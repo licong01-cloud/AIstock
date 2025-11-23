@@ -6,6 +6,7 @@ from urllib.parse import quote
 from ..services.analysis_service import (
     analyze_stock,
     get_stock_context,
+    get_realtime_quote,
     analyze_stocks_batch,
     generate_stock_pdf_from_record,
     generate_stock_markdown_from_record,
@@ -18,6 +19,7 @@ from ..models.analysis import (
     StockAnalysisRequest,
     StockAnalysisResponse,
     StockContextResponse,
+    StockQuote,
     BatchStockAnalysisRequest,
     BatchStockAnalysisResponse,
 )
@@ -38,6 +40,17 @@ async def stock_context_endpoint(req: StockAnalysisRequest) -> StockContextRespo
     """返回单只股票的概览信息与基础K线数据。"""
 
     return get_stock_context(req)
+
+
+@router.get("/stock/quote/{symbol}", response_model=StockQuote, summary="获取单只股票的实时行情（TDX）")
+async def stock_quote_endpoint(symbol: str) -> StockQuote:
+    """轻量级实时行情接口，仅依赖 TDX 等实时源。
+
+    - 主要用于历史详情中的“当前价格/涨跌幅”卡片；
+    - 不会触发完整的统一数据获取或多智能体分析。
+    """
+
+    return get_realtime_quote(symbol)
 
 
 @router.post(

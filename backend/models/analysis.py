@@ -30,6 +30,7 @@ class StockAnalysisResponse(BaseModel):
     discussion: str | None = None
     final_decision: Dict[str, Any] | None = None
     data_fetch_diagnostics: Dict[str, Any] | None = None
+    technical_indicators: Dict[str, Any] | None = None
     # 与旧版 pg_stock_analysis_repo 对齐的持久化信息
     record_id: int | None = None
     saved_to_db: bool | None = None
@@ -37,6 +38,9 @@ class StockAnalysisResponse(BaseModel):
 
 class StockKlineSeries(BaseModel):
     dates: List[str]
+    open: List[float | None]
+    high: List[float | None]
+    low: List[float | None]
     close: List[float | None]
 
 
@@ -53,6 +57,8 @@ class StockQuote(BaseModel):
     amount: float | None = None
     quote_source: str | None = None
     quote_timestamp: datetime | None = None
+    week52_high: float | None = None
+    week52_low: float | None = None
 
 
 class StockContextResponse(BaseModel):

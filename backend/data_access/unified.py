@@ -27,6 +27,11 @@ class NextUnifiedDataAccess:
     def get_stock_info(self, symbol: str, analysis_date: Optional[str] = None) -> Dict[str, Any]:
         return self._uda.get_stock_info(symbol, analysis_date=analysis_date)
 
+    def get_realtime_quotes(self, symbol: str) -> Dict[str, Any]:
+        """获取实时行情（通常由 TDX 接口提供）。"""
+
+        return self._uda.get_realtime_quotes(symbol)
+
     def get_stock_data(self, symbol: str, period: str = "1y", analysis_date: Optional[str] = None):
         """兼容旧接口的封装，优先尝试带 analysis_date 的新签名。"""
 

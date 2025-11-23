@@ -129,6 +129,7 @@ def analyze_stock(req: StockAnalysisRequest) -> StockAnalysisResponse:
             agents=agents,
             conclusion=conclusion,
             data_fetch_diagnostics=diagnostics,
+            technical_indicators=None,
         )
 
     # 计算技术指标：沿用 UnifiedDataAccess 内部的工具
@@ -463,6 +464,7 @@ def analyze_stock(req: StockAnalysisRequest) -> StockAnalysisResponse:
         discussion=str(discussion_result) if discussion_result is not None else None,
         final_decision=final_decision if isinstance(final_decision, dict) else None,
         data_fetch_diagnostics=diagnostics,
+        technical_indicators=indicators if isinstance(indicators, dict) else None,
         record_id=record_id,
         saved_to_db=saved_to_db,
     )
@@ -501,25 +503,36 @@ def get_stock_context(req: StockAnalysisRequest) -> StockContextResponse:
         amount=_safe_float(info.get("amount")),
         quote_source=str(info.get("quote_source") or "") or None,
         quote_timestamp=_parse_timestamp(info.get("quote_timestamp")),
+        week52_high=_safe_float(info.get("52_week_high")),
+        week52_low=_safe_float(info.get("52_week_low")),
     )
 
-    # 历史K线（仅收盘价）
+    # 历史K线（用于前端K线图展示，包含 OHLC）
     kline_series: StockKlineSeries | None = None
     try:
         df = uda.get_stock_data(symbol, period, analysis_date=analysis_date)
         if df is not None and hasattr(df, "index") and len(df.index) > 0:
             # Date 索引已经在 UnifiedDataAccess 中标准化
             dates = [idx.strftime("%Y-%m-%d") for idx in df.index]
-            closes = []
-            for v in df["Close"].tolist():
-                try:
-                    fv = float(v)
-                except (TypeError, ValueError):
-                    closes.append(None)
-                else:
-                    closes.append(fv)
 
-            kline_series = StockKlineSeries(dates=dates, close=closes)
+            opens: list[float | None] = []
+            highs: list[float | None] = []
+            lows: list[float | None] = []
+            closes: list[float | None] = []
+
+            for _, row in df.iterrows():
+                opens.append(_safe_float(row.get("Open")))
+                highs.append(_safe_float(row.get("High")))
+                lows.append(_safe_float(row.get("Low")))
+                closes.append(_safe_float(row.get("Close")))
+
+            kline_series = StockKlineSeries(
+                dates=dates,
+                open=opens,
+                high=highs,
+                low=lows,
+                close=closes,
+            )
     except Exception:
         kline_series = None
 
@@ -528,6 +541,66 @@ def get_stock_context(req: StockAnalysisRequest) -> StockContextResponse:
         name=quote.name,
         quote=quote,
         kline=kline_series,
+    )
+
+
+def get_realtime_quote(symbol: str) -> StockQuote:
+    """基于统一数据访问的实时行情接口（通常走 TDX），仅返回当前价格等轻量字段。
+
+    用于历史详情中的“当前价格/涨跌幅”卡片，避免重新拉取完整 K 线等重型数据。
+    """
+
+    uda = NextUnifiedDataAccess()
+
+    try:
+        quotes = uda.get_realtime_quotes(symbol)
+    except Exception:
+        quotes = None
+
+    if not isinstance(quotes, dict):
+        # 兜底：没有可用行情时返回空值，占位显示 "--"
+        return StockQuote(
+            symbol=str(symbol),
+            name="",
+            current_price=None,
+            change_percent=None,
+            open_price=None,
+            high_price=None,
+            low_price=None,
+            pre_close=None,
+            volume=None,
+            amount=None,
+            quote_source=None,
+            quote_timestamp=None,
+        )
+
+    sym = str(quotes.get("symbol") or symbol)
+    name = str(quotes.get("name") or "")
+
+    current_price = _safe_float(quotes.get("price"))
+    change_percent = _safe_float(quotes.get("change_percent"))
+    open_price = _safe_float(quotes.get("open"))
+    high_price = _safe_float(quotes.get("high"))
+    low_price = _safe_float(quotes.get("low"))
+    pre_close = _safe_float(quotes.get("pre_close"))
+    volume = _safe_float(quotes.get("volume"))
+    amount = _safe_float(quotes.get("amount"))
+    quote_source = str(quotes.get("source") or "") or None
+    quote_timestamp = _parse_timestamp(quotes.get("timestamp"))
+
+    return StockQuote(
+        symbol=sym,
+        name=name,
+        current_price=current_price,
+        change_percent=change_percent,
+        open_price=open_price,
+        high_price=high_price,
+        low_price=low_price,
+        pre_close=pre_close,
+        volume=volume,
+        amount=amount,
+        quote_source=quote_source,
+        quote_timestamp=quote_timestamp,
     )
 
 
