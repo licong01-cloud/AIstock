@@ -1501,7 +1501,14 @@ export default function WatchlistPage() {
             return (
               <div key={key}>
                 <div style={{ marginBottom: 2 }}>{label}</div>
-                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 4,
+                    alignItems: "center",
+                  }}
+                >
                   <select
                     title={`${label}比较符号`}
                     value={nf.op}
@@ -1547,6 +1554,8 @@ export default function WatchlistPage() {
                     }
                     style={{
                       flex: 1,
+                      minWidth: 80,
+                      maxWidth: 120,
                       padding: "2px 4px",
                       borderRadius: 4,
                       border: "1px solid #e5e7eb",
@@ -1642,6 +1651,8 @@ export default function WatchlistPage() {
                     }
                     style={{
                       flex: 1,
+                      minWidth: 120,
+                      maxWidth: 160,
                       padding: "2px 4px",
                       borderRadius: 4,
                       border: "1px solid #e5e7eb",

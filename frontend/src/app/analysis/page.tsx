@@ -86,18 +86,59 @@ interface BatchStockAnalysisResponse {
   results: BatchStockAnalysisItemResult[];
 }
 
+interface TrendPredictionScenario {
+  direction: "up" | "down" | "flat";
+  magnitude_min_pct: number;
+  magnitude_max_pct: number;
+  probability: number;
+  label: string;
+  narrative: string;
+}
+
+interface TrendPredictionHorizon {
+  horizon: "1d" | "1w" | "1m" | "long";
+  scenarios: TrendPredictionScenario[];
+  base_expectation_pct?: number | null;
+}
+
+interface TrendAnalystResult {
+  name: string;
+  role: string;
+  raw_text: string;
+  conclusion_json: Record<string, any>;
+  created_at: string;
+}
+
+interface PredictionStep {
+  step: number;
+  analyst_key: string;
+  analyst_name: string;
+  description: string;
+  horizons: TrendPredictionHorizon[];
+  created_at: string;
+}
+
+interface StockTrendAnalysisResponse {
+  ts_code: string;
+  analysis_date: string;
+  mode: "realtime" | "backtest";
+  horizons: TrendPredictionHorizon[];
+  analysts: TrendAnalystResult[];
+  risk_report?: TrendAnalystResult | null;
+  prediction_evolution: PredictionStep[];
+  record_id?: number | null;
+}
+
 type EnabledAnalysts = Record<string, boolean>;
 
 const DEFAULT_ENABLED_ANALYSTS: EnabledAnalysts = {
   technical: true,
   fundamental: true,
-  fund_flow: true,
   risk: true,
-  sentiment: true,
-  news: true,
+  sentiment: false,
+  news: false,
   research: false,
   announcement: false,
-  chip: false,
 };
 
 function normalizeMarkdownText(text: string | null | undefined): string {
@@ -217,8 +258,7 @@ export default function AnalysisPage() {
   );
   const [historyDetailResult, setHistoryDetailResult] =
     useState<StockAnalysisResponse | null>(null);
-  const [historyDetailQuote, setHistoryDetailQuote] =
-    useState<StockQuote | null>(null);
+  const [historyDetailQuote, setHistoryDetailQuote] = useState<StockQuote | null>(null);
   const [historyActiveAgentIndex, setHistoryActiveAgentIndex] = useState(0);
   const [historyMonitorIds, setHistoryMonitorIds] = useState<number[]>([]);
   const [historyDeletingIds, setHistoryDeletingIds] = useState<number[]>([]);
@@ -232,8 +272,26 @@ export default function AnalysisPage() {
     [batchCodesText],
   );
 
+  const allAnalystsSelected = useMemo(
+    () => Object.values(enabledAnalysts).every((v) => v),
+    [enabledAnalysts],
+  );
+
   function toggleAnalyst(key: keyof EnabledAnalysts) {
     setEnabledAnalysts((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
+
+  function handleToggleAllAnalysts() {
+    setEnabledAnalysts((prev) => {
+      if (allAnalystsSelected) {
+        return { ...DEFAULT_ENABLED_ANALYSTS };
+      }
+      const next: EnabledAnalysts = {};
+      Object.keys(prev).forEach((key) => {
+        next[key] = true;
+      });
+      return next;
+    });
   }
 
   function handleUseFirstBatchCode() {
@@ -649,6 +707,35 @@ export default function AnalysisPage() {
           <div
             style={{
               display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              margin: "4px 0 8px",
+              gap: 8,
+              flexWrap: "wrap",
+            }}
+          >
+            <span style={{ fontSize: 12, color: "#6b7280" }}>
+              默认仅启用：技术资金分析师 / 基本面 / 风险管理师；你也可以一键全选所有分析师。
+            </span>
+            <button
+              type="button"
+              onClick={handleToggleAllAnalysts}
+              style={{
+                padding: "4px 10px",
+                borderRadius: 999,
+                border: "1px solid #d1d5db",
+                background: allAnalystsSelected ? "#eef2ff" : "#f9fafb",
+                fontSize: 12,
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {allAnalystsSelected ? "恢复默认分析师" : "一键全选分析师"}
+            </button>
+          </div>
+          <div
+            style={{
+              display: "flex",
               flexWrap: "wrap",
               gap: 8,
               marginTop: 4,
@@ -670,7 +757,7 @@ export default function AnalysisPage() {
                 checked={enabledAnalysts.technical}
                 onChange={() => toggleAnalyst("technical")}
               />
-              <span>📊 技术分析师</span>
+              <span>📊 技术资金分析师</span>
             </label>
             <label
               style={{
@@ -689,24 +776,6 @@ export default function AnalysisPage() {
                 onChange={() => toggleAnalyst("fundamental")}
               />
               <span>💼 基本面分析师</span>
-            </label>
-            <label
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                padding: "4px 8px",
-                borderRadius: 999,
-                background: "#f3f4f6",
-                cursor: "pointer",
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={enabledAnalysts.fund_flow}
-                onChange={() => toggleAnalyst("fund_flow")}
-              />
-              <span>💰 资金面分析师</span>
             </label>
             <label
               style={{
@@ -797,24 +866,6 @@ export default function AnalysisPage() {
                 onChange={() => toggleAnalyst("announcement")}
               />
               <span>📢 公告分析师</span>
-            </label>
-            <label
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                padding: "4px 8px",
-                borderRadius: 999,
-                background: "#f3f4f6",
-                cursor: "pointer",
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={enabledAnalysts.chip}
-                onChange={() => toggleAnalyst("chip")}
-              />
-              <span>🎯 筹码分析师</span>
             </label>
           </div>
         </div>
@@ -1285,154 +1336,6 @@ export default function AnalysisPage() {
                       </>
                     );
                   })()}
-                </div>
-              </section>
-            )}
-
-            {result.data_fetch_diagnostics && (
-              <section
-                style={{
-                  marginBottom: 16,
-                  background: "#fff",
-                  borderRadius: 12,
-                  padding: 16,
-                  boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-                }}
-              >
-                <h3 style={{ marginTop: 0, fontSize: 16 }}>
-                  🔍 数据获取诊断
-                </h3>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                    gap: 12,
-                    fontSize: 13,
-                  }}
-                >
-                  {Object.entries(result.data_fetch_diagnostics).map(
-                    ([key, value]) => {
-                      const v = value as any;
-                      const status = v?.status || "unknown";
-                      const hasError = status === "error";
-                      const hasData = v?.has_data;
-                      let label = key;
-                      if (key === "stock_info") label = "基础信息";
-                      if (key === "stock_data") label = "历史行情";
-                      if (key === "technical_indicators") label = "技术指标";
-                      if (key === "financial_data") label = "财务数据";
-                      if (key === "fund_flow_data") label = "资金流数据";
-                      if (key === "risk_data") label = "风险数据";
-                      if (key === "sentiment_data") label = "市场情绪数据";
-                      if (key === "news_data") label = "新闻数据";
-                      if (key === "research_data") label = "研报数据";
-                      if (key === "announcement_data") label = "公告数据";
-                      if (key === "chip_data") label = "筹码数据";
-
-                      const color = hasError
-                        ? "#b00020"
-                        : status === "success"
-                          ? "#2e7d32"
-                          : "#555";
-
-                      let statusText = "未知";
-                      if (status === "success") statusText = "获取成功";
-                      else if (status === "error") statusText = "获取失败";
-                      else if (status === "skipped")
-                        statusText = "已跳过（分析师未启用）";
-                      else if (status === "not_implemented")
-                        statusText = "未接入统一获取";
-
-                      return (
-                        <div
-                          key={key}
-                          style={{
-                            borderRadius: 8,
-                            border: "1px solid #eee",
-                            padding: 10,
-                            background: "#fafafa",
-                          }}
-                        >
-                          <div
-                            style={{
-                              fontWeight: 600,
-                              marginBottom: 4,
-                            }}
-                          >
-                            {label}
-                          </div>
-                          <div style={{ color, marginBottom: 4 }}>
-                            状态：
-                            {statusText}
-                          </div>
-                          {typeof hasData === "boolean" && (
-                            <div
-                              style={{
-                                marginBottom: 4,
-                              }}
-                            >
-                              是否有数据：
-                              {hasData ? "是" : "否"}
-                            </div>
-                          )}
-                          {v?.period && (
-                            <div
-                              style={{
-                                marginBottom: 4,
-                              }}
-                            >
-                              period：
-                              {String(v.period)}
-                            </div>
-                          )}
-                          {v?.reason && (
-                            <div
-                              style={{
-                                marginBottom: 4,
-                                fontSize: 12,
-                                color: "#777",
-                              }}
-                            >
-                              原因：
-                              {v.reason === "analyst_disabled"
-                                ? "分析师未启用"
-                                : v.reason === "data_fetch_not_wired"
-                                  ? "尚未接入统一数据获取"
-                                  : "未显式传入启用配置"}
-                            </div>
-                          )}
-                          {hasError && v?.error && (
-                            <details
-                              style={{
-                                marginTop: 4,
-                              }}
-                            >
-                              <summary
-                                style={{
-                                  cursor: "pointer",
-                                  fontSize: 12,
-                                }}
-                              >
-                                查看错误详情
-                              </summary>
-                              <pre
-                                style={{
-                                  whiteSpace: "pre-wrap",
-                                  marginTop: 4,
-                                  fontSize: 11,
-                                  background: "#fff",
-                                  padding: 6,
-                                  borderRadius: 4,
-                                }}
-                              >
-                                {String(v.error)}
-                              </pre>
-                            </details>
-                          )}
-                        </div>
-                      );
-                    },
-                  )}
                 </div>
               </section>
             )}
@@ -2370,6 +2273,74 @@ export default function AnalysisPage() {
                       </div>
                     </div>
                   )}
+
+                  {(() => {
+                    const ti = historyDetailResult.technical_indicators as any | null;
+                    if (!ti || typeof ti !== "object" || Array.isArray(ti)) return null;
+                    if (Object.keys(ti).length === 0) return null;
+
+                    return (
+                      <div
+                        style={{
+                          background: "#fff",
+                          borderRadius: 8,
+                          padding: 16,
+                          marginBottom: 12,
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontWeight: 600,
+                            marginBottom: 8,
+                          }}
+                        >
+                          关键技术指标
+                        </div>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                            gap: 12,
+                            fontSize: 13,
+                          }}
+                        >
+                          {Object.entries(ti).map(([key, value]) => {
+                            const v = value as any;
+                            let label = key;
+                            if (key === "ma") label = "移动平均线";
+                            if (key === "rsi") label = "相对强弱指数";
+                            if (key === "boll") label = "布林带";
+                            if (key === "macd") label = "指数平滑异同平均线";
+
+                            return (
+                              <div
+                                key={key}
+                                style={{
+                                  borderRadius: 8,
+                                  border: "1px solid #eee",
+                                  padding: 10,
+                                  background: "#fafafa",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    fontWeight: 600,
+                                    marginBottom: 4,
+                                  }}
+                                >
+                                  {label}
+                                </div>
+                                <div style={{ marginBottom: 4 }}>
+                                  值：
+                                  {String(v)}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {historyDetailResult.data_fetch_diagnostics && (
                     <div

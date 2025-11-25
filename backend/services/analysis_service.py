@@ -12,10 +12,14 @@ from ..models.analysis import (
     BatchStockAnalysisRequest,
     BatchStockAnalysisItemResult,
     BatchStockAnalysisResponse,
+    StockTrendAnalysisRequest,
+    StockTrendAnalysisResponse,
 )
 from ..data_access.unified import NextUnifiedDataAccess
 from ..agents.stock_analysis import NextStockAnalysisAgents
+from ..agents.trend_analysis import StockTrendAnalysisAgents
 from ..repositories.analysis_repo_impl import analysis_repo
+from ..repositories.trend_analysis_repo_impl import trend_analysis_repo
 from ..infra.pdf_report_impl import create_pdf_report, generate_markdown_report
 
 
@@ -146,8 +150,9 @@ def analyze_stock(req: StockAnalysisRequest) -> StockAnalysisResponse:
         }
         logger.exception("calculate_technical_indicators failed for symbol=%s", symbol)
 
-    # 2. 准备多维度数据（财务、资金流、风险等）
+    # 2. 准备多维度数据（财务、季报、资金流、风险等）
     financial_data: Dict[str, Any] | None = None
+    quarterly_data: Dict[str, Any] | None = None
     fund_flow_data: Dict[str, Any] | None = None
     risk_data: Dict[str, Any] | None = None
     sentiment_data: Dict[str, Any] | None = None
@@ -169,6 +174,24 @@ def analyze_stock(req: StockAnalysisRequest) -> StockAnalysisResponse:
             "error": repr(e),
         }
         logger.exception("get_financial_data failed for symbol=%s", symbol)
+
+    # 季报数据（最近8期），用于基本面分析重点的季报趋势部分
+    try:
+        quarterly_data = uda.get_quarterly_reports(symbol, analysis_date=analysis_date)
+        diagnostics["quarterly_data"] = {
+            "status": "success",
+            "has_data": bool(
+                isinstance(quarterly_data, dict)
+                and quarterly_data.get("data_success")
+            ),
+        }
+    except Exception as e:  # noqa: BLE001
+        quarterly_data = None
+        diagnostics["quarterly_data"] = {
+            "status": "error",
+            "error": repr(e),
+        }
+        logger.exception("get_quarterly_reports failed for symbol=%s", symbol)
 
     try:
         fund_flow_data = uda.get_fund_flow_data(symbol, analysis_date=analysis_date)
@@ -399,6 +422,7 @@ def analyze_stock(req: StockAnalysisRequest) -> StockAnalysisResponse:
         indicators=indicators,
         financial_data=financial_data,
         fund_flow_data=fund_flow_data,
+        quarterly_data=quarterly_data,
         risk_data=risk_data,
         sentiment_data=sentiment_data,
         news_data=news_data,
@@ -467,6 +491,348 @@ def analyze_stock(req: StockAnalysisRequest) -> StockAnalysisResponse:
         technical_indicators=indicators if isinstance(indicators, dict) else None,
         record_id=record_id,
         saved_to_db=saved_to_db,
+    )
+
+
+def analyze_stock_trend(req: StockTrendAnalysisRequest) -> StockTrendAnalysisResponse:
+    """Skeleton implementation of the stock trend analysis service.
+
+    Phase 1: only define the public API shape and return a mock payload.
+
+    Later phases will:
+    - Reuse NextUnifiedDataAccess to fetch all required data;
+    - Delegate to a dedicated StockTrendAnalysisAgents orchestrator;
+    - Persist detailed results to dedicated trend analysis tables.
+    """
+
+    # 1. 复用与 analyze_stock 一致的 period / analysis_date 推断逻辑
+    uda = NextUnifiedDataAccess()
+
+    period = _choose_period(req.start_date, req.end_date)
+    analysis_date_raw: str | None = None
+    if req.analysis_date:
+        analysis_date_raw = req.analysis_date.replace("-", "")
+    elif req.end_date:
+        analysis_date_raw = req.end_date.replace("-", "")
+
+    if analysis_date_raw:
+        analysis_date_str = f"{analysis_date_raw[:4]}-{analysis_date_raw[4:6]}-{analysis_date_raw[6:8]}"
+    else:
+        analysis_date_str = datetime.utcnow().strftime("%Y-%m-%d")
+
+    # 2. 获取基础数据（信息 + 历史行情 + 技术指标）
+    symbol = req.ts_code
+
+    diagnostics: Dict[str, Any] = {}
+
+    stock_info: Dict[str, Any] | None = None
+    try:
+        stock_info = uda.get_stock_info(symbol, analysis_date=analysis_date_raw)
+        diagnostics["stock_info"] = {"status": "success"}
+    except Exception as e:  # noqa: BLE001
+        diagnostics["stock_info"] = {"status": "error", "error": repr(e)}
+        logger.exception("get_stock_info failed for symbol=%s", symbol)
+        stock_info = {"symbol": symbol}
+
+    stock_data = None
+    try:
+        try:
+            stock_data = uda.get_stock_data(symbol, period, analysis_date=analysis_date_raw)
+        except TypeError as e:  # 兼容旧实现
+            if "analysis_date" in str(e):
+                stock_data = uda.get_stock_data(symbol, period)
+            else:
+                raise
+        diagnostics["stock_data"] = {"status": "success", "period": period}
+    except Exception as e:  # noqa: BLE001
+        diagnostics["stock_data"] = {
+            "status": "error",
+            "error": repr(e),
+            "period": period,
+        }
+        logger.exception("get_stock_data failed for symbol=%s, period=%s", symbol, period)
+        stock_data = None
+
+    if stock_data is None:
+        # 无法获取基础行情时，直接返回空预测并附带诊断信息
+        return StockTrendAnalysisResponse(
+            ts_code=req.ts_code,
+            analysis_date=analysis_date_str,
+            mode=req.mode,
+            horizons=[],
+            analysts=[],
+            risk_report=None,
+            prediction_evolution=[],
+            record_id=None,
+        )
+
+    try:
+        stock_data_with_indicators = uda.stock_data_fetcher.calculate_technical_indicators(stock_data)
+        indicators = uda.stock_data_fetcher.get_latest_indicators(stock_data_with_indicators)
+        diagnostics["technical_indicators"] = {"status": "success"}
+    except Exception as e:  # noqa: BLE001
+        stock_data_with_indicators = stock_data
+        indicators = {}
+        diagnostics["technical_indicators"] = {"status": "error", "error": repr(e)}
+        logger.exception("calculate_technical_indicators failed for symbol=%s", symbol)
+
+    # 获取基本面相关数据（估值与成长性）
+    financial_data: Dict[str, Any] | None = None
+    quarterly_data: Dict[str, Any] | None = None
+
+    try:
+        financial_data = uda.get_financial_data(symbol, analysis_date=analysis_date_raw)
+        diagnostics["financial_data"] = {
+            "status": "success",
+            "has_data": financial_data is not None,
+        }
+    except Exception as e:  # noqa: BLE001
+        financial_data = None
+        diagnostics["financial_data"] = {"status": "error", "error": repr(e)}
+        logger.exception("get_financial_data failed for symbol=%s", symbol)
+
+    try:
+        quarterly_data = uda.get_quarterly_reports(symbol, analysis_date=analysis_date_raw)
+        diagnostics["quarterly_data"] = {
+            "status": "success",
+            "has_data": bool(
+                isinstance(quarterly_data, dict)
+                and quarterly_data.get("data_success"),
+            ),
+        }
+    except Exception as e:  # noqa: BLE001
+        quarterly_data = None
+        diagnostics["quarterly_data"] = {"status": "error", "error": repr(e)}
+        logger.exception("get_quarterly_reports failed for symbol=%s", symbol)
+
+    # 3. 获取与趋势相关的关键数据（资金流、筹码等），预留更多数据以便后续扩展
+    fund_flow_data: Dict[str, Any] | None = None
+    chip_data: Dict[str, Any] | None = None
+    risk_data: Dict[str, Any] | None = None
+    sentiment_data: Dict[str, Any] | None = None
+    news_data: Dict[str, Any] | None = None
+    research_data: Dict[str, Any] | None = None
+    announcement_data: Dict[str, Any] | None = None
+
+    try:
+        fund_flow_data = uda.get_fund_flow_data(symbol, analysis_date=analysis_date_raw)
+        diagnostics["fund_flow_data"] = {
+            "status": "success",
+            "has_data": fund_flow_data is not None,
+        }
+    except Exception as e:  # noqa: BLE001
+        fund_flow_data = None
+        diagnostics["fund_flow_data"] = {"status": "error", "error": repr(e)}
+        logger.exception("get_fund_flow_data failed for symbol=%s", symbol)
+
+    try:
+        current_price_val = None
+        try:
+            if stock_info and isinstance(stock_info, dict):
+                cp = stock_info.get("current_price")
+                if cp is not None:
+                    current_price_val = float(cp)
+        except Exception:  # noqa: BLE001
+            current_price_val = None
+
+        chip_data = uda.get_chip_distribution_data(
+            symbol,
+            trade_date=None,
+            current_price=current_price_val,
+            analysis_date=analysis_date_raw,
+        )
+        diagnostics["chip_data"] = {
+            "status": "success",
+            "has_data": bool(isinstance(chip_data, dict) and chip_data.get("data_success")),
+        }
+    except Exception as e:  # noqa: BLE001
+        chip_data = None
+        diagnostics["chip_data"] = {"status": "error", "error": repr(e)}
+        logger.exception("get_chip_distribution_data failed for symbol=%s", symbol)
+
+    # 风险数据
+    try:
+        risk_data = uda.get_risk_data(symbol, analysis_date=analysis_date_raw)
+        diagnostics["risk_data"] = {
+            "status": "success",
+            "has_data": risk_data is not None,
+        }
+    except Exception as e:  # noqa: BLE001
+        risk_data = None
+        diagnostics["risk_data"] = {"status": "error", "error": repr(e)}
+        logger.exception("get_risk_data failed for symbol=%s", symbol)
+
+    # 仅在前端显式启用相应分析师时，获取情绪 / 新闻 / 研报 / 公告数据
+    enabled = req.enabled_analysts or {}
+
+    if enabled.get("sentiment") is True:
+        try:
+            sentiment_data = uda.get_market_sentiment_data(
+                symbol,
+                stock_data_with_indicators,
+                analysis_date=analysis_date_raw,
+            )
+            diagnostics["sentiment_data"] = {
+                "status": "success",
+                "has_data": bool(
+                    isinstance(sentiment_data, dict)
+                    and sentiment_data.get("data_success")
+                ),
+            }
+        except Exception as e:  # noqa: BLE001
+            sentiment_data = None
+            diagnostics["sentiment_data"] = {"status": "error", "error": repr(e)}
+            logger.exception("get_market_sentiment_data failed for symbol=%s", symbol)
+
+    if enabled.get("news") is True:
+        try:
+            news_data = uda.get_news_data(symbol, analysis_date=analysis_date_raw)
+            diagnostics["news_data"] = {
+                "status": "success",
+                "has_data": bool(
+                    isinstance(news_data, dict)
+                    and news_data.get("data_success")
+                ),
+            }
+        except Exception as e:  # noqa: BLE001
+            news_data = None
+            diagnostics["news_data"] = {"status": "error", "error": repr(e)}
+            logger.exception("get_news_data failed for symbol=%s", symbol)
+
+    if enabled.get("research") is True:
+        try:
+            research_data = uda.get_research_reports_data(
+                symbol,
+                days=180,
+                analysis_date=analysis_date_raw,
+            )
+            diagnostics["research_data"] = {
+                "status": "success",
+                "has_data": bool(
+                    isinstance(research_data, dict)
+                    and research_data.get("data_success")
+                    and research_data.get("report_count", 0) > 0
+                ),
+            }
+        except Exception as e:  # noqa: BLE001
+            research_data = None
+            diagnostics["research_data"] = {"status": "error", "error": repr(e)}
+            logger.exception("get_research_reports_data failed for symbol=%s", symbol)
+
+    if enabled.get("announcement") is True:
+        try:
+            announcement_data = uda.get_announcement_data(
+                symbol,
+                days=30,
+                analysis_date=analysis_date_raw,
+            )
+            diagnostics["announcement_data"] = {
+                "status": "success",
+                "has_data": bool(
+                    isinstance(announcement_data, dict)
+                    and announcement_data.get("data_success")
+                ),
+            }
+        except Exception as e:  # noqa: BLE001
+            announcement_data = None
+            diagnostics["announcement_data"] = {"status": "error", "error": repr(e)}
+            logger.exception("get_announcement_data failed for symbol=%s", symbol)
+
+    # 4. 调用趋势分析 orchestrator（当前仅技术资金分析师规则化初版）
+    trend_agents = StockTrendAnalysisAgents(model="deepseek-chat")
+
+    horizons, analyst_results, risk_report, evolution = trend_agents.run_trend_analysis(
+        stock_info=stock_info or {},
+        stock_data_with_indicators=stock_data_with_indicators,
+        indicators=indicators,
+        financial_data=financial_data,
+        fund_flow_data=fund_flow_data,
+        quarterly_data=quarterly_data,
+        risk_data=risk_data,
+        sentiment_data=sentiment_data,
+        news_data=news_data,
+        research_data=research_data,
+        announcement_data=announcement_data,
+        chip_data=chip_data,
+        enabled_analysts=req.enabled_analysts,
+    )
+
+    # 5. 落库：将最终预测与每位分析师结构化结果写入专用表
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+
+    try:
+        if analysis_date_raw:
+            ad = _dt.strptime(analysis_date_str, "%Y-%m-%d").replace(tzinfo=_tz.utc)
+        else:
+            ad = _dt.now(_tz.utc)
+
+        analyst_rows: list[dict[str, Any]] = []
+        for r in analyst_results:
+            analyst_key_val: str
+            try:
+                raw_key = r.conclusion_json.get("analyst_key")  # type: ignore[union-attr]
+                analyst_key_val = str(raw_key) if raw_key is not None else ""
+            except Exception:  # noqa: BLE001
+                analyst_key_val = ""
+
+            if not analyst_key_val:
+                name = r.name
+                if "技术资金" in name:
+                    analyst_key_val = "tech_capital"
+                elif "基本面" in name:
+                    analyst_key_val = "fundamental"
+                elif "研报" in name:
+                    analyst_key_val = "research"
+                elif "公告" in name:
+                    analyst_key_val = "announcement"
+                elif "情绪" in name:
+                    analyst_key_val = "sentiment"
+                elif "新闻" in name:
+                    analyst_key_val = "news"
+                elif "风险" in name:
+                    analyst_key_val = "risk"
+                else:
+                    analyst_key_val = "unknown"
+
+            analyst_rows.append(
+                {
+                    "analyst_key": analyst_key_val,  # 当前只有一位分析师
+                    "analyst_name": r.name,
+                    "role": r.role,
+                    "raw_text": r.raw_text,
+                    "conclusion_json": r.conclusion_json,
+                    "created_at": r.created_at,
+                }
+            )
+
+        record_id = trend_analysis_repo.save_trend_analysis(
+            symbol=symbol,
+            analysis_date=ad,
+            mode=req.mode,
+            stock_info=stock_info or {},
+            final_predictions=[h.model_dump() for h in horizons],
+            prediction_evolution=[step.model_dump() for step in evolution],
+            analyst_rows=analyst_rows,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("save_trend_analysis failed for symbol=%s", symbol)
+        record_id = None
+
+    rating = _compute_trend_rating_from_horizons(horizons)
+
+    return StockTrendAnalysisResponse(
+        ts_code=req.ts_code,
+        analysis_date=analysis_date_str,
+        mode=req.mode,
+        horizons=horizons,
+        analysts=analyst_results,
+        risk_report=risk_report,
+        prediction_evolution=evolution,
+        record_id=record_id,
+        data_fetch_diagnostics=diagnostics,
+        technical_indicators=indicators if isinstance(indicators, dict) else None,
+        rating=rating,
     )
 
 
@@ -604,6 +970,179 @@ def get_realtime_quote(symbol: str) -> StockQuote:
     )
 
 
+def _compute_trend_rating_from_horizons(horizons: Any) -> str | None:
+    """Compute a simple trend rating from long-horizon expectation.
+
+    The logic is based on the "long" horizon base_expectation_pct (%):
+
+    - x >= 30   -> 强烈买入
+    - 15 <= x < 30 -> 买入
+    - 5  <= x < 15 -> 增持
+    - -5 < x < 5   -> 中性/持有
+    - -15 < x <= -5 -> 减持
+    - x <= -15     -> 卖出/回避
+    """
+
+    # Normalise horizons to a list of dict-like objects
+    if horizons is None:
+        return None
+
+    try:
+        hs = list(horizons)
+    except TypeError:
+        return None
+
+    long_item: Any | None = None
+    for h in hs:
+        try:
+            if isinstance(h, dict):
+                hz = h.get("horizon")
+            else:
+                hz = getattr(h, "horizon", None)
+        except Exception:  # noqa: BLE001
+            hz = None
+        if hz == "long":
+            long_item = h
+            break
+
+    if long_item is None:
+        return None
+
+    try:
+        if isinstance(long_item, dict):
+            raw = long_item.get("base_expectation_pct")
+        else:
+            raw = getattr(long_item, "base_expectation_pct", None)
+        if raw is None:
+            return None
+        x = float(raw)
+    except Exception:  # noqa: BLE001
+        return None
+
+    if x >= 30:
+        return "强烈买入"
+    if x >= 15:
+        return "买入"
+    if x >= 5:
+        return "增持"
+    if x > -5:
+        return "中性/持有"
+    if x > -15:
+        return "减持"
+    return "卖出/回避"
+
+
+def get_trend_history_records(
+    symbol_or_name: str | None,
+    page: int = 1,
+    page_size: int = 10,
+    rating: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    """分页查询趋势分析历史记录列表。
+
+    rating 过滤逻辑基于 long horizon 的预期涨跌幅，在服务层按计算结果过滤。
+    """
+
+    raw_items = trend_analysis_repo.list_records(
+        symbol_or_name=symbol_or_name or None,
+        start_date=start_date or None,
+        end_date=end_date or None,
+    )
+
+    items: list[dict[str, Any]] = []
+    for r in raw_items:
+        r_analysis_date = r.get("analysis_date")
+        r_created_at = r.get("created_at")
+        r_predictions = r.get("final_predictions")
+        trend_rating = _compute_trend_rating_from_horizons(r_predictions) or "未知"
+
+        if rating and trend_rating != rating:
+            continue
+
+        items.append(
+            {
+                "id": r["id"],
+                "symbol": r.get("symbol", ""),
+                "stock_name": r.get("stock_name", ""),
+                "analysis_date": r_analysis_date.isoformat()
+                if hasattr(r_analysis_date, "isoformat")
+                else str(r_analysis_date)
+                if r_analysis_date is not None
+                else None,
+                "mode": r.get("mode", ""),
+                "rating": trend_rating,
+                "created_at": r_created_at.isoformat()
+                if hasattr(r_created_at, "isoformat")
+                else str(r_created_at)
+                if r_created_at is not None
+                else None,
+            }
+        )
+
+    total = len(items)
+    page = max(1, int(page))
+    page_size = max(1, min(int(page_size), 100))
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_items = items[start:end]
+
+    return {"total": total, "items": page_items}
+
+
+def get_trend_history_record_detail(record_id: int) -> StockTrendAnalysisResponse:
+    payload = trend_analysis_repo.get_trend_analysis(record_id)
+    if not payload:
+        raise ValueError(f"trend analysis record not found: {record_id}")
+
+    record = payload["record"]
+    analysts_rows = payload.get("analysts", [])
+
+    horizons_raw = record.get("final_predictions") or []
+    evolution_raw = record.get("prediction_evolution") or []
+
+    analysts_payload: list[dict[str, Any]] = []
+    risk_payload: dict[str, Any] | None = None
+
+    for row in analysts_rows:
+        base = {
+            "name": row.get("analyst_name", ""),
+            "role": row.get("role", ""),
+            "raw_text": row.get("raw_text", ""),
+            "conclusion_json": row.get("conclusion_json") or {},
+            "created_at": row.get("created_at"),
+        }
+
+        if (row.get("analyst_key") or "") == "risk" and risk_payload is None:
+            risk_payload = base
+
+        analysts_payload.append(base)
+
+    r_analysis_date = record.get("analysis_date")
+    analysis_date_str = (
+        r_analysis_date.strftime("%Y-%m-%d")
+        if hasattr(r_analysis_date, "strftime")
+        else str(r_analysis_date)
+    )
+
+    rating_val = _compute_trend_rating_from_horizons(horizons_raw)
+
+    return StockTrendAnalysisResponse(
+        ts_code=str(record.get("ts_code") or ""),
+        analysis_date=analysis_date_str,
+        mode=str(record.get("mode") or "realtime"),
+        horizons=horizons_raw,
+        analysts=analysts_payload,
+        risk_report=risk_payload,
+        prediction_evolution=evolution_raw,
+        record_id=int(record.get("id") or record_id),
+        data_fetch_diagnostics=None,
+        technical_indicators=None,
+        rating=rating_val,
+    )
+
+
 def analyze_stocks_batch(req: BatchStockAnalysisRequest) -> BatchStockAnalysisResponse:
     """批量股票分析服务。
 
@@ -733,6 +1272,193 @@ def generate_stock_markdown_from_record(record_id: int) -> tuple[str, str]:
     symbol = (stock_info.get("symbol") or record.get("symbol") or "unknown")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"股票分析报告_{symbol}_{ts}.md"
+    return md_text, filename
+
+
+def _build_trend_summary_text(final_predictions: Any, rating: str | None) -> str:
+    """Generate a human-readable summary for trend analysis horizons."""
+
+    try:
+        horizons = list(final_predictions or [])
+    except TypeError:
+        horizons = []
+
+    label_map = {"1d": "1天", "1w": "1周", "1m": "1个月", "long": "长线"}
+
+    lines: list[str] = []
+    if rating:
+        lines.append(f"综合趋势评级：{rating}")
+
+    if horizons:
+        lines.append("多周期预期涨跌概览：")
+        for h in horizons:
+            try:
+                if isinstance(h, dict):
+                    hz = h.get("horizon")
+                    pct = h.get("base_expectation_pct")
+                else:
+                    hz = getattr(h, "horizon", None)
+                    pct = getattr(h, "base_expectation_pct", None)
+                if hz is None:
+                    continue
+                label = label_map.get(str(hz), str(hz))
+                if isinstance(pct, (int, float)):
+                    lines.append(f"- {label}：预期涨跌 {pct:.2f}%")
+                else:
+                    lines.append(f"- {label}：预期涨跌 不明确")
+            except Exception:  # noqa: BLE001
+                continue
+
+    return "\n".join(lines) if lines else "暂无多周期预期数据。"
+
+
+def generate_trend_pdf_from_record(record_id: int) -> tuple[bytes, str]:
+    """根据 trend_analysis_records 记录生成趋势分析 PDF 报告。"""
+
+    payload = trend_analysis_repo.get_trend_analysis(record_id)
+    if not payload:
+        raise ValueError(f"trend analysis record not found: {record_id}")
+
+    record = payload["record"]
+    analysts_rows = payload.get("analysts", [])
+
+    stock_info = record.get("stock_info") or {}
+    final_predictions = record.get("final_predictions") or []
+
+    rating_val = _compute_trend_rating_from_horizons(final_predictions)
+    summary_text = _build_trend_summary_text(final_predictions, rating_val)
+
+    agents_results: dict[str, Any] = {
+        "trend": {
+            "agent_name": "趋势分析总结",
+            "analysis": summary_text,
+        }
+    }
+
+    analyst_names = ", ".join(
+        str(row.get("analyst_name")) for row in analysts_rows if row.get("analyst_name")
+    )
+    discussion_result: str = ""
+    if analyst_names:
+        discussion_result = f"参与分析师：{analyst_names}"
+
+    decision_lines: list[str] = []
+    if rating_val:
+        decision_lines.append(f"综合趋势评级：{rating_val}")
+    decision_lines.append(summary_text)
+    final_decision = {"decision_text": "\n".join(decision_lines)}
+
+    pdf_bytes = create_pdf_report(
+        stock_info=stock_info,
+        agents_results=agents_results,
+        discussion_result=discussion_result,
+        final_decision=final_decision,
+    )
+
+    symbol = stock_info.get("symbol") or record.get("ts_code") or "unknown"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"股票趋势分析报告_{symbol}_{ts}.pdf"
+    return pdf_bytes, filename
+
+
+def generate_trend_markdown_from_record(record_id: int) -> tuple[str, str]:
+    """根据 trend_analysis_records 记录生成 Markdown 趋势分析报告。"""
+
+    payload = trend_analysis_repo.get_trend_analysis(record_id)
+    if not payload:
+        raise ValueError(f"trend analysis record not found: {record_id}")
+
+    record = payload["record"]
+    analysts_rows = payload.get("analysts", [])
+
+    stock_info = record.get("stock_info") or {}
+    final_predictions = record.get("final_predictions") or []
+
+    rating_val = _compute_trend_rating_from_horizons(final_predictions) or "未知"
+
+    ts_code = str(record.get("ts_code") or stock_info.get("symbol") or "")
+    name = str(stock_info.get("name") or "")
+    r_analysis_date = record.get("analysis_date")
+    analysis_date_str = (
+        r_analysis_date.strftime("%Y-%m-%d")
+        if hasattr(r_analysis_date, "strftime")
+        else str(r_analysis_date)
+    )
+
+    summary_text = _build_trend_summary_text(final_predictions, rating_val)
+
+    label_map = {"1d": "1天", "1w": "1周", "1m": "1个月", "long": "长线"}
+
+    try:
+        horizons = list(final_predictions or [])
+    except TypeError:
+        horizons = []
+
+    md_lines: list[str] = []
+    md_lines.append("# AI股票趋势分析报告")
+    md_lines.append("")
+    md_lines.append(f"**股票代码**：{ts_code}")
+    md_lines.append(f"**股票名称**：{name}")
+    md_lines.append(f"**分析日期**：{analysis_date_str}")
+    md_lines.append(f"**趋势评级**：{rating_val}")
+    md_lines.append("")
+    md_lines.append("---")
+    md_lines.append("")
+    md_lines.append("## 多周期预期涨跌")
+    md_lines.append("")
+    if horizons:
+        md_lines.append("| 周期 | 预期涨跌幅(%) |")
+        md_lines.append("|------|----------------|")
+        for h in horizons:
+            try:
+                if isinstance(h, dict):
+                    hz = h.get("horizon")
+                    pct = h.get("base_expectation_pct")
+                else:
+                    hz = getattr(h, "horizon", None)
+                    pct = getattr(h, "base_expectation_pct", None)
+                if hz is None:
+                    continue
+                label = label_map.get(str(hz), str(hz))
+                if isinstance(pct, (int, float)):
+                    md_lines.append(f"| {label} | {pct:.2f} |")
+                else:
+                    md_lines.append(f"| {label} | 不明确 |")
+            except Exception:  # noqa: BLE001
+                continue
+    else:
+        md_lines.append("暂无多周期预期数据。")
+
+    md_lines.append("")
+    md_lines.append("---")
+    md_lines.append("")
+    md_lines.append("## 趋势综合说明")
+    md_lines.append("")
+    md_lines.append(summary_text or "暂无说明。")
+    md_lines.append("")
+
+    if analysts_rows:
+        md_lines.append("---")
+        md_lines.append("")
+        md_lines.append("## 分析师观点摘要")
+        md_lines.append("")
+        for row in analysts_rows:
+            name_i = str(row.get("analyst_name") or "")
+            role_i = str(row.get("role") or "")
+            text_i = str(row.get("raw_text") or "")
+            md_lines.append(f"### {name_i}")
+            if role_i:
+                md_lines.append("")
+                md_lines.append(f"角色：{role_i}")
+            md_lines.append("")
+            md_lines.append(text_i or "暂无内容。")
+            md_lines.append("")
+
+    md_text = "\n".join(md_lines)
+
+    symbol = stock_info.get("symbol") or ts_code or "unknown"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"股票趋势分析报告_{symbol}_{ts}.md"
     return md_text, filename
 
 

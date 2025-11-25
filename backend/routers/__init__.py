@@ -9,6 +9,8 @@ from . import portfolio
 from . import main_force
 from . import sector_strategy
 from . import longhubang
+from . import model_scheduler
+from . import ingestion
 
 __all__ = [
     "health",
@@ -22,5 +24,6 @@ __all__ = [
     "main_force",
     "sector_strategy",
     "longhubang",
+    "model_scheduler",
+    "ingestion",
 ]
-

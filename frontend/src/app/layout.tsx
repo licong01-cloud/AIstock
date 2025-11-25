@@ -14,7 +14,10 @@ const NAV_GROUPS: {
 }[] = [
   {
     title: "🔍 功能导航",
-    items: [{ href: "/analysis", label: "🏠 股票分析" }],
+    items: [
+      { href: "/analysis", label: "🏠 股票分析" },
+      { href: "/analysis-trend", label: "📈 趋势分析" },
+    ],
   },
   {
     title: "🎯 选股板块",
@@ -47,6 +50,7 @@ const NAV_GROUPS: {
       { href: "/history", label: "📖 历史记录" },
       { href: "/config", label: "⚙️ 环境配置" },
       { href: "/local-data", label: "🗄️ 本地数据管理" },
+      { href: "/quant-models", label: "🧠 模型调度" },
     ],
   },
 ];

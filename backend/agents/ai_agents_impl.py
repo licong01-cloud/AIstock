@@ -23,15 +23,14 @@ from ..core.risk_data_fetcher_impl import RiskDataFetcher
 
 
 DEFAULT_ENABLED_ANALYSTS: Dict[str, bool] = {
+    # 技术相关统一为“技术资金分析师”，内部综合技术 + 资金流 + 筹码分析
     "technical": True,
     "fundamental": True,
-    "fund_flow": True,
     "risk": True,
     "sentiment": False,
     "news": False,
     "research": False,
     "announcement": False,
-    "chip": False,
 }
 
 
@@ -56,25 +55,82 @@ class StockAnalysisAgents:
         stock_info: Dict[str, Any],
         stock_data: Any,
         indicators: Dict[str, Any],
+        fund_flow_data: Dict[str, Any] | None = None,
+        chip_data: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
-        """Technical analysis agent.
+        """综合技术 + 资金流 + 筹码的“技术资金分析师”。
 
-        Delegates the core reasoning to DeepSeekClient. The structure of the
-        returned dict is compatible with the legacy implementation.
+        内部复用 DeepSeekClient.technical_analysis / fund_flow_analysis /
+        chip_analysis 三个高层方法，将结果汇总为单一智能体报告，便于前端以
+        “技术资金分析师”这一角色统一展示。
         """
 
-        print("🔍 技术分析师正在分析中...")
+        print("🔍 技术资金分析师正在分析中...")
         time.sleep(0.5)
 
-        analysis = self.deepseek_client.technical_analysis(
-            stock_info, stock_data, indicators
-        )
+        # 1. 技术面分析
+        tech_text = ""
+        try:
+            tech_text = self.deepseek_client.technical_analysis(
+                stock_info, stock_data, indicators
+            )
+        except Exception as exc:  # noqa: BLE001
+            debug_logger.error(
+                "technical_analysis_for_tech_capital_failed", error=str(exc)
+            )
+
+        # 2. 资金面分析（可选）
+        fund_flow_text = ""
+        try:
+            fund_flow_text = self.deepseek_client.fund_flow_analysis(
+                stock_info, indicators, fund_flow_data
+            )
+        except Exception as exc:  # noqa: BLE001
+            debug_logger.error(
+                "fund_flow_analysis_for_tech_capital_failed", error=str(exc)
+            )
+
+        # 3. 筹码结构分析（可选）
+        chip_text = ""
+        try:
+            prompt_context = {"stock_info": stock_info, "chip_data": chip_data}
+            chip_text = self.deepseek_client.chip_analysis(prompt_context)
+        except Exception as exc:  # noqa: BLE001
+            debug_logger.error(
+                "chip_analysis_for_tech_capital_failed", error=str(exc)
+            )
+
+        analysis_parts: list[str] = []
+        if isinstance(tech_text, str) and tech_text.strip():
+            analysis_parts.append(
+                "【技术面分析】\n" + tech_text.strip()
+            )
+        if isinstance(fund_flow_text, str) and fund_flow_text.strip():
+            analysis_parts.append(
+                "【资金面分析】\n" + fund_flow_text.strip()
+            )
+        if isinstance(chip_text, str) and chip_text.strip():
+            analysis_parts.append(
+                "【筹码结构分析】\n" + chip_text.strip()
+            )
+
+        if analysis_parts:
+            analysis = "\n\n".join(analysis_parts)
+        else:
+            analysis = "暂无技术 / 资金 / 筹码相关的有效分析结果。"
 
         return {
-            "agent_name": "技术分析师",
-            "agent_role": "负责技术指标分析、图表形态识别、趋势判断",
+            "agent_name": "技术资金分析师",
+            "agent_role": "综合技术指标、资金流向与筹码结构进行趋势与风险研判",
             "analysis": analysis,
-            "focus_areas": ["技术指标", "趋势分析", "支撑阻力", "交易信号"],
+            "focus_areas": [
+                "技术指标与趋势",
+                "资金流向与主力行为",
+                "筹码分布与持股结构",
+                "量价配合与风险信号",
+            ],
+            "fund_flow_data": fund_flow_data,
+            "chip_data": chip_data,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
@@ -214,79 +270,6 @@ class StockAnalysisAgents:
 4. 如果数据中有日期字段，要特别关注最近的记录和即将发生的事件
 5. 如果数据中有金额/比例字段，要评估其规模和影响力
 6. 基于实际数据给出量化的风险评估，而不是空泛的描述
-
-请从以下角度进行全面的风险评估：
-
-1. **限售解禁风险分析** ⭐ 重点
-   - 解禁时间和规模评估
-   - 解禁对股价的潜在冲击
-   - 解禁股东类型分析（创始人/投资机构/其他）
-   - 历史解禁后股价走势参考
-   - 风险等级评定和应对建议
-
-2. **股东减持风险分析** ⭐ 重点
-   - 减持频率和力度评估
-   - 减持股东身份和意图分析
-   - 减持对市场信心的影响
-   - 是否存在连续减持或集中减持
-   - 风险警示和投资建议
-
-3. **重要事件风险分析** ⭐ 重点
-   - 识别可能影响股价的重大事件
-   - 事件性质判断（利好/利空/中性）
-   - 事件影响的时间维度（短期/中期/长期）
-   - 事件的确定性和不确定性
-   - 风险提示和关注要点
-
-4. **市场风险（系统性风险）**
-   - 宏观经济环境风险
-   - 市场整体走势风险
-   - Beta系数反映的市场敏感度
-   - 系统性风险应对策略
-
-5. **个股风险（非系统性风险）**
-   - 公司基本面风险
-   - 经营管理风险
-   - 竞争力风险
-   - 行业地位风险
-
-6. **流动性风险**
-   - 成交量和换手率分析
-   - 买卖盘深度评估
-   - 流动性枯竭风险
-   - 大额交易影响评估
-   - 结合以上资金流向参考数据，判断主力资金动向对流动性的影响
-
-7. **波动性风险**
-   - 价格波动幅度分析
-   - 52周最高最低位分析
-   - RSI等技术指标的风险提示
-   - 波动率对投资的影响
-
-8. **估值风险**
-   - 当前估值水平评估
-   - 市场预期和估值偏差
-   - 估值过高风险警示
-
-9. **行业风险**
-   - 行业周期阶段
-   - 行业竞争格局
-   - 行业政策风险
-   - 行业技术变革风险
-
-10. **综合风险评定**
-    - 风险等级评定（低/中/高）
-    - 主要风险因素排序
-    - 风险暴露时间窗口
-    - 风险演变趋势判断
-
-11. **风险控制建议** ⭐ 核心
-    - 仓位控制建议（具体比例）
-    - 止损位设置建议（具体价位）
-    - 风险规避策略（什么情况下不建议投资）
-    - 风险对冲方案（如果适用）
-    - 持仓时间建议
-    - 重点关注指标和信号
 
 请基于实际数据进行客观、专业、严谨的风险评估，给出可操作的风险控制建议。
 如果某些风险数据缺失，也要指出数据缺失本身可能带来的风险。
@@ -560,9 +543,24 @@ class StockAnalysisAgents:
         their respective result dicts.
         """
 
-        flags = dict(DEFAULT_ENABLED_ANALYSTS)
+        # 基于默认配置 + 用户显式传入配置构建最终启用表。
+        # 为了向后兼容，若请求中仍包含 fund_flow / chip，则将其视为
+        # “技术资金分析师”的别名，统一并入 technical 维度，而不再生成
+        # 独立的资金面 / 筹码分析师。
+        raw_flags: Dict[str, bool] = dict(DEFAULT_ENABLED_ANALYSTS)
         if enabled_analysts:
-            flags.update(enabled_analysts)
+            raw_flags.update(enabled_analysts)
+
+        legacy_ff = enabled_analysts.get("fund_flow") if enabled_analysts else None
+        legacy_chip = enabled_analysts.get("chip") if enabled_analysts else None
+        if legacy_ff is True or legacy_chip is True:
+            raw_flags["technical"] = True
+
+        flags: Dict[str, bool] = {}
+        for k, v in raw_flags.items():
+            if k in {"fund_flow", "chip"}:
+                continue
+            flags[k] = v
 
         debug_logger.info(
             "run_multi_agent_analysis开始",
@@ -575,16 +573,18 @@ class StockAnalysisAgents:
         def _run_single(name: str) -> Tuple[str, Any]:
             try:
                 if name == "technical":
-                    res = self.technical_analyst_agent(stock_info, stock_data, indicators)
+                    res = self.technical_analyst_agent(
+                        stock_info,
+                        stock_data,
+                        indicators,
+                        fund_flow_data=fund_flow_data,
+                        chip_data=chip_data,
+                    )
                 elif name == "fundamental":
                     res = self.fundamental_analyst_agent(
                         stock_info,
                         financial_data=financial_data,
                         quarterly_data=quarterly_data,
-                    )
-                elif name == "fund_flow":
-                    res = self.fund_flow_analyst_agent(
-                        stock_info, indicators, fund_flow_data=fund_flow_data
                     )
                 elif name == "risk":
                     res = self.risk_management_agent(
@@ -603,8 +603,6 @@ class StockAnalysisAgents:
                     res = self.announcement_analyst_agent(
                         stock_info, announcement_data
                     )
-                elif name == "chip":
-                    res = self.chip_analyst_agent(stock_info, chip_data)
                 else:
                     raise ValueError(f"Unknown agent: {name}")
 
@@ -673,37 +671,103 @@ class StockAnalysisAgents:
         to the legacy implementation.
         """
 
-        lines: list[str] = []
-        for key, value in agents_results.items():
-            if key.startswith("_"):
-                continue
-            if not isinstance(value, dict):
-                continue
-            name = value.get("agent_name", key)
-            analysis = str(value.get("analysis", ""))
-            lines.append(f"【{name}观点】\n{analysis}\n")
+        print("🤝 分析团队正在进行综合讨论...")
+        time.sleep(2)
 
-        summary = "\n".join(lines)
+        participants: list[str] = []
+        reports: list[str] = []
+
+        if "technical" in agents_results:
+            participants.append("技术资金分析师")
+            reports.append(
+                f"【技术资金分析师报告】\n{agents_results['technical'].get('analysis', '')}"
+            )
+
+        if "fundamental" in agents_results:
+            participants.append("基本面分析师")
+            reports.append(
+                f"【基本面分析师报告】\n{agents_results['fundamental'].get('analysis', '')}"
+            )
+
+        if "fund_flow" in agents_results:
+            participants.append("资金面分析师")
+            reports.append(
+                f"【资金面分析师报告】\n{agents_results['fund_flow'].get('analysis', '')}"
+            )
+
+        if "risk" in agents_results:
+            participants.append("风险管理师")
+            reports.append(
+                f"【风险管理师报告】\n{agents_results['risk'].get('analysis', '')}"
+            )
+
+        if "sentiment" in agents_results:
+            participants.append("市场情绪分析师")
+            reports.append(
+                f"【市场情绪分析师报告】\n{agents_results['sentiment'].get('analysis', '')}"
+            )
+
+        if "news" in agents_results:
+            participants.append("新闻分析师")
+            reports.append(
+                f"【新闻分析师报告】\n{agents_results['news'].get('analysis', '')}"
+            )
+
+        if "research" in agents_results:
+            participants.append("机构研报分析师")
+            reports.append(
+                f"【机构研报分析师报告】\n{agents_results['research'].get('analysis', '')}"
+            )
+
+        if "announcement" in agents_results:
+            participants.append("公告分析师")
+            reports.append(
+                f"【公告分析师报告】\n{agents_results['announcement'].get('analysis', '')}"
+            )
+
+        if "chip" in agents_results:
+            participants.append("筹码分析师")
+            reports.append(
+                f"【筹码分析师报告】\n{agents_results['chip'].get('analysis', '')}"
+            )
+
+        all_reports = "\n\n".join(reports)
+
+        discussion_prompt = f"""
+现在进行投资决策团队会议，参会人员包括：{', '.join(participants)}。
+
+股票：{stock_info.get('name', 'N/A')} ({stock_info.get('symbol', 'N/A')})
+
+各分析师报告：
+
+{all_reports}
+
+请模拟一场真实的投资决策会议讨论：
+1. 各分析师观点的一致性和分歧
+2. 不同维度分析的权重考量
+3. 风险收益评估
+4. 投资时机判断
+5. 策略制定思路
+6. 达成初步共识
+
+请以对话形式展现讨论过程，体现专业团队的思辨过程。
+注意：只讨论参与分析的分析师的观点。
+"""
 
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "你是多位投研分析师组成的投资委员会主席，需要综合各位分析师的"
-                    "意见，组织一场结构化的团队讨论并给出清晰的结论。"
+                    "你需要模拟一场专业的投资团队讨论会议，体现不同角色的观点碰撞和最终共识形成。"
                 ),
             },
-            {
-                "role": "user",
-                "content": (
-                    f"标的: {stock_info.get('name','N/A')} ({stock_info.get('symbol','N/A')})\n\n"
-                    "以下是各分析师的独立观点，请先进行角色扮演式的讨论，最后给出"
-                    "一段清晰的团队共识总结：\n\n" + summary
-                ),
-            },
+            {"role": "user", "content": discussion_prompt},
         ]
 
-        return self.deepseek_client.call_api(messages, max_tokens=4000)
+        discussion_result = self.deepseek_client.call_api(messages, max_tokens=6000)
+
+        print("✅ 团队讨论完成")
+        return discussion_result
 
     def make_final_decision(
         self,
@@ -717,41 +781,52 @@ class StockAnalysisAgents:
         其余字段用于前端调试和后续扩展。
         """
 
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "你是一名首席投资官，需要在听取团队讨论后，给出最终的、结构化"
-                    "的投资决策建议。"
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"标的: {stock_info.get('name','N/A')} ({stock_info.get('symbol','N/A')})\n"
-                    f"技术指标: {indicators}\n\n"
-                    "以下是团队讨论纪要，请在充分吸收讨论内容的基础上，给出最终决策：\n\n"
-                    f"{discussion_result}\n\n"
-                    "请用结构化JSON形式输出，包括: summary(文字总结)、rating(买入/观望/卖出)、"
-                    "time_horizon(建议持有周期)、key_reasons(关键理由列表)、risk_points(主要风险点)。"
-                ),
-            },
-        ]
+        print("📋 正在制定最终投资决策...")
+        time.sleep(1)
 
-        raw = self.deepseek_client.call_api(messages, max_tokens=2000)
+        # 委托给 DeepSeekClient.final_decision，以复用旧程序的决策提示词和字段结构
+        decision = self.deepseek_client.final_decision(
+            comprehensive_discussion=discussion_result,
+            stock_info=stock_info,
+            indicators=indicators,
+        )
 
-        # 为了兼容性，这里做一个保守解析：如果不是合法JSON，就包裹到 summary 中
-        decision: Dict[str, Any]
-        if isinstance(raw, dict) and "summary" in raw:
-            decision = raw
-        else:
-            decision = {
-                "summary": str(raw),
-                "rating": None,
-                "time_horizon": None,
-                "key_reasons": None,
-                "risk_points": None,
-                "_raw": raw,
-            }
+        # 确保始终提供一个可读性良好的 summary 字段，便于前端展示
+        if isinstance(decision, dict) and "summary" not in decision:
+            rating = str(decision.get("rating") or "").strip()
+            target = str(decision.get("target_price") or "").strip()
+            entry = str(decision.get("entry_range") or "").strip()
+            tp = str(decision.get("take_profit") or "").strip()
+            sl = str(decision.get("stop_loss") or "").strip()
+            pos = str(decision.get("position_size") or "").strip()
+            conf = str(decision.get("confidence_level") or "").strip()
 
+            parts: list[str] = []
+            if rating:
+                parts.append(f"投资评级：{rating}")
+            if target:
+                parts.append(f"目标价：{target}")
+            if entry:
+                parts.append(f"建议进场区间：{entry}")
+            if tp:
+                parts.append(f"止盈位：{tp}")
+            if sl:
+                parts.append(f"止损位：{sl}")
+            if pos:
+                parts.append(f"仓位建议：{pos}")
+            if conf:
+                parts.append(f"信心度：{conf}/10")
+
+            if parts:
+                decision["summary"] = "；".join(parts)
+            else:
+                try:
+                    import json as _json
+
+                    decision["summary"] = _json.dumps(decision, ensure_ascii=False)
+                except Exception:  # noqa: BLE001
+                    decision["summary"] = str(decision)
+
+        print("✅ 最终投资决策完成")
         return decision
+

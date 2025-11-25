@@ -51,6 +51,13 @@ class NextUnifiedDataAccess:
     def get_risk_data(self, symbol: str, analysis_date: Optional[str] = None) -> Optional[Dict[str, Any]]:
         return self._uda.get_risk_data(symbol, analysis_date=analysis_date)
 
+    def get_quarterly_reports(
+        self, symbol: str, analysis_date: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """获取季度报表数据，直接代理 core.UnifiedDataAccess 实现。"""
+
+        return self._uda.get_quarterly_reports(symbol, analysis_date=analysis_date)
+
     def get_market_sentiment_data(
         self,
         symbol: str,

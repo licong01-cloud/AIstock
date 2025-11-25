@@ -47,6 +47,7 @@ const INGESTION_DATASETS: Record<string, string> = {
   tdx_board_member: "通达信板块成分",
   tdx_board_daily: "通达信板块行情",
   stock_moneyflow: "个股资金流（moneyflow_ind_dc）",
+  trade_agg_5m: "高频聚合 5m（Core/自选）",
 };
 
 interface IngestionJobCounters {
@@ -69,6 +70,14 @@ interface IngestionJobStatus {
   progress?: number;
   counters?: IngestionJobCounters;
   logs?: string[];
+  meta?: any;
+}
+
+interface IncrementalPrefill {
+  dataSource?: DataSource;
+  dataset?: string;
+  targetDate?: string;
+  startDate?: string | null;
 }
 
 function classNames(...parts: Array<string | false | null | undefined>): string {
@@ -111,10 +120,33 @@ async function backendRequest<T = any>(
   }
 }
 
+function formatDateTime(value?: string | null): string {
+  if (!value) return "—";
+  try {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return String(value);
+    const s = d.toLocaleString("zh-CN", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    return s.replace(/\//g, "-");
+  } catch {
+    return String(value);
+  }
+}
+
 export default function LocalDataPage() {
   const [activeTab, setActiveTab] = useState<LocalDataTab>("init");
   const [pingResult, setPingResult] = useState<PingResult | null>(null);
   const [pingLoading, setPingLoading] = useState(false);
+  const [incrementalPrefill, setIncrementalPrefill] =
+    useState<IncrementalPrefill | null>(null);
 
   const backendBaseDisplay = useMemo(
     () => TDX_BASE.replace(/\/$/, ""),
@@ -140,6 +172,38 @@ export default function LocalDataPage() {
       setPingLoading(false);
     }
   }, []);
+
+  const handleFillLatestFromStats = useCallback(
+    (kind: string, latestTradingDay: string) => {
+      const lower = (kind || "").toLowerCase();
+      let dataSource: DataSource = "TDX";
+      let dataset: string | undefined;
+      if (lower === "kline_daily_qfq") {
+        dataset = "kline_daily_qfq";
+      } else if (lower === "kline_daily_raw") {
+        dataset = "kline_daily_raw";
+      } else if (lower === "kline_minute_raw") {
+        dataset = "kline_minute_raw";
+      } else if (
+        lower === "tdx_board_index" ||
+        lower === "tdx_board_member" ||
+        lower === "tdx_board_daily"
+      ) {
+        dataSource = "Tushare";
+        dataset = "tdx_board_all";
+      } else {
+        return;
+      }
+      setIncrementalPrefill({
+        dataSource,
+        dataset,
+        targetDate: latestTradingDay,
+        startDate: null,
+      });
+      setActiveTab("incremental");
+    },
+    [],
+  );
 
   useEffect(() => {
     // 首次进入页面时，不自动 ping，避免阻塞渲染；交给用户手动测试。
@@ -291,10 +355,17 @@ export default function LocalDataPage() {
         }}
       >
         {activeTab === "init" && <InitTab />}
-        {activeTab === "incremental" && <IncrementalTab />}
+        {activeTab === "incremental" && (
+          <IncrementalTab
+            prefill={incrementalPrefill}
+            onPrefillConsumed={() => setIncrementalPrefill(null)}
+          />
+        )}
         {activeTab === "adjust" && <AdjustTab />}
         {activeTab === "jobs" && <JobsTab />}
-        {activeTab === "stats" && <DataStatsTab />}
+        {activeTab === "stats" && (
+          <DataStatsTab onFillLatest={handleFillLatestFromStats} />
+        )}
         {activeTab === "testing" && <TestingTab />}
         {activeTab === "schedules" && <IngestionSchedulesTab />}
         {activeTab === "logs" && <LogsTab />}
@@ -324,8 +395,22 @@ function InitTab() {
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
 
   const datasetOptionsTDX: { key: string; label: string }[] = [
-    { key: "kline_daily_raw", label: "kline_daily_raw · 日线（未复权 RAW）" },
-    { key: "kline_minute_raw", label: "kline_minute_raw · 1 分钟（原始 RAW）" },
+    {
+      key: "kline_daily_qfq",
+      label: "kline_daily_qfq · 日线（前复权 QFQ）",
+    },
+    {
+      key: "kline_daily_raw",
+      label: "kline_daily_raw · 日线（未复权 RAW）",
+    },
+    {
+      key: "kline_minute_raw",
+      label: "kline_minute_raw · 1 分钟（原始 RAW）",
+    },
+    {
+      key: "trade_agg_5m",
+      label: "trade_agg_5m · 高频聚合 5m（Core/自选）",
+    },
   ];
 
   const datasetOptionsTushare: { key: string; label: string }[] = [
@@ -370,28 +455,80 @@ function InitTab() {
     setError(null);
     try {
       if (dataSource === "TDX") {
-        if (truncate && !confirmClear) {
-          setError("请先勾选确认或取消清空选项后再继续。显示方式同旧版：清空前必须二次确认。");
-          return;
-        }
-        const opts = {
-          exchanges: exchanges
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean),
-          start_date: startDate,
-          end_date: endDate,
-          batch_size: 100,
-          truncate: Boolean(truncate),
-        };
-        const payload = { dataset, options: opts };
-        const resp: any = await backendRequest("POST", "/api/ingestion/init", {
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (resp && resp.job_id) {
-          setJobId(String(resp.job_id));
-          setAutoRefresh(true);
+        if (dataset === "kline_daily_qfq") {
+          const opts = {
+            exchanges: exchanges
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean),
+            start_date: startDate,
+            end_date: endDate,
+            batch_size: 100,
+          };
+          const payload = { dataset: "kline_daily_qfq", mode: "init", options: opts };
+          const resp: any = await backendRequest(
+            "POST",
+            "/api/ingestion/run",
+            {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            },
+          );
+          if (resp && resp.job_id) {
+            setJobId(String(resp.job_id));
+            setAutoRefresh(true);
+          }
+        } else if (dataset === "trade_agg_5m") {
+          const opts = {
+            start_date: startDate,
+            end_date: endDate,
+            freq_minutes: 5,
+            symbols_scope: "watchlist",
+            batch_size: 50,
+          };
+          const payload = { dataset: "trade_agg_5m", mode: "init", options: opts };
+          const resp: any = await backendRequest(
+            "POST",
+            "/api/ingestion/run",
+            {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            },
+          );
+          if (resp && resp.job_id) {
+            setJobId(String(resp.job_id));
+            setAutoRefresh(true);
+          }
+        } else {
+          if (truncate && !confirmClear) {
+            setError(
+              "请先勾选确认或取消清空选项后再继续。显示方式同旧版：清空前必须二次确认。",
+            );
+            return;
+          }
+          const opts = {
+            exchanges: exchanges
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean),
+            start_date: startDate,
+            end_date: endDate,
+            batch_size: 100,
+            truncate: Boolean(truncate),
+          };
+          const payload = { dataset, options: opts };
+          const resp: any = await backendRequest(
+            "POST",
+            "/api/ingestion/init",
+            {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            },
+          );
+          if (resp && resp.job_id) {
+            setJobId(String(resp.job_id));
+            setAutoRefresh(true);
+          }
         }
       } else {
         if (dataset === "tushare_trade_cal") {
@@ -441,7 +578,6 @@ function InitTab() {
       setSubmitting(false);
     }
   };
-
   const loadJobStatus = useCallback(
     async (id: string) => {
       setJobLoading(true);
@@ -622,7 +758,8 @@ function InitTab() {
             </div>
           )}
 
-          {dataSource === "TDX" && (
+          {dataSource === "TDX" &&
+            (dataset === "kline_daily_raw" || dataset === "kline_minute_raw") && (
             <div style={{ marginTop: 4, marginBottom: 8 }}>
               <label style={{ fontSize: 13 }}>
                 <input
@@ -805,7 +942,13 @@ function InitTab() {
   );
 }
 
-function IncrementalTab() {
+function IncrementalTab({
+  prefill,
+  onPrefillConsumed,
+}: {
+  prefill?: IncrementalPrefill | null;
+  onPrefillConsumed?: () => void;
+}) {
   const [dataSource, setDataSource] = useState<DataSource>("TDX");
   const [dataset, setDataset] = useState<string>("kline_daily_qfq");
   const [date, setDate] = useState<string>(() => {
@@ -829,8 +972,22 @@ function IncrementalTab() {
   const [autoRefresh, setAutoRefresh] = useState(true);
 
   const datasetOptionsTDX = [
-    { key: "kline_daily_qfq", label: "kline_daily_qfq · 日线（前复权 QFQ）" },
-    { key: "kline_minute_raw", label: "kline_minute_raw · 1 分钟（原始 RAW）" },
+    {
+      key: "kline_daily_qfq",
+      label: "kline_daily_qfq · 日线（前复权 QFQ）",
+    },
+    {
+      key: "kline_daily_raw",
+      label: "kline_daily_raw · 日线（未复权 RAW）",
+    },
+    {
+      key: "kline_minute_raw",
+      label: "kline_minute_raw · 1 分钟（原始 RAW）",
+    },
+    {
+      key: "trade_agg_5m",
+      label: "trade_agg_5m · 高频聚合 5m（Core/自选）",
+    },
   ];
 
   const datasetOptionsTushare = [
@@ -842,8 +999,13 @@ function IncrementalTab() {
     { key: "tdx_board_member", label: "tdx_board_member · 通达信板块成分" },
     { key: "tdx_board_daily", label: "tdx_board_daily · 通达信板块行情" },
     {
+      key: "kline_weekly",
+      label: "kline_weekly · 周线（由本地日线QFQ聚合）",
+    },
+    {
       key: "stock_moneyflow",
-      label: "stock_moneyflow · 个股资金流（按交易日增量，默认最近3个自然日）",
+      label:
+        "stock_moneyflow · 个股资金流（按交易日增量，默认最近3个自然日）",
     },
     {
       key: "tushare_trade_cal",
@@ -851,12 +1013,38 @@ function IncrementalTab() {
     },
   ];
 
+  // 处理来自“数据看板”的预填参数：数据源 / 数据集 / 日期范围
+  useEffect(() => {
+    if (!prefill) return;
+    if (prefill.dataSource) {
+      setDataSource(prefill.dataSource);
+    }
+    if (prefill.dataset) {
+      setDataset(prefill.dataset);
+    }
+    if (prefill.targetDate) {
+      setDate(prefill.targetDate);
+    }
+    if (prefill.startDate !== undefined) {
+      setStartDate(prefill.startDate || "");
+    }
+    if (onPrefillConsumed) {
+      onPrefillConsumed();
+    }
+  }, [prefill, onPrefillConsumed]);
+
   useEffect(() => {
     if (dataSource === "TDX") {
-      setDataset("kline_daily_qfq");
+      // 仅调整默认交易所，不强制覆盖当前 dataset，避免打断外部预填
       setExchanges("sh,sz,bj");
     } else {
-      setDataset("tdx_board_all");
+      // 切换到 Tushare 时，如果当前 dataset 不在 Tushare 选项里，则默认选 tdx_board_all
+      const isTushareDataset = datasetOptionsTushare.some(
+        (opt) => opt.key === dataset,
+      );
+      if (!isTushareDataset) {
+        setDataset("tdx_board_all");
+      }
       const d = new Date();
       const today = d.toISOString().slice(0, 10);
       const ago = new Date(d.getTime() - 365 * 24 * 60 * 60 * 1000)
@@ -865,7 +1053,7 @@ function IncrementalTab() {
       setCalStart(ago);
       setCalEnd(today);
     }
-  }, [dataSource]);
+  }, [dataSource, dataset]);
 
   const loadJobStatus = useCallback(
     async (id: string) => {
@@ -910,23 +1098,60 @@ function IncrementalTab() {
     setError(null);
     try {
       if (dataSource === "TDX") {
-        const opts = {
-          date,
-          start_date: startDate || null,
-          exchanges: exchanges
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean),
-          batch_size: Number(batchSize) || 100,
-        };
-        const payload = { dataset, mode: "incremental", options: opts };
-        const resp: any = await backendRequest("POST", "/api/ingestion/run", {
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (resp && resp.job_id) {
-          setJobId(String(resp.job_id));
-          setAutoRefresh(true);
+        if (dataset === "trade_agg_5m") {
+          const argsParts: string[] = ["--mode", "incremental"]; 
+          if (startDate) {
+            argsParts.push("--start-date", startDate);
+          }
+          if (date) {
+            argsParts.push("--end-date", date);
+          }
+          argsParts.push("--freq-minutes", "5");
+          argsParts.push("--symbols-scope", "watchlist");
+          argsParts.push("--batch-size", String(Number(batchSize) || 50));
+          const opts = {
+            args: argsParts.join(" "),
+          };
+          const payload = {
+            dataset: "trade_agg_5m",
+            mode: "incremental",
+            options: opts,
+          };
+          const resp: any = await backendRequest(
+            "POST",
+            "/api/ingestion/run",
+            {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            },
+          );
+          if (resp && resp.job_id) {
+            setJobId(String(resp.job_id));
+            setAutoRefresh(true);
+          }
+        } else {
+          const opts = {
+            date,
+            start_date: startDate || null,
+            exchanges: exchanges
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean),
+            batch_size: Number(batchSize) || 100,
+          };
+          const payload = { dataset, mode: "incremental", options: opts };
+          const resp: any = await backendRequest(
+            "POST",
+            "/api/ingestion/run",
+            {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            },
+          );
+          if (resp && resp.job_id) {
+            setJobId(String(resp.job_id));
+            setAutoRefresh(true);
+          }
         }
       } else {
         if (dataset === "tushare_trade_cal") {
@@ -1670,18 +1895,12 @@ function AdjustTab() {
                         color: "#4b5563",
                       }}
                     >
-                      总数 {jobStatus.counters.total ?? 0} · 已完成
-                      {" "}
-                      {jobStatus.counters.done ?? 0} · 运行中
-                      {" "}
-                      {jobStatus.counters.running ?? 0} · 排队
-                      {" "}
-                      {jobStatus.counters.pending ?? 0} · 成功
-                      {" "}
-                      {jobStatus.counters.success ?? 0} · 失败
-                      {" "}
-                      {jobStatus.counters.failed ?? 0} · 新增行数
-                      {" "}
+                      总数 {jobStatus.counters.total ?? 0} · 已完成{" "}
+                      {jobStatus.counters.done ?? 0} · 运行中{" "}
+                      {jobStatus.counters.running ?? 0} · 排队{" "}
+                      {jobStatus.counters.pending ?? 0} · 成功{" "}
+                      {jobStatus.counters.success ?? 0} · 失败{" "}
+                      {jobStatus.counters.failed ?? 0} · 新增行数{" "}
                       {jobStatus.counters.inserted_rows ?? 0}
                     </p>
                   )}
@@ -1718,7 +1937,7 @@ function AdjustTab() {
             </div>
           ) : (
             <p style={{ fontSize: 12, color: "#6b7280" }}>
-              尚未提交复权生成任务。请在左侧填写参数并点击“开始生成”。
+              尚未提交复权任务。请在左侧填写参数并点击“开始生成”。
             </p>
           )}
         </div>
@@ -1761,8 +1980,8 @@ function JobsTab() {
   useEffect(() => {
     if (!autoRefresh) return;
     const anyActive = items.some((job: any) => {
-      const status = String(job?.status || "").toLowerCase();
-      return ["running", "queued", "pending"].includes(status);
+      const st = String(job?.status || "").toLowerCase();
+      return ["running", "queued", "pending"].includes(st);
     });
     if (!anyActive) return;
     const id = setTimeout(() => {
@@ -1770,6 +1989,29 @@ function JobsTab() {
     }, 5000);
     return () => clearTimeout(id);
   }, [autoRefresh, items, loadJobs]);
+
+  const handleDelete = useCallback(
+    async (jobId: string, status: string) => {
+      const st = (status || "").toLowerCase();
+      if (["running", "queued", "pending"].includes(st)) {
+        setError("运行中或排队中的任务不能删除。");
+        return;
+      }
+      if (typeof window !== "undefined") {
+        const ok = window.confirm(
+          "确定要删除该任务及其相关历史记录吗？此操作不可恢复。",
+        );
+        if (!ok) return;
+      }
+      try {
+        await backendRequest("DELETE", `/api/ingestion/job/${jobId}`);
+        await loadJobs();
+      } catch (e: any) {
+        setError(e?.message || "删除任务失败");
+      }
+    },
+    [loadJobs],
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1846,27 +2088,25 @@ function JobsTab() {
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {items.map((job: any, idx: number) => {
             const summary = job?.summary || {};
+            const meta = job?.meta || {};
             const dataset =
-              summary.dataset || (summary.datasets && summary.datasets[0]);
-            const mode = (summary.mode || job.job_type || "").toLowerCase();
+              meta.dataset || summary.dataset || (summary.datasets && summary.datasets[0]);
+            const mode = (meta.mode || summary.mode || job.job_type || "").toLowerCase();
             const status = (job.status || "").toLowerCase();
             const counters = job.counters || {};
             const percent = Number(job.progress || 0);
             const errorSamples = job.error_samples || [];
+            const jobId: string | undefined = job.job_id;
 
             let cat = "其他";
             const dsLower = String(dataset || "").toLowerCase();
             if (
-              ["kline_daily_qfq", "kline_daily", "kline_daily_raw"].includes(
-                dsLower,
-              ) &&
+              ["kline_daily_qfq", "kline_daily", "kline_daily_raw"].includes(dsLower) &&
               mode === "init"
             ) {
               cat = "日线初始化";
             } else if (
-              ["kline_daily_qfq", "kline_daily", "kline_daily_raw"].includes(
-                dsLower,
-              ) &&
+              ["kline_daily_qfq", "kline_daily", "kline_daily_raw"].includes(dsLower) &&
               mode === "incremental"
             ) {
               cat = "日线增量";
@@ -1883,12 +2123,17 @@ function JobsTab() {
             const createdAt = job.created_at || job.started_at;
 
             const startDate =
+              meta.start_date ||
               summary.start_date ||
               summary.start ||
               summary.date_from ||
               null;
             const endDate =
-              summary.end_date || summary.end || summary.date_to || null;
+              meta.end_date ||
+              summary.end_date ||
+              summary.end ||
+              summary.date_to ||
+              null;
             const targetDate = summary.date || summary.target_date || null;
 
             let dateRangeText: string;
@@ -1901,7 +2146,7 @@ function JobsTab() {
             }
 
             let exchangesText: string | null = null;
-            const exVal = summary.exchanges;
+            const exVal = (meta.exchanges ?? summary.exchanges) as any;
             if (Array.isArray(exVal)) {
               exchangesText = exVal.join(",");
             } else if (typeof exVal === "string") {
@@ -1914,16 +2159,44 @@ function JobsTab() {
               extraParts.push(`日期：${dateRangeText}`);
             }
             if (summary.which) extraParts.push(`复权类型：${summary.which}`);
-            if (summary.workers)
-              extraParts.push(`并行度：${summary.workers}`);
+            if (summary.workers) extraParts.push(`并行度：${summary.workers}`);
+            if (meta.freq_minutes)
+              extraParts.push(`频率：${meta.freq_minutes} 分钟`);
+            if (meta.symbols_scope)
+              extraParts.push(`代码范围：${meta.symbols_scope}`);
 
-            const rangeText = extraParts.length
-              ? extraParts.join(" · ")
-              : "—";
+            const rangeText =
+              extraParts.length > 0 ? extraParts.join(" · ") : "—";
+
+            const datasetLabel =
+              dataset && INGESTION_DATASETS[String(dataset)]
+                ? `${dataset} · ${INGESTION_DATASETS[String(dataset)]}`
+                : dataset || "—";
+
+            const typeText =
+              mode === "init"
+                ? "全量"
+                : mode === "incremental"
+                  ? "增量"
+                  : meta.type || job.job_type || "—";
+
+            const sourceText =
+              meta.source === "tdx_api"
+                ? "TDX 接口"
+                : meta.source === "tushare"
+                  ? "Tushare"
+                  : meta.source === "derived_from_kline_daily_qfq"
+                    ? "本地日线聚合"
+                    : meta.source === "tdx_api_minute_trade_all"
+                      ? "TDX 分钟成交聚合"
+                      : meta.source || "—";
+
+            const canDelete =
+              !!jobId && !["running", "queued", "pending"].includes(status);
 
             return (
               <div
-                key={idx}
+                key={jobId || idx}
                 style={{
                   borderRadius: 10,
                   border: "1px solid #e5e7eb",
@@ -1943,9 +2216,8 @@ function JobsTab() {
                 >
                   <div>
                     <div>
-                      {cat} · 数据集: {dataset || "—"} · 模式:
-                      {" "}
-                      {summary.mode || job.job_type || "—"}
+                      {cat} · 数据集: {datasetLabel} · 类型: {typeText} · 来源:{" "}
+                      {sourceText}
                     </div>
                     <div
                       style={{
@@ -1954,7 +2226,7 @@ function JobsTab() {
                         marginTop: 2,
                       }}
                     >
-                      开始时间：{createdAt || "—"}
+                      开始时间：{formatDateTime(createdAt)}
                     </div>
                   </div>
                   <div
@@ -1966,9 +2238,29 @@ function JobsTab() {
                           : status === "failed"
                             ? "#b91c1c"
                             : "#374151",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
                     }}
                   >
                     状态：{job.status || "—"}
+                    {canDelete && jobId && (
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(jobId, status)}
+                        style={{
+                          padding: "2px 6px",
+                          borderRadius: 6,
+                          border: "1px solid #fecaca",
+                          background: "#fee2e2",
+                          color: "#b91c1c",
+                          cursor: "pointer",
+                          fontSize: 11,
+                        }}
+                      >
+                        删除
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -2007,10 +2299,8 @@ function JobsTab() {
                   }}
                 >
                   总数 {counters.total ?? 0} · 已完成 {counters.done ?? 0} ·
-                  运行中 {counters.running ?? 0} · 排队
-                  {" "}
-                  {counters.pending ?? 0} · 成功 {counters.success ?? 0} · 失败
-                  {" "}
+                  运行中 {counters.running ?? 0} · 排队 {" "}
+                  {counters.pending ?? 0} · 成功 {counters.success ?? 0} · 失败 {" "}
                   {counters.failed ?? 0}
                 </div>
                 <div
@@ -2043,11 +2333,13 @@ function JobsTab() {
                           detail.start_date ||
                           null;
                         let msg = String(err.message || "").trim();
-                        if (msg.length > 200) msg = msg.slice(0, 200) + "...";
+                        if (msg.length > 200) {
+                          msg = `${msg.slice(0, 200)}...`;
+                        }
                         return (
                           <li key={i} style={{ marginBottom: 2 }}>
                             <span>
-                              代码：`{tsCode}` · 日期/范围：
+                              代码：{tsCode} · 日期/范围：
                               {tradeDate || "未知"}
                             </span>
                             <br />
@@ -2067,10 +2359,16 @@ function JobsTab() {
   );
 }
 
-function DataStatsTab() {
+function DataStatsTab({
+  onFillLatest,
+}: {
+  onFillLatest?: (kind: string, latestTradingDay: string) => void;
+}) {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [gapResult, setGapResult] = useState<any | null>(null);
+  const [gapLoadingKind, setGapLoadingKind] = useState<string | null>(null);
 
   const loadStats = useCallback(async () => {
     setLoading(true);
@@ -2085,6 +2383,27 @@ function DataStatsTab() {
     }
   }, []);
 
+  const handleCheckGapsClick = useCallback(
+    async (kind: string) => {
+      if (!kind) return;
+      setError(null);
+      setGapResult(null);
+      setGapLoadingKind(kind);
+      try {
+        const data: any = await backendRequest(
+          "GET",
+          `/api/data-stats/gaps?data_kind=${encodeURIComponent(kind)}`,
+        );
+        setGapResult(data || null);
+      } catch (e: any) {
+        setError(e?.message || "数据检查失败");
+      } finally {
+        setGapLoadingKind(null);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     loadStats();
   }, [loadStats]);
@@ -2097,6 +2416,27 @@ function DataStatsTab() {
       setError(e?.message || "触发统计刷新失败");
     }
   };
+
+  const handleFillLatestClick = useCallback(
+    async (kind: string) => {
+      if (!onFillLatest) return;
+      try {
+        const data: any = await backendRequest(
+          "GET",
+          "/api/trading/latest-day",
+        );
+        const latest = data?.latest_trading_day;
+        if (!latest) {
+          setError("无法获取最新交易日，请先同步交易日历。");
+          return;
+        }
+        onFillLatest(kind, String(latest));
+      } catch (e: any) {
+        setError(e?.message || "获取最新交易日失败");
+      }
+    },
+    [onFillLatest],
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -2176,6 +2516,9 @@ function DataStatsTab() {
                 <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
                   表名
                 </th>
+                <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
+                  操作
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -2187,7 +2530,19 @@ function DataStatsTab() {
                       : {})) ||
                   {};
                 const lastRaw = it.last_updated_at;
-                const lastDisp = lastRaw != null ? String(lastRaw) : "—";
+                const lastDisp =
+                  lastRaw != null ? formatDateTime(String(lastRaw)) : "—";
+                const kind = String(
+                  it.data_kind || it.kind || "",
+                );
+                const canFillLatest = [
+                  "kline_daily_qfq",
+                  "kline_daily_raw",
+                  "kline_minute_raw",
+                  "tdx_board_index",
+                  "tdx_board_member",
+                  "tdx_board_daily",
+                ].includes(kind);
                 return (
                   <tr key={idx}>
                     <td
@@ -2246,11 +2601,109 @@ function DataStatsTab() {
                     >
                       {it.table_name || it.table || "—"}
                     </td>
+                    <td
+                      style={{
+                        padding: 6,
+                        borderBottom: "1px solid #f3f4f6",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: 4,
+                        }}
+                      >
+                        {onFillLatest && canFillLatest ? (
+                          <button
+                            type="button"
+                            onClick={() => handleFillLatestClick(kind)}
+                            style={{
+                              padding: "4px 8px",
+                              borderRadius: 6,
+                              border: "1px solid #d4d4d4",
+                              background: "#fff",
+                              cursor: "pointer",
+                              fontSize: 12,
+                            }}
+                          >
+                            补齐到最新交易日
+                          </button>
+                        ) : (
+                          <span
+                            style={{ fontSize: 12, color: "#9ca3af" }}
+                          >
+                            —
+                          </span>
+                        )}
+                        {kind && (
+                          <button
+                            type="button"
+                            onClick={() => handleCheckGapsClick(kind)}
+                            disabled={gapLoadingKind === kind}
+                            style={{
+                              padding: "4px 8px",
+                              borderRadius: 6,
+                              border: "1px solid #d4d4d4",
+                              background: "#fff",
+                              cursor: "pointer",
+                              fontSize: 12,
+                            }}
+                          >
+                            {gapLoadingKind === kind ? "检查中..." : "数据检查"}
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+          {gapResult && (
+            <div
+              style={{
+                marginTop: 8,
+                fontSize: 12,
+              }}
+            >
+              <div>
+                数据集: {gapResult.data_kind} · 表: {gapResult.table_name}
+              </div>
+              <div>
+                检查区间: {gapResult.start_date} ~ {gapResult.end_date}
+              </div>
+              <div>
+                交易日总数: {gapResult.total_trading_days}，有数据天数:
+                {" "}
+                {gapResult.covered_days}，缺失交易日:
+                {" "}
+                {gapResult.missing_days}
+              </div>
+              {Array.isArray(gapResult.missing_ranges) &&
+                gapResult.missing_ranges.length > 0 && (
+                  <details style={{ marginTop: 4 }}>
+                    <summary>
+                      缺失日期段 ({gapResult.missing_ranges.length})
+                    </summary>
+                    <ul
+                      style={{
+                        marginTop: 4,
+                        paddingLeft: 18,
+                      }}
+                    >
+                      {gapResult.missing_ranges.map((r: any, idx: number) => (
+                        <li key={idx}>
+                          {r.start === r.end
+                            ? r.start
+                            : `${r.start} ~ ${r.end}`}（{r.days} 天）
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -2335,12 +2788,12 @@ function TestingRunsTable({ runs }: { runs: any[] }) {
                 <td
                   style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
                 >
-                  {item.started_at || "—"}
+                  {formatDateTime(item.started_at)}
                 </td>
                 <td
                   style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
                 >
-                  {item.finished_at || "—"}
+                  {formatDateTime(item.finished_at)}
                 </td>
                 <td
                   style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
@@ -2361,26 +2814,51 @@ function TestingRunsTable({ runs }: { runs: any[] }) {
   );
 }
 
-function IngestionLogsTable({ logs }: { logs: any[] }) {
-  const rows: any[] = [];
+function IngestionLogsTable({
+  logs,
+  selectedKeys,
+  onToggleItem,
+}: {
+  logs: any[];
+  selectedKeys: string[];
+  onToggleItem: (item: any, checked: boolean, key: string) => void;
+}) {
+  const rows: Array<{
+    key: string;
+    raw: any;
+    task: string;
+    run_id: string | null;
+    ts: string | null;
+    level: string | null;
+    dataset: string;
+    mode?: string;
+    status?: string;
+    note?: string | null;
+  }> = [];
+
   for (const item of logs || []) {
     const payload = item.payload || {};
-    let dataset = payload.summary?.dataset;
-    if (!dataset) {
-      const datasets = payload.summary?.datasets;
-      if (Array.isArray(datasets) && datasets.length > 0) {
-        dataset = datasets[0];
-      }
-    }
+    const summary = payload.summary || {};
+    let dataset: string | undefined =
+      item.dataset ||
+      summary.dataset ||
+      (Array.isArray(summary.datasets) && summary.datasets.length > 0
+        ? summary.datasets[0]
+        : undefined);
     if (!dataset && typeof payload.raw === "string" && payload.raw.trim()) {
       dataset = payload.raw.split(" ")[0];
     }
-    const mode = payload.summary?.mode || payload.status;
+    const mode: string | undefined =
+      item.mode || summary.mode || payload.status;
     let note: string | null = null;
     if (payload.error != null) {
       note = String(payload.error);
-    } else if (payload.summary != null) {
-      note = String(payload.summary);
+    } else if (summary && Object.keys(summary).length > 0) {
+      try {
+        note = JSON.stringify(summary);
+      } catch {
+        note = String(summary);
+      }
     } else if (typeof payload.raw === "string" && payload.raw.trim()) {
       note = payload.raw;
     }
@@ -2389,11 +2867,15 @@ function IngestionLogsTable({ logs }: { logs: any[] }) {
       if (snippet.length > 300) snippet = "..." + snippet.slice(-300);
       note = snippet;
     }
+
+    const key = `${item.run_id || ""}||${item.timestamp || ""}`;
     rows.push({
+      key,
+      raw: item,
       task: mode ? `${dataset || "—"} · ${mode}` : dataset || "—",
-      run_id: item.run_id,
-      ts: item.timestamp,
-      level: item.level,
+      run_id: item.run_id || null,
+      ts: item.timestamp || null,
+      level: item.level || null,
       dataset: dataset || "—",
       mode,
       status: payload.status,
@@ -2426,6 +2908,9 @@ function IngestionLogsTable({ logs }: { logs: any[] }) {
         <thead>
           <tr style={{ background: "#f3f4f6" }}>
             <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
+              选择
+            </th>
+            <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
               任务内容
             </th>
             <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
@@ -2452,50 +2937,64 @@ function IngestionLogsTable({ logs }: { logs: any[] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, idx) => (
-            <tr key={idx}>
-              <td
-                style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
-              >
-                {r.task}
-              </td>
-              <td
-                style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
-              >
-                {r.run_id}
-              </td>
-              <td
-                style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
-              >
-                {r.ts || "—"}
-              </td>
-              <td
-                style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
-              >
-                {r.level}
-              </td>
-              <td
-                style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
-              >
-                {r.dataset}
-              </td>
-              <td
-                style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
-              >
-                {r.mode || "—"}
-              </td>
-              <td
-                style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
-              >
-                {r.status || "—"}
-              </td>
-              <td
-                style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
-              >
-                {r.note || "—"}
-              </td>
-            </tr>
-          ))}
+          {rows.map((r) => {
+            const checked = selectedKeys.includes(r.key);
+            return (
+              <tr key={r.key}>
+                <td
+                  style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) =>
+                      onToggleItem(r.raw, e.target.checked, r.key)
+                    }
+                  />
+                </td>
+                <td
+                  style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
+                >
+                  {r.task}
+                </td>
+                <td
+                  style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
+                >
+                  {r.run_id}
+                </td>
+                <td
+                  style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
+                >
+                  {formatDateTime(r.ts || undefined)}
+                </td>
+                <td
+                  style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
+                >
+                  {r.level}
+                </td>
+                <td
+                  style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
+                >
+                  {r.dataset}
+                </td>
+                <td
+                  style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
+                >
+                  {r.mode || "—"}
+                </td>
+                <td
+                  style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
+                >
+                  {r.status || "—"}
+                </td>
+                <td
+                  style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}
+                >
+                  {r.note || "—"}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -3339,26 +3838,143 @@ function LogsTab() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [testingOffset, setTestingOffset] = useState<number>(0);
+  const [logsOffset, setLogsOffset] = useState<number>(0);
+  const [selectedLogKeys, setSelectedLogKeys] = useState<string[]>([]);
+  const [testingTotal, setTestingTotal] = useState<number>(0);
+  const [logsTotal, setLogsTotal] = useState<number>(0);
+
   const loadLogs = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const [runs, logs] = await Promise.all([
-        backendRequest("GET", "/api/testing/runs?limit=30"),
-        backendRequest("GET", `/api/ingestion/logs?limit=${logsLimit}`),
+        backendRequest(
+          "GET",
+          `/api/testing/runs?limit=30&offset=${testingOffset}`,
+        ),
+        backendRequest(
+          "GET",
+          `/api/ingestion/logs?limit=${logsLimit}&offset=${logsOffset}`,
+        ),
       ]);
       setTestingRuns(Array.isArray(runs?.items) ? runs.items : []);
       setIngestionLogs(Array.isArray(logs?.items) ? logs.items : []);
+      setTestingTotal(Number(runs?.total || 0));
+      setLogsTotal(Number(logs?.total || 0));
     } catch (e: any) {
       setError(e?.message || "加载日志失败");
     } finally {
       setLoading(false);
     }
-  }, [logsLimit]);
+  }, [logsLimit, testingOffset, logsOffset]);
 
   useEffect(() => {
     loadLogs();
   }, [loadLogs]);
+
+  // 当翻页或修改每页条数时，自动清空当前所有选择，实现“每页独立选择”语义
+  useEffect(() => {
+    setSelectedLogKeys([]);
+  }, [logsOffset, logsLimit]);
+
+  const makeLogKey = (item: any): string => {
+    return `${item.run_id || ""}||${item.timestamp || ""}`;
+  };
+
+  const handleToggleLogItem = (
+    item: any,
+    checked: boolean,
+    key: string,
+  ) => {
+    setSelectedLogKeys((prev) => {
+      if (checked) {
+        if (prev.includes(key)) return prev;
+        return [...prev, key];
+      }
+      return prev.filter((k) => k !== key);
+    });
+  };
+
+  const handleSelectAllLogsOnPage = () => {
+    const keysOnPage = (ingestionLogs || []).map((it: any) => makeLogKey(it));
+    setSelectedLogKeys((prev) => {
+      const set = new Set(prev);
+      for (const k of keysOnPage) {
+        set.add(k);
+      }
+      return Array.from(set);
+    });
+  };
+
+  const handleClearLogSelection = () => {
+    setSelectedLogKeys([]);
+  };
+
+  const handleDeleteSelectedLogs = async () => {
+    if (!selectedLogKeys.length) return;
+    if (!window.confirm("确认删除当前页选中的入库日志记录？")) return;
+    try {
+      const items = (ingestionLogs || [])
+        .filter((it: any) => selectedLogKeys.includes(makeLogKey(it)))
+        .map((it: any) => ({ job_id: it.run_id, ts: it.timestamp }));
+      await backendRequest("DELETE", "/api/ingestion/logs", {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items, delete_all: false }),
+      });
+      setSelectedLogKeys([]);
+      await loadLogs();
+    } catch (e: any) {
+      setError(e?.message || "删除入库日志失败");
+    }
+  };
+
+  const handleDeleteAllLogs = async () => {
+    if (!window.confirm("确认删除全部入库运行日志？该操作不可恢复！")) return;
+    try {
+      await backendRequest("DELETE", "/api/ingestion/logs", {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ delete_all: true }),
+      });
+      setSelectedLogKeys([]);
+      await loadLogs();
+    } catch (e: any) {
+      setError(e?.message || "删除全部入库日志失败");
+    }
+  };
+
+  const handleDeleteAllTestingRuns = async () => {
+    if (!window.confirm("确认删除全部测试执行记录？该操作不可恢复！")) return;
+    try {
+      await backendRequest("DELETE", "/api/testing/runs", {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ delete_all: true }),
+      });
+      await loadLogs();
+    } catch (e: any) {
+      setError(e?.message || "删除测试执行记录失败");
+    }
+  };
+
+  // 计算分页信息（测试执行记录与入库日志各自独立）
+  const testingPageSize = 30;
+  const testingTotalPages = Math.max(
+    1,
+    Math.ceil((testingTotal || 0) / testingPageSize),
+  );
+  const testingCurrentPage = Math.min(
+    testingTotalPages,
+    Math.floor(testingOffset / testingPageSize) + 1,
+  );
+
+  const logsTotalPages = Math.max(
+    1,
+    Math.ceil((logsTotal || 0) / Math.max(1, logsLimit)),
+  );
+  const logsCurrentPage = Math.min(
+    logsTotalPages,
+    Math.floor(logsOffset / Math.max(1, logsLimit)) + 1,
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -3379,7 +3995,12 @@ function LogsTab() {
             max={200}
             step={10}
             value={logsLimit}
-            onChange={(e) => setLogsLimit(Number(e.target.value) || 50)}
+            onChange={(e) => {
+              const v = Number(e.target.value) || 50;
+              const clamped = Math.min(200, Math.max(10, v));
+              setLogsLimit(clamped);
+              setLogsOffset(0);
+            }}
             style={{
               marginLeft: 4,
               width: 80,
@@ -3404,6 +4025,21 @@ function LogsTab() {
         >
           {loading ? "刷新中..." : "刷新日志"}
         </button>
+        <button
+          type="button"
+          onClick={handleDeleteAllTestingRuns}
+          disabled={loading}
+          style={{
+            padding: "6px 10px",
+            borderRadius: 8,
+            border: "1px solid #d4d4d4",
+            background: "#fff7ed",
+            cursor: "pointer",
+            fontSize: 13,
+          }}
+        >
+          清空测试执行记录
+        </button>
       </div>
 
       {error && (
@@ -3418,6 +4054,56 @@ function LogsTab() {
         }}
       >
         <h4 style={{ fontSize: 14, margin: "0 0 4px" }}>测试执行记录</h4>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 4,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() =>
+              setTestingOffset((prev) =>
+                Math.max(0, prev - testingPageSize),
+              )
+            }
+            disabled={loading || testingOffset <= 0}
+            style={{
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid #d4d4d4",
+              background: "#fff",
+              cursor: "pointer",
+              fontSize: 12,
+            }}
+          >
+            上一页
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              setTestingOffset((prev) => prev + testingPageSize)
+            }
+            disabled={
+              loading || testingOffset + testingPageSize >= testingTotal
+            }
+            style={{
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid #d4d4d4",
+              background: "#fff",
+              cursor: "pointer",
+              fontSize: 12,
+            }}
+          >
+            下一页
+          </button>
+          <span style={{ fontSize: 12, color: "#6b7280" }}>
+            第 {testingCurrentPage} / {testingTotalPages} 页
+          </span>
+        </div>
         <TestingRunsTable runs={testingRuns} />
       </div>
 
@@ -3429,7 +4115,119 @@ function LogsTab() {
         }}
       >
         <h4 style={{ fontSize: 14, margin: "0 0 4px" }}>入库运行日志</h4>
-        <IngestionLogsTable logs={ingestionLogs} />
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 4,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() =>
+              setLogsOffset((prev) => Math.max(0, prev - logsLimit))
+            }
+            disabled={loading || logsOffset <= 0}
+            style={{
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid #d4d4d4",
+              background: "#fff",
+              cursor: "pointer",
+              fontSize: 12,
+            }}
+          >
+            上一页
+          </button>
+          <button
+            type="button"
+            onClick={() => setLogsOffset((prev) => prev + logsLimit)}
+            disabled={
+              loading || logsOffset + logsLimit >= logsTotal || logsTotal === 0
+            }
+            style={{
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid #d4d4d4",
+              background: "#fff",
+              cursor: "pointer",
+              fontSize: 12,
+            }}
+          >
+            下一页
+          </button>
+          <span style={{ fontSize: 12, color: "#6b7280" }}>
+            第 {logsCurrentPage} / {logsTotalPages} 页
+          </span>
+          <button
+            type="button"
+            onClick={handleSelectAllLogsOnPage}
+            disabled={ingestionLogs.length === 0}
+            style={{
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid #d4d4d4",
+              background: "#f9fafb",
+              cursor: "pointer",
+              fontSize: 12,
+            }}
+          >
+            本页全选
+          </button>
+          <button
+            type="button"
+            onClick={handleClearLogSelection}
+            disabled={!selectedLogKeys.length}
+            style={{
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid #d4d4d4",
+              background: "#fff",
+              cursor: "pointer",
+              fontSize: 12,
+            }}
+          >
+            清除选择
+          </button>
+          <button
+            type="button"
+            onClick={handleDeleteSelectedLogs}
+            disabled={!selectedLogKeys.length || loading}
+            style={{
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: "1px solid #f97316",
+              background: "#fffbeb",
+              cursor: "pointer",
+              fontSize: 13,
+              color: "#c2410c",
+            }}
+          >
+            删除选中日志
+          </button>
+          <button
+            type="button"
+            onClick={handleDeleteAllLogs}
+            disabled={loading}
+            style={{
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: "1px solid #dc2626",
+              background: "#fef2f2",
+              cursor: "pointer",
+              fontSize: 13,
+              color: "#b91c1c",
+            }}
+          >
+            清空全部入库日志
+          </button>
+        </div>
+        <IngestionLogsTable
+          logs={ingestionLogs}
+          selectedKeys={selectedLogKeys}
+          onToggleItem={handleToggleLogItem}
+        />
       </div>
     </div>
   );

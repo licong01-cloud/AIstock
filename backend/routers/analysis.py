@@ -5,6 +5,7 @@ from urllib.parse import quote
 
 from ..services.analysis_service import (
     analyze_stock,
+    analyze_stock_trend,
     get_stock_context,
     get_realtime_quote,
     analyze_stocks_batch,
@@ -14,6 +15,10 @@ from ..services.analysis_service import (
     delete_history_record,
     add_history_record_to_monitor_quick,
     get_history_record_detail,
+    get_trend_history_records,
+    get_trend_history_record_detail,
+    generate_trend_pdf_from_record,
+    generate_trend_markdown_from_record,
 )
 from ..models.analysis import (
     StockAnalysisRequest,
@@ -22,6 +27,8 @@ from ..models.analysis import (
     StockQuote,
     BatchStockAnalysisRequest,
     BatchStockAnalysisResponse,
+    StockTrendAnalysisRequest,
+    StockTrendAnalysisResponse,
 )
 
 
@@ -33,6 +40,19 @@ async def analyze_stock_endpoint(req: StockAnalysisRequest) -> StockAnalysisResp
     """股票分析接口，复用统一数据访问与旧多智能体实现。"""
 
     return analyze_stock(req)
+
+
+@router.post(
+    "/stock/trend",
+    response_model=StockTrendAnalysisResponse,
+    summary="股票趋势分析（多周期概率预测）",
+)
+async def analyze_stock_trend_endpoint(
+    req: StockTrendAnalysisRequest,
+) -> StockTrendAnalysisResponse:
+    """股票趋势分析接口，复用统一数据访问与新趋势分析管线。"""
+
+    return analyze_stock_trend(req)
 
 
 @router.post("/stock/context", response_model=StockContextResponse, summary="股票概览与K线基础数据")
@@ -122,6 +142,53 @@ async def download_stock_report_markdown(record_id: int) -> PlainTextResponse:
     )
 
 
+@router.get("/stock/trend/report/pdf/{record_id}")
+async def download_trend_report_pdf(record_id: int) -> StreamingResponse:
+    """下载指定趋势分析记录对应的 PDF 报告。"""
+
+    try:
+        pdf_bytes, filename = generate_trend_pdf_from_record(record_id)
+    except ValueError as e:  # 记录不存在
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    safe_filename = quote(filename)
+    disposition = f"attachment; filename*=UTF-8''{safe_filename}"
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": disposition,
+        },
+    )
+
+
+@router.get(
+    "/stock/trend/report/markdown/{record_id}",
+    response_class=PlainTextResponse,
+)
+async def download_trend_report_markdown(
+    record_id: int,
+) -> PlainTextResponse:
+    """下载指定趋势分析记录对应的 Markdown 报告文本。"""
+
+    try:
+        md_text, filename = generate_trend_markdown_from_record(record_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    safe_filename = quote(filename)
+    disposition = f"attachment; filename*=UTF-8''{safe_filename}"
+
+    return PlainTextResponse(
+        content=md_text,
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": disposition,
+        },
+    )
+
+
 @router.get("/history")
 async def list_history_records(
     q: str | None = Query(None, description="按股票代码或名称模糊搜索"),
@@ -191,3 +258,46 @@ async def history_quick_add_monitor(record_id: int) -> dict:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/trend/history")
+async def list_trend_history_records(
+    q: str | None = Query(None, description="按股票代码或名称模糊搜索"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    rating: str | None = Query(
+        None,
+        description="按趋势评级精确过滤，如 强烈买入/买入/增持/中性/持有/减持/卖出/回避/未知",
+    ),
+    start_date: str | None = Query(
+        None,
+        description="起始分析日期 (YYYY-MM-DD)",
+    ),
+    end_date: str | None = Query(
+        None,
+        description="结束分析日期 (YYYY-MM-DD)",
+    ),
+) -> dict:
+    """趋势分析历史记录列表（分页 + 搜索）。"""
+
+    return get_trend_history_records(
+        symbol_or_name=q,
+        page=page,
+        page_size=page_size,
+        rating=rating,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+@router.get(
+    "/trend/history/{record_id}",
+    response_model=StockTrendAnalysisResponse,
+)
+async def get_trend_history_record_detail_endpoint(
+    record_id: int,
+) -> StockTrendAnalysisResponse:
+    try:
+        return get_trend_history_record_detail(record_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e

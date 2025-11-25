@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 
 from datetime import datetime
 
@@ -96,4 +96,84 @@ class BatchStockAnalysisResponse(BaseModel):
     success_count: int
     failed_count: int
     results: List[BatchStockAnalysisItemResult]
+
+
+class TrendPredictionScenario(BaseModel):
+    """Single price-move scenario for a given horizon.
+
+    Used by the stock trend analysis module to describe a possible
+    future return range and its probability.
+    """
+
+    direction: Literal["up", "down", "flat"]
+    magnitude_min_pct: float
+    magnitude_max_pct: float
+    probability: float
+    label: str
+    narrative: str
+
+
+class TrendPredictionHorizon(BaseModel):
+    """Prediction for a specific time horizon (1d / 1w / 1m / long)."""
+
+    horizon: Literal["1d", "1w", "1m", "long"]
+    scenarios: List[TrendPredictionScenario]
+    base_expectation_pct: float | None = None
+
+
+class TrendAnalystResult(BaseModel):
+    """Single analyst's trend analysis report and structured conclusion."""
+
+    name: str
+    role: str
+    raw_text: str
+    conclusion_json: Dict[str, Any]
+    created_at: datetime
+
+
+class PredictionStep(BaseModel):
+    """Snapshot of predictions after each analyst's adjustment.
+
+    This is used to visualise how forecasts evolve step‑by‑step on the
+    frontend charts.
+    """
+
+    step: int
+    analyst_key: str
+    analyst_name: str
+    description: str
+    horizons: List[TrendPredictionHorizon]
+    created_at: datetime
+
+
+class StockTrendAnalysisRequest(BaseModel):
+    """Request payload for the stock trend analysis service.
+
+    This is intentionally separate from StockAnalysisRequest so that the
+    new trend module can evolve independently while reusing the same
+    data access layer.
+    """
+
+    ts_code: str
+    start_date: str | None = None
+    end_date: str | None = None
+    analysis_date: str | None = None
+    enabled_analysts: Dict[str, bool] | None = None
+    mode: Literal["realtime", "backtest"] = "realtime"
+
+
+class StockTrendAnalysisResponse(BaseModel):
+    """Response payload returned by the stock trend analysis service."""
+
+    ts_code: str
+    analysis_date: str
+    mode: Literal["realtime", "backtest"]
+    horizons: List[TrendPredictionHorizon]
+    analysts: List[TrendAnalystResult]
+    risk_report: TrendAnalystResult | None = None
+    prediction_evolution: List[PredictionStep]
+    record_id: int | None = None
+    data_fetch_diagnostics: Dict[str, Any] | None = None
+    technical_indicators: Dict[str, Any] | None = None
+    rating: str | None = None
 

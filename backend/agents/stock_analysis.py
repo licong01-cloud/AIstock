@@ -24,7 +24,8 @@ class NextStockAnalysisAgents:
         indicators: Dict[str, Any],
         financial_data: Dict[str, Any] | None,
         fund_flow_data: Dict[str, Any] | None,
-        risk_data: Dict[str, Any] | None,
+        quarterly_data: Dict[str, Any] | None = None,
+        risk_data: Dict[str, Any] | None = None,
         sentiment_data: Dict[str, Any] | None = None,
         news_data: Dict[str, Any] | None = None,
         research_data: Dict[str, Any] | None = None,
@@ -35,18 +36,29 @@ class NextStockAnalysisAgents:
         """执行核心多智能体分析，返回 (agents_results, discussion_result, final_decision)。"""
 
         if enabled_analysts is None:
+            # 与核心 StockAnalysisAgents.DEFAULT_ENABLED_ANALYSTS 对齐：
+            # 技术相关统一为“技术资金分析师”（technical），内部综合技术 + 资金流 + 筹码。
             enabled_analysts = {
                 "technical": True,
                 "fundamental": True,
-                "fund_flow": True,
                 "risk": True,
                 # 其余高成本分析先关闭，后续按需开放
                 "sentiment": False,
                 "news": False,
                 "research": False,
                 "announcement": False,
-                "chip": False,
             }
+        else:
+            # 兼容旧调用方：若仍显式传入 fund_flow / chip，则视为 technical 的别名，
+            # 只打开组合后的技术资金分析师，不再创建独立资金面 / 筹码智能体。
+            legacy_ff = enabled_analysts.get("fund_flow")
+            legacy_chip = enabled_analysts.get("chip")
+            if legacy_ff is True or legacy_chip is True:
+                enabled_analysts = dict(enabled_analysts)
+                enabled_analysts["technical"] = True
+                # 删除旧 key，避免上游误解有独立智能体存在
+                enabled_analysts.pop("fund_flow", None)
+                enabled_analysts.pop("chip", None)
 
         agents_results = self._core.run_multi_agent_analysis(
             stock_info=stock_info,
@@ -56,7 +68,7 @@ class NextStockAnalysisAgents:
             fund_flow_data=fund_flow_data,
             sentiment_data=sentiment_data,
             news_data=news_data,
-            quarterly_data=None,
+            quarterly_data=quarterly_data,
             risk_data=risk_data,
             research_data=research_data,
             announcement_data=announcement_data,

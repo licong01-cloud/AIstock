@@ -21,7 +21,10 @@ from .routers import (
     main_force,
     sector_strategy,
     longhubang,
+    model_scheduler,
+    ingestion,
 )
+from .ingestion.tdx_scheduler import scheduler as ingestion_scheduler
 
 
 def create_app() -> FastAPI:
@@ -45,14 +48,16 @@ def create_app() -> FastAPI:
         """Initialize process-wide PostgreSQL connection pool."""
 
         init_db_pool(minconn=1, maxconn=10)
+        ingestion_scheduler.start()
 
     @app.on_event("shutdown")
     async def _on_shutdown() -> None:  # noqa: D401
         """Close PostgreSQL connection pool on application shutdown."""
 
         close_db_pool()
+        ingestion_scheduler.shutdown(wait=False)
 
-    # 基础路由
+    # 业务路由（版本化）
     app.include_router(health.router, prefix="/api/v1")
     app.include_router(analysis.router, prefix="/api/v1")
     app.include_router(hotboard.router, prefix="/api/v1")
@@ -64,6 +69,10 @@ def create_app() -> FastAPI:
     app.include_router(main_force.router, prefix="/api/v1")
     app.include_router(sector_strategy.router, prefix="/api/v1")
     app.include_router(longhubang.router, prefix="/api/v1")
+    app.include_router(model_scheduler.router, prefix="/api/v1")
+
+    # ingestion / 本地数据管理接口：保持与旧 tdx_backend 相同的 /api/* 路径
+    app.include_router(ingestion.router, prefix="")
 
     return app
 
