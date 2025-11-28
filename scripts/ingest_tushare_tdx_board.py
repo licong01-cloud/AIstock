@@ -67,6 +67,7 @@ DB_CFG = dict(
     user=os.getenv("TDX_DB_USER", "postgres"),
     password=os.getenv("TDX_DB_PASSWORD", "lc78080808"),
     dbname=os.getenv("TDX_DB_NAME", "aistock"),
+    application_name="AIstock-ingest-tdx-board",
 )
 
 
@@ -363,6 +364,17 @@ def fetch_daily_for_date(pro, trade_date: str) -> List[Dict[str, Any]]:
 
 def run_dataset(conn, pro, dataset: str, mode: str, start_date: str, end_date: str, job_id: uuid.UUID) -> Dict[str, Any]:
     stats = {"inserted_rows": 0, "success_days": 0, "failed_days": 0}
+    if mode == "init":
+        table: Optional[str] = None
+        if dataset == "tdx_board_index":
+            table = "market.tdx_board_index"
+        elif dataset == "tdx_board_member":
+            table = "market.tdx_board_member"
+        elif dataset == "tdx_board_daily":
+            table = "market.tdx_board_daily"
+        if table is not None:
+            with conn.cursor() as cur:
+                cur.execute(f"TRUNCATE TABLE {table}")
     d0 = dt.date.fromisoformat(start_date)
     d1 = dt.date.fromisoformat(end_date)
 
@@ -384,7 +396,10 @@ def run_dataset(conn, pro, dataset: str, mode: str, start_date: str, end_date: s
         try:
             if dataset == "tdx_board_index":
                 rows = fetch_index_for_date(pro, ymd)
-                inserted = upsert_board_index(conn, rows)
+                if mode == "init":
+                    inserted = insert_board_index_init(conn, rows)
+                else:
+                    inserted = upsert_board_index(conn, rows)
             elif dataset == "tdx_board_member":
                 # get boards for this date from DB (populated by index)
                 boards = _list_boards_from_db(conn, d.isoformat())
@@ -397,11 +412,17 @@ def run_dataset(conn, pro, dataset: str, mode: str, start_date: str, end_date: s
                 for b in boards:
                     rows = fetch_member_for_board_date(pro, ymd, b)
                     if rows:
-                        inserted += upsert_board_member(conn, rows)
+                        if mode == "init":
+                            inserted += insert_board_member_init(conn, rows)
+                        else:
+                            inserted += upsert_board_member(conn, rows)
                     time.sleep(0.2)
             elif dataset == "tdx_board_daily":
                 rows = fetch_daily_for_date(pro, ymd)
-                inserted = upsert_board_daily(conn, rows)
+                if mode == "init":
+                    inserted = insert_board_daily_init(conn, rows)
+                else:
+                    inserted = upsert_board_daily(conn, rows)
             else:
                 raise ValueError(f"Unsupported dataset: {dataset}")
             stats["inserted_rows"] += inserted

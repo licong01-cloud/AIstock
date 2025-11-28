@@ -37,6 +37,7 @@ DB_CFG = dict(
     user=os.getenv("TDX_DB_USER", "postgres"),
     password=os.getenv("TDX_DB_PASSWORD", "lc78080808"),
     dbname=os.getenv("TDX_DB_NAME", "aistock"),
+    application_name="AIstock-ingest-moneyflow",
 )
 
 
@@ -197,6 +198,57 @@ def _upsert_moneyflow(conn, rows: List[Dict[str, Any]]) -> int:
     return len(values)
 
 
+def _insert_moneyflow_init(conn, rows: List[Dict[str, Any]]) -> int:
+    if not rows:
+        return 0
+    sql = (
+        "INSERT INTO market.moneyflow_ind_dc (trade_date, ts_code, "
+        "buy_elg_vol, buy_elg_amount, sell_elg_vol, sell_elg_amount, net_elg_amount, "
+        "buy_lg_vol, buy_lg_amount, sell_lg_vol, sell_lg_amount, net_lg_amount, "
+        "buy_md_vol, buy_md_amount, sell_md_vol, sell_md_amount, net_md_amount, "
+        "buy_sm_vol, buy_sm_amount, sell_sm_vol, sell_sm_amount, net_sm_amount, total_value_traded) "
+        "VALUES %s"
+    )
+    values = []
+    for r in rows:
+        trade_date = r.get("trade_date")
+        ts_code = (r.get("ts_code") or "").strip()
+        if not trade_date or not ts_code:
+            continue
+        values.append(
+            (
+                trade_date,
+                ts_code,
+                r.get("buy_elg_vol"),
+                r.get("buy_elg_amount"),
+                r.get("sell_elg_vol"),
+                r.get("sell_elg_amount"),
+                r.get("net_elg_amount"),
+                r.get("buy_lg_vol"),
+                r.get("buy_lg_amount"),
+                r.get("sell_lg_vol"),
+                r.get("sell_lg_amount"),
+                r.get("net_lg_amount"),
+                r.get("buy_md_vol"),
+                r.get("buy_md_amount"),
+                r.get("sell_md_vol"),
+                r.get("sell_md_amount"),
+                r.get("net_md_amount"),
+                r.get("buy_sm_vol"),
+                r.get("buy_sm_amount"),
+                r.get("sell_sm_vol"),
+                r.get("sell_sm_amount"),
+                r.get("net_sm_amount"),
+                r.get("total_value_traded"),
+            )
+        )
+    if not values:
+        return 0
+    with conn.cursor() as cur:
+        pgx.execute_values(cur, sql, values)
+    return len(values)
+
+
 def _fetch_moneyflow_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]]:
     ymd = trade_date.strftime("%Y%m%d")
     df = pro.moneyflow_ind_dc(trade_date=ymd)
@@ -238,7 +290,10 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
     for d in days:
         try:
             rows = _fetch_moneyflow_for_date(pro, d)
-            inserted = _upsert_moneyflow(conn, rows)
+            if mode == "init":
+                inserted = _insert_moneyflow_init(conn, rows)
+            else:
+                inserted = _upsert_moneyflow(conn, rows)
             stats["inserted_rows"] += inserted
             stats["success_days"] += 1
             _log(conn, job_id, "info", f"moneyflow_ind_dc {d} inserted={inserted}")
@@ -303,6 +358,11 @@ def main() -> None:
         else:
             print(f"[ERROR] unsupported mode: {mode}")
             sys.exit(1)
+
+        if mode == "init":
+            with conn.cursor() as cur:
+                cur.execute("TRUNCATE TABLE market.moneyflow_ind_dc")
+            print("[WARN] TRUNCATE market.moneyflow_ind_dc executed before full moneyflow_ind_dc ingestion")
 
         job_summary = {
             "dataset": "stock_moneyflow",

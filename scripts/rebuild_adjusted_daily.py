@@ -41,6 +41,7 @@ DB_CFG = dict(
     user=os.getenv("TDX_DB_USER", "postgres"),
     password=os.getenv("TDX_DB_PASSWORD", ""),
     dbname=os.getenv("TDX_DB_NAME", "aistock"),
+    application_name="AIstock-rebuild-adjusted-daily",
 )
 
 EXCHANGE_MAP = {"sh": "SH", "sz": "SZ", "bj": "BJ"}

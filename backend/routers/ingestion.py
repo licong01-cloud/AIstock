@@ -9,8 +9,10 @@ from typing import Any, Dict, List, Optional
 import psycopg2.extras as pgx
 from fastapi import APIRouter, Body, HTTPException, Path, Query
 from pydantic import BaseModel, Field
+import requests
+from requests import exceptions as req_exc
 
-from next_app.backend.db.pg_pool import get_conn
+from ..db.pg_pool import get_conn
 from ..ingestion.tdx_scheduler import scheduler  # 1:1 复用现有调度器实现
 
 
@@ -52,6 +54,11 @@ def _fetchall(sql: str, params: tuple = ()) -> List[Dict[str, Any]]:
             cols = [c[0] for c in cur.description]
             rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     return rows
+
+
+def _fetchone(sql: str, params: tuple = ()) -> Optional[Dict[str, Any]]:
+    rows = _fetchall(sql, params)
+    return rows[0] if rows else None
 
 
 def _execute(sql: str, params: tuple) -> None:
@@ -645,19 +652,244 @@ async def run_testing_schedule(schedule_id: uuid.UUID = Path(...)) -> Dict[str, 
 @router.post("/ingestion/init")
 async def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
     dataset = (payload.dataset or "").strip().lower()
-    if dataset not in {"kline_daily_raw", "kline_minute_raw"}:
+    # 目前仅支持通过 Go 服务执行以下初始化：
+    # - kline_minute_raw: 分钟线 RAW，全量 COPY 入库
+    # - kline_daily_raw_go: 未复权日线 RAW（Go 直连版），全量 COPY 入库
+    if dataset not in {"kline_minute_raw", "kline_daily_raw_go"}:
         raise HTTPException(status_code=400, detail="unsupported dataset for init")
     options = dict(payload.options or {})
     summary = {"datasets": [dataset], **options}
     job_id = _create_init_job(summary)
-    options["job_id"] = str(job_id)
-    run_id = scheduler.run_ingestion_now(dataset=dataset, mode="init", triggered_by="api", options=options)
-    return {"job_id": str(job_id), "run_id": str(run_id)}
+
+    # 对分钟线初始化：直接调用新的 TDX Go API，由 Go 负责高性能 COPY 入库
+    if dataset == "kline_minute_raw":
+        # 将前端传入的起始日期转换为 start_time（东八区），结束时间由 Go 端自行扩展到“最新可用”
+        start_date_str = str(options.get("start_date") or "1990-01-01")
+        try:
+            start_date = dt.date.fromisoformat(start_date_str)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid start_date for minute init")
+
+        tz = dt.timezone(dt.timedelta(hours=8))
+        start_dt = dt.datetime.combine(start_date, dt.time.min).replace(tzinfo=tz)
+
+        workers = int(options.get("workers") or 1)
+        truncate_before = bool(options.get("truncate"))
+        max_rows_per_chunk = int(options.get("max_rows_per_chunk") or 500_000)
+        codes = options.get("codes") or []
+
+        go_payload: Dict[str, Any] = {
+            "job_id": str(job_id),
+            "codes": codes,
+            "start_time": start_dt.isoformat(),
+            "workers": workers,
+            "options": {
+                "truncate_before": truncate_before,
+                "max_rows_per_chunk": max_rows_per_chunk,
+                "source": "tdx_api",
+            },
+        }
+
+        base = os.getenv("TDX_API_BASE", "http://localhost:19080").rstrip("/")
+        url = f"{base}/api/tasks/ingest-minute-raw-init"
+
+        try:
+            resp = requests.post(url, json=go_payload, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            # 若任务创建失败，直接将 job 标记为 failed，避免长时间停留在 queued
+            err_summary = {**summary, "error": str(exc), "phase": "create_go_task"}
+            _execute(
+                """
+                UPDATE market.ingestion_jobs
+                   SET status='failed', finished_at=NOW(), summary=%s
+                 WHERE job_id=%s
+                """,
+                (_json_dump(err_summary), job_id),
+            )
+            raise HTTPException(status_code=502, detail=f"failed to start TDX minute init task: {exc}")
+
+        if isinstance(data, dict) and data.get("code") not in (0, None):
+            msg = str(data)
+            err_summary = {**summary, "error": msg, "phase": "create_go_task"}
+            _execute(
+                """
+                UPDATE market.ingestion_jobs
+                   SET status='failed', finished_at=NOW(), summary=%s
+                 WHERE job_id=%s
+                """,
+                (_json_dump(err_summary), job_id),
+            )
+            raise HTTPException(status_code=502, detail=f"TDX minute init task error: {msg}")
+
+        task_id: Optional[str] = None
+        payload_data = data.get("data") if isinstance(data, dict) else None
+        if isinstance(payload_data, dict):
+            raw_tid = payload_data.get("task_id")
+            if raw_tid is not None:
+                task_id = str(raw_tid)
+
+        # 将 Go 侧 task_id 持久化到 ingestion_jobs.summary 中，方便后续在任务监视器中执行取消操作
+        if task_id is not None:
+            summary_with_task = {**summary, "go_task_id": task_id}
+            _execute(
+                """
+                UPDATE market.ingestion_jobs
+                   SET summary=%s
+                 WHERE job_id=%s
+                """,
+                (_json_dump(summary_with_task), job_id),
+            )
+
+        # Go 任务会自行更新 ingestion_jobs.status / summary 以及 ingestion_logs
+        return {"job_id": str(job_id), "task_id": task_id}
+
+    # 未复权日线（Go 直连版）初始化：调用新的 TDX Go API，将结果 COPY 至 kline_daily_raw
+    if dataset == "kline_daily_raw_go":
+        start_date_str = str(options.get("start_date") or "1990-01-01")
+        try:
+            start_date = dt.date.fromisoformat(start_date_str)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid start_date for daily raw init")
+
+        tz = dt.timezone(dt.timedelta(hours=8))
+        start_dt = dt.datetime.combine(start_date, dt.time.min).replace(tzinfo=tz)
+
+        workers = int(options.get("workers") or 1)
+        truncate_before = bool(options.get("truncate"))
+        max_rows_per_chunk = int(options.get("max_rows_per_chunk") or 500_000)
+        codes = options.get("codes") or []
+
+        go_payload: Dict[str, Any] = {
+            "job_id": str(job_id),
+            "codes": codes,
+            "start_time": start_dt.isoformat(),
+            "workers": workers,
+            "options": {
+                "truncate_before": truncate_before,
+                "max_rows_per_chunk": max_rows_per_chunk,
+                "source": "tdx_api",
+            },
+        }
+
+        base = os.getenv("TDX_API_BASE", "http://localhost:19080").rstrip("/")
+        url = f"{base}/api/tasks/ingest-daily-raw-init"
+
+        try:
+            resp = requests.post(url, json=go_payload, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            err_summary = {**summary, "error": str(exc), "phase": "create_go_task"}
+            _execute(
+                """
+                UPDATE market.ingestion_jobs
+                   SET status='failed', finished_at=NOW(), summary=%s
+                 WHERE job_id=%s
+                """,
+                (_json_dump(err_summary), job_id),
+            )
+            raise HTTPException(status_code=502, detail=f"failed to start TDX daily raw init task: {exc}")
+
+        if isinstance(data, dict) and data.get("code") not in (0, None):
+            msg = str(data)
+            err_summary = {**summary, "error": msg, "phase": "create_go_task"}
+            _execute(
+                """
+                UPDATE market.ingestion_jobs
+                   SET status='failed', finished_at=NOW(), summary=%s
+                 WHERE job_id=%s
+                """,
+                (_json_dump(err_summary), job_id),
+            )
+            raise HTTPException(status_code=502, detail=f"TDX daily raw init task error: {msg}")
+
+        task_id: Optional[str] = None
+        payload_data = data.get("data") if isinstance(data, dict) else None
+        if isinstance(payload_data, dict):
+            raw_tid = payload_data.get("task_id")
+            if raw_tid is not None:
+                task_id = str(raw_tid)
+
+        if task_id is not None:
+            summary_with_task = {**summary, "go_task_id": task_id}
+            _execute(
+                """
+                UPDATE market.ingestion_jobs
+                   SET summary=%s
+                 WHERE job_id=%s
+                """,
+                (_json_dump(summary_with_task), job_id),
+            )
+
+        return {"job_id": str(job_id), "task_id": task_id}
+
+    # 其它历史 init 任务路径（如旧版 kline_daily_raw Python 版）已关闭。
+    raise HTTPException(status_code=400, detail="init path not implemented for this dataset")
 
 
 @router.get("/ingestion/job/{job_id}")
 async def get_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
     return _job_status(job_id)
+
+
+@router.post("/ingestion/job/{job_id}/cancel")
+async def cancel_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
+    """取消正在运行的 Go 驱动的 ingestion 任务（目前主要用于 kline_minute_raw init）。
+
+    - 从 ingestion_jobs.summary 中读取 go_task_id
+    - 调用 TDX Go API /api/tasks/{go_task_id}/cancel
+    - 将 ingestion_jobs.status 标记为 cancelled
+    """
+
+    row = _fetchone(
+        "SELECT status, summary FROM market.ingestion_jobs WHERE job_id=%s",
+        (job_id,),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="ingestion job not found")
+
+    status = str(row.get("status") or "").lower()
+    if status in {"success", "failed", "cancelled", "canceled"}:
+        raise HTTPException(status_code=400, detail="job already finished")
+
+    summary_raw = row.get("summary") or {}
+    try:
+        summary_obj = json.loads(summary_raw) if isinstance(summary_raw, str) else dict(summary_raw)
+    except Exception:  # noqa: BLE001
+        summary_obj = {}
+
+    go_task_id = summary_obj.get("go_task_id")
+    if not go_task_id:
+        raise HTTPException(status_code=400, detail="go_task_id not found for this job")
+
+    base = os.getenv("TDX_API_BASE", "http://localhost:19080").rstrip("/")
+    url = f"{base}/api/tasks/{go_task_id}/cancel"
+
+    try:
+        resp = requests.post(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, dict) and data.get("code") not in (0, None):
+            raise HTTPException(status_code=502, detail=f"TDX cancel task error: {data}")
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"failed to cancel Go task: {exc}")
+
+    # 将作业状态标记为 cancelled
+    summary_obj["cancelled"] = True
+    _execute(
+        """
+        UPDATE market.ingestion_jobs
+           SET status='cancelled', finished_at=NOW(), summary=%s
+         WHERE job_id=%s
+        """,
+        (_json_dump(summary_obj), job_id),
+    )
+
+    return {"job_id": str(job_id), "go_task_id": go_task_id, "status": "cancelled"}
 
 
 @router.get("/ingestion/jobs")
@@ -692,6 +924,28 @@ async def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
     job_id = _create_job(job_type, summary)
     options = dict(payload.options or {})
     options["job_id"] = str(job_id)
+
+    # 对 trade_agg_5m 增量任务：前端通过 options.args 传入完整命令行片段，
+    # 其中可能已经包含一个前端生成的 --job-id。这里需要将其替换为我们刚刚
+    # 在 ingestion_jobs 表中创建的 job_id，确保脚本在写入 ingestion_job_tasks
+    # 时不会触发外键约束错误。
+    if payload.dataset == "trade_agg_5m" and "args" in options and isinstance(options["args"], str):
+        raw_args = options["args"].strip()
+        if raw_args:
+            tokens = [tok for tok in raw_args.split(" ") if tok]
+            new_tokens: list[str] = []
+            skip_next = False
+            for tok in tokens:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if tok == "--job-id":
+                    # 跳过旧的 --job-id 及其参数
+                    skip_next = True
+                    continue
+                new_tokens.append(tok)
+            new_tokens.extend(["--job-id", str(job_id)])
+            options["args"] = " ".join(new_tokens)
     run_id = scheduler.run_ingestion_now(
         dataset=payload.dataset,
         mode=payload.mode,
@@ -884,7 +1138,7 @@ async def delete_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # 1) 确认 job 存在并检查状态
+            # 1) 确认 job 存在
             cur.execute(
                 """
                 SELECT job_id, status
@@ -896,9 +1150,6 @@ async def delete_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
             row = cur.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Job not found")
-            status = (row[1] or "").lower()
-            if status in {"running", "queued", "pending"}:
-                raise HTTPException(status_code=400, detail="Cannot delete a running or pending job")
 
             # 2) 找出与该 job 关联的 run_id（通过 params->>'job_id' 反查）
             cur.execute(
@@ -1022,11 +1273,29 @@ async def get_data_gaps(
         default=None,
         description="可选覆盖结束日期(YYYY-MM-DD)，默认使用 data_stats.max_date",
     ),
+    refresh: bool = Query(
+        default=False,
+        description="如果为 true，则强制实时计算并更新缓存；否则优先返回上次缓存结果",
+    ),
 ) -> Dict[str, Any]:
     """
     计算指定 data_kind 在本地交易日历上的缺失日期段，并压缩为连续区间返回。
     完全基于新程序的连接池 / 数据表，不依赖 tdx_backend 或 9000 端口。
     """
+
+    # 0) 如果不强制刷新且没有指定日期范围（即查全量），尝试读缓存
+    if not refresh and not start_date and not end_date:
+        cached_rows = _fetchall(
+            "SELECT last_check_result, last_check_at FROM market.data_stats WHERE data_kind=%s",
+            (data_kind,),
+        )
+        if cached_rows:
+            res = _json_load(cached_rows[0].get("last_check_result"))
+            chk_at = _isoformat(cached_rows[0].get("last_check_at"))
+            if isinstance(res, dict) and res:
+                # 将 last_check_at 注入返回结果
+                res["last_check_at"] = chk_at
+                return res
 
     # 1) 从 data_stats_config 读取表名和日期列
     cfg_rows = _fetchall(
@@ -1097,13 +1366,28 @@ async def get_data_gaps(
     trading_days: List[dt.date] = [r["cal_date"] for r in cal_rows]
 
     # 4) 统计业务表中实际出现过数据的交易日期集合
-    sql = f"""
-        SELECT DISTINCT {date_column}::date AS d
-          FROM {table_name}
-         WHERE {date_column} >= %s AND {date_column} <= %s
-         ORDER BY d
-    """
-    data_rows = _fetchall(sql, (start, end))
+    # OPTIMIZATION: Use "Driver Table + EXISTS" strategy.
+    # Instead of scanning the huge data table, we iterate the small trading_calendar 
+    # and check existence in the data table using the index.
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = '300s'")
+            
+            # Efficiently find which trading days have data
+            sql = f"""
+                SELECT cal_date AS d
+                  FROM market.trading_calendar
+                 WHERE is_trading = TRUE
+                   AND cal_date >= %s AND cal_date <= %s
+                   AND EXISTS (
+                       SELECT 1 FROM {table_name}
+                        WHERE {date_column} = cal_date
+                   )
+                 ORDER BY cal_date
+            """
+            cur.execute(sql, (start, end))
+            data_rows = [dict(zip([c[0] for c in cur.description], r)) for r in cur.fetchall()]
+    
     data_days = {r["d"] for r in data_rows}
 
     # 5) 求差集并压缩为连续缺失区间
@@ -1130,9 +1414,54 @@ async def get_data_gaps(
             {"start": cur_start.isoformat(), "end": cur_end.isoformat(), "days": days_span}
         )
 
+    # 6) 针对特定数据集统计覆盖的股票数量
+    symbol_count: Optional[int] = None
+    
+    # 确定代码列名
+    code_col = None
+    if data_kind == "trade_agg_5m":
+        code_col = "symbol"
+    elif data_kind in (
+        "kline_daily_qfq", "kline_daily_raw", 
+        "kline_minute_raw", "kline_weekly", 
+        "stock_moneyflow", "minute_1m"
+    ):
+        code_col = "ts_code"
+    elif data_kind.startswith("tdx_board_"):
+        code_col = "ts_code"
+
+    if code_col:
+        # OPTIMIZATION: Combined strategy for symbol count
+        # 1. Increase work_mem to avoid OOM/disk spill on complex queries.
+        # 2. Use direct COUNT(DISTINCT) as requested by user to ensure accuracy against actual data,
+        #    ignoring market.stock_info which might be incomplete.
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    # Increase memory for this session to handle HashAggregate in memory
+                    cur.execute("SET work_mem = '256MB'")
+                    # User requested long timeout. Set DB timeout to 20 minutes (1200s) 
+                    # to be safer than the frontend 10 min timeout.
+                    cur.execute("SET statement_timeout = '1200s'")
+                    
+                    symbol_sql = f"""
+                        SELECT COUNT(DISTINCT {code_col}) AS c
+                          FROM {table_name}
+                         WHERE {date_column} >= %s AND {date_column} <= %s
+                    """
+                    cur.execute(symbol_sql, (start, end))
+                    sc_rows = [dict(zip([c[0] for c in cur.description], r)) for r in cur.fetchall()]
+                    if sc_rows:
+                        symbol_count = int(sc_rows[0].get("c") or 0)
+                            
+        except Exception as e: 
+            print(f"Error calculating symbol_count for {data_kind}: {e}")
+            symbol_count = None
+
     total_trading = len(trading_days)
     total_missing = len(missing_days)
-    return {
+    
+    result_payload = {
         "data_kind": data_kind,
         "table_name": table_name,
         "start_date": start.isoformat(),
@@ -1141,7 +1470,32 @@ async def get_data_gaps(
         "covered_days": total_trading - total_missing,
         "missing_days": total_missing,
         "missing_ranges": missing_ranges,
+        "symbol_count": symbol_count,
     }
+
+    # 7) 如果是全量检查（未指定日期范围），更新缓存
+    if not start_date and not end_date:
+        try:
+            now_ts = dt.datetime.now(dt.timezone.utc).isoformat()
+            result_payload["last_check_at"] = now_ts
+            # Use UPSERT (Insert on conflict update) to ensure row exists even if not previously in stats
+            _execute(
+                """
+                INSERT INTO market.data_stats (data_kind, table_name, last_check_result, last_check_at)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (data_kind) 
+                DO UPDATE SET 
+                    last_check_result = EXCLUDED.last_check_result,
+                    last_check_at = EXCLUDED.last_check_at,
+                    table_name = EXCLUDED.table_name
+                """,
+                (data_kind, table_name, _json_dump(result_payload), now_ts),
+            )
+        except Exception as e:
+            print(f"Failed to update data_stats cache: {e}")
+            pass
+
+    return result_payload
 # ---------------------------------------------------------------------------
 # Trading calendar helper（供“补齐到最新交易日”使用）
 # ---------------------------------------------------------------------------
@@ -1168,7 +1522,6 @@ async def get_latest_trading_day() -> Dict[str, Any]:
     if isinstance(latest, dt.date):
         return {"latest_trading_day": latest.isoformat()}
     return {"latest_trading_day": str(latest)}
-
 
 class CalendarSyncRequest(BaseModel):
     start_date: str

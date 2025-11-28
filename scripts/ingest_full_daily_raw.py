@@ -33,6 +33,7 @@ DB_CFG = dict(
     user=os.getenv("TDX_DB_USER", "postgres"),
     password=os.getenv("TDX_DB_PASSWORD", ""),
     dbname=os.getenv("TDX_DB_NAME", "aistock"),
+    application_name="AIstock-ingest-full-daily-raw",
 )
 SUPPORTED_EXCHANGES = {"sh", "sz", "bj"}
 
@@ -47,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--truncate", action="store_true", help="TRUNCATE market.kline_daily_raw before run")
     parser.add_argument("--job-id", type=str, default=None, help="Existing job id to attach and update")
     parser.add_argument("--bulk-session-tune", action="store_true", help="Apply session-level tuning for bulk load")
+    parser.add_argument("--workers", type=int, default=1, choices=[1, 2, 4, 8], help="Number of parallel workers (1 = no parallelism)")
     return parser.parse_args()
 
 
@@ -164,8 +166,7 @@ def fetch_kline_daily_raw(code: str, start: str, end: str) -> List[Dict[str, Any
 def upsert_kline_daily_raw(conn, ts_code: str, bars: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
     sql = (
         "INSERT INTO market.kline_daily_raw (trade_date, ts_code, open_li, high_li, low_li, close_li, volume_hand, amount_li, adjust_type, source) "
-        "VALUES %s ON CONFLICT (ts_code, trade_date) DO UPDATE SET "
-        "open_li=EXCLUDED.open_li, high_li=EXCLUDED.high_li, low_li=EXCLUDED.low_li, close_li=EXCLUDED.close_li, volume_hand=EXCLUDED.volume_hand, amount_li=EXCLUDED.amount_li"
+        "VALUES %s"
     )
     values: List[Tuple[Any, ...]] = []
     last_date: Optional[str] = None
@@ -373,13 +374,12 @@ def main() -> None:
         print("[ERROR] start-date or end-date format invalid")
         sys.exit(1)
 
-    if args.truncate:
-        with psycopg2.connect(**DB_CFG) as conn0:
-            conn0.autocommit = False
-            with conn0.cursor() as cur:
-                cur.execute("TRUNCATE TABLE market.kline_daily_raw")
-            conn0.commit()
-        print("[WARN] TRUNCATE market.kline_daily_raw executed by user request")
+    with psycopg2.connect(**DB_CFG) as conn0:
+        conn0.autocommit = False
+        with conn0.cursor() as cur:
+            cur.execute("TRUNCATE TABLE market.kline_daily_raw")
+        conn0.commit()
+    print("[WARN] TRUNCATE market.kline_daily_raw executed before full daily RAW ingestion")
 
     with psycopg2.connect(**DB_CFG) as conn:
         conn.autocommit = True

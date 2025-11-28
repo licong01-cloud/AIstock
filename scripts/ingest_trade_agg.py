@@ -36,8 +36,9 @@ DB_CFG = dict(
     host=os.getenv("TDX_DB_HOST", "localhost"),
     port=int(os.getenv("TDX_DB_PORT", "5432")),
     user=os.getenv("TDX_DB_USER", "postgres"),
-    password=os.getenv("TDX_DB_PASSWORD", ""),
+    password=os.getenv("TDX_DB_PASSWORD", "lc78080808"),
     dbname=os.getenv("TDX_DB_NAME", "aistock"),
+    application_name="AIstock-ingest-trade-agg",
 )
 DATASET = "trade_agg_5m"
 
@@ -53,10 +54,16 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="watchlist",
         choices=["watchlist", "all"],
-        help="symbol universe: watchlist (default) or all (market.symbol_dim)",
+        help="symbol universe: watchlist (app.watchlist_items) or all (TDX /api/codes full universe)",
     )
     parser.add_argument("--batch-size", type=int, default=50, help="symbols per batch")
     parser.add_argument("--job-id", type=str, default=None, help="attach to existing ingestion_jobs.job_id")
+    parser.add_argument(
+        "--bulk-session-tune",
+        action="store_true",
+        help="Apply session-level tuning for bulk load (reserved flag; currently no-op).",
+    )
+    parser.add_argument("--workers", type=int, default=1, choices=[1, 2, 4, 8], help="Number of parallel workers (1 = no parallelism)")
     return parser.parse_args()
 
 
@@ -94,18 +101,60 @@ def _bucket_start(ts: dt.datetime, bucket_minutes: int) -> dt.datetime:
     return ts0.replace(hour=hour, minute=minute)
 
 
+def _normalize_ts_code(code: str) -> Optional[str]:
+    """Normalize bare TDX 6-digit code to ts_code with SH/SZ/BJ suffix.
+
+    This mirrors ingest_incremental.normalize_ts_code.
+    """
+    code = (code or "").strip()
+    if len(code) != 6 or not code.isdigit():
+        return None
+    if code.startswith("6"):
+        suffix = "SH"
+    elif code.startswith(("8", "4")):
+        suffix = "BJ"
+    else:
+        suffix = "SZ"
+    return f"{code}.{suffix}"
+
+
 def _load_symbols(conn, scope: str) -> List[str]:
+    """Load symbol universe for trade_agg_5m.
+
+    - watchlist: use app.watchlist_items.code
+    - all / any other scope: fetch full universe from TDX /api/codes
+    """
     if scope == "watchlist":
         with conn.cursor() as cur:
             cur.execute("SELECT code FROM app.watchlist_items ORDER BY code")
             rows = cur.fetchall()
             return [r[0] for r in rows]
-    if scope == "all":
-        with conn.cursor() as cur:
-            cur.execute("SELECT ts_code FROM market.symbol_dim ORDER BY ts_code")
-            rows = cur.fetchall()
-            return [r[0] for r in rows]
-    raise ValueError(f"unsupported symbols_scope: {scope}")
+
+    # 默认：通过 TDX /api/codes 获取全部股票代码，不再依赖 market.symbol_dim
+    try:
+        data = http_get("/api/codes", params=None)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERROR] 获取 TDX 股票列表失败: {exc}")
+        raise
+
+    payload = data.get("data") if isinstance(data, dict) else None
+    if isinstance(payload, dict):
+        rows = payload.get("codes") or []
+    else:
+        rows = payload or []
+
+    seen = set()
+    result: List[str] = []
+    for item in rows:
+        if isinstance(item, dict):
+            raw_code = item.get("code")
+        else:
+            raw_code = str(item)
+        ts_code = _normalize_ts_code(str(raw_code))
+        if ts_code and ts_code not in seen:
+            seen.add(ts_code)
+            result.append(ts_code)
+    return result
 
 
 def _workdays(start: dt.date, end: dt.date) -> List[dt.date]:
@@ -457,6 +506,7 @@ def _chunked(items: List[str], size: int) -> Iterable[List[str]]:
 
 
 def ingest_trade_agg(args: argparse.Namespace) -> None:
+    print(f"[DEBUG] argv: {sys.argv}")
     mode = args.mode
     today = dt.date.today()
     if args.end_date:
@@ -512,6 +562,7 @@ def ingest_trade_agg(args: argparse.Namespace) -> None:
             "processed_days": 0,
             "inserted_rows": 0,
         }
+        processed_count = 0
         _update_job_summary(conn, job_id, {
             "total_codes": len(symbols),
             "success_codes": 0,
@@ -616,12 +667,14 @@ def ingest_trade_agg(args: argparse.Namespace) -> None:
                         f"[OK] {DATASET} {ts_code} days={len(effective_days)} rows={inserted_rows_total} "
                         f"last_date={last_processed}"
                     )
-                    _log_ingestion(
-                        conn,
-                        job_id,
-                        "info",
-                        f"run {run_id} {DATASET} {ts_code} days={len(effective_days)} rows={inserted_rows_total}",
-                    )
+                    processed_count += 1
+                    if processed_count % 100 == 0:
+                        _log_ingestion(
+                            conn,
+                            job_id,
+                            "info",
+                            f"Progress: {processed_count}/{len(symbols)} codes processed. Last: {ts_code}",
+                        )
                 else:
                     _complete_task(conn, task_id, False, 0.0, "processing failed")
                     _update_job_summary(conn, job_id, {"failed_codes": 1})
@@ -639,6 +692,7 @@ def ingest_trade_agg(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    print(f"[DEBUG] argv: {sys.argv}", flush=True)
     args = parse_args()
     ingest_trade_agg(args)
 

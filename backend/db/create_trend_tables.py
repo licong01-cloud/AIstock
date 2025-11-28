@@ -9,7 +9,7 @@ You can delete this file after running once if you like.
 import os
 from pathlib import Path
 
-from next_app.backend.db.pg_pool import get_conn
+from .pg_pool import get_conn
 
 
 SQL = """

@@ -36,6 +36,7 @@ DB_CFG = dict(
     user=os.getenv("TDX_DB_USER", "postgres"),
     password=os.getenv("TDX_DB_PASSWORD", ""),
     dbname=os.getenv("TDX_DB_NAME", "aistock"),
+    application_name="AIstock-ingest-full-daily-qfq",
 )
 SUPPORTED_EXCHANGES = {"sh", "sz", "bj"}
 EXCHANGE_MAP = {"sh": "SH", "sz": "SZ", "bj": "BJ"}
@@ -50,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit-codes", type=int, default=None, help="Optional limit on number of codes to process")
     parser.add_argument("--bulk-session-tune", action="store_true", help="Apply session-level tuning for bulk load")
     parser.add_argument("--job-id", type=str, default=None, help="Existing job id to attach and update")
+    parser.add_argument("--workers", type=int, default=1, choices=[1, 2, 4, 8], help="Number of parallel workers (1 = no parallelism)")
     return parser.parse_args()
 
 
@@ -136,21 +138,44 @@ def _to_date(value: Any) -> Optional[str]:
 
 
 def fetch_kline_daily(code: str, start: str, end: str) -> List[Dict[str, Any]]:
-    params = {"code": code, "type": "day", "adjust": "qfq", "start": start, "end": end}
-    data = http_get("/api/kline", params=params)
+    """Fetch full front-adjusted daily bars for a single symbol within [start, end].
+
+    使用 /api/kline-all/ths 获取同花顺前复权全量日 K，再在本地按日期范围过滤，
+    避免依赖 /api/kline 的内部分页与第三方兜底逻辑，语义上更接近
+    ingest_full_daily_raw 中的 fetch_kline_daily_raw。
+    """
+    params = {"code": code, "type": "day"}
+    data = http_get("/api/kline-all/ths", params=params)
     payload = data.get("data") if isinstance(data, dict) else None
     if isinstance(payload, dict):
-        values = payload.get("List") or payload.get("list") or []
+        values = payload.get("list") or payload.get("List") or []
     else:
         values = payload or []
-    return list(values)
+
+    if not values:
+        return []
+
+    start_date = start or ""
+    end_date = end or ""
+    selected: List[Tuple[str, Dict[str, Any]]] = []
+    for row in values:
+        trade_date = _to_date(row.get("Date") or row.get("date") or row.get("Time") or row.get("time"))
+        if trade_date is None:
+            continue
+        if start_date and trade_date < start_date:
+            continue
+        if end_date and trade_date > end_date:
+            continue
+        selected.append((trade_date, dict(row)))
+
+    selected.sort(key=lambda item: item[0])
+    return [row for _, row in selected]
 
 
 def upsert_kline_daily(conn, ts_code: str, bars: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
     sql = (
         "INSERT INTO market.kline_daily_qfq (trade_date, ts_code, open_li, high_li, low_li, close_li, volume_hand, amount_li, adjust_type, source) "
-        "VALUES %s ON CONFLICT (ts_code, trade_date) DO UPDATE SET "
-        "open_li=EXCLUDED.open_li, high_li=EXCLUDED.high_li, low_li=EXCLUDED.low_li, close_li=EXCLUDED.close_li, volume_hand=EXCLUDED.volume_hand, amount_li=EXCLUDED.amount_li"
+        "VALUES %s"
     )
     values: List[Tuple[Any, ...]] = []
     last_date: Optional[str] = None
@@ -372,6 +397,8 @@ def main() -> None:
 
     with psycopg2.connect(**DB_CFG) as conn:
         conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE market.kline_daily_qfq")
         if args.bulk_session_tune:
             with conn.cursor() as cur:
                 cur.execute("SET synchronous_commit = off")

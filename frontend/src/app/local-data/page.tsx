@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 const TDX_BASE =
-  process.env.NEXT_PUBLIC_TDX_BACKEND_BASE || "http://localhost:9000";
+  process.env.NEXT_PUBLIC_TDX_BACKEND_BASE || "http://127.0.0.1:8001";
 
 interface BackendError {
   message: string;
@@ -39,7 +39,6 @@ const FREQUENCY_CHOICES: { label: string; value: string }[] = [
 
 const INGESTION_DATASETS: Record<string, string> = {
   kline_daily_qfq: "日线（前复权）",
-  kline_daily_raw: "日线（未复权 RAW）",
   kline_minute_raw: "1 分钟原始",
   kline_weekly: "周线（由日线QFQ聚合）",
   tdx_board_all: "通达信板块（信息+成分+行情）",
@@ -47,7 +46,7 @@ const INGESTION_DATASETS: Record<string, string> = {
   tdx_board_member: "通达信板块成分",
   tdx_board_daily: "通达信板块行情",
   stock_moneyflow: "个股资金流（moneyflow_ind_dc）",
-  trade_agg_5m: "高频聚合 5m（Core/自选）",
+  trade_agg_5m: "高频聚合 5m",
 };
 
 interface IngestionJobCounters {
@@ -78,6 +77,7 @@ interface IncrementalPrefill {
   dataset?: string;
   targetDate?: string;
   startDate?: string | null;
+  symbolsScope?: "watchlist" | "all";
 }
 
 function classNames(...parts: Array<string | false | null | undefined>): string {
@@ -91,13 +91,23 @@ async function backendRequest<T = any>(
 ): Promise<T> {
   const url = `${TDX_BASE.replace(/\/$/, "")}${path}`;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  // Increase timeout to 10 minutes (600000ms) as requested for long-running data checks
+  const timeoutId = setTimeout(() => controller.abort(), 600000);
   try {
-    const res = await fetch(url, {
-      ...options,
-      method,
-      signal: controller.signal,
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        ...options,
+        method,
+        signal: controller.signal,
+      });
+    } catch (err: any) {
+      // 统一处理浏览器/Next.js 的 AbortError，避免出现“signal is aborted without reason”这类底层报错
+      if (err && (err.name === "AbortError" || String(err.message || "").includes("aborted"))) {
+        throw new Error("请求已超时或被中断，请稍后重试。");
+      }
+      throw err;
+    }
     if (!res.ok) {
       let content: string | undefined;
       try {
@@ -174,16 +184,21 @@ export default function LocalDataPage() {
   }, []);
 
   const handleFillLatestFromStats = useCallback(
-    (kind: string, latestTradingDay: string) => {
+    (kind: string, latestTradingDay: string, minDate?: string | null) => {
       const lower = (kind || "").toLowerCase();
       let dataSource: DataSource = "TDX";
       let dataset: string | undefined;
+      let symbolsScope: "watchlist" | "all" | undefined;
+
       if (lower === "kline_daily_qfq") {
         dataset = "kline_daily_qfq";
       } else if (lower === "kline_daily_raw") {
         dataset = "kline_daily_raw";
       } else if (lower === "kline_minute_raw") {
         dataset = "kline_minute_raw";
+      } else if (lower === "trade_agg_5m") {
+        dataset = "trade_agg_5m";
+        symbolsScope = "all";
       } else if (
         lower === "tdx_board_index" ||
         lower === "tdx_board_member" ||
@@ -198,7 +213,8 @@ export default function LocalDataPage() {
         dataSource,
         dataset,
         targetDate: latestTradingDay,
-        startDate: null,
+        startDate: minDate || null,
+        symbolsScope,
       });
       setActiveTab("incremental");
     },
@@ -272,7 +288,7 @@ export default function LocalDataPage() {
                   fontSize: 12,
                 }}
               >
-                uvicorn tdx_backend:app --host 0.0.0.0 --port 9000
+                uvicorn backend.main:app --host 0.0.0.0 --port 8001
               </code>
             </div>
           </div>
@@ -376,7 +392,8 @@ export default function LocalDataPage() {
 
 function InitTab() {
   const [dataSource, setDataSource] = useState<DataSource>("TDX");
-  const [dataset, setDataset] = useState<string>("kline_daily_raw");
+  const [dataset, setDataset] = useState<string>("kline_daily_qfq");
+  const [tradeAggScope, setTradeAggScope] = useState<"all" | "watchlist">("all");
   const [startDate, setStartDate] = useState<string>("1990-01-01");
   const [endDate, setEndDate] = useState<string>(() => {
     const d = new Date();
@@ -384,6 +401,7 @@ function InitTab() {
   });
   const [exchanges, setExchanges] = useState<string>("sh,sz,bj");
   const [calExchange, setCalExchange] = useState<string>("SSE");
+  const [workers, setWorkers] = useState<number>(1);
   const [truncate, setTruncate] = useState<boolean>(true);
   const [confirmClear, setConfirmClear] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
@@ -394,22 +412,30 @@ function InitTab() {
   const [jobLoading, setJobLoading] = useState<boolean>(false);
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
 
+  const [logJobId, setLogJobId] = useState<string | null>(null);
+  const [logItems, setLogItems] = useState<any[]>([]);
+  const [logLoading, setLogLoading] = useState<boolean>(false);
+
   const datasetOptionsTDX: { key: string; label: string }[] = [
     {
       key: "kline_daily_qfq",
       label: "kline_daily_qfq · 日线（前复权 QFQ）",
     },
     {
-      key: "kline_daily_raw",
-      label: "kline_daily_raw · 日线（未复权 RAW）",
+      key: "kline_daily_raw_go",
+      label: "kline_daily_raw_go · 日线（未复权 RAW · Go 直连）",
     },
     {
       key: "kline_minute_raw",
-      label: "kline_minute_raw · 1 分钟（原始 RAW）",
+      label: "kline_minute_raw · 1 分钟原始（TDX 全量）",
     },
     {
       key: "trade_agg_5m",
-      label: "trade_agg_5m · 高频聚合 5m（Core/自选）",
+      label: "trade_agg_5m · 高频聚合 5m",
+    },
+    {
+      key: "symbol_dim",
+      label: "symbol_dim · 股票基础信息（TDX /api/codes）",
     },
   ];
 
@@ -432,7 +458,7 @@ function InitTab() {
   // 根据数据源动态调整默认参数
   useEffect(() => {
     if (dataSource === "TDX") {
-      setDataset("kline_daily_raw");
+      setDataset("kline_daily_qfq");
       setStartDate("1990-01-01");
       setTruncate(true);
       setConfirmClear(false);
@@ -455,7 +481,27 @@ function InitTab() {
     setError(null);
     try {
       if (dataSource === "TDX") {
-        if (dataset === "kline_daily_qfq") {
+        if (dataset === "symbol_dim") {
+          const opts = {
+            exchanges: exchanges
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean),
+          };
+          const payload = { dataset: "symbol_dim", mode: "init", options: opts };
+          const resp: any = await backendRequest(
+            "POST",
+            "/api/ingestion/run",
+            {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            },
+          );
+          if (resp && resp.job_id) {
+            setJobId(String(resp.job_id));
+            setAutoRefresh(true);
+          }
+        } else if (dataset === "kline_daily_qfq") {
           const opts = {
             exchanges: exchanges
               .split(",")
@@ -464,6 +510,7 @@ function InitTab() {
             start_date: startDate,
             end_date: endDate,
             batch_size: 100,
+            workers: Number(workers) || 1,
           };
           const payload = { dataset: "kline_daily_qfq", mode: "init", options: opts };
           const resp: any = await backendRequest(
@@ -483,8 +530,9 @@ function InitTab() {
             start_date: startDate,
             end_date: endDate,
             freq_minutes: 5,
-            symbols_scope: "watchlist",
+            symbols_scope: tradeAggScope,
             batch_size: 50,
+            workers: Number(workers) || 1,
           };
           const payload = { dataset: "trade_agg_5m", mode: "init", options: opts };
           const resp: any = await backendRequest(
@@ -506,28 +554,54 @@ function InitTab() {
             );
             return;
           }
-          const opts = {
-            exchanges: exchanges
-              .split(",")
-              .map((s) => s.trim())
-              .filter(Boolean),
-            start_date: startDate,
-            end_date: endDate,
-            batch_size: 100,
-            truncate: Boolean(truncate),
-          };
-          const payload = { dataset, options: opts };
-          const resp: any = await backendRequest(
-            "POST",
-            "/api/ingestion/init",
-            {
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            },
-          );
-          if (resp && resp.job_id) {
-            setJobId(String(resp.job_id));
-            setAutoRefresh(true);
+          const commonExchanges = exchanges
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+          if (dataset === "kline_minute_raw" || dataset === "kline_daily_raw_go") {
+            const opts = {
+              exchanges: commonExchanges,
+              start_date: startDate,
+              // 对 Go 驱动的分钟/日线 RAW 初始化：不再传递 end_date，由 Go / TDX 自动拉取至最新有数据的交易日
+              batch_size: 100,
+              workers: Number(workers) || 1,
+              truncate: Boolean(truncate),
+            };
+            const payload = { dataset, options: opts };
+            const resp: any = await backendRequest(
+              "POST",
+              "/api/ingestion/init",
+              {
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              },
+            );
+            if (resp && resp.job_id) {
+              setJobId(String(resp.job_id));
+              setAutoRefresh(true);
+            }
+          } else {
+            const opts = {
+              exchanges: commonExchanges,
+              start_date: startDate,
+              end_date: endDate,
+              batch_size: 100,
+              workers: Number(workers) || 1,
+              truncate: Boolean(truncate),
+            };
+            const payload = { dataset, options: opts };
+            const resp: any = await backendRequest(
+              "POST",
+              "/api/ingestion/init",
+              {
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              },
+            );
+            if (resp && resp.job_id) {
+              setJobId(String(resp.job_id));
+              setAutoRefresh(true);
+            }
           }
         }
       } else {
@@ -621,6 +695,23 @@ function InitTab() {
     };
   }, [jobId, autoRefresh, loadJobStatus]);
 
+  const openJobLogs = async (jobIdValue: string) => {
+    try {
+      setLogLoading(true);
+      setLogJobId(jobIdValue);
+      const data: any = await backendRequest(
+        "GET",
+        `/api/ingestion/logs?job_id=${jobIdValue}&limit=500&offset=0`,
+      );
+      const items = Array.isArray(data?.items) ? data.items : [];
+      setLogItems(items);
+    } catch (e: any) {
+      setError(e?.message || "加载运行日志失败");
+    } finally {
+      setLogLoading(false);
+    }
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div
@@ -680,6 +771,28 @@ function InitTab() {
             </select>
           </div>
 
+          {dataSource === "TDX" && dataset === "trade_agg_5m" && (
+            <div style={{ marginBottom: 8 }}>
+              <label style={{ fontSize: 13 }}>股票范围</label>
+              <select
+                value={tradeAggScope}
+                onChange={(e) => setTradeAggScope(e.target.value as "all" | "watchlist")}
+                style={{
+                  display: "block",
+                  marginTop: 4,
+                  padding: "6px 8px",
+                  borderRadius: 8,
+                  border: "1px solid #d4d4d4",
+                  fontSize: 13,
+                  width: "100%",
+                }}
+              >
+                <option value="all">全市场（TDX /api/codes 返回的全部股票）</option>
+                <option value="watchlist">自选股（app.watchlist_items）</option>
+              </select>
+            </div>
+          )}
+
           <div
             style={{
               display: "grid",
@@ -703,22 +816,32 @@ function InitTab() {
                 }}
               />
             </div>
-            <div>
-              <label style={{ fontSize: 13 }}>结束日期</label>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                style={{
-                  marginTop: 4,
-                  width: "100%",
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: "1px solid #d4d4d4",
-                }}
-              />
-            </div>
+            {!(
+              dataSource === "TDX" &&
+              (dataset === "kline_minute_raw" || dataset === "kline_daily_raw_go")
+            ) && (
+              <div>
+                <label style={{ fontSize: 13 }}>结束日期</label>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  style={{
+                    marginTop: 4,
+                    width: "100%",
+                    padding: "6px 8px",
+                    borderRadius: 8,
+                    border: "1px solid #d4d4d4",
+                  }}
+                />
+              </div>
+            )}
           </div>
+          {dataSource === "TDX" && dataset === "kline_minute_raw" && (
+            <p style={{ marginTop: 0, marginBottom: 8, fontSize: 12, color: "#6b7280" }}>
+              不再指定截止日期，系统将从开始日期起自动拉取至最新有数据的交易日。
+            </p>
+          )}
 
           {dataSource === "TDX" && (
             <div style={{ marginBottom: 8 }}>
@@ -736,6 +859,36 @@ function InitTab() {
               />
             </div>
           )}
+
+          {dataSource === "TDX" &&
+            (dataset === "kline_minute_raw" ||
+              dataset === "kline_daily_raw_go" ||
+              dataset === "trade_agg_5m") && (
+              <div style={{ marginBottom: 8 }}>
+                <label style={{ fontSize: 13 }}>并行度 (Workers)</label>
+                <select
+                  value={workers}
+                  onChange={(e) =>
+                    setWorkers(Number(e.target.value) || 1)
+                  }
+                  style={{
+                    display: "block",
+                    marginTop: 4,
+                    padding: "6px 8px",
+                    borderRadius: 8,
+                    border: "1px solid #d4d4d4",
+                    fontSize: 13,
+                    width: "100%",
+                  }}
+                >
+                  {[1, 2, 4, 8].map((w) => (
+                    <option key={w} value={w}>
+                      {w} 线程
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
           {dataSource === "Tushare" && dataset === "tushare_trade_cal" && (
             <div style={{ marginBottom: 8 }}>
@@ -759,7 +912,7 @@ function InitTab() {
           )}
 
           {dataSource === "TDX" &&
-            (dataset === "kline_daily_raw" || dataset === "kline_minute_raw") && (
+            (dataset === "kline_minute_raw" || dataset === "kline_daily_raw_go") && (
             <div style={{ marginTop: 4, marginBottom: 8 }}>
               <label style={{ fontSize: 13 }}>
                 <input
@@ -958,6 +1111,8 @@ function IncrementalTab({
   const [startDate, setStartDate] = useState<string>("");
   const [exchanges, setExchanges] = useState<string>("sh,sz,bj");
   const [batchSize, setBatchSize] = useState<number>(100);
+  const [workers, setWorkers] = useState<number>(1);
+  const [symbolsScope, setSymbolsScope] = useState<"watchlist" | "all">("watchlist");
 
   const [calStart, setCalStart] = useState<string>("");
   const [calEnd, setCalEnd] = useState<string>("");
@@ -986,7 +1141,7 @@ function IncrementalTab({
     },
     {
       key: "trade_agg_5m",
-      label: "trade_agg_5m · 高频聚合 5m（Core/自选）",
+      label: "trade_agg_5m · 高频聚合 5m",
     },
   ];
 
@@ -1027,6 +1182,9 @@ function IncrementalTab({
     }
     if (prefill.startDate !== undefined) {
       setStartDate(prefill.startDate || "");
+    }
+    if (prefill.symbolsScope) {
+      setSymbolsScope(prefill.symbolsScope);
     }
     if (onPrefillConsumed) {
       onPrefillConsumed();
@@ -1099,7 +1257,11 @@ function IncrementalTab({
     try {
       if (dataSource === "TDX") {
         if (dataset === "trade_agg_5m") {
-          const argsParts: string[] = ["--mode", "incremental"]; 
+          if (!symbolsScope) {
+            setError("错误：股票范围 (symbolsScope) 参数丢失。请重新选择股票范围（Watchlist 或 All）。");
+            return;
+          }
+          const argsParts: string[] = ["--mode", "incremental"];
           if (startDate) {
             argsParts.push("--start-date", startDate);
           }
@@ -1107,8 +1269,11 @@ function IncrementalTab({
             argsParts.push("--end-date", date);
           }
           argsParts.push("--freq-minutes", "5");
-          argsParts.push("--symbols-scope", "watchlist");
+          argsParts.push("--symbols-scope", symbolsScope);
           argsParts.push("--batch-size", String(Number(batchSize) || 50));
+          argsParts.push("--workers", String(Number(workers) || 1));
+
+          console.log("[DEBUG] Submitting trade_agg_5m with args:", argsParts);
           const opts = {
             args: argsParts.join(" "),
           };
@@ -1130,7 +1295,8 @@ function IncrementalTab({
             setAutoRefresh(true);
           }
         } else {
-          const opts = {
+          const isMinuteDataset = dataset === "kline_minute_raw";
+          const opts: any = {
             date,
             start_date: startDate || null,
             exchanges: exchanges
@@ -1138,7 +1304,12 @@ function IncrementalTab({
               .map((s) => s.trim())
               .filter(Boolean),
             batch_size: Number(batchSize) || 100,
+            // max_empty 仅在需要限制空天数时显式使用；当前分钟增量默认传 0，表示不根据空天数提前停止，完整扫完日期区间
+            workers: Number(workers) || 1,
           };
+          if (isMinuteDataset) {
+            opts.max_empty = 0;
+          }
           const payload = { dataset, mode: "incremental", options: opts };
           const resp: any = await backendRequest(
             "POST",
@@ -1385,13 +1556,32 @@ function IncrementalTab({
             </div>
           )}
 
+          {dataSource === "TDX" && dataset === "trade_agg_5m" && (
+            <div style={{ marginBottom: 8 }}>
+              <label style={{ fontSize: 13 }}>股票范围 (Scope)</label>
+              <select
+                value={symbolsScope}
+                onChange={(e) => setSymbolsScope(e.target.value as any)}
+                style={{
+                  display: "block",
+                  marginTop: 4,
+                  padding: "6px 8px",
+                  width: "100%",
+                  boxSizing: "border-box",
+                }}
+              >
+                <option value="watchlist">Watchlist (自选股)</option>
+                <option value="all">All (全市场)</option>
+              </select>
+              <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>
+                全市场更新耗时较长，请谨慎选择
+              </div>
+            </div>
+          )}
+
           <div style={{ marginBottom: 8 }}>
-            <label style={{ fontSize: 13 }}>批大小</label>
+            <label style={{ fontSize: 13 }}>批量大小 (Batch Size)</label>
             <input
-              type="number"
-              min={10}
-              max={2000}
-              step={10}
               value={batchSize}
               onChange={(e) => setBatchSize(Number(e.target.value) || 100)}
               style={{
@@ -1403,6 +1593,36 @@ function IncrementalTab({
               }}
             />
           </div>
+
+          {dataSource === "TDX" &&
+            (dataset === "kline_daily_qfq" ||
+              dataset === "kline_daily_raw" ||
+              dataset === "kline_minute_raw" ||
+              dataset === "trade_agg_5m") && (
+              <div style={{ marginBottom: 8 }}>
+                <label style={{ fontSize: 13 }}>并行度 (Workers)</label>
+                <select
+                  value={workers}
+                  onChange={(e) =>
+                    setWorkers(Number(e.target.value) || 1)
+                  }
+                  style={{
+                    marginTop: 4,
+                    width: "100%",
+                    padding: "6px 8px",
+                    borderRadius: 8,
+                    border: "1px solid #d4d4d4",
+                    fontSize: 13,
+                  }}
+                >
+                  {[1, 2, 4, 8].map((w) => (
+                    <option key={w} value={w}>
+                      {w} 线程
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
           <button
             type="button"
@@ -1576,8 +1796,8 @@ function AdjustTab() {
 
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<IngestionJobStatus | null>(null);
-  const [jobLoading, setJobLoading] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [jobLoading, setJobLoading] = useState<boolean>(false);
+  const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
 
   const loadJobStatus = useCallback(
     async (id: string) => {
@@ -1954,6 +2174,10 @@ function JobsTab() {
   const [limit, setLimit] = useState<number>(50);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
+  const [logJobId, setLogJobId] = useState<string | null>(null);
+  const [logItems, setLogItems] = useState<any[]>([]);
+  const [logLoading, setLogLoading] = useState(false);
+
   const loadJobs = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -1992,11 +2216,6 @@ function JobsTab() {
 
   const handleDelete = useCallback(
     async (jobId: string, status: string) => {
-      const st = (status || "").toLowerCase();
-      if (["running", "queued", "pending"].includes(st)) {
-        setError("运行中或排队中的任务不能删除。");
-        return;
-      }
       if (typeof window !== "undefined") {
         const ok = window.confirm(
           "确定要删除该任务及其相关历史记录吗？此操作不可恢复。",
@@ -2012,6 +2231,39 @@ function JobsTab() {
     },
     [loadJobs],
   );
+
+  const handleCancel = useCallback(
+    async (jobId: string, status: string) => {
+      if (typeof window !== "undefined") {
+        const ok = window.confirm("确定要停止该任务吗？正在执行的同步任务会被强制取消。");
+        if (!ok) return;
+      }
+      try {
+        await backendRequest("POST", `/api/ingestion/job/${jobId}/cancel`);
+        await loadJobs();
+      } catch (e: any) {
+        setError(e?.message || "停止任务失败");
+      }
+    },
+    [loadJobs],
+  );
+
+  const openJobLogs = async (jobIdValue: string) => {
+    try {
+      setLogLoading(true);
+      setLogJobId(jobIdValue);
+      const data: any = await backendRequest(
+        "GET",
+        `/api/ingestion/logs?job_id=${jobIdValue}&limit=500&offset=0`,
+      );
+      const items = Array.isArray(data?.items) ? data.items : [];
+      setLogItems(items);
+    } catch (e: any) {
+      setError(e?.message || "加载运行日志失败");
+    } finally {
+      setLogLoading(false);
+    }
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -2191,8 +2443,15 @@ function JobsTab() {
                       ? "TDX 分钟成交聚合"
                       : meta.source || "—";
 
-            const canDelete =
-              !!jobId && !["running", "queued", "pending"].includes(status);
+            const canDelete = !!jobId;
+            // 仅当任务由 Go 驱动（即 summary/meta 中存在 go_task_id）且仍在运行/排队时，才允许前端发起停止请求。
+            const hasGoTaskId =
+              !!(meta as any)?.go_task_id ||
+              !!(summary && (summary as any).go_task_id);
+            const canCancel =
+              !!jobId &&
+              hasGoTaskId &&
+              ["running", "queued", "pending"].includes(status);
 
             return (
               <div
@@ -2244,6 +2503,40 @@ function JobsTab() {
                     }}
                   >
                     状态：{job.status || "—"}
+
+                    {jobId && (
+                      <button
+                        type="button"
+                        onClick={() => openJobLogs(jobId)}
+                        style={{
+                          padding: "2px 6px",
+                          borderRadius: 6,
+                          border: "1px solid #d4d4d4",
+                          background: "#fff",
+                          cursor: "pointer",
+                          fontSize: 11,
+                        }}
+                      >
+                        详情
+                      </button>
+                    )}
+                    {canCancel && jobId && (
+                      <button
+                        type="button"
+                        onClick={() => handleCancel(jobId, status)}
+                        style={{
+                          padding: "2px 6px",
+                          borderRadius: 6,
+                          border: "1px solid #fed7aa",
+                          background: "#ffedd5",
+                          color: "#c2410c",
+                          cursor: "pointer",
+                          fontSize: 11,
+                        }}
+                      >
+                        停止
+                      </button>
+                    )}
                     {canDelete && jobId && (
                       <button
                         type="button"
@@ -2355,27 +2648,151 @@ function JobsTab() {
           })}
         </div>
       )}
+
+      {logJobId && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.35)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            style={{
+              width: "80%",
+              maxWidth: 900,
+              maxHeight: "80vh",
+              background: "#fff",
+              borderRadius: 10,
+              padding: 12,
+              boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <h4 style={{ margin: 0, fontSize: 14 }}>
+                运行日志详情 · Job {logJobId}
+              </h4>
+              <button
+                type="button"
+                onClick={() => {
+                  setLogJobId(null);
+                  setLogItems([]);
+                }}
+                style={{
+                  padding: "2px 8px",
+                  borderRadius: 6,
+                  border: "1px solid #d4d4d4",
+                  background: "#fff",
+                  cursor: "pointer",
+                  fontSize: 12,
+                }}
+              >
+                关闭
+              </button>
+            </div>
+            <div
+              style={{
+                flex: 1,
+                overflowY: "auto",
+                border: "1px solid #e5e7eb",
+                borderRadius: 8,
+                padding: 8,
+                fontFamily:
+                  "SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                fontSize: 12,
+                background: "#fafafa",
+              }}
+            >
+              {logLoading ? (
+                <p style={{ fontSize: 12 }}>日志加载中...</p>
+              ) : logItems.length === 0 ? (
+                <p style={{ fontSize: 12, color: "#6b7280" }}>
+                  暂无日志记录。
+                </p>
+              ) : (
+                logItems.map((it: any, idx: number) => {
+                  const ts = it?.timestamp || "";
+                  const level = it?.level || "";
+                  const datasetLabel = it?.dataset || "";
+                  const modeLabel = it?.mode || "";
+                  const payload = it?.payload ?? {};
+                  const text = JSON.stringify(payload, null, 2);
+                  return (
+                    <div
+                      key={`${ts}-${idx}`}
+                      style={{
+                        marginBottom: 8,
+                        paddingBottom: 8,
+                        borderBottom: "1px solid #e5e7eb",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: "#4b5563",
+                          marginBottom: 2,
+                        }}
+                      >
+                        [{ts}] [{level}] {datasetLabel} {modeLabel}
+                      </div>
+                      <pre
+                        style={{
+                          margin: 0,
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-all",
+                        }}
+                      >
+                        {text}
+                      </pre>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
+// ...
+
 function DataStatsTab({
   onFillLatest,
 }: {
-  onFillLatest?: (kind: string, latestTradingDay: string) => void;
+  onFillLatest?: (
+    kind: string,
+    latestTradingDay: string,
+    minDate?: string | null,
+  ) => void;
 }) {
   const [items, setItems] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [gapResult, setGapResult] = useState<any | null>(null);
   const [gapLoadingKind, setGapLoadingKind] = useState<string | null>(null);
+  const [gapResult, setGapResult] = useState<any | null>(null);
 
-  const loadStats = useCallback(async () => {
+  const loadExistingStats = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const data: any = await backendRequest("GET", "/api/data-stats");
-      setItems(Array.isArray(data?.items || data?.rows) ? data.items || data.rows : []);
+      const nextItems = Array.isArray(data?.items) ? data.items : [];
+      setItems(nextItems);
     } catch (e: any) {
       setError(e?.message || "加载统计数据失败");
     } finally {
@@ -2383,18 +2800,42 @@ function DataStatsTab({
     }
   }, []);
 
+  const triggerRefresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setGapResult(null);
+    try {
+      await backendRequest("POST", "/api/data-stats/refresh");
+      const data: any = await backendRequest("GET", "/api/data-stats");
+      const nextItems = Array.isArray(data?.items) ? data.items : [];
+      setItems(nextItems);
+    } catch (e: any) {
+      setError(e?.message || "刷新统计数据失败");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // 初次进入数据看板时仅加载上次刷新结果，不主动触发后端 refresh
+    loadExistingStats();
+  }, [loadExistingStats]);
+
   const handleCheckGapsClick = useCallback(
-    async (kind: string) => {
-      if (!kind) return;
-      setError(null);
-      setGapResult(null);
+    async (kind: string, refresh: boolean = false) => {
       setGapLoadingKind(kind);
+      if (!refresh) setGapResult(null);
+      setError(null);
       try {
+        const params = new URLSearchParams({ data_kind: kind });
+        if (refresh) {
+          params.append("refresh", "true");
+        }
         const data: any = await backendRequest(
           "GET",
-          `/api/data-stats/gaps?data_kind=${encodeURIComponent(kind)}`,
+          `/api/data-stats/gaps?${params.toString()}`,
         );
-        setGapResult(data || null);
+        setGapResult(data);
       } catch (e: any) {
         setError(e?.message || "数据检查失败");
       } finally {
@@ -2404,21 +2845,8 @@ function DataStatsTab({
     [],
   );
 
-  useEffect(() => {
-    loadStats();
-  }, [loadStats]);
-
-  const triggerRefresh = async () => {
-    try {
-      await backendRequest("POST", "/api/data-stats/refresh", {});
-      await loadStats();
-    } catch (e: any) {
-      setError(e?.message || "触发统计刷新失败");
-    }
-  };
-
   const handleFillLatestClick = useCallback(
-    async (kind: string) => {
+    async (kind: string, minDate?: string | null) => {
       if (!onFillLatest) return;
       try {
         const data: any = await backendRequest(
@@ -2430,13 +2858,15 @@ function DataStatsTab({
           setError("无法获取最新交易日，请先同步交易日历。");
           return;
         }
-        onFillLatest(kind, String(latest));
+        onFillLatest(kind, String(latest), minDate ?? null);
       } catch (e: any) {
         setError(e?.message || "获取最新交易日失败");
       }
     },
     [onFillLatest],
   );
+
+  // ...
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -2471,7 +2901,9 @@ function DataStatsTab({
       </div>
 
       {error && (
-        <p style={{ fontSize: 12, color: "#b91c1c" }}>{error}</p>
+        <p style={{ fontSize: 12, color: "#b91c1c", margin: 0 }}>
+          {error}
+        </p>
       )}
 
       {items.length === 0 && !loading ? (
@@ -2514,6 +2946,9 @@ function DataStatsTab({
                   最后更新时间
                 </th>
                 <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
+                  最近检查
+                </th>
+                <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
                   表名
                 </th>
                 <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
@@ -2532,9 +2967,33 @@ function DataStatsTab({
                 const lastRaw = it.last_updated_at;
                 const lastDisp =
                   lastRaw != null ? formatDateTime(String(lastRaw)) : "—";
+                
+                // 处理最近检查信息
+                const lastCheckAt = it.last_check_at ? formatDateTime(String(it.last_check_at)) : "—";
+                let checkSummary = "";
+                if (it.last_check_result) {
+                    try {
+                        const res = typeof it.last_check_result === 'string' ? JSON.parse(it.last_check_result) : it.last_check_result;
+                        if (typeof res.missing_days === 'number') {
+                            checkSummary = ` (缺失 ${res.missing_days} 天)`;
+                        }
+                    } catch (e) {
+                        // ignore
+                    }
+                }
+
                 const kind = String(
                   it.data_kind || it.kind || "",
                 );
+                
+                // 处理描述文本：去掉 trade_agg_5m 后面的括号内容
+                let description = extra.desc || it.label || it.description || "—";
+                if (kind === "trade_agg_5m") {
+                    description = description.replace(/（.*?）|\(.*?\)/g, "").trim();
+                }
+
+                const minDateStr =
+                  it.min_date || it.date_min || it.start_date || null;
                 const canFillLatest = [
                   "kline_daily_qfq",
                   "kline_daily_raw",
@@ -2542,6 +3001,7 @@ function DataStatsTab({
                   "tdx_board_index",
                   "tdx_board_member",
                   "tdx_board_daily",
+                  "trade_agg_5m",
                 ].includes(kind);
                 return (
                   <tr key={idx}>
@@ -2559,7 +3019,7 @@ function DataStatsTab({
                         borderBottom: "1px solid #f3f4f6",
                       }}
                     >
-                      {extra.desc || it.label || it.description || "—"}
+                      {description}
                     </td>
                     <td
                       style={{
@@ -2599,6 +3059,15 @@ function DataStatsTab({
                         borderBottom: "1px solid #f3f4f6",
                       }}
                     >
+                      <div style={{ fontSize: 12 }}>{lastCheckAt}</div>
+                      {checkSummary && <div style={{ fontSize: 11, color: "#666" }}>{checkSummary}</div>}
+                    </td>
+                    <td
+                      style={{
+                        padding: 6,
+                        borderBottom: "1px solid #f3f4f6",
+                      }}
+                    >
                       {it.table_name || it.table || "—"}
                     </td>
                     <td
@@ -2607,17 +3076,11 @@ function DataStatsTab({
                         borderBottom: "1px solid #f3f4f6",
                       }}
                     >
-                      <div
-                        style={{
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: 4,
-                        }}
-                      >
-                        {onFillLatest && canFillLatest ? (
+                      <div style={{ display: "flex", gap: 6 }}>
+                        {canFillLatest && kind && (
                           <button
                             type="button"
-                            onClick={() => handleFillLatestClick(kind)}
+                            onClick={() => handleFillLatestClick(kind, minDateStr)}
                             style={{
                               padding: "4px 8px",
                               borderRadius: 6,
@@ -2629,17 +3092,11 @@ function DataStatsTab({
                           >
                             补齐到最新交易日
                           </button>
-                        ) : (
-                          <span
-                            style={{ fontSize: 12, color: "#9ca3af" }}
-                          >
-                            —
-                          </span>
                         )}
                         {kind && (
                           <button
                             type="button"
-                            onClick={() => handleCheckGapsClick(kind)}
+                            onClick={() => handleCheckGapsClick(kind, false)}
                             disabled={gapLoadingKind === kind}
                             style={{
                               padding: "4px 8px",
@@ -2665,14 +3122,43 @@ function DataStatsTab({
               style={{
                 marginTop: 8,
                 fontSize: 12,
+                background: "#f9fafb",
+                padding: 8,
+                borderRadius: 8,
+                border: "1px solid #e5e7eb",
               }}
             >
-              <div>
-                数据集: {gapResult.data_kind} · 表: {gapResult.table_name}
+              <div style={{ marginBottom: 4, fontWeight: "bold", display: "flex", justifyContent: "space-between" }}>
+                <span>检查结果 (Kind: {gapResult.data_kind})</span>
+                <button
+                  type="button"
+                  onClick={() => handleCheckGapsClick(gapResult.data_kind, true)}
+                  disabled={gapLoadingKind === gapResult.data_kind}
+                  style={{
+                    padding: "2px 8px",
+                    borderRadius: 4,
+                    border: "1px solid #d4d4d4",
+                    background: "#fff",
+                    cursor: "pointer",
+                    fontSize: 11,
+                  }}
+                >
+                  {gapLoadingKind === gapResult.data_kind ? "重新检查中..." : "立即重新检查(强制刷新)"}
+                </button>
               </div>
               <div>
-                检查区间: {gapResult.start_date} ~ {gapResult.end_date}
+                表: {gapResult.table_name} · 区间: {gapResult.start_date} ~ {gapResult.end_date}
               </div>
+              {gapResult.last_check_at && (
+                <div style={{ color: "#6b7280" }}>
+                  结果生成于: {formatDateTime(gapResult.last_check_at)} (缓存)
+                </div>
+              )}
+              {typeof gapResult.symbol_count === "number" && (
+                <div>
+                  覆盖股票数量: {gapResult.symbol_count}
+                </div>
+              )}
               <div>
                 交易日总数: {gapResult.total_trading_days}，有数据天数:
                 {" "}

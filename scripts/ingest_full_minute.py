@@ -14,6 +14,7 @@ import os
 import sys
 import uuid
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import psycopg2
 import psycopg2.extras as pgx
@@ -27,8 +28,9 @@ DB_CFG = dict(
     host=os.getenv("TDX_DB_HOST", "localhost"),
     port=int(os.getenv("TDX_DB_PORT", "5432")),
     user=os.getenv("TDX_DB_USER", "postgres"),
-    password=os.getenv("TDX_DB_PASSWORD", ""),
+    password=os.getenv("TDX_DB_PASSWORD", "lc78080808"),
     dbname=os.getenv("TDX_DB_NAME", "aistock"),
+    application_name="AIstock-ingest-full-minute",
 )
 SUPPORTED_EXCHANGES = {"sh", "sz", "bj"}
 EXCHANGE_MAP = {"sh": "SH", "sz": "SZ", "bj": "BJ"}
@@ -45,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--truncate", action="store_true", help="TRUNCATE market.kline_minute_raw before run")
     parser.add_argument("--job-id", type=str, default=None, help="Existing job id to attach and update")
     parser.add_argument("--bulk-session-tune", action="store_true", help="Apply session-level tuning for bulk load")
+    parser.add_argument("--workers", type=int, default=1, choices=[1, 2, 4, 8], help="Number of parallel workers (1 = no parallelism)")
     return parser.parse_args()
 
 
@@ -120,6 +123,11 @@ def date_range(start: dt.date, end: dt.date) -> Iterable[dt.date]:
 
 
 def fetch_minute(code: str, date: dt.date) -> List[Dict[str, Any]]:
+    """Legacy helper: fetch 1-minute bars for a single date via /api/minute.
+
+    仍保留该函数用于兼容性或后续调试，但全量初始化路径将优先使用
+    /api/kline-all/tdx?type=minute1 做单股全量获取。
+    """
     params = {"code": code, "type": "minute1", "date": date.strftime("%Y%m%d")}
     data = http_get("/api/minute", params=params)
     payload = data.get("data") if isinstance(data, dict) else None
@@ -132,12 +140,36 @@ def fetch_minute(code: str, date: dt.date) -> List[Dict[str, Any]]:
     return list(items)
 
 
+def fetch_all_minute(code: str) -> List[Dict[str, Any]]:
+    """Fetch full 1-minute K-line history for a single symbol via /api/kline-all/tdx.
+
+    返回值为原始列表（可能跨多个交易日），后续由调用方按 trade_date 进行分组
+    并筛选所需的日期区间。
+    """
+    params = {"code": code, "type": "minute1"}
+    data = http_get("/api/kline-all/tdx", params=params)
+    payload = data.get("data") if isinstance(data, dict) else None
+    if isinstance(payload, dict):
+        values = payload.get("list") or payload.get("List") or []
+    else:
+        values = payload or []
+    return list(values) if isinstance(values, list) else []
+
+
 def _combine_trade_time(date_hint: dt.date, value: Any) -> Optional[str]:
+    """Combine a trade date hint with a time-like value into ISO8601 string.
+
+    行为与 ingest_incremental.py 中的实现保持一致：
+    - 若传入的是完整的 ISO8601 时间戳（含日期），直接解析并返回；
+    - 否则按 "%H:%M:%S" / "%H:%M" 解析时间，并与 date_hint 组合。
+    """
+
     if value is None:
         return None
     text = str(value).strip()
     if not text:
         return None
+
     cleaned = text.replace("Z", "+00:00")
     try:
         dt_obj = dt.datetime.fromisoformat(cleaned)
@@ -147,16 +179,45 @@ def _combine_trade_time(date_hint: dt.date, value: Any) -> Optional[str]:
     except ValueError:
         pass
 
-    base_date = date_hint
-    try:
-        time_obj = dt.datetime.strptime(text, "%H:%M:%S").time()
-    except ValueError:
+    for fmt in ("%H:%M:%S", "%H:%M"):
         try:
-            time_obj = dt.datetime.strptime(text, "%H:%M").time()
+            time_obj = dt.datetime.strptime(text, fmt).time()
+            tzinfo = dt.timezone(dt.timedelta(hours=8))
+            return dt.datetime.combine(date_hint, time_obj).replace(tzinfo=tzinfo).isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def _to_trade_date_from_ts(value: Any) -> Optional[dt.date]:
+    """Parse a timestamp-like field and return its trade_date (YYYY-MM-DD -> date).
+
+    主要用于 /api/kline-all/tdx 返回的一分钟 K 数据，根据 Time/Date 字段
+    提取自然日。支持 ISO8601 字符串与简单 "YYYY-MM-DD" / "YYYYMMDD" 形式。
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    cleaned = text.replace("Z", "+00:00")
+    try:
+        dt_obj = dt.datetime.fromisoformat(cleaned)
+        return dt_obj.date()
+    except ValueError:
+        pass
+    # Fallback: 仅日期部分
+    if len(text) == 10 and text[4] == "-" and text[7] == "-":
+        try:
+            return dt.date.fromisoformat(text)
         except ValueError:
             return None
-    tzinfo = dt.timezone(dt.timedelta(hours=8))
-    return dt.datetime.combine(base_date, time_obj).replace(tzinfo=tzinfo).isoformat()
+    if len(text) == 8 and text.isdigit():
+        try:
+            return dt.date(int(text[0:4]), int(text[4:6]), int(text[6:8]))
+        except ValueError:
+            return None
+    return None
 
 
 def upsert_minute(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
@@ -186,7 +247,53 @@ def upsert_minute(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, 
         return 0, None
     with conn.cursor() as cur:
         pgx.execute_values(cur, sql, values)
+    _commit_if_needed(conn)
     return len(values), last_ts
+
+
+def insert_minute_init(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
+    sql = (
+        "INSERT INTO market.kline_minute_raw (trade_time, ts_code, freq, open_li, high_li, low_li, close_li, volume_hand, amount_li, adjust_type, source) "
+        "VALUES %s"
+    )
+    values: List[Tuple[Any, ...]] = []
+    last_ts: Optional[str] = None
+    for row in bars:
+        if not isinstance(row, dict):
+            continue
+        trade_time = row.get("TradeTime") or row.get("trade_time") or row.get("Time") or row.get("time")
+        trade_time_iso = _combine_trade_time(trade_date, trade_time)
+        open_li = row.get("Open") or row.get("open")
+        high_li = row.get("High") or row.get("high")
+        low_li = row.get("Low") or row.get("low")
+        close_li = row.get("Close") or row.get("close") or row.get("Price") or row.get("price")
+        volume_hand = row.get("Volume") or row.get("volume") or 0
+        amount_li = row.get("Amount") or row.get("amount") or 0
+        if trade_time_iso is None or close_li is None:
+            continue
+        last_ts = trade_time_iso if last_ts is None or trade_time_iso > last_ts else last_ts
+        values.append((trade_time_iso, ts_code, "1m", open_li, high_li, low_li, close_li, volume_hand, amount_li, "none", "tdx_api"))
+    if not values:
+        return 0, None
+    with conn.cursor() as cur:
+        pgx.execute_values(cur, sql, values)
+    _commit_if_needed(conn)
+    return len(values), last_ts
+
+
+def _commit_if_needed(conn) -> None:
+    """Commit the current transaction if autocommit is disabled.
+
+    在 ingest_full_minute 中，我们期望所有写入都是短事务：
+    - 正常情况下，主连接会设置 autocommit=True；
+    - 若由于某些原因导致 autocommit=False，则这里显式 commit，避免长时间
+      处于 idle in transaction 状态，尤其是对 ingestion_jobs / ingestion_job_tasks
+      / ingestion_runs 等元数据表。
+    """
+
+    if getattr(conn, "autocommit", False):
+        return
+    conn.commit()
 
 
 def create_run(conn, params: Dict[str, Any]) -> uuid.UUID:
@@ -199,6 +306,7 @@ def create_run(conn, params: Dict[str, Any]) -> uuid.UUID:
             """,
             (run_id, json.dumps(params, ensure_ascii=False)),
         )
+    _commit_if_needed(conn)
     return run_id
 
 
@@ -212,6 +320,7 @@ def start_job(conn, job_id: uuid.UUID, summary: Dict[str, Any]) -> None:
             """,
             (json.dumps(summary, ensure_ascii=False), job_id),
         )
+    _commit_if_needed(conn)
     return None
 
 
@@ -221,6 +330,7 @@ def finish_run(conn, run_id: uuid.UUID, status: str, summary: Dict[str, Any]) ->
             "UPDATE market.ingestion_runs SET status=%s, finished_at=NOW(), summary=%s WHERE run_id=%s",
             (status, json.dumps(summary, ensure_ascii=False), run_id),
         )
+    _commit_if_needed(conn)
 
 
 def create_job(conn, job_type: str, summary: Dict[str, Any]) -> uuid.UUID:
@@ -233,6 +343,7 @@ def create_job(conn, job_type: str, summary: Dict[str, Any]) -> uuid.UUID:
             """,
             (job_id, job_type, json.dumps(summary, ensure_ascii=False)),
         )
+    _commit_if_needed(conn)
     return job_id
 
 
@@ -256,6 +367,7 @@ def finish_job(conn, job_id: uuid.UUID, status: str, summary: Dict[str, Any]) ->
             """,
             (status, json.dumps(base, ensure_ascii=False), job_id),
         )
+    _commit_if_needed(conn)
 
 def update_job_summary(conn, job_id: uuid.UUID, patch: Dict[str, Any]) -> None:
     """Read-modify-write ingestion_jobs.summary to accumulate counters.
@@ -282,6 +394,7 @@ def update_job_summary(conn, job_id: uuid.UUID, patch: Dict[str, Any]) -> None:
             "UPDATE market.ingestion_jobs SET summary=%s WHERE job_id=%s",
             (json.dumps(base, ensure_ascii=False), job_id),
         )
+    _commit_if_needed(conn)
         
 def create_task(
     conn,
@@ -300,6 +413,7 @@ def create_task(
             """,
             (task_id, job_id, dataset, ts_code, date_from, date_to),
         )
+    _commit_if_needed(conn)
     return task_id
 
 
@@ -314,6 +428,7 @@ def complete_task(conn, task_id: uuid.UUID, success: bool, progress: float, last
             """,
             (status, progress, last_error, task_id),
         )
+    _commit_if_needed(conn)
 
 
 def upsert_state(
@@ -334,6 +449,7 @@ def upsert_state(
             """,
             (dataset, ts_code, last_date, last_time),
         )
+    _commit_if_needed(conn)
 
 
 def log_ingestion(conn, job_id: uuid.UUID, level: str, message: str) -> None:
@@ -358,6 +474,7 @@ def upsert_checkpoint(conn, run_id: uuid.UUID, ts_code: str, cursor_date: dt.dat
             """,
             (run_id, ts_code, cursor_date, cursor_time),
         )
+    _commit_if_needed(conn)
 
 
 def log_error(conn, run_id: uuid.UUID, ts_code: Optional[str], message: str, detail: Optional[Dict[str, Any]] = None) -> None:
@@ -366,6 +483,7 @@ def log_error(conn, run_id: uuid.UUID, ts_code: Optional[str], message: str, det
             "INSERT INTO market.ingestion_errors (run_id, dataset, ts_code, message, detail) VALUES (%s, 'kline_minute_raw', %s, %s, %s)",
             (run_id, ts_code, message, json.dumps(detail, ensure_ascii=False) if detail else None),
         )
+    _commit_if_needed(conn)
 
 
 def chunked(codes: List[str], size: int) -> Iterable[List[str]]:
@@ -391,17 +509,58 @@ def main() -> None:
         print("[ERROR] start-date later than end-date")
         sys.exit(1)
 
-    if args.truncate:
+    # 明确打印当前脚本路径，便于确认调度器调用的是哪一份代码
+    print(f"[INFO] ingest_full_minute entry __file__={__file__}")
+
+    # 在执行 TRUNCATE 之前，若提供了 job_id，则预先解析为 UUID，
+    # 这样一旦 TRUNCATE 因锁超时等原因失败，可以立即将该任务标记为 failed，
+    # 避免 ingestion_jobs 中长期停留在 running 状态而没有任何日志。
+    job_id_for_truncate: Optional[uuid.UUID] = None
+    if args.job_id:
+        try:
+            job_id_for_truncate = uuid.UUID(args.job_id)
+        except Exception:  # noqa: BLE001
+            job_id_for_truncate = None
+
+    try:
         with psycopg2.connect(**DB_CFG) as conn0:
             conn0.autocommit = False
             with conn0.cursor() as cur:
                 cur.execute("SET lock_timeout = '5s'")
                 cur.execute("TRUNCATE TABLE market.kline_minute_raw")
             conn0.commit()
-        print("[WARN] TRUNCATE market.kline_minute_raw executed by user request")
+        print("[WARN] TRUNCATE market.kline_minute_raw executed before full minute ingestion")
+    except Exception as exc:  # noqa: BLE001
+        # 若 TRUNCATE 失败，并且已知 job_id，则尝试将对应任务标记为失败，
+        # 并记录一条简单的错误日志，方便前端和任务监视器诊断问题。
+        if job_id_for_truncate is not None:
+            try:
+                with psycopg2.connect(**DB_CFG) as conn_fail:
+                    conn_fail.autocommit = True
+                    finish_job(
+                        conn_fail,
+                        job_id_for_truncate,
+                        "failed",
+                        {"error": str(exc), "phase": "truncate"},
+                    )
+                    log_ingestion(
+                        conn_fail,
+                        job_id_for_truncate,
+                        "error",
+                        f"TRUNCATE market.kline_minute_raw failed: {exc}",
+                    )
+            except Exception:  # noqa: BLE001
+                # 清理阶段的错误不应掩盖原始异常
+                pass
+        # 重新抛出异常，让调度器或命令行调用方看到非零退出码
+        raise
 
     with psycopg2.connect(**DB_CFG) as conn:
-        conn.autocommit = True
+        # 使用显式事务提交：
+        # - conn.autocommit 维持默认 False；
+        # - 各个辅助函数（insert_minute_init/create_job/update_job_summary 等）
+        #   内部通过 _commit_if_needed(conn) 做短事务提交，
+        #   避免出现整个导入过程占用一个长事务的情况。
         with conn.cursor() as cur:
             cur.execute("SET lock_timeout = '5s'")
             cur.execute("SET statement_timeout = '5min'")
@@ -448,6 +607,15 @@ def main() -> None:
                 job_finished = True
                 return
 
+            # 打印 / 记录获取到的股票数量，便于任务监视器和执行日志诊断
+            print(f"[INFO] fetched {len(codes)} codes for exchanges={exchanges}")
+            log_ingestion(
+                conn,
+                job_id,
+                "info",
+                f"run {run_id} fetched {len(codes)} codes for exchanges={exchanges}",
+            )
+
             stats = {
                 "total_codes": len(codes),
                 "processed_dates": 0,
@@ -455,61 +623,119 @@ def main() -> None:
                 "failed_codes": 0,
                 "inserted_rows": 0,
             }
-            update_job_summary(conn, job_id, {"total_codes": stats["total_codes"], "success_codes": 0, "failed_codes": 0, "inserted_rows": 0})
+            update_job_summary(
+                conn,
+                job_id,
+                {"total_codes": stats["total_codes"], "success_codes": 0, "failed_codes": 0, "inserted_rows": 0},
+            )
 
-            total_days = (end_date - start_date).days + 1
-            for batch in chunked(codes, args.batch_size):
-                for ts_code in batch:
-                    code = ts_code.split(".")[0]
+            def _collect_by_date_for_code(ts_code: str) -> Tuple[bool, Dict[dt.date, List[Dict[str, Any]]], Optional[str]]:
+                code = ts_code.split(".")[0]
+                try:
+                    all_bars = fetch_all_minute(code)
+                except Exception as exc:  # noqa: BLE001
+                    return False, {}, str(exc)
+                by_date: Dict[dt.date, List[Dict[str, Any]]] = {}
+                if all_bars:
+                    for row in all_bars:
+                        trade_date = _to_trade_date_from_ts(
+                            row.get("TradeTime")
+                            or row.get("trade_time")
+                            or row.get("Time")
+                            or row.get("time")
+                        )
+                        if trade_date is None:
+                            continue
+                        if trade_date < start_date or trade_date > end_date:
+                            continue
+                        by_date.setdefault(trade_date, []).append(row)
+                return True, by_date, None
+
+            with ThreadPoolExecutor(max_workers=max(1, int(args.workers))) as executor:
+                future_map: Dict[Any, Tuple[str, uuid.UUID]] = {}
+                for ts_code in codes:
                     task_id = create_task(conn, job_id, "kline_minute_raw", ts_code, start_date, end_date)
-                    empty_streak = 0
+                    fut = executor.submit(_collect_by_date_for_code, ts_code)
+                    future_map[fut] = (ts_code, task_id)
+
+                print(
+                    f"[INFO] job_id={job_id} submitting {len(future_map)} minute tasks "
+                    f"with workers={args.workers}"
+                )
+                log_ingestion(
+                    conn,
+                    job_id,
+                    "info",
+                    f"run {run_id} submitting {len(future_map)} minute tasks with workers={args.workers}",
+                )
+
+                for fut in as_completed(future_map):
+                    ts_code, task_id = future_map[fut]
                     code_failed = False
-                    processed_days = 0
-                    last_ts_dt: Optional[dt.datetime] = None
-                    for trade_date in date_range(start_date, end_date):
-                        try:
-                            bars = fetch_minute(code, trade_date)
-                            if not bars:
-                                empty_streak += 1
-                                if empty_streak >= args.max_empty:
-                                    log_ingestion(conn, job_id, "info", f"run {run_id} {ts_code} empty streak={empty_streak}, stop")
-                                    break
+                    inserted_total = 0
+                    processed_dates = 0
+                    ok = False
+                    by_date: Dict[dt.date, List[Dict[str, Any]]] = {}
+                    err_msg: Optional[str] = None
+                    try:
+                        ok, by_date, err_msg = fut.result()
+                    except Exception as exc:  # noqa: BLE001
+                        ok = False
+                        by_date = {}
+                        err_msg = str(exc)
+                    if not ok:
+                        code_failed = True
+                        log_error(
+                            conn,
+                            run_id,
+                            ts_code,
+                            err_msg or "fetch_all_minute failed",
+                            detail={"code": ts_code.split(".")[0], "start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+                        )
+                        print(f"[WARN] {ts_code} full-minute failed: {err_msg}")
+                        log_ingestion(
+                            conn,
+                            job_id,
+                            "error",
+                            f"run {run_id} {ts_code} full-minute failed: {err_msg}",
+                        )
+                    else:
+                        for trade_date in sorted(by_date.keys()):
+                            day_bars = by_date[trade_date]
+                            if not day_bars:
                                 continue
-                            empty_streak = 0
-                            inserted, last_ts = upsert_minute(conn, ts_code, trade_date, bars)
+                            inserted, last_ts = insert_minute_init(conn, ts_code, trade_date, day_bars)
+                            if inserted <= 0:
+                                continue
+                            inserted_total += inserted
                             stats["inserted_rows"] += inserted
                             stats["processed_dates"] += 1
-                            processed_days += 1
+                            processed_dates += 1
                             upsert_checkpoint(conn, run_id, ts_code, trade_date, last_ts)
                             last_ts_dt = dt.datetime.fromisoformat(last_ts) if last_ts else None
                             if last_ts_dt:
                                 upsert_state(conn, "kline_minute_raw", ts_code, trade_date, last_ts_dt)
-                            update_job_summary(conn, job_id, {"inserted_rows": inserted})
                             print(f"[OK] {ts_code} {trade_date} inserted={inserted}")
-                            log_ingestion(conn, job_id, "info", f"run {run_id} {ts_code} {trade_date} inserted={inserted}")
-                        except Exception as exc:  # noqa: BLE001
-                            code_failed = True
-                            log_error(
+                            log_ingestion(
                                 conn,
-                                run_id,
-                                ts_code,
-                                str(exc),
-                                detail={"code": code, "trade_date": trade_date.isoformat()},
+                                job_id,
+                                "info",
+                                f"run {run_id} {ts_code} {trade_date} inserted={inserted}",
                             )
-                            print(f"[WARN] {ts_code} {trade_date} failed: {exc}")
-                            log_ingestion(conn, job_id, "error", f"run {run_id} {ts_code} {trade_date} failed: {exc}")
-                            break
-                    progress = 0.0
-                    if total_days > 0:
-                        progress = min(100.0, (processed_days / total_days) * 100.0)
+
                     if code_failed:
                         stats["failed_codes"] += 1
-                        complete_task(conn, task_id, False, progress, "processing failed")
+                        complete_task(conn, task_id, False, 0.0, "processing failed")
                         update_job_summary(conn, job_id, {"failed_codes": 1})
                     else:
                         stats["success_codes"] += 1
-                        complete_task(conn, task_id, True, 100.0 if progress > 0 else progress, None)
-                        update_job_summary(conn, job_id, {"success_codes": 1})
+                        # 符合设计文档的语义：按“每只股票完成”更新进度。
+                        complete_task(conn, task_id, True, 100.0, None)
+                        update_job_summary(
+                            conn,
+                            job_id,
+                            {"success_codes": 1, "inserted_rows": int(inserted_total)},
+                        )
 
             status = "success" if stats["failed_codes"] == 0 else "failed"
             finish_run(conn, run_id, status, stats)

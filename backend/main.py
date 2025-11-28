@@ -4,7 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 import sys
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# 将项目根目录指向 AIstock 仓库根，便于导入顶层模块（如 pg_monitor_repo 等）
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -23,6 +24,7 @@ from .routers import (
     longhubang,
     model_scheduler,
     ingestion,
+    quant,
 )
 from .ingestion.tdx_scheduler import scheduler as ingestion_scheduler
 
@@ -73,6 +75,7 @@ def create_app() -> FastAPI:
 
     # ingestion / 本地数据管理接口：保持与旧 tdx_backend 相同的 /api/* 路径
     app.include_router(ingestion.router, prefix="")
+    app.include_router(quant.router, prefix="")
 
     return app
 

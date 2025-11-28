@@ -1,0 +1,34 @@
+import os
+from typing import Any, Dict
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+DB_CFG: Dict[str, Any] = {
+    "host": os.getenv("TDX_DB_HOST", "localhost"),
+    "port": int(os.getenv("TDX_DB_PORT", "5432")),
+    "user": os.getenv("TDX_DB_USER", "postgres"),
+    "password": os.getenv("TDX_DB_PASSWORD", "lc78080808"),
+    "dbname": os.getenv("TDX_DB_NAME", "aistock"),
+}
+
+
+def main() -> None:
+    print("Using config:", DB_CFG)
+    with psycopg2.connect(**DB_CFG) as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            print("\n[1] data_stats_config rows (data_kind, table_name, date_column)")
+            cur.execute(
+                """
+                SELECT data_kind, table_name, date_column, enabled
+                  FROM market.data_stats_config
+                 ORDER BY data_kind
+                """
+            )
+            rows = cur.fetchall() or []
+            for r in rows:
+                print(r)
+
+
+if __name__ == "__main__":
+    main()

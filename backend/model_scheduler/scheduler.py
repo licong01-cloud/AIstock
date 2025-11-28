@@ -27,14 +27,14 @@ Usage pattern:
 
 - Then run this scheduler via:
 
-  python -m next_app.backend.model_scheduler.scheduler run-once \
+  python -m backend.model_scheduler.scheduler run-once \
       --model-name LSTM_SHARED \
       --schedule-name weekly_shared_train \
       --task-type train
 
 - Or periodically run:
 
-  python -m next_app.backend.model_scheduler.scheduler run-due
+  python -m backend.model_scheduler.scheduler run-due
 
   which will pick all enabled schedules whose next_run_at is NULL or in
   the past, execute them once, and advance next_run_at by `frequency::interval`.
@@ -53,7 +53,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from next_app.backend.db.pg_pool import get_conn
+from ..db.pg_pool import get_conn
 
 
 # ---------------------------------------------------------------------------
@@ -80,31 +80,45 @@ class ScheduleRecord:
 DISPATCH_TABLE: Dict[str, Dict[str, Any]] = {
     # LSTM per-stock
     "lstm_per_stock_train": {
-        "module": "next_app.backend.quant_models.lstm.train_per_stock",
+        "module": "backend.quant_models.lstm.train_per_stock",
     },
     "lstm_per_stock_infer": {
-        "module": "next_app.backend.quant_models.lstm.infer_per_stock",
+        "module": "backend.quant_models.lstm.infer_per_stock",
     },
     # LSTM shared
     "lstm_shared_train": {
-        "module": "next_app.backend.quant_models.lstm.train_shared",
+        "module": "backend.quant_models.lstm.train_shared",
     },
     "lstm_shared_infer": {
-        "module": "next_app.backend.quant_models.lstm.infer_shared",
+        "module": "backend.quant_models.lstm.infer_shared",
     },
     # LSTM refinement (mode is passed explicitly via params)
     "lstm_refinement_train": {
-        "module": "next_app.backend.quant_models.lstm.refinement_per_stock",
+        "module": "backend.quant_models.lstm.refinement_per_stock",
     },
     "lstm_refinement_infer": {
-        "module": "next_app.backend.quant_models.lstm.refinement_per_stock",
+        "module": "backend.quant_models.lstm.refinement_per_stock",
     },
     # DeepAR daily / 60m (freq is part of params)
     "deepar_train": {
-        "module": "next_app.backend.quant_models.deepar.train",
+        "module": "backend.quant_models.deepar.train",
     },
     "deepar_infer": {
-        "module": "next_app.backend.quant_models.deepar.infer",
+        "module": "backend.quant_models.deepar.infer",
+    },
+    # ARIMA daily (planned, skeleton only)
+    "arima_train": {
+        "module": "backend.quant_models.arima.train",
+    },
+    "arima_infer": {
+        "module": "backend.quant_models.arima.infer",
+    },
+    # HMM daily regime detection (planned, skeleton only)
+    "hmm_train": {
+        "module": "backend.quant_models.hmm.train",
+    },
+    "hmm_infer": {
+        "module": "backend.quant_models.hmm.infer",
     },
 }
 

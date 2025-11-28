@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..db.pg_pool import get_conn
 import psycopg2.extras as pg_extras
 
 from ..db.pg_pool import get_conn

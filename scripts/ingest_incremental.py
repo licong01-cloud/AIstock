@@ -36,6 +36,7 @@ DB_CFG = dict(
     user=os.getenv("TDX_DB_USER", "postgres"),
     password=os.getenv("TDX_DB_PASSWORD", "lc78080808"),
     dbname=os.getenv("TDX_DB_NAME", "aistock"),
+    application_name="AIstock-ingest-incremental",
 )
 # 支持增量更新的数据集：
 # - kline_daily_qfq: 前复权日线
@@ -62,9 +63,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--exchanges", type=str, default="sh,sz", help="Comma separated exchanges (sh,sz,bj)")
     parser.add_argument("--batch-size", type=int, default=100, help="Codes per batch")
-    parser.add_argument("--max-empty", type=int, default=2, help="Minute dataset: stop after N empty days")
+    parser.add_argument(
+        "--max-empty",
+        type=int,
+        default=0,
+        help="Minute dataset: stop after N empty days; <=0 disables early stop (scan full date range)",
+    )
     parser.add_argument("--job-id", type=str, default=None, help="Attach to existing job id (pre-created by backend)")
     parser.add_argument("--bulk-session-tune", action="store_true", help="Apply session-level tuning for bulk load")
+    parser.add_argument("--workers", type=int, default=1, choices=[1, 2, 4, 8], help="Number of parallel workers (1 = no parallelism)")
     return parser.parse_args()
 
 
@@ -175,25 +182,78 @@ def _to_date(value: Any) -> Optional[str]:
 
 
 def fetch_daily(code: str, start: str, end: str) -> List[Dict[str, Any]]:
-    params = {"code": code, "type": "day", "adjust": "qfq", "start": start, "end": end}
-    data = http_get("/api/kline", params=params)
-    payload = data.get("data") if isinstance(data, dict) else None
-    if isinstance(payload, dict):
-        values = payload.get("List") or payload.get("list") or []
-    else:
-        values = payload or []
-    return list(values)
+    """Fetch front-adjusted daily bars for a single symbol within [start, end].
+
+    优先使用 /api/kline-history 按时间范围取数；当 start/end 缺失或格式异常时，
+    回退到原先的 /api/kline 行为以保证兼容性。
+    """
+
+    def _parse_iso(date_text: Optional[str]) -> Optional[dt.date]:
+        if not date_text:
+            return None
+        try:
+            return dt.date.fromisoformat(str(date_text))
+        except ValueError:
+            return None
+
+    start_dt = _parse_iso(start)
+    end_dt = _parse_iso(end)
+
+    # 当无法解析日期或区间非法时，退回到旧的 /api/kline 调用逻辑
+    if not start_dt or not end_dt or start_dt > end_dt:
+        params: Dict[str, Any] = {"code": code, "type": "day"}
+        if start:
+            params["start"] = start
+        if end:
+            params["end"] = end
+        data = http_get("/api/kline", params=params)
+        payload = data.get("data") if isinstance(data, dict) else None
+        if isinstance(payload, dict):
+            values = payload.get("List") or payload.get("list") or []
+        else:
+            values = payload or []
+        return list(values)
+
+    # 使用 /api/kline-history，按时间段拆分，确保单次请求不超过 limit=800 的上限
+    max_span_days = 750  # 保守值，避免极端情况下超过 800 条
+    all_values: List[Dict[str, Any]] = []
+    cur_start = start_dt
+    while cur_start <= end_dt:
+        cur_end = min(cur_start + dt.timedelta(days=max_span_days - 1), end_dt)
+        params = {
+            "code": code,
+            "type": "day",
+            "start_date": cur_start.strftime("%Y%m%d"),
+            "end_date": cur_end.strftime("%Y%m%d"),
+            "limit": 800,
+        }
+        data = http_get("/api/kline-history", params=params)
+        payload = data.get("data") if isinstance(data, dict) else None
+        if isinstance(payload, dict):
+            values = payload.get("List") or payload.get("list") or []
+        else:
+            values = payload or []
+        if isinstance(values, list):
+            all_values.extend(values)
+        cur_start = cur_end + dt.timedelta(days=1)
+
+    return all_values
 
 
-def fetch_daily_raw(code: str, start: str, end: str) -> List[Dict[str, Any]]:
+def fetch_daily_raw(code: str, start: str, end: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
     """Fetch *unadjusted* daily bars for a single symbol within [start, end].
 
     与 ingest_full_daily_raw 中的 fetch_kline_daily_raw 保持语义一致：
-    - 调用 /api/kline-all/tdx 获取该标的全部日线；
+    - 调用 /api/kline-all/tdx 获取该标的全部日线（如提供 limit，则仅取最近 N 条）；
     - 在本地按日期范围进行过滤；
     - 返回按交易日期升序排列的列表。
     """
-    params = {"code": code, "type": "day"}
+    params: Dict[str, Any] = {"code": code, "type": "day"}
+    if limit is not None and limit > 0:
+        try:
+            params["limit"] = int(limit)
+        except (TypeError, ValueError):
+            pass
     data = http_get("/api/kline-all/tdx", params=params)
     payload = data.get("data") if isinstance(data, dict) else None
     if isinstance(payload, dict):
@@ -232,6 +292,30 @@ def fetch_minute(code: str, trade_date: dt.date) -> List[Dict[str, Any]]:
     else:
         items = payload or []
     return list(items)
+
+
+def fetch_minute_range(code: str, start: dt.date, end: dt.date) -> List[Dict[str, Any]]:
+    """Fetch 1-minute K-bars for a symbol within [start, end] via /api/kline-history.
+
+    为避免触及 limit=800 的上限，调用方应保证 (end-start) 的跨度不超过数日；
+    本函数仅负责单次 /api/kline-history 调用并返回原始列表。
+    """
+    if start > end:
+        return []
+    params = {
+        "code": code,
+        "type": "minute1",
+        "start_date": start.strftime("%Y%m%d"),
+        "end_date": end.strftime("%Y%m%d"),
+        "limit": 800,
+    }
+    data = http_get("/api/kline-history", params=params)
+    payload = data.get("data") if isinstance(data, dict) else None
+    if isinstance(payload, dict):
+        items = payload.get("List") or payload.get("list") or []
+    else:
+        items = payload or []
+    return list(items) if isinstance(items, list) else []
 
 
 def upsert_daily(conn, ts_code: str, bars: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
@@ -671,6 +755,44 @@ def ingest_daily_raw(
         "start_date_override": start_override.isoformat() if start_override else None,
         "batch_size": batch_size,
     }
+    # 根据交易日历估算本次需要的未复权日线条数，用于 /api/kline-all/tdx 的 limit，
+    # 尤其是距离当前交易日小于一年的增量区间，避免每次都全量拉取。
+    raw_limit: Optional[int] = None
+    start_str = params.get("start_date_override")
+    if start_str:
+        try:
+            start_dt = dt.date.fromisoformat(start_str)
+        except ValueError:
+            start_dt = None
+        if start_dt is not None:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT MAX(cal_date) AS latest
+                      FROM market.trading_calendar
+                     WHERE is_trading = TRUE
+                    """
+                )
+                row = cur.fetchone()
+                latest = row[0] if row and row[0] else None
+                if latest is not None and start_dt <= latest:
+                    # 仅当起始日期距离当前最新交易日不超过约一年时，才使用 limit 做近似范围切片，
+                    # 更长区间仍采用全量拉取以避免遗漏早期数据。
+                    if (latest - start_dt).days <= 366:
+                        cur.execute(
+                            """
+                            SELECT COUNT(*)
+                              FROM market.trading_calendar
+                             WHERE is_trading = TRUE
+                               AND cal_date BETWEEN %s AND %s
+                            """,
+                            (start_dt, latest),
+                        )
+                        count_row = cur.fetchone()
+                        days = int(count_row[0]) if count_row and count_row[0] is not None else 0
+                        if days > 0:
+                            # 略微增加冗余，确保覆盖到起始日前后的边界情况。
+                            raw_limit = days + 5
     job_params = {"datasets": [dataset], **params}
     job_id = uuid.UUID(job_id_opt) if job_id_opt else create_job(conn, "incremental", job_params)
     if job_id_opt:
@@ -692,7 +814,12 @@ def ingest_daily_raw(
             ok = False
             err: Optional[str] = None
             try:
-                bars = fetch_daily_raw(ts_code.split(".")[0], params["start_date_override"], target_date.isoformat())
+                bars = fetch_daily_raw(
+                    ts_code.split(".")[0],
+                    params["start_date_override"],
+                    target_date.isoformat(),
+                    raw_limit,
+                )
                 inserted, last_fetched = upsert_daily_raw(conn, ts_code, bars)
                 stats["inserted_rows"] += inserted
                 if inserted > 0 and last_fetched:
@@ -809,29 +936,12 @@ def ingest_minute(
             code_failed = False
             err: Optional[str] = None
             empty_streak = 0
-            for trade_date in date_range(range_start, range_end):
+            window_days = 3  # 每次最多抓取约 3 天，避免分钟条数超过 limit=800
+            cur_start = range_start
+            while cur_start <= range_end:
+                cur_end = min(range_end, cur_start + dt.timedelta(days=window_days - 1))
                 try:
-                    bars = fetch_minute(code, trade_date)
-                    if not bars:
-                        empty_streak += 1
-                        if empty_streak >= max_empty:
-                            log_ingestion(
-                                conn,
-                                job_id,
-                                "info",
-                                f"run {run_id} {dataset} {ts_code} empty streak={empty_streak}, stop at {trade_date.isoformat()}",
-                            )
-                            break
-                        continue
-                    empty_streak = 0
-                    inserted, last_ts = upsert_minute(conn, ts_code, trade_date, bars)
-                    stats["inserted_rows"] += inserted
-                    if inserted > 0:
-                        last_dt = dt.datetime.fromisoformat(last_ts) if last_ts else None
-                        upsert_state(conn, dataset, ts_code, trade_date, last_dt, None)
-                        upsert_checkpoint(conn, run_id, dataset, ts_code, trade_date, last_ts, None)
-                    print(f"[OK] {dataset} {ts_code} {trade_date} inserted={inserted}")
-                    log_ingestion(conn, job_id, "info", f"run {run_id} {dataset} {ts_code} {trade_date} inserted={inserted}")
+                    values = fetch_minute_range(code, cur_start, cur_end)
                 except Exception as exc:  # noqa: BLE001
                     err = str(exc)
                     code_failed = True
@@ -843,19 +953,94 @@ def ingest_minute(
                         err,
                         detail={
                             "code": code,
-                            "date": trade_date.isoformat(),
-                            "range_start": range_start.isoformat(),
-                            "range_end": range_end.isoformat(),
+                            "range_start": cur_start.isoformat(),
+                            "range_end": cur_end.isoformat(),
                         },
                     )
-                    print(f"[WARN] {dataset} {ts_code} {trade_date} failed: {err}")
+                    print(f"[WARN] {dataset} {ts_code} range {cur_start}..{cur_end} failed: {err}")
                     log_ingestion(
                         conn,
                         job_id,
                         "error",
-                        f"run {run_id} {dataset} {ts_code} {trade_date} failed: {err}",
+                        f"run {run_id} {dataset} {ts_code} range {cur_start}..{cur_end} failed: {err}",
                     )
                     break
+
+                # 按交易日分组，保持旧逻辑的“逐日 upsert” 语义
+                by_date: Dict[str, List[Dict[str, Any]]] = {}
+                for row in values:
+                    trade_date_str = _to_date(
+                        row.get("TradeTime")
+                        or row.get("trade_time")
+                        or row.get("Time")
+                        or row.get("time")
+                    )
+                    if trade_date_str is None:
+                        continue
+                    by_date.setdefault(trade_date_str, []).append(row)
+
+                stop_early = False
+                for trade_date in date_range(cur_start, cur_end):
+                    key = trade_date.isoformat()
+                    day_bars = by_date.get(key, [])
+                    try:
+                        if not day_bars:
+                            empty_streak += 1
+                            # 当 max_empty <= 0 时，不根据空天数提前停止，始终扫完整日期区间
+                            if max_empty > 0 and empty_streak >= max_empty:
+                                log_ingestion(
+                                    conn,
+                                    job_id,
+                                    "info",
+                                    f"run {run_id} {dataset} {ts_code} empty streak={empty_streak}, stop at {trade_date.isoformat()}",
+                                )
+                                stop_early = True
+                                break
+                            continue
+                        empty_streak = 0
+                        inserted, last_ts = upsert_minute(conn, ts_code, trade_date, day_bars)
+                        stats["inserted_rows"] += inserted
+                        if inserted > 0:
+                            last_dt = dt.datetime.fromisoformat(last_ts) if last_ts else None
+                            upsert_state(conn, dataset, ts_code, trade_date, last_dt, None)
+                            upsert_checkpoint(conn, run_id, dataset, ts_code, trade_date, last_ts, None)
+                        print(f"[OK] {dataset} {ts_code} {trade_date} inserted={inserted}")
+                        log_ingestion(
+                            conn,
+                            job_id,
+                            "info",
+                            f"run {run_id} {dataset} {ts_code} {trade_date} inserted={inserted}",
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        err = str(exc)
+                        code_failed = True
+                        log_error(
+                            conn,
+                            run_id,
+                            dataset,
+                            ts_code,
+                            err,
+                            detail={
+                                "code": code,
+                                "date": trade_date.isoformat(),
+                                "range_start": range_start.isoformat(),
+                                "range_end": range_end.isoformat(),
+                            },
+                        )
+                        print(f"[WARN] {dataset} {ts_code} {trade_date} failed: {err}")
+                        log_ingestion(
+                            conn,
+                            job_id,
+                            "error",
+                            f"run {run_id} {dataset} {ts_code} {trade_date} failed: {err}",
+                        )
+                        stop_early = True
+                        break
+
+                if code_failed or stop_early:
+                    break
+                cur_start = cur_end + dt.timedelta(days=1)
+
             if code_failed:
                 stats["failed_codes"] += 1
                 try:
@@ -912,6 +1097,16 @@ def main() -> None:
 
     exchanges = [ex.strip().lower() for ex in args.exchanges.split(",") if ex.strip()]
 
+    # 默认使用 TDX /api/codes 作为全市场股票来源，不再强依赖 market.symbol_dim。
+    try:
+        codes = fetch_codes(exchanges)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERROR] failed to fetch codes from TDX /api/codes: {exc}")
+        sys.exit(1)
+    if not codes:
+        print("[ERROR] no codes returned from TDX /api/codes; please check TDX backend status")
+        sys.exit(1)
+
     with psycopg2.connect(**DB_CFG) as conn:
         conn.autocommit = True
         with conn.cursor() as cur:
@@ -921,10 +1116,6 @@ def main() -> None:
             with conn.cursor() as cur:
                 cur.execute("SET synchronous_commit = off")
                 cur.execute("SET work_mem = '256MB'")
-        codes = get_db_codes(conn, exchanges)
-        if not codes:
-            print("[ERROR] no codes found in market.symbol_dim; run symbol ingestion first")
-            sys.exit(1)
 
         if "kline_daily_qfq" in datasets:
             ingest_daily(conn, codes, target_date, start_override, args.batch_size, args.job_id)

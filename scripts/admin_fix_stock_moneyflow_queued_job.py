@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from next_app.backend.db.pg_pool import get_conn, init_db_pool
+from backend.db.pg_pool import get_conn, init_db_pool
 
 
 def _load_db_env() -> None:

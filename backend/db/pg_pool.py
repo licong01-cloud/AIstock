@@ -23,6 +23,7 @@ def _db_cfg() -> Dict[str, Any]:
         "user": os.getenv("TDX_DB_USER", "postgres"),
         "password": os.getenv("TDX_DB_PASSWORD", ""),
         "dbname": os.getenv("TDX_DB_NAME", "aistock"),
+        "application_name": "AIstock-backend",
     }
 
 

@@ -61,6 +61,7 @@ DEFAULT_ADJUST_REBUILD = ROOT_DIR / "scripts" / "rebuild_adjusted_daily.py"
 DEFAULT_INGEST_TUSHARE_TDX_BOARD = ROOT_DIR / "scripts" / "ingest_tushare_tdx_board.py"
 DEFAULT_INGEST_TUSHARE_MONEYFLOW = ROOT_DIR / "scripts" / "ingest_tushare_moneyflow.py"
 DEFAULT_INGEST_WEEKLY_FROM_DAILY = ROOT_DIR / "scripts" / "ingest_tushare_weekly.py"
+DEFAULT_SYNC_SYMBOL_DIM = ROOT_DIR / "scripts" / "sync_symbol_dim_from_tdx.py"
 
 
 def _ensure_directory(path: Path) -> None:
@@ -419,8 +420,18 @@ class TDXScheduler:
         triggered_by: str,
         options: Dict[str, Any],
     ) -> uuid.UUID:
+        # run_id: 调度器内部使用的执行 ID，与 ingestion_jobs.job_id 解耦。
+        # job_id 由调用方（API 路由或脚本本身）负责创建和管理：
+        # - 手动触发：/api/ingestion/run 先在 market.ingestion_jobs 中插入一行，
+        #   然后通过 options 传入统一的 job_id，CLI 使用该 job_id 进行任务/日志关联；
+        # - 定时任务：schedule options 通常不包含 job_id，CLI 脚本在未提供
+        #   --job-id 时会自行创建 ingestion_jobs 记录。
+        # 这里不再根据 job_id 派生 run_id，也不覆盖 options["job_id" ]，
+        # 只负责生成调度器自己的 run_id，并按调用方提供的 options 构造命令行。
         run_id = uuid.uuid4()
-        cmd = self._build_ingestion_command(dataset, mode, options)
+
+        cmd_opts = options.copy()
+        cmd = self._build_ingestion_command(dataset, mode, cmd_opts)
         future = self._executor.submit(
             self._run_ingestion_process, run_id, schedule_id, dataset, mode, triggered_by, cmd
         )
@@ -489,6 +500,9 @@ class TDXScheduler:
         # Weekly aggregation uses dedicated script, both modes
         if dataset == "kline_weekly" and mode in {"init", "incremental"}:
             return DEFAULT_INGEST_WEEKLY_FROM_DAILY
+        # Trade aggregation uses dedicated script, both modes
+        if dataset == "trade_agg_5m" and mode in {"init", "incremental"}:
+            return DEFAULT_INGEST_TRADE_AGG
         if mode == "incremental":
             return DEFAULT_INGEST_INCREMENTAL
         if mode == "init" and dataset in {"kline_daily_qfq", "kline_daily"}:
@@ -497,10 +511,10 @@ class TDXScheduler:
             return DEFAULT_INGEST_FULL_DAILY_RAW
         if mode == "init" and dataset in {"kline_minute_raw", "minute_1m"}:
             return DEFAULT_INGEST_FULL_MINUTE
-        if dataset == "trade_agg_5m" and mode in {"init", "incremental"}:
-            return DEFAULT_INGEST_TRADE_AGG
         if mode == "rebuild" and dataset in {"adjust_daily", "kline_adjust_daily"}:
             return DEFAULT_ADJUST_REBUILD
+        if dataset == "symbol_dim":
+            return DEFAULT_SYNC_SYMBOL_DIM
         return None
 
     @staticmethod
@@ -551,10 +565,16 @@ class TDXScheduler:
                         args += ["--exchanges", ",".join(options["exchanges"]) if isinstance(options["exchanges"], (list, tuple)) else str(options["exchanges"])]
                     if options.get("batch_size"):
                         args += ["--batch-size", str(options["batch_size"])]
-                    if options.get("max_empty"):
-                        args += ["--max-empty", str(options["max_empty"])]
+                    # max_empty: 仅当前端显式传入时才透传给脚本；
+                    # 否则由 ingest_incremental.py 的默认值决定（当前默认 0，表示不因空天数提前停止）。
+                    max_empty = options.get("max_empty")
+                    if max_empty is not None:
+                        args += ["--max-empty", str(max_empty)]
                     if options.get("job_id"):
                         args += ["--job-id", str(options["job_id"])]
+                    # 可选并行度：增量日 K / 分钟 K / 其它基于 ingest_incremental.py 的任务
+                    if options.get("workers"):
+                        args += ["--workers", str(options["workers"])]
         elif mode == "init":
             if dataset in {"kline_daily_qfq", "kline_daily"}:
                 if options.get("exchanges"):
@@ -569,6 +589,8 @@ class TDXScheduler:
                     args += ["--limit-codes", str(options["limit_codes"])]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
+                if options.get("workers"):
+                    args += ["--workers", str(options["workers"])]
             elif dataset in {"kline_daily_raw"}:
                 if options.get("exchanges"):
                     args += ["--exchanges", ",".join(options["exchanges"]) if isinstance(options["exchanges"], (list, tuple)) else str(options["exchanges"])]
@@ -584,6 +606,8 @@ class TDXScheduler:
                     args += ["--truncate"]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
+                if options.get("workers"):
+                    args += ["--workers", str(options["workers"])]
             elif dataset in {"kline_minute_raw", "minute_1m"}:
                 if options.get("exchanges"):
                     args += [
@@ -604,6 +628,8 @@ class TDXScheduler:
                     args += ["--truncate"]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
+                if options.get("workers"):
+                    args += ["--workers", str(options["workers"])]
             elif dataset.startswith("tdx_board_"):
                 args += ["--dataset", dataset, "--mode", "init"]
                 if options.get("start_date"):
@@ -637,6 +663,8 @@ class TDXScheduler:
                     args += ["--batch-size", str(options["batch_size"])]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
+                if options.get("workers"):
+                    args += ["--workers", str(options["workers"])]
         elif mode == "rebuild" and dataset in {"adjust_daily", "kline_adjust_daily"}:
             which = options.get("which") or "both"
             args += ["--which", str(which)]
@@ -658,6 +686,15 @@ class TDXScheduler:
         use_bulk = options.get("bulk_session_tune")
         if use_bulk is None or bool(use_bulk):
             args.append("--bulk-session-tune")
+        
+        if dataset == "symbol_dim":
+            # Special case for symbol_dim sync (usually mode="init" or "incremental" both work the same)
+            if options.get("exchanges"):
+                val = options["exchanges"]
+                args += ["--exchanges", ",".join(val) if isinstance(val, (list, tuple)) else str(val)]
+            if options.get("job_id"):
+                args += ["--job-id", str(options["job_id"])]
+
         return args
 
     # ------------------------------------------------------------------
@@ -741,7 +778,23 @@ class TDXScheduler:
             log_lines.append(proc.stdout)
             log_lines.append(proc.stderr)
             status = "success" if proc.returncode == 0 else "failed"
-            summary = {"returncode": proc.returncode, "dataset": dataset, "mode": mode}
+
+            stdout_text = (proc.stdout or "").strip()
+            stderr_text = (proc.stderr or "").strip()
+
+            def _tail(text: str, limit: int = 800) -> str:
+                if not text:
+                    return ""
+                return text if len(text) <= limit else "..." + text[-limit:]
+
+            summary = {
+                "returncode": proc.returncode,
+                "dataset": dataset,
+                "mode": mode,
+                "command": cmd,
+                "stdout_tail": _tail(stdout_text),
+                "stderr_tail": _tail(stderr_text),
+            }
             detail = {"command": cmd}
             if schedule_id:
                 self._update_ingestion_schedule(schedule_id, last_run=start_ts, last_status=status, last_error=None)

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 from typing import Any, Dict, Tuple
 
 import numpy as np
@@ -106,6 +107,67 @@ def _ensure_default_universe_configs() -> None:
                         json_dumps(item["config_json"]),
                     ),
                 )
+
+
+def _ensure_default_model_configs() -> None:
+    """向 app.model_config 中写入 ARIMA/HMM 的默认配置（若不存在）。"""
+
+    defaults = [
+        {
+            "model_name": "ARIMA_DAILY",
+            "description": "ARIMA 日级基线预测（ALL_EQ_CLEAN Universe）",
+            "config_json": {
+                "kind": "arima_daily",
+                "params": {
+                    "freq": "1d",
+                    "history_years": 3.0,
+                    "universe_name": "ALL_EQ_CLEAN",
+                    "order": [1, 1, 1],
+                    "seasonal_order": None,
+                },
+            },
+        },
+        {
+            "model_name": "HMM_DAILY",
+            "description": "HMM 日级行情状态识别（ALL_EQ_CLEAN Universe）",
+            "config_json": {
+                "kind": "hmm_daily",
+                "params": {
+                    "freq": "1d",
+                    "history_years": 3.0,
+                    "universe_name": "ALL_EQ_CLEAN",
+                    "n_states": 3,
+                },
+            },
+        },
+    ]
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for item in defaults:
+                cur.execute(
+                    """
+                    INSERT INTO app.model_config (model_name, description, config_json, enabled)
+                    VALUES (%s, %s, %s, TRUE)
+                    ON CONFLICT (model_name)
+                    DO UPDATE SET
+                        description = EXCLUDED.description,
+                        config_json = EXCLUDED.config_json,
+                        enabled = TRUE,
+                        updated_at = NOW()
+                    """,
+                    (
+                        item["model_name"],
+                        item["description"],
+                        json_dumps(item["config_json"]),
+                    ),
+                )
+
+
+def json_dumps(payload: Any) -> str:
+    """Helper for JSON serialization with UTF-8 support."""
+
+    return json.dumps(payload, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +375,8 @@ def main() -> None:
 
     print(f"[INFO] seeding model_universe_config (default entries)")
     _ensure_default_universe_configs()
+    print(f"[INFO] seeding model_config (ARIMA/HMM defaults)")
+    _ensure_default_model_configs()
 
     # 计算日度观察窗口
     end_dt = dt.datetime.combine(as_of_date + dt.timedelta(days=1), dt.time(0, 0), tzinfo=dt.timezone.utc)

@@ -232,7 +232,7 @@ def trigger_schedule_run_async(schedule_id: int, dry_run: bool = False) -> None:
     cmd = [
         sys.executable,
         "-m",
-        "next_app.backend.model_scheduler.scheduler",
+        "backend.model_scheduler.scheduler",
         "run-once",
         "--id",
         str(schedule_id),

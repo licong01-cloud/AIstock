@@ -9,7 +9,7 @@
 
 - 已安装 Anaconda/Miniconda
 - 已安装 Git、Node.js（建议 >= 18）
-- 当前代码仓库路径：`c:/Users/lc999/aistock/aiagents-stock-main`
+- 当前代码仓库路径：`c:/Users/lc999/NewAIstock/AIstock`
 
 ---
 
@@ -32,7 +32,7 @@ conda activate aistock-next
 在仓库根目录执行：
 
 ```bash
-cd c:/Users/lc999/aistock/aiagents-stock-main
+cd c:/Users/lc999/NewAIstock/AIstock
 
 # 基础 Web 依赖
 pip install fastapi uvicorn[standard] pydantic "python-dotenv>=1.0.0"
@@ -108,7 +108,7 @@ npm -v
 > 以下仅为建议流程，新前端尚未在仓库中初始化，可在准备好时执行。
 
 ```bash
-cd c:/Users/lc999/aistock/aiagents-stock-main/next_app
+cd c:/Users/lc999/NewAIstock/AIstock/frontend
 
 # 使用 create-next-app 初始化（以 TypeScript 为例）
 npx create-next-app@latest frontend \
@@ -157,7 +157,7 @@ export async function analyzeStock(payload: any) {
 运行前端开发服务器：
 
 ```bash
-cd c:/Users/lc999/aistock/aiagents-stock-main/next_app/frontend
+cd c:/Users/lc999/NewAIstock/AIstock/frontend
 npm install
 npm run dev
 ```
