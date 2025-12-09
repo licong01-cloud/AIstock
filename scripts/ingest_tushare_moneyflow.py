@@ -62,7 +62,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--end-date", type=str, default=None, help="End date YYYY-MM-DD (defaults to today)")
     parser.add_argument("--job-id", type=str, default=None, help="Existing job id to attach and update")
     parser.add_argument("--batch-sleep", type=float, default=0.2, help="Sleep seconds between trade_date batches")
+    parser.add_argument(
+        "--truncate",
+        action="store_true",
+        help="Truncate market.moneyflow_ind_dc before init (full rebuild, destructive)",
+    )
+    # 与其他入库脚本保持一致：可选启用会话级批量调优，降低单条提交的 fsync 开销、放宽内存限制，
+    # 以提升大批量入库场景下的吞吐。未显式指定时保持默认数据库设置。
+    parser.add_argument(
+        "--bulk-session-tune",
+        action="store_true",
+        help="Apply session-level tuning for bulk load (SET synchronous_commit=off, work_mem=256MB)",
+    )
     return parser.parse_args()
+
+
+def _ensure_session_tune(conn, enabled: bool) -> None:
+    """Apply PostgreSQL session-level tuning for bulk loads when enabled.
+
+    - synchronous_commit = off  : 减少每次提交等待 WAL 刷盘的延迟，提升写入吞吐；
+    - work_mem = 256MB          : 为排序/哈希聚合等操作提供更大的内存空间，减少磁盘临时文件。
+
+    该设置仅作用于当前连接会话，不会影响其他连接；不启用时保持数据库默认配置。
+    """
+
+    if not enabled:
+        return
+    with conn.cursor() as cur:
+        cur.execute("SET synchronous_commit = off")
+        cur.execute("SET work_mem = '256MB'")
 
 
 def _date_range(d0: dt.date, d1: dt.date) -> List[dt.date]:
@@ -136,6 +164,49 @@ def _log(conn, job_id: uuid.UUID, level: str, message: str) -> None:
             "INSERT INTO market.ingestion_logs (job_id, ts, level, message) VALUES (%s, NOW(), %s, %s)",
             (job_id, level.upper(), message),
         )
+
+
+def _update_job_progress(conn, job_id: uuid.UUID, stats: Dict[str, Any]) -> None:
+    """Update ingestion_jobs.progress and summary.counters for stock_moneyflow job.
+
+    进度更新逻辑与复权因子任务保持一致：
+    - 基于 total_days / success_days / failed_days 计算进度百分比；
+    - 在 summary.counters 中维护 total/done/pending/success/failed/inserted_rows；
+    - 在 summary.total_days / summary.done_days 中冗余保存天数信息，兼容后端进度计算逻辑。
+    """
+    total = int(stats.get("total_days") or 0)
+    done = int(stats.get("success_days") or 0) + int(stats.get("failed_days") or 0)
+    if total > 0:
+        progress = max(0.0, min(100.0, 100.0 * float(done) / float(total)))
+    else:
+        progress = 0.0
+
+    counters = {
+        "total": total,
+        "done": done,
+        "running": 0,
+        "pending": max(total - done, 0),
+        "failed": int(stats.get("failed_days") or 0),
+        "success": int(stats.get("success_days") or 0),
+        "inserted_rows": int(stats.get("inserted_rows") or 0),
+    }
+
+    payload = {
+        "counters": counters,
+        "progress": progress,
+        "total_days": total,
+        "done_days": done,
+    }
+    with conn.cursor() as cur:
+        sql = (
+            """
+            UPDATE market.ingestion_jobs
+               SET summary = COALESCE(summary::jsonb, '{}'::jsonb) || %s::jsonb
+             WHERE job_id = %s
+            """
+        )
+        params = (json.dumps(payload, ensure_ascii=False), job_id)
+        cur.execute(sql, params)
 
 
 def _upsert_moneyflow(conn, rows: List[Dict[str, Any]]) -> int:
@@ -282,7 +353,6 @@ def _fetch_moneyflow_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]]:
             })
     return rows
 
-
 def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, job_id: uuid.UUID, batch_sleep: float) -> Dict[str, Any]:
     stats = {"total_days": 0, "success_days": 0, "failed_days": 0, "inserted_rows": 0}
     days = _date_range(start_date, end_date)
@@ -296,12 +366,29 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
                 inserted = _upsert_moneyflow(conn, rows)
             stats["inserted_rows"] += inserted
             stats["success_days"] += 1
-            _log(conn, job_id, "info", f"moneyflow_ind_dc {d} inserted={inserted}")
+            # 仅在错误时写日志；正常成功不再写 ingestion_logs，避免日志堆积
             print(f"[OK] moneyflow_ind_dc {d} inserted={inserted}")
         except Exception as exc:  # noqa: BLE001
             stats["failed_days"] += 1
             _log(conn, job_id, "error", f"moneyflow_ind_dc {d} failed: {exc}")
-            print(f"[WARN] moneyflow_ind_dc {d} failed: {exc}")
+            print(f"[ERROR] moneyflow_ind_dc {d} failed: {exc}")
+            time.sleep(batch_sleep)
+        # 确保任务监视器能够看到实时进度条，而不影响主流程的健壮性。
+        try:
+            _update_job_progress(conn, job_id, stats)
+            conn.commit()
+        except Exception as exc:  # noqa: BLE001
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            msg = f"failed to update job progress: {exc}"
+            print(f"[WARN] {msg}")
+            try:
+                _log(conn, job_id, "warn", msg)
+            except Exception:
+                # 如果日志写入也失败，就静默忽略，避免影响主流程。
+                pass
         if batch_sleep > 0:
             time.sleep(batch_sleep)
     return stats
@@ -326,7 +413,15 @@ def main() -> None:
 
     with psycopg2.connect(**DB_CFG) as conn:
         conn.autocommit = True
+        # 根据命令行参数决定是否对当前会话启用批量写入调优设置
+        _ensure_session_tune(conn, getattr(args, "bulk_session_tune", False))
         pro = pro_api()
+
+        if args.truncate:
+            with conn.cursor() as cur:
+                cur.execute("TRUNCATE TABLE market.moneyflow_ind_dc RESTART IDENTITY")
+            _log(conn, job_id, "info", "TRUNCATE market.moneyflow_ind_dc done before init")
+            print("[WARN] truncated market.moneyflow_ind_dc before init")
 
         if mode == "init":
             if not args.start_date:

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import styles from "./localData.module.css";
 
 const TDX_BASE =
   process.env.NEXT_PUBLIC_TDX_BACKEND_BASE || "http://127.0.0.1:8001";
@@ -29,6 +30,9 @@ type DataSource = "TDX" | "Tushare";
 
 const FREQUENCY_CHOICES: { label: string; value: string }[] = [
   { label: "手动 (不调度)", value: "" },
+  { label: "10 秒", value: "10s" },
+  { label: "15 秒", value: "15s" },
+  { label: "30 秒", value: "30s" },
   { label: "5 分钟", value: "5m" },
   { label: "10 分钟", value: "10m" },
   { label: "15 分钟", value: "15m" },
@@ -38,15 +42,17 @@ const FREQUENCY_CHOICES: { label: string; value: string }[] = [
 ];
 
 const INGESTION_DATASETS: Record<string, string> = {
-  kline_daily_qfq: "日线（前复权）",
-  kline_minute_raw: "1 分钟原始",
-  kline_weekly: "周线（由日线QFQ聚合）",
-  tdx_board_all: "通达信板块（信息+成分+行情）",
+  kline_daily_qfq: "日线（前复权 QFQ）",
+  kline_daily_raw: "日线（未复权 RAW）",
+  kline_daily_qfq_go: "日线（前复权 QFQ · Go 直连）",
+  kline_daily_raw_go: "日线（未复权 RAW · Go 直连）",
   tdx_board_index: "通达信板块信息",
   tdx_board_member: "通达信板块成分",
   tdx_board_daily: "通达信板块行情",
   stock_moneyflow: "个股资金流（moneyflow_ind_dc）",
+  stock_moneyflow_ts: "个股资金流（moneyflow · Tushare）",
   trade_agg_5m: "高频聚合 5m",
+  news_realtime: "新闻实时入库（多源快讯）",
 };
 
 interface IngestionJobCounters {
@@ -78,6 +84,9 @@ interface IncrementalPrefill {
   targetDate?: string;
   startDate?: string | null;
   symbolsScope?: "watchlist" | "all";
+  latestTradingDate?: string | null;
+  currentMaxDate?: string | null;
+  hasData?: boolean;
 }
 
 function classNames(...parts: Array<string | false | null | undefined>): string {
@@ -184,21 +193,38 @@ export default function LocalDataPage() {
   }, []);
 
   const handleFillLatestFromStats = useCallback(
-    (kind: string, latestTradingDay: string, minDate?: string | null) => {
+    (
+      kind: string,
+      startDate: string,
+      latestTradingDay: string,
+      currentMaxDate?: string | null,
+    ) => {
       const lower = (kind || "").toLowerCase();
       let dataSource: DataSource = "TDX";
       let dataset: string | undefined;
       let symbolsScope: "watchlist" | "all" | undefined;
 
-      if (lower === "kline_daily_qfq") {
-        dataset = "kline_daily_qfq";
-      } else if (lower === "kline_daily_raw") {
-        dataset = "kline_daily_raw";
+      if (lower === "kline_daily_qfq_go" || lower === "kline_daily_qfq") {
+        dataset = "kline_daily_qfq_go";
+      } else if (lower === "kline_daily_raw_go" || lower === "kline_daily_raw") {
+        dataset = "kline_daily_raw_go";
       } else if (lower === "kline_minute_raw") {
         dataset = "kline_minute_raw";
       } else if (lower === "trade_agg_5m") {
         dataset = "trade_agg_5m";
         symbolsScope = "all";
+      } else if (lower === "stock_moneyflow") {
+        dataSource = "Tushare";
+        dataset = "stock_moneyflow";
+      } else if (lower === "stock_moneyflow_ts") {
+        dataSource = "Tushare";
+        dataset = "stock_moneyflow_ts";
+      } else if (lower === "stock_st") {
+        dataSource = "Tushare";
+        dataset = "stock_st";
+      } else if (lower === "bak_basic") {
+        dataSource = "Tushare";
+        dataset = "bak_basic";
       } else if (
         lower === "tdx_board_index" ||
         lower === "tdx_board_member" ||
@@ -206,6 +232,9 @@ export default function LocalDataPage() {
       ) {
         dataSource = "Tushare";
         dataset = "tdx_board_all";
+      } else if (lower === "adj_factor") {
+        dataSource = "Tushare";
+        dataset = "adj_factor";
       } else {
         return;
       }
@@ -213,8 +242,10 @@ export default function LocalDataPage() {
         dataSource,
         dataset,
         targetDate: latestTradingDay,
-        startDate: minDate || null,
+        startDate: startDate || null,
         symbolsScope,
+        latestTradingDate: latestTradingDay || null,
+        currentMaxDate: currentMaxDate ?? null,
       });
       setActiveTab("incremental");
     },
@@ -237,85 +268,43 @@ export default function LocalDataPage() {
   ];
 
   return (
-    <main style={{ padding: 24 }}>
-      <section style={{ marginBottom: 16 }}>
-        <h1 style={{ margin: 0, fontSize: 22 }}>🗄️ 本地数据管理</h1>
-        <p style={{ marginTop: 4, fontSize: 13, color: "#666" }}>
+    <main className={styles.page}>
+      <section className={styles.sectionBlock}>
+        <h1 className={styles.sectionHeading}>🗄️ 本地数据管理</h1>
+        <p className={styles.sectionSubtext}>
           集中管理 TDX 接口测试与数据入库调度，支持手动与自动执行。
         </p>
       </section>
 
-      <section
-        style={{
-          marginBottom: 16,
-          padding: 12,
-          borderRadius: 10,
-          background: "#fff",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-          fontSize: 13,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-            flexWrap: "wrap",
-          }}
-        >
+      <section className={`${styles.heroCard} ${styles.sectionBlock}`}>
+        <div className={styles.rowBetweenWrap}>
           <div>
-            <div style={{ color: "#444" }}>
+            <div className={styles.textMain}>
               当前调度后端地址：
-              <code
-                style={{
-                  padding: "2px 6px",
-                  borderRadius: 4,
-                  background: "#f3f4f6",
-                  fontSize: 12,
-                }}
-              >
-                {backendBaseDisplay}
-              </code>
+              <code className={styles.codeChip}>{backendBaseDisplay}</code>
             </div>
-            <div style={{ marginTop: 4, color: "#888", fontSize: 12 }}>
+            <div className={styles.textMuted}>
               启动命令示例：
-              <code
-                style={{
-                  padding: "2px 6px",
-                  borderRadius: 4,
-                  background: "#f3f4f6",
-                  fontSize: 12,
-                }}
-              >
+              <code className={styles.codeChip}>
                 uvicorn backend.main:app --host 0.0.0.0 --port 8001
               </code>
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className={styles.rowWrap}>
             <button
               type="button"
               onClick={handlePing}
               disabled={pingLoading}
-              style={{
-                padding: "6px 10px",
-                borderRadius: 8,
-                border: "none",
-                background: "#0ea5e9",
-                color: "#fff",
-                cursor: "pointer",
-                fontSize: 13,
-              }}
+              className={styles.btnPrimary}
+              aria-label="测试调度后端连接"
             >
               {pingLoading ? "测试连接中..." : "测试连接"}
             </button>
             {pingResult && (
               <span
-                style={{
-                  fontSize: 12,
-                  color: pingResult.ok ? "#16a34a" : "#dc2626",
-                }}
+                className={styles.textSmall}
+                style={{ color: pingResult.ok ? "#16a34a" : "#dc2626" }}
               >
                 {pingResult.ok
                   ? "调度后端连接成功。"
@@ -327,32 +316,17 @@ export default function LocalDataPage() {
       </section>
 
       {/* Tab 切换 */}
-      <section style={{ marginBottom: 12 }}>
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 6,
-            borderBottom: "1px solid #e5e7eb",
-            paddingBottom: 4,
-            marginBottom: 8,
-          }}
-        >
+      <section className={styles.sectionBlock}>
+        <div className={styles.tabBar}>
           {tabs.map((tab) => (
             <button
               key={tab.key}
               type="button"
               onClick={() => setActiveTab(tab.key)}
-              style={{
-                padding: "6px 10px",
-                borderRadius: 999,
-                border: "none",
-                background:
-                  activeTab === tab.key ? "#0f766e" : "transparent",
-                color: activeTab === tab.key ? "#fff" : "#374151",
-                fontSize: 13,
-                cursor: "pointer",
-              }}
+              className={classNames(
+                styles.tabBtn,
+                activeTab === tab.key && styles.tabBtnActive,
+              )}
             >
               {tab.label}
             </button>
@@ -361,15 +335,7 @@ export default function LocalDataPage() {
       </section>
 
       {/* 内容区域 */}
-      <section
-        style={{
-          background: "#fff",
-          borderRadius: 12,
-          padding: 14,
-          boxShadow: "0 2px 10px rgba(0,0,0,0.04)",
-          fontSize: 13,
-        }}
-      >
+      <section className={styles.contentCard}>
         {activeTab === "init" && <InitTab />}
         {activeTab === "incremental" && (
           <IncrementalTab
@@ -392,7 +358,7 @@ export default function LocalDataPage() {
 
 function InitTab() {
   const [dataSource, setDataSource] = useState<DataSource>("TDX");
-  const [dataset, setDataset] = useState<string>("kline_daily_qfq");
+  const [dataset, setDataset] = useState<string>("kline_daily_qfq_go");
   const [tradeAggScope, setTradeAggScope] = useState<"all" | "watchlist">("all");
   const [startDate, setStartDate] = useState<string>("1990-01-01");
   const [endDate, setEndDate] = useState<string>(() => {
@@ -418,8 +384,8 @@ function InitTab() {
 
   const datasetOptionsTDX: { key: string; label: string }[] = [
     {
-      key: "kline_daily_qfq",
-      label: "kline_daily_qfq · 日线（前复权 QFQ）",
+      key: "kline_daily_qfq_go",
+      label: "kline_daily_qfq_go · 日线（前复权 QFQ · Go 直连）",
     },
     {
       key: "kline_daily_raw_go",
@@ -450,15 +416,26 @@ function InitTab() {
       label: "stock_moneyflow · 个股资金流（moneyflow_ind_dc）",
     },
     {
+      key: "stock_moneyflow_ts",
+      label: "stock_moneyflow_ts · 个股资金流（moneyflow · Tushare）",
+    },
+    { key: "stock_basic", label: "stock_basic · 最新股票列表" },
+    { key: "stock_st", label: "stock_st · ST 股票列表" },
+    { key: "bak_basic", label: "bak_basic · 历史股票列表" },
+    {
       key: "tushare_trade_cal",
       label: "tushare_trade_cal · 交易日历（Tushare trade_cal 同步）",
+    },
+    {
+      key: "adj_factor",
+      label: "adj_factor · 股票复权因子（Tushare adj_factor）",
     },
   ];
 
   // 根据数据源动态调整默认参数
   useEffect(() => {
     if (dataSource === "TDX") {
-      setDataset("kline_daily_qfq");
+      setDataset("kline_daily_qfq_go");
       setStartDate("1990-01-01");
       setTruncate(true);
       setConfirmClear(false);
@@ -476,11 +453,25 @@ function InitTab() {
     }
   }, [dataSource]);
 
+  // 针对 stock_basic：默认全量仅需当前日期且强制 truncate 前置
+  useEffect(() => {
+    if (dataset === "stock_basic") {
+      const today = new Date().toISOString().slice(0, 10);
+      setStartDate(today);
+      setEndDate(today);
+      setTruncate(true);
+      setConfirmClear(true);
+    }
+  }, [dataset]);
+
   const submitInit = async () => {
     setSubmitting(true);
     setError(null);
     try {
-      if (dataSource === "TDX") {
+      // 对于 stock_moneyflow，无论数据源选择了什么，都走 Python/Tushare 入库路径，需显式传 start/end
+      const forceTushareMoneyflow = dataset === "stock_moneyflow";
+
+      if (dataSource === "TDX" && !forceTushareMoneyflow) {
         if (dataset === "symbol_dim") {
           const opts = {
             exchanges: exchanges
@@ -489,30 +480,6 @@ function InitTab() {
               .filter(Boolean),
           };
           const payload = { dataset: "symbol_dim", mode: "init", options: opts };
-          const resp: any = await backendRequest(
-            "POST",
-            "/api/ingestion/run",
-            {
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            },
-          );
-          if (resp && resp.job_id) {
-            setJobId(String(resp.job_id));
-            setAutoRefresh(true);
-          }
-        } else if (dataset === "kline_daily_qfq") {
-          const opts = {
-            exchanges: exchanges
-              .split(",")
-              .map((s) => s.trim())
-              .filter(Boolean),
-            start_date: startDate,
-            end_date: endDate,
-            batch_size: 100,
-            workers: Number(workers) || 1,
-          };
-          const payload = { dataset: "kline_daily_qfq", mode: "init", options: opts };
           const resp: any = await backendRequest(
             "POST",
             "/api/ingestion/run",
@@ -558,11 +525,14 @@ function InitTab() {
             .split(",")
             .map((s) => s.trim())
             .filter(Boolean);
-          if (dataset === "kline_minute_raw" || dataset === "kline_daily_raw_go") {
+          if (
+            dataset === "kline_minute_raw" ||
+            dataset === "kline_daily_raw_go" ||
+            dataset === "kline_daily_qfq_go"
+          ) {
             const opts = {
               exchanges: commonExchanges,
-              start_date: startDate,
-              // 对 Go 驱动的分钟/日线 RAW 初始化：不再传递 end_date，由 Go / TDX 自动拉取至最新有数据的交易日
+              // 对 Go 驱动的分钟/日线 RAW/QFQ 初始化：不再传递日期范围，由 Go / TDX 自动拉取全量数据
               batch_size: 100,
               workers: Number(workers) || 1,
               truncate: Boolean(truncate),
@@ -626,11 +596,43 @@ function InitTab() {
               : "交易日历同步完成。",
           );
         } else {
-          const opts = {
+          if (
+            ["adj_factor", "stock_moneyflow", "stock_basic", "stock_st", "bak_basic"].includes(
+              dataset,
+            ) &&
+            truncate &&
+            !confirmClear
+          ) {
+            setError(
+              "请先勾选确认或取消清空选项后再继续。显示方式同旧版：清空前必须二次确认。",
+            );
+            return;
+          }
+          const opts: any = {
             start_date: startDate,
             end_date: endDate,
             batch_size: 200,
           };
+          if (dataset === "adj_factor") {
+            opts.truncate = Boolean(truncate);
+          }
+          if (["stock_moneyflow", "stock_basic", "stock_st", "bak_basic"].includes(dataset)) {
+            opts.truncate = Boolean(truncate);
+          }
+          if (dataset === "stock_st" || dataset === "bak_basic") {
+            if (!opts.start_date || !opts.end_date) {
+              setError("请填写起止日期再执行初始化。");
+              return;
+            }
+            // 提供轻量批次休眠参数，避免日级循环过快
+            opts.batch_sleep = 0.2;
+          }
+          if (dataset === "stock_basic") {
+            // stock_basic 不需要日期参数，清理以避免后端校验冲突
+            delete opts.start_date;
+            delete opts.end_date;
+          }
+          // 对 stock_moneyflow 强制使用 Python run 入口，避免遗漏起止日期
           const payload = { dataset, mode: "init", options: opts };
           const resp: any = await backendRequest(
             "POST",
@@ -712,6 +714,36 @@ function InitTab() {
     }
   };
 
+  // 当选择了某个任务查看日志时，周期性刷新该任务的日志，便于在任务运行过程中实时观察报错和进度。
+  useEffect(() => {
+    if (!logJobId) return;
+    let cancelled = false;
+
+    const tick = async () => {
+      if (!logJobId || cancelled) return;
+      try {
+        const data: any = await backendRequest(
+          "GET",
+          `/api/ingestion/logs?job_id=${logJobId}&limit=500&offset=0`,
+        );
+        if (cancelled) return;
+        const items = Array.isArray(data?.items) ? data.items : [];
+        setLogItems(items);
+      } catch (e: any) {
+        // 保持静默，避免在日志轮询期间频繁打断 UI；真正的请求错误仍可通过手动刷新或重新打开日志查看。
+        console.error("[JobsTab] auto-refresh logs failed", e?.message || e);
+      }
+    };
+
+    const intervalId = setInterval(tick, 5000);
+    tick();
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [logJobId]);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div
@@ -724,41 +756,34 @@ function InitTab() {
       >
         <div>
           <h3 style={{ marginTop: 0, fontSize: 15 }}>🚀 初始化同步</h3>
-          <div style={{ marginBottom: 8 }}>
-            <label style={{ fontSize: 13 }}>数据源</label>
+          <div className={styles.mb8}>
+            <label className={styles.label} htmlFor="init-datasource">
+              数据源
+            </label>
             <select
+              id="init-datasource"
               value={dataSource}
               onChange={(e) =>
                 setDataSource(e.target.value as DataSource)
               }
-              style={{
-                display: "block",
-                marginTop: 4,
-                padding: "6px 8px",
-                borderRadius: 8,
-                border: "1px solid #d4d4d4",
-                fontSize: 13,
-              }}
+              className={styles.select}
+              title="选择数据源"
             >
               <option value="TDX">TDX</option>
               <option value="Tushare">Tushare</option>
             </select>
           </div>
 
-          <div style={{ marginBottom: 8 }}>
-            <label style={{ fontSize: 13 }}>目标数据集</label>
+          <div className={styles.mb8}>
+            <label className={styles.label} htmlFor="init-dataset">
+              目标数据集
+            </label>
             <select
+              id="init-dataset"
               value={dataset}
               onChange={(e) => setDataset(e.target.value)}
-              style={{
-                display: "block",
-                marginTop: 4,
-                padding: "6px 8px",
-                borderRadius: 8,
-                border: "1px solid #d4d4d4",
-                fontSize: 13,
-                width: "100%",
-              }}
+              className={styles.select}
+              title="选择初始化的数据集"
             >
               {(dataSource === "TDX"
                 ? datasetOptionsTDX
@@ -772,20 +797,16 @@ function InitTab() {
           </div>
 
           {dataSource === "TDX" && dataset === "trade_agg_5m" && (
-            <div style={{ marginBottom: 8 }}>
-              <label style={{ fontSize: 13 }}>股票范围</label>
+            <div className={styles.mb8}>
+              <label className={styles.label} htmlFor="trade-agg-scope">
+                股票范围
+              </label>
               <select
+                id="trade-agg-scope"
                 value={tradeAggScope}
                 onChange={(e) => setTradeAggScope(e.target.value as "all" | "watchlist")}
-                style={{
-                  display: "block",
-                  marginTop: 4,
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: "1px solid #d4d4d4",
-                  fontSize: 13,
-                  width: "100%",
-                }}
+                className={styles.select}
+                title="选择股票范围"
               >
                 <option value="all">全市场（TDX /api/codes 返回的全部股票）</option>
                 <option value="watchlist">自选股（app.watchlist_items）</option>
@@ -793,69 +814,66 @@ function InitTab() {
             </div>
           )}
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-              gap: 10,
-              marginBottom: 8,
-            }}
-          >
+          <div className={`${styles.gridTwo} ${styles.mb8}`}>
             <div>
-              <label style={{ fontSize: 13 }}>开始日期</label>
+              <label className={styles.label} htmlFor="init-start-date">
+                开始日期
+              </label>
               <input
+                id="init-start-date"
                 type="date"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
-                style={{
-                  marginTop: 4,
-                  width: "100%",
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: "1px solid #d4d4d4",
-                }}
+                className={styles.input}
               />
             </div>
             {!(
               dataSource === "TDX" &&
-              (dataset === "kline_minute_raw" || dataset === "kline_daily_raw_go")
+              (dataset === "kline_minute_raw" ||
+                dataset === "kline_daily_raw_go" ||
+                dataset === "kline_daily_qfq_go")
             ) && (
               <div>
-                <label style={{ fontSize: 13 }}>结束日期</label>
+                <label className={styles.label} htmlFor="init-end-date">
+                  结束日期
+                </label>
                 <input
+                  id="init-end-date"
                   type="date"
                   value={endDate}
                   onChange={(e) => setEndDate(e.target.value)}
-                  style={{
-                    marginTop: 4,
-                    width: "100%",
-                    padding: "6px 8px",
-                    borderRadius: 8,
-                    border: "1px solid #d4d4d4",
-                  }}
+                  className={styles.input}
                 />
               </div>
             )}
           </div>
           {dataSource === "TDX" && dataset === "kline_minute_raw" && (
-            <p style={{ marginTop: 0, marginBottom: 8, fontSize: 12, color: "#6b7280" }}>
+            <p
+              style={{
+                marginTop: 0,
+                marginBottom: 8,
+                fontSize: 12,
+                color: "#6b7280",
+              }}
+            >
               不再指定截止日期，系统将从开始日期起自动拉取至最新有数据的交易日。
+              同时需要注意：分钟线数据通过 TDX 接口获取，单只股票最多返回约 24000 条
+              记录，约覆盖最近 100 个交易日，更早的分钟数据无法通过当前接口补齐。
             </p>
           )}
 
           {dataSource === "TDX" && (
-            <div style={{ marginBottom: 8 }}>
-              <label style={{ fontSize: 13 }}>交易所(逗号分隔)</label>
+            <div className={styles.formGroup}>
+              <label className={styles.label} htmlFor="exchanges-input">
+                交易所(逗号分隔)
+              </label>
               <input
+                id="exchanges-input"
+                className={styles.input}
+                placeholder="如 SSE,SZSE"
+                aria-label="交易所(逗号分隔)"
                 value={exchanges}
                 onChange={(e) => setExchanges(e.target.value)}
-                style={{
-                  marginTop: 4,
-                  width: "100%",
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: "1px solid #d4d4d4",
-                }}
               />
             </div>
           )}
@@ -863,23 +881,20 @@ function InitTab() {
           {dataSource === "TDX" &&
             (dataset === "kline_minute_raw" ||
               dataset === "kline_daily_raw_go" ||
+              dataset === "kline_daily_qfq_go" ||
               dataset === "trade_agg_5m") && (
-              <div style={{ marginBottom: 8 }}>
-                <label style={{ fontSize: 13 }}>并行度 (Workers)</label>
+              <div className={styles.formGroup}>
+                <label className={styles.label} htmlFor="workers-select">
+                  并行度 (Workers)
+                </label>
                 <select
+                  id="workers-select"
+                  className={styles.select}
+                  aria-label="并行度"
                   value={workers}
                   onChange={(e) =>
                     setWorkers(Number(e.target.value) || 1)
                   }
-                  style={{
-                    display: "block",
-                    marginTop: 4,
-                    padding: "6px 8px",
-                    borderRadius: 8,
-                    border: "1px solid #d4d4d4",
-                    fontSize: 13,
-                    width: "100%",
-                  }}
                 >
                   {[1, 2, 4, 8].map((w) => (
                     <option key={w} value={w}>
@@ -891,19 +906,16 @@ function InitTab() {
             )}
 
           {dataSource === "Tushare" && dataset === "tushare_trade_cal" && (
-            <div style={{ marginBottom: 8 }}>
-              <label style={{ fontSize: 13 }}>交易所(用于Tushare日历)</label>
+            <div className={styles.formGroup}>
+              <label className={styles.label} htmlFor="cal-exchange-select">
+                交易所(用于Tushare日历)
+              </label>
               <select
+                id="cal-exchange-select"
+                className={styles.select}
+                aria-label="交易所(用于Tushare日历)"
                 value={calExchange}
                 onChange={(e) => setCalExchange(e.target.value)}
-                style={{
-                  marginTop: 4,
-                  width: "100%",
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: "1px solid #d4d4d4",
-                  fontSize: 13,
-                }}
               >
                 <option value="SSE">SSE</option>
                 <option value="SZSE">SZSE</option>
@@ -911,26 +923,38 @@ function InitTab() {
             </div>
           )}
 
-          {dataSource === "TDX" &&
-            (dataset === "kline_minute_raw" || dataset === "kline_daily_raw_go") && (
-            <div style={{ marginTop: 4, marginBottom: 8 }}>
-              <label style={{ fontSize: 13 }}>
+          {((dataSource === "TDX" &&
+            (dataset === "kline_minute_raw" ||
+              dataset === "kline_daily_raw_go" ||
+              dataset === "kline_daily_qfq_go")) ||
+            (dataSource === "Tushare" &&
+              ["adj_factor", "stock_moneyflow", "stock_basic", "stock_st", "bak_basic"].includes(
+                dataset,
+              ))) && (
+            <div className={styles.formGroup}>
+              <label className={styles.label} htmlFor="init-truncate">
                 <input
+                  id="init-truncate"
                   type="checkbox"
                   checked={truncate}
-                  onChange={(e) => setTruncate(e.target.checked)}
-                  style={{ marginRight: 4 }}
+                  onChange={(e) => {
+                    setTruncate(e.target.checked);
+                    if (!e.target.checked) {
+                      setConfirmClear(false);
+                    }
+                  }}
+                  className={styles.inputCheckbox}
                 />
                 初始化前清空目标表(或目标范围)
               </label>
               {truncate && (
-                <div style={{ marginTop: 4 }}>
-                  <label style={{ fontSize: 13, color: "#b91c1c" }}>
+                <div className={styles.textDangerSmall}>
+                  <label>
                     <input
                       type="checkbox"
                       checked={confirmClear}
                       onChange={(e) => setConfirmClear(e.target.checked)}
-                      style={{ marginRight: 4 }}
+                      className={styles.inputCheckbox}
                     />
                     我已知晓清空数据的风险，并确认继续
                   </label>
@@ -943,53 +967,29 @@ function InitTab() {
             type="button"
             onClick={submitInit}
             disabled={submitting}
-            style={{
-              marginTop: 4,
-              padding: "8px 12px",
-              borderRadius: 8,
-              border: "none",
-              background: "#16a34a",
-              color: "#fff",
-              cursor: "pointer",
-              fontSize: 13,
-              minWidth: 120,
-            }}
+            className={styles.btnSuccess}
           >
             {submitting ? "正在提交..." : "开始初始化"}
           </button>
 
           {error && (
-            <p style={{ marginTop: 8, fontSize: 12, color: "#b91c1c" }}>
+            <p className={styles.textDangerSmall} style={{ marginTop: 8 }}>
               {error}
             </p>
           )}
         </div>
 
         <div>
-          <h3 style={{ marginTop: 0, fontSize: 15 }}>当前初始化任务进度</h3>
+          <h3 className={styles.headingSmall}>当前初始化任务进度</h3>
           {jobId ? (
-            <div style={{ fontSize: 12 }}>
-              <p style={{ margin: 0 }}>当前作业ID：{jobId}</p>
-              <div
-                style={{
-                  marginTop: 6,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
+            <div className={styles.textSmall}>
+              <p className={styles.textSmall}>当前作业ID：{jobId}</p>
+              <div className={styles.row} style={{ marginTop: 6 }}>
                 <button
                   type="button"
                   onClick={() => jobId && loadJobStatus(jobId)}
                   disabled={jobLoading}
-                  style={{
-                    padding: "4px 8px",
-                    borderRadius: 6,
-                    border: "1px solid #d4d4d4",
-                    background: "#fff",
-                    cursor: "pointer",
-                    fontSize: 12,
-                  }}
+                  className={styles.btnSecondary}
                 >
                   {jobLoading ? "刷新中..." : "手动刷新"}
                 </button>
@@ -1126,14 +1126,19 @@ function IncrementalTab({
   const [jobLoading, setJobLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
+  const [autoInfo, setAutoInfo] = useState<{
+    latestTradingDate?: string | null;
+    currentMaxDate?: string | null;
+  } | null>(null);
+
   const datasetOptionsTDX = [
     {
-      key: "kline_daily_qfq",
-      label: "kline_daily_qfq · 日线（前复权 QFQ）",
+      key: "kline_daily_qfq_go",
+      label: "kline_daily_qfq_go · 日线（前复权 QFQ · Go 直连）",
     },
     {
-      key: "kline_daily_raw",
-      label: "kline_daily_raw · 日线（未复权 RAW）",
+      key: "kline_daily_raw_go",
+      label: "kline_daily_raw_go · 日线（未复权 RAW · Go 直连）",
     },
     {
       key: "kline_minute_raw",
@@ -1158,10 +1163,16 @@ function IncrementalTab({
       label: "kline_weekly · 周线（由本地日线QFQ聚合）",
     },
     {
+      key: "adj_factor",
+      label: "adj_factor · 复权因子（Tushare adj_factor）",
+    },
+    {
       key: "stock_moneyflow",
       label:
         "stock_moneyflow · 个股资金流（按交易日增量，默认最近3个自然日）",
     },
+    { key: "stock_st", label: "stock_st · ST 股票列表（按公告日增量）" },
+    { key: "bak_basic", label: "bak_basic · 历史股票列表（按交易日增量）" },
     {
       key: "tushare_trade_cal",
       label: "tushare_trade_cal · 交易日历（Tushare trade_cal 同步）",
@@ -1182,6 +1193,15 @@ function IncrementalTab({
     }
     if (prefill.startDate !== undefined) {
       setStartDate(prefill.startDate || "");
+    }
+    if (
+      prefill.latestTradingDate !== undefined ||
+      prefill.currentMaxDate !== undefined
+    ) {
+      setAutoInfo({
+        latestTradingDate: prefill.latestTradingDate ?? prefill.targetDate ?? null,
+        currentMaxDate: prefill.currentMaxDate ?? null,
+      });
     }
     if (prefill.symbolsScope) {
       setSymbolsScope(prefill.symbolsScope);
@@ -1295,33 +1315,61 @@ function IncrementalTab({
             setAutoRefresh(true);
           }
         } else {
-          const isMinuteDataset = dataset === "kline_minute_raw";
-          const opts: any = {
-            date,
-            start_date: startDate || null,
-            exchanges: exchanges
-              .split(",")
-              .map((s) => s.trim())
-              .filter(Boolean),
-            batch_size: Number(batchSize) || 100,
-            // max_empty 仅在需要限制空天数时显式使用；当前分钟增量默认传 0，表示不根据空天数提前停止，完整扫完日期区间
-            workers: Number(workers) || 1,
-          };
-          if (isMinuteDataset) {
-            opts.max_empty = 0;
-          }
-          const payload = { dataset, mode: "incremental", options: opts };
-          const resp: any = await backendRequest(
-            "POST",
-            "/api/ingestion/run",
-            {
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            },
-          );
-          if (resp && resp.job_id) {
-            setJobId(String(resp.job_id));
-            setAutoRefresh(true);
+          const isGoTdxSpecial =
+            dataset === "kline_daily_raw_go" ||
+            dataset === "kline_daily_qfq_go" ||
+            dataset === "kline_minute_raw";
+          if (isGoTdxSpecial) {
+            if (!startDate) {
+              setError("请先选择起始日期");
+              return;
+            }
+            const payload = {
+              data_kind: dataset,
+              start_date: startDate,
+              workers: Number(workers) || 1,
+            };
+            const resp: any = await backendRequest(
+              "POST",
+              "/api/ingestion/incremental",
+              {
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              },
+            );
+            if (resp && resp.job_id) {
+              setJobId(String(resp.job_id));
+              setAutoRefresh(true);
+            }
+          } else {
+            const isMinuteDataset = dataset === "kline_minute_raw";
+            const opts: any = {
+              date,
+              start_date: startDate || null,
+              exchanges: exchanges
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean),
+              batch_size: Number(batchSize) || 100,
+              // max_empty 仅在需要限制空天数时显式使用；当前分钟增量默认传 0，表示不根据空天数提前停止，完整扫完日期区间
+              workers: Number(workers) || 1,
+            };
+            if (isMinuteDataset) {
+              opts.max_empty = 0;
+            }
+            const payload = { dataset, mode: "incremental", options: opts };
+            const resp: any = await backendRequest(
+              "POST",
+              "/api/ingestion/run",
+              {
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              },
+            );
+            if (resp && resp.job_id) {
+              setJobId(String(resp.job_id));
+              setAutoRefresh(true);
+            }
           }
         }
       } else {
@@ -1388,52 +1436,38 @@ function IncrementalTab({
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1.1fr 1.1fr",
-          gap: 16,
-          alignItems: "flex-start",
-        }}
-      >
+    <div className={styles.section}>
+      <div className={styles.initGrid}>
         <div>
-          <h3 style={{ marginTop: 0, fontSize: 15 }}>🔄 增量更新</h3>
-          <div style={{ marginBottom: 8 }}>
-            <label style={{ fontSize: 13 }}>数据源</label>
+          <h3 className={styles.headingSmall}>🔄 增量更新</h3>
+          <div className={styles.mb8}>
+            <label className={styles.label} htmlFor="incr-datasource">
+              数据源
+            </label>
             <select
+              id="incr-datasource"
               value={dataSource}
               onChange={(e) =>
                 setDataSource(e.target.value as DataSource)
               }
-              style={{
-                display: "block",
-                marginTop: 4,
-                padding: "6px 8px",
-                borderRadius: 8,
-                border: "1px solid #d4d4d4",
-                fontSize: 13,
-              }}
+              className={styles.select}
+              title="选择增量数据源"
             >
               <option value="TDX">TDX</option>
               <option value="Tushare">Tushare</option>
             </select>
           </div>
 
-          <div style={{ marginBottom: 8 }}>
-            <label style={{ fontSize: 13 }}>目标数据集</label>
+          <div className={styles.mb8}>
+            <label className={styles.label} htmlFor="incr-dataset">
+              目标数据集
+            </label>
             <select
+              id="incr-dataset"
               value={dataset}
               onChange={(e) => setDataset(e.target.value)}
-              style={{
-                display: "block",
-                marginTop: 4,
-                padding: "6px 8px",
-                borderRadius: 8,
-                border: "1px solid #d4d4d4",
-                fontSize: 13,
-                width: "100%",
-              }}
+              className={styles.select}
+              title="选择增量数据集"
             >
               {(dataSource === "TDX"
                 ? datasetOptionsTDX
@@ -1446,108 +1480,113 @@ function IncrementalTab({
             </select>
           </div>
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-              gap: 10,
-              marginBottom: 8,
-            }}
-          >
+          <div className={`${styles.gridTwo} ${styles.mb8}`}>
+            {!(
+              dataSource === "TDX" &&
+              (dataset === "kline_daily_raw_go" ||
+                dataset === "kline_daily_qfq_go" ||
+                dataset === "kline_minute_raw")
+            ) && (
+              <div>
+                <label className={styles.label} htmlFor="incr-target-date">
+                  目标日期
+                </label>
+                <input
+                  id="incr-target-date"
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  className={styles.input}
+                />
+              </div>
+            )}
             <div>
-              <label style={{ fontSize: 13 }}>目标日期</label>
+              <label className={styles.label} htmlFor="incr-start-date">
+                {dataSource === "TDX" &&
+                (dataset === "kline_daily_raw_go" ||
+                  dataset === "kline_daily_qfq_go" ||
+                  dataset === "kline_minute_raw")
+                  ? "增量起始日期"
+                  : "覆盖起始日期(可选)"}
+              </label>
               <input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                style={{
-                  marginTop: 4,
-                  width: "100%",
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: "1px solid #d4d4d4",
-                }}
-              />
-            </div>
-            <div>
-              <label style={{ fontSize: 13 }}>覆盖起始日期(可选)</label>
-              <input
+                id="incr-start-date"
                 type="date"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
-                style={{
-                  marginTop: 4,
-                  width: "100%",
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: "1px solid #d4d4d4",
-                }}
+                className={styles.input}
               />
             </div>
           </div>
 
+          {dataSource === "TDX" &&
+            (dataset === "kline_daily_raw_go" ||
+              dataset === "kline_daily_qfq_go" ||
+              dataset === "kline_minute_raw") && (
+              <div className={styles.mb8}>
+                <div className={styles.textMutedSmall}>
+                  将从
+                  {startDate || "（请先选择起始日期）"}
+                  自动补齐到当前最新交易日。
+                </div>
+                {autoInfo && (
+                  <div className={styles.textMutedSmall} style={{ marginTop: 2 }}>
+                    <div className={styles.textMutedSmall}>
+                      当前数据集已有最晚日期：
+                      {autoInfo.currentMaxDate || "无"}
+                    </div>
+                    <div className={styles.textMutedSmall}>
+                      本次将从
+                      {startDate || "（请先选择起始日期）"}
+                      自动补齐到当前最新交易日：
+                      {autoInfo.latestTradingDate || "未知"}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
           {dataSource === "TDX" && (
-            <div style={{ marginBottom: 8 }}>
-              <label style={{ fontSize: 13 }}>交易所(逗号分隔)</label>
+            <div className={styles.mb8}>
+              <label className={styles.label} htmlFor="incr-exchanges">
+                交易所(逗号分隔)
+              </label>
               <input
+                id="incr-exchanges"
                 value={exchanges}
                 onChange={(e) => setExchanges(e.target.value)}
-                style={{
-                  marginTop: 4,
-                  width: "100%",
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: "1px solid #d4d4d4",
-                }}
+                className={styles.inputText}
+                title="输入交易所列表，逗号分隔"
               />
             </div>
           )}
 
           {dataSource === "Tushare" && dataset === "tushare_trade_cal" && (
-            <div style={{ marginBottom: 8 }}>
-              <label style={{ fontSize: 13 }}>交易日历同步窗口</label>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                  gap: 10,
-                  marginTop: 4,
-                }}
-              >
+            <div className={styles.mb8}>
+              <label className={styles.label}>交易日历同步窗口</label>
+              <div className={`${styles.gridTwo} ${styles.mb8}`}>
                 <input
                   type="date"
                   value={calStart}
                   onChange={(e) => setCalStart(e.target.value)}
-                  style={{
-                    width: "100%",
-                    padding: "6px 8px",
-                    borderRadius: 8,
-                    border: "1px solid #d4d4d4",
-                  }}
+                  className={styles.input}
+                  aria-label="交易日历开始日期"
                 />
                 <input
                   type="date"
                   value={calEnd}
                   onChange={(e) => setCalEnd(e.target.value)}
-                  style={{
-                    width: "100%",
-                    padding: "6px 8px",
-                    borderRadius: 8,
-                    border: "1px solid #d4d4d4",
-                  }}
+                  className={styles.input}
+                  aria-label="交易日历结束日期"
                 />
               </div>
-              <div style={{ marginTop: 4 }}>
+              <div className={styles.mb8}>
                 <select
+                  aria-label="交易所(用于Tushare日历)"
                   value={calExchange}
                   onChange={(e) => setCalExchange(e.target.value)}
-                  style={{
-                    width: "100%",
-                    padding: "6px 8px",
-                    borderRadius: 8,
-                    border: "1px solid #d4d4d4",
-                    fontSize: 13,
-                  }}
+                  className={styles.select}
+                  title="选择交易所（用于Tushare日历）"
                 >
                   <option value="SSE">SSE</option>
                   <option value="SZSE">SZSE</option>
@@ -1557,63 +1596,53 @@ function IncrementalTab({
           )}
 
           {dataSource === "TDX" && dataset === "trade_agg_5m" && (
-            <div style={{ marginBottom: 8 }}>
-              <label style={{ fontSize: 13 }}>股票范围 (Scope)</label>
+            <div className={styles.mb8}>
+              <label className={styles.label} htmlFor="incr-scope">
+                股票范围 (Scope)
+              </label>
               <select
+                id="incr-scope"
                 value={symbolsScope}
                 onChange={(e) => setSymbolsScope(e.target.value as any)}
-                style={{
-                  display: "block",
-                  marginTop: 4,
-                  padding: "6px 8px",
-                  width: "100%",
-                  boxSizing: "border-box",
-                }}
+                className={styles.select}
+                title="选择股票范围"
               >
                 <option value="watchlist">Watchlist (自选股)</option>
                 <option value="all">All (全市场)</option>
               </select>
-              <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>
-                全市场更新耗时较长，请谨慎选择
-              </div>
             </div>
           )}
 
-          <div style={{ marginBottom: 8 }}>
-            <label style={{ fontSize: 13 }}>批量大小 (Batch Size)</label>
+          <div className={styles.mb8}>
+            <label className={styles.label} htmlFor="incr-batch-size">
+              批量大小 (Batch Size)
+            </label>
             <input
+              id="incr-batch-size"
               value={batchSize}
               onChange={(e) => setBatchSize(Number(e.target.value) || 100)}
-              style={{
-                marginTop: 4,
-                width: "100%",
-                padding: "6px 8px",
-                borderRadius: 8,
-                border: "1px solid #d4d4d4",
-              }}
+              className={styles.inputText}
+              title="设置每批次处理的行数"
             />
           </div>
 
           {dataSource === "TDX" &&
-            (dataset === "kline_daily_qfq" ||
-              dataset === "kline_daily_raw" ||
+            (dataset === "kline_daily_qfq_go" ||
+              dataset === "kline_daily_raw_go" ||
               dataset === "kline_minute_raw" ||
               dataset === "trade_agg_5m") && (
-              <div style={{ marginBottom: 8 }}>
-                <label style={{ fontSize: 13 }}>并行度 (Workers)</label>
+              <div className={styles.mb8}>
+                <label className={styles.label} htmlFor="incr-workers">
+                  并行度 (Workers)
+                </label>
                 <select
+                  id="incr-workers"
                   value={workers}
                   onChange={(e) =>
                     setWorkers(Number(e.target.value) || 1)
                   }
-                  style={{
-                    marginTop: 4,
-                    width: "100%",
-                    padding: "6px 8px",
-                    borderRadius: 8,
-                    border: "1px solid #d4d4d4",
-                    fontSize: 13,
-                  }}
+                  className={styles.select}
+                  title="设置并行线程数"
                 >
                   {[1, 2, 4, 8].map((w) => (
                     <option key={w} value={w}>
@@ -1628,101 +1657,67 @@ function IncrementalTab({
             type="button"
             onClick={submitIncremental}
             disabled={submitting}
-            style={{
-              marginTop: 4,
-              padding: "8px 12px",
-              borderRadius: 8,
-              border: "none",
-              background: "#0f766e",
-              color: "#fff",
-              cursor: "pointer",
-              fontSize: 13,
-              minWidth: 120,
-            }}
+            className={styles.btnSuccess}
+            style={{ marginTop: 4 }}
+            aria-label="提交增量任务"
           >
             {submitting ? "正在提交..." : "开始增量"}
           </button>
 
           {error && (
-            <p style={{ marginTop: 8, fontSize: 12, color: "#b91c1c" }}>
+            <p className={styles.textDangerSmall} style={{ marginTop: 8 }}>
               {error}
             </p>
           )}
         </div>
 
         <div>
-          <h3 style={{ marginTop: 0, fontSize: 15 }}>当前增量任务进度</h3>
+          <h3 className={styles.headingSmall}>当前增量任务进度</h3>
           {jobId ? (
-            <div style={{ fontSize: 12 }}>
-              <p style={{ margin: 0 }}>当前作业ID：{jobId}</p>
-              <div
-                style={{
-                  marginTop: 6,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
+            <div className={styles.textSmall}>
+              <p className={`${styles.textSmall} ${styles.m0}`}>
+                当前作业ID：{jobId}
+              </p>
+              <div className={`${styles.rowWrapSmall} ${styles.mt6 || ""}`}>
                 <button
                   type="button"
                   onClick={() => jobId && loadJobStatus(jobId)}
                   disabled={jobLoading}
-                  style={{
-                    padding: "4px 8px",
-                    borderRadius: 6,
-                    border: "1px solid #d4d4d4",
-                    background: "#fff",
-                    cursor: "pointer",
-                    fontSize: 12,
-                  }}
+                  className={styles.btnGhost}
+                  aria-label="手动刷新增量任务状态"
                 >
                   {jobLoading ? "刷新中..." : "手动刷新"}
                 </button>
-                <label style={{ fontSize: 12 }}>
+                <label className={styles.textSmall}>
                   <input
                     type="checkbox"
                     checked={autoRefresh}
                     onChange={(e) => setAutoRefresh(e.target.checked)}
-                    style={{ marginRight: 4 }}
+                    className={styles.inputCheckbox}
                   />
                   自动刷新
                 </label>
               </div>
 
               {jobStatus && (
-                <div style={{ marginTop: 8 }}>
-                  <p style={{ margin: 0 }}>
+                <div className={styles.sectionBlock}>
+                  <p className={`${styles.textSmall} ${styles.m0}`}>
                     状态：{jobStatus.status || "未知"} · 进度：
                     {jobStatus.progress ?? 0}%
                   </p>
-                  <div
-                    style={{
-                      marginTop: 4,
-                      width: "100%",
-                      background: "#e5e7eb",
-                      borderRadius: 999,
-                      overflow: "hidden",
-                    }}
-                  >
+                  <div className={styles.progressWrapper}>
                     <div
+                      className={styles.progressBar}
                       style={{
                         width: `${Math.min(
                           100,
                           Math.max(0, jobStatus.progress ?? 0),
                         )}%`,
-                        height: 8,
-                        background: "#0f766e",
                       }}
                     />
                   </div>
                   {jobStatus.counters && (
-                    <p
-                      style={{
-                        marginTop: 4,
-                        fontSize: 12,
-                        color: "#4b5563",
-                      }}
-                    >
+                    <p className={styles.textMuted}>
                       总数 {jobStatus.counters.total ?? 0} · 已完成
                       {" "}
                       {jobStatus.counters.done ?? 0} · 运行中
@@ -1739,25 +1734,11 @@ function IncrementalTab({
                     </p>
                   )}
                   {jobStatus.logs && jobStatus.logs.length > 0 && (
-                    <div style={{ marginTop: 8 }}>
-                      <p
-                        style={{
-                          margin: 0,
-                          fontSize: 12,
-                          color: "#4b5563",
-                        }}
-                      >
+                    <div className={styles.sectionBlock}>
+                      <p className={`${styles.textMuted} ${styles.m0}`}>
                         最近日志：
                       </p>
-                      <ul
-                        style={{
-                          marginTop: 4,
-                          paddingLeft: 18,
-                          maxHeight: 180,
-                          overflowY: "auto",
-                          fontSize: 12,
-                        }}
-                      >
+                      <ul className={styles.listLogs}>
                         {jobStatus.logs.map((m, idx) => (
                           <li key={idx} style={{ marginBottom: 2 }}>
                             <code>{String(m)}</code>
@@ -1770,7 +1751,7 @@ function IncrementalTab({
               )}
             </div>
           ) : (
-            <p style={{ fontSize: 12, color: "#6b7280" }}>
+            <p className={styles.textMutedSmall}>
               尚未提交增量任务。请在左侧填写参数并点击“开始增量”。
             </p>
           )}
@@ -1872,32 +1853,21 @@ function AdjustTab() {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1.1fr 1.1fr",
-          gap: 16,
-          alignItems: "flex-start",
-        }}
-      >
+    <div className={styles.section}>
+      <div className={styles.gridTwoTight}>
         <div>
-          <h3 style={{ marginTop: 0, fontSize: 15 }}>🛠️ 复权生成（RAW → QFQ/HFQ）</h3>
-          <div style={{ marginBottom: 8 }}>
-            <label style={{ fontSize: 13 }}>生成类型</label>
+          <h3 className={styles.headingSmall}>🛠️ 复权生成（RAW → QFQ/HFQ）</h3>
+          <div className={styles.formGroup}>
+            <label className={styles.label} htmlFor="adjust-which">
+              生成类型
+            </label>
             <select
+              id="adjust-which"
               value={which}
               onChange={(e) =>
                 setWhich(e.target.value as "both" | "qfq" | "hfq")
               }
-              style={{
-                display: "block",
-                marginTop: 4,
-                padding: "6px 8px",
-                borderRadius: 8,
-                border: "1px solid #d4d4d4",
-                fontSize: 13,
-              }}
+              className={styles.select}
             >
               <option value="both">QFQ+HFQ</option>
               <option value="qfq">仅QFQ</option>
@@ -1905,82 +1875,91 @@ function AdjustTab() {
             </select>
           </div>
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-              gap: 10,
-              marginBottom: 8,
-            }}
-          >
-            <div>
-              <label style={{ fontSize: 13 }}>开始日期</label>
+          <div className={styles.gridTwo}>
+            <div className={styles.formGroup}>
+              <label className={styles.label} htmlFor="init-start-date">
+                起始日期
+              </label>
               <input
+                id="init-start-date"
                 type="date"
+                className={styles.input}
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
-                style={{
-                  marginTop: 4,
-                  width: "100%",
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: "1px solid #d4d4d4",
-                }}
+                aria-label="起始日期"
               />
             </div>
-            <div>
-              <label style={{ fontSize: 13 }}>结束日期</label>
+            <div className={styles.formGroup}>
+              <label className={styles.label} htmlFor="init-end-date">
+                结束日期
+              </label>
               <input
+                id="init-end-date"
                 type="date"
+                className={styles.input}
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
-                style={{
-                  marginTop: 4,
-                  width: "100%",
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: "1px solid #d4d4d4",
-                }}
+                aria-label="结束日期"
               />
             </div>
           </div>
 
-          <div style={{ marginBottom: 8 }}>
-            <label style={{ fontSize: 13 }}>交易所(逗号分隔)</label>
+          <div className={styles.formGroup}>
+            <label className={styles.label} htmlFor="tushare-basic-truncate">
+              <input
+                id="tushare-basic-truncate"
+                type="checkbox"
+                checked={truncate}
+                onChange={(e) => {
+                  setTruncate(e.target.checked);
+                  if (!e.target.checked) {
+                    setConfirmClear(false);
+                  }
+                }}
+                className={styles.inputCheckbox}
+              />
+              初始化前清空目标表（TRUNCATE）
+            </label>
+            {truncate && (
+              <div className={styles.textDangerSmall}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={confirmClear}
+                    onChange={(e) => setConfirmClear(e.target.checked)}
+                    className={styles.inputCheckbox}
+                  />
+                  我已知晓清空数据风险，并确认继续
+                </label>
+              </div>
+            )}
+          </div>
+
+          <div className={styles.formGroup}>
+            <label className={styles.label} htmlFor="init-exchanges">
+              交易所(逗号分隔)
+            </label>
             <input
+              id="init-exchanges"
+              className={styles.input}
+              placeholder="如 SSE,SZSE"
+              aria-label="交易所(逗号分隔)"
               value={exchanges}
               onChange={(e) => setExchanges(e.target.value)}
-              style={{
-                marginTop: 4,
-                width: "100%",
-                padding: "6px 8px",
-                borderRadius: 8,
-                border: "1px solid #d4d4d4",
-              }}
             />
           </div>
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-              gap: 10,
-              marginBottom: 8,
-            }}
-          >
-            <div>
-              <label style={{ fontSize: 13 }}>并行度</label>
+          <div className={styles.gridTwo}>
+            <div className={styles.formGroup}>
+              <label className={styles.label} htmlFor="init-workers">
+                并行度
+              </label>
               <select
+                id="init-workers"
+                className={styles.select}
+                aria-label="并行度"
                 value={workers}
                 onChange={(e) => setWorkers(Number(e.target.value) || 1)}
-                style={{
-                  marginTop: 4,
-                  width: "100%",
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: "1px solid #d4d4d4",
-                  fontSize: 13,
-                }}
               >
                 {[1, 2, 4, 8].map((w) => (
                   <option key={w} value={w}>
@@ -2248,6 +2227,19 @@ function JobsTab() {
     [loadJobs],
   );
 
+  const handleClearQueued = useCallback(async () => {
+    if (typeof window !== "undefined") {
+      const ok = window.confirm("确定要清除所有排队/待执行的任务吗？此操作不可恢复。");
+      if (!ok) return;
+    }
+    try {
+      await backendRequest("DELETE", "/api/ingestion/jobs/queued");
+      await loadJobs();
+    } catch (e: any) {
+      setError(e?.message || "清除排队任务失败");
+    }
+  }, [loadJobs]);
+
   const openJobLogs = async (jobIdValue: string) => {
     try {
       setLogLoading(true);
@@ -2327,6 +2319,22 @@ function JobsTab() {
           }}
         >
           {loading ? "刷新中..." : "手动刷新"}
+        </button>
+        <button
+          type="button"
+          onClick={handleClearQueued}
+          disabled={loading}
+          style={{
+            padding: "4px 10px",
+            borderRadius: 6,
+            border: "1px solid #d4d4d4",
+            background: "#fff6f6",
+            cursor: "pointer",
+            fontSize: 13,
+            color: "#b91c1c",
+          }}
+        >
+          清除排队任务
         </button>
       </div>
 
@@ -2444,7 +2452,8 @@ function JobsTab() {
                       : meta.source || "—";
 
             const canDelete = !!jobId;
-            // 仅当任务由 Go 驱动（即 summary/meta 中存在 go_task_id）且仍在运行/排队时，才允许前端发起停止请求。
+            // 仅当任务由 Go 驱动（即 summary/meta 中存在 go_task_id）且仍在运行/排队时，才允许前端发起停止请求，
+            // 否则后端 /api/ingestion/job/{job_id}/cancel 会返回 400（go_task_id not found for this job）。
             const hasGoTaskId =
               !!(meta as any)?.go_task_id ||
               !!(summary && (summary as any).go_task_id);
@@ -2776,8 +2785,9 @@ function DataStatsTab({
 }: {
   onFillLatest?: (
     kind: string,
+    startDate: string,
     latestTradingDay: string,
-    minDate?: string | null,
+    currentMaxDate?: string | null,
   ) => void;
 }) {
   const [items, setItems] = useState<any[]>([]);
@@ -2785,6 +2795,22 @@ function DataStatsTab({
   const [error, setError] = useState<string | null>(null);
   const [gapLoadingKind, setGapLoadingKind] = useState<string | null>(null);
   const [gapResult, setGapResult] = useState<any | null>(null);
+  const [fillLoadingKind, setFillLoadingKind] = useState<string | null>(null);
+  const [newsStats, setNewsStats] = useState<any | null>(null);
+  const [newsLoading, setNewsLoading] = useState<boolean>(false);
+
+  // 普通函数声明，避免 const 声明带来的 TDZ 问题
+  async function loadNewsStats() {
+    setNewsLoading(true);
+    try {
+      const data: any = await backendRequest("GET", "/api/v1/news/stats");
+      setNewsStats(data || null);
+    } catch {
+      // 静默失败：新闻统计只是附加信息，不影响主统计功能
+    } finally {
+      setNewsLoading(false);
+    }
+  }
 
   const loadExistingStats = useCallback(async () => {
     setLoading(true);
@@ -2804,21 +2830,26 @@ function DataStatsTab({
     setLoading(true);
     setError(null);
     setGapResult(null);
+    setNewsLoading(true);
+    setNewsStats(null);
     try {
       await backendRequest("POST", "/api/data-stats/refresh");
       const data: any = await backendRequest("GET", "/api/data-stats");
       const nextItems = Array.isArray(data?.items) ? data.items : [];
       setItems(nextItems);
+      await loadNewsStats();
     } catch (e: any) {
       setError(e?.message || "刷新统计数据失败");
     } finally {
       setLoading(false);
+      setNewsLoading(false);
     }
   }, []);
 
   useEffect(() => {
     // 初次进入数据看板时仅加载上次刷新结果，不主动触发后端 refresh
     loadExistingStats();
+    loadNewsStats();
   }, [loadExistingStats]);
 
   const handleCheckGapsClick = useCallback(
@@ -2848,19 +2879,50 @@ function DataStatsTab({
   const handleFillLatestClick = useCallback(
     async (kind: string, minDate?: string | null) => {
       if (!onFillLatest) return;
+      setFillLoadingKind(kind);
+      const lower = (kind || "").toLowerCase();
       try {
-        const data: any = await backendRequest(
-          "GET",
-          "/api/trading/latest-day",
-        );
-        const latest = data?.latest_trading_day;
-        if (!latest) {
-          setError("无法获取最新交易日，请先同步交易日历。");
-          return;
+        if (
+          lower === "kline_daily_qfq_go" ||
+          lower === "kline_daily_qfq" ||
+          lower === "kline_daily_raw_go" ||
+          lower === "kline_daily_raw" ||
+          lower === "kline_minute_raw" ||
+          lower === "adj_factor" ||
+          lower === "stock_moneyflow" ||
+          lower === "stock_st" ||
+          lower === "bak_basic"
+        ) {
+          const params = new URLSearchParams({ data_kind: kind });
+          const data: any = await backendRequest(
+            "GET",
+            `/api/ingestion/auto-range?${params.toString()}`,
+          );
+          const startDate = data?.start_date;
+          const latestTradingDate = data?.latest_trading_date;
+          const currentMaxDate = data?.current_max_date ?? null;
+          if (!startDate || !latestTradingDate) {
+            setError("无法自动计算补齐区间，请检查数据统计和交易日历。");
+            return;
+          }
+          onFillLatest(kind, String(startDate), String(latestTradingDate), currentMaxDate);
+        } else {
+          // 对于其他数据集保持原有“补齐到最新交易日”的简化逻辑
+          const latestResp: any = await backendRequest(
+            "GET",
+            "/api/trading/latest-day",
+          );
+          const latest = latestResp?.latest_trading_day;
+          if (!latest) {
+            setError("无法获取最新交易日，请先同步交易日历。");
+            return;
+          }
+          onFillLatest(kind, minDate || String(latest), String(latest), null);
         }
-        onFillLatest(kind, String(latest), minDate ?? null);
       } catch (e: any) {
-        setError(e?.message || "获取最新交易日失败");
+        setError(e?.message || "自动补齐区间计算失败");
+      } finally {
+        setFillLoadingKind(null);
       }
     },
     [onFillLatest],
@@ -2869,91 +2931,89 @@ function DataStatsTab({
   // ...
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <h3 style={{ marginTop: 0, fontSize: 15 }}>📊 数据看板（统计总览）</h3>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          marginBottom: 6,
-        }}
-      >
+    <div className={styles.section}>
+      <h3 className={styles.headingSmall}>📊 数据看板（统计总览）</h3>
+      <div className={styles.rowWrapSmall}>
         <button
           type="button"
           onClick={triggerRefresh}
           disabled={loading}
-          style={{
-            padding: "6px 10px",
-            borderRadius: 8,
-            border: "none",
-            background: "#0ea5e9",
-            color: "#fff",
-            cursor: "pointer",
-            fontSize: 13,
-          }}
+          className={styles.btnPrimary}
+          aria-label="刷新统计数据"
         >
           {loading ? "刷新中..." : "刷新统计数据"}
         </button>
-        <span style={{ fontSize: 12, color: "#6b7280" }}>
+        <span className={styles.textMuted}>
           统计数据来自后台预计算表 market.data_stats，适合快速查看各类数据的时间范围、条数和更新时间。
         </span>
       </div>
 
+      {/* 新闻统计摘要（仅展示数量与时间范围，不展示新闻内容） */}
+      {newsStats && (
+        <div className={styles.cardInfo}>
+          <div className={styles.rowBetween}>
+            <span style={{ fontWeight: 500 }}>📰 新闻数据概览</span>
+            {newsLoading && <span className={styles.textMuted}>加载中...</span>}
+          </div>
+          <div className={styles.rowWrapSmall}>
+            <span>
+              总条数：<strong>{newsStats.total_count ?? 0}</strong>
+            </span>
+            <span>
+              最早发布时间：
+              {newsStats.earliest_time
+                ? formatDateTime(String(newsStats.earliest_time))
+                : "—"}
+            </span>
+            <span>
+              最新发布时间：
+              {newsStats.latest_time
+                ? formatDateTime(String(newsStats.latest_time))
+                : "—"}
+            </span>
+          </div>
+          {Array.isArray(newsStats.sources) && newsStats.sources.length > 0 && (
+            <div className={styles.newsSources}>
+              <span>按来源统计：</span>
+              <span style={{ marginLeft: 4 }}>
+                {newsStats.sources
+                  .map((s: any) => {
+                    const raw = s.source || "未知";
+                    let label = raw;
+                    if (raw === "cls_telegraph") label = "财联社";
+                    else if (raw === "sina_finance") label = "新浪财经";
+                    else if (raw === "tradingview") label = "TradingView 外媒";
+                    return `${label}: ${s.count ?? 0}`;
+                  })
+                  .join(" · ")}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
       {error && (
-        <p style={{ fontSize: 12, color: "#b91c1c", margin: 0 }}>
+        <p className={styles.textDangerSmall}>
           {error}
         </p>
       )}
 
       {items.length === 0 && !loading ? (
-        <p style={{ fontSize: 13, color: "#6b7280" }}>
-          当前没有统计数据，请先执行一次刷新。
-        </p>
+        <p className={styles.textMuted}>当前没有统计数据，请先执行一次刷新。</p>
       ) : (
-        <div
-          style={{
-            width: "100%",
-            overflowX: "auto",
-            marginTop: 4,
-          }}
-        >
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              fontSize: 12,
-            }}
-          >
+        <div className={styles.tableWrapper}>
+          <table className={styles.statsTable}>
             <thead>
-              <tr style={{ background: "#f3f4f6" }}>
-                <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
-                  类别
-                </th>
-                <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
-                  描述
-                </th>
-                <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
-                  记录数
-                </th>
-                <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
-                  起始日期
-                </th>
-                <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
-                  结束日期
-                </th>
-                <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
-                  最后更新时间
-                </th>
-                <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
-                  最近检查
-                </th>
-                <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
-                  表名
-                </th>
-                <th style={{ padding: 6, borderBottom: "1px solid #e5e7eb" }}>
-                  操作
-                </th>
+              <tr>
+                <th className={styles.statsHeaderCell}>数据集</th>
+                <th className={styles.statsHeaderCell}>描述</th>
+                <th className={styles.statsHeaderCell}>行数</th>
+                <th className={styles.statsHeaderCell}>开始日期</th>
+                <th className={styles.statsHeaderCell}>结束日期</th>
+                <th className={styles.statsHeaderCell}>最后更新时间</th>
+                <th className={styles.statsHeaderCell}>最近检查</th>
+                <th className={styles.statsHeaderCell}>表名</th>
+                <th className={styles.statsHeaderCell}>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -2986,111 +3046,71 @@ function DataStatsTab({
                   it.data_kind || it.kind || "",
                 );
                 
-                // 处理描述文本：去掉 trade_agg_5m 后面的括号内容
+                // 处理描述文本：优先使用 extra_info.desc / label / description
                 let description = extra.desc || it.label || it.description || "—";
+                // 对 trade_agg_5m：去掉括号中的补充说明，保持数据看板描述简洁
                 if (kind === "trade_agg_5m") {
                     description = description.replace(/（.*?）|\(.*?\)/g, "").trim();
+                }
+                // 对 stock_moneyflow/stock_moneyflow_ts：若后端未提供描述，则使用与初始化任务一致的说明
+                if (kind === "stock_moneyflow" && (!description || description === "—")) {
+                    description = "个股资金流（moneyflow_ind_dc）";
+                }
+                if (kind === "stock_moneyflow_ts" && (!description || description === "—")) {
+                    description = "个股资金流（moneyflow · Tushare）";
                 }
 
                 const minDateStr =
                   it.min_date || it.date_min || it.start_date || null;
                 const canFillLatest = [
                   "kline_daily_qfq",
+                  "kline_daily_qfq_go",
                   "kline_daily_raw",
+                  "kline_daily_raw_go",
                   "kline_minute_raw",
                   "tdx_board_index",
                   "tdx_board_member",
                   "tdx_board_daily",
                   "trade_agg_5m",
+                  "adj_factor",
+                  "stock_moneyflow",
+                  "stock_moneyflow_ts",
+                  "stock_st",
+                  "bak_basic",
                 ].includes(kind);
                 return (
                   <tr key={idx}>
-                    <td
-                      style={{
-                        padding: 6,
-                        borderBottom: "1px solid #f3f4f6",
-                      }}
-                    >
+                    <td className={styles.statsCell}>
                       {it.data_kind || it.kind || "—"}
                     </td>
-                    <td
-                      style={{
-                        padding: 6,
-                        borderBottom: "1px solid #f3f4f6",
-                      }}
-                    >
-                      {description}
-                    </td>
-                    <td
-                      style={{
-                        padding: 6,
-                        borderBottom: "1px solid #f3f4f6",
-                      }}
-                    >
-                      {it.row_count || it.rows || 0}
-                    </td>
-                    <td
-                      style={{
-                        padding: 6,
-                        borderBottom: "1px solid #f3f4f6",
-                      }}
-                    >
+                    <td className={styles.statsCell}>{description}</td>
+                    <td className={styles.statsCell}>{it.row_count || it.rows || 0}</td>
+                    <td className={styles.statsCell}>
                       {it.min_date || it.date_min || it.start_date || "—"}
                     </td>
-                    <td
-                      style={{
-                        padding: 6,
-                        borderBottom: "1px solid #f3f4f6",
-                      }}
-                    >
+                    <td className={styles.statsCell}>
                       {it.max_date || it.date_max || it.end_date || "—"}
                     </td>
-                    <td
-                      style={{
-                        padding: 6,
-                        borderBottom: "1px solid #f3f4f6",
-                      }}
-                    >
-                      {lastDisp}
+                    <td className={styles.statsCell}>{lastDisp}</td>
+                    <td className={styles.statsCell}>
+                      <div className={styles.statsCheckInfo}>{lastCheckAt}</div>
+                      {checkSummary && (
+                        <div className={styles.statsCheckInfo} style={{ color: "#666" }}>
+                          {checkSummary}
+                        </div>
+                      )}
                     </td>
-                    <td
-                      style={{
-                        padding: 6,
-                        borderBottom: "1px solid #f3f4f6",
-                      }}
-                    >
-                      <div style={{ fontSize: 12 }}>{lastCheckAt}</div>
-                      {checkSummary && <div style={{ fontSize: 11, color: "#666" }}>{checkSummary}</div>}
-                    </td>
-                    <td
-                      style={{
-                        padding: 6,
-                        borderBottom: "1px solid #f3f4f6",
-                      }}
-                    >
-                      {it.table_name || it.table || "—"}
-                    </td>
-                    <td
-                      style={{
-                        padding: 6,
-                        borderBottom: "1px solid #f3f4f6",
-                      }}
-                    >
-                      <div style={{ display: "flex", gap: 6 }}>
+                    <td className={styles.statsCell}>{it.table_name || it.table || "—"}</td>
+                    <td className={styles.statsCell}>
+                      <div className={styles.rowWrapSmall}>
                         {canFillLatest && kind && (
                           <button
                             type="button"
                             onClick={() => handleFillLatestClick(kind, minDateStr)}
-                            style={{
-                              padding: "4px 8px",
-                              borderRadius: 6,
-                              border: "1px solid #d4d4d4",
-                              background: "#fff",
-                              cursor: "pointer",
-                              fontSize: 12,
-                            }}
+                            disabled={fillLoadingKind === kind}
+                            className={styles.btnSecondary}
                           >
-                            补齐到最新交易日
+                            {fillLoadingKind === kind ? "补齐中..." : "补齐到最新交易日"}
                           </button>
                         )}
                         {kind && (
@@ -3098,14 +3118,7 @@ function DataStatsTab({
                             type="button"
                             onClick={() => handleCheckGapsClick(kind, false)}
                             disabled={gapLoadingKind === kind}
-                            style={{
-                              padding: "4px 8px",
-                              borderRadius: 6,
-                              border: "1px solid #d4d4d4",
-                              background: "#fff",
-                              cursor: "pointer",
-                              fontSize: 12,
-                            }}
+                            className={styles.btnGhost}
                           >
                             {gapLoadingKind === kind ? "检查中..." : "数据检查"}
                           </button>
@@ -3118,48 +3131,32 @@ function DataStatsTab({
             </tbody>
           </table>
           {gapResult && (
-            <div
-              style={{
-                marginTop: 8,
-                fontSize: 12,
-                background: "#f9fafb",
-                padding: 8,
-                borderRadius: 8,
-                border: "1px solid #e5e7eb",
-              }}
-            >
-              <div style={{ marginBottom: 4, fontWeight: "bold", display: "flex", justifyContent: "space-between" }}>
+            <div className={`${styles.cardSoft} ${styles.note}`}>
+              <div className={styles.rowBetween}>
                 <span>检查结果 (Kind: {gapResult.data_kind})</span>
                 <button
                   type="button"
                   onClick={() => handleCheckGapsClick(gapResult.data_kind, true)}
                   disabled={gapLoadingKind === gapResult.data_kind}
-                  style={{
-                    padding: "2px 8px",
-                    borderRadius: 4,
-                    border: "1px solid #d4d4d4",
-                    background: "#fff",
-                    cursor: "pointer",
-                    fontSize: 11,
-                  }}
+                  className={styles.btnGhost}
                 >
                   {gapLoadingKind === gapResult.data_kind ? "重新检查中..." : "立即重新检查(强制刷新)"}
                 </button>
               </div>
-              <div>
+              <div className={styles.textSmall}>
                 表: {gapResult.table_name} · 区间: {gapResult.start_date} ~ {gapResult.end_date}
               </div>
               {gapResult.last_check_at && (
-                <div style={{ color: "#6b7280" }}>
+                <div className={styles.textMuted}>
                   结果生成于: {formatDateTime(gapResult.last_check_at)} (缓存)
                 </div>
               )}
               {typeof gapResult.symbol_count === "number" && (
-                <div>
+                <div className={styles.textSmall}>
                   覆盖股票数量: {gapResult.symbol_count}
                 </div>
               )}
-              <div>
+              <div className={styles.textSmall}>
                 交易日总数: {gapResult.total_trading_days}，有数据天数:
                 {" "}
                 {gapResult.covered_days}，缺失交易日:
@@ -3169,20 +3166,13 @@ function DataStatsTab({
               {Array.isArray(gapResult.missing_ranges) &&
                 gapResult.missing_ranges.length > 0 && (
                   <details style={{ marginTop: 4 }}>
-                    <summary>
+                    <summary className={styles.textSmall}>
                       缺失日期段 ({gapResult.missing_ranges.length})
                     </summary>
-                    <ul
-                      style={{
-                        marginTop: 4,
-                        paddingLeft: 18,
-                      }}
-                    >
+                    <ul className={styles.gapSummary}>
                       {gapResult.missing_ranges.map((r: any, idx: number) => (
                         <li key={idx}>
-                          {r.start === r.end
-                            ? r.start
-                            : `${r.start} ~ ${r.end}`}（{r.days} 天）
+                          {r.start === r.end ? r.start : `${r.start} ~ ${r.end}`}（{r.days} 天）
                         </li>
                       ))}
                     </ul>
@@ -3492,6 +3482,9 @@ function TestingTab() {
   const [runs, setRuns] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmDeleteIdTest, setConfirmDeleteIdTest] = useState<string | null>(
+    null,
+  );
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -3590,26 +3583,30 @@ function TestingTab() {
     }
   };
 
+  const deleteTestSchedule = async (schedId: string) => {
+    try {
+      await backendRequest("DELETE", `/api/testing/schedule/${schedId}`);
+      setConfirmDeleteIdTest(null);
+      await loadAll();
+    } catch (e: any) {
+      setError(e?.message || "删除测试调度失败");
+    }
+  };
+
   const [newFreq, setNewFreq] = useState<string>("5m");
   const [newEnabled, setNewEnabled] = useState<boolean>(true);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <div className={styles.column}>
       <h3 style={{ marginTop: 0, fontSize: 15 }}>🧪 TDX 接口自动化测试</h3>
-      <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+      <div className={styles.rowWrap} style={{ marginBottom: 4 }}>
         <button
           type="button"
           onClick={triggerRunNow}
           disabled={loading}
-          style={{
-            padding: "6px 10px",
-            borderRadius: 8,
-            border: "none",
-            background: "#22c55e",
-            color: "#fff",
-            cursor: "pointer",
-            fontSize: 13,
-          }}
+          className={styles.btnPrimary}
+          aria-label="立即执行测试"
+          style={{ background: "#22c55e" }}
         >
           立即执行测试
         </button>
@@ -3617,14 +3614,8 @@ function TestingTab() {
           type="button"
           onClick={loadAll}
           disabled={loading}
-          style={{
-            padding: "6px 10px",
-            borderRadius: 8,
-            border: "1px solid #d4d4d4",
-            background: "#fff",
-            cursor: "pointer",
-            fontSize: 13,
-          }}
+          className={styles.btnGhost}
+          aria-label="刷新测试调度状态"
         >
           刷新状态
         </button>
@@ -3641,9 +3632,7 @@ function TestingTab() {
             尚未配置测试调度，使用下方表单新建。
           </p>
         ) : (
-          <div
-            style={{ display: "flex", flexDirection: "column", gap: 8 }}
-          >
+          <div className={styles.column}>
             {schedules.map((item: any) => {
               const schedId = item.schedule_id;
               const enabled = item.enabled ?? true;
@@ -3653,15 +3642,7 @@ function TestingTab() {
                 (freqValue || "手动");
 
               return (
-                <div
-                  key={schedId}
-                  style={{
-                    borderRadius: 10,
-                    border: "1px solid #e5e7eb",
-                    padding: 10,
-                    background: "#fafafa",
-                  }}
-                >
+                <div key={schedId} className={styles.card}>
                   <div
                     style={{
                       display: "flex",
@@ -3685,23 +3666,15 @@ function TestingTab() {
                   >
                     <div>调度频率：{freqLabel}</div>
                     <div>
-                      上次运行：{item.last_run_at || "—"} · 下次运行：
-                      {item.next_run_at || "—"}
+                      上次运行：{formatDateTime(item.last_run_at)} · 下次运行：
+                      {formatDateTime(item.next_run_at)}
                     </div>
                     <div>
                       上次状态：{item.last_status || "—"} · 错误信息：
                       {item.last_error || "—"}
                     </div>
                   </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 8,
-                      alignItems: "center",
-                      fontSize: 12,
-                    }}
-                  >
+                  <div className={styles.rowWrap} style={{ fontSize: 12 }}>
                     <select
                       value={freqValue}
                       onChange={async (e) => {
@@ -3711,12 +3684,8 @@ function TestingTab() {
                           enabled,
                         );
                       }}
-                      style={{
-                        padding: "4px 8px",
-                        borderRadius: 6,
-                        border: "1px solid #d4d4d4",
-                        fontSize: 12,
-                      }}
+                      className={styles.btnSecondary}
+                      aria-label="选择测试调度频率"
                     >
                       {FREQUENCY_CHOICES.map((f) => (
                         <option key={f.value} value={f.value}>
@@ -3742,29 +3711,65 @@ function TestingTab() {
                     <button
                       type="button"
                       onClick={() => toggleSchedule(schedId, !enabled)}
-                      style={{
-                        padding: "4px 8px",
-                        borderRadius: 6,
-                        border: "1px solid #d4d4d4",
-                        background: "#fff",
-                        cursor: "pointer",
-                      }}
+                      className={styles.btnGhost}
+                      aria-label="切换测试调度启用状态"
                     >
                       切换启用
                     </button>
                     <button
                       type="button"
                       onClick={() => runSchedule(schedId)}
-                      style={{
-                        padding: "4px 8px",
-                        borderRadius: 6,
-                        border: "1px solid #d4d4d4",
-                        background: "#fff",
-                        cursor: "pointer",
-                      }}
+                      className={styles.btnGhost}
+                      aria-label="立即运行测试调度"
                     >
                       立即运行
                     </button>
+                    {confirmDeleteIdTest === schedId ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => deleteTestSchedule(schedId)}
+                          style={{
+                            padding: "4px 8px",
+                            borderRadius: 6,
+                            border: "1px solid #dc2626",
+                            background: "#fee2e2",
+                            color: "#b91c1c",
+                            cursor: "pointer",
+                          }}
+                        >
+                          确认删除
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteIdTest(null)}
+                          style={{
+                            padding: "4px 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d4d4d4",
+                            background: "#fff",
+                            cursor: "pointer",
+                          }}
+                        >
+                          取消
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteIdTest(schedId)}
+                        style={{
+                          padding: "4px 8px",
+                          borderRadius: 6,
+                          border: "1px solid #f97316",
+                          background: "#fff7ed",
+                          color: "#ea580c",
+                          cursor: "pointer",
+                        }}
+                      >
+                        删除
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -3778,7 +3783,6 @@ function TestingTab() {
           marginTop: 8,
           paddingTop: 8,
           borderTop: "1px dashed #e5e7eb",
-          fontSize: 13,
         }}
       >
         <h4 style={{ fontSize: 14, margin: "4px 0" }}>新建测试调度</h4>
@@ -3788,6 +3792,7 @@ function TestingTab() {
             flexWrap: "wrap",
             gap: 8,
             alignItems: "center",
+            fontSize: 12,
           }}
         >
           <select
@@ -3859,6 +3864,7 @@ function IngestionSchedulesTab() {
   );
   const [newFreq, setNewFreq] = useState<string>("5m");
   const [newEnabled, setNewEnabled] = useState<boolean>(true);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const loadSchedules = useCallback(async () => {
     setLoading(true);
@@ -3953,6 +3959,16 @@ function IngestionSchedulesTab() {
     }
   };
 
+  const deleteSchedule = async (schedId: string) => {
+    try {
+      await backendRequest("DELETE", `/api/ingestion/schedule/${schedId}`);
+      setConfirmDeleteId(null);
+      await loadSchedules();
+    } catch (e: any) {
+      setError(e?.message || "删除入库调度失败");
+    }
+  };
+
   const createSchedule = async () => {
     try {
       await backendRequest("POST", "/api/ingestion/schedule", {
@@ -3971,83 +3987,49 @@ function IngestionSchedulesTab() {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <h3 style={{ marginTop: 0, fontSize: 15 }}>📥 数据入库调度</h3>
+    <div className={styles.section}>
+      <h3 className={styles.headingSmall}>📥 数据入库调度</h3>
 
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 10,
-          alignItems: "center",
-          marginBottom: 6,
-        }}
-      >
+      <div className={styles.rowWrap} style={{ marginBottom: 6 }}>
         <button
           type="button"
           onClick={createDefaults}
           disabled={loading}
-          style={{
-            padding: "6px 10px",
-            borderRadius: 8,
-            border: "none",
-            background: "#0ea5e9",
-            color: "#fff",
-            cursor: "pointer",
-            fontSize: 13,
-          }}
+          className={styles.btnPrimary}
+          aria-label="创建默认调度"
         >
           创建默认调度
         </button>
       </div>
 
-      <div
-        style={{
-          padding: 10,
-          borderRadius: 10,
-          border: "1px solid #e5e7eb",
-          background: "#fafafa",
-          marginBottom: 8,
-        }}
-      >
-        <h4 style={{ fontSize: 14, margin: "0 0 6px" }}>手动执行入库任务</h4>
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 8,
-            alignItems: "center",
-          }}
-        >
+      <div className={styles.card}>
+        <h4 className={styles.headingSmall}>手动执行入库任务</h4>
+        <div className={styles.rowWrap}>
           <select
             value={newDataset}
             onChange={(e) => setNewDataset(e.target.value)}
-            style={{
-              padding: "4px 8px",
-              borderRadius: 6,
-              border: "1px solid #d4d4d4",
-              fontSize: 12,
-            }}
+            className={styles.select}
+            aria-label="选择手动执行数据集"
           >
             {Object.entries(INGESTION_DATASETS).map(([key, label]) => (
               <option key={key} value={key}>{`${key} · ${label}`}</option>
             ))}
           </select>
-          <label style={{ fontSize: 12 }}>
+          <label className={styles.labelSmall}>
             <input
               type="radio"
               checked={newMode === "incremental"}
               onChange={() => setNewMode("incremental")}
-              style={{ marginRight: 4 }}
+              className={styles.inputCheckbox}
             />
             增量
           </label>
-          <label style={{ fontSize: 12 }}>
+          <label className={styles.labelSmall}>
             <input
               type="radio"
               checked={newMode === "init"}
               onChange={() => setNewMode("init")}
-              style={{ marginRight: 4 }}
+              className={styles.inputCheckbox}
             />
             初始化
           </label>
@@ -4055,15 +4037,9 @@ function IngestionSchedulesTab() {
             type="button"
             onClick={() => runManual(newDataset, newMode)}
             disabled={loading}
-            style={{
-              padding: "6px 10px",
-              borderRadius: 8,
-              border: "none",
-              background: "#22c55e",
-              color: "#fff",
-              cursor: "pointer",
-              fontSize: 13,
-            }}
+            className={styles.btnPrimary}
+            aria-label="立即执行入库任务"
+            style={{ background: "#22c55e" }}
           >
             立即执行
           </button>
@@ -4071,22 +4047,18 @@ function IngestionSchedulesTab() {
       </div>
 
       {error && (
-        <p style={{ fontSize: 12, color: "#b91c1c" }}>{error}</p>
+        <p className={styles.textDangerSmall}>{error}</p>
       )}
 
       <div>
-        <h4 style={{ fontSize: 14, margin: "0 0 6px" }}>已配置的入库调度</h4>
+        <h4 className={styles.headingSmall}>已配置的入库调度</h4>
         {schedules.length === 0 && !loading ? (
-          <p style={{ fontSize: 13, color: "#6b7280" }}>
-            尚未配置入库调度，使用下方表单新建。
-          </p>
+          <p className={styles.textMuted}>尚未配置入库调度，使用下方表单新建。</p>
         ) : (
-          <div
-            style={{ display: "flex", flexDirection: "column", gap: 8 }}
-          >
+          <div className={styles.section}>
             {schedules.map((item: any) => {
               const schedId = item.schedule_id;
-              const dataset = item.dataset;
+              const schedDataset = item.dataset;
               const mode = item.mode;
               const enabled = item.enabled ?? true;
               const freqValue = item.frequency || "";
@@ -4095,74 +4067,39 @@ function IngestionSchedulesTab() {
                 (freqValue || "手动");
 
               return (
-                <div
-                  key={schedId}
-                  style={{
-                    borderRadius: 10,
-                    border: "1px solid #e5e7eb",
-                    padding: 10,
-                    background: "#fafafa",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      marginBottom: 4,
-                      fontSize: 13,
-                    }}
-                  >
+                <div key={schedId} className={styles.cardSoft}>
+                  <div className={styles.rowBetween} style={{ fontSize: 13 }}>
                     <div>
-                      调度 {schedId} · {dataset} · {mode}
+                      调度 {schedId} · {schedDataset} · {mode}
                     </div>
-                    <div style={{ fontSize: 12, color: "#6b7280" }}>
+                    <div className={styles.textMuted}>
                       {enabled ? "🟢 启用" : "⚪️ 停用"}
                     </div>
                   </div>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: "#4b5563",
-                      marginBottom: 4,
-                    }}
-                  >
+                  <div className={styles.textMutedSmall}>
                     <div>调度频率：{freqLabel}</div>
                     <div>
-                      上次运行：{item.last_run_at || "—"} · 下次运行：
-                      {item.next_run_at || "—"}
+                      上次运行：{formatDateTime(item.last_run_at)} · 下次运行：
+                      {formatDateTime(item.next_run_at)}
                     </div>
                     <div>
                       上次状态：{item.last_status || "—"} · 错误信息：
                       {item.last_error || "—"}
                     </div>
                   </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 8,
-                      alignItems: "center",
-                      fontSize: 12,
-                    }}
-                  >
+                  <div className={styles.rowWrapSmall}>
                     <select
                       value={freqValue}
                       onChange={async (e) => {
                         await updateSchedule(
                           schedId,
-                          dataset,
+                          schedDataset,
                           mode,
                           e.target.value,
                           enabled,
                         );
                       }}
-                      style={{
-                        padding: "4px 8px",
-                        borderRadius: 6,
-                        border: "1px solid #d4d4d4",
-                        fontSize: 12,
-                      }}
+                      className={styles.selectSmall}
                     >
                       {FREQUENCY_CHOICES.map((f) => (
                         <option key={f.value} value={f.value}>
@@ -4177,42 +4114,56 @@ function IngestionSchedulesTab() {
                         onChange={async (e) => {
                           await updateSchedule(
                             schedId,
-                            dataset,
+                            schedDataset,
                             mode,
                             freqValue,
                             e.target.checked,
                           );
                         }}
-                        style={{ marginRight: 4 }}
+                        className={styles.inputCheckbox}
                       />
                       启用调度
                     </label>
                     <button
                       type="button"
                       onClick={() => toggleSchedule(schedId, !enabled)}
-                      style={{
-                        padding: "4px 8px",
-                        borderRadius: 6,
-                        border: "1px solid #d4d4d4",
-                        background: "#fff",
-                        cursor: "pointer",
-                      }}
+                      className={styles.btnToggle}
                     >
                       切换启用
                     </button>
                     <button
                       type="button"
                       onClick={() => runSchedule(schedId)}
-                      style={{
-                        padding: "4px 8px",
-                        borderRadius: 6,
-                        border: "1px solid #d4d4d4",
-                        background: "#fff",
-                        cursor: "pointer",
-                      }}
+                      className={styles.btnToggle}
                     >
                       立即运行
                     </button>
+                    {confirmDeleteId === schedId ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => deleteSchedule(schedId)}
+                          className={styles.btnDelete}
+                        >
+                          确认删除
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(null)}
+                          className={styles.btnToggle}
+                        >
+                          取消
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteId(schedId)}
+                        className={styles.btnWarnSoft}
+                      >
+                        删除
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -4221,64 +4172,40 @@ function IngestionSchedulesTab() {
         )}
       </div>
 
-      <div
-        style={{
-          marginTop: 10,
-          paddingTop: 8,
-          borderTop: "1px dashed #e5e7eb",
-        }}
-      >
-        <h4 style={{ fontSize: 14, margin: "0 0 6px" }}>新建入库调度</h4>
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 8,
-            alignItems: "center",
-            fontSize: 12,
-          }}
-        >
+      <div className={`${styles.card} ${styles.cardDividerTop}`}>
+        <h4 className={styles.headingSmall}>新建入库调度</h4>
+        <div className={styles.rowWrapSmall}>
           <select
             value={newDataset}
             onChange={(e) => setNewDataset(e.target.value)}
-            style={{
-              padding: "4px 8px",
-              borderRadius: 6,
-              border: "1px solid #d4d4d4",
-              fontSize: 12,
-            }}
+            className={styles.selectSmall}
           >
             {Object.entries(INGESTION_DATASETS).map(([key, label]) => (
               <option key={key} value={key}>{`${key} · ${label}`}</option>
             ))}
           </select>
-          <label>
+          <label className={styles.labelSmall}>
             <input
               type="radio"
               checked={newMode === "incremental"}
               onChange={() => setNewMode("incremental")}
-              style={{ marginRight: 4 }}
+              className={styles.inputCheckbox}
             />
             增量
           </label>
-          <label>
+          <label className={styles.labelSmall}>
             <input
               type="radio"
               checked={newMode === "init"}
               onChange={() => setNewMode("init")}
-              style={{ marginRight: 4 }}
+              className={styles.inputCheckbox}
             />
             初始化
           </label>
           <select
             value={newFreq}
             onChange={(e) => setNewFreq(e.target.value)}
-            style={{
-              padding: "4px 8px",
-              borderRadius: 6,
-              border: "1px solid #d4d4d4",
-              fontSize: 12,
-            }}
+            className={styles.selectSmall}
           >
             {FREQUENCY_CHOICES.map((f) => (
               <option key={f.value} value={f.value}>
@@ -4286,12 +4213,12 @@ function IngestionSchedulesTab() {
               </option>
             ))}
           </select>
-          <label>
+          <label className={styles.labelSmall}>
             <input
               type="checkbox"
               checked={newEnabled}
               onChange={(e) => setNewEnabled(e.target.checked)}
-              style={{ marginRight: 4 }}
+              className={styles.inputCheckbox}
             />
             启用调度
           </label>
@@ -4299,15 +4226,8 @@ function IngestionSchedulesTab() {
             type="button"
             onClick={createSchedule}
             disabled={loading}
-            style={{
-              padding: "6px 10px",
-              borderRadius: 8,
-              border: "none",
-              background: "#6366f1",
-              color: "#fff",
-              cursor: "pointer",
-              fontSize: 13,
-            }}
+            className={styles.btnSuccessSmall}
+            aria-label="创建调度"
           >
             创建调度
           </button>

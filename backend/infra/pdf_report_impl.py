@@ -176,6 +176,7 @@ def create_pdf_report(
     # 各分析师分析结果
     story.append(Paragraph("AI分析师团队分析", heading_style))
 
+    # 优先按预定义顺序展示常见分析师角色
     agent_names = {
         "technical": "技术分析师",
         "fundamental": "基本面分析师",
@@ -184,17 +185,34 @@ def create_pdf_report(
         "market_sentiment": "市场情绪分析师",
     }
 
+    used_keys = set()
+
+    def _render_agent_block(title: str, result: Any) -> None:
+        story.append(Paragraph(title, subheading_style))
+        if isinstance(result, dict):
+            analysis_text = result.get("analysis", "暂无分析")
+        else:
+            analysis_text = str(result)
+        analysis_text = str(analysis_text).replace("\n", "<br/>")
+        story.append(Paragraph(analysis_text, normal_style))
+        story.append(Spacer(1, 12))
+
+    # 先渲染内置映射中定义的分析师
     for agent_key, agent_name in agent_names.items():
         if agent_key in agents_results:
-            story.append(Paragraph(f"{agent_name}分析", subheading_style))
-            agent_result = agents_results[agent_key]
-            if isinstance(agent_result, dict):
-                analysis_text = agent_result.get("analysis", "暂无分析")
-            else:
-                analysis_text = str(agent_result)
-            analysis_text = str(analysis_text).replace("\n", "<br/>")
-            story.append(Paragraph(analysis_text, normal_style))
-            story.append(Spacer(1, 12))
+            used_keys.add(agent_key)
+            _render_agent_block(f"{agent_name}分析", agents_results[agent_key])
+
+    # 再渲染其余未在内置映射中的分析师，确保所有分析师都出现在报告中
+    for agent_key, agent_result in agents_results.items():
+        if agent_key in used_keys:
+            continue
+        display_name = None
+        if isinstance(agent_result, dict):
+            display_name = agent_result.get("agent_name")
+        if not display_name:
+            display_name = agent_names.get(agent_key) or str(agent_key)
+        _render_agent_block(f"{display_name}分析", agent_result)
 
     # 团队讨论
     story.append(Paragraph("团队综合讨论", heading_style))

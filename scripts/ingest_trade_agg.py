@@ -447,24 +447,32 @@ def _finish_job(conn, job_id: uuid.UUID, status: str, summary: Dict[str, Any]) -
 
 
 def _update_job_summary(conn, job_id: uuid.UUID, patch: Dict[str, Any]) -> None:
-    with conn.cursor() as cur:
-        cur.execute("SELECT summary FROM market.ingestion_jobs WHERE job_id=%s", (job_id,))
-        row = cur.fetchone()
-        base: Dict[str, Any] = {}
-        if row and row[0]:
-            try:
-                base = json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
-            except Exception:  # noqa: BLE001
-                base = {}
-        for k, v in (patch or {}).items():
-            if isinstance(v, (int, float)) and isinstance(base.get(k), (int, float)):
-                base[k] = type(base.get(k))(base.get(k, 0) + v)
-            else:
-                base[k] = v
-        cur.execute(
-            "UPDATE market.ingestion_jobs SET summary=%s WHERE job_id=%s",
-            (json.dumps(base, ensure_ascii=False), job_id),
-        )
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT summary FROM market.ingestion_jobs WHERE job_id=%s", (job_id,))
+            row = cur.fetchone()
+            base: Dict[str, Any] = {}
+            if row and row[0]:
+                try:
+                    base = json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
+                except Exception:  # noqa: BLE001
+                    base = {}
+            for k, v in (patch or {}).items():
+                if isinstance(v, (int, float)) and isinstance(base.get(k), (int, float)):
+                    base[k] = type(base.get(k))(base.get(k, 0) + v)
+                else:
+                    base[k] = v
+            cur.execute(
+                "UPDATE market.ingestion_jobs SET summary=%s WHERE job_id=%s",
+                (json.dumps(base, ensure_ascii=False), job_id),
+            )
+        conn.commit()
+    except Exception:  # noqa: BLE001
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        # 进度更新失败不应中断主流程，这里不再向上抛出异常
 
 
 def _create_task(

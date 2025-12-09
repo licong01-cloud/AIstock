@@ -60,7 +60,12 @@ DEFAULT_INGEST_TRADE_AGG = ROOT_DIR / "scripts" / "ingest_trade_agg.py"
 DEFAULT_ADJUST_REBUILD = ROOT_DIR / "scripts" / "rebuild_adjusted_daily.py"
 DEFAULT_INGEST_TUSHARE_TDX_BOARD = ROOT_DIR / "scripts" / "ingest_tushare_tdx_board.py"
 DEFAULT_INGEST_TUSHARE_MONEYFLOW = ROOT_DIR / "scripts" / "ingest_tushare_moneyflow.py"
+DEFAULT_INGEST_TUSHARE_MONEYFLOW_TS = ROOT_DIR / "scripts" / "ingest_tushare_moneyflow_ts.py"
 DEFAULT_INGEST_WEEKLY_FROM_DAILY = ROOT_DIR / "scripts" / "ingest_tushare_weekly.py"
+DEFAULT_INGEST_TUSHARE_ADJ_FACTOR = ROOT_DIR / "scripts" / "ingest_tushare_adj_factor.py"
+DEFAULT_INGEST_TUSHARE_STOCK_BASIC = ROOT_DIR / "scripts" / "ingest_tushare_stock_basic.py"
+DEFAULT_INGEST_TUSHARE_STOCK_ST = ROOT_DIR / "scripts" / "ingest_tushare_stock_st.py"
+DEFAULT_INGEST_TUSHARE_BAK_BASIC = ROOT_DIR / "scripts" / "ingest_tushare_bak_basic.py"
 DEFAULT_SYNC_SYMBOL_DIM = ROOT_DIR / "scripts" / "sync_symbol_dim_from_tdx.py"
 
 
@@ -122,7 +127,11 @@ def _build_frequency_job(scheduler: schedule.Scheduler, frequency: str, options:
     if not freq or freq == "manual":
         return None
     job = None
-    if freq.endswith("m") and freq[:-1].isdigit():
+    # support seconds-level frequency like "10s", "15s", "30s" for real-time tasks
+    if freq.endswith("s") and freq[:-1].isdigit():
+        seconds = int(freq[:-1])
+        job = scheduler.every(seconds).seconds
+    elif freq.endswith("m") and freq[:-1].isdigit():
         minutes = int(freq[:-1])
         job = scheduler.every(minutes).minutes
     elif freq.endswith("h") and freq[:-1].isdigit():
@@ -491,12 +500,30 @@ class TDXScheduler:
     def _default_ingestion_script(dataset: str, mode: str) -> Optional[Path]:
         dataset = (dataset or "").strip().lower()
         mode = (mode or "").strip().lower()
+        # Real-time news ingestion: use dedicated script for all modes
+        if dataset == "news_realtime":
+            return ROOT_DIR / "scripts" / "ingest_news_realtime.py"
         # Tushare TDX board datasets must use the dedicated script for both modes
         if dataset.startswith("tdx_board_") and mode in {"init", "incremental"}:
             return DEFAULT_INGEST_TUSHARE_TDX_BOARD
         # Tushare moneyflow_ind_dc uses its own ingestion script for both modes
         if dataset == "stock_moneyflow" and mode in {"init", "incremental"}:
             return DEFAULT_INGEST_TUSHARE_MONEYFLOW
+        # Tushare moneyflow (TS source) uses its own ingestion script for both modes
+        if dataset == "stock_moneyflow_ts" and mode in {"init", "incremental"}:
+            return DEFAULT_INGEST_TUSHARE_MONEYFLOW_TS
+        # Tushare adj_factor uses its own ingestion script for both modes
+        if dataset == "adj_factor" and mode in {"init", "incremental"}:
+            return DEFAULT_INGEST_TUSHARE_ADJ_FACTOR
+        # Tushare stock_basic uses its own ingestion script (init only)
+        if dataset == "stock_basic" and mode in {"init"}:
+            return DEFAULT_INGEST_TUSHARE_STOCK_BASIC
+        # Tushare stock_st uses its own ingestion script
+        if dataset == "stock_st" and mode in {"init", "incremental"}:
+            return DEFAULT_INGEST_TUSHARE_STOCK_ST
+        # Tushare bak_basic uses its own ingestion script
+        if dataset == "bak_basic" and mode in {"init", "incremental"}:
+            return DEFAULT_INGEST_TUSHARE_BAK_BASIC
         # Weekly aggregation uses dedicated script, both modes
         if dataset == "kline_weekly" and mode in {"init", "incremental"}:
             return DEFAULT_INGEST_WEEKLY_FROM_DAILY
@@ -534,6 +561,17 @@ class TDXScheduler:
                     args += ["--batch-size", str(options["batch_size"])]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
+            elif dataset == "adj_factor":
+                # Tushare adj_factor init: date range + optional truncate + job id
+                args += ["--mode", "init"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("truncate"):
+                    args += ["--truncate"]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
             else:
                 # Special handling for moneyflow_ind_dc: only trade_date cursor, no datasets/exchanges
                 if dataset == "stock_moneyflow":
@@ -544,8 +582,25 @@ class TDXScheduler:
                         args += ["--end-date", str(options["end_date"])]
                     if options.get("job_id"):
                         args += ["--job-id", str(options["job_id"])]
+                elif dataset == "stock_moneyflow_ts":
+                    args += ["--mode", "incremental"]
+                    if options.get("start_date"):
+                        args += ["--start-date", str(options["start_date"])]
+                    if options.get("end_date"):
+                        args += ["--end-date", str(options["end_date"])]
+                    if options.get("job_id"):
+                        args += ["--job-id", str(options["job_id"])]
                 # Weekly aggregation incremental: just pass mode + date range + job id
                 elif dataset == "kline_weekly":
+                    args += ["--mode", "incremental"]
+                    if options.get("start_date"):
+                        args += ["--start-date", str(options["start_date"])]
+                    if options.get("end_date"):
+                        args += ["--end-date", str(options["end_date"])]
+                    if options.get("job_id"):
+                        args += ["--job-id", str(options["job_id"])]
+                # Tushare adj_factor incremental: date range + job id
+                elif dataset == "adj_factor":
                     args += ["--mode", "incremental"]
                     if options.get("start_date"):
                         args += ["--start-date", str(options["start_date"])]
@@ -576,6 +631,26 @@ class TDXScheduler:
                     if options.get("workers"):
                         args += ["--workers", str(options["workers"])]
         elif mode == "init":
+            if dataset == "stock_basic":
+                # Tushare stock_basic 全量：仅需要 job_id / truncate 标记，无起止日期
+                args += ["--mode", "init"]
+                if options.get("truncate"):
+                    args += ["--truncate"]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
+            elif dataset in {"stock_st", "bak_basic"}:
+                # Tushare stock_st / bak_basic 全量：需要起止日期 + 可选 truncate/batch_sleep + job_id
+                args += ["--mode", "init"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("batch_sleep"):
+                    args += ["--batch-sleep", str(options["batch_sleep"])]
+                if options.get("truncate"):
+                    args += ["--truncate"]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
             if dataset in {"kline_daily_qfq", "kline_daily"}:
                 if options.get("exchanges"):
                     args += ["--exchanges", ",".join(options["exchanges"]) if isinstance(options["exchanges"], (list, tuple)) else str(options["exchanges"])]
@@ -630,6 +705,27 @@ class TDXScheduler:
                     args += ["--job-id", str(options["job_id"])]
                 if options.get("workers"):
                     args += ["--workers", str(options["workers"])]
+            elif dataset == "stock_moneyflow":
+                # 个股资金流向初始化：需要明确起止日期与 job_id，否则脚本会因缺少 start_date 直接退出，
+                # 导致数据库状态仍停留在 queued。
+                args += ["--mode", "init"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
+            elif dataset == "stock_moneyflow_ts":
+                # Tushare moneyflow (TS) 初始化：需要起止日期 + job_id，可选 truncate
+                args += ["--mode", "init"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("truncate"):
+                    args += ["--truncate"]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
             elif dataset.startswith("tdx_board_"):
                 args += ["--dataset", dataset, "--mode", "init"]
                 if options.get("start_date"):
@@ -665,6 +761,17 @@ class TDXScheduler:
                     args += ["--job-id", str(options["job_id"])]
                 if options.get("workers"):
                     args += ["--workers", str(options["workers"])]
+            elif dataset == "adj_factor":
+                # Tushare adj_factor init: date range + optional truncate + job id
+                args += ["--mode", "init"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("truncate"):
+                    args += ["--truncate"]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
         elif mode == "rebuild" and dataset in {"adjust_daily", "kline_adjust_daily"}:
             which = options.get("which") or "both"
             args += ["--which", str(which)]
@@ -800,10 +907,32 @@ class TDXScheduler:
                 self._update_ingestion_schedule(schedule_id, last_run=start_ts, last_status=status, last_error=None)
             job_uuid = self._extract_job_id_from_cmd(cmd)
             log_job_id = job_uuid or run_id
-            self._log_ingestion_run(log_job_id, schedule_id, triggered_by, start_ts, status, summary, detail, log_lines)
+            # 对于 news_realtime 任务，正常成功时不再写 ingestion_logs，只在失败时写，避免高频调度产生大量日志行。
+            if not (dataset == "news_realtime" and status == "success"):
+                self._log_ingestion_run(
+                    log_job_id,
+                    schedule_id,
+                    triggered_by,
+                    start_ts,
+                    status,
+                    summary,
+                    detail,
+                    log_lines,
+                )
             if status != "success" and job_uuid is not None:
                 # Ensure the job row is finalized as failed when the script exits non-zero before updating DB itself
                 self._update_ingestion_job_status(job_uuid, status, start_ts, summary)
+            # 兜底：若提取到 job_id 但状态仍停留 queued/pending，至少将其从排队转为终态，避免僵尸队列。
+            if job_uuid is not None and status != "success":
+                try:
+                    sql = """
+                        UPDATE market.ingestion_jobs
+                           SET status=%s, finished_at=COALESCE(finished_at, NOW())
+                         WHERE job_id=%s AND status IN ('queued','pending')
+                    """
+                    self._execute(sql, (status, job_uuid))
+                except Exception:
+                    pass
         except Exception as exc:  # noqa: BLE001
             if schedule_id:
                 self._update_ingestion_schedule(schedule_id, last_run=start_ts, last_status="failed", last_error=str(exc))

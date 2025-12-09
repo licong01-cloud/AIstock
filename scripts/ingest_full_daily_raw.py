@@ -23,6 +23,7 @@ import psycopg2
 import psycopg2.extras as pgx
 import requests
 from requests import exceptions as req_exc
+from psycopg2 import errors as pg_errors
 
 pgx.register_uuid()
 
@@ -187,7 +188,10 @@ def upsert_kline_daily_raw(conn, ts_code: str, bars: List[Dict[str, Any]]) -> Tu
     if not values:
         return 0, None
     with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, values)
+        try:
+            pgx.execute_values(cur, sql, values)
+        except pg_errors.UniqueViolation as exc:
+            raise exc
     return len(values), last_date
 
 
@@ -203,6 +207,7 @@ def create_job(conn, job_type: str, summary: Dict[str, Any]) -> uuid.UUID:
             """,
             (job_id, job_type, json.dumps(summary, ensure_ascii=False)),
         )
+    return job_id
 
 
 def start_job(conn, job_id: uuid.UUID, summary: Dict[str, Any]) -> None:
@@ -215,7 +220,6 @@ def start_job(conn, job_id: uuid.UUID, summary: Dict[str, Any]) -> None:
             """,
             (json.dumps(summary, ensure_ascii=False), job_id),
         )
-    return job_id
 
 
 def finish_job(conn, job_id: uuid.UUID, status: str, summary: Dict[str, Any]) -> None:
@@ -341,6 +345,24 @@ def log_ingestion(conn, job_id: uuid.UUID, level: str, message: str) -> None:
     print(f"[{level_up}] job_id={job_id} {message}")
 
 
+def log_error(
+    conn,
+    run_id: uuid.UUID,
+    dataset: str,
+    ts_code: Optional[str],
+    message: str,
+    detail: Optional[Dict[str, Any]] = None,
+) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.ingestion_errors (run_id, dataset, ts_code, message, detail)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (run_id, dataset, ts_code, message, json.dumps(detail, ensure_ascii=False) if detail else None),
+        )
+
+
 def upsert_checkpoint(conn, run_id: uuid.UUID, ts_code: str, cursor_date: Optional[str]) -> None:
     with conn.cursor() as cur:
         cur.execute(
@@ -453,6 +475,24 @@ def main() -> None:
                         print(f"[OK] {ts_code}: inserted={inserted} rows last_date={last_date}")
                         log_ingestion(conn, job_id, "info", f"run {run_id} {ts_code} inserted={inserted} last_date={last_date}")
                     except Exception as exc:  # noqa: BLE001
+                        # 若出现主键冲突（通常意味着在未清空表的情况下重复执行 INIT），
+                        # 记录一条标准化的 pk_conflict 错误到 ingestion_errors，便于后续排查
+                        is_pk_conflict = isinstance(exc, pg_errors.UniqueViolation) or (
+                            "duplicate key value violates unique constraint" in str(exc)
+                        )
+                        if is_pk_conflict and run_id is not None:
+                            try:
+                                detail = {
+                                    "source": "python_init",
+                                    "mode": "init",
+                                    "start_date": args.start_date,
+                                    "end_date": args.end_date,
+                                    "error": str(exc),
+                                }
+                                log_error(conn, run_id, "kline_daily_raw", ts_code, "pk_conflict", detail)
+                            except Exception:
+                                # 日志写入失败不影响原有错误处理流程
+                                pass
                         stats["failed_codes"] += 1
                         update_job_summary(conn, job_id, {"failed_codes": 1})
                         complete_task(conn, task_id, False, 0.0, str(exc))

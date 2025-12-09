@@ -26,6 +26,7 @@ const NAV_GROUPS: {
       { href: "/watchlist", label: "⭐ 自选股票池" },
       { href: "/indicator-screening", label: "📊 指标选股" },
       { href: "/cloud-screening", label: "☁ 云选股" },
+      { href: "/market-news", label: "📰 市场资讯 / 市场快讯" },
       { href: "/main-force", label: "💰 主力选股" },
     ],
   },
@@ -51,6 +52,8 @@ const NAV_GROUPS: {
       { href: "/config", label: "⚙️ 环境配置" },
       { href: "/local-data", label: "🗄️ 本地数据管理" },
       { href: "/quant-models", label: "🧠 模型调度" },
+      { href: "/qlib", label: "📦 Qlib Snapshot 导出" },
+      { href: "/scheduler", label: "🗓️ RD-Agent 调度" },
     ],
   },
 ];

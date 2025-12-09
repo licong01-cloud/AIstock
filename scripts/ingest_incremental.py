@@ -29,7 +29,7 @@ except Exception:  # noqa: BLE001
 
 pgx.register_uuid()
 
-TDX_API_BASE = os.getenv("TDX_API_BASE", "http://localhost:8080")
+TDX_API_BASE = os.getenv("TDX_API_BASE", "http://localhost:19080")
 DB_CFG = dict(
     host=os.getenv("TDX_DB_HOST", "localhost"),
     port=int(os.getenv("TDX_DB_PORT", "5432")),

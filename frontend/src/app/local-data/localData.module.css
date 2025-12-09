@@ -1,0 +1,490 @@
+.formGroup {
+  margin-bottom: 8px;
+}
+
+.label {
+  font-size: 13px;
+  display: block;
+}
+
+.input {
+  margin-top: 4px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #d4d4d4;
+}
+
+.inputDisabled {
+  margin-top: 4px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #d4d4d4;
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.select {
+  margin-top: 4px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #d4d4d4;
+  font-size: 13px;
+}
+
+.gridTwo {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.gridOne {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rowWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.card {
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  background: #fafafa;
+  margin-bottom: 8px;
+}
+
+.btnPrimary {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: none;
+  background: #0ea5e9;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btnSecondary {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid #d4d4d4;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btnDanger {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid #dc2626;
+  background: #fee2e2;
+  color: #b91c1c;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btnWarn {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid #f97316;
+  background: #fff7ed;
+  color: #ea580c;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btnGhost {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid #d4d4d4;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.inputText {
+  margin-top: 4px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #d4d4d4;
+}
+
+.progressWrapper {
+  margin-top: 4px;
+  width: 100%;
+  background: #e5e7eb;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progressBar {
+  height: 8px;
+  background: #0f766e;
+}
+
+.mt4 {
+  margin-top: 4px;
+}
+
+.mt8 {
+  margin-top: 8px;
+}
+
+.mt6 {
+  margin-top: 6px;
+}
+
+.m0 {
+  margin: 0;
+}
+
+.mb2 {
+  margin-bottom: 2px;
+}
+
+.btnInline {
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid #d4d4d4;
+  background: #fff;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.btnSuccess {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: none;
+  background: #16a34a;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  min-width: 120px;
+}
+
+.textDangerSmall {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #b91c1c;
+}
+
+.headingSmall {
+  margin-top: 0;
+  font-size: 15px;
+}
+
+.textSmall {
+  font-size: 12px;
+  margin: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rowBetween {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.inputCheckbox {
+  margin-right: 4px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.gridTwoTight {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.labelSmall {
+  font-size: 12px;
+}
+
+.selectSmall {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid #d4d4d4;
+  font-size: 12px;
+}
+
+.textMuted {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.textMutedSmall {
+  font-size: 12px;
+  color: #4b5563;
+}
+
+.mb8 {
+  margin-bottom: 8px;
+}
+
+.contentCard {
+  background: #fff;
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+  font-size: 13px;
+}
+
+.note {
+  margin: 0 0 8px 0;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.sectionHeading {
+  margin: 0;
+  font-size: 22px;
+}
+
+.sectionSubtext {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #666;
+}
+
+.statsTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.statsHeaderCell {
+  padding: 6px;
+  border-bottom: 1px solid #e5e7eb;
+  color: #374151;
+  font-weight: 600;
+  text-align: left;
+}
+
+.statsCell {
+  padding: 6px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.statsCheckInfo {
+  font-size: 12px;
+}
+
+.page {
+  padding: 24px;
+}
+
+.sectionBlock {
+  margin-bottom: 16px;
+}
+
+.rowBetweenWrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.textMain {
+  color: #444;
+}
+
+.codeChip {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #f3f4f6;
+  font-size: 12px;
+}
+
+.tableWrapper {
+  width: 100%;
+  overflow-x: auto;
+  margin-top: 4px;
+}
+
+.tabBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 4px;
+  margin-bottom: 8px;
+}
+
+.tabBtn {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: #374151;
+  cursor: pointer;
+}
+
+.tabBtnActive {
+  background: #0f766e;
+  color: #fff;
+}
+
+.initGrid {
+  display: grid;
+  grid-template-columns: 1.1fr 1.1fr;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.noteSmall {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.textSuccess {
+  color: #16a34a;
+}
+
+.textDanger {
+  color: #dc2626;
+}
+
+.listLogs {
+  margin-top: 4px;
+  padding-left: 18px;
+  max-height: 180px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.cardSoft {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fafafa;
+}
+
+.cardInfo {
+  margin-bottom: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  font-size: 12px;
+}
+
+.gapSummary {
+  margin-top: 4px;
+  padding-left: 18px;
+}
+
+.gapDetails {
+  margin-top: 4px;
+}
+
+.gapSummaryHeader {
+  margin-bottom: 4px;
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.newsSources {
+  margin-top: 4px;
+}
+
+.textBold {
+  font-weight: 600;
+}
+
+.ml4 {
+  margin-left: 4px;
+}
+
+.rowWrapSmall {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.rowWrapTight {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.btnToggle {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid #d4d4d4;
+  background: #fff;
+  cursor: pointer;
+}
+
+.btnDelete {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid #dc2626;
+  background: #fee2e2;
+  color: #b91c1c;
+  cursor: pointer;
+}
+
+.btnWarnSoft {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid #f97316;
+  background: #fff7ed;
+  color: #ea580c;
+  cursor: pointer;
+}
+
+.btnSuccessSmall {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: none;
+  background: #22c55e;
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.cardDividerTop {
+  border-top: 1px dashed #e5e7eb;
+}
+
+.mb6 {
+  margin-bottom: 6px;
+}

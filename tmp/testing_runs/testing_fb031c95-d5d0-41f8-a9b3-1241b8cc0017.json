@@ -1,0 +1,164 @@
+{
+  "results": [
+    {
+      "name": "GET /api/quote",
+      "success": true,
+      "detail": "single=1 multi=2"
+    },
+    {
+      "name": "GET /api/kline",
+      "success": true,
+      "detail": "items=8302"
+    },
+    {
+      "name": "GET /api/minute",
+      "success": true,
+      "detail": "date=20251203 items=240"
+    },
+    {
+      "name": "_test_trade",
+      "success": false,
+      "detail": "/api/trade: missing List"
+    },
+    {
+      "name": "GET /api/search",
+      "success": true,
+      "detail": "matches=50"
+    },
+    {
+      "name": "GET /api/stock-info",
+      "success": true,
+      "detail": "contains quote/kline_day/minute"
+    },
+    {
+      "name": "GET /api/codes",
+      "success": true,
+      "detail": "total=5464 sample=600000"
+    },
+    {
+      "name": "GET /api/codes?exchange=sh",
+      "success": true,
+      "detail": "count=2299"
+    },
+    {
+      "name": "POST /api/batch-quote",
+      "success": true,
+      "detail": "items=3"
+    },
+    {
+      "name": "GET /api/kline-history",
+      "success": true,
+      "detail": "items=50"
+    },
+    {
+      "name": "GET /api/index",
+      "success": true,
+      "detail": "items=100"
+    },
+    {
+      "name": "GET /api/server-status",
+      "success": true,
+      "detail": "status=running"
+    },
+    {
+      "name": "GET /api/etf",
+      "success": true,
+      "detail": "items=5"
+    },
+    {
+      "name": "GET /api/trade-history",
+      "success": true,
+      "detail": "items=10"
+    },
+    {
+      "name": "GET /api/minute-trade-all",
+      "success": true,
+      "detail": "items=4452"
+    },
+    {
+      "name": "GET /api/workday",
+      "success": true,
+      "detail": "is_workday=True"
+    },
+    {
+      "name": "GET /api/market-count",
+      "success": true,
+      "detail": "total=48624"
+    },
+    {
+      "name": "GET /api/stock-codes",
+      "success": true,
+      "detail": "items=10"
+    },
+    {
+      "name": "GET /api/etf-codes",
+      "success": true,
+      "detail": "items=10"
+    },
+    {
+      "name": "GET /api/kline-all",
+      "success": true,
+      "detail": "items=200 time=0.45s"
+    },
+    {
+      "name": "GET /api/index/all",
+      "success": true,
+      "detail": "items=200 time=0.62s"
+    },
+    {
+      "name": "GET /api/trade-history/full",
+      "success": true,
+      "detail": "items=300 time=0.12s"
+    },
+    {
+      "name": "GET /api/workday/range",
+      "success": true,
+      "detail": "days=8"
+    },
+    {
+      "name": "GET /api/income",
+      "success": true,
+      "detail": "items=3"
+    },
+    {
+      "name": "GET /api/tasks",
+      "success": true,
+      "detail": "count=8"
+    },
+    {
+      "name": "POST /api/tasks/pull-kline",
+      "success": true,
+      "detail": "task_id=9cbab861-6f35-43ea-a4ae-b05853a2a560"
+    },
+    {
+      "name": "POST /api/tasks/pull-trade",
+      "success": true,
+      "detail": "task_id=63ab1ec5-b7c1-4536-afbc-e32bc7f0b106"
+    },
+    {
+      "name": "GET /api/tasks/9cbab861-6f35-43ea-a4ae-b05853a2a560",
+      "success": true,
+      "detail": "running"
+    },
+    {
+      "name": "POST /api/tasks/9cbab861-6f35-43ea-a4ae-b05853a2a560/cancel",
+      "success": true,
+      "detail": "success"
+    },
+    {
+      "name": "GET /api/tasks/63ab1ec5-b7c1-4536-afbc-e32bc7f0b106",
+      "success": true,
+      "detail": "running"
+    },
+    {
+      "name": "POST /api/tasks/63ab1ec5-b7c1-4536-afbc-e32bc7f0b106/cancel",
+      "success": true,
+      "detail": "success"
+    }
+  ],
+  "summary": {
+    "total": 31,
+    "success": 30,
+    "failed": 1
+  }
+}

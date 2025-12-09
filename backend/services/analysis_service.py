@@ -1325,22 +1325,91 @@ def generate_trend_pdf_from_record(record_id: int) -> tuple[bytes, str]:
     stock_info = record.get("stock_info") or {}
     final_predictions = record.get("final_predictions") or []
 
+    # 综合趋势评级与多周期摘要
     rating_val = _compute_trend_rating_from_horizons(final_predictions)
     summary_text = _build_trend_summary_text(final_predictions, rating_val)
 
-    agents_results: dict[str, Any] = {
-        "trend": {
+    # 1. 构造各分析师的详细报告：优先使用 raw_text，若为空则回退到结论 JSON
+    agents_results: dict[str, Any] = {}
+    for row in analysts_rows:
+        key_raw = row.get("analyst_key") or ""
+        try:
+            analyst_id = row.get("id")
+            if not key_raw and analyst_id is not None:
+                key_raw = f"analyst_{analyst_id}"
+        except Exception:  # noqa: BLE001
+            pass
+
+        agent_key = str(key_raw or "analyst")
+        agent_name = str(row.get("analyst_name") or row.get("role") or agent_key)
+
+        raw_text = row.get("raw_text")
+        analysis_text: str
+        if raw_text:
+            analysis_text = str(raw_text)
+        else:
+            cj = row.get("conclusion_json")
+            try:
+                analysis_text = json.dumps(cj, ensure_ascii=False, indent=2)
+            except Exception:  # noqa: BLE001
+                analysis_text = str(cj)
+
+        agents_results[agent_key] = {
+            "agent_name": agent_name,
+            "analysis": analysis_text,
+        }
+
+    # 附加一个“趋势分析总结”条目，便于在 PDF 中展示整体结论
+    if "trend" not in agents_results:
+        agents_results["trend"] = {
             "agent_name": "趋势分析总结",
             "analysis": summary_text,
         }
-    }
 
+    # 2. 构造“团队综合讨论”：包含参与分析师名单 + 演化过程摘要
     analyst_names = ", ".join(
         str(row.get("analyst_name")) for row in analysts_rows if row.get("analyst_name")
     )
-    discussion_result: str = ""
+
+    discussion_lines: list[str] = []
     if analyst_names:
-        discussion_result = f"参与分析师：{analyst_names}"
+        discussion_lines.append(f"参与分析师：{analyst_names}")
+
+    evolution = record.get("prediction_evolution") or []
+    try:
+        steps = list(evolution or [])
+    except TypeError:
+        steps = []
+
+    if steps:
+        if discussion_lines:
+            discussion_lines.append("")
+        discussion_lines.append("分析与讨论过程：")
+        for idx, step in enumerate(steps, start=1):
+            title = None
+            summary = None
+            if isinstance(step, dict):
+                title = step.get("title") or step.get("label") or step.get("stage")
+                summary = (
+                    step.get("summary")
+                    or step.get("description")
+                    or step.get("detail")
+                )
+            if not title:
+                title = f"步骤 {idx}"
+            if summary is None:
+                summary = step
+            try:
+                summary_str = (
+                    json.dumps(summary, ensure_ascii=False, indent=2)
+                    if not isinstance(summary, (str, int, float))
+                    else str(summary)
+                )
+            except Exception:  # noqa: BLE001
+                summary_str = str(summary)
+            discussion_lines.append(f"{idx}. {title}：{summary_str}")
+
+    discussion_result = "\n".join(discussion_lines) if discussion_lines else ""
 
     decision_lines: list[str] = []
     if rating_val:

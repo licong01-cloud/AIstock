@@ -18,7 +18,7 @@ def _db_cfg() -> Dict[str, Any]:
     """
 
     return {
-        "host": os.getenv("TDX_DB_HOST", "localhost"),
+        "host": os.getenv("TDX_DB_HOST", "127.0.0.1"),
         "port": int(os.getenv("TDX_DB_PORT", "5432")),
         "user": os.getenv("TDX_DB_USER", "postgres"),
         "password": os.getenv("TDX_DB_PASSWORD", ""),

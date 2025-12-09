@@ -283,7 +283,7 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
         return "tdx_api"
     if ds.startswith("tdx_board_"):
         return "tushare"
-    if ds in {"stock_moneyflow"}:
+    if ds in {"stock_moneyflow", "stock_moneyflow_ts", "stock_basic", "stock_st", "bak_basic"}:
         return "tushare"
     if ds in {"kline_weekly"}:
         return "derived_from_kline_daily_qfq"
@@ -414,6 +414,31 @@ def _job_status(job_id: uuid.UUID) -> Dict[str, Any]:
             percent = min(100, int((done_days / total_days) * 100))
             total = total_days
             done = done_days
+        else:
+            # 兼容纯 Python 脚本（如 adj_factor）写入的 summary.counters / summary.progress
+            counters_from_summary = summary.get("counters") or {}
+            try:
+                total_c = int(counters_from_summary.get("total") or 0)
+                done_c = int(counters_from_summary.get("done") or 0)
+            except Exception:  # noqa: BLE001
+                total_c = 0
+                done_c = 0
+            if total_c > 0:
+                total = total_c
+                done = done_c
+                success = int(counters_from_summary.get("success") or success)
+                failed = int(counters_from_summary.get("failed") or failed)
+                try:
+                    # 若脚本已经写入 progress，优先使用；否则按 done/total 计算
+                    progress_val = counters_from_summary.get("progress")
+                    if progress_val is None:
+                        progress_val = summary.get("progress")
+                    if progress_val is not None:
+                        percent = max(0, min(100, int(float(progress_val))))
+                    else:
+                        percent = min(100, int((done / total) * 100))
+                except Exception:  # noqa: BLE001
+                    percent = min(100, int((done / total) * 100)) if total > 0 else 0
 
     log_rows = _fetchall(
         """
@@ -451,14 +476,17 @@ def _job_status(job_id: uuid.UUID) -> Dict[str, Any]:
 
     stats = summary.get("stats") or {}
     inserted_rows = int(summary.get("inserted_rows") or stats.get("inserted_rows") or 0)
+
+    # 优先合并脚本写入的 counters，以便展示更准确的统计
+    counters_from_summary = summary.get("counters") or {}
     counters = {
-        "total": total,
-        "done": done,
-        "running": running,
-        "pending": pending,
-        "failed": failed,
-        "success": success,
-        "inserted_rows": inserted_rows,
+        "total": counters_from_summary.get("total", total),
+        "done": counters_from_summary.get("done", done),
+        "running": counters_from_summary.get("running", running),
+        "pending": counters_from_summary.get("pending", pending),
+        "failed": counters_from_summary.get("failed", failed),
+        "success": counters_from_summary.get("success", success),
+        "inserted_rows": counters_from_summary.get("inserted_rows", inserted_rows),
         "success_codes": int(summary.get("success_codes") or stats.get("success_codes") or 0),
     }
 
@@ -540,10 +568,13 @@ def _upsert_ingestion_schedule_entry(
 
 def _ensure_default_ingestion_schedules() -> List[Dict[str, Any]]:
     defaults = [
-        ("kline_daily_qfq", "incremental", "daily", True, {}),
-        ("kline_daily_raw", "incremental", "daily", True, {}),
-        ("kline_minute_raw", "incremental", "10m", True, {}),
+        # 说明：
+        # - kline_daily_qfq / kline_daily_raw / kline_minute_raw 的初始化和增量
+        #   已统一切换为 Go 实现（init: /api/ingestion/init，incremental: /api/ingestion/incremental），
+        #   不再通过 Python 调度器执行，因此这里不再为它们创建默认 schedule，
+        #   以避免误触发 Python 版脚本。
         ("stock_moneyflow", "incremental", "daily", True, {}),
+        ("stock_moneyflow_ts", "incremental", "daily", True, {}),
         ("kline_weekly", "incremental", "daily", True, {}),
         ("trade_agg_5m", "incremental", "10m", True, {"freq_minutes": 5, "symbols_scope": "watchlist"}),
     ]
@@ -655,7 +686,8 @@ async def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
     # 目前仅支持通过 Go 服务执行以下初始化：
     # - kline_minute_raw: 分钟线 RAW，全量 COPY 入库
     # - kline_daily_raw_go: 未复权日线 RAW（Go 直连版），全量 COPY 入库
-    if dataset not in {"kline_minute_raw", "kline_daily_raw_go"}:
+    # - kline_daily_qfq_go: 前复权日线 QFQ（Go 直连版），全量 COPY 入库
+    if dataset not in {"kline_minute_raw", "kline_daily_raw_go", "kline_daily_qfq_go"}:
         raise HTTPException(status_code=400, detail="unsupported dataset for init")
     options = dict(payload.options or {})
     summary = {"datasets": [dataset], **options}
@@ -825,6 +857,76 @@ async def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
 
         return {"job_id": str(job_id), "task_id": task_id}
 
+    # 前复权日线（Go 直连版）初始化：调用新的 TDX Go API，将结果 COPY 至 kline_daily_qfq
+    if dataset == "kline_daily_qfq_go":
+        workers = int(options.get("workers") or 1)
+        truncate_before = bool(options.get("truncate"))
+        max_rows_per_chunk = int(options.get("max_rows_per_chunk") or 500_000)
+        codes = options.get("codes") or []
+
+        go_payload: Dict[str, Any] = {
+            "job_id": str(job_id),
+            "codes": codes,
+            "workers": workers,
+            "options": {
+                "truncate_before": truncate_before,
+                "max_rows_per_chunk": max_rows_per_chunk,
+                "source": "tdx_api",
+            },
+        }
+
+        base = os.getenv("TDX_API_BASE", "http://localhost:19080").rstrip("/")
+        url = f"{base}/api/tasks/ingest-daily-qfq-init"
+
+        try:
+            resp = requests.post(url, json=go_payload, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            err_summary = {**summary, "error": str(exc), "phase": "create_go_task"}
+            _execute(
+                """
+                UPDATE market.ingestion_jobs
+                   SET status='failed', finished_at=NOW(), summary=%s
+                 WHERE job_id=%s
+                """,
+                (_json_dump(err_summary), job_id),
+            )
+            raise HTTPException(status_code=502, detail=f"failed to start TDX daily qfq init task: {exc}")
+
+        if isinstance(data, dict) and data.get("code") not in (0, None):
+            msg = str(data)
+            err_summary = {**summary, "error": msg, "phase": "create_go_task"}
+            _execute(
+                """
+                UPDATE market.ingestion_jobs
+                   SET status='failed', finished_at=NOW(), summary=%s
+                 WHERE job_id=%s
+                """,
+                (_json_dump(err_summary), job_id),
+            )
+            raise HTTPException(status_code=502, detail=f"TDX daily qfq init task error: {msg}")
+
+        task_id: Optional[str] = None
+        payload_data = data.get("data") if isinstance(data, dict) else None
+        if isinstance(payload_data, dict):
+            raw_tid = payload_data.get("task_id")
+            if raw_tid is not None:
+                task_id = str(raw_tid)
+
+        if task_id is not None:
+            summary_with_task = {**summary, "go_task_id": task_id}
+            _execute(
+                """
+                UPDATE market.ingestion_jobs
+                   SET summary=%s
+                 WHERE job_id=%s
+                """,
+                (_json_dump(summary_with_task), job_id),
+            )
+
+        return {"job_id": str(job_id), "task_id": task_id}
+
     # 其它历史 init 任务路径（如旧版 kline_daily_raw Python 版）已关闭。
     raise HTTPException(status_code=400, detail="init path not implemented for this dataset")
 
@@ -919,11 +1021,53 @@ async def create_default_ingestion_schedules() -> Dict[str, Any]:
 @router.post("/ingestion/run")
 async def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
     payload.validate_mode()
+    dataset = (payload.dataset or "").strip().lower()
+    mode = (payload.mode or "").strip().lower()
+    options = dict(payload.options or {})
+
+    # 前复权日线、未复权日线、分钟线的初始化和增量
+    # 已统一为 Go 端实现：
+    #   - init:        /api/ingestion/init
+    #   - incremental: /api/ingestion/incremental
+    # 这里显式禁止通过 Python 调度入口 /api/ingestion/run 触发，
+    # 避免应用误走 Python 版脚本导致行为不一致或无法取消任务。
+    if dataset in {"kline_daily_qfq", "kline_daily_raw", "kline_minute_raw"} and mode in {"init", "incremental"}:
+        raise HTTPException(
+            status_code=400,
+            detail="dataset must be ingested via Go APIs (use /api/ingestion/init or /api/ingestion/incremental)",
+        )
+
+    # 业务校验：三支新 Tushare 数据集
+    if dataset == "stock_basic":
+        if mode != "init":
+            raise HTTPException(status_code=400, detail="stock_basic only supports init mode")
+    elif dataset == "stock_st":
+        # init: 需要 start_date/end_date；incremental: start_date 可选
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="stock_st init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="stock_st init requires end_date")
+    elif dataset == "bak_basic":
+        # init: 需要 start_date/end_date；incremental: start_date 可选
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="bak_basic init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="bak_basic init requires end_date")
+    elif dataset == "stock_moneyflow_ts":
+        # init: 需要起止日期；incremental: start_date 可选；支持可选 truncate
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="stock_moneyflow_ts init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="stock_moneyflow_ts init requires end_date")
+
     summary = {"dataset": payload.dataset, "mode": payload.mode, **(payload.options or {})}
     job_type = "init" if payload.mode == "init" else "incremental"
     job_id = _create_job(job_type, summary)
-    options = dict(payload.options or {})
     options["job_id"] = str(job_id)
+
+    # 为未复权日线增量任务提供默认并行度：当前端未显式传入 workers 时，使用一个适中的默认值。
+    if payload.dataset == "kline_daily_raw" and payload.mode == "incremental" and "workers" not in options:
+        options["workers"] = 4
 
     # 对 trade_agg_5m 增量任务：前端通过 options.args 传入完整命令行片段，
     # 其中可能已经包含一个前端生成的 --job-id。这里需要将其替换为我们刚刚
@@ -1036,6 +1180,32 @@ async def run_ingestion_schedule(schedule_id: uuid.UUID = Path(...)) -> Dict[str
     return {"run_id": str(run_id), "schedule": _serialize_ingestion_schedule(data)}
 
 
+@router.delete("/ingestion/schedule/{schedule_id}")
+async def delete_ingestion_schedule(schedule_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
+    """Delete a single ingestion schedule and remove it from in-memory scheduler.
+
+    仅删除调度配置本身，不会删除历史任务或日志记录。
+    """
+
+    # Ensure it exists first (will raise 404 if not found)
+    _ensure_ingestion_schedule(schedule_id)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM market.ingestion_schedules
+                 WHERE schedule_id=%s
+                """,
+                (schedule_id,),
+            )
+
+    # Refresh in-memory schedules so background scheduler drops this job
+    scheduler.refresh_schedules()
+
+    return {"deleted": True, "schedule_id": str(schedule_id)}
+
+
 @router.get("/ingestion/logs")
 async def list_ingestion_logs(
     limit: int = Query(50),
@@ -1128,12 +1298,36 @@ async def bulk_delete_ingestion_logs(
     return {"deleted": int(deleted)}
 
 
-@router.delete("/ingestion/job/{job_id}")
+@router.delete("/ingestion/jobs/queued")
+async def delete_queued_ingestion_jobs() -> Dict[str, Any]:
+    """Bulk delete all queued/pending ingestion jobs and their tasks.
+
+    仅清理队列中的待运行作业及子任务，不影响已完成/正在运行的任务。
+    """
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM market.ingestion_job_tasks
+                 WHERE job_id IN (
+                     SELECT job_id FROM market.ingestion_jobs WHERE status IN ('queued','pending')
+                 )
+                """
+            )
+            cur.execute(
+                """
+                DELETE FROM market.ingestion_jobs
+                 WHERE status IN ('queued','pending')
+                """
+            )
+            deleted = cur.rowcount
+    return {"deleted": deleted}
+
 async def delete_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
     """Delete a historical ingestion job and its related records.
 
-    仅允许删除非运行中的任务（状态非 running/queued/pending），
-    防止误删调度中的任务。主要用于清理调试期间产生的失败/测试任务。
+    仅删除数据库记录，不会取消正在运行的后台任务。
     """
 
     with get_conn() as conn:
@@ -1374,6 +1568,9 @@ async def get_data_gaps(
             cur.execute("SET statement_timeout = '300s'")
             
             # Efficiently find which trading days have data
+            # 注意：date_column 在分钟/日线表中通常是 timestamp/timestamptz，需要按日期比较。
+            # 因此前端看到的 data_kind=kline_minute_raw 等，需要使用 {date_column}::date = cal_date，
+            # 否则严格相等比较会导致始终匹配不到任何行，从而错误地认为所有交易日都缺失。
             sql = f"""
                 SELECT cal_date AS d
                   FROM market.trading_calendar
@@ -1381,7 +1578,7 @@ async def get_data_gaps(
                    AND cal_date >= %s AND cal_date <= %s
                    AND EXISTS (
                        SELECT 1 FROM {table_name}
-                        WHERE {date_column} = cal_date
+                        WHERE {date_column}::date = cal_date
                    )
                  ORDER BY cal_date
             """
@@ -1424,7 +1621,8 @@ async def get_data_gaps(
     elif data_kind in (
         "kline_daily_qfq", "kline_daily_raw", 
         "kline_minute_raw", "kline_weekly", 
-        "stock_moneyflow", "minute_1m"
+        "stock_moneyflow", "stock_moneyflow_ts", "minute_1m",
+        "stock_st", "bak_basic"
     ):
         code_col = "ts_code"
     elif data_kind.startswith("tdx_board_"):
@@ -1496,19 +1694,271 @@ async def get_data_gaps(
             pass
 
     return result_payload
-# ---------------------------------------------------------------------------
-# Trading calendar helper（供“补齐到最新交易日”使用）
-# ---------------------------------------------------------------------------
 
+
+@router.get("/ingestion/auto-range")
+async def get_ingestion_auto_range(
+    data_kind: str = Query(..., description=" data_stats_config.data_kind"),
+) -> Dict[str, Any]:
+    """Calculate start_date and latest_trading_date for incremental catch-up.
+
+    -  data_kind
+    -  start_date: next trading day after max_date, or 1990-01-01 if no data
+    -  latest_trading_date: MAX(cal_date WHERE is_trading)
+    """
+
+    # 1)  data_stats
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT market.refresh_data_stats();")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"refresh_data_stats failed: {exc}") from exc
+
+    # 2)  data_stats_config  table_name
+    cfg_rows = _fetchall(
+        """
+        SELECT data_kind, table_name
+          FROM market.data_stats_config
+         WHERE data_kind = %s AND enabled
+        """,
+        (data_kind,),
+    )
+    if not cfg_rows:
+        raise HTTPException(status_code=404, detail="unknown or disabled data_kind")
+    cfg = cfg_rows[0]
+    table_name = str(cfg.get("table_name") or "").strip()
+
+    # 3)  data_stats  max_date
+    stats_row = _fetchone(
+        """
+        SELECT max_date
+          FROM market.data_stats
+         WHERE data_kind = %s
+        """,
+        (data_kind,),
+    )
+    current_max_date: Optional[dt.date] = None
+    if stats_row is not None:
+        current_max_date = stats_row.get("max_date")
+
+    # 4) latest_trading_date：仅考虑当前日期及之前的交易日，避免拿到未来计划交易日
+    latest_rows = _fetchall(
+        """
+        SELECT MAX(cal_date) AS latest
+          FROM market.trading_calendar
+         WHERE is_trading = TRUE
+           AND cal_date <= CURRENT_DATE
+        """,
+    )
+    latest_trading_date: Optional[dt.date] = None
+    if latest_rows:
+        latest_trading_date = latest_rows[0].get("latest")
+    if latest_trading_date is None:
+        raise HTTPException(status_code=400, detail="no trading_calendar rows; please sync calendar first")
+
+    # 5)  start_date
+    if current_max_date is None:
+        start_date = dt.date(1990, 1, 1)
+        has_data = False
+    else:
+        next_rows = _fetchall(
+            """
+            SELECT MIN(cal_date) AS next_trading
+              FROM market.trading_calendar
+             WHERE is_trading = TRUE
+               AND cal_date > %s
+            """,
+            (current_max_date,),
+        )
+        next_trading: Optional[dt.date] = None
+        if next_rows:
+            next_trading = next_rows[0].get("next_trading")
+        if next_trading is None:
+            start_date = latest_trading_date
+        else:
+            start_date = next_trading
+        has_data = True
+
+    return {
+        "data_kind": data_kind,
+        "table_name": table_name,
+        "start_date": start_date.isoformat(),
+        "latest_trading_date": latest_trading_date.isoformat(),
+        "current_max_date": current_max_date.isoformat() if isinstance(current_max_date, dt.date) else None,
+        "has_data": has_data,
+    }
+
+
+class GoIncrementalRequest(BaseModel):
+    data_kind: str
+    start_date: str
+    workers: int = 1
+
+
+@router.post("/ingestion/incremental")
+async def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any]:
+    """For specific TDX datasets, reuse Go init handlers as incremental tasks.
+
+    - data_kind: kline_daily_raw_go / kline_daily_qfq_go / kline_minute_raw
+    - start_date 
+    - end_date / target_date latest_trading_date
+    - truncate_before false
+    """
+    
+    data_kind = (payload.data_kind or "").strip()
+    if data_kind not in {"kline_daily_raw_go", "kline_daily_qfq_go", "kline_minute_raw"}:
+        raise HTTPException(status_code=400, detail="unsupported data_kind for Go incremental")
+    
+    try:
+        start_date = dt.date.fromisoformat(payload.start_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid start_date format, expected YYYY-MM-DD")
+    
+    # latest_trading_date：同样仅取当前日期及以前的交易日
+    rows = _fetchall(
+        """
+        SELECT MAX(cal_date) AS latest
+          FROM market.trading_calendar
+         WHERE is_trading = TRUE
+           AND cal_date <= CURRENT_DATE
+        """,
+    )
+    latest = rows[0].get("latest") if rows else None
+    if latest is None:
+        raise HTTPException(status_code=400, detail="no trading_calendar rows; please sync calendar first")
+    if not isinstance(latest, dt.date):
+        try:
+            latest_trading_date = dt.date.fromisoformat(str(latest))
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail="invalid latest_trading_date in DB")
+    else:
+        latest_trading_date = latest
+    
+    workers = payload.workers if payload.workers and payload.workers > 0 else 1
+    
+    summary: Dict[str, Any] = {
+        "data_kind": data_kind,
+        "mode": "incremental",
+        "via": "go_init",
+        "start_date": start_date.isoformat(),
+        "end_date": latest_trading_date.isoformat(),
+        "workers": workers,
+    }
+    job_id = _create_job("incremental", summary)
+    
+    base = os.getenv("TDX_API_BASE", "http://localhost:19080").rstrip("/")
+    tz = dt.timezone(dt.timedelta(hours=8))
+    
+    if data_kind == "kline_minute_raw":
+        # Go start_time 
+        start_dt = dt.datetime.combine(start_date, dt.time.min).replace(tzinfo=tz)
+        go_payload: Dict[str, Any] = {
+            "job_id": str(job_id),
+            "codes": [],
+            "start_time": start_dt.isoformat(),
+            "workers": workers,
+            "options": {
+                "truncate_before": False,
+                "max_rows_per_chunk": 500_000,
+                "source": "tdx_api",
+            },
+        }
+        url = f"{base}/api/tasks/ingest-minute-raw-init"
+    elif data_kind == "kline_daily_raw_go":
+        start_dt = dt.datetime.combine(start_date, dt.time.min).replace(tzinfo=tz)
+        go_payload = {
+            "job_id": str(job_id),
+            "codes": [],
+            "start_time": start_dt.isoformat(),
+            "workers": workers,
+            "options": {
+                "truncate_before": False,
+                "max_rows_per_chunk": 500_000,
+                "source": "tdx_api",
+            },
+        }
+        url = f"{base}/api/tasks/ingest-daily-raw-init"
+    else:  # kline_daily_qfq_go
+        go_payload = {
+            "job_id": str(job_id),
+            "codes": [],
+            "workers": workers,
+            "options": {
+                "truncate_before": False,
+                "max_rows_per_chunk": 500_000,
+                "source": "tdx_api",
+            },
+        }
+        url = f"{base}/api/tasks/ingest-daily-qfq-init"
+    
+    try:
+        resp = requests.post(url, json=go_payload, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        err_summary = {**summary, "error": str(exc), "phase": "create_go_task"}
+        _execute(
+            """
+            UPDATE market.ingestion_jobs
+               SET status='failed', finished_at=NOW(), summary=%s
+             WHERE job_id=%s
+            """,
+            (_json_dump(err_summary), job_id),
+        )
+        raise HTTPException(status_code=502, detail=f"failed to start Go incremental task: {exc}")
+    
+    if isinstance(data, dict) and data.get("code") not in (0, None):
+        msg = str(data)
+        err_summary = {**summary, "error": msg, "phase": "create_go_task"}
+        _execute(
+            """
+            UPDATE market.ingestion_jobs
+               SET status='failed', finished_at=NOW(), summary=%s
+             WHERE job_id=%s
+            """,
+            (_json_dump(err_summary), job_id),
+        )
+        raise HTTPException(status_code=502, detail=f"Go incremental task error: {msg}")
+    
+    task_id: Optional[str] = None
+    payload_data = data.get("data") if isinstance(data, dict) else None
+    if isinstance(payload_data, dict):
+        raw_tid = payload_data.get("task_id")
+        if raw_tid is not None:
+            task_id = str(raw_tid)
+    
+    if task_id is not None:
+        summary_with_task = {**summary, "go_task_id": task_id}
+        _execute(
+            """
+            UPDATE market.ingestion_jobs
+               SET summary=%s
+             WHERE job_id=%s
+            """,
+            (_json_dump(summary_with_task), job_id),
+        )
+    
+    return {
+        "job_id": str(job_id),
+        "task_id": task_id,
+        "data_kind": data_kind,
+        "start_date": start_date.isoformat(),
+        "end_date": latest_trading_date.isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Trading calendar helper
+# ---------------------------------------------------------------------------
 
 @router.get("/trading/latest-day")
 async def get_latest_trading_day() -> Dict[str, Any]:
     """Return the latest trading day from market.trading_calendar.
 
-    与 tdx_backend 中新增的 /api/trading/latest-day 语义保持一致，
-    供前端“补齐到最新交易日”按钮使用。
+    tdx_backend /api/trading/latest-day 
     """
-
+    
     rows = _fetchall(
         """
         SELECT MAX(cal_date) AS latest

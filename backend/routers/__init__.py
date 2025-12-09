@@ -11,6 +11,9 @@ from . import sector_strategy
 from . import longhubang
 from . import model_scheduler
 from . import ingestion
+from . import settings
+from . import config_env
+from . import smart_monitor
 
 __all__ = [
     "health",
@@ -26,4 +29,7 @@ __all__ = [
     "longhubang",
     "model_scheduler",
     "ingestion",
+    "settings",
+    "config_env",
+    "smart_monitor",
 ]

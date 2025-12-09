@@ -5,6 +5,8 @@ import math
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import psycopg2.extras as pg_extras
+
 from ..db.pg_pool import get_conn
 
 

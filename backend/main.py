@@ -25,7 +25,12 @@ from .routers import (
     model_scheduler,
     ingestion,
     quant,
+    news,
+    settings,
+    config_env,
+    smart_monitor,
 )
+from .qlib_exporter.router import router as qlib_router
 from .ingestion.tdx_scheduler import scheduler as ingestion_scheduler
 
 
@@ -72,6 +77,11 @@ def create_app() -> FastAPI:
     app.include_router(sector_strategy.router, prefix="/api/v1")
     app.include_router(longhubang.router, prefix="/api/v1")
     app.include_router(model_scheduler.router, prefix="/api/v1")
+    app.include_router(news.router, prefix="/api/v1")
+    app.include_router(settings.router, prefix="/api/v1")
+    app.include_router(config_env.router, prefix="/api/v1")
+    app.include_router(smart_monitor.router, prefix="/api/v1")
+    app.include_router(qlib_router, prefix="")
 
     # ingestion / 本地数据管理接口：保持与旧 tdx_backend 相同的 /api/* 路径
     app.include_router(ingestion.router, prefix="")

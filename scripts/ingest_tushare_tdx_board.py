@@ -137,6 +137,63 @@ def _create_job(conn, job_type: str, summary: Dict[str, Any]) -> uuid.UUID:
 
 
 def _update_job_summary(conn, job_id: uuid.UUID, patch: Dict[str, Any]) -> None:
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT summary FROM market.ingestion_jobs WHERE job_id=%s", (job_id,))
+            row = cur.fetchone()
+            base: Dict[str, Any] = {}
+            if row and row[0]:
+                try:
+                    base = json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
+                except Exception:
+                    base = {}
+            for k, v in (patch or {}).items():
+                if isinstance(v, (int, float)) and isinstance(base.get(k), (int, float)):
+                    base[k] = type(base.get(k))(base.get(k, 0) + v)
+                else:
+                    base[k] = v
+            cur.execute(
+                "UPDATE market.ingestion_jobs SET summary=%s WHERE job_id=%s",
+                (_json(base), job_id),
+            )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        # 进度更新失败不应中断主流程，这里不再向上抛出异常
+
+
+def _update_task_progress(conn, task_id: uuid.UUID, progress: float) -> None:
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE market.ingestion_job_tasks
+                   SET progress=%s, updated_at=NOW()
+                 WHERE task_id=%s
+                """,
+                (progress, task_id),
+            )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        # 同样不向上抛出，避免影响主流程
+
+
+def _finish_job(conn, job_id: uuid.UUID, status: str, summary: Dict[str, Any]) -> None:
+    """Finalize job while preserving existing summary fields.
+
+    原先的实现会用新的 summary 完全覆盖掉旧的 summary，导致 dataset/mode/
+    start_date/end_date 等元信息在任务结束后丢失。这里改为：
+    - 先读取当前 summary 并反序列化为 dict；
+    - 与传入的 summary 做浅层合并（新值覆盖旧键）；
+    - 再写回，确保之前写入的元信息仍然保留。
+    """
     with conn.cursor() as cur:
         cur.execute("SELECT summary FROM market.ingestion_jobs WHERE job_id=%s", (job_id,))
         row = cur.fetchone()
@@ -144,40 +201,16 @@ def _update_job_summary(conn, job_id: uuid.UUID, patch: Dict[str, Any]) -> None:
         if row and row[0]:
             try:
                 base = json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
-            except Exception:
+            except Exception:  # noqa: BLE001
                 base = {}
-        for k, v in (patch or {}).items():
-            if isinstance(v, (int, float)) and isinstance(base.get(k), (int, float)):
-                base[k] = type(base.get(k))(base.get(k, 0) + v)
-            else:
-                base[k] = v
-        cur.execute(
-            "UPDATE market.ingestion_jobs SET summary=%s WHERE job_id=%s",
-            (_json(base), job_id),
-        )
-
-
-def _update_task_progress(conn, task_id: uuid.UUID, progress: float) -> None:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE market.ingestion_job_tasks
-               SET progress=%s, updated_at=NOW()
-             WHERE task_id=%s
-            """,
-            (progress, task_id),
-        )
-
-
-def _finish_job(conn, job_id: uuid.UUID, status: str, summary: Dict[str, Any]) -> None:
-    with conn.cursor() as cur:
+        base.update(summary or {})
         cur.execute(
             """
             UPDATE market.ingestion_jobs
                SET status=%s, finished_at=NOW(), summary=%s
              WHERE job_id=%s
             """,
-            (status, _json(summary), job_id),
+            (status, _json(base), job_id),
         )
 
 
@@ -242,6 +275,25 @@ def upsert_board_index(conn, rows: List[Dict[str, Any]]) -> int:
     return len(values)
 
 
+def insert_board_daily_init(conn, rows: List[Dict[str, Any]]) -> int:
+    """Full-init insert for tdx_board_daily (wrapper around upsert).
+
+    与 index/member 一致，init 路径在上游已经 TRUNCATE 了目标表，因此直接
+    调用 upsert 既能满足语义，又避免重复实现一套独立的 INSERT 语句。
+    """
+    return upsert_board_daily(conn, rows)
+
+
+def insert_board_index_init(conn, rows: List[Dict[str, Any]]) -> int:
+    """Full-init insert for tdx_board_index.
+
+    For now we reuse the upsert logic since the init path already truncates
+    the target table when appropriate, so an upsert behaves like a plain
+    insert but keeps the API explicit for future optimizations.
+    """
+    return upsert_board_index(conn, rows)
+
+
 def upsert_board_member(conn, rows: List[Dict[str, Any]]) -> int:
     if not rows:
         return 0
@@ -264,6 +316,11 @@ def upsert_board_member(conn, rows: List[Dict[str, Any]]) -> int:
     with conn.cursor() as cur:
         pgx.execute_values(cur, sql, values)
     return len(values)
+
+
+def insert_board_member_init(conn, rows: List[Dict[str, Any]]) -> int:
+    """Full-init insert for tdx_board_member (wrapper around upsert)."""
+    return upsert_board_member(conn, rows)
 
 
 def upsert_board_daily(conn, rows: List[Dict[str, Any]]) -> int:
@@ -427,7 +484,6 @@ def run_dataset(conn, pro, dataset: str, mode: str, start_date: str, end_date: s
                 raise ValueError(f"Unsupported dataset: {dataset}")
             stats["inserted_rows"] += inserted
             stats["success_days"] += 1
-            _log(conn, job_id, "info", f"{dataset} {d} inserted={inserted}")
         except Exception as exc:  # noqa: BLE001
             stats["failed_days"] += 1
             _log(conn, job_id, "error", f"{dataset} {d} failed: {exc}")
@@ -512,7 +568,16 @@ def main() -> None:
                 s = run_dataset(conn, pro, dataset, mode, args.start_date, args.end_date, job_id)
                 total_summary["parts"][dataset] = s
                 total_summary["inserted_rows"] += s.get("inserted_rows", 0)
-            _finish_job(conn, job_id, "success", total_summary)
+
+            any_failed = False
+            for part_stats in total_summary.get("parts", {}).values():
+                failed_days = int(part_stats.get("failed_days", 0)) if isinstance(part_stats, dict) else 0
+                if failed_days > 0:
+                    any_failed = True
+                    break
+            final_status = "failed" if any_failed else "success"
+
+            _finish_job(conn, job_id, final_status, total_summary)
             _log(conn, job_id, "info", f"finished success: {total_summary}")
             print("[DONE]", total_summary)
         except Exception as exc:  # noqa: BLE001
