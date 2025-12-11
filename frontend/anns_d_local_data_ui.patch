@@ -1,0 +1,138 @@
+diff --git a/frontend/src/app/local-data/page.tsx b/frontend/src/app/local-data/page.tsx
+index 0000000..1111111 100644
+--- a/frontend/src/app/local-data/page.tsx
++++ b/frontend/src/app/local-data/page.tsx
+@@ -408,6 +408,10 @@ function InitTab() {
+     {
+       key: "stock_moneyflow_ts",
+       label: "stock_moneyflow_ts · 个股资金流（moneyflow · Tushare）",
+     },
+     { key: "stock_basic", label: "stock_basic · 最新股票列表" },
+     { key: "stock_st", label: "stock_st · ST 股票列表" },
+     { key: "bak_basic", label: "bak_basic · 历史股票列表" },
++    {
++      key: "anns_d",
++      label: "anns_d · 上市公司公告（Tushare anns_d）",
++    },
+     {
+       key: "tushare_trade_cal",
+       label: "tushare_trade_cal · 交易日历（Tushare trade_cal 同步）",
+@@ -926,7 +930,7 @@ function InitTab() {
+   926→          {((dataSource === "TDX" &&
+   927→            (dataset === "kline_minute_raw" ||
+   928→              dataset === "kline_daily_raw_go" ||
+   929→              dataset === "kline_daily_qfq_go")) ||
+   930→            (dataSource === "Tushare" &&
+-   931→              ["adj_factor", "stock_moneyflow", "stock_basic", "stock_st", "bak_basic"].includes(
++   931→              ["adj_factor", "stock_moneyflow", "stock_basic", "stock_st", "bak_basic", "anns_d"].includes(
+   932→                dataset,
+   933→              ))) && (
+@@ -XXX,YY +XXX,YY @@ async function submitInit() {
+-        if (
+-          ["adj_factor", "stock_moneyflow", "stock_basic", "stock_st", "bak_basic"].includes(
+-            dataset,
+-          ) &&
+-          truncate &&
+-          !confirmClear
+-        ) {
++        if (
++          ["adj_factor", "stock_moneyflow", "stock_basic", "stock_st", "bak_basic", "anns_d"].includes(
++            dataset,
++          ) &&
++          truncate &&
++          !confirmClear
++        ) {
+           setError("请先勾选确认或取消清空选项后再继续。...");
+           return;
+         }
+@@
+-        if (dataset === "adj_factor") {
+-          opts.truncate = Boolean(truncate);
+-        }
+-        if (["stock_moneyflow", "stock_basic", "stock_st", "bak_basic"].includes(dataset)) {
+-          opts.truncate = Boolean(truncate);
+-        }
+-        if (dataset === "stock_st" || dataset === "bak_basic") {
++        if (dataset === "adj_factor") {
++          opts.truncate = Boolean(truncate);
++        }
++        if (["stock_moneyflow", "stock_basic", "stock_st", "bak_basic", "anns_d"].includes(dataset)) {
++          opts.truncate = Boolean(truncate);
++        }
++        if (dataset === "stock_st" || dataset === "bak_basic" || dataset === "anns_d") {
+           if (!opts.start_date || !opts.end_date) {
+             setError("请填写起止日期再执行初始化。");
+             return;
+           }
+           // 提供轻量批次休眠参数
+           opts.batch_sleep = 0.2;
+         }
+@@
+   const datasetOptionsTushare = [
+@@
+-    { key: "stock_st", label: "stock_st · ST 股票列表（按公告日增量）" },
+-    { key: "bak_basic", label: "bak_basic · 历史股票列表（按交易日增量）" },
++    { key: "stock_st", label: "stock_st · ST 股票列表（按公告日增量）" },
++    { key: "bak_basic", label: "bak_basic · 历史股票列表（按交易日增量）" },
++    {
++      key: "anns_d",
++      label: "anns_d · 上市公司公告（Tushare anns_d）",
++    },
+@@
+-    if (lower === "kline_daily_qfq_go" || lower === "kline_daily_qfq") {
++    if (lower === "kline_daily_qfq_go" || lower === "kline_daily_qfq") {
+       dataset = "kline_daily_qfq_go";
+@@
+-    } else if (lower === "bak_basic") {
+-      dataSource = "Tushare";
+-      dataset = "bak_basic";
++    } else if (lower === "bak_basic") {
++      dataSource = "Tushare";
++      dataset = "bak_basic";
++    } else if (lower === "anns_d") {
++      dataSource = "Tushare";
++      dataset = "anns_d";
+@@
+-        if (
+-          lower === "kline_daily_qfq_go" ||
+-          lower === "kline_daily_qfq" ||
+-          lower === "kline_daily_raw_go" ||
+-          lower === "kline_daily_raw" ||
+-          lower === "kline_minute_raw" ||
+-          lower === "adj_factor" ||
+-          lower === "stock_moneyflow" ||
+-          lower === "stock_st" ||
+-          lower === "bak_basic"
+-        ) {
++        if (
++          lower === "kline_daily_qfq_go" ||
++          lower === "kline_daily_qfq" ||
++          lower === "kline_daily_raw_go" ||
++          lower === "kline_daily_raw" ||
++          lower === "kline_minute_raw" ||
++          lower === "adj_factor" ||
++          lower === "stock_moneyflow" ||
++          lower === "stock_st" ||
++          lower === "bak_basic" ||
++          lower === "anns_d"
++        ) {
+@@
+-                    const canFillLatest = [
++                    const canFillLatest = [
+                       "kline_daily_qfq",
+                       "kline_daily_qfq_go",
+                       "kline_daily_raw",
+                       "kline_daily_raw_go",
+                       "kline_minute_raw",
+                       "tdx_board_index",
+                       "tdx_board_member",
+                       "tdx_board_daily",
+                       "trade_agg_5m",
+                       "adj_factor",
+                       "stock_moneyflow",
+                       "stock_moneyflow_ts",
+                       "stock_st",
+-                      "bak_basic",
++                      "bak_basic",
++                      "anns_d",
+                     ].includes(kind);

@@ -283,7 +283,7 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
         return "tdx_api"
     if ds.startswith("tdx_board_"):
         return "tushare"
-    if ds in {"stock_moneyflow", "stock_moneyflow_ts", "stock_basic", "stock_st", "bak_basic"}:
+    if ds in {"stock_moneyflow", "stock_moneyflow_ts", "stock_basic", "stock_st", "bak_basic", "daily_basic"}:
         return "tushare"
     if ds in {"kline_weekly"}:
         return "derived_from_kline_daily_qfq"
@@ -1037,10 +1037,14 @@ async def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             detail="dataset must be ingested via Go APIs (use /api/ingestion/init or /api/ingestion/incremental)",
         )
 
-    # 业务校验：三支新 Tushare 数据集
+    # 业务校验：Tushare 相关数据集
     if dataset == "stock_basic":
         if mode != "init":
             raise HTTPException(status_code=400, detail="stock_basic only supports init mode")
+    elif dataset == "index_basic":
+        # 指数基础信息 index_basic：仅支持 init 模式，不需要起止日期参数
+        if mode != "init":
+            raise HTTPException(status_code=400, detail="index_basic only supports init mode")
     elif dataset == "stock_st":
         # init: 需要 start_date/end_date；incremental: start_date 可选
         if mode == "init" and not options.get("start_date"):
@@ -1053,6 +1057,38 @@ async def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="bak_basic init requires start_date")
         if mode == "init" and not options.get("end_date"):
             raise HTTPException(status_code=400, detail="bak_basic init requires end_date")
+    elif dataset == "daily_basic":
+        # init: 需要 start_date/end_date；incremental: start_date 可选
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="daily_basic init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="daily_basic init requires end_date")
+    elif dataset == "index_daily":
+        # 指数日线行情 index_daily：
+        # - init: 必须提供 start_date/end_date
+        # - incremental: start_date/end_date 可选，由脚本内部根据历史数据自动推断起始位置
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="index_daily init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="index_daily init requires end_date")
+    elif dataset == "anns_d":
+        # 公告数据 anns_d：init 需要 start_date/end_date；incremental 时 start_date 可选
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="anns_d init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="anns_d init requires end_date")
+    elif dataset == "anns_pdf":
+        # 公告 PDF 下载任务：通过 download_anns_pdf.py 实现
+        # 这里不强制参数，但可以对 limit 做一个简单的范围约束，避免一次性扫描过大规模
+        raw_limit = options.get("limit")
+        if raw_limit is not None:
+            try:
+                limit_val = int(raw_limit)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail=f"anns_pdf invalid limit: {exc}")
+            if limit_val <= 0 or limit_val > 5000:
+                raise HTTPException(status_code=400, detail="anns_pdf limit must be between 1 and 5000")
+            options["limit"] = limit_val
     elif dataset == "stock_moneyflow_ts":
         # init: 需要起止日期；incremental: start_date 可选；支持可选 truncate
         if mode == "init" and not options.get("start_date"):
@@ -1324,6 +1360,7 @@ async def delete_queued_ingestion_jobs() -> Dict[str, Any]:
             deleted = cur.rowcount
     return {"deleted": deleted}
 
+@router.delete("/ingestion/job/{job_id}")
 async def delete_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
     """Delete a historical ingestion job and its related records.
 

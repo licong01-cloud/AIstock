@@ -95,6 +95,12 @@ class ConfigManager:
                 "required": False,
                 "type": "text",
             },
+            "ANNOUNCE_PDF_ROOT": {
+                "value": "D:/AIstockDB/data/anns",
+                "description": "公告PDF本地根目录，例如 D:/AIstockDB/data/anns",
+                "required": False,
+                "type": "text",
+            },
             "TDX_DB_HOST": {
                 "value": "127.0.0.1",
                 "description": "TimescaleDB主机",
@@ -363,6 +369,9 @@ class ConfigManager:
             )
             lines.append(
                 f'QLIB_BIN_ROOT_WIN="{config.get("QLIB_BIN_ROOT_WIN", "")}"'
+            )
+            lines.append(
+                f'ANNOUNCE_PDF_ROOT="{config.get("ANNOUNCE_PDF_ROOT", "")}"'
             )
             lines.append("")
 

@@ -157,10 +157,15 @@ def run_qlib_script_in_wsl(
     if extra_env:
         env.update(extra_env)
 
+    # Windows 默认控制台编码为 GBK，WSL/conda 下的 Python 一般使用 UTF-8 输出，
+    # 如果不显式指定 encoding，subprocess 会用本地代码页解码，容易触发 UnicodeDecodeError。
+    # 这里强制按 UTF-8 解码，并使用 errors="replace" 保证不会因个别字符导致整个调用失败。
     completed = subprocess.run(
         cmd_list,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
         timeout=timeout,
         check=False,

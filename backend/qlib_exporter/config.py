@@ -48,8 +48,15 @@ TDX_BOARD_INDEX_TABLE = "market.tdx_board_index"
 TDX_BOARD_MEMBER_TABLE = "market.tdx_board_member"
 TDX_BOARD_DAILY_TABLE = "market.tdx_board_daily"
 
+# 指数相关表（用于导出 Qlib 指数 bin 数据）
+INDEX_BASIC_TABLE = "market.index_basic"
+INDEX_DAILY_TABLE = "market.index_daily"
+
 # 因子数据表（用于存储自定义因子）
 FACTOR_DATA_TABLE = "market.qlib_factors"
+
+# 个股资金流向表（Tushare moneyflow_ts，按交易日聚合）
+MONEYFLOW_TS_TABLE = "market.moneyflow_ts"
 
 # =========================================================================
 # 价格单位转换

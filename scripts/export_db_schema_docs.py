@@ -5,7 +5,11 @@ import datetime as dt
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from dotenv import load_dotenv
 import psycopg2
+
+
+load_dotenv()
 
 
 DB_CFG = dict(
@@ -360,7 +364,8 @@ def main(argv: List[str] | None = None) -> int:
         if not output_path.is_absolute():
             output_path = root_dir / output_path
     else:
-        docs_dir = root_dir / "docs"
+        # 与项目当前文档路径保持一致：写入 doc/db_schema.md
+        docs_dir = root_dir / "doc"
         docs_dir.mkdir(parents=True, exist_ok=True)
         output_path = docs_dir / "db_schema.md"
 

@@ -184,7 +184,7 @@ def complete_task(conn, task_id: uuid.UUID, success: bool, progress: float, last
 def get_codes(conn, exchanges: Iterable[str]) -> List[str]:
     ex_vals = [EXCHANGE_MAP.get(ex.lower()) for ex in exchanges if ex.lower() in EXCHANGE_MAP]
     params: Tuple[Any, ...] = ()
-    sql = "SELECT ts_code FROM market.symbol_dim"
+    sql = "SELECT ts_code FROM market.stock_basic"
     if ex_vals:
         placeholders = ",".join(["%s"] * len(ex_vals))
         sql += f" WHERE exchange IN ({placeholders})"

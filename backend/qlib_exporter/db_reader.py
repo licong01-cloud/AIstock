@@ -33,6 +33,9 @@ from .config import (
     TDX_BOARD_DAILY_TABLE,
     TDX_BOARD_INDEX_TABLE,
     TDX_BOARD_MEMBER_TABLE,
+    MONEYFLOW_TS_TABLE,
+    INDEX_BASIC_TABLE,
+    INDEX_DAILY_TABLE,
 )
 from .adj_factor_provider import AdjFactorProvider
 
@@ -77,6 +80,117 @@ class DBReader:
                 cur.execute(sql, params or None)
                 rows = cur.fetchall()
         return [r[0] for r in rows]
+
+    # ---------------------------------------------------------------------
+    # 指数基础信息 & 日线行情
+    # ---------------------------------------------------------------------
+
+    def get_all_index_markets(self) -> List[str]:
+        """获取 index_basic.market 的去重列表（按字典序排序）。"""
+
+        sql = f"SELECT DISTINCT market FROM {INDEX_BASIC_TABLE} ORDER BY market"
+        with get_conn() as conn:  # type: ignore[attr-defined]
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+        markets: List[str] = []
+        for r in rows:
+            if r[0] is None:
+                continue
+            m = str(r[0]).strip()
+            if m:
+                markets.append(m)
+        return markets
+
+    def load_index_basic_by_markets(self, markets: Optional[List[str]] = None) -> pd.DataFrame:
+        """按 market 过滤加载指数基础信息.
+
+        返回 DataFrame，列至少包含: ts_code, name, fullname, market。
+        若 markets 为空，则返回全部指数基础信息。
+        """
+
+        base_sql = f"SELECT ts_code, name, fullname, market FROM {INDEX_BASIC_TABLE}"
+        params: dict[str, object] = {}
+        where_clause = ""
+        if markets:
+            markets_clean = [m.strip().upper() for m in markets if m and m.strip()]
+            if markets_clean:
+                where_clause = " WHERE market = ANY(%(markets)s)"
+                params["markets"] = markets_clean
+
+        sql = base_sql + where_clause + " ORDER BY ts_code"
+
+        with get_conn() as conn:  # type: ignore[attr-defined]
+            df = pd.read_sql(sql, conn, params=params or None)
+
+        if df.empty:
+            return df
+
+        # 规范化类型
+        df["ts_code"] = df["ts_code"].astype(str)
+        if "name" in df.columns:
+            df["name"] = df["name"].astype(str)
+        if "fullname" in df.columns:
+            df["fullname"] = df["fullname"].astype(str)
+        if "market" in df.columns:
+            df["market"] = df["market"].astype(str)
+
+        return df
+
+    def load_index_daily(
+        self,
+        ts_code: str,
+        start: date | None,
+        end: date | None,
+    ) -> pd.DataFrame:
+        """加载单个指数在给定日期区间内的日线行情.
+
+        返回 DataFrame，列为 trade_date, ts_code, open, high, low, close, vol, amount，
+        已按 trade_date 升序排序。调用方可据此构建符合 Qlib dump_bin.py 的 CSV。
+        """
+
+        code = (ts_code or "").strip()
+        if not code:
+            return pd.DataFrame()
+
+        conditions: list[str] = ["ts_code = %(ts_code)s"]
+        params: dict[str, object] = {"ts_code": code}
+
+        if start is not None:
+            conditions.append("trade_date >= %(start)s")
+            params["start"] = start
+        if end is not None:
+            conditions.append("trade_date <= %(end)s")
+            params["end"] = end
+
+        where_clause = " AND ".join(conditions)
+
+        sql = f"""
+            SELECT
+                trade_date,
+                ts_code,
+                open,
+                high,
+                low,
+                close,
+                vol   AS volume,
+                amount
+            FROM {INDEX_DAILY_TABLE}
+            WHERE {where_clause}
+            ORDER BY trade_date
+        """
+
+        with get_conn() as conn:  # type: ignore[attr-defined]
+            df = pd.read_sql(sql, conn, params=params)
+
+        if df.empty:
+            return df
+
+        # 统一日期类型
+        df["trade_date"] = pd.to_datetime(df["trade_date"], utc=False).dt.date
+        df["ts_code"] = df["ts_code"].astype(str)
+
+        return df
 
     def get_all_ts_codes_minute(self) -> List[str]:
         sql = f"""
@@ -135,7 +249,8 @@ class DBReader:
         """
 
         with get_conn() as conn:  # type: ignore[attr-defined]
-            df = pd.read_sql(sql, conn, params=params)
+            # 统一使用位置参数列表，避免命名参数与位置参数混用导致的错误
+            df = pd.read_sql(sql, conn, params=params_list)
 
         if df.empty:
             return df
@@ -207,7 +322,8 @@ class DBReader:
         """
 
         with get_conn() as conn:  # type: ignore[attr-defined]
-            df = pd.read_sql(sql, conn, params=params)
+            # 统一使用位置参数列表，避免命名参数与位置参数混用导致的错误
+            df = pd.read_sql(sql, conn, params=params_list)
 
         if df.empty:
             return df
@@ -267,7 +383,8 @@ class DBReader:
         """
 
         with get_conn() as conn:  # type: ignore[attr-defined]
-            df = pd.read_sql(sql, conn, params=params)
+            # 统一使用位置参数列表，避免命名参数与位置参数混用导致的错误
+            df = pd.read_sql(sql, conn, params=params_list)
 
         if df.empty:
             return df
@@ -605,10 +722,12 @@ class DBReader:
         price_df["$factor"] = price_df["qfq_factor"].astype(np.float32)
 
         # 5. 转换为 Qlib 格式
-        price_df["instrument"] = price_df["ts_code"].apply(self._ts_code_to_instrument)
+        # 为了与 bin 目录和其他 H5 数据集保持一致，这里直接使用 ts_code 作为 instrument，
+        # 统一采用 Tushare ts_code 格式（例如 000001.SZ / 600000.SH）。
+        price_df["instrument"] = price_df["ts_code"].astype(str)
         price_df["datetime"] = pd.to_datetime(price_df["trade_date"])
 
-        # 6. 设置 MultiIndex
+        # 6. 设置 MultiIndex：Index = (datetime, instrument)
         price_df = price_df.set_index(["datetime", "instrument"])
 
         # 7. 只保留 Qlib 列（$amount 为可选列）
@@ -622,6 +741,306 @@ class DBReader:
 
         return result
 
+    def load_qlib_minute_data_all(
+        self,
+        start: date,
+        end: date,
+        exchanges: Optional[List[str]] = None,
+        use_tushare_adj: bool = True,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+        freq: str = "1m",
+    ) -> pd.DataFrame:
+        """加载全部股票的 Qlib 格式分钟线数据。
+
+        过滤规则与日线的 ``load_qlib_daily_data_all`` 保持一致，包括：
+        - 按交易所筛选（sh/sz/bj）
+        - 可选排除 ST 股票
+        - 可选排除退市或当前暂停上市股票
+        """
+
+        exchange_filter = ""
+        if exchanges:
+            exchange_conditions = []
+            for ex in exchanges:
+                ex_upper = ex.upper()
+                exchange_conditions.append(f"mr.ts_code LIKE '%%.{ex_upper}'")
+            if exchange_conditions:
+                exchange_filter = " AND (" + " OR ".join(exchange_conditions) + ")"
+
+        st_filter = ""
+        if exclude_st:
+            st_filter = "AND mr.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st)"
+
+        status_filter = ""
+        if exclude_delisted_or_paused:
+            status_filter = (
+                " AND mr.ts_code NOT IN ("
+                "SELECT ts_code FROM market.stock_basic WHERE list_status IN ('D','P')"
+                ")"
+            )
+
+        sql = f"""
+            SELECT DISTINCT mr.ts_code
+            FROM {MINUTE_RAW_TABLE} AS mr
+            WHERE mr.freq = %(freq)s
+              AND mr.trade_time::date >= %(start)s
+              AND mr.trade_time::date <= %(end)s
+              {exchange_filter}
+              {st_filter}
+              {status_filter}
+            ORDER BY mr.ts_code
+        """
+
+        with get_conn() as conn:  # type: ignore[attr-defined]
+            with conn.cursor() as cur:
+                cur.execute(sql, {"start": start, "end": end, "freq": freq})
+                codes = [row[0] for row in cur.fetchall()]
+
+        if not codes:
+            return pd.DataFrame()
+
+        batch_size = 500
+        all_data = []
+
+        for i in range(0, len(codes), batch_size):
+            batch_codes = codes[i : i + batch_size]
+            batch_df = self.load_qlib_minute_data(
+                batch_codes,
+                start,
+                end,
+                freq=freq,
+                use_tushare_adj=use_tushare_adj,
+            )
+            if not batch_df.empty:
+                all_data.append(batch_df)
+
+        if not all_data:
+            return pd.DataFrame()
+
+        result = pd.concat(all_data)
+        result = result.sort_index()
+
+        return result
+
+    def load_moneyflow_panel(
+        self,
+        start: date,
+        end: date,
+        exchanges: Optional[List[str]] = None,
+        *,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+    ) -> pd.DataFrame:
+        """加载个股资金流向数据（moneyflow_ts）并转换为 Qlib/RD-Agent 友好的面板格式.
+
+        返回 DataFrame:
+        - Index: MultiIndex (datetime, instrument)
+        - Columns: mf_sm_buy_vol, mf_sm_sell_vol, mf_sm_buy_amt, mf_sm_sell_amt, ...
+          单位：_vol 为股，_amt 为元。
+        """
+
+        # 起止日期已由 Pydantic 校验为合法日期，这里直接内联到 SQL 字符串，
+        # 避免 psycopg2 在参数绑定时出现 "list index out of range" 等兼容性问题。
+        conditions: list[str] = [
+            f"trade_date >= '{start.isoformat()}'",
+            f"trade_date <= '{end.isoformat()}'",
+        ]
+
+        # 按交易所过滤（基于 ts_code 后缀 .SH / .SZ / .BJ）
+        if exchanges:
+            normalized = {e.strip().lower() for e in exchanges if e.strip()}
+            exchange_conds: list[str] = []
+            if normalized:
+                if "sh" in normalized:
+                    exchange_conds.append("ts_code LIKE '%.SH'")
+                if "sz" in normalized:
+                    exchange_conds.append("ts_code LIKE '%.SZ'")
+                if "bj" in normalized:
+                    exchange_conds.append("ts_code LIKE '%.BJ'")
+            if exchange_conds:
+                conditions.append("(" + " OR ".join(exchange_conds) + ")")
+
+        # ST / 退市 / 暂停上市过滤
+        if exclude_st:
+            conditions.append(
+                "ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st)",
+            )
+        if exclude_delisted_or_paused:
+            conditions.append(
+                "ts_code NOT IN ("
+                "SELECT ts_code FROM market.stock_basic WHERE list_status IN ('D','P')"
+                ")",
+            )
+
+        where_clause = " AND ".join(conditions)
+
+        sql = f"""
+            SELECT
+                trade_date,
+                ts_code,
+                buy_sm_vol,
+                buy_sm_amount,
+                sell_sm_vol,
+                sell_sm_amount,
+                buy_md_vol,
+                buy_md_amount,
+                sell_md_vol,
+                sell_md_amount,
+                buy_lg_vol,
+                buy_lg_amount,
+                sell_lg_vol,
+                sell_lg_amount,
+                buy_elg_vol,
+                buy_elg_amount,
+                sell_elg_vol,
+                sell_elg_amount,
+                net_mf_vol,
+                net_mf_amount
+            FROM {MONEYFLOW_TS_TABLE}
+            WHERE {where_clause}
+            ORDER BY trade_date, ts_code
+        """
+
+        with get_conn() as conn:  # type: ignore[attr-defined]
+            # 直接使用 cursor.execute + fetchall，且不再使用 DB-API 参数占位符，
+            # 避免驱动在处理参数列表时出现索引越界等问题。
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+                colnames = [desc[0] for desc in cur.description]
+        df = pd.DataFrame(rows, columns=colnames)
+
+        if df.empty:
+            return df
+
+        # 单位转换：手 -> 股，万元 -> 元
+        vol_cols = [
+            "buy_sm_vol",
+            "sell_sm_vol",
+            "buy_md_vol",
+            "sell_md_vol",
+            "buy_lg_vol",
+            "sell_lg_vol",
+            "buy_elg_vol",
+            "sell_elg_vol",
+            "net_mf_vol",
+        ]
+        amt_cols = [
+            "buy_sm_amount",
+            "sell_sm_amount",
+            "buy_md_amount",
+            "sell_md_amount",
+            "buy_lg_amount",
+            "sell_lg_amount",
+            "buy_elg_amount",
+            "sell_elg_amount",
+            "net_mf_amount",
+        ]
+
+        for col in vol_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce") * 100.0
+        for col in amt_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce") * 10000.0
+
+        # 构造 MultiIndex (datetime, instrument)
+        # 直接使用 ts_code 作为 instrument，保证与日线 / bin 中使用的代码格式一致（000001.SZ/600000.SH）。
+        df["datetime"] = pd.to_datetime(df["trade_date"], utc=False)
+        df["instrument"] = df["ts_code"].astype(str)
+        df = df.set_index(["datetime", "instrument"])  # type: ignore[call-arg]
+
+        # 重命名列为 mf_*_* 格式
+        rename_map = {
+            "buy_sm_vol": "mf_sm_buy_vol",
+            "sell_sm_vol": "mf_sm_sell_vol",
+            "buy_sm_amount": "mf_sm_buy_amt",
+            "sell_sm_amount": "mf_sm_sell_amt",
+            "buy_md_vol": "mf_md_buy_vol",
+            "sell_md_vol": "mf_md_sell_vol",
+            "buy_md_amount": "mf_md_buy_amt",
+            "sell_md_amount": "mf_md_sell_amt",
+            "buy_lg_vol": "mf_lg_buy_vol",
+            "sell_lg_vol": "mf_lg_sell_vol",
+            "buy_lg_amount": "mf_lg_buy_amt",
+            "sell_lg_amount": "mf_lg_sell_amt",
+            "buy_elg_vol": "mf_elg_buy_vol",
+            "sell_elg_vol": "mf_elg_sell_vol",
+            "buy_elg_amount": "mf_elg_buy_amt",
+            "sell_elg_amount": "mf_elg_sell_amt",
+            "net_mf_vol": "mf_net_vol",
+            "net_mf_amount": "mf_net_amt",
+        }
+        df = df.rename(columns=rename_map)
+
+        # 仅保留 mf_* 列，并统一为 float32
+        mf_cols = [col for col in df.columns if col.startswith("mf_")]
+        result = df[mf_cols].astype("float32")
+
+        # 排序索引
+        result = result.sort_index()
+
+        return result
+
+    def _get_base_universe(
+        self,
+        exchanges: Optional[List[str]] = None,
+        *,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+    ) -> List[str]:
+        """基于 stock_basic 构建统一股票池（返回 ts_code 列表）。
+
+        约定：
+        - 默认仅包含上交所 / 深交所（.SH / .SZ），不包含北交所（.BJ）。
+        - exclude_st=True 时，剔除在 stock_st 中出现过的所有股票（曾经 / 当前 ST）。
+        - exclude_delisted_or_paused=True 时，剔除 list_status IN ('D','P') 的股票。
+        """
+
+        conditions: list[str] = []
+
+        # 交易所过滤
+        if exchanges:
+            normalized = {e.strip().lower() for e in exchanges if e.strip()}
+        else:
+            # 默认只导出 SH / SZ，不包含 BJ
+            normalized = {"sh", "sz"}
+
+        exchange_conds: list[str] = []
+        if "sh" in normalized:
+            exchange_conds.append("ts_code LIKE '%.SH'")
+        if "sz" in normalized:
+            exchange_conds.append("ts_code LIKE '%.SZ'")
+        if "bj" in normalized:
+            exchange_conds.append("ts_code LIKE '%.BJ'")
+        if exchange_conds:
+            conditions.append("(" + " OR ".join(exchange_conds) + ")")
+
+        if exclude_st:
+            conditions.append(
+                "ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st)",
+            )
+
+        if exclude_delisted_or_paused:
+            conditions.append("list_status NOT IN ('D','P')")
+
+        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+        sql = f"""
+            SELECT DISTINCT ts_code
+            FROM market.stock_basic
+            {where_clause}
+            ORDER BY ts_code
+        """
+
+        with get_conn() as conn:  # type: ignore[attr-defined]
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+
+        return [r[0] for r in rows]
+
     def load_qlib_daily_data_all(
         self,
         start: date,
@@ -633,55 +1052,18 @@ class DBReader:
     ) -> pd.DataFrame:
         """加载全部股票的 Qlib 格式日线数据.
 
-        Args:
-            start: 开始日期
-            end: 结束日期
-            exchanges: 交易所过滤，如 ["sh", "sz", "bj"]
-            use_tushare_adj: 是否使用 Tushare 复权因子
-            exclude_st: 是否排除所有在 stock_st 表中出现过的股票（曾经 / 当前 ST）
-            exclude_delisted_or_paused: 是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）
-
-        Returns:
-            符合 Qlib 格式的 DataFrame
+        股票池严格基于 stock_basic：
+        - 默认只包含 SH/SZ A 股（.SH/.SZ），不含 BJ；
+        - 根据 exclude_st / exclude_delisted_or_paused 统一剔除 ST 和退市 / 暂停上市股票；
+        - 然后在给定日期区间内从日线原始表加载数据。
         """
-        # 构建交易所过滤条件
-        exchange_filter = ""
-        if exchanges:
-            exchange_conditions = []
-            for ex in exchanges:
-                ex_upper = ex.upper()
-                exchange_conditions.append(f"dr.ts_code LIKE '%%.{ex_upper}'")
-            if exchange_conditions:
-                exchange_filter = " AND (" + " OR ".join(exchange_conditions) + ")"
 
-        # ST / 退市 / 暂停上市过滤
-        st_filter = ""
-        if exclude_st:
-            st_filter = "AND dr.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st)"
-
-        status_filter = ""
-        if exclude_delisted_or_paused:
-            status_filter = (
-                " AND dr.ts_code NOT IN ("
-                "SELECT ts_code FROM market.stock_basic WHERE list_status IN ('D','P')"
-                ")"
-            )
-
-        # 1. 获取符合条件的股票代码
-        sql = f"""
-            SELECT DISTINCT dr.ts_code
-            FROM {DAILY_RAW_TABLE} AS dr
-            WHERE dr.trade_date >= %(start)s
-              AND dr.trade_date <= %(end)s
-              {exchange_filter}
-              {st_filter}
-              {status_filter}
-            ORDER BY dr.ts_code
-        """
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, {"start": start, "end": end})
-                codes = [row[0] for row in cur.fetchall()]
+        # 1. 基于 stock_basic 获取统一股票池
+        codes = self._get_base_universe(
+            exchanges=exchanges,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
 
         if not codes:
             return pd.DataFrame()

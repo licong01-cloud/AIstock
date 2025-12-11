@@ -66,6 +66,11 @@ DEFAULT_INGEST_TUSHARE_ADJ_FACTOR = ROOT_DIR / "scripts" / "ingest_tushare_adj_f
 DEFAULT_INGEST_TUSHARE_STOCK_BASIC = ROOT_DIR / "scripts" / "ingest_tushare_stock_basic.py"
 DEFAULT_INGEST_TUSHARE_STOCK_ST = ROOT_DIR / "scripts" / "ingest_tushare_stock_st.py"
 DEFAULT_INGEST_TUSHARE_BAK_BASIC = ROOT_DIR / "scripts" / "ingest_tushare_bak_basic.py"
+DEFAULT_INGEST_TUSHARE_DAILY_BASIC = ROOT_DIR / "scripts" / "ingest_tushare_daily_basic.py"
+DEFAULT_INGEST_TUSHARE_ANNS_D = ROOT_DIR / "scripts" / "ingest_tushare_anns_init.py"
+DEFAULT_DOWNLOAD_ANNS_PDF = ROOT_DIR / "scripts" / "download_anns_pdf.py"
+DEFAULT_INGEST_TUSHARE_INDEX_BASIC = ROOT_DIR / "scripts" / "ingest_tushare_index_basic.py"
+DEFAULT_INGEST_TUSHARE_INDEX_DAILY = ROOT_DIR / "scripts" / "ingest_tushare_index_daily.py"
 DEFAULT_SYNC_SYMBOL_DIM = ROOT_DIR / "scripts" / "sync_symbol_dim_from_tdx.py"
 
 
@@ -482,9 +487,18 @@ class TDXScheduler:
         return cmd
 
     def _build_ingestion_command(self, dataset: str, mode: str, options: Dict[str, Any]) -> List[str]:
-        script = Path(options.get("script") or self._default_ingestion_script(dataset, mode))
-        if not script:
+        """构造实际运行的 Python 命令行。
+
+        这里要小心处理脚本路径：如果调用方没有通过 options["script"]
+        显式指定脚本，则根据 dataset/mode 选择默认脚本；若仍然拿不到脚本，
+        应该抛出明确的 ValueError，而不是让 Path(None) 触发 TypeError。
+        """
+
+        script_any = options.get("script") or self._default_ingestion_script(dataset, mode)
+        if script_any is None:
             raise ValueError(f"No script defined for dataset={dataset} mode={mode}")
+
+        script = Path(script_any)
         cmd: List[str] = [sys.executable, str(script)]
         extra_args = options.get("args")
         if extra_args:
@@ -518,12 +532,27 @@ class TDXScheduler:
         # Tushare stock_basic uses its own ingestion script (init only)
         if dataset == "stock_basic" and mode in {"init"}:
             return DEFAULT_INGEST_TUSHARE_STOCK_BASIC
+        # Tushare index_basic 指数基础信息使用独立脚本（仅 init）
+        if dataset == "index_basic" and mode in {"init"}:
+            return DEFAULT_INGEST_TUSHARE_INDEX_BASIC
+        # Tushare index_daily 指数日线行情使用独立脚本（init + incremental）
+        if dataset == "index_daily" and mode in {"init", "incremental"}:
+            return DEFAULT_INGEST_TUSHARE_INDEX_DAILY
         # Tushare stock_st uses its own ingestion script
         if dataset == "stock_st" and mode in {"init", "incremental"}:
             return DEFAULT_INGEST_TUSHARE_STOCK_ST
         # Tushare bak_basic uses its own ingestion script
         if dataset == "bak_basic" and mode in {"init", "incremental"}:
             return DEFAULT_INGEST_TUSHARE_BAK_BASIC
+        # Tushare daily_basic uses its own ingestion script for both modes
+        if dataset == "daily_basic" and mode in {"init", "incremental"}:
+            return DEFAULT_INGEST_TUSHARE_DAILY_BASIC
+        # Tushare anns_d 公告数据使用独立脚本（两种模式共用）
+        if dataset == "anns_d" and mode in {"init", "incremental"}:
+            return DEFAULT_INGEST_TUSHARE_ANNS_D
+        # 公告 PDF 下载任务 anns_pdf：使用独立脚本，mode 目前仅使用 init 语义（单次扫描批处理）
+        if dataset == "anns_pdf" and mode in {"init", "incremental"}:
+            return DEFAULT_DOWNLOAD_ANNS_PDF
         # Weekly aggregation uses dedicated script, both modes
         if dataset == "kline_weekly" and mode in {"init", "incremental"}:
             return DEFAULT_INGEST_WEEKLY_FROM_DAILY
@@ -572,42 +601,65 @@ class TDXScheduler:
                     args += ["--truncate"]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
-            else:
-                # Special handling for moneyflow_ind_dc: only trade_date cursor, no datasets/exchanges
-                if dataset == "stock_moneyflow":
-                    args += ["--mode", "incremental"]
-                    if options.get("start_date"):
-                        args += ["--start-date", str(options["start_date"])]
-                    if options.get("end_date"):
-                        args += ["--end-date", str(options["end_date"])]
-                    if options.get("job_id"):
-                        args += ["--job-id", str(options["job_id"])]
-                elif dataset == "stock_moneyflow_ts":
-                    args += ["--mode", "incremental"]
-                    if options.get("start_date"):
-                        args += ["--start-date", str(options["start_date"])]
-                    if options.get("end_date"):
-                        args += ["--end-date", str(options["end_date"])]
-                    if options.get("job_id"):
-                        args += ["--job-id", str(options["job_id"])]
+            elif dataset == "index_daily":
+                # 指数日线行情增量：直接透传起止日期和市场过滤 + job_id
+                args += ["--mode", "incremental"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                # index_markets 为字符串数组，拼成逗号分隔列表
+                markets = options.get("index_markets")
+                if markets:
+                    if isinstance(markets, (list, tuple)):
+                        markets_val = ",".join(str(m) for m in markets)
+                    else:
+                        markets_val = str(markets)
+                    args += ["--index-markets", markets_val]
+                # 默认每批之间休眠 0.13 秒，除非调用方显式覆盖
+                sleep_val = options.get("batch_sleep", 0.13)
+                args += ["--batch-sleep", str(sleep_val)]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
+            elif dataset == "stock_moneyflow":
+                # 个股资金流向增量：需要明确起止日期与 job_id，否则脚本会因缺少 start_date 直接退出，
+                # 导致数据库状态仍停留在 queued。
+                args += ["--mode", "incremental"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
+            elif dataset == "stock_moneyflow_ts":
+                # Tushare moneyflow (TS) 增量：需要起止日期 + job_id，可选 truncate
+                args += ["--mode", "incremental"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("truncate"):
+                    args += ["--truncate"]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
+            elif dataset == "kline_weekly":
                 # Weekly aggregation incremental: just pass mode + date range + job id
-                elif dataset == "kline_weekly":
-                    args += ["--mode", "incremental"]
-                    if options.get("start_date"):
-                        args += ["--start-date", str(options["start_date"])]
-                    if options.get("end_date"):
-                        args += ["--end-date", str(options["end_date"])]
-                    if options.get("job_id"):
-                        args += ["--job-id", str(options["job_id"])]
-                # Tushare adj_factor incremental: date range + job id
-                elif dataset == "adj_factor":
-                    args += ["--mode", "incremental"]
-                    if options.get("start_date"):
-                        args += ["--start-date", str(options["start_date"])]
-                    if options.get("end_date"):
-                        args += ["--end-date", str(options["end_date"])]
-                    if options.get("job_id"):
-                        args += ["--job-id", str(options["job_id"])]
+                args += ["--mode", "incremental"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
+            # Tushare adj_factor incremental: date range + job id
+            elif dataset == "adj_factor":
+                args += ["--mode", "incremental"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
                 else:
                     target = options.get("datasets") or dataset
                     if target:
@@ -638,8 +690,8 @@ class TDXScheduler:
                     args += ["--truncate"]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
-            elif dataset in {"stock_st", "bak_basic"}:
-                # Tushare stock_st / bak_basic 全量：需要起止日期 + 可选 truncate/batch_sleep + job_id
+            elif dataset in {"stock_st", "bak_basic", "daily_basic", "anns_d"}:
+                # Tushare stock_st / bak_basic / daily_basic / anns_d 全量：需要起止日期 + 可选 truncate/batch_sleep + job_id
                 args += ["--mode", "init"]
                 if options.get("start_date"):
                     args += ["--start-date", str(options["start_date"])]
@@ -649,6 +701,36 @@ class TDXScheduler:
                     args += ["--batch-sleep", str(options["batch_sleep"])]
                 if options.get("truncate"):
                     args += ["--truncate"]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
+            elif dataset == "index_daily":
+                # 指数日线行情初始化：需要起止日期 + 可选市场过滤 + 批次休眠 + job_id
+                args += ["--mode", "init"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                markets = options.get("index_markets")
+                if markets:
+                    if isinstance(markets, (list, tuple)):
+                        markets_val = ",".join(str(m) for m in markets)
+                    else:
+                        markets_val = str(markets)
+                    args += ["--index-markets", markets_val]
+                if options.get("batch_sleep"):
+                    args += ["--batch-sleep", str(options["batch_sleep"])]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
+            elif dataset == "anns_pdf":
+                # 公告 PDF 下载任务：使用 download_anns_pdf.py，透传 limit/sleep/timeout
+                if options.get("limit") is not None:
+                    args += ["--limit", str(options["limit"])]
+                if options.get("sleep") is not None:
+                    args += ["--sleep", str(options["sleep"])]
+                if options.get("timeout") is not None:
+                    args += ["--timeout", str(options["timeout"])]
+                if options.get("retry_failed"):
+                    args += ["--retry-failed"]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
             if dataset in {"kline_daily_qfq", "kline_daily"}:
@@ -789,10 +871,14 @@ class TDXScheduler:
                 args += ["--truncate"]
             if options.get("job_id"):
                 args += ["--job-id", str(options["job_id"])]
-        # Append session-level bulk tuning flag by default unless explicitly disabled
+        # Append session-level bulk tuning flag by default unless explicitly disabled。
+        # 对于部分与数据库批量写入无关的辅助脚本（例如 anns_pdf 的文件下载，
+        # 以及无需会话级调优的简单全量任务 index_basic / index_daily），不需要也不支持该参数，
+        # 这里显式跳过。
         use_bulk = options.get("bulk_session_tune")
-        if use_bulk is None or bool(use_bulk):
-            args.append("--bulk-session-tune")
+        if dataset not in {"anns_pdf", "index_basic", "index_daily"}:
+            if use_bulk is None or bool(use_bulk):
+                args.append("--bulk-session-tune")
         
         if dataset == "symbol_dim":
             # Special case for symbol_dim sync (usually mode="init" or "incremental" both work the same)

@@ -140,7 +140,7 @@ def fetch_codes(exchanges: Optional[Iterable[str]]) -> List[str]:
 
 def get_db_codes(conn, exchanges: Iterable[str]) -> List[str]:
     exchange_values = [EXCHANGE_MAP.get(ex.lower()) for ex in exchanges if ex.lower() in EXCHANGE_MAP]
-    query = "SELECT ts_code FROM market.symbol_dim"
+    query = "SELECT ts_code FROM market.stock_basic"
     params: Tuple[Any, ...] = ()
     if exchange_values:
         placeholders = ",".join(["%s"] * len(exchange_values))
@@ -148,7 +148,8 @@ def get_db_codes(conn, exchanges: Iterable[str]) -> List[str]:
         params = tuple(exchange_values)
     with conn.cursor() as cur:
         cur.execute(query, params)
-        return [row[0] for row in cur.fetchall()]
+        rows = cur.fetchall()
+    return [r[0] for r in rows]
 
 
 def chunked(items: List[str], size: int) -> Iterable[List[str]]:

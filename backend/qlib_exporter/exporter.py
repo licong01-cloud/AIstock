@@ -618,6 +618,146 @@ class QlibBoardDailyExporter:
         )
 
 
+class QlibDailyBasicExporter:
+    """Tushare daily_basic 指标导出协调器.
+
+    输出文件 daily_basic.h5，供 Qlib / RD-Agent 使用：
+    - Index: MultiIndex (datetime, instrument)
+    - Columns: db_* 系列字段（估值、市值、换手率等）
+    """
+
+    def __init__(
+        self,
+        db: Optional[DBReader] = None,
+        writer: Optional[SnapshotWriter] = None,
+        meta: Optional[MetaRepo] = None,
+    ) -> None:
+        self.db = db or DBReader()
+        self.writer = writer or SnapshotWriter()
+        self.meta = meta or MetaRepo()
+
+    def export_full(
+        self,
+        snapshot_id: str,
+        start: date,
+        end: date,
+        exchanges: Optional[Sequence[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+        filename: str = "daily_basic.h5",
+    ) -> ExportResult:
+        """全量导出 daily_basic 指标数据到 Snapshot.
+
+        Args:
+            snapshot_id: Snapshot ID
+            start: 开始日期
+            end: 结束日期
+            exchanges: 可选，交易所过滤
+            exclude_st: 是否剔除 ST 股票
+            exclude_delisted_or_paused: 是否剔除退市或暂停上市股票
+            filename: 输出文件名，默认为 daily_basic.h5
+        """
+
+        df = self.db.load_daily_basic_panel(
+            start=start,
+            end=end,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+
+        if df.empty:
+            raise ValueError("export_full: 指定区间内无 daily_basic 数据")
+
+        self.writer.write_factor_data(snapshot_id, df, filename)
+
+        # 更新元数据：记录该 Snapshot 的 daily_basic 最新日期
+        self.meta.ensure_table()
+        max_dt = df.index.get_level_values("datetime").max()
+        self.meta.upsert_last_datetime(snapshot_id, "daily_basic", max_dt)
+
+        instruments = df.index.get_level_values("instrument").unique().tolist()
+
+        return ExportResult(
+            snapshot_id=snapshot_id,
+            freq="daily_basic",
+            start=start,
+            end=end,
+            ts_codes=instruments,
+            rows=int(df.shape[0]),
+        )
+
+
+class QlibMoneyflowExporter:
+    """个股资金流向（moneyflow_ts）导出协调器.
+
+    输出文件 moneyflow.h5，供 Qlib / RD-Agent 使用：
+    - Index: MultiIndex (datetime, instrument)
+    - Columns: mf_* 系列字段，_vol 为股，_amt 为元
+    """
+
+    def __init__(
+        self,
+        db: Optional[DBReader] = None,
+        writer: Optional[SnapshotWriter] = None,
+        meta: Optional[MetaRepo] = None,
+    ) -> None:
+        self.db = db or DBReader()
+        self.writer = writer or SnapshotWriter()
+        self.meta = meta or MetaRepo()
+
+    def export_full(
+        self,
+        snapshot_id: str,
+        start: date,
+        end: date,
+        exchanges: Optional[Sequence[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+        filename: str = "moneyflow.h5",
+    ) -> ExportResult:
+        """全量导出 moneyflow_ts 数据到 Snapshot.
+
+        Args:
+            snapshot_id: Snapshot ID
+            start: 开始日期
+            end: 结束日期
+            exchanges: 可选，交易所过滤
+            exclude_st: 是否剔除 ST 股票
+            exclude_delisted_or_paused: 是否剔除退市或暂停上市股票
+            filename: 输出文件名，默认为 moneyflow.h5
+        """
+
+        df = self.db.load_moneyflow_panel(
+            start=start,
+            end=end,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+
+        if df.empty:
+            raise ValueError("export_full: 指定区间内无资金流向数据")
+
+        self.writer.write_factor_data(snapshot_id, df, filename)
+
+        # 更新元数据：记录该 Snapshot 的 moneyflow 最新日期
+        self.meta.ensure_table()
+        max_dt = df.index.get_level_values("datetime").max()
+        self.meta.upsert_last_datetime(snapshot_id, "moneyflow", max_dt)
+
+        instruments = df.index.get_level_values("instrument").unique().tolist()
+
+        return ExportResult(
+            snapshot_id=snapshot_id,
+            freq="moneyflow",
+            start=start,
+            end=end,
+            ts_codes=instruments,
+            rows=int(df.shape[0]),
+        )
+
+
 class QlibFactorExporter:
     """RD-Agent 因子数据导出协调器.
 

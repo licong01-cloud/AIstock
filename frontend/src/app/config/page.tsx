@@ -93,6 +93,10 @@ export default function ConfigPage() {
       ],
     },
     {
+      title: "本地数据目录",
+      keys: ["ANNOUNCE_PDF_ROOT"],
+    },
+    {
       title: "TimescaleDB / PostgreSQL",
       keys: [
         "TDX_DB_HOST",

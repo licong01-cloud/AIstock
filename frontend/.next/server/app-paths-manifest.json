@@ -1,0 +1,5 @@
+{
+  "/qlib/page": "app/qlib/page.js",
+  "/smart-monitor/page": "app/smart-monitor/page.js",
+  "/local-data/page": "app/local-data/page.js"
+}
