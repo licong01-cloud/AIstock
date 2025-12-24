@@ -7,9 +7,9 @@ param()
 
 # ---------------- 用户可调整区域 ----------------
 # Windows 下的 CSV 输入路径（导出的 K 线 CSV）
-$CSV_PATH   = "C:\\Users\\lc999\\NewAIstock\\AIstock\\qlib_snapshots\\export_daily.csv"
+$CSV_PATH   = "F:\\Dev\\AIstock\\qlib_snapshots\\export_daily.csv"
 # Windows 下的 bin 输出目录（将写入 qlib 目录结构）
-$BIN_DIR    = "C:\\Users\\lc999\\NewAIstock\\AIstock\\qlib_snapshots\\qlib_export_test"
+$BIN_DIR    = "F:\\Dev\\AIstock\\qlib_snapshots\\qlib_export_test"
 # 导出与校验的日期区间
 $START_DATE = "2020-01-01"
 $END_DATE   = "2020-01-10"

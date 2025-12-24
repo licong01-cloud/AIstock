@@ -1,0 +1,160 @@
+{
+  "dataset": "moneyflow",
+  "h5_key": "data",
+  "path": "/mnt/f/Dev/AIstock/qlib_snapshots/qlib_export_20251209/moneyflow.h5",
+  "index": {
+    "type": "MultiIndex",
+    "names": [
+      "datetime",
+      "instrument"
+    ]
+  },
+  "columns": [
+    {
+      "name": "mf_sm_buy_vol",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_sm_buy_amt",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_sm_sell_vol",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_sm_sell_amt",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_md_buy_vol",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_md_buy_amt",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_md_sell_vol",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_md_sell_amt",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_lg_buy_vol",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_lg_buy_amt",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_lg_sell_vol",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_lg_sell_amt",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_elg_buy_vol",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_elg_buy_amt",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_elg_sell_vol",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_elg_sell_amt",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_net_vol",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    },
+    {
+      "name": "mf_net_amt",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "moneyflow",
+      "comment": ""
+    }
+  ],
+  "field_map": "/mnt/f/Dev/AIstock/qlib_snapshots/qlib_export_20251209/metadata/aistock_field_map.csv",
+  "unit_policy": "unit is optional and should only contain physical units (e.g., 元/万元/股/万股). Ratios/percentages/PE should have empty unit and be inferred from meaning_cn."
+}

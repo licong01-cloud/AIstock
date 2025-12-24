@@ -6,6 +6,10 @@ import { useState, useEffect, useCallback } from "react";
 const BACKEND_BASE =
   process.env.NEXT_PUBLIC_TDX_BACKEND_BASE || "http://127.0.0.1:8001";
 
+function buildBackendUrl(path: string) {
+  return `${BACKEND_BASE.replace(/\/$/, "")}${path}`;
+}
+
 async function backendRequest<T = any>(
   method: string,
   path: string,
@@ -48,6 +52,7 @@ interface SnapshotInfo {
   has_board_member: boolean;
   has_factor_data: boolean;
   has_moneyflow: boolean;
+  has_daily_basic: boolean;
   meta: any;
   created_at: string | null;
 }
@@ -113,15 +118,18 @@ interface DataCheckResponse {
 
 // 数据预览响应
 interface DataPreviewResponse {
-  ts_code: string;
-  rows: number;
-  columns: string[];
+  code: string;
+  count: number;
   data: Array<Record<string, any>>;
-  factor_range: {
-    min: number;
-    max: number;
-    unique_count: number;
-  } | null;
+}
+
+interface FieldMapExportResponse {
+  snapshot_id: string;
+  csv_path: string;
+  rows: number;
+  written_h5: Record<string, number>;
+  has_daily_basic: boolean;
+  has_moneyflow: boolean;
 }
 
 interface IndexMarketInfo {
@@ -203,6 +211,11 @@ export default function QlibPage() {
   const [previewResult, setPreviewResult] = useState<DataPreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
+  // 字段说明（CSV + 写入 H5 attrs）
+  const [fieldMapLoading, setFieldMapLoading] = useState(false);
+  const [fieldMapError, setFieldMapError] = useState<string | null>(null);
+  const [fieldMapResult, setFieldMapResult] = useState<FieldMapExportResponse | null>(null);
+
   // Qlib bin 导出（CSV -> bin）相关状态
   const [binSnapshotId, setBinSnapshotId] = useState<string>(
     "qlib_bin_" + new Date().toISOString().slice(0, 10).replace(/-/g, ""),
@@ -238,6 +251,7 @@ export default function QlibPage() {
 
   const [indexStart, setIndexStart] = useState<string>(binStart);
   const [indexEnd, setIndexEnd] = useState<string>(binEnd);
+  const [indexDataSource, setIndexDataSource] = useState<"tushare" | "tdx">("tushare");
   const [indexRunHealthCheck, setIndexRunHealthCheck] = useState<boolean>(true);
   const [indexLoading, setIndexLoading] = useState<boolean>(false);
   const [indexError, setIndexError] = useState<string | null>(null);
@@ -277,6 +291,47 @@ export default function QlibPage() {
     // moneyflow 和日线/板块全量导出不支持增量
     if (!INCREMENTAL_TYPES.includes(type)) {
       setExportMode("full");
+    }
+  };
+
+  const handleExportFieldMapForSnapshot = async (sid: string) => {
+    const id = (sid || "").trim();
+    if (!id) return;
+
+    try {
+      const resp = await backendRequest<FieldMapExportResponse>(
+        "POST",
+        "/api/v1/qlib/field_map/export",
+        {
+          snapshot_id: id,
+          write_to_h5: true,
+        },
+      );
+      alert(`字段说明已生成\nCSV: ${resp.csv_path}\nrows: ${resp.rows}`);
+    } catch (e: any) {
+      alert(e?.message || "生成字段说明失败");
+    }
+  };
+
+  const handleExportFieldMap = async () => {
+    setFieldMapLoading(true);
+    setFieldMapError(null);
+    setFieldMapResult(null);
+
+    try {
+      const resp = await backendRequest<FieldMapExportResponse>(
+        "POST",
+        "/api/v1/qlib/field_map/export",
+        {
+          snapshot_id: snapshotId.trim(),
+          write_to_h5: true,
+        },
+      );
+      setFieldMapResult(resp);
+    } catch (e: any) {
+      setFieldMapError(e?.message || "生成字段说明失败");
+    } finally {
+      setFieldMapLoading(false);
     }
   };
 
@@ -351,7 +406,7 @@ export default function QlibPage() {
 
   // 在进入 "指数 bin 导出" 子标签时加载指数市场列表
   useEffect(() => {
-    if (exportTab === "bin" && binTab === "index" && !indexMarketsLoaded) {
+    if (exportTab === "bin" && binTab === "index" && indexDataSource !== "tdx" && !indexMarketsLoaded) {
       (async () => {
         try {
           const resp = await backendRequest<IndexMarketListResponse>(
@@ -365,11 +420,12 @@ export default function QlibPage() {
         }
       })();
     }
-  }, [exportTab, binTab, indexMarketsLoaded]);
+  }, [exportTab, binTab, indexMarketsLoaded, indexDataSource]);
 
   // 当选中的指数 market 变化时加载指数列表
   useEffect(() => {
     if (exportTab !== "bin" || binTab !== "index") return;
+    if (indexDataSource === "tdx") return;
     if (selectedIndexMarkets.length === 0) {
       setIndices([]);
       setSelectedIndexCode("");
@@ -397,7 +453,37 @@ export default function QlibPage() {
         setIndicesLoading(false);
       }
     })();
-  }, [exportTab, binTab, selectedIndexMarkets]);
+  }, [exportTab, binTab, selectedIndexMarkets, indexDataSource]);
+
+  // 选择 TDX 数据源时，从后端按实际数据表生成可选指数列表
+  useEffect(() => {
+    if (exportTab !== "bin" || binTab !== "index") return;
+    if (indexDataSource !== "tdx") return;
+
+    (async () => {
+      setIndicesLoading(true);
+      setIndicesError(null);
+      try {
+        const resp = await backendRequest<IndexListResponse>(
+          "GET",
+          "/api/v1/qlib/index/list?data_source=tdx",
+        );
+        setIndices(resp.items || []);
+        if (resp.items && resp.items.length > 0) {
+          setSelectedIndexCode(resp.items[0].ts_code);
+        } else {
+          setSelectedIndexCode("");
+        }
+        setSelectedIndexMarkets([]);
+      } catch (e: any) {
+        setIndicesError(e?.message || "加载 TDX 指数列表失败");
+        setIndices([]);
+        setSelectedIndexCode("");
+      } finally {
+        setIndicesLoading(false);
+      }
+    })();
+  }, [exportTab, binTab, indexDataSource]);
 
   // 删除 Snapshot
   const handleDelete = async (id: string) => {
@@ -475,6 +561,8 @@ export default function QlibPage() {
         }
         if (exchanges.length > 0) payload.exchanges = exchanges;
         payload.freq = "1m";
+        payload.exclude_st = excludeSt;
+        payload.exclude_delisted_or_paused = excludeDelistedOrPaused;
       } else if (exportType === "board") {
         if (exportMode === "incremental") {
           endpoint = "/api/v1/qlib/boards/daily/incremental";
@@ -793,8 +881,8 @@ export default function QlibPage() {
             </div>
           )}
 
-          {/* 日线 / 资金流向 / 每日指标 专用：样本过滤（ST / 退市 / 暂停上市） */}
-          {(exportType === "daily" || exportType === "moneyflow" || exportType === "daily_basic") && (
+          {/* 日线 / 分钟线 / 资金流向 / 每日指标 专用：样本过滤（ST / 退市 / 暂停上市） */}
+          {(exportType === "daily" || exportType === "minute" || exportType === "moneyflow" || exportType === "daily_basic") && (
             <div>
               <label className="block text-sm font-medium mb-2">样本过滤</label>
               <div className="flex flex-col gap-1 text-sm text-gray-700">
@@ -897,6 +985,21 @@ export default function QlibPage() {
             </button>
           </div>
 
+          {/* 字段说明按钮：生成 aistock_field_map.csv 并写入 H5 attrs */}
+          <div>
+            <button
+              type="button"
+              disabled={fieldMapLoading}
+              onClick={handleExportFieldMap}
+              style={{ ...btnSecondary, opacity: fieldMapLoading ? 0.6 : 1 }}
+            >
+              {fieldMapLoading ? "生成字段说明中..." : "生成字段说明（CSV+写入H5）"}
+            </button>
+            <p className="text-xs text-gray-500 mt-1">
+              将读取数据库列 comment（daily_basic / moneyflow_ts），生成 <code>metadata/aistock_field_map.csv</code>，并写入该 Snapshot 下的 <code>daily_basic.h5</code>/<code>moneyflow.h5</code> attrs。
+            </p>
+          </div>
+
           {/* 进度条 */}
           {loading && (
             <div className="space-y-2">
@@ -917,6 +1020,32 @@ export default function QlibPage() {
           {error && (
             <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm">
               {error}
+            </div>
+          )}
+
+          {fieldMapError && (
+            <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm">
+              {fieldMapError}
+            </div>
+          )}
+
+          {fieldMapResult && (
+            <div className="p-4 rounded-lg bg-blue-50 text-blue-800 text-sm space-y-2">
+              <div className="font-medium text-base">📄 字段说明已生成</div>
+              <div className="text-xs">
+                <div><span className="text-blue-700">Snapshot ID:</span> {fieldMapResult.snapshot_id}</div>
+                <div><span className="text-blue-700">CSV:</span> {fieldMapResult.csv_path}</div>
+                <div><span className="text-blue-700">字段数:</span> {fieldMapResult.rows}</div>
+                <div>
+                  <span className="text-blue-700">写入 H5:</span>
+                  {Object.keys(fieldMapResult.written_h5 || {}).length === 0
+                    ? " 无"
+                    : ""}
+                </div>
+                {Object.entries(fieldMapResult.written_h5 || {}).map(([p, n]) => (
+                  <div key={p} className="ml-4">- {p}（{n} 列）</div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -1264,43 +1393,65 @@ export default function QlibPage() {
                         />
                       </div>
                     </div>
+
+                    {/* 指数数据源 */}
+                    <div className="mt-3">
+                      <label className="block text-sm font-medium mb-1">指数数据源</label>
+                      <select
+                        value={indexDataSource}
+                        onChange={(e) => setIndexDataSource(e.target.value as "tushare" | "tdx")}
+                        style={inputStyle}
+                      >
+                        <option value="tushare">Tushare（market.index_daily）</option>
+                        <option value="tdx">TDX（market.index_daily_tdx）</option>
+                      </select>
+                      <p className="text-xs text-gray-500 mt-1">
+                        TDX 数据源将使用 <code>market.index_daily_tdx</code>（价格/金额为厘），导出时统一转换为元。
+                      </p>
+                    </div>
                   </div>
                 </div>
 
                 {/* 指数 market 选择 */}
                 <div>
                   <label className="block text-sm font-medium mb-1">指数市场 (market)</label>
-                  {indexMarketsError && (
-                    <div className="text-xs text-red-600 mb-1">{indexMarketsError}</div>
-                  )}
-                  {indexMarkets.length === 0 ? (
-                    <p className="text-xs text-gray-500">暂无指数市场信息，请检查后端配置。</p>
+                  {indexDataSource === "tdx" ? (
+                    <p className="text-xs text-gray-500">TDX 数据源当前不使用 market 过滤（固定提供可导出的指数列表）。</p>
                   ) : (
-                    <div className="flex flex-wrap gap-2 text-sm">
-                      {indexMarkets.map((m) => {
-                        const active = selectedIndexMarkets.includes(m.market);
-                        return (
-                          <button
-                            key={m.market}
-                            type="button"
-                            onClick={() => {
-                              setSelectedIndexMarkets((prev) =>
-                                prev.includes(m.market)
-                                  ? prev.filter((x) => x !== m.market)
-                                  : [...prev, m.market],
-                              );
-                            }}
-                            style={active ? tabButtonActive : tabButtonBase}
-                          >
-                            {m.market}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <>
+                      {indexMarketsError && (
+                        <div className="text-xs text-red-600 mb-1">{indexMarketsError}</div>
+                      )}
+                      {indexMarkets.length === 0 ? (
+                        <p className="text-xs text-gray-500">暂无指数市场信息，请检查后端配置。</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-2 text-sm">
+                          {indexMarkets.map((m) => {
+                            const active = selectedIndexMarkets.includes(m.market);
+                            return (
+                              <button
+                                key={m.market}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedIndexMarkets((prev) =>
+                                    prev.includes(m.market)
+                                      ? prev.filter((x) => x !== m.market)
+                                      : [...prev, m.market],
+                                  );
+                                }}
+                                style={active ? tabButtonActive : tabButtonBase}
+                              >
+                                {m.market}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <p className="text-xs text-gray-500 mt-1">
+                        先选择一个或多个 market，再从下方列表选择具体指数。
+                      </p>
+                    </>
                   )}
-                  <p className="text-xs text-gray-500 mt-1">
-                    先选择一个或多个 market，再从下方列表选择具体指数。
-                  </p>
                 </div>
 
                 {/* 指数列表 */}
@@ -1312,7 +1463,9 @@ export default function QlibPage() {
                   {indicesLoading ? (
                     <p className="text-xs text-gray-500">加载指数列表中...</p>
                   ) : indices.length === 0 ? (
-                    <p className="text-xs text-gray-500">请选择 market 以加载指数列表。</p>
+                    <p className="text-xs text-gray-500">
+                      {indexDataSource === "tdx" ? "TDX 指数列表为空，请检查 market.index_daily_tdx 是否有数据。" : "请选择 market 以加载指数列表。"}
+                    </p>
                   ) : (
                     <select
                       value={selectedIndexCode}
@@ -1360,6 +1513,7 @@ export default function QlibPage() {
                             index_code: selectedIndexCode,
                             start: indexStart,
                             end: indexEnd,
+                            data_source: indexDataSource,
                             run_health_check: indexRunHealthCheck,
                           },
                         );
@@ -1578,6 +1732,21 @@ export default function QlibPage() {
                         <button onClick={() => setDetailSnapshot(s)} style={btnSecondary}>
                           详情
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => handleExportFieldMapForSnapshot(s.snapshot_id)}
+                          style={btnSecondary}
+                        >
+                          生成CSV
+                        </button>
+                        <a
+                          href={buildBackendUrl(
+                            `/api/v1/qlib/snapshots/${encodeURIComponent(s.snapshot_id)}/export`,
+                          )}
+                          style={{ ...btnSecondary, display: "inline-block" }}
+                        >
+                          导出
+                        </a>
                         <button onClick={() => handleDelete(s.snapshot_id)} style={btnDanger}>
                           删除
                         </button>

@@ -1,0 +1,300 @@
+{
+  "generated_at": "2025-12-19T02:43:49.896284Z",
+  "snapshot_root": "/mnt/f/Dev/AIstock/qlib_snapshots/qlib_export_20251209",
+  "provider_uri": "/mnt/f/Dev/AIstock/qlib_bin/qlib_bin_20251209",
+  "region": "cn",
+  "datasets": [
+    {
+      "dataset_id": "daily_basic",
+      "kind": "h5",
+      "path": "/mnt/f/Dev/AIstock/qlib_snapshots/qlib_export_20251209/daily_basic.h5",
+      "schema": {
+        "index": {
+          "type": "MultiIndex",
+          "names": [
+            "datetime",
+            "instrument"
+          ]
+        },
+        "columns": [
+          {
+            "name": "db_close",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_turnover_rate",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_turnover_rate_f",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_volume_ratio",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_pe",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_pe_ttm",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_pb",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_ps",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_ps_ttm",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_dv_ratio",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_dv_ttm",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_total_share",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_float_share",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_free_share",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_total_mv",
+            "dtype": "float32"
+          },
+          {
+            "name": "db_circ_mv",
+            "dtype": "float32"
+          }
+        ]
+      },
+      "coverage": {
+        "instrument_count_full": 4684,
+        "date_count_full": 3861,
+        "date_min_full": "2010-01-07",
+        "date_max_full": "2025-12-01"
+      }
+    },
+    {
+      "dataset_id": "daily_pv",
+      "kind": "h5",
+      "path": "/mnt/f/Dev/AIstock/qlib_snapshots/qlib_export_20251209/daily_pv.h5",
+      "schema": {
+        "index": {
+          "type": "MultiIndex",
+          "names": [
+            "datetime",
+            "instrument"
+          ]
+        },
+        "columns": [
+          {
+            "name": "open",
+            "dtype": "float64"
+          },
+          {
+            "name": "close",
+            "dtype": "float64"
+          },
+          {
+            "name": "high",
+            "dtype": "float64"
+          },
+          {
+            "name": "low",
+            "dtype": "float64"
+          },
+          {
+            "name": "volume",
+            "dtype": "float64"
+          },
+          {
+            "name": "factor",
+            "dtype": "float64"
+          },
+          {
+            "name": "amount",
+            "dtype": "float64"
+          }
+        ]
+      },
+      "coverage": {
+        "instrument_count_full": 4684,
+        "date_count_full": 3861,
+        "date_min_full": "2010-01-07",
+        "date_max_full": "2025-12-01"
+      }
+    },
+    {
+      "dataset_id": "moneyflow",
+      "kind": "h5",
+      "path": "/mnt/f/Dev/AIstock/qlib_snapshots/qlib_export_20251209/moneyflow.h5",
+      "schema": {
+        "index": {
+          "type": "MultiIndex",
+          "names": [
+            "datetime",
+            "instrument"
+          ]
+        },
+        "columns": [
+          {
+            "name": "mf_sm_buy_vol",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_sm_buy_amt",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_sm_sell_vol",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_sm_sell_amt",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_md_buy_vol",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_md_buy_amt",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_md_sell_vol",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_md_sell_amt",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_lg_buy_vol",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_lg_buy_amt",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_lg_sell_vol",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_lg_sell_amt",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_elg_buy_vol",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_elg_buy_amt",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_elg_sell_vol",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_elg_sell_amt",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_net_vol",
+            "dtype": "float32"
+          },
+          {
+            "name": "mf_net_amt",
+            "dtype": "float32"
+          }
+        ]
+      },
+      "coverage": {
+        "instrument_count_full": 4684,
+        "date_count_full": 3861,
+        "date_min_full": "2010-01-07",
+        "date_max_full": "2025-12-01"
+      }
+    },
+    {
+      "dataset_id": "qlib_bin_daily",
+      "kind": "qlib_bin",
+      "path": "/mnt/f/Dev/AIstock/qlib_bin/qlib_bin_20251209",
+      "schema": {
+        "calendar": {
+          "status": "pass",
+          "count": 3861,
+          "min": "2010-01-07 00:00:00",
+          "max": "2025-12-01 00:00:00"
+        },
+        "fields_sample": [
+          "$open",
+          "$high",
+          "$low",
+          "$close",
+          "$volume",
+          "$amount"
+        ],
+        "instrument_pools": {
+          "index": {
+            "status": "pass",
+            "count": 1,
+            "sample": [
+              "000300.SH"
+            ]
+          },
+          "all": {
+            "status": "pass",
+            "count": 4684,
+            "sample": [
+              "000001.SZ",
+              "000002.SZ",
+              "000006.SZ",
+              "000008.SZ",
+              "000009.SZ",
+              "000011.SZ",
+              "000012.SZ",
+              "000014.SZ",
+              "000016.SZ",
+              "000019.SZ",
+              "000020.SZ",
+              "000021.SZ",
+              "000025.SZ",
+              "000026.SZ",
+              "000027.SZ",
+              "000028.SZ",
+              "000029.SZ",
+              "000030.SZ",
+              "000031.SZ",
+              "000032.SZ"
+            ]
+          }
+        }
+      },
+      "coverage": {
+        "instrument_count_full": 4684,
+        "date_count_full": 3861,
+        "date_min_full": "2010-01-07",
+        "date_max_full": "2025-12-01"
+      }
+    }
+  ]
+}

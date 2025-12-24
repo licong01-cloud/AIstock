@@ -1,0 +1,5 @@
+dataset_id,kind,path,status,instrument_count_full,date_count_full,date_min_full,date_max_full,check_column_name_no_dollar_prefix_status,check_required_columns_status,check_date_coverage_status,check_instrument_format_status,check_key_field_quality_status,check_calendar_status,check_instrument_pools_status,check_features_sample_status,check_index_000300_status,check_index_pool_contains_000300_status
+daily_basic,h5,/mnt/f/Dev/AIstock/qlib_snapshots/qlib_export_20251209/daily_basic.h5,pass,4684,3861,2010-01-07,2025-12-01,skip,pass,pass,pass,pass,,,,,
+daily_pv,h5,/mnt/f/Dev/AIstock/qlib_snapshots/qlib_export_20251209/daily_pv.h5,pass,4684,3861,2010-01-07,2025-12-01,pass,pass,pass,pass,pass,,,,,
+moneyflow,h5,/mnt/f/Dev/AIstock/qlib_snapshots/qlib_export_20251209/moneyflow.h5,pass,4684,3861,2010-01-07,2025-12-01,skip,pass,pass,pass,pass,,,,,
+qlib_bin_daily,qlib_bin,/mnt/f/Dev/AIstock/qlib_bin/qlib_bin_20251209,pass,4684,3861,2010-01-07,2025-12-01,,,,,,pass,,pass,pass,pass

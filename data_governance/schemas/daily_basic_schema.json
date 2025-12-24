@@ -1,0 +1,144 @@
+{
+  "dataset": "daily_basic",
+  "h5_key": "data",
+  "path": "/mnt/f/Dev/AIstock/qlib_snapshots/qlib_export_20251209/daily_basic.h5",
+  "index": {
+    "type": "MultiIndex",
+    "names": [
+      "datetime",
+      "instrument"
+    ]
+  },
+  "columns": [
+    {
+      "name": "db_close",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_turnover_rate",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_turnover_rate_f",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_volume_ratio",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_pe",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_pe_ttm",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_pb",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_ps",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_ps_ttm",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_dv_ratio",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_dv_ttm",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_total_share",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_float_share",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_free_share",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_total_mv",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    },
+    {
+      "name": "db_circ_mv",
+      "dtype": "",
+      "meaning_cn": "",
+      "unit": "",
+      "source_table": "daily_basic",
+      "comment": ""
+    }
+  ],
+  "field_map": "/mnt/f/Dev/AIstock/qlib_snapshots/qlib_export_20251209/metadata/aistock_field_map.csv",
+  "unit_policy": "unit is optional and should only contain physical units (e.g., 元/万元/股/万股). Ratios/percentages/PE should have empty unit and be inferred from meaning_cn."
+}

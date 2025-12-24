@@ -45,6 +45,32 @@ def main() -> None:
                 """
             )
 
+            # 将字段说明写入 PostgreSQL 的 column comment（pg_catalog 可读），
+            # 注意：SQL 行内注释 "--" 不会进入 COMMENT。
+            cur.execute("COMMENT ON TABLE market.daily_basic IS 'Tushare daily_basic 股票每日指标（按交易日）';")
+            comments = {
+                "trade_date": "交易日期 YYYYMMDD",
+                "ts_code": "TS股票代码",
+                "close": "当日收盘价",
+                "turnover_rate": "换手率(%)",
+                "turnover_rate_f": "换手率(自由流通股)",
+                "volume_ratio": "量比",
+                "pe": "市盈率(总市值/净利润, 亏损的PE为空)",
+                "pe_ttm": "市盈率(TTM,亏损的PE为空)",
+                "pb": "市净率(总市值/净资产)",
+                "ps": "市销率",
+                "ps_ttm": "市销率(TTM)",
+                "dv_ratio": "股息率(%)",
+                "dv_ttm": "股息率(TTM)(%)",
+                "total_share": "总股本(万股)",
+                "float_share": "流通股本(万股)",
+                "free_share": "自由流通股本(万)",
+                "total_mv": "总市值(万元)",
+                "circ_mv": "流通市值(万元)",
+            }
+            for col, desc in comments.items():
+                cur.execute(f"COMMENT ON COLUMN market.daily_basic.{col} IS %s;", (desc,))
+
             # 创建 Timescale hypertable（按 trade_date 分区）
             cur.execute(
                 "SELECT create_hypertable('market.daily_basic','trade_date', if_not_exists => TRUE);"

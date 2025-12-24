@@ -1,0 +1,23 @@
+0000000000000000000000000000000000000000 6bcc3fc2b43f76e3d877251f53758aa647e5c241 licong01-cloud <licong01@gmail.com> 1762660209 +0800	commit (initial): 补充扩展接口，同步 API 文档与示例，完整实现全部接口
+6bcc3fc2b43f76e3d877251f53758aa647e5c241 0000000000000000000000000000000000000000 licong01-cloud <licong01@gmail.com> 1762660221 +0800	Branch: renamed refs/heads/master to refs/heads/main
+0000000000000000000000000000000000000000 6bcc3fc2b43f76e3d877251f53758aa647e5c241 licong01-cloud <licong01@gmail.com> 1762660221 +0800	Branch: renamed refs/heads/master to refs/heads/main
+6bcc3fc2b43f76e3d877251f53758aa647e5c241 1021c1b5d46591ba91ff075617cf6f927bb0e050 licong01-cloud <licong01@gmail.com> 1762660452 +0800	pull --rebase origin main (start): checkout 1021c1b5d46591ba91ff075617cf6f927bb0e050
+1021c1b5d46591ba91ff075617cf6f927bb0e050 6bcc3fc2b43f76e3d877251f53758aa647e5c241 licong01-cloud <licong01@gmail.com> 1762663353 +0800	rebase (abort): returning to refs/heads/main
+6bcc3fc2b43f76e3d877251f53758aa647e5c241 1021c1b5d46591ba91ff075617cf6f927bb0e050 licong01-cloud <licong01@gmail.com> 1762746912 +0800	checkout: moving from main to feature/api-doc-update
+1021c1b5d46591ba91ff075617cf6f927bb0e050 1021c1b5d46591ba91ff075617cf6f927bb0e050 licong01-cloud <licong01@gmail.com> 1762747055 +0800	reset: moving to 1021c1b5d46591ba91ff075617cf6f927bb0e050
+1021c1b5d46591ba91ff075617cf6f927bb0e050 c619e7a91af315cc24c02a56837511ee776df280 licong01-cloud <licong01@gmail.com> 1762747565 +0800	commit: feat: update extended apis
+c619e7a91af315cc24c02a56837511ee776df280 7087c827e6ff719ca86f84ac63fb9df184df60a9 licong01-cloud <licong01@gmail.com> 1762765201 +0800	commit: feat: expand tdx apis and fix chart layout
+7087c827e6ff719ca86f84ac63fb9df184df60a9 bc24647cab94bf88d3bbd44562b41d70d8acc80a licong01-cloud <licong01@gmail.com> 1762780104 +0800	commit: refactor: split kline sources and refresh docs
+bc24647cab94bf88d3bbd44562b41d70d8acc80a 0f2c6403ae270729cfab2578cde2f71bb2b0b90e licong01-cloud <licong01@gmail.com> 1762783657 +0800	commit: fix: ensure charts resize correctly
+0f2c6403ae270729cfab2578cde2f71bb2b0b90e 1a7e619928b48b6027ecc7e5462c4a8208763f2b licong01-cloud <licong01@gmail.com> 1762784521 +0800	commit: docs: add update summary for 2025-11-10
+1a7e619928b48b6027ecc7e5462c4a8208763f2b 7300a3afd952e309207a67abd5044e899d829217 licong01-cloud <licong01@gmail.com> 1762784762 +0800	commit: docs: refresh update summary and add api checks
+7300a3afd952e309207a67abd5044e899d829217 0fad9231c9d779415c9225714097e402b5b0f496 licong01-cloud <licong01@gmail.com> 1762784836 +0800	commit: docs: polish update summary wording
+0fad9231c9d779415c9225714097e402b5b0f496 1eca038883f1de01f3ffece38f881b290c2e36b7 licong01-cloud <licong01@gmail.com> 1762839754 +0800	pull --rebase upstream main (start): checkout 1eca038883f1de01f3ffece38f881b290c2e36b7
+1eca038883f1de01f3ffece38f881b290c2e36b7 82b1b339487cd64161563c71cbb309237a82e343 licong01-cloud <licong01@gmail.com> 1762840056 +0800	rebase (continue): feat: expand tdx apis and fix chart layout
+82b1b339487cd64161563c71cbb309237a82e343 0fad9231c9d779415c9225714097e402b5b0f496 licong01-cloud <licong01@gmail.com> 1762840086 +0800	rebase (abort): returning to refs/heads/feature/api-doc-update
+0fad9231c9d779415c9225714097e402b5b0f496 1eca038883f1de01f3ffece38f881b290c2e36b7 licong01-cloud <licong01@gmail.com> 1762840111 +0800	checkout: moving from feature/api-doc-update to feature/server-minute-cleanup
+1eca038883f1de01f3ffece38f881b290c2e36b7 8ba0ad59e55ed62e21ef1265608bd0ac3844310d licong01-cloud <licong01@gmail.com> 1762840202 +0800	commit: fix: remove minute fallback and duplicate routes
+8ba0ad59e55ed62e21ef1265608bd0ac3844310d dbce2ecaad592ce0c5927edc0a43dde2b9f34f3f licong01-cloud <licong01@gmail.com> 1762937944 +0800	commit: docs: add sqlite sync appendix
+dbce2ecaad592ce0c5927edc0a43dde2b9f34f3f 367bdddb8efd2b221409e9f42685cef2a2c15612 licong01-cloud <licong01@gmail.com> 1764300774 +0800	commit: feat: integrate TDX Go daily raw ingestion and web server fixes
+367bdddb8efd2b221409e9f42685cef2a2c15612 624defd355a43fe401bd5237e43456cacdd49418 licong01-cloud <licong01@gmail.com> 1765472123 +0800	commit: feat: ingest kline/trade data for AIstock integration
+624defd355a43fe401bd5237e43456cacdd49418 f2319b5815942f8d8e180cf5a75b9a99137c63ec licong01-cloud <licong01@gmail.com> 1765517877 +0800	commit: chore: update local tdx-api databases for AIstock integration

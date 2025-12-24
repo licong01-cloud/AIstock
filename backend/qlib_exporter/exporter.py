@@ -49,51 +49,23 @@ class QlibDailyExporter:
         - 仅导出 [start, end] 区间内的数据。
         """
 
+        # 与因子导出保持一致：使用 Qlib 格式日线（前复权 + factor + amount）
         if ts_codes is None:
-            codes = self.db.get_all_ts_codes()
+            df = self.db.load_qlib_daily_data_all(
+                start,
+                end,
+                exchanges=list(exchanges) if exchanges else None,
+                use_tushare_adj=True,
+                exclude_st=exclude_st,
+                exclude_delisted_or_paused=exclude_delisted_or_paused,
+            )
+            codes = df.index.get_level_values("instrument").unique().tolist() if not df.empty else []
         else:
             codes = list(ts_codes)
+            if not codes:
+                raise ValueError("export_full: ts_codes 为空，无法导出 Snapshot")
+            df = self.db.load_qlib_daily_data(codes, start, end, use_tushare_adj=True)
 
-        # 按交易所过滤 ts_code（通过后缀推断 .SH / .SZ / .BJ），若未指定则不过滤
-        if exchanges is not None:
-            normalized = {e.strip().lower() for e in exchanges if e.strip()}
-
-            def _match_exchange(code: str) -> bool:
-                uc = code.upper()
-                if uc.endswith(".SH"):
-                    return "sh" in normalized
-                if uc.endswith(".SZ"):
-                    return "sz" in normalized
-                if uc.endswith(".BJ"):
-                    return "bj" in normalized
-                # 未能识别交易所后缀时，保守起见保留
-                return True
-
-            codes = [c for c in codes if _match_exchange(c)]
-
-        # 按 ST / 退市 / 暂停上市状态过滤股票代码
-        if exclude_st or exclude_delisted_or_paused:
-            excluded: set[str] = set()
-            with get_conn() as conn:  # type: ignore[attr-defined]
-                with conn.cursor() as cur:
-                    if exclude_st:
-                        cur.execute("SELECT DISTINCT ts_code FROM market.stock_st")
-                        excluded.update(row[0] for row in cur.fetchall())
-                    if exclude_delisted_or_paused:
-                        cur.execute(
-                            "SELECT ts_code FROM market.stock_basic WHERE list_status IN ('D','P')",
-                        )
-                        excluded.update(row[0] for row in cur.fetchall())
-
-            if excluded:
-                codes = [c for c in codes if c not in excluded]
-
-        if not codes:
-            raise ValueError(
-                "export_full: ts_codes 为空（可能被交易所 / ST / 退市过滤条件排除），无法导出 Snapshot",
-            )
-
-        df = self.db.load_daily(codes, start, end)
         if df.empty:
             raise ValueError("export_full: 指定区间内无数据")
 
@@ -192,6 +164,8 @@ class QlibMinuteExporter:
         end: date,
         ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
         freq: str = "1m",
         batch_days: int = 30,
     ) -> ExportResult:
@@ -209,11 +183,15 @@ class QlibMinuteExporter:
             batch_days: 每批加载天数，默认 30 天
         """
         if ts_codes is None:
-            codes = self.db.get_all_ts_codes_minute()
+            codes = self.db.get_base_ts_codes(
+                start=start,
+                end=end,
+                exchanges=list(exchanges) if exchanges else None,
+                exclude_st=exclude_st,
+                exclude_delisted_or_paused=exclude_delisted_or_paused,
+            )
         else:
             codes = list(ts_codes)
-
-        codes = self._filter_by_exchange(codes, exchanges)
 
         if not codes:
             raise ValueError("export_full: ts_codes 为空（可能被交易所过滤条件排除），无法导出分钟 Snapshot")
@@ -265,6 +243,8 @@ class QlibMinuteExporter:
         end: date,
         ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
         freq: str = "1m",
         batch_days: int = 30,
     ) -> ExportResult:
@@ -304,11 +284,16 @@ class QlibMinuteExporter:
             )
 
         if ts_codes is None:
-            codes = self.db.get_all_ts_codes_minute()
+            codes = self.db.get_base_ts_codes(
+                start=start,
+                end=end,
+                exchanges=list(exchanges) if exchanges else None,
+                exclude_st=exclude_st,
+                exclude_delisted_or_paused=exclude_delisted_or_paused,
+            )
         else:
             codes = list(ts_codes)
-
-        codes = self._filter_by_exchange(codes, exchanges)
+            codes = self._filter_by_exchange(codes, exchanges)
 
         if not codes:
             raise ValueError("export_incremental: ts_codes 为空")
@@ -658,9 +643,17 @@ class QlibDailyBasicExporter:
             filename: 输出文件名，默认为 daily_basic.h5
         """
 
+        codes = self.db.get_base_ts_codes(
+            start=start,
+            end=end,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
         df = self.db.load_daily_basic_panel(
             start=start,
             end=end,
+            ts_codes=codes,
             exchanges=list(exchanges) if exchanges else None,
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
@@ -728,9 +721,17 @@ class QlibMoneyflowExporter:
             filename: 输出文件名，默认为 moneyflow.h5
         """
 
+        codes = self.db.get_base_ts_codes(
+            start=start,
+            end=end,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
         df = self.db.load_moneyflow_panel(
             start=start,
             end=end,
+            ts_codes=codes,
             exchanges=list(exchanges) if exchanges else None,
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,

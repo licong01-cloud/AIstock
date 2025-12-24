@@ -1,6 +1,6 @@
 # 数据库结构文档
 
-- 生成时间: 2025-12-11 23:12:58 中国标准时间
+- 生成时间: 2025-12-17 00:04:33 中国标准时间
 - 数据库名: aistock
 
 > 本文档由 scripts/export_db_schema_docs.py 自动生成，请勿手工编辑。
@@ -76,26 +76,28 @@
 
 ### Table `market.daily_basic`
 
+> Tushare daily_basic 股票每日指标（按交易日）
+
 | # | 字段名 | 类型 | 允许为空 | 默认值 | 是否主键 | 备注 |
 |---|--------|------|----------|--------|----------|------|
-| 1 | `trade_date` | `date` | NO |  | YES |  |
-| 2 | `ts_code` | `text` | NO |  | YES |  |
-| 3 | `close` | `numeric` | YES |  |  |  |
-| 4 | `turnover_rate` | `numeric` | YES |  |  |  |
-| 5 | `turnover_rate_f` | `numeric` | YES |  |  |  |
-| 6 | `volume_ratio` | `numeric` | YES |  |  |  |
-| 7 | `pe` | `numeric` | YES |  |  |  |
-| 8 | `pe_ttm` | `numeric` | YES |  |  |  |
-| 9 | `pb` | `numeric` | YES |  |  |  |
-| 10 | `ps` | `numeric` | YES |  |  |  |
-| 11 | `ps_ttm` | `numeric` | YES |  |  |  |
-| 12 | `dv_ratio` | `numeric` | YES |  |  |  |
-| 13 | `dv_ttm` | `numeric` | YES |  |  |  |
-| 14 | `total_share` | `numeric` | YES |  |  |  |
-| 15 | `float_share` | `numeric` | YES |  |  |  |
-| 16 | `free_share` | `numeric` | YES |  |  |  |
-| 17 | `total_mv` | `numeric` | YES |  |  |  |
-| 18 | `circ_mv` | `numeric` | YES |  |  |  |
+| 1 | `trade_date` | `date` | NO |  | YES | 交易日期 YYYYMMDD |
+| 2 | `ts_code` | `text` | NO |  | YES | TS股票代码 |
+| 3 | `close` | `numeric` | YES |  |  | 当日收盘价 |
+| 4 | `turnover_rate` | `numeric` | YES |  |  | 换手率(%) |
+| 5 | `turnover_rate_f` | `numeric` | YES |  |  | 换手率(自由流通股) |
+| 6 | `volume_ratio` | `numeric` | YES |  |  | 量比 |
+| 7 | `pe` | `numeric` | YES |  |  | 市盈率(总市值/净利润, 亏损的PE为空) |
+| 8 | `pe_ttm` | `numeric` | YES |  |  | 市盈率(TTM,亏损的PE为空) |
+| 9 | `pb` | `numeric` | YES |  |  | 市净率(总市值/净资产) |
+| 10 | `ps` | `numeric` | YES |  |  | 市销率 |
+| 11 | `ps_ttm` | `numeric` | YES |  |  | 市销率(TTM) |
+| 12 | `dv_ratio` | `numeric` | YES |  |  | 股息率(%) |
+| 13 | `dv_ttm` | `numeric` | YES |  |  | 股息率(TTM)(%) |
+| 14 | `total_share` | `numeric` | YES |  |  | 总股本(万股) |
+| 15 | `float_share` | `numeric` | YES |  |  | 流通股本(万股) |
+| 16 | `free_share` | `numeric` | YES |  |  | 自由流通股本(万) |
+| 17 | `total_mv` | `numeric` | YES |  |  | 总市值(万元) |
+| 18 | `circ_mv` | `numeric` | YES |  |  | 流通市值(万元) |
 
 **主键约束**
 

@@ -69,6 +69,10 @@ async def get_env_summary() -> Dict[str, Any]:
         "miniqmt": {
             "enabled": (getenv("MINIQMT_ENABLED", "false").lower() == "true"),
             "account_id": getenv("MINIQMT_ACCOUNT_ID"),
+            "mode": (getenv("MINIQMT_MODE", "SIM") or "SIM").upper(),
+            "userdata_path": getenv("MINIQMT_USERDATA_PATH"),
+            "session_id": getenv("MINIQMT_SESSION_ID"),
+            "xtquant_dir": getenv("MINIQMT_XTQUANT_DIR"),
             "host": getenv("MINIQMT_HOST"),
             "port": getenv("MINIQMT_PORT"),
         },

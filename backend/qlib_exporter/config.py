@@ -15,12 +15,27 @@ from __future__ import annotations
 """
 
 from pathlib import Path
+import os
 from typing import Dict
 
 from app_pg import get_conn  # type: ignore[attr-defined]
 
-# Snapshot 根目录（可改为从环境变量或集中配置读取）
-QLIB_SNAPSHOT_ROOT = Path("qlib_snapshots")
+
+def _project_root() -> Path:
+    # backend/qlib_exporter/config.py -> AIstock/
+    return Path(__file__).resolve().parents[2]
+
+
+def _resolve_snapshot_root() -> Path:
+    # Prefer explicit env, otherwise use stable absolute path under project root.
+    env = (os.getenv("QLIB_SNAPSHOT_ROOT") or "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    return (_project_root() / "qlib_snapshots").resolve()
+
+
+# Snapshot 根目录（稳定绝对路径；可通过环境变量 QLIB_SNAPSHOT_ROOT 覆盖）
+QLIB_SNAPSHOT_ROOT = _resolve_snapshot_root()
 
 # 市场标识（供将来兼容 Qlib 使用）
 QLIB_MARKET = "aistock"
@@ -51,6 +66,7 @@ TDX_BOARD_DAILY_TABLE = "market.tdx_board_daily"
 # 指数相关表（用于导出 Qlib 指数 bin 数据）
 INDEX_BASIC_TABLE = "market.index_basic"
 INDEX_DAILY_TABLE = "market.index_daily"
+INDEX_DAILY_TDX_TABLE = "market.index_daily_tdx"
 
 # 因子数据表（用于存储自定义因子）
 FACTOR_DATA_TABLE = "market.qlib_factors"

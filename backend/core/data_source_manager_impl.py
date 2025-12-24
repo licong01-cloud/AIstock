@@ -65,19 +65,139 @@ class DataSourceManager:
         else:
             end_date = datetime.now().strftime("%Y%m%d")
 
+        # 规范化代码为 6 位数字，避免传入 000001.SZ / 688981.SH 等导致 TDX 报错
+        code_raw = (str(symbol) or "").strip().upper()
+        base_code = self._convert_from_ts_code(code_raw) if "." in code_raw else code_raw
+
+        # 0. 尝试使用 miniQMT / xtdata 获取日线历史K线
+        try:
+            miniqmt_enabled = (os.getenv("MINIQMT_ENABLED") or "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "y",
+                "on",
+            }
+        except Exception:  # noqa: BLE001
+            miniqmt_enabled = False
+
+        if miniqmt_enabled:
+            try:
+                from xtquant import xtdata  # type: ignore
+
+                print(f"[miniQMT] 正在通过 xtdata 获取 {base_code} 的日线历史数据...")
+
+                # xtdata 使用 code.market 形式的代码
+                ts_code = self._convert_to_ts_code(base_code)
+
+                # xtdata 要求 YYYYMMDD 或 带时间的字符串，这里直接用日期字符串
+                start_time = start_date or ""
+                end_time = end_date or ""
+
+                # 映射复权方式
+                div_map = {"qfq": "front", "hfq": "back", "none": "none", "": "none"}
+                dividend_type = div_map.get(str(adjust).lower(), "front")
+
+                field_list = ["open", "high", "low", "close", "volume", "amount"]
+
+                data = xtdata.get_market_data(
+                    field_list=field_list,
+                    stock_list=[ts_code],
+                    period="1d",
+                    start_time=start_time,
+                    end_time=end_time,
+                    count=-1,
+                    dividend_type=dividend_type,
+                    fill_data=True,
+                )
+
+                if not isinstance(data, dict) or not data:
+                    print("[miniQMT] ⚠️ get_market_data 返回空或非 dict，跳过")
+                else:
+                    # 以 close 字段为基准检查是否有数据
+                    close_df = data.get("close")
+                    if not isinstance(close_df, pd.DataFrame) or close_df.empty:
+                        print("[miniQMT] ⚠️ close 数据为空，跳过")
+                    else:
+                        try:
+                            row_close = close_df.loc[ts_code]
+                        except Exception:  # noqa: BLE001
+                            print(f"[miniQMT] ⚠️ 在 close 中找不到 {ts_code} 行，跳过")
+                        else:
+                            if row_close.empty:
+                                print("[miniQMT] ⚠️ close 行数据为空，跳过")
+                            else:
+                                # 时间索引通常为字符串时间戳，这里统一截取前8位作为 YYYYMMDD
+                                time_index = [str(t) for t in row_close.index]
+                                date_series = pd.to_datetime([t[:8] for t in time_index], format="%Y%m%d")
+
+                                def _field(name: str):
+                                    df = data.get(name)
+                                    if not isinstance(df, pd.DataFrame) or df.empty:
+                                        return [None] * len(date_series)
+                                    try:
+                                        row = df.loc[ts_code]
+                                    except Exception:  # noqa: BLE001
+                                        return [None] * len(date_series)
+                                    # 按时间索引顺序对齐
+                                    return [row.get(t, None) for t in row.index]
+
+                                open_vals = _field("open")
+                                high_vals = _field("high")
+                                low_vals = _field("low")
+                                close_vals = list(row_close.values)
+                                vol_vals = _field("volume")
+                                amt_vals = _field("amount")
+
+                                rows = []
+                                for dt, o, h, l, c, v, a in zip(
+                                    date_series,
+                                    open_vals,
+                                    high_vals,
+                                    low_vals,
+                                    close_vals,
+                                    vol_vals,
+                                    amt_vals,
+                                ):
+                                    rows.append(
+                                        {
+                                            "date": dt.strftime("%Y-%m-%d"),
+                                            "open": o,
+                                            "high": h,
+                                            "low": l,
+                                            "close": c,
+                                            "volume": v,
+                                            "amount": a,
+                                        }
+                                    )
+
+                                df_mini = pd.DataFrame(rows)
+                                if not df_mini.empty:
+                                    df_mini["date"] = pd.to_datetime(df_mini["date"], format="%Y-%m-%d")
+                                    df_mini = df_mini.sort_values("date").reset_index(drop=True)
+                                    print(
+                                        f"[miniQMT] ✅ 成功获取 {base_code} 的日线历史数据 (共{len(df_mini)}条)",
+                                    )
+                                    return df_mini
+                                print("[miniQMT] ⚠️ 组装后的 DataFrame 为空，跳过")
+            except ImportError:
+                print("[miniQMT] ⚠️ 未安装 xtquant，跳过 miniQMT 数据源")
+            except Exception as e:  # noqa: BLE001
+                print(f"[miniQMT] ❌ 通过 xtdata 获取历史数据失败: {e}")
+
         # 1. 优先使用本地 TDX API
         if self.tdx_available:
             try:
                 df = self._fetch_tdx_kline(
-                    symbol=symbol,
+                    symbol=base_code,
                     start_date=start_date,
                     end_date=end_date,
                     kline_type="day",
                 )
                 if df is not None and not df.empty:
-                    print(f"[TDX] ✅ 成功获取 {symbol} 的历史数据 (共{len(df)}条)")
+                    print(f"[TDX] ✅ 成功获取 {base_code} 的历史数据 (共{len(df)}条)")
                     return df
-                print(f"[TDX] ⚠️ 未获取到 {symbol} 的历史数据，尝试其他数据源")
+                print(f"[TDX] ⚠️ 未获取到 {base_code} 的历史数据，尝试其他数据源")
             except Exception as e:  # noqa: BLE001
                 print(f"[TDX] ❌ 获取历史数据失败: {e}")
 
@@ -85,8 +205,8 @@ class DataSourceManager:
         if self.tushare_available:
             try:
                 with network_optimizer.apply():
-                    print(f"[Tushare] 正在获取 {symbol} 的历史数据...")
-                    ts_code = self._convert_to_ts_code(symbol)
+                    print(f"[Tushare] 正在获取 {base_code} 的历史数据...")
+                    ts_code = self._convert_to_ts_code(base_code)
                     adj_dict = {"qfq": "qfq", "hfq": "hfq", "": None}
                     adj = adj_dict.get(adjust, "qfq")
                     df = self.tushare_api.daily(
@@ -124,9 +244,9 @@ class DataSourceManager:
             with network_optimizer.apply():
                 import akshare as ak
 
-                print(f"[Akshare] 正在获取 {symbol} 的历史数据(兜底)...")
+                print(f"[Akshare] 正在获取 {base_code} 的历史数据(兜底)...")
                 df = ak.stock_zh_a_hist(
-                    symbol=symbol,
+                    symbol=base_code,
                     period="daily",
                     start_date=start_date,
                     end_date=end_date,
@@ -191,8 +311,10 @@ class DataSourceManager:
             params["end_date"] = end_date
 
         try:
+            # 使用 /api/kline-all/tdx 获取通达信原始未复权历史K线，
+            # 由服务端负责按批次拼接全量数据
             resp = requests.get(
-                f"{self.tdx_api_base.rstrip('/')}/api/kline-history",
+                f"{self.tdx_api_base.rstrip('/')}/api/kline-all/tdx",
                 params=params,
                 timeout=8,
             )

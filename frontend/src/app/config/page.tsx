@@ -111,6 +111,10 @@ export default function ConfigPage() {
       keys: [
         "MINIQMT_ENABLED",
         "MINIQMT_ACCOUNT_ID",
+        "MINIQMT_MODE",
+        "MINIQMT_USERDATA_PATH",
+        "MINIQMT_SESSION_ID",
+        "MINIQMT_XTQUANT_DIR",
         "MINIQMT_HOST",
         "MINIQMT_PORT",
       ],

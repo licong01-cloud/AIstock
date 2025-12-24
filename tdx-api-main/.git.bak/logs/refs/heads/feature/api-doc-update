@@ -1,0 +1,8 @@
+0000000000000000000000000000000000000000 1021c1b5d46591ba91ff075617cf6f927bb0e050 licong01-cloud <licong01@gmail.com> 1762746912 +0800	branch: Created from upstream/main
+1021c1b5d46591ba91ff075617cf6f927bb0e050 c619e7a91af315cc24c02a56837511ee776df280 licong01-cloud <licong01@gmail.com> 1762747565 +0800	commit: feat: update extended apis
+c619e7a91af315cc24c02a56837511ee776df280 7087c827e6ff719ca86f84ac63fb9df184df60a9 licong01-cloud <licong01@gmail.com> 1762765201 +0800	commit: feat: expand tdx apis and fix chart layout
+7087c827e6ff719ca86f84ac63fb9df184df60a9 bc24647cab94bf88d3bbd44562b41d70d8acc80a licong01-cloud <licong01@gmail.com> 1762780104 +0800	commit: refactor: split kline sources and refresh docs
+bc24647cab94bf88d3bbd44562b41d70d8acc80a 0f2c6403ae270729cfab2578cde2f71bb2b0b90e licong01-cloud <licong01@gmail.com> 1762783657 +0800	commit: fix: ensure charts resize correctly
+0f2c6403ae270729cfab2578cde2f71bb2b0b90e 1a7e619928b48b6027ecc7e5462c4a8208763f2b licong01-cloud <licong01@gmail.com> 1762784521 +0800	commit: docs: add update summary for 2025-11-10
+1a7e619928b48b6027ecc7e5462c4a8208763f2b 7300a3afd952e309207a67abd5044e899d829217 licong01-cloud <licong01@gmail.com> 1762784762 +0800	commit: docs: refresh update summary and add api checks
+7300a3afd952e309207a67abd5044e899d829217 0fad9231c9d779415c9225714097e402b5b0f496 licong01-cloud <licong01@gmail.com> 1762784836 +0800	commit: docs: polish update summary wording

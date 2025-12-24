@@ -66,13 +66,13 @@ class ConfigManager:
                 "type": "text",
             },
             "QLIB_RDAGENT_ROOT_WIN": {
-                "value": "C:/Users/lc999/NewAIstock/AIstock/RD-Agent-main",
+                "value": "F:/Dev/RD-Agent-main",
                 "description": "Windows 下 RD-Agent 项目根目录（绝对路径）",
                 "required": False,
                 "type": "text",
             },
             "QLIB_RDAGENT_ROOT_WSL": {
-                "value": "/mnt/c/Users/lc999/NewAIstock/AIstock/RD-Agent-main",
+                "value": "/mnt/f/Dev/RD-Agent-main",
                 "description": "WSL 中 RD-Agent 项目根目录（绝对路径）",
                 "required": False,
                 "type": "text",
@@ -140,6 +140,31 @@ class ConfigManager:
             "MINIQMT_ACCOUNT_ID": {
                 "value": "",
                 "description": "MiniQMT账户ID",
+                "required": False,
+                "type": "text",
+            },
+            "MINIQMT_MODE": {
+                "value": "SIM",
+                "description": "MiniQMT模式：SIM=模拟盘，LIVE=实盘（仅用于AIstock侧标注与风控分流）",
+                "required": False,
+                "type": "select",
+                "options": ["SIM", "LIVE"],
+            },
+            "MINIQMT_USERDATA_PATH": {
+                "value": "",
+                "description": "miniQMT 安装目录下 userdata_mini 路径（xtquant 交易连接必填），例如 D:/xxx/userdata_mini",
+                "required": False,
+                "type": "text",
+            },
+            "MINIQMT_SESSION_ID": {
+                "value": "123456",
+                "description": "xtquant 会话ID（不同策略/进程需不同；单后端实例可用固定值）",
+                "required": False,
+                "type": "text",
+            },
+            "MINIQMT_XTQUANT_DIR": {
+                "value": "",
+                "description": "xtquant 目录路径（可选覆盖）。默认自动使用 <AIstock_ROOT>/xtquant",
                 "required": False,
                 "type": "text",
             },
@@ -394,6 +419,10 @@ class ConfigManager:
             lines.append(
                 f'MINIQMT_ACCOUNT_ID="{config.get("MINIQMT_ACCOUNT_ID", "")}"'
             )
+            lines.append(f'MINIQMT_MODE="{config.get("MINIQMT_MODE", "SIM")}"')
+            lines.append(f'MINIQMT_USERDATA_PATH="{config.get("MINIQMT_USERDATA_PATH", "")}"')
+            lines.append(f'MINIQMT_SESSION_ID="{config.get("MINIQMT_SESSION_ID", "123456")}"')
+            lines.append(f'MINIQMT_XTQUANT_DIR="{config.get("MINIQMT_XTQUANT_DIR", "")}"')
             lines.append(f'MINIQMT_HOST="{config.get("MINIQMT_HOST", "127.0.0.1")}"')
             lines.append(f'MINIQMT_PORT="{config.get("MINIQMT_PORT", "58610")}"')
             lines.append("")

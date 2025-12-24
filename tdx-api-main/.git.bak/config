@@ -1,0 +1,26 @@
+[core]
+	repositoryformatversion = 0
+	filemode = false
+	bare = false
+	logallrefupdates = true
+	symlinks = false
+	ignorecase = true
+[remote "origin"]
+	url = git@github.com:licong01-cloud/tdx-api.git
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[remote "upstream"]
+	url = git@github.com:oficcejo/tdx-api.git
+	fetch = +refs/heads/*:refs/remotes/upstream/*
+[branch "main"]
+	vscode-merge-base = origin/main
+[branch "feature/api-doc-update"]
+	remote = upstream
+	merge = refs/heads/main
+	vscode-merge-base = upstream/main
+[branch "feature/server-minute-cleanup"]
+	remote = upstream
+	merge = refs/heads/main
+	vscode-merge-base = upstream/main
+[remote "licong01-cloud"]
+	url = https://github.com/licong01-cloud/tdx-api.git
+	fetch = +refs/heads/*:refs/remotes/licong01-cloud/*

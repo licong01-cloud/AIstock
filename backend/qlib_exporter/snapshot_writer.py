@@ -36,6 +36,14 @@ class SnapshotWriter:
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or ensure_snapshot_root()
 
+    def _normalize_dollar_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df
+        rename_map = {c: c[1:] for c in df.columns if isinstance(c, str) and c.startswith("$")}
+        if not rename_map:
+            return df
+        return df.rename(columns=rename_map)
+
     def _snapshot_path(self, snapshot_id: str) -> Path:
         path = self.root / snapshot_id
         path.mkdir(parents=True, exist_ok=True)
@@ -59,10 +67,19 @@ class SnapshotWriter:
         # 排序并规范化索引 dtype，避免 Pandas 在保存带有扩展 dtype 的 MultiIndex 到 HDF5 时出错
         df = df.sort_index()
 
+        df = self._normalize_dollar_columns(df)
+
         # 通过 reset_index / set_index 强制将索引各级转换为普通 numpy dtype
         tmp = df.reset_index()
         tmp["datetime"] = pd.to_datetime(tmp["datetime"], utc=False)
         tmp["instrument"] = tmp["instrument"].astype(str)
+
+        # 强制数值列为 float，避免 HDF5 写入时出现 int64（例如 amount 变成全 0）
+        if "amount" not in tmp.columns:
+            tmp["amount"] = float("nan")
+        for col in ["open", "high", "low", "close", "volume", "amount", "factor"]:
+            if col in tmp.columns:
+                tmp[col] = pd.to_numeric(tmp[col], errors="coerce").astype("float64")
         df = tmp.set_index(["datetime", "instrument"])  # type: ignore[call-arg]
 
         h5_path = snapshot_dir / "daily_pv.h5"
@@ -244,6 +261,8 @@ class SnapshotWriter:
         if df_new.empty:
             return
 
+        df_new = self._normalize_dollar_columns(df_new)
+
         snapshot_dir = self._snapshot_path(snapshot_id)
         h5_path = snapshot_dir / f"minute_{freq}.h5"
 
@@ -374,7 +393,7 @@ class SnapshotWriter:
         h5_path = snap_dir / filename
 
         # 确保数据格式正确
-        df_out = df.copy()
+        df_out = self._normalize_dollar_columns(df.copy())
 
         # 确保索引名称正确
         if df_out.index.names != ["datetime", "instrument"]:

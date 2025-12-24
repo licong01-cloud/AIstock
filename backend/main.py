@@ -2,12 +2,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from pathlib import Path
+import os
 import sys
+
+from dotenv import load_dotenv
 
 # 将项目根目录指向 AIstock 仓库根，便于导入顶层模块（如 pg_monitor_repo 等）
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 from .db.pg_pool import init_db_pool, close_db_pool
 from .routers import (
@@ -18,6 +23,7 @@ from .routers import (
     indicator_screening,
     cloud_screening,
     monitor,
+    qmt,
     portfolio,
     main_force,
     sector_strategy,
@@ -29,9 +35,13 @@ from .routers import (
     settings,
     config_env,
     smart_monitor,
+    prompt_packs,
+    strategies,
+    rdagent,
 )
 from .qlib_exporter.router import router as qlib_router
 from .ingestion.tdx_scheduler import scheduler as ingestion_scheduler
+from .schedulers.strategy_scheduler import scheduler as strategy_scheduler
 
 
 def create_app() -> FastAPI:
@@ -55,7 +65,14 @@ def create_app() -> FastAPI:
         """Initialize process-wide PostgreSQL connection pool."""
 
         init_db_pool(minconn=1, maxconn=10)
-        ingestion_scheduler.start()
+        disable_scheduler = (os.getenv("DISABLE_INGESTION_SCHEDULER") or "").strip().lower()
+        if disable_scheduler not in {"1", "true", "yes", "y", "on"}:
+            ingestion_scheduler.start()
+        
+        # 启动策略调度器
+        disable_strategy_scheduler = (os.getenv("DISABLE_STRATEGY_SCHEDULER") or "").strip().lower()
+        if disable_strategy_scheduler not in {"1", "true", "yes", "y", "on"}:
+            strategy_scheduler.start()
 
     @app.on_event("shutdown")
     async def _on_shutdown() -> None:  # noqa: D401
@@ -63,6 +80,7 @@ def create_app() -> FastAPI:
 
         close_db_pool()
         ingestion_scheduler.shutdown(wait=False)
+        strategy_scheduler.shutdown(wait=False)
 
     # 业务路由（版本化）
     app.include_router(health.router, prefix="/api/v1")
@@ -72,6 +90,8 @@ def create_app() -> FastAPI:
     app.include_router(indicator_screening.router, prefix="/api/v1")
     app.include_router(cloud_screening.router, prefix="/api/v1")
     app.include_router(monitor.router, prefix="/api/v1")
+    app.include_router(qmt.router, prefix="/api/v1")
+    app.include_router(strategies.router)
     app.include_router(portfolio.router, prefix="/api/v1")
     app.include_router(main_force.router, prefix="/api/v1")
     app.include_router(sector_strategy.router, prefix="/api/v1")
@@ -81,6 +101,8 @@ def create_app() -> FastAPI:
     app.include_router(settings.router, prefix="/api/v1")
     app.include_router(config_env.router, prefix="/api/v1")
     app.include_router(smart_monitor.router, prefix="/api/v1")
+    app.include_router(prompt_packs.router, prefix="/api/v1")
+    app.include_router(rdagent.router, prefix="/api/v1")
     app.include_router(qlib_router, prefix="")
 
     # ingestion / 本地数据管理接口：保持与旧 tdx_backend 相同的 /api/* 路径

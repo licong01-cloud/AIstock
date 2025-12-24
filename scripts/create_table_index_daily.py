@@ -70,6 +70,24 @@ def main() -> None:
             except Exception as exc:  # noqa: BLE001
                 # 若数据库未安装 Timescale 扩展或已是 hypertable，可以忽略错误。
                 print(f"[WARN] create_hypertable for market.index_daily failed or skipped: {exc}")
+
+            cur.execute(
+                """
+                INSERT INTO market.data_stats_config (data_kind, table_name, date_column, enabled, extra_info)
+                VALUES (
+                    'index_daily',
+                    'market.index_daily',
+                    'trade_date',
+                    TRUE,
+                    jsonb_build_object('desc','Tushare index_daily 指数日线行情')
+                )
+                ON CONFLICT (data_kind) DO UPDATE
+                    SET table_name = EXCLUDED.table_name,
+                        date_column = EXCLUDED.date_column,
+                        enabled = EXCLUDED.enabled,
+                        extra_info = EXCLUDED.extra_info;
+                """
+            )
         print("[OK] market.index_daily table created/updated successfully")
     finally:
         try:

@@ -1,0 +1,8 @@
+name,dtype,meaning_cn,unit,source_table,comment
+open,,,,daily_pv,
+close,,,,daily_pv,
+high,,,,daily_pv,
+low,,,,daily_pv,
+volume,,,,daily_pv,
+factor,,,,daily_pv,
+amount,,,,daily_pv,

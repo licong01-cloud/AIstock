@@ -51,6 +51,8 @@ const INGESTION_DATASETS: Record<string, string> = {
   tdx_board_daily: "通达信板块行情",
   stock_moneyflow: "个股资金流（moneyflow_ind_dc）",
   stock_moneyflow_ts: "个股资金流（moneyflow · Tushare）",
+  daily_basic: "股票每日指标（Tushare daily_basic）",
+  index_daily: "指数日线行情（Tushare index_daily）",
   trade_agg_5m: "高频聚合 5m",
   news_realtime: "新闻实时入库（多源快讯）",
 };

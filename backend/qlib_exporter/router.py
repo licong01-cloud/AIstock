@@ -14,15 +14,17 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from dataclasses import asdict, dataclass
+import io
+import zipfile
+import traceback
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Literal
-import traceback
+from typing import Any, Dict, List, Literal, Optional
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, validator
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..infra.wsl_qlib_runner import QlibWSLConfigError, run_qlib_script_in_wsl, win_to_wsl_path
 from .config import (
@@ -49,6 +51,7 @@ from .exporter import (
     QlibMinuteExporter,
     QlibMoneyflowExporter,
 )
+from .field_map_service import export_field_map_for_snapshot
 from .data_quality import DataReporter, DataValidator
 from .db_reader import DBReader
 
@@ -77,7 +80,8 @@ class DailySnapshotRequest(BaseModel):
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
 
-    @validator("snapshot_id")
+    @field_validator("snapshot_id")
+    @classmethod
     def _snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
         """确保 snapshot_id 非空且无首尾空格."""
         v2 = v.strip()
@@ -85,13 +89,12 @@ class DailySnapshotRequest(BaseModel):
             raise ValueError("snapshot_id 不能为空")
         return v2
 
-    @validator("end")
-    def _end_not_before_start(cls, v: date, values: dict) -> date:  # noqa: D401, N805
+    @model_validator(mode="after")
+    def _end_not_before_start(self):  # noqa: D401, N805
         """确保 end >= start."""
-        start = values.get("start")
-        if start and v < start:
+        if self.end < self.start:
             raise ValueError("end 日期不能早于 start")
-        return v
+        return self
 
 
 class DailySnapshotResponse(BaseModel):
@@ -131,7 +134,8 @@ class MoneyflowSnapshotRequest(BaseModel):
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
 
-    @validator("snapshot_id")
+    @field_validator("snapshot_id")
+    @classmethod
     def _moneyflow_snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
         """确保 snapshot_id 非空且无首尾空格."""
         v2 = v.strip()
@@ -139,13 +143,12 @@ class MoneyflowSnapshotRequest(BaseModel):
             raise ValueError("snapshot_id 不能为空")
         return v2
 
-    @validator("end")
-    def _moneyflow_end_not_before_start(cls, v: date, values: dict) -> date:  # noqa: D401, N805
+    @model_validator(mode="after")
+    def _moneyflow_end_not_before_start(self):  # noqa: D401, N805
         """确保 end >= start."""
-        start = values.get("start")
-        if start and v < start:
+        if self.end < self.start:
             raise ValueError("end 日期不能早于 start")
-        return v
+        return self
 
 
 class MoneyflowSnapshotResponse(BaseModel):
@@ -166,6 +169,41 @@ class MoneyflowSnapshotResponse(BaseModel):
             ts_codes=result.ts_codes,
             rows=result.rows,
         )
+
+
+class FieldMapExportRequest(BaseModel):
+    snapshot_id: str = Field(..., description="Snapshot ID（目录名）")
+    write_to_h5: bool = Field(
+        True,
+        description="是否将字段中文说明写入 snapshot 下的 daily_basic.h5/moneyflow.h5 的 HDF5 attrs",
+    )
+
+    @field_validator("snapshot_id")
+    @classmethod
+    def _snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
+        v2 = v.strip()
+        if not v2:
+            raise ValueError("snapshot_id 不能为空")
+        return v2
+
+
+class FieldMapExportResponse(BaseModel):
+    snapshot_id: str
+    csv_path: str
+    rows: int
+    written_h5: dict[str, int]
+    has_daily_basic: bool
+    has_moneyflow: bool
+
+
+# NOTE: FastAPI builds request body TypeAdapters while registering routes.
+# Ensure models are rebuilt BEFORE route decorators below.
+try:
+    DailySnapshotRequest.model_rebuild(force=True)
+    MoneyflowSnapshotRequest.model_rebuild(force=True)
+    FieldMapExportRequest.model_rebuild(force=True)
+except Exception:
+    pass
 
 
 _daily_exporter = QlibDailyExporter()
@@ -222,19 +260,19 @@ class DailyBasicSnapshotRequest(BaseModel):
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
 
-    @validator("snapshot_id")
+    @field_validator("snapshot_id")
+    @classmethod
     def _daily_basic_snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
         v2 = v.strip()
         if not v2:
             raise ValueError("snapshot_id 不能为空")
         return v2
 
-    @validator("end")
-    def _daily_basic_end_not_before_start(cls, v: date, values: dict) -> date:  # noqa: D401, N805
-        start = values.get("start")
-        if start and v < start:
+    @model_validator(mode="after")
+    def _daily_basic_end_not_before_start(self) -> "DailyBasicSnapshotRequest":  # noqa: D401, N805
+        if self.end < self.start:
             raise ValueError("end 日期不能早于 start")
-        return v
+        return self
 
 
 class DailyBasicSnapshotResponse(BaseModel):
@@ -308,6 +346,31 @@ async def create_moneyflow_snapshot(body: MoneyflowSnapshotRequest) -> Moneyflow
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.post("/api/v1/qlib/field_map/export", response_model=FieldMapExportResponse)
+async def export_field_map(body: FieldMapExportRequest) -> FieldMapExportResponse:
+    """生成字段含义映射 CSV，并可选写入 HDF5 attrs.
+
+    - 输出 CSV：AIstock/metadata/aistock_field_map.csv
+    - 读取 DB 列 comment（market.daily_basic / market.moneyflow_ts）
+    - 根据 snapshot 下 h5 的列名映射到最终导出列名（db_*/mf_*）
+    - 写入 daily_basic.h5 / moneyflow.h5 的 storer.attrs.column_comments(_json)
+    """
+
+    try:
+        payload = export_field_map_for_snapshot(
+            snapshot_id=body.snapshot_id,
+            write_to_h5=body.write_to_h5,
+        )
+        return FieldMapExportResponse(**payload)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 # =============================================================================
 # CSV → Qlib bin 导出 API（通过 WSL 调用 RD-Agent 脚本）
 # =============================================================================
@@ -353,6 +416,25 @@ class BinExportResponse(BaseModel):
     stderr_dump: Optional[str] = None
     stdout_check: Optional[str] = None
     stderr_check: Optional[str] = None
+
+
+# Ensure Pydantic v2 fully rebuilds models for FastAPI TypeAdapter
+try:
+    DailySnapshotRequest.model_rebuild()
+    DailyBasicSnapshotRequest.model_rebuild()
+    MoneyflowSnapshotRequest.model_rebuild()
+    FieldMapExportRequest.model_rebuild()
+    MinuteSnapshotRequest.model_rebuild()
+    BoardDailySnapshotRequest.model_rebuild()
+    BoardIndexRequest.model_rebuild()
+    BoardMemberRequest.model_rebuild()
+    IncrementalExportRequest.model_rebuild()
+    FactorExportRequest.model_rebuild()
+    BinExportInfo.model_rebuild()
+    BinExportListResponse.model_rebuild()
+except Exception:
+    # If rebuild fails, let runtime raise the original error for diagnosis.
+    pass
 
 
 _db_reader = DBReader()
@@ -403,22 +485,40 @@ def _export_daily_to_csv_for_dump_bin(
     rename_cols = {}
     if "$open" in df_reset.columns:
         rename_cols["$open"] = "open"
+    elif "open" in df_reset.columns:
+        rename_cols["open"] = "open"
+
     if "$high" in df_reset.columns:
         rename_cols["$high"] = "high"
+    elif "high" in df_reset.columns:
+        rename_cols["high"] = "high"
+
     if "$low" in df_reset.columns:
         rename_cols["$low"] = "low"
+    elif "low" in df_reset.columns:
+        rename_cols["low"] = "low"
+
     if "$close" in df_reset.columns:
         rename_cols["$close"] = "close"
+    elif "close" in df_reset.columns:
+        rename_cols["close"] = "close"
+
     if "$volume" in df_reset.columns:
         rename_cols["$volume"] = "volume"
+    elif "volume" in df_reset.columns:
+        rename_cols["volume"] = "volume"
+
     if "$amount" in df_reset.columns:
         rename_cols["$amount"] = "amount"
+    elif "amount" in df_reset.columns:
+        rename_cols["amount"] = "amount"
+
+    if "$factor" in df_reset.columns:
+        rename_cols["$factor"] = "factor"
+    elif "factor" in df_reset.columns:
+        rename_cols["factor"] = "factor"
 
     df_reset = df_reset.rename(columns=rename_cols)
-
-    # 确保 amount 列存在
-    if "amount" not in df_reset.columns:
-        df_reset["amount"] = 0.0
 
     csv_cols = [
         "date",
@@ -429,7 +529,19 @@ def _export_daily_to_csv_for_dump_bin(
         "close",
         "volume",
         "amount",
+        "factor",
     ]
+
+    # 缺列兜底：一律用 NaN（禁止用 0）
+    for col in csv_cols:
+        if col not in df_reset.columns:
+            df_reset[col] = float("nan")
+
+    if df_reset["factor"].isna().all():
+        raise HTTPException(
+            status_code=400,
+            detail="bin 导出失败：factor 列为空或全为 NaN（请检查复权因子 adj_factor / 数据加载逻辑）",
+        )
     df_csv = df_reset[csv_cols]
 
     # 为兼容 dump_bin.py dump_all 的行为，这里按 symbol 拆分为多个文件：每只股票一个 CSV。
@@ -494,21 +606,40 @@ def _export_minute_to_csv_for_dump_bin(
     rename_cols: Dict[str, str] = {}
     if "$open" in df_reset.columns:
         rename_cols["$open"] = "open"
+    elif "open" in df_reset.columns:
+        rename_cols["open"] = "open"
+
     if "$high" in df_reset.columns:
         rename_cols["$high"] = "high"
+    elif "high" in df_reset.columns:
+        rename_cols["high"] = "high"
+
     if "$low" in df_reset.columns:
         rename_cols["$low"] = "low"
+    elif "low" in df_reset.columns:
+        rename_cols["low"] = "low"
+
     if "$close" in df_reset.columns:
         rename_cols["$close"] = "close"
+    elif "close" in df_reset.columns:
+        rename_cols["close"] = "close"
+
     if "$volume" in df_reset.columns:
         rename_cols["$volume"] = "volume"
+    elif "volume" in df_reset.columns:
+        rename_cols["volume"] = "volume"
+
     if "$amount" in df_reset.columns:
         rename_cols["$amount"] = "amount"
+    elif "amount" in df_reset.columns:
+        rename_cols["amount"] = "amount"
+
+    if "$factor" in df_reset.columns:
+        rename_cols["$factor"] = "factor"
+    elif "factor" in df_reset.columns:
+        rename_cols["factor"] = "factor"
 
     df_reset = df_reset.rename(columns=rename_cols)
-
-    if "amount" not in df_reset.columns:
-        df_reset["amount"] = 0.0
 
     csv_cols = [
         "date",
@@ -519,7 +650,19 @@ def _export_minute_to_csv_for_dump_bin(
         "close",
         "volume",
         "amount",
+        "factor",
     ]
+
+    # 缺列兜底：一律用 NaN（禁止用 0）
+    for col in csv_cols:
+        if col not in df_reset.columns:
+            df_reset[col] = float("nan")
+
+    if df_reset["factor"].isna().all():
+        raise HTTPException(
+            status_code=400,
+            detail="bin 导出失败：factor 列为空或全为 NaN（请检查复权因子 adj_factor / 数据加载逻辑）",
+        )
     df_csv = df_reset[csv_cols]
 
     csv_path = csv_dir / f"minute_{freq}_all.csv"
@@ -533,6 +676,8 @@ def _export_index_to_csv_for_dump_bin(
     index_code: str,
     start: date,
     end: date,
+    *,
+    data_source: Literal["tushare", "tdx"] = "tushare",
 ) -> Path:
     """从 DB 导出单个指数日线为 CSV，供 dump_bin.py 使用。
 
@@ -549,7 +694,10 @@ def _export_index_to_csv_for_dump_bin(
     csv_dir = csv_root_path / snapshot_id / "index"
     csv_dir.mkdir(parents=True, exist_ok=True)
 
-    df = _db_reader.load_index_daily(index_code, start, end)
+    if data_source == "tdx":
+        df = _db_reader.load_index_daily_tdx(index_code, start, end)
+    else:
+        df = _db_reader.load_index_daily(index_code, start, end)
     if df.empty:
         raise HTTPException(status_code=400, detail="指定区间内无可导出的指数日线数据")
 
@@ -562,7 +710,12 @@ def _export_index_to_csv_for_dump_bin(
     df_csv["low"] = df["low"]
     df_csv["close"] = df["close"]
     df_csv["volume"] = df["volume"]
-    df_csv["amount"] = df.get("amount", 0.0)
+    # amount 统一输出为元：
+    # - tushare(index_daily.amount) 单位为千元，需要 *1000
+    # - tdx(index_daily_tdx.amount_li) 单位为厘，已在 DBReader 中 /1000 转为元
+    if "amount" in df.columns:
+        amt = pd.to_numeric(df["amount"], errors="coerce")
+        df_csv["amount"] = amt * 1000.0 if data_source == "tushare" else amt
 
     csv_cols = [
         "date",
@@ -574,6 +727,12 @@ def _export_index_to_csv_for_dump_bin(
         "volume",
         "amount",
     ]
+
+    # 缺列兜底：一律用 NaN（禁止用 0）
+    for col in csv_cols:
+        if col not in df_csv.columns:
+            df_csv[col] = float("nan")
+
     df_csv = df_csv[csv_cols]
 
     csv_path = csv_dir / f"{index_code}.csv"
@@ -625,6 +784,21 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
     bin_root_path = Path(bin_root)
     bin_dir = bin_root_path / body.snapshot_id
     bin_dir.mkdir(parents=True, exist_ok=True)
+
+    # dump_bin.py 会维护 instruments/all.txt。
+    # 需求：指数导出不应更新 all.txt（只维护 index.txt）。
+    # 因此：
+    # - 若 all.txt 原本存在：dump 后恢复原内容（避免指数写入影响股票 universe）
+    # - 若 all.txt 原本不存在：dump 后删除新生成的 all.txt
+    instruments_dir_for_all = bin_dir / "instruments"
+    all_file = instruments_dir_for_all / "all.txt"
+    all_file_existed = all_file.exists()
+    all_file_backup: Optional[bytes] = None
+    if all_file_existed:
+        try:
+            all_file_backup = all_file.read_bytes()
+        except Exception:
+            all_file_backup = None
 
     csv_dir_wsl = win_to_wsl_path(str(csv_dir))
     bin_dir_wsl = win_to_wsl_path(str(bin_dir))
@@ -862,12 +1036,31 @@ class IndexListResponse(BaseModel):
 
 
 @router.get("/api/v1/qlib/index/list", response_model=IndexListResponse)
-async def list_indices(markets: Optional[str] = None) -> IndexListResponse:
+async def list_indices(
+    markets: Optional[str] = None,
+    data_source: Literal["tushare", "tdx"] = "tushare",
+) -> IndexListResponse:
     """按 market 过滤罗列指数基础信息.
 
     Args:
         markets: 可选，逗号分隔的 market 列表，例如 "CSI,SSE,SZSE"。
+        data_source: tushare 使用 index_basic；tdx 使用 index_daily_tdx 实际数据生成列表。
     """
+
+    if data_source == "tdx":
+        df = _db_reader.load_index_list_tdx()
+        if df.empty:
+            return IndexListResponse(items=[], total=0)
+        items = [
+            IndexInfo(
+                ts_code=row["ts_code"],
+                name=row.get("name"),
+                fullname=row.get("fullname"),
+                market=row.get("market"),
+            )
+            for _, row in df.iterrows()
+        ]
+        return IndexListResponse(items=items, total=len(items))
 
     market_list: Optional[List[str]]
     if markets:
@@ -900,6 +1093,10 @@ class IndexBinExportRequest(BaseModel):
     index_code: str = Field(..., description="指数 ts_code，例如 000300.SH")
     start: date = Field(..., description="开始日期，YYYY-MM-DD")
     end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
+    data_source: Literal["tushare", "tdx"] = Field(
+        "tushare",
+        description="指数数据源：tushare=market.index_daily（amount=千元）；tdx=market.index_daily_tdx（价格/金额=厘）",
+    )
     run_health_check: bool = Field(
         True,
         description="是否在 dump_bin 后运行 check_data_health.py（对整个日频 bin）",
@@ -941,6 +1138,7 @@ async def export_index_bin(body: IndexBinExportRequest) -> IndexBinExportRespons
         index_code=body.index_code,
         start=body.start,
         end=body.end,
+        data_source=body.data_source,
     )
 
     # 2. 构造 bin 目录
@@ -998,25 +1196,85 @@ async def export_index_bin(body: IndexBinExportRequest) -> IndexBinExportRespons
             stdout_check = None
             stderr_check = str(exc)
 
+    # dump_bin.py 可能已修改/生成 instruments/all.txt；这里按策略恢复/删除
+    try:
+        if all_file_existed:
+            if all_file_backup is not None:
+                instruments_dir_for_all.mkdir(parents=True, exist_ok=True)
+                all_file.write_bytes(all_file_backup)
+        else:
+            if all_file.exists():
+                all_file.unlink()
+    except Exception:
+        # 不影响导出主流程
+        pass
+
     # 5. 维护 instruments/index.txt
     instruments_dir = bin_dir / "instruments"
     instruments_dir.mkdir(parents=True, exist_ok=True)
     index_file = instruments_dir / "index.txt"
-    existing: set[str] = set()
+    # 写入策略：
+    # - 若 index.txt 已存在且包含其它指数，则保留其它行；
+    # - 若本次导出的指数已存在，则覆盖更新该行 start/end；
+    # - 若本次导出的指数不存在，则追加新行。
+    # - 读取兼容 1 列（仅 code）或 3 列（code\tstart\tend）格式；写回统一为 3 列 Tab 分隔。
+    # start/end 使用本次导出区间内实际存在数据的 min/max(trade_date)，失败则回退到 body.start/body.end。
+    try:
+        if body.data_source == "tdx":
+            idx_df = _db_reader.load_index_daily_tdx(body.index_code, body.start, body.end)
+        else:
+            idx_df = _db_reader.load_index_daily(body.index_code, body.start, body.end)
+        if not idx_df.empty and "trade_date" in idx_df.columns:
+            min_dt = min(idx_df["trade_date"])
+            max_dt = max(idx_df["trade_date"])
+            start_str = pd.Timestamp(min_dt).strftime("%Y-%m-%d")
+            end_str = pd.Timestamp(max_dt).strftime("%Y-%m-%d")
+        else:
+            start_str = body.start.strftime("%Y-%m-%d")
+            end_str = body.end.strftime("%Y-%m-%d")
+    except Exception:
+        start_str = body.start.strftime("%Y-%m-%d")
+        end_str = body.end.strftime("%Y-%m-%d")
+
+    records: list[tuple[str, str, str]] = []
     if index_file.exists():
         try:
-            for line in index_file.read_text(encoding="utf-8").splitlines():
-                code = line.strip()
+            raw = index_file.read_text(encoding="utf-8")
+            for line in raw.splitlines():
+                s = line.strip()
+                if not s:
+                    continue
+                parts = s.split("\t")
+                if len(parts) >= 3:
+                    code = parts[0].strip()
+                    s0 = parts[1].strip()
+                    e0 = parts[2].strip()
+                else:
+                    # 兼容 1 列（或空白分隔）
+                    parts2 = s.split()
+                    code = parts2[0].strip() if parts2 else ""
+                    s0 = ""
+                    e0 = ""
                 if code:
-                    existing.add(code)
+                    records.append((code, s0, e0))
         except Exception:
-            existing = set()
+            records = []
 
-    if body.index_code not in existing:
-        existing.add(body.index_code)
-        # 按字典序写回，便于阅读
-        lines = "\n".join(sorted(existing)) + "\n"
-        index_file.write_text(lines, encoding="utf-8")
+    updated = False
+    new_records: list[tuple[str, str, str]] = []
+    for code, s0, e0 in records:
+        if code == body.index_code:
+            new_records.append((code, start_str, end_str))
+            updated = True
+        else:
+            # 保留原有 start/end（若为空则回退到请求区间）
+            new_records.append((code, s0 or body.start.strftime("%Y-%m-%d"), e0 or body.end.strftime("%Y-%m-%d")))
+
+    if not updated:
+        new_records.append((body.index_code, start_str, end_str))
+
+    content = "".join([f"{c}\t{s}\t{e}\n" for c, s, e in new_records])
+    index_file.write_text(content, encoding="utf-8")
 
     return IndexBinExportResponse(
         snapshot_id=body.snapshot_id,
@@ -1148,21 +1406,29 @@ class MinuteSnapshotRequest(BaseModel):
         None,
         description="可选，按交易所过滤：支持 'sh', 'sz', 'bj'；为空表示不过滤（全市场）",
     )
+    exclude_st: bool = Field(
+        False,
+        description="是否排除所有在 stock_st 中出现过的股票（曾经 / 当前 ST）",
+    )
+    exclude_delisted_or_paused: bool = Field(
+        False,
+        description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
+    )
     freq: str = Field("1m", description="分钟线频率，当前固定为 1m")
 
-    @validator("snapshot_id")
+    @field_validator("snapshot_id")
+    @classmethod
     def _snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
         v2 = v.strip()
         if not v2:
             raise ValueError("snapshot_id 不能为空")
         return v2
 
-    @validator("end")
-    def _end_not_before_start(cls, v: date, values: dict) -> date:  # noqa: D401, N805
-        start = values.get("start")
-        if start and v < start:
+    @model_validator(mode="after")
+    def _end_not_before_start(self) -> "MinuteSnapshotRequest":  # noqa: D401, N805
+        if self.end < self.start:
             raise ValueError("end 日期不能早于 start")
-        return v
+        return self
 
 
 class MinuteSnapshotResponse(BaseModel):
@@ -1196,6 +1462,8 @@ async def create_minute_snapshot(body: MinuteSnapshotRequest) -> MinuteSnapshotR
             end=body.end,
             ts_codes=body.ts_codes,
             exchanges=body.exchanges,
+            exclude_st=body.exclude_st,
+            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
             freq=body.freq,
         )
         return MinuteSnapshotResponse.from_result(result)
@@ -1224,19 +1492,19 @@ class BoardDailySnapshotRequest(BaseModel):
         description="可选，按板块类型过滤（来自 tdx_board_index.idx_type）",
     )
 
-    @validator("snapshot_id")
+    @field_validator("snapshot_id")
+    @classmethod
     def _snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
         v2 = v.strip()
         if not v2:
             raise ValueError("snapshot_id 不能为空")
         return v2
 
-    @validator("end")
-    def _end_not_before_start(cls, v: date, values: dict) -> date:  # noqa: D401, N805
-        start = values.get("start")
-        if start and v < start:
+    @model_validator(mode="after")
+    def _end_not_before_start(self) -> "BoardDailySnapshotRequest":  # noqa: D401, N805
+        if self.end < self.start:
             raise ValueError("end 日期不能早于 start")
-        return v
+        return self
 
 
 class BoardDailySnapshotResponse(BaseModel):
@@ -1393,6 +1661,35 @@ async def list_snapshots() -> SnapshotListResponse:
     return SnapshotListResponse(snapshots=snapshots, total=len(snapshots))
 
 
+@router.get("/api/v1/qlib/snapshots/{snapshot_id}/export")
+async def export_snapshot_zip(snapshot_id: str):
+    """导出指定 Snapshot 目录为 zip 下载."""
+
+    sid = (snapshot_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="snapshot_id 不能为空")
+
+    root = QLIB_SNAPSHOT_ROOT.resolve()
+    snap_dir = (root / sid).resolve()
+    if root not in snap_dir.parents and snap_dir != root:
+        raise HTTPException(status_code=400, detail="invalid snapshot_id")
+    if not snap_dir.exists() or not snap_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"snapshot not found: {sid}")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for p in snap_dir.rglob("*"):
+            if p.is_dir():
+                continue
+            rel = p.relative_to(snap_dir)
+            zf.write(p, arcname=str(Path(sid) / rel))
+
+    buf.seek(0)
+    filename = f"{sid}.zip"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(buf, media_type="application/zip", headers=headers)
+
+
 class DeleteSnapshotResponse(BaseModel):
     """删除 Snapshot 响应."""
 
@@ -1440,19 +1737,19 @@ class BoardIndexRequest(BaseModel):
         description="可选，按板块类型过滤（如 'TDX_BOARD_HY', 'TDX_BOARD_GN' 等）",
     )
 
-    @validator("snapshot_id")
+    @field_validator("snapshot_id")
+    @classmethod
     def _snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
         v2 = v.strip()
         if not v2:
             raise ValueError("snapshot_id 不能为空")
         return v2
 
-    @validator("end")
-    def _end_not_before_start(cls, v: date, values: dict) -> date:  # noqa: D401, N805
-        start = values.get("start")
-        if start and v < start:
+    @model_validator(mode="after")
+    def _end_not_before_start(self) -> "BoardIndexRequest":  # noqa: D401, N805
+        if self.end < self.start:
             raise ValueError("end 日期不能早于 start")
-        return v
+        return self
 
 
 class BoardIndexResponse(BaseModel):
@@ -1508,19 +1805,19 @@ class BoardMemberRequest(BaseModel):
         description="可选，指定导出的板块代码列表；为空则导出全部",
     )
 
-    @validator("snapshot_id")
+    @field_validator("snapshot_id")
+    @classmethod
     def _snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
         v2 = v.strip()
         if not v2:
             raise ValueError("snapshot_id 不能为空")
         return v2
 
-    @validator("end")
-    def _end_not_before_start(cls, v: date, values: dict) -> date:  # noqa: D401, N805
-        start = values.get("start")
-        if start and v < start:
+    @model_validator(mode="after")
+    def _end_not_before_start(self) -> "BoardMemberRequest":  # noqa: D401, N805
+        if self.end < self.start:
             raise ValueError("end 日期不能早于 start")
-        return v
+        return self
 
 
 class BoardMemberResponse(BaseModel):
@@ -1579,8 +1876,17 @@ class IncrementalExportRequest(BaseModel):
         None,
         description="可选，交易所过滤（仅分钟线有效）：sh, sz, bj",
     )
+    exclude_st: bool = Field(
+        False,
+        description="是否排除所有在 stock_st 中出现过的股票（仅分钟线有效）",
+    )
+    exclude_delisted_or_paused: bool = Field(
+        False,
+        description="是否排除退市或当前暂停上市股票（仅分钟线有效；stock_basic.list_status in ('D','P')）",
+    )
 
-    @validator("snapshot_id")
+    @field_validator("snapshot_id")
+    @classmethod
     def _snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
         v2 = v.strip()
         if not v2:
@@ -1620,6 +1926,8 @@ async def create_minute_snapshot_incremental(body: IncrementalExportRequest) -> 
             snapshot_id=body.snapshot_id,
             end=body.end,
             exchanges=body.exchanges,
+            exclude_st=body.exclude_st,
+            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
         )
         return IncrementalExportResponse.from_result(result)
     except ValueError as exc:
@@ -1693,7 +2001,8 @@ class FactorExportRequest(BaseModel):
     )
     filename: str = Field("daily_pv.h5", description="输出文件名")
 
-    @validator("snapshot_id")
+    @field_validator("snapshot_id")
+    @classmethod
     def _snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
         v2 = v.strip()
         if not v2:

@@ -10,7 +10,7 @@ from __future__ import annotations
     QLIB_WSL_CONDA_SH=~/miniconda3/etc/profile.d/conda.sh
     QLIB_WSL_CONDA_ENV=rdagent-gpu
 
-    QLIB_RDAGENT_ROOT_WSL=/mnt/c/Users/lc999/RD-Agent-main
+    QLIB_RDAGENT_ROOT_WSL=/mnt/f/Dev/RD-Agent-main
     QLIB_SCRIPTS_SUBDIR=scripts
 
     # 以下两个主要给上层逻辑使用, 本模块只做透传(可选)
@@ -94,7 +94,7 @@ def build_wsl_qlib_command(
     rdagent_root_wsl = _get_env("QLIB_RDAGENT_ROOT_WSL")
     scripts_subdir = _get_env("QLIB_SCRIPTS_SUBDIR") or "scripts"
 
-    # 目标脚本所在目录, 例如 /mnt/c/Users/.../RD-Agent-main/scripts
+    # 目标脚本所在目录, 例如 /mnt/f/Dev/RD-Agent-main/scripts
     scripts_dir = f"{rdagent_root_wsl.rstrip('/')}/{scripts_subdir}"
 
     arg_list: List[str] = list(args or [])

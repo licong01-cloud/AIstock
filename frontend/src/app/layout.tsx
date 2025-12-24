@@ -46,6 +46,13 @@ const NAV_GROUPS: {
     ],
   },
   {
+    title: "📈 QMT模拟盘交易",
+    items: [
+      { href: "/qmt/positions", label: "💼 持仓管理" },
+      { href: "/qmt/strategies", label: "📊 策略管理" },
+    ],
+  },
+  {
     title: "系统与数据",
     items: [
       { href: "/history", label: "📖 历史记录" },
@@ -54,6 +61,14 @@ const NAV_GROUPS: {
       { href: "/quant-models", label: "🧠 模型调度" },
       { href: "/qlib", label: "📦 Qlib Snapshot 导出" },
       { href: "/scheduler", label: "🗓️ RD-Agent 调度" },
+    ],
+  },
+  {
+    title: "RD-Agent管理",
+    items: [
+      { href: "/rd-agent/prompt-packs", label: "RD-agent提示词模板管理" },
+      { href: "/rdagent/strategies", label: "RD-Agent 策略管理" },
+      { href: "/rdagent/import", label: "RD-Agent 候选导入" },
     ],
   },
 ];
