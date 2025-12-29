@@ -38,6 +38,11 @@ qlib_snapshots/
 # Local xtquant installation and vendor tools (read-only, not tracked)
 xtquant/
 
+# Local environment files (never commit)
+.env
+.env.*
+!.env.example
+
 # Frontend build artifacts and local temp files (not tracked)
 frontend/.next/
 tmp/
