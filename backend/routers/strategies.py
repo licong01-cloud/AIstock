@@ -1,12 +1,14 @@
 """策略交易 API 路由（QMT 交易系统）"""
 from __future__ import annotations
 
+import threading
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from ..infra.strategy_executor import SimpleStrategyExecutor, build_qmt_client_from_env
+from ..infra.strategy_executor import SimpleStrategyExecutor
+from ..schedulers.strategy_scheduler import scheduler as strategy_scheduler
 
 router = APIRouter(prefix="/api/v1/strategies", tags=["strategies"])
 
@@ -197,6 +199,14 @@ def create_or_update_strategy_config(request: StrategyConfigRequest) -> Dict[str
                     )
                     config_id = cur.fetchone()[0]
                     conn.commit()
+                    try:
+                        threading.Thread(
+                            target=strategy_scheduler.refresh_strategies,
+                            name="strategy-refresh-on-config-update",
+                            daemon=True,
+                        ).start()
+                    except Exception:
+                        pass
                     return {"success": True, "message": "策略配置已更新", "id": config_id}
                 else:
                     # 创建
@@ -221,6 +231,14 @@ def create_or_update_strategy_config(request: StrategyConfigRequest) -> Dict[str
                     )
                     config_id = cur.fetchone()[0]
                     conn.commit()
+                    try:
+                        threading.Thread(
+                            target=strategy_scheduler.refresh_strategies,
+                            name="strategy-refresh-on-config-create",
+                            daemon=True,
+                        ).start()
+                    except Exception:
+                        pass
                     return {"success": True, "message": "策略配置已创建", "id": config_id}
 
     except Exception as e:
@@ -247,6 +265,14 @@ def delete_strategy_config(strategy_id: str) -> Dict[str, Any]:
                 conn.commit()
 
                 if deleted:
+                    try:
+                        threading.Thread(
+                            target=strategy_scheduler.refresh_strategies,
+                            name="strategy-refresh-on-config-delete",
+                            daemon=True,
+                        ).start()
+                    except Exception:
+                        pass
                     return {"success": True, "message": "策略配置已删除"}
                 else:
                     raise HTTPException(status_code=404, detail="策略配置不存在")
@@ -279,6 +305,14 @@ def toggle_strategy_enabled(strategy_id: str, enabled: bool = Query(..., descrip
                 conn.commit()
 
                 if updated:
+                    try:
+                        threading.Thread(
+                            target=strategy_scheduler.refresh_strategies,
+                            name="strategy-refresh-on-toggle-enabled",
+                            daemon=True,
+                        ).start()
+                    except Exception:
+                        pass
                     return {"success": True, "message": f"策略已{'启用' if enabled else '禁用'}"}
                 else:
                     raise HTTPException(status_code=404, detail="策略配置不存在")
@@ -298,7 +332,13 @@ def get_strategy_executions(
     try:
         from ..db.pg_pool import get_conn
         import json
+        from ..infra.qmt_client import (
+            get_qmt_client_singleton,
+            QMTNotAvailableError,
+        )
 
+        # NOTE: Always release DB connection before calling into QMT.
+        # QMT connect/query may block on internal locks when QMT is unavailable or connecting.
         with get_conn() as conn:
             with conn.cursor() as cur:
                 if strategy_id:
@@ -330,27 +370,62 @@ def get_strategy_executions(
                     )
 
                 rows = cur.fetchall()
-                executions = []
-                for row in rows:
-                    executions.append(
-                        {
-                            "id": row[0],
-                            "strategy_id": row[1],
-                            "execution_type": row[2],
-                            "trigger_source": row[3],
-                            "status": row[4],
-                            "start_time": row[5].isoformat() if row[5] else None,
-                            "end_time": row[6].isoformat() if row[6] else None,
-                            "duration_seconds": row[7],
-                            "symbols_processed": row[8],
-                            "signals_generated": row[9],
-                            "signals_executed": row[10],
-                            "error_message": row[11],
-                            "metrics": json.loads(row[12]) if row[12] else {},
-                        }
-                    )
 
-                return {"success": True, "executions": executions, "total": len(executions)}
+        executions = []
+        for row in rows:
+            executions.append(
+                {
+                    "id": row[0],
+                    "strategy_id": row[1],
+                    "execution_type": row[2],
+                    "trigger_source": row[3],
+                    "status": row[4],
+                    "start_time": row[5].isoformat() if row[5] else None,
+                    "end_time": row[6].isoformat() if row[6] else None,
+                    "duration_seconds": row[7],
+                    "symbols_processed": row[8],
+                    "signals_generated": row[9],
+                    "signals_executed": row[10],
+                    "error_message": row[11],
+                    "metrics": json.loads(row[12]) if row[12] else {},
+                }
+            )
+
+        qmt_orders_by_strategy: Dict[str, List[Dict[str, Any]]] = {}
+        qmt_trades_by_strategy: Dict[str, List[Dict[str, Any]]] = {}
+        try:
+            client = get_qmt_client_singleton()
+            qmt_orders = client.get_orders(cancelable_only=False) or []
+            qmt_trades = client.get_trades() or []
+
+            for o in qmt_orders:
+                sid = str(o.get("strategy_name") or "").strip()
+                if not sid:
+                    continue
+                qmt_orders_by_strategy.setdefault(sid, []).append(o)
+
+            for t in qmt_trades:
+                sid = str(t.get("strategy_name") or "").strip()
+                if not sid:
+                    continue
+                qmt_trades_by_strategy.setdefault(sid, []).append(t)
+        except QMTNotAvailableError:
+            qmt_orders_by_strategy = {}
+            qmt_trades_by_strategy = {}
+        except Exception:
+            qmt_orders_by_strategy = {}
+            qmt_trades_by_strategy = {}
+
+        for exec_item in executions:
+            sid = str(exec_item.get("strategy_id") or "").strip()
+            exec_item["qmt_orders"] = qmt_orders_by_strategy.get(sid, [])
+            exec_item["qmt_trades"] = qmt_trades_by_strategy.get(sid, [])
+
+        return {
+            "success": True,
+            "executions": executions,
+            "total": len(executions),
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
@@ -397,29 +472,79 @@ def get_trade_intents(
                 )
 
                 rows = cur.fetchall()
-                intents = []
-                for row in rows:
-                    intents.append(
-                        {
-                            "id": row[0],
-                            "strategy_id": row[1],
-                            "symbol": row[2],
-                            "side": row[3],
-                            "quantity": row[4],
-                            "price_type": row[5],
-                            "price": float(row[6]) if row[6] else None,
-                            "reason": row[7],
-                            "status": row[8],
-                            "order_id": row[9],
-                            "order_sysid": row[10],
-                            "error_message": row[11],
-                            "created_at": row[12].isoformat() if row[12] else None,
-                            "executed_at": row[13].isoformat() if row[13] else None,
-                            "signal_data": json.loads(row[14]) if row[14] else {},
-                        }
-                    )
 
-                return {"success": True, "intents": intents, "total": len(intents)}
+        from ..infra.qmt_client import get_qmt_client_singleton, QMTNotAvailableError
+
+        order_map = {}
+        try:
+            client = get_qmt_client_singleton()
+            qmt_orders = client.get_orders(cancelable_only=False) or []
+            for o in qmt_orders:
+                oid = str(o.get("order_id") or "").strip()
+                if not oid:
+                    continue
+                order_map[oid] = o
+        except QMTNotAvailableError:
+            order_map = {}
+        except Exception:
+            order_map = {}
+
+        intents = []
+        for row in rows:
+            raw_signal = row[14]
+            if raw_signal is None:
+                signal_obj = {}
+            elif isinstance(raw_signal, dict):
+                signal_obj = raw_signal
+            elif isinstance(raw_signal, (str, bytes, bytearray)):
+                try:
+                    signal_obj = json.loads(raw_signal)
+                except Exception:
+                    signal_obj = {}
+            else:
+                signal_obj = {}
+
+            intents.append(
+                {
+                    "id": row[0],
+                    "strategy_id": row[1],
+                    "symbol": row[2],
+                    "side": row[3],
+                    "quantity": row[4],
+                    "price_type": row[5],
+                    "price": float(row[6]) if row[6] else None,
+                    "reason": row[7],
+                    "status": row[8],
+                    "order_id": row[9],
+                    "order_sysid": row[10],
+                    "error_message": row[11],
+                    "created_at": row[12].isoformat() if row[12] else None,
+                    "executed_at": row[13].isoformat() if row[13] else None,
+                    "signal_data": signal_obj,
+                    "latest_order_status": (
+                        order_map.get(str(row[9]), {}).get("order_status")
+                        if row[9] is not None
+                        else None
+                    ),
+                    "latest_order_status_msg": (
+                        order_map.get(str(row[9]), {}).get("status_msg")
+                        if row[9] is not None
+                        else None
+                    ),
+                    "traded_volume": (
+                        order_map.get(str(row[9]), {}).get("traded_volume")
+                        if row[9] is not None
+                        else None
+                    ),
+                    "traded_price": (
+                        order_map.get(str(row[9]), {}).get("traded_price")
+                        if row[9] is not None
+                        else None
+                    ),
+                }
+            )
+
+        return {"success": True, "intents": intents, "total": len(intents)}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")

@@ -407,17 +407,35 @@ AIstock 统一策略实体。
 
 ## 15. 开发进度（开发过程中持续更新）
 
-- **Phase 1 - signals 可视化 + 入库**：`后端主要功能已完成，前端页面开发中`
+- **Phase 1 - signals 可视化 + 入库**：`后端主要功能已完成，前端主要页面已落地，细节迭代中`
   - [x] DB 建表（`trading.strategy_*` / `trading.rdagent_signal`）
   - [x] 导入候选浏览 API（`backend/routers/rdagent.py` + `RDRegistryReader`）
   - [x] 导入执行（复制 artifacts 到 Strategy Store，写入 strategy/strategy_version/strategy_artifact_file）
   - [x] signals 解析 + 规范化 + 入库（`rdagent_signals_service.py`）
   - [x] signals 查询 API（overview/topk/portfolio/symbol_series 等）
-  - [ ] Next.js 页面：RDagent 独立策略管理页（`/rdagent/strategies`）
-  - [ ] Next.js 页面：RDagent 候选导入页（`/rdagent/import`）
-  - [ ] Next.js 页面：signals 可视化页（`/strategies/[strategyId]/versions/[versionId]/signals`）
+  - [x] Next.js 页面：RDagent 独立策略管理页（`/rdagent/strategies`）
+  - [x] Next.js 页面：RDagent 候选导入页（`/rdagent/import`）
+  - [x] Next.js 页面：signals 可视化页（`/strategies/[strategyId]/versions/[versionId]/signals`）
 
-- **统一数据服务层设计**：`待开始`
+- **Phase 2 - RD-Agent Catalog & 联动（已完成核心工作）**：`Catalog 后端 + 前端浏览页 + 与 RDagent 策略管理页的联动已完成，支持指标卡深度联动与路径展示`
+  - [x] PostgreSQL 表：`aistock_factor_catalog` / `aistock_strategy_catalog` / `aistock_loop_catalog`
+  - [x] ETL 脚本与服务：从 RD-Agent JSON catalog 导入三类表，支持幂等 upsert
+  - [x] FastAPI 管理与查询 API：`/api/v1/rdagent/catalogs/import` 及三类只读查询接口
+  - [x] Next.js 页面：因子目录浏览（`/rdagent/factors`）
+  - [x] Next.js 页面：策略目录浏览（`/rdagent/strategies-catalog`，支持从 `/rdagent/strategies` 通过 `strategy_id` 跳转与过滤）
+  - [x] Next.js 页面：实验 / loop 目录浏览（`/rdagent/loops`，支持按 `strategy_id` / `status` / `step_name` / `action` 过滤，点击行显示 Drawer 详情）
+  - [x] RDagent 策略管理页与 Catalog/loop 页联动：在 `/rdagent/strategies` 上为每个策略提供跳转到策略目录与 loop 目录的入口
+  - [x] 指标卡联动：策略页指标卡点击可直接跳转到对应 loop 的全量详情 Drawer
+  - [x] 路径展示：在 loop 详情 Drawer 中展示 `feedback`、`ret_curve` 等关联文件路径
+  - [x] 性能优化：后端聚合接口添加索引支持与语句超时控制，解决 5-20s 响应慢问题
+  - [x] 数据服务层（Data Service Layer）核心框架落地：已实现 `xtquant`、`tdx`、`timescaledb` 适配器，支持实时快照、历史窗口、分钟线获取及行情订阅流。
+
+- **统一数据服务层设计与实现**：`核心行情框架已完成，交易适配层待接入`
+  - [x] 统一行情 API（`api.py`）：支持 Snapshot/History/Stream 接口。
+  - [x] `xtquant` 适配器：支持日线/分钟线历史及基于 `get_full_tick` 的行情流。
+  - [x] `tdx` 适配器：支持 HTTP API 批量快照获取（作为备选源）。
+  - [x] `timescaledb` 适配器：支持基于 `DBReader` 的日线历史查询（作为备选源）。
+  - [ ] `miniqmt` 交易适配器：已定义 Dataclass 结构，逻辑实现（Account/Position/Order）待接入。
 - **Phase 2 推理服务层设计**：`待开始`
 
 ---
@@ -427,4 +445,4 @@ AIstock 统一策略实体。
 | 日期 | 变更内容 | 原因 | 影响范围 |
 |------|----------|------|----------|
 | 2025-12-23 | 初版设计文档建立；确认 signals 入库到 `trading.rdagent_signal`；前端为 Next.js | 需求确认 | 全局 |
-| 2025-12-23 (晚) | 对齐 RD-Agent registry & signals 设计文档；补充 RDagent 独立策略管理页面与人工导入流程；更新 Phase 1 后端实现进度 | 与 RD-Agent 思路保持一致，并反映最新产品决策 | 后端服务、前端 IA、策略生命周期 |
+| 2025-12-28 | 实现 RD-Agent 策略页指标卡点击跳转 loop 详情 Drawer；在 Drawer 中显示全量 paths 路径信息；修复 metrics 解析逻辑以支持嵌套结构；添加数据库索引优化性能 | 用户体验优化与性能修复 | 后端 API、前端 UI、数据库索引 |

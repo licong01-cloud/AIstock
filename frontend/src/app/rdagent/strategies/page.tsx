@@ -24,6 +24,19 @@ interface RDStrategyVersion {
   created_at: string | null;
 }
 
+interface BestLoopSummary {
+  strategy_id: string;
+  task_run_id: string;
+  loop_id: number;
+  status: string | null;
+  has_result: boolean | null;
+  metrics: Record<string, any> | null;
+  decision: string | null;
+  summary_execution: string | null;
+  summary_value_feedback: string | null;
+  summary_shape_feedback: string | null;
+}
+
 function formatDateTime(value: string | null) {
   if (!value) return "-";
   try {
@@ -32,6 +45,23 @@ function formatDateTime(value: string | null) {
   } catch {
     return value;
   }
+}
+
+function openStrategyCatalog(strategyId: string) {
+  const url = `/rdagent/strategies-catalog?strategy_id=${encodeURIComponent(
+    strategyId,
+  )}`;
+  window.open(url, "_blank");
+}
+
+function openLoopCatalog(strategyId: string) {
+  const url = `/rdagent/loops?strategy_id=${encodeURIComponent(strategyId)}`;
+  window.open(url, "_blank");
+}
+
+function openLoopDetailDrawer(strategyId: string) {
+  const url = `/rdagent/loops?strategy_id=${encodeURIComponent(strategyId)}&auto_open=true`;
+  window.open(url, "_blank");
 }
 
 export default function RDagentStrategiesPage() {
@@ -43,9 +73,11 @@ export default function RDagentStrategiesPage() {
   const [activeResultStrategyId, setActiveResultStrategyId] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, any>>({});
   const [fullCurveStrategyId, setFullCurveStrategyId] = useState<string | null>(null);
+  const [bestLoops, setBestLoops] = useState<Record<string, BestLoopSummary>>({});
 
   useEffect(() => {
     loadStrategies();
+    loadBestLoops();
   }, []);
 
   async function loadStrategies() {
@@ -60,6 +92,24 @@ export default function RDagentStrategiesPage() {
       setError(e?.message || "加载失败");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadBestLoops() {
+    try {
+      const res = await fetch(`${API_BASE}/rdagent/catalogs/strategy-loop-best`);
+      if (!res.ok) throw new Error(`加载最佳 loop 摘要失败: ${res.status}`);
+      const data = await res.json();
+      const map: Record<string, BestLoopSummary> = {};
+      (data.items || []).forEach((item: BestLoopSummary) => {
+        if (item.strategy_id) {
+          map[item.strategy_id] = item;
+        }
+      });
+      setBestLoops(map);
+    } catch (e) {
+      // 聚合失败不阻塞主页面，仅在控制台打印
+      console.error(e);
     }
   }
 
@@ -161,9 +211,10 @@ export default function RDagentStrategiesPage() {
                   <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>策略ID</th>
                   <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>名称</th>
                   <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>概览</th>
+                  <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>RD-Agent 实验最佳性能</th>
                   <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>状态</th>
                   <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>创建时间</th>
-                  <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>版本 / 回测</th>
+                  <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>版本 / 回测 / Catalog 联动</th>
                 </tr>
               </thead>
               <tbody>
@@ -181,6 +232,89 @@ export default function RDagentStrategiesPage() {
                         来源：RD-Agent（{s.source_strategy_key}）
                       </div>
                     </td>
+                    <td style={{ padding: 12, minWidth: 220 }}>
+                      {(() => {
+                        const best = bestLoops[s.strategy_id];
+                        if (!best || !best.metrics) {
+                          return (
+                            <div style={{ fontSize: 11, color: "#9ca3af" }}>
+                              暂无 loop 指标摘要
+                            </div>
+                          );
+                        }
+                        const m = best.metrics;
+                        const pick = (keys: string[]) => {
+                          for (const k of keys) {
+                            if (m[k] !== undefined && m[k] !== null) return m[k];
+                          }
+                          return undefined;
+                        };
+                        const ann = pick(["ann_ret", "annual_return", "annualized_return"]);
+                        const mdd = pick(["mdd", "max_drawdown"]);
+                        const ic = pick(["ic_mean", "ic", "IC"]);
+
+                        // Fallback logic for Unnamed: 0 / 0 format
+                        let displayAnn = ann;
+                        if (displayAnn === undefined && m["Unnamed: 0"]?.includes("annualized_return")) {
+                          displayAnn = m["0"];
+                        }
+                        let displayMdd = mdd;
+                        if (displayMdd === undefined && m["Unnamed: 0"]?.includes("max_drawdown")) {
+                          displayMdd = m["0"];
+                        }
+                        let displayIc = ic;
+                        if (displayIc === undefined && m["Unnamed: 0"]?.includes("ic_mean")) {
+                          displayIc = m["0"];
+                        }
+
+                        const fmt = (v: any) => {
+                          if (v === undefined || v === null) return "-";
+                          const num = Number(v);
+                          return Number.isFinite(num) ? num.toFixed(4) : String(v).slice(0, 12);
+                        };
+                        return (
+                          <div
+                            style={{ display: "flex", flexWrap: "wrap", gap: 6, cursor: "pointer" }}
+                            onClick={() => openLoopDetailDrawer(s.strategy_id)}
+                            title="点击查看 loop 详细指标与路径"
+                          >
+                            <div
+                              style={{
+                                padding: "4px 6px",
+                                borderRadius: 6,
+                                background: "#ecfeff",
+                                fontSize: 11,
+                              }}
+                            >
+                              <div style={{ color: "#64748b" }}>年化收益</div>
+                              <div style={{ fontWeight: 600 }}>{fmt(displayAnn)}</div>
+                            </div>
+                            <div
+                              style={{
+                                padding: "4px 6px",
+                                borderRadius: 6,
+                                background: "#fef9c3",
+                                fontSize: 11,
+                              }}
+                            >
+                              <div style={{ color: "#64748b" }}>最大回撤</div>
+                              <div style={{ fontWeight: 600 }}>{fmt(displayMdd)}</div>
+                            </div>
+                            <div
+                              style={{
+                                padding: "4px 6px",
+                                borderRadius: 6,
+                                background: "#f5f3ff",
+                                fontSize: 11,
+                              }}
+                            >
+                              <div style={{ color: "#64748b" }}>IC(mean)</div>
+                              <div style={{ fontWeight: 600 }}>{fmt(displayIc)}</div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </td>
                     <td style={{ padding: 12 }}>
                       <span
                         style={{
@@ -195,7 +329,7 @@ export default function RDagentStrategiesPage() {
                       </span>
                     </td>
                     <td style={{ padding: 12 }}>{formatDateTime(s.created_at)}</td>
-                    <td style={{ padding: 12, minWidth: 260 }}>
+                    <td style={{ padding: 12, minWidth: 320 }}>
                       <button
                         type="button"
                         onClick={() => loadVersions(s.strategy_id)}
@@ -225,6 +359,36 @@ export default function RDagentStrategiesPage() {
                         disabled={resultLoading && activeResultStrategyId === s.strategy_id}
                       >
                         {activeResultStrategyId === s.strategy_id ? "隐藏结果" : "查看结果"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openStrategyCatalog(s.strategy_id)}
+                        style={{
+                          padding: "4px 8px",
+                          borderRadius: 6,
+                          border: "1px solid #e5e7eb",
+                          background: "#f9fafb",
+                          fontSize: 12,
+                          cursor: "pointer",
+                          marginLeft: 8,
+                        }}
+                      >
+                        策略目录
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openLoopCatalog(s.strategy_id)}
+                        style={{
+                          padding: "4px 8px",
+                          borderRadius: 6,
+                          border: "1px solid #e5e7eb",
+                          background: "#f9fafb",
+                          fontSize: 12,
+                          cursor: "pointer",
+                          marginLeft: 8,
+                        }}
+                      >
+                        实验 / loop
                       </button>
                       {versions[s.strategy_id] && versions[s.strategy_id].length > 0 && (
                         <ul style={{ marginTop: 8, paddingLeft: 16, fontSize: 12 }}>

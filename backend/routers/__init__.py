@@ -6,7 +6,6 @@ from . import indicator_screening
 from . import cloud_screening
 from . import monitor
 from . import portfolio
-from . import main_force
 from . import sector_strategy
 from . import longhubang
 from . import model_scheduler
@@ -27,7 +26,6 @@ __all__ = [
     "cloud_screening",
     "monitor",
     "portfolio",
-    "main_force",
     "sector_strategy",
     "longhubang",
     "model_scheduler",

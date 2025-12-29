@@ -1,11 +1,14 @@
 """双均线交叉策略（QMT 交易系统）"""
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Optional
 
 import pandas as pd
 
 from .base_strategy import BaseStrategy, TradeSignal
+from ..data_service import api as data_api
+from ..infra.qmt_client import QMTNotAvailableError, get_qmt_client_singleton
 
 
 class MACrossStrategy(BaseStrategy):
@@ -168,189 +171,53 @@ class MACrossStrategy(BaseStrategy):
         return None
 
     def _fetch_stock_data(self, symbol: str) -> Optional[pd.DataFrame]:
-        """获取股票历史数据（历史K线 + 实时行情更新）
-        
-        数据来源优先级：
-        1. 历史K线数据（根据period配置）- 用于计算均线
-        2. xtquant 实时行情（如果可用）- 更新最新价格
-        3. TDX/Tushare 实时行情（兜底）
-        
-        支持的周期：
-        - 15m: 15分钟线（日内交易）
-        - 1d: 日线（日频交易）
-        - 1m, 5m, 30m等
+        """通过数据服务层获取股票历史数据。
+
+        - 对于日线周期（"1d"），使用 get_history_window；
+        - 对于分钟/其他周期（"1m"/"5m"/"15m"/"30m" 等），使用
+          get_intraday_window；
+        - 不再直接依赖 UnifiedDataAccess 或 xtquant 低层 API。
         """
         try:
-            from ..core.unified_data_access_impl import UnifiedDataAccess
+            universe = [symbol]
 
-            # 优先尝试通过 xtquant 补充所需周期的历史数据（如果可用）
-            # 参考 xtdata 文档：支持的周期包括 1m / 5m / 15m / 30m / 1d 等
-            try:  # best-effort，不影响后续 UnifiedDataAccess 兜底
-                import xtquant.xtdata as xtdata  # type: ignore[import]
+            # 为了计算均线，至少需要 ma_long 条，额外多取一些做缓冲。
+            bars = max(self.ma_long + 5, self.ma_long * 2)
 
-                if self.period in ["1m", "5m", "15m", "30m"]:
-                    # 补齐对应分钟线历史数据
-                    self.logger.info(
-                        "准备通过 xtquant 下载 %s 的 %s K 线历史数据", symbol, self.period
-                    )
-                    xtdata.download_history_data(symbol, self.period)
-                    self.logger.info(
-                        "xtquant 下载 %s 的 %s K 线历史数据完成（如有缺失将按需补齐）",
-                        symbol,
-                        self.period,
-                    )
-                elif self.period == "1d":
-                    # 日线策略，补齐日线历史
-                    self.logger.info("准备通过 xtquant 下载 %s 的日线历史数据", symbol)
-                    xtdata.download_history_data(symbol, "1d")
-                    self.logger.info(
-                        "xtquant 下载 %s 的日线历史数据完成（如有缺失将按需补齐）",
-                        symbol,
-                    )
-            except Exception as e:
-                # xtquant 不可用或补数据失败时，记录 warning 并回退到 UnifiedDataAccess
-                self.logger.warning(
-                    "通过 xtquant 下载 %s 的 %s 历史数据失败，将回退到 UnifiedDataAccess: %s",
-                    symbol,
-                    self.period,
-                    e,
+            if self.period in ["1m", "5m", "15m", "30m", "60m"]:
+                df = data_api.get_intraday_window(
+                    universe,
+                    bars=bars,
+                    fields=["open", "high", "low", "close", "volume", "amount"],
+                    freq=self.period if self.period != "60m" else "60m",
                 )
-
-            data_access = UnifiedDataAccess()
-            
-            # 根据周期确定历史数据范围
-            # 15分钟线：获取最近1个月的数据
-            # 日线：获取最近3个月的数据
-            if self.period == "15m":
-                hist_period = "1mo"
-            elif self.period in ["1m", "5m"]:
-                hist_period = "1mo"
             else:
-                hist_period = "3mo"
-            
-            df = data_access.get_stock_data(symbol, period=hist_period)
+                # 默认按日线处理
+                df = data_api.get_history_window(
+                    universe,
+                    bars=bars,
+                    fields=["open", "high", "low", "close", "volume", "amount"],
+                    freq="1d",
+                )
 
             if df is None or df.empty:
                 return None
 
-            # 确保有 close 列
-            if "close" not in df.columns and "Close" in df.columns:
-                df = df.rename(columns={"Close": "close"})
-            
-            # 如果配置了分钟线（1m/5m/15m/30m），尝试从 xtquant 获取对应周期 K 线数据
-            if self.period in ["1m", "5m", "15m", "30m"]:
-                try:
-                    import xtquant.xtdata as xtdata  # type: ignore[import]
-
-                    kline_data = xtdata.get_market_data(
-                        field_list=["time", "close", "open", "high", "low", "volume"],
-                        stock_list=[symbol],
-                        period=self.period,
-                        count=100,
-                    )
-
-                    # kline_data 应为 { field: DataFrame }，但需要防御性检查
-                    if not kline_data or "close" not in kline_data:
-                        self.logger.warning(
-                            "xtquant 返回的 %s K 线数据为空或缺少 close 字段: %s",
-                            self.period,
-                            symbol,
-                        )
-                    else:
-                        df_close = kline_data["close"]
-                        if df_close is None or df_close.empty:
-                            self.logger.warning(
-                                "xtquant %s K 线 close 数据为空: %s",
-                                self.period,
-                                symbol,
-                            )
-                        else:
-                            import pandas as pd
-
-                            # 取第一个合约（列 0）的时间序列
-                            close_series = df_close.iloc[:, 0]
-                            open_series = (
-                                kline_data["open"].iloc[:, 0]
-                                if "open" in kline_data and not kline_data["open"].empty
-                                else None
-                            )
-                            high_series = (
-                                kline_data["high"].iloc[:, 0]
-                                if "high" in kline_data and not kline_data["high"].empty
-                                else None
-                            )
-                            low_series = (
-                                kline_data["low"].iloc[:, 0]
-                                if "low" in kline_data and not kline_data["low"].empty
-                                else None
-                            )
-                            volume_series = (
-                                kline_data["volume"].iloc[:, 0]
-                                if "volume" in kline_data and not kline_data["volume"].empty
-                                else None
-                            )
-
-                            df_kline = pd.DataFrame({"close": close_series})
-                            if open_series is not None:
-                                df_kline["open"] = open_series
-                            if high_series is not None:
-                                df_kline["high"] = high_series
-                            if low_series is not None:
-                                df_kline["low"] = low_series
-                            if volume_series is not None:
-                                df_kline["volume"] = volume_series
-
-                            if "time" in kline_data and not kline_data["time"].empty:
-                                df_kline.index = kline_data["time"].iloc[:, 0]
-
-                            if not df_kline.empty:
-                                self.logger.info(
-                                    "从xtquant获取%s K线数据: %d根", self.period, len(df_kline)
-                                )
-                                df = df_kline
-                            else:
-                                self.logger.warning(
-                                    "xtquant %s K 线转换后为空: %s", self.period, symbol
-                                )
-                except Exception as e:
-                    self.logger.warning(
-                        "从xtquant获取%s K线失败，使用 UnifiedDataAccess 历史数据: %s",
-                        self.period,
-                        e,
-                    )
-
-            # 优先使用 xtquant 获取实时行情（从 miniQMT）
-            current_price = None
+            # get_*_window 返回 MultiIndex(datetime, instrument)，取出单标的
             try:
-                from ..infra.realtime_quote_subscriber import get_realtime_quote_subscriber
-                subscriber = get_realtime_quote_subscriber()
-                quote = subscriber.get_latest_quote(symbol)
-                if quote:
-                    # 字段对齐：xtquant返回lastPrice，策略使用close
-                    current_price = quote.get("close") or quote.get("lastPrice")
-                    self.logger.info(f"从 xtquant 获取 {symbol} 实时价格: {current_price}")
-            except Exception as e:
-                self.logger.debug(f"xtquant 实时行情不可用: {e}")
+                df_symbol = df.xs(symbol, level="instrument")
+            except Exception:
+                # 若索引结构异常，直接返回 None 以避免错误信号
+                return None
 
-            # 如果 xtquant 不可用，使用 TDX/Tushare 实时行情
-            if current_price is None:
-                try:
-                    realtime_quote = data_access.get_realtime_quotes(symbol)
-                    if realtime_quote:
-                        # 字段对齐：TDX/Tushare返回price，策略使用close
-                        current_price = realtime_quote.get("price")
-                        self.logger.info(f"从 TDX/Tushare 获取 {symbol} 实时价格: {current_price}")
-                except Exception as e:
-                    self.logger.warning(f"获取实时行情失败，使用历史数据: {e}")
+            if df_symbol is None or df_symbol.empty:
+                return None
 
-            # 更新最新价格（字段对齐：统一使用close字段）
-            if current_price and len(df) > 0:
-                last_price = float(df.iloc[-1]["close"])
-                if abs(last_price - current_price) > 0.01:
-                    df.iloc[-1, df.columns.get_loc("close")] = current_price
-                    self.logger.info(f"已更新 {symbol} 最新价格: {last_price} -> {current_price}")
+            # 确保有 close 列
+            if "close" not in df_symbol.columns and "Close" in df_symbol.columns:
+                df_symbol = df_symbol.rename(columns={"Close": "close"})
 
-            return df
+            return df_symbol
 
         except Exception as e:
             self.logger.error(f"获取股票数据失败: {e}", exc_info=True)
@@ -373,6 +240,21 @@ class MACrossStrategy(BaseStrategy):
 
             return max(0, quantity)
 
+        except QMTNotAvailableError as e:
+            try:
+                client = get_qmt_client_singleton()
+                st = client.status()
+                self.logger.warning(
+                    "QMT 未连接，无法计算买入数量: %s | pid=%s client_object_id=%s client_class=%s status=%s",
+                    str(e),
+                    os.getpid(),
+                    hex(id(client)),
+                    f"{client.__class__.__module__}.{client.__class__.__name__}",
+                    st.__dict__,
+                )
+            except Exception:
+                self.logger.warning(f"QMT 未连接，无法计算买入数量: {e}")
+            return 0
         except Exception as e:
             self.logger.error(f"计算买入数量失败: {e}", exc_info=True)
             return 0

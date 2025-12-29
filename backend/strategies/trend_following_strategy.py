@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from .base_strategy import BaseStrategy, TradeSignal
+from ..data_service import api as data_api
 
 
 class TrendFollowingStrategy(BaseStrategy):
@@ -164,67 +165,45 @@ class TrendFollowingStrategy(BaseStrategy):
         return None
 
     def _fetch_stock_data(self, symbol: str) -> Optional[pd.DataFrame]:
-        """获取股票历史数据（历史K线 + 实时行情更新）
-        
-        数据来源优先级：
-        1. 历史K线数据（3个月）- 用于计算均线和成交量
-        2. xtquant 实时行情（如果可用）- 更新最新价格和成交量
-        3. TDX/Tushare 实时行情（兜底）
+        """通过数据服务层获取股票历史数据（用于趋势判断）。
+
+        - 使用 get_history_window 获取最近一段日线数据（约 3 个月，按
+          bars 数量近似）；
+        - 不再依赖 UnifiedDataAccess 或实时订阅，避免混用多套数据。
         """
         try:
-            from ..core.unified_data_access_impl import UnifiedDataAccess
+            universe = [symbol]
 
-            data_access = UnifiedDataAccess()
-            df = data_access.get_stock_data(symbol, period="3mo")
+            # 为了计算均线和成交量均值，需要 ma_period 条以上的历史，额外
+            # 多取一些以增强鲁棒性。
+            bars = max(self.ma_period + 10, self.ma_period * 3)
+
+            df = data_api.get_history_window(
+                universe,
+                bars=bars,
+                fields=["open", "high", "low", "close", "volume", "amount"],
+                freq="1d",
+            )
 
             if df is None or df.empty:
                 return None
 
-            # 确保有 close 和 volume 列
-            if "close" not in df.columns and "Close" in df.columns:
-                df = df.rename(columns={"Close": "close"})
-            if "volume" not in df.columns and "Volume" in df.columns:
-                df = df.rename(columns={"Volume": "volume"})
-
-            # 优先使用 xtquant 获取实时行情（从 miniQMT）
-            current_price = None
-            current_volume = None
+            # MultiIndex(datetime, instrument) → 单标的 DataFrame
             try:
-                from ..infra.realtime_quote_subscriber import get_realtime_quote_subscriber
-                subscriber = get_realtime_quote_subscriber()
-                quote = subscriber.get_latest_quote(symbol)
-                if quote:
-                    # 字段对齐：xtquant返回lastPrice，策略使用close
-                    current_price = quote.get("close") or quote.get("lastPrice")
-                    current_volume = quote.get("volume")  # volume字段已对齐
-                    self.logger.info(f"从 xtquant 获取 {symbol} 实时数据: 价格={current_price}, 成交量={current_volume}")
-            except Exception as e:
-                self.logger.debug(f"xtquant 实时行情不可用: {e}")
+                df_symbol = df.xs(symbol, level="instrument")
+            except Exception:
+                return None
 
-            # 如果 xtquant 不可用，使用 TDX/Tushare 实时行情
-            if current_price is None:
-                try:
-                    realtime_quote = data_access.get_realtime_quotes(symbol)
-                    if realtime_quote:
-                        # 字段对齐：TDX/Tushare返回price，策略使用close
-                        current_price = realtime_quote.get("price")
-                        current_volume = realtime_quote.get("volume")  # volume字段已对齐
-                        self.logger.info(f"从 TDX/Tushare 获取 {symbol} 实时数据: 价格={current_price}, 成交量={current_volume}")
-                except Exception as e:
-                    self.logger.warning(f"获取实时行情失败，使用历史数据: {e}")
+            if df_symbol is None or df_symbol.empty:
+                return None
 
-            # 更新最新价格和成交量（字段对齐：统一使用close和volume字段）
-            if len(df) > 0:
-                if current_price:
-                    last_price = float(df.iloc[-1]["close"])
-                    if abs(last_price - current_price) > 0.01:
-                        df.iloc[-1, df.columns.get_loc("close")] = current_price
-                        self.logger.info(f"已更新 {symbol} 最新价格: {last_price} -> {current_price}")
+            # 确保有 close / volume 列
+            if "close" not in df_symbol.columns and "Close" in df_symbol.columns:
+                df_symbol = df_symbol.rename(columns={"Close": "close"})
+            if "volume" not in df_symbol.columns and "Volume" in df_symbol.columns:
+                df_symbol = df_symbol.rename(columns={"Volume": "volume"})
 
-                if current_volume and "volume" in df.columns:
-                    df.iloc[-1, df.columns.get_loc("volume")] = current_volume
-
-            return df
+            return df_symbol
 
         except Exception as e:
             self.logger.error(f"获取股票数据失败: {e}", exc_info=True)

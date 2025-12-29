@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 
-from .qmt_client import BaseQMTClient, build_qmt_client_from_env
+from .qmt_client import BaseQMTClient, get_qmt_client_singleton
 from .risk_control import RiskControlService
 
 load_dotenv(override=True)
@@ -27,10 +27,10 @@ class SimpleStrategyExecutor:
         """初始化策略执行器
 
         Args:
-            qmt_client: QMT 客户端实例（如果为 None，则从环境变量构建）
+            qmt_client: QMT 客户端实例（如果为 None，则使用进程级单例）
             db_conn: 数据库连接（如果为 None，则按需获取）
         """
-        self.qmt_client = qmt_client or build_qmt_client_from_env()
+        self.qmt_client = qmt_client or get_qmt_client_singleton()
         self.db_conn = db_conn
         self.risk_control = RiskControlService()
         self._lock = threading.RLock()  # 串行执行锁

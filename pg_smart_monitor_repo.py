@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 import psycopg2.extras as pg_extras
 
-from app_pg import get_conn
+from backend.db.pg_pool import get_conn
 
 load_dotenv(override=True)
 

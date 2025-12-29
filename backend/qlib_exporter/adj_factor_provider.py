@@ -18,7 +18,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from app_pg import get_conn  # type: ignore[attr-defined]
+from backend.db.pg_pool import get_conn
 
 from .config import ADJ_FACTOR_TABLE
 

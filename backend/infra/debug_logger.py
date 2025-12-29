@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Optional
+import logging
 import sys
 import traceback
 import json
@@ -18,6 +19,22 @@ class DebugLogger:
     def __init__(self, enable_debug: bool = True):
         self.enable_debug = enable_debug
         self.log_file = "debug.log"
+        self._logger = logging.getLogger(__name__)
+
+    def _safe_print(self, message: str, *, stderr: bool = False) -> None:
+        stream = sys.stderr if stderr else sys.stdout
+        try:
+            if stream is None or getattr(stream, "closed", False):
+                raise ValueError("stream closed")
+            print(message, file=stream)
+        except Exception:
+            try:
+                if stderr:
+                    self._logger.error(message)
+                else:
+                    self._logger.info(message)
+            except Exception:
+                pass
 
     def _get_timestamp(self) -> str:
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
@@ -40,38 +57,38 @@ class DebugLogger:
 
     def info(self, message: str, **kwargs: Any) -> None:
         msg = self._format_message("INFO", message, **kwargs)
-        print(msg)
+        self._safe_print(msg)
         self._write_to_file(msg)
 
     def debug(self, message: str, **kwargs: Any) -> None:
         if not self.enable_debug:
             return
         msg = self._format_message("DEBUG", message, **kwargs)
-        print(msg)
+        self._safe_print(msg)
         self._write_to_file(msg)
 
     def warning(self, message: str, **kwargs: Any) -> None:
         msg = self._format_message("WARNING", message, **kwargs)
         try:
-            print(f"⚠️ {msg}")
+            self._safe_print(f"⚠️ {msg}")
         except UnicodeEncodeError:
-            print(f"[WARNING] {msg}")
+            self._safe_print(f"[WARNING] {msg}")
         self._write_to_file(msg)
 
     def error(self, message: str, error: Optional[Exception] = None, **kwargs: Any) -> None:
         msg = self._format_message("ERROR", message, **kwargs)
         try:
-            print(f"❌ {msg}", file=sys.stderr)
+            self._safe_print(f"❌ {msg}", stderr=True)
         except UnicodeEncodeError:
-            print(f"[ERROR] {msg}", file=sys.stderr)
+            self._safe_print(f"[ERROR] {msg}", stderr=True)
 
         if error is not None:
             error_details = f"  Exception Type: {type(error).__name__}"
             error_details += f"\n  Exception Message: {str(error)}"
-            print(error_details, file=sys.stderr)
+            self._safe_print(error_details, stderr=True)
             msg += f"\n{error_details}"
             tb = traceback.format_exc()
-            print(f"  Traceback:\n{tb}", file=sys.stderr)
+            self._safe_print(f"  Traceback:\n{tb}", stderr=True)
             msg += f"\n  Traceback:\n{tb}"
 
         self._write_to_file(msg)
@@ -84,7 +101,7 @@ class DebugLogger:
         kwargs_str = ", ".join([f"{k}={repr(v)}" for k, v in kwargs.items()])
         params = ", ".join(filter(None, [args_str, kwargs_str]))
         msg = self._format_message("CALL", f"{func_name}({params})")
-        print(msg)
+        self._safe_print(msg)
         self._write_to_file(msg)
 
     def function_return(self, func_name: str, result: Any, elapsed_time: Optional[float] = None) -> None:
@@ -105,7 +122,7 @@ class DebugLogger:
         if elapsed_time is not None:
             ctx["elapsed"] = f"{elapsed_time:.3f}s"
         msg = self._format_message("RETURN", func_name, **ctx)
-        print(msg)
+        self._safe_print(msg)
         self._write_to_file(msg)
 
     def data_info(self, data_name: str, data: Any) -> None:
@@ -129,14 +146,14 @@ class DebugLogger:
             except Exception:
                 pass
         msg = self._format_message("DATA", f"Data info for {data_name}", **info)
-        print(msg)
+        self._safe_print(msg)
         self._write_to_file(msg)
 
     def step(self, step_num: int, description: str, **kwargs: Any) -> None:
         msg = self._format_message("STEP", f"Step {step_num}: {description}", **kwargs)
-        print("\n" + "=" * 80)
-        print(msg)
-        print("=" * 80)
+        self._safe_print("\n" + "=" * 80)
+        self._safe_print(msg)
+        self._safe_print("=" * 80)
         self._write_to_file(msg)
 
 

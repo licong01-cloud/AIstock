@@ -20,7 +20,7 @@ from typing import Iterable, List, Optional
 import numpy as np
 import pandas as pd
 
-from app_pg import get_conn  # type: ignore[attr-defined]
+from backend.db.pg_pool import get_conn
 
 from .config import (
     ADJ_FACTOR_TABLE,

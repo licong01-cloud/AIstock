@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from app_pg import get_conn  # type: ignore[attr-defined]
+from backend.db.pg_pool import get_conn
 
 
 class MetaRepo:

@@ -27,7 +27,6 @@ const NAV_GROUPS: {
       { href: "/indicator-screening", label: "📊 指标选股" },
       { href: "/cloud-screening", label: "☁ 云选股" },
       { href: "/market-news", label: "📰 市场资讯 / 市场快讯" },
-      { href: "/main-force", label: "💰 主力选股" },
     ],
   },
   {
@@ -69,6 +68,9 @@ const NAV_GROUPS: {
       { href: "/rd-agent/prompt-packs", label: "RD-agent提示词模板管理" },
       { href: "/rdagent/strategies", label: "RD-Agent 策略管理" },
       { href: "/rdagent/import", label: "RD-Agent 候选导入" },
+      { href: "/rdagent/factors", label: "RD-Agent 因子目录" },
+      { href: "/rdagent/strategies-catalog", label: "RD-Agent 策略目录" },
+      { href: "/rdagent/loops", label: "RD-Agent 实验/loop" },
     ],
   },
 ];

@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, time as dt_time
 from typing import Any, Dict, List, Optional
 
 import schedule
@@ -18,7 +19,8 @@ from ..db.pg_pool import get_conn
 from ..strategies.ma_cross_strategy import MACrossStrategy
 from ..strategies.trend_following_strategy import TrendFollowingStrategy
 from ..infra.strategy_executor import SimpleStrategyExecutor
-from ..infra.realtime_quote_subscriber import get_realtime_quote_subscriber
+from ..data_service import api as data_api
+from ..infra.qmt_client import get_qmt_client_singleton, QMTNotAvailableError
 
 load_dotenv(override=True)
 
@@ -35,9 +37,22 @@ class StrategyScheduler:
         self._lock = threading.RLock()
         self._strategies: Dict[str, Any] = {}  # strategy_id -> strategy instance
         self._executor = SimpleStrategyExecutor()
-        self._realtime_subscriber = get_realtime_quote_subscriber()
+        # 使用数据服务层的推送接口时，每个实时策略对应一个工作线程和停止事件
         self._realtime_enabled_strategies: Dict[str, List[str]] = {}  # strategy_id -> stocks
-        self._realtime_subscription_seqs: Dict[str, int] = {}  # strategy_id -> subscription_seq
+        self._realtime_threads: Dict[str, threading.Thread] = {}  # strategy_id -> thread
+        self._realtime_stop_events: Dict[str, threading.Event] = {}  # strategy_id -> stop_event
+
+    def _is_trading_time(self, now: Optional[datetime] = None) -> bool:
+        dt = now or datetime.now()
+        # Monday=0 ... Sunday=6
+        if dt.weekday() >= 5:
+            return False
+        t = dt.time()
+        morning_start = dt_time(9, 15)
+        morning_end = dt_time(11, 31)
+        afternoon_start = dt_time(13, 0)
+        afternoon_end = dt_time(15, 0)
+        return (morning_start <= t <= morning_end) or (afternoon_start <= t <= afternoon_end)
 
     def start(self, refresh_interval: int = 60) -> None:
         """启动调度器
@@ -58,21 +73,36 @@ class StrategyScheduler:
             )
             self._schedule_thread.start()
 
-            # 启动刷新线程
-            refresh_thread = threading.Thread(
-                target=self._refresh_loop,
-                args=(refresh_interval,),
-                name="strategy-refresh",
-                daemon=True,
-            )
-            refresh_thread.start()
-
-            # 启动实时行情订阅服务（如果可用）
+            interval = refresh_interval
             try:
-                self._realtime_subscriber.start()
-                logger.info("实时行情订阅服务已启动")
-            except Exception as e:
-                logger.warning(f"启动实时行情订阅服务失败: {e}")
+                v = (os.getenv("STRATEGY_REFRESH_INTERVAL_SECONDS") or "").strip()
+                if v:
+                    interval = int(v)
+            except Exception:
+                interval = refresh_interval
+
+            enable_refresh = (os.getenv("ENABLE_STRATEGY_REFRESH") or "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "y",
+                "on",
+            }
+
+            if enable_refresh and interval > 0:
+                refresh_thread = threading.Thread(
+                    target=self._refresh_loop,
+                    args=(interval,),
+                    name="strategy-refresh",
+                    daemon=True,
+                )
+                refresh_thread.start()
+            else:
+                logger.warning(
+                    "策略配置自动刷新默认关闭（ENABLE_STRATEGY_REFRESH=%s, STRATEGY_REFRESH_INTERVAL_SECONDS=%s）",
+                    os.getenv("ENABLE_STRATEGY_REFRESH"),
+                    os.getenv("STRATEGY_REFRESH_INTERVAL_SECONDS"),
+                )
 
             logger.info("策略调度器已启动")
 
@@ -80,13 +110,18 @@ class StrategyScheduler:
         """关闭调度器"""
         with self._lock:
             self._stop_event.set()
-            
-            # 停止实时行情订阅
-            try:
-                self._realtime_subscriber.stop()
-            except Exception as e:
-                logger.warning(f"停止实时行情订阅服务失败: {e}")
-            
+            # 停止所有基于数据服务的实时线程
+            for sid, ev in list(self._realtime_stop_events.items()):
+                try:
+                    ev.set()
+                    t = self._realtime_threads.get(sid)
+                    if t and t.is_alive():
+                        t.join(timeout=5.0)
+                except Exception as e:
+                    logger.warning(f"停止实时线程失败 {sid}: {e}")
+            self._realtime_stop_events.clear()
+            self._realtime_threads.clear()
+
             if self._schedule_thread and self._schedule_thread.is_alive():
                 if wait:
                     self._schedule_thread.join(timeout=5.0)
@@ -110,19 +145,18 @@ class StrategyScheduler:
             # 清除现有调度
             self._scheduler.clear()
             
-            # 取消所有实时行情订阅（防御性检查）
-            if not hasattr(self, '_realtime_subscription_seqs'):
-                self._realtime_subscription_seqs: Dict[str, int] = {}
-            if not hasattr(self, '_realtime_enabled_strategies'):
-                self._realtime_enabled_strategies: Dict[str, List[str]] = {}
-            
-            for strategy_id, seq in list(self._realtime_subscription_seqs.items()):
+            # 停止所有已有的实时行情线程
+            for sid, ev in list(self._realtime_stop_events.items()):
                 try:
-                    self._realtime_subscriber.unsubscribe(seq)
+                    ev.set()
+                    t = self._realtime_threads.get(sid)
+                    if t and t.is_alive():
+                        t.join(timeout=5.0)
                 except Exception as e:
-                    logger.warning(f"取消实时行情订阅失败 {strategy_id}: {e}")
+                    logger.warning(f"取消实时行情线程失败 {sid}: {e}")
             self._realtime_enabled_strategies.clear()
-            self._realtime_subscription_seqs.clear()
+            self._realtime_threads.clear()
+            self._realtime_stop_events.clear()
 
             # 加载策略
             for row in rows:
@@ -213,42 +247,131 @@ class StrategyScheduler:
         else:
             logger.warning(f"未知的调度类型: {schedule_type}")
 
+
     def _setup_realtime_subscription(self, strategy_id: str, config: Dict[str, Any], schedule_config: Dict[str, Any]) -> None:
         """设置实时行情订阅（事件驱动）"""
         schedule_type = schedule_config.get("type", "daily")
-        
-        # 防御性检查：确保属性存在
-        if not hasattr(self, '_realtime_subscription_seqs'):
-            self._realtime_subscription_seqs: Dict[str, int] = {}
-        if not hasattr(self, '_realtime_enabled_strategies'):
-            self._realtime_enabled_strategies: Dict[str, List[str]] = {}
-        
-        # 如果配置了实时行情触发，订阅实时行情
-        if schedule_type == "realtime":
-            symbols = config.get("symbols", [])
-            if symbols:
-                try:
-                    # 定义回调函数
-                    def on_realtime_quote(stock_code: str, quote: Dict):
-                        """实时行情回调"""
+
+        if schedule_type != "realtime":
+            return
+
+        symbols = config.get("symbols", [])
+        if not symbols:
+            return
+
+        stop_event = threading.Event()
+
+        def _worker() -> None:
+            try:
+                # 仅在【交易时段 + QMT 已连接】时才进入 stream_quotes 订阅循环。
+                last_connected: Optional[bool] = None
+
+                while not stop_event.is_set():
+                    if not self._is_trading_time():
+                        time.sleep(2.0)
+                        continue
+
+                    try:
+                        client = get_qmt_client_singleton()
+                        status = client.status()
+
+                        if last_connected is None:
+                            last_connected = bool(status.connected)
+                        elif last_connected and (not status.connected):
+                            logger.warning("QMT 已断开连接，realtime 行情触发暂停，等待重连")
+                            last_connected = False
+                        elif (not last_connected) and status.connected:
+                            logger.info("QMT 已恢复连接，realtime 行情触发恢复")
+                            last_connected = True
+
+                        if not status.connected:
+                            time.sleep(2.0)
+                            continue
+                    except QMTNotAvailableError:
+                        if last_connected is None:
+                            last_connected = False
+                        elif last_connected is True:
+                            logger.warning("QMT 不可用，realtime 行情触发暂停，等待重连")
+                            last_connected = False
+                        time.sleep(2.0)
+                        continue
+
+                    for batch in data_api.stream_quotes(
+                        universe=symbols,
+                        fields=["close", "open", "high", "low", "volume", "amount"],
+                        freq="tick",
+                    ):
+                        if stop_event.is_set():
+                            break
+
+                        if not self._is_trading_time():
+                            break
+
                         try:
-                            logger.info(f"收到 {stock_code} 实时行情，触发策略 {strategy_id}")
-                            self._execute_strategy_for_symbol(strategy_id, stock_code)
-                        except Exception as e:
-                            logger.error(f"实时行情触发策略执行失败: {e}", exc_info=True)
-                    
-                    # 订阅实时行情
-                    seq = self._realtime_subscriber.subscribe(symbols, on_realtime_quote)
-                    if seq:
-                        self._realtime_enabled_strategies[strategy_id] = symbols
-                        self._realtime_subscription_seqs[strategy_id] = seq
-                        logger.info(f"策略 {strategy_id} 已订阅实时行情: {symbols}, 订阅号: {seq}")
-                except Exception as e:
-                    logger.error(f"设置实时行情订阅失败 {strategy_id}: {e}", exc_info=True)
+                            status = client.status()
+                            if last_connected is None:
+                                last_connected = bool(status.connected)
+                            elif last_connected and (not status.connected):
+                                logger.warning("QMT 已断开连接，realtime 行情触发暂停，等待重连")
+                                last_connected = False
+                            elif (not last_connected) and status.connected:
+                                logger.info("QMT 已恢复连接，realtime 行情触发恢复")
+                                last_connected = True
+
+                            if not status.connected:
+                                break
+                        except QMTNotAvailableError:
+                            if last_connected is None:
+                                last_connected = False
+                            elif last_connected is True:
+                                logger.warning("QMT 不可用，realtime 行情触发暂停，等待重连")
+                                last_connected = False
+                            break
+
+                        try:
+                            instruments = list(batch.data.index.unique())
+                        except Exception:
+                            instruments = []
+
+                        for inst in instruments:
+                            try:
+                                logger.info("收到 %s 实时快照，触发策略 %s", inst, strategy_id)
+                                self._execute_strategy_for_symbol(strategy_id, inst)
+                            except Exception as e:
+                                logger.error(
+                                    f"实时快照触发策略执行失败 {strategy_id} {inst}: {e}",
+                                    exc_info=True,
+                                )
+            except Exception as e:
+                logger.error(f"数据服务实时流触发策略 {strategy_id} 失败: {e}", exc_info=True)
+
+        t = threading.Thread(
+            target=_worker,
+            name=f"strategy-realtime-{strategy_id}",
+            daemon=True,
+        )
+        self._realtime_enabled_strategies[strategy_id] = symbols
+        self._realtime_stop_events[strategy_id] = stop_event
+        self._realtime_threads[strategy_id] = t
+        t.start()
+        logger.info("策略 %s 使用数据服务实时快照触发，标的: %s", strategy_id, symbols)
 
     def _execute_strategy(self, strategy_id: str) -> None:
         """执行策略"""
         try:
+            if not self._is_trading_time():
+                return
+            # 若 QMT 未连接，则直接跳过本次执行，避免在模拟交易关闭时产生无效压力
+            try:
+                client = get_qmt_client_singleton()
+                status = client.status()
+                if not status.connected:
+                    logger.warning("QMT 未连接，跳过策略执行: %s", strategy_id)
+                    return
+            except QMTNotAvailableError:
+                logger.warning("QMT 不可用，跳过策略执行: %s", strategy_id)
+                return
+
             strategy = self._strategies.get(strategy_id)
             if strategy is None:
                 logger.warning(f"策略不存在: {strategy_id}")
@@ -261,9 +384,6 @@ class StrategyScheduler:
             if not symbols:
                 logger.warning(f"策略 {strategy_id} 没有配置股票列表")
                 return
-
-            # 创建执行记录
-            execution_id = self._create_execution_record(strategy_id, "SCHEDULED", "scheduler")
 
             signals_generated = 0
             signals_executed = 0
@@ -284,17 +404,37 @@ class StrategyScheduler:
                     except Exception as e:
                         logger.error(f"执行策略 {strategy_id} 股票 {symbol} 失败: {e}", exc_info=True)
 
-                # 更新执行记录
-                self._update_execution_record(
-                    execution_id, "SUCCESS", signals_generated, signals_executed, symbols_processed
-                )
+                # 仅在存在实际成交（下单成功）时写入执行记录
+                if signals_executed > 0:
+                    execution_id = self._create_execution_record(
+                        strategy_id, "SCHEDULED", "scheduler"
+                    )
+                    if execution_id:
+                        self._update_execution_record(
+                            execution_id,
+                            "SUCCESS",
+                            signals_generated,
+                            signals_executed,
+                            symbols_processed,
+                        )
 
             except Exception as e:
                 error_message = str(e)
                 logger.error(f"执行策略 {strategy_id} 失败: {e}", exc_info=True)
-                self._update_execution_record(
-                    execution_id, "FAILED", signals_generated, signals_executed, symbols_processed, error_message
-                )
+                # 失败场景下，同样只在曾产生过实际成交时记录执行
+                if signals_executed > 0:
+                    execution_id = self._create_execution_record(
+                        strategy_id, "SCHEDULED", "scheduler"
+                    )
+                    if execution_id:
+                        self._update_execution_record(
+                            execution_id,
+                            "FAILED",
+                            signals_generated,
+                            signals_executed,
+                            symbols_processed,
+                            error_message,
+                        )
 
         except Exception as e:
             logger.error(f"执行策略异常 {strategy_id}: {e}", exc_info=True)

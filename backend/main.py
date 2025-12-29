@@ -2,8 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from pathlib import Path
+import builtins
+import logging
 import os
 import sys
+import signal
+import faulthandler
 
 from dotenv import load_dotenv
 
@@ -25,7 +29,6 @@ from .routers import (
     monitor,
     qmt,
     portfolio,
-    main_force,
     sector_strategy,
     longhubang,
     model_scheduler,
@@ -38,10 +41,120 @@ from .routers import (
     prompt_packs,
     strategies,
     rdagent,
+    rdagent_catalog_admin,
 )
 from .qlib_exporter.router import router as qlib_router
 from .ingestion.tdx_scheduler import scheduler as ingestion_scheduler
 from .schedulers.strategy_scheduler import scheduler as strategy_scheduler
+from .infra.qmt_client import get_qmt_client_singleton
+
+
+def _install_safe_print_and_logging() -> None:
+    try:
+        if getattr(sys.stdout, "closed", False):
+            sys.stdout = sys.__stdout__
+        if getattr(sys.stderr, "closed", False):
+            sys.stderr = sys.__stderr__
+    except Exception:
+        pass
+
+    try:
+        logging.raiseExceptions = False
+    except Exception:
+        pass
+
+    class SafeStreamHandler(logging.StreamHandler):
+        def emit(self, record):  # type: ignore[no-untyped-def]
+            try:
+                return super().emit(record)
+            except Exception:
+                # Never let logging failures crash or spam the app.
+                try:
+                    self.stream = sys.__stderr__
+                    return super().emit(record)
+                except Exception:
+                    return None
+
+    try:
+        if getattr(builtins, "_AISTOCK_ORIGINAL_PRINT", None) is None:
+            builtins._AISTOCK_ORIGINAL_PRINT = builtins.print
+
+        original_print = builtins._AISTOCK_ORIGINAL_PRINT
+
+        def safe_print(*args, **kwargs):  # type: ignore[no-untyped-def]
+            try:
+                stream = kwargs.get("file", sys.stdout)
+                if stream is None or getattr(stream, "closed", False):
+                    raise ValueError("stream closed")
+                return original_print(*args, **kwargs)
+            except ValueError as e:
+                if "closed file" not in str(e).lower() and "stream" not in str(e).lower():
+                    raise
+                try:
+                    msg = " ".join(str(a) for a in args)
+                    logging.getLogger("aistock.safe_print").info(msg)
+                except Exception:
+                    pass
+                return None
+
+        builtins.print = safe_print
+    except Exception:
+        pass
+
+    try:
+        for logger in (logging.getLogger(), logging.getLogger("uvicorn"), logging.getLogger("uvicorn.access"), logging.getLogger("uvicorn.error")):
+            for h in list(getattr(logger, "handlers", []) or []):
+                stream = getattr(h, "stream", None)
+                if stream is not None and getattr(stream, "closed", False):
+                    try:
+                        h.stream = sys.__stderr__
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    # Replace StreamHandlers with a safe variant that self-heals when streams are closed.
+    try:
+        for logger in (logging.getLogger(), logging.getLogger("uvicorn"), logging.getLogger("uvicorn.access"), logging.getLogger("uvicorn.error")):
+            handlers = list(getattr(logger, "handlers", []) or [])
+            if not handlers:
+                continue
+            for idx, h in enumerate(handlers):
+                if isinstance(h, SafeStreamHandler):
+                    continue
+                if not isinstance(h, logging.StreamHandler):
+                    continue
+                new_h = SafeStreamHandler(stream=getattr(h, "stream", None) or sys.__stderr__)
+                new_h.setLevel(h.level)
+                new_h.setFormatter(h.formatter)
+                # Preserve filters
+                for f in getattr(h, "filters", []) or []:
+                    new_h.addFilter(f)
+                logger.removeHandler(h)
+                logger.addHandler(new_h)
+    except Exception:
+        pass
+
+    # Patch tqdm to avoid noisy __del__ crashes when half-initialized (often due to stream/tty issues).
+    try:
+        import tqdm.std as _tqdm_std
+
+        if getattr(_tqdm_std.tqdm, "_AISTOCK_DEL_PATCHED", False) is False:
+            _orig_del = getattr(_tqdm_std.tqdm, "__del__", None)
+
+            def _safe_tqdm_del(self):  # type: ignore[no-untyped-def]
+                try:
+                    if _orig_del is not None:
+                        _orig_del(self)
+                except AttributeError:
+                    return
+                except Exception:
+                    return
+
+            _tqdm_std.tqdm.__del__ = _safe_tqdm_del
+            _tqdm_std.tqdm._AISTOCK_DEL_PATCHED = True
+    except Exception:
+        pass
 
 
 def create_app() -> FastAPI:
@@ -62,12 +175,52 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _on_startup() -> None:  # noqa: D401
-        """Initialize process-wide PostgreSQL connection pool."""
+        """Initialize shared resources (DB pool, schedulers, QMT client)."""
 
-        init_db_pool(minconn=1, maxconn=10)
+        import logging
+
+        _install_safe_print_and_logging()
+
+        # 提高连接池上限以适配多路并发请求与后台任务
+        # 同时将 minconn 提高，以减少请求高峰时频繁 _connect（psycopg2 建连在本环境下可达 2s+）
+        init_db_pool(minconn=5, maxconn=40)
+
+        if (os.getenv("DUMP_THREADS_ON_SIGNAL") or "").strip().lower() in {"1", "true", "yes", "y", "on"}:
+            try:
+                def _dump_threads(_signum, _frame):
+                    try:
+                        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+                    except Exception:
+                        pass
+
+                signal.signal(signal.SIGINT, _dump_threads)
+                signal.signal(signal.SIGTERM, _dump_threads)
+            except Exception:
+                pass
+
+        # 尝试自动连接 QMT（不影响服务启动，失败仅记录告警日志）
+        try:
+            client = get_qmt_client_singleton()
+            ok, msg = client.connect()
+            # Use uvicorn.error logger so messages are visible under uvicorn default logging config.
+            logger = logging.getLogger("uvicorn.error")
+            if ok:
+                logger.warning("QMT 自动连接成功: %s", msg)
+            else:
+                logger.warning("QMT 自动连接失败: %s", msg)
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger("uvicorn.error").warning("QMT 自动连接异常: %s", e)
+
         disable_scheduler = (os.getenv("DISABLE_INGESTION_SCHEDULER") or "").strip().lower()
-        if disable_scheduler not in {"1", "true", "yes", "y", "on"}:
+        enable_scheduler = (os.getenv("ENABLE_INGESTION_SCHEDULER") or "").strip().lower()
+        if disable_scheduler in {"1", "true", "yes", "y", "on"}:
+            pass
+        elif enable_scheduler in {"1", "true", "yes", "y", "on"}:
             ingestion_scheduler.start()
+        else:
+            logging.getLogger(__name__).warning(
+                "TDXScheduler 已默认禁用（设置 ENABLE_INGESTION_SCHEDULER=1 可启用）"
+            )
         
         # 启动策略调度器
         disable_strategy_scheduler = (os.getenv("DISABLE_STRATEGY_SCHEDULER") or "").strip().lower()
@@ -77,6 +230,11 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     async def _on_shutdown() -> None:  # noqa: D401
         """Close PostgreSQL connection pool on application shutdown."""
+        try:
+            client = get_qmt_client_singleton()
+            client.disconnect()
+        except Exception:
+            pass
 
         close_db_pool()
         ingestion_scheduler.shutdown(wait=False)
@@ -93,7 +251,6 @@ def create_app() -> FastAPI:
     app.include_router(qmt.router, prefix="/api/v1")
     app.include_router(strategies.router)
     app.include_router(portfolio.router, prefix="/api/v1")
-    app.include_router(main_force.router, prefix="/api/v1")
     app.include_router(sector_strategy.router, prefix="/api/v1")
     app.include_router(longhubang.router, prefix="/api/v1")
     app.include_router(model_scheduler.router, prefix="/api/v1")
@@ -103,6 +260,7 @@ def create_app() -> FastAPI:
     app.include_router(smart_monitor.router, prefix="/api/v1")
     app.include_router(prompt_packs.router, prefix="/api/v1")
     app.include_router(rdagent.router, prefix="/api/v1")
+    app.include_router(rdagent_catalog_admin.router)
     app.include_router(qlib_router, prefix="")
 
     # ingestion / 本地数据管理接口：保持与旧 tdx_backend 相同的 /api/* 路径

@@ -14,10 +14,10 @@ import os
 from pathlib import Path
 import sys
 import threading
+import time
 
 
-class QMTNotAvailableError(RuntimeError):
-    """Raised when xtquant is missing or QMT connection is unavailable."""
+_GLOBAL_QMT_CLIENT: Optional["BaseQMTClient"] = None
 
 
 @dataclass
@@ -30,6 +30,40 @@ class QMTStatus:
     userdata_path: Optional[str] = None
     session_id: Optional[int] = None
     last_error: Optional[str] = None
+
+
+def _env_float(key: str, default: float) -> float:
+    raw = (os.getenv(key) or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        return float(raw)
+    except Exception:
+        return float(default)
+
+
+def _call_with_timeout(fn, timeout_s: float):
+    result_holder: Dict[str, Any] = {}
+    error_holder: Dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            result_holder["value"] = fn()
+        except Exception as e:  # noqa: BLE001
+            error_holder["error"] = e
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join(timeout=max(0.0, float(timeout_s)))
+    if t.is_alive():
+        raise TimeoutError(f"call timed out after {timeout_s}s")
+    if "error" in error_holder:
+        raise error_holder["error"]
+    return result_holder.get("value")
+
+
+class QMTNotAvailableError(RuntimeError):
+    """Raised when xtquant is missing or QMT connection is unavailable."""
 
 
 class BaseQMTClient:
@@ -50,74 +84,19 @@ class BaseQMTClient:
     def get_positions(self) -> List[Dict[str, Any]]:
         raise NotImplementedError
 
-    def get_orders(self, cancelable_only: bool = False) -> List[Dict[str, Any]]:
-        """查询当日委托列表"""
-        raise NotImplementedError
 
-    def get_trades(self) -> List[Dict[str, Any]]:
-        """查询当日成交列表"""
-        raise NotImplementedError
 
-    def place_order(
-        self,
-        stock_code: str,
-        order_type: int,  # 23=买入, 24=卖出
-        order_volume: int,
-        price_type: int,  # 限价/市价等
-        price: float = 0.0,
-        strategy_name: str = "",
-        order_remark: str = "",
-    ) -> Tuple[int, str]:
-        """下单
-        Returns: (order_id, message)
-        - order_id > 0: 成功，返回订单编号
-        - order_id == -1: 失败
-        """
-        raise NotImplementedError
+def get_qmt_client_singleton() -> BaseQMTClient:
+    """Return process-wide QMT client singleton."""
 
-    def cancel_order(self, order_id: str) -> Tuple[bool, str]:
-        """根据订单编号撤单
-        Returns: (success, message)
-        """
-        raise NotImplementedError
-
-    def cancel_order_by_sysid(self, market: int, order_sysid: str) -> Tuple[bool, str]:
-        """根据柜台合同编号撤单
-        Returns: (success, message)
-        """
-        raise NotImplementedError
-
-    def query_new_purchase_limit(self) -> Dict[str, Any]:
-        """查询新股申购额度"""
-        raise NotImplementedError
-
-    def query_ipo_data(self) -> List[Dict[str, Any]]:
-        """查询新股信息"""
-        raise NotImplementedError
-
-    def bank_transfer_in(
-        self, bank_no: str, bank_account: str, bank_pwd: str, amount: float
-    ) -> Tuple[bool, str]:
-        """银行转证券"""
-        raise NotImplementedError
-
-    def bank_transfer_out(
-        self, bank_no: str, bank_account: str, bank_pwd: str, amount: float
-    ) -> Tuple[bool, str]:
-        """证券转银行"""
-        raise NotImplementedError
-
-    def query_bank_info(self) -> List[Dict[str, Any]]:
-        """查询银行信息"""
-        raise NotImplementedError
+    global _GLOBAL_QMT_CLIENT
+    if _GLOBAL_QMT_CLIENT is None:
+        _GLOBAL_QMT_CLIENT = build_qmt_client_from_env()
+    return _GLOBAL_QMT_CLIENT
 
 
 class SimulatorQMTClient(BaseQMTClient):
-    """Fallback simulator: returns zero assets and empty positions.
-
-This is NOT a trading simulator; it's a safe placeholder so the backend can run
-when xtquant/miniQMT are not installed.
-"""
+    """Fallback simulator: returns zero assets and empty positions."""
 
     def __init__(self, *, enabled: bool, account_id: str | None, mode: str, reason: str | None):
         self._enabled = bool(enabled)
@@ -158,49 +137,6 @@ when xtquant/miniQMT are not installed.
     def get_positions(self) -> List[Dict[str, Any]]:
         return []
 
-    def get_orders(self, cancelable_only: bool = False) -> List[Dict[str, Any]]:
-        return []
-
-    def get_trades(self) -> List[Dict[str, Any]]:
-        return []
-
-    def place_order(
-        self,
-        stock_code: str,
-        order_type: int,
-        order_volume: int,
-        price_type: int,
-        price: float = 0.0,
-        strategy_name: str = "",
-        order_remark: str = "",
-    ) -> Tuple[int, str]:
-        return -1, "xtquant 未安装或不可用"
-
-    def cancel_order(self, order_id: str) -> Tuple[bool, str]:
-        return False, "xtquant 未安装或不可用"
-
-    def cancel_order_by_sysid(self, market: int, order_sysid: str) -> Tuple[bool, str]:
-        return False, "xtquant 未安装或不可用"
-
-    def query_new_purchase_limit(self) -> Dict[str, Any]:
-        return {}
-
-    def query_ipo_data(self) -> List[Dict[str, Any]]:
-        return []
-
-    def bank_transfer_in(
-        self, bank_no: str, bank_account: str, bank_pwd: str, amount: float
-    ) -> Tuple[bool, str]:
-        return False, "xtquant 未安装或不可用"
-
-    def bank_transfer_out(
-        self, bank_no: str, bank_account: str, bank_pwd: str, amount: float
-    ) -> Tuple[bool, str]:
-        return False, "xtquant 未安装或不可用"
-
-    def query_bank_info(self) -> List[Dict[str, Any]]:
-        return []
-
 
 class XtQuantQMTClient(BaseQMTClient):
     """xtquant-backed QMT client.
@@ -233,14 +169,17 @@ Notes:
         self._trader = None  # XtQuantTrader instance
         self._account = None  # StockAccount instance
         self._connected = False
+        self._last_probe_ts: float = 0.0
+        self._last_status_connected: Optional[bool] = None
+        self._last_autoconnect_ts: float = 0.0
 
     def _resolve_xtquant_dir(self) -> Optional[Path]:
         """Resolve xtquant directory.
 
-Priority:
-1) MINIQMT_XTQUANT_DIR (explicit override)
-2) Repo-bundled <repo_root>/xtquant
-"""
+        Priority:
+        1) MINIQMT_XTQUANT_DIR (explicit override)
+        2) Repo-bundled <repo_root>/xtquant
+        """
 
         override = (os.getenv("MINIQMT_XTQUANT_DIR") or "").strip()
         if override:
@@ -250,10 +189,8 @@ Priority:
         return self._resolve_repo_xtquant_dir()
 
     def _resolve_repo_xtquant_dir(self) -> Optional[Path]:
-        """Try to locate repo-bundled xtquant directory.
+        """Try to locate repo-bundled xtquant directory."""
 
-Repo layout in this workspace: <repo_root>/xtquant/xttrader.py ...
-"""
         try:
             repo_root = Path(__file__).resolve().parents[2]
         except Exception:
@@ -267,21 +204,17 @@ Repo layout in this workspace: <repo_root>/xtquant/xttrader.py ...
         if self._xttrader_mod is not None and self._xttype_mod is not None:
             return
         try:
-            # 1) Ensure repo-bundled xtquant can be imported (if present)
             xt_dir = self._resolve_xtquant_dir()
             if xt_dir is not None:
                 repo_root = str(xt_dir.parent)
                 if repo_root not in sys.path:
                     sys.path.insert(0, repo_root)
-                # Python 3.8+ requires adding DLL dir for dependent .dll/.pyd loading in some setups.
                 if hasattr(os, "add_dll_directory"):
                     try:
                         os.add_dll_directory(str(xt_dir))
                     except Exception:
-                        # Best effort; some environments may restrict.
                         pass
 
-            # 2) Import modules per bundled doc: xtquant.xttrader / xtquant.xttype
             from xtquant import xttrader as xttrader_mod  # type: ignore
             from xtquant import xttype as xttype_mod  # type: ignore
 
@@ -308,6 +241,11 @@ Repo layout in this workspace: <repo_root>/xtquant/xttrader.py ...
         if session_id is None:
             session_id = int(os.getpid() % 1000000)
             self._session_id = session_id
+
+        import logging
+
+        logger = logging.getLogger(self.__class__.__name__)
+        prev_connected = bool(self._connected)
 
         with self._lock:
             try:
@@ -346,7 +284,9 @@ Repo layout in this workspace: <repo_root>/xtquant/xttrader.py ...
 
                 # Start API thread then connect.
                 self._trader.start()
-                rc = self._trader.connect()
+
+                connect_timeout_s = _env_float("MINIQMT_CONNECT_TIMEOUT_SECONDS", default=2.0)
+                rc = _call_with_timeout(self._trader.connect, connect_timeout_s)
                 if rc == 0:
                     # Subscribe for pushes (optional for query, but recommended by doc).
                     try:
@@ -355,10 +295,42 @@ Repo layout in this workspace: <repo_root>/xtquant/xttrader.py ...
                         pass
                     self._connected = True
                     self._last_error = None
+                    if not prev_connected:
+                        logger.info("miniQMT 已连接，账户: %s", self._account_id)
                     return True, f"miniQMT 已连接，账户: {self._account_id}"
 
                 self._connected = False
                 self._last_error = f"miniQMT connect 失败，错误码: {rc}"
+                if prev_connected:
+                    logger.warning("miniQMT 连接已断开（connect 返回失败码: %s）", rc)
+                # IMPORTANT: when connect fails, xtquant may have started background threads.
+                # Stop and release the trader instance to avoid thread leaks and lock contention.
+                try:
+                    try:
+                        stop_timeout_s = _env_float("MINIQMT_STOP_TIMEOUT_SECONDS", default=2.0)
+                        _call_with_timeout(self._trader.stop, stop_timeout_s)
+                    except Exception:
+                        pass
+                finally:
+                    self._trader = None
+                    self._account = None
+                return False, self._last_error
+
+            except TimeoutError as e:
+                self._connected = False
+                self._last_error = f"miniQMT connect 超时: {e!r}"
+                try:
+                    if self._trader is not None:
+                        try:
+                            stop_timeout_s = _env_float("MINIQMT_STOP_TIMEOUT_SECONDS", default=2.0)
+                            _call_with_timeout(self._trader.stop, stop_timeout_s)
+                        except Exception:
+                            pass
+                finally:
+                    self._trader = None
+                    self._account = None
+                if prev_connected:
+                    logger.warning("miniQMT 连接已断开（connect 超时）")
                 return False, self._last_error
 
             except Exception as e:  # noqa: BLE001
@@ -384,7 +356,8 @@ Repo layout in this workspace: <repo_root>/xtquant/xttrader.py ...
                 if self._trader is not None:
                     try:
                         try:
-                            self._trader.stop()
+                            stop_timeout_s = _env_float("MINIQMT_STOP_TIMEOUT_SECONDS", default=2.0)
+                            _call_with_timeout(self._trader.stop, stop_timeout_s)
                         except Exception:
                             pass
                     except Exception:
@@ -394,35 +367,83 @@ Repo layout in this workspace: <repo_root>/xtquant/xttrader.py ...
                 self._account = None
                 return False, self._last_error
 
-    def disconnect(self) -> Tuple[bool, str]:
-        with self._lock:
-            try:
-                if self._trader is not None:
-                    try:
-                        self._trader.stop()
-                    except Exception:
-                        pass
-                    # 清理 trader 引用，避免析构时的错误
-                    self._trader = None
-                self._account = None
-                self._connected = False
-                return True, "已断开 miniQMT"
-            except Exception as e:  # noqa: BLE001
-                self._connected = False
-                self._last_error = f"断开 miniQMT 失败: {e!r}"
-                return False, self._last_error
+    def _probe_connection_locked(self) -> bool:
+        """Best-effort probe to detect miniQMT exit/disconnect.
+
+        Must be called under self._lock.
+        """
+
+        if not self._enabled:
+            self._connected = False
+            return False
+
+        if self._trader is None or self._account is None:
+            self._connected = False
+
+            # Optional: auto-connect on status() call, to support "start miniQMT then refresh page".
+            auto_connect = _env_bool("MINIQMT_AUTO_CONNECT_ON_STATUS", default=True)
+            if auto_connect and self._account_id and self._userdata_path:
+                now = time.time()
+                interval_s = _env_float("MINIQMT_STATUS_AUTOCONNECT_INTERVAL_SECONDS", default=30.0)
+                if now - self._last_autoconnect_ts >= interval_s:
+                    self._last_autoconnect_ts = now
+                    ok, msg = self.connect()
+                    if ok:
+                        return True
+                    self._last_error = msg
+
+            return False
+
+        # Rate limit probing to avoid hammering trader.
+        # NOTE: Probing only happens when status() is called (e.g., UI open/refresh).
+        # You can tune this to reduce overhead.
+        probe_interval_s = _env_float("MINIQMT_STATUS_PROBE_INTERVAL_SECONDS", default=15.0)
+        now = time.time()
+        if now - self._last_probe_ts < probe_interval_s:
+            return bool(self._connected)
+
+        self._last_probe_ts = now
+        try:
+            # Any lightweight query should fail fast when miniQMT is gone.
+            probe_timeout_s = _env_float("MINIQMT_PROBE_TIMEOUT_SECONDS", default=1.5)
+            _call_with_timeout(lambda: self._trader.query_stock_asset(self._account), probe_timeout_s)
+            self._connected = True
+            self._last_error = None
+            return True
+        except TimeoutError as e:
+            self._connected = False
+            self._last_error = f"miniQMT 探测超时: {e!r}"
+            return False
+        except Exception as e:  # noqa: BLE001
+            self._connected = False
+            self._last_error = f"miniQMT 探测失败: {e!r}"
+            return False
 
     def status(self) -> QMTStatus:
-        return QMTStatus(
-            enabled=self._enabled,
-            connected=bool(self._connected),
-            mode=self._mode,
-            account_id=self._account_id,
-            provider="xtquant",
-            userdata_path=self._userdata_path,
-            session_id=self._session_id,
-            last_error=self._last_error,
-        )
+        import logging
+
+        logger = logging.getLogger(self.__class__.__name__)
+        with self._lock:
+            connected_now = self._probe_connection_locked()
+            if self._last_status_connected is None:
+                self._last_status_connected = connected_now
+            elif self._last_status_connected and (not connected_now):
+                logger.warning("检测到 miniQMT 已断开/退出（status 探测失败）")
+                self._last_status_connected = False
+            elif (not self._last_status_connected) and connected_now:
+                logger.info("检测到 miniQMT 已恢复连接")
+                self._last_status_connected = True
+
+            return QMTStatus(
+                enabled=self._enabled,
+                connected=bool(connected_now),
+                mode=self._mode,
+                account_id=self._account_id,
+                provider="xtquant",
+                userdata_path=self._userdata_path,
+                session_id=self._session_id,
+                last_error=self._last_error,
+            )
 
     def _require_connected(self) -> None:
         if not self._enabled:
@@ -432,9 +453,12 @@ Repo layout in this workspace: <repo_root>/xtquant/xttrader.py ...
 
     def get_account_info(self) -> Dict[str, Any]:
         with self._lock:
+            if not self._probe_connection_locked():
+                raise QMTNotAvailableError(self._last_error or "miniQMT 未连接")
             self._require_connected()
             try:
-                asset = self._trader.query_stock_asset(self._account)
+                query_timeout_s = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
+                asset = _call_with_timeout(lambda: self._trader.query_stock_asset(self._account), query_timeout_s)
                 return {
                     "provider": "xtquant",
                     "connected": True,
@@ -451,9 +475,15 @@ Repo layout in this workspace: <repo_root>/xtquant/xttrader.py ...
 
     def get_positions(self) -> List[Dict[str, Any]]:
         with self._lock:
+            if not self._probe_connection_locked():
+                raise QMTNotAvailableError(self._last_error or "miniQMT 未连接")
             self._require_connected()
             try:
-                positions = self._trader.query_stock_positions(self._account) or []
+                query_timeout_s = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
+                positions = (
+                    _call_with_timeout(lambda: self._trader.query_stock_positions(self._account), query_timeout_s)
+                    or []
+                )
                 result: List[Dict[str, Any]] = []
                 for pos in positions:
                     stock_code = getattr(pos, "stock_code", "") or ""
@@ -466,8 +496,14 @@ Repo layout in this workspace: <repo_root>/xtquant/xttrader.py ...
                             "open_price": float(getattr(pos, "open_price", 0.0) or 0.0),
                             "cost_price": float(getattr(pos, "avg_price", 0.0) or 0.0),
                             "current_price": float(getattr(pos, "last_price", 0.0) or 0.0),
+                            # 昨日收盘价：当前 xtquant 股票持仓结构未提供，暂固定为 0.0，仅保留字段以兼容前端
+                            "prev_close": float(getattr(pos, "pre_close", 0.0) or 0.0),
                             "market_value": float(getattr(pos, "market_value", 0.0) or 0.0),
+                            # position_profit: 持仓总盈亏金额（相对成本价的累计浮盈/浮亏）
+                            "position_profit": float(getattr(pos, "position_profit", 0.0) or 0.0),
+                            # float_profit: 当日盈亏金额（相对昨收的日内盈亏）
                             "float_profit": float(getattr(pos, "float_profit", 0.0) or 0.0),
+                            # profit_rate: 持仓总盈亏比例（position_profit / 成本市值）
                             "profit_rate": float(getattr(pos, "profit_rate", 0.0) or 0.0),
                             "secu_account": str(getattr(pos, "secu_account", "") or ""),
                         }
@@ -478,9 +514,18 @@ Repo layout in this workspace: <repo_root>/xtquant/xttrader.py ...
 
     def get_orders(self, cancelable_only: bool = False) -> List[Dict[str, Any]]:
         with self._lock:
+            if not self._probe_connection_locked():
+                raise QMTNotAvailableError(self._last_error or "miniQMT 未连接")
             self._require_connected()
             try:
-                orders = self._trader.query_stock_orders(self._account, cancelable_only) or []
+                query_timeout_s = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
+                orders = (
+                    _call_with_timeout(
+                        lambda: self._trader.query_stock_orders(self._account, cancelable_only),
+                        query_timeout_s,
+                    )
+                    or []
+                )
                 result: List[Dict[str, Any]] = []
                 for order in orders:
                     # order_type: 23=买, 24=卖
@@ -512,9 +557,15 @@ Repo layout in this workspace: <repo_root>/xtquant/xttrader.py ...
 
     def get_trades(self) -> List[Dict[str, Any]]:
         with self._lock:
+            if not self._probe_connection_locked():
+                raise QMTNotAvailableError(self._last_error or "miniQMT 未连接")
             self._require_connected()
             try:
-                trades = self._trader.query_stock_trades(self._account) or []
+                query_timeout_s = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
+                trades = (
+                    _call_with_timeout(lambda: self._trader.query_stock_trades(self._account), query_timeout_s)
+                    or []
+                )
                 result: List[Dict[str, Any]] = []
                 for trade in trades:
                     order_type = getattr(trade, "order_type", 0) or 0

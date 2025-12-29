@@ -18,8 +18,6 @@ from pathlib import Path
 import os
 from typing import Dict
 
-from app_pg import get_conn  # type: ignore[attr-defined]
-
 
 def _project_root() -> Path:
     # backend/qlib_exporter/config.py -> AIstock/

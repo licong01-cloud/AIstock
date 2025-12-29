@@ -52,13 +52,19 @@
   - `aistock.data_service.timescaledb_adapter`（可选）
     - 如有需要，从 TimescaleDB 直接查询历史窗口（例如更大跨度历史）；
     - 可作为 `get_history_window` 的其中一种后端实现策略。
+  - `aistock.data_service.tdx_adapter`
+    - 封装本地 TDX/通达信 数据（文件或服务）读取，提供日线/分钟线历史窗口；
+    - 统一处理代码前缀、复权等 TDX 特有细节，对上暴露标准化行情 DataFrame。
+  - `aistock.data_service.tushare_adapter`
+    - 封装 Tushare / Tushare Pro HTTP API 访问，提供日线/分钟线/基础面等数据；
+    - 负责 HTTP 调用与限流/重试，对上暴露与其他适配器一致的 DataFrame 视图。
   - `aistock.data_service.api`
     - 对上暴露统一的 Python 接口：
       - `get_realtime_snapshot(...)`
       - `stream_quotes(...)`
       - `get_history_window(...)`
       - `get_portfolio_state()` / `get_open_orders()` / `get_trades(...)`
-    - 对调用方屏蔽 xtquant/miniQMT/TimescaleDB 的差异。
+    - 对调用方屏蔽 xtquant/miniQMT/TimescaleDB/TDX/Tushare 的差异。
 
 - （可选）`aistock.data_service.http`
   - 使用 FastAPI 对 `api` 做一层极薄包装，仅供：
@@ -420,16 +426,112 @@ def run_strategy_push(cfg):
   - 不对外暴露 HTTP/gRPC 服务；
   - 不改变现有 TimescaleDB → HDF5/qlib 导出与 RD-Agent 离线研究流程。
 
-- 后续可扩展方向：
-  - 将 `aistock.data_service.api` 包装为内部 HTTP/gRPC 服务，支持：
-    - 多语言策略；
-    - Web 可视化/监控直接查询；
-  - 扩展多资产、多市场、多时区；
-  - 引入缓存层（Redis 等）优化高频读写场景。
+---
+## 7. 当前实现进度与设计更新（2025-12-26）
+
+### 7.1 已实现内容概览
+
+- **模块结构**
+  - 已在 `backend/data_service/` 下落地实现内部数据服务层：
+    - `xtquant_adapter.py`
+    - `miniqmt_adapter.py`（仅 dataclass 与函数签名，核心逻辑待实现）
+    - `api.py`（统一对上接口）
+    - `timescaledb_adapter.py` / `tdx_adapter.py` / `errors.py` 等支撑模块。
+  - 提供了校验脚本 `backend/scripts/validate_data_service.py`，用于本地验证行情相关接口。
+
+- **行情相关接口（第 3 章）**
+  - `get_realtime_snapshot`：
+    - 已在 `backend/data_service/api.py` 中实现。
+    - 实际行为：优先使用 **xtquant**，失败或返回空时严格回退到 **TDX**；若两者都无数据则抛出 `DataSourceError`，不会静默返回空。
+  - `stream_quotes`：
+    - 已在 `api.py` 中通过 `xtquant_adapter.stream_quotes_xt` 实现。
+    - 当前实现基于 **轮询 `get_full_tick` + 队列封装**，而不是 xtquant 的原生推送回调，但对上暴露的依然是 `QuoteBatch` 迭代器。
+  - `get_history_window`：
+    - 已实现，并在严格模式下：
+      - **优先 xtquant K 线**；
+      - 若 xtquant 抛错或无数据，再回退到 **TimescaleDB**；
+      - 两者都失败时抛出 `DataSourceError`。
+  - **新增 `get_intraday_window`**：
+    - 文档原设计仅在 `get_history_window` 中泛化分钟线；
+    - 当前实现中添加了专门的 `get_intraday_window` 接口，内部仍委托 `xtquant_adapter.fetch_history_window_xt` 获取 1m/5m/15m 等周期。
+
+- **账户与交易视图（第 4 章）**
+  - `miniqmt_adapter.py`：
+    - 已定义 `Position` / `PortfolioState` / `Order` / `Trade` 四个 dataclass，与文档中 4.1、4.2 的结构基本一致。
+    - 提供了函数签名：
+      - `load_portfolio_state_qmt()`
+      - `load_open_orders_qmt()`
+      - `load_trades_qmt(start, end)`
+    - 目前函数体均为 `raise NotImplementedError`，尚未接入实际 QMT 客户端。
+  - `api.py`：
+    - 已提供对外接口：
+      - `get_portfolio_state()` → 调用 `miniqmt_adapter.load_portfolio_state_qmt()`
+      - `get_open_orders()` → 调用 `miniqmt_adapter.load_open_orders_qmt()`
+      - `get_trades(start, end)` → 调用 `miniqmt_adapter.load_trades_qmt()`
+    - 因适配器尚未实现，调用这些函数当前会触发 `NotImplementedError`。
+
+- **验证脚本与使用示例**
+  - `backend/scripts/validate_data_service.py`：
+    - 已支持：
+      - `get_realtime_snapshot`
+      - `get_history_window`（1d）
+      - `get_intraday_window`（1m）
+    - 可用于在本地环境快速验证 xtquant/TDX/TimescaleDB 的联通性与数据完整度。
+
+### 7.2 相对原设计的差异与更新
+
+- **数据源优先级与严格模式**
+  - 文档原设想：
+    - 日线历史 `get_history_window` 更偏向 TimescaleDB 为主、xtquant 为辅；
+    - 实时快照回退到“最近一条 TimescaleDB 记录”仅作模拟用途。
+  - 当前实现：
+    - 对历史：**以 xtquant 为主，TimescaleDB 为回退**，更贴近“在线本地行情环境”场景；
+    - 对实时：以 xtquant 为主，**TDX 为回退源**，不再使用 TimescaleDB 近一条记录模拟实时；
+    - 若所有源均失败或无数据，统一抛出 `DataSourceError`，而非返回空 DataFrame。
+  - 这属于在实现阶段对“严格模式”语义的增强，建议保留，并在上层调用方显式处理 `DataSourceError`。
+
+- **推送模式实现方式**
+  - 文档中描述的是基于 xtquant “订阅 + 回调” 的推送实现。
+  - 当前实现采用 **轮询 `get_full_tick` + 线程 + 队列** 的方式近似推送，主要是为了减少对复杂订阅接口的依赖。
+  - 对策略层暴露的仍是 `QuoteBatch` 生成器，不影响后续平滑替换为真实订阅实现。
+
+- **接口形态扩展**
+  - 新增 `get_intraday_window` 独立接口，便于策略端明确区分日线与盘中窗口请求；
+  - 与原文档的“在 `get_history_window` 中支持分钟线”思路兼容，但接口边界更清晰。
+
+### 7.3 尚未完成 / 待实现工作
+
+- **miniQMT 账户与交易适配层（优先级高）**
+  - 在 `backend/data_service/miniqmt_adapter.py` 中：
+    - 实现 `load_portfolio_state_qmt()`：
+      - 调用现有 QMT 客户端（如 `backend.infra.qmt_client`）获取账户 / 持仓；
+      - 转换为 `PortfolioState`／`Position` 结构；
+      - 对齐文档中“equity≈cash+Σmarket_value”的约束。
+    - 实现 `load_open_orders_qmt()` / `load_trades_qmt(...)`：
+      - 基于 miniQMT 订单/成交查询接口，填充 `Order` / `Trade` dataclass。
+  - 完成后，`api.get_portfolio_state()` / `get_open_orders()` / `get_trades()` 才可正式对上游策略与风控模块开放。
+
+- **TimescaleDB / TDX 适配层的细节完善**
+  - 确认 `timescaledb_adapter.fetch_history_window_ts` 与 `tdx_adapter.fetch_realtime_snapshot_tdx` 的字段映射与频率支持，与文档中字段规范保持一致；
+  - 根据实际使用情况补充错误日志与重试策略（可复用 `errors.py` 中的封装）。
+
+- **策略 Runner 与多策略并行（第 5 章）**
+  - 当前仓库尚未完整落地文档中示例的 `aistock.strategy_engine.runner`：
+    - `run_strategy_polling` / `run_strategy_push` 等函数仍需根据实际策略宿主结构实现；
+    - 需要接入现有的策略配置存储（如 `trading.strategy_config`）与调度器（`backend/schedulers/strategy_scheduler.py`）。
+  - 多策略并行的进程/线程模型、与现有 QMT 调度器的关系仍待设计与集成。
+
+- **HTTP 封装层（第 2.1 节可选模块）**
+  - 目前尚未实现 `aistock.data_service.http`；
+  - 若未来需要给 Web 前端或外部进程使用，只读查询接口可以基于现有 `data_service.api` 再包一层 FastAPI。
+
+- **与现有回测/模拟盘模块的集成计划**
+  - 文档中提到的“评估如何逐步引入 Data Service 提供的数据视图”尚未形成具体步骤；
+  - 建议后续补充：
+    - 单策略试点接入流程；
+    - 风险评估与回滚策略；
+    - 与当前 TimescaleDB → HDF5/qlib 导出链路的边界说明。
 
 ---
-
-> 本文档当前为实现设计的初稿，后续可根据 xtquant/miniqmt 具体接口与 AIstock 现有策略引擎结构进一步补充：
-> - xtquant 接口与 Data Service API 的一一映射表；
-> - 具体错误处理与重试策略；
-> - 与现有回测/模拟盘模块的集成计划。
+> 本节用于持续同步 Data Service 在 AIstock 仓库中的实际实现进度与设计差异，
+> 后续如有新的适配层、错误处理策略或策略引擎集成方式变更，请在此节下追加更新记录.

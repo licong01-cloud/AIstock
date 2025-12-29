@@ -91,14 +91,21 @@ def _parse_options(options: Any) -> Dict[str, Any]:
     return {}
 
 
+from ..db.pg_pool import get_conn
+
+
 @contextmanager
 def _get_conn(db_cfg: Dict[str, Any]):
-    conn = psycopg2.connect(**db_cfg)
-    conn.autocommit = True
-    try:
+    """Backward-compatible connection helper.
+
+    - Historically使用每次 psycopg2.connect(**db_cfg) 直连；
+    - 现在统一委托给 backend.db.pg_pool.get_conn()，以启用连接池；
+    - 参数 db_cfg 保留以兼容旧调用签名，但当前实现不再直接使用。
+    """
+
+    # 忽略 db_cfg，统一走进程级连接池；若连接池未初始化，get_conn 会退回直连。
+    with get_conn() as conn:
         yield conn
-    finally:
-        conn.close()
 
 
 def _json_dump(data: Any) -> str:
@@ -196,12 +203,18 @@ class TDXScheduler:
 
     # ------------------------------------------------------------------
     # lifecycle
-    def start(self, refresh_interval: int = 60) -> None:
+    def start(self, refresh_interval: int = 30) -> None:
         with self._lock:
             if self._schedule_thread and self._schedule_thread.is_alive():
                 return
             self._stop_event.clear()
-            self.refresh_schedules()
+            # 非懒加载：启动时立即尝试从数据库加载调度配置。
+            # 若此时数据库不可用，不抛出异常阻塞 FastAPI 启动，仅打印告警，
+            # 后续由后台刷新线程每 30 秒重试，直到数据库恢复。
+            try:
+                self.refresh_schedules()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[TDX Scheduler] initial refresh failed (DB unavailable?): {exc}")
             self._schedule_thread = threading.Thread(target=self._run_loop, name="tdx-schedule", daemon=True)
             self._schedule_thread.start()
             self._refresh_thread = threading.Thread(
@@ -236,15 +249,36 @@ class TDXScheduler:
     # ------------------------------------------------------------------
     # DB helpers
     def _fetchall(self, sql: str, params: Tuple[Any, ...] = ()) -> List[Dict[str, Any]]:
+        t0 = time.time()
         with _get_conn(self._db_cfg) as conn:
             with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
                 cur.execute(sql, params)
-                return list(cur.fetchall())
+                rows = list(cur.fetchall())
+        if (os.getenv("TDX_DB_DEBUG") or "").strip().lower() in {"1", "true", "yes", "y", "on"}:
+            slow_ms = int((os.getenv("TDX_DB_SLOW_MS") or "300").strip() or "300")
+            cost_ms = (time.time() - t0) * 1000.0
+            if cost_ms >= float(slow_ms):
+                preview = " ".join((sql or "").split())[:240]
+                print(
+                    "[TDX DB] slow fetchall %.1fms thread=%s sql=%s params=%s"
+                    % (cost_ms, threading.current_thread().name, preview, params)
+                )
+        return rows
 
     def _execute(self, sql: str, params: Tuple[Any, ...]) -> None:
+        t0 = time.time()
         with _get_conn(self._db_cfg) as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
+        if (os.getenv("TDX_DB_DEBUG") or "").strip().lower() in {"1", "true", "yes", "y", "on"}:
+            slow_ms = int((os.getenv("TDX_DB_SLOW_MS") or "300").strip() or "300")
+            cost_ms = (time.time() - t0) * 1000.0
+            if cost_ms >= float(slow_ms):
+                preview = " ".join((sql or "").split())[:240]
+                print(
+                    "[TDX DB] slow execute %.1fms thread=%s sql=%s params=%s"
+                    % (cost_ms, threading.current_thread().name, preview, params)
+                )
 
     # ------------------------------------------------------------------
     # schedule management

@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
-from ..infra.qmt_client import BaseQMTClient, QMTNotAvailableError, build_qmt_client_from_env
+from ..infra.qmt_client import BaseQMTClient, QMTNotAvailableError, get_qmt_client_singleton
+from ..monitor.qmt_monitor import (
+    MonitorConfigModel,
+    build_monitor_summary,
+    build_single_strategy_summary,
+    build_strategy_summaries,
+    get_monitor_config_model,
+    update_monitor_config_model,
+)
 
 
 router = APIRouter(prefix="/qmt", tags=["qmt"])
-
-# Process-wide singleton. For the "直连" phase this is sufficient.
-# If you update .env at runtime, call /qmt/reload to rebuild.
-# 延迟初始化：不在模块导入时创建客户端，避免启动失败
-_client: Optional[BaseQMTClient] = None
 
 
 def _get_client() -> BaseQMTClient:
@@ -20,58 +25,90 @@ def _get_client() -> BaseQMTClient:
     
     第一次调用时会创建客户端实例。如果配置错误，会抛出明确的异常。
     """
-    global _client
-    if _client is None:
-        try:
-            _client = build_qmt_client_from_env()
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"初始化QMT客户端失败: {e}", exc_info=True)
-            # 严格模式：不允许fallback，直接抛出异常
-            raise RuntimeError(
-                f"QMT客户端初始化失败: {e}\n"
-                f"请检查 .env 文件中的配置：\n"
-                f"- MINIQMT_ENABLED\n"
-                f"- MINIQMT_ACCOUNT_ID\n"
-                f"- MINIQMT_USERDATA_PATH\n"
-                f"- MINIQMT_SESSION_ID (可选)\n"
-                f"\n如果不需要QMT功能，请设置 MINIQMT_ENABLED=false"
-            ) from e
-    return _client
+    try:
+        return get_qmt_client_singleton()
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"初始化QMT客户端失败: {e}", exc_info=True)
+        # 严格模式：不允许fallback，直接抛出异常
+        raise RuntimeError(
+            f"QMT客户端初始化失败: {e}\n"
+            f"请检查 .env 文件中的配置：\n"
+            f"- MINIQMT_ENABLED\n"
+            f"- MINIQMT_ACCOUNT_ID\n"
+            f"- MINIQMT_USERDATA_PATH\n"
+            f"- MINIQMT_SESSION_ID (可选)\n"
+            f"\n如果不需要QMT功能，请设置 MINIQMT_ENABLED=false"
+        ) from e
 
 
 @router.post("/reload", summary="重新加载 QMT 配置并重建客户端")
 async def reload_client() -> Dict[str, Any]:
-    global _client
+    """尝试通过断开+重连的方式刷新 QMT 连接.
+
+    注意：由于客户端现为进程级单例，本接口不会重新构建实例，只会在
+    现有实例上执行 disconnect/connect，以避免打破其他调用方的连接状态
+    抽象。
+    """
+
     try:
-        _client = None  # 清除旧客户端
-        _client = build_qmt_client_from_env()
-        return {"ok": True, "status": _get_client().status().__dict__}
+        client = _get_client()
+        ok1, msg1 = client.disconnect()
+        ok2, msg2 = client.connect()
+        return {
+            "ok": bool(ok2),
+            "message": f"disconnect: {msg1}; connect: {msg2}",
+            "status": client.status().__dict__,
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"重新加载QMT配置失败: {e}\n请检查 .env 文件中的配置。"
+            detail=f"重新加载QMT配置失败: {e}\n请检查 .env 文件中的配置。",
         ) from e
 
 
 @router.get("/status", summary="QMT/xtquant 连接状态")
 async def get_status() -> Dict[str, Any]:
-    return _get_client().status().__dict__
+    client = _get_client()
+    return {
+        **client.status().__dict__,
+        "pid": os.getpid(),
+        "client_object_id": hex(id(client)),
+        "client_class": f"{client.__class__.__module__}.{client.__class__.__name__}",
+    }
 
 
 @router.post("/connect", summary="连接 QMT（模拟盘/实盘取决于账户与 MINIQMT_MODE）")
 async def connect() -> Dict[str, Any]:
     client = _get_client()
     ok, msg = client.connect()
-    return {"success": bool(ok), "message": msg, "status": client.status().__dict__}
+    return {
+        "success": bool(ok),
+        "message": msg,
+        "status": {
+            **client.status().__dict__,
+            "pid": os.getpid(),
+            "client_object_id": hex(id(client)),
+            "client_class": f"{client.__class__.__module__}.{client.__class__.__name__}",
+        },
+    }
 
 
 @router.post("/disconnect", summary="断开 QMT 连接")
 async def disconnect() -> Dict[str, Any]:
     client = _get_client()
     ok, msg = client.disconnect()
-    return {"success": bool(ok), "message": msg, "status": client.status().__dict__}
+    return {
+        "success": bool(ok),
+        "message": msg,
+        "status": {
+            **client.status().__dict__,
+            "pid": os.getpid(),
+            "client_object_id": hex(id(client)),
+            "client_class": f"{client.__class__.__module__}.{client.__class__.__name__}",
+        },
+    }
 
 
 @router.get("/account", summary="获取 QMT 资金信息（快照）")
@@ -169,6 +206,73 @@ async def place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"下单失败: {e!r}") from e
+
+
+@router.get("/monitor/config", summary="获取 QMT 持仓监控配置")
+async def get_qmt_monitor_config() -> Dict[str, Any]:
+    """返回当前 QMT 监控阈值配置.
+
+    - global: 账户级阈值（总回撤、当日亏损、单票最大权重、最小现金比例）
+    - per_symbol: 按股票代码的个性化阈值
+    """
+
+    model = get_monitor_config_model()
+    return model.dict(by_alias=True)
+
+
+@router.post("/monitor/config", summary="更新 QMT 持仓监控配置")
+async def update_qmt_monitor_config(payload: MonitorConfigModel) -> Dict[str, Any]:
+    """更新 QMT 监控阈值配置.
+
+    直接提交完整配置对象（global + per_symbol），后端进行覆盖写入。
+    """
+
+    model = update_monitor_config_model(payload)
+    return model.dict(by_alias=True)
+
+
+@router.get("/monitor/summary", summary="获取 QMT 持仓监控摘要")
+async def get_qmt_monitor_summary() -> Dict[str, Any]:
+    """基于当前 QMT 快照，返回账户/持仓 PnL 指标与告警列表.
+
+    - account: total_asset / market_value / available_cash / total_position_profit / total_daily_profit
+    - positions: 每只持仓的 PnL 指标 + 权重 + 本地 alerts
+    - alerts: 聚合告警列表
+    """
+
+    try:
+        return build_monitor_summary()
+    except QMTNotAvailableError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/monitor/strategies", summary="获取所有策略的 QMT 监控摘要")
+async def get_qmt_monitor_strategies() -> Dict[str, Any]:
+    """按 strategy_id 维度返回简要监控摘要.
+
+    - items: 每个元素包含 strategy_id、orders_count、trades_count、
+      total_position_profit、total_daily_profit、market_value、weight_asset 等。
+    """
+
+    try:
+        return build_strategy_summaries()
+    except QMTNotAvailableError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/monitor/strategy/{strategy_id}/summary", summary="获取单个策略的 QMT 监控摘要")
+async def get_qmt_monitor_strategy_summary(strategy_id: str) -> Dict[str, Any]:
+    """返回指定 strategy_id 对应的详细监控摘要.
+
+    - pnl: 该策略相关持仓的总持仓盈亏 / 当日盈亏 / 市值及资产权重
+    - positions: 涉及的持仓明细
+    - orders / trades: 该策略的当日委托与成交
+    """
+
+    try:
+        return build_single_strategy_summary(strategy_id)
+    except QMTNotAvailableError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/cancel", summary="撤单")

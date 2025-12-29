@@ -28,7 +28,7 @@ interface AccountInfo {
   fetch_balance: number;
 }
 
-interface Position {
+export interface Position {
   stock_code: string;
   stock_name: string;
   quantity: number;
@@ -36,8 +36,13 @@ interface Position {
   open_price: number;
   cost_price: number;
   current_price: number;
+  prev_close: number;
   market_value: number;
+  // 持仓总盈亏金额（相对成本价的累计浮盈/浮亏），对应 xtquant 的 position_profit
+  position_profit: number;
+  // 当日盈亏金额（相对昨收的日内盈亏），对应 xtquant 的 float_profit
   float_profit: number;
+  // 持仓总盈亏比例（position_profit / 成本市值），对应 xtquant 的 profit_rate
   profit_rate: number;
   secu_account: string;
 }
@@ -111,9 +116,34 @@ function formatDateTime(s?: string | null) {
   }
 }
 
+interface MonitorSummary {
+  timestamp: string;
+  account: {
+    total_asset: number;
+    market_value: number;
+    available_cash: number;
+    total_position_profit: number;
+    total_daily_profit: number;
+  };
+  positions: Array<Record<string, any>>;
+  alerts: Array<Record<string, any>>;
+}
+
+interface MonitorGlobalConfig {
+  max_total_drawdown: number;
+  max_daily_loss: number;
+  max_position_weight: number;
+  min_available_cash_ratio: number;
+}
+
+interface MonitorConfigResponse {
+  global: MonitorGlobalConfig;
+  per_symbol: Record<string, any>;
+}
+
 export default function QMTPositionsPage() {
   const [activeTab, setActiveTab] = useState<
-    "positions" | "orders" | "trades" | "account" | "trade" | "ipo" | "bank"
+    "positions" | "orders" | "trades" | "account" | "trade" | "ipo" | "bank" | "monitor"
   >("positions");
 
   const [status, setStatus] = useState<QMTStatus | null>(null);
@@ -124,7 +154,7 @@ export default function QMTPositionsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
-  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false); // 默认关闭自动刷新
   const [refreshInterval, setRefreshInterval] = useState(5); // 默认5秒
 
   // 交易相关状态
@@ -152,6 +182,17 @@ export default function QMTPositionsPage() {
   const [transferBankPwd, setTransferBankPwd] = useState("");
   const [transferAmount, setTransferAmount] = useState(0);
   const [transferring, setTransferring] = useState(false);
+
+  // QMT 账户级监控摘要
+  const [monitorSummary, setMonitorSummary] = useState<MonitorSummary | null>(null);
+  // QMT 监控阈值配置（本地默认 + 后端覆盖）
+  const [monitorGlobal, setMonitorGlobal] = useState<MonitorGlobalConfig>({
+    max_total_drawdown: -10000,
+    max_daily_loss: -3000,
+    max_position_weight: 0.3,
+    min_available_cash_ratio: 0.05,
+  });
+  const [monitorPerSymbolJson, setMonitorPerSymbolJson] = useState("{}");
 
   async function loadStatus() {
     try {
@@ -225,6 +266,19 @@ export default function QMTPositionsPage() {
         const tradesData: Trade[] = await tradesRes.json();
         setTrades(tradesData || []);
       }
+
+      // 加载账户监控摘要（仅供监控页使用）
+      try {
+        const monitorRes = await fetch(`${API_BASE}/qmt/monitor/summary`);
+        if (monitorRes.ok) {
+          const monitorData: MonitorSummary = await monitorRes.json();
+          setMonitorSummary(monitorData);
+        } else {
+          setMonitorSummary(null);
+        }
+      } catch {
+        setMonitorSummary(null);
+      }
     } catch (e: any) {
       setError(e?.message || "加载数据失败");
     } finally {
@@ -296,7 +350,10 @@ export default function QMTPositionsPage() {
   const positionStats = {
     total: positions.length,
     totalMarketValue: positions.reduce((sum, p) => sum + p.market_value, 0),
-    totalFloatProfit: positions.reduce((sum, p) => sum + p.float_profit, 0),
+    // 总持仓盈亏（相对成本价的累计浮盈/浮亏），对应 xtquant position_profit
+    totalPositionProfit: positions.reduce((sum, p) => sum + p.position_profit, 0),
+    // 当日盈亏总和（相对昨收的日内盈亏），对应 xtquant float_profit
+    totalDailyProfit: positions.reduce((sum, p) => sum + p.float_profit, 0),
   };
 
   // 下单函数
@@ -495,6 +552,56 @@ export default function QMTPositionsPage() {
     }
   }, [activeTab, status?.connected]);
 
+  // 仅在进入监控标签时加载监控配置
+  useEffect(() => {
+    async function loadMonitorConfig() {
+      try {
+        const res = await fetch(`${API_BASE}/qmt/monitor/config`);
+        if (res.ok) {
+          const data: MonitorConfigResponse = await res.json();
+          if (data.global) {
+            setMonitorGlobal(data.global);
+          }
+          setMonitorPerSymbolJson(JSON.stringify(data.per_symbol || {}, null, 2));
+        }
+      } catch {
+        // 忽略，保持本地默认
+      }
+    }
+
+    if (activeTab === "monitor" && status?.connected) {
+      loadMonitorConfig();
+    }
+  }, [activeTab, status?.connected]);
+
+  async function handleSaveMonitorConfig() {
+    try {
+      let perSymbolParsed: Record<string, any> = {};
+      if (monitorPerSymbolJson.trim()) {
+        perSymbolParsed = JSON.parse(monitorPerSymbolJson);
+      }
+
+      const payload = {
+        global: monitorGlobal,
+        per_symbol: perSymbolParsed,
+      };
+
+      const res = await fetch(`${API_BASE}/qmt/monitor/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        alert(`保存监控配置失败: ${res.status} ${txt}`);
+        return;
+      }
+      alert("监控阈值已保存");
+    } catch (e: any) {
+      alert(e?.message || "保存监控配置失败，请检查 per_symbol JSON 格式");
+    }
+  }
+
   return (
     <main style={{ padding: 24 }}>
       <section style={{ marginBottom: 16 }}>
@@ -640,7 +747,7 @@ export default function QMTPositionsPage() {
         </p>
       )}
 
-      {/* 标签页 */}
+      {/* 顶部标签切换 */}
       <section style={{ marginBottom: 12 }}>
         <div style={{ display: "flex", gap: 12, fontSize: 13 }}>
           <button
@@ -727,8 +834,344 @@ export default function QMTPositionsPage() {
           >
             💳 银证转账
           </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("monitor")}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 999,
+              border: "1px solid #ccc",
+              background: activeTab === "monitor" ? "#eef2ff" : "#fff",
+            }}
+          >
+            🚨 账户监控
+          </button>
         </div>
       </section>
+
+      {/* 账户监控 */}
+      {activeTab === "monitor" && (
+        <section>
+          {loading && <p style={{ fontSize: 13, color: "#666" }}>加载中...</p>}
+
+          {!loading && !monitorSummary && (
+            <div style={{ padding: 40, textAlign: "center", color: "#666" }}>
+              暂无监控数据，请确认 QMT 已连接且有持仓。
+            </div>
+          )}
+
+          {!loading && monitorSummary && (
+            <>
+              {/* 顶部账户监控摘要卡片 */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                  gap: 12,
+                  marginBottom: 16,
+                }}
+              >
+                <div
+                  style={{
+                    background: "#fff",
+                    borderRadius: 10,
+                    padding: 16,
+                    boxShadow: "0 2px 6px rgba(0,0,0,0.06)",
+                  }}
+                >
+                  <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}>总资产</div>
+                  <div style={{ fontSize: 24, fontWeight: 600 }}>
+                    ¥{formatNumber(monitorSummary.account.total_asset)}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    background: "#fff",
+                    borderRadius: 10,
+                    padding: 16,
+                    boxShadow: "0 2px 6px rgba(0,0,0,0.06)",
+                  }}
+                >
+                  <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}>持仓市值</div>
+                  <div style={{ fontSize: 24, fontWeight: 600 }}>
+                    ¥{formatNumber(monitorSummary.account.market_value)}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    background: "#fff",
+                    borderRadius: 10,
+                    padding: 16,
+                    boxShadow: "0 2px 6px rgba(0,0,0,0.06)",
+                  }}
+                >
+                  <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}>总持仓盈亏</div>
+                  <div
+                    style={{
+                      fontSize: 24,
+                      fontWeight: 600,
+                      color:
+                        monitorSummary.account.total_position_profit > 0
+                          ? "#dc2626"
+                          : monitorSummary.account.total_position_profit < 0
+                          ? "#16a34a"
+                          : "#374151",
+                    }}
+                  >
+                    ¥{formatNumber(monitorSummary.account.total_position_profit)}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    background: "#fff",
+                    borderRadius: 10,
+                    padding: 16,
+                    boxShadow: "0 2px 6px rgba(0,0,0,0.06)",
+                  }}
+                >
+                  <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}>当日盈亏</div>
+                  <div
+                    style={{
+                      fontSize: 24,
+                      fontWeight: 600,
+                      color:
+                        monitorSummary.account.total_daily_profit > 0
+                          ? "#dc2626"
+                          : monitorSummary.account.total_daily_profit < 0
+                          ? "#16a34a"
+                          : "#374151",
+                    }}
+                  >
+                    ¥{formatNumber(monitorSummary.account.total_daily_profit)}
+                  </div>
+                </div>
+              </div>
+
+              {/* 告警列表 */}
+              <div
+                style={{
+                  marginBottom: 16,
+                  background: "#fff7ed",
+                  borderRadius: 10,
+                  padding: 12,
+                  border: "1px solid #fed7aa",
+                }}
+              >
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>告警列表</div>
+                {monitorSummary.alerts.length === 0 ? (
+                  <div style={{ fontSize: 13, color: "#4b5563" }}>当前无告警。</div>
+                ) : (
+                  <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "#4b5563" }}>
+                    {monitorSummary.alerts.map((a, idx) => (
+                      <li key={idx}>
+                        [{a.level}] {a.message}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* 持仓监控明细 */}
+              <div style={{ marginBottom: 24 }}>
+                <h3 style={{ marginTop: 0, marginBottom: 8 }}>持仓监控明细</h3>
+                {monitorSummary.positions.length === 0 ? (
+                  <div style={{ padding: 12, color: "#6b7280" }}>暂无持仓。</div>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ background: "#f5f5f5" }}>
+                          <th style={{ padding: 8, textAlign: "left", borderBottom: "2px solid #ddd" }}>代码</th>
+                          <th style={{ padding: 8, textAlign: "left", borderBottom: "2px solid #ddd" }}>名称</th>
+                          <th style={{ padding: 8, textAlign: "right", borderBottom: "2px solid #ddd" }}>数量</th>
+                          <th style={{ padding: 8, textAlign: "right", borderBottom: "2px solid #ddd" }}>市值</th>
+                          <th style={{ padding: 8, textAlign: "right", borderBottom: "2px solid #ddd" }}>持仓盈亏</th>
+                          <th style={{ padding: 8, textAlign: "right", borderBottom: "2px solid #ddd" }}>当日盈亏</th>
+                          <th style={{ padding: 8, textAlign: "right", borderBottom: "2px solid #ddd" }}>资产占比</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {monitorSummary.positions.map((p: any, idx: number) => {
+                          const posPnl = Number(p.position_profit || 0);
+                          const dailyPnl = Number(p.float_profit || 0);
+                          const mv = Number(p.market_value || 0);
+                          const weightAsset = Number(p.weight_asset || 0);
+                          return (
+                            <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
+                              <td style={{ padding: 8 }}>{p.stock_code}</td>
+                              <td style={{ padding: 8 }}>{p.stock_name}</td>
+                              <td style={{ padding: 8, textAlign: "right" }}>{p.quantity}</td>
+                              <td style={{ padding: 8, textAlign: "right" }}>{mv.toFixed(2)}</td>
+                              <td
+                                style={{
+                                  padding: 8,
+                                  textAlign: "right",
+                                  color: posPnl > 0 ? "#dc2626" : posPnl < 0 ? "#16a34a" : "#374151",
+                                }}
+                              >
+                                {posPnl.toFixed(2)}
+                              </td>
+                              <td
+                                style={{
+                                  padding: 8,
+                                  textAlign: "right",
+                                  color: dailyPnl > 0 ? "#dc2626" : dailyPnl < 0 ? "#16a34a" : "#374151",
+                                }}
+                              >
+                                {dailyPnl.toFixed(2)}
+                              </td>
+                              <td style={{ padding: 8, textAlign: "right" }}>{(weightAsset * 100).toFixed(2)}%</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* 监控阈值配置 */}
+              <div
+                style={{
+                  background: "#fff",
+                  borderRadius: 12,
+                  padding: 16,
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.05)",
+                }}
+              >
+                <h3 style={{ marginTop: 0, marginBottom: 12 }}>监控阈值配置</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "2fr 3fr", gap: 16, fontSize: 13 }}>
+                  <div>
+                    <h4 style={{ marginTop: 0, marginBottom: 8 }}>全局阈值</h4>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <label style={{ display: "block" }}>
+                        <span>总持仓回撤下限 (max_total_drawdown)</span>
+                        <input
+                          type="number"
+                          value={monitorGlobal?.max_total_drawdown || 0}
+                          onChange={(e) =>
+                            setMonitorGlobal({
+                              ...monitorGlobal,
+                              max_total_drawdown: Number(e.target.value || 0),
+                            })
+                          }
+                          style={{
+                            width: "100%",
+                            marginTop: 4,
+                            padding: "4px 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d4d4d4",
+                          }}
+                        />
+                      </label>
+                      <label style={{ display: "block" }}>
+                        <span>当日亏损下限 (max_daily_loss)</span>
+                        <input
+                          type="number"
+                          value={monitorGlobal?.max_daily_loss || 0}
+                          onChange={(e) =>
+                            setMonitorGlobal({
+                              ...monitorGlobal,
+                              max_daily_loss: Number(e.target.value || 0),
+                            })
+                          }
+                          style={{
+                            width: "100%",
+                            marginTop: 4,
+                            padding: "4px 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d4d4d4",
+                          }}
+                        />
+                      </label>
+                      <label style={{ display: "block" }}>
+                        <span>单票最大资产占比 (max_position_weight)</span>
+                        <input
+                          type="number"
+                          value={monitorGlobal?.max_position_weight || 0}
+                          step={0.01}
+                          onChange={(e) =>
+                            setMonitorGlobal({
+                              ...monitorGlobal,
+                              max_position_weight: Number(e.target.value || 0),
+                            })
+                          }
+                          style={{
+                            width: "100%",
+                            marginTop: 4,
+                            padding: "4px 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d4d4d4",
+                          }}
+                        />
+                      </label>
+                      <label style={{ display: "block" }}>
+                        <span>最小可用资金比例 (min_available_cash_ratio)</span>
+                        <input
+                          type="number"
+                          value={monitorGlobal?.min_available_cash_ratio || 0}
+                          step={0.01}
+                          onChange={(e) =>
+                            setMonitorGlobal({
+                              ...monitorGlobal,
+                              min_available_cash_ratio: Number(e.target.value || 0),
+                            })
+                          }
+                          style={{
+                            width: "100%",
+                            marginTop: 4,
+                            padding: "4px 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d4d4d4",
+                          }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                  <div>
+                    <h4 style={{ marginTop: 0, marginBottom: 8 }}>按股票代码阈值 per_symbol (JSON)</h4>
+                    <textarea
+                      value={monitorPerSymbolJson}
+                      onChange={(e) => setMonitorPerSymbolJson(e.target.value)}
+                      rows={12}
+                      style={{
+                        width: "100%",
+                        fontFamily: "monospace",
+                        fontSize: 12,
+                        padding: 8,
+                        borderRadius: 6,
+                        border: "1px solid #d4d4d4",
+                        resize: "vertical",
+                      }}
+                    />
+                    <p style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                      示例: {"{"}"600000.SH":{"{"}"max_daily_loss":{""}-500{""},"max_position_loss":{""}-2000{""}{"}"}{"}"}
+                    </p>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 12, textAlign: "right" }}>
+                  <button
+                    type="button"
+                    onClick={handleSaveMonitorConfig}
+                    style={{
+                      padding: "6px 16px",
+                      borderRadius: 8,
+                      border: "none",
+                      background: "#4f46e5",
+                      color: "#fff",
+                      cursor: "pointer",
+                      fontWeight: 600,
+                    }}
+                  >
+                    保存监控阈值
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </section>
+      )}
 
       {/* 账户资金 */}
       {activeTab === "account" && (
@@ -738,7 +1181,7 @@ export default function QMTPositionsPage() {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
                 gap: 12,
                 marginBottom: 16,
               }}
@@ -786,6 +1229,58 @@ export default function QMTPositionsPage() {
                 </div>
                 <div style={{ fontSize: 24, fontWeight: 600 }}>
                   ¥{formatNumber(account.market_value)}
+                </div>
+              </div>
+              <div
+                style={{
+                  background: "#fff",
+                  borderRadius: 10,
+                  padding: 16,
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.06)",
+                }}
+              >
+                <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}>
+                  总持仓盈亏
+                </div>
+                <div
+                  style={{
+                    fontSize: 24,
+                    fontWeight: 600,
+                    color:
+                      positionStats.totalPositionProfit > 0
+                        ? "#dc2626"
+                        : positionStats.totalPositionProfit < 0
+                        ? "#16a34a"
+                        : "#374151",
+                  }}
+                >
+                  ¥{formatNumber(positionStats.totalPositionProfit)}
+                </div>
+              </div>
+              <div
+                style={{
+                  background: "#fff",
+                  borderRadius: 10,
+                  padding: 16,
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.06)",
+                }}
+              >
+                <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}>
+                  当日盈亏
+                </div>
+                <div
+                  style={{
+                    fontSize: 24,
+                    fontWeight: 600,
+                    color:
+                      positionStats.totalDailyProfit > 0
+                        ? "#dc2626"
+                        : positionStats.totalDailyProfit < 0
+                        ? "#16a34a"
+                        : "#374151",
+                  }}
+                >
+                  ¥{formatNumber(positionStats.totalDailyProfit)}
                 </div>
               </div>
               <div
@@ -850,7 +1345,7 @@ export default function QMTPositionsPage() {
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
                   gap: 12,
                   marginBottom: 16,
                 }}
@@ -889,88 +1384,254 @@ export default function QMTPositionsPage() {
                     boxShadow: "0 2px 6px rgba(0,0,0,0.06)",
                   }}
                 >
-                  <div style={{ fontSize: 13, color: "#6b7280" }}>浮动盈亏</div>
+                  <div style={{ fontSize: 13, color: "#6b7280" }}>总持仓盈亏</div>
                   <div
                     style={{
                       marginTop: 4,
                       fontSize: 18,
                       color:
-                        positionStats.totalFloatProfit >= 0 ? "#16a34a" : "#dc2626",
+                        positionStats.totalPositionProfit > 0
+                          ? "#dc2626"
+                          : positionStats.totalPositionProfit < 0
+                          ? "#16a34a"
+                          : "#374151",
                     }}
                   >
-                    ¥{formatNumber(positionStats.totalFloatProfit)}
+                    ¥{formatNumber(positionStats.totalPositionProfit)}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    background: "#fff",
+                    borderRadius: 10,
+                    padding: 12,
+                    boxShadow: "0 2px 6px rgba(0,0,0,0.06)",
+                  }}
+                >
+                  <div style={{ fontSize: 13, color: "#6b7280" }}>当日盈亏</div>
+                  <div
+                    style={{
+                      marginTop: 4,
+                      fontSize: 18,
+                      color:
+                        positionStats.totalDailyProfit > 0
+                          ? "#dc2626"
+                          : positionStats.totalDailyProfit < 0
+                          ? "#16a34a"
+                          : "#374151",
+                    }}
+                  >
+                    ¥{formatNumber(positionStats.totalDailyProfit)}
                   </div>
                 </div>
               </div>
 
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {positions.map((pos, idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      background: "#fff",
-                      borderRadius: 12,
-                      padding: 14,
-                      boxShadow: "0 2px 6px rgba(0,0,0,0.05)",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 1fr",
-                        gap: 12,
-                        fontSize: 13,
-                      }}
-                    >
-                      <div>
-                        <div style={{ fontWeight: 600 }}>
-                          {pos.stock_code} {pos.stock_name}
-                        </div>
-                        <div style={{ marginTop: 2, color: "#6b7280", fontSize: 12 }}>
-                          股东账户: {pos.secu_account}
-                        </div>
-                      </div>
-                      <div>
-                        <div style={{ color: "#6b7280" }}>持仓数量</div>
-                        <div style={{ marginTop: 2 }}>{pos.quantity} 股</div>
-                        <div style={{ marginTop: 2, fontSize: 12, color: "#6b7280" }}>
-                          可卖: {pos.can_sell} 股
-                        </div>
-                      </div>
-                      <div>
-                        <div style={{ color: "#6b7280" }}>成本价</div>
-                        <div style={{ marginTop: 2 }}>
-                          ¥{formatNumber(pos.cost_price, 3)}
-                        </div>
-                      </div>
-                      <div>
-                        <div style={{ color: "#6b7280" }}>当前价</div>
-                        <div style={{ marginTop: 2 }}>
-                          ¥{formatNumber(pos.current_price, 3)}
-                        </div>
-                      </div>
-                      <div>
-                        <div style={{ color: "#6b7280" }}>市值</div>
-                        <div style={{ marginTop: 2 }}>
-                          ¥{formatNumber(pos.market_value)}
-                        </div>
-                      </div>
-                      <div>
-                        <div style={{ color: "#6b7280" }}>浮动盈亏</div>
-                        <div
-                          style={{
-                            marginTop: 2,
-                            color: pos.float_profit >= 0 ? "#16a34a" : "#dc2626",
-                            fontWeight: 600,
-                          }}
-                        >
-                          ¥{formatNumber(pos.float_profit)} (
-                          {formatNumber(pos.profit_rate * 100, 2)}%)
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+              <div
+                style={{
+                  background: "#fff",
+                  borderRadius: 12,
+                  padding: 14,
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.05)",
+                  overflowX: "auto",
+                }}
+              >
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: 12,
+                  }}
+                >
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                        代码/名称
+                      </th>
+                      <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                        股东账户
+                      </th>
+                      <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                        持仓数量
+                      </th>
+                      <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                        可卖数量
+                      </th>
+                      <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                        成本价
+                      </th>
+                      <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                        现价
+                      </th>
+                      <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                        市值
+                      </th>
+                      <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                        持仓总成本
+                      </th>
+                      <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                        持仓盈亏(¥)
+                      </th>
+                      <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                        持仓盈亏(%)
+                      </th>
+                      <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                        当日盈亏(¥)
+                      </th>
+                      <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                        当日盈亏(%)
+                      </th>
+                      <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                        资产占比 / 市值占比
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {positions.map((pos, idx) => {
+                      const totalCost = pos.cost_price * pos.quantity;
+                      const dailyPct =
+                        totalCost > 0 ? (pos.float_profit / totalCost) * 100 : 0;
+                      const assetTotal = account?.total_asset || 0;
+                      const mvTotal = positionStats.totalMarketValue || 0;
+                      const assetPct = assetTotal > 0 ? (pos.market_value / assetTotal) * 100 : 0;
+                      const mvPct = mvTotal > 0 ? (pos.market_value / mvTotal) * 100 : 0;
+                      return (
+                        <tr key={idx}>
+                          <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>
+                            <div style={{ fontWeight: 600 }}>
+                              {pos.stock_code} {pos.stock_name}
+                            </div>
+                          </td>
+                          <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>
+                            {pos.secu_account}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                              borderBottom: "1px solid #f3f4f6",
+                              textAlign: "right",
+                            }}
+                          >
+                            {pos.quantity}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                              borderBottom: "1px solid #f3f4f6",
+                              textAlign: "right",
+                            }}
+                          >
+                            {pos.can_sell}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                              borderBottom: "1px solid #f3f4f6",
+                              textAlign: "right",
+                            }}
+                          >
+                            ¥{formatNumber(pos.cost_price, 3)}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                              borderBottom: "1px solid #f3f4f6",
+                              textAlign: "right",
+                            }}
+                          >
+                            ¥{formatNumber(pos.current_price, 3)}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                              borderBottom: "1px solid #f3f4f6",
+                              textAlign: "right",
+                            }}
+                          >
+                            ¥{formatNumber(pos.market_value)}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                              borderBottom: "1px solid #f3f4f6",
+                              textAlign: "right",
+                            }}
+                          >
+                            ¥{formatNumber(totalCost)}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                              borderBottom: "1px solid #f3f4f6",
+                              textAlign: "right",
+                              color:
+                                pos.position_profit > 0
+                                  ? "#dc2626"
+                                  : pos.position_profit < 0
+                                  ? "#16a34a"
+                                  : "#374151",
+                            }}
+                          >
+                            ¥{formatNumber(pos.position_profit)}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                              borderBottom: "1px solid #f3f4f6",
+                              textAlign: "right",
+                              color:
+                                pos.position_profit > 0
+                                  ? "#dc2626"
+                                  : pos.position_profit < 0
+                                  ? "#16a34a"
+                                  : "#374151",
+                            }}
+                          >
+                            {formatNumber(pos.profit_rate * 100, 2)}%
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                              borderBottom: "1px solid #f3f4f6",
+                              textAlign: "right",
+                              color:
+                                pos.float_profit > 0
+                                  ? "#dc2626"
+                                  : pos.float_profit < 0
+                                  ? "#16a34a"
+                                  : "#374151",
+                            }}
+                          >
+                            ¥{formatNumber(pos.float_profit)}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                              borderBottom: "1px solid #f3f4f6",
+                              textAlign: "right",
+                              color:
+                                pos.float_profit > 0
+                                  ? "#dc2626"
+                                  : pos.float_profit < 0
+                                  ? "#16a34a"
+                                  : "#374151",
+                            }}
+                          >
+                            {formatNumber(dailyPct, 2)}%
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                              borderBottom: "1px solid #f3f4f6",
+                              textAlign: "right",
+                            }}
+                          >
+                            {formatNumber(assetPct, 2)}% / {formatNumber(mvPct, 2)}%
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </>
           )}

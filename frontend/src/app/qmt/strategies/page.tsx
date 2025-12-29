@@ -18,6 +18,17 @@ interface Strategy {
   updated_at: string | null;
 }
 
+interface QmtStatus {
+  enabled: boolean;
+  connected: boolean;
+  mode?: string | null;
+  account_id?: string | null;
+  provider?: string | null;
+  userdata_path?: string | null;
+  session_id?: string | null;
+  last_error?: string | null;
+}
+
 interface TradeIntent {
   id: number;
   strategy_id: string;
@@ -34,6 +45,10 @@ interface TradeIntent {
   created_at: string | null;
   executed_at: string | null;
   signal_data: Record<string, any>;
+  latest_order_status?: number | null;
+  latest_order_status_msg?: string | null;
+  traded_volume?: number | null;
+  traded_price?: number | null;
 }
 
 interface Execution {
@@ -50,6 +65,35 @@ interface Execution {
   signals_executed: number;
   error_message: string | null;
   metrics: Record<string, any>;
+  // 后端补充的 QMT 明细
+  qmt_orders?: Array<Record<string, any>>;
+  qmt_trades?: Array<Record<string, any>>;
+}
+
+interface StrategyMonitorItem {
+  strategy_id: string;
+  orders_count: number;
+  trades_count: number;
+  total_position_profit: number;
+  total_daily_profit: number;
+  market_value: number;
+  weight_asset: number;
+  symbols: string[];
+}
+
+interface StrategyMonitorSummary {
+  timestamp: string;
+  strategy_id: string;
+  account: Record<string, any>;
+  pnl: {
+    total_position_profit: number;
+    total_daily_profit: number;
+    market_value: number;
+    weight_asset: number;
+  };
+  positions: Array<Record<string, any>>;
+  orders: Array<Record<string, any>>;
+  trades: Array<Record<string, any>>;
 }
 
 function formatDateTime(s?: string | null) {
@@ -63,12 +107,20 @@ function formatDateTime(s?: string | null) {
 }
 
 export default function StrategiesPage() {
-  const [activeTab, setActiveTab] = useState<"strategies" | "intents" | "executions">("strategies");
+  const [activeTab, setActiveTab] = useState<"strategies" | "intents" | "executions" | "monitor">("strategies");
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [intents, setIntents] = useState<TradeIntent[]>([]);
   const [executions, setExecutions] = useState<Execution[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 交易意图自动刷新配置
+  const [intentRefreshIntervalSec, setIntentRefreshIntervalSec] = useState<number>(0);
+
+  // QMT 连接状态
+  const [qmtStatus, setQmtStatus] = useState<QmtStatus | null>(null);
+  const [qmtConnecting, setQmtConnecting] = useState(false);
+  const [qmtError, setQmtError] = useState<string | null>(null);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingStrategy, setEditingStrategy] = useState<Strategy | null>(null);
@@ -106,9 +158,35 @@ export default function StrategiesPage() {
   const [formRiskConfig, setFormRiskConfig] = useState("{}");
   const [useAdvancedMode, setUseAdvancedMode] = useState(false);
 
+  // 执行记录筛选：按策略ID
+  const [executionStrategyFilter, setExecutionStrategyFilter] = useState<string>("");
+
+  // 策略级监控数据
+  const [strategyMonitors, setStrategyMonitors] = useState<StrategyMonitorItem[]>([]);
+  const [selectedMonitorStrategyId, setSelectedMonitorStrategyId] = useState<string>("");
+  const [strategyMonitorSummary, setStrategyMonitorSummary] = useState<StrategyMonitorSummary | null>(null);
+
   useEffect(() => {
     loadData();
   }, [activeTab]);
+
+  // 当处于 Intents 标签页时，按配置的间隔自动刷新
+  useEffect(() => {
+    if (activeTab !== "intents") return;
+    if (!intentRefreshIntervalSec || intentRefreshIntervalSec <= 0) return;
+    if (qmtStatus && qmtStatus.enabled && !qmtStatus.connected) return;
+
+    const timer = setInterval(() => {
+      loadData();
+    }, intentRefreshIntervalSec * 1000);
+
+    return () => clearInterval(timer);
+  }, [activeTab, intentRefreshIntervalSec, qmtStatus]);
+
+  // 进入页面时自动检查并建立 miniQMT 连接
+  useEffect(() => {
+    ensureQmtConnected();
+  }, []);
 
   async function loadData() {
     setLoading(true);
@@ -125,15 +203,112 @@ export default function StrategiesPage() {
         const data = await res.json();
         setIntents(data.intents || []);
       } else if (activeTab === "executions") {
-        const res = await fetch(`${API_BASE}/strategies/executions?limit=100`);
+        // 确保已有策略列表用于筛选下拉选项
+        if (strategies.length === 0) {
+          try {
+            const stratRes = await fetch(`${API_BASE}/strategies/list?enabled_only=false`);
+            if (stratRes.ok) {
+              const stratData = await stratRes.json();
+              setStrategies(stratData.strategies || []);
+            }
+          } catch {
+            // 忽略策略列表加载错误，不阻塞执行记录
+          }
+        }
+
+        const params = new URLSearchParams();
+        params.set("limit", "100");
+        if (executionStrategyFilter) {
+          params.set("strategy_id", executionStrategyFilter);
+        }
+        const res = await fetch(`${API_BASE}/strategies/executions?${params.toString()}`);
         if (!res.ok) throw new Error(`请求失败: ${res.status}`);
         const data = await res.json();
         setExecutions(data.executions || []);
+      } else if (activeTab === "monitor") {
+        // 策略级监控列表
+        const res = await fetch(`${API_BASE}/qmt/monitor/strategies`);
+        if (!res.ok) throw new Error(`请求失败: ${res.status}`);
+        const data = await res.json();
+        const items: StrategyMonitorItem[] = (data.items || []).map((x: any) => ({
+          strategy_id: String(x.strategy_id),
+          orders_count: Number(x.orders_count || 0),
+          trades_count: Number(x.trades_count || 0),
+          total_position_profit: Number(x.total_position_profit || 0),
+          total_daily_profit: Number(x.total_daily_profit || 0),
+          market_value: Number(x.market_value || 0),
+          weight_asset: Number(x.weight_asset || 0),
+          symbols: Array.isArray(x.symbols) ? x.symbols.map((s: any) => String(s)) : [],
+        }));
+        setStrategyMonitors(items);
+
+        // 如果当前没有选中的策略，则默认选中第一个
+        if (!selectedMonitorStrategyId && items.length > 0) {
+          setSelectedMonitorStrategyId(items[0].strategy_id);
+          // 立即加载该策略详情
+          await loadSingleStrategyMonitor(items[0].strategy_id);
+        } else if (selectedMonitorStrategyId) {
+          // 已有选中策略，则刷新其详情
+          await loadSingleStrategyMonitor(selectedMonitorStrategyId);
+        } else {
+          setStrategyMonitorSummary(null);
+        }
       }
     } catch (e: any) {
       setError(e?.message || "加载失败");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadSingleStrategyMonitor(strategyId: string) {
+    if (!strategyId) {
+      setStrategyMonitorSummary(null);
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/qmt/monitor/strategy/${encodeURIComponent(strategyId)}/summary`);
+      if (!res.ok) throw new Error(`请求失败: ${res.status}`);
+      const data = await res.json();
+      setStrategyMonitorSummary(data as StrategyMonitorSummary);
+    } catch (e: any) {
+      // 不把错误打到全局 error，避免干扰其它标签
+      console.error("加载策略监控详情失败", e);
+      setStrategyMonitorSummary(null);
+    }
+  }
+
+  async function ensureQmtConnected() {
+    try {
+      setQmtError(null);
+
+      // 1. 查询当前状态
+      const res = await fetch(`${API_BASE}/qmt/status`);
+      if (!res.ok) {
+        throw new Error(`QMT 状态查询失败: ${res.status}`);
+      }
+      const status: QmtStatus = await res.json();
+      setQmtStatus(status);
+
+      // 2. 如已启用但未连接，则尝试自动连接
+      if (status.enabled && !status.connected) {
+        setQmtConnecting(true);
+        const connRes = await fetch(`${API_BASE}/qmt/connect`, {
+          method: "POST",
+        });
+        if (!connRes.ok) {
+          const err = await connRes.json().catch(() => null);
+          throw new Error(err?.detail || `QMT 连接失败: ${connRes.status}`);
+        }
+        const connData = await connRes.json();
+        if (connData?.status) {
+          setQmtStatus(connData.status as QmtStatus);
+        }
+      }
+    } catch (e: any) {
+      setQmtError(e?.message || "QMT 连接检查失败");
+    } finally {
+      setQmtConnecting(false);
     }
   }
 
@@ -391,6 +566,42 @@ export default function StrategiesPage() {
         </p>
       </section>
 
+      {/* QMT 连接状态 */}
+      <section
+        style={{
+          marginBottom: 16,
+          padding: 12,
+          borderRadius: 8,
+          border: "1px solid #e5e7eb",
+          backgroundColor: "#f9fafb",
+          fontSize: 13,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontWeight: 600 }}>QMT 连接状态：</span>
+          {qmtConnecting && <span>正在连接...</span>}
+          {!qmtConnecting && qmtStatus && (
+            <span>
+              {qmtStatus.enabled ? (
+                qmtStatus.connected ? (
+                  <>
+                    已连接（模式: {qmtStatus.mode || "未知"}, 账户: {qmtStatus.account_id || "未配置"}
+                    )
+                  </>
+                ) : (
+                  <>未连接（已启用，请检查 QMT 终端或 /qmt/connect 接口）</>
+                )
+              ) : (
+                <>未启用（MINIQMT_ENABLED=false）</>
+              )}
+            </span>
+          )}
+        </div>
+        {qmtError && (
+          <div style={{ marginTop: 4, color: "#b91c1c" }}>错误：{qmtError}</div>
+        )}
+      </section>
+
       <div
         style={{
           display: "flex",
@@ -445,6 +656,22 @@ export default function StrategiesPage() {
           }}
         >
           📈 执行记录
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("monitor")}
+          style={{
+            padding: "8px 16px",
+            borderRadius: 999,
+            border: "none",
+            cursor: "pointer",
+            fontWeight: 600,
+            backgroundColor:
+              activeTab === "monitor" ? "#4f46e5" : "rgba(15,23,42,0.06)",
+            color: activeTab === "monitor" ? "#fff" : "#111827",
+          }}
+        >
+          🚨 策略监控
         </button>
       </div>
 
@@ -586,6 +813,291 @@ export default function StrategiesPage() {
         </section>
       )}
 
+      {activeTab === "monitor" && (
+        <section
+          style={{
+            background: "#fff",
+            borderRadius: 12,
+            padding: 20,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 16,
+            }}
+          >
+            <h2 style={{ margin: 0 }}>QMT 策略级监控</h2>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+              <span>选择策略：</span>
+              <select
+                value={selectedMonitorStrategyId}
+                onChange={async (e) => {
+                  const sid = e.target.value;
+                  setSelectedMonitorStrategyId(sid);
+                  await loadSingleStrategyMonitor(sid);
+                }}
+                style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid #ddd" }}
+              >
+                <option value="">请选择策略</option>
+                {strategyMonitors.map((s) => (
+                  <option key={s.strategy_id} value={s.strategy_id}>
+                    {s.strategy_id}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={loadData}
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: 4,
+                  border: "1px solid #ddd",
+                  background: "#fff",
+                  cursor: "pointer",
+                }}
+              >
+                刷新
+              </button>
+            </div>
+          </div>
+
+          {loading && <div>加载中...</div>}
+
+          {!loading && strategyMonitors.length === 0 && (
+            <div style={{ padding: 40, textAlign: "center", color: "#666" }}>
+              暂无策略监控数据（请确认有策略通过 QMT 下过单）
+            </div>
+          )}
+
+          {!loading && strategyMonitors.length > 0 && (
+            <>
+              {/* 总览表 */}
+              <div style={{ overflowX: "auto", marginBottom: 24 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ background: "#f5f5f5" }}>
+                      <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #ddd" }}>策略ID</th>
+                      <th style={{ padding: 12, textAlign: "right", borderBottom: "2px solid #ddd" }}>委托数</th>
+                      <th style={{ padding: 12, textAlign: "right", borderBottom: "2px solid #ddd" }}>成交数</th>
+                      <th style={{ padding: 12, textAlign: "right", borderBottom: "2px solid #ddd" }}>持仓总盈亏</th>
+                      <th style={{ padding: 12, textAlign: "right", borderBottom: "2px solid #ddd" }}>当日盈亏</th>
+                      <th style={{ padding: 12, textAlign: "right", borderBottom: "2px solid #ddd" }}>市值</th>
+                      <th style={{ padding: 12, textAlign: "right", borderBottom: "2px solid #ddd" }}>资产占比</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {strategyMonitors.map((m) => {
+                      const totalPnl = m.total_position_profit || 0;
+                      const dailyPnl = m.total_daily_profit || 0;
+                      return (
+                        <tr
+                          key={m.strategy_id}
+                          style={{
+                            borderBottom: "1px solid #eee",
+                            backgroundColor:
+                              selectedMonitorStrategyId === m.strategy_id ? "#eef2ff" : "transparent",
+                            cursor: "pointer",
+                          }}
+                          onClick={async () => {
+                            setSelectedMonitorStrategyId(m.strategy_id);
+                            await loadSingleStrategyMonitor(m.strategy_id);
+                          }}
+                        >
+                          <td style={{ padding: 12 }}>{m.strategy_id}</td>
+                          <td style={{ padding: 12, textAlign: "right" }}>{m.orders_count}</td>
+                          <td style={{ padding: 12, textAlign: "right" }}>{m.trades_count}</td>
+                          <td
+                            style={{
+                              padding: 12,
+                              textAlign: "right",
+                              color: totalPnl > 0 ? "#b91c1c" : totalPnl < 0 ? "#15803d" : "#111827",
+                            }}
+                          >
+                            {totalPnl.toFixed(2)}
+                          </td>
+                          <td
+                            style={{
+                              padding: 12,
+                              textAlign: "right",
+                              color: dailyPnl > 0 ? "#b91c1c" : dailyPnl < 0 ? "#15803d" : "#111827",
+                            }}
+                          >
+                            {dailyPnl.toFixed(2)}
+                          </td>
+                          <td style={{ padding: 12, textAlign: "right" }}>{m.market_value.toFixed(2)}</td>
+                          <td style={{ padding: 12, textAlign: "right" }}>{(m.weight_asset * 100).toFixed(2)}%</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 单个策略详情 */}
+              {strategyMonitorSummary && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    paddingTop: 16,
+                    borderTop: "1px solid #e5e7eb",
+                  }}
+                >
+                  <h3 style={{ marginTop: 0, marginBottom: 12 }}>当前策略详情：{strategyMonitorSummary.strategy_id}</h3>
+
+                  {/* 概要卡片 */}
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                      gap: 12,
+                      marginBottom: 16,
+                    }}
+                  >
+                    <div
+                      style={{
+                        padding: 12,
+                        borderRadius: 8,
+                        background: "#f9fafb",
+                        border: "1px solid #e5e7eb",
+                      }}
+                    >
+                      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>持仓总盈亏</div>
+                      <div
+                        style={{
+                          fontSize: 18,
+                          fontWeight: 600,
+                          color:
+                            strategyMonitorSummary.pnl.total_position_profit > 0
+                              ? "#b91c1c"
+                              : strategyMonitorSummary.pnl.total_position_profit < 0
+                              ? "#15803d"
+                              : "#111827",
+                        }}
+                      >
+                        {strategyMonitorSummary.pnl.total_position_profit.toFixed(2)}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        padding: 12,
+                        borderRadius: 8,
+                        background: "#f9fafb",
+                        border: "1px solid #e5e7eb",
+                      }}
+                    >
+                      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>当日盈亏</div>
+                      <div
+                        style={{
+                          fontSize: 18,
+                          fontWeight: 600,
+                          color:
+                            strategyMonitorSummary.pnl.total_daily_profit > 0
+                              ? "#b91c1c"
+                              : strategyMonitorSummary.pnl.total_daily_profit < 0
+                              ? "#15803d"
+                              : "#111827",
+                        }}
+                      >
+                        {strategyMonitorSummary.pnl.total_daily_profit.toFixed(2)}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        padding: 12,
+                        borderRadius: 8,
+                        background: "#f9fafb",
+                        border: "1px solid #e5e7eb",
+                      }}
+                    >
+                      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>策略相关市值</div>
+                      <div style={{ fontSize: 18, fontWeight: 600 }}>
+                        {strategyMonitorSummary.pnl.market_value.toFixed(2)}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        padding: 12,
+                        borderRadius: 8,
+                        background: "#f9fafb",
+                        border: "1px solid #e5e7eb",
+                      }}
+                    >
+                      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>资产占比</div>
+                      <div style={{ fontSize: 18, fontWeight: 600 }}>
+                        {(strategyMonitorSummary.pnl.weight_asset * 100).toFixed(2)}%
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 持仓明细表 */}
+                  <div style={{ marginTop: 12 }}>
+                    <h4 style={{ marginTop: 0, marginBottom: 8 }}>相关持仓</h4>
+                    {strategyMonitorSummary.positions.length === 0 ? (
+                      <div style={{ padding: 12, color: "#6b7280" }}>当前策略暂无关联持仓</div>
+                    ) : (
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                          <thead>
+                            <tr style={{ background: "#f5f5f5" }}>
+                              <th style={{ padding: 8, textAlign: "left", borderBottom: "2px solid #ddd" }}>代码</th>
+                              <th style={{ padding: 8, textAlign: "left", borderBottom: "2px solid #ddd" }}>名称</th>
+                              <th style={{ padding: 8, textAlign: "right", borderBottom: "2px solid #ddd" }}>数量</th>
+                              <th style={{ padding: 8, textAlign: "right", borderBottom: "2px solid #ddd" }}>市值</th>
+                              <th style={{ padding: 8, textAlign: "right", borderBottom: "2px solid #ddd" }}>持仓盈亏</th>
+                              <th style={{ padding: 8, textAlign: "right", borderBottom: "2px solid #ddd" }}>当日盈亏</th>
+                              <th style={{ padding: 8, textAlign: "right", borderBottom: "2px solid #ddd" }}>资产占比</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {strategyMonitorSummary.positions.map((p, idx) => {
+                              const posPnl = Number(p.position_profit || 0);
+                              const dailyPnl = Number(p.float_profit || 0);
+                              const mv = Number(p.market_value || 0);
+                              const weightAsset = Number(p.weight_asset || 0);
+                              return (
+                                <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
+                                  <td style={{ padding: 8 }}>{p.stock_code}</td>
+                                  <td style={{ padding: 8 }}>{p.stock_name}</td>
+                                  <td style={{ padding: 8, textAlign: "right" }}>{p.quantity}</td>
+                                  <td style={{ padding: 8, textAlign: "right" }}>{mv.toFixed(2)}</td>
+                                  <td
+                                    style={{
+                                      padding: 8,
+                                      textAlign: "right",
+                                      color: posPnl > 0 ? "#b91c1c" : posPnl < 0 ? "#15803d" : "#111827",
+                                    }}
+                                  >
+                                    {posPnl.toFixed(2)}
+                                  </td>
+                                  <td
+                                    style={{
+                                      padding: 8,
+                                      textAlign: "right",
+                                      color: dailyPnl > 0 ? "#b91c1c" : dailyPnl < 0 ? "#15803d" : "#111827",
+                                    }}
+                                  >
+                                    {dailyPnl.toFixed(2)}
+                                  </td>
+                                  <td style={{ padding: 8, textAlign: "right" }}>{(weightAsset * 100).toFixed(2)}%</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
       {activeTab === "intents" && (
         <section
           style={{
@@ -595,7 +1107,43 @@ export default function StrategiesPage() {
             boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
           }}
         >
-          <h2 style={{ margin: "0 0 16px 0" }}>交易意图记录</h2>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 16,
+            }}
+          >
+            <h2 style={{ margin: 0 }}>交易意图记录</h2>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+              <span>自动刷新间隔：</span>
+              <select
+                value={intentRefreshIntervalSec}
+                onChange={(e) => setIntentRefreshIntervalSec(Number(e.target.value))}
+                aria-label="交易意图自动刷新间隔"
+                style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid #ddd" }}
+              >
+                <option value={5}>5 秒</option>
+                <option value={10}>10 秒</option>
+                <option value={30}>30 秒</option>
+                <option value={60}>1 分钟</option>
+              </select>
+              <button
+                type="button"
+                onClick={loadData}
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: 4,
+                  border: "1px solid #ddd",
+                  background: "#fff",
+                  cursor: "pointer",
+                }}
+              >
+                手动刷新
+              </button>
+            </div>
+          </div>
           {loading ? (
             <div>加载中...</div>
           ) : intents.length === 0 ? (
@@ -612,7 +1160,9 @@ export default function StrategiesPage() {
                     <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #ddd" }}>方向</th>
                     <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #ddd" }}>数量</th>
                     <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #ddd" }}>价格</th>
-                    <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #ddd" }}>状态</th>
+                    <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #ddd" }}>意图状态</th>
+                    <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #ddd" }}>QMT委托状态</th>
+                    <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #ddd" }}>成交(股/价)</th>
                     <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #ddd" }}>订单ID</th>
                     <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #ddd" }}>创建时间</th>
                   </tr>
@@ -648,6 +1198,16 @@ export default function StrategiesPage() {
                           {i.status}
                         </span>
                       </td>
+                      <td style={{ padding: 12 }}>
+                        {i.latest_order_status_msg || "-"}
+                      </td>
+                      <td style={{ padding: 12 }}>
+                        {i.traded_volume != null && i.traded_volume > 0
+                          ? `${i.traded_volume} / ${
+                              i.traded_price != null ? i.traded_price.toFixed(2) : "-"
+                            }`
+                          : "-"}
+                      </td>
                       <td style={{ padding: 12 }}>{i.order_id || "-"}</td>
                       <td style={{ padding: 12 }}>{formatDateTime(i.created_at)}</td>
                     </tr>
@@ -668,7 +1228,38 @@ export default function StrategiesPage() {
             boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
           }}
         >
-          <h2 style={{ margin: "0 0 16px 0" }}>策略执行记录</h2>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 16,
+            }}
+          >
+            <h2 style={{ margin: 0 }}>策略执行记录</h2>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+              <span>按策略筛选：</span>
+              <select
+                value={executionStrategyFilter}
+                onChange={(e) => {
+                  setExecutionStrategyFilter(e.target.value);
+                  // 立刻刷新当前标签页数据
+                  // 注意：依赖 activeTab 和 executionStrategyFilter 的 useEffect 不存在，这里直接调用
+                  setTimeout(() => {
+                    loadData();
+                  }, 0);
+                }}
+                style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid #ddd" }}
+              >
+                <option value="">全部策略</option>
+                {strategies.map((s) => (
+                  <option key={s.strategy_id} value={s.strategy_id}>
+                    {s.strategy_id} - {s.strategy_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
           {loading ? (
             <div>加载中...</div>
           ) : executions.length === 0 ? (
@@ -687,42 +1278,225 @@ export default function StrategiesPage() {
                     <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #ddd" }}>生成信号数</th>
                     <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #ddd" }}>执行信号数</th>
                     <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #ddd" }}>开始时间</th>
+                    <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #ddd" }}>关联委托/成交</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {executions.map((e) => (
-                    <tr key={e.id} style={{ borderBottom: "1px solid #eee" }}>
-                      <td style={{ padding: 12 }}>{e.strategy_id}</td>
-                      <td style={{ padding: 12 }}>{e.execution_type}</td>
-                      <td style={{ padding: 12 }}>
-                        <span
-                          style={{
-                            padding: "4px 8px",
-                            borderRadius: 4,
-                            background:
-                              e.status === "SUCCESS"
-                                ? "#d4edda"
-                                : e.status === "FAILED"
-                                ? "#f8d7da"
-                                : "#fff3cd",
-                            color:
-                              e.status === "SUCCESS"
-                                ? "#155724"
-                                : e.status === "FAILED"
-                                ? "#721c24"
-                                : "#856404",
-                            fontSize: 12,
-                          }}
-                        >
-                          {e.status}
-                        </span>
-                      </td>
-                      <td style={{ padding: 12 }}>{e.symbols_processed}</td>
-                      <td style={{ padding: 12 }}>{e.signals_generated}</td>
-                      <td style={{ padding: 12 }}>{e.signals_executed}</td>
-                      <td style={{ padding: 12 }}>{formatDateTime(e.start_time)}</td>
-                    </tr>
-                  ))}
+                  {executions.map((e) => {
+                    const orders = e.qmt_orders || [];
+                    const trades = e.qmt_trades || [];
+                    return (
+                      <>
+                        <tr key={e.id} style={{ borderBottom: "1px solid #eee" }}>
+                          <td style={{ padding: 12 }}>{e.strategy_id}</td>
+                          <td style={{ padding: 12 }}>{e.execution_type}</td>
+                          <td style={{ padding: 12 }}>
+                            <span
+                              style={{
+                                padding: "4px 8px",
+                                borderRadius: 4,
+                                background:
+                                  e.status === "SUCCESS"
+                                    ? "#d4edda"
+                                    : e.status === "FAILED"
+                                    ? "#f8d7da"
+                                    : "#fff3cd",
+                                color:
+                                  e.status === "SUCCESS"
+                                    ? "#155724"
+                                    : e.status === "FAILED"
+                                    ? "#721c24"
+                                    : "#856404",
+                                fontSize: 12,
+                              }}
+                            >
+                              {e.status}
+                            </span>
+                          </td>
+                          <td style={{ padding: 12 }}>{e.symbols_processed}</td>
+                          <td style={{ padding: 12 }}>{e.signals_generated}</td>
+                          <td style={{ padding: 12 }}>{e.signals_executed}</td>
+                          <td style={{ padding: 12 }}>{formatDateTime(e.start_time)}</td>
+                          <td style={{ padding: 12 }}>
+                            委托 {orders.length} 笔 / 成交 {trades.length} 笔
+                          </td>
+                        </tr>
+                        {(orders.length > 0 || trades.length > 0) && (
+                          <tr>
+                            <td
+                              colSpan={8}
+                              style={{
+                                padding: 12,
+                                borderBottom: "1px solid #eee",
+                                backgroundColor: "#fafafa",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: 16,
+                                  flexWrap: "wrap",
+                                }}
+                              >
+                                {orders.length > 0 && (
+                                  <div style={{ fontSize: 12, minWidth: 260 }}>
+                                    <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                                      关联委托
+                                    </div>
+                                    <table
+                                      style={{
+                                        width: "100%",
+                                        borderCollapse: "collapse",
+                                      }}
+                                    >
+                                      <thead>
+                                        <tr>
+                                          <th
+                                            style={{
+                                              textAlign: "left",
+                                              padding: 4,
+                                              borderBottom: "1px solid #e5e7eb",
+                                            }}
+                                          >
+                                            代码
+                                          </th>
+                                          <th
+                                            style={{
+                                              textAlign: "right",
+                                              padding: 4,
+                                              borderBottom: "1px solid #e5e7eb",
+                                            }}
+                                          >
+                                            量/价
+                                          </th>
+                                          <th
+                                            style={{
+                                              textAlign: "left",
+                                              padding: 4,
+                                              borderBottom: "1px solid #e5e7eb",
+                                            }}
+                                          >
+                                            状态
+                                          </th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {orders.map((o, idx) => (
+                                          <tr key={idx}>
+                                            <td
+                                              style={{
+                                                padding: 4,
+                                                borderBottom: "1px solid #f3f4f6",
+                                              }}
+                                            >
+                                              {o.stock_code}
+                                            </td>
+                                            <td
+                                              style={{
+                                                padding: 4,
+                                                borderBottom: "1px solid #f3f4f6",
+                                                textAlign: "right",
+                                              }}
+                                            >
+                                              {o.order_volume} / {o.price}
+                                            </td>
+                                            <td
+                                              style={{
+                                                padding: 4,
+                                                borderBottom: "1px solid #f3f4f6",
+                                              }}
+                                            >
+                                              {o.status_msg || `状态: ${o.order_status}`}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                                {trades.length > 0 && (
+                                  <div style={{ fontSize: 12, minWidth: 260 }}>
+                                    <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                                      关联成交
+                                    </div>
+                                    <table
+                                      style={{
+                                        width: "100%",
+                                        borderCollapse: "collapse",
+                                      }}
+                                    >
+                                      <thead>
+                                        <tr>
+                                          <th
+                                            style={{
+                                              textAlign: "left",
+                                              padding: 4,
+                                              borderBottom: "1px solid #e5e7eb",
+                                            }}
+                                          >
+                                            代码
+                                          </th>
+                                          <th
+                                            style={{
+                                              textAlign: "right",
+                                              padding: 4,
+                                              borderBottom: "1px solid #e5e7eb",
+                                            }}
+                                          >
+                                            量/价
+                                          </th>
+                                          <th
+                                            style={{
+                                              textAlign: "left",
+                                              padding: 4,
+                                              borderBottom: "1px solid #e5e7eb",
+                                            }}
+                                          >
+                                            时间
+                                          </th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {trades.map((t, idx) => (
+                                          <tr key={idx}>
+                                            <td
+                                              style={{
+                                                padding: 4,
+                                                borderBottom: "1px solid #f3f4f6",
+                                              }}
+                                            >
+                                              {t.stock_code}
+                                            </td>
+                                            <td
+                                              style={{
+                                                padding: 4,
+                                                borderBottom: "1px solid #f3f4f6",
+                                                textAlign: "right",
+                                              }}
+                                            >
+                                              {t.traded_volume} / {t.traded_price}
+                                            </td>
+                                            <td
+                                              style={{
+                                                padding: 4,
+                                                borderBottom: "1px solid #f3f4f6",
+                                              }}
+                                            >
+                                              {t.traded_time}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
