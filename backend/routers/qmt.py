@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+import uuid
+from dataclasses import asdict
+from typing import Any, Dict, List
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 
 from ..infra.qmt_client import BaseQMTClient, QMTNotAvailableError, get_qmt_client_singleton
 from ..monitor.qmt_monitor import (
@@ -15,9 +16,22 @@ from ..monitor.qmt_monitor import (
     get_monitor_config_model,
     update_monitor_config_model,
 )
+from ..data_service.dataset_stats_service import DatasetStatsService
 
 
 router = APIRouter(prefix="/qmt", tags=["qmt"])
+
+# 数据集统计服务实例
+_dataset_stats_service: DatasetStatsService | None = None
+
+
+def get_dataset_stats_service() -> DatasetStatsService:
+    """获取数据集统计服务实例（延迟初始化）"""
+    global _dataset_stats_service
+    if _dataset_stats_service is None:
+        client = get_qmt_client_singleton()
+        _dataset_stats_service = DatasetStatsService(client)
+    return _dataset_stats_service
 
 
 def _get_client() -> BaseQMTClient:
@@ -461,5 +475,660 @@ async def get_bank_info() -> List[Dict[str, Any]]:
         return _get_client().query_bank_info()
     except QMTNotAvailableError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/data/range", summary="查询 miniQMT 本地数据范围")
+async def get_local_data_range(stock_code: str, period: str) -> Dict[str, Any]:
+    try:
+        return _get_client().get_local_data_range(stock_code, period)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/data/download", summary="下载 miniQMT 历史数据")
+async def download_history_data(payload: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    """
+    异步下载历史数据。
+    参数:
+    - stock_list: 股票代码列表
+    - period: 周期 (1d, 1m, 5m, 1h)
+    - start_time: 开始时间 (YYYYMMDD)
+    - end_time: 结束时间 (YYYYMMDD)
+    """
+    try:
+        stock_list = payload.get("stock_list", [])
+        period = payload.get("period", "1d")
+        start_time = payload.get("start_time", "")
+        end_time = payload.get("end_time", "")
+
+        if not stock_list:
+            raise HTTPException(status_code=400, detail="股票列表不能为空")
+
+        task_id = str(uuid.uuid4())
+        client = _get_client()
+
+        def _run_download():
+            try:
+                client.download_history_data(
+                    stock_list=stock_list,
+                    period=period,
+                    start_time=start_time,
+                    end_time=end_time,
+                    task_id=task_id
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Async download failed: {e}")
+
+        background_tasks.add_task(_run_download)
+
+        return {
+            "success": True, 
+            "task_id": task_id,
+            "message": f"已启动 {len(stock_list)} 只股票的 {period} 数据异步下载任务"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/data/download-financial", summary="下载 miniQMT 财务数据")
+async def download_financial_data(payload: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    """
+    异步下载财务数据。
+    参数:
+    - stock_list: 股票代码列表
+    - table_list: 财务表名列表 (如 ['Balance', 'Income'])
+    """
+    try:
+        stock_list = payload.get("stock_list", [])
+        table_list = payload.get("table_list", [])
+
+        if not stock_list:
+            raise HTTPException(status_code=400, detail="股票列表不能为空")
+
+        task_id = str(uuid.uuid4())
+        client = _get_client()
+
+        def _run_financial_download():
+            try:
+                client.download_financial_data(stock_list=stock_list, table_list=table_list, task_id=task_id)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Async financial download failed: {e}")
+
+        background_tasks.add_task(_run_financial_download)
+
+        return {
+            "success": True, 
+            "task_id": task_id,
+            "message": f"已启动 {len(stock_list)} 只股票的财务数据异步下载任务"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/data/task/{task_id}/progress", summary="查询异步任务进度（QMT + Ingestion）")
+async def get_task_progress(task_id: str) -> Dict[str, Any]:
+    try:
+        # 优先从 QMT 内存任务中查询
+        try:
+            progress = _get_client().get_task_progress(task_id)
+            if progress:
+                return progress
+        except Exception:
+            pass
+
+        # Fallback: 从 ingestion_jobs 表查询（Tushare 数据集补齐任务）
+        from ..db.pg_pool import get_conn
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT job_id, job_type, status, summary
+                             FROM market.ingestion_jobs
+                            WHERE job_id = %s::uuid""",
+                        (task_id,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        import json
+                        job_id, job_type, status, summary_raw = row
+                        summary_data = {}
+                        if summary_raw:
+                            if isinstance(summary_raw, str):
+                                try:
+                                    summary_data = json.loads(summary_raw)
+                                except Exception:
+                                    summary_data = {}
+                            elif isinstance(summary_raw, dict):
+                                summary_data = summary_raw
+
+                        # 从 summary 中提取进度信息
+                        # 脚本通过 _update_job_progress 写入 counters/progress/total_days/done_days
+                        counters = summary_data.get("counters", {})
+                        pct = summary_data.get("progress", 0)
+                        total_items = counters.get("total", summary_data.get("total_days", 0))
+                        done_items = counters.get("done", summary_data.get("done_days", 0))
+                        inserted_rows = counters.get("inserted_rows", 0)
+
+                        # 状态映射：ingestion_jobs 的 status 可能是 queued/running/success/failed
+                        mapped_status = status or "unknown"
+                        if mapped_status == "queued":
+                            mapped_status = "running"  # 前端只识别 running/success/failed
+
+                        if mapped_status == "success":
+                            pct = 100
+
+                        dataset_name = summary_data.get("dataset", job_type or "")
+                        msg = f"{dataset_name} 增量补齐"
+                        if done_items and total_items:
+                            msg = f"{dataset_name}: {done_items}/{total_items} 天已完成"
+
+                        return {
+                            "status": mapped_status,
+                            "progress": int(pct),
+                            "message": msg,
+                            "total": total_items,
+                            "finished": done_items,
+                            "inserted_rows": inserted_rows,
+                            "job_id": str(job_id),
+                            "source": "ingestion_job",
+                        }
+        except Exception:
+            pass
+
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Progress query failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/data/latest-day", summary="获取 miniQMT 最新交易日")
+async def get_latest_trading_day() -> Dict[str, Any]:
+    try:
+        client = _get_client()
+        latest_day = client.get_latest_trading_day()
+        return {"latest_day": latest_day}
+    except Exception as e:
+        import datetime
+        return {"latest_day": datetime.date.today().strftime("%Y%m%d"), "error": str(e)}
+
+
+@router.post("/data/one-click-update", summary="一键更新 miniQMT 历史数据")
+async def one_click_update(payload: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    """
+    一键更新常用周期数据到最新（异步）。
+    """
+    try:
+        periods = payload.get("periods", ["1d", "1m", "5m", "1h"])
+        scope = payload.get("scope", "all")
+        start_time = payload.get("start_time", "")
+
+        client = _get_client()
+        if scope == "all":
+            stock_list = client.get_stock_list_in_sector("沪深A股")
+        else:
+            stock_list = client.get_stock_list_in_sector("沪深A股")
+
+        if not stock_list:
+            raise HTTPException(status_code=400, detail="无法获取股票列表，请确认 miniQMT 已启动且 xtdata 路径正确")
+
+        task_id = str(uuid.uuid4())
+
+        client.update_task_status(task_id, {
+            "status": "queued",
+            "progress": 0,
+            "message": "任务已排队，等待执行",
+        })
+
+        def _run_one_click():
+            try:
+                # 获取最新交易日
+                calendar = client.get_trading_calendar("SH")
+                if calendar:
+                    latest_day = calendar[-1]
+                else:
+                    import datetime
+                    latest_day = datetime.date.today().strftime("%Y%m%d")
+
+                total_steps = len(periods) + 1
+                current_step = 0
+
+                for p in periods:
+                    client.download_history_data(stock_list, p, start_time=start_time, end_time=latest_day)
+                    current_step += 1
+                    # 更新总任务进度
+                    progress = int((current_step / total_steps) * 100)
+                    client.update_task_status(task_id, {
+                        "status": "downloading",
+                        "progress": progress,
+                        "message": f"正在下载 {p} 历史数据...",
+                    })
+                
+                # 同步复权因子
+                client.download_financial_data(stock_list, ["Capital"])
+                
+                client.update_task_status(task_id, {
+                    "status": "success",
+                    "progress": 100,
+                    "message": "一键更新完成",
+                })
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Async one-click update failed: {e}", exc_info=True)
+                client.update_task_status(task_id, {
+                    "status": "failed",
+                    "error": str(e),
+                })
+
+        background_tasks.add_task(_run_one_click)
+
+        return {
+            "success": True, 
+            "task_id": task_id,
+            "message": f"已启动 {len(stock_list)} 只股票的一键更新任务"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/data/datasets/{dataset_id}/check-gap", summary="检查数据集缺口（直接查询数据表）")
+async def check_dataset_gap(dataset_id: str) -> Dict[str, Any]:
+    """
+    直接查询数据集自己的表获取 max_date，与最新交易日对比，返回缺口信息。
+    不使用 refresh_data_stats()，避免超时和映射错误。
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    from ..db.pg_pool import get_conn
+
+    try:
+        # 1) 从 data_stats_config 获取该数据集的表名和日期列
+        table_name = None
+        date_column = None
+        extra_info = None
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT table_name, date_column, extra_info FROM market.data_stats_config WHERE data_kind = %s",
+                    (dataset_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    table_name, date_column, extra_info = row
+
+        if not table_name or not date_column:
+            raise HTTPException(
+                status_code=404,
+                detail=f"数据集 {dataset_id} 未在 data_stats_config 中注册"
+            )
+
+        # 2) 直接查询该表的 max_date（使用 statement_timeout 防止大表超时）
+        current_max_date = None
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '10s'")
+                try:
+                    cur.execute(f"SELECT MAX({date_column})::date FROM {table_name}")
+                    row = cur.fetchone()
+                    if row:
+                        current_max_date = row[0]
+                except Exception as e:
+                    _logger.warning(f"[{dataset_id}] 查询 MAX({date_column}) 失败: {e}")
+                    conn.rollback()
+
+        # 3) 获取最新交易日
+        latest_trading_date = None
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT MAX(cal_date) AS latest FROM market.trading_calendar "
+                    "WHERE is_trading = TRUE AND cal_date <= CURRENT_DATE"
+                )
+                row = cur.fetchone()
+                if row:
+                    latest_trading_date = row[0]
+
+        if latest_trading_date is None:
+            raise HTTPException(
+                status_code=400,
+                detail="无法获取最新交易日，请先同步交易日历"
+            )
+
+        # 4) 计算缺口
+        has_gap = False
+        gap_start = None
+        gap_end = str(latest_trading_date)
+
+        if current_max_date is None:
+            has_gap = True
+            gap_start = gap_end  # 无数据时从最新交易日开始
+        elif current_max_date < latest_trading_date:
+            has_gap = True
+            # 找到 max_date 之后的下一个交易日作为起始
+            next_trading = None
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT MIN(cal_date) FROM market.trading_calendar "
+                        "WHERE is_trading = TRUE AND cal_date > %s",
+                        (current_max_date,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        next_trading = row[0]
+            gap_start = str(next_trading) if next_trading else str(current_max_date)
+
+        # 5) 确定数据源
+        source = "Tushare"
+        if extra_info and isinstance(extra_info, dict):
+            src = extra_info.get("source", "")
+            if src:
+                source = src.capitalize()
+        elif dataset_id.startswith("kline_") or dataset_id.startswith("tdx_"):
+            source = "TDX"
+        elif dataset_id.startswith("xtquant"):
+            source = "xtquant"
+
+        return {
+            "dataset_id": dataset_id,
+            "table_name": table_name,
+            "date_column": date_column,
+            "current_max_date": str(current_max_date) if current_max_date else None,
+            "latest_trading_date": str(latest_trading_date),
+            "has_gap": has_gap,
+            "gap_start": gap_start,
+            "gap_end": gap_end,
+            "source": source,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        _logger.error(f"check-gap 失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# ==================== 数据集统计接口 ====================
+
+@router.get("/data/datasets", summary="获取所有数据集统计信息")
+async def get_all_datasets() -> Dict[str, Any]:
+    """
+    获取所有数据集的统计信息，包括状态、数据范围、股票范围等。
+    """
+    try:
+        service = get_dataset_stats_service()
+        datasets = service.get_all_datasets()
+        
+        return {
+            "datasets": [asdict(d) for d in datasets],
+            "total": len(datasets)
+        }
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"获取数据集统计信息失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/data/datasets/{dataset_id}", summary="获取指定数据集的详细统计")
+async def get_dataset_detail(dataset_id: str) -> Dict[str, Any]:
+    """
+    获取指定数据集的详细统计信息，包括日期范围、股票范围、质量指标等。
+    """
+    try:
+        service = get_dataset_stats_service()
+        detail = service.get_dataset_detail(dataset_id)
+        
+        if not detail:
+            raise HTTPException(status_code=404, detail=f"数据集 {dataset_id} 不存在")
+        
+        return asdict(detail)
+    except HTTPException:
+        raise
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"获取数据集 {dataset_id} 详细信息失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/data/datasets/{dataset_id}/catch-up", summary="一键补齐数据集到当前日期")
+async def catch_up_dataset(dataset_id: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    """
+    一键补齐指定数据集到当前日期。
+    支持 QMT 数据集（kline_1d/1m/5m/1h/tick）和 Tushare 数据集（daily_basic/bak_basic/stock_moneyflow_ts/cyq_perf/cyq_chips）。
+    """
+    import logging
+    import datetime as dt
+    _logger = logging.getLogger(__name__)
+
+    try:
+        # ============================================================
+        # QMT 数据集：通过 miniQMT 下载
+        # ============================================================
+        dataset_periods = {
+            "kline_1d": "1d",
+            "kline_1m": "1m",
+            "kline_5m": "5m",
+            "kline_1h": "1h",
+            "tick": "tick",
+        }
+
+        if dataset_id in dataset_periods:
+            period = dataset_periods[dataset_id]
+            client = _get_client()
+
+            stock_list = client.get_stock_list_in_sector("沪深A股")
+            if not stock_list:
+                raise HTTPException(status_code=400, detail="无法获取股票列表，请确认 miniQMT 已启动")
+
+            calendar = client.get_trading_calendar("SH")
+            if calendar:
+                latest_day = calendar[-1]
+            else:
+                latest_day = dt.date.today().strftime("%Y%m%d")
+
+            task_id = str(uuid.uuid4())
+
+            def _run_catch_up():
+                try:
+                    client.update_task_status(task_id, {
+                        "status": "queued",
+                        "progress": 0,
+                        "message": "任务已排队，等待执行",
+                        "total": len(stock_list),
+                        "finished": 0,
+                    })
+                    client.update_task_status(task_id, {
+                        "status": "running",
+                        "message": f"开始补齐 {dataset_id} 数据...",
+                    })
+                    for idx, stock_code in enumerate(stock_list):
+                        try:
+                            client.download_history_data([stock_code], period, end_time=latest_day)
+                            finished = idx + 1
+                            progress = int((finished / len(stock_list)) * 100)
+                            client.update_task_status(task_id, {
+                                "status": "running",
+                                "progress": progress,
+                                "message": f"正在处理 {stock_code}",
+                                "total": len(stock_list),
+                                "finished": finished,
+                                "last_stock": stock_code,
+                            })
+                        except Exception as e:
+                            _logger.warning(f"处理 {stock_code} 失败: {e}")
+                    client.update_task_status(task_id, {
+                        "status": "success",
+                        "progress": 100,
+                        "message": f"{dataset_id} 数据补齐完成",
+                        "total": len(stock_list),
+                        "finished": len(stock_list),
+                    })
+                except Exception as e:
+                    _logger.error(f"数据集 {dataset_id} 补齐失败: {e}", exc_info=True)
+                    client.update_task_status(task_id, {
+                        "status": "failed",
+                        "error": str(e),
+                    })
+
+            background_tasks.add_task(_run_catch_up)
+            return {
+                "success": True,
+                "task_id": task_id,
+                "message": f"已启动 {dataset_id} 数据补齐任务"
+            }
+
+        # ============================================================
+        # 非 QMT 数据集：调用 check-gap API 获取缺口信息并返回
+        # 前端收到后跳转到增量页面，由用户确认后执行增量同步
+        # ============================================================
+        from ..db.pg_pool import get_conn
+
+        # 从 data_stats_config 获取该数据集的表名和日期列
+        table_name = None
+        date_column = None
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT table_name, date_column FROM market.data_stats_config WHERE data_kind = %s",
+                    (dataset_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    table_name, date_column = row
+
+        if not table_name or not date_column:
+            raise HTTPException(status_code=400, detail=f"数据集 {dataset_id} 不支持一键补齐（未在 data_stats_config 中注册）")
+
+        # 直接查询该表的 max_date（使用 statement_timeout 防止大表超时）
+        current_max_date = None
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '10s'")
+                try:
+                    cur.execute(f"SELECT MAX({date_column})::date FROM {table_name}")
+                    row = cur.fetchone()
+                    if row:
+                        current_max_date = row[0]
+                except Exception as e:
+                    _logger.warning(f"[{dataset_id}] 查询 MAX({date_column}) from {table_name} 失败: {e}")
+                    conn.rollback()
+
+        # 获取最新交易日
+        latest_trading_date = None
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT MAX(cal_date) AS latest FROM market.trading_calendar "
+                    "WHERE is_trading = TRUE AND cal_date <= CURRENT_DATE"
+                )
+                row = cur.fetchone()
+                if row:
+                    latest_trading_date = row[0]
+
+        if latest_trading_date is None:
+            raise HTTPException(
+                status_code=400,
+                detail="无法获取最新交易日，请先同步交易日历"
+            )
+
+        # 计算缺口
+        has_gap = False
+        gap_start = None
+        gap_end = str(latest_trading_date)
+
+        if current_max_date is None:
+            has_gap = True
+            gap_start = gap_end
+        elif current_max_date < latest_trading_date:
+            has_gap = True
+            next_trading = None
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT MIN(cal_date) FROM market.trading_calendar "
+                        "WHERE is_trading = TRUE AND cal_date > %s",
+                        (current_max_date,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        next_trading = row[0]
+            gap_start = str(next_trading) if next_trading else str(current_max_date)
+
+        if not has_gap:
+            return {
+                "success": True,
+                "action": "no_gap",
+                "message": f"{dataset_id} 数据已是最新（max_date={current_max_date}，latest_trading={latest_trading_date}）",
+                "current_max_date": str(current_max_date),
+                "latest_trading_date": str(latest_trading_date),
+            }
+
+        # 返回缺口信息，让前端跳转到增量页面
+        return {
+            "success": True,
+            "action": "redirect_to_incremental",
+            "dataset_id": dataset_id,
+            "current_max_date": str(current_max_date) if current_max_date else None,
+            "latest_trading_date": str(latest_trading_date),
+            "gap_start": gap_start,
+            "gap_end": gap_end,
+            "message": f"{dataset_id} 数据缺口: {gap_start} → {gap_end}",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        _logger.error(f"一键补齐失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/data/tasks", summary="获取所有同步任务")
+async def get_all_tasks(active_only: bool = False, limit: int = 50) -> Dict[str, Any]:
+    """
+    获取所有同步任务列表。
+    
+    参数：
+    - active_only: 是否仅显示运行中/排队的任务
+    - limit: 最多返回的任务数量
+    """
+    try:
+        client = _get_client()
+        tasks = client.get_all_tasks(active_only=active_only, limit=limit)
+        
+        return {
+            "tasks": tasks,
+            "total": len(tasks)
+        }
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"获取任务列表失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/data/tasks/{task_id}/progress", summary="获取任务详细进度")
+async def get_task_progress_detail(task_id: str) -> Dict[str, Any]:
+    """
+    获取指定任务的详细进度信息，包括进度、日志、当前处理的股票等。
+    """
+    try:
+        client = _get_client()
+        progress = client.get_task_progress(task_id)
+        
+        if not progress:
+            raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在或已过期")
+        
+        return progress
+    except HTTPException:
+        raise
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"获取任务进度失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 

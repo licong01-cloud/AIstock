@@ -3,10 +3,9 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
@@ -78,6 +77,19 @@ def import_best_workspace(
     output_mode: Optional[str] = None,
     enabled: bool = True,
 ) -> ImportResult:
+    disable_backtest = (os.environ.get("AISTOCK_DISABLE_BACKTEST_IMPORT") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
+    env_name = (os.environ.get("AISTOCK_ENV") or "").strip().lower()
+    if disable_backtest or env_name in {"prod", "production"}:
+        raise RuntimeError(
+            "生产/实盘环境已禁用从 RD-Agent workspace 导入 signals.parquet（回测/离线产物）。"
+        )
+
     reader = RDRegistryReader(registry_db_path)
     ws: RDWorkspace = reader.get_workspace(workspace_id)
 

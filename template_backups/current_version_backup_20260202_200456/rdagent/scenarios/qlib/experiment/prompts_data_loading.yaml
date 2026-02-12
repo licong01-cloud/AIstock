@@ -1,0 +1,19 @@
+qlib_factor_interface_data_loading: |-
+  【数据加载与字段名规范】
+  - 因子实现只能从当前工作目录下的 `daily_pv.h5` 读取数据，该文件索引为 MultiIndex(`datetime`, `instrument`)，列名包括：
+    `open`, `high`, `low`, `close`, `volume`, `amount`, `factor`.
+  - **可选静态字段（daily_basic / 资金流原始字段）**：当前工作目录下可能存在 `static_factors.parquet`（由上游数据准备阶段复制到因子执行目录），其索引同样为 MultiIndex(`datetime`, `instrument`)，包含 daily_basic / moneyflow 等原始字段（通常以 `db_` / `mf_` 等前缀命名）。
+    - **列名白名单（硬约束）**：你只能使用 `static_factors_schema.csv` / `static_factors_schema.json` 中列出的字段名（系统会在数据目录中提供该 schema 文件的描述）。严禁凭经验"编造/猜测"字段名（例如 `mf_net_inflow_1d`、`mf_large_buy_ratio` 等）。
+    - 如果你的因子定义确实依赖这些字段（例如流通市值、流通股本、换手率、资金净流入等），你 **必须** 显式读取并 join。为了节省内存，**严禁全量加载**，必须通过 `columns` 参数仅读取必要的列：
+      ```python
+      # 必须：仅读取计算所需的列，以避免 OOM (static_factors.parquet 很大)
+      required_static_cols = ["db_circ_mv", "mf_net_amt"] # 示例：按需替换为实际所需列名
+      static_df = pd.read_parquet("static_factors.parquet", columns=required_static_cols).sort_index()
+      
+      # 注意：当前数据源的 instrument 已经是 Qlib 风格（600000.SH/000001.SZ），与 static_factors.parquet 完全对齐.
+      # 直接执行 join 即可，无需进行格式转换.
+      # 使用 join 将所需列合并到主 DataFrame 中
+      df = df.sort_index().join(static_df, how="left")
+      ```
+    - **资金净流入等派生量（推荐做法）**：如果你需要"资金净流入/净流入占比/5日净流入"等字段，但 schema 中没有直接提供，请基于 `mf_*_buy_amt` / `mf_*_sell_amt` 组合自行派生（例如把 `sm/md/lg/elg` 四档买入金额相加减去卖出金额），并可进一步除以 `amount` 或 `db_circ_mv` 做归一化，再做 rolling 聚合。
+    - 若 `static_factors.parquet` 不存在或缺少所需列，请直接报错并在下一轮改写因子定义（见下文约束），严禁用硬编码常数"拍脑袋补齐"。

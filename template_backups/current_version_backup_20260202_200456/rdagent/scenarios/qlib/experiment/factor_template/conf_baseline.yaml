@@ -1,0 +1,108 @@
+qlib_init:
+    provider_uri: "/mnt/f/Dev/AIstock/qlib_bin/qlib_bin_20251209"
+    region: cn
+
+market: &market all
+benchmark: &benchmark 000300.SH
+
+data_handler_config: &data_handler_config
+    # 基于当前 qlib_bin_20251209 可用数据的长周期配置（2010-01-07 ~ 2025-12-01）
+    start_time: 2010-01-07
+    end_time: 2025-12-01
+    # 因子归一化拟合区间：前五年
+    fit_start_time: 2010-01-07
+    fit_end_time: 2014-12-31
+    instruments: *market
+    infer_processors:
+        - class: FilterCol
+          kwargs:
+              fields_group: feature
+              col_list: ["RESI5", "WVMA5", "RSQR5", "KLEN", "RSQR10", "CORR5", "CORD5", "CORR10", 
+                            "ROC60", "RESI10", "VSTD5", "RSQR60", "CORR60", "WVMA60", "STD5", 
+                            "RSQR20", "CORD60", "CORD10", "CORR20", "KLOW"
+                        ]
+        - class: RobustZScoreNorm
+          kwargs:
+              fields_group: feature
+              clip_outlier: true
+        - class: Fillna
+          kwargs:
+              fields_group: feature
+    learn_processors:
+        - class: DropnaLabel
+        - class: CSRankNorm
+          kwargs:
+              fields_group: label
+    label: ["Ref($close, -2) / Ref($close, -1) - 1"] 
+
+port_analysis_config: &port_analysis_config
+    strategy:
+        class: EnhancedTopkDropoutStrategy
+        module_path: rdagent.scenarios.qlib.experiment.factor_template.custom_strategy
+        kwargs:
+            signal: <PRED>
+            topk: 50
+            n_drop: 5
+            min_score: 0.1
+            max_position_ratio: 0.90
+            stop_loss: -0.10
+    backtest:
+        start_time: 2021-01-01
+        # 为避免 Qlib 在回测最后一步访问 calendar_index+1 越界，这里不使用最后一个交易日
+        # 当前 day 频数据最后一行是 2025-12-01，因此将回测截止日设置到 2025-11-28
+        end_time: 2025-11-28
+        account: 100000000
+        benchmark: *benchmark
+        exchange_kwargs:
+            limit_threshold: 0.095
+            deal_price: close
+            open_cost: 0.0005
+            close_cost: 0.0015
+            min_cost: 5
+task:
+    model:
+        class: LGBModel
+        module_path: qlib.contrib.model.gbdt
+        kwargs:
+            loss: mse
+            device_type: cpu
+            max_bin: 63
+            colsample_bytree: 0.8879
+            learning_rate: 0.2
+            subsample: 0.8789
+            lambda_l1: 205.6999
+            lambda_l2: 580.9768
+            max_depth: 8
+            num_leaves: 210
+            num_threads: 20
+    dataset:
+        class: DatasetH
+        module_path: qlib.data.dataset
+        kwargs:
+            handler:
+                class: Alpha158
+                module_path: qlib.contrib.data.handler
+                kwargs: *data_handler_config
+            segments:
+                # 基于 2010-01-07 ~ 2025-12-01 的长周期划分
+                # 训练：2010-01-07 ~ 2018-12-31
+                train: [2010-01-07, 2018-12-31]
+                # 验证：2019-01-01 ~ 2020-12-31
+                valid: [2019-01-01, 2020-12-31]
+                # 测试：2021-01-01 ~ 2025-12-01
+                test: [2021-01-01, 2025-12-01]
+    record: 
+        - class: SignalRecord
+          module_path: qlib.workflow.record_temp
+          kwargs: 
+            model: <MODEL>
+            dataset: <DATASET>
+        - class: SigAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs: 
+            ana_long_short: False
+            ann_scaler: 252
+        - class: PortAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs: 
+            config: *port_analysis_config

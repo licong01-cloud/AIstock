@@ -11,18 +11,26 @@ interface WatchlistCategory {
   description?: string | null;
 }
 
+export default WatchlistPage;
+
+
 interface WatchlistItem {
   id: number;
   code: string;
   name: string;
   category_names?: string;
+  category_ids?: number[];
   created_at?: string | null;
   updated_at?: string | null;
   last_analysis_time?: string | null;
   last_rating?: string | null;
   last_conclusion?: string | null;
+  entry_price?: number | null;
+  entry_rank?: number | null;
+  entry_task_id?: string | null;
   last?: number | null;
   pct_change?: number | null;
+  pct_since_entry?: number | null;
   open?: number | null;
   prev_close?: number | null;
   high?: number | null;
@@ -34,6 +42,31 @@ interface WatchlistItem {
 interface ListItemsResponse {
   total: number;
   items: WatchlistItem[];
+}
+
+interface Task {
+  id: string;
+  name: string;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+interface TasksResponse {
+  tasks: Task[];
+}
+
+interface PricesResponse {
+  prices: Record<
+    string,
+    {
+      latestPrice?: number | null;
+      openPrice?: number | null;
+      closePrice?: number | null;
+      highPrice?: number | null;
+      lowPrice?: number | null;
+      rating?: string | null;
+    } | null
+  >;
 }
 
 function formatPct(v: number | null | undefined) {
@@ -51,6 +84,8 @@ type SortByPersistent =
   | "code"
   | "name"
   | "category"
+  | "entry_price"
+  | "entry_rank"
   | "created_at"
   | "updated_at"
   | "last_analysis_time"
@@ -59,6 +94,7 @@ type SortByPersistent =
 type SortByRealtime =
   | "last"
   | "pct_change"
+  | "pct_since_entry"
   | "open"
   | "prev_close"
   | "high"
@@ -78,6 +114,23 @@ const PERSISTENT_SORT_KEYS: SortByPersistent[] = [
   "last_rating",
 ];
 
+const REALTIME_SORT_KEYS: SortByRealtime[] = [
+  "last",
+  "pct_change",
+  "pct_since_entry",
+  "open",
+  "prev_close",
+  "high",
+  "low",
+  "volume_hand",
+  "amount",
+];
+
+const DEFAULT_SORT_FIELD: SortBy = "updated_at";
+const DEFAULT_SORT_DIR: "asc" | "desc" = "desc";
+
+const REALTIME_HINT = "请先刷新价格";
+
 interface NumericFilter {
   op: ">=" | "<=" | ">" | "<" | "=";
   enabled: boolean;
@@ -95,6 +148,8 @@ interface SearchFilters {
   name: string;
   category: string;
   rating: string;
+  entry_task: string;
+  entry_rank: NumericFilter;
   num: {
     last: NumericFilter;
     pct_change: NumericFilter;
@@ -213,6 +268,11 @@ function sortItemsRealtime(
   return cloned;
 }
 
+function canSortRealtime(field: SortBy, pricesRefreshed: boolean): boolean {
+  if (!REALTIME_SORT_KEYS.includes(field as SortByRealtime)) return true;
+  return pricesRefreshed;
+}
+
 function sortItemsPersistent(
   items: WatchlistItem[],
   sortBy: SortByPersistent,
@@ -221,6 +281,22 @@ function sortItemsPersistent(
   const reverse = sortDir === "desc";
   const cloned = [...items];
   cloned.sort((a, b) => {
+    if (sortBy === "entry_price" || sortBy === "entry_rank") {
+      const va = (a as any)[sortBy] as number | null | undefined;
+      const vb = (b as any)[sortBy] as number | null | undefined;
+      const aNull = va === null || va === undefined || Number.isNaN(va);
+      const bNull = vb === null || vb === undefined || Number.isNaN(vb);
+      if (aNull && bNull) {
+        return displayCode(a.code).localeCompare(displayCode(b.code));
+      }
+      if (aNull) return 1;
+      if (bNull) return -1;
+      const diff = Number(va) - Number(vb);
+      if (diff === 0) {
+        return displayCode(a.code).localeCompare(displayCode(b.code));
+      }
+      return reverse ? -diff : diff;
+    }
     let va: any;
     let vb: any;
     if (sortBy === "category") {
@@ -256,21 +332,28 @@ function sortItemsPersistent(
   return cloned;
 }
 
-export default function WatchlistPage() {
+function WatchlistPage() {
   const [categories, setCategories] = useState<WatchlistCategory[]>([]);
   const [currentCatId, setCurrentCatId] = useState<number | null>(null);
 
-  const [sortBy, setSortBy] = useState<SortBy>("updated_at");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [sortBy, setSortBy] = useState<SortBy>(DEFAULT_SORT_FIELD);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">(DEFAULT_SORT_DIR);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(5); // seconds
 
+  const [allItems, setAllItems] = useState<WatchlistItem[]>([]);
   const [items, setItems] = useState<WatchlistItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [pricesRefreshed, setPricesRefreshed] = useState(false);
+  const [refreshingPrices, setRefreshingPrices] = useState(false);
+
+  const [sourceTasks, setSourceTasks] = useState<Task[]>([]);
+  const [selectedSourceTaskId, setSelectedSourceTaskId] = useState<string>("");
 
   const [searchActive, setSearchActive] = useState(false);
   const [searchFilters, setSearchFilters] = useState<SearchFilters>({
@@ -278,6 +361,8 @@ export default function WatchlistPage() {
     name: "",
     category: "",
     rating: "",
+    entry_task: "",
+    entry_rank: { ...DEFAULT_NUMERIC_FILTER },
     num: {
       last: { ...DEFAULT_NUMERIC_FILTER },
       pct_change: { ...DEFAULT_NUMERIC_FILTER },
@@ -296,7 +381,61 @@ export default function WatchlistPage() {
 
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
-   // 分类管理与添加到自选相关表单状态
+  // 卡片展开/折叠状态
+  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
+
+  const toggleCard = (cardId: string) => {
+    setExpandedCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(cardId)) {
+        next.delete(cardId);
+      } else {
+        next.add(cardId);
+      }
+      return next;
+    });
+  };
+
+  // 可折叠卡片组件
+  const CollapsibleCard = ({ title, cardId, children }: { title: string; cardId: string; children: React.ReactNode }) => {
+    const isExpanded = expandedCards.has(cardId);
+    return (
+      <section
+        style={{
+          background: "#f9fafb",
+          borderRadius: 10,
+          marginBottom: 8,
+          fontSize: 13,
+        }}
+      >
+        <div
+          onClick={() => toggleCard(cardId)}
+          style={{
+            padding: "8px 12px",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            background: "#f3f4f6",
+            borderRadius: "10px 10px 0 0",
+            borderBottom: isExpanded ? "1px solid #e5e7eb" : "none",
+          }}
+        >
+          <h3 style={{ margin: 0, fontSize: 14 }}>
+            {title}
+            <span style={{ fontSize: 12, color: "#9ca3af", marginLeft: 8 }}>
+              {isExpanded ? "▼" : "▶"}
+            </span>
+          </h3>
+        </div>
+        {isExpanded && (
+          <div style={{ padding: "12px" }}>{children}</div>
+        )}
+      </section>
+    );
+  };
+
+  // 分类管理与添加到自选相关表单状态
   const [newCatName, setNewCatName] = useState("");
   const [newCatDesc, setNewCatDesc] = useState("");
   const [renameTargetName, setRenameTargetName] = useState("");
@@ -336,9 +475,15 @@ export default function WatchlistPage() {
   const [bulkAddCodes, setBulkAddCodes] = useState("");
 
   const currentCatName = useMemo(
-    () => categories.find((c) => c.id === currentCatId)?.name,
+    () => categories.find((c) => c.id === currentCatId)?.name || "",
     [categories, currentCatId],
   );
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const allSelected =
+    items.length > 0 && items.every((it) => selectedIds.includes(it.id));
+  const someSelected =
+    items.length > 0 && items.some((it) => selectedIds.includes(it.id));
 
   const nameToCatId = useMemo(() => {
     const map: Record<string, number> = {};
@@ -347,6 +492,19 @@ export default function WatchlistPage() {
     });
     return map;
   }, [categories]);
+
+  async function loadSourceTasks() {
+    try {
+      const res = await fetch(`${API_BASE}/watchlist/items/source-tasks`);
+      if (!res.ok) throw new Error(`来源TASK请求失败: ${res.status}`);
+      const data: Task[] = await res.json();
+      console.log("[DEBUG] source-tasks API返回:", data);
+      setSourceTasks(data || []);
+    } catch (err: any) {
+      console.error("[DEBUG] loadSourceTasks错误:", err);
+      setSourceTasks([]);
+    }
+  }
 
   async function loadCategories() {
     try {
@@ -362,63 +520,217 @@ export default function WatchlistPage() {
     }
   }
 
-  async function loadPageItems() {
-    // 非搜索模式下从服务端分页
-    if (searchActive) {
-      await loadAllAndFilter();
-      return;
+  function matchesCategory(item: WatchlistItem): boolean {
+    if (currentCatId == null) return true;
+    if (Array.isArray(item.category_ids)) {
+      return item.category_ids.includes(currentCatId);
     }
+    const catName = categories.find((c) => c.id === currentCatId)?.name;
+    if (!catName) return false;
+    return (item.category_names || "").includes(catName);
+  }
+
+  function matchesSourceTask(item: WatchlistItem): boolean {
+    if (!selectedSourceTaskId) return true;
+    return item.entry_task_id === selectedSourceTaskId;
+  }
+
+  function applyFiltersAndSort(nextItems: WatchlistItem[]) {
+    let filtered = nextItems.filter((item) => matchesCategory(item));
+    filtered = filtered.filter((item) => matchesSourceTask(item));
+
+    if (searchActive) {
+      const f = searchFilters;
+      const tCode = f.code.trim().toLowerCase();
+      const tName = f.name.trim().toLowerCase();
+      const tCat = f.category.trim().toLowerCase();
+      const tRating = f.rating.trim().toLowerCase();
+      const tEntryTask = f.entry_task.trim().toLowerCase();
+
+      function okText(it: WatchlistItem): boolean {
+        const ts = (it.code || "").toLowerCase();
+        const c6 = displayCode(it.code).toLowerCase();
+        if (tCode && !c6.includes(tCode) && !ts.includes(tCode)) return false;
+        if (tName && !(it.name || "").toLowerCase().includes(tName)) return false;
+        if (tCat && !(it.category_names || "").toLowerCase().includes(tCat))
+          return false;
+        if (
+          tRating &&
+          !(it.last_rating || "").toLowerCase().includes(tRating)
+        )
+          return false;
+        if (
+          tEntryTask &&
+          !(it.entry_task_id || "").toLowerCase().includes(tEntryTask)
+        )
+          return false;
+        return true;
+      }
+
+      function okEntryRank(it: WatchlistItem): boolean {
+        const er = f.entry_rank;
+        if (!er.enabled) return true;
+        return cmpNumeric(it.entry_rank, er.op, er.value);
+      }
+
+      function okNumeric(it: WatchlistItem): boolean {
+        const n = f.num;
+        const mapping: [keyof typeof n, keyof WatchlistItem][] = [
+          ["last", "last"],
+          ["pct_change", "pct_change"],
+          ["open", "open"],
+          ["prev_close", "prev_close"],
+          ["high", "high"],
+          ["low", "low"],
+          ["volume_hand", "volume_hand"],
+          ["amount", "amount"],
+        ];
+        for (const [k, field] of mapping) {
+          const nf = n[k];
+          if (!nf.enabled) continue;
+          if (!cmpNumeric((it as any)[field], nf.op, nf.value)) return false;
+        }
+        return true;
+      }
+
+      function okDate(it: WatchlistItem): boolean {
+        const d = f.date;
+        if (d.created_at.enabled) {
+          if (!cmpDate(it.created_at ?? null, d.created_at.op, d.created_at.value))
+            return false;
+        }
+        if (d.last_analysis_time.enabled) {
+          if (
+            !cmpDate(
+              it.last_analysis_time ?? null,
+              d.last_analysis_time.op,
+              d.last_analysis_time.value,
+            )
+          )
+            return false;
+        }
+        return true;
+      }
+
+      filtered = filtered.filter((it) => okText(it) && okEntryRank(it) && okNumeric(it) && okDate(it));
+    }
+
+    const canSort = canSortRealtime(sortBy, pricesRefreshed);
+    const effectiveSort = canSort ? sortBy : DEFAULT_SORT_FIELD;
+    const effectiveDir = canSort ? sortDir : DEFAULT_SORT_DIR;
+
+    if (PERSISTENT_SORT_KEYS.includes(effectiveSort as SortByPersistent)) {
+      filtered = sortItemsPersistent(
+        filtered,
+        effectiveSort as SortByPersistent,
+        effectiveDir,
+      );
+    } else {
+      filtered = sortItemsRealtime(
+        filtered,
+        effectiveSort as SortByRealtime,
+        effectiveDir,
+      );
+    }
+
+    const totalLocal = filtered.length;
+    const start = Math.max(0, (page - 1) * pageSize);
+    const end = start + pageSize;
+    const pageItems = filtered.slice(start, end);
+    setItems(pageItems);
+    setTotal(totalLocal);
+  }
+
+  async function loadAllItems() {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams();
-      if (currentCatId != null) params.set("category_id", String(currentCatId));
-      params.set("page", String(page));
-      params.set("page_size", String(pageSize));
-      const sortForServer: SortByPersistent =
-        (PERSISTENT_SORT_KEYS.includes(sortBy as SortByPersistent)
-          ? (sortBy as SortByPersistent)
-          : "updated_at");
-      params.set("sort_by", sortForServer);
-      params.set("sort_dir", sortDir);
-      const res = await fetch(`${API_BASE}/watchlist/items?${params.toString()}`);
-      if (!res.ok) throw new Error(`列表请求失败: ${res.status}`);
-      const data: ListItemsResponse = await res.json();
-      let pageItems = data.items || [];
-      if (
-        (sortBy as SortByRealtime) &&
-        [
-          "last",
-          "pct_change",
-          "open",
-          "prev_close",
-          "high",
-          "low",
-          "volume_hand",
-          "amount",
-        ].includes(sortBy as SortByRealtime)
-      ) {
-        pageItems = sortItemsRealtime(
-          pageItems,
-          sortBy as SortByRealtime,
-          sortDir,
+      const all: WatchlistItem[] = [];
+      let fetched = 0;
+      let totalRemote = 0;
+      const pageSizeServer = 200;
+      let p = 1;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const params = new URLSearchParams();
+        params.set("page", String(p));
+        params.set("page_size", String(pageSizeServer));
+        params.set("sort_by", "updated_at");
+        params.set("sort_dir", "desc");
+        const res = await fetch(
+          `${API_BASE}/watchlist/items?${params.toString()}`,
         );
-      } else if ((["code", "name", "category", "created_at", "updated_at", "last_analysis_time", "last_rating"] as SortByPersistent[]).includes(sortBy as SortByPersistent)) {
-        pageItems = sortItemsPersistent(
-          pageItems,
-          sortBy as SortByPersistent,
-          sortDir,
-        );
+        if (!res.ok) throw new Error(`列表请求失败: ${res.status}`);
+        const data: ListItemsResponse = await res.json();
+        const batch = data.items || [];
+        if (p === 1) totalRemote = data.total || batch.length || 0;
+        all.push(...batch);
+        fetched += batch.length;
+        if (batch.length === 0 || fetched >= totalRemote) break;
+        p += 1;
+        if (p > 200) break;
       }
-      setItems(pageItems);
-      setTotal(data.total || pageItems.length || 0);
+      setAllItems(all);
+      setPricesRefreshed(false);
+      applyFiltersAndSort(all);
     } catch (e: any) {
       setError(e?.message || "未知错误");
       setItems([]);
       setTotal(0);
+      setAllItems([]);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function refreshPrices() {
+    if (refreshingPrices) return;
+    setRefreshingPrices(true);
+    setError(null);
+    try {
+      let filtered = allItems.filter((item) => matchesCategory(item));
+      filtered = filtered.filter((item) => matchesSourceTask(item));
+      const codes = filtered.map((item) => item.code).filter(Boolean);
+      if (codes.length === 0) {
+        setPricesRefreshed(true);
+        return;
+      }
+      const res = await fetch(`${API_BASE}/stocks/prices`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ codes }),
+      });
+      if (!res.ok) throw new Error(`价格刷新失败: ${res.status}`);
+      const data: PricesResponse = await res.json();
+      const updated = allItems.map((item) => {
+        const priceData = data.prices[item.code];
+        if (!priceData) return item;
+        return {
+          ...item,
+          last: priceData.latestPrice ?? item.last,
+          open: priceData.openPrice ?? item.open,
+          prev_close: priceData.closePrice ?? item.prev_close,
+          high: priceData.highPrice ?? item.high,
+          low: priceData.lowPrice ?? item.low,
+          last_rating: priceData.rating ?? item.last_rating,
+        };
+      });
+      setAllItems(updated);
+      setPricesRefreshed(true);
+      applyFiltersAndSort(updated);
+    } catch (e: any) {
+      setError(e?.message || "价格刷新失败");
+    } finally {
+      setRefreshingPrices(false);
+    }
+  }
+
+  async function loadPageItems() {
+    if (searchActive) {
+      await loadAllAndFilter();
+      return;
+    }
+    await loadAllItems();
   }
 
   async function loadAllAndFilter() {
@@ -521,6 +833,10 @@ export default function WatchlistPage() {
 
       let filtered = all.filter((it) => okText(it) && okNumeric(it) && okDate(it));
 
+      // 分类和来源TASK筛选（在搜索模式下也需要应用）
+      filtered = filtered.filter((item) => matchesCategory(item));
+      filtered = filtered.filter((item) => matchesSourceTask(item));
+
       // 排序
       if (PERSISTENT_SORT_KEYS.includes(sortBy as SortByPersistent)) {
         filtered = sortItemsPersistent(filtered, sortBy as SortByPersistent, sortDir);
@@ -545,22 +861,54 @@ export default function WatchlistPage() {
 
   useEffect(() => {
     loadCategories();
+    loadSourceTasks();
+    loadAllItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    loadPageItems();
+    if (searchActive) {
+      loadAllAndFilter();
+    } else {
+      applyFiltersAndSort(allItems);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentCatId, sortBy, sortDir, page, pageSize, searchActive]);
+  }, [
+    currentCatId,
+    sortBy,
+    sortDir,
+    page,
+    pageSize,
+    searchActive,
+    selectedSourceTaskId,
+    pricesRefreshed,
+    allItems,
+  ]);
 
   useEffect(() => {
     if (!autoRefresh) return undefined;
     const id = setInterval(() => {
-      loadPageItems();
+      if (searchActive) {
+        loadAllAndFilter();
+      } else {
+        applyFiltersAndSort(allItems);
+      }
     }, Math.max(2, refreshInterval) * 1000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRefresh, refreshInterval, currentCatId, sortBy, sortDir, page, pageSize, searchActive]);
+  }, [
+    autoRefresh,
+    refreshInterval,
+    currentCatId,
+    sortBy,
+    sortDir,
+    page,
+    pageSize,
+    searchActive,
+    selectedSourceTaskId,
+    pricesRefreshed,
+    allItems,
+  ]);
 
   function toggleSelect(id: number, checked: boolean) {
     setSelectedIds((prev) => {
@@ -569,6 +917,30 @@ export default function WatchlistPage() {
       else set.delete(id);
       return Array.from(set);
     });
+  }
+
+  function toggleSelectAll(checked: boolean) {
+    if (!checked) {
+      const pageIds = new Set(items.map((it) => it.id));
+      setSelectedIds((prev) => prev.filter((id) => !pageIds.has(id)));
+      return;
+    }
+    const merged = new Set(selectedIds);
+    items.forEach((it) => merged.add(it.id));
+    setSelectedIds(Array.from(merged));
+  }
+
+  function toggleSort(field: SortBy) {
+    if (!canSortRealtime(field, pricesRefreshed)) {
+      setError(REALTIME_HINT);
+      return;
+    }
+    if (sortBy === field) {
+      setSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortBy(field);
+      setSortDir("desc");
+    }
   }
 
   function handleJumpHistory(item: WatchlistItem) {
@@ -874,15 +1246,10 @@ export default function WatchlistPage() {
     }
   }
 
-  const totalPages = Math.max(1, Math.ceil((total || 0) / pageSize));
-
   return (
     <main style={{ padding: 24 }}>
       <section style={{ marginBottom: 16 }}>
         <h1 style={{ margin: 0, fontSize: 22 }}>⭐ 自选股票池</h1>
-        <p style={{ marginTop: 4, fontSize: 13, color: "#666" }}>
-          完整复刻旧版管理功能：分类管理、批量添加、自选列表、搜索、批量操作与历史/分析联动。
-        </p>
       </section>
 
       {/* 列表控制条：排序、分页、自动刷新 */}
@@ -917,12 +1284,37 @@ export default function WatchlistPage() {
         </div>
 
         <div>
+          <span style={{ marginRight: 6 }}>来源TASK：</span>
+          <select
+            title="来源TASK"
+            value={selectedSourceTaskId}
+            onChange={(e) => {
+              setSelectedSourceTaskId(e.target.value);
+              setPage(1);
+            }}
+            style={{ minWidth: 160 }}
+          >
+            <option value="">全部</option>
+            {sourceTasks.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name || t.id}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
           <span style={{ marginRight: 6 }}>排序字段：</span>
           <select
             title="排序字段"
             value={sortBy}
             onChange={(e) => {
-              setSortBy(e.target.value as SortBy);
+              const next = e.target.value as SortBy;
+              if (!canSortRealtime(next, pricesRefreshed)) {
+                setError(REALTIME_HINT);
+                return;
+              }
+              setSortBy(next);
               setPage(1);
             }}
           >
@@ -933,15 +1325,40 @@ export default function WatchlistPage() {
             <option value="updated_at">更新时间</option>
             <option value="last_analysis_time">最近分析时间</option>
             <option value="last_rating">投资评级</option>
-            <option value="last">最新价</option>
-            <option value="pct_change">涨幅%</option>
-            <option value="open">开盘</option>
-            <option value="prev_close">昨收</option>
-            <option value="high">最高</option>
-            <option value="low">最低</option>
-            <option value="volume_hand">成交量(手)</option>
-            <option value="amount">成交额</option>
+            <option value="entry_price">加入价格</option>
+            <option value="last" disabled={!pricesRefreshed}>
+              最新价{!pricesRefreshed ? "*" : ""}
+            </option>
+            <option value="pct_change" disabled={!pricesRefreshed}>
+              涨幅%{!pricesRefreshed ? "*" : ""}
+            </option>
+            <option value="pct_since_entry" disabled={!pricesRefreshed}>
+              加入以来涨幅{!pricesRefreshed ? "*" : ""}
+            </option>
+            <option value="open" disabled={!pricesRefreshed}>
+              开盘{!pricesRefreshed ? "*" : ""}
+            </option>
+            <option value="prev_close" disabled={!pricesRefreshed}>
+              昨收{!pricesRefreshed ? "*" : ""}
+            </option>
+            <option value="high" disabled={!pricesRefreshed}>
+              最高{!pricesRefreshed ? "*" : ""}
+            </option>
+            <option value="low" disabled={!pricesRefreshed}>
+              最低{!pricesRefreshed ? "*" : ""}
+            </option>
+            <option value="volume_hand" disabled={!pricesRefreshed}>
+              成交量(手){!pricesRefreshed ? "*" : ""}
+            </option>
+            <option value="amount" disabled={!pricesRefreshed}>
+              成交额{!pricesRefreshed ? "*" : ""}
+            </option>
           </select>
+          {!pricesRefreshed && (
+            <span style={{ marginLeft: 6, fontSize: 12, color: "#fff" }}>
+              *需先刷新价格
+            </span>
+          )}
         </div>
 
         <div>
@@ -986,6 +1403,7 @@ export default function WatchlistPage() {
             自动刷新
           </label>
           <select
+            title="刷新间隔"
             value={refreshInterval}
             onChange={(e) => setRefreshInterval(Number(e.target.value))}
           >
@@ -1016,26 +1434,33 @@ export default function WatchlistPage() {
           {loading ? "刷新中..." : "刷新"}
         </button>
 
-        <span style={{ color: "#777" }}>
+        <button
+          type="button"
+          onClick={refreshPrices}
+          disabled={refreshingPrices}
+          style={{
+            padding: "4px 10px",
+            borderRadius: 8,
+            border: "1px solid #cbd5e1",
+            background: pricesRefreshed ? "#dcfce7" : "#f8fafc",
+            fontSize: 12,
+          }}
+        >
+          {refreshingPrices ? "刷新中..." : "刷新价格"}
+        </button>
+
+        <span style={{ color: "#fff" }}>
           {currentCatName ? `当前分类：${currentCatName}` : "全部分类"}
           {total ? ` · 共 ${total} 条` : ""}
           {totalPages ? ` · 第 ${page}/${totalPages} 页` : ""}
+          {pricesRefreshed ? " · 价格已刷新" : " · 价格未刷新"}
         </span>
       </section>
 
       {error && <p style={{ color: "#b00020", fontSize: 13 }}>错误：{error}</p>}
 
       {/* 分类管理 */}
-      <section
-        style={{
-          background: "#f9fafb",
-          borderRadius: 10,
-          padding: 12,
-          marginBottom: 12,
-          fontSize: 13,
-        }}
-      >
-        <h2 style={{ margin: "4px 0", fontSize: 16 }}>🗂 分类管理</h2>
+      <CollapsibleCard title="🗂 分类管理" cardId="category">
         <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
           <div style={{ minWidth: 220 }}>
             <div style={{ fontWeight: 600, marginBottom: 4 }}>新建分类</div>
@@ -1188,221 +1613,216 @@ export default function WatchlistPage() {
             </button>
           </div>
         </div>
-      </section>
+      </CollapsibleCard>
 
       {/* 添加到自选 */}
-      <section
-        style={{
-          background: "#f9fafb",
-          borderRadius: 10,
-          padding: 12,
-          marginBottom: 12,
-          fontSize: 13,
-        }}
-      >
-        <h2 style={{ margin: "4px 0", fontSize: 16 }}>➕ 添加到自选</h2>
-        <div style={{ marginBottom: 8, fontWeight: 600 }}>单个添加</div>
+      <CollapsibleCard title="➕ 添加到自选" cardId="add">
         <div
           style={{
             display: "flex",
-            flexWrap: "wrap",
-            gap: 8,
-            marginBottom: 8,
+            gap: 16,
           }}
         >
-          <input
-            title="股票代码"
-            value={singleAddCode}
-            onChange={(e) => setSingleAddCode(e.target.value)}
-            placeholder="股票代码，如 600519"
-            style={{
-              minWidth: 160,
-              padding: "4px 6px",
-              borderRadius: 6,
-              border: "1px solid #e5e7eb",
-            }}
-          />
-          <input
-            title="股票名称"
-            value={singleAddName}
-            onChange={(e) => setSingleAddName(e.target.value)}
-            placeholder="名称(可选)"
-            style={{
-              minWidth: 160,
-              padding: "4px 6px",
-              borderRadius: 6,
-              border: "1px solid #e5e7eb",
-            }}
-          />
-        </div>
-        <div style={{ marginBottom: 4 }}>分类方式：</div>
-        <div style={{ display: "flex", gap: 12, marginBottom: 8 }}>
-          <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <input
-              type="radio"
-              checked={singleAddMode === "existing"}
-              onChange={() => setSingleAddMode("existing")}
-            />
-            已有(可多选)
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <input
-              type="radio"
-              checked={singleAddMode === "new"}
-              onChange={() => setSingleAddMode("new")}
-            />
-            新建
-          </label>
-        </div>
-        {singleAddMode === "existing" ? (
-          <select
-            title="选择分类(可按 Ctrl 多选)"
-            multiple
-            value={singleAddExistingCats}
-            onChange={(e) => {
-              const opts = Array.from(e.target.selectedOptions).map(
-                (o) => o.value,
-              );
-              setSingleAddExistingCats(opts);
-            }}
-            style={{
-              minWidth: 220,
-              padding: "4px 6px",
-              borderRadius: 6,
-              border: "1px solid #e5e7eb",
-              marginBottom: 8,
-            }}
-          >
-            {categories.map((c) => (
-              <option key={c.id} value={c.name}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <input
-            title="新建分类名称"
-            value={singleAddNewCatName}
-            onChange={(e) => setSingleAddNewCatName(e.target.value)}
-            placeholder="新建分类名称"
-            style={{
-              minWidth: 220,
-              padding: "4px 6px",
-              borderRadius: 6,
-              border: "1px solid #e5e7eb",
-              marginBottom: 8,
-            }}
-          />
-        )}
-        <div style={{ marginBottom: 12 }}>
-          <button
-            type="button"
-            onClick={handleSingleAdd}
-            style={{
-              padding: "4px 10px",
-              borderRadius: 999,
-              border: "1px solid #22c55e",
-              background: "#dcfce7",
-              fontSize: 12,
-            }}
-          >
-            添加
-          </button>
-        </div>
-
-        <div style={{ marginBottom: 8, fontWeight: 600 }}>批量添加</div>
-        <textarea
-          title="批量添加代码"
-          value={batchAddCodes}
-          onChange={(e) => setBatchAddCodes(e.target.value)}
-          placeholder="多个代码用逗号或换行分隔，如 600519,000001"
-          rows={3}
-          style={{
-            width: "100%",
-            padding: "4px 6px",
-            borderRadius: 6,
-            border: "1px solid #e5e7eb",
-            marginBottom: 8,
-          }}
-        />
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 8,
-            alignItems: "center",
-          }}
-        >
-          <select
-            title="批量添加分类"
-            value={batchAddCatChoice}
-            onChange={(e) => setBatchAddCatChoice(e.target.value)}
-            style={{
-              minWidth: 160,
-              padding: "4px 6px",
-              borderRadius: 6,
-              border: "1px solid #e5e7eb",
-            }}
-          >
-            <option value="默认">默认</option>
-            {categories
-              .filter((c) => c.name !== "默认")
-              .map((c) => (
-                <option key={c.id} value={c.name}>
-                  {c.name}
-                </option>
-              ))}
-            <option value="新建分类...">新建分类...</option>
-          </select>
-          {batchAddCatChoice === "新建分类..." && (
-            <input
-              title="批量新建分类名称"
-              value={batchAddNewCatName}
-              onChange={(e) => setBatchAddNewCatName(e.target.value)}
-              placeholder="新建分类名称"
+          {/* 左侧：单个添加 */}
+          <div style={{ flex: 1 }}>
+            <div style={{ marginBottom: 8, fontWeight: 600 }}>单个添加</div>
+            <div
               style={{
-                minWidth: 160,
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 8,
+                marginBottom: 8,
+              }}
+            >
+              <input
+                title="股票代码"
+                value={singleAddCode}
+                onChange={(e) => setSingleAddCode(e.target.value)}
+                placeholder="股票代码，如 600519"
+                style={{
+                  minWidth: 160,
+                  padding: "4px 6px",
+                  borderRadius: 6,
+                  border: "1px solid #e5e7eb",
+                }}
+              />
+              <input
+                title="股票名称"
+                value={singleAddName}
+                onChange={(e) => setSingleAddName(e.target.value)}
+                placeholder="名称(可选)"
+                style={{
+                  minWidth: 160,
+                  padding: "4px 6px",
+                  borderRadius: 6,
+                  border: "1px solid #e5e7eb",
+                }}
+              />
+            </div>
+            <div style={{ marginBottom: 4 }}>分类方式：</div>
+            <div style={{ display: "flex", gap: 12, marginBottom: 8 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <input
+                  type="radio"
+                  checked={singleAddMode === "existing"}
+                  onChange={() => setSingleAddMode("existing")}
+                />
+                已有(可多选)
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <input
+                  type="radio"
+                  checked={singleAddMode === "new"}
+                  onChange={() => setSingleAddMode("new")}
+                />
+                新建
+              </label>
+            </div>
+            {singleAddMode === "existing" ? (
+              <select
+                title="选择分类(可按 Ctrl 多选)"
+                multiple
+                value={singleAddExistingCats}
+                onChange={(e) => {
+                  const opts = Array.from(e.target.selectedOptions).map(
+                    (o) => o.value,
+                  );
+                  setSingleAddExistingCats(opts);
+                }}
+                style={{
+                  minWidth: 220,
+                  padding: "4px 6px",
+                  borderRadius: 6,
+                  border: "1px solid #e5e7eb",
+                  marginBottom: 8,
+                }}
+              >
+                {categories.map((c) => (
+                  <option key={c.id} value={c.name}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                title="新建分类名称"
+                value={singleAddNewCatName}
+                onChange={(e) => setSingleAddNewCatName(e.target.value)}
+                placeholder="新建分类名称"
+                style={{
+                  minWidth: 220,
+                  padding: "4px 6px",
+                  borderRadius: 6,
+                  border: "1px solid #e5e7eb",
+                  marginBottom: 8,
+                }}
+              />
+            )}
+            <div>
+              <button
+                type="button"
+                onClick={handleSingleAdd}
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: 999,
+                  border: "1px solid #22c55e",
+                  background: "#dcfce7",
+                  fontSize: 12,
+                }}
+              >
+                添加
+              </button>
+            </div>
+          </div>
+
+          {/* 右侧：批量添加 */}
+          <div style={{ flex: 1 }}>
+            <div style={{ marginBottom: 8, fontWeight: 600 }}>批量添加</div>
+            <textarea
+              title="批量添加代码"
+              value={batchAddCodes}
+              onChange={(e) => setBatchAddCodes(e.target.value)}
+              placeholder="多个代码用逗号或换行分隔，如 600519,000001"
+              rows={6}
+              style={{
+                width: "100%",
                 padding: "4px 6px",
                 borderRadius: 6,
                 border: "1px solid #e5e7eb",
+                marginBottom: 8,
               }}
             />
-          )}
-          <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <input
-              type="checkbox"
-              checked={batchAddMoveIfExists}
-              onChange={(e) => setBatchAddMoveIfExists(e.target.checked)}
-            />
-            存在则移动到此分类
-          </label>
-          <button
-            type="button"
-            onClick={handleBatchAdd}
-            style={{
-              padding: "4px 10px",
-              borderRadius: 999,
-              border: "1px solid #3b82f6",
-              background: "#dbeafe",
-              fontSize: 12,
-            }}
-          >
-            执行批量添加
-          </button>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 8,
+                alignItems: "center",
+              }}
+            >
+              <select
+                title="批量添加分类"
+                value={batchAddCatChoice}
+                onChange={(e) => setBatchAddCatChoice(e.target.value)}
+                style={{
+                  minWidth: 160,
+                  padding: "4px 6px",
+                  borderRadius: 6,
+                  border: "1px solid #e5e7eb",
+                }}
+              >
+                <option value="默认">默认</option>
+                {categories
+                  .filter((c) => c.name !== "默认")
+                  .map((c) => (
+                    <option key={c.id} value={c.name}>
+                      {c.name}
+                    </option>
+                  ))}
+                <option value="新建分类...">新建分类...</option>
+              </select>
+              {batchAddCatChoice === "新建分类..." && (
+                <input
+                  title="批量新建分类名称"
+                  value={batchAddNewCatName}
+                  onChange={(e) => setBatchAddNewCatName(e.target.value)}
+                  placeholder="新建分类名称"
+                  style={{
+                    minWidth: 160,
+                    padding: "4px 6px",
+                    borderRadius: 6,
+                    border: "1px solid #e5e7eb",
+                  }}
+                />
+              )}
+              <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={batchAddMoveIfExists}
+                  onChange={(e) => setBatchAddMoveIfExists(e.target.checked)}
+                />
+                存在则移动到此分类
+              </label>
+              <button
+                type="button"
+                onClick={handleBatchAdd}
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: 999,
+                  border: "1px solid #3b82f6",
+                  background: "#dbeafe",
+                  fontSize: 12,
+                }}
+              >
+                批量添加
+              </button>
+            </div>
+          </div>
         </div>
-      </section>
+      </CollapsibleCard>
 
       {/* 高级搜索 */}
-      <section
-        style={{
-          background: "#f9fafb",
-          borderRadius: 10,
-          padding: 12,
-          marginBottom: 12,
-          fontSize: 13,
-        }}
-      >
-        <h2 style={{ margin: "4px 0", fontSize: 16 }}>🔎 搜索</h2>
+      <CollapsibleCard title="🔎 搜索" cardId="search">
         <p style={{ margin: "4px 0 8px", fontSize: 12, color: "#6b7280" }}>
           文字为包含匹配，数字/日期支持比较条件；留空表示不筛选。
         </p>
@@ -1476,6 +1896,91 @@ export default function WatchlistPage() {
               border: "1px solid #e5e7eb",
             }}
           />
+          <input
+            title="来源TASK包含"
+            value={searchFilters.entry_task}
+            onChange={(e) =>
+              setSearchFilters((prev) => ({
+                ...prev,
+                entry_task: e.target.value,
+              }))
+            }
+            placeholder="来源TASK包含"
+            style={{
+              minWidth: 160,
+              padding: "4px 6px",
+              borderRadius: 6,
+              border: "1px solid #e5e7eb",
+            }}
+          />
+        </div>
+
+        {/* Entry Rank 条件 */}
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ marginBottom: 4, fontWeight: 500 }}>加入时Rank评分</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <select
+              title="Rank比较符号"
+              value={searchFilters.entry_rank.op}
+              onChange={(e) =>
+                setSearchFilters((prev) => ({
+                  ...prev,
+                  entry_rank: {
+                    ...prev.entry_rank,
+                    op: e.target.value as NumericFilter["op"],
+                  },
+                }))
+              }
+              style={{
+                padding: "4px 6px",
+                borderRadius: 6,
+                border: "1px solid #e5e7eb",
+              }}
+            >
+              <option value=">=">&gt;=</option>
+              <option value="<=">&lt;=</option>
+              <option value=">">&gt;</option>
+              <option value="<">&lt;</option>
+              <option value="=">=</option>
+            </select>
+            <input
+              title="Rank阈值"
+              type="number"
+              value={searchFilters.entry_rank.value}
+              onChange={(e) =>
+                setSearchFilters((prev) => ({
+                  ...prev,
+                  entry_rank: {
+                    ...prev.entry_rank,
+                    value: Number(e.target.value || "0"),
+                  },
+                }))
+              }
+              placeholder="数值"
+              style={{
+                width: 100,
+                padding: "4px 6px",
+                borderRadius: 6,
+                border: "1px solid #e5e7eb",
+              }}
+            />
+            <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <input
+                type="checkbox"
+                checked={searchFilters.entry_rank.enabled}
+                onChange={(e) =>
+                  setSearchFilters((prev) => ({
+                    ...prev,
+                    entry_rank: {
+                      ...prev.entry_rank,
+                      enabled: e.target.checked,
+                    },
+                  }))
+                }
+              />
+              启用
+            </label>
+          </div>
         </div>
 
         {/* 数值条件 */}
@@ -1712,6 +2217,8 @@ export default function WatchlistPage() {
                 name: "",
                 category: "",
                 rating: "",
+                entry_task: "",
+                entry_rank: { ...DEFAULT_NUMERIC_FILTER },
                 num: {
                   last: { ...DEFAULT_NUMERIC_FILTER },
                   pct_change: { ...DEFAULT_NUMERIC_FILTER },
@@ -1741,7 +2248,7 @@ export default function WatchlistPage() {
             清空搜索
           </button>
         </div>
-      </section>
+      </CollapsibleCard>
 
       <section
         style={{
@@ -1775,21 +2282,176 @@ export default function WatchlistPage() {
                   top: 0,
                 }}
               >
-                <th style={{ padding: 6 }}>选中</th>
-                <th style={{ padding: 6, textAlign: "left" }}>代码</th>
-                <th style={{ padding: 6, textAlign: "left" }}>名称</th>
-                <th style={{ padding: 6, textAlign: "left" }}>分类</th>
-                <th style={{ padding: 6, textAlign: "right" }}>最新价</th>
-                <th style={{ padding: 6, textAlign: "right" }}>涨幅%</th>
-                <th style={{ padding: 6, textAlign: "right" }}>开盘</th>
-                <th style={{ padding: 6, textAlign: "right" }}>昨收</th>
-                <th style={{ padding: 6, textAlign: "right" }}>最高</th>
-                <th style={{ padding: 6, textAlign: "right" }}>最低</th>
-                <th style={{ padding: 6, textAlign: "right" }}>成交量(手)</th>
-                <th style={{ padding: 6, textAlign: "right" }}>成交额</th>
-                <th style={{ padding: 6, textAlign: "left" }}>投资评级</th>
-                <th style={{ padding: 6, textAlign: "left" }}>加入时间</th>
-                <th style={{ padding: 6, textAlign: "left" }}>分析时间</th>
+                <th style={{ padding: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    ref={(el) => {
+                      if (el && allSelected) el.indeterminate = false;
+                      if (el && someSelected && !allSelected) {
+                        el.indeterminate = true;
+                      }
+                    }}
+                    onChange={(e) => toggleSelectAll(e.target.checked)}
+                  />
+                </th>
+                <th
+                  style={{ padding: 6, textAlign: "left", cursor: "pointer" }}
+                  onClick={() => toggleSort("code")}
+                >
+                  代码 {sortBy === "code" && (sortDir === "asc" ? "↑" : "↓")}
+                </th>
+                <th
+                  style={{ padding: 6, textAlign: "left", cursor: "pointer" }}
+                  onClick={() => toggleSort("name")}
+                >
+                  名称 {sortBy === "name" && (sortDir === "asc" ? "↑" : "↓")}
+                </th>
+                <th
+                  style={{ padding: 6, textAlign: "left", cursor: "pointer" }}
+                  onClick={() => toggleSort("category")}
+                >
+                  分类 {sortBy === "category" && (sortDir === "asc" ? "↑" : "↓")}
+                </th>
+                <th style={{ padding: 6, textAlign: "left" }}>来源Task</th>
+                <th
+                  style={{ padding: 6, textAlign: "right", cursor: "pointer" }}
+                  onClick={() => toggleSort("entry_rank")}
+                >
+                  Rank {sortBy === "entry_rank" && (sortDir === "asc" ? "↑" : "↓")}
+                </th>
+                <th
+                  style={{ padding: 6, textAlign: "right", cursor: "pointer" }}
+                  onClick={() => toggleSort("entry_price")}
+                >
+                  加入价格 {sortBy === "entry_price" && (sortDir === "asc" ? "↑" : "↓")}
+                </th>
+                <th
+                  style={{
+                    padding: 6,
+                    textAlign: "right",
+                    cursor: pricesRefreshed ? "pointer" : "not-allowed",
+                    color: pricesRefreshed ? "#333" : "#999",
+                  }}
+                  onClick={() => pricesRefreshed && toggleSort("last")}
+                >
+                  最新价 {sortBy === "last" && (sortDir === "asc" ? "↑" : "↓")}
+                  {!pricesRefreshed && "*"}
+                </th>
+                <th
+                  style={{
+                    padding: 6,
+                    textAlign: "right",
+                    cursor: pricesRefreshed ? "pointer" : "not-allowed",
+                    color: pricesRefreshed ? "#333" : "#999",
+                  }}
+                  onClick={() => pricesRefreshed && toggleSort("pct_change")}
+                >
+                  涨幅% {sortBy === "pct_change" && (sortDir === "asc" ? "↑" : "↓")}
+                  {!pricesRefreshed && "*"}
+                </th>
+                <th
+                  style={{
+                    padding: 6,
+                    textAlign: "right",
+                    cursor: pricesRefreshed ? "pointer" : "not-allowed",
+                    color: pricesRefreshed ? "#333" : "#999",
+                  }}
+                  onClick={() => pricesRefreshed && toggleSort("pct_since_entry")}
+                >
+                  加入以来涨幅 {sortBy === "pct_since_entry" && (sortDir === "asc" ? "↑" : "↓")}
+                  {!pricesRefreshed && "*"}
+                </th>
+                <th
+                  style={{
+                    padding: 6,
+                    textAlign: "right",
+                    cursor: pricesRefreshed ? "pointer" : "not-allowed",
+                    color: pricesRefreshed ? "#333" : "#999",
+                  }}
+                  onClick={() => pricesRefreshed && toggleSort("open")}
+                >
+                  开盘 {sortBy === "open" && (sortDir === "asc" ? "↑" : "↓")}
+                  {!pricesRefreshed && "*"}
+                </th>
+                <th
+                  style={{
+                    padding: 6,
+                    textAlign: "right",
+                    cursor: pricesRefreshed ? "pointer" : "not-allowed",
+                    color: pricesRefreshed ? "#333" : "#999",
+                  }}
+                  onClick={() => pricesRefreshed && toggleSort("prev_close")}
+                >
+                  昨收 {sortBy === "prev_close" && (sortDir === "asc" ? "↑" : "↓")}
+                  {!pricesRefreshed && "*"}
+                </th>
+                <th
+                  style={{
+                    padding: 6,
+                    textAlign: "right",
+                    cursor: pricesRefreshed ? "pointer" : "not-allowed",
+                    color: pricesRefreshed ? "#333" : "#999",
+                  }}
+                  onClick={() => pricesRefreshed && toggleSort("high")}
+                >
+                  最高 {sortBy === "high" && (sortDir === "asc" ? "↑" : "↓")}
+                  {!pricesRefreshed && "*"}
+                </th>
+                <th
+                  style={{
+                    padding: 6,
+                    textAlign: "right",
+                    cursor: pricesRefreshed ? "pointer" : "not-allowed",
+                    color: pricesRefreshed ? "#333" : "#999",
+                  }}
+                  onClick={() => pricesRefreshed && toggleSort("low")}
+                >
+                  最低 {sortBy === "low" && (sortDir === "asc" ? "↑" : "↓")}
+                  {!pricesRefreshed && "*"}
+                </th>
+                <th
+                  style={{
+                    padding: 6,
+                    textAlign: "right",
+                    cursor: pricesRefreshed ? "pointer" : "not-allowed",
+                    color: pricesRefreshed ? "#333" : "#999",
+                  }}
+                  onClick={() => pricesRefreshed && toggleSort("volume_hand")}
+                >
+                  成交量(手) {sortBy === "volume_hand" && (sortDir === "asc" ? "↑" : "↓")}
+                  {!pricesRefreshed && "*"}
+                </th>
+                <th
+                  style={{
+                    padding: 6,
+                    textAlign: "right",
+                    cursor: pricesRefreshed ? "pointer" : "not-allowed",
+                    color: pricesRefreshed ? "#333" : "#999",
+                  }}
+                  onClick={() => pricesRefreshed && toggleSort("amount")}
+                >
+                  成交额 {sortBy === "amount" && (sortDir === "asc" ? "↑" : "↓")}
+                  {!pricesRefreshed && "*"}
+                </th>
+                <th
+                  style={{ padding: 6, textAlign: "left", cursor: "pointer" }}
+                  onClick={() => toggleSort("last_rating")}
+                >
+                  投资评级 {sortBy === "last_rating" && (sortDir === "asc" ? "↑" : "↓")}
+                </th>
+                <th
+                  style={{ padding: 6, textAlign: "left", cursor: "pointer" }}
+                  onClick={() => toggleSort("created_at")}
+                >
+                  加入时间 {sortBy === "created_at" && (sortDir === "asc" ? "↑" : "↓")}
+                </th>
+                <th
+                  style={{ padding: 6, textAlign: "left", cursor: "pointer" }}
+                  onClick={() => toggleSort("last_analysis_time")}
+                >
+                  分析时间 {sortBy === "last_analysis_time" && (sortDir === "asc" ? "↑" : "↓")}
+                </th>
                 <th style={{ padding: 6 }}>历史</th>
                 <th style={{ padding: 6 }}>分析</th>
               </tr>
@@ -1820,6 +2482,15 @@ export default function WatchlistPage() {
                     </td>
                     <td style={{ padding: 6 }}>{row.name}</td>
                     <td style={{ padding: 6 }}>{row.category_names || "-"}</td>
+                    <td style={{ padding: 6, fontFamily: "monospace", color: "#6b7280" }}>
+                      {row.entry_task_id || "-"}
+                    </td>
+                    <td style={{ padding: 6, textAlign: "right", color: "#6b7280" }}>
+                      {row.entry_rank != null ? String(row.entry_rank) : "-"}
+                    </td>
+                    <td style={{ padding: 6, textAlign: "right", color: "#6b7280" }}>
+                      {row.entry_price != null ? row.entry_price.toFixed(3) : "-"}
+                    </td>
                     <td style={{ padding: 6, textAlign: "right" }}>
                       {row.last != null ? row.last.toFixed(3) : "-"}
                     </td>
@@ -1837,6 +2508,23 @@ export default function WatchlistPage() {
                     >
                       {row.pct_change != null
                         ? Number(row.pct_change).toFixed(3)
+                        : "-"}
+                    </td>
+                    <td
+                      style={{
+                        padding: 6,
+                        textAlign: "right",
+                        fontWeight: 600,
+                        color:
+                          (row.pct_since_entry ?? 0) > 0
+                            ? "#e53935"
+                            : (row.pct_since_entry ?? 0) < 0
+                              ? "#1e88e5"
+                              : "#333",
+                      }}
+                    >
+                      {row.pct_since_entry != null
+                        ? `${row.pct_since_entry.toFixed(2)}%`
                         : "-"}
                     </td>
                     <td style={{ padding: 6, textAlign: "right" }}>

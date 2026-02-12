@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import date
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ..db.pg_pool import get_conn
 import psycopg2.extras as pg_extras
-
-from ..db.pg_pool import get_conn
 
 
 _SORT_MAP = {
@@ -84,6 +83,12 @@ class WatchlistRepoPG:
         name: str,
         category_id: int,
         note: Optional[str] = None,
+        entry_price: Optional[float] = None,
+        entry_rank: Optional[int] = None,
+        entry_source: Optional[str] = None,
+        entry_task_id: Optional[str] = None,
+        entry_loop_id: Optional[int] = None,
+        entry_as_of: Optional[Union[date, str]] = None,
     ) -> int:
         """Create or upsert item, then ensure mapping to category exists.
 
@@ -94,14 +99,41 @@ class WatchlistRepoPG:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO app.watchlist_items(code, name, note)
-                    VALUES (%s,%s,%s)
+                    INSERT INTO app.watchlist_items(
+                        code,
+                        name,
+                        note,
+                        entry_price,
+                        entry_rank,
+                        entry_source,
+                        entry_task_id,
+                        entry_loop_id,
+                        entry_as_of
+                    )
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (code) DO UPDATE
                     SET name = COALESCE(EXCLUDED.name, app.watchlist_items.name),
+                        note = COALESCE(EXCLUDED.note, app.watchlist_items.note),
+                        entry_price = COALESCE(EXCLUDED.entry_price, app.watchlist_items.entry_price),
+                        entry_rank = COALESCE(EXCLUDED.entry_rank, app.watchlist_items.entry_rank),
+                        entry_source = COALESCE(EXCLUDED.entry_source, app.watchlist_items.entry_source),
+                        entry_task_id = COALESCE(EXCLUDED.entry_task_id, app.watchlist_items.entry_task_id),
+                        entry_loop_id = COALESCE(EXCLUDED.entry_loop_id, app.watchlist_items.entry_loop_id),
+                        entry_as_of = COALESCE(EXCLUDED.entry_as_of, app.watchlist_items.entry_as_of),
                         updated_at = now()
                     RETURNING id
                     """,
-                    (code, name, note),
+                    (
+                        code,
+                        name,
+                        note,
+                        entry_price,
+                        entry_rank,
+                        entry_source,
+                        entry_task_id,
+                        entry_loop_id,
+                        entry_as_of,
+                    ),
                 )
                 item_id = int(cur.fetchone()[0])
                 cur.execute(
@@ -210,6 +242,149 @@ class WatchlistRepoPG:
 
         return {"added": added, "skipped": skipped, "moved": moved}
 
+    def add_items_bulk_with_meta(
+        self,
+        *,
+        category_id: int,
+        items: List[Dict[str, Any]],
+        on_conflict: str = "ignore",
+    ) -> Dict[str, Any]:
+        """Bulk add items with entry metadata.
+
+        items: each item supports keys:
+        - code (required)
+        - name
+        - note
+        - entry_price
+        - entry_rank
+        - entry_source
+        - entry_task_id
+        - entry_loop_id
+        - entry_as_of (date or ISO string)
+
+        Returns: {added, skipped, moved, item_ids_by_code}
+        """
+
+        if not items:
+            return {"added": 0, "skipped": 0, "moved": 0, "item_ids_by_code": {}}
+
+        # normalize & de-dup by code (last wins)
+        norm_map: Dict[str, Dict[str, Any]] = {}
+        for it in items:
+            code = str((it or {}).get("code") or "").strip()
+            if not code:
+                continue
+            norm_map[code] = dict(it)
+            norm_map[code]["code"] = code
+
+        codes = list(norm_map.keys())
+        if not codes:
+            return {"added": 0, "skipped": 0, "moved": 0, "item_ids_by_code": {}}
+
+        added = skipped = moved = 0
+        upsert_rows: List[Tuple[Any, ...]] = []
+        for code in codes:
+            it = norm_map[code]
+            upsert_rows.append(
+                (
+                    code,
+                    it.get("name") or code,
+                    it.get("note"),
+                    it.get("entry_price"),
+                    it.get("entry_rank"),
+                    it.get("entry_source"),
+                    it.get("entry_task_id"),
+                    it.get("entry_loop_id"),
+                    it.get("entry_as_of"),
+                )
+            )
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                pg_extras.execute_values(
+                    cur,
+                    """
+                    INSERT INTO app.watchlist_items(
+                        code,
+                        name,
+                        note,
+                        entry_price,
+                        entry_rank,
+                        entry_source,
+                        entry_task_id,
+                        entry_loop_id,
+                        entry_as_of
+                    )
+                    VALUES %s
+                    ON CONFLICT (code) DO UPDATE
+                    SET name = COALESCE(EXCLUDED.name, app.watchlist_items.name),
+                        note = COALESCE(EXCLUDED.note, app.watchlist_items.note),
+                        entry_price = COALESCE(EXCLUDED.entry_price, app.watchlist_items.entry_price),
+                        entry_rank = COALESCE(EXCLUDED.entry_rank, app.watchlist_items.entry_rank),
+                        entry_source = COALESCE(EXCLUDED.entry_source, app.watchlist_items.entry_source),
+                        entry_task_id = COALESCE(EXCLUDED.entry_task_id, app.watchlist_items.entry_task_id),
+                        entry_loop_id = COALESCE(EXCLUDED.entry_loop_id, app.watchlist_items.entry_loop_id),
+                        entry_as_of = COALESCE(EXCLUDED.entry_as_of, app.watchlist_items.entry_as_of),
+                        updated_at = now()
+                    """,
+                    upsert_rows,
+                    page_size=1000,
+                )
+
+                cur.execute(
+                    "SELECT id, code FROM app.watchlist_items WHERE code = ANY(%s)",
+                    (codes,),
+                )
+                code_to_id = {r[1]: int(r[0]) for r in cur.fetchall()}
+                item_ids = [code_to_id[c] for c in codes if c in code_to_id]
+                if not item_ids:
+                    return {"added": 0, "skipped": len(codes), "moved": 0, "item_ids_by_code": {}}
+
+                if on_conflict == "move":
+                    cur.execute(
+                        "SELECT COUNT(DISTINCT item_id) FROM app.watchlist_item_categories "
+                        "WHERE item_id = ANY(%s)",
+                        (item_ids,),
+                    )
+                    had_mappings = int(cur.fetchone()[0])
+                    cur.execute(
+                        "DELETE FROM app.watchlist_item_categories WHERE item_id = ANY(%s)",
+                        (item_ids,),
+                    )
+                    moved = had_mappings
+                    map_rows = [(iid, category_id) for iid in item_ids]
+                    pg_extras.execute_values(
+                        cur,
+                        "INSERT INTO app.watchlist_item_categories(item_id, category_id) VALUES %s ON CONFLICT DO NOTHING",
+                        map_rows,
+                        page_size=1000,
+                    )
+                    added = len(item_ids)
+                    skipped = 0
+                else:
+                    map_rows = [(iid, category_id) for iid in item_ids]
+                    pg_extras.execute_values(
+                        cur,
+                        "INSERT INTO app.watchlist_item_categories(item_id, category_id) VALUES %s ON CONFLICT DO NOTHING",
+                        map_rows,
+                        page_size=1000,
+                    )
+                    cur.execute(
+                        "SELECT COUNT(*) FROM app.watchlist_item_categories "
+                        "WHERE item_id = ANY(%s) AND category_id = %s",
+                        (item_ids, category_id),
+                    )
+                    present = int(cur.fetchone()[0])
+                    added = present
+                    skipped = max(0, len(item_ids) - added)
+
+        return {
+            "added": added,
+            "skipped": skipped,
+            "moved": moved,
+            "item_ids_by_code": code_to_id,
+        }
+
     def update_item_category(self, ids: List[int], new_category_id: int) -> int:
         """Replace categories for given items with ONLY the new_category_id."""
 
@@ -253,12 +428,18 @@ class WatchlistRepoPG:
                     """
                     SELECT i.id, i.code, i.name, i.note, i.created_at, i.updated_at,
                            COALESCE(string_agg(DISTINCT c.name, ',' ORDER BY c.name), '') AS cat_names,
-                           COALESCE(array_agg(DISTINCT c.id), ARRAY[]::BIGINT[]) AS cat_ids
+                           COALESCE(array_agg(DISTINCT c.id), ARRAY[]::BIGINT[]) AS cat_ids,
+                           i.entry_price,
+                           i.entry_rank,
+                           i.entry_source,
+                           i.entry_task_id,
+                           i.entry_loop_id,
+                           i.entry_as_of
                       FROM app.watchlist_items i
                  LEFT JOIN app.watchlist_item_categories w ON w.item_id = i.id
                  LEFT JOIN app.watchlist_categories c ON c.id = w.category_id
                      WHERE i.code = %s
-                  GROUP BY i.id, i.code, i.name, i.note, i.created_at, i.updated_at
+                  GROUP BY i.id, i.code, i.name, i.note, i.created_at, i.updated_at, i.entry_price, i.entry_rank, i.entry_source, i.entry_task_id, i.entry_loop_id, i.entry_as_of
                     """,
                     (code,),
                 )
@@ -274,6 +455,12 @@ class WatchlistRepoPG:
                     "updated_at": r[5].isoformat() if r[5] else None,
                     "category_names": r[6],
                     "category_ids": list(r[7]) if r[7] is not None else [],
+                    "entry_price": r[8],
+                    "entry_rank": r[9],
+                    "entry_source": r[10],
+                    "entry_task_id": r[11],
+                    "entry_loop_id": r[12],
+                    "entry_as_of": r[13].isoformat() if r[13] else None,
                 }
 
     def get_items_by_codes(self, codes: List[str]) -> List[Dict[str, Any]]:
@@ -286,12 +473,18 @@ class WatchlistRepoPG:
                     """
                     SELECT i.id, i.code, i.name, i.note, i.created_at, i.updated_at,
                            COALESCE(string_agg(DISTINCT c.name, ',' ORDER BY c.name), '') AS cat_names,
-                           COALESCE(array_agg(DISTINCT c.id), ARRAY[]::BIGINT[]) AS cat_ids
+                           COALESCE(array_agg(DISTINCT c.id), ARRAY[]::BIGINT[]) AS cat_ids,
+                           i.entry_price,
+                           i.entry_rank,
+                           i.entry_source,
+                           i.entry_task_id,
+                           i.entry_loop_id,
+                           i.entry_as_of
                       FROM app.watchlist_items i
                  LEFT JOIN app.watchlist_item_categories w ON w.item_id = i.id
                  LEFT JOIN app.watchlist_categories c ON c.id = w.category_id
                      WHERE i.code = ANY(%s)
-                  GROUP BY i.id, i.code, i.name, i.note, i.created_at, i.updated_at
+                  GROUP BY i.id, i.code, i.name, i.note, i.created_at, i.updated_at, i.entry_price, i.entry_rank, i.entry_source, i.entry_task_id, i.entry_loop_id, i.entry_as_of
                     """,
                     (codes,),
                 )
@@ -306,6 +499,12 @@ class WatchlistRepoPG:
                             "updated_at": r[5].isoformat() if r[5] else None,
                             "category_names": r[6],
                             "category_ids": list(r[7]) if r[7] is not None else [],
+                            "entry_price": r[8],
+                            "entry_rank": r[9],
+                            "entry_source": r[10],
+                            "entry_task_id": r[11],
+                            "entry_loop_id": r[12],
+                            "entry_as_of": r[13].isoformat() if r[13] else None,
                         }
                     )
         return out
@@ -342,7 +541,13 @@ class WatchlistRepoPG:
                            COALESCE(array_agg(DISTINCT c.id), ARRAY[]::BIGINT[]) AS cat_ids,
                            a.analysis_date AS last_analysis_time,
                            a.rating AS last_rating,
-                           a.conclusion AS last_conclusion
+                           a.conclusion AS last_conclusion,
+                           i.entry_price,
+                           i.entry_rank,
+                           i.entry_source,
+                           i.entry_task_id,
+                           i.entry_loop_id,
+                           i.entry_as_of
                       FROM app.watchlist_items i
                  LEFT JOIN app.watchlist_item_categories w ON w.item_id = i.id
                  LEFT JOIN app.watchlist_categories c ON c.id = w.category_id
@@ -356,7 +561,7 @@ class WatchlistRepoPG:
                          LIMIT 1
                    ) a ON TRUE
                    {where}
-                  GROUP BY i.id, i.code, i.name, i.note, i.created_at, i.updated_at, a.analysis_date, a.rating, a.conclusion
+                  GROUP BY i.id, i.code, i.name, i.note, i.created_at, i.updated_at, a.analysis_date, a.rating, a.conclusion, i.entry_price, i.entry_rank, i.entry_source, i.entry_task_id, i.entry_loop_id, i.entry_as_of
                   ORDER BY {order_expr} {dir_kw} NULLS LAST, i.code ASC
                   OFFSET %s LIMIT %s
                 """
@@ -376,6 +581,12 @@ class WatchlistRepoPG:
                             "last_analysis_time": r[8].isoformat() if r[8] else None,
                             "last_rating": r[9],
                             "last_conclusion": r[10],
+                            "entry_price": r[11],
+                            "entry_rank": r[12],
+                            "entry_source": r[13],
+                            "entry_task_id": r[14],
+                            "entry_loop_id": r[15],
+                            "entry_as_of": r[16].isoformat() if r[16] else None,
                         }
                     )
         return {"total": total, "items": items}

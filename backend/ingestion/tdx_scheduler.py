@@ -71,7 +71,9 @@ DEFAULT_INGEST_TUSHARE_ANNS_D = ROOT_DIR / "scripts" / "ingest_tushare_anns_init
 DEFAULT_DOWNLOAD_ANNS_PDF = ROOT_DIR / "scripts" / "download_anns_pdf.py"
 DEFAULT_INGEST_TUSHARE_INDEX_BASIC = ROOT_DIR / "scripts" / "ingest_tushare_index_basic.py"
 DEFAULT_INGEST_TUSHARE_INDEX_DAILY = ROOT_DIR / "scripts" / "ingest_tushare_index_daily.py"
+DEFAULT_INGEST_TUSHARE_CYQ = ROOT_DIR / "scripts" / "ingest_tushare_cyq.py"
 DEFAULT_SYNC_SYMBOL_DIM = ROOT_DIR / "scripts" / "sync_symbol_dim_from_tdx.py"
+DEFAULT_INGEST_XTQUANT_PERSHARE_INDEX = ROOT_DIR / "scripts" / "ingest_xtquant_pershare_index.py"
 
 
 def _ensure_directory(path: Path) -> None:
@@ -217,10 +219,13 @@ class TDXScheduler:
                 print(f"[TDX Scheduler] initial refresh failed (DB unavailable?): {exc}")
             self._schedule_thread = threading.Thread(target=self._run_loop, name="tdx-schedule", daemon=True)
             self._schedule_thread.start()
-            self._refresh_thread = threading.Thread(
-                target=self._refresh_loop, args=(refresh_interval,), name="tdx-refresh", daemon=True
-            )
-            self._refresh_thread.start()
+            if int(refresh_interval) > 0:
+                self._refresh_thread = threading.Thread(
+                    target=self._refresh_loop, args=(int(refresh_interval),), name="tdx-refresh", daemon=True
+                )
+                self._refresh_thread.start()
+            else:
+                self._refresh_thread = None
 
     def shutdown(self, wait: bool = False) -> None:
         self._stop_event.set()
@@ -239,6 +244,8 @@ class TDXScheduler:
             time.sleep(1)
 
     def _refresh_loop(self, interval: int) -> None:
+        if int(interval) <= 0:
+            return
         while not self._stop_event.is_set():
             time.sleep(interval)
             try:
@@ -584,9 +591,15 @@ class TDXScheduler:
         # Tushare anns_d 公告数据使用独立脚本（两种模式共用）
         if dataset == "anns_d" and mode in {"init", "incremental"}:
             return DEFAULT_INGEST_TUSHARE_ANNS_D
+        # Tushare cyq_perf 和 cyq_chips 筹码数据使用独立脚本（两种模式共用）
+        if dataset in {"cyq_perf", "cyq_chips"} and mode in {"init", "incremental"}:
+            return DEFAULT_INGEST_TUSHARE_CYQ
         # 公告 PDF 下载任务 anns_pdf：使用独立脚本，mode 目前仅使用 init 语义（单次扫描批处理）
         if dataset == "anns_pdf" and mode in {"init", "incremental"}:
             return DEFAULT_DOWNLOAD_ANNS_PDF
+        # xtquant pershare_index 使用独立脚本（init + incremental）
+        if dataset == "xtquant_pershare_index" and mode in {"init", "incremental"}:
+            return DEFAULT_INGEST_XTQUANT_PERSHARE_INDEX
         # Weekly aggregation uses dedicated script, both modes
         if dataset == "kline_weekly" and mode in {"init", "incremental"}:
             return DEFAULT_INGEST_WEEKLY_FROM_DAILY
@@ -676,6 +689,68 @@ class TDXScheduler:
                     args += ["--truncate"]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
+            elif dataset == "daily_basic":
+                # Tushare daily_basic 增量：起止日期 + job_id
+                args += ["--mode", "incremental"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
+            elif dataset == "bak_basic":
+                # Tushare bak_basic 增量：起止日期 + job_id
+                args += ["--mode", "incremental"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
+            elif dataset == "stock_st":
+                # Tushare stock_st 增量：起止日期 + job_id
+                args += ["--mode", "incremental"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
+            elif dataset == "anns_d":
+                # Tushare anns_d 增量：起止日期 + job_id + 可选 batch_sleep
+                args += ["--mode", "incremental"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("batch_sleep"):
+                    args += ["--batch-sleep", str(options["batch_sleep"])]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
+            elif dataset in {"cyq_perf", "cyq_chips"}:
+                # Tushare cyq_perf / cyq_chips 增量：起止日期 + job_id + 可选 batch_sleep
+                args += ["--mode", "incremental", "--dataset", dataset]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("batch_sleep"):
+                    args += ["--batch-sleep", str(options["batch_sleep"])]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
+            elif dataset == "xtquant_pershare_index":
+                # xtquant PershareIndex 增量：起止日期 + workers + job_id
+                args += ["--mode", "incremental"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("batch_sleep"):
+                    args += ["--batch-sleep", str(options["batch_sleep"])]
+                if options.get("workers"):
+                    args += ["--workers", str(options["workers"])]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
             elif dataset == "kline_weekly":
                 # Weekly aggregation incremental: just pass mode + date range + job id
                 args += ["--mode", "incremental"]
@@ -724,9 +799,12 @@ class TDXScheduler:
                     args += ["--truncate"]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
-            elif dataset in {"stock_st", "bak_basic", "daily_basic", "anns_d"}:
-                # Tushare stock_st / bak_basic / daily_basic / anns_d 全量：需要起止日期 + 可选 truncate/batch_sleep + job_id
+            elif dataset in {"stock_st", "bak_basic", "daily_basic", "anns_d", "cyq_perf", "cyq_chips"}:
+                # Tushare stock_st / bak_basic / daily_basic / anns_d / cyq_perf / cyq_chips 全量：需要起止日期 + 可选 truncate/batch_sleep + job_id
                 args += ["--mode", "init"]
+                # cyq_perf 和 cyq_chips 需要显式指定 --dataset
+                if dataset in {"cyq_perf", "cyq_chips"}:
+                    args += ["--dataset", dataset]
                 if options.get("start_date"):
                     args += ["--start-date", str(options["start_date"])]
                 if options.get("end_date"):
@@ -753,6 +831,21 @@ class TDXScheduler:
                     args += ["--index-markets", markets_val]
                 if options.get("batch_sleep"):
                     args += ["--batch-sleep", str(options["batch_sleep"])]
+                if options.get("job_id"):
+                    args += ["--job-id", str(options["job_id"])]
+            elif dataset == "xtquant_pershare_index":
+                # xtquant PershareIndex 全量：起止日期 + workers + truncate + job_id
+                args += ["--mode", "init"]
+                if options.get("start_date"):
+                    args += ["--start-date", str(options["start_date"])]
+                if options.get("end_date"):
+                    args += ["--end-date", str(options["end_date"])]
+                if options.get("batch_sleep"):
+                    args += ["--batch-sleep", str(options["batch_sleep"])]
+                if options.get("truncate"):
+                    args += ["--truncate"]
+                if options.get("workers"):
+                    args += ["--workers", str(options["workers"])]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
             elif dataset == "anns_pdf":
@@ -908,9 +1001,10 @@ class TDXScheduler:
         # Append session-level bulk tuning flag by default unless explicitly disabled。
         # 对于部分与数据库批量写入无关的辅助脚本（例如 anns_pdf 的文件下载，
         # 以及无需会话级调优的简单全量任务 index_basic / index_daily），不需要也不支持该参数，
+        # cyq_perf 和 cyq_chips 也不支持该参数。
         # 这里显式跳过。
         use_bulk = options.get("bulk_session_tune")
-        if dataset not in {"anns_pdf", "index_basic", "index_daily"}:
+        if dataset not in {"anns_pdf", "index_basic", "index_daily", "cyq_perf", "cyq_chips"}:
             if use_bulk is None or bool(use_bulk):
                 args.append("--bulk-session-tune")
         

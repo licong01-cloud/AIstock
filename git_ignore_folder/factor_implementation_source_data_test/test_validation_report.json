@@ -1,0 +1,214 @@
+{
+  "file": "F:\\Dev\\AIstock\\git_ignore_folder\\factor_implementation_source_data_test\\test_static_factors.parquet",
+  "total_rows": 93676,
+  "total_columns": 77,
+  "instruments": 4684,
+  "date_range": {
+    "start": "2025-11-03 00:00:00",
+    "end": "2025-11-28 00:00:00",
+    "trading_days": 20
+  },
+  "columns_by_source": {
+    "daily_basic": {
+      "count": 16,
+      "columns": [
+        "db_close",
+        "db_turnover_rate",
+        "db_turnover_rate_f",
+        "db_volume_ratio",
+        "db_pe",
+        "db_pe_ttm",
+        "db_pb",
+        "db_ps",
+        "db_ps_ttm",
+        "db_dv_ratio",
+        "db_dv_ttm",
+        "db_total_share",
+        "db_float_share",
+        "db_free_share",
+        "db_total_mv",
+        "db_circ_mv"
+      ]
+    },
+    "moneyflow": {
+      "count": 32,
+      "columns": [
+        "mf_sm_buy_vol",
+        "mf_sm_buy_amt",
+        "mf_sm_sell_vol",
+        "mf_sm_sell_amt",
+        "mf_md_buy_vol",
+        "mf_md_buy_amt",
+        "mf_md_sell_vol",
+        "mf_md_sell_amt",
+        "mf_lg_buy_vol",
+        "mf_lg_buy_amt",
+        "mf_lg_sell_vol",
+        "mf_lg_sell_amt",
+        "mf_elg_buy_vol",
+        "mf_elg_buy_amt",
+        "mf_elg_sell_vol",
+        "mf_elg_sell_amt",
+        "mf_net_vol",
+        "mf_net_amt",
+        "mf_total_net_amt",
+        "mf_total_net_vol",
+        "mf_total_net_amt_ratio",
+        "mf_total_net_vol_ratio",
+        "mf_main_net_amt",
+        "mf_main_net_vol",
+        "mf_main_net_amt_ratio",
+        "mf_main_net_vol_ratio",
+        "mf_elg_net_amt",
+        "mf_elg_net_vol",
+        "mf_elg_net_amt_ratio",
+        "mf_elg_net_vol_ratio",
+        "mf_elg_share_in_main_amt",
+        "mf_elg_share_in_main_vol"
+      ]
+    },
+    "bak_basic": {
+      "count": 15,
+      "columns": [
+        "bb_pe_dyn",
+        "bb_total_assets",
+        "bb_liquid_assets",
+        "bb_fixed_assets",
+        "bb_reserved",
+        "bb_reserved_pershare",
+        "bb_eps",
+        "bb_bvps",
+        "bb_undp",
+        "bb_per_undp",
+        "bb_rev_yoy",
+        "bb_profit_yoy",
+        "bb_gpr",
+        "bb_npr",
+        "bb_holder_num"
+      ]
+    },
+    "cyq_perf": {
+      "count": 9,
+      "columns": [
+        "cp_his_low",
+        "cp_his_high",
+        "cp_cost_5pct",
+        "cp_cost_15pct",
+        "cp_cost_50pct",
+        "cp_cost_85pct",
+        "cp_cost_95pct",
+        "cp_weight_avg",
+        "cp_winner_rate"
+      ]
+    },
+    "other": {
+      "count": 5,
+      "columns": [
+        "value_pe_inv",
+        "value_pb_inv",
+        "size_log_mv",
+        "liquidity_turnover",
+        "liquidity_vol_ratio"
+      ]
+    }
+  },
+  "null_check": {
+    "bb_pe_dyn": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "bb_total_assets": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "bb_liquid_assets": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "bb_fixed_assets": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "bb_reserved": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "bb_reserved_pershare": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "bb_eps": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "bb_bvps": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "bb_undp": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "bb_per_undp": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "bb_rev_yoy": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "bb_profit_yoy": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "bb_gpr": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "bb_npr": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "bb_holder_num": {
+      "null_count": 160,
+      "null_percent": 0.17080148597292796
+    },
+    "cp_his_low": {
+      "null_count": 357,
+      "null_percent": 0.3811008155770955
+    },
+    "cp_his_high": {
+      "null_count": 357,
+      "null_percent": 0.3811008155770955
+    },
+    "cp_cost_5pct": {
+      "null_count": 357,
+      "null_percent": 0.3811008155770955
+    },
+    "cp_cost_15pct": {
+      "null_count": 357,
+      "null_percent": 0.3811008155770955
+    },
+    "cp_cost_50pct": {
+      "null_count": 357,
+      "null_percent": 0.3811008155770955
+    },
+    "cp_cost_85pct": {
+      "null_count": 357,
+      "null_percent": 0.3811008155770955
+    },
+    "cp_cost_95pct": {
+      "null_count": 357,
+      "null_percent": 0.3811008155770955
+    },
+    "cp_weight_avg": {
+      "null_count": 357,
+      "null_percent": 0.3811008155770955
+    },
+    "cp_winner_rate": {
+      "null_count": 357,
+      "null_percent": 0.3811008155770955
+    }
+  },
+  "issues": []
+}

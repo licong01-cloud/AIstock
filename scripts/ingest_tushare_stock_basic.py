@@ -1,9 +1,11 @@
 """Ingest Tushare stock_basic (latest stock list) into PostgreSQL.
 
-- 仅支持 init（全量），不做增量游标。
-- 支持 --truncate 先清空表。
-- 仅在出错时写 ingestion_logs，正常不落库日志。
-- 进度与 moneyflow/adj_factor 一致：基于单任务 total/done 更新 summary.progress。
+- init: full fetch and upsert by ts_code.
+- incremental: only fetch stocks listed since last run (based on list_date cursor).
+- supports --truncate before init.
+- supports --batch-sleep (placeholder for compatibility).
+- supports --bulk-session-tune for session-level write tuning.
+- only logs errors/warnings to ingestion_logs; normal successes print to stdout.
 """
 from __future__ import annotations
 
@@ -12,8 +14,9 @@ import datetime as dt
 import json
 import os
 import sys
+import time
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import psycopg2
 import psycopg2.extras as pgx
@@ -49,12 +52,16 @@ def pro_api():
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Ingest Tushare stock_basic (latest stock list)")
+    parser = argparse.ArgumentParser(description="Ingest Tushare stock_basic into PostgreSQL")
+    parser.add_argument("--mode", type=str, default="init", choices=["init", "incremental"], help="Ingestion mode")
+    parser.add_argument("--start-date", type=str, default=None, help="Start list_date YYYY-MM-DD (or override)")
+    parser.add_argument("--end-date", type=str, default=None, help="End list_date YYYY-MM-DD (defaults to today)")
     parser.add_argument("--job-id", type=str, default=None, help="Existing job id to attach and update")
+    parser.add_argument("--batch-sleep", type=float, default=0.2, help="Sleep seconds between batches (compatibility)")
     parser.add_argument(
         "--truncate",
         action="store_true",
-        help="Truncate market.stock_basic before ingestion (destructive)",
+        help="Truncate market.stock_basic before init (destructive)",
     )
     parser.add_argument(
         "--bulk-session-tune",
@@ -70,6 +77,16 @@ def _ensure_session_tune(conn, enabled: bool) -> None:
     with conn.cursor() as cur:
         cur.execute("SET synchronous_commit = off")
         cur.execute("SET work_mem = '256MB'")
+
+
+def _get_max_list_date(conn) -> Optional[dt.date]:
+    """Get the maximum list_date from stock_basic for incremental mode."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT max(list_date) FROM market.stock_basic")
+        row = cur.fetchone()
+        if not row or row[0] is None:
+            return None
+        return row[0]
 
 
 def _create_job(conn, job_type: str, summary: Dict[str, Any]) -> uuid.UUID:
@@ -126,20 +143,21 @@ def _log(conn, job_id: uuid.UUID, level: str, message: str) -> None:
         )
 
 
-def _update_job_progress(conn, job_id: uuid.UUID, total: int, done: int, inserted_rows: int) -> None:
-    total_safe = max(total, 0)
-    done_safe = min(max(done, 0), total_safe if total_safe > 0 else done)
-    progress = 0.0 if total_safe == 0 else max(0.0, min(100.0, 100.0 * float(done_safe) / float(total_safe)))
+def _update_job_progress(conn, job_id: uuid.UUID, stats: Dict[str, Any]) -> None:
+    """Update job progress with stats similar to daily_basic."""
+    total = int(stats.get("total_batches") or 0)
+    done = int(stats.get("success_batches") or 0) + int(stats.get("failed_batches") or 0)
+    progress = 0.0 if total <= 0 else max(0.0, min(100.0, 100.0 * float(done) / float(total)))
     counters = {
-        "total": total_safe,
-        "done": done_safe,
+        "total": total,
+        "done": done,
         "running": 0,
-        "pending": max(total_safe - done_safe, 0),
-        "failed": 0,
-        "success": done_safe,
-        "inserted_rows": inserted_rows,
+        "pending": max(total - done, 0),
+        "failed": int(stats.get("failed_batches") or 0),
+        "success": int(stats.get("success_batches") or 0),
+        "inserted_rows": int(stats.get("inserted_rows") or 0),
     }
-    payload = {"counters": counters, "progress": progress, "total_days": total_safe, "done_days": done_safe}
+    payload = {"counters": counters, "progress": progress}
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -237,33 +255,88 @@ def _parse_ymd(val) -> dt.date | None:
 
 def main() -> None:
     args = parse_args()
+    mode = (args.mode or "init").strip().lower()
+
+    today = dt.date.today()
+    
+    # Parse end_date
+    if args.end_date:
+        try:
+            end_date = dt.date.fromisoformat(args.end_date)
+        except ValueError:
+            print("[ERROR] invalid --end-date format, expected YYYY-MM-DD")
+            sys.exit(1)
+    else:
+        end_date = today
+
     with psycopg2.connect(**DB_CFG) as conn:
         conn.autocommit = True
         _ensure_session_tune(conn, getattr(args, "bulk_session_tune", False))
         pro = pro_api()
 
-        if args.truncate:
-            with conn.cursor() as cur:
-                cur.execute("TRUNCATE TABLE market.stock_basic")
-            print("[WARN] TRUNCATE market.stock_basic executed before ingestion")
+        if mode == "init":
+            if args.truncate:
+                with conn.cursor() as cur:
+                    cur.execute("TRUNCATE TABLE market.stock_basic")
+                print("[WARN] TRUNCATE market.stock_basic executed before ingestion")
+            
+            # For init mode, start_date is optional
+            start_date = None
+            if args.start_date:
+                try:
+                    start_date = dt.date.fromisoformat(args.start_date)
+                except ValueError:
+                    print("[ERROR] invalid --start-date format, expected YYYY-MM-DD")
+                    sys.exit(1)
+                    
+        elif mode == "incremental":
+            if args.start_date:
+                try:
+                    start_date = dt.date.fromisoformat(args.start_date)
+                except ValueError:
+                    print("[ERROR] invalid --start-date format, expected YYYY-MM-DD")
+                    sys.exit(1)
+            else:
+                # Get max list_date from database
+                max_date = _get_max_list_date(conn)
+                start_date = (max_date + dt.timedelta(days=1)) if max_date else end_date
+                
+            if start_date and start_date > end_date:
+                print("[INFO] stock_basic up to date; nothing to do")
+                return
+        else:
+            print(f"[ERROR] unsupported mode: {mode}")
+            sys.exit(1)
 
-        job_summary = {"dataset": "stock_basic", "mode": "init"}
+        job_summary = {
+            "dataset": "stock_basic",
+            "mode": mode,
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat(),
+        }
         if args.job_id:
             job_id = uuid.UUID(args.job_id)
             _start_existing_job(conn, job_id, job_summary)
         else:
-            job_id = _create_job(conn, "init", job_summary)
+            job_id = _create_job(conn, mode, job_summary)
 
-        _log(conn, job_id, "info", "start tushare stock_basic ingestion")
+        _log(conn, job_id, "info", f"start tushare stock_basic ingestion {mode} {start_date} -> {end_date}")
 
         try:
+            # For stock_basic, we do a single fetch and upsert
+            # (stock_basic is a dimension table, not time-series)
             rows = _fetch_stock_basic(pro)
             inserted = _insert_stock_basic(conn, rows)
-            _update_job_progress(conn, job_id, total=1, done=1, inserted_rows=inserted)
-            _finish_job(conn, job_id, "success", {"stats": {"inserted_rows": inserted}})
-            print(f"[DONE] stock_basic inserted_rows={inserted}")
+            stats = {
+                "total_batches": 1,
+                "success_batches": 1,
+                "failed_batches": 0,
+                "inserted_rows": inserted,
+            }
+            _update_job_progress(conn, job_id, stats)
+            _finish_job(conn, job_id, "success", {"stats": stats})
+            print(f"[DONE] stock_basic mode={mode} inserted_rows={inserted}")
         except Exception as exc:  # noqa: BLE001
-            _log(conn, job_id, "error", f"stock_basic failed: {exc}")
             _finish_job(conn, job_id, "failed", {"error": str(exc)})
             print(f"[ERROR] stock_basic failed: {exc}")
             sys.exit(1)

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """QMT (miniQMT) client abstraction for AIstock.
 
 Design goals:
@@ -8,6 +6,8 @@ Design goals:
 - Allow future evolution into a dedicated gateway process without touching callers.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 import os
@@ -15,6 +15,7 @@ from pathlib import Path
 import sys
 import threading
 import time
+import logging
 
 
 _GLOBAL_QMT_CLIENT: Optional["BaseQMTClient"] = None
@@ -60,12 +61,8 @@ def _call_with_timeout(fn, timeout_s: float):
     if "error" in error_holder:
         raise error_holder["error"]
     return result_holder.get("value")
-
-
 class QMTNotAvailableError(RuntimeError):
     """Raised when xtquant is missing or QMT connection is unavailable."""
-
-
 class BaseQMTClient:
     """Minimal client interface used by API layer."""
 
@@ -84,6 +81,36 @@ class BaseQMTClient:
     def get_positions(self) -> List[Dict[str, Any]]:
         raise NotImplementedError
 
+    def get_local_data_range(self, stock_code: str, period: str) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    def download_history_data(
+        self, 
+        stock_list: List[str], 
+        period: str, 
+        start_time: str = "", 
+        end_time: str = "",
+        task_id: str | None = None
+    ) -> None:
+        raise NotImplementedError
+
+    def download_financial_data(self, stock_list: List[str], table_list: List[str], task_id: str | None = None) -> None:
+        raise NotImplementedError
+
+    def get_task_progress(self, task_id: str) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    def update_task_status(self, task_id: str, status_data: Dict[str, Any]) -> None:
+        raise NotImplementedError
+
+    def get_latest_trading_day(self) -> str:
+        raise NotImplementedError
+
+    def get_stock_list_in_sector(self, sector_name: str) -> List[str]:
+        raise NotImplementedError
+
+    def get_trading_calendar(self, market: str = "SH") -> List[str]:
+        raise NotImplementedError
 
 
 def get_qmt_client_singleton() -> BaseQMTClient:
@@ -93,8 +120,6 @@ def get_qmt_client_singleton() -> BaseQMTClient:
     if _GLOBAL_QMT_CLIENT is None:
         _GLOBAL_QMT_CLIENT = build_qmt_client_from_env()
     return _GLOBAL_QMT_CLIENT
-
-
 class SimulatorQMTClient(BaseQMTClient):
     """Fallback simulator: returns zero assets and empty positions."""
 
@@ -104,6 +129,8 @@ class SimulatorQMTClient(BaseQMTClient):
         self._account_id = account_id
         self._mode = mode or "SIM"
         self._reason = reason
+        self._active_tasks: Dict[str, Dict[str, Any]] = {}
+        self._task_lock = threading.Lock()
 
     def connect(self) -> Tuple[bool, str]:
         self._connected = False
@@ -137,6 +164,42 @@ class SimulatorQMTClient(BaseQMTClient):
     def get_positions(self) -> List[Dict[str, Any]]:
         return []
 
+    def get_local_data_range(self, stock_code: str, period: str) -> Dict[str, Any]:
+        return {"start": None, "end": None, "count": 0}
+
+    def download_history_data(
+        self, 
+        stock_list: List[str], 
+        period: str, 
+        start_time: str = "", 
+        end_time: str = "",
+        task_id: str | None = None
+    ) -> None:
+        pass
+
+    def download_financial_data(self, stock_list: List[str], table_list: List[str], task_id: str | None = None) -> None:
+        pass
+
+    def get_latest_trading_day(self) -> str:
+        import datetime
+        return datetime.date.today().strftime("%Y%m%d")
+
+    def get_task_progress(self, task_id: str) -> Dict[str, Any]:
+        with self._task_lock:
+            return self._active_tasks.get(task_id, {})
+
+    def update_task_status(self, task_id: str, status_data: Dict[str, Any]) -> None:
+        with self._task_lock:
+            if task_id not in self._active_tasks:
+                self._active_tasks[task_id] = {}
+            self._active_tasks[task_id].update(status_data)
+            self._active_tasks[task_id]["updated_at"] = time.time()
+
+    def get_stock_list_in_sector(self, sector_name: str) -> List[str]:
+        return []
+
+    def get_trading_calendar(self, market: str = "SH") -> List[str]:
+        return []
 
 class XtQuantQMTClient(BaseQMTClient):
     """xtquant-backed QMT client.
@@ -172,6 +235,8 @@ Notes:
         self._last_probe_ts: float = 0.0
         self._last_status_connected: Optional[bool] = None
         self._last_autoconnect_ts: float = 0.0
+        self._active_tasks: Dict[str, Dict[str, Any]] = {}
+        self._task_lock = threading.Lock()
 
     def _resolve_xtquant_dir(self) -> Optional[Path]:
         """Resolve xtquant directory.
@@ -592,6 +657,275 @@ Notes:
             except Exception as e:  # noqa: BLE001
                 raise QMTNotAvailableError(f"读取成交失败: {e!r}") from e
 
+    def get_local_data_range(self, stock_code: str, period: str) -> Dict[str, Any]:
+        with self._lock:
+            # 即使未连接交易端，只要 xtdata 路径正确也可以查询本地数据
+            try:
+                self._ensure_xtquant()
+                from xtquant import xtdata
+                
+                # xtdata.get_local_data 返回的是 dict {field: DataFrame}
+                # 我们只需要知道时间范围，所以取任意一个字段即可
+                field_list = [] if period == "tick" else ["close"]
+                res = xtdata.get_local_data(
+                    field_list=field_list,
+                    stock_list=[stock_code],
+                    period=period,
+                    count=-1
+                )
+                
+                import logging
+                logger = logging.getLogger(self.__class__.__name__)
+                logger.info(f"get_local_data 返回: {res}")
+                
+                if not res:
+                    logger.warning(f"get_local_data 返回空: {res}")
+                    return {"start": None, "end": None, "count": 0}
+
+                if period == "tick":
+                    tick_data = res.get(stock_code)
+                    if tick_data is None:
+                        logger.warning(f"tick 数据不存在: {res}")
+                        return {"start": None, "end": None, "count": 0}
+                    if getattr(tick_data, "size", 0) == 0:
+                        logger.warning("tick 数据为空")
+                        return {"start": None, "end": None, "count": 0}
+
+                    times = None
+                    if getattr(tick_data, "dtype", None) is not None and tick_data.dtype.names:
+                        if "time" in tick_data.dtype.names:
+                            times = tick_data["time"]
+                    if times is None:
+                        if len(getattr(tick_data, "shape", ())) > 1:
+                            times = tick_data[:, 0]
+                        else:
+                            times = tick_data
+                    if times is None or len(times) == 0:
+                        logger.warning("tick 时间列解析失败")
+                        return {"start": None, "end": None, "count": 0}
+
+                    logger.info(f"数据范围: {times[0]} ~ {times[-1]}, 共 {len(times)} 条")
+                    return {
+                        "start": str(times[0]),
+                        "end": str(times[-1]),
+                        "count": len(times)
+                    }
+
+                df = None
+                if "close" in res:
+                    df = res["close"]
+                elif stock_code in res:
+                    stock_value = res.get(stock_code)
+                    if isinstance(stock_value, dict):
+                        if "close" in stock_value:
+                            df = stock_value.get("close")
+                        elif stock_value:
+                            df = next(iter(stock_value.values()))
+                    else:
+                        df = stock_value
+
+                if df is None:
+                    logger.warning(f"get_local_data 返回无法解析数据结构: {res}")
+                    return {"start": None, "end": None, "count": 0}
+                if hasattr(df, "shape"):
+                    logger.info(f"DataFrame shape: {df.shape}, columns: {getattr(df, 'columns', [])}")
+
+                if hasattr(df, "empty") and df.empty:
+                    logger.warning("DataFrame 为空")
+                    return {"start": None, "end": None, "count": 0}
+
+                times = None
+                if hasattr(df, "columns"):
+                    columns = df.columns.tolist()
+                    if columns:
+                        times = columns
+                if times is None and hasattr(df, "index"):
+                    index = df.index.tolist()
+                    if index:
+                        times = index
+                if times is None and hasattr(df, "__len__"):
+                    times = list(df)
+                if not times:
+                    logger.warning("DataFrame 没有可用时间列")
+                    return {"start": None, "end": None, "count": 0}
+
+                logger.info(f"数据范围: {times[0]} ~ {times[-1]}, 共 {len(times)} 条")
+
+                return {
+                    "start": str(times[0]),
+                    "end": str(times[-1]),
+                    "count": len(times)
+                }
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(self.__class__.__name__)
+                logger.error(f"查询本地数据范围失败 ({stock_code}, {period}): {e}", exc_info=True)
+                return {"start": None, "end": None, "count": 0}
+
+    def download_history_data(
+        self, 
+        stock_list: List[str], 
+        period: str, 
+        start_time: str = "", 
+        end_time: str = "",
+        task_id: str | None = None
+    ) -> None:
+        with self._lock:
+            self._ensure_xtquant()
+            from xtquant import xtdata
+            
+            total_count = len(stock_list)
+            finished_count = 0
+
+            def on_progress(data: Any) -> None:
+                nonlocal finished_count
+                if not task_id:
+                    return
+                
+                # xtdata 回调数据通常是一个字典，包含当前处理的股票信息
+                # 这里的逻辑是每完成一个股票，进度加一
+                with self._task_lock:
+                    finished_count += 1
+                    progress = int((finished_count / total_count) * 100) if total_count > 0 else 100
+                    self._active_tasks[task_id] = {
+                        "status": "downloading",
+                        "progress": progress,
+                        "finished": finished_count,
+                        "total": total_count,
+                        "last_stock": data.get("stock_code") if isinstance(data, dict) else None,
+                        "updated_at": time.time()
+                    }
+
+            # 初始化任务状态
+            if task_id:
+                with self._task_lock:
+                    self._active_tasks[task_id] = {
+                        "status": "pending",
+                        "progress": 0,
+                        "finished": 0,
+                        "total": total_count,
+                        "updated_at": time.time()
+                    }
+
+            try:
+                # 使用 download_history_data2 支持批量下载和回调
+                xtdata.download_history_data2(
+                    stock_list=stock_list,
+                    period=period,
+                    start_time=start_time,
+                    end_time=end_time,
+                    callback=on_progress
+                )
+                
+                # 标记完成
+                if task_id:
+                    with self._task_lock:
+                        self._active_tasks[task_id]["status"] = "success"
+                        self._active_tasks[task_id]["progress"] = 100
+                        self._active_tasks[task_id]["updated_at"] = time.time()
+            except Exception as e:
+                if task_id:
+                    with self._task_lock:
+                        self._active_tasks[task_id]["status"] = "failed"
+                        self._active_tasks[task_id]["error"] = str(e)
+                        self._active_tasks[task_id]["updated_at"] = time.time()
+                raise
+
+    def download_financial_data(self, stock_list: List[str], table_list: List[str], task_id: str | None = None) -> None:
+        with self._lock:
+            self._ensure_xtquant()
+            from xtquant import xtdata
+            
+            if task_id:
+                with self._task_lock:
+                    self._active_tasks[task_id] = {
+                        "status": "downloading",
+                        "progress": 20,
+                        "updated_at": time.time()
+                    }
+
+            try:
+                # 财务数据下载（xtquant 暂不支持财务数据的细粒度进度回调）
+                xtdata.download_financial_data(
+                    stock_list=stock_list,
+                    table_list=table_list
+                )
+                
+                if task_id:
+                    with self._task_lock:
+                        self._active_tasks[task_id]["status"] = "success"
+                        self._active_tasks[task_id]["progress"] = 100
+                        self._active_tasks[task_id]["updated_at"] = time.time()
+            except Exception as e:
+                if task_id:
+                    with self._task_lock:
+                        self._active_tasks[task_id]["status"] = "failed"
+                        self._active_tasks[task_id]["error"] = str(e)
+                        self._active_tasks[task_id]["updated_at"] = time.time()
+                raise
+
+    def get_task_progress(self, task_id: str) -> Dict[str, Any]:
+        with self._task_lock:
+            # 返回任务进度，如果没有则返回 404 语义的空字典
+            return self._active_tasks.get(task_id, {})
+
+    def update_task_status(self, task_id: str, status_data: Dict[str, Any]) -> None:
+        with self._task_lock:
+            if task_id not in self._active_tasks:
+                self._active_tasks[task_id] = {}
+            self._active_tasks[task_id].update(status_data)
+            self._active_tasks[task_id]["updated_at"] = time.time()
+
+    def get_latest_trading_day(self) -> str:
+        """获取最新交易日，带有超时保护."""
+        import datetime
+        with self._lock:
+            try:
+                self._ensure_xtquant()
+                from xtquant import xtdata
+                
+                # 尝试获取交易日历 (3秒超时)
+                try:
+                    calendar = _call_with_timeout(lambda: xtdata.get_trading_calendar("SH"), timeout_s=3.0)
+                    if calendar:
+                        return str(calendar[-1])
+                except Exception:
+                    pass
+                
+                # 尝试获取最新行情的时间 (3秒超时)
+                try:
+                    snapshot = _call_with_timeout(lambda: xtdata.get_full_tick(["000001.SH"]), timeout_s=3.0)
+                    if snapshot and "000001.SH" in snapshot:
+                        last_time = snapshot["000001.SH"].get("timetag", "")
+                        if last_time:
+                            return str(last_time[:8])
+                except Exception:
+                    pass
+                
+                return datetime.date.today().strftime("%Y%m%d")
+            except Exception as e:
+                logger = logging.getLogger(self.__class__.__name__)
+                logger.error(f"获取最新交易日失败: {e}")
+                return datetime.date.today().strftime("%Y%m%d")
+
+    def get_stock_list_in_sector(self, sector_name: str) -> List[str]:
+        with self._lock:
+            try:
+                self._ensure_xtquant()
+                from xtquant import xtdata
+                return xtdata.get_stock_list_in_sector(sector_name) or []
+            except Exception:
+                return []
+
+    def get_trading_calendar(self, market: str = "SH") -> List[str]:
+        with self._lock:
+            try:
+                self._ensure_xtquant()
+                from xtquant import xtdata
+                return xtdata.get_trading_calendar(market) or []
+            except Exception:
+                return []
+
     def place_order(
         self,
         stock_code: str,
@@ -606,8 +940,6 @@ Notes:
             self._require_connected()
             try:
                 self._ensure_xtquant()
-                from xtquant import xtconstant  # type: ignore
-
                 order_id = self._trader.order_stock(
                     self._account,
                     stock_code,
@@ -813,5 +1145,3 @@ Env keys (existing + new optional):
         userdata_path=userdata_path,
         session_id=session_id,
     )
-
-

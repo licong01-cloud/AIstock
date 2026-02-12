@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(python:*)",
+      "Bash(where:*)",
+      "Bash(conda info:*)",
+      "Bash(findstr:*)",
+      "Bash(C:\\\\Users\\\\lc999\\\\miniconda3\\\\envs\\\\aistock\\\\python.exe:*)",
+      "Bash(cmd /c:*)",
+      "Bash(f:/Dev/AIstock/.venv/Scripts/python.exe:*)",
+      "Bash(f:/Dev/AIstock/.venv/Scripts/pip.exe list:*)",
+      "Bash(dir:*)",
+      "Bash(f:/Dev/AIstock/.venv/Scripts/pip.exe show:*)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)",
+      "Bash(git -C \"f:/Dev/AIstock\" diff backend/services/rdagent_task_sync_service.py)",
+      "Bash(git -C \"f:/Dev/AIstock\" status backend/services/rdagent_task_sync_service.py)",
+      "Bash(git -C \"f:/Dev/AIstock\" log --oneline -5)",
+      "Bash(git -C \"f:/Dev/AIstock\" status --short backend/services/)",
+      "Bash(git -C \"f:/Dev/AIstock\" log --all --oneline --since=\"2026-02-07\" --until=\"2026-02-11\")",
+      "Bash(git -C \"f:/Dev/AIstock\" log --all --oneline -20)",
+      "Bash(f:/Dev/AIstock/.venv/Scripts/pip.exe install:*)",
+      "Bash(pip install:*)"
+    ]
+  }
+}

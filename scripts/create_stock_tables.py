@@ -54,26 +54,107 @@ def main() -> None:
         cur.execute("SELECT create_hypertable('market.stock_st','ann_date', if_not_exists => TRUE);")
 
         # bak_basic：历史股票列表，时序表（按交易日）
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS market.bak_basic (
-                trade_date DATE NOT NULL, -- 交易日期 YYYYMMDD
-                ts_code TEXT NOT NULL,
-                name TEXT,                -- 名称
-                industry TEXT,            -- 行业
-                area TEXT,                -- 地域
-                pe NUMERIC,               -- 市盈率（TTM）
-                pb NUMERIC,               -- 市净率
-                total_share NUMERIC,      -- 总股本(万股)
-                float_share NUMERIC,      -- 流通股本(万股)
-                free_share NUMERIC,       -- 自由流通股本(万股)
-                total_mv NUMERIC,         -- 总市值(万元)
-                circ_mv NUMERIC,          -- 流通市值(万元)
-                PRIMARY KEY (trade_date, ts_code)
+        # 字段说明依据 Tushare 文档 https://tushare.pro/document/2?doc_id=262
+        # 如果表已存在，则添加缺失字段；否则创建新表
+        new_columns = [
+            ("total_assets", "NUMERIC", "总资产（亿）"),
+            ("liquid_assets", "NUMERIC", "流动资产（亿）"),
+            ("fixed_assets", "NUMERIC", "固定资产（亿）"),
+            ("reserved", "NUMERIC", "公积金"),
+            ("reserved_pershare", "NUMERIC", "每股公积金"),
+            ("eps", "NUMERIC", "每股收益"),
+            ("bvps", "NUMERIC", "每股净资产"),
+            ("list_date", "DATE", "上市日期"),
+            ("undp", "NUMERIC", "未分配利润"),
+            ("per_undp", "NUMERIC", "每股未分配利润"),
+            ("rev_yoy", "NUMERIC", "收入同比（%）"),
+            ("profit_yoy", "NUMERIC", "利润同比（%）"),
+            ("gpr", "NUMERIC", "毛利率（%）"),
+            ("npr", "NUMERIC", "净利润率（%）"),
+            ("holder_num", "BIGINT", "股东人数"),
+        ]
+        
+        # 检查表是否存在
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'market' AND table_name = 'bak_basic'
             );
-            """
-        )
-        cur.execute("SELECT create_hypertable('market.bak_basic','trade_date', if_not_exists => TRUE);")
+        """)
+        table_exists = cur.fetchone()[0]
+        
+        if not table_exists:
+            # 创建新表
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS market.bak_basic (
+                    trade_date DATE NOT NULL,    -- 交易日期
+                    ts_code TEXT NOT NULL,       -- TS股票代码
+                    name TEXT,                   -- 股票名称
+                    industry TEXT,               -- 行业
+                    area TEXT,                   -- 地域
+                    pe_dyn NUMERIC,              -- 动态市盈率
+                    total_assets NUMERIC,        -- 总资产（亿）
+                    liquid_assets NUMERIC,       -- 流动资产（亿）
+                    fixed_assets NUMERIC,        -- 固定资产（亿）
+                    reserved NUMERIC,            -- 公积金
+                    reserved_pershare NUMERIC,   -- 每股公积金
+                    eps NUMERIC,                 -- 每股收益
+                    bvps NUMERIC,                -- 每股净资产
+                    list_date DATE,              -- 上市日期
+                    undp NUMERIC,                -- 未分配利润
+                    per_undp NUMERIC,            -- 每股未分配利润
+                    rev_yoy NUMERIC,             -- 收入同比（%）
+                    profit_yoy NUMERIC,          -- 利润同比（%）
+                    gpr NUMERIC,                 -- 毛利率（%）
+                    npr NUMERIC,                 -- 净利润率（%）
+                    holder_num BIGINT,           -- 股东人数
+                    PRIMARY KEY (trade_date, ts_code)
+                );
+                """
+            )
+            cur.execute("SELECT create_hypertable('market.bak_basic','trade_date', if_not_exists => TRUE);")
+        else:
+            # 表已存在，添加缺失字段
+            for col_name, col_type, col_desc in new_columns:
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_schema = 'market' AND table_name = 'bak_basic' AND column_name = %s
+                    );
+                """, (col_name,))
+                col_exists = cur.fetchone()[0]
+                if not col_exists:
+                    cur.execute(f"ALTER TABLE market.bak_basic ADD COLUMN {col_name} {col_type};")
+                    print(f"  Added column: {col_name} ({col_type})")
+        
+        # 为所有字段添加/更新注释
+        comments_bak_basic = {
+            "trade_date": "交易日期",
+            "ts_code": "TS股票代码",
+            "name": "股票名称",
+            "industry": "行业",
+            "area": "地域",
+            "pe_dyn": "动态市盈率",
+            "total_assets": "总资产（亿）",
+            "liquid_assets": "流动资产（亿）",
+            "fixed_assets": "固定资产（亿）",
+            "reserved": "公积金",
+            "reserved_pershare": "每股公积金",
+            "eps": "每股收益",
+            "bvps": "每股净资产",
+            "list_date": "上市日期",
+            "undp": "未分配利润",
+            "per_undp": "每股未分配利润",
+            "rev_yoy": "收入同比（%）",
+            "profit_yoy": "利润同比（%）",
+            "gpr": "毛利率（%）",
+            "npr": "净利润率（%）",
+            "holder_num": "股东人数",
+        }
+        for col, desc in comments_bak_basic.items():
+            cur.execute(f"COMMENT ON COLUMN market.bak_basic.{col} IS %s;", (desc,))
+        cur.execute("COMMENT ON TABLE market.bak_basic IS 'Tushare bak_basic 历史股票列表（按交易日）';")
 
         # moneyflow_ts：Tushare 个股资金流向（moneyflow 接口），按交易日
         cur.execute(

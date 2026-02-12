@@ -1,0 +1,71 @@
+############################################
+# 语言与输出约定（请勿删除或修改本段注释）
+# - 所有面向用户的自然语言解释、反馈、评审意见等，默认使用「简体中文」。
+# - 如需给出英文术语，可在中文中夹带英文，例如：动量（Momentum）、波动率（Volatility）。
+# - 后续在调整具体内容时，请保留本段注释，以保证输出语言风格的一致性。
+############################################
+
+qlib_factor_interface_core_constraints: |-
+  Your python code should follow the interface to better interact with the user's system.
+  Your python code should contain the following part: the import part, the function part, and the main part. You should write a main function name: "calculate_{function_name}" and call this function in "if __name__ == __main__" part. Don't write any try-except block in your python code. The user will catch the exception message and provide the feedback to you.
+  User will write your python code into a python file and execute the file directly with "python {your_file_name}.py". You should calculate the factor values and save the result into a HDF5(H5) file named "result.h5" in the same directory as your python file. The result file is a HDF5(H5) file containing a pandas dataframe. The index of the dataframe is the "datetime" and "instrument", and the single column name is the factor name,and the value is the factor value. The result file should be saved in the same directory as your python file.
+
+  【统一因子脚本模板（必须遵守，LLM 只能在中间区域写逻辑）】
+  - 因子脚本应严格采用如下整体骨架，其中 **仅允许在标记的"FACTOR COMPUTATION AREA"内编写/修改代码**.
+    - 在该区域内，你可以根据本轮假设自由设计因子与信号逻辑，不局限于简单的动量/波动率/量价关系；
+    - 说明：Alpha158/AE/daily_basic 等特征通常在 Qlib 训练/回测侧由 DataHandler/YAML 进行拼接并作为模型输入；单个 `factor.py` 的运行时输入默认只保证 `daily_pv.h5`，若需要使用 `daily_basic/moneyflow` 等静态字段，必须显式读取并 join `static_factors.parquet`；
+    - 本轮实验不强制策略必须依赖"量价因子"，重点在于保证数据格式与索引 contract 正确的前提下，充分释放模型与因子的演进空间。
+
+    ```python
+    import pandas as pd
+    import numpy as np
+
+    def calculate_{function_name}():
+        """根据给定因子定义计算因子值，并写入 result.h5"""
+
+        # 1. 读取数据并按索引排序（索引应为 MultiIndex(datetime, instrument)）
+        df = pd.read_hdf("daily_pv.h5", key="data").sort_index()
+
+        # 2. 确保索引按 (datetime, instrument) 排序
+        df = df.sort_index()
+
+        # 3. ==== BEGIN FACTOR COMPUTATION AREA ====
+        # 在此区域内，你可以自由使用 df 计算出一个或多个与 df.index 对齐的 Series/列：
+        # - 不允许修改 df.index 结构
+        # - 只允许对 df.columns / 中间 Series 做变换
+        # - 你可以根据当前任务需要，灵活组合价格、成交量、AE 因子、daily_basic 等多种信号，探索不同的因子形态与策略风格；
+        # - 不要求本区域实现的因子一定是"简单收益率"或"纯量价指标"，可以是截面打分、分位数信号、非线性组合等。
+
+        # 示意：以下只是一个占位示例，请在实际任务中用你的真实逻辑完全替换掉该 Series 的构造。
+        series = df["close"] / df["close"].groupby(level="instrument").shift(1) - 1
+
+        # 对于 groupby+rolling 的典型模式，请使用：
+        # s = df["x"].groupby(level="instrument").rolling(window=K, min_periods=K).func(...)
+        # s = s.reset_index(level=0, drop=True)  # 恢复为与 df.index 对齐
+
+        # ==== END FACTOR COMPUTATION AREA ====
+
+        # 4. 构造结果 DataFrame：索引必须与 df.index 完全一致
+        result_df = pd.DataFrame(index=df.index)
+        result_df["{function_name}"] = series.astype("float32")
+
+        # 5. 索引名称必须直接继承 df.index.names，禁止手写 ["datetime", "instrument"]
+        result_df.index.names = df.index.names
+
+        # 6. 按索引排序并写入 result.h5
+        result_df = result_df.sort_index()
+        result_df.to_hdf("result.h5", key="data", mode="w")
+
+        return result_df
+
+    if __name__ == "__main__":
+        calculate_{function_name}()
+    ```
+  - **严禁** 在上述模板之外随意增删"读取/输出/索引处理"代码:
+    - 不要重写 `result_df = pd.DataFrame(index=df.index)` 这一行的模式；
+    - 不要手工写 `result_df.index.names = ["datetime", "instrument"]`，而是始终使用 `df.index.names`；
+    - 不要对结果进行 `reset_index(drop=True)` 或 `droplevel` / `swaplevel` 等会改变索引结构的操作.
+  - 所有因子实现都应遵守统一的 **输出 contract**：
+    - `index`：MultiIndex(`datetime`, `instrument`)，与 `df.index` 完全一致并已排序；
+    - `columns`：一列或多列 `float32` 类型的因子列；
+    - 输出文件固定为当前目录下的 `result.h5`，由 Qlib 上游统一加载.

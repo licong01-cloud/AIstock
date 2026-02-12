@@ -41,10 +41,12 @@ from .config import (
 )
 from .exporter import (
     ExportResult,
+    QlibBakBasicExporter,
     QlibBoardDailyExporter,
     QlibBoardExporter,
     QlibBoardIndexExporter,
     QlibBoardMemberExporter,
+    QlibCyqPerfExporter,
     QlibDailyBasicExporter,
     QlibDailyExporter,
     QlibFactorExporter,
@@ -194,6 +196,8 @@ class FieldMapExportResponse(BaseModel):
     written_h5: dict[str, int]
     has_daily_basic: bool
     has_moneyflow: bool
+    has_bak_basic: bool
+    has_cyq_perf: bool
 
 
 # NOTE: FastAPI builds request body TypeAdapters while registering routes.
@@ -215,6 +219,8 @@ _board_index_exporter = QlibBoardIndexExporter()
 _board_member_exporter = QlibBoardMemberExporter()
 _factor_exporter = QlibFactorExporter()
 _moneyflow_exporter = QlibMoneyflowExporter()
+_bak_basic_exporter = QlibBakBasicExporter()
+_cyq_perf_exporter = QlibCyqPerfExporter()
 
 
 @router.post("/api/v1/qlib/snapshots/daily", response_model=DailySnapshotResponse)
@@ -312,6 +318,15 @@ async def create_daily_basic_snapshot(body: DailyBasicSnapshotRequest) -> DailyB
             exclude_st=body.exclude_st,
             exclude_delisted_or_paused=body.exclude_delisted_or_paused,
         )
+        # 导出成功后自动触发字段映射生成
+        try:
+            export_field_map_for_snapshot(
+                snapshot_id=body.snapshot_id,
+                write_to_h5=True,
+            )
+        except Exception as e:
+            # 字段映射生成失败不影响主导出流程
+            print(f"[WARN] Auto field map generation failed: {e}")
         return DailyBasicSnapshotResponse.from_result(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -337,11 +352,204 @@ async def create_moneyflow_snapshot(body: MoneyflowSnapshotRequest) -> Moneyflow
             exclude_st=body.exclude_st,
             exclude_delisted_or_paused=body.exclude_delisted_or_paused,
         )
+        # 导出成功后自动触发字段映射生成
+        try:
+            export_field_map_for_snapshot(
+                snapshot_id=body.snapshot_id,
+                write_to_h5=True,
+            )
+        except Exception as e:
+            # 字段映射生成失败不影响主导出流程
+            print(f"[WARN] Auto field map generation failed: {e}")
         return MoneyflowSnapshotResponse.from_result(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         # 打印完整堆栈，便于诊断内部错误（如 list index out of range 等）
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+class BakBasicSnapshotRequest(BaseModel):
+    snapshot_id: str = Field(..., description="Snapshot ID，作为导出目录名（与日线/分钟共用目录）")
+    start: date = Field(..., description="开始日期，YYYY-MM-DD")
+    end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
+    exchanges: Optional[List[str]] = Field(
+        None,
+        description="可选，按交易所过滤：支持 'sh', 'sz', 'bj'；为空表示不过滤（全市场）",
+    )
+    exclude_st: bool = Field(
+        False,
+        description="是否排除所有在 stock_st 中出现过的股票（曾经 / 当前 ST）",
+    )
+    exclude_delisted_or_paused: bool = Field(
+        False,
+        description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
+    )
+
+    @field_validator("snapshot_id")
+    @classmethod
+    def _bak_basic_snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
+        """确保 snapshot_id 非空且无首尾空格."""
+        v2 = v.strip()
+        if not v2:
+            raise ValueError("snapshot_id 不能为空")
+        return v2
+
+    @model_validator(mode="after")
+    def _bak_basic_end_not_before_start(self):  # noqa: D401, N805
+        """确保 end >= start."""
+        if self.end < self.start:
+            raise ValueError("end 日期不能早于 start")
+        return self
+
+
+class BakBasicSnapshotResponse(BaseModel):
+    snapshot_id: str
+    freq: str
+    start: date
+    end: date
+    ts_codes: List[str]
+    rows: int
+
+    @classmethod
+    def from_result(cls, result: ExportResult) -> "BakBasicSnapshotResponse":
+        return cls(
+            snapshot_id=result.snapshot_id,
+            freq=result.freq,
+            start=result.start,
+            end=result.end,
+            ts_codes=result.ts_codes,
+            rows=result.rows,
+        )
+
+
+@router.post("/api/v1/qlib/snapshots/bak_basic", response_model=BakBasicSnapshotResponse)
+async def create_bak_basic_snapshot(body: BakBasicSnapshotRequest) -> BakBasicSnapshotResponse:
+    """触发一次 Tushare bak_basic 历史股票列表数据 Snapshot 导出.
+
+    生成的文件位于指定 snapshot 目录下的 bak_basic.h5，索引为
+    MultiIndex(datetime, instrument)，列名为 bb_* 系列字段。
+    """
+
+    try:
+        result = _bak_basic_exporter.export_full(
+            snapshot_id=body.snapshot_id,
+            start=body.start,
+            end=body.end,
+            exchanges=body.exchanges,
+            exclude_st=body.exclude_st,
+            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+        )
+        # 导出成功后自动触发字段映射生成
+        print(f"[DEBUG] BakBasic export success for {body.snapshot_id}, auto-triggering field map...")
+        try:
+            from .field_map_service import export_field_map_for_snapshot
+            fm_result = export_field_map_for_snapshot(
+                snapshot_id=body.snapshot_id,
+                write_to_h5=True,
+            )
+            print(f"[DEBUG] Field map generated: {fm_result.get('rows')} rows")
+        except Exception as e:
+            import traceback
+            print(f"[WARN] Auto field map failed: {e}")
+            traceback.print_exc()
+        return BakBasicSnapshotResponse.from_result(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+class CyqPerfSnapshotRequest(BaseModel):
+    snapshot_id: str = Field(..., description="Snapshot ID，作为导出目录名（与日线/分钟共用目录）")
+    start: date = Field(..., description="开始日期，YYYY-MM-DD")
+    end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
+    exchanges: Optional[List[str]] = Field(
+        None,
+        description="可选，按交易所过滤：支持 'sh', 'sz', 'bj'；为空表示不过滤（全市场）",
+    )
+    exclude_st: bool = Field(
+        False,
+        description="是否排除所有在 stock_st 中出现过的股票（曾经 / 当前 ST）",
+    )
+    exclude_delisted_or_paused: bool = Field(
+        False,
+        description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
+    )
+
+    @field_validator("snapshot_id")
+    @classmethod
+    def _cyq_perf_snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
+        """确保 snapshot_id 非空且无首尾空格."""
+        v2 = v.strip()
+        if not v2:
+            raise ValueError("snapshot_id 不能为空")
+        return v2
+
+    @model_validator(mode="after")
+    def _cyq_perf_end_not_before_start(self):  # noqa: D401, N805
+        """确保 end >= start."""
+        if self.end < self.start:
+            raise ValueError("end 日期不能早于 start")
+        return self
+
+
+class CyqPerfSnapshotResponse(BaseModel):
+    snapshot_id: str
+    freq: str
+    start: date
+    end: date
+    ts_codes: List[str]
+    rows: int
+
+    @classmethod
+    def from_result(cls, result: ExportResult) -> "CyqPerfSnapshotResponse":
+        return cls(
+            snapshot_id=result.snapshot_id,
+            freq=result.freq,
+            start=result.start,
+            end=result.end,
+            ts_codes=result.ts_codes,
+            rows=result.rows,
+        )
+
+
+@router.post("/api/v1/qlib/snapshots/cyq_perf", response_model=CyqPerfSnapshotResponse)
+async def create_cyq_perf_snapshot(body: CyqPerfSnapshotRequest) -> CyqPerfSnapshotResponse:
+    """触发一次 Tushare cyq_perf 每日筹码及胜率数据 Snapshot 导出.
+
+    生成的文件位于指定 snapshot 目录下的 cyq_perf.h5，索引为
+    MultiIndex(datetime, instrument)，列名为 cp_* 系列字段。
+    """
+
+    try:
+        result = _cyq_perf_exporter.export_full(
+            snapshot_id=body.snapshot_id,
+            start=body.start,
+            end=body.end,
+            exchanges=body.exchanges,
+            exclude_st=body.exclude_st,
+            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+        )
+        # 导出成功后自动触发字段映射生成
+        print(f"[DEBUG] CyqPerf export success for {body.snapshot_id}, auto-triggering field map...")
+        try:
+            from .field_map_service import export_field_map_for_snapshot
+            fm_result = export_field_map_for_snapshot(
+                snapshot_id=body.snapshot_id,
+                write_to_h5=True,
+            )
+            print(f"[DEBUG] Field map generated: {fm_result.get('rows')} rows")
+        except Exception as e:
+            import traceback
+            print(f"[WARN] Auto field map failed: {e}")
+            traceback.print_exc()
+        return CyqPerfSnapshotResponse.from_result(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -422,6 +630,8 @@ class BinExportResponse(BaseModel):
 try:
     DailySnapshotRequest.model_rebuild()
     DailyBasicSnapshotRequest.model_rebuild()
+    BakBasicSnapshotRequest.model_rebuild()
+    CyqPerfSnapshotRequest.model_rebuild()
     MoneyflowSnapshotRequest.model_rebuild()
     FieldMapExportRequest.model_rebuild()
     MinuteSnapshotRequest.model_rebuild()
@@ -1595,6 +1805,8 @@ class SnapshotInfo(BaseModel):
     has_factor_data: bool = Field(False, description="是否包含 RD-Agent 因子数据")
     has_moneyflow: bool = Field(False, description="是否包含资金流向数据")
     has_daily_basic: bool = Field(False, description="是否包含 daily_basic 指标数据")
+    has_bak_basic: bool = Field(False, description="是否包含 bak_basic 历史股票数据")
+    has_cyq_perf: bool = Field(False, description="是否包含 cyq_perf 筹码胜率数据")
     meta: Optional[Dict[str, Any]] = Field(None, description="meta.json 内容（如存在）")
     created_at: Optional[str] = Field(None, description="创建时间（从 meta.json 读取）")
 
@@ -1627,6 +1839,8 @@ async def list_snapshots() -> SnapshotListResponse:
         has_board_member = (item / "boards" / "board_member.h5").exists()
         has_moneyflow = (item / "moneyflow.h5").exists()
         has_daily_basic = (item / "daily_basic.h5").exists()
+        has_bak_basic = (item / "bak_basic.h5").exists()
+        has_cyq_perf = (item / "cyq_perf.h5").exists()
 
         meta: Optional[Dict[str, Any]] = None
         created_at: Optional[str] = None
@@ -1650,6 +1864,8 @@ async def list_snapshots() -> SnapshotListResponse:
                 has_factor_data=has_daily_pv,  # daily_pv.h5 同时用于日线和因子数据
                 has_moneyflow=has_moneyflow,
                 has_daily_basic=has_daily_basic,
+                has_bak_basic=has_bak_basic,
+                has_cyq_perf=has_cyq_perf,
                 meta=meta,
                 created_at=created_at,
             )
@@ -2469,3 +2685,206 @@ async def preview_qlib_data(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# =============================================================================
+# H5 文件导出 CSV API（支持 daily_basic、bak_basic、cyq_perf、moneyflow 等）
+# =============================================================================
+
+
+@router.get("/api/v1/qlib/snapshots/{snapshot_id}/csv")
+async def export_h5_to_csv(
+    snapshot_id: str,
+    data_type: str = "daily_basic",
+):
+    """将指定的 H5 数据文件导出为 CSV 格式下载。
+
+    支持的数据类型：
+    - daily_basic: daily_basic.h5
+    - bak_basic: bak_basic.h5
+    - cyq_perf: cyq_perf.h5
+    - moneyflow: moneyflow.h5
+    - daily: daily_pv.h5
+    - minute: minute_1min.h5
+    - board_daily: boards/board_daily.h5
+    - board_index: boards/board_index.h5
+    - board_member: boards/board_member.h5
+
+    Args:
+        snapshot_id: Snapshot ID
+        data_type: 数据类型标识
+
+    Returns:
+        CSV 文件下载响应
+    """
+    sid = (snapshot_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="snapshot_id 不能为空")
+
+    # 数据类型到文件名的映射
+    file_map = {
+        "daily_basic": "daily_basic.h5",
+        "bak_basic": "bak_basic.h5",
+        "cyq_perf": "cyq_perf.h5",
+        "moneyflow": "moneyflow.h5",
+        "daily": "daily_pv.h5",
+        "minute": "minute_1min.h5",
+        "board_daily": "boards/board_daily.h5",
+        "board_index": "boards/board_index.h5",
+        "board_member": "boards/board_member.h5",
+    }
+
+    if data_type not in file_map:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的数据类型: {data_type}。支持类型: {', '.join(file_map.keys())}"
+        )
+
+    root = QLIB_SNAPSHOT_ROOT.resolve()
+    snap_dir = (root / sid).resolve()
+
+    # 安全检查：确保路径在允许的根目录内
+    if root not in snap_dir.parents and snap_dir != root:
+        raise HTTPException(status_code=400, detail="invalid snapshot_id")
+
+    if not snap_dir.exists() or not snap_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"Snapshot not found: {sid}")
+
+    h5_path = snap_dir / file_map[data_type]
+    if not h5_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"数据文件不存在: {file_map[data_type]}"
+        )
+
+    try:
+        # 读取 H5 文件
+        df = pd.read_hdf(h5_path, key="data")
+
+        if df.empty:
+            raise HTTPException(status_code=400, detail="H5 文件数据为空")
+
+        # 重置索引，将 MultiIndex 转换为普通列
+        if isinstance(df.index, pd.MultiIndex):
+            df_reset = df.reset_index()
+        else:
+            df_reset = df.copy()
+
+        # 处理 datetime 列，确保可序列化
+        for col in df_reset.columns:
+            if pd.api.types.is_datetime64_any_dtype(df_reset[col]):
+                df_reset[col] = df_reset[col].astype(str)
+
+        # 生成 CSV 到内存
+        csv_buffer = io.StringIO()
+        df_reset.to_csv(csv_buffer, index=False, encoding="utf-8")
+        csv_content = csv_buffer.getvalue()
+
+        # 返回 CSV 下载响应
+        filename = f"{sid}_{data_type}.csv"
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Type": "text/csv; charset=utf-8",
+        }
+
+        return StreamingResponse(
+            io.BytesIO(csv_content.encode("utf-8")),
+            media_type="text/csv",
+            headers=headers,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"CSV 导出失败: {exc}")
+
+
+@router.get("/api/v1/qlib/snapshots/{snapshot_id}/csv/preview")
+async def preview_h5_as_csv(
+    snapshot_id: str,
+    data_type: str = "daily_basic",
+    limit: int = 100,
+):
+    """预览 H5 数据的前 N 行（JSON 格式，用于前端预览）。
+
+    Args:
+        snapshot_id: Snapshot ID
+        data_type: 数据类型标识
+        limit: 返回的最大行数（默认 100）
+
+    Returns:
+        JSON 格式的数据预览
+    """
+    sid = (snapshot_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="snapshot_id 不能为空")
+
+    file_map = {
+        "daily_basic": "daily_basic.h5",
+        "bak_basic": "bak_basic.h5",
+        "cyq_perf": "cyq_perf.h5",
+        "moneyflow": "moneyflow.h5",
+        "daily": "daily_pv.h5",
+        "minute": "minute_1min.h5",
+        "board_daily": "boards/board_daily.h5",
+        "board_index": "boards/board_index.h5",
+        "board_member": "boards/board_member.h5",
+    }
+
+    if data_type not in file_map:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的数据类型: {data_type}"
+        )
+
+    root = QLIB_SNAPSHOT_ROOT.resolve()
+    snap_dir = (root / sid).resolve()
+
+    if root not in snap_dir.parents and snap_dir != root:
+        raise HTTPException(status_code=400, detail="invalid snapshot_id")
+
+    h5_path = snap_dir / file_map[data_type]
+    if not h5_path.exists():
+        raise HTTPException(status_code=404, detail=f"数据文件不存在: {file_map[data_type]}")
+
+    try:
+        df = pd.read_hdf(h5_path, key="data")
+
+        if df.empty:
+            return {
+                "snapshot_id": sid,
+                "data_type": data_type,
+                "rows": 0,
+                "columns": [],
+                "preview": [],
+            }
+
+        # 重置索引
+        if isinstance(df.index, pd.MultiIndex):
+            df_reset = df.reset_index()
+        else:
+            df_reset = df.copy()
+
+        # 处理 datetime 列
+        for col in df_reset.columns:
+            if pd.api.types.is_datetime64_any_dtype(df_reset[col]):
+                df_reset[col] = df_reset[col].astype(str)
+
+        # 限制行数
+        preview_df = df_reset.head(limit)
+
+        return {
+            "snapshot_id": sid,
+            "data_type": data_type,
+            "total_rows": len(df),
+            "preview_rows": len(preview_df),
+            "columns": list(preview_df.columns),
+            "preview": preview_df.to_dict(orient="records"),
+        }
+
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"预览失败: {exc}")

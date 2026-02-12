@@ -205,13 +205,22 @@ def _fetch_bak_basic_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]]:
                     "name": row.get("name"),
                     "industry": row.get("industry"),
                     "area": row.get("area"),
-                    "pe": row.get("pe"),
-                    "pb": row.get("pb"),
-                    "total_share": row.get("total_share"),
-                    "float_share": row.get("float_share"),
-                    "free_share": row.get("free_share"),
-                    "total_mv": row.get("total_mv"),
-                    "circ_mv": row.get("circ_mv"),
+                    "pe_dyn": row.get("pe"),
+                    "total_assets": row.get("total_assets"),
+                    "liquid_assets": row.get("liquid_assets"),
+                    "fixed_assets": row.get("fixed_assets"),
+                    "reserved": row.get("reserved"),
+                    "reserved_pershare": row.get("reserved_pershare"),
+                    "eps": row.get("eps"),
+                    "bvps": row.get("bvps"),
+                    "list_date": _parse_ymd(row.get("list_date")),
+                    "undp": row.get("undp"),
+                    "per_undp": row.get("per_undp"),
+                    "rev_yoy": row.get("rev_yoy"),
+                    "profit_yoy": row.get("profit_yoy"),
+                    "gpr": row.get("gpr"),
+                    "npr": row.get("npr"),
+                    "holder_num": row.get("holder_num"),
                 }
             )
         if len(df.index) < limit:
@@ -225,11 +234,17 @@ def _upsert_bak_basic(conn, rows: List[Dict[str, Any]]) -> int:
     if not rows:
         return 0
     sql = (
-        "INSERT INTO market.bak_basic (trade_date, ts_code, name, industry, area, pe, pb, total_share, float_share, free_share, total_mv, circ_mv) "
+        "INSERT INTO market.bak_basic (trade_date, ts_code, name, industry, area, pe_dyn, "
+        "total_assets, liquid_assets, fixed_assets, reserved, reserved_pershare, "
+        "eps, bvps, list_date, undp, per_undp, rev_yoy, profit_yoy, gpr, npr, holder_num) "
         "VALUES %s ON CONFLICT (trade_date, ts_code) DO UPDATE SET "
-        "name=EXCLUDED.name, industry=EXCLUDED.industry, area=EXCLUDED.area, pe=EXCLUDED.pe, pb=EXCLUDED.pb, "
-        "total_share=EXCLUDED.total_share, float_share=EXCLUDED.float_share, free_share=EXCLUDED.free_share, "
-        "total_mv=EXCLUDED.total_mv, circ_mv=EXCLUDED.circ_mv"
+        "name=EXCLUDED.name, industry=EXCLUDED.industry, area=EXCLUDED.area, pe_dyn=EXCLUDED.pe_dyn, "
+        "total_assets=EXCLUDED.total_assets, liquid_assets=EXCLUDED.liquid_assets, "
+        "fixed_assets=EXCLUDED.fixed_assets, reserved=EXCLUDED.reserved, "
+        "reserved_pershare=EXCLUDED.reserved_pershare, eps=EXCLUDED.eps, bvps=EXCLUDED.bvps, "
+        "list_date=EXCLUDED.list_date, undp=EXCLUDED.undp, "
+        "per_undp=EXCLUDED.per_undp, rev_yoy=EXCLUDED.rev_yoy, profit_yoy=EXCLUDED.profit_yoy, "
+        "gpr=EXCLUDED.gpr, npr=EXCLUDED.npr, holder_num=EXCLUDED.holder_num"
     )
     values = []
     for r in rows:
@@ -244,13 +259,22 @@ def _upsert_bak_basic(conn, rows: List[Dict[str, Any]]) -> int:
                 r.get("name"),
                 r.get("industry"),
                 r.get("area"),
-                r.get("pe"),
-                r.get("pb"),
-                r.get("total_share"),
-                r.get("float_share"),
-                r.get("free_share"),
-                r.get("total_mv"),
-                r.get("circ_mv"),
+                r.get("pe_dyn"),
+                r.get("total_assets"),
+                r.get("liquid_assets"),
+                r.get("fixed_assets"),
+                r.get("reserved"),
+                r.get("reserved_pershare"),
+                r.get("eps"),
+                r.get("bvps"),
+                r.get("list_date"),
+                r.get("undp"),
+                r.get("per_undp"),
+                r.get("rev_yoy"),
+                r.get("profit_yoy"),
+                r.get("gpr"),
+                r.get("npr"),
+                r.get("holder_num"),
             )
         )
     if not values:

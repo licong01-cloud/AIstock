@@ -90,7 +90,25 @@ def _db_cfg() -> Dict[str, Any]:
         "password": os.getenv("TDX_DB_PASSWORD", ""),
         "dbname": os.getenv("TDX_DB_NAME", "aistock"),
         "application_name": "AIstock-backend",
+        "options": "-c client_encoding=utf8",
     }
+
+
+def _apply_statement_timeout(conn: psycopg2.extensions.connection) -> None:
+    v = (os.getenv("AISTOCK_PG_STATEMENT_TIMEOUT_MS") or "").strip()
+    if not v:
+        return
+    try:
+        ms = int(v)
+        if ms < 0:
+            return
+    except Exception:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SET statement_timeout TO {ms}")
+    except Exception:
+        return
 
 
 def init_db_pool(minconn: int = 1, maxconn: int = 10) -> None:
@@ -155,6 +173,7 @@ def get_conn():
                 )
             conn = psycopg2.connect(**_db_cfg())
             conn.autocommit = True
+            _apply_statement_timeout(conn)
             duration = time.time() - start_time
             if duration > 0.1:
                 print(f"DEBUG: Direct DB connection took {duration:.4f}s")
@@ -217,6 +236,7 @@ def get_conn():
                     pass
         try:
             conn.autocommit = True
+            _apply_statement_timeout(conn)
             with _CHECKED_OUT_LOCK:
                 _CHECKED_OUT[id(conn)] = {
                     "checkout_ts": time.time(),

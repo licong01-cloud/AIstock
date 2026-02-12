@@ -2,12 +2,10 @@ from . import health
 from . import analysis
 from . import hotboard
 from . import watchlist
-from . import indicator_screening
 from . import cloud_screening
 from . import monitor
 from . import portfolio
 from . import sector_strategy
-from . import longhubang
 from . import model_scheduler
 from . import ingestion
 from . import settings
@@ -16,18 +14,17 @@ from . import qmt
 from . import smart_monitor
 from . import prompt_packs
 from . import rdagent
+from . import rdagent_templates
 
 __all__ = [
     "health",
     "analysis",
     "hotboard",
     "watchlist",
-    "indicator_screening",
     "cloud_screening",
     "monitor",
     "portfolio",
     "sector_strategy",
-    "longhubang",
     "model_scheduler",
     "ingestion",
     "settings",
@@ -36,4 +33,5 @@ __all__ = [
     "smart_monitor",
     "prompt_packs",
     "rdagent",
+    "rdagent_templates",
 ]

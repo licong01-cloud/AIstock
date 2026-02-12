@@ -24,7 +24,6 @@ const NAV_GROUPS: {
     items: [
       { href: "/hotboard", label: "🔥 热点板块跟踪" },
       { href: "/watchlist", label: "⭐ 自选股票池" },
-      { href: "/indicator-screening", label: "📊 指标选股" },
       { href: "/cloud-screening", label: "☁ 云选股" },
       { href: "/market-news", label: "📰 市场资讯 / 市场快讯" },
     ],
@@ -33,7 +32,6 @@ const NAV_GROUPS: {
     title: "📊 策略分析",
     items: [
       { href: "/sector-strategy", label: "🎯 智策板块" },
-      { href: "/longhubang", label: "🐉 智瞰龙虎" },
     ],
   },
   {
@@ -65,12 +63,18 @@ const NAV_GROUPS: {
   {
     title: "RD-Agent管理",
     items: [
-      { href: "/rd-agent/prompt-packs", label: "RD-agent提示词模板管理" },
-      { href: "/rdagent/strategies", label: "RD-Agent 策略管理" },
-      { href: "/rdagent/import", label: "RD-Agent 候选导入" },
-      { href: "/rdagent/factors", label: "RD-Agent 因子目录" },
-      { href: "/rdagent/strategies-catalog", label: "RD-Agent 策略目录" },
-      { href: "/rdagent/loops", label: "RD-Agent 实验/loop" },
+      { href: "/rdagent/sync", label: "🎯 RD-Agent 同步" },
+      { href: "/rdagent/tasks-sync", label: "🧰 Task 资产同步" },
+      { href: "/rdagent/tasks", label: "🗂️ Task 列表" },
+      { href: "/rdagent/task-selection", label: "🚀 Task 选股" },
+      { href: "/rdagent/strategies-catalog", label: "🎯 策略目录" },
+      { href: "/rdagent/multi-selection", label: "🎯 多策略选股" },
+      { href: "/rdagent/loops", label: "🧪 实验/Loop 管理" },
+      { href: "/rdagent/factors", label: "📊 因子目录" },
+      { href: "/rdagent/models", label: "🧠 模型目录" },
+      { href: "/rd-agent/prompt-packs", label: "📝 提示词模板管理" },
+      { href: "/rdagent/import", label: "📥 候选导入" },
+      { href: "/config/rdagent-llm", label: "🤖 RDagent 模型配置" },
     ],
   },
 ];

@@ -1,0 +1,72 @@
+[
+  {
+    "task_id": "2025-12-18_16-24-29-487030",
+    "status": "exception",
+    "error": "attempted relative import beyond top-level package",
+    "elapsed": 0,
+    "traceback": "Traceback (most recent call last):\n  File \"F:\\Dev\\AIstock\\debug_tools\\direct_sync.py\", line 43, in do_sync\n    from services.rdagent_task_sync_service import RDAgentTaskSyncService\n  File \"F:\\Dev\\AIstock\\debug_tools\\..\\backend\\services\\rdagent_task_sync_service.py\", line 16, in <module>\n    from ..data_service import xtquant_adapter\nImportError: attempted relative import beyond top-level package\n"
+  },
+  {
+    "task_id": "2025-12-19_08-42-46-183506",
+    "status": "exception",
+    "error": "attempted relative import beyond top-level package",
+    "elapsed": 0,
+    "traceback": "Traceback (most recent call last):\n  File \"F:\\Dev\\AIstock\\debug_tools\\direct_sync.py\", line 43, in do_sync\n    from services.rdagent_task_sync_service import RDAgentTaskSyncService\n  File \"F:\\Dev\\AIstock\\debug_tools\\..\\backend\\services\\rdagent_task_sync_service.py\", line 16, in <module>\n    from ..data_service import xtquant_adapter\nImportError: attempted relative import beyond top-level package\n"
+  },
+  {
+    "task_id": "2025-12-19_10-13-25-001",
+    "status": "exception",
+    "error": "attempted relative import beyond top-level package",
+    "elapsed": 0,
+    "traceback": "Traceback (most recent call last):\n  File \"F:\\Dev\\AIstock\\debug_tools\\direct_sync.py\", line 43, in do_sync\n    from services.rdagent_task_sync_service import RDAgentTaskSyncService\n  File \"F:\\Dev\\AIstock\\debug_tools\\..\\backend\\services\\rdagent_task_sync_service.py\", line 16, in <module>\n    from ..data_service import xtquant_adapter\nImportError: attempted relative import beyond top-level package\n"
+  },
+  {
+    "task_id": "2025-12-19_10-13-25-002",
+    "status": "exception",
+    "error": "attempted relative import beyond top-level package",
+    "elapsed": 0,
+    "traceback": "Traceback (most recent call last):\n  File \"F:\\Dev\\AIstock\\debug_tools\\direct_sync.py\", line 43, in do_sync\n    from services.rdagent_task_sync_service import RDAgentTaskSyncService\n  File \"F:\\Dev\\AIstock\\debug_tools\\..\\backend\\services\\rdagent_task_sync_service.py\", line 16, in <module>\n    from ..data_service import xtquant_adapter\nImportError: attempted relative import beyond top-level package\n"
+  },
+  {
+    "task_id": "2025-12-19_10-13-25-003",
+    "status": "exception",
+    "error": "attempted relative import beyond top-level package",
+    "elapsed": 0,
+    "traceback": "Traceback (most recent call last):\n  File \"F:\\Dev\\AIstock\\debug_tools\\direct_sync.py\", line 43, in do_sync\n    from services.rdagent_task_sync_service import RDAgentTaskSyncService\n  File \"F:\\Dev\\AIstock\\debug_tools\\..\\backend\\services\\rdagent_task_sync_service.py\", line 16, in <module>\n    from ..data_service import xtquant_adapter\nImportError: attempted relative import beyond top-level package\n"
+  },
+  {
+    "task_id": "2025-12-19_10-13-25-004",
+    "status": "exception",
+    "error": "attempted relative import beyond top-level package",
+    "elapsed": 0,
+    "traceback": "Traceback (most recent call last):\n  File \"F:\\Dev\\AIstock\\debug_tools\\direct_sync.py\", line 43, in do_sync\n    from services.rdagent_task_sync_service import RDAgentTaskSyncService\n  File \"F:\\Dev\\AIstock\\debug_tools\\..\\backend\\services\\rdagent_task_sync_service.py\", line 16, in <module>\n    from ..data_service import xtquant_adapter\nImportError: attempted relative import beyond top-level package\n"
+  },
+  {
+    "task_id": "2025-12-19_10-13-25-005",
+    "status": "exception",
+    "error": "attempted relative import beyond top-level package",
+    "elapsed": 0,
+    "traceback": "Traceback (most recent call last):\n  File \"F:\\Dev\\AIstock\\debug_tools\\direct_sync.py\", line 43, in do_sync\n    from services.rdagent_task_sync_service import RDAgentTaskSyncService\n  File \"F:\\Dev\\AIstock\\debug_tools\\..\\backend\\services\\rdagent_task_sync_service.py\", line 16, in <module>\n    from ..data_service import xtquant_adapter\nImportError: attempted relative import beyond top-level package\n"
+  },
+  {
+    "task_id": "2025-12-19_10-13-25-006",
+    "status": "exception",
+    "error": "attempted relative import beyond top-level package",
+    "elapsed": 0,
+    "traceback": "Traceback (most recent call last):\n  File \"F:\\Dev\\AIstock\\debug_tools\\direct_sync.py\", line 43, in do_sync\n    from services.rdagent_task_sync_service import RDAgentTaskSyncService\n  File \"F:\\Dev\\AIstock\\debug_tools\\..\\backend\\services\\rdagent_task_sync_service.py\", line 16, in <module>\n    from ..data_service import xtquant_adapter\nImportError: attempted relative import beyond top-level package\n"
+  },
+  {
+    "task_id": "2025-12-19_10-13-25-007",
+    "status": "exception",
+    "error": "attempted relative import beyond top-level package",
+    "elapsed": 0,
+    "traceback": "Traceback (most recent call last):\n  File \"F:\\Dev\\AIstock\\debug_tools\\direct_sync.py\", line 43, in do_sync\n    from services.rdagent_task_sync_service import RDAgentTaskSyncService\n  File \"F:\\Dev\\AIstock\\debug_tools\\..\\backend\\services\\rdagent_task_sync_service.py\", line 16, in <module>\n    from ..data_service import xtquant_adapter\nImportError: attempted relative import beyond top-level package\n"
+  },
+  {
+    "task_id": "2025-12-19_10-13-25-008",
+    "status": "exception",
+    "error": "attempted relative import beyond top-level package",
+    "elapsed": 0,
+    "traceback": "Traceback (most recent call last):\n  File \"F:\\Dev\\AIstock\\debug_tools\\direct_sync.py\", line 43, in do_sync\n    from services.rdagent_task_sync_service import RDAgentTaskSyncService\n  File \"F:\\Dev\\AIstock\\debug_tools\\..\\backend\\services\\rdagent_task_sync_service.py\", line 16, in <module>\n    from ..data_service import xtquant_adapter\nImportError: attempted relative import beyond top-level package\n"
+  }
+]

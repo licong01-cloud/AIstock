@@ -24,13 +24,11 @@ from .routers import (
     analysis,
     hotboard,
     watchlist,
-    indicator_screening,
     cloud_screening,
     monitor,
     qmt,
     portfolio,
     sector_strategy,
-    longhubang,
     model_scheduler,
     ingestion,
     quant,
@@ -42,6 +40,13 @@ from .routers import (
     strategies,
     rdagent,
     rdagent_catalog_admin,
+    rdagent_sync_admin,
+    rdagent_templates,
+    rdagent_llm_config,
+    rdagent_llm_config_v2,
+    rdagent_llm_config_endpoints,
+    tasks,
+    stocks,
 )
 from .qlib_exporter.router import router as qlib_router
 from .ingestion.tdx_scheduler import scheduler as ingestion_scheduler
@@ -181,6 +186,29 @@ def create_app() -> FastAPI:
 
         _install_safe_print_and_logging()
 
+        # Ensure app loggers are visible under uvicorn default logging config.
+        try:
+            uv_err = logging.getLogger("uvicorn.error")
+            root = logging.getLogger()
+            if not getattr(root, "handlers", None):
+                for h in getattr(uv_err, "handlers", []) or []:
+                    root.addHandler(h)
+            if root.level > logging.INFO:
+                root.setLevel(logging.INFO)
+
+            for name in (
+                "aistock",
+                "aistock.inference",
+                "aistock.rdagent_selection",
+                "aistock.rdagent_router",
+            ):
+                lg = logging.getLogger(name)
+                if lg.level > logging.INFO:
+                    lg.setLevel(logging.INFO)
+                lg.propagate = True
+        except Exception:
+            pass
+
         # 提高连接池上限以适配多路并发请求与后台任务
         # 同时将 minconn 提高，以减少请求高峰时频繁 _connect（psycopg2 建连在本环境下可达 2s+）
         init_db_pool(minconn=5, maxconn=40)
@@ -212,15 +240,14 @@ def create_app() -> FastAPI:
             logging.getLogger("uvicorn.error").warning("QMT 自动连接异常: %s", e)
 
         disable_scheduler = (os.getenv("DISABLE_INGESTION_SCHEDULER") or "").strip().lower()
-        enable_scheduler = (os.getenv("ENABLE_INGESTION_SCHEDULER") or "").strip().lower()
+        enable_scheduler = (os.getenv("ENABLE_INGESTION_SCHEDULER") or "1").strip().lower()
         if disable_scheduler in {"1", "true", "yes", "y", "on"}:
             pass
-        elif enable_scheduler in {"1", "true", "yes", "y", "on"}:
-            ingestion_scheduler.start()
         else:
-            logging.getLogger(__name__).warning(
-                "TDXScheduler 已默认禁用（设置 ENABLE_INGESTION_SCHEDULER=1 可启用）"
-            )
+            # REQ-SCHEDULER-P3-001: 默认开启数据调度器
+            refresh_interval = int((os.getenv("AISTOCK_INGESTION_SCHEDULE_REFRESH_INTERVAL_SEC") or "30").strip() or "30")
+            ingestion_scheduler.start(refresh_interval=refresh_interval)
+            logging.getLogger("uvicorn.error").info("TDX 数据调度器已启动 (REQ-SCHEDULER-P3-001)")
         
         # 启动策略调度器
         disable_strategy_scheduler = (os.getenv("DISABLE_STRATEGY_SCHEDULER") or "").strip().lower()
@@ -245,14 +272,12 @@ def create_app() -> FastAPI:
     app.include_router(analysis.router, prefix="/api/v1")
     app.include_router(hotboard.router, prefix="/api/v1")
     app.include_router(watchlist.router, prefix="/api/v1")
-    app.include_router(indicator_screening.router, prefix="/api/v1")
     app.include_router(cloud_screening.router, prefix="/api/v1")
     app.include_router(monitor.router, prefix="/api/v1")
     app.include_router(qmt.router, prefix="/api/v1")
     app.include_router(strategies.router)
     app.include_router(portfolio.router, prefix="/api/v1")
     app.include_router(sector_strategy.router, prefix="/api/v1")
-    app.include_router(longhubang.router, prefix="/api/v1")
     app.include_router(model_scheduler.router, prefix="/api/v1")
     app.include_router(news.router, prefix="/api/v1")
     app.include_router(settings.router, prefix="/api/v1")
@@ -260,8 +285,15 @@ def create_app() -> FastAPI:
     app.include_router(smart_monitor.router, prefix="/api/v1")
     app.include_router(prompt_packs.router, prefix="/api/v1")
     app.include_router(rdagent.router, prefix="/api/v1")
-    app.include_router(rdagent_catalog_admin.router)
+    app.include_router(rdagent_templates.router, prefix="/api/v1")
+    app.include_router(rdagent_catalog_admin.router, prefix="/api/v1")
+    app.include_router(rdagent_llm_config.router, prefix="/api/v1")
+    app.include_router(rdagent_llm_config_v2.router, prefix="/api/v1")
+    app.include_router(rdagent_llm_config_endpoints.router, prefix="/api/v1")
+    app.include_router(rdagent_sync_admin.router)
     app.include_router(qlib_router, prefix="")
+    app.include_router(tasks.router, prefix="/api/v1")
+    app.include_router(stocks.router, prefix="/api/v1")
 
     # ingestion / 本地数据管理接口：保持与旧 tdx_backend 相同的 /api/* 路径
     app.include_router(ingestion.router, prefix="")

@@ -208,6 +208,69 @@ class RDRegistryReader:
             return None
         return row["path"]
 
+    def list_backtest_workspaces(self, task_run_id: str) -> List[Dict[str, Any]]:
+        """List workspaces under a task_run_id that have backtest artifacts.
+
+        Returns list of {loop_id, workspace_id, has_metrics, has_curve}.
+        """
+
+        sql = """
+        SELECT
+            a.loop_id AS loop_id,
+            a.workspace_id AS workspace_id,
+            MAX(CASE WHEN af.path = 'qlib_res.csv' THEN 1 ELSE 0 END) AS has_metrics,
+            MAX(CASE WHEN af.path = 'ret.pkl' THEN 1 ELSE 0 END) AS has_curve
+        FROM artifacts a
+        JOIN artifact_files af ON af.artifact_id = a.artifact_id
+        WHERE a.task_run_id = ?
+          AND af.path IN ('qlib_res.csv', 'ret.pkl')
+        GROUP BY a.loop_id, a.workspace_id
+        ORDER BY a.loop_id ASC
+        """
+
+        with self._connect() as conn:
+            rows = conn.execute(sql, (task_run_id,)).fetchall()
+
+        return [
+            {
+                "loop_id": _row_get(row, "loop_id"),
+                "workspace_id": _row_get(row, "workspace_id"),
+                "has_metrics": int(_row_get(row, "has_metrics") or 0),
+                "has_curve": int(_row_get(row, "has_curve") or 0),
+            }
+            for row in rows
+            if _row_get(row, "workspace_id")
+        ]
+
+    def list_workspace_ids_for_task_run(self, task_run_id: str) -> List[str]:
+        """Collect workspace_id for a task_run_id from artifacts/loops tables."""
+
+        sql = """
+        SELECT DISTINCT workspace_id
+        FROM artifacts
+        WHERE task_run_id = ?
+          AND workspace_id IS NOT NULL
+        """
+
+        with self._connect() as conn:
+            rows = conn.execute(sql, (task_run_id,)).fetchall()
+
+        ws_ids = {str(row["workspace_id"]) for row in rows if row["workspace_id"]}
+
+        try:
+            sql_loops = """
+            SELECT DISTINCT best_workspace_id AS workspace_id
+            FROM loops
+            WHERE task_run_id = ?
+              AND best_workspace_id IS NOT NULL
+            """
+            rows2 = conn.execute(sql_loops, (task_run_id,)).fetchall()
+            ws_ids.update({str(row["workspace_id"]) for row in rows2 if row["workspace_id"]})
+        except Exception:
+            pass
+
+        return sorted(ws_ids)
+
     def find_backtest_curve_file(self, workspace_id: str) -> Optional[str]:
         """Return relative path to ret.pkl if recorded in artifact_files.
 

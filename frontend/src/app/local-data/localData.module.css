@@ -488,3 +488,18 @@
 .mb6 {
   margin-bottom: 6px;
 }
+
+.multipleCheckboxRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.checkboxInlineLabel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}

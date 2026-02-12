@@ -8,7 +8,7 @@ from typing import Dict, Iterable, List, Sequence
 
 import pandas as pd
 
-from app_pg import get_conn  # type: ignore[attr-defined]
+from db.pg_pool import get_conn  # type: ignore[attr-defined]
 
 
 @dataclass(frozen=True)
@@ -25,34 +25,39 @@ def _fetch_pg_column_comments(schema: str, table: str) -> Dict[str, str]:
     """Fetch column comments via pg_catalog.
 
     Returns mapping: column_name -> comment (empty string if no comment).
+    If DB connection fails, returns empty dict to trigger fallback.
     """
+    try:
+        sql = """
+        SELECT
+          a.attname AS column_name,
+          COALESCE(d.description, '') AS comment
+        FROM pg_catalog.pg_attribute a
+        JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
+        JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+        LEFT JOIN pg_catalog.pg_description d
+          ON d.objoid = a.attrelid AND d.objsubid = a.attnum
+        WHERE n.nspname = %(schema)s
+          AND c.relname = %(table)s
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+        ORDER BY a.attnum;
+        """
 
-    sql = """
-    SELECT
-      a.attname AS column_name,
-      COALESCE(d.description, '') AS comment
-    FROM pg_catalog.pg_attribute a
-    JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
-    JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
-    LEFT JOIN pg_catalog.pg_description d
-      ON d.objoid = a.attrelid AND d.objsubid = a.attnum
-    WHERE n.nspname = %(schema)s
-      AND c.relname = %(table)s
-      AND a.attnum > 0
-      AND NOT a.attisdropped
-    ORDER BY a.attnum;
-    """
+        with get_conn() as conn:  # type: ignore[attr-defined]
+            df = pd.read_sql(sql, conn, params={"schema": schema, "table": table})
 
-    with get_conn() as conn:  # type: ignore[attr-defined]
-        df = pd.read_sql(sql, conn, params={"schema": schema, "table": table})
-
-    out: Dict[str, str] = {}
-    for _, r in df.iterrows():
-        col = str(r.get("column_name") or "").strip()
-        if not col:
-            continue
-        out[col] = str(r.get("comment") or "").strip().replace("\n", " ")
-    return out
+        out: Dict[str, str] = {}
+        for _, r in df.iterrows():
+            col = str(r.get("column_name") or "").strip()
+            if not col:
+                continue
+            out[col] = str(r.get("comment") or "").strip().replace("\n", " ")
+        return out
+    except Exception as e:
+        # DB connection failed, return empty dict to trigger fallback
+        print(f"[WARN] Failed to fetch comments from DB for {schema}.{table}: {e}")
+        return {}
 
 
 def _infer_dtype_hints(df: pd.DataFrame) -> Dict[str, str]:
@@ -81,33 +86,39 @@ def _daily_basic_source_to_export_map() -> Dict[str, str]:
     }
 
 
-def _daily_basic_comment_fallback() -> Dict[str, str]:
-    """Fallback Chinese meanings for market.daily_basic columns.
-
-    Some deployments created market.daily_basic with inline SQL comments ("-- ...")
-    rather than PostgreSQL COMMENT ON COLUMN, which means pg_catalog does not store
-    them. This mapping ensures we can still export a useful field map.
-    """
-
+def _bak_basic_source_to_export_map() -> Dict[str, str]:
+    """DB column -> exported column (bb_* prefix)"""
     return {
-        "trade_date": "交易日期",
-        "ts_code": "TS股票代码",
-        "close": "当日收盘价",
-        "turnover_rate": "换手率(%)",
-        "turnover_rate_f": "换手率(自由流通股)",
-        "volume_ratio": "量比",
-        "pe": "市盈率(总市值/净利润, 亏损的PE为空)",
-        "pe_ttm": "市盈率(TTM,亏损的PE为空)",
-        "pb": "市净率(总市值/净资产)",
-        "ps": "市销率",
-        "ps_ttm": "市销率(TTM)",
-        "dv_ratio": "股息率(%)",
-        "dv_ttm": "股息率(TTM)(%)",
-        "total_share": "总股本(万股)",
-        "float_share": "流通股本(万股)",
-        "free_share": "自由流通股本(万)",
-        "total_mv": "总市值(万元)",
-        "circ_mv": "流通市值(万元)",
+        "pe_dyn": "bb_pe_dyn",
+        "total_assets": "bb_total_assets",
+        "liquid_assets": "bb_liquid_assets",
+        "fixed_assets": "bb_fixed_assets",
+        "reserved": "bb_reserved",
+        "reserved_pershare": "bb_reserved_pershare",
+        "eps": "bb_eps",
+        "bvps": "bb_bvps",
+        "undp": "bb_undp",
+        "per_undp": "bb_per_undp",
+        "rev_yoy": "bb_rev_yoy",
+        "profit_yoy": "bb_profit_yoy",
+        "gpr": "bb_gpr",
+        "npr": "bb_npr",
+        "holder_num": "bb_holder_num",
+    }
+
+
+def _cyq_perf_source_to_export_map() -> Dict[str, str]:
+    """DB column -> exported column (cp_* prefix)"""
+    return {
+        "his_low": "cp_his_low",
+        "his_high": "cp_his_high",
+        "cost_5pct": "cp_cost_5pct",
+        "cost_15pct": "cp_cost_15pct",
+        "cost_50pct": "cp_cost_50pct",
+        "cost_85pct": "cp_cost_85pct",
+        "cost_95pct": "cp_cost_95pct",
+        "weight_avg": "cp_weight_avg",
+        "winner_rate": "cp_winner_rate",
     }
 
 
@@ -149,26 +160,33 @@ def build_field_map_rows_for_snapshot(
     *,
     daily_basic_columns: Sequence[str] | None,
     moneyflow_columns: Sequence[str] | None,
+    bak_basic_columns: Sequence[str] | None = None,
+    cyq_perf_columns: Sequence[str] | None = None,
+    daily_basic_dtypes: Dict[str, str] | None = None,
+    moneyflow_dtypes: Dict[str, str] | None = None,
+    bak_basic_dtypes: Dict[str, str] | None = None,
+    cyq_perf_dtypes: Dict[str, str] | None = None,
 ) -> List[FieldMapRow]:
     rows: List[FieldMapRow] = []
 
     if daily_basic_columns is not None:
         comments = _fetch_pg_column_comments("market", "daily_basic")
-        if not comments or all(not (v or "").strip() for v in comments.values()):
-            comments = _daily_basic_comment_fallback()
+        # 移除 fallback：如果数据库无 comment，保持为空，不使用硬编码
         src2exp = _daily_basic_source_to_export_map()
         exp2src = {v: k for k, v in src2exp.items()}
         for col in daily_basic_columns:
             src = exp2src.get(col)
             if not src:
                 continue
-            cn = comments.get(src) or col
+            cn = comments.get(src, "")
+            dtype = daily_basic_dtypes.get(col, "float64") if daily_basic_dtypes else "float64"
             rows.append(
                 FieldMapRow(
                     name=col,
                     meaning_cn=cn,
                     source_table="daily_basic",
                     comment=cn,
+                    dtype_hint=dtype,
                 )
             )
 
@@ -180,7 +198,7 @@ def build_field_map_rows_for_snapshot(
             src = exp2src.get(col)
             if not src:
                 continue
-            raw = comments.get(src) or col
+            raw = comments.get(src, "")
             cn = _normalize_moneyflow_comment(raw)
             unit = ""
             if col.endswith("_amt"):
@@ -194,6 +212,47 @@ def build_field_map_rows_for_snapshot(
                     unit=unit,
                     source_table="moneyflow",
                     comment=cn,
+                    dtype_hint=moneyflow_dtypes.get(col, "float64") if moneyflow_dtypes else "float64",
+                )
+            )
+
+    if bak_basic_columns is not None:
+        comments = _fetch_pg_column_comments("market", "bak_basic")
+        # 移除 fallback：如果数据库无 comment，保持为空，不使用硬编码
+        src2exp = _bak_basic_source_to_export_map()
+        exp2src = {v: k for k, v in src2exp.items()}
+        for col in bak_basic_columns:
+            src = exp2src.get(col)
+            if not src:
+                continue
+            cn = comments.get(src, "")
+            rows.append(
+                FieldMapRow(
+                    name=col,
+                    meaning_cn=cn,
+                    source_table="bak_basic",
+                    comment=cn,
+                    dtype_hint=bak_basic_dtypes.get(col, "float64") if bak_basic_dtypes else "float64",
+                )
+            )
+
+    if cyq_perf_columns is not None:
+        comments = _fetch_pg_column_comments("market", "cyq_perf")
+        # 移除 fallback：如果数据库无 comment，保持为空，不使用硬编码
+        src2exp = _cyq_perf_source_to_export_map()
+        exp2src = {v: k for k, v in src2exp.items()}
+        for col in cyq_perf_columns:
+            src = exp2src.get(col)
+            if not src:
+                continue
+            cn = comments.get(src, "")
+            rows.append(
+                FieldMapRow(
+                    name=col,
+                    meaning_cn=cn,
+                    source_table="cyq_perf",
+                    comment=cn,
+                    dtype_hint=cyq_perf_dtypes.get(col, "float64") if cyq_perf_dtypes else "float64",
                 )
             )
 

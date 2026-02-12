@@ -14,6 +14,7 @@ from __future__ import annotations
 - 板块数据（TDX）
 """
 
+import logging
 from datetime import date, datetime
 from typing import Iterable, List, Optional
 
@@ -24,6 +25,7 @@ from backend.db.pg_pool import get_conn
 
 from .config import (
     ADJ_FACTOR_TABLE,
+    DAILY_QFQ_TABLE,
     DAILY_RAW_TABLE,
     FACTOR_DATA_TABLE,
     FIELD_MAPPING_DB_DAILY,
@@ -45,6 +47,9 @@ from .adj_factor_provider import AdjFactorProvider
 
 class DBReader:
     """封装针对前复权日线表和分钟线表的读取逻辑."""
+
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
 
     def _quote_sql_strings(self, values: Iterable[str]) -> str:
         items: List[str] = []
@@ -83,64 +88,65 @@ class DBReader:
                 - Index: MultiIndex (datetime, instrument)
                 - Columns: db_* 系列字段（float32）
         """
-
-        conditions: list[str] = [
-            f"trade_date >= '{start.isoformat()}'",
-            f"trade_date <= '{end.isoformat()}'",
-        ]
-
-        if ts_codes:
-            codes = [self._normalize_ts_code(c) for c in ts_codes if str(c).strip()]
-            if codes:
-                conditions.append(f"ts_code IN ({self._quote_sql_strings(codes)})")
-
-        # 按交易所过滤（基于 ts_code 后缀 .SH / .SZ / .BJ）
+        # 使用JOIN stock_basic方式，无需指定股票列表
+        # 通过stock_basic表过滤ST、退市股票和交易所
+        
+        # 构建交易所过滤条件
+        exchange_conds = []
         if exchanges:
             normalized = {e.strip().lower() for e in exchanges if e and e.strip()}
-            exchange_conds: list[str] = []
             if normalized:
                 if "sh" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.SH' OR ts_code LIKE 'SH%')")
+                    exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
                 if "sz" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.SZ' OR ts_code LIKE 'SZ%')")
+                    exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
                 if "bj" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.BJ' OR ts_code LIKE 'BJ%')")
-            if exchange_conds:
-                conditions.append("(" + " OR ".join(exchange_conds) + ")")
-
-        # ST / 退市 / 暂停上市过滤
+                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
+        else:
+            # 默认只包含SH/SZ
+            exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
+        
+        # 构建基础过滤条件
+        base_conds = [
+            "s.list_status = 'L'",
+            f"s.list_date <= '{end.isoformat()}'",
+        ]
+        
         if exclude_st:
-            conditions.append("ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st)")
+            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
         if exclude_delisted_or_paused:
-            conditions.append(
-                "ts_code NOT IN (SELECT ts_code FROM market.stock_basic WHERE list_status IN ('D','P'))",
-            )
-
-        where_clause = " AND ".join(conditions)
-
+            base_conds.append("s.list_status NOT IN ('D', 'P')")
+        if exchange_conds:
+            base_conds.append("(" + " OR ".join(exchange_conds) + ")")
+        
+        where_clause = " AND ".join(base_conds)
+        
         sql = f"""
             SELECT
-                trade_date,
-                ts_code,
-                close,
-                turnover_rate,
-                turnover_rate_f,
-                volume_ratio,
-                pe,
-                pe_ttm,
-                pb,
-                ps,
-                ps_ttm,
-                dv_ratio,
-                dv_ttm,
-                total_share,
-                float_share,
-                free_share,
-                total_mv,
-                circ_mv
-            FROM market.daily_basic
-            WHERE {where_clause}
-            ORDER BY trade_date, ts_code
+                d.trade_date,
+                d.ts_code,
+                d.close,
+                d.turnover_rate,
+                d.turnover_rate_f,
+                d.volume_ratio,
+                d.pe,
+                d.pe_ttm,
+                d.pb,
+                d.ps,
+                d.ps_ttm,
+                d.dv_ratio,
+                d.dv_ttm,
+                d.total_share,
+                d.float_share,
+                d.free_share,
+                d.total_mv,
+                d.circ_mv
+            FROM market.daily_basic d
+            INNER JOIN market.stock_basic s ON d.ts_code = s.ts_code
+            WHERE d.trade_date >= '{start.isoformat()}'
+              AND d.trade_date <= '{end.isoformat()}'
+              AND {where_clause}
+            ORDER BY d.trade_date, d.ts_code
         """
 
         with get_conn() as conn:  # type: ignore[attr-defined]
@@ -194,38 +200,46 @@ class DBReader:
         exclude_delisted_or_paused: bool = False,
     ) -> List[str]:
         """moneyflow_ts 覆盖的股票池（ts_code），带同样过滤规则。"""
-
-        conditions: list[str] = [
-            f"trade_date >= '{start.isoformat()}'",
-            f"trade_date <= '{end.isoformat()}'",
-        ]
-
+        # 使用JOIN stock_basic方式，无需指定股票列表
+        
+        # 构建交易所过滤条件
+        exchange_conds = []
         if exchanges:
             normalized = {e.strip().lower() for e in exchanges if e.strip()}
-            exchange_conds: list[str] = []
             if normalized:
                 if "sh" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.SH' OR ts_code LIKE 'SH%')")
+                    exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
                 if "sz" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.SZ' OR ts_code LIKE 'SZ%')")
+                    exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
                 if "bj" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.BJ' OR ts_code LIKE 'BJ%')")
-            if exchange_conds:
-                conditions.append("(" + " OR ".join(exchange_conds) + ")")
-
+                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
+        else:
+            # 默认只包含SH/SZ
+            exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
+        
+        # 构建基础过滤条件
+        base_conds = [
+            "s.list_status = 'L'",
+            f"s.list_date <= '{end.isoformat()}'",
+        ]
+        
         if exclude_st:
-            conditions.append("ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st)")
+            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
         if exclude_delisted_or_paused:
-            conditions.append(
-                "ts_code NOT IN (SELECT ts_code FROM market.stock_basic WHERE list_status IN ('D','P'))",
-            )
-
-        where_clause = " AND ".join(conditions)
+            base_conds.append("s.list_status NOT IN ('D', 'P')")
+        if exchange_conds:
+            base_conds.append("(" + " OR ".join(exchange_conds) + ")")
+        
+        where_clause = " AND ".join(base_conds)
+        
         sql = f"""
-            SELECT DISTINCT ts_code
-            FROM {MONEYFLOW_TS_TABLE}
-            WHERE {where_clause}
-            ORDER BY ts_code
+            SELECT DISTINCT m.ts_code
+            FROM {MONEYFLOW_TS_TABLE} m
+            INNER JOIN market.stock_basic s ON m.ts_code = s.ts_code
+            WHERE m.trade_date >= '{start.isoformat()}'
+              AND m.trade_date <= '{end.isoformat()}'
+              AND {where_clause}
+            ORDER BY m.ts_code
         """
         with get_conn() as conn:  # type: ignore[attr-defined]
             df = pd.read_sql(sql, conn)
@@ -243,38 +257,46 @@ class DBReader:
         exclude_delisted_or_paused: bool = False,
     ) -> List[str]:
         """daily_basic 覆盖的股票池（ts_code），带同样过滤规则。"""
-
-        conditions: list[str] = [
-            f"trade_date >= '{start.isoformat()}'",
-            f"trade_date <= '{end.isoformat()}'",
-        ]
-
+        # 使用JOIN stock_basic方式，无需指定股票列表
+        
+        # 构建交易所过滤条件
+        exchange_conds = []
         if exchanges:
             normalized = {e.strip().lower() for e in exchanges if e.strip()}
-            exchange_conds: list[str] = []
             if normalized:
                 if "sh" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.SH' OR ts_code LIKE 'SH%')")
+                    exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
                 if "sz" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.SZ' OR ts_code LIKE 'SZ%')")
+                    exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
                 if "bj" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.BJ' OR ts_code LIKE 'BJ%')")
-            if exchange_conds:
-                conditions.append("(" + " OR ".join(exchange_conds) + ")")
-
+                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
+        else:
+            # 默认只包含SH/SZ
+            exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
+        
+        # 构建基础过滤条件
+        base_conds = [
+            "s.list_status = 'L'",
+            f"s.list_date <= '{end.isoformat()}'",
+        ]
+        
         if exclude_st:
-            conditions.append("ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st)")
+            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
         if exclude_delisted_or_paused:
-            conditions.append(
-                "ts_code NOT IN (SELECT ts_code FROM market.stock_basic WHERE list_status IN ('D','P'))",
-            )
-
-        where_clause = " AND ".join(conditions)
+            base_conds.append("s.list_status NOT IN ('D', 'P')")
+        if exchange_conds:
+            base_conds.append("(" + " OR ".join(exchange_conds) + ")")
+        
+        where_clause = " AND ".join(base_conds)
+        
         sql = f"""
-            SELECT DISTINCT ts_code
-            FROM market.daily_basic
-            WHERE {where_clause}
-            ORDER BY ts_code
+            SELECT DISTINCT d.ts_code
+            FROM market.daily_basic d
+            INNER JOIN market.stock_basic s ON d.ts_code = s.ts_code
+            WHERE d.trade_date >= '{start.isoformat()}'
+              AND d.trade_date <= '{end.isoformat()}'
+              AND {where_clause}
+            ORDER BY d.ts_code
         """
         with get_conn() as conn:  # type: ignore[attr-defined]
             df = pd.read_sql(sql, conn)
@@ -293,44 +315,47 @@ class DBReader:
         freq: str = "1m",
     ) -> List[str]:
         """分钟线覆盖的股票池（ts_code），带同样过滤规则。"""
-
-        # 使用内联 SQL（不使用 %(...)s 参数占位符），避免 LIKE 子句中的 %
-        # 与 psycopg2 的 pyformat 参数占位符冲突，触发 "argument formats can't be mixed"。
-        conditions: list[str] = [
-            f"freq = '{freq}'",
-            f"trade_time::date >= '{start.isoformat()}'",
-            f"trade_time::date <= '{end.isoformat()}'",
-        ]
-
+        # 使用JOIN stock_basic方式，无需指定股票列表
+        
+        # 构建交易所过滤条件
+        exchange_conds = []
         if exchanges:
             normalized = {e.strip().lower() for e in exchanges if e.strip()}
+            if normalized:
+                if "sh" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
+                if "sz" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
+                if "bj" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
         else:
-            normalized = set()
-
-        exchange_conds: list[str] = []
-        if normalized:
-            if "sh" in normalized:
-                exchange_conds.append("(ts_code LIKE '%.SH' OR ts_code LIKE 'SH%')")
-            if "sz" in normalized:
-                exchange_conds.append("(ts_code LIKE '%.SZ' OR ts_code LIKE 'SZ%')")
-            if "bj" in normalized:
-                exchange_conds.append("(ts_code LIKE '%.BJ' OR ts_code LIKE 'BJ%')")
-        if exchange_conds:
-            conditions.append("(" + " OR ".join(exchange_conds) + ")")
-
+            # 默认只包含SH/SZ
+            exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
+        
+        # 构建基础过滤条件
+        base_conds = [
+            "s.list_status = 'L'",
+            f"s.list_date <= '{end.isoformat()}'",
+        ]
+        
         if exclude_st:
-            conditions.append("ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st)")
+            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
         if exclude_delisted_or_paused:
-            conditions.append(
-                "ts_code NOT IN (SELECT ts_code FROM market.stock_basic WHERE list_status IN ('D','P'))",
-            )
-
-        where_clause = " AND ".join(conditions)
+            base_conds.append("s.list_status NOT IN ('D', 'P')")
+        if exchange_conds:
+            base_conds.append("(" + " OR ".join(exchange_conds) + ")")
+        
+        where_clause = " AND ".join(base_conds)
+        
         sql = f"""
-            SELECT DISTINCT ts_code
-            FROM {MINUTE_QFQ_TABLE}
-            WHERE {where_clause}
-            ORDER BY ts_code
+            SELECT DISTINCT m.ts_code
+            FROM {MINUTE_QFQ_TABLE} m
+            INNER JOIN market.stock_basic s ON m.ts_code = s.ts_code
+            WHERE m.freq = '{freq}'
+              AND m.trade_time::date >= '{start.isoformat()}'
+              AND m.trade_time::date <= '{end.isoformat()}'
+              AND {where_clause}
+            ORDER BY m.ts_code
         """
 
         with get_conn() as conn:  # type: ignore[attr-defined]
@@ -373,7 +398,7 @@ class DBReader:
                 conditions.append("(" + " OR ".join(exchange_conds) + ")")
 
         if exclude_st:
-            conditions.append("ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st)")
+            conditions.append(f"ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
         if exclude_delisted_or_paused:
             conditions.append("list_status NOT IN ('D','P')")
 
@@ -709,16 +734,25 @@ class DBReader:
         ts_codes: Iterable[str],
         start: date | None,
         end: date | None,
+        table_name: str | None = None,
+        with_factor: bool = False,
     ) -> pd.DataFrame:
-        """加载指定股票在给定日期区间内的前复权日线数据.
+        """加载指定股票在给定日期区间内的日线数据.
 
         返回 MultiIndex (datetime, instrument) 的 DataFrame，列使用逻辑字段名。
-        当前仅包含基础 OHLCV + amount 列。
+        
+        Phase 2 强化:
+        - 自动将 *_li 字段除以 1000 (厘 -> 元);
+        - 自动将 volume_hand 乘以 100 (手 -> 股);
+        - 若 with_factor=True, 则关联获取前复权因子 $factor.
         """
 
         codes = list(ts_codes)
         if not codes:
             return pd.DataFrame()
+
+        # 修复: 默认使用不复权表，避免使用未全量更新的前复权表
+        target_table = table_name or DAILY_RAW_TABLE
 
         conditions: list[str] = ["ts_code = ANY(%(codes)s)"]
         params: dict[str, object] = {"codes": codes}
@@ -742,7 +776,7 @@ class DBReader:
                 close_li,
                 volume_hand,
                 amount_li
-            FROM {DAILY_QFQ_TABLE}
+            FROM {target_table}
             WHERE {where_clause}
             ORDER BY trade_date, ts_code
         """
@@ -753,25 +787,41 @@ class DBReader:
         if df.empty:
             return df
 
-        # 重命名列到逻辑字段
-        rename_map = {
-            FIELD_MAPPING_DB_DAILY["datetime"]: "datetime",
-            FIELD_MAPPING_DB_DAILY["open"]: "open",
-            FIELD_MAPPING_DB_DAILY["high"]: "high",
-            FIELD_MAPPING_DB_DAILY["low"]: "low",
-            FIELD_MAPPING_DB_DAILY["close"]: "close",
-            FIELD_MAPPING_DB_DAILY["volume"]: "volume",
-            FIELD_MAPPING_DB_DAILY["amount"]: "amount",
-        }
-        df = df.rename(columns=rename_map)
+        # 1. 数值缩放 (厘 -> 元, 手 -> 股)
+        df["open"] = pd.to_numeric(df["open_li"], errors="coerce") / PRICE_UNIT_DIVISOR
+        df["high"] = pd.to_numeric(df["high_li"], errors="coerce") / PRICE_UNIT_DIVISOR
+        df["low"] = pd.to_numeric(df["low_li"], errors="coerce") / PRICE_UNIT_DIVISOR
+        df["close"] = pd.to_numeric(df["close_li"], errors="coerce") / PRICE_UNIT_DIVISOR
+        df["amount"] = pd.to_numeric(df["amount_li"], errors="coerce") / PRICE_UNIT_DIVISOR
+        df["volume"] = pd.to_numeric(df["volume_hand"], errors="coerce") * 100.0
 
-        # 构造 MultiIndex (datetime, instrument)
-        df["datetime"] = pd.to_datetime(df["datetime"], utc=False)
+        # 2. 获取复权因子 (如果需要)
+        if with_factor:
+            provider = AdjFactorProvider()
+            adj_df = provider.get_adj_factor(codes, start or date(2000, 1, 1), end or date.today())
+            if not adj_df.empty:
+                adj_df = provider.calculate_qfq_factor(adj_df)
+                # 转换日期格式以便 merge
+                df["trade_date"] = pd.to_datetime(df["trade_date"])
+                adj_df["trade_date"] = pd.to_datetime(adj_df["trade_date"])
+                df = df.merge(adj_df[["ts_code", "trade_date", "qfq_factor"]], on=["ts_code", "trade_date"], how="left")
+                df = df.rename(columns={"qfq_factor": "factor"})
+            else:
+                # 修复: 复权因子缺失时报错，不使用兜底值
+                raise ValueError(
+                    f"复权因子数据缺失，无法计算前复权价格。"
+                    f"请检查 market.adj_factor 表是否有 {len(codes)} 只股票在 {start} 至 {end} 期间的数据。"
+                )
+        else:
+            df["factor"] = 1.0
+
+        # 3. 构造 MultiIndex (datetime, instrument)
+        df["datetime"] = pd.to_datetime(df["trade_date"], utc=False)
         df = df.set_index(["datetime", "ts_code"])  # type: ignore[call-arg]
         df.index = df.index.set_names(["datetime", "instrument"])
 
         # 仅保留逻辑字段列
-        cols = ["open", "high", "low", "close", "volume", "amount"]
+        cols = ["open", "high", "low", "close", "volume", "amount", "factor"]
         df = df[cols]
 
         return df
@@ -1192,13 +1242,49 @@ class DBReader:
         # 不允许缺失复权因子
         if price_df["qfq_factor"].isna().any():
             missing = price_df[price_df["qfq_factor"].isna()][["ts_code", "trade_date"]].drop_duplicates()
+            missing_count = len(missing)
+            
+            # 获取缺失复权因子的日期范围
+            min_missing_date = missing["trade_date"].min()
+            max_missing_date = missing["trade_date"].max()
+            affected_stocks = missing["ts_code"].nunique()
+            
+            # 检查 adj_factor 表的数据范围
+            adj_min_date = adj_df["trade_date"].min() if not adj_df.empty else None
+            adj_max_date = adj_df["trade_date"].max() if not adj_df.empty else None
+            
             raise RuntimeError(
-                "Missing adjustment factors for some records after merge; "
-                f"examples: {missing.head().to_dict(orient='records')}"
+                f"Missing adjustment factors for {missing_count} records ({affected_stocks} stocks). "
+                f"Date range: {min_missing_date} to {max_missing_date}. "
+                f"adj_factor table available range: {adj_min_date} to {adj_max_date}. "
+                f"Please ensure the export date range is within the adj_factor data range. "
+                f"Examples: {missing.head().to_dict(orient='records')}"
             )
 
         # 4. 计算 Qlib 格式数据
         # 价格单位转换：厘 -> 元，并按前复权因子调整
+
+        # 严格检查：不允许 qfq_factor 为 0，抛出异常
+        zero_factor_mask = price_df["qfq_factor"] == 0
+        if zero_factor_mask.any():
+            # 获取所有 qfq_factor = 0 的股票代码和日期
+            zero_factor_records = price_df[zero_factor_mask][["ts_code", "trade_date"]].drop_duplicates()
+            # 按股票分组统计
+            zero_factor_by_stock = zero_factor_records.groupby("ts_code").size().to_dict()
+            # 找出所有记录都是异常的股票
+            all_zero_factor_stocks = []
+            for stock in zero_factor_by_stock:
+                total_records = len(price_df[price_df["ts_code"] == stock])
+                if zero_factor_by_stock[stock] == total_records:
+                    all_zero_factor_stocks.append(stock)
+            
+            raise RuntimeError(
+                f"Found {zero_factor_mask.sum()} records with qfq_factor = 0, "
+                f"which would cause division by zero. "
+                f"Stocks with all zero factors: {all_zero_factor_stocks[:10]}... "
+                f"Please check the adj_factor data for these stocks."
+            )
+
         price_df["$open"] = (price_df["open_li"] / PRICE_UNIT_DIVISOR * price_df["qfq_factor"]).astype(np.float32)
         price_df["$high"] = (price_df["high_li"] / PRICE_UNIT_DIVISOR * price_df["qfq_factor"]).astype(np.float32)
         price_df["$low"] = (price_df["low_li"] / PRICE_UNIT_DIVISOR * price_df["qfq_factor"]).astype(np.float32)
@@ -1215,7 +1301,35 @@ class DBReader:
 
         price_df["$factor"] = price_df["qfq_factor"].astype(np.float32)
 
-        # 5. 转换为 Qlib 格式
+        # 5. 数据质量验证
+        # 检查价格是否为 0 或负数
+        invalid_price_mask = (price_df["$open"] <= 0) | (price_df["$high"] <= 0) | (price_df["$low"] <= 0) | (price_df["$close"] <= 0)
+        if invalid_price_mask.any():
+            invalid_price_records = price_df[invalid_price_mask][["ts_code", "trade_date", "$open", "$high", "$low", "$close"]].drop_duplicates()
+            raise RuntimeError(
+                f"Found {invalid_price_mask.sum()} records with invalid prices (<= 0). "
+                f"Examples: {invalid_price_records.head().to_dict(orient='records')}"
+            )
+
+        # 检查成交量是否为负数或无穷大（成交量为 0 是允许的，表示停牌）
+        invalid_volume_mask = (price_df["$volume"] < 0) | (~np.isfinite(price_df["$volume"]))
+        if invalid_volume_mask.any():
+            invalid_volume_records = price_df[invalid_volume_mask][["ts_code", "trade_date", "$volume"]].drop_duplicates()
+            raise RuntimeError(
+                f"Found {invalid_volume_mask.sum()} records with invalid volume (< 0 or inf). "
+                f"Examples: {invalid_volume_records.head().to_dict(orient='records')}"
+            )
+
+        # 检查复权因子是否在合理范围内（0 < factor <= 1）
+        invalid_factor_mask = (price_df["$factor"] <= 0) | (price_df["$factor"] > 1)
+        if invalid_factor_mask.any():
+            invalid_factor_records = price_df[invalid_factor_mask][["ts_code", "trade_date", "$factor"]].drop_duplicates()
+            raise RuntimeError(
+                f"Found {invalid_factor_mask.sum()} records with invalid adjustment factor (<= 0 or > 1). "
+                f"Examples: {invalid_factor_records.head().to_dict(orient='records')}"
+            )
+
+        # 6. 转换为 Qlib 格式
         # 为了与 bin 目录和其他 H5 数据集保持一致，这里直接使用 ts_code 作为 instrument，
         # 统一采用 Tushare ts_code 格式（例如 000001.SZ / 600000.SH）。
         price_df["instrument"] = price_df["ts_code"].astype(str)
@@ -1306,72 +1420,75 @@ class DBReader:
         - Columns: mf_sm_buy_vol, mf_sm_sell_vol, mf_sm_buy_amt, mf_sm_sell_amt, ...
           单位：_vol 为股，_amt 为元。
         """
-
-        # 起止日期已由 Pydantic 校验为合法日期，这里直接内联到 SQL 字符串，
-        # 避免 psycopg2 在参数绑定时出现 "list index out of range" 等兼容性问题。
-        conditions: list[str] = [
-            f"trade_date >= '{start.isoformat()}'",
-            f"trade_date <= '{end.isoformat()}'",
-        ]
-
-        if ts_codes:
-            codes = [self._normalize_ts_code(c) for c in ts_codes if str(c).strip()]
-            if codes:
-                conditions.append(f"ts_code IN ({self._quote_sql_strings(codes)})")
-
-        # 按交易所过滤（基于 ts_code 后缀 .SH / .SZ / .BJ）
+        # 使用JOIN stock_basic方式，无需指定股票列表
+        # 通过stock_basic表过滤ST、退市股票和交易所
+        
+        # 构建交易所过滤条件
+        exchange_conds = []
         if exchanges:
-            normalized = {e.strip().lower() for e in exchanges if e.strip()}
-            exchange_conds: list[str] = []
+            normalized = {e.strip().lower() for e in exchanges if e and e.strip()}
             if normalized:
                 if "sh" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.SH' OR ts_code LIKE 'SH%')")
+                    exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
                 if "sz" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.SZ' OR ts_code LIKE 'SZ%')")
+                    exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
                 if "bj" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.BJ' OR ts_code LIKE 'BJ%')")
-            if exchange_conds:
-                conditions.append("(" + " OR ".join(exchange_conds) + ")")
-
-        # ST / 退市 / 暂停上市过滤
+                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
+        else:
+            # 默认只包含SH/SZ
+            exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
+        
+        # 构建基础过滤条件
+        base_conds = [
+            "s.list_status = 'L'",
+            f"s.list_date <= '{end.isoformat()}'",
+        ]
+        
         if exclude_st:
-            conditions.append(
-                "ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st)",
-            )
+            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
         if exclude_delisted_or_paused:
-            conditions.append(
-                "ts_code NOT IN ("
-                "SELECT ts_code FROM market.stock_basic WHERE list_status IN ('D','P')"
-                ")",
-            )
+            base_conds.append("s.list_status NOT IN ('D', 'P')")
+        if exchange_conds:
+            base_conds.append("(" + " OR ".join(exchange_conds) + ")")
+        
+        where_clause = " AND ".join(base_conds)
 
-        where_clause = " AND ".join(conditions)
-
+        # 如果调用方传入了 ts_codes（来自 get_base_ts_codes），则额外限制股票范围，
+        # 确保 moneyflow 的股票集与其他数据集完全一致。
+        ts_code_filter = ""
+        if ts_codes:
+            # 将 Qlib 格式（000001.SZ）还原为数据库格式进行匹配
+            quoted = ", ".join(f"'{c}'" for c in ts_codes)
+            ts_code_filter = f" AND m.ts_code IN ({quoted})"
+        
         sql = f"""
             SELECT
-                trade_date,
-                ts_code,
-                buy_sm_vol,
-                buy_sm_amount,
-                sell_sm_vol,
-                sell_sm_amount,
-                buy_md_vol,
-                buy_md_amount,
-                sell_md_vol,
-                sell_md_amount,
-                buy_lg_vol,
-                buy_lg_amount,
-                sell_lg_vol,
-                sell_lg_amount,
-                buy_elg_vol,
-                buy_elg_amount,
-                sell_elg_vol,
-                sell_elg_amount,
-                net_mf_vol,
-                net_mf_amount
-            FROM {MONEYFLOW_TS_TABLE}
-            WHERE {where_clause}
-            ORDER BY trade_date, ts_code
+                m.trade_date,
+                m.ts_code,
+                m.buy_sm_vol,
+                m.buy_sm_amount,
+                m.sell_sm_vol,
+                m.sell_sm_amount,
+                m.buy_md_vol,
+                m.buy_md_amount,
+                m.sell_md_vol,
+                m.sell_md_amount,
+                m.buy_lg_vol,
+                m.buy_lg_amount,
+                m.sell_lg_vol,
+                m.sell_lg_amount,
+                m.buy_elg_vol,
+                m.buy_elg_amount,
+                m.sell_elg_vol,
+                m.sell_elg_amount,
+                m.net_mf_vol,
+                m.net_mf_amount
+            FROM {MONEYFLOW_TS_TABLE} m
+            INNER JOIN market.stock_basic s ON m.ts_code = s.ts_code
+            WHERE m.trade_date >= '{start.isoformat()}'
+              AND m.trade_date <= '{end.isoformat()}'
+              AND {where_clause}{ts_code_filter}
+            ORDER BY m.trade_date, m.ts_code
         """
 
         with get_conn() as conn:  # type: ignore[attr-defined]
@@ -1605,7 +1722,13 @@ class DBReader:
         for i in range(0, len(codes), batch_size):
             batch_codes = codes[i : i + batch_size]
             batch_df = self.load_qlib_daily_data(batch_codes, start, end, use_tushare_adj)
-            if not batch_df.empty:
+            if batch_df.empty:
+                # 如果某个批次的数据为空，记录警告并跳过
+                self.logger.warning(
+                    f"Batch {i // batch_size + 1} (codes {batch_codes[0]} - {batch_codes[-1]}) "
+                    f"returned empty DataFrame, skipping"
+                )
+            else:
                 all_data.append(batch_df)
 
         if not all_data:
@@ -1851,6 +1974,266 @@ class DBReader:
 
         qlib_cols = ["$open", "$close", "$high", "$low", "$volume", "$factor"]
         result = df[qlib_cols].copy()
+        result = result.sort_index()
+
+        return result
+
+    def load_bak_basic_panel(
+        self,
+        *,
+        start: date,
+        end: date,
+        ts_codes: Optional[List[str]] = None,
+        exchanges: Optional[List[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+    ) -> pd.DataFrame:
+        """加载 Tushare bak_basic 历史股票列表数据并转换为 Qlib/RD-Agent 友好的面板格式.
+
+        源表：market.bak_basic
+
+        Returns:
+            DataFrame
+                - Index: MultiIndex (datetime, instrument)
+                - Columns: bb_* 系列字段（float32）
+        """
+        # 使用JOIN stock_basic方式，无需指定股票列表
+        # 通过stock_basic表过滤ST、退市股票和交易所
+        
+        # 构建交易所过滤条件
+        exchange_conds = []
+        if exchanges:
+            normalized = {e.strip().lower() for e in exchanges if e and e.strip()}
+            if normalized:
+                if "sh" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
+                if "sz" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
+                if "bj" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
+        else:
+            # 默认只包含SH/SZ
+            exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
+        
+        # 构建基础过滤条件（ST、退市、上市时间）
+        base_conds = [
+            "s.list_status = 'L'",  # 上市状态
+            f"s.list_date <= '{end.isoformat()}'",  # 已上市
+            "b.trade_date >= s.list_date",  # 只导出上市日期之后的数据
+            # 停牌数据对齐：只保留在kline_daily_raw表中有交易数据的日期
+            "EXISTS (SELECT 1 FROM market.kline_daily_raw d WHERE d.ts_code = b.ts_code AND d.trade_date = b.trade_date)",
+        ]
+        
+        if exclude_st:
+            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
+        if exclude_delisted_or_paused:
+            base_conds.append("s.list_status NOT IN ('D', 'P')")
+        if exchange_conds:
+            base_conds.append("(" + " OR ".join(exchange_conds) + ")")
+        
+        where_clause = " AND ".join(base_conds)
+        
+        sql = f"""
+            SELECT
+                b.trade_date,
+                b.ts_code,
+                b.name,
+                b.industry,
+                b.area,
+                b.pe_dyn,
+                b.total_assets,
+                b.liquid_assets,
+                b.fixed_assets,
+                b.reserved,
+                b.reserved_pershare,
+                b.eps,
+                b.bvps,
+                b.list_date,
+                b.undp,
+                b.per_undp,
+                b.rev_yoy,
+                b.profit_yoy,
+                b.gpr,
+                b.npr,
+                b.holder_num
+            FROM market.bak_basic b
+            INNER JOIN market.stock_basic s ON b.ts_code = s.ts_code
+            WHERE b.trade_date >= '{start.isoformat()}'
+              AND b.trade_date <= '{end.isoformat()}'
+              AND {where_clause}
+            ORDER BY b.trade_date, b.ts_code
+        """
+
+        with get_conn() as conn:  # type: ignore[attr-defined]
+            df = pd.read_sql(sql, conn)
+
+        if df.empty:
+            return df
+
+        df["datetime"] = pd.to_datetime(df["trade_date"], utc=False)
+        df["instrument"] = df["ts_code"].apply(self._normalize_ts_code).astype(str)
+        df = df.set_index(["datetime", "instrument"])  # type: ignore[call-arg]
+
+        rename_map = {
+            "pe_dyn": "bb_pe_dyn",
+            "total_assets": "bb_total_assets",
+            "liquid_assets": "bb_liquid_assets",
+            "fixed_assets": "bb_fixed_assets",
+            "reserved": "bb_reserved",
+            "reserved_pershare": "bb_reserved_pershare",
+            "eps": "bb_eps",
+            "bvps": "bb_bvps",
+            "undp": "bb_undp",
+            "per_undp": "bb_per_undp",
+            "rev_yoy": "bb_rev_yoy",
+            "profit_yoy": "bb_profit_yoy",
+            "gpr": "bb_gpr",
+            "npr": "bb_npr",
+            "holder_num": "bb_holder_num",
+        }
+
+        df = df.rename(columns=rename_map)
+
+        # 仅保留 bb_ 列，并统一为 float32
+        bb_cols = [c for c in df.columns if c.startswith("bb_")]
+        result = df[bb_cols].copy()
+        
+        # 添加调试日志
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[load_bak_basic_panel] 开始转换 {len(bb_cols)} 列到 float32")
+        
+        for c in bb_cols:
+            # 记录转换前的非空值数量
+            pre_count = result[c].notna().sum()
+            
+            # 安全转换：处理可能的 Decimal 类型
+            if result[c].dtype == 'object':
+                # 对 object 类型（可能是 Decimal）使用更安全的转换
+                result[c] = result[c].apply(
+                    lambda x: float(x) if pd.notna(x) and str(x).strip() not in ['', 'None', 'nan'] else np.nan
+                )
+            else:
+                # 对其他类型使用 pd.to_numeric
+                result[c] = pd.to_numeric(result[c], errors="coerce")
+            
+            # 转换为 float32
+            result[c] = result[c].astype("float32")
+            
+            # 记录转换后的非空值数量
+            post_count = result[c].notna().sum()
+            if post_count == 0 and pre_count > 0:
+                logger.warning(f"[load_bak_basic_panel] 列 {c}: 转换前 {pre_count} 个非空值，转换后全部丢失！")
+            elif pre_count != post_count:
+                logger.warning(f"[load_bak_basic_panel] 列 {c}: 转换前 {pre_count} 个非空值，转换后 {post_count} 个")
+        
+        result = result.sort_index()
+        logger.info(f"[load_bak_basic_panel] 数据转换完成，最终形状: {result.shape}")
+
+        return result
+
+    def load_cyq_perf_panel(
+        self,
+        *,
+        start: date,
+        end: date,
+        ts_codes: Optional[List[str]] = None,
+        exchanges: Optional[List[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+    ) -> pd.DataFrame:
+        """加载 Tushare cyq_perf 每日筹码及胜率数据并转换为 Qlib/RD-Agent 友好的面板格式.
+
+        源表：market.cyq_perf
+
+        Returns:
+            DataFrame
+                - Index: MultiIndex (datetime, instrument)
+                - Columns: cp_* 系列字段（float32）
+        """
+        # 使用JOIN stock_basic方式，无需指定股票列表
+        # 通过stock_basic表过滤ST、退市股票和交易所
+        
+        # 构建交易所过滤条件
+        exchange_conds = []
+        if exchanges:
+            normalized = {e.strip().lower() for e in exchanges if e and e.strip()}
+            if normalized:
+                if "sh" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
+                if "sz" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
+                if "bj" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
+        else:
+            # 默认只包含SH/SZ
+            exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
+        
+        # 构建基础过滤条件
+        base_conds = [
+            "s.list_status = 'L'",
+            f"s.list_date <= '{end.isoformat()}'",
+        ]
+        
+        if exclude_st:
+            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
+        if exclude_delisted_or_paused:
+            base_conds.append("s.list_status NOT IN ('D', 'P')")
+        if exchange_conds:
+            base_conds.append("(" + " OR ".join(exchange_conds) + ")")
+        
+        where_clause = " AND ".join(base_conds)
+        
+        sql = f"""
+            SELECT
+                c.trade_date,
+                c.ts_code,
+                c.his_low,
+                c.his_high,
+                c.cost_5pct,
+                c.cost_15pct,
+                c.cost_50pct,
+                c.cost_85pct,
+                c.cost_95pct,
+                c.weight_avg,
+                c.winner_rate
+            FROM market.cyq_perf c
+            INNER JOIN market.stock_basic s ON c.ts_code = s.ts_code
+            WHERE c.trade_date >= '{start.isoformat()}'
+              AND c.trade_date <= '{end.isoformat()}'
+              AND {where_clause}
+            ORDER BY c.trade_date, c.ts_code
+        """
+
+        with get_conn() as conn:  # type: ignore[attr-defined]
+            df = pd.read_sql(sql, conn)
+
+        if df.empty:
+            return df
+
+        df["datetime"] = pd.to_datetime(df["trade_date"], utc=False)
+        df["instrument"] = df["ts_code"].apply(self._normalize_ts_code).astype(str)
+        df = df.set_index(["datetime", "instrument"])  # type: ignore[call-arg]
+
+        rename_map = {
+            "his_low": "cp_his_low",
+            "his_high": "cp_his_high",
+            "cost_5pct": "cp_cost_5pct",
+            "cost_15pct": "cp_cost_15pct",
+            "cost_50pct": "cp_cost_50pct",
+            "cost_85pct": "cp_cost_85pct",
+            "cost_95pct": "cp_cost_95pct",
+            "weight_avg": "cp_weight_avg",
+            "winner_rate": "cp_winner_rate",
+        }
+
+        df = df.rename(columns=rename_map)
+
+        # 仅保留 cp_ 列，并统一为 float32
+        cp_cols = [c for c in df.columns if c.startswith("cp_")]
+        result = df[cp_cols].copy()
+        for c in cp_cols:
+            result[c] = pd.to_numeric(result[c], errors="coerce").astype("float32")
         result = result.sort_index()
 
         return result

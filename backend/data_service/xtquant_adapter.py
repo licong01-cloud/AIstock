@@ -61,6 +61,7 @@ def fetch_history_window_xt(
     bars: Optional[int] = None,
     fields: Optional[List[str]] = None,
     freq: str = "1d",
+    adj: str = "front",
 ) -> pd.DataFrame:
     """Fetch historical window from xtquant.
 
@@ -72,6 +73,7 @@ def fetch_history_window_xt(
     - If *fields* is provided, columns are filtered accordingly;
     - If *bars* is provided, the result is trimmed per instrument to the
       latest N bars.
+    - *adj* supports: 'front' (前复权), 'back' (后复权), 'none' (不复权).
     """
 
     try:
@@ -81,6 +83,14 @@ def fetch_history_window_xt(
 
     if not universe:
         return pd.DataFrame()
+
+    # Map AIstock adj to xtquant dividend_type
+    div_map = {
+        "none": "none",
+        "front": "front",
+        "back": "back",
+    }
+    dividend_type = div_map.get(adj, "front")
 
     # Normalize requested fields; fall back to a standard OHLCV set.
     default_fields = ["open", "high", "low", "close", "volume", "amount"]
@@ -114,7 +124,7 @@ def fetch_history_window_xt(
             start_time=start_str,
             end_time=end_str,
             count=count,
-            dividend_type="none",
+            dividend_type=dividend_type,
             fill_data=True,
         )
 
@@ -150,17 +160,25 @@ def fetch_history_window_xt(
     for field_name, df_field in data.items():
         if df_field is None or df_field.empty:
             continue
-        # stack to (instrument, time)
+        
+        # 将 (instrument, time) 转置并堆叠
+        # xtdata 返回的是 index=stocks, columns=times
         s = df_field.stack().rename(field_name)
-        s.index = s.index.set_names(["instrument", "datetime"])  # type: ignore[call-arg]
+        s.index = s.index.set_names(["instrument", "datetime"])
         frames.append(s)
 
     if not frames:
         return pd.DataFrame()
 
     combined = pd.concat(frames, axis=1)
-    # Reorder to (datetime, instrument)
+    
+    # 转换为 Qlib 要求的 MultiIndex(datetime, instrument) 顺序并排序
     combined = combined.reorder_levels(["datetime", "instrument"]).sort_index()
+    
+    # 强制将索引 datetime 转换为 pd.Timestamp 格式，防止 Qlib 报错
+    combined.index = combined.index.set_levels(
+        pd.to_datetime(combined.index.levels[0]), level="datetime"
+    )
 
     # Optional trim per instrument if bars is specified but we could not
     # rely solely on xtdata's count semantics (e.g. multiple symbols).

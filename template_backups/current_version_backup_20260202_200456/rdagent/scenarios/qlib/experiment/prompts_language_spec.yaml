@@ -1,0 +1,28 @@
+qlib_factor_interface_language_spec: |-
+  【语言规范】
+  - 代码注释：使用简体中文，清晰说明每一步操作的目的
+  - 变量名：使用英文，遵循PEP8命名规范
+  - 函数名：使用英文小写加下划线，如 `calculate_momentum_10d`
+  - 因子名称：可以使用中英结合，如 `10日动量（Momentum_10D）`
+  - 错误信息：使用简体中文，明确指出问题所在
+  - 示例：
+    ```python
+    # 读取日线数据
+    df = pd.read_hdf("daily_pv.h5", key="data").sort_index()
+    
+    # 重命名列名，统一使用不带 $ 的字段名
+    rename_map = {
+        "$open": "open",
+        "$close": "close",
+    }
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+    
+    # 计算10日动量因子
+    momentum_10d = df["close"] / df["close"].groupby(level="instrument").shift(10) - 1
+    
+    # 检查必要字段是否存在
+    required_cols = ["close", "volume"]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"缺少必要字段: {missing}。请使用可用字段重新设计因子。")
+    ```

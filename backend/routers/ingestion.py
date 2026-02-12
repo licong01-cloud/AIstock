@@ -289,6 +289,8 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
         return "derived_from_kline_daily_qfq"
     if ds in {"trade_agg_5m"}:
         return "tdx_api_minute_trade_all"
+    if ds.startswith("xtquant_"):
+        return "xtquant"
     return None
 
 
@@ -1095,6 +1097,12 @@ async def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="stock_moneyflow_ts init requires start_date")
         if mode == "init" and not options.get("end_date"):
             raise HTTPException(status_code=400, detail="stock_moneyflow_ts init requires end_date")
+    elif dataset in {"cyq_perf", "cyq_chips"}:
+        # cyq_perf / cyq_chips：init 需要 start_date/end_date；incremental 时 start_date 可选
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail=f"{dataset} init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail=f"{dataset} init requires end_date")
 
     summary = {"dataset": payload.dataset, "mode": payload.mode, **(payload.options or {})}
     job_type = "init" if payload.mode == "init" else "incremental"
@@ -1659,7 +1667,8 @@ async def get_data_gaps(
         "kline_daily_qfq", "kline_daily_raw", 
         "kline_minute_raw", "kline_weekly", 
         "stock_moneyflow", "stock_moneyflow_ts", "minute_1m",
-        "stock_st", "bak_basic"
+        "stock_st", "bak_basic",
+        "xtquant_pershare_index"
     ):
         code_col = "ts_code"
     elif data_kind.startswith("tdx_board_"):
@@ -1744,18 +1753,10 @@ async def get_ingestion_auto_range(
     -  latest_trading_date: MAX(cal_date WHERE is_trading)
     """
 
-    # 1)  data_stats
-    try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT market.refresh_data_stats();")
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"refresh_data_stats failed: {exc}") from exc
-
-    # 2)  data_stats_config  table_name
+    # 1) 从 data_stats_config 获取表名和日期列（不再调用 refresh_data_stats 避免超时）
     cfg_rows = _fetchall(
         """
-        SELECT data_kind, table_name
+        SELECT data_kind, table_name, date_column
           FROM market.data_stats_config
          WHERE data_kind = %s AND enabled
         """,
@@ -1765,19 +1766,21 @@ async def get_ingestion_auto_range(
         raise HTTPException(status_code=404, detail="unknown or disabled data_kind")
     cfg = cfg_rows[0]
     table_name = str(cfg.get("table_name") or "").strip()
+    date_column = str(cfg.get("date_column") or "trade_date").strip()
 
-    # 3)  data_stats  max_date
-    stats_row = _fetchone(
-        """
-        SELECT max_date
-          FROM market.data_stats
-         WHERE data_kind = %s
-        """,
-        (data_kind,),
-    )
+    # 2) 直接查询该表的 max_date（使用 statement_timeout 防止大表超时）
     current_max_date: Optional[dt.date] = None
-    if stats_row is not None:
-        current_max_date = stats_row.get("max_date")
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '10s'")
+                cur.execute(f"SELECT MAX({date_column})::date FROM {table_name}")
+                row = cur.fetchone()
+                if row and row[0]:
+                    current_max_date = row[0]
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(f"[{data_kind}] 查询 MAX({date_column}) from {table_name} 失败: {exc}")
 
     # 4) latest_trading_date：仅考虑当前日期及之前的交易日，避免拿到未来计划交易日
     latest_rows = _fetchall(

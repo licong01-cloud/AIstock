@@ -53,6 +53,8 @@ interface SnapshotInfo {
   has_factor_data: boolean;
   has_moneyflow: boolean;
   has_daily_basic: boolean;
+  has_bak_basic: boolean;
+  has_cyq_perf: boolean;
   meta: any;
   created_at: string | null;
 }
@@ -88,7 +90,9 @@ type ExportType =
   | "board_member"
   | "factor"
   | "moneyflow"
-  | "daily_basic";
+  | "daily_basic"
+  | "bak_basic"
+  | "cyq_perf";
 type ExportMode = "full" | "incremental";
 type ExportTab = "snapshot" | "bin";
 type BinTab = "stock" | "index";
@@ -215,6 +219,11 @@ export default function QlibPage() {
   const [fieldMapLoading, setFieldMapLoading] = useState(false);
   const [fieldMapError, setFieldMapError] = useState<string | null>(null);
   const [fieldMapResult, setFieldMapResult] = useState<FieldMapExportResponse | null>(null);
+  // 自动字段映射生成状态
+  const [autoFieldMapStatus, setAutoFieldMapStatus] = useState<"idle" | "generating" | "success" | "error">("idle");
+
+  // CSV导出相关状态
+  const [csvDownloading, setCsvDownloading] = useState<string | null>(null);
 
   // Qlib bin 导出（CSV -> bin）相关状态
   const [binSnapshotId, setBinSnapshotId] = useState<string>(
@@ -384,6 +393,36 @@ export default function QlibPage() {
     loadSnapshots();
   }, [loadSnapshots]);
 
+  // CSV下载函数
+  const handleDownloadCSV = async (snapshotId: string, dataType: string) => {
+    setCsvDownloading(`${snapshotId}_${dataType}`);
+    try {
+      const url = buildBackendUrl(
+        `/api/v1/qlib/snapshots/${encodeURIComponent(snapshotId)}/csv?data_type=${encodeURIComponent(dataType)}`,
+      );
+
+      const response = await fetch(url);
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        throw new Error(`下载失败: ${response.status} ${errorText}`);
+      }
+
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = `${snapshotId}_${dataType}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+      document.body.removeChild(a);
+    } catch (e: any) {
+      alert(`CSV下载失败: ${e?.message || "未知错误"}`);
+    } finally {
+      setCsvDownloading(null);
+    }
+  };
+
   const loadBinExports = useCallback(async () => {
     setBinExportsLoading(true);
     setBinExportsError(null);
@@ -396,14 +435,6 @@ export default function QlibPage() {
       setBinExportsLoading(false);
     }
   }, []);
-
-  // 在切换到 bin 标签时加载 bin 列表
-  useEffect(() => {
-    if (exportTab === "bin") {
-      loadBinExports();
-    }
-  }, [exportTab, loadBinExports]);
-
   // 在进入 "指数 bin 导出" 子标签时加载指数市场列表
   useEffect(() => {
     if (exportTab === "bin" && binTab === "index" && indexDataSource !== "tdx" && !indexMarketsLoaded) {
@@ -606,13 +637,27 @@ export default function QlibPage() {
         if (exchanges.length > 0) payload.exchanges = exchanges;
         payload.exclude_st = excludeSt;
         payload.exclude_delisted_or_paused = excludeDelistedOrPaused;
+      } else if (exportType === "bak_basic") {
+        // bak_basic 只支持全量导出
+        endpoint = "/api/v1/qlib/snapshots/bak_basic";
+        payload.start = start;
+        if (exchanges.length > 0) payload.exchanges = exchanges;
+        payload.exclude_st = excludeSt;
+        payload.exclude_delisted_or_paused = excludeDelistedOrPaused;
+      } else if (exportType === "cyq_perf") {
+        // cyq_perf 只支持全量导出
+        endpoint = "/api/v1/qlib/snapshots/cyq_perf";
+        payload.start = start;
+        if (exchanges.length > 0) payload.exchanges = exchanges;
+        payload.exclude_st = excludeSt;
+        payload.exclude_delisted_or_paused = excludeDelistedOrPaused;
       }
 
       // 记录导出配置
       setLastExportConfig({
         type: exportType,
         mode: exportMode,
-        exchanges: (exportType === "daily" || exportType === "minute" || exportType === "factor" || exportType === "moneyflow" || exportType === "daily_basic")
+        exchanges: (exportType === "daily" || exportType === "minute" || exportType === "factor" || exportType === "moneyflow" || exportType === "daily_basic" || exportType === "bak_basic" || exportType === "cyq_perf")
           ? exchanges
           : undefined,
         start,
@@ -623,6 +668,8 @@ export default function QlibPage() {
       setResult(resp);
       setExportStatus("done");
       setExportProgress(100);
+      // 自动字段映射生成已在后端触发，更新前端状态
+      setAutoFieldMapStatus("success");
       loadSnapshots();
     } catch (e: any) {
       setError(e?.message || "导出失败");
@@ -643,6 +690,8 @@ export default function QlibPage() {
       factor: "RD-Agent因子",
       moneyflow: "个股资金流向 (moneyflow.h5)",
       daily_basic: "每日指标 (daily_basic.h5)",
+      bak_basic: "历史股票列表 (bak_basic.h5)",
+      cyq_perf: "每日筹码及胜率 (cyq_perf.h5)",
     };
     return names[type];
   };
@@ -850,6 +899,8 @@ export default function QlibPage() {
               <option value="factor">RD-Agent因子</option>
               <option value="moneyflow">个股资金流向 (moneyflow.h5)</option>
               <option value="daily_basic">每日指标 (daily_basic.h5)</option>
+              <option value="bak_basic">历史股票列表 (bak_basic.h5)</option>
+              <option value="cyq_perf">每日筹码及胜率 (cyq_perf.h5)</option>
             </select>
           </div>
 
@@ -881,8 +932,8 @@ export default function QlibPage() {
             </div>
           )}
 
-          {/* 日线 / 分钟线 / 资金流向 / 每日指标 专用：样本过滤（ST / 退市 / 暂停上市） */}
-          {(exportType === "daily" || exportType === "minute" || exportType === "moneyflow" || exportType === "daily_basic") && (
+          {/* 日线 / 分钟线 / 资金流向 / 每日指标 / 历史股票列表 / 每日筹码及胜率 专用：样本过滤（ST / 退市 / 暂停上市） */}
+          {(exportType === "daily" || exportType === "minute" || exportType === "moneyflow" || exportType === "daily_basic" || exportType === "bak_basic" || exportType === "cyq_perf") && (
             <div>
               <label className="block text-sm font-medium mb-2">样本过滤</label>
               <div className="flex flex-col gap-1 text-sm text-gray-700">
@@ -921,8 +972,8 @@ export default function QlibPage() {
             </p>
           </div>
 
-          {/* 交易所（日频、分钟线、因子数据、资金流向） */}
-          {(exportType === "daily" || exportType === "minute" || exportType === "factor" || exportType === "moneyflow") && (
+          {/* 交易所（日频、分钟线、因子数据、资金流向、每日指标、历史股票列表、每日筹码及胜率） */}
+          {(exportType === "daily" || exportType === "minute" || exportType === "factor" || exportType === "moneyflow" || exportType === "daily_basic" || exportType === "bak_basic" || exportType === "cyq_perf") && (
             <div>
               <label className="block text-sm font-medium mb-2">交易所范围</label>
               <div className="flex gap-4">
@@ -1710,6 +1761,8 @@ export default function QlibPage() {
                     <th className="text-center py-2 px-2">板块成员</th>
                     <th className="text-center py-2 px-2">资金流向</th>
                     <th className="text-center py-2 px-2">每日指标</th>
+                    <th className="text-center py-2 px-2">历史股票</th>
+                    <th className="text-center py-2 px-2">筹码胜率</th>
                     <th className="text-left py-2 px-2">创建时间</th>
                     <th className="text-center py-2 px-2">操作</th>
                   </tr>
@@ -1725,31 +1778,84 @@ export default function QlibPage() {
                       <td className="py-2 px-2 text-center">{s.has_board_member ? "✅" : "—"}</td>
                       <td className="py-2 px-2 text-center">{s.has_moneyflow ? "✅" : "—"}</td>
                       <td className="py-2 px-2 text-center">{s.has_daily_basic ? "✅" : "—"}</td>
+                      <td className="py-2 px-2 text-center">{s.has_bak_basic ? "✅" : "—"}</td>
+                      <td className="py-2 px-2 text-center">{s.has_cyq_perf ? "✅" : "—"}</td>
                       <td className="py-2 px-2 text-xs text-gray-500">
                         {s.created_at ? new Date(s.created_at).toLocaleString() : "—"}
                       </td>
-                      <td className="py-2 px-2 text-center space-x-2">
-                        <button onClick={() => setDetailSnapshot(s)} style={btnSecondary}>
-                          详情
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleExportFieldMapForSnapshot(s.snapshot_id)}
-                          style={btnSecondary}
-                        >
-                          生成CSV
-                        </button>
-                        <a
-                          href={buildBackendUrl(
-                            `/api/v1/qlib/snapshots/${encodeURIComponent(s.snapshot_id)}/export`,
+                      <td className="py-2 px-2 text-center">
+                        <div className="flex flex-wrap gap-1 justify-center">
+                          <button onClick={() => setDetailSnapshot(s)} style={btnSecondary}>
+                            详情
+                          </button>
+                          {/* CSV下载按钮组 */}
+                          {s.has_daily && (
+                            <button
+                              type="button"
+                              disabled={csvDownloading === `${s.snapshot_id}_daily`}
+                              onClick={() => handleDownloadCSV(s.snapshot_id, "daily")}
+                              style={{...btnSecondary, fontSize: "10px", padding: "2px 6px"}}
+                              title="下载日频CSV"
+                            >
+                              {csvDownloading === `${s.snapshot_id}_daily` ? "..." : "日线CSV"}
+                            </button>
                           )}
-                          style={{ ...btnSecondary, display: "inline-block" }}
-                        >
-                          导出
-                        </a>
-                        <button onClick={() => handleDelete(s.snapshot_id)} style={btnDanger}>
-                          删除
-                        </button>
+                          {s.has_daily_basic && (
+                            <button
+                              type="button"
+                              disabled={csvDownloading === `${s.snapshot_id}_daily_basic`}
+                              onClick={() => handleDownloadCSV(s.snapshot_id, "daily_basic")}
+                              style={{...btnSecondary, fontSize: "10px", padding: "2px 6px"}}
+                              title="下载每日指标CSV"
+                            >
+                              {csvDownloading === `${s.snapshot_id}_daily_basic` ? "..." : "指标CSV"}
+                            </button>
+                          )}
+                          {s.has_bak_basic && (
+                            <button
+                              type="button"
+                              disabled={csvDownloading === `${s.snapshot_id}_bak_basic`}
+                              onClick={() => handleDownloadCSV(s.snapshot_id, "bak_basic")}
+                              style={{...btnSecondary, fontSize: "10px", padding: "2px 6px"}}
+                              title="下载历史股票CSV"
+                            >
+                              {csvDownloading === `${s.snapshot_id}_bak_basic` ? "..." : "历史CSV"}
+                            </button>
+                          )}
+                          {s.has_cyq_perf && (
+                            <button
+                              type="button"
+                              disabled={csvDownloading === `${s.snapshot_id}_cyq_perf`}
+                              onClick={() => handleDownloadCSV(s.snapshot_id, "cyq_perf")}
+                              style={{...btnSecondary, fontSize: "10px", padding: "2px 6px"}}
+                              title="下载筹码胜率CSV"
+                            >
+                              {csvDownloading === `${s.snapshot_id}_cyq_perf` ? "..." : "筹码CSV"}
+                            </button>
+                          )}
+                          {s.has_moneyflow && (
+                            <button
+                              type="button"
+                              disabled={csvDownloading === `${s.snapshot_id}_moneyflow`}
+                              onClick={() => handleDownloadCSV(s.snapshot_id, "moneyflow")}
+                              style={{...btnSecondary, fontSize: "10px", padding: "2px 6px"}}
+                              title="下载资金流向CSV"
+                            >
+                              {csvDownloading === `${s.snapshot_id}_moneyflow` ? "..." : "资金CSV"}
+                            </button>
+                          )}
+                          <a
+                            href={buildBackendUrl(
+                              `/api/v1/qlib/snapshots/${encodeURIComponent(s.snapshot_id)}/export`,
+                            )}
+                            style={{ ...btnSecondary, display: "inline-block", fontSize: "10px", padding: "2px 6px" }}
+                          >
+                            导出ZIP
+                          </a>
+                          <button onClick={() => handleDelete(s.snapshot_id)} style={{...btnDanger, fontSize: "10px", padding: "2px 6px"}}>
+                            删除
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1862,6 +1968,16 @@ export default function QlibPage() {
                     <div className="flex items-center gap-2">
                       <span>{detailSnapshot.has_daily ? "✅" : "❌"}</span>
                       <span>日频行情 (daily_pv.h5)</span>
+                      {detailSnapshot.has_daily && (
+                        <button
+                          type="button"
+                          disabled={csvDownloading === `${detailSnapshot.snapshot_id}_daily`}
+                          onClick={() => handleDownloadCSV(detailSnapshot.snapshot_id, "daily")}
+                          style={{...btnSecondary, fontSize: "10px", padding: "2px 6px", marginLeft: "auto"}}
+                        >
+                          {csvDownloading === `${detailSnapshot.snapshot_id}_daily` ? "..." : "下载CSV"}
+                        </button>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <span>{detailSnapshot.has_minute ? "✅" : "❌"}</span>
@@ -1882,6 +1998,58 @@ export default function QlibPage() {
                     <div className="flex items-center gap-2">
                       <span>{detailSnapshot.has_moneyflow ? "✅" : "❌"}</span>
                       <span>资金流向 (moneyflow.h5)</span>
+                      {detailSnapshot.has_moneyflow && (
+                        <button
+                          type="button"
+                          disabled={csvDownloading === `${detailSnapshot.snapshot_id}_moneyflow`}
+                          onClick={() => handleDownloadCSV(detailSnapshot.snapshot_id, "moneyflow")}
+                          style={{...btnSecondary, fontSize: "10px", padding: "2px 6px", marginLeft: "auto"}}
+                        >
+                          {csvDownloading === `${detailSnapshot.snapshot_id}_moneyflow` ? "..." : "下载CSV"}
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span>{detailSnapshot.has_daily_basic ? "✅" : "❌"}</span>
+                      <span>每日指标 (daily_basic.h5)</span>
+                      {detailSnapshot.has_daily_basic && (
+                        <button
+                          type="button"
+                          disabled={csvDownloading === `${detailSnapshot.snapshot_id}_daily_basic`}
+                          onClick={() => handleDownloadCSV(detailSnapshot.snapshot_id, "daily_basic")}
+                          style={{...btnSecondary, fontSize: "10px", padding: "2px 6px", marginLeft: "auto"}}
+                        >
+                          {csvDownloading === `${detailSnapshot.snapshot_id}_daily_basic` ? "..." : "下载CSV"}
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span>{detailSnapshot.has_bak_basic ? "✅" : "❌"}</span>
+                      <span>历史股票列表 (bak_basic.h5)</span>
+                      {detailSnapshot.has_bak_basic && (
+                        <button
+                          type="button"
+                          disabled={csvDownloading === `${detailSnapshot.snapshot_id}_bak_basic`}
+                          onClick={() => handleDownloadCSV(detailSnapshot.snapshot_id, "bak_basic")}
+                          style={{...btnSecondary, fontSize: "10px", padding: "2px 6px", marginLeft: "auto"}}
+                        >
+                          {csvDownloading === `${detailSnapshot.snapshot_id}_bak_basic` ? "..." : "下载CSV"}
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span>{detailSnapshot.has_cyq_perf ? "✅" : "❌"}</span>
+                      <span>每日筹码及胜率 (cyq_perf.h5)</span>
+                      {detailSnapshot.has_cyq_perf && (
+                        <button
+                          type="button"
+                          disabled={csvDownloading === `${detailSnapshot.snapshot_id}_cyq_perf`}
+                          onClick={() => handleDownloadCSV(detailSnapshot.snapshot_id, "cyq_perf")}
+                          style={{...btnSecondary, fontSize: "10px", padding: "2px 6px", marginLeft: "auto"}}
+                        >
+                          {csvDownloading === `${detailSnapshot.snapshot_id}_cyq_perf` ? "..." : "下载CSV"}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>

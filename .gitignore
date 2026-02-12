@@ -1,4 +1,6 @@
-﻿# Python
+# AIstock RD-Agent assets
+rdagent_assets/
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -46,3 +48,39 @@ xtquant/
 # Frontend build artifacts and local temp files (not tracked)
 frontend/.next/
 tmp/
+
+# Debug tools and test scripts (not tracked)
+debug_tools/
+
+# Windows special files
+nul
+
+# Data files in root (not tracked)
+*.h5
+*.parquet
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+
+# Backup and temp directories
+git_ignore_folder/
+backend_data/
+log/
+template_backups/
+qlib_src_backup/
+factors_sota/
+factors_ui/
+
+# Generated/temp files
+direct_sync_progress.json
+direct_sync_results.json
+full_sync_results.json
+test_loops_response.json
+
+# Claude config
+.claude/
+
+# QuantEvolver data directories
+qe_data/
+qe_experiments/

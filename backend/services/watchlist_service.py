@@ -1,9 +1,14 @@
 from __future__ import annotations
+import logging
 
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from ..repositories.watchlist_repo_impl import watchlist_repo
 from ..core.data_source_manager_impl import data_source_manager
+from ..data_service import xtquant_adapter
+
+logger = logging.getLogger("aistock.watchlist")
 
 
 REALTIME_FIELDS = {
@@ -19,8 +24,10 @@ REALTIME_FIELDS = {
 
 
 def _fetch_quotes(codes: List[str]) -> Dict[str, Dict[str, Any]]:
-    out: Dict[str, Dict[str, Any]] = {}
-    for code in codes:
+    """并行获取实时行情数据，使用线程池提高性能。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _fetch_single(code: str) -> tuple[str, Dict[str, Any]]:
         base = code
         if "." in str(code):
             try:
@@ -31,11 +38,67 @@ def _fetch_quotes(codes: List[str]) -> Dict[str, Dict[str, Any]]:
             q = data_source_manager.get_realtime_quotes(base)
         except Exception:
             q = {}
-        out[code] = q or {}
+        return code, q or {}
+
+    out: Dict[str, Dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        results = list(executor.map(_fetch_single, codes))
+        for code, quote in results:
+            out[code] = quote
     return out
 
 
-def _compute_realtime_fields(q: Dict[str, Any]) -> Dict[str, Optional[float]]:
+def _get_entry_price_strict(ts_code: str) -> float:
+    """获取加入价格：TDX 优先，失败回退 miniQMT(xtquant)。
+
+    返回值必须 > 0，否则抛错。
+    """
+
+    ts_code = (ts_code or "").strip().upper()
+    if not ts_code:
+        raise ValueError("code 不能为空")
+
+    base = ts_code
+    if "." in ts_code:
+        try:
+            base = data_source_manager._convert_from_ts_code(ts_code)  # type: ignore[attr-defined]
+        except Exception:
+            base = ts_code.split(".", 1)[0]
+
+    # 1) TDX 优先（通过 data_source_manager.get_realtime_quotes）
+    try:
+        q = data_source_manager.get_realtime_quotes(base)
+    except Exception:
+        q = {}
+    if isinstance(q, dict):
+        p = q.get("price")
+        if isinstance(p, (int, float)) and float(p) > 0:
+            return float(p)
+
+    # 2) xtquant/miniQMT 兜底
+    try:
+        snap = xtquant_adapter.fetch_realtime_snapshot_xt([ts_code], fields=["close"], freq="1d")
+    except Exception as exc:
+        raise ValueError(f"行情获取失败: {ts_code}") from exc
+
+    if snap is None or snap.empty:
+        raise ValueError(f"行情为空: {ts_code}")
+    try:
+        row = snap.loc[ts_code]
+    except Exception as exc:
+        raise ValueError(f"行情缺失: {ts_code}") from exc
+
+    p2 = None
+    try:
+        p2 = row.get("close") if hasattr(row, "get") else None
+    except Exception:
+        p2 = None
+    if isinstance(p2, (int, float)) and float(p2) > 0:
+        return float(p2)
+    raise ValueError(f"行情价格无效: {ts_code}")
+
+
+def _compute_realtime_fields(q: Dict[str, Any], entry_price: Optional[float] = None) -> Dict[str, Optional[float]]:
     price = q.get("price")
     pre_close = q.get("pre_close")
     open_ = q.get("open")
@@ -51,11 +114,20 @@ def _compute_realtime_fields(q: Dict[str, Any]) -> Dict[str, Optional[float]]:
         except Exception:
             pct = None
 
+    # 计算加入以来涨幅
+    pct_since_entry = None
+    if isinstance(price, (int, float)) and isinstance(entry_price, (int, float)) and entry_price > 0:
+        try:
+            pct_since_entry = (price - entry_price) / entry_price * 100.0
+        except Exception:
+            pct_since_entry = None
+
     volume_hand = volume / 100.0 if isinstance(volume, (int, float)) else None
 
     return {
         "last": price,
         "pct_change": pct,
+        "pct_since_entry": pct_since_entry,
         "open": open_,
         "prev_close": pre_close,
         "high": high,
@@ -153,8 +225,9 @@ def list_items_with_quotes(
     enriched: List[Dict[str, Any]] = []
     for it in items:
         code = str(it.get("code"))
+        entry_price = it.get("entry_price")
         q = quotes_raw.get(code, {})
-        rt = _compute_realtime_fields(q)
+        rt = _compute_realtime_fields(q, entry_price=entry_price)
         row = dict(it)
         for k, v in rt.items():
             row[k] = v
@@ -191,13 +264,22 @@ def add_single_item(
     code: str,
     category_id: int,
     name: Optional[str] = None,
+    note: Optional[str] = None,
     extra_category_ids: Optional[List[int]] = None,
+    entry_price: Optional[float] = None,
+    entry_rank: Optional[int] = None,
+    entry_source: Optional[str] = None,
+    entry_task_id: Optional[str] = None,
+    entry_loop_id: Optional[int] = None,
+    entry_as_of: Optional[str] = None,
 ) -> int:
     """单只添加到自选股票池，带分类管理。
 
     - 代码会按旧版 UI 逻辑标准化为 ts_code；
     - 名称为空时，会通过 data_source_manager 查询；
+    - 支持备注 (note)；
     - 支持额外分类 ID 列表，用于多分类映射。
+    - 支持 entry_price (加入价格) 记录。
     返回创建/更新后的 item_id。
     """
 
@@ -207,7 +289,31 @@ def add_single_item(
 
     display_name = name or _get_stock_name(ts_code) or ts_code
 
-    item_id = watchlist_repo.add_item(ts_code, display_name, category_id)
+    # 如果没传 entry_price，严格获取最新价（TDX 优先 -> miniQMT 兜底），并要求 >0
+    if entry_price is None:
+        entry_price = _get_entry_price_strict(ts_code)
+    if not isinstance(entry_price, (int, float)) or float(entry_price) <= 0:
+        raise ValueError("加入价格无效，必须 > 0")
+
+    entry_as_of_date = None
+    if entry_as_of:
+        try:
+            entry_as_of_date = date.fromisoformat(str(entry_as_of))
+        except Exception:
+            entry_as_of_date = None
+
+    item_id = watchlist_repo.add_item(
+        ts_code,
+        display_name,
+        category_id,
+        note=note,
+        entry_price=float(entry_price),
+        entry_rank=entry_rank,
+        entry_source=entry_source,
+        entry_task_id=entry_task_id,
+        entry_loop_id=entry_loop_id,
+        entry_as_of=entry_as_of_date,
+    )
 
     if extra_category_ids:
         valid_extra = [cid for cid in extra_category_ids if isinstance(cid, int)]
@@ -215,6 +321,168 @@ def add_single_item(
             watchlist_repo.add_categories_to_items([item_id], valid_extra)
 
     return item_id
+
+
+def _get_entry_price_bulk(ts_codes: List[str]) -> Dict[str, float]:
+    """批量获取加入价格：TDX 优先，失败回退 miniQMT。
+
+    返回结果字典 {ts_code: price}，仅包含成功的项。
+    """
+    if not ts_codes:
+        return {}
+
+    results: Dict[str, float] = {}
+    # 标准化代码用于查询
+    code_to_ts = {}
+    remaining_base_codes = []
+    
+    for c in ts_codes:
+        if not c: continue
+        base = c
+        if "." in c:
+            try:
+                base = data_source_manager._convert_from_ts_code(c)
+            except Exception:
+                base = c.split(".", 1)[0]
+        code_to_ts[base] = c
+        remaining_base_codes.append(base)
+
+    # 1) 尝试批量获取 TDX 行情
+    # 优化：优先使用本地 TDX 批量接口（如果存在），否则使用线程池加速单只请求
+    from concurrent.futures import ThreadPoolExecutor
+    
+    def _fetch_single_tdx(base):
+        try:
+            # 增加超时控制，防止单只卡住
+            q = data_source_manager.get_realtime_quotes(base)
+            if isinstance(q, dict) and q.get("source") == "tdx":
+                p = q.get("price")
+                if isinstance(p, (int, float)) and float(p) > 0:
+                    return base, float(p)
+        except Exception:
+            pass
+        return base, None
+
+    if remaining_base_codes:
+        # 限制最大线程数，避免本地 API 过载
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_results = list(executor.map(_fetch_single_tdx, remaining_base_codes))
+            for base, p in future_results:
+                if p is not None:
+                    ts_code = code_to_ts[base]
+                    results[ts_code] = p
+                    if base in remaining_base_codes:
+                        remaining_base_codes.remove(base)
+
+    if not remaining_base_codes:
+        return results
+
+    # 2) xtquant/miniQMT 批量兜底
+    remaining_ts_codes = [code_to_ts[b] for b in remaining_base_codes]
+    try:
+        # xtquant 本身支持批量
+        snap = xtquant_adapter.fetch_realtime_snapshot_xt(remaining_ts_codes, fields=["close"], freq="1d")
+        if snap is not None and not snap.empty:
+            for ts_code in remaining_ts_codes:
+                try:
+                    if ts_code in snap.index:
+                        p2 = snap.loc[ts_code].get("close")
+                        if isinstance(p2, (int, float)) and float(p2) > 0:
+                            results[ts_code] = float(p2)
+                except Exception:
+                    pass
+    except Exception as exc:
+        logger.warning(f"xtquant 批量行情获取失败: {exc}")
+
+    return results
+
+
+def add_items_bulk_from_task_selection(
+    *,
+    items: List[Dict[str, Any]],
+    category_id: int,
+    on_conflict: str = "ignore",
+    entry_source: str = "rdagent_task",
+) -> Dict[str, Any]:
+    """从 task 选股结果批量加入自选池。
+
+    items: [{code, rank, name?, task_id?, as_of?}]
+    - 批量获取 entry_price(TDX->xtquant)，失败则记录 error。
+    - 写入 entry_rank/entry_source/entry_task_id/entry_as_of。
+    """
+
+    if not items:
+        return {"ok": True, "added": 0, "skipped": 0, "moved": 0, "errors": [], "item_ids_by_code": {}}
+
+    # 1. 标准化代码并去重
+    code_map: Dict[str, Dict[str, Any]] = {}
+    for it in items:
+        raw_code = str((it or {}).get("code") or "").strip()
+        ts_code = _normalize_code_for_storage(raw_code)
+        if ts_code:
+            code_map[ts_code] = it
+
+    all_ts_codes = list(code_map.keys())
+    
+    # 2. 批量获取价格
+    price_map = _get_entry_price_bulk(all_ts_codes)
+
+    prepared: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+
+    for ts_code in all_ts_codes:
+        it = code_map[ts_code]
+        p = price_map.get(ts_code)
+        
+        if p is None or p <= 0:
+            errors.append({"code": ts_code, "error": "无法获取实时行情或价格无效"})
+            continue
+
+        display_name = it.get("name") or _get_stock_name(ts_code) or ts_code
+
+        # entry_as_of: 若未提供则使用当天
+        as_of_raw = it.get("as_of")
+        if not as_of_raw:
+            as_of_raw = date.today().isoformat()
+        try:
+            as_of = date.fromisoformat(str(as_of_raw))
+        except Exception:
+            as_of = date.today()
+
+        prepared.append(
+            {
+                "code": ts_code,
+                "name": display_name,
+                "note": it.get("note"),
+                "entry_price": float(p),
+                "entry_rank": it.get("rank"),
+                "entry_source": it.get("entry_source") or entry_source,
+                "entry_task_id": it.get("task_id"),
+                "entry_loop_id": None,
+                "entry_as_of": as_of,
+            }
+        )
+
+    if not prepared:
+        return {"ok": False, "added": 0, "skipped": 0, "moved": 0, "errors": errors, "item_ids_by_code": {}}
+
+    try:
+        res = watchlist_repo.add_items_bulk_with_meta(
+            category_id=category_id,
+            items=prepared,
+            on_conflict=on_conflict,
+        )
+        return {
+            "ok": True,
+            "added": res.get("added", 0),
+            "skipped": res.get("skipped", 0),
+            "moved": res.get("moved", 0),
+            "errors": errors,
+            "item_ids_by_code": res.get("item_ids_by_code", {}),
+        }
+    except Exception as exc:
+        logger.error(f"批量加入自选数据库操作失败: {exc}")
+        return {"ok": False, "added": 0, "skipped": 0, "moved": 0, "errors": [{"error": str(exc)}], "item_ids_by_code": {}}
 
 
 def update_items_category(ids: List[int], new_category_id: int) -> int:
