@@ -9,6 +9,7 @@ from psycopg2.extras import RealDictCursor
 from ...db.pg_pool import get_conn
 
 from .qe_rdagent_api_client import RdagentApiClient
+from .qe_evolution_agents import EvolutionAgents
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ class AutoEvolutionScheduler:
     """
     def __init__(self):
         self.rdagent_client = RdagentApiClient()
+        self.agents = EvolutionAgents()
         
     async def create_task(self, task_name: str, target_desc: str, max_loops: int, base_experiment_id: str) -> str:
         """
@@ -92,7 +94,10 @@ class AutoEvolutionScheduler:
                     conn.commit()
 
                 # 1. 组装本轮配置 (如果是 Loop 0，基于 base_experiment；否则由 Researcher Agent 决定)
-                config = {} # Mock config
+                # config is maintained across loops or initialized at loop 0
+                if current_loop == 0:
+                    config = {} # TODO: load from base_experiment_id
+                
                 action_type = "initial" if current_loop == 0 else "factor_adjust"
 
                 # 2. 调用 WSL 执行
@@ -105,13 +110,35 @@ class AutoEvolutionScheduler:
                     # 3. 获取回测结果
                     metrics = await self.rdagent_client.get_loop_metrics(rd_loop_id)
                     
-                    # 4. Agent 分析 (Mock)
+                    # 4. Agent 分析
+                    logger.info(f"Running Agent analysis for loop {current_loop}")
+                    analyst_report = await self.agents.run_analyst(current_loop, config, metrics)
+                    
+                    historical_sota_metrics = None
+                    with get_conn() as conn:
+                        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                            cur.execute("""
+                                SELECT l.metrics_json 
+                                FROM qe_sota_registry r
+                                JOIN qe_evolution_loops l ON r.loop_id = l.loop_id
+                                WHERE l.task_id = %s
+                                ORDER BY r.created_at DESC LIMIT 1
+                            """, (task_id,))
+                            sota_row = cur.fetchone()
+                            if sota_row and sota_row['metrics_json']:
+                                historical_sota_metrics = sota_row['metrics_json']
+                    
+                    is_sota = await self.agents.run_evaluator(metrics, historical_sota_metrics)
+                    
+                    next_config_draft = await self.agents.run_researcher(analyst_report, is_sota, config)
+                    next_config = await self.agents.run_reviewer(next_config_draft)
+                    
                     agent_analysis = {
-                        "analyst": "各项指标正常",
-                        "evaluator": "未超越历史 SOTA",
-                        "researcher": "建议下轮增加动量因子"
+                        "analyst": analyst_report,
+                        "evaluator": f"SOTA Status: {is_sota}",
+                        "researcher": "Draft generated",
+                        "reviewer": "Config validated"
                     }
-                    is_sota = False
                     
                     # 更新 LOOP 记录
                     with get_conn() as conn:
@@ -129,8 +156,17 @@ class AutoEvolutionScheduler:
                                 is_sota, 
                                 loop_id
                             ))
+                            
+                            if is_sota:
+                                cur.execute("""
+                                    INSERT INTO qe_sota_registry (loop_id, evaluation_reason)
+                                    VALUES (%s, %s)
+                                """, (loop_id, "Evaluator Agent marked as SOTA based on metrics."))
+                                
                         conn.commit()
 
+                    # 准备下一轮的 config
+                    config = next_config
                     current_loop += 1
                     
                     # 更新总进度
