@@ -20,34 +20,35 @@ load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 from .db.pg_pool import init_db_pool, close_db_pool
 from .routers import (
-    health,
     analysis,
-    hotboard,
-    watchlist,
     cloud_screening,
-    monitor,
-    qmt,
-    portfolio,
-    sector_strategy,
-    model_scheduler,
-    ingestion,
-    quant,
-    news,
-    settings,
     config_env,
-    smart_monitor,
+    health,
+    ingestion,
+    monitor,
+    news,
+    portfolio,
     prompt_packs,
+    qmt,
+    quant,
+    sector_strategy,
+    settings,
+    smart_monitor,
+    watchlist,
+    rdagent_templates,
+    rdagent_sync_admin,
+    tasks,
+    stocks,
+    quantevolver,
+    quantevolver_evolution,
     strategies,
     rdagent,
     rdagent_catalog_admin,
-    rdagent_sync_admin,
-    rdagent_templates,
     rdagent_llm_config,
     rdagent_llm_config_v2,
     rdagent_llm_config_endpoints,
-    tasks,
-    stocks,
 )
+from .routers import llm_config
 from .qlib_exporter.router import router as qlib_router
 from .ingestion.tdx_scheduler import scheduler as ingestion_scheduler
 from .schedulers.strategy_scheduler import scheduler as strategy_scheduler
@@ -270,7 +271,6 @@ def create_app() -> FastAPI:
     # 业务路由（版本化）
     app.include_router(health.router, prefix="/api/v1")
     app.include_router(analysis.router, prefix="/api/v1")
-    app.include_router(hotboard.router, prefix="/api/v1")
     app.include_router(watchlist.router, prefix="/api/v1")
     app.include_router(cloud_screening.router, prefix="/api/v1")
     app.include_router(monitor.router, prefix="/api/v1")
@@ -278,7 +278,6 @@ def create_app() -> FastAPI:
     app.include_router(strategies.router)
     app.include_router(portfolio.router, prefix="/api/v1")
     app.include_router(sector_strategy.router, prefix="/api/v1")
-    app.include_router(model_scheduler.router, prefix="/api/v1")
     app.include_router(news.router, prefix="/api/v1")
     app.include_router(settings.router, prefix="/api/v1")
     app.include_router(config_env.router, prefix="/api/v1")
@@ -294,6 +293,10 @@ def create_app() -> FastAPI:
     app.include_router(qlib_router, prefix="")
     app.include_router(tasks.router, prefix="/api/v1")
     app.include_router(stocks.router, prefix="/api/v1")
+    app.include_router(quantevolver.router, prefix="/api/v1")
+    app.include_router(quantevolver_evolution.router, prefix="/api/v1")
+    app.include_router(llm_config.router)
+    app.include_router(rdagent_catalog_admin.router, prefix="/api/v1")
 
     # ingestion / 本地数据管理接口：保持与旧 tdx_backend 相同的 /api/* 路径
     app.include_router(ingestion.router, prefix="")
