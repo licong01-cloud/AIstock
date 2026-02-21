@@ -14,9 +14,10 @@
   5. 级联清理/删除指定的实验工作区。
 - **通过这种设计，AIstock 变成了纯粹的“大脑控制中心”，网络隔离彻底完成。**
 
-### 1.2 模块化与独立路由设计
-为了防止现有的 API 文件过大，影响已有功能，演进模块在 AIstock 侧必须完全独立：
-- **独立路由**：新建 `backend/routers/quantevolver_evolution.py`，专门负责 `/api/v1/quantevolver/evolution/...` 下的所有自动演进接口。
+### 1.2 模块化、代码复用与独立路由设计
+为了防止现有的 API 文件过大，影响已有功能，演进模块在 AIstock 侧必须在架构上完全独立，但**在底层核心逻辑上完全复用**：
+- **独立路由与前端**：新建 `backend/routers/quantevolver_evolution.py`，专门负责 `/api/v1/quantevolver/evolution/...` 下的所有自动演进接口。前端也会提供完全独立于当前 QE 的新页面，绝不影响现有 QE 单次实验功能。
+- **底层代码复用**：虽然业务流独立，但每个 LOOP 的本质依然是单次实验。因此，**组装配置文件的逻辑、触发回测的代码、特别是实验结束后的多维度结果统计与图表分析脚本，都将被完全复用**。
 - **独立服务**：新建 `backend/services/quantevolver/qe_evolution_service.py` 承载状态机与 Agent 调度逻辑。
 - **独立通信客户端**：新建 `backend/services/quantevolver/qe_rdagent_api_client.py`，专门封装与物理隔离的 RDAgent 机器通信的网络请求（基于 `httpx` 或 `aiohttp`）。
 
@@ -28,6 +29,7 @@
 
 1. **实验诊断分析师 (Experiment Analyst Agent)**
    - 职责：解析回测指标，诊断当前组合的瓶颈。
+   - **输入强化**：完全复用现有 QE 单次实验跑完后生成的“多维度结果总结分析报告”（包括收益、回撤、分层图、相关性等多维数据）。这些既有成熟的统计分析结果将直接作为本 Agent 的核心输入（Context），极大提升其诊断准确性。
 2. **SOTA 评估官 (SOTA Evaluator Agent)**【独立 Agent】
    - 职责：专门负责将本轮 LOOP 结果与全局历史 SOTA 数据库对比，独立输出判定结论（是/否 SOTA，以及超越的具体维度理由）。
 3. **演进策略研究员 (Evolution Researcher Agent)**
@@ -100,10 +102,10 @@
 
 为保证第一期的快速落地且稳健，我们将两个极其高级但复杂的需求规划为 **二期实施目标**。
 
-### 6.1 阶段二：引入长期演进知识库 (Knowledge Base / RAG)
-- **RDAgent 知识库参考**：RDAgent 能够通过不断积累历史成功或失败的“经验”（如：哪些因子容易共线性，哪种市场适合哪种树模型深度），沉淀到向量数据库。
-- **QE 的 Agent 赋能**：在二期，我们将在 AIstock 侧建立 ChromaDB 或类似向量库。每次 LOOP 的 `agent_analysis` (特别是失败的教训) 都会被 Embedding 入库。
-- **效果提升**：未来的 **演进策略研究员 (Researcher)** 在决策前，会先检索类似因子组合的历史演进经验。比如：“检索到历史实验中，因子A与因子B组合会导致模型过拟合”，从而主动避开陷阱，使 Agent 具备真正的长期记忆和自我进化能力。
+### 6.1 阶段二：引入长期演进知识库 (Knowledge Base / RAG - 文件存储方案)
+- **RDAgent 知识库参考**：RDAgent 能够通过不断积累历史成功或失败的“经验”（如：哪些因子容易共线性，哪种市场适合哪种树模型深度），沉淀为经验文件。
+- **QE 的 Agent 赋能 (File-based)**：在二期，我们将**不使用复杂的向量数据库**，而是参考 RDAgent 的原生做法，使用基于文件（如 JSON/YAML 经验日志库）的方式进行管理。每次 LOOP 的 `agent_analysis` (特别是失败的教训和超参敏感度) 都会被序列化到持久化经验文件目录中。
+- **效果提升**：未来的 **演进策略研究员 (Researcher)** 在决策前，会先读取这些经验文件。比如：“发现记录显示，因子A与因子B组合会导致模型过拟合”，从而主动避开陷阱，使 Agent 具备真正的长期记忆和自我进化能力。
 
 ### 6.2 阶段二：拓展模型选择范围至所有 QLib 模型及新架构
 - **当前限制**：第一阶段由于求稳，`Evolution Planner Agent` 只能在 QE 当前配置好的 `[LightGBM, XGBoost, CatBoost, 简单线性]` 等几个成熟模型中选择或调参。
