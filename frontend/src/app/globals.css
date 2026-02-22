@@ -60,6 +60,26 @@ body {
   margin-bottom: 6px;
 }
 
+.sidebar-group-toggle {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  transition: background 0.2s ease;
+}
+
+.sidebar-group-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.toggle-icon {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
 .sidebar-group-items {
   display: flex;
   flex-direction: column;

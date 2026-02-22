@@ -7,7 +7,12 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 
-from ..infra.qmt_client import BaseQMTClient, QMTNotAvailableError, get_qmt_client_singleton
+from ..infra.qmt_client import (
+    BaseQMTClient,
+    QMTNotAvailableError,
+    get_qmt_client_singleton,
+    reset_qmt_client_singleton,
+)
 from ..monitor.qmt_monitor import (
     MonitorConfigModel,
     build_monitor_summary,
@@ -23,6 +28,16 @@ router = APIRouter(prefix="/qmt", tags=["qmt"])
 
 # 数据集统计服务实例
 _dataset_stats_service: DatasetStatsService | None = None
+
+
+def _get_trade_password() -> str:
+    return (os.getenv("QMT_TRADE_PASSWORD") or "138730").strip()
+
+
+def _verify_trade_password(password: str | None) -> None:
+    expected = _get_trade_password()
+    if not password or password != expected:
+        raise HTTPException(status_code=403, detail="交易密码错误")
 
 
 def get_dataset_stats_service() -> DatasetStatsService:
@@ -67,12 +82,18 @@ async def reload_client() -> Dict[str, Any]:
     """
 
     try:
+        old_client = _get_client()
+        try:
+            old_client.disconnect()
+        except Exception:
+            pass
+
+        reset_qmt_client_singleton()
         client = _get_client()
-        ok1, msg1 = client.disconnect()
         ok2, msg2 = client.connect()
         return {
             "ok": bool(ok2),
-            "message": f"disconnect: {msg1}; connect: {msg2}",
+            "message": f"connect: {msg2}",
             "status": client.status().__dict__,
         }
     except Exception as e:
@@ -184,6 +205,8 @@ async def place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
     - order_remark: 委托备注（可选）
     """
     try:
+        _verify_trade_password(payload.get("trade_password"))
+
         stock_code = payload.get("stock_code", "").strip()
         order_type = payload.get("order_type")
         order_volume = payload.get("order_volume")
@@ -300,6 +323,8 @@ async def cancel_order(payload: Dict[str, Any]) -> Dict[str, Any]:
     - order_sysid: 柜台合同编号
     """
     try:
+        _verify_trade_password(payload.get("trade_password"))
+
         order_id = payload.get("order_id")
         market = payload.get("market")
         order_sysid = payload.get("order_sysid")
@@ -329,6 +354,8 @@ async def batch_place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
     - orders: 订单列表，每个订单包含下单接口的所有参数
     """
     try:
+        _verify_trade_password(payload.get("trade_password"))
+
         orders = payload.get("orders", [])
         if not isinstance(orders, list) or len(orders) == 0:
             raise HTTPException(status_code=400, detail="订单列表不能为空")
@@ -416,6 +443,8 @@ async def bank_transfer_in(payload: Dict[str, Any]) -> Dict[str, Any]:
     - amount: 转账金额
     """
     try:
+        _verify_trade_password(payload.get("trade_password"))
+
         bank_no = payload.get("bank_no", "").strip()
         bank_account = payload.get("bank_account", "").strip()
         bank_pwd = payload.get("bank_pwd", "").strip()
@@ -448,6 +477,8 @@ async def bank_transfer_out(payload: Dict[str, Any]) -> Dict[str, Any]:
     - amount: 转账金额
     """
     try:
+        _verify_trade_password(payload.get("trade_password"))
+
         bank_no = payload.get("bank_no", "").strip()
         bank_account = payload.get("bank_account", "").strip()
         bank_pwd = payload.get("bank_pwd", "").strip()

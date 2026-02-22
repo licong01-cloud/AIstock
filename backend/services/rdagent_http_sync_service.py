@@ -466,6 +466,14 @@ def run_full_sync(*, mode: SyncMode = "upsert", client: Optional[RDAgentResultsA
             "alpha360": import_alpha360_meta_from_payload(alpha360_payload),
         }
 
+        # 4.5 从QLib源码回填alpha158因子的expression（RDAgent API不提供expression）
+        try:
+            from .rdagent_catalog_etl_service import backfill_alpha158_expressions
+            backfill_result = backfill_alpha158_expressions()
+            logger.info(f"Alpha158 expression回填: {backfill_result}")
+        except Exception as e:
+            logger.warning(f"Alpha158 expression回填失败（非致命）: {e}")
+
         # 5. 自动下载资产包 (Phase 3 Section 15.3)
         # 全量/UPSERT同步后，检查所有 Loop 记录，若有 asset_bundle_id 则尝试下载
         # 如果 sync_metadata_only=True，则跳过资产包下载

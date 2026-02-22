@@ -109,13 +109,18 @@ async def list_factor_source_tasks() -> Dict[str, Any]:
 @router.get("/factors", summary="查询因子 Catalog 列表")
 async def list_factors(
     source: Optional[str] = Query(None, description="因子来源过滤, 例如 qlib_alpha158/rdagent"),
+    exclude_source: Optional[str] = Query(None, description="排除的source，逗号分隔，如 alpha158,alpha360"),
     source_task_id: Optional[str] = Query(None, description="按来源 Task ID 过滤"),
     region: Optional[str] = Query(None, description="区域过滤, 例如 cn"),
     tag: Optional[str] = Query(None, description="按单个标签过滤, 如 alpha158"),
+    factor_type: Optional[str] = Query(None, description="因子类型过滤: CrossSection(截面) / TimeSeries(时序)"),
+    data_source: Optional[str] = Query(None, description="数据来源过滤: daily_pv/daily_basic/moneyflow/cyq_perf/bak_basic/multi"),
+    sort_by: Optional[str] = Query(None, description="排序字段: name/ic/sharpe/ann_ret"),
+    sort_order: Optional[str] = Query(None, description="排序方向: asc/desc"),
     limit: int = Query(50, ge=1, le=2000),
     offset: int = Query(0, ge=0),
 ) -> Dict[str, Any]:
-    """从 aistock_factor_catalog 查询因子列表, 支持按 source/region/tag/source_task_id 过滤."""
+    """从 aistock_factor_catalog 查询因子列表, 支持按 source/region/tag/source_task_id/factor_type/data_source 过滤."""
 
     conds = []
     params: list[Any] = []
@@ -123,6 +128,12 @@ async def list_factors(
     if source:
         conds.append("source = %s")
         params.append(source)
+    if exclude_source:
+        ex_list = [s.strip() for s in exclude_source.split(",") if s.strip()]
+        if ex_list:
+            placeholders = ",".join(["%s"] * len(ex_list))
+            conds.append(f"source NOT IN ({placeholders})")
+            params.extend(ex_list)
     if source_task_id:
         conds.append("source_task_id = %s")
         params.append(source_task_id)
@@ -132,10 +143,33 @@ async def list_factors(
     if tag:
         conds.append("tags ? %s")
         params.append(tag)
+    if factor_type:
+        conds.append("factor_type = %s")
+        params.append(factor_type)
+    if data_source:
+        conds.append("data_source = %s")
+        params.append(data_source)
 
     where_sql = ""
     if conds:
         where_sql = " WHERE " + " AND ".join(conds)
+
+    # 排序逻辑
+    order_by = "factor_name"  # 默认按名称排序
+    if sort_by:
+        valid_sort_fields = {
+            "name": "factor_name",
+            "ic": "ic",
+            "sharpe": "sharpe",
+            "ann_ret": "annualized_return",
+            "mdd": "max_drawdown",
+        }
+        if sort_by in valid_sort_fields:
+            order_by = valid_sort_fields[sort_by]
+            if sort_order == "desc":
+                order_by += " DESC"
+            elif sort_order == "asc":
+                order_by += " ASC"
 
     sql = """
         SELECT factor_name, expression, source, region, tags,
@@ -147,12 +181,13 @@ async def list_factors(
                source_task_id, source_code_relpath, source_code_origin, source_loop_tag, source_index,
                raw_payload,
                LEFT(code_text, 500) AS code_text_preview,
-               ic, annualized_return, max_drawdown, sharpe
+               ic, annualized_return, max_drawdown, sharpe,
+               factor_type, data_source, asset_path
         FROM aistock_factor_catalog
         {where_sql}
-        ORDER BY factor_name
+        ORDER BY {order_by}
         LIMIT %s OFFSET %s
-    """.format(where_sql=where_sql)
+    """.format(where_sql=where_sql, order_by=order_by)
 
     params_with_page = params + [limit, offset]
 
@@ -175,7 +210,8 @@ async def list_factors(
         perf, first_sota_task_id, is_sota_factor, info, best_perf, best_sharpe, best_ann, bundle_id,
         source_task_id, source_code_relpath, source_code_origin, source_loop_tag, source_index,
         raw_payload, code_text_preview,
-        ic_val, ann_ret_val, max_dd_val, sharpe_val
+        ic_val, ann_ret_val, max_dd_val, sharpe_val,
+        factor_type_val, data_source_val, asset_path_val
     ) in rows:
         items.append(
             {
@@ -214,6 +250,9 @@ async def list_factors(
                 "annualized_return": ann_ret_val,
                 "max_drawdown": max_dd_val,
                 "sharpe": sharpe_val,
+                "factor_type": factor_type_val,
+                "data_source": data_source_val,
+                "asset_path": asset_path_val,
             }
         )
 
@@ -240,7 +279,7 @@ async def get_factor_detail(
                performance_metrics, first_sota_task_id, is_sota_factor, interface_info, best_performance,
                best_performance_sharpe, best_performance_ann_ret, asset_bundle_id,
                source_task_id, source_code_relpath, source_code_origin, source_loop_tag, source_index,
-               raw_payload
+               raw_payload, code_text
         FROM aistock_factor_catalog
         {where_sql}
         LIMIT 1
@@ -259,7 +298,7 @@ async def get_factor_detail(
         created, exp_id, impl_mod, impl_func, impl_v,
         perf, first_sota_task_id, is_sota_factor, info, best_perf, best_sharpe, best_ann, bundle_id,
         source_task_id, source_code_relpath, source_code_origin, source_loop_tag, source_index,
-        raw_payload
+        raw_payload, code_text
     ) = row
 
     return {
@@ -293,6 +332,7 @@ async def get_factor_detail(
         "source_loop_tag": source_loop_tag,
         "source_index": source_index,
         "raw_payload": raw_payload,
+        "code_text": code_text,
     }
 
 
@@ -309,7 +349,7 @@ async def download_factor_source_code(
 
     where_sql = " WHERE " + " AND ".join(conds)
     sql = f"""
-        SELECT source_task_id, source_code_relpath
+        SELECT source_task_id, source_code_relpath, asset_path
         FROM aistock_factor_catalog
         {where_sql}
         ORDER BY created_at_utc DESC
@@ -323,11 +363,25 @@ async def download_factor_source_code(
     if not row:
         raise HTTPException(status_code=404, detail=f"因子 {factor_name} 不存在")
 
-    task_id, relpath = row
+    task_id, relpath, asset_path = row
+
+    aistock_root = Path(__file__).resolve().parents[2]
+
+    # 优先使用 asset_path（相对于 AIstock 根目录的 posix 路径，由回填脚本/同步服务写入）
+    if asset_path:
+        file_path = (aistock_root / asset_path).resolve()
+        try:
+            file_path.relative_to(aistock_root)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="factor_source_path_invalid")
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(path=str(file_path), filename=file_path.name, media_type="text/plain")
+
+    # 兜底：使用 source_code_relpath（旧格式，相对于 task 目录）
     if not task_id or not relpath:
         raise HTTPException(status_code=404, detail="factor_source_code_not_available")
 
-    assets_root = (Path(__file__).resolve().parents[2] / "rdagent_assets" / "rdagent_tasks").resolve()
+    assets_root = (aistock_root / "rdagent_assets" / "rdagent_tasks").resolve()
     task_dir = (assets_root / str(task_id)).resolve()
     rel = str(relpath).strip().lstrip("/\\")
     file_path = (task_dir / rel).resolve()

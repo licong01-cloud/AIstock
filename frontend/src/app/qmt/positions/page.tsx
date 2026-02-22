@@ -356,6 +356,17 @@ export default function QMTPositionsPage() {
     totalDailyProfit: positions.reduce((sum, p) => sum + p.float_profit, 0),
   };
 
+  function requestTradePassword(actionLabel: string): string | null {
+    const pwd = window.prompt(`执行${actionLabel}需要输入交易密码`, "");
+    if (pwd === null) return null;
+    const trimmed = pwd.trim();
+    if (!trimmed) {
+      setError("交易密码不能为空");
+      return null;
+    }
+    return trimmed;
+  }
+
   // 下单函数
   async function handlePlaceOrder() {
     if (!orderStockCode.trim()) {
@@ -368,6 +379,11 @@ export default function QMTPositionsPage() {
     }
     if (priceType === "FIX_PRICE" && orderPrice <= 0) {
       setError("限价单必须填写价格");
+      return;
+    }
+
+    const tradePassword = requestTradePassword("下单");
+    if (!tradePassword) {
       return;
     }
 
@@ -403,9 +419,13 @@ export default function QMTPositionsPage() {
           price: priceType === "FIX_PRICE" ? orderPrice : 0,
           strategy_name: orderStrategyName.trim(),
           order_remark: orderRemark.trim(),
+          trade_password: tradePassword,
         }),
       });
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail || data?.message || `下单失败: ${res.status}`);
+      }
       if (data.success) {
         alert(`下单成功！订单编号：${data.order_id}`);
         setShowOrderForm(false);
@@ -430,15 +450,23 @@ export default function QMTPositionsPage() {
   async function handleCancelOrder(orderId: string) {
     if (!confirm("确认撤单吗？")) return;
 
+    const tradePassword = requestTradePassword("撤单");
+    if (!tradePassword) {
+      return;
+    }
+
     setCancelingOrderId(orderId);
     setError(null);
     try {
       const res = await fetch(`${API_BASE}/qmt/cancel`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ order_id: orderId }),
+        body: JSON.stringify({ order_id: orderId, trade_password: tradePassword }),
       });
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail || data?.message || `撤单失败: ${res.status}`);
+      }
       if (data.success) {
         alert("撤单成功！");
         await loadData();
@@ -511,6 +539,11 @@ export default function QMTPositionsPage() {
       return;
     }
 
+    const tradePassword = requestTradePassword("银证转账");
+    if (!tradePassword) {
+      return;
+    }
+
     setTransferring(true);
     setError(null);
     try {
@@ -524,9 +557,13 @@ export default function QMTPositionsPage() {
           bank_account: transferBankAccount,
           bank_pwd: transferBankPwd,
           amount: transferAmount,
+          trade_password: tradePassword,
         }),
       });
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail || data?.message || `转账失败: ${res.status}`);
+      }
       if (data.success) {
         alert(`转账成功！${data.message}`);
         setTransferAmount(0);

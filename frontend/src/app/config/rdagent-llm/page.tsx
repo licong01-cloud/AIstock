@@ -531,13 +531,12 @@ export default function RDAgentLLMConfigPage() {
     return models.filter((m) => m.provider_id === providerId);
   };
 
-  // 5个RD-Agent阶段（与.env LITELLM_CHAT_MODEL_MAP一致）
+  // 4个RD-Agent阶段（与.env LITELLM_CHAT_MODEL_MAP一致）
   const rdagentStages = [
     { name: "direct_exp_gen", label: "假设生成+实验设计", description: "生成研究假设和实验方案" },
     { name: "coding", label: "代码生成", description: "生成和修改Factor/Strategy代码" },
     { name: "feedback", label: "反馈分析", description: "分析实验结果并生成反馈" },
     { name: "default", label: "默认兜底", description: "其他未定义阶段的默认配置" },
-    { name: "embedding", label: "向量嵌入", description: "文本向量化（RAG/知识库）" },
   ];
 
   return (
@@ -578,12 +577,6 @@ export default function RDAgentLLMConfigPage() {
           onClick={() => setActiveTab("stages")}
         >
           阶段映射配置
-        </button>
-        <button
-          className={activeTab === "current" ? styles.tabActive : styles.tab}
-          onClick={() => setActiveTab("current")}
-        >
-          当前配置
         </button>
         <button
           className={activeTab === "logs" ? styles.tabActive : styles.tab}
@@ -1166,86 +1159,6 @@ export default function RDAgentLLMConfigPage() {
               {loading ? "更新中..." : "保存配置"}
             </button>
           </div>
-        </div>
-      )}
-
-      {/* 当前配置 */}
-      {activeTab === "current" && (
-        <div className={styles.content}>
-          <h2>当前RD-Agent配置</h2>
-          <p className={styles.hint}>从.env文件读取的当前配置状态</p>
-
-          {currentConfig && (
-            <div className={styles.currentConfig}>
-              <div className={styles.configSection}>
-                <h3>基础配置</h3>
-                <div className={styles.configItem}>
-                  <label>默认对话模型</label>
-                  <div className={styles.configValue}>
-                    {currentConfig.base_config?.chat_model || "未配置"}
-                  </div>
-                </div>
-                <div className={styles.configItem}>
-                  <label>嵌入模型</label>
-                  <div className={styles.configValue}>
-                    {currentConfig.base_config?.embedding_model || "未配置"}
-                    {currentConfig.base_config?.embedding_api_base && (
-                      <span className={styles.configParams}>
-                        (API: {currentConfig.base_config.embedding_api_base})
-                      </span>
-                    )}
-                  </div>
-                </div>
-                {currentConfig.base_config?.reasoner_model && (
-                  <div className={styles.configItem}>
-                    <label>推理模型</label>
-                    <div className={styles.configValue}>
-                      {currentConfig.base_config.reasoner_model}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className={styles.configSection}>
-                <h3>阶段Chat模型映射</h3>
-                {currentConfig.stage_mappings &&
-                Object.keys(currentConfig.stage_mappings).length > 0 ? (
-                  Object.entries(currentConfig.stage_mappings).map(([stage, config]: any) => (
-                    <div key={stage} className={styles.configItem}>
-                      <label>{stage}</label>
-                      <div className={styles.configValue}>
-                        {config.model || "未配置"}
-                        {config.temperature && (
-                          <span className={styles.configParams}>
-                            (temp: {config.temperature}, tokens: {config.max_tokens})
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className={styles.noData}>暂无阶段映射配置</p>
-                )}
-              </div>
-
-              <div className={styles.configSection}>
-                <h3>阶段Embedding模型映射</h3>
-                {currentConfig.embedding_stage_mappings &&
-                Object.keys(currentConfig.embedding_stage_mappings).length > 0 ? (
-                  Object.entries(currentConfig.embedding_stage_mappings).map(([stage, config]: any) => (
-                    <div key={stage} className={styles.configItem}>
-                      <label>{stage}</label>
-                      <div className={styles.configValue}>
-                        {config.model || "未配置"}
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className={styles.noData}>暂无Embedding模型映射配置</p>
-                )}
-              </div>
-            </div>
-          )}
         </div>
       )}
 

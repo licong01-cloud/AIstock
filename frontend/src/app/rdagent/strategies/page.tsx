@@ -54,16 +54,6 @@ function openStrategyCatalog(strategyId: string) {
   window.open(url, "_blank");
 }
 
-function openLoopCatalog(strategyId: string) {
-  const url = `/rdagent/loops?strategy_id=${encodeURIComponent(strategyId)}`;
-  window.open(url, "_blank");
-}
-
-function openLoopDetailDrawer(strategyId: string) {
-  const url = `/rdagent/loops?strategy_id=${encodeURIComponent(strategyId)}&auto_open=true`;
-  window.open(url, "_blank");
-}
-
 export default function RDagentStrategiesPage() {
   const [strategies, setStrategies] = useState<RDStrategy[]>([]);
   const [versions, setVersions] = useState<Record<string, RDStrategyVersion[]>>({});
@@ -273,11 +263,7 @@ export default function RDagentStrategiesPage() {
                           return Number.isFinite(num) ? num.toFixed(4) : String(v).slice(0, 12);
                         };
                         return (
-                          <div
-                            style={{ display: "flex", flexWrap: "wrap", gap: 6, cursor: "pointer" }}
-                            onClick={() => openLoopDetailDrawer(s.strategy_id)}
-                            title="点击查看 loop 详细指标与路径"
-                          >
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                             <div
                               style={{
                                 padding: "4px 6px",
@@ -374,21 +360,6 @@ export default function RDagentStrategiesPage() {
                         }}
                       >
                         策略目录
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openLoopCatalog(s.strategy_id)}
-                        style={{
-                          padding: "4px 8px",
-                          borderRadius: 6,
-                          border: "1px solid #e5e7eb",
-                          background: "#f9fafb",
-                          fontSize: 12,
-                          cursor: "pointer",
-                          marginLeft: 8,
-                        }}
-                      >
-                        实验 / loop
                       </button>
                       {versions[s.strategy_id] && versions[s.strategy_id].length > 0 && (
                         <ul style={{ marginTop: 8, paddingLeft: 16, fontSize: 12 }}>

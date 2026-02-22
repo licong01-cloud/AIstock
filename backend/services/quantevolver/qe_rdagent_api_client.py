@@ -1,10 +1,9 @@
 import logging
-import asyncio
 import os
 import aiofiles
-from typing import Dict, Any, List, Optional
+import zipfile
+from typing import Dict, Any
 import httpx
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +16,9 @@ class RdagentApiClient:
         self.base_url = base_url
         self.client = httpx.AsyncClient(timeout=60.0)
         
-    async def create_and_run_loop(self, task_id: str, loop_index: int, config: Dict[str, Any]) -> str:
+    async def create_and_run_loop(
+        self, task_id: str, loop_index: int, config: Dict[str, Any], experiment_files: Dict[str, str] = None, wsl_command: str = ""
+    ) -> str:
         """
         通知 RDAgent 根据配置生成代码并启动执行 QLib 回测
         返回 RDAgent 端生成的 loop_id
@@ -25,19 +26,22 @@ class RdagentApiClient:
         url = f"{self.base_url}/tasks/{task_id}/loops"
         payload = {
             "loop_index": loop_index,
-            "config": config
+            "config": config,
+            "experiment_files": experiment_files or {},
+            "wsl_command": wsl_command
         }
         
         try:
             response = await self.client.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
-            return data.get("loop_id", f"{task_id}_L{loop_index}")
+            loop_id = data.get("loop_id")
+            if not isinstance(loop_id, str) or not loop_id:
+                raise ValueError(f"Invalid loop_id in response: {data}")
+            return loop_id
         except httpx.HTTPError as e:
             logger.error(f"Failed to create loop {loop_index} for task {task_id}: {str(e)}")
-            # Fallback to mock for development if server is down
-            logger.warning("Falling back to mock loop_id generation due to API error")
-            return f"{task_id}_L{loop_index}"
+            raise
         
     async def get_loop_status(self, loop_id: str) -> Dict[str, Any]:
         """
@@ -49,8 +53,8 @@ class RdagentApiClient:
             response.raise_for_status()
             return response.json()
         except httpx.HTTPError as e:
-            logger.warning(f"Failed to get status for loop {loop_id}, falling back to mock: {str(e)}")
-            return {"status": "completed"}
+            logger.error(f"Failed to get status for loop {loop_id}: {str(e)}")
+            raise
         
     async def get_loop_metrics(self, loop_id: str) -> Dict[str, Any]:
         """
@@ -62,13 +66,21 @@ class RdagentApiClient:
             response.raise_for_status()
             return response.json()
         except httpx.HTTPError as e:
-            logger.warning(f"Failed to get metrics for loop {loop_id}, falling back to mock: {str(e)}")
-            return {
-                "IC": 0.054,
-                "ICIR": 0.68,
-                "Annualized Return": 0.15,
-                "Max Drawdown": -0.124
-            }
+            logger.error(f"Failed to get metrics for loop {loop_id}: {str(e)}")
+            raise
+
+    async def stream_task_logs(self, task_id: str):
+        """
+        从 RDAgent 侧实时拉取任务日志流。
+        注意：需要 RDAgent 提供 /tasks/{task_id}/logs SSE 接口。
+        """
+        url = f"{self.base_url}/tasks/{task_id}/logs"
+        async with self.client.stream("GET", url) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                yield line
         
     async def download_loop_assets(self, loop_id: str, dest_dir: str) -> str:
         """
@@ -84,14 +96,15 @@ class RdagentApiClient:
                 async with aiofiles.open(zip_path, 'wb') as f:
                     async for chunk in response.aiter_bytes():
                         await f.write(chunk)
-            
-            # TODO: Extract ZIP file here using zipfile module
-            # For now, just return the directory path
+
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(dest_dir)
+
             logger.info(f"Successfully downloaded assets for {loop_id} to {zip_path}")
             return dest_dir
         except httpx.HTTPError as e:
-            logger.warning(f"Failed to download assets for {loop_id}, falling back to mock: {str(e)}")
-            return f"{dest_dir}/models_synced_mock"
+            logger.error(f"Failed to download assets for {loop_id}: {str(e)}")
+            raise
         
     async def cleanup_task_workspace(self, task_id: str) -> bool:
         """
@@ -104,4 +117,4 @@ class RdagentApiClient:
             return True
         except httpx.HTTPError as e:
             logger.error(f"Failed to cleanup workspace for task {task_id}: {str(e)}")
-            return False
+            raise

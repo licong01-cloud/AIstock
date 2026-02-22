@@ -20,7 +20,6 @@ from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from ..db.pg_pool import get_conn
-from ..services.rdagent_import_service import import_best_workspace
 from ..services.rdagent_registry_service import RDRegistryReader
 from ..services.rdagent_signals_service import (
     load_signals_for_date,
@@ -47,13 +46,6 @@ class InferenceRequest(BaseModel):
 class BatchInferenceRequest(BaseModel):
     version_tag: str = Field("latest", description="版本标签")
     trade_date: Optional[str] = Field(None, description="推理日期")
-
-
-class LoopSelectionRequest(BaseModel):
-    trade_date: Optional[str] = Field(None, description="推理日期 YYYY-MM-DD，默认当日")
-    cutoff_date: Optional[str] = Field(None, description="数据截止日期 YYYY-MM-DD；若设置，则推理取数不得晚于该日期")
-    top_k: int = Field(50, ge=1, le=500, description="返回候选数量，默认 50")
-
 
 class TaskSelectionRequest(BaseModel):
     trade_date: Optional[str] = Field(None, description="推理日期 YYYY-MM-DD，默认当日")
@@ -153,38 +145,6 @@ async def trigger_batch_inference(req: BatchInferenceRequest) -> Dict[str, Any]:
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-
-
-@router.post("/loops/{task_run_id}/{loop_id}/selection", summary="基于 loop 一键选股（TopK+行情/名称补齐）")
-def trigger_loop_selection(task_run_id: str, loop_id: int, req: LoopSelectionRequest) -> Dict[str, Any]:
-    """REQ-UI-P3-0XX: 在 loops 页面触发选股，返回 TopK 结果用于 UI 展示与加入自选池。"""
-
-    try:
-        payload = build_loop_selection(
-            task_run_id=task_run_id,
-            loop_id=loop_id,
-            trade_date=req.trade_date,
-            cutoff_date=req.cutoff_date,
-            top_k=req.top_k,
-        )
-        return {"ok": True, **payload}
-    except Exception as exc:
-        msg = str(exc)
-        logging.getLogger(__name__).error(f"Loop 选股聚合失败: {msg}", exc_info=True)
-        known_asset_issue = (
-            "parquet 回放型" in msg
-            or "Qlib handler" in msg
-            or "config_file" in msg
-            or "data_handler_config" in msg
-            or "训练" in msg and "特征" in msg and "不一致" in msg
-            or "训练特征存在缺失值" in msg
-            or "nan_cols_sample" in msg
-            or "Column_" in msg
-            or "关键数据未入库" in msg
-            or "fundamental" in msg.lower() and ("required" in msg.lower() or "failed" in msg.lower())
-            or "get_history_window" in msg and "fundamental" in msg.lower()
-        )
-        raise HTTPException(status_code=422 if known_asset_issue else 500, detail=msg)
 
 
 @router.get("/tasks/latest", summary="获取 RD-Agent 最新 task 列表（供 UI 增量同步前预览）")
@@ -647,128 +607,6 @@ async def trigger_task_selection_stream(
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
-@router.get("/loops/{task_run_id}/{loop_id}/selection/stream", summary="基于 loop 一键选股（SSE 实时日志流）")
-async def trigger_loop_selection_stream(
-    task_run_id: str,
-    loop_id: int,
-    trade_date: Optional[str] = Query(None, description="推理日期 YYYY-MM-DD，默认当日"),
-    cutoff_date: Optional[str] = Query(None, description="数据截止日期 YYYY-MM-DD；若设置，则推理取数不得晚于该日期"),
-    top_k: int = Query(50, ge=1, le=500, description="返回候选数量，默认 50"),
-):
-    reqid = str(uuid.uuid4())
-
-    q: "queue.Queue[str]" = queue.Queue()
-    done = threading.Event()
-    result_holder: Dict[str, Any] = {}
-    error_holder: Dict[str, Any] = {}
-
-    fmt = logging.Formatter("%(asctime)s %(name)s %(levelname)s: %(message)s")
-    handler = _SelectionStreamHandler(q)
-    handler.setFormatter(fmt)
-    handler.setLevel(logging.INFO)
-
-    targets = [
-        logging.getLogger("aistock.rdagent_selection"),
-        logging.getLogger("aistock.inference"),
-        logging.getLogger("aistock.timescaledb_adapter"),
-        logging.getLogger("aistock.rdagent_router"),
-    ]
-
-    async def _run() -> None:
-        token = _selection_stream_reqid.set(reqid)
-        for lg in targets:
-            try:
-                lg.addHandler(handler)
-                lg.setLevel(logging.INFO)
-                lg.propagate = True
-            except Exception:
-                pass
-        try:
-            q.put_nowait(
-                f"selection_stream_start reqid={reqid} task_run_id={task_run_id} loop_id={loop_id} trade_date={trade_date} top_k={top_k} cutoff_date={cutoff_date}"
-            )
-            payload = await run_in_threadpool(
-                build_loop_selection,
-                task_run_id=task_run_id,
-                loop_id=loop_id,
-                trade_date=trade_date,
-                cutoff_date=cutoff_date,
-                top_k=top_k,
-            )
-            result_holder["payload"] = {"ok": True, **payload}
-        except Exception as exc:
-            msg = str(exc)
-            error_holder["detail"] = msg
-            error_holder["status_code"] = 500
-            known_asset_issue = (
-                "parquet 回放型" in msg
-                or "Qlib handler" in msg
-                or "config_file" in msg
-                or "data_handler_config" in msg
-                or "训练" in msg and "特征" in msg and "不一致" in msg
-                or "训练特征存在缺失值" in msg
-                or "nan_cols_sample" in msg
-                or "Column_" in msg
-                or "关键数据未入库" in msg
-                or "fundamental" in msg.lower() and ("required" in msg.lower() or "failed" in msg.lower())
-                or "get_history_window" in msg and "fundamental" in msg.lower()
-            )
-            if known_asset_issue:
-                error_holder["status_code"] = 422
-            q.put_nowait(f"selection_stream_error status_code={error_holder['status_code']} detail={msg}")
-        finally:
-            for lg in targets:
-                try:
-                    lg.removeHandler(handler)
-                except Exception:
-                    pass
-            _selection_stream_reqid.reset(token)
-            done.set()
-
-    asyncio_task = asyncio.create_task(_run())
-
-    async def _gen():
-        yield _selection_sse_format(
-            "start",
-            json.dumps(
-                {
-                    "reqid": reqid,
-                    "task_run_id": task_run_id,
-                    "loop_id": loop_id,
-                    "trade_date": trade_date,
-                    "cutoff_date": cutoff_date,
-                    "top_k": top_k,
-                },
-                ensure_ascii=False,
-            ),
-        )
-        last_ping = time.time()
-        while not done.is_set() or not q.empty():
-            try:
-                line = q.get_nowait()
-                yield _selection_sse_format("log", line)
-                continue
-            except queue.Empty:
-                pass
-            now = time.time()
-            if now - last_ping >= 10:
-                last_ping = now
-                yield _selection_sse_format("ping", "")
-            await asyncio.sleep(0.2)
-
-        if error_holder:
-            yield _selection_sse_format("error", json.dumps(error_holder, ensure_ascii=False))
-        else:
-            yield _selection_sse_format("result", json.dumps(result_holder.get("payload") or {}, ensure_ascii=False))
-
-        try:
-            await asyncio_task
-        except Exception:
-            pass
-
-    return StreamingResponse(_gen(), media_type="text/event-stream")
-
-
 @router.post("/strategies/{strategy_id}/inference", summary="触发策略预览推理任务")
 def trigger_strategy_inference(strategy_id: str, req: InferenceRequest) -> Dict[str, Any]:
     """
@@ -808,37 +646,6 @@ def trigger_strategy_inference(strategy_id: str, req: InferenceRequest) -> Dict[
         raise HTTPException(status_code=422 if known_asset_issue else 500, detail=msg)
 
 
-@router.post("/loops/{task_run_id}/{loop_id}/replay", summary="一键重放实验推理任务")
-def trigger_loop_replay(task_run_id: str, loop_id: int, req: InferenceRequest) -> Dict[str, Any]:
-    """
-    REQ-LOOP-P3-001: 基于 loop 的一键重放能力。
-    直接从指定的 Loop 配置出发，在 AIstock 环境下重放推理过程。
-    """
-    try:
-        t_date = datetime.now()
-        if req.trade_date:
-            t_date = datetime.strptime(req.trade_date, "%Y-%m-%d")
-            
-        # 执行推理，传入 task_run_id 和 loop_id
-        scores = inference_engine.run_inference(
-            strategy_id="",  # 传空，内部会根据 loop_id 加载
-            version_tag="replay",
-            trade_date=t_date,
-            task_run_id=task_run_id,
-            loop_id=loop_id
-        )
-        
-        return {
-            "ok": True,
-            "message": f"Loop {task_run_id}/{loop_id} 重放推理任务执行成功",
-            "symbols_count": len(scores),
-            "trade_date": t_date.strftime("%Y-%m-%d")
-        }
-    except Exception as exc:
-        logging.getLogger(__name__).error(f"Loop 重放任务执行失败: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
 def _normalize_workspace_path(raw: str) -> str:
     p = (raw or "").strip()
     if os.name != "nt":
@@ -860,16 +667,6 @@ def _safe_read_json(abs_path: Path) -> Any | None:
         return json.loads(abs_path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001
         return {"_error": str(exc), "path": str(abs_path)}
-
-
-class ImportRequest(BaseModel):
-    task_run_id: str
-    loop_id: int
-    workspace_id: str
-    strategy_name: Optional[str] = None
-    strategy_kind: Optional[str] = Field(default=None, description="portfolio/single_symbol")
-    output_mode: Optional[str] = Field(default=None, description="target_weight/topk")
-    enabled: bool = True
 
 
 @router.get("/strategies", summary="列出已导入的 RD-Agent 策略")
@@ -1119,132 +916,6 @@ def list_rdagent_strategy_versions(strategy_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@router.get("/candidates", summary="列出 RD-Agent 候选（best workspace）")
-def list_candidates(
-    task_run_limit: int = Query(20, ge=1, le=200),
-    loops_per_task_limit: int = Query(50, ge=1, le=500),
-    has_result_only: bool = Query(True),
-    mode: str = Query("signals", description="candidates discovery mode: signals|best_workspace"),
-) -> Dict[str, Any]:
-    try:
-        db_path = RDRegistryReader.resolve_db_path()
-        reader = RDRegistryReader(db_path)
-        candidates: List[Dict[str, Any]] = []
-
-        if mode == "signals":
-            hints = reader.list_workspaces_with_signals(limit=500)
-            for h in hints:
-                candidates.append(
-                    {
-                        "task_run_id": h.task_run_id,
-                        "scenario": None,
-                        "loop_id": h.loop_id,
-                        "action": h.action,
-                        "has_result": None,
-                        "best_workspace_id": h.workspace_id,
-                        "workspace_path": h.workspace_path,
-                        "manifest_path": h.manifest_path,
-                        "summary_path": h.summary_path,
-                        "ic_mean": h.ic_mean,
-                        "ann_return": h.ann_return,
-                        "mdd": h.mdd,
-                        "turnover": h.turnover,
-                        "multi_score": h.multi_score,
-                        "workspace_role": h.workspace_role,
-                        "experiment_type": h.experiment_type,
-                        "has_signals": True,
-                    }
-                )
-
-            return {"registry_db_path": db_path, "candidates": candidates}
-
-        # legacy: best_workspace mode
-        task_runs = reader.list_task_runs(limit=task_run_limit)
-        for tr in task_runs:
-            loops = reader.list_loops(tr.task_run_id)
-            if loops_per_task_limit and len(loops) > loops_per_task_limit:
-                loops = loops[:loops_per_task_limit]
-
-            for lp in loops:
-                if has_result_only and not lp.has_result:
-                    continue
-                if not lp.best_workspace_id:
-                    continue
-                ws = reader.get_workspace(lp.best_workspace_id)
-                sig_parquet, sig_json = reader.find_signal_files(lp.best_workspace_id)
-                has_signals = bool(sig_parquet or sig_json)
-
-                candidates.append(
-                    {
-                        "task_run_id": tr.task_run_id,
-                        "scenario": tr.scenario,
-                        "loop_id": lp.loop_id,
-                        "action": lp.action,
-                        "has_result": bool(lp.has_result),
-                        "best_workspace_id": lp.best_workspace_id,
-                        "workspace_path": ws.workspace_path,
-                        "manifest_path": ws.manifest_path,
-                        "summary_path": ws.summary_path,
-                        "ic_mean": lp.ic_mean,
-                        "ann_return": lp.ann_return,
-                        "mdd": lp.mdd,
-                        "turnover": lp.turnover,
-                        "multi_score": lp.multi_score,
-                        "has_signals": has_signals,
-                    }
-                )
-
-        return {"registry_db_path": db_path, "candidates": candidates}
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@router.get("/candidates/detail", summary="获取候选详情（manifest/summary 预览）")
-def candidate_detail(
-    task_run_id: str = Query(...),
-    loop_id: int = Query(...),
-    workspace_id: str = Query(...),
-) -> Dict[str, Any]:
-    try:
-        db_path = RDRegistryReader.resolve_db_path()
-        reader = RDRegistryReader(db_path)
-        ws = reader.get_workspace(workspace_id)
-
-        raw_workspace_path = _normalize_workspace_path(ws.workspace_path)
-        workspace_root = Path(raw_workspace_path)
-        manifest_json = None
-        summary_json = None
-
-        if ws.manifest_path:
-            manifest_json = _safe_read_json(workspace_root / ws.manifest_path)
-        if ws.summary_path:
-            summary_json = _safe_read_json(workspace_root / ws.summary_path)
-
-        return {
-            "registry_db_path": db_path,
-            "candidate": {
-                "task_run_id": task_run_id,
-                "loop_id": loop_id,
-                "workspace_id": workspace_id,
-                "workspace_path": ws.workspace_path,
-                "workspace_role": ws.workspace_role,
-                "experiment_type": ws.experiment_type,
-                "manifest_path": ws.manifest_path,
-                "summary_path": ws.summary_path,
-                "manifest_json": manifest_json,
-                "summary_json": summary_json,
-            },
-        }
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
 @router.get("/signals/overview", summary="signals 概览")
 def signals_overview(strategy_version_id: str = Query(...)) -> Dict[str, Any]:
     try:
@@ -1275,38 +946,6 @@ def symbol_series(
     try:
         rows = load_symbol_series(strategy_version_id, symbol, limit=limit)
         return {"symbol": symbol, "rows": rows}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@router.post("/import", summary="导入 RD-Agent best workspace 到 AIstock")
-def import_candidate(req: ImportRequest) -> Dict[str, Any]:
-    try:
-        db_path = RDRegistryReader.resolve_db_path()
-        result = import_best_workspace(
-            registry_db_path=db_path,
-            task_run_id=req.task_run_id,
-            loop_id=req.loop_id,
-            workspace_id=req.workspace_id,
-            strategy_name=req.strategy_name,
-            strategy_kind=req.strategy_kind,
-            output_mode=req.output_mode,
-            enabled=req.enabled,
-        )
-        return {
-            "ok": True,
-            "strategy_id": result.strategy_id,
-            "strategy_version_id": result.strategy_version_id,
-            "artifact_root_path": result.artifact_root_path,
-            "strategy_kind": result.inferred_strategy_kind,
-            "output_mode": result.inferred_output_mode,
-        }
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -1396,41 +1035,54 @@ def refresh_candidate_tasks(
 @router.post("/tasks/{task_id}/refresh", summary="刷新指定TASK的数据")
 def refresh_single_task(task_id: str) -> Dict[str, Any]:
     """
-    清除指定TASK在数据库中的LOOP缓存，并从RD-Agent API重新获取最新数据
+    清除指定TASK在数据库中的LOOP缓存和候选任务缓存，并从RD-Agent API重新获取最新数据
     
     这将：
-    1. 删除数据库中该TASK的所有LOOP缓存记录
-    2. 从RD-Agent API获取最新的LOOP数据
-    3. 重新缓存到数据库
+    1. 删除数据库中该TASK的所有LOOP缓存记录（rdagent_candidate_loops）
+    2. 删除数据库中该TASK的候选任务缓存记录（rdagent_candidate_tasks），
+       使 list_sync_candidates 下次调用时重新从 RD-Agent API 获取最新 SOTA 数量
+    3. 从RD-Agent API获取最新的LOOP数据并重新缓存
     """
     try:
         candidate_service = get_candidate_service()
         
-        # 1. 删除数据库中的LOOP缓存
         conn = candidate_service._get_db_connection()
         cur = conn.cursor()
         
+        # 1. 删除数据库中的LOOP缓存
         cur.execute("""
             DELETE FROM rdagent.rdagent_candidate_loops
             WHERE task_id = %s
         """, (task_id,))
-        
-        deleted_count = cur.rowcount
+        deleted_loops = cur.rowcount
+
+        # 2. 删除候选任务缓存（rdagent_candidate_tasks），
+        #    使 list_sync_candidates 重新调用 v2_alignment_preview API 获取最新 SOTA 数量
+        cur.execute("""
+            DELETE FROM rdagent.rdagent_candidate_tasks
+            WHERE task_id = %s
+        """, (task_id,))
+        deleted_candidate = cur.rowcount
+
         conn.commit()
         cur.close()
         conn.close()
         
-        logging.info(f"已删除Task {task_id} 的 {deleted_count} 条LOOP缓存记录")
+        logging.info(f"已删除Task {task_id} 的 {deleted_loops} 条LOOP缓存、{deleted_candidate} 条候选任务缓存")
         
-        # 2. 强制从RD-Agent API重新获取
+        # 3. 强制从RD-Agent API重新获取LOOP数据
         loops, from_cache = candidate_service.get_task_loops(task_id, force_refresh=True)
         
         return {
             "ok": True,
             "task_id": task_id,
-            "deleted_loops": deleted_count,
+            "deleted_loops": deleted_loops,
+            "deleted_candidate_cache": deleted_candidate,
             "refreshed_loops": len(loops),
-            "message": f"已刷新Task {task_id}，清除了 {deleted_count} 条缓存，重新获取了 {len(loops)} 个LOOP"
+            "message": (
+                f"已刷新Task {task_id}：清除 {deleted_loops} 条LOOP缓存、"
+                f"{deleted_candidate} 条候选任务缓存，重新获取了 {len(loops)} 个LOOP"
+            )
         }
     except Exception as e:
         logging.error(f"刷新Task {task_id} 失败: {e}")

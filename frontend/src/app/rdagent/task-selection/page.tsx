@@ -421,7 +421,7 @@ export default function RDAgentTaskSelectionPage() {
           }}
         >
           <div style={{ fontWeight: 600, marginBottom: 8 }}>实时日志（SSE）</div>
-          <div style={{ height: 360, overflow: "auto", fontSize: 12, fontFamily: "monospace", whiteSpace: "pre" }}>
+          <div style={{ height: 360, overflow: "auto", fontSize: 12, fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
             {(logs || []).join("\n")}
           </div>
         </div>
@@ -435,7 +435,7 @@ export default function RDAgentTaskSelectionPage() {
           }}
         >
           <div style={{ fontWeight: 600, marginBottom: 8 }}>响应（原始）</div>
-          <div style={{ height: 360, overflow: "auto", fontSize: 12, fontFamily: "monospace", whiteSpace: "pre" }}>
+          <div style={{ height: 360, overflow: "auto", fontSize: 12, fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
             {JSON.stringify(result, null, 2)}
           </div>
         </div>

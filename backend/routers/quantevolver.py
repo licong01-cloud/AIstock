@@ -383,29 +383,41 @@ async def create_strategy(req: CreateStrategyRequest):
     """新建策略。"""
     try:
         import json as _json
+        import os
+        from pathlib import Path
         from ..db.pg_pool import get_conn
+        
+        # 保存源码到文件系统
+        strategies_dir = Path("F:/Dev/AIstock/rdagent_assets/qe_strategies")
+        strategies_dir.mkdir(parents=True, exist_ok=True)
+        file_path = strategies_dir / f"{req.strategy_id}.py"
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(req.source_code)
+        source_code_relpath = f"qe_strategies/{req.strategy_id}.py"
+
         with get_conn() as conn:
             with conn.cursor() as cur:
                 # 检查ID是否已存在
                 cur.execute("SELECT 1 FROM aistock_strategy_catalog WHERE strategy_id = %s", (req.strategy_id,))
                 if cur.fetchone():
                     raise HTTPException(status_code=409, detail=f"策略ID {req.strategy_id} 已存在")
+
                 cur.execute("""
                     INSERT INTO aistock_strategy_catalog (
                         strategy_id, display_name, description, strategy_type,
                         catalog_source, market, freq,
-                        source_code, default_kwargs, param_schema,
+                        source_code, source_code_relpath, default_kwargs, param_schema,
                         parent_strategy_id, created_at, updated_at
                     ) VALUES (
                         %s, %s, %s, %s,
                         'custom', %s, %s,
-                        %s, %s, %s,
+                        %s, %s, %s, %s,
                         %s, NOW(), NOW()
                     )
                 """, (
                     req.strategy_id, req.display_name, req.description, req.strategy_type,
                     req.market, req.freq,
-                    req.source_code,
+                    req.source_code, source_code_relpath,
                     _json.dumps(req.default_kwargs) if req.default_kwargs else None,
                     _json.dumps(req.param_schema) if req.param_schema else None,
                     req.parent_strategy_id,
@@ -423,6 +435,7 @@ async def update_strategy(strategy_id: str, req: UpdateStrategyRequest):
     """编辑策略。"""
     try:
         import json as _json
+        from pathlib import Path
         from ..db.pg_pool import get_conn
 
         set_parts = []
@@ -437,8 +450,18 @@ async def update_strategy(strategy_id: str, req: UpdateStrategyRequest):
             set_parts.append("strategy_type = %s")
             params.append(req.strategy_type)
         if req.source_code is not None:
+            # 同步更新文件系统中的源码
+            strategies_dir = Path("F:/Dev/AIstock/rdagent_assets/qe_strategies")
+            strategies_dir.mkdir(parents=True, exist_ok=True)
+            file_path = strategies_dir / f"{strategy_id}.py"
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(req.source_code)
+            source_code_relpath = f"qe_strategies/{strategy_id}.py"
+            
             set_parts.append("source_code = %s")
             params.append(req.source_code)
+            set_parts.append("source_code_relpath = %s")
+            params.append(source_code_relpath)
         if req.market is not None:
             set_parts.append("market = %s")
             params.append(req.market)
@@ -498,33 +521,45 @@ async def clone_strategy(strategy_id: str, req: CreateStrategyRequest):
     """从现有策略模板创建新策略。"""
     try:
         import json as _json
+        from pathlib import Path
         from ..db.pg_pool import get_conn
+        
+        # 保存源码到文件系统
+        strategies_dir = Path("F:/Dev/AIstock/rdagent_assets/qe_strategies")
+        strategies_dir.mkdir(parents=True, exist_ok=True)
+        file_path = strategies_dir / f"{req.strategy_id}.py"
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(req.source_code)
+        source_code_relpath = f"qe_strategies/{req.strategy_id}.py"
+
         with get_conn() as conn:
             with conn.cursor() as cur:
                 # 检查模板策略是否存在
                 cur.execute("SELECT 1 FROM aistock_strategy_catalog WHERE strategy_id = %s", (strategy_id,))
                 if not cur.fetchone():
                     raise HTTPException(status_code=404, detail=f"模板策略 {strategy_id} 不存在")
+
                 # 检查新ID是否已存在
                 cur.execute("SELECT 1 FROM aistock_strategy_catalog WHERE strategy_id = %s", (req.strategy_id,))
                 if cur.fetchone():
                     raise HTTPException(status_code=409, detail=f"策略ID {req.strategy_id} 已存在")
+
                 cur.execute("""
                     INSERT INTO aistock_strategy_catalog (
                         strategy_id, display_name, description, strategy_type,
                         catalog_source, market, freq,
-                        source_code, default_kwargs, param_schema,
+                        source_code, source_code_relpath, default_kwargs, param_schema,
                         parent_strategy_id, created_at, updated_at
                     ) VALUES (
                         %s, %s, %s, %s,
                         'custom', %s, %s,
-                        %s, %s, %s,
+                        %s, %s, %s, %s,
                         %s, NOW(), NOW()
                     )
                 """, (
                     req.strategy_id, req.display_name, req.description, req.strategy_type,
                     req.market, req.freq,
-                    req.source_code,
+                    req.source_code, source_code_relpath,
                     _json.dumps(req.default_kwargs) if req.default_kwargs else None,
                     _json.dumps(req.param_schema) if req.param_schema else None,
                     strategy_id,  # parent_strategy_id = 模板策略ID

@@ -289,6 +289,40 @@ def import_alpha360_meta_from_payload(data: JsonDict) -> ImportSummary:
     return import_alpha_meta_from_payload(data, kind="alpha360")
 
 
+def backfill_alpha158_expressions() -> Dict[str, int]:
+    """从QLib源码提取Alpha158因子的表达式，回填到aistock_factor_catalog中缺失expression的alpha158因子。
+
+    Returns:
+        {"updated": N, "total_qlib": M} 更新数量和QLib因子总数
+    """
+    try:
+        from qlib.contrib.data.handler import Alpha158 as _Alpha158
+        handler = _Alpha158.__new__(_Alpha158)
+        expressions, names = handler.get_feature_config()
+    except Exception as exc:
+        print(f"[rdagent][etl] backfill_alpha158_expressions: QLib Alpha158 不可用: {exc}")
+        return {"updated": 0, "total_qlib": 0, "error": str(exc)}
+
+    factor_expr_map = dict(zip(names, expressions))
+
+    updated = 0
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for name, expr in factor_expr_map.items():
+                cur.execute("""
+                    UPDATE aistock_factor_catalog
+                    SET expression = %s
+                    WHERE factor_name = %s AND source = 'alpha158'
+                      AND (expression IS NULL OR expression = '')
+                """, (expr, name))
+                if cur.rowcount > 0:
+                    updated += 1
+
+    if updated:
+        print(f"[rdagent][etl] backfill_alpha158_expressions: 回填了 {updated} 个因子的expression")
+    return {"updated": updated, "total_qlib": len(factor_expr_map)}
+
+
 def import_factor_catalog_from_payload(data: JsonDict) -> ImportSummary:
     # 2026-01-05 Fix: 增加健壮的 Key 探测逻辑，确保能从多种 JSON 结构中提取因子
     factors = data.get("factors")

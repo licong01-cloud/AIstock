@@ -157,14 +157,6 @@ export default function RDagentStrategyCatalogPage() {
     }
   }
 
-  function openLoopPage(item: StrategyCatalogItem) {
-    if (!item.workspace_example?.task_run_id || item.workspace_example?.loop_id == null) return;
-    const url = `/rdagent/loops?strategy_id=${encodeURIComponent(
-      item.strategy_id,
-    )}`;
-    window.open(url, "_blank");
-  }
-
   return (
     <main style={{ padding: 24 }}>
       <section
@@ -234,26 +226,9 @@ export default function RDagentStrategyCatalogPage() {
             重新加载
           </button>
           <span style={{ fontSize: 12, color: "#6b7280" }}>总计 {total} 条策略模板</span>
-          <button
-            type="button"
-            onClick={() => window.location.href = '/rdagent/multi-selection'}
-            style={{
-              marginLeft: "auto",
-              padding: "6px 16px",
-              borderRadius: 6,
-              background: "#6366f1",
-              color: "#fff",
-              border: "none",
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4
-            }}
-          >
-            📊 进入选股中心 ({selectedForInference.length})
-          </button>
+          <span style={{ marginLeft: "auto", fontSize: 12, color: "#6b7280" }}>
+            选股中心已下线（当前已勾选 {selectedForInference.length} 条）
+          </span>
         </div>
       </section>
 
@@ -387,21 +362,6 @@ export default function RDagentStrategyCatalogPage() {
                     </td>
                     <td style={{ padding: 8, fontSize: 12 }}>
                       <div style={{ display: "flex", gap: 8 }}>
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); openLoopPage(s); }}
-                          disabled={!s.workspace_example?.task_run_id || s.workspace_example?.loop_id == null}
-                          style={{
-                            padding: "4px 8px",
-                            borderRadius: 6,
-                            border: "1px solid #e5e7eb",
-                            background: "#f9fafb",
-                            fontSize: 12,
-                            cursor: !s.workspace_example?.task_run_id || s.workspace_example?.loop_id == null ? "not-allowed" : "pointer",
-                          }}
-                        >
-                          查看相关 loop
-                        </button>
                         <button
                           type="button"
                           onClick={(e) => { e.stopPropagation(); toggleForInference(s.strategy_id); }}

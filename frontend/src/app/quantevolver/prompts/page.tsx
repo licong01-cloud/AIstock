@@ -21,29 +21,39 @@ type Prompt = {
 type LLMModel = { id: string; name: string; source: string };
 
 const AGENT_LABELS: Record<string, string> = {
-  factor_analyst: "因子分析师",
+  factor_analyst: "因子分析员",
   portfolio_architect: "组合架构师",
-  model_analyst: "模型分析师",
-  experiment_analyst: "实验结果分析师",
+  model_analyst: "模型分析员",
+  experiment_analyst: "实验结果分析员",
   factor_repairer: "因子代码修复Agent",
-  factor_analyzer: "因子改造审核Agent",
+  factor_analyzer: "因子特征分析Agent",
+  evolution_analyst: "演进诊断分析师(Analyst)",
+  evolution_evaluator: "SOTA评估官(Evaluator)",
+  evolution_researcher: "演进策略研究员(Researcher)",
+  evolution_reviewer: "配置审查员(Reviewer)",
 };
 
 // 分组配置：用于在模型配置区域分组展示
 const AGENT_GROUPS: { label: string; color: string; types: string[] }[] = [
+  {
+    label: "QE自动演进(Auto-Evolution)",
+    color: "#ec4899", // Pink
+    types: ["evolution_analyst", "evolution_evaluator", "evolution_researcher", "evolution_reviewer"],
+  },
   {
     label: "QE选股分析",
     color: "#7c3aed",
     types: ["factor_analyst", "portfolio_architect", "model_analyst", "experiment_analyst"],
   },
   {
-    label: "因子代码改造",
+    label: "因子代码改写",
     color: "#0891b2",
     types: ["factor_repairer", "factor_analyzer"],
   },
 ];
 
 const AGENT_TYPES = [
+  "evolution_analyst", "evolution_evaluator", "evolution_researcher", "evolution_reviewer",
   "factor_analyst", "portfolio_architect", "model_analyst", "experiment_analyst",
   "factor_repairer", "factor_analyzer",
 ];
@@ -57,7 +67,7 @@ export default function PromptsPage() {
   const [saving, setSaving] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [newPrompt, setNewPrompt] = useState({
-    agent_type: "factor_analyst",
+    agent_type: "evolution_analyst",
     prompt_key: "",
     display_name: "",
     description: "",
@@ -173,7 +183,7 @@ export default function PromptsPage() {
         alert("创建成功！");
         setShowCreate(false);
         setNewPrompt({
-          agent_type: "factor_analyst", prompt_key: "", display_name: "",
+          agent_type: "evolution_analyst", prompt_key: "", display_name: "",
           description: "", system_prompt: "", user_prompt_template: "",
         });
         loadPrompts();
@@ -363,13 +373,19 @@ export default function PromptsPage() {
             style={{ padding: "6px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db" }}
           >
             <option value="">全部Agent</option>
-            <optgroup label="QE选股分析">
-              <option value="factor_analyst">因子分析师</option>
-              <option value="portfolio_architect">组合架构师</option>
-              <option value="model_analyst">模型分析师</option>
-              <option value="experiment_analyst">实验结果分析师</option>
+            <optgroup label="QE自动演进">
+              <option value="evolution_analyst">演进诊断分析师(Analyst)</option>
+              <option value="evolution_evaluator">SOTA评估官(Evaluator)</option>
+              <option value="evolution_researcher">演进策略研究员(Researcher)</option>
+              <option value="evolution_reviewer">配置审查员(Reviewer)</option>
             </optgroup>
-            <optgroup label="因子代码改造">
+            <optgroup label="QE选股分析">
+              <option value="factor_analyst">因子分析员</option>
+              <option value="portfolio_architect">组合架构师</option>
+              <option value="model_analyst">模型分析员</option>
+              <option value="experiment_analyst">实验结果分析员</option>
+            </optgroup>
+            <optgroup label="因子代码改写">
               <option value="factor_repairer">因子代码修复Agent</option>
               <option value="factor_analyzer">因子改造审核Agent</option>
             </optgroup>
@@ -470,21 +486,26 @@ export default function PromptsPage() {
               <select
                 value={newPrompt.agent_type}
                 onChange={e => setNewPrompt({ ...newPrompt, agent_type: e.target.value })}
-                style={inputStyle}
+                style={{ padding: "6px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db" }}
               >
-                <optgroup label="QE选股分析">
-                  <option value="factor_analyst">因子分析师</option>
-                  <option value="portfolio_architect">组合架构师</option>
-                  <option value="model_analyst">模型分析师</option>
-                  <option value="experiment_analyst">实验结果分析师</option>
+                <option value="">全部Agent</option>
+                <optgroup label="QE自动演进">
+                  <option value="evolution_analyst">演进诊断分析师(Analyst)</option>
+                  <option value="evolution_evaluator">SOTA评估官(Evaluator)</option>
+                  <option value="evolution_researcher">演进策略研究员(Researcher)</option>
+                  <option value="evolution_reviewer">配置审查员(Reviewer)</option>
                 </optgroup>
-                <optgroup label="因子代码改造">
+                <optgroup label="QE选股分析">
+                  <option value="factor_analyst">因子分析员</option>
+                  <option value="portfolio_architect">组合架构师</option>
+                  <option value="model_analyst">模型分析员</option>
+                  <option value="experiment_analyst">实验结果分析员</option>
+                </optgroup>
+                <optgroup label="因子代码改写">
                   <option value="factor_repairer">因子代码修复Agent</option>
                   <option value="factor_analyzer">因子改造审核Agent</option>
                 </optgroup>
               </select>
-            </label>
-            <label style={{ fontSize: 12 }}>
               <span style={{ fontWeight: 600 }}>提示词键名</span>
               <input
                 placeholder="如: analyze_factor_v2"

@@ -447,14 +447,32 @@ export default function StrategiesPage() {
 
   async function handleToggleEnabled(strategyId: string, enabled: boolean) {
     try {
+      const nextEnabled = !enabled;
+      let passwordPart = "";
+      if (nextEnabled) {
+        const pwd = window.prompt("启用策略需要输入交易密码", "");
+        if (pwd === null) {
+          return;
+        }
+        const trimmedPwd = pwd.trim();
+        if (!trimmedPwd) {
+          alert("交易密码不能为空");
+          return;
+        }
+        passwordPart = `&trade_password=${encodeURIComponent(trimmedPwd)}`;
+      }
+
       const res = await fetch(
-        `${API_BASE}/strategies/config/${strategyId}/enable?enabled=${!enabled}`,
+        `${API_BASE}/strategies/config/${strategyId}/enable?enabled=${nextEnabled}${passwordPart}`,
         {
           method: "PATCH",
         }
       );
 
-      if (!res.ok) throw new Error("操作失败");
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.detail || "操作失败");
+      }
 
       loadData();
     } catch (e: any) {

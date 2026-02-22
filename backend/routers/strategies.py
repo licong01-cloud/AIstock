@@ -1,6 +1,7 @@
 """策略交易 API 路由（QMT 交易系统）"""
 from __future__ import annotations
 
+import os
 import threading
 from typing import Any, Dict, List, Optional
 
@@ -11,6 +12,16 @@ from ..infra.strategy_executor import SimpleStrategyExecutor
 from ..schedulers.strategy_scheduler import scheduler as strategy_scheduler
 
 router = APIRouter(prefix="/api/v1/strategies", tags=["strategies"])
+
+
+def _get_trade_password() -> str:
+    return (os.getenv("QMT_TRADE_PASSWORD") or "138730").strip()
+
+
+def _verify_trade_password(password: str | None) -> None:
+    expected = _get_trade_password()
+    if not password or password != expected:
+        raise HTTPException(status_code=403, detail="交易密码错误")
 
 
 class ExecuteSignalRequest(BaseModel):
@@ -284,11 +295,18 @@ def delete_strategy_config(strategy_id: str) -> Dict[str, Any]:
 
 
 @router.patch("/config/{strategy_id}/enable", summary="启用/禁用策略")
-def toggle_strategy_enabled(strategy_id: str, enabled: bool = Query(..., description="是否启用")) -> Dict[str, Any]:
+def toggle_strategy_enabled(
+    strategy_id: str,
+    enabled: bool = Query(..., description="是否启用"),
+    trade_password: Optional[str] = Query(None, description="交易密码（启用时必填）"),
+) -> Dict[str, Any]:
     """启用或禁用策略"""
     try:
         from ..db.pg_pool import get_conn
         from datetime import datetime
+
+        if enabled:
+            _verify_trade_password(trade_password)
 
         with get_conn() as conn:
             with conn.cursor() as cur:

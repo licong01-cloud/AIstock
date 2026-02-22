@@ -76,6 +76,7 @@ const NAV_GROUPS: {
       { href: "/quantevolver/compose", label: "🔧 组合配置" },
       { href: "/quantevolver/experiments", label: "🧪 实验历史" },
       { href: "/quantevolver/evolution", label: "🔁 自动演进" },
+      { href: "/quantevolver/evolution/sota", label: "🏆 SOTA 殿堂" },
       { href: "/quantevolver/selection", label: "🚀 实验选股" },
       { href: "/quantevolver/prompts", label: "📝 提示词配置" },
     ],

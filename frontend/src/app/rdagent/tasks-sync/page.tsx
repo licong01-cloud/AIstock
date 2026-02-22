@@ -41,8 +41,12 @@ export default function RDAgentTaskSyncPage() {
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<SyncCandidateItem[]>([]);
 
-  const [limit, setLimit] = useState<number>(50);
+  const [limit, setLimit] = useState<number>(100);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
+
+  // 分页状态
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(100);
 
   const [syncRunning, setSyncRunning] = useState(false);
   const [syncResult, setSyncResult] = useState<any>(null);
@@ -68,6 +72,13 @@ export default function RDAgentTaskSyncPage() {
     [selected],
   );
 
+  // 分页计算
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const pagedItems = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return items.slice(start, start + pageSize);
+  }, [items, currentPage, pageSize]);
+
   async function loadCandidates() {
     setLoading(true);
     setError(null);
@@ -79,6 +90,7 @@ export default function RDAgentTaskSyncPage() {
       }
       const data = (await res.json()) as SyncCandidatesResp;
       setItems(data.items || []);
+      setCurrentPage(1);
 
       // 合并选中状态：新数据里不存在的自动剔除
       setSelected((prev) => {
@@ -400,6 +412,11 @@ export default function RDAgentTaskSyncPage() {
       >
         <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 8 }}>
           共 {items.length} 个候选（来自 RD-Agent latest + summary，与本地 task_catalog 合并）
+          {items.length > pageSize && (
+            <span style={{ marginLeft: 8 }}>
+              | 第 {currentPage}/{totalPages} 页，每页 {pageSize} 条
+            </span>
+          )}
         </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -416,7 +433,7 @@ export default function RDAgentTaskSyncPage() {
               </tr>
             </thead>
             <tbody>
-              {(items || []).map((it) => {
+              {(pagedItems || []).map((it) => {
                 const tid = String(it.task_id || "");
                 const local = it.local || null;
                 // 同步状态：未同步/同步成功/同步失败
@@ -715,6 +732,60 @@ export default function RDAgentTaskSyncPage() {
             </tbody>
           </table>
         </div>
+
+        {/* 分页控件 */}
+        {items.length > 0 && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12 }}>
+              <span style={{ color: "#6b7280" }}>每页</span>
+              <select
+                value={pageSize}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                style={{ padding: "4px 8px", fontSize: 12, borderRadius: 4, border: "1px solid #d1d5db" }}
+              >
+                {[20, 50, 100, 200].map((n) => (
+                  <option key={n} value={n}>{n} 条</option>
+                ))}
+              </select>
+              <span style={{ color: "#6b7280" }}>
+                共 {items.length} 条
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <button
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage <= 1}
+                style={{ padding: "4px 8px", fontSize: 11, cursor: currentPage <= 1 ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: currentPage <= 1 ? "#f3f4f6" : "#fff" }}
+              >
+                首页
+              </button>
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1}
+                style={{ padding: "4px 10px", fontSize: 11, cursor: currentPage <= 1 ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: currentPage <= 1 ? "#f3f4f6" : "#fff" }}
+              >
+                上一页
+              </button>
+              <span style={{ fontSize: 12, fontWeight: 500, minWidth: 80, textAlign: "center" }}>
+                {currentPage} / {totalPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages}
+                style={{ padding: "4px 10px", fontSize: 11, cursor: currentPage >= totalPages ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: currentPage >= totalPages ? "#f3f4f6" : "#fff" }}
+              >
+                下一页
+              </button>
+              <button
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage >= totalPages}
+                style={{ padding: "4px 8px", fontSize: 11, cursor: currentPage >= totalPages ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: currentPage >= totalPages ? "#f3f4f6" : "#fff" }}
+              >
+                末页
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       {syncResult && (

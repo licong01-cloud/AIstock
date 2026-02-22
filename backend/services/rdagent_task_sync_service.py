@@ -218,23 +218,31 @@ class RDAgentTaskSyncService:
             # ============================================================
             # 步骤1: 调用sota_factor_anchor API获取完整SOTA信息
             # ============================================================
+            # 注意：混合task（有SOTA模型但无SOTA因子）会返回no_sota_exp_in_log，
+            # 此时不应报错退出，而是标记为无SOTA因子继续后续步骤
             logger.info(f"[{tid}] 调用sota_factor_anchor API...")
+            has_sota_factors = False
             try:
                 anchor_resp = _rdagent_client.get_task_sota_factor_anchor(task_id=tid)
-                if not anchor_resp or not anchor_resp.get("ok"):
+                if anchor_resp and anchor_resp.get("ok"):
+                    has_sota_factors = True
+                    diagnostics["sota_anchor"] = {
+                        "last_sota_factor_index": anchor_resp.get("last_sota_factor_index"),
+                        "model_exp_index": anchor_resp.get("model_exp_index"),
+                        "resolved_model_weight_key": anchor_resp.get("resolved_model_weight_key"),
+                        "resolved_model_weight_source": anchor_resp.get("resolved_model_weight_source"),
+                        "resolved_factor_entry_key": anchor_resp.get("resolved_factor_entry_key"),
+                        "based_factors_count": len(anchor_resp.get("based_factor_entries", [])),
+                    }
+                else:
                     error_msg = anchor_resp.get("error") if anchor_resp else "API返回空"
-                    raise RuntimeError(f"sota_factor_anchor API失败: {error_msg}")
-                
-                diagnostics["sota_anchor"] = {
-                    "last_sota_factor_index": anchor_resp.get("last_sota_factor_index"),
-                    "model_exp_index": anchor_resp.get("model_exp_index"),
-                    "resolved_model_weight_key": anchor_resp.get("resolved_model_weight_key"),
-                    "resolved_model_weight_source": anchor_resp.get("resolved_model_weight_source"),
-                    "resolved_factor_entry_key": anchor_resp.get("resolved_factor_entry_key"),
-                    "based_factors_count": len(anchor_resp.get("based_factor_entries", [])),
-                }
+                    logger.warning(f"[{tid}] sota_factor_anchor无SOTA因子: {error_msg}")
+                    diagnostics["sota_anchor"] = {"ok": False, "error": error_msg}
+                    anchor_resp = anchor_resp or {}
             except Exception as e:
-                raise RuntimeError(f"调用sota_factor_anchor API失败: {e}")
+                logger.warning(f"[{tid}] sota_factor_anchor调用异常: {e}")
+                diagnostics["sota_anchor"] = {"ok": False, "error": str(e)}
+                anchor_resp = {}
 
             # ============================================================
             # 步骤2: 下载模型权重（双重定位：file_dict → mlruns）
@@ -348,6 +356,8 @@ class RDAgentTaskSyncService:
             v2_preview_data = None  # V2 preview返回的完整数据（含sota_factors、factor_order等）
             
             # 调用v2_alignment_preview获取对齐数据（唯一可信的factor_order来源）
+            # 注意：混合task（有SOTA模型但无SOTA因子）的v2_alignment_preview也会返回失败，
+            # 此时跳过因子对齐，继续模型同步
             try:
                 import requests as _req
                 base_url = _rdagent_client.base_url.rstrip("/")
@@ -364,31 +374,40 @@ class RDAgentTaskSyncService:
                     
                     if not v2_alpha:
                         raise RuntimeError("V2 preview未返回alpha因子列表")
-                    if not v2_sota:
-                        raise RuntimeError("V2 preview未返回SOTA因子列表")
                     
-                    # 严格对齐验证：alpha + sota 必须等于 model_feature_count
-                    expected_total = len(v2_alpha) + len(v2_sota)
-                    if v2_model_features is not None and expected_total != v2_model_features:
-                        raise RuntimeError(
-                            f"V2 preview对齐验证失败: alpha({len(v2_alpha)}) + sota({len(v2_sota)}) = {expected_total} "
-                            f"!= model_feature_count({v2_model_features})"
-                        )
+                    # SOTA因子可以为空（混合task可能只有模型没有因子）
+                    if not v2_sota:
+                        logger.warning(f"[{tid}] V2 preview未返回SOTA因子列表，此task可能只有模型")
+                        diagnostics["warnings"].append("V2 preview未返回SOTA因子列表")
+                    
+                    # 对齐验证（仅在有SOTA因子时执行）
+                    if v2_sota:
+                        expected_total = len(v2_alpha) + len(v2_sota)
+                        if v2_model_features is not None and expected_total != v2_model_features:
+                            raise RuntimeError(
+                                f"V2 preview对齐验证失败: alpha({len(v2_alpha)}) + sota({len(v2_sota)}) = {expected_total} "
+                                f"!= model_feature_count({v2_model_features})"
+                            )
                     
                     alpha_baseline_factors = v2_alpha
                     alpha_source = f"v2_alignment_preview/{v2_data.get('alpha_source', 'unknown')}"
                     v2_preview_data = v2_data
+                    expected_total = len(v2_alpha) + len(v2_sota)
                     logger.info(
                         f"[{tid}] V2 preview获取成功: {len(v2_alpha)}个alpha + {len(v2_sota)}个SOTA = {expected_total}个因子, "
                         f"model_feature_count={v2_model_features}, is_aligned={v2_is_aligned}, "
                         f"source={v2_data.get('sota_source', '?')}"
                     )
                 else:
-                    raise RuntimeError(f"V2 preview返回失败: {v2_data.get('error')}")
+                    v2_error = v2_data.get('error') if v2_data else 'empty'
+                    logger.warning(f"[{tid}] V2 preview返回失败: {v2_error}，此task可能无SOTA因子实验")
+                    diagnostics["warnings"].append(f"V2 preview失败: {v2_error}")
+                    # 不报错，继续后续步骤（模型同步等）
             except RuntimeError:
                 raise
             except Exception as v2_err:
-                raise RuntimeError(f"V2 alignment preview调用失败: {v2_err}")
+                logger.warning(f"[{tid}] V2 alignment preview调用异常: {v2_err}")
+                diagnostics["warnings"].append(f"V2 preview异常: {v2_err}")
             
             diagnostics["alpha_baseline_factors"] = {
                 "count": len(alpha_baseline_factors),
@@ -397,78 +416,129 @@ class RDAgentTaskSyncService:
             }
 
             # ============================================================
-            # 步骤4: 下载主因子和所有based factors
+            # 步骤4: 通过complete_assets API获取所有SOTA因子代码
             # ============================================================
+            # 设计原则：
+            # - 使用complete_assets API获取所有SOTA因子代码（anchor只返回最后一轮的主因子）
+            # - 每个因子保存为独立的原始文件（factor_{name}.py），保持RDAgent原始代码不修改
+            # - 合并所有因子代码到factor.py，推理引擎逐个执行calculate_函数
             all_factors = []
             
-            # 4.1 下载主因子
-            resolved_factor_key = anchor_resp.get("resolved_factor_entry_key")
-            if resolved_factor_key:
-                logger.info(f"[{tid}] 下载主因子: {resolved_factor_key}")
-                try:
-                    factor_bytes = _rdagent_client.download_task_asset_bytes(tid, resolved_factor_key)
-                    if factor_bytes:
-                        factor_path = task_dir / "factor.py"
-                        
-                        # 保存原始因子代码，不做任何修改
-                        # 推理引擎(inference_engine.py)已能直接调用 calculate_* 函数
-                        # 数据环境兼容（索引名称、instrument格式、列去重等）由推理引擎在数据准备阶段处理
-                        factor_code = factor_bytes.decode('utf-8', errors='ignore')
-                        
-                        # 仅添加 compute 包装函数（过渡期兼容旧调用路径）
-                        import re
-                        calc_func_match = re.search(r'def\s+(calculate_\w+)\s*\(', factor_code)
-                        if calc_func_match:
-                            calc_func_name = calc_func_match.group(1)
-                            wrapper_code = f"\n\n# AIstock兼容性包装（过渡期）\ndef compute(*args, **kwargs):\n    return {calc_func_name}()\n"
-                            factor_code += wrapper_code
-                            factor_bytes = factor_code.encode('utf-8')
-                            logger.info(f"[{tid}] 已添加compute包装函数，包装{calc_func_name}（原始代码未修改）")
-                        
-                        factor_path.write_bytes(factor_bytes)
-                        all_factors.append({
-                            "type": "main",
-                            "key": resolved_factor_key,
-                            "path": "factor.py",
-                            "size": len(factor_bytes),
-                        })
-                        diagnostics["main_factor"] = {"key": resolved_factor_key, "size": len(factor_bytes)}
-                        logger.info(f"[{tid}] 主因子下载成功")
-                except Exception as e:
-                    diagnostics["warnings"].append(f"主因子下载失败: {e}")
-            
-            # 4.2 下载所有based factors
-            based_factor_entries = anchor_resp.get("based_factor_entries", [])
-            based_factors_dir = task_dir / "based_factors"
-            based_factors_dir.mkdir(exist_ok=True)
-            
-            for i, entry in enumerate(based_factor_entries):
-                based_key = entry.get("resolved_factor_entry_key")
-                if not based_key:
-                    continue
+            try:
+                import requests as _req
+                base_url = _rdagent_client.base_url.rstrip("/")
+                ca_url = f"{base_url}/tasks/{tid}/complete_assets"
+                logger.info(f"[{tid}] 调用complete_assets API获取所有因子代码...")
+                ca_resp = _req.get(ca_url, timeout=600.0)
+                ca_resp.raise_for_status()
+                ca_data = ca_resp.json()
+                
+                if not ca_data or not ca_data.get("ok"):
+                    raise RuntimeError(f"complete_assets API失败: {ca_data.get('error') if ca_data else 'empty'}")
+                
+                factor_codes = ca_data.get("factor_codes", [])
+                logger.info(f"[{tid}] complete_assets返回 {len(factor_codes)} 个因子代码")
+                
+                if factor_codes:
+                    # 保存每个因子的原始代码为独立文件
+                    factors_dir = task_dir / "factors"
+                    factors_dir.mkdir(exist_ok=True)
                     
-                logger.info(f"[{tid}] 下载based factor {i}: {based_key}")
-                try:
-                    based_bytes = _rdagent_client.download_task_asset_bytes(tid, based_key)
-                    if based_bytes:
-                        # 保存为based_factor_{i}.py
-                        based_path = based_factors_dir / f"based_factor_{i}.py"
-                        based_path.write_bytes(based_bytes)
+                    # 合并所有因子代码到factor.py（保持原始代码，仅拼接）
+                    merged_lines = [
+                        "# 合并的SOTA因子文件（由task同步自动生成）",
+                        "# 每个calculate_函数对应一个独立的SOTA因子",
+                        "# 原始代码未做任何修改，直接兼容QLib环境",
+                        "",
+                    ]
+                    
+                    # 收集所有import语句（去重）
+                    seen_imports = set()
+                    all_func_bodies = []
+                    
+                    for i, code_info in enumerate(factor_codes):
+                        factor_name = code_info.get("factor_name", f"factor_{i}")
+                        code_content = code_info.get("code", "")
+                        
+                        if not code_content:
+                            diagnostics["warnings"].append(f"因子 {factor_name} 代码为空")
+                            continue
+                        
+                        # 保存独立的原始因子文件（不做任何修改）
+                        ind_path = factors_dir / f"{factor_name}.py"
+                        ind_path.write_text(code_content, encoding="utf-8")
+                        
                         all_factors.append({
-                            "type": "based",
+                            "type": "sota",
                             "index": i,
-                            "key": based_key,
-                            "path": f"based_factors/based_factor_{i}.py",
-                            "size": len(based_bytes),
+                            "factor_name": factor_name,
+                            "path": f"factors/{factor_name}.py",
+                            "size": len(code_content),
                         })
-                        logger.info(f"[{tid}] based factor {i}下载成功")
-                except Exception as e:
-                    diagnostics["warnings"].append(f"based factor {i}下载失败: {e}")
+                        
+                        # 分离import语句和函数体
+                        import_lines = []
+                        body_lines = []
+                        for line in code_content.split('\n'):
+                            stripped = line.strip()
+                            if stripped.startswith('import ') or stripped.startswith('from '):
+                                if stripped not in seen_imports:
+                                    seen_imports.add(stripped)
+                                    # 使用stripped确保import在顶层无缩进（原始代码中import可能在函数体内有缩进）
+                                    import_lines.append(stripped)
+                            else:
+                                body_lines.append(line)
+                        
+                        all_func_bodies.append((factor_name, '\n'.join(body_lines)))
+                        if import_lines:
+                            merged_lines.extend(import_lines)
+                        
+                        logger.info(f"[{tid}] 因子 {factor_name} 代码已保存 ({len(code_content)} chars)")
+                    
+                    # 拼接所有函数体
+                    merged_lines.append("")
+                    for factor_name, body in all_func_bodies:
+                        merged_lines.append(f"# --- SOTA因子: {factor_name} ---")
+                        merged_lines.append(body)
+                        merged_lines.append("")
+                    
+                    # 写入合并的factor.py
+                    factor_py_path = task_dir / "factor.py"
+                    merged_code = '\n'.join(merged_lines)
+                    factor_py_path.write_text(merged_code, encoding="utf-8")
+                    
+                    logger.info(
+                        f"[{tid}] 合并factor.py生成成功: {len(factor_codes)}个因子, "
+                        f"{len(merged_code)} chars"
+                    )
+                else:
+                    diagnostics["warnings"].append("complete_assets未返回因子代码")
+                    
+            except Exception as e:
+                diagnostics["warnings"].append(f"complete_assets因子代码获取失败: {e}")
+                logger.warning(f"[{tid}] complete_assets因子代码获取失败: {e}")
+                # 降级：尝试用anchor的主因子（只有1个）
+                resolved_factor_key = anchor_resp.get("resolved_factor_entry_key")
+                if resolved_factor_key:
+                    logger.info(f"[{tid}] 降级：使用anchor主因子 {resolved_factor_key}")
+                    try:
+                        factor_bytes = _rdagent_client.download_task_asset_bytes(tid, resolved_factor_key)
+                        if factor_bytes:
+                            factor_path = task_dir / "factor.py"
+                            factor_path.write_bytes(factor_bytes)
+                            all_factors.append({
+                                "type": "main_fallback",
+                                "key": resolved_factor_key,
+                                "path": "factor.py",
+                                "size": len(factor_bytes),
+                            })
+                    except Exception as e2:
+                        diagnostics["warnings"].append(f"anchor主因子下载也失败: {e2}")
             
             diagnostics["all_factors"] = {
                 "total": len(all_factors),
-                "main": sum(1 for f in all_factors if f["type"] == "main"),
-                "based": sum(1 for f in all_factors if f["type"] == "based"),
+                "sota_from_complete_assets": sum(1 for f in all_factors if f.get("type") == "sota"),
+                "fallback": sum(1 for f in all_factors if f.get("type") == "main_fallback"),
             }
 
             # ============================================================
@@ -476,45 +546,47 @@ class RDAgentTaskSyncService:
             # ============================================================
             # 设计原则：factor_order 只能来自 v2_alignment_preview（parquet schema），
             # 禁止使用 V1 extractor API（会包含幽灵因子导致数据不对齐）。
-            # v2_preview_data 在步骤3中已经强制获取，此处直接使用。
-            assert v2_preview_data is not None, "v2_preview_data不应为None，步骤3应已获取"
-            
-            v2_sota = v2_preview_data.get('sota_factors', [])
-            v2_alpha = v2_preview_data.get('alpha_factors', [])
-            v2_factor_order = v2_preview_data.get('factor_order', [])
-            
-            if not v2_factor_order:
-                # factor_order字段为空时，手动拼接：alpha在前，sota在后
-                v2_factor_order = list(v2_alpha) + list(v2_sota)
-            
-            factor_order_data = {
-                "task_id": tid,
-                "total_factors": len(v2_factor_order),
-                "alpha158_count": len(v2_alpha),
-                "dynamic_count": len(v2_sota),
-                "factor_order": v2_factor_order,
-                "alpha158_factors": v2_alpha,
-                "dynamic_factors": v2_sota,
-                "source": "v2_alignment_preview",
-                "is_aligned": v2_preview_data.get('is_aligned', False),
-                "model_feature_count": v2_preview_data.get('model_feature_count'),
-                "sota_source": v2_preview_data.get('sota_source', 'unknown'),
-            }
-            logger.info(f"[{tid}] 从V2 preview生成factor_order.json: {len(v2_alpha)}个alpha + {len(v2_sota)}个SOTA = {len(v2_factor_order)}个因子")
-            
-            factor_order_path = task_dir / "factor_order.json"
-            factor_order_path.write_text(
-                json.dumps(factor_order_data, ensure_ascii=False, indent=2),
-                encoding="utf-8"
-            )
-            diagnostics["factor_order"] = {
-                "path": "factor_order.json",
-                "source": v2_preview_data.get('sota_source', 'v2_preview'),
-                "total_factors": factor_order_data["total_factors"],
-                "alpha158_count": factor_order_data["alpha158_count"],
-                "dynamic_count": factor_order_data["dynamic_count"],
-            }
-            logger.info(f"[{tid}] factor_order.json生成成功")
+            # v2_preview_data 在步骤3中已经获取，可能为None（混合task无SOTA因子实验）。
+            if v2_preview_data is not None:
+                v2_sota = v2_preview_data.get('sota_factors', [])
+                v2_alpha = v2_preview_data.get('alpha_factors', [])
+                v2_factor_order = v2_preview_data.get('factor_order', [])
+                
+                if not v2_factor_order:
+                    # factor_order字段为空时，手动拼接：alpha在前，sota在后
+                    v2_factor_order = list(v2_alpha) + list(v2_sota)
+                
+                factor_order_data = {
+                    "task_id": tid,
+                    "total_factors": len(v2_factor_order),
+                    "alpha158_count": len(v2_alpha),
+                    "dynamic_count": len(v2_sota),
+                    "factor_order": v2_factor_order,
+                    "alpha158_factors": v2_alpha,
+                    "dynamic_factors": v2_sota,
+                    "source": "v2_alignment_preview",
+                    "is_aligned": v2_preview_data.get('is_aligned', False),
+                    "model_feature_count": v2_preview_data.get('model_feature_count'),
+                    "sota_source": v2_preview_data.get('sota_source', 'unknown'),
+                }
+                logger.info(f"[{tid}] 从V2 preview生成factor_order.json: {len(v2_alpha)}个alpha + {len(v2_sota)}个SOTA = {len(v2_factor_order)}个因子")
+                
+                factor_order_path = task_dir / "factor_order.json"
+                factor_order_path.write_text(
+                    json.dumps(factor_order_data, ensure_ascii=False, indent=2),
+                    encoding="utf-8"
+                )
+                diagnostics["factor_order"] = {
+                    "path": "factor_order.json",
+                    "source": v2_preview_data.get('sota_source', 'v2_preview'),
+                    "total_factors": factor_order_data["total_factors"],
+                    "alpha158_count": factor_order_data["alpha158_count"],
+                    "dynamic_count": factor_order_data["dynamic_count"],
+                }
+                logger.info(f"[{tid}] factor_order.json生成成功")
+            else:
+                logger.warning(f"[{tid}] v2_preview_data为None，跳过factor_order.json生成（此task可能无SOTA因子实验）")
+                diagnostics["factor_order"] = {"skipped": True, "reason": "v2_preview_data为None"}
 
             # ============================================================
             # 步骤6: 生成本地manifest.json
@@ -525,13 +597,13 @@ class RDAgentTaskSyncService:
                 "generated_at_utc": _utc_now_iso(),
                 "primary_assets": {
                     "model_weight_relpath": "model.pkl" if has_model_weight else None,
-                    "factor_entry_relpath": "factor.py" if resolved_factor_key else None,
+                    "factor_entry_relpath": "factor.py" if all_factors else None,
                 },
                 "assets": {
                     "model_weight": "model.pkl" if has_model_weight else None,
-                    "factor_entry": "factor.py" if resolved_factor_key else None,
+                    "factor_entry": "factor.py" if all_factors else None,
                     "factor_order": "factor_order.json",
-                    "based_factors_count": len(based_factor_entries),
+                    "factors_count": len(all_factors),
                 },
                 "diagnostics": diagnostics
             }
@@ -588,6 +660,32 @@ class RDAgentTaskSyncService:
                 except Exception as e:
                     diagnostics["factor_catalog_sync"] = {"ok": False, "error": str(e)}
                     logger.error(f"[{tid}] 因子入库失败（不影响Task同步状态）: {e}")
+
+            # ============================================================
+            # 步骤9: SOTA Model Loop数据同步到 aistock_model_catalog
+            # 只同步进入SOTA的模型（model task和quant task均适用）
+            # ============================================================
+            try:
+                from .rdagent_model_catalog_sync import sync_models_from_task
+                last_sota_idx = anchor_resp.get("last_sota_factor_index") if anchor_resp else None
+                model_sync_result = sync_models_from_task(
+                    task_id=tid,
+                    task_dir=str(task_dir),
+                    last_sota_index=last_sota_idx,
+                )
+                diagnostics["model_catalog_sync"] = {
+                    "ok": model_sync_result.ok,
+                    "total": model_sync_result.total_models,
+                    "inserted": model_sync_result.inserted,
+                    "errors": model_sync_result.errors,
+                }
+                if model_sync_result.total_models > 0:
+                    logger.info(
+                        f"[{tid}] 模型入库完成: {model_sync_result.inserted}/{model_sync_result.total_models} 入库"
+                    )
+            except Exception as e:
+                diagnostics["model_catalog_sync"] = {"ok": False, "error": str(e)}
+                logger.error(f"[{tid}] 模型入库失败（不影响Task同步状态）: {e}")
 
             return TaskSyncResult(
                 ok=True,

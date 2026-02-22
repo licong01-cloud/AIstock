@@ -8,7 +8,6 @@ RDAgent LLM配置管理 - 模型API配置编辑和验证端点
 from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-import os
 
 from ..db.pg_pool import get_conn
 
@@ -35,6 +34,55 @@ class ModelVerifyRequest(BaseModel):
 RDAGENT_API_BASE = "http://127.0.0.1:9000"
 
 
+def _find_provider_api_config(cursor: Any, provider_id: int) -> dict[str, Any] | None:
+    cursor.execute(
+        """
+        SELECT id, api_key, api_base
+        FROM aistock_llm_api_configs
+        WHERE provider_id = %s
+          AND is_active = true
+        ORDER BY
+            CASE WHEN config_purpose = 'chat' THEN 0 ELSE 1 END,
+            priority DESC,
+            updated_at DESC,
+            id DESC
+        LIMIT 1
+        """,
+        (provider_id,),
+    )
+    row = cursor.fetchone()
+    if row:
+        api_base = row[2]
+        if not api_base:
+            cursor.execute("SELECT api_base_url FROM aistock_llm_providers WHERE id = %s", (provider_id,))
+            p_row = cursor.fetchone()
+            if p_row and p_row[0]:
+                api_base = p_row[0]
+        return {"id": row[0], "api_key": row[1], "api_base": api_base}
+
+    # 添加环境变量回退逻辑
+    cursor.execute("SELECT provider_name, default_env_prefix, api_base_url FROM aistock_llm_providers WHERE id = %s", (provider_id,))
+    p_row = cursor.fetchone()
+    if p_row:
+        p_name, env_prefix, p_api_base_url = p_row
+        prefix = (env_prefix or p_name).upper()
+        import os
+        env_key = os.environ.get(f"{prefix}_API_KEY")
+        if env_key:
+            env_base = os.environ.get(f"{prefix}_API_BASE", "")
+            final_api_base = env_base or p_api_base_url or ""
+            cursor.execute("""
+                INSERT INTO aistock_llm_api_configs 
+                (provider_id, api_base, api_key, env_api_base_name, env_api_key_name, config_purpose, description)
+                VALUES (%s, %s, %s, %s, %s, 'default', '自动从环境变量导入')
+                RETURNING id
+            """, (provider_id, env_base, env_key, f"{prefix}_API_BASE", f"{prefix}_API_KEY"))
+            new_id = cursor.fetchone()[0]
+            return {"id": new_id, "api_base": final_api_base, "api_key": env_key}
+
+    return None
+
+
 async def comprehensive_model_verification(
     provider_name: str,
     model_name: str,
@@ -57,18 +105,18 @@ async def comprehensive_model_verification(
         try:
             import litellm
             
-            # 临时设置环境变量
-            os.environ[f"{provider_name.upper()}_API_KEY"] = api_key
+            # 测试调用，直接传递 api_key 和 api_base 给 litellm，避免依赖环境变量前缀猜测
+            kwargs = {
+                "model": full_model_id,
+                "messages": [{"role": "user", "content": "Test"}],
+                "max_tokens": 5,
+                "timeout": 30,
+                "api_key": api_key
+            }
             if api_base:
-                os.environ[f"{provider_name.upper()}_API_BASE"] = api_base
-            
-            # 测试调用
-            response = await litellm.acompletion(
-                model=full_model_id,
-                messages=[{"role": "user", "content": "Test"}],
-                max_tokens=5,
-                timeout=30
-            )
+                kwargs["api_base"] = api_base
+                
+            response = await litellm.acompletion(**kwargs)
             
             results["litellm_test"] = {
                 "success": True,
@@ -82,11 +130,6 @@ async def comprehensive_model_verification(
                 "message": f"LiteLLM验证失败: {str(e)}"
             }
             results["errors"].append(f"LiteLLM: {str(e)}")
-        finally:
-            # 清理环境变量
-            os.environ.pop(f"{provider_name.upper()}_API_KEY", None)
-            if api_base:
-                os.environ.pop(f"{provider_name.upper()}_API_BASE", None)
     
     # 2. RDAgent健康检查
     if run_health_check:
@@ -173,49 +216,32 @@ async def update_model_api_config(model_id: int, config: ModelAPIConfigUpdate) -
                         detail=f"API配置验证失败: {', '.join(verification_result['errors'])}"
                     )
             
-            # 3. 查找或创建API配置
-            # 先查找是否已有配置
-            cursor.execute("""
-                SELECT id FROM aistock_llm_api_configs
-                WHERE provider_id = (SELECT provider_id FROM aistock_llm_models WHERE id = %s)
-                AND config_purpose = 'chat'
-                AND is_active = true
-                LIMIT 1
-            """, (model_id,))
-            
-            existing_config = cursor.fetchone()
-            
             # 生成环境变量名
             env_api_base_name = f"{env_prefix.upper()}_API_BASE" if env_prefix else f"{provider_name.upper()}_API_BASE"
             env_api_key_name = f"{env_prefix.upper()}_API_KEY" if env_prefix else f"{provider_name.upper()}_API_KEY"
-            
-            if existing_config:
-                # 更新现有配置
-                api_config_id = existing_config[0]
-                cursor.execute("""
-                    UPDATE aistock_llm_api_configs
-                    SET api_base = %s, api_key = %s, 
-                        env_api_base_name = %s, env_api_key_name = %s,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = %s
-                """, (config.api_base or '', config.api_key, env_api_base_name, env_api_key_name, api_config_id))
-            else:
-                # 创建新配置
-                cursor.execute("""
-                    INSERT INTO aistock_llm_api_configs
-                    (provider_id, api_base, api_key, env_api_base_name, env_api_key_name, 
-                     config_purpose, description)
-                    VALUES (
-                        (SELECT provider_id FROM aistock_llm_models WHERE id = %s),
-                        %s, %s, %s, %s, 'chat',
-                        %s
-                    )
-                    RETURNING id
-                """, (model_id, config.api_base or '', config.api_key, 
-                      env_api_base_name, env_api_key_name,
-                      f'{provider_name}模型API配置'))
-                
-                api_config_id = cursor.fetchone()[0]
+
+            # 3. 始终创建模型级覆盖配置，避免修改服务商默认配置影响其他模型
+            cursor.execute("""
+                INSERT INTO aistock_llm_api_configs
+                (provider_id, api_base, api_key, env_api_base_name, env_api_key_name,
+                 config_purpose, description)
+                VALUES (
+                    (SELECT provider_id FROM aistock_llm_models WHERE id = %s),
+                    %s, %s, %s, %s, %s,
+                    %s
+                )
+                RETURNING id
+            """, (
+                model_id,
+                config.api_base or '',
+                config.api_key,
+                env_api_base_name,
+                env_api_key_name,
+                f'model_{model_id}',
+                f'{provider_name} 模型 {model_id} 覆盖API配置',
+            ))
+
+            api_config_id = cursor.fetchone()[0]
             
             # 4. 关联模型与API配置
             cursor.execute("""
@@ -257,7 +283,7 @@ async def verify_model(request: ModelVerifyRequest) -> dict[str, Any]:
             
             # 获取模型信息
             cursor.execute("""
-                SELECT m.full_model_id, m.model_name, p.provider_name,
+                SELECT m.full_model_id, m.model_name, p.provider_name, p.id,
                        ac.api_key, ac.api_base
                 FROM aistock_llm_models m
                 JOIN aistock_llm_providers p ON m.provider_id = p.id
@@ -269,14 +295,21 @@ async def verify_model(request: ModelVerifyRequest) -> dict[str, Any]:
             if not row:
                 raise HTTPException(status_code=404, detail=f"模型ID {request.model_id} 不存在")
             
-            full_model_id, model_name, provider_name, db_api_key, db_api_base = row
+            full_model_id, model_name, provider_name, provider_id, db_api_key, db_api_base = row
             
             # 使用提供的API配置或数据库中的配置
             api_key = request.api_key or db_api_key
             api_base = request.api_base or db_api_base
             
+            # 无论是否有模型级的 api_key，如果没有 api_base，都需要去尝试回退查找服务商级配置获取
+            if not api_key or not api_base:
+                provider_api = _find_provider_api_config(cursor, provider_id)
+                if provider_api:
+                    api_key = api_key or provider_api.get("api_key")
+                    api_base = api_base or provider_api.get("api_base")
+
             if not api_key:
-                raise HTTPException(status_code=400, detail="缺少API Key，请提供api_key参数或在数据库中配置")
+                raise HTTPException(status_code=400, detail="缺少API Key，请提供api_key参数、模型覆盖配置或服务商默认配置")
             
             cursor.close()
         

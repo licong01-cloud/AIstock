@@ -120,6 +120,17 @@ def get_qmt_client_singleton() -> BaseQMTClient:
     if _GLOBAL_QMT_CLIENT is None:
         _GLOBAL_QMT_CLIENT = build_qmt_client_from_env()
     return _GLOBAL_QMT_CLIENT
+
+
+def reset_qmt_client_singleton() -> None:
+    """Reset process-wide QMT client singleton.
+
+    Used when .env changed and caller needs to rebuild client from latest env.
+    """
+
+    global _GLOBAL_QMT_CLIENT
+    _GLOBAL_QMT_CLIENT = None
+
 class SimulatorQMTClient(BaseQMTClient):
     """Fallback simulator: returns zero assets and empty positions."""
 
@@ -350,7 +361,7 @@ Notes:
                 # Start API thread then connect.
                 self._trader.start()
 
-                connect_timeout_s = _env_float("MINIQMT_CONNECT_TIMEOUT_SECONDS", default=2.0)
+                connect_timeout_s = _env_float("MINIQMT_CONNECT_TIMEOUT_SECONDS", default=15.0)
                 rc = _call_with_timeout(self._trader.connect, connect_timeout_s)
                 if rc == 0:
                     # Subscribe for pushes (optional for query, but recommended by doc).
@@ -363,6 +374,47 @@ Notes:
                     if not prev_connected:
                         logger.info("miniQMT 已连接，账户: %s", self._account_id)
                     return True, f"miniQMT 已连接，账户: {self._account_id}"
+
+                # 某些环境下 rc=-1 可能由 session_id 冲突触发，尝试自动换 session 重连一次。
+                if rc == -1 and _env_bool("MINIQMT_RETRY_NEW_SESSION_ON_RC_MINUS1", default=True):
+                    retry_session_id = int(time.time() * 1000) % 1000000
+                    if retry_session_id == session_id:
+                        retry_session_id = (retry_session_id + 1) % 1000000
+                    if retry_session_id <= 0:
+                        retry_session_id = 1
+
+                    logger.warning(
+                        "miniQMT connect 返回 -1，尝试使用新 session_id 重连: old=%s, new=%s",
+                        session_id,
+                        retry_session_id,
+                    )
+                    try:
+                        try:
+                            stop_timeout_s = _env_float("MINIQMT_STOP_TIMEOUT_SECONDS", default=2.0)
+                            _call_with_timeout(self._trader.stop, stop_timeout_s)
+                        except Exception:
+                            pass
+
+                        self._trader = self._xttrader_mod.XtQuantTrader(self._userdata_path, retry_session_id)
+                        self._trader.start()
+                        rc2 = _call_with_timeout(self._trader.connect, connect_timeout_s)
+                        if rc2 == 0:
+                            try:
+                                self._trader.subscribe(self._account)
+                            except Exception:
+                                pass
+                            self._connected = True
+                            self._last_error = None
+                            self._session_id = retry_session_id
+                            logger.info(
+                                "miniQMT 已连接（自动重试成功），账户: %s, session_id: %s",
+                                self._account_id,
+                                retry_session_id,
+                            )
+                            return True, f"miniQMT 已连接，账户: {self._account_id}"
+                        rc = rc2
+                    except Exception as retry_error:  # noqa: BLE001
+                        logger.warning("miniQMT 自动重试连接失败: %r", retry_error)
 
                 self._connected = False
                 self._last_error = f"miniQMT connect 失败，错误码: {rc}"

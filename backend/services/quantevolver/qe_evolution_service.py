@@ -1,10 +1,9 @@
+import json
 import logging
 import asyncio
-import json
-from datetime import datetime
-from typing import Dict, Any, List, Optional
 from uuid import uuid4
-
+from typing import Dict, Any, List, Optional
+from pathlib import Path
 from psycopg2.extras import RealDictCursor
 from ...db.pg_pool import get_conn
 
@@ -26,6 +25,12 @@ class AutoEvolutionScheduler:
         """
         创建演进任务并写入数据库
         """
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT experiment_id FROM qe_experiments WHERE experiment_id = %s", (base_experiment_id,))
+                if not cur.fetchone():
+                    raise ValueError(f"base_experiment_id not found: {base_experiment_id}")
+
         task_id = f"Evo_{uuid4().hex[:8]}"
         
         with get_conn() as conn:
@@ -39,6 +44,52 @@ class AutoEvolutionScheduler:
             
         logger.info(f"Created evolution task {task_id}: {task_name}")
         return task_id
+
+    def _parse_json_field(self, value: Any, field_name: str) -> Dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        raise ValueError(f"Invalid JSON field for {field_name}: {value}")
+
+    def _load_base_config_from_experiment(self, base_experiment_id: str) -> Dict[str, Any]:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT factor_names, model_id, strategy_id, data_split, custom_params
+                    FROM qe_experiments
+                    WHERE experiment_id = %s
+                    """,
+                    (base_experiment_id,),
+                )
+                row = cur.fetchone()
+
+        if not row:
+            raise ValueError(f"Base experiment not found: {base_experiment_id}")
+
+        factor_names = row.get("factor_names")
+        if isinstance(factor_names, str):
+            factor_names = json.loads(factor_names)
+        if not isinstance(factor_names, list) or len(factor_names) == 0:
+            raise ValueError(f"Base experiment {base_experiment_id} has invalid factor_names")
+
+        data_split = self._parse_json_field(row.get("data_split"), "data_split")
+        custom_params = self._parse_json_field(row.get("custom_params"), "custom_params")
+
+        return {
+            "action_type": "initial",
+            "factor_list": factor_names,
+            "model_id": row.get("model_id"),
+            "strategy_id": row.get("strategy_id"),
+            "data_split": data_split,
+            "model_params": custom_params,
+            "base_experiment_id": base_experiment_id,
+        }
         
     async def start_task_loop(self, task_id: str):
         """
@@ -68,6 +119,7 @@ class AutoEvolutionScheduler:
 
             current_loop = task['current_loop']
             max_loops = task['max_loops']
+            config: Dict[str, Any] = {}
             
             while current_loop < max_loops:
                 # 检查任务是否被中止
@@ -96,23 +148,82 @@ class AutoEvolutionScheduler:
                 # 1. 组装本轮配置 (如果是 Loop 0，基于 base_experiment；否则由 Researcher Agent 决定)
                 # config is maintained across loops or initialized at loop 0
                 if current_loop == 0:
-                    config = {} # TODO: load from base_experiment_id
+                    config = self._load_base_config_from_experiment(task["base_experiment_id"])
                 
-                action_type = "initial" if current_loop == 0 else "factor_adjust"
+                action_type = config.get("action_type", "initial" if current_loop == 0 else "param_tune")
+
+                # 使用 ConfigComposer 生成文件
+                from .config_composer import ConfigComposer
+                composer = ConfigComposer()
+                compose_res = composer.compose_experiment(
+                    factor_names=config.get("factor_list", []),
+                    model_id=config.get("model_id"),
+                    strategy_id=config.get("strategy_id"),
+                    data_split=config.get("data_split"),
+                    custom_params=config.get("model_params"),
+                    experiment_name=loop_id
+                )
+                
+                # 收集生成的实验文件，准备发送给 RDAgent
+                experiment_files = {}
+                exp_dir = Path(compose_res["experiment_dir"])
+                allowed_suffixes = {".yaml", ".yml", ".py", ".txt", ".json"}
+                for f in exp_dir.rglob("*"):
+                    if f.is_file() and f.suffix in allowed_suffixes:
+                        rel_path = f.relative_to(exp_dir).as_posix()
+                        experiment_files[rel_path] = f.read_text(encoding="utf-8")
+                        
+                wsl_command = compose_res.get("wsl_command", "")
 
                 # 2. 调用 WSL 执行
                 try:
-                    rd_loop_id = await self.rdagent_client.create_and_run_loop(task_id, current_loop, config)
+                    rd_loop_id = await self.rdagent_client.create_and_run_loop(
+                        task_id, current_loop, config, experiment_files, wsl_command
+                    )
                     
-                    # 模拟等待执行完成
-                    await asyncio.sleep(2)
+                    # 轮询等待执行完成（真实状态，不使用本地模拟）
+                    while True:
+                        status_resp = await self.rdagent_client.get_loop_status(rd_loop_id)
+                        rd_status = status_resp.get("status")
+                        if rd_status == "completed":
+                            break
+                        if rd_status in ("failed", "error"):
+                            raise RuntimeError(f"RDAgent loop failed: {rd_loop_id}, status={rd_status}")
+                        await asyncio.sleep(2)
                     
                     # 3. 获取回测结果
                     metrics = await self.rdagent_client.get_loop_metrics(rd_loop_id)
                     
                     # 4. Agent 分析
                     logger.info(f"Running Agent analysis for loop {current_loop}")
-                    analyst_report = await self.agents.run_analyst(current_loop, config, metrics)
+                    
+                    # 构建历史分析上下文 (提取前3轮的 SOTA 状态和 Analyst 报告)
+                    analysis_context = {}
+                    with get_conn() as conn:
+                        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                            cur.execute("""
+                                SELECT loop_index, is_sota, agent_analysis 
+                                FROM qe_evolution_loops 
+                                WHERE task_id = %s AND status = 'completed'
+                                ORDER BY loop_index DESC LIMIT 3
+                            """, (task_id,))
+                            history_rows = cur.fetchall()
+                            if history_rows:
+                                analysis_context["recent_history"] = []
+                                for row in history_rows:
+                                    analysis = row.get("agent_analysis")
+                                    if isinstance(analysis, str):
+                                        try:
+                                            analysis = json.loads(analysis)
+                                        except Exception:
+                                            analysis = {}
+                                    analysis_context["recent_history"].append({
+                                        "loop": row["loop_index"],
+                                        "is_sota": row["is_sota"],
+                                        "analyst_report": analysis.get("analyst", "") if isinstance(analysis, dict) else ""
+                                    })
+                    
+                    analyst_report = await self.agents.run_analyst(current_loop, config, metrics, analysis_context)
                     
                     historical_sota_metrics = None
                     with get_conn() as conn:
@@ -213,7 +324,7 @@ class AutoEvolutionScheduler:
                 loops = cur.fetchall()
                 
                 result = dict(task)
-                result['loops'] = [dict(l) for l in loops]
+                result['loops'] = [dict(loop_row) for loop_row in loops]
                 return result
         
     async def stop_task(self, task_id: str):
@@ -225,11 +336,14 @@ class AutoEvolutionScheduler:
         
     async def stream_task_logs(self, task_id: str):
         """
-        模拟生成日志流
+        转发 RDAgent SSE 日志流
         """
-        for i in range(10):
-            yield f"data: Log line {i} from RDAgent for task {task_id}\n\n"
-            await asyncio.sleep(1)
+        async for line in self.rdagent_client.stream_task_logs(task_id):
+            # 若上游已是 SSE data 行则直接透传，否则包装为 SSE
+            if line.startswith("data:"):
+                yield f"{line}\n\n"
+            else:
+                yield f"data: {line}\n\n"
 
     async def get_sota_registry(self) -> List[Dict[str, Any]]:
         with get_conn() as conn:

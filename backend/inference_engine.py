@@ -523,15 +523,27 @@ class InferenceEngine:
 
         # 构建输出 DataFrame
         # 尝试从static_factors加载缺失的基本面因子
+        # ⚠️ 关键修复：只加载col_list中请求的列，避免加载所有字段
         static_factors_path = Path("static_factors.parquet")
         if static_factors_path.exists():
             try:
-                df_static = pd.read_parquet(static_factors_path)
-                logger.info(f"从static_factors加载数据: {df_static.shape}, 列: {list(df_static.columns)}")
+                # 先读取parquet文件的列信息，只加载需要的列
+                import pyarrow.parquet as pq
+                parquet_file = pq.ParquetFile(static_factors_path)
+                available_columns = parquet_file.schema.names
                 
-                # 尝试将static_factors中的列匹配到请求的Alpha158因子
-                for col in col_list:
-                    if col not in out and col in df_static.columns:
+                # 找出col_list中在static_factors中存在但out中不存在的列
+                missing_in_out = [col for col in col_list if col not in out]
+                columns_to_load = [col for col in missing_in_out if col in available_columns]
+                
+                if columns_to_load:
+                    logger.info(f"从static_factors加载缺失因子: {columns_to_load}")
+                    # 只加载需要的列
+                    df_static = pd.read_parquet(static_factors_path, columns=columns_to_load)
+                    logger.info(f"从static_factors加载数据: {df_static.shape}, 列: {list(df_static.columns)}")
+                    
+                    # 尝试将static_factors中的列匹配到请求的Alpha158因子
+                    for col in columns_to_load:
                         # 获取最后一天的数据
                         static_dates = _safe_get_datetime_level(df_static)
                         if last_date in static_dates:
@@ -546,6 +558,8 @@ class InferenceEngine:
                             if col in static_last.columns:
                                 out[col] = static_last[col]
                                 logger.info(f"从static_factors加载因子(使用最近日期): {col}")
+                else:
+                    logger.info("所有请求的Alpha158因子已计算完成，无需从static_factors加载")
             except Exception as e:
                 logger.warning(f"从static_factors加载因子失败: {e}")
         
@@ -568,6 +582,17 @@ class InferenceEngine:
         if not df_out.empty:
             df_out = df_out.sort_index()
         
+        # ⚠️ 关键修复：强制只返回col_list中请求的列，防止返回额外的列
+        if not df_out.empty:
+            # 检查是否有多余的列
+            extra_cols = [col for col in df_out.columns if col not in col_list]
+            if extra_cols:
+                logger.warning(f"Alpha158计算返回了{len(extra_cols)}个多余的列，将被删除: {extra_cols[:20]}...")
+                # 只保留col_list中的列
+                df_out = df_out[[col for col in col_list if col in df_out.columns]]
+            
+            logger.info(f"Alpha158最终返回列数: {len(df_out.columns)}, 列名: {list(df_out.columns)}")
+        
         # 释放内存
         gc.collect()
         
@@ -589,6 +614,22 @@ class InferenceEngine:
                     return json.load(f)
             except Exception as e:
                 logger.error(f"加载 manifest 失败: {e}")
+        return None
+
+    def _load_experiment_manifest(self, workspace_path: str) -> Optional[Dict[str, Any]]:
+        """加载QE实验工作目录的 manifest.json
+        
+        QE实验的manifest结构与TASK相同，包含：
+        - primary_assets: factor_entry_relpath, model_weight_relpath
+        - assets: factor_order等
+        """
+        manifest_path = Path(workspace_path) / "manifest.json"
+        if manifest_path.exists():
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"加载实验 manifest 失败: {e}")
         return None
 
     def _infer_expected_features(self, task_dir: Path, manifest: Dict[str, Any]) -> Tuple[List[str], List[str], List[str]]:
@@ -665,6 +706,8 @@ class InferenceEngine:
         task_run_id: Optional[str] = None,
         loop_id: Optional[int] = None,
         cutoff_date: Optional[datetime] = None,
+        experiment_id: Optional[str] = None,
+        workspace_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         try:
             return self._run_inference_impl(
@@ -674,6 +717,8 @@ class InferenceEngine:
                 task_run_id=task_run_id,
                 loop_id=loop_id,
                 cutoff_date=cutoff_date,
+                experiment_id=experiment_id,
+                workspace_path=workspace_path,
             )
         except Exception as e:
             import traceback
@@ -690,8 +735,15 @@ class InferenceEngine:
         task_run_id: Optional[str] = None,
         loop_id: Optional[int] = None,
         cutoff_date: Optional[datetime] = None,
+        experiment_id: Optional[str] = None,
+        workspace_path: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """执行完整的推理流程"""
+        """执行完整的推理流程
+        
+        支持两种模式：
+        1. TASK选股模式：使用task_run_id + loop_id，从rdagent_assets加载
+        2. QE实验选股模式：使用experiment_id + workspace_path，从实验工作目录加载
+        """
         target_date = trade_date
         if cutoff_date and target_date.date() > cutoff_date.date():
             target_date = cutoff_date
@@ -708,12 +760,22 @@ class InferenceEngine:
         )
         
         # 核心逻辑：加载本地同步后的 v2 资产
-        task_id = task_run_id or strategy_id
-        manifest = self._load_task_manifest(task_id)
-        if not manifest:
-            raise ValueError(f"未找到本地任务资产 manifest: {task_id}")
+        # 区分TASK选股和QE实验选股
+        if experiment_id and workspace_path:
+            # QE实验选股模式：从实验工作目录加载
+            task_id = experiment_id
+            manifest = self._load_experiment_manifest(workspace_path)
+            if not manifest:
+                raise ValueError(f"未找到实验资产 manifest: {experiment_id} at {workspace_path}")
+            task_dir = Path(workspace_path)
+        else:
+            # TASK选股模式：从rdagent_assets加载
+            task_id = task_run_id or strategy_id
+            manifest = self._load_task_manifest(task_id)
+            if not manifest:
+                raise ValueError(f"未找到本地任务资产 manifest: {task_id}")
+            task_dir = self.assets_root / task_id
 
-        task_dir = self.assets_root / task_id
         primary = manifest.get("primary_assets", {})
         
         factor_file = task_dir / primary["factor_entry_relpath"]
@@ -723,14 +785,22 @@ class InferenceEngine:
         # RDAgent原始因子接口: def calculate_xxx() 无参数，内部从 daily_pv.h5 读取数据
         # 推理引擎在调用前已将 daily_pv.h5 和 static_factors.parquet 写入临时工作目录
         factor_module = self.validator.validate_and_load(task_id, str(factor_file))
+        # 收集所有 calculate_ 开头的函数（支持多SOTA因子场景）
+        all_calc_funcs = {}
+        for attr in sorted(dir(factor_module)):
+            if attr.startswith("calculate_") and callable(getattr(factor_module, attr)):
+                all_calc_funcs[attr] = getattr(factor_module, attr)
+
         factor_func = None
         factor_func_name = None
-        # 优先查找 calculate_ 开头的函数（RDAgent原始因子接口）
-        for attr in dir(factor_module):
-            if attr.startswith("calculate_") and callable(getattr(factor_module, attr)):
-                factor_func = getattr(factor_module, attr)
-                factor_func_name = attr
-                break
+        if len(all_calc_funcs) == 1:
+            # 单因子：直接使用
+            factor_func_name, factor_func = next(iter(all_calc_funcs.items()))
+        elif len(all_calc_funcs) > 1:
+            # 多因子：使用第一个作为主函数（后续会逐个执行所有函数）
+            factor_func_name, factor_func = next(iter(all_calc_funcs.items()))
+            logger.info(f"发现 {len(all_calc_funcs)} 个因子计算函数: {list(all_calc_funcs.keys())}")
+
         # 兼容：如果没有 calculate_ 函数，尝试 compute（旧版包装）
         if not factor_func:
             factor_func = getattr(factor_module, "compute", None)
@@ -756,11 +826,64 @@ class InferenceEngine:
         #   - LGBModel: 有 self.model (lgb.Booster)，predict 接收 numpy 数组
         #   - GeneralPTNN: 有 self.dnn_model (nn.Module)，predict 接收 DatasetH
         #   - 其他Qlib Model子类: 统一 predict(dataset, segment) 接口
+        
+        # 将实验工作目录添加到sys.path，以便pickle能找到自定义模型类（如QE实验的model.py）
+        import sys
+        task_dir_str = str(task_dir)
+        if task_dir_str not in sys.path:
+            sys.path.insert(0, task_dir_str)
+            logger.info(f"已将实验目录添加到sys.path: {task_dir_str}")
+        
+        # 加载模型：使用pickle.load（更稳定，支持CUDA模型）
         with open(model_file, "rb") as f:
             model = pickle.load(f)
         
+        # 如果有torch，处理PyTorch模型的设备
+        try:
+            import torch
+            
+            # 检测设备：优先使用CUDA
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            logger.info(f"检测到设备: {device}")
+            
+            # 如果模型有dnn_model属性（PyTorch模型）
+            if hasattr(model, 'dnn_model') and hasattr(model.dnn_model, 'parameters'):
+                try:
+                    param = next(model.dnn_model.parameters())
+                    current_device = param.device.type
+                    logger.info(f"模型当前设备: {current_device}")
+                    
+                    # 如果需要，移动到目标设备
+                    if current_device != device:
+                        if device == 'cuda':
+                            model.dnn_model = model.dnn_model.cuda()
+                            logger.info("模型已移到CUDA")
+                        else:
+                            model.dnn_model = model.dnn_model.cpu()
+                            logger.info("模型已移到CPU")
+                except StopIteration:
+                    pass
+                        
+        except ModuleNotFoundError:
+            pass
+        
         model_type_name = type(model).__name__
         logger.info(f"模型类型: {model_type_name}")
+        
+        # 如果是PyTorch模型，设置为eval模式
+        try:
+            import torch
+            
+            # 设置eval模式（禁用Dropout和BatchNorm训练行为）
+            if hasattr(model, 'dnn_model') and isinstance(model.dnn_model, torch.nn.Module):
+                model.dnn_model.eval()
+                logger.info("PyTorch模型已设置为eval模式")
+            elif isinstance(model, torch.nn.Module):
+                model.eval()
+                logger.info("PyTorch模型已设置为eval模式")
+            
+        except Exception as e:
+            logger.warning(f"设置PyTorch模型为eval模式时出错: {e}")
         
         # 确定性类型判断：基于属性存在性区分模型类型
         model_kind = "unknown"
@@ -844,6 +967,16 @@ class InferenceEngine:
             # 存入缓存
             cache.put(actual_date.date(), universe, df_history, df_fund_raw)
             logger.info(f"✓ 数据已缓存: df_history={df_history.shape}, df_fund_raw={df_fund_raw.shape}")
+        
+        # 🔍 诊断：检查df_history初始列数
+        logger.info(f"🔍 df_history初始列数: {len(df_history.columns)}, 列名: {list(df_history.columns)}")
+        
+        # 写入诊断文件
+        with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
+            f.write(f"\n{'='*80}\n")
+            f.write(f"时间: {datetime.now()}\n")
+            f.write(f"df_history初始列数: {len(df_history.columns)}\n")
+            f.write(f"df_history列名: {list(df_history.columns)}\n")
 
         # 4.4 检查数据窗口是否充足
         is_sufficient, actual_days, window_msg = check_data_window_sufficient(
@@ -927,6 +1060,13 @@ class InferenceEngine:
                 fund_instruments = df_fund.index.get_level_values('instrument').unique()
                 logger.info(f"预计算完成: {len(df_fund)}行, {len(fund_instruments)}只股票, {len(df_fund.columns)}个字段")
                 logger.info(f"数据时间范围: {_safe_get_datetime_level(df_fund).min()} 到 {_safe_get_datetime_level(df_fund).max()}")
+                # 🔍 诊断：检查df_fund列数
+                logger.info(f"🔍 df_fund列数: {len(df_fund.columns)}, 前20列: {list(df_fund.columns)[:20]}")
+                
+                # 写入诊断文件
+                with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
+                    f.write(f"df_fund列数: {len(df_fund.columns)}\n")
+                    f.write(f"df_fund前30列: {list(df_fund.columns)[:30]}\n")
             else:
                 logger.warning("数据库中没有找到资金流数据")
                 df_fund = pd.DataFrame()
@@ -1006,25 +1146,78 @@ class InferenceEngine:
                 t_parquet = time.time()
                 df_fund.to_parquet("static_factors.parquet")
                 logger.info(f"✓ static_factors.parquet 写入完成，耗时: {time.time() - t_parquet:.2f}s")
+                
+                # 🔍 诊断：检查df_history是否被df_fund污染
+                # df_history应该只包含OHLCV列，不应该包含df_fund的列
+                if hasattr(df_history, 'columns'):
+                    logger.info(f"🔍 df_history当前列数: {len(df_history.columns)}, 列名: {list(df_history.columns)}")
+                    # 检查是否有df_fund的列混入df_history
+                    fund_cols_in_history = [col for col in df_history.columns if col in df_fund.columns]
+                    if fund_cols_in_history:
+                        logger.error(f"❌ df_history被污染！包含{len(fund_cols_in_history)}个df_fund的列: {fund_cols_in_history[:20]}")
 
             # 验证临时文件是否存在
             import os as _os
             logger.info(f"临时目录内容: {_os.listdir('.')}")
+            
+            # ⚠️ 关键修复：强制确保df_history只包含OHLCV列
+            # 防止df_history被污染导致传递给模型的特征数量错误
+            expected_ohlcv_cols = ['open', 'high', 'low', 'close', 'volume', 'amount']
+            actual_cols = list(df_history.columns)
+            extra_cols = [col for col in actual_cols if col not in expected_ohlcv_cols]
+            
+            if extra_cols:
+                logger.error(f"❌ df_history被污染！包含{len(extra_cols)}个额外列: {extra_cols[:20]}...")
+                logger.error(f"df_history总列数: {len(df_history.columns)}")
+                logger.error(f"强制只保留OHLCV列")
+                # 只保留OHLCV列
+                df_history = df_history[[col for col in expected_ohlcv_cols if col in df_history.columns]]
+                logger.info(f"✓ df_history已清理，当前列数: {len(df_history.columns)}, 列名: {list(df_history.columns)}")
 
             t_start = time.time()
-            logger.info(f"开始执行SOTA因子计算函数: {factor_func_name}")
-            # RDAgent原始因子: calculate_xxx() 无参数，内部从 daily_pv.h5 读取
-            # 旧版兼容: compute(df_history) 接受DataFrame参数
-            sig = inspect.signature(factor_func)
-            if len(sig.parameters) == 0:
-                # 原始RDAgent因子接口：无参数
-                logger.info("调用无参数因子函数...")
-                df_factors_raw = factor_func()
+            # 多因子场景：逐个执行所有calculate_函数并合并结果
+            if len(all_calc_funcs) > 1:
+                logger.info(f"开始逐个执行 {len(all_calc_funcs)} 个SOTA因子计算函数")
+                df_parts = []
+                for fn_name, fn_obj in all_calc_funcs.items():
+                    t_fn = time.time()
+                    logger.info(f"开始执行SOTA因子计算函数: {fn_name}")
+                    sig = inspect.signature(fn_obj)
+                    if len(sig.parameters) == 0:
+                        logger.info("调用无参数因子函数...")
+                        part = fn_obj()
+                    else:
+                        logger.info("调用带参数因子函数...")
+                        part = fn_obj(df_history)
+                    logger.info(f"SOTA因子计算完成（{fn_name}），耗时: {time.time() - t_fn:.2f}s")
+                    if isinstance(part, pd.DataFrame):
+                        df_parts.append(part)
+                    else:
+                        raise ValueError(
+                            f"SOTA因子计算函数 {fn_name} 必须返回DataFrame，"
+                            f"实际返回类型: {type(part)}"
+                        )
+                # 合并所有因子DataFrame
+                df_factors_raw = pd.concat(df_parts, axis=1)
+                # 去除可能的重复列
+                df_factors_raw = df_factors_raw.loc[:, ~df_factors_raw.columns.duplicated()]
+                logger.info(
+                    f"所有SOTA因子计算完成，合并后列数: {len(df_factors_raw.columns)}, "
+                    f"列名: {list(df_factors_raw.columns)}, 总耗时: {time.time() - t_start:.2f}s"
+                )
             else:
-                # 旧版compute包装：接受df_history参数
-                logger.info("调用带参数因子函数...")
-                df_factors_raw = factor_func(df_history)
-            logger.info(f"SOTA因子计算完成（{factor_func_name}），耗时: {time.time() - t_start:.2f}s")
+                # 单因子或compute兼容模式
+                logger.info(f"开始执行SOTA因子计算函数: {factor_func_name}")
+                # RDAgent原始因子: calculate_xxx() 无参数，内部从 daily_pv.h5 读取
+                # 旧版兼容: compute(df_history) 接受DataFrame参数
+                sig = inspect.signature(factor_func)
+                if len(sig.parameters) == 0:
+                    logger.info("调用无参数因子函数...")
+                    df_factors_raw = factor_func()
+                else:
+                    logger.info("调用带参数因子函数...")
+                    df_factors_raw = factor_func(df_history)
+                logger.info(f"SOTA因子计算完成（{factor_func_name}），耗时: {time.time() - t_start:.2f}s")
             
             # 验证返回类型必须是DataFrame
             if not isinstance(df_factors_raw, pd.DataFrame):
@@ -1032,28 +1225,33 @@ class InferenceEngine:
                     f"SOTA因子计算函数必须返回DataFrame，实际返回类型: {type(df_factors_raw)}"
                 )
             
-            # 获取最后一天的日期
-            last_date = _safe_get_datetime_level(df_history).max()
-            
-            # 获取SOTA因子数据中的所有日期
-            sota_dates = _safe_get_datetime_level(df_factors_raw)
-            
-            # 只保留最后一天的因子值（优化：选股只需要当天值）
-            if last_date in sota_dates:
-                df_factors = df_factors_raw.loc[last_date]
-                logger.info(f"SOTA因子优化：使用目标日期 {last_date.date()} 的因子值")
+            # 检查是否为空DataFrame（QE实验可能只使用Alpha158基线因子）
+            if df_factors_raw.empty:
+                logger.info("SOTA因子返回空DataFrame，将只使用Alpha158基线因子")
+                df_factors = pd.DataFrame()
             else:
-                # 如果目标日期不存在，使用最近可用日期
-                available_dates = sota_dates.unique()
-                if len(available_dates) > 0:
-                    closest_date = max([d for d in available_dates if d <= last_date], default=available_dates[-1])
-                    df_factors = df_factors_raw.loc[closest_date]
-                    logger.warning(f"SOTA因子：目标日期 {last_date.date()} 无数据，使用最近可用日期 {closest_date.date()}")
+                # 获取最后一天的日期
+                last_date = _safe_get_datetime_level(df_history).max()
+                
+                # 获取SOTA因子数据中的所有日期
+                sota_dates = _safe_get_datetime_level(df_factors_raw)
+                
+                # 只保留最后一天的因子值（优化：选股只需要当天值）
+                if last_date in sota_dates:
+                    df_factors = df_factors_raw.loc[last_date]
+                    logger.info(f"SOTA因子优化：使用目标日期 {last_date.date()} 的因子值")
                 else:
-                    raise ValueError(
-                        f"SOTA因子计算结果中没有任何日期数据。"
-                        f"请检查因子计算函数是否正确处理了输入数据。"
-                    )
+                    # 如果目标日期不存在，使用最近可用日期
+                    available_dates = sota_dates.unique()
+                    if len(available_dates) > 0:
+                        closest_date = max([d for d in available_dates if d <= last_date], default=available_dates[-1])
+                        df_factors = df_factors_raw.loc[closest_date]
+                        logger.warning(f"SOTA因子：目标日期 {last_date.date()} 无数据，使用最近可用日期 {closest_date.date()}")
+                    else:
+                        raise ValueError(
+                            f"SOTA因子计算结果中没有任何日期数据。"
+                            f"请检查因子计算函数是否正确处理了输入数据。"
+                        )
             
             # 确保返回的是MultiIndex格式
             if not isinstance(df_factors.index, pd.MultiIndex):
@@ -1081,8 +1279,19 @@ class InferenceEngine:
         # 6. 计算 Alpha158 基线因子（优化版本：只计算最后一天）
         # 只计算alpha158_feats中的因子，不包含dynamic_feats
         if alpha158_feats:
-            logger.info(f"开始计算 Alpha158 基线因子: {alpha158_feats}")
+            logger.info(f"开始计算 Alpha158 基线因子，请求的因子数量: {len(alpha158_feats)}")
+            logger.info(f"请求的Alpha158因子列表: {alpha158_feats}")
             alpha_subset = self._compute_alpha158_subset(df_history, alpha158_feats)
+            
+            # 关键诊断：检查实际返回的列数
+            logger.info(f"⚠️ Alpha158计算完成，实际返回列数: {len(alpha_subset.columns)}")
+            logger.info(f"⚠️ Alpha158实际返回的列: {list(alpha_subset.columns)}")
+            
+            # 如果返回的列数不等于请求的列数，这是严重错误
+            if len(alpha_subset.columns) != len(alpha158_feats):
+                logger.error(f"❌ Alpha158列数不匹配！请求{len(alpha158_feats)}个，返回{len(alpha_subset.columns)}个")
+                logger.error(f"请求的因子: {alpha158_feats}")
+                logger.error(f"返回的因子: {list(alpha_subset.columns)}")
             
             # 验证所有列都是Series（不使用兜底方案）
             for col in alpha_subset.columns:
@@ -1141,20 +1350,27 @@ class InferenceEngine:
             
             # 再检查是否在SOTA动态因子中
             elif feat_name in dynamic_feats:
-                if feat_name not in df_factors.columns:
-                    logger.warning(
-                        f"SOTA 动态因子 {feat_name} 计算失败，无法找到该列。"
-                        f"可用的SOTA因子列: {list(df_factors.columns)}"
-                    )
-                    # 创建空值Series而不是报错
-                    if df_factors.empty:
-                        raise ValueError("SOTA因子数据为空")
-                    sample_series = df_factors.iloc[:, 0] if len(df_factors.columns) > 0 else None
-                    if sample_series is not None:
-                        final_cols_data[feat_name] = pd.Series(np.nan, index=df_factors.index, name=feat_name)
-                        logger.warning(f"为缺失的SOTA因子 {feat_name} 创建空值")
-                    continue  # 跳过此因子
-                col_data = df_factors[feat_name]
+                # 支持多级列索引：('feature', 'factor_name') 或直接 'factor_name'
+                if isinstance(df_factors.columns, pd.MultiIndex):
+                    # 多级列索引，尝试('feature', feat_name)
+                    col_key = ('feature', feat_name)
+                    if col_key not in df_factors.columns:
+                        raise ValueError(
+                            f"SOTA 动态因子 {feat_name} 计算失败，无法找到该列。"
+                            f"可用的SOTA因子列: {list(df_factors.columns)}。"
+                            f"请检查该因子的计算代码是否存在于task目录中。"
+                        )
+                    col_data = df_factors[col_key]
+                else:
+                    # 单级列索引
+                    if feat_name not in df_factors.columns:
+                        raise ValueError(
+                            f"SOTA 动态因子 {feat_name} 计算失败，无法找到该列。"
+                            f"可用的SOTA因子列: {list(df_factors.columns)}。"
+                            f"请检查该因子的计算代码是否存在于task目录中。"
+                        )
+                    col_data = df_factors[feat_name]
+                
                 if not isinstance(col_data, pd.Series):
                     raise ValueError(
                         f"SOTA 动态因子 {feat_name} 的数据类型错误: {type(col_data)}，期望 pd.Series"
@@ -1173,9 +1389,38 @@ class InferenceEngine:
         final_index = alpha_subset.index if len(alpha158_feats) > 0 else df_factors.index
         df_factors_combined = pd.DataFrame(final_cols_data, index=final_index)
         
+        # ⚠️ 关键修复：强制确保只包含factor_order中的列，按正确顺序排列
+        # 这是防御性编程，确保即使前面有bug，最终输入模型的特征也是正确的
+        if set(df_factors_combined.columns) != set(factor_order):
+            logger.warning(f"特征列不匹配！期望{len(factor_order)}列，实际{len(df_factors_combined.columns)}列")
+            logger.warning(f"期望列: {factor_order}")
+            logger.warning(f"实际列: {list(df_factors_combined.columns)}")
+            
+            # 只保留factor_order中的列，按factor_order的顺序
+            missing_cols = [col for col in factor_order if col not in df_factors_combined.columns]
+            extra_cols = [col for col in df_factors_combined.columns if col not in factor_order]
+            
+            if missing_cols:
+                logger.error(f"缺失的列: {missing_cols}")
+            if extra_cols:
+                logger.warning(f"多余的列（将被删除）: {extra_cols[:20]}... (共{len(extra_cols)}列)")
+            
+            # 强制只保留factor_order中的列
+            df_factors_combined = df_factors_combined[[col for col in factor_order if col in df_factors_combined.columns]]
+        
+        # 确保列顺序与factor_order完全一致
+        df_factors_combined = df_factors_combined[factor_order]
+        
         # 7.5 验证特征数量
         actual_count = len(df_factors_combined.columns)
         logger.info(f"特征组合完成: Alpha158={len(alpha158_feats)}, SOTA动态因子={actual_count - len(alpha158_feats)}, 总计={actual_count}")
+        logger.info(f"最终特征列: {list(df_factors_combined.columns)}")
+        
+        # 写入诊断文件
+        with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
+            f.write(f"df_factors_combined列数: {len(df_factors_combined.columns)}\n")
+            f.write(f"df_factors_combined列名: {list(df_factors_combined.columns)}\n")
+            f.write(f"factor_order长度: {len(factor_order)}\n")
         
         # 7.6 处理特征数量不匹配的情况
         if num_features_expected > 0 and actual_count != num_features_expected:
@@ -1208,10 +1453,71 @@ class InferenceEngine:
         df_today = df_factors_combined[_safe_get_datetime_level(df_factors_combined) == actual_date]
         if df_today.empty:
             raise ValueError(f"推理日期 {actual_date} 无有效因子数据")
+        
+        # 写入诊断文件
+        with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
+            f.write(f"df_today列数（索引过滤后）: {len(df_today.columns)}\n")
+            f.write(f"df_today列名: {list(df_today.columns)[:50]}\n")
 
         # 7. 模型预测（确定性分支，基于model_kind判断）
         X = df_today
-        logger.info(f"模型预测: model_kind={model_kind}, X.shape={X.shape}")
+        
+        # 写入诊断文件
+        with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
+            f.write(f"X列数（赋值后）: {len(X.columns)}\n")
+            f.write(f"X形状: {X.shape}\n")
+        
+        # ⚠️ 关键检查：强制验证输入维度
+        if len(X.columns) != len(factor_order):
+            raise ValueError(
+                f"❌ 输入维度错误！\n"
+                f"期望特征数: {len(factor_order)}\n"
+                f"实际特征数: {len(X.columns)}\n"
+                f"期望特征: {factor_order}\n"
+                f"实际特征: {list(X.columns)[:50]}...\n"
+                f"df_factors_combined列数: {len(df_factors_combined.columns)}\n"
+                f"df_today来源于df_factors_combined，索引过滤后列数: {len(df_today.columns)}"
+            )
+        
+        # 确保所有列都是数值类型（转换object类型）
+        for col in X.columns:
+            if X[col].dtype == 'object':
+                logger.warning(f"列 {col} 是object类型，尝试转换为float")
+                X[col] = pd.to_numeric(X[col], errors='coerce')
+        
+        # 🔍 诊断：检查输入数据是否有NaN
+        nan_count_per_col = X.isna().sum()
+        total_nan = nan_count_per_col.sum()
+        if total_nan > 0:
+            logger.warning(f"⚠️ 输入数据包含NaN: 总计{total_nan}个NaN")
+            # 显示NaN最多的前10列
+            top_nan_cols = nan_count_per_col[nan_count_per_col > 0].sort_values(ascending=False).head(10)
+            for col, cnt in top_nan_cols.items():
+                logger.warning(f"  列 {col}: {cnt}个NaN ({cnt/len(X)*100:.1f}%)")
+        
+        # 写入诊断文件
+        with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
+            f.write(f"输入数据NaN统计: 总计{total_nan}个NaN\n")
+            if total_nan > 0:
+                f.write(f"NaN最多的列:\n")
+                for col, cnt in top_nan_cols.items():
+                    f.write(f"  {col}: {cnt}个NaN ({cnt/len(X)*100:.1f}%)\n")
+        
+        # 用0填充NaN（避免模型推理失败）
+        X = X.fillna(0)
+        
+        # 🔍 诊断：检查是否有inf值
+        inf_count = np.isinf(X.values).sum()
+        if inf_count > 0:
+            logger.warning(f"⚠️ 输入数据包含{inf_count}个inf值，将被替换为0")
+            X = X.replace([np.inf, -np.inf], 0)
+        
+        # 写入诊断文件
+        with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
+            f.write(f"inf值数量: {inf_count}\n")
+        
+        logger.info(f"模型预测: model_kind={model_kind}, X.shape={X.shape}, dtypes={X.dtypes.unique()}")
+        
         if model_kind == "lgb":
             # LGBModel: inner_model 是 lgb.Booster，predict 接收 numpy 数组
             scores = inner_model.predict(X.values)
@@ -1220,11 +1526,51 @@ class InferenceEngine:
             import torch
             inner_model.eval()
             with torch.no_grad():
-                x_tensor = torch.tensor(X.values, dtype=torch.float32)
-                if hasattr(model, "device"):
+                # 确保数据是float32类型
+                x_values = X.values.astype('float32')
+                x_tensor = torch.tensor(x_values, dtype=torch.float32)
+                
+                # 🔍 诊断：检查模型类型
+                model_type_name = type(inner_model).__name__
+                logger.info(f"模型类型: {model_type_name}")
+                
+                # ⚠️ 关键修复：检查模型是否是序列模型（GRU/LSTM/RNN）
+                # 也检查模型类名中是否包含这些关键字
+                is_sequence_model = any(kw in model_type_name for kw in ['GRU', 'LSTM', 'RNN', 'Sequence', 'Recurrent'])
+                
+                if is_sequence_model:
+                    # 添加序列维度：(batch, features) -> (batch, 1, features)
+                    x_tensor = x_tensor.unsqueeze(1)
+                    logger.info(f"检测到序列模型 {model_type_name}，添加序列维度: {x_tensor.shape}")
+                
+                # 写入诊断文件
+                with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
+                    f.write(f"模型类型: {model_type_name}\n")
+                    f.write(f"是否序列模型: {is_sequence_model}\n")
+                    f.write(f"输入张量形状: {x_tensor.shape}\n")
+                
+                # 移动到正确的设备
+                if torch.cuda.is_available():
+                    x_tensor = x_tensor.cuda()
+                elif hasattr(model, "device"):
                     x_tensor = x_tensor.to(model.device)
+                
                 output = inner_model(x_tensor)
                 scores = output.cpu().numpy()
+                
+                # 写入输出诊断
+                with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
+                    f.write(f"输出形状: {scores.shape}\n")
+                    f.write(f"输出范围: {scores.min():.6f} ~ {scores.max():.6f}\n")
+                    f.write(f"输出均值: {scores.mean():.6f}\n")
+                
+                # 如果输出是3D的，取最后一个时间步
+                if len(scores.shape) == 3:
+                    scores = scores[:, -1, :]
+                
+                # 如果输出是2D但有多列，取第一列
+                if len(scores.shape) == 2 and scores.shape[1] > 1:
+                    scores = scores[:, 0]
         elif model_kind == "qlib_generic":
             # 通用Qlib Model子类: predict 接收 DataFrame
             scores = model.predict(X)

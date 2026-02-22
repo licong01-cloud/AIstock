@@ -430,7 +430,27 @@ def sync_factors_from_task(
                     source_code_origin = code_info.get("origin")
                     code_for_factor = downloaded_codes.get(source_code_relpath, "")
 
-            # 提取核心代码和表达式
+            # 从文件系统读取完整因子源代码（权威数据源）
+            # task_dir/factors/{fname}.py 是 task 同步时保存的原始完整源代码文件
+            full_code_from_file: str = ""
+            asset_path_value: str = ""
+            if task_dir:
+                factor_file = Path(task_dir) / "factors" / f"{fname}.py"
+                if factor_file.exists():
+                    full_code_from_file = factor_file.read_text(encoding="utf-8")
+                    # 存储相对于 AIstock 项目根目录的相对路径（跨平台兼容）
+                    # task_dir 结构: {aistock_root}/rdagent_assets/rdagent_tasks/{task_id}
+                    # 所以需要 parent.parent.parent 才能得到 aistock_root
+                    try:
+                        aistock_root = Path(task_dir).parent.parent.parent
+                        asset_path_value = factor_file.relative_to(aistock_root).as_posix()
+                    except ValueError:
+                        asset_path_value = str(factor_file)
+                    logger.info(f"[{task_id}] 因子 {fname} 从文件系统读取完整源码: {len(full_code_from_file)} chars, path={asset_path_value}")
+                else:
+                    logger.warning(f"[{task_id}] 因子 {fname} 文件不存在: {factor_file}")
+
+            # 提取表达式（仅用于 expression 字段，不影响 code_text）
             core_code = ""
             expression = None
 
@@ -446,7 +466,7 @@ def sync_factors_from_task(
                     expression = description
 
             if code_for_factor:
-                # 提取核心代码（用于 code_text 字段和去重哈希）
+                # 提取核心代码（仅用于去重哈希和表达式提取，不再用于 code_text）
                 core_code = _extract_factor_computation_code(code_for_factor, fname)
                 # 如果 aligned API 没有返回表达式，回退到代码注释提取
                 if not expression:
@@ -459,6 +479,9 @@ def sync_factors_from_task(
                         core_code = _extract_factor_computation_code(code_for_factor, generic_name)
                         if not expression:
                             expression = _extract_factor_expression(code_for_factor, generic_name)
+
+            # code_text 优先使用文件系统中的完整源代码；文件不存在时回退到 API 返回的代码
+            code_text_value = full_code_from_file if full_code_from_file else (code_for_factor or None)
 
             # 计算去重哈希
             dedup_hash = compute_factor_dedup_hash(code_for_factor, fname) if code_for_factor else None
@@ -492,7 +515,7 @@ def sync_factors_from_task(
                     source_loop_tag, source_index,
                     ic, annualized_return, max_drawdown, sharpe,
                     performance_metrics, best_performance_ann_ret, best_performance_sharpe,
-                    dedup_hash, dedup_group_id, is_dedup_primary, code_text
+                    dedup_hash, dedup_group_id, is_dedup_primary, code_text, asset_path
                 )
                 VALUES (
                     %s, %s, %s, %s, %s,
@@ -501,7 +524,7 @@ def sync_factors_from_task(
                     %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s,
-                    %s, %s, %s, %s
+                    %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (factor_name, source) DO UPDATE SET
                     catalog_version = EXCLUDED.catalog_version,
@@ -523,7 +546,8 @@ def sync_factors_from_task(
                     dedup_hash = COALESCE(EXCLUDED.dedup_hash, aistock_factor_catalog.dedup_hash),
                     dedup_group_id = COALESCE(EXCLUDED.dedup_group_id, aistock_factor_catalog.dedup_group_id),
                     is_dedup_primary = EXCLUDED.is_dedup_primary,
-                    code_text = COALESCE(EXCLUDED.code_text, aistock_factor_catalog.code_text)
+                    code_text = COALESCE(EXCLUDED.code_text, aistock_factor_catalog.code_text),
+                    asset_path = COALESCE(EXCLUDED.asset_path, aistock_factor_catalog.asset_path)
             """
 
             perf_metrics_json = json.dumps(metrics, ensure_ascii=False) if metrics else None
@@ -537,7 +561,9 @@ def sync_factors_from_task(
                         str(loop_id) if loop_id is not None else None, i,
                         ic_val, ann_ret, max_dd, info_ratio,
                         perf_metrics_json, ann_ret, info_ratio,
-                        dedup_hash, dedup_group_id, is_dedup_primary, core_code or None,
+                        dedup_hash, dedup_group_id, is_dedup_primary,
+                        code_text_value,
+                        asset_path_value or None,
                     ))
                     # rowcount: 1 for insert, 1 for update
                     inserted += 1
