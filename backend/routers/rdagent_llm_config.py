@@ -1451,6 +1451,13 @@ async def update_config(config: ConfigUpdate) -> dict[str, Any]:
                         stage_map["embedding"] = {
                             "model": full_model_id,
                         }
+                        
+                        # 更新数据库中的 embedding 阶段映射
+                        cursor.execute("SELECT id FROM aistock_llm_stage_mappings WHERE stage_name = 'embedding'")
+                        if cursor.fetchone():
+                            cursor.execute("UPDATE aistock_llm_stage_mappings SET model_id = %s, updated_at = CURRENT_TIMESTAMP WHERE stage_name = 'embedding'", (config.embedding_model_id,))
+                        else:
+                            cursor.execute("INSERT INTO aistock_llm_stage_mappings (stage_name, model_id, is_active) VALUES ('embedding', %s, true)", (config.embedding_model_id,))
                     selected_api_config = None
                     if model_api_config_id:
                         cursor.execute(
