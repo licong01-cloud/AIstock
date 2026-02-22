@@ -758,13 +758,32 @@ async def get_current_config() -> dict[str, Any]:
                 "max_tokens": stage_config.get("max_tokens"),
             }
 
-        # Extract embedding config
-        embedding_config = config.get("embedding_config", {})
+        # Extract embedding config (always fetch from DB to ensure consistency)
         embedding_stage_mappings = {}
-        if embedding_config.get("litellm_embedding_model"):
-            embedding_stage_mappings["default"] = {
-                "model": embedding_config["litellm_embedding_model"]
-            }
+        try:
+            with get_conn() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT m.full_model_id
+                    FROM aistock_llm_stage_mappings sm
+                    JOIN aistock_llm_models m ON sm.model_id = m.id
+                    WHERE sm.stage_name = 'embedding' AND sm.is_active = true
+                    LIMIT 1
+                """)
+                embedding_row = cursor.fetchone()
+                if embedding_row and embedding_row[0]:
+                    embedding_stage_mappings["default"] = {"model": embedding_row[0]}
+                cursor.close()
+        except Exception:
+            pass
+        
+        if not embedding_stage_mappings:
+            # Fallback to old embedding_config if DB fails
+            embedding_config = config.get("embedding_config", {})
+            if embedding_config.get("litellm_embedding_model"):
+                embedding_stage_mappings["default"] = {
+                    "model": embedding_config["litellm_embedding_model"]
+                }
 
         return {
             "base_config": {
@@ -1469,7 +1488,7 @@ async def update_config(config: ConfigUpdate) -> dict[str, Any]:
             for stage_name, stage_config in stage_map.items():
                 mapping = {
                     "stage_name": stage_name,
-                    "model_id": stage_config["model"],
+                    "model_id": stage_config.get("full_model_id") or stage_config["model"],
                 }
                 if stage_config.get("temperature"):
                     mapping["temperature"] = float(stage_config["temperature"])

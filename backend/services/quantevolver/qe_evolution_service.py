@@ -161,7 +161,7 @@ class AutoEvolutionScheduler:
                     strategy_id=config.get("strategy_id"),
                     data_split=config.get("data_split"),
                     custom_params=config.get("model_params"),
-                    experiment_name=loop_id
+                    experiment_name=f"{task_id}/{loop_id}"
                 )
                 
                 # 收集生成的实验文件，准备发送给 RDAgent
