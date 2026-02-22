@@ -266,15 +266,16 @@ def _classify_with_llm(factor_name: str, expression: Optional[str],
 
     try:
         from .llm_client import get_llm_kwargs
-        kwargs = get_llm_kwargs("factor_analyst")
+        kwargs = get_llm_kwargs("factor_classifier")
         
         response = llm.completion(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.1,
+            temperature=0.2,
             max_tokens=200,
+            response_format={"type": "json_object"},
             **kwargs
         )
         content = response.choices[0].message.content.strip()
@@ -528,7 +529,7 @@ def _generate_description_with_llm(factor_name: str, code_text: Optional[str],
 
     from .prompt_manager import PromptManager
     pm = PromptManager()
-    prompt_data = pm.get_active_prompt_text("factor_analyst", "generate_description")
+    prompt_data = pm.get_active_prompt_text("factor_describer", "generate_description")
 
     if prompt_data:
         system_prompt = prompt_data["system_prompt"]
@@ -561,7 +562,7 @@ def _generate_description_with_llm(factor_name: str, code_text: Optional[str],
 
     try:
         from .llm_client import get_llm_kwargs
-        kwargs = get_llm_kwargs("factor_analyst")
+        kwargs = get_llm_kwargs("factor_describer")
         
         response = llm.completion(
             messages=[

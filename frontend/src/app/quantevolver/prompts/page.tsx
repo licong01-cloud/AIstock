@@ -21,16 +21,18 @@ type Prompt = {
 type LLMModel = { id: string; name: string; source: string };
 
 const AGENT_LABELS: Record<string, string> = {
-  factor_analyst: "因子分析员",
+  factor_analyst: "因子分析师",
   portfolio_architect: "组合架构师",
-  model_analyst: "模型分析员",
-  experiment_analyst: "实验结果分析员",
+  model_analyst: "模型分析师",
+  experiment_analyst: "实验结果分析师",
   factor_repairer: "因子代码修复Agent",
   factor_analyzer: "因子特征分析Agent",
   evolution_analyst: "演进诊断分析师(Analyst)",
-  evolution_evaluator: "SOTA评估官(Evaluator)",
+  evolution_evaluator: "SOTA评估员(Evaluator)",
   evolution_researcher: "演进策略研究员(Researcher)",
   evolution_reviewer: "配置审查员(Reviewer)",
+  factor_classifier: "因子分类Agent",
+  factor_describer: "因子描述Agent",
 };
 
 // 分组配置：用于在模型配置区域分组展示
@@ -43,7 +45,12 @@ const AGENT_GROUPS: { label: string; color: string; types: string[] }[] = [
   {
     label: "QE选股分析",
     color: "#7c3aed",
-    types: ["factor_analyst", "portfolio_architect", "model_analyst", "experiment_analyst"],
+    types: ["portfolio_architect", "model_analyst", "experiment_analyst"],
+  },
+  {
+    label: "因子库管理",
+    color: "#10b981", // Emerald
+    types: ["factor_analyst", "factor_classifier", "factor_describer"],
   },
   {
     label: "因子代码改写",
@@ -56,6 +63,7 @@ const AGENT_TYPES = [
   "evolution_analyst", "evolution_evaluator", "evolution_researcher", "evolution_reviewer",
   "factor_analyst", "portfolio_architect", "model_analyst", "experiment_analyst",
   "factor_repairer", "factor_analyzer",
+  "factor_classifier", "factor_describer",
 ];
 
 export default function PromptsPage() {

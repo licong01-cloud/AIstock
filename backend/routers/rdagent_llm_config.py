@@ -1304,31 +1304,38 @@ async def update_config(config: ConfigUpdate) -> dict[str, Any]:
             cursor = conn.cursor()
             
             # 2. 验证所有模型ID是否存在，并检查API配置
+            # 把普通阶段的 mapping 和 embedding 的 mapping 放一起验证
+            models_to_verify = []
             for mapping in config.stage_mappings:
                 if mapping.model_id:
-                    cursor.execute(
-                        "SELECT id, full_model_id, api_config_id, provider_id, model_type FROM aistock_llm_models WHERE id = %s",
-                        (mapping.model_id,),
+                    models_to_verify.append(mapping.model_id)
+            if config.embedding_model_id:
+                models_to_verify.append(config.embedding_model_id)
+
+            for model_id in models_to_verify:
+                cursor.execute(
+                    "SELECT id, full_model_id, api_config_id, provider_id, model_type FROM aistock_llm_models WHERE id = %s",
+                    (model_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    raise HTTPException(status_code=400, detail=f"模型ID {model_id} 不存在")
+
+                api_config_id = row[2]
+                if not api_config_id:
+                    provider_api = _find_provider_api_config(
+                        cursor=cursor,
+                        provider_id=row[3],
+                        model_type=row[4],
                     )
-                    row = cursor.fetchone()
-                    if not row:
-                        raise HTTPException(status_code=400, detail=f"模型ID {mapping.model_id} 不存在")
+                    api_config_id = provider_api["id"] if provider_api else None
 
-                    api_config_id = row[2]
-                    if not api_config_id:
-                        provider_api = _find_provider_api_config(
-                            cursor=cursor,
-                            provider_id=row[3],
-                            model_type=row[4],
-                        )
-                        api_config_id = provider_api["id"] if provider_api else None
-
-                    # 检查模型是否有可用API配置（模型级或服务商级）
-                    if not api_config_id:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"模型 '{row[1]}' 缺少API配置。请先为该模型配置API Key，或选择其他已配置的模型。"
-                        )
+                # 检查模型是否有可用API配置（模型级或服务商级）
+                if not api_config_id:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"模型 '{row[1]}' 缺少API配置。请先为该模型配置API Key，或选择其他已配置的模型。"
+                    )
             
             # 3. 更新数据库中的阶段映射
             for mapping in config.stage_mappings:

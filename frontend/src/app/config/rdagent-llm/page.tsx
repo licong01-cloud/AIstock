@@ -161,15 +161,19 @@ export default function RDAgentLLMConfigPage() {
     const res = await fetch(`${API_BASE}/rdagent/llm-config/stage-mappings`);
     const data = await res.json();
     setStageMappings(data.stage_mappings || []);
-    
+
     // 初始化表单
     const formData: any = {};
     (data.stage_mappings || []).forEach((mapping: StageMapping) => {
-      formData[mapping.stage_name] = {
-        model_id: mapping.model_id,
-        temperature: mapping.temperature || 0.7,
-        max_tokens: mapping.max_tokens || 4000,
-      };
+      if (mapping.stage_name === "embedding") {
+        setEmbeddingModelId(mapping.model_id);
+      } else {
+        formData[mapping.stage_name] = {
+          model_id: mapping.model_id,
+          temperature: mapping.temperature || 0.7,
+          max_tokens: mapping.max_tokens || 4000,
+        };
+      }
     });
     setStageConfigForm(formData);
   };
