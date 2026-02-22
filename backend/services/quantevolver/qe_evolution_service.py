@@ -244,6 +244,11 @@ class AutoEvolutionScheduler:
                     next_config_draft = await self.agents.run_researcher(analyst_report, is_sota, config)
                     next_config = await self.agents.run_reviewer(next_config_draft)
                     
+                    # 确保关键基础字段不会因为 Agent 漏输出而丢失
+                    for key in ["model_id", "strategy_id", "data_split", "base_experiment_id"]:
+                        if key not in next_config and key in config:
+                            next_config[key] = config[key]
+                    
                     agent_analysis = {
                         "analyst": analyst_report,
                         "evaluator": f"SOTA Status: {is_sota}",
