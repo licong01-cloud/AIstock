@@ -572,81 +572,106 @@ export default function PromptsPage() {
         </section>
       )}
 
-      {/* 提示词卡片列表 */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        {prompts.map(p => (
-          <section
-            key={p.id}
-            style={{
-              ...cardStyle,
-              border: p.is_active ? "1px solid #c4b5fd" : "1px solid #e5e7eb",
-              opacity: p.is_active ? 1 : 0.7,
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-              <div>
-                <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>{p.display_name}</h3>
-                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
-                  <span style={{
-                    padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600,
-                    background: ["factor_repairer", "factor_analyzer"].includes(p.agent_type)
-                      ? "#cffafe" : (p.agent_type === "factor_analyst" ? "#ede9fe" : "#dbeafe"),
-                    color: ["factor_repairer", "factor_analyzer"].includes(p.agent_type)
-                      ? "#0891b2" : (p.agent_type === "factor_analyst" ? "#7c3aed" : "#2563eb"),
-                  }}>
-                    {AGENT_LABELS[p.agent_type] || p.agent_type}
-                  </span>
-                  <span style={{ marginLeft: 6 }}>{p.prompt_key}</span>
-                  <span style={{ marginLeft: 6 }}>v{p.version}</span>
-                  {!p.is_active && <span style={{ marginLeft: 6, color: "#ef4444" }}>已停用</span>}
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 4 }}>
-                <button
-                  onClick={() => setEditingPrompt({ ...p })}
-                  style={{
-                    padding: "4px 10px", fontSize: 11, fontWeight: 600,
-                    background: "#7c3aed", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer",
-                  }}
-                >
-                  编辑
-                </button>
-                <button
-                  onClick={() => deletePrompt(p.id, p.display_name)}
-                  style={{
-                    padding: "4px 10px", fontSize: 11,
-                    background: "#fee2e2", color: "#991b1b", border: "none", borderRadius: 4, cursor: "pointer",
-                  }}
-                >
-                  删除
-                </button>
-              </div>
+      {/* 提示词卡片列表（分组展示） */}
+      {AGENT_GROUPS.map(group => {
+        // 过滤出属于当前分组的 prompt
+        const groupPrompts = prompts.filter(p => group.types.includes(p.agent_type));
+        
+        if (groupPrompts.length === 0) return null;
+
+        return (
+          <div key={`group-${group.label}`} style={{ marginBottom: 24 }}>
+            <div style={{
+              fontSize: 14, fontWeight: 700, color: group.color,
+              marginBottom: 12, paddingBottom: 6,
+              borderBottom: `2px solid ${group.color}33`,
+              display: "flex", alignItems: "center", gap: 8,
+            }}>
+              <span style={{
+                display: "inline-block", width: 10, height: 10,
+                borderRadius: "50%", background: group.color,
+              }} />
+              {group.label}
+              <span style={{ fontSize: 12, fontWeight: 400, color: "#9ca3af" }}>
+                ({groupPrompts.length})
+              </span>
             </div>
 
-            {p.description && (
-              <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 8px" }}>{p.description}</p>
-            )}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              {groupPrompts.map(p => (
+                <section
+                  key={p.id}
+                  style={{
+                    ...cardStyle,
+                    border: p.is_active ? `1px solid ${group.color}66` : "1px solid #e5e7eb",
+                    opacity: p.is_active ? 1 : 0.7,
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                    <div>
+                      <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>{p.display_name}</h3>
+                      <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
+                        <span style={{
+                          padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                          background: `${group.color}15`,
+                          color: group.color,
+                        }}>
+                          {AGENT_LABELS[p.agent_type] || p.agent_type}
+                        </span>
+                        <span style={{ marginLeft: 6 }}>{p.prompt_key}</span>
+                        <span style={{ marginLeft: 6 }}>v{p.version}</span>
+                        {!p.is_active && <span style={{ marginLeft: 6, color: "#ef4444" }}>已停用</span>}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <button
+                        onClick={() => setEditingPrompt({ ...p })}
+                        style={{
+                          padding: "4px 10px", fontSize: 11, fontWeight: 600,
+                          background: group.color, color: "#fff", border: "none", borderRadius: 4, cursor: "pointer",
+                        }}
+                      >
+                        编辑
+                      </button>
+                      <button
+                        onClick={() => deletePrompt(p.id, p.display_name)}
+                        style={{
+                          padding: "4px 10px", fontSize: 11,
+                          background: "#fee2e2", color: "#991b1b", border: "none", borderRadius: 4, cursor: "pointer",
+                        }}
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </div>
 
-            <div style={{ fontSize: 11, color: "#9ca3af" }}>
-              <div>系统提示词: {p.system_prompt.length} 字符</div>
-              <div>用户模板: {p.user_prompt_template.length} 字符</div>
-              {p.updated_at && <div>更新: {new Date(p.updated_at).toLocaleString("zh-CN")}</div>}
+                  {p.description && (
+                    <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 8px" }}>{p.description}</p>
+                  )}
+
+                  <div style={{ fontSize: 11, color: "#9ca3af" }}>
+                    <div>系统提示词: {p.system_prompt.length} 字符</div>
+                    <div>用户模板: {p.user_prompt_template.length} 字符</div>
+                    {p.updated_at && <div>更新: {new Date(p.updated_at).toLocaleString("zh-CN")}</div>}
+                  </div>
+
+                  {/* 预览 */}
+                  <details style={{ marginTop: 8 }}>
+                    <summary style={{ fontSize: 11, cursor: "pointer", color: group.color }}>预览系统提示词</summary>
+                    <pre style={{
+                      marginTop: 4, padding: 8, background: "#f9fafb", borderRadius: 6,
+                      fontSize: 11, whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto",
+                      border: "1px solid #e5e7eb",
+                    }}>
+                      {p.system_prompt || "(空)"}
+                    </pre>
+                  </details>
+                </section>
+              ))}
             </div>
-
-            {/* 预览 */}
-            <details style={{ marginTop: 8 }}>
-              <summary style={{ fontSize: 11, cursor: "pointer", color: "#7c3aed" }}>预览系统提示词</summary>
-              <pre style={{
-                marginTop: 4, padding: 8, background: "#f9fafb", borderRadius: 6,
-                fontSize: 11, whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto",
-                border: "1px solid #e5e7eb",
-              }}>
-                {p.system_prompt || "(空)"}
-              </pre>
-            </details>
-          </section>
-        ))}
-      </div>
+          </div>
+        );
+      })}
 
       {!loading && prompts.length === 0 && (
         <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>暂无提示词配置</div>
