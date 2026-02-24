@@ -127,27 +127,25 @@ def _generate_model_description_with_llm(model_info: Dict) -> Optional[str]:
     architecture = model_info.get("model_architecture") or ""
     hp = model_info.get("model_hyperparameters") or ""
 
-    system_prompt = """你是一位专业的量化模型研究员兼组合架构顾问。请根据模型信息生成简洁准确的中文描述（120-200字）。
-描述应包含：
-1. 模型类型和核心思路/假设
-2. 关键超参数和性能表现（IC、年化收益、最大回撤）
-3. 适合什么规模的因子集（少量精选因子 vs 大量因子）
-4. 擅长捕捉什么类型的信号（线性关系 vs 非线性交互 vs 时序模式）
-5. 适合什么投资风格（保守稳健 vs 激进高收益）
+    from .prompt_manager import PromptManager, safe_format
+    pm = PromptManager()
+    prompt_data = pm.get_active_prompt_text("model_analyst", "generate_description")
 
-最后一句简要说明该模型在组合中的最佳搭配建议。
-仅返回JSON格式：{"description": "模型描述"}
-不要返回其他任何内容。"""
-
-    user_prompt = f"""模型名称: {model_name}
-模型类型: {model_type}
-假设文本: {hypothesis[:500] if hypothesis else '无'}
-架构信息: {architecture[:300] if architecture else '无'}
-超参数: {str(hp)[:300] if hp else '无'}
-IC: {model_info.get('ic')}
-年化收益: {model_info.get('annualized_return')}
-最大回撤: {model_info.get('max_drawdown')}
-IR: {model_info.get('information_ratio')}"""
+    if prompt_data:
+        system_prompt = prompt_data["system_prompt"]
+        user_prompt = safe_format(prompt_data["user_prompt_template"], 
+            model_name=model_name,
+            model_type=model_type,
+            hypothesis=(hypothesis[:500] if hypothesis else "无"),
+            architecture=(architecture[:300] if architecture else "无"),
+            hyperparameters=(str(hp)[:300] if hp else "无"),
+            ic=model_info.get("ic"),
+            annualized_return=model_info.get("annualized_return"),
+            max_drawdown=model_info.get("max_drawdown"),
+            information_ratio=model_info.get("information_ratio"),
+        )
+    else:
+        raise ValueError("未配置 model_analyst/generate_description 的提示词，拒绝使用兜底策略")
 
     try:
         from .llm_client import get_llm_kwargs

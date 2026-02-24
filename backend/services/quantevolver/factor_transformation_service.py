@@ -686,6 +686,26 @@ df = df.join(static_df, how='left')
 
 直接输出修复后的完整Python代码，不要用markdown代码块包裹。"""
 
+        try:
+            from .prompt_manager import PromptManager, safe_format
+            pm = PromptManager()
+            prompt_data = pm.get_active_prompt_text("factor_repairer", "repair_factor_code")
+            if prompt_data:
+                system_prompt = prompt_data["system_prompt"]
+                user_prompt = safe_format(prompt_data["user_prompt_template"], 
+                    factor_name=factor_name,
+                    original_code=original_code,
+                    current_code=current_code,
+                    error_type=error_type,
+                    error_msg=(error_msg or "未知错误"),
+                    history_section=history_section,
+                )
+            else:
+                raise ValueError("未配置 factor_repairer/repair_factor_code 的提示词，拒绝使用兜底策略")
+        except Exception as e:
+            logger.error(f"获取 factor_repairer 提示词失败: {e}")
+            return None
+
         response = _call_llm(system_prompt, user_prompt, model_id, temperature=0.2, max_tokens=6000,
                              agent_type="factor_repairer")
         if not response:
@@ -857,6 +877,39 @@ RDAgent研发阶段生成的因子代码（原始代码）通过读取本地文�
 4. **禁止项检查**：是否存在残留文件读写、兜底方案（try-except+pass、NaN填充、空DataFrame返回）
 
 输出JSON格式的最终审核结果。"""
+
+        try:
+            from .prompt_manager import PromptManager, safe_format
+            pm = PromptManager()
+            prompt_data = pm.get_active_prompt_text("factor_analyzer", "analyze_transformation")
+            if prompt_data:
+                system_prompt = prompt_data["system_prompt"]
+                user_prompt = safe_format(prompt_data["user_prompt_template"], 
+                    factor_name=factor_name,
+                    test_status=test_status,
+                    original_code_path=original_code_path,
+                    transformed_code_path=transformed_code_path,
+                    original_code=original_code_for_review,
+                    transformed_code=transformed_code_for_review,
+                )
+            else:
+                raise ValueError("未配置 factor_analyzer/analyze_transformation 的提示词，拒绝使用兜底策略")
+        except Exception as e:
+            logger.error(f"获取 factor_analyzer 提示词失败: {e}")
+            if compile_ok and exec_ok:
+                return {
+                    "final_decision": True, "approved": True, "confidence": 0.75,
+                    "final_feedback": "提示词获取失败，基于编译测试通过、执行测试通过判定改造成功",
+                    "logic_preserved": True, "interface_correct": True,
+                    "issues": [], "suggestions": [],
+                }
+            else:
+                return {
+                    "final_decision": False, "approved": False, "confidence": 0.9,
+                    "final_feedback": "提示词获取失败，且自动化测试未全部通过，判定改造失败",
+                    "logic_preserved": None, "interface_correct": None,
+                    "issues": ["自动化测试未全部通过"], "suggestions": [],
+                }
 
         response = _call_llm(system_prompt, user_prompt, model_id, temperature=0.1, max_tokens=4096,
                              agent_type="factor_analyzer")

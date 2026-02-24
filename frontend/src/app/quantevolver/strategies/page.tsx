@@ -2,8 +2,13 @@
 
 import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
+import type { EditorProps } from "@monaco-editor/react";
 
-const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
+// @ts-ignore
+const MonacoEditor = dynamic(
+  () => import("@monaco-editor/react").then((mod) => mod.default as React.ComponentType<any>),
+  { ssr: false }
+);
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 
@@ -660,12 +665,13 @@ export default function StrategiesPage() {
                 </button>
               </div>
               <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+                {/* @ts-ignore */}
                 <MonacoEditor
                   height="100%"
                   language="python"
                   theme="vs-dark"
                   value={editCode}
-                  onChange={(v) => setEditCode(v || "")}
+                  onChange={(v: string | undefined) => setEditCode(v || "")}
                   options={{
                     minimap: { enabled: false },
                     fontSize: 13,

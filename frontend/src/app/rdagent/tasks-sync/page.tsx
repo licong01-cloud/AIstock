@@ -10,10 +10,12 @@ type LoopDetail = {
   hypothesis: string | null;
   reason: string | null;
   exp_type: string | null;
+  tested_count?: number | null;
+  total_count?: number | null;
   valid_score: number | null;
   test_score: number | null;
   mle_score: any;
-  feedback: boolean | null;
+  feedback: boolean | "true" | "false" | null;
   is_sota: boolean;
   annualized_return: number | null;
   max_drawdown: number | null;

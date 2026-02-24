@@ -51,29 +51,21 @@ class EvolutionAgents:
         analysis_context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """实验诊断分析师"""
-        from .prompt_manager import PromptManager
+        from .prompt_manager import PromptManager, safe_format
         pm = PromptManager()
         prompt_data = pm.get_active_prompt_text("evolution_analyst", "diagnose_experiment")
 
         if prompt_data:
             system_prompt = prompt_data["system_prompt"]
-            user_prompt = prompt_data["user_prompt_template"].format(
+            user_prompt = safe_format(prompt_data["user_prompt_template"], 
                 loop_index=loop_index,
                 config=json.dumps(config, ensure_ascii=False),
                 metrics=json.dumps(metrics, ensure_ascii=False),
                 analysis_context=json.dumps(analysis_context or {}, ensure_ascii=False),
             )
         else:
-            system_prompt = "你是一位量化实验诊断分析师(Analyst)。你的任务是根据量化模型回测的配置和结果指标，诊断当前组合的瓶颈和表现。请给出简短、专业的结论。"
-            user_prompt = f"""
-请分析以下实验结果：
-- Loop 轮次: {loop_index}
-- 实验配置: {json.dumps(config, ensure_ascii=False)}
-- 回测核心指标: {json.dumps(metrics, ensure_ascii=False)}
-- 复用历史多维分析上下文: {json.dumps(analysis_context or {}, ensure_ascii=False)}
-
-请给出一段简明扼要的诊断报告（100字左右），指出表现优异的地方以及可能存在的过拟合或特征衰减风险。
-"""
+            raise ValueError("未配置 evolution_analyst/diagnose_experiment 的提示词，拒绝使用兜底策略")
+            
         return await self.async_call_llm("evolution_analyst", system_prompt, user_prompt)
 
     async def run_evaluator(self, current_metrics: Dict[str, Any], historical_sota_metrics: Optional[Dict[str, Any]]) -> bool:
@@ -82,6 +74,30 @@ class EvolutionAgents:
         """
         if not historical_sota_metrics:
             return True # 第一轮默认是 SOTA
+
+        from .prompt_manager import PromptManager, safe_format
+        pm = PromptManager()
+        prompt_data = pm.get_active_prompt_text("evolution_evaluator", "evaluate_sota")
+
+        if prompt_data:
+            try:
+                system_prompt = prompt_data["system_prompt"]
+                user_prompt = safe_format(prompt_data["user_prompt_template"], 
+                    current_metrics=json.dumps(current_metrics, ensure_ascii=False),
+                    historical_sota_metrics=json.dumps(historical_sota_metrics, ensure_ascii=False),
+                )
+                response = await self.async_call_llm("evolution_evaluator", system_prompt, user_prompt)
+
+                start = response.find("{")
+                end = response.rfind("}")
+                if start != -1 and end != -1:
+                    payload = json.loads(response[start:end+1])
+                    if "is_sota" in payload:
+                        return bool(payload.get("is_sota"))
+            except Exception as e:
+                logger.warning(f"evolution_evaluator提示词调用或解析失败: {e}")
+        else:
+            logger.warning("未配置 evolution_evaluator/evaluate_sota 提示词")
             
         # 这里用纯规则判断，也可以用大模型。为了稳定，建议先用规则核心指标判断
         cur_ic = current_metrics.get("IC", 0)
@@ -101,30 +117,20 @@ class EvolutionAgents:
         """
         演进策略研究员
         """
-        from .prompt_manager import PromptManager
+        from .prompt_manager import PromptManager, safe_format
         pm = PromptManager()
         prompt_data = pm.get_active_prompt_text("evolution_researcher", "propose_config")
 
         if prompt_data:
             system_prompt = prompt_data["system_prompt"]
-            user_prompt = prompt_data["user_prompt_template"].format(
+            user_prompt = safe_format(prompt_data["user_prompt_template"], 
                 analyst_report=analyst_report,
                 sota_status=sota_status,
                 current_config=json.dumps(current_config, ensure_ascii=False)
             )
         else:
-            system_prompt = "你是一位高级量化策略研究员(Researcher)。你的任务是根据上一轮的诊断报告，决策下一轮的配置方案（决定是调整因子、调整超参，还是更换模型）。只输出 JSON 格式的更新配置，不要输出其他废话。"
-            user_prompt = f"""
-上一轮诊断意见: {analyst_report}
-上一轮是否达到 SOTA (最优): {sota_status}
-当前基础配置: {json.dumps(current_config, ensure_ascii=False)}
-
-请给出下一轮建议的实验配置(格式必须为严格的 JSON)。
-如果你决定调整超参（如过拟合则增加正则化或减少树深度，欠拟合则增加树深度或迭代次数），action_type 为 "param_tune"。
-如果你决定删减或新增特征因子，action_type 为 "factor_adjust"。
-如果你决定更换模型结构，action_type 为 "model_switch"。
-输出格式要求：包含完整的 config 结构，必须包含 "action_type" 字段。
-"""
+            raise ValueError("未配置 evolution_researcher/propose_config 的提示词，拒绝使用兜底策略")
+            
         response = await self.async_call_llm("evolution_researcher", system_prompt, user_prompt)
         
         try:
@@ -143,6 +149,33 @@ class EvolutionAgents:
         配置审查与构建员
         目前简化为结构校验，确保能发给 RDAgent。
         """
+        from .prompt_manager import PromptManager, safe_format
+        pm = PromptManager()
+        prompt_data = pm.get_active_prompt_text("evolution_reviewer", "review_config")
+
+        if prompt_data:
+            try:
+                system_prompt = prompt_data["system_prompt"]
+                user_prompt = safe_format(prompt_data["user_prompt_template"], 
+                    draft_config=json.dumps(draft_config, ensure_ascii=False)
+                )
+                response = await self.async_call_llm("evolution_reviewer", system_prompt, user_prompt)
+
+                start = response.find("{")
+                end = response.rfind("}")
+                if start != -1 and end != -1:
+                    payload = json.loads(response[start:end+1])
+                    approved = bool(payload.get("approved", False))
+                    if not approved:
+                        raise ValueError(payload.get("reason", "Reviewer rejected config"))
+                    candidate = payload.get("config")
+                    if isinstance(candidate, dict):
+                        draft_config = candidate
+            except Exception as e:
+                logger.warning(f"evolution_reviewer提示词调用或解析失败: {e}")
+        else:
+            logger.warning("未配置 evolution_reviewer/review_config 提示词")
+
         required_keys = ["model_params", "factor_list", "action_type"]
         missing = [k for k in required_keys if k not in draft_config]
         if missing:

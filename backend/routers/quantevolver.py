@@ -92,6 +92,18 @@ class GenerateFromRequirementRequest(BaseModel):
     max_factors: int = Field(30, description="最大因子数量")
 
 
+class SmartSelectRequest(BaseModel):
+    user_requirement: str = Field(..., description="用户自然语言需求描述")
+    max_factors: int = Field(20, description="最大因子数量")
+
+
+class EvaluatePortfolioRequest(BaseModel):
+    factor_names: List[str] = Field(..., description="选择的因子列表")
+    model_id: str = Field(..., description="选择的模型ID")
+    strategy_id: Optional[str] = Field(None, description="选择的策略ID")
+    custom_params: Optional[Dict[str, Any]] = None
+
+
 class GenerateConfigRequest(BaseModel):
     factor_names: List[str]
     factor_sources: Optional[Dict[str, str]] = None
@@ -732,6 +744,51 @@ async def recommend_combinations(req: RecommendCombinationsRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/experiment/smart-select")
+async def smart_select_components(req: SmartSelectRequest):
+    """基于用户自然语言需求智能选择合适的因子、模型和策略。"""
+    try:
+        from ..services.quantevolver.portfolio_architect import PortfolioArchitect
+        pa = PortfolioArchitect()
+        result = pa.generate_from_requirement(
+            user_requirement=req.user_requirement,
+            use_llm=True,
+            max_factors=req.max_factors,
+        )
+        return result
+    except Exception as e:
+        logger.exception("智能组件选择失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/experiment/evaluate-portfolio")
+async def evaluate_portfolio_design(req: EvaluatePortfolioRequest):
+    """AI评估用户选择的组合配置（因子+模型+策略）。"""
+    try:
+        import litellm
+        from ..services.quantevolver.llm_client import get_llm_kwargs
+        
+        prompt = f"""请作为资深量化研究员，评估以下量化投资组合设计的合理性：
+        - 选中因子: {', '.join(req.factor_names) if req.factor_names else '无'}
+        - 选中模型: {req.model_id}
+        - 选中策略: {req.strategy_id}
+        
+        请简要分析该组合的优缺点、数据频度匹配风险以及过拟合风险（控制在300字以内）。"""
+        
+        kwargs = get_llm_kwargs("portfolio_architect")
+        response = litellm.completion(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=1000,
+            **kwargs
+        )
+        report = response.choices[0].message.content.strip()
+        return {"report": report}
+    except Exception as e:
+        logger.exception("AI评估组合失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/portfolio/generate")
 async def generate_from_requirement(req: GenerateFromRequirementRequest):
     """基于用户自然语言需求智能生成最佳因子+模型组合。"""
@@ -1183,6 +1240,7 @@ async def get_available_llm_models():
                     FROM aistock_llm_models m
                     JOIN aistock_llm_providers p ON m.provider_id = p.id
                     WHERE m.is_active = true
+                      AND COALESCE(m.model_type, 'chat') <> 'embedding'
                     ORDER BY p.provider_name, m.display_name
                 """)
                 for row in cur.fetchall():

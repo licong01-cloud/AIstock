@@ -238,31 +238,19 @@ def _classify_with_llm(factor_name: str, expression: Optional[str],
     if llm is None:
         return None
 
-    system_prompt = """你是一位专业的量化交易因子分析师。请根据因子的表达式和代码中实际使用的数据列和计算逻辑，
-将其分类到以下类别之一：
+    from .prompt_manager import PromptManager, safe_format
+    pm = PromptManager()
+    prompt_data = pm.get_active_prompt_text("factor_classifier", "classify_factor")
 
-- MOM: 动量因子（基于价格变化率、收益率、趋势）
-- VOL: 波动率因子（基于标准差、波动率、ATR）
-- LIQ: 流动性因子（基于成交量、换手率、流动性指标）
-- VAL: 价值因子（基于PE/PB/PS等估值指标、基本面数据）
-- QUAL: 质量因子（基于ROE/ROA、盈利能力、财务质量）
-- CORR: 相关性因子（基于量价相关性、协方差）
-- TECH: 技术指标因子（基于RSI/MACD/KDJ等技术指标、价格形态）
-- SIZE: 规模因子（基于市值、流通盘）
-- STAT: 统计因子（基于排名、分位数、偏度、峰度等统计量）
-- MF: 资金流因子（基于主力资金流向、大单买卖、资金净流入）
-- CHIP: 筹码因子（基于筹码分布、获利比例、平均成本）
-- ML: 机器学习因子（使用神经网络、树模型等ML方法）
-
-分类原则：优先看代码/表达式中使用了什么数据列（如mf_*是资金流、cp_*是筹码、bb_*是基本面），
-其次看计算逻辑（如std()是波动率、corr()是相关性），最后才参考名称。
-
-仅返回JSON格式：{"category": "类别ID", "reason": "分类理由（说明依据的数据列或计算逻辑）"}
-不要返回其他任何内容。"""
-
-    user_prompt = f"""因子名称: {factor_name}
-因子表达式: {expression or '无'}
-因子代码片段: {(code_text or '')[:500]}"""
+    if prompt_data:
+        system_prompt = prompt_data["system_prompt"]
+        user_prompt = safe_format(prompt_data["user_prompt_template"], 
+            factor_name=factor_name,
+            expression=expression or "无",
+            code_text=(code_text or "")[:500],
+        )
+    else:
+        raise ValueError("未配置 factor_classifier/classify_factor 的提示词，拒绝使用兜底策略")
 
     try:
         from .llm_client import get_llm_kwargs
@@ -527,38 +515,17 @@ def _generate_description_with_llm(factor_name: str, code_text: Optional[str],
     if llm is None:
         return None
 
-    from .prompt_manager import PromptManager
+    from .prompt_manager import PromptManager, safe_format
     pm = PromptManager()
     prompt_data = pm.get_active_prompt_text("factor_describer", "generate_description")
 
     if prompt_data:
         system_prompt = prompt_data["system_prompt"]
-    else:
-        system_prompt = """你是一位资深量化因子研究员兼组合架构顾问。请基于因子的代码实现和表达式，从实战应用角度分析因子，内容必须包含以下要素：
-
-1. 【因子逻辑】基于代码和表达式分析该因子捕捉什么市场信号，使用了什么数据源和计算方法（不要展示公式或代码）
-2. 【因子维度】判断是截面因子（横向比较不同股票）还是时序因子（纵向分析同一股票历史），说明判断依据
-3. 【使用场景】该因子适合什么市场环境（趋势市/震荡市/牛市/熊市）、什么投资风格（价值/成长/动量/低波）、什么持仓周期（日内/短线/中线/长线）
-4. 【搭配建议】基于因子的数据源和计算逻辑，推荐与哪些类型的因子搭配使用可以形成互补（如动量+价值对冲、资金流+筹码共振等），说明搭配的金融逻辑
-
-特别说明：
-- 如果提供了QLib表达式（如 Resi($close, 5)/$close），请基于表达式的数学含义来理解因子逻辑
-- 如果提供了Python代码，请基于代码中实际使用的数据列和计算逻辑来分析
-- 分析结论必须基于代码和表达式的实际内容，不要泛泛而谈
-
-要求：
-- 200-250字中文描述
-- 不要显示任何计算公式、表达式或代码
-- 不要罗列代码中的变量名
-- 用专业但易懂的金融语言描述
-- 重点突出使用场景和搭配建议的实战价值
-
-仅返回JSON格式：{"description": "因子描述"}
-不要返回其他任何内容。"""
-
-    user_prompt = f"""因子名称: {factor_name}
+        user_prompt = f"""因子名称: {factor_name}
 因子表达式（QLib格式，仅供理解逻辑，不要在描述中展示）: {expression or '无'}
 因子代码（仅供理解逻辑，不要在描述中展示变量名）: {(code_text or '')[:800]}"""
+    else:
+        raise ValueError("未配置 factor_describer/generate_description 的提示词，拒绝使用兜底策略")
 
     try:
         from .llm_client import get_llm_kwargs

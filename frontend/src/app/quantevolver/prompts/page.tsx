@@ -33,6 +33,7 @@ const AGENT_LABELS: Record<string, string> = {
   evolution_reviewer: "配置审查员(Reviewer)",
   factor_classifier: "因子分类Agent",
   factor_describer: "因子描述Agent",
+  strategy_analyzer: "策略分析师",
 };
 
 // 分组配置：用于在模型配置区域分组展示
@@ -45,12 +46,12 @@ const AGENT_GROUPS: { label: string; color: string; types: string[] }[] = [
   {
     label: "QE选股分析",
     color: "#7c3aed",
-    types: ["portfolio_architect", "model_analyst", "experiment_analyst"],
+    types: ["portfolio_architect", "model_analyst", "experiment_analyst", "strategy_analyzer"],
   },
   {
     label: "因子库管理",
     color: "#10b981", // Emerald
-    types: ["factor_analyst", "factor_classifier", "factor_describer"],
+    types: ["factor_classifier", "factor_describer"],
   },
   {
     label: "因子代码改写",
@@ -61,7 +62,7 @@ const AGENT_GROUPS: { label: string; color: string; types: string[] }[] = [
 
 const AGENT_TYPES = [
   "evolution_analyst", "evolution_evaluator", "evolution_researcher", "evolution_reviewer",
-  "factor_analyst", "portfolio_architect", "model_analyst", "experiment_analyst",
+  "portfolio_architect", "model_analyst", "experiment_analyst", "strategy_analyzer",
   "factor_repairer", "factor_analyzer",
   "factor_classifier", "factor_describer",
 ];
@@ -388,10 +389,14 @@ export default function PromptsPage() {
               <option value="evolution_reviewer">配置审查员(Reviewer)</option>
             </optgroup>
             <optgroup label="QE选股分析">
-              <option value="factor_analyst">因子分析员</option>
               <option value="portfolio_architect">组合架构师</option>
               <option value="model_analyst">模型分析员</option>
               <option value="experiment_analyst">实验结果分析员</option>
+              <option value="strategy_analyzer">策略分析师</option>
+            </optgroup>
+            <optgroup label="因子库管理">
+              <option value="factor_classifier">因子分类Agent</option>
+              <option value="factor_describer">因子描述Agent</option>
             </optgroup>
             <optgroup label="因子代码改写">
               <option value="factor_repairer">因子代码修复Agent</option>
@@ -504,10 +509,14 @@ export default function PromptsPage() {
                   <option value="evolution_reviewer">配置审查员(Reviewer)</option>
                 </optgroup>
                 <optgroup label="QE选股分析">
-                  <option value="factor_analyst">因子分析员</option>
                   <option value="portfolio_architect">组合架构师</option>
                   <option value="model_analyst">模型分析员</option>
                   <option value="experiment_analyst">实验结果分析员</option>
+                  <option value="strategy_analyzer">策略分析师</option>
+                </optgroup>
+                <optgroup label="因子库管理">
+                  <option value="factor_classifier">因子分类Agent</option>
+                  <option value="factor_describer">因子描述Agent</option>
                 </optgroup>
                 <optgroup label="因子代码改写">
                   <option value="factor_repairer">因子代码修复Agent</option>

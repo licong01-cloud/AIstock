@@ -31,3 +31,6 @@ __all__ = [
     "rdagent",
     "rdagent_templates",
 ]
+
+from . import quantevolver
+from . import quantevolver_evolution

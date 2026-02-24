@@ -1540,5 +1540,6 @@ async def update_config(config: ConfigUpdate) -> dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"配置更新失败: {str(e)}")
     finally:
-        if client:
-            await client.close()
+        # get_llm_config_client() 返回的是全局单例，不能在单次请求后关闭
+        # 否则后续请求会复用到已关闭的 AsyncClient，报 "client has been closed"
+        pass

@@ -516,23 +516,28 @@ export default function RDagentStrategyCatalogPage() {
                     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                       <div>
                         <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 4 }}>Template Files</div>
-                        <pre style={{ background: "#f9fafb", padding: 8, borderRadius: 6, fontSize: 11, maxHeight: 100, overflow: "auto" }}>
+                        <pre style={{ background: "#f8fafc", padding: 10, borderRadius: 8, fontSize: 11, border: "1px solid #e2e8f0", maxHeight: 160, overflow: "auto" }}>
                           {JSON.stringify(selected.template_files || {}, null, 2)}
                         </pre>
                       </div>
                       <div>
-                        <button 
-                          onClick={() => openLoopPage(selected)}
+                        <button
+                          onClick={() => {
+                            const taskRunId = selected.workspace_example?.task_run_id;
+                            if (!taskRunId) return;
+                            window.open(`/rdagent/tasks/${taskRunId}`, "_blank");
+                          }}
+                          disabled={!selected.workspace_example?.task_run_id}
                           style={{
                             width: "100%",
                             padding: "8px",
                             borderRadius: 6,
-                            background: "#6366f1",
+                            background: selected.workspace_example?.task_run_id ? "#6366f1" : "#9ca3af",
                             color: "#fff",
                             border: "none",
-                            cursor: "pointer",
+                            cursor: selected.workspace_example?.task_run_id ? "pointer" : "not-allowed",
                             fontSize: 13,
-                            fontWeight: 500
+                            fontWeight: 500,
                           }}
                         >
                           跳转至关联 Loop 列表

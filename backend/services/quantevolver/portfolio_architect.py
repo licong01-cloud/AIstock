@@ -147,46 +147,24 @@ class PortfolioArchitect:
                 f"警告: {'; '.join(s.get('warnings', [])) or '无'}"
             )
 
-        system_prompt = """你是一位资深量化投资组合分析师。请对用户选择的因子+模型+策略组合进行全面、专业的分析评估。
+        from .prompt_manager import PromptManager, safe_format
+        pm = PromptManager()
+        prompt_data = pm.get_active_prompt_text("portfolio_architect", "evaluate_combination")
 
-你的分析必须包含以下维度：
-1. **因子组合质量**：评估因子的类别多样性、评级分布、是否存在冗余或缺失
-2. **模型适配性**：模型类型是否适合当前因子集的特征（数量、维度、类别）
-3. **策略合理性**：策略参数是否与因子和模型匹配，持仓集中度和换手率是否合理
-4. **整体协同效应**：因子、模型、策略三者之间的配合是否合理
-5. **潜在风险**：过拟合风险、因子衰减风险、流动性风险等
-6. **优化方向**：具体可操作的改进建议
-
-请给出专业、有深度的分析，不要泛泛而谈。
-
-仅返回JSON格式：
-{
-  "commentary": "完整的分析评论（300-500字中文，分段落，使用markdown格式）",
-  "llm_score": 0-100的综合评分,
-  "additional_risks": ["风险1", "风险2"],
-  "additional_suggestions": ["建议1", "建议2"]
-}
-不要返回其他任何内容。"""
-
-        user_prompt = f"""请评估以下量化投资组合：
-
-=== 因子组合 ===
-总因子数: {factor_analysis.get('count', 0)}
-已分类因子数: {factor_analysis.get('classified_count', 0)}
-类别数: {factor_analysis.get('category_count', 0)}
-平均评级分: {factor_analysis.get('avg_grade_score', 0)}/5.0
-多样性评分: {factor_analysis.get('diversity_score', 0)}
-
-因子分类详情:
-{factor_summary}
-
-=== 模型 ===
-{model_summary}
-
-=== 策略 ===
-{strategy_summary}
-
-请给出专业的综合分析评论。"""
+        if prompt_data:
+            system_prompt = prompt_data["system_prompt"]
+            user_prompt = safe_format(prompt_data["user_prompt_template"], 
+                factor_count=factor_analysis.get('count', 0),
+                classified_count=factor_analysis.get('classified_count', 0),
+                category_count=factor_analysis.get('category_count', 0),
+                avg_grade_score=factor_analysis.get('avg_grade_score', 0),
+                diversity_score=factor_analysis.get('diversity_score', 0),
+                factor_summary=factor_summary,
+                model_summary=model_summary,
+                strategy_summary=strategy_summary
+            )
+        else:
+            raise ValueError("未配置 portfolio_architect/evaluate_combination 的提示词，拒绝使用兜底策略")
 
         try:
             from .llm_client import get_llm_kwargs
@@ -1021,42 +999,23 @@ class PortfolioArchitect:
             available_factors_lines.append(f"  {cat}({cat_name}): {', '.join(names)}")
         available_factors = "\n".join(available_factors_lines)
 
-        system_prompt = f"""你是一位资深量化组合架构师。请根据用户的投资需求，从可用的因子库和模型库中选择最优组合。
-
-你的职责：
-1. 理解用户的投资风格偏好（保守/均衡/激进、关注收益/回撤/夏普等）
-2. 从因子库中选择最合适的因子组合（{max_factors}个以内）
-3. 选择最匹配的预测模型
-4. 给出策略参数建议（topk持仓数、n_drop换仓数）
-5. 说明组合设计理由
-
-选择原则：
-- 高评级因子优先（S>A>B>C>D）
-- 保证类别多样性（至少覆盖3个类别）
-- 同类别因子不超过总数30%
-- 保守型偏好低波动/价值/质量因子，激进型偏好动量/资金流/筹码因子
-- 因子名称必须从可用列表中选择，不能编造
-
-仅返回JSON格式，不要返回其他内容：
-{{
-  "factors": ["因子名1", "因子名2", ...],
-  "model_id": "选择的模型ID",
-  "strategy_params": {{"topk": 50, "n_drop": 5}},
-  "rationale": "组合设计理由（100-200字中文，说明为什么这样选择）"
-}}"""
-
-        user_prompt = f"""用户需求: {user_requirement}
-
-=== 因子库摘要（按类别） ===
-{factor_summary}
-
-=== 可用因子完整列表（按类别，括号内为评级） ===
-{available_factors}
-
-=== 模型库 ===
-{model_summary}
-
-请选择最优的因子+模型组合（因子不超过{max_factors}个）。"""
+        from .prompt_manager import PromptManager, safe_format
+        pm = PromptManager()
+        prompt_data = pm.get_active_prompt_text("portfolio_architect", "smart_select")
+        
+        if prompt_data:
+            system_prompt = prompt_data["system_prompt"]
+            user_prompt = safe_format(
+                prompt_data["user_prompt_template"],
+                user_requirement=user_requirement,
+                max_factors=max_factors,
+                total_factors=len(factor_metadata["factors"]),
+                factor_summary=factor_summary,
+                available_factors=available_factors,
+                model_summary=model_summary
+            )
+        else:
+            raise ValueError("未配置 portfolio_architect/smart_select 的提示词，拒绝使用兜底策略")
 
         try:
             from .llm_client import get_llm_kwargs
@@ -1081,7 +1040,7 @@ class PortfolioArchitect:
             logger.info(f"LLM生成组合: {len(result.get('factors', []))}个因子, 模型={result.get('model_id')}")
             return result
         except Exception as e:
-            logger.warning(f"LLM组合生成失败: {e}")
+            logger.exception(f"LLM组合生成失败: {e}")
             return None
 
     def _validate_llm_selection(

@@ -185,27 +185,18 @@ class StrategyAnalyzer:
         if llm is None:
             return None
 
-        system_prompt = """你是一位专业的量化交易策略分析师。请分析以下交易策略的Python代码，从以下几个方面给出评估：
+        from .prompt_manager import PromptManager, safe_format
+        pm = PromptManager()
+        prompt_data = pm.get_active_prompt_text("strategy_analyzer", "analyze_strategy")
 
-1. **语法问题**：代码中是否存在语法错误、类型错误、未定义变量等问题
-2. **逻辑问题**：策略逻辑是否合理，是否存在潜在的bug（如除零、空值处理、边界条件等）
-3. **改进建议**：策略可以如何优化，参数设置是否合理
-4. **总体评级**：A(优秀)/B(良好)/C(一般)/D(需改进)
-
-请以JSON格式返回，格式如下：
-{
-    "syntax_issues": ["问题1", "问题2"],
-    "logic_issues": ["问题1", "问题2"],
-    "suggestions": ["建议1", "建议2"],
-    "overall_rating": "A",
-    "summary": "总体评价（100字以内）"
-}
-仅返回JSON，不要包含markdown代码块标记。"""
-
-        user_prompt = f"""策略ID: {strategy_id}
-
-策略代码:
-{source_code[:4000]}"""
+        if prompt_data:
+            system_prompt = prompt_data["system_prompt"]
+            user_prompt = safe_format(prompt_data["user_prompt_template"], 
+                strategy_id=strategy_id,
+                source_code=source_code[:4000]
+            )
+        else:
+            raise ValueError("未配置 strategy_analyzer/analyze_strategy 的提示词，拒绝使用兜底策略")
 
         try:
             from .llm_client import get_llm_kwargs

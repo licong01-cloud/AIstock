@@ -18,6 +18,16 @@ from ...db.pg_pool import get_conn
 logger = logging.getLogger("aistock.quantevolver.prompt_manager")
 
 
+class SafeDict(dict):
+    def __missing__(self, key):
+        return '{' + key + '}'
+
+def safe_format(template_str: str, **kwargs) -> str:
+    """瀹夊叏鐨勫瓧绗︿覆鏍煎紡鍖栵紝閬垮厤鍥犵己灏戝崰浣嶇鍙橀噺鑰屽紩鍙?KeyError"""
+    if not template_str:
+        return ""
+    return template_str.format_map(SafeDict(**kwargs))
+
 class PromptManager:
     """Agent提示词管理器。"""
 

@@ -1,7 +1,6 @@
 /* 紫色渐变背景容器 */
 .container {
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   padding: 2rem;
 }
 
@@ -302,7 +301,7 @@
 .modelCardHeader {
   display: flex;
   justify-content: space-between;
-  align-items: start;
+  align-items: flex-start;
   margin-bottom: 0.75rem;
 }
 
