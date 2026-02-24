@@ -175,7 +175,7 @@ export default function FactorList({
   }
 
   function selectAll() {
-    const keys = mergedFactors.map(f => \\||\\);
+    const keys = mergedFactors.map(f => `${f.factor_name}||${f.source}`);
     const next = new Set(keys);
     if (mode === "selection" && onFactorSelect) {
       onFactorSelect(next);
@@ -212,7 +212,7 @@ export default function FactorList({
     setDetailLoading(prev => new Set(prev).add(key));
     try {
       const params = new URLSearchParams({ source });
-      const res = await fetch(\\/rdagent/catalogs/factors/\?\\);
+      const res = await fetch(`${API}/rdagent/catalogs/factors/${encodeURIComponent(factorName)}?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
         setFactorDetails(prev => ({ ...prev, [key]: data }));
@@ -230,7 +230,7 @@ export default function FactorList({
     setExpMetricsLoading(prev => new Set(prev).add(key));
     try {
       const params = new URLSearchParams({ source, limit: "10", order_by: "collected_at" });
-      const res = await fetch(\\/quantevolver/factors/\/experiment-metrics?\\);
+      const res = await fetch(`${API}/quantevolver/factors/${encodeURIComponent(factorName)}/experiment-metrics?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
         if (data.ok) {
@@ -271,11 +271,11 @@ export default function FactorList({
   useEffect(() => {
     const classMap: Record<string, Classification> = {};
     classifications.forEach(c => {
-      classMap[\\||\\] = c;
+      classMap[`${c.factor_name}||${c.factor_source}`] = c;
     });
 
     const merged: MergedFactor[] = factors.map(f => {
-      const cls = classMap[\\||\\];
+      const cls = classMap[`${f.factor_name}||${f.source}`];
       return {
         factor_name: f.factor_name,
         source: f.source,
@@ -337,8 +337,8 @@ export default function FactorList({
       if (!showAlpha) classParams.set("exclude_source", "alpha158,alpha360");
 
       const [fRes, cRes] = await Promise.all([
-        fetch(\\/quantevolver/factors?\\).then(r => r.json()),
-        fetch(\\/quantevolver/factor-analyst/classifications?\\).then(r => r.json()).catch(() => ({ items: [] })),
+        fetch(`${API}/quantevolver/factors?${factorParams.toString()}`).then(r => r.json()),
+        fetch(`${API}/quantevolver/factor-analyst/classifications?${classParams.toString()}`).then(r => r.json()).catch(() => ({ items: [] })),
       ]);
 
       setFactors(fRes.items || []);
@@ -363,12 +363,12 @@ export default function FactorList({
       return;
     }
     const factorNames = Array.from(actualSelectedFactors).map(k => k.split("||")[0]);
-    if (!confirm(\确定要批量分析选中的 \ 个因子吗？\n这可能需要一些时间。\)) return;
+    if (!confirm(`确定要批量分析选中的 ${selectedCount} 个因子吗？\n这可能需要一些时间。`)) return;
     
     setBatchLoading(true);
     setBatchResult(null);
     try {
-      const res = await fetch(\\/quantevolver/factor-analyst/batch-analyze\, {
+      const res = await fetch(`${API}/quantevolver/factor-analyst/batch-analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ use_llm: useLlm, source_filter: sourceFilter || undefined, factor_names: factorNames }),
@@ -483,7 +483,7 @@ export default function FactorList({
                   opacity: (batchLoading || actualSelectedFactors.size === 0) ? 0.5 : 1,
                 }}
               >
-                {batchLoading ? "批量分析中..." : \批量分析-规则(\)\}
+                {batchLoading ? "批量分析中..." : `批量分析-规则(${actualSelectedFactors.size})`}
               </button>
 
               <button
@@ -495,7 +495,7 @@ export default function FactorList({
                   opacity: (batchLoading || actualSelectedFactors.size === 0) ? 0.5 : 1,
                 }}
               >
-                {batchLoading ? "分析中..." : \批量分析-LLM(\)\}
+                {batchLoading ? "分析中..." : `批量分析-LLM(${actualSelectedFactors.size})`}
               </button>
             </>
           )}
@@ -538,7 +538,7 @@ export default function FactorList({
               <tr style={{ textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>
                 <th style={{ ...thStyle, width: 32 }}>
                   <input type="checkbox" title="全选/取消全选"
-                    checked={mergedFactors.length > 0 && mergedFactors.every(f => actualSelectedFactors.has(\\||\\))}
+                    checked={mergedFactors.length > 0 && mergedFactors.every(f => actualSelectedFactors.has(`${f.factor_name}||${f.source}`))}
                     onChange={e => { if (e.target.checked) selectAll(); else clearSelection(); }}
                   />
                 </th>
@@ -556,8 +556,8 @@ export default function FactorList({
             </thead>
             <tbody>
               {mergedFactors.map(f => {
-                const rowKey = \\-\\;
-                const selectKey = \\||\\;
+                const rowKey = `${f.factor_name}-${f.source}`;
+                const selectKey = `${f.factor_name}||${f.source}`;
                 const isExpanded = expandedDescriptions.has(rowKey);
                 const isSelected = actualSelectedFactors.has(selectKey);
                 const dim = f.factor_dimension ? DIMENSION_NAMES[f.factor_dimension] : null;
@@ -612,7 +612,7 @@ export default function FactorList({
                             padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600,
                             background: "#f3f4f6",
                           }}>
-                            {f.category}{CATEGORY_NAMES[f.category] ? \ \\ : ""}
+                            {f.category}{CATEGORY_NAMES[f.category] ? ` ${CATEGORY_NAMES[f.category]}` : ""}
                           </span>
                         ) : (
                           <span style={{ color: "#d1d5db", fontSize: 10 }}>-</span>

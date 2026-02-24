@@ -48,7 +48,7 @@ export default function ModelList({
       const params = new URLSearchParams({ limit: "100", offset: "0" });
       if (search) params.set("search", search);
       if (sotaOnly) params.set("sota_only", "true");
-      const res = await fetch(${API}/quantevolver/models?);
+      const res = await fetch(`${API}/quantevolver/models?${params.toString()}`);
       const data = await res.json();
       setModels(data.items || []);
       setTotal(data.total || 0);
@@ -103,7 +103,7 @@ export default function ModelList({
                   if (!confirm("确定要批量分析所有模型吗？")) return;
                   setBatchLoading(true); setBatchResult(null);
                   try {
-                    const res = await fetch(\\/quantevolver/model-analyst/batch-analyze\, {
+                    const res = await fetch(`${API}/quantevolver/model-analyst/batch-analyze`, {
                       method: "POST", headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ use_llm: false }),
                     });
@@ -165,7 +165,7 @@ export default function ModelList({
                 }
               }}
             >
-              <div style={{ display: "flex", justify-content: "space-between", alignItems: "flex-start" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                 <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
                   {isSelectionMode && (
                     <input 
