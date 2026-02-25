@@ -133,8 +133,13 @@ export default function ComposePage() {
       const data = await res.json();
       setAiResult(data);
       if (data.ok && data.combination) {
-        setSelectedFactors(new Set(data.combination.factor_names));
+        const keys = data.combination.factor_names.map((name: string) => {
+          const f = factors.find((f: any) => f.factor_name === name);
+          return f ? `${f.factor_name}||${f.source}` : name;
+        });
+        setSelectedFactors(new Set(keys));
         setSelectedModel(data.combination.model_id || "");
+        setSelectedStrategy(data.combination.strategy_id || "TopkDropoutStrategy");
         if (data.combination.strategy_params) {
           setTopk(data.combination.strategy_params.topk || 50);
           setNDrop(data.combination.strategy_params.n_drop || 5);
@@ -259,25 +264,47 @@ export default function ComposePage() {
       </section>
 
       {/* Stepper 导航区 */}
-      <section className="mb-8 px-4">
-        <div className="flex items-center justify-between relative">
-          <div className="absolute left-0 top-1/2 -translate-y-1/2 w-full h-[2px] bg-slate-200 z-0"></div>
-          {STEPS.map((step, idx) => {
-            const stepNum = idx + 1;
-            const isActive = currentStep === stepNum;
-            const isPassed = currentStep > stepNum;
-            return (
-              <div key={stepNum} className="relative z-10 flex flex-col items-center cursor-pointer group" onClick={() => setCurrentStep(stepNum)}>
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shadow-sm transition-colors duration-200
-                  ${isActive ? 'bg-purple-600 text-white ring-4 ring-purple-100' : isPassed ? 'bg-purple-100 text-purple-600' : 'bg-white text-slate-400 border-2 border-slate-200'}`}>
-                  {isPassed ? "✓" : stepNum}
+      <section className="mb-12 px-4 md:px-8 relative">
+        <div className="max-w-5xl mx-auto">
+          <div className="flex items-center justify-between relative">
+            {/* 背景进度条 */}
+            <div className="absolute left-0 top-6 w-full h-[4px] bg-slate-100 z-0 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-all duration-700 ease-in-out"
+                style={{ width: `${((currentStep - 1) / (STEPS.length - 1)) * 100}%` }}
+              />
+            </div>
+            
+            {STEPS.map((step, idx) => {
+              const stepNum = idx + 1;
+              const isActive = currentStep === stepNum;
+              const isPassed = currentStep > stepNum;
+              
+              return (
+                <div key={stepNum} className="relative z-10 flex flex-col items-center flex-1 group">
+                  <div className="flex items-center justify-center w-full relative">
+                    {/* 节点圆形 */}
+                    <div 
+                      onClick={() => setCurrentStep(stepNum)}
+                      className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-base shadow-sm transition-all duration-500 cursor-pointer z-20
+                        ${isActive ? 'bg-gradient-to-br from-purple-600 to-indigo-600 text-white ring-4 ring-purple-100 scale-110 shadow-lg' 
+                          : isPassed ? 'bg-purple-100 text-purple-700 hover:bg-purple-200 hover:scale-105' 
+                          : 'bg-white text-slate-400 border-2 border-slate-200 hover:border-purple-300 hover:scale-105'}`}
+                    >
+                      {isPassed ? (
+                        <svg className="w-6 h-6 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                      ) : stepNum}
+                    </div>
+                  </div>
+                  
+                  {/* 节点文字 */}
+                  <div className={`mt-4 text-sm transition-colors duration-300 text-center ${isActive ? 'text-purple-800 font-bold' : isPassed ? 'text-slate-700 font-semibold' : 'text-slate-500 font-medium'}`}>
+                    {step}
+                  </div>
                 </div>
-                <div className={`mt-2 text-sm font-medium ${isActive ? 'text-purple-700' : isPassed ? 'text-slate-700' : 'text-slate-400'}`}>
-                  {step}
-                </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       </section>
 
@@ -394,13 +421,37 @@ export default function ComposePage() {
                     <span className="text-slate-500">已选因子数量</span>
                     <span className="font-bold text-purple-600 text-lg">{selectedFactors.size} 个</span>
                   </div>
+                  {selectedFactors.size > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-2 pb-3 border-b border-slate-200 max-h-[120px] overflow-y-auto">
+                      {Array.from(selectedFactors).map(k => {
+                        const name = k.split("||")[0];
+                        return (
+                          <span key={k} className="px-2 py-1 bg-purple-50 text-purple-700 text-xs rounded border border-purple-100 font-mono">
+                            {name}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
                   <div className="flex justify-between items-baseline border-b border-slate-200 pb-2">
                     <span className="text-slate-500">选定模型</span>
-                    <span className="font-semibold text-slate-800 text-right max-w-[200px] truncate" title={selectedModel}>{selectedModel || "未选择"}</span>
+                    <span className="font-semibold text-slate-800 text-right max-w-[200px] truncate" title={selectedModel}>
+                      {(() => {
+                        if (!selectedModel) return "未选择";
+                        const m = models.find(m => m.model_id === selectedModel);
+                        return m ? `${m.display_name || m.model_name} (${m.model_type || "未知类型"})` : selectedModel;
+                      })()}
+                    </span>
                   </div>
                   <div className="flex justify-between items-baseline border-b border-slate-200 pb-2">
                     <span className="text-slate-500">选定策略</span>
-                    <span className="font-semibold text-slate-800">{selectedStrategy || "未选择"} (TopK={topk}, n_drop={nDrop})</span>
+                    <span className="font-semibold text-slate-800">
+                      {(() => {
+                        if (!selectedStrategy) return "未选择";
+                        const s = strategies.find(s => s.strategy_id === selectedStrategy);
+                        return `${s?.display_name || selectedStrategy} (TopK=${topk}, n_drop=${nDrop})`;
+                      })()}
+                    </span>
                   </div>
                 </div>
 
