@@ -99,7 +99,7 @@ class SmartSelectRequest(BaseModel):
 
 class EvaluatePortfolioRequest(BaseModel):
     factor_names: List[str] = Field(..., description="选择的因子列表")
-    model_id: str = Field(..., description="选择的模型ID")
+    model_id: Optional[str] = Field(None, description="选择的模型ID")
     strategy_id: Optional[str] = Field(None, description="选择的策略ID")
     custom_params: Optional[Dict[str, Any]] = None
 
@@ -763,27 +763,22 @@ async def smart_select_components(req: SmartSelectRequest):
 
 @router.post("/experiment/evaluate-portfolio")
 async def evaluate_portfolio_design(req: EvaluatePortfolioRequest):
-    """AI评估用户选择的组合配置（因子+模型+策略）。"""
+    """AI评估用户选择的组合配置（因子+模型+策略）。
+
+    使用 PortfolioArchitect 进行多维度规则分析 + LLM 综合评估，
+    返回格式与前端 EvalResult 类型对齐：
+    { ok, overall_score, risks, suggestions, llm_commentary, factor_analysis, ... }
+    """
     try:
-        import litellm
-        from ..services.quantevolver.llm_client import get_llm_kwargs
-        
-        prompt = f"""请作为资深量化研究员，评估以下量化投资组合设计的合理性：
-        - 选中因子: {', '.join(req.factor_names) if req.factor_names else '无'}
-        - 选中模型: {req.model_id}
-        - 选中策略: {req.strategy_id}
-        
-        请简要分析该组合的优缺点、数据频度匹配风险以及过拟合风险（控制在300字以内）。"""
-        
-        kwargs = get_llm_kwargs("portfolio_architect")
-        response = litellm.completion(
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=1000,
-            **kwargs
+        from ..services.quantevolver.portfolio_architect import PortfolioArchitect
+        pa = PortfolioArchitect()
+        result = pa.evaluate_combination(
+            factor_names=req.factor_names,
+            model_id=req.model_id,
+            strategy_id=req.strategy_id,
+            custom_params=req.custom_params,
         )
-        report = response.choices[0].message.content.strip()
-        return {"report": report}
+        return result
     except Exception as e:
         logger.exception("AI评估组合失败")
         raise HTTPException(status_code=500, detail=str(e))

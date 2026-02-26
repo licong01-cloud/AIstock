@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import FactorList from "../components/FactorList";
 import ModelList from "../components/ModelList";
 
@@ -17,7 +17,7 @@ const GRADE_ORDER: Record<string, number> = { S: 0, A: 1, B: 2, C: 3, D: 4 };
 type Factor = { factor_name: string; source: string; ic?: number; sharpe?: number; is_sota_factor?: boolean;
   category?: string; grade?: string; description?: string; ann_ret_value?: number; factor_type?: string; data_source?: string };
 type Model = { model_id: string; model_name: string; model_type?: string; ic?: number; annualized_return?: number; is_sota?: boolean; display_name?: string; description?: string };
-type Strategy = { strategy_id: string; display_name: string; portfolio_config?: any };
+type Strategy = { strategy_id: string; display_name: string; strategy_type?: string; portfolio_config?: any; description?: string; market?: string; catalog_source?: string; };
 
 type EvalResult = {
   ok: boolean;
@@ -32,12 +32,87 @@ type ConfigResult = {
   experiment_id?: string;
   experiment_dir?: string;
   wsl_command?: string;
-  factor_count?: number;
+  error?: string;
+};
+
+/* ━━ 类型标签颜色 ━━ */
+const TYPE_COLORS: Record<string, { bg: string; text: string; label: string }> = {
+  daily: { bg: "#dbeafe", text: "#2563eb", label: "日频" },
+  intraday: { bg: "#fef3c7", text: "#d97706", label: "日内" },
 };
 
 export default function ComposePage() {
   const [currentStep, setCurrentStep] = useState(1);
   const STEPS = ["因子选择", "模型选择", "策略选择", "组合配置与评估", "生成执行与下发"];
+
+  /* ━━ 公共样式常量（与 evolution 页面统一） ━━ */
+  const cardStyle: React.CSSProperties = {
+    backgroundColor: "#ffffff",
+    borderRadius: "12px",
+    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.05)",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+    border: "1px solid rgba(255, 255, 255, 0.2)",
+  };
+
+  const headerStyle: React.CSSProperties = {
+    padding: "16px 20px",
+    borderBottom: "1px solid #f1f5f9",
+    backgroundColor: "#f8fafc",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+  };
+
+  const btnPrimary: React.CSSProperties = {
+    padding: "8px 20px",
+    backgroundColor: "#2563eb",
+    color: "#fff",
+    border: "none",
+    borderRadius: "6px",
+    fontSize: "13px",
+    fontWeight: 600,
+    cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+    boxShadow: "0 2px 4px rgba(37, 99, 235, 0.2)",
+    transition: "background-color 0.2s",
+  };
+
+  const btnSecondary: React.CSSProperties = {
+    padding: "8px 20px",
+    backgroundColor: "#f1f5f9",
+    color: "#475569",
+    border: "1px solid #e2e8f0",
+    borderRadius: "6px",
+    fontSize: "13px",
+    fontWeight: 600,
+    cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+    transition: "background-color 0.2s",
+  };
+
+  const inputStyle: React.CSSProperties = {
+    width: "100%",
+    padding: "8px 12px",
+    borderRadius: "6px",
+    border: "1px solid #cbd5e1",
+    fontSize: "14px",
+    boxSizing: "border-box",
+    outline: "none",
+  };
+
+  const labelStyle: React.CSSProperties = {
+    display: "block",
+    fontSize: "13px",
+    fontWeight: 600,
+    color: "#475569",
+    marginBottom: "6px",
+  };
 
   /* ── AI智能生成 ── */
   const [userRequirement, setUserRequirement] = useState("");
@@ -198,7 +273,9 @@ export default function ComposePage() {
           custom_params: { topk, n_drop: nDrop, disable_alpha158: disableAlphaBaseline, quick_train: quickTrain },
         }),
       });
-      setEvalResult(await res.json());
+      const data = await res.json();
+      if (!res.ok) { alert("评估失败: " + (data?.detail || res.statusText)); setActionLoading(null); return; }
+      setEvalResult(data);
     } catch (e: any) { alert("评估失败: " + (e?.message || "")); }
     setActionLoading(null);
   }
@@ -225,101 +302,125 @@ export default function ComposePage() {
   const toggleFactor = (name: string) => setSelectedFactors(prev => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n; });
 
   return (
-    <main className="p-6 max-w-[1400px] mx-auto bg-slate-50 min-h-screen font-sans text-slate-800">
+    <div style={{
+      padding: "24px",
+      boxSizing: "border-box",
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+      minHeight: "calc(100vh - 48px)",
+      maxWidth: "1400px",
+      margin: "0 auto",
+    }}>
       {/* 顶部标题区 */}
-      <header className="mb-6">
-         <h1 className="text-3xl font-bold text-slate-900">QE实验设计</h1>
-         <p className="text-slate-500 mt-2 text-sm">双轨驱动：支持AI智能生成配置与人工分步流程式选择，为您构建优质的因子组合与模型演进任务。</p>
-      </header>
+      <div style={{ marginBottom: "24px" }}>
+        <h1 style={{ margin: 0, fontSize: "24px", fontWeight: 700, color: "#ffffff", textShadow: "0 1px 3px rgba(0,0,0,0.15)" }}>QE实验设计</h1>
+        <p style={{ margin: "8px 0 0", fontSize: "14px", color: "rgba(255,255,255,0.75)" }}>双轨驱动：支持AI智能生成配置与人工分步流程式选择，为您构建优质的因子组合与模型演进任务。</p>
+      </div>
       
       {/* AI 智能实验设计区 */}
-      <section className="bg-white rounded-2xl p-6 shadow-sm mb-8 border border-slate-200">
-        <h2 className="text-lg font-bold mb-4 text-purple-700 flex items-center gap-2">
-          <span>✨ AI 智能实验设计</span>
-        </h2>
-        <textarea
-          value={userRequirement}
-          onChange={e => setUserRequirement(e.target.value)}
-          placeholder="请输入您的实验组合设计目标，例如：构建一个偏向于动量反转的日频量化组合，配合高频微观结构因子..."
-          className="w-full border border-slate-300 rounded-xl p-4 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent transition-shadow"
-          rows={3}
-        />
-        <div className="flex gap-3 mt-4 items-center">
-          <button
-            onClick={aiGenerate}
-            disabled={aiLoading}
-            className="px-6 py-2.5 bg-purple-600 text-white font-semibold rounded-lg shadow hover:bg-purple-700 disabled:opacity-50 transition-colors"
-          >
-            {aiLoading ? "正在深度解析并生成..." : "智能生成配置"}
-          </button>
-          <div className="flex gap-2">
-             {["稳健低回撤", "资金流选股", "高夏普动量"].map(tag => (
-               <button key={tag} onClick={() => setUserRequirement(tag + "组合，要求全面考虑风险控制")}
-                 className="px-3 py-1.5 text-xs text-slate-600 border border-slate-200 rounded-full hover:bg-slate-100 transition-colors">
-                 {tag}
-               </button>
-             ))}
-          </div>
+      <div style={{ ...cardStyle, marginBottom: "24px" }}>
+        <div style={headerStyle}>
+          <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#7c3aed", display: "flex", alignItems: "center", gap: "8px" }}>
+            ✨ AI 智能实验设计
+          </h2>
         </div>
-      </section>
-
-      {/* Stepper 导航区 */}
-      <section className="mb-12 px-4 md:px-8 relative">
-        <div className="max-w-5xl mx-auto">
-          <div className="flex items-center justify-between relative">
-            {/* 背景进度条 */}
-            <div className="absolute left-0 top-6 w-full h-[4px] bg-slate-100 z-0 rounded-full overflow-hidden">
-              <div 
-                className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-all duration-700 ease-in-out"
-                style={{ width: `${((currentStep - 1) / (STEPS.length - 1)) * 100}%` }}
-              />
+        <div style={{ padding: "20px" }}>
+          <textarea
+            value={userRequirement}
+            onChange={e => setUserRequirement(e.target.value)}
+            placeholder="请输入您的实验组合设计目标，例如：构建一个偏向于动量反转的日频量化组合，配合高频微观结构因子..."
+            rows={3}
+            style={{ ...inputStyle, resize: "none", padding: "12px 16px", fontSize: "14px", lineHeight: 1.6, borderRadius: "8px" }}
+          />
+          <div style={{ display: "flex", gap: "12px", marginTop: "16px", alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              onClick={aiGenerate}
+              disabled={aiLoading}
+              style={{ ...btnPrimary, backgroundColor: "#7c3aed", padding: "10px 24px", fontSize: "14px", boxShadow: "0 2px 4px rgba(124, 58, 237, 0.25)", opacity: aiLoading ? 0.5 : 1 }}
+            >
+              {aiLoading ? "正在深度解析并生成..." : "智能生成配置"}
+            </button>
+            <div style={{ display: "flex", gap: "8px" }}>
+              {["稳健低回撤", "资金流选股", "高夏普动量"].map(tag => (
+                <button key={tag} onClick={() => setUserRequirement(tag + "组合，要求全面考虑风险控制")}
+                  style={{ padding: "4px 12px", fontSize: "12px", color: "#64748b", border: "1px solid #e2e8f0", borderRadius: "16px", backgroundColor: "#fff", cursor: "pointer", transition: "all 0.2s" }}>
+                  {tag}
+                </button>
+              ))}
             </div>
-            
-            {STEPS.map((step, idx) => {
-              const stepNum = idx + 1;
-              const isActive = currentStep === stepNum;
-              const isPassed = currentStep > stepNum;
-              
-              return (
-                <div key={stepNum} className="relative z-10 flex flex-col items-center flex-1 group">
-                  <div className="flex items-center justify-center w-full relative">
-                    {/* 节点圆形 */}
-                    <div 
-                      onClick={() => setCurrentStep(stepNum)}
-                      className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-base shadow-sm transition-all duration-500 cursor-pointer z-20
-                        ${isActive ? 'bg-gradient-to-br from-purple-600 to-indigo-600 text-white ring-4 ring-purple-100 scale-110 shadow-lg' 
-                          : isPassed ? 'bg-purple-100 text-purple-700 hover:bg-purple-200 hover:scale-105' 
-                          : 'bg-white text-slate-400 border-2 border-slate-200 hover:border-purple-300 hover:scale-105'}`}
-                    >
-                      {isPassed ? (
-                        <svg className="w-6 h-6 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
-                      ) : stepNum}
-                    </div>
-                  </div>
-                  
-                  {/* 节点文字 */}
-                  <div className={`mt-4 text-sm transition-colors duration-300 text-center ${isActive ? 'text-purple-800 font-bold' : isPassed ? 'text-slate-700 font-semibold' : 'text-slate-500 font-medium'}`}>
-                    {step}
-                  </div>
-                </div>
-              );
-            })}
           </div>
         </div>
-      </section>
+      </div>
+
+      {/* 流程导航 - 横向按钮样式 */}
+      <div style={{ ...cardStyle, marginBottom: "24px" }}>
+        <div style={{ display: "flex", width: "100%" }}>
+          {STEPS.map((step, idx) => {
+            const stepNum = idx + 1;
+            const isActive = currentStep === stepNum;
+            const isPassed = currentStep > stepNum;
+
+            return (
+              <button
+                key={stepNum}
+                onClick={() => setCurrentStep(stepNum)}
+                style={{
+                  flex: 1,
+                  padding: "16px 8px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "10px",
+                  border: "none",
+                  borderRight: idx < STEPS.length - 1 ? "1px solid #f1f5f9" : "none",
+                  backgroundColor: isActive ? "#eff6ff" : isPassed ? "#f8fafc" : "#ffffff",
+                  cursor: "pointer",
+                  transition: "all 0.2s ease",
+                  borderBottom: isActive ? "3px solid #2563eb" : "3px solid transparent",
+                }}
+              >
+                <div style={{
+                  width: "32px",
+                  height: "32px",
+                  borderRadius: "50%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontWeight: 700,
+                  fontSize: "13px",
+                  flexShrink: 0,
+                  backgroundColor: isActive ? "#2563eb" : isPassed ? "#dbeafe" : "#f1f5f9",
+                  color: isActive ? "#ffffff" : isPassed ? "#2563eb" : "#94a3b8",
+                  boxShadow: isActive ? "0 2px 4px rgba(37, 99, 235, 0.3)" : "none",
+                  transition: "all 0.2s ease",
+                }}>
+                  {isPassed ? "✓" : stepNum}
+                </div>
+                <span style={{
+                  fontWeight: 600,
+                  fontSize: "14px",
+                  whiteSpace: "nowrap",
+                  color: isActive ? "#1e293b" : isPassed ? "#475569" : "#94a3b8",
+                }}>
+                  {step}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       {/* 下部：分步卡片区 */}
-      <section className="bg-white rounded-2xl shadow-sm border border-slate-200 min-h-[500px] overflow-hidden">
-        
+      <div style={{ ...cardStyle, minHeight: "500px" }}>
+
         {/* Step 1: 因子选择 */}
         {currentStep === 1 && (
-          <div className="p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold text-slate-800">1. 因子选择 (Factor Selection)</h2>
-              <span className="bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-sm font-semibold">已选 {selectedFactors.size} 项</span>
+          <div style={{ padding: "24px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+              <h2 style={{ margin: 0, fontSize: "18px", fontWeight: 700, color: "#1e293b" }}>1. 因子选择 (Factor Selection)</h2>
+              <span style={{ backgroundColor: "#dbeafe", color: "#2563eb", padding: "4px 12px", borderRadius: "12px", fontSize: "13px", fontWeight: 600 }}>已选 {selectedFactors.size} 项</span>
             </div>
 
-            <div className="border border-slate-200 rounded-lg overflow-hidden">
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", overflow: "hidden" }}>
               <FactorList
                 mode="selection"
                 selectedFactors={selectedFactors}
@@ -327,18 +428,18 @@ export default function ComposePage() {
               />
             </div>
 
-            <div className="flex justify-end mt-6">
-              <button onClick={() => setCurrentStep(2)} className="px-8 py-2.5 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 transition-colors">下一步：选择模型</button>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "24px" }}>
+              <button onClick={() => setCurrentStep(2)} style={{ ...btnPrimary, padding: "10px 28px", fontSize: "14px" }}>下一步：选择模型</button>
             </div>
           </div>
         )}
 
         {/* Step 2: 模型选择 */}
         {currentStep === 2 && (
-          <div className="p-6">
-            <h2 className="text-xl font-bold text-slate-800 mb-4">2. 模型选择 (Model Selection)</h2>
-            
-            <div className="border border-slate-200 rounded-lg overflow-hidden mb-6">
+          <div style={{ padding: "24px" }}>
+            <h2 style={{ margin: "0 0 16px", fontSize: "18px", fontWeight: 700, color: "#1e293b" }}>2. 模型选择 (Model Selection)</h2>
+
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", overflow: "hidden", marginBottom: "24px" }}>
               <ModelList
                 mode="selection"
                 selectedModel={selectedModel}
@@ -346,96 +447,139 @@ export default function ComposePage() {
               />
             </div>
 
-            <div className="flex justify-between mt-6">
-              <button onClick={() => setCurrentStep(1)} className="px-6 py-2.5 bg-white border border-slate-300 text-slate-700 font-medium rounded-lg hover:bg-slate-50 transition-colors">上一步</button>
-              <button onClick={() => setCurrentStep(3)} className="px-8 py-2.5 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 transition-colors">下一步：选择策略</button>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: "24px" }}>
+              <button onClick={() => setCurrentStep(1)} style={btnSecondary}>上一步</button>
+              <button onClick={() => setCurrentStep(3)} style={{ ...btnPrimary, padding: "10px 28px", fontSize: "14px" }}>下一步：选择策略</button>
             </div>
           </div>
         )}
 
         {/* Step 3: 策略选择 */}
         {currentStep === 3 && (
-          <div className="p-6">
-            <h2 className="text-xl font-bold text-slate-800 mb-4">3. 策略选择 (Strategy Selection)</h2>
-            
-            <div className="mb-6">
-              <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">日频策略 (Daily Frequency)</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {strategies.map(s => (
-                  <div key={s.strategy_id} onClick={() => setSelectedStrategy(s.strategy_id)}
-                    className={`border-2 rounded-xl p-4 cursor-pointer transition-all ${selectedStrategy === s.strategy_id ? "border-purple-600 bg-purple-50/30 shadow-md" : "border-slate-200 hover:border-purple-300 hover:bg-slate-50"}`}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-5 h-5 rounded-full border border-slate-300 flex items-center justify-center bg-white flex-shrink-0">
-                        {selectedStrategy === s.strategy_id && <div className="w-3 h-3 bg-purple-600 rounded-full" />}
-                      </div>
-                      <div className="font-bold text-slate-800">{s.display_name}</div>
-                    </div>
-                  </div>
-                ))}
+          <div style={{ padding: "24px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+              <h2 style={{ margin: 0, fontSize: "18px", fontWeight: 700, color: "#1e293b" }}>选择交易策略与核心参数</h2>
+              <span style={{ fontSize: "13px", color: "#64748b" }}>
+                已选择策略：<strong style={{ color: "#2563eb" }}>{selectedStrategy || "未选择"}</strong>
+              </span>
+            </div>
+
+            {/* 策略列表 */}
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", overflow: "hidden", marginBottom: "24px" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: "#f9fafb", textAlign: "left" }}>
+                      <th style={{ padding: "10px 16px", fontWeight: 500, color: "#6b7280", fontSize: 12, width: 60, textAlign: "center" }}>选择</th>
+                      <th style={{ padding: "10px 16px", fontWeight: 500, color: "#6b7280", fontSize: 12 }}>策略名称</th>
+                      <th style={{ padding: "10px 16px", fontWeight: 500, color: "#6b7280", fontSize: 12 }}>描述</th>
+                      <th style={{ padding: "10px 16px", fontWeight: 500, color: "#6b7280", fontSize: 12, width: 70 }}>类型</th>
+                      <th style={{ padding: "10px 16px", fontWeight: 500, color: "#6b7280", fontSize: 12, width: 70 }}>市场</th>
+                      <th style={{ padding: "10px 16px", fontWeight: 500, color: "#6b7280", fontSize: 12, width: 80 }}>来源</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {strategies.length > 0 ? strategies.map(s => {
+                      const tc = TYPE_COLORS[s.strategy_type || "daily"] || TYPE_COLORS.daily;
+                      const isSelected = selectedStrategy === s.strategy_id;
+                      return (
+                        <tr key={s.strategy_id}
+                          onClick={() => setSelectedStrategy(s.strategy_id)}
+                          style={{ 
+                            borderTop: "1px solid #f3f4f6", 
+                            cursor: "pointer",
+                            background: isSelected ? "#f5f3ff" : "transparent"
+                          }}
+                          onMouseEnter={e => { if(!isSelected) e.currentTarget.style.background = "#f9fafb" }}
+                          onMouseLeave={e => { if(!isSelected) e.currentTarget.style.background = "transparent" }}
+                        >
+                          <td style={{ padding: "10px 16px", textAlign: "center" }}>
+                            <input 
+                              type="radio" 
+                              name="strategy-selection"
+                              checked={isSelected}
+                              onChange={() => setSelectedStrategy(s.strategy_id)}
+                              style={{ cursor: "pointer", width: 16, height: 16, accentColor: "#7c3aed" }}
+                            />
+                          </td>
+                          <td style={{ padding: "10px 16px" }}>
+                            <div style={{ fontWeight: 600, color: "#111827" }}>{s.display_name}</div>
+                            <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>{s.strategy_id}</div>
+                          </td>
+                          <td style={{ padding: "10px 16px", color: "#4b5563", fontSize: 12, maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={s.description}>
+                            {s.description || "-"}
+                          </td>
+                          <td style={{ padding: "10px 16px" }}>
+                            <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: tc.bg, color: tc.text }}>
+                              {tc.label}
+                            </span>
+                          </td>
+                          <td style={{ padding: "10px 16px", fontSize: 12, color: "#6b7280" }}>{s.market || "-"}</td>
+                          <td style={{ padding: "10px 16px", fontSize: 12, color: "#6b7280" }}>{s.catalog_source || "-"}</td>
+                        </tr>
+                      );
+                    }) : (
+                      <tr>
+                        <td colSpan={6} style={{ padding: "32px", textAlign: "center", color: "#9ca3af", fontSize: 14 }}>
+                          尚未加载到策略数据
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
 
-            <div className="mb-8">
-              <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">日内高频策略 (Intraday High-Frequency)</h3>
-              <div className="border-2 border-slate-200 rounded-xl p-4 bg-slate-50 opacity-60 cursor-not-allowed flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-5 h-5 rounded-full border border-slate-300 flex items-center justify-center bg-white flex-shrink-0"></div>
-                  <div className="font-bold text-slate-800">Intraday T0 Reversal (日内T0反转)</div>
-                </div>
-                <span className="text-xs font-semibold bg-slate-200 text-slate-600 px-2 py-1 rounded">尚未就绪 (回测数据缺失)</span>
-              </div>
-            </div>
-
-            <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 mb-6">
-              <h3 className="text-sm font-bold text-slate-800 mb-4">策略核心参数调整</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            <div style={{ backgroundColor: "#f8fafc", borderRadius: "8px", padding: "20px", border: "1px solid #e2e8f0", marginBottom: "24px" }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: "13px", fontWeight: 700, color: "#1e293b" }}>策略核心参数调整</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", maxWidth: "400px" }}>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Top K (持仓数量)</label>
-                  <input type="number" value={topk} onChange={e => setTopk(Number(e.target.value))} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-400 outline-none" />
+                  <label style={labelStyle}>Top K (持仓数量)</label>
+                  <input type="number" value={topk} onChange={e => setTopk(Number(e.target.value))} style={inputStyle} />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">N Drop (每日替换)</label>
-                  <input type="number" value={nDrop} onChange={e => setNDrop(Number(e.target.value))} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-400 outline-none" />
+                  <label style={labelStyle}>N Drop (每日替换)</label>
+                  <input type="number" value={nDrop} onChange={e => setNDrop(Number(e.target.value))} style={inputStyle} />
                 </div>
               </div>
             </div>
 
-            <div className="flex justify-between mt-6">
-              <button onClick={() => setCurrentStep(2)} className="px-6 py-2.5 bg-white border border-slate-300 text-slate-700 font-medium rounded-lg hover:bg-slate-50 transition-colors">上一步</button>
-              <button onClick={() => setCurrentStep(4)} className="px-8 py-2.5 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 transition-colors">下一步：组合配置与评估</button>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: "24px" }}>
+              <button onClick={() => setCurrentStep(2)} style={btnSecondary}>上一步</button>
+              <button onClick={() => setCurrentStep(4)} style={{ ...btnPrimary, padding: "10px 28px", fontSize: "14px" }}>下一步：组合配置与评估</button>
             </div>
           </div>
         )}
 
         {/* Step 4: 组合配置与AI评估 */}
         {currentStep === 4 && (
-          <div className="p-6">
-            <h2 className="text-xl font-bold text-slate-800 mb-6">4. 组合配置预览与 AI 评估</h2>
-            
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+          <div style={{ padding: "24px" }}>
+            <h2 style={{ margin: "0 0 20px", fontSize: "18px", fontWeight: 700, color: "#1e293b" }}>4. 组合配置预览与 AI 评估</h2>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "24px" }}>
               {/* 左侧预览 */}
-              <div className="bg-slate-50 rounded-xl p-5 border border-slate-200">
-                <h3 className="text-sm font-bold text-slate-800 mb-4">当前配置清单</h3>
-                <div className="space-y-4 text-sm">
-                  <div className="flex justify-between items-baseline border-b border-slate-200 pb-2">
-                    <span className="text-slate-500">已选因子数量</span>
-                    <span className="font-bold text-purple-600 text-lg">{selectedFactors.size} 个</span>
+              <div style={{ backgroundColor: "#f8fafc", borderRadius: "8px", padding: "20px", border: "1px solid #e2e8f0" }}>
+                <h3 style={{ margin: "0 0 16px", fontSize: "13px", fontWeight: 700, color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.05em" }}>当前配置清单</h3>
+                <div style={{ fontSize: "14px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                    <span style={{ color: "#64748b", fontWeight: 500 }}>已选因子数量</span>
+                    <span style={{ fontSize: "20px", fontWeight: 700, fontFamily: "monospace", color: "#059669" }}>{selectedFactors.size} 个</span>
                   </div>
                   {selectedFactors.size > 0 && (
-                    <div className="flex flex-wrap gap-1.5 pt-2 pb-3 border-b border-slate-200 max-h-[120px] overflow-y-auto">
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", paddingBottom: "12px", borderBottom: "1px solid #f1f5f9", maxHeight: "120px", overflowY: "auto" }}>
                       {Array.from(selectedFactors).map(k => {
                         const name = k.split("||")[0];
                         return (
-                          <span key={k} className="px-2 py-1 bg-purple-50 text-purple-700 text-xs rounded border border-purple-100 font-mono">
+                          <span key={k} style={{ padding: "2px 8px", backgroundColor: "#dbeafe", color: "#2563eb", fontSize: "11px", borderRadius: "4px", fontFamily: "monospace", border: "1px solid #bfdbfe" }}>
                             {name}
                           </span>
                         );
                       })}
                     </div>
                   )}
-                  <div className="flex justify-between items-baseline border-b border-slate-200 pb-2">
-                    <span className="text-slate-500">选定模型</span>
-                    <span className="font-semibold text-slate-800 text-right max-w-[200px] truncate" title={selectedModel}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                    <span style={{ color: "#64748b", fontWeight: 500 }}>选定模型</span>
+                    <span style={{ fontWeight: 600, color: "#1e293b", textAlign: "right", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={selectedModel}>
                       {(() => {
                         if (!selectedModel) return "未选择";
                         const m = models.find(m => m.model_id === selectedModel);
@@ -443,9 +587,9 @@ export default function ComposePage() {
                       })()}
                     </span>
                   </div>
-                  <div className="flex justify-between items-baseline border-b border-slate-200 pb-2">
-                    <span className="text-slate-500">选定策略</span>
-                    <span className="font-semibold text-slate-800">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                    <span style={{ color: "#64748b", fontWeight: 500 }}>选定策略</span>
+                    <span style={{ fontWeight: 600, color: "#1e293b" }}>
                       {(() => {
                         if (!selectedStrategy) return "未选择";
                         const s = strategies.find(s => s.strategy_id === selectedStrategy);
@@ -455,119 +599,129 @@ export default function ComposePage() {
                   </div>
                 </div>
 
-                <div className="mt-6 pt-4 border-t border-slate-200">
+                <div style={{ marginTop: "20px", paddingTop: "16px", borderTop: "1px solid #e2e8f0" }}>
                   <button onClick={evaluateCombination} disabled={actionLoading === "evaluate"}
-                    className="w-full py-3 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-2">
+                    style={{ ...btnPrimary, width: "100%", justifyContent: "center", padding: "10px 20px", fontSize: "14px", backgroundColor: "#3b82f6", opacity: actionLoading === "evaluate" ? 0.5 : 1 }}>
                     {actionLoading === "evaluate" ? "正在调用 LLM 进行深度评估..." : "AI 评估此组合的合理性"}
                   </button>
                 </div>
               </div>
 
               {/* 右侧评估结果 */}
-              <div className="bg-white rounded-xl p-5 border border-indigo-100 shadow-inner min-h-[250px]">
+              <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", padding: "20px", border: "1px solid #e2e8f0", boxShadow: "0 1px 3px rgba(0,0,0,0.05)", minHeight: "250px", display: "flex", flexDirection: "column" }}>
                 {evalResult ? (
                   <div>
-                    <div className="flex items-center gap-4 mb-4">
-                      <div className="w-16 h-16 rounded-full flex items-center justify-center text-xl font-bold bg-indigo-50 text-indigo-700 border-4 border-indigo-200">
+                    <div style={{ display: "flex", alignItems: "center", gap: "16px", marginBottom: "16px" }}>
+                      <div style={{ width: "56px", height: "56px", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px", fontWeight: 700, backgroundColor: "#dbeafe", color: "#1d4ed8", border: "3px solid #93c5fd" }}>
                         {evalResult.overall_score?.toFixed(0)}
                       </div>
                       <div>
-                        <h3 className="text-lg font-bold text-slate-800">综合评估得分</h3>
-                        <p className="text-xs text-slate-500">基于多维度因子互补性和策略匹配度</p>
+                        <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#1e293b" }}>综合评估得分</h3>
+                        <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#64748b" }}>基于多维度因子互补性和策略匹配度</p>
                       </div>
                     </div>
                     {evalResult.llm_commentary && (
-                      <div className="text-sm text-slate-700 leading-relaxed mb-4 whitespace-pre-wrap p-3 bg-slate-50 rounded-lg">
+                      <div style={{ fontSize: "14px", color: "#334155", lineHeight: 1.6, marginBottom: "16px", whiteSpace: "pre-wrap", padding: "12px", backgroundColor: "#f8fafc", borderRadius: "6px", border: "1px solid #f1f5f9" }}>
                         {evalResult.llm_commentary}
                       </div>
                     )}
                     {evalResult.risks && evalResult.risks.length > 0 && (
-                      <div className="mb-3">
-                        <h4 className="text-xs font-bold text-red-600 uppercase mb-2">识别到的风险</h4>
-                        {evalResult.risks.map((r, i) => <div key={i} className="text-xs bg-red-50 text-red-700 p-2 rounded mb-1 border border-red-100">{r.message}</div>)}
+                      <div style={{ marginBottom: "12px" }}>
+                        <h4 style={{ margin: "0 0 8px", fontSize: "12px", fontWeight: 700, color: "#dc2626", textTransform: "uppercase", letterSpacing: "0.05em" }}>识别到的风险</h4>
+                        {evalResult.risks.map((r, i) => (
+                          <div key={i} style={{ fontSize: "12px", backgroundColor: "#fef2f2", color: "#b91c1c", padding: "8px 12px", borderRadius: "6px", marginBottom: "4px", border: "1px solid #fecaca" }}>{r.message}</div>
+                        ))}
                       </div>
                     )}
                   </div>
                 ) : (
-                  <div className="h-full flex flex-col items-center justify-center text-slate-400">
-                    <div className="text-4xl mb-2">🤖</div>
-                    <p className="text-sm">点击左侧按钮，使用 AI 分析您的投资组合</p>
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#94a3b8" }}>
+                    <div style={{ fontSize: "36px", marginBottom: "8px" }}>🤖</div>
+                    <p style={{ margin: 0, fontSize: "14px" }}>点击左侧按钮，使用 AI 分析您的投资组合</p>
                   </div>
                 )}
               </div>
             </div>
 
-            <div className="flex justify-between mt-6 pt-6 border-t border-slate-200">
-              <button onClick={() => setCurrentStep(3)} className="px-6 py-2.5 bg-white border border-slate-300 text-slate-700 font-medium rounded-lg hover:bg-slate-50 transition-colors">上一步</button>
-              <button onClick={() => setCurrentStep(5)} className="px-8 py-2.5 bg-purple-600 text-white font-medium rounded-lg hover:bg-purple-700 shadow-md transition-colors">确认配置并进入下一步</button>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: "24px", paddingTop: "20px", borderTop: "1px solid #f1f5f9" }}>
+              <button onClick={() => setCurrentStep(3)} style={btnSecondary}>上一步</button>
+              <button onClick={() => setCurrentStep(5)} style={{ ...btnPrimary, padding: "10px 28px", fontSize: "14px" }}>确认配置并进入下一步</button>
             </div>
           </div>
         )}
 
         {/* Step 5: 任务下发设置 */}
         {currentStep === 5 && (
-          <div className="p-6">
-            <h2 className="text-xl font-bold text-slate-800 mb-6">5. 任务下发设置 (Task Dispatching)</h2>
+          <div style={{ padding: "24px" }}>
+            <h2 style={{ margin: "0 0 20px", fontSize: "18px", fontWeight: 700, color: "#1e293b" }}>5. 任务下发设置 (Task Dispatching)</h2>
 
-            <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 mb-6">
-              <h3 className="text-sm font-bold text-slate-800 mb-4">时间区间与数据基线</h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-4">
+            <div style={{ backgroundColor: "#f8fafc", borderRadius: "8px", padding: "20px", border: "1px solid #e2e8f0", marginBottom: "24px" }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: "13px", fontWeight: 700, color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.05em" }}>时间区间与数据基线</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "20px", marginBottom: "16px" }}>
                 {[ { label: "训练集", sk: "train_start", ek: "train_end" }, { label: "验证集", sk: "valid_start", ek: "valid_end" }, { label: "测试集(回测)", sk: "test_start", ek: "test_end" } ].map(seg => (
                   <div key={seg.label}>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">{seg.label}</label>
-                    <div className="flex items-center gap-2">
-                      <input type="date" value={(dataSplit as any)[seg.sk]} onChange={e => setDataSplit(p => ({ ...p, [seg.sk]: e.target.value }))} className="px-2 py-1.5 text-xs border border-slate-300 rounded bg-white w-full" />
-                      <span className="text-slate-400">-</span>
-                      <input type="date" value={(dataSplit as any)[seg.ek]} onChange={e => setDataSplit(p => ({ ...p, [seg.ek]: e.target.value }))} className="px-2 py-1.5 text-xs border border-slate-300 rounded bg-white w-full" />
+                    <label style={labelStyle}>{seg.label}</label>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <input type="date" value={(dataSplit as any)[seg.sk]} onChange={e => setDataSplit(p => ({ ...p, [seg.sk]: e.target.value }))} style={{ ...inputStyle, padding: "6px 8px", fontSize: "12px" }} />
+                      <span style={{ color: "#94a3b8" }}>-</span>
+                      <input type="date" value={(dataSplit as any)[seg.ek]} onChange={e => setDataSplit(p => ({ ...p, [seg.ek]: e.target.value }))} style={{ ...inputStyle, padding: "6px 8px", fontSize: "12px" }} />
                     </div>
                   </div>
                 ))}
               </div>
-              <div className="flex gap-6 mt-4 pt-4 border-t border-slate-200">
-                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                  <input type="checkbox" className="rounded text-purple-600 w-4 h-4" checked={disableAlphaBaseline} onChange={e => setDisableAlphaBaseline(e.target.checked)} />
+              <div style={{ display: "flex", gap: "24px", marginTop: "16px", paddingTop: "16px", borderTop: "1px solid #e2e8f0" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "14px", color: "#475569", cursor: "pointer" }}>
+                  <input type="checkbox" checked={disableAlphaBaseline} onChange={e => setDisableAlphaBaseline(e.target.checked)} style={{ width: "16px", height: "16px", accentColor: "#2563eb" }} />
                   禁用 Alpha158 基线因子
                 </label>
-                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                  <input type="checkbox" className="rounded text-purple-600 w-4 h-4" checked={quickTrain} onChange={e => setQuickTrain(e.target.checked)} />
-                  启用快速训练模式 <span className="text-xs text-amber-600 ml-1">(训练时间缩短至20%)</span>
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "14px", color: "#475569", cursor: "pointer" }}>
+                  <input type="checkbox" checked={quickTrain} onChange={e => setQuickTrain(e.target.checked)} style={{ width: "16px", height: "16px", accentColor: "#2563eb" }} />
+                  启用快速训练模式 <span style={{ fontSize: "12px", color: "#d97706", marginLeft: "4px" }}>(训练时间缩短至20%)</span>
                 </label>
               </div>
             </div>
 
-            <div className="mb-8">
-              <h3 className="text-sm font-bold text-slate-800 mb-4">选择任务分流模式</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div style={{ marginBottom: "32px" }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: "13px", fontWeight: 700, color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.05em" }}>选择任务分流模式</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
                 <div onClick={() => setDispatchMode("independent")}
-                  className={`p-5 rounded-xl border-2 cursor-pointer transition-all ${dispatchMode === "independent" ? "border-blue-600 bg-blue-50" : "border-slate-200 hover:border-blue-300"}`}>
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="font-bold text-blue-800 text-lg">执行独立任务 (单次回测)</h4>
-                    <div className="w-5 h-5 rounded-full border border-blue-300 flex items-center justify-center bg-white">
-                      {dispatchMode === "independent" && <div className="w-3 h-3 bg-blue-600 rounded-full" />}
+                  style={{
+                    padding: "20px", borderRadius: "8px", cursor: "pointer", transition: "all 0.2s",
+                    border: dispatchMode === "independent" ? "2px solid #3b82f6" : "2px solid #e2e8f0",
+                    backgroundColor: dispatchMode === "independent" ? "#eff6ff" : "#ffffff",
+                  }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                    <h4 style={{ margin: 0, fontWeight: 700, color: "#1d4ed8", fontSize: "16px" }}>执行独立任务 (单次回测)</h4>
+                    <div style={{ width: "20px", height: "20px", borderRadius: "50%", border: "2px solid #93c5fd", display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "#fff" }}>
+                      {dispatchMode === "independent" && <div style={{ width: "10px", height: "10px", backgroundColor: "#3b82f6", borderRadius: "50%" }} />}
                     </div>
                   </div>
-                  <p className="text-sm text-slate-600">单次生成 QLib 配置并发送到 WSL 环境执行，不会触发自动循环演进。适合验证当前组合的效果。</p>
+                  <p style={{ margin: 0, fontSize: "13px", color: "#475569", lineHeight: 1.5 }}>单次生成 QLib 配置并发送到 WSL 环境执行，不会触发自动循环演进。适合验证当前组合的效果。</p>
                 </div>
-                
+
                 <div onClick={() => setDispatchMode("evolution")}
-                  className={`p-5 rounded-xl border-2 cursor-pointer transition-all ${dispatchMode === "evolution" ? "border-purple-600 bg-purple-50" : "border-slate-200 hover:border-purple-300"}`}>
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="font-bold text-purple-800 text-lg">启动 QE 自动演进 (持续迭代)</h4>
-                    <div className="w-5 h-5 rounded-full border border-purple-300 flex items-center justify-center bg-white">
-                      {dispatchMode === "evolution" && <div className="w-3 h-3 bg-purple-600 rounded-full" />}
+                  style={{
+                    padding: "20px", borderRadius: "8px", cursor: "pointer", transition: "all 0.2s",
+                    border: dispatchMode === "evolution" ? "2px solid #7c3aed" : "2px solid #e2e8f0",
+                    backgroundColor: dispatchMode === "evolution" ? "#f5f3ff" : "#ffffff",
+                  }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                    <h4 style={{ margin: 0, fontWeight: 700, color: "#6d28d9", fontSize: "16px" }}>启动 QE 自动演进 (持续迭代)</h4>
+                    <div style={{ width: "20px", height: "20px", borderRadius: "50%", border: "2px solid #c4b5fd", display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "#fff" }}>
+                      {dispatchMode === "evolution" && <div style={{ width: "10px", height: "10px", backgroundColor: "#7c3aed", borderRadius: "50%" }} />}
                     </div>
                   </div>
-                  <p className="text-sm text-slate-600 mb-3">以此配置作为 Task 0 (初始环境)，交给 AIstock 调度大脑进行自动化、循环的因子与模型挖掘。</p>
-                  
+                  <p style={{ margin: "0 0 12px", fontSize: "13px", color: "#475569", lineHeight: 1.5 }}>以此配置作为 Task 0 (初始环境)，交给 AIstock 调度大脑进行自动化、循环的因子与模型挖掘。</p>
+
                   {dispatchMode === "evolution" && (
-                    <div className="space-y-3 mt-4 pt-4 border-t border-purple-200" onClick={e => e.stopPropagation()}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "16px", paddingTop: "16px", borderTop: "1px solid #ddd6fe" }} onClick={e => e.stopPropagation()}>
                       <div>
-                        <label className="block text-xs font-semibold text-purple-800 mb-1">演进总体目标描述</label>
-                        <input type="text" value={evolutionObjective} onChange={e => setEvolutionObjective(e.target.value)} placeholder="例如：挖掘低相关性的新动量因子，提升多头收益" className="w-full px-3 py-1.5 border border-purple-200 rounded text-sm focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500" />
+                        <label style={{ ...labelStyle, color: "#6d28d9" }}>演进总体目标描述</label>
+                        <input type="text" value={evolutionObjective} onChange={e => setEvolutionObjective(e.target.value)} placeholder="例如：挖掘低相关性的新动量因子，提升多头收益" style={{ ...inputStyle, borderColor: "#c4b5fd", fontSize: "13px" }} />
                       </div>
                       <div>
-                        <label className="block text-xs font-semibold text-purple-800 mb-1">预设循环迭代次数 (Loops)</label>
-                        <input type="number" value={evolutionLoops} onChange={e => setEvolutionLoops(Number(e.target.value))} className="w-24 px-3 py-1.5 border border-purple-200 rounded text-sm focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500" />
+                        <label style={{ ...labelStyle, color: "#6d28d9" }}>预设循环迭代次数 (Loops)</label>
+                        <input type="number" value={evolutionLoops} onChange={e => setEvolutionLoops(Number(e.target.value))} style={{ ...inputStyle, width: "96px", borderColor: "#c4b5fd", fontSize: "13px" }} />
                       </div>
                     </div>
                   )}
@@ -576,30 +730,42 @@ export default function ComposePage() {
             </div>
 
             {configResult?.ok && (
-              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-5 mb-6">
-                <h3 className="font-bold text-emerald-800 mb-2">任务已成功生成！</h3>
-                <p className="text-sm text-emerald-700 mb-1"><strong>Experiment ID:</strong> {configResult.experiment_id}</p>
-                <p className="text-sm text-emerald-700 mb-3"><strong>工作目录:</strong> {configResult.experiment_dir}</p>
-                <div className="bg-slate-900 rounded-lg p-3 overflow-x-auto">
-                  <pre className="text-xs text-green-400 font-mono m-0">{configResult.wsl_command}</pre>
+              <div style={{ backgroundColor: "#dcfce7", border: "1px solid #86efac", borderRadius: "8px", padding: "20px", marginBottom: "24px" }}>
+                <h3 style={{ margin: "0 0 8px", fontWeight: 700, color: "#166534", fontSize: "15px" }}>任务已成功生成！</h3>
+                <p style={{ margin: "0 0 4px", fontSize: "13px", color: "#15803d" }}><strong>Experiment ID:</strong> {configResult.experiment_id}</p>
+                <p style={{ margin: "0 0 12px", fontSize: "13px", color: "#15803d" }}><strong>工作目录:</strong> {configResult.experiment_dir}</p>
+                <div style={{ backgroundColor: "#0f172a", borderRadius: "6px", padding: "12px", overflowX: "auto" }}>
+                  <pre style={{ margin: 0, fontSize: "12px", color: "#4ade80", fontFamily: "'Fira Code', Consolas, monospace" }}>{configResult.wsl_command}</pre>
                 </div>
-                <div className="mt-3 flex gap-3">
-                  <button onClick={() => { navigator.clipboard.writeText(configResult.wsl_command || ""); alert("已复制命令"); }} className="px-4 py-1.5 bg-white text-emerald-700 font-medium text-sm border border-emerald-300 rounded hover:bg-emerald-100">复制终端命令</button>
-                  {dispatchMode === "evolution" && <button onClick={() => window.open("/quantevolver/evolution", "_blank")} className="px-4 py-1.5 bg-emerald-600 text-white font-medium text-sm rounded hover:bg-emerald-700">前往演进监控大屏</button>}
+                <div style={{ marginTop: "12px", display: "flex", gap: "12px" }}>
+                  <button onClick={() => { navigator.clipboard.writeText(configResult.wsl_command || ""); alert("已复制命令"); }}
+                    style={{ ...btnSecondary, fontSize: "13px", borderColor: "#86efac", color: "#166534" }}>复制终端命令</button>
+                  {dispatchMode === "evolution" && (
+                    <button onClick={() => window.open("/quantevolver/evolution", "_blank")}
+                      style={{ ...btnPrimary, backgroundColor: "#10b981", fontSize: "13px", boxShadow: "0 2px 4px rgba(16, 185, 129, 0.2)" }}>前往演进监控大屏</button>
+                  )}
                 </div>
               </div>
             )}
 
-            <div className="flex justify-between mt-6 pt-6 border-t border-slate-200">
-              <button onClick={() => setCurrentStep(4)} className="px-6 py-2.5 bg-white border border-slate-300 text-slate-700 font-medium rounded-lg hover:bg-slate-50 transition-colors">上一步</button>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: "24px", paddingTop: "20px", borderTop: "1px solid #f1f5f9" }}>
+              <button onClick={() => setCurrentStep(4)} style={btnSecondary}>上一步</button>
               <button onClick={generateConfig} disabled={actionLoading === "generate" || selectedFactors.size === 0}
-                className="px-10 py-3 bg-slate-900 text-white font-bold text-lg rounded-xl hover:bg-black shadow-lg hover:shadow-xl transition-all flex items-center gap-2">
+                style={{
+                  ...btnPrimary,
+                  padding: "12px 32px",
+                  fontSize: "15px",
+                  fontWeight: 700,
+                  backgroundColor: "#1e293b",
+                  boxShadow: "0 4px 12px rgba(0, 0, 0, 0.15)",
+                  opacity: (actionLoading === "generate" || selectedFactors.size === 0) ? 0.5 : 1,
+                }}>
                 {actionLoading === "generate" ? "正在执行生成中..." : dispatchMode === "independent" ? "执行独立任务 (Generate)" : "启动 QE 自动演进 (Start Evolution)"}
               </button>
             </div>
           </div>
         )}
-      </section>
-    </main>
+      </div>
+    </div>
   );
 }

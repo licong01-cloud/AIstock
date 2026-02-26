@@ -48,6 +48,50 @@ ON CONFLICT (agent_type, prompt_key) DO UPDATE SET
 ''', (system_prompt, user_prompt_template))
 
 conn.commit()
+
+# ── 2. portfolio_architect / evaluate_combination ──
+eval_system_prompt = '''你是一位资深量化投资组合评估专家。
+你的任务是评估用户选择的因子+模型+策略组合的合理性，给出综合评分和改进建议。
+返回JSON格式：
+{
+    "commentary": "对组合的综合分析评论（200字左右）",
+    "llm_score": 75,
+    "additional_risks": ["风险点1", "风险点2"],
+    "additional_suggestions": ["建议1", "建议2"]
+}
+评分标准（0-100）：
+- 因子多样性和质量占30%
+- 模型与因子的适配性占25%
+- 策略参数合理性占20%
+- 整体风险控制占25%
+JSON 必须是合法的，不要输出任何额外的解释文本。'''
+
+eval_user_prompt_template = '''请评估以下量化投资组合：
+
+因子组合（共{factor_count}个，已分类{classified_count}个，覆盖{category_count}个类别）：
+- 平均评级得分: {avg_grade_score}/5
+- 多样性得分: {diversity_score}
+- 分类详情:
+{factor_summary}
+
+模型信息：
+{model_summary}
+
+策略信息：
+{strategy_summary}
+
+请给出综合评估。'''
+
+cur.execute('''
+INSERT INTO qe_agent_prompts (agent_type, prompt_key, display_name, description, system_prompt, user_prompt_template, is_active, version)
+VALUES ('portfolio_architect', 'evaluate_combination', '组合评估', '评估因子+模型+策略组合的合理性并给出评分', %s, %s, true, 1)
+ON CONFLICT (agent_type, prompt_key) DO UPDATE SET
+    system_prompt = EXCLUDED.system_prompt,
+    user_prompt_template = EXCLUDED.user_prompt_template;
+''', (eval_system_prompt, eval_user_prompt_template))
+
+conn.commit()
+print('Inserted evaluate_combination prompt')
+
 cur.close()
 conn.close()
-print('Inserted smart_select prompt')

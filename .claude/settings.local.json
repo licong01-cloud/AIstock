@@ -22,7 +22,12 @@
       "Bash(git -C \"f:/Dev/AIstock\" log --all --oneline --since=\"2026-02-07\" --until=\"2026-02-11\")",
       "Bash(git -C \"f:/Dev/AIstock\" log --all --oneline -20)",
       "Bash(f:/Dev/AIstock/.venv/Scripts/pip.exe install:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(npx next:*)",
+      "Bash(npx tsc:*)",
+      "Bash(python3:*)",
+      "Bash(rm:*)",
+      "Bash(git add:*)"
     ]
   }
 }

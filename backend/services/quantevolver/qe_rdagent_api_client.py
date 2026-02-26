@@ -106,6 +106,19 @@ class RdagentApiClient:
             logger.error(f"Failed to download assets for {loop_id}: {str(e)}")
             raise
         
+    async def get_workspace_config(self) -> Dict[str, Any]:
+        """
+        获取 RDAgent 侧的工作区配置（路径等），用于动态生成 WSL 命令。
+        """
+        url = f"{self.base_url}/config"
+        try:
+            response = await self.client.get(url)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to get workspace config: {e}")
+            raise
+
     async def cleanup_task_workspace(self, task_id: str) -> bool:
         """
         要求 RDAgent 彻底删除任务工作区

@@ -75,14 +75,18 @@ class PortfolioArchitect:
         # 6. 综合评分（规则基础）
         analysis["overall_score"] = self._compute_overall_score(factor_analysis, risks)
 
-        # 7. LLM综合分析评论
-        llm_result = self._llm_evaluate_combination(
-            factor_analysis=factor_analysis,
-            model_analysis=analysis.get("model_analysis", {}),
-            strategy_analysis=analysis.get("strategy_analysis", {}),
-            factor_names=factor_names,
-            custom_params=custom_params,
-        )
+        # 7. LLM综合分析评论（失败不影响规则分析结果）
+        llm_result = None
+        try:
+            llm_result = self._llm_evaluate_combination(
+                factor_analysis=factor_analysis,
+                model_analysis=analysis.get("model_analysis", {}),
+                strategy_analysis=analysis.get("strategy_analysis", {}),
+                factor_names=factor_names,
+                custom_params=custom_params,
+            )
+        except Exception as e:
+            logger.warning(f"LLM综合评估异常，规则分析结果不受影响: {e}")
         if llm_result:
             analysis["llm_commentary"] = llm_result.get("commentary", "")
             # LLM可以补充风险和建议

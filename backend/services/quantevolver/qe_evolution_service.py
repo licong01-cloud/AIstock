@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import asyncio
 from uuid import uuid4
 from typing import Dict, Any, List, Optional
@@ -11,6 +12,8 @@ from .qe_rdagent_api_client import RdagentApiClient
 from .qe_evolution_agents import EvolutionAgents
 
 logger = logging.getLogger(__name__)
+
+SOTA_ASSETS_DIR = os.environ.get("QE_SOTA_ASSETS_DIR", "f:/Dev/AIstock/rdagent_assets/qe_sota_assets")
 
 class AutoEvolutionScheduler:
     """
@@ -91,6 +94,108 @@ class AutoEvolutionScheduler:
             "base_experiment_id": base_experiment_id,
         }
         
+    def _build_full_evolution_history(self, task_id: str) -> Dict[str, Any]:
+        """
+        构建完整演进历史（查询所有已完成 loop，不再 LIMIT 3）。
+        供所有 Agent 做全局最优决策。
+        """
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT loop_index, action_type, config_json, metrics_json,
+                           agent_analysis, is_sota
+                    FROM qe_evolution_loops
+                    WHERE task_id = %s AND status = 'completed'
+                    ORDER BY loop_index ASC
+                """, (task_id,))
+                rows = cur.fetchall()
+
+        loops = []
+        sota_loop_index = None
+        sota_metrics = None
+        ic_trend = []
+        action_type_deltas: Dict[str, list] = {}
+        failed_approaches = []
+        prev_ic = None
+
+        for row in rows:
+            config = row.get("config_json") or {}
+            if isinstance(config, str):
+                config = json.loads(config)
+            metrics = row.get("metrics_json") or {}
+            if isinstance(metrics, str):
+                metrics = json.loads(metrics)
+            analysis = row.get("agent_analysis") or {}
+            if isinstance(analysis, str):
+                analysis = json.loads(analysis)
+
+            cur_ic = metrics.get("IC")
+            ic_trend.append(cur_ic)
+
+            delta_vs_previous = None
+            if prev_ic is not None and cur_ic is not None:
+                delta_vs_previous = {
+                    "IC": round(cur_ic - prev_ic, 6),
+                }
+
+            action = row.get("action_type") or "initial"
+            loop_entry = {
+                "loop_index": row["loop_index"],
+                "action_type": action,
+                "config_summary": {
+                    "factors": config.get("factor_list", []),
+                    "model_id": config.get("model_id"),
+                    "model_params": config.get("model_params", {}),
+                },
+                "metrics": metrics,
+                "is_sota": bool(row.get("is_sota")),
+                "analyst_report": analysis.get("analyst", ""),
+                "delta_vs_previous": delta_vs_previous,
+            }
+            loops.append(loop_entry)
+
+            if row.get("is_sota"):
+                sota_loop_index = row["loop_index"]
+                sota_metrics = metrics
+
+            # 统计 action_type 的 IC delta
+            if delta_vs_previous and cur_ic is not None:
+                action_type_deltas.setdefault(action, []).append(
+                    delta_vs_previous["IC"]
+                )
+
+            # 记录失败方法（IC 下降）
+            if delta_vs_previous and delta_vs_previous["IC"] < 0:
+                failed_approaches.append({
+                    "loop_index": row["loop_index"],
+                    "action_type": action,
+                    "ic_delta": delta_vs_previous["IC"],
+                })
+
+            prev_ic = cur_ic
+
+        # 汇总 action_type 统计
+        action_type_stats = {}
+        for at, deltas in action_type_deltas.items():
+            action_type_stats[at] = {
+                "count": len(deltas),
+                "avg_ic_delta": round(sum(deltas) / len(deltas), 6) if deltas else 0,
+            }
+
+        valid_ics = [x for x in ic_trend if x is not None]
+        return {
+            "total_loops": len(loops),
+            "sota_loop_index": sota_loop_index,
+            "sota_metrics": sota_metrics,
+            "loops": loops,
+            "trend_summary": {
+                "ic_trend": ic_trend,
+                "best_ic": max(valid_ics) if valid_ics else None,
+                "action_type_stats": action_type_stats,
+            },
+            "failed_approaches": failed_approaches,
+        }
+
     async def start_task_loop(self, task_id: str):
         """
         异步后台执行状态机，驱动 LOOP 流转
@@ -152,27 +257,18 @@ class AutoEvolutionScheduler:
                 
                 action_type = config.get("action_type", "initial" if current_loop == 0 else "param_tune")
 
-                # 使用 ConfigComposer 生成文件
+                # 使用 ConfigComposer 在内存中生成实验文件（不写磁盘）
                 from .config_composer import ConfigComposer
                 composer = ConfigComposer()
-                compose_res = composer.compose_experiment(
+                compose_res = composer.compose_experiment_in_memory(
                     factor_names=config.get("factor_list", []),
                     model_id=config.get("model_id"),
                     strategy_id=config.get("strategy_id"),
                     data_split=config.get("data_split"),
                     custom_params=config.get("model_params"),
-                    experiment_name=f"{task_id}/{loop_id}"
+                    experiment_name=f"{task_id}/{loop_id}",
                 )
-                
-                # 收集生成的实验文件，准备发送给 RDAgent
-                experiment_files = {}
-                exp_dir = Path(compose_res["experiment_dir"])
-                allowed_suffixes = {".yaml", ".yml", ".py", ".txt", ".json"}
-                for f in exp_dir.rglob("*"):
-                    if f.is_file() and f.suffix in allowed_suffixes:
-                        rel_path = f.relative_to(exp_dir).as_posix()
-                        experiment_files[rel_path] = f.read_text(encoding="utf-8")
-                        
+                experiment_files = compose_res["experiment_files"]
                 wsl_command = compose_res.get("wsl_command", "")
 
                 # 2. 调用 WSL 执行
@@ -194,36 +290,14 @@ class AutoEvolutionScheduler:
                     # 3. 获取回测结果
                     metrics = await self.rdagent_client.get_loop_metrics(rd_loop_id)
                     
-                    # 4. Agent 分析
+                    # 4. Agent 分析（传递完整演进历史）
                     logger.info(f"Running Agent analysis for loop {current_loop}")
-                    
-                    # 构建历史分析上下文 (提取前3轮的 SOTA 状态和 Analyst 报告)
-                    analysis_context = {}
-                    with get_conn() as conn:
-                        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                            cur.execute("""
-                                SELECT loop_index, is_sota, agent_analysis 
-                                FROM qe_evolution_loops 
-                                WHERE task_id = %s AND status = 'completed'
-                                ORDER BY loop_index DESC LIMIT 3
-                            """, (task_id,))
-                            history_rows = cur.fetchall()
-                            if history_rows:
-                                analysis_context["recent_history"] = []
-                                for row in history_rows:
-                                    analysis = row.get("agent_analysis")
-                                    if isinstance(analysis, str):
-                                        try:
-                                            analysis = json.loads(analysis)
-                                        except Exception:
-                                            analysis = {}
-                                    analysis_context["recent_history"].append({
-                                        "loop": row["loop_index"],
-                                        "is_sota": row["is_sota"],
-                                        "analyst_report": analysis.get("analyst", "") if isinstance(analysis, dict) else ""
-                                    })
-                    
-                    analyst_report = await self.agents.run_analyst(current_loop, config, metrics, analysis_context)
+                    evolution_history = self._build_full_evolution_history(task_id)
+
+                    analyst_report = await self.agents.run_analyst(
+                        current_loop, config, metrics,
+                        evolution_history=evolution_history,
+                    )
                     
                     historical_sota_metrics = None
                     with get_conn() as conn:
@@ -239,10 +313,19 @@ class AutoEvolutionScheduler:
                             if sota_row and sota_row['metrics_json']:
                                 historical_sota_metrics = sota_row['metrics_json']
                     
-                    is_sota = await self.agents.run_evaluator(metrics, historical_sota_metrics)
-                    
-                    next_config_draft = await self.agents.run_researcher(analyst_report, is_sota, config)
-                    next_config = await self.agents.run_reviewer(next_config_draft)
+                    is_sota = await self.agents.run_evaluator(
+                        metrics, historical_sota_metrics,
+                        evolution_history=evolution_history,
+                    )
+
+                    next_config_draft = await self.agents.run_researcher(
+                        analyst_report, is_sota, config,
+                        evolution_history=evolution_history,
+                    )
+                    next_config = await self.agents.run_reviewer(
+                        next_config_draft,
+                        evolution_history=evolution_history,
+                    )
                     
                     # 确保关键基础字段不会因为 Agent 漏输出而丢失
                     for key in ["model_id", "strategy_id", "data_split", "base_experiment_id"]:
@@ -251,9 +334,18 @@ class AutoEvolutionScheduler:
                     
                     agent_analysis = {
                         "analyst": analyst_report,
-                        "evaluator": f"SOTA Status: {is_sota}",
-                        "researcher": "Draft generated",
-                        "reviewer": "Config validated"
+                        "evaluator": {
+                            "is_sota": is_sota,
+                            "historical_sota_metrics": historical_sota_metrics,
+                        },
+                        "researcher": {
+                            "draft": next_config_draft,
+                            "action_type": next_config_draft.get("action_type"),
+                        },
+                        "reviewer": {
+                            "approved": True,
+                            "validated_config": next_config,
+                        },
                     }
                     
                     # 更新 LOOP 记录
@@ -366,7 +458,7 @@ class AutoEvolutionScheduler:
         """
         同步 RDAgent 侧的物理资产到本地
         """
-        dest_dir = f"f:/Dev/AIstock/rdagent_assets/qe_sota_assets/{loop_id}"
+        dest_dir = os.path.join(SOTA_ASSETS_DIR, loop_id)
         synced_path = await self.rdagent_client.download_loop_assets(loop_id, dest_dir)
         
         # 更新 DB SOTA registry 如果有记录

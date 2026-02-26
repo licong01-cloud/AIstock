@@ -49,6 +49,7 @@ class EvolutionAgents:
         config: Dict[str, Any],
         metrics: Dict[str, Any],
         analysis_context: Optional[Dict[str, Any]] = None,
+        evolution_history: Optional[Dict[str, Any]] = None,
     ) -> str:
         """实验诊断分析师"""
         from .prompt_manager import PromptManager, safe_format
@@ -57,18 +58,24 @@ class EvolutionAgents:
 
         if prompt_data:
             system_prompt = prompt_data["system_prompt"]
-            user_prompt = safe_format(prompt_data["user_prompt_template"], 
+            user_prompt = safe_format(prompt_data["user_prompt_template"],
                 loop_index=loop_index,
                 config=json.dumps(config, ensure_ascii=False),
                 metrics=json.dumps(metrics, ensure_ascii=False),
                 analysis_context=json.dumps(analysis_context or {}, ensure_ascii=False),
+                evolution_history=json.dumps(evolution_history or {}, ensure_ascii=False),
             )
         else:
             raise ValueError("未配置 evolution_analyst/diagnose_experiment 的提示词，拒绝使用兜底策略")
-            
+
         return await self.async_call_llm("evolution_analyst", system_prompt, user_prompt)
 
-    async def run_evaluator(self, current_metrics: Dict[str, Any], historical_sota_metrics: Optional[Dict[str, Any]]) -> bool:
+    async def run_evaluator(
+        self,
+        current_metrics: Dict[str, Any],
+        historical_sota_metrics: Optional[Dict[str, Any]],
+        evolution_history: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """
         SOTA 评估官
         """
@@ -82,9 +89,10 @@ class EvolutionAgents:
         if prompt_data:
             try:
                 system_prompt = prompt_data["system_prompt"]
-                user_prompt = safe_format(prompt_data["user_prompt_template"], 
+                user_prompt = safe_format(prompt_data["user_prompt_template"],
                     current_metrics=json.dumps(current_metrics, ensure_ascii=False),
                     historical_sota_metrics=json.dumps(historical_sota_metrics, ensure_ascii=False),
+                    evolution_history=json.dumps(evolution_history or {}, ensure_ascii=False),
                 )
                 response = await self.async_call_llm("evolution_evaluator", system_prompt, user_prompt)
 
@@ -113,7 +121,13 @@ class EvolutionAgents:
             
         return False
 
-    async def run_researcher(self, analyst_report: str, sota_status: bool, current_config: Dict[str, Any]) -> Dict[str, Any]:
+    async def run_researcher(
+        self,
+        analyst_report: str,
+        sota_status: bool,
+        current_config: Dict[str, Any],
+        evolution_history: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         演进策略研究员
         """
@@ -123,10 +137,11 @@ class EvolutionAgents:
 
         if prompt_data:
             system_prompt = prompt_data["system_prompt"]
-            user_prompt = safe_format(prompt_data["user_prompt_template"], 
+            user_prompt = safe_format(prompt_data["user_prompt_template"],
                 analyst_report=analyst_report,
                 sota_status=sota_status,
-                current_config=json.dumps(current_config, ensure_ascii=False)
+                current_config=json.dumps(current_config, ensure_ascii=False),
+                evolution_history=json.dumps(evolution_history or {}, ensure_ascii=False),
             )
         else:
             raise ValueError("未配置 evolution_researcher/propose_config 的提示词，拒绝使用兜底策略")
@@ -144,7 +159,11 @@ class EvolutionAgents:
         
         raise ValueError(f"Researcher output is not valid JSON config: {response}")
 
-    async def run_reviewer(self, draft_config: Dict[str, Any]) -> Dict[str, Any]:
+    async def run_reviewer(
+        self,
+        draft_config: Dict[str, Any],
+        evolution_history: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         配置审查与构建员
         目前简化为结构校验，确保能发给 RDAgent。
@@ -156,8 +175,9 @@ class EvolutionAgents:
         if prompt_data:
             try:
                 system_prompt = prompt_data["system_prompt"]
-                user_prompt = safe_format(prompt_data["user_prompt_template"], 
-                    draft_config=json.dumps(draft_config, ensure_ascii=False)
+                user_prompt = safe_format(prompt_data["user_prompt_template"],
+                    draft_config=json.dumps(draft_config, ensure_ascii=False),
+                    evolution_history=json.dumps(evolution_history or {}, ensure_ascii=False),
                 )
                 response = await self.async_call_llm("evolution_reviewer", system_prompt, user_prompt)
 
@@ -187,7 +207,7 @@ class EvolutionAgents:
             raise ValueError("Reviewer rejected config: factor_list must be an array")
 
         action_type = draft_config["action_type"]
-        allowed_action_types = {"initial", "factor_adjust", "param_tune", "model_switch"}
+        allowed_action_types = {"initial", "factor_adjust", "param_tune", "model_switch", "factor_model_joint"}
         if not isinstance(action_type, str) or action_type not in allowed_action_types:
             raise ValueError(
                 f"Reviewer rejected config: action_type must be one of {sorted(allowed_action_types)}"

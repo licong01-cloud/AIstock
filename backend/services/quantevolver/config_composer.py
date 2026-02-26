@@ -18,6 +18,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import httpx
+
 from ...db.pg_pool import get_conn
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
@@ -82,6 +84,30 @@ RDAGENT_DEFAULT_LGB_KWARGS = {
 
 class ConfigComposer:
     """配置组装器。"""
+
+    _rdagent_config_cache: Optional[Dict[str, str]] = None
+
+    def _fetch_rdagent_config(self) -> Dict[str, str]:
+        """
+        从 RDAgent /config 端点获取工作区配置（路径等），带类级缓存。
+        消除对 RDAgent 内部路径的硬编码依赖。
+        """
+        if ConfigComposer._rdagent_config_cache is not None:
+            return ConfigComposer._rdagent_config_cache
+
+        rdagent_base = os.getenv("RDAGENT_API_BASE", "http://localhost:9000/api/v1/qe_workspace")
+        try:
+            resp = httpx.get(f"{rdagent_base}/config", timeout=10.0)
+            resp.raise_for_status()
+            ConfigComposer._rdagent_config_cache = resp.json()
+        except Exception as e:
+            logger.warning(f"Failed to fetch RDAgent config, falling back to env vars: {e}")
+            ConfigComposer._rdagent_config_cache = {
+                "workspace_base": QE_WORKSPACE_WSL,
+                "factor_data_dir": RDAGENT_FACTOR_DATA_WSL,
+                "qlib_data_path": QLIB_DATA_PATH_WSL,
+            }
+        return ConfigComposer._rdagent_config_cache
 
     def compose_experiment(
         self,
@@ -245,18 +271,6 @@ class ConfigComposer:
             llm_hypothesis=llm_hypothesis,
         )
 
-        # 初始化轨迹文件（存储LLM假设）
-        self._init_trace_file(
-            exp_dir=exp_dir,
-            experiment_id=experiment_id,
-            experiment_name=experiment_name,
-            factor_names=factor_names,
-            model_id=model_id,
-            strategy_id=strategy_id,
-            custom_params=custom_params,
-            llm_hypothesis=llm_hypothesis,
-        )
-
         return {
             "ok": True,
             "experiment_id": experiment_id,
@@ -273,6 +287,232 @@ class ConfigComposer:
             "data_split": data_split,
             "llm_hypothesis": llm_hypothesis,
         }
+
+    def compose_experiment_in_memory(
+        self,
+        factor_names: List[str],
+        factor_sources: Optional[Dict[str, str]] = None,
+        model_id: Optional[str] = None,
+        strategy_id: Optional[str] = None,
+        data_split: Optional[Dict[str, str]] = None,
+        custom_params: Optional[Dict[str, Any]] = None,
+        experiment_name: Optional[str] = None,
+        evolution_goal: Optional[str] = None,
+        llm_hypothesis: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """组装实验配置到内存字典，不写入磁盘。
+
+        复用现有生成逻辑，但将所有文件内容收集到 Dict[str, str]，
+        供演进循环通过 RDAgent loop API 的 experiment_files 参数直接传递。
+
+        Returns:
+            {
+                "experiment_files": Dict[str, str],  # 相对路径 -> 文件内容
+                "wsl_command": str,
+                "experiment_name": str,
+                "experiment_id": str,
+                "factor_count": int,
+                "has_custom_factors": bool,
+            }
+        """
+        import uuid as _uuid
+
+        experiment_id = str(_uuid.uuid4())[:8]
+        if not experiment_name:
+            experiment_name = f"qe_exp_{experiment_id}"
+
+        if not data_split:
+            data_split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
+
+        # ── 获取因子 / 模型 / 策略信息 ──
+        factors_info = self._get_factors_info(factor_names, factor_sources)
+        model_info = self._get_model_info(model_id) if model_id else None
+        strategy_info = self._get_strategy_info(strategy_id) if strategy_id else None
+
+        has_custom_factors = any(f.get("source") == "rdagent_task_sync" for f in factors_info)
+        has_alpha158 = any(f.get("source") == "alpha158" for f in factors_info)
+        has_alpha360 = any(f.get("source") == "alpha360" for f in factors_info)
+
+        model_type_tag = None
+        if model_info and model_info.get("code_text"):
+            model_type_raw = model_info.get("model_type") or ""
+            if model_type_raw in ("TimeSeries", "timeseries"):
+                model_type_tag = "TimeSeries"
+            elif model_type_raw in ("Tabular", "tabular"):
+                model_type_tag = "Tabular"
+            else:
+                name_lower = (model_info.get("model_name") or "").lower()
+                if any(k in name_lower for k in ["transformer", "lstm", "gru", "rnn", "timeseries", "temporal"]):
+                    model_type_tag = "TimeSeries"
+                else:
+                    model_type_tag = "Tabular"
+
+        disable_alpha158 = False
+        quick_train = False
+        if custom_params:
+            disable_alpha158 = custom_params.get("disable_alpha158", False)
+            quick_train = custom_params.get("quick_train", False)
+
+        # ── 从 RDAgent API 获取动态路径 ──
+        rdagent_cfg = self._fetch_rdagent_config()
+        workspace_wsl = rdagent_cfg.get("workspace_base", QE_WORKSPACE_WSL)
+        qlib_data_path = rdagent_cfg.get("qlib_data_path", QLIB_DATA_PATH_WSL)
+        factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
+
+        # ── 生成各文件内容到 dict ──
+        experiment_files: Dict[str, str] = {}
+
+        # 1) conf.yaml
+        conf_yaml = self._compose_conf_yaml(
+            factors_info=factors_info,
+            model_info=model_info,
+            strategy_info=strategy_info,
+            data_split=data_split,
+            custom_params=custom_params,
+            has_custom_factors=has_custom_factors,
+            has_alpha158=has_alpha158,
+            has_alpha360=has_alpha360,
+            disable_alpha158=disable_alpha158,
+            quick_train=quick_train,
+            qlib_data_path=qlib_data_path,
+        )
+        experiment_files["conf.yaml"] = conf_yaml
+
+        # 2) 因子文件 + prepare_factors.py
+        if has_custom_factors:
+            # 因子代码文件 → factors/<name>.py
+            custom_factors = [f for f in factors_info if f.get("source") == "rdagent_task_sync"]
+            for f in custom_factors:
+                code = f.get("code_text")
+                if code:
+                    experiment_files[f"factors/{f['factor_name']}.py"] = code
+
+            prepare_factors_py = self._compose_prepare_factors(factors_info, factor_data_dir=factor_data_dir)
+            if prepare_factors_py:
+                experiment_files["prepare_factors.py"] = prepare_factors_py
+
+        # 3) qe_custom_loaders.py（仅 disable_alpha158 时需要）
+        if has_custom_factors and disable_alpha158:
+            qe_loader_source = Path(__file__).parent / "qe_custom_loaders.py"
+            if qe_loader_source.exists():
+                experiment_files["qe_custom_loaders.py"] = qe_loader_source.read_text(encoding="utf-8")
+
+        # 4) read_exp_res.py
+        experiment_files["read_exp_res.py"] = self._get_read_exp_res_content()
+
+        # 5) model.py（自定义模型）
+        if model_info and model_info.get("code_text"):
+            experiment_files["model.py"] = self._build_model_py_content(model_info)
+
+        # 6) custom_strategy.py（自定义策略）
+        if strategy_info and strategy_info.get("source_code"):
+            experiment_files["custom_strategy.py"] = self._build_strategy_py_content(strategy_info)
+
+        # ── 生成 WSL 命令 ──
+        wsl_path = f"{workspace_wsl}/{experiment_name}"
+        wsl_command = self._generate_wsl_command(
+            wsl_path,
+            has_custom_factors=has_custom_factors,
+            use_custom_model=has_custom_factors and model_info and bool(model_info.get("code_text")),
+            model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
+        )
+
+        # ── 保存 DB 记录（不写文件） ──
+        self._save_experiment_record(
+            experiment_id=experiment_id,
+            experiment_name=experiment_name,
+            exp_dir=f"<in_memory>/{experiment_name}",
+            factor_names=factor_names,
+            model_id=model_id,
+            strategy_id=strategy_id,
+            data_split=data_split,
+            custom_params=custom_params,
+            evolution_goal=evolution_goal,
+            llm_hypothesis=llm_hypothesis,
+        )
+
+        return {
+            "experiment_files": experiment_files,
+            "wsl_command": wsl_command,
+            "experiment_name": experiment_name,
+            "experiment_id": experiment_id,
+            "factor_count": len(factor_names),
+            "has_custom_factors": has_custom_factors,
+        }
+
+    # ── 内存生成辅助方法 ──
+
+    def _build_model_py_content(self, model_info: Dict) -> str:
+        """生成 model.py 文件内容（不写磁盘）。"""
+        code_text = model_info.get("code_text", "")
+        model_name = model_info.get("model_name", "CustomModel")
+        class_match = re.search(r'class\s+(\w+)\s*\(', code_text)
+        nn_class_name = class_match.group(1) if class_match else model_name
+        return f'"""\nRDAgent SOTA模型: {model_name}\nQuantEvolver自动生成 - 由 GeneralPTNN 通过 pt_model_uri: "model.model_cls" 加载\n"""\n{code_text}\n\n# GeneralPTNN 通过此变量加载 NN 类\nmodel_cls = {nn_class_name}\n'
+
+    def _build_strategy_py_content(self, strategy_info: Dict) -> str:
+        """生成 custom_strategy.py 文件内容（不写磁盘）。
+
+        复用 _write_custom_strategy 中的验证和 import 处理逻辑。
+        """
+        source_code = strategy_info.get("source_code", "")
+        if not source_code:
+            return ""
+
+        validation_result = self._validate_strategy_code(source_code)
+        if not validation_result["ok"]:
+            raise ValueError(
+                f"策略代码编译验证失败:\n{validation_result['error']}\n"
+                f"请修复策略代码后再创建实验。"
+            )
+
+        # 自动添加缺失的 import
+        required_imports = ["import pandas as pd", "import numpy as np"]
+        import_lines = [imp for imp in required_imports if imp not in source_code]
+        if import_lines:
+            lines = source_code.split("\n")
+            insert_pos = 0
+            in_docstring = False
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if not stripped:
+                    insert_pos = i + 1; continue
+                if stripped.startswith("#"):
+                    insert_pos = i + 1; continue
+                if '"""' in stripped or "'''" in stripped:
+                    in_docstring = not in_docstring
+                    insert_pos = i + 1; continue
+                if in_docstring:
+                    insert_pos = i + 1; continue
+                if stripped.startswith("import ") or stripped.startswith("from "):
+                    insert_pos = i + 1; continue
+                break
+            for imp in import_lines:
+                lines.insert(insert_pos, imp)
+                insert_pos += 1
+            source_code = "\n".join(lines)
+
+        # 移除函数内部的重复 import
+        lines = source_code.split("\n")
+        cleaned_lines = []
+        in_function = False
+        indent_level = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if re.match(r'^(def |async def |class )', stripped):
+                in_function = True
+                indent_level = len(line) - len(line.lstrip())
+            elif in_function and line and not line[0].isspace():
+                in_function = False
+            elif in_function and line:
+                current_indent = len(line) - len(line.lstrip())
+                if current_indent <= indent_level and stripped and not stripped.startswith('#'):
+                    in_function = False
+            if in_function and (stripped.startswith("import pandas") or
+                                stripped.startswith("import numpy")):
+                continue
+            cleaned_lines.append(line)
+        return "\n".join(cleaned_lines)
 
     def sync_experiment_results(self, experiment_id: str) -> Dict[str, Any]:
         """同步实验结果。
@@ -527,6 +767,7 @@ class ConfigComposer:
         has_alpha360: bool = False,
         disable_alpha158: bool = False,
         quick_train: bool = False,  # 快速训练模式：训练时间缩短到20%
+        qlib_data_path: Optional[str] = None,
     ) -> str:
         """生成QLib conf.yaml内容。
 
@@ -565,12 +806,17 @@ class ConfigComposer:
                     "n_epochs": thp.get("n_epochs", 30),
                     "lr": thp.get("lr", "1e-3"),
                     "early_stop": thp.get("early_stop", 5),
-                    "batch_size": thp.get("batch_size", 256),
+                    "batch_size": thp.get("batch_size", 4096),
                     "weight_decay": thp.get("weight_decay", "1e-4"),
                     "metric": "loss",
                     "loss": "mse",
-                    "n_jobs": 20,
+                    "n_jobs": 8,
                     "GPU": 0,
+                    "use_amp": True,
+                    "gradient_accumulation_steps": 1,
+                    "pin_memory": True,
+                    "prefetch_factor": 6,
+                    "persistent_workers": True,
                     "pt_model_uri": '"model.model_cls"',
                 }
 
@@ -729,7 +975,7 @@ class ConfigComposer:
         # ── 生成 YAML（与 RDAgent conf_baseline.yaml 结构一致） ──
         lines = []
         lines.append("qlib_init:")
-        lines.append(f'    provider_uri: "{QLIB_DATA_PATH_WSL}"')
+        lines.append(f'    provider_uri: "{qlib_data_path or QLIB_DATA_PATH_WSL}"')
         lines.append("    region: cn")
         lines.append("")
         lines.append("market: &market all")
@@ -977,7 +1223,7 @@ class ConfigComposer:
             factor_path.write_text(code, encoding="utf-8")
             logger.info(f"写入因子文件: {factor_path}")
 
-    def _compose_prepare_factors(self, factors_info: List[Dict]) -> Optional[str]:
+    def _compose_prepare_factors(self, factors_info: List[Dict], factor_data_dir: Optional[str] = None) -> Optional[str]:
         """生成 prepare_factors.py 预处理脚本。
 
         与 RDAgent FactorFBWorkspace.execute() 完全一致的因子执行方式：
@@ -1013,7 +1259,7 @@ class ConfigComposer:
         lines.append("logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')")
         lines.append("logger = logging.getLogger('prepare_factors')")
         lines.append("")
-        lines.append(f"FACTOR_DATA_DIR = os.environ.get('RDAGENT_FACTOR_DATA_DIR', '{RDAGENT_FACTOR_DATA_WSL}')")
+        lines.append(f"FACTOR_DATA_DIR = os.environ.get('RDAGENT_FACTOR_DATA_DIR', '{factor_data_dir or RDAGENT_FACTOR_DATA_WSL}')")
         lines.append("")
         lines.append("")
         lines.append("def link_all_files_to_dir(src_dir, dst_dir):")
@@ -1376,38 +1622,43 @@ class ConfigComposer:
                               use_custom_model: bool = False,
                               model_type_tag: Optional[str] = None) -> str:
         """生成WSL执行命令。
-
         与 RDAgent model_runner.py / factor_runner.py 完全一致的执行方式：
         - 自定义因子：先执行 prepare_factors.py 生成 combined_factors_df.parquet
         - 自定义模型：通过环境变量传递 num_features, dataset_cls, step_len 等
         - PYTHONPATH 设置确保 model.py 可被 GeneralPTNN 加载
         """
-        if has_custom_factors:
+        env_lines = []
+        if has_custom_factors or use_custom_model:
             # 环境变量设置
-            env_lines = []
             env_lines.append(f'export PYTHONPATH="{wsl_path}:/mnt/f/Dev/RD-Agent-main:$PYTHONPATH"')
+            
+        if use_custom_model and model_type_tag:
+            # 与 RDAgent model_runner.py 一致的环境变量
+            if model_type_tag == "TimeSeries":
+                env_lines.append("export dataset_cls=TSDatasetH")
+                env_lines.append("export step_len=20")
+                env_lines.append("export num_timesteps=20")
+            else:
+                env_lines.append("export dataset_cls=DatasetH")
+        
+        if use_custom_model and not has_custom_factors:
+            # 如果没有自定义因子但有自定义模型，默认使用 Alpha158 的 158 个特征
+            env_lines.append("export num_features=158")
+        elif has_custom_factors:
+            # num_features 在 prepare_factors.py 执行后才能确定
+            # 供 conf.yaml 中的 Jinja2 模板变量引用
+            env_lines.append("# num_features 将在 qrun 时由 conf.yaml Jinja2 模板自动计算")
 
-            if use_custom_model and model_type_tag:
-                # 与 RDAgent model_runner.py 一致的环境变量
-                if model_type_tag == "TimeSeries":
-                    env_lines.append("export dataset_cls=TSDatasetH")
-                    env_lines.append("export step_len=20")
-                    env_lines.append("export num_timesteps=20")
-                else:
-                    env_lines.append("export dataset_cls=DatasetH")
-                # num_features 在 prepare_factors.py 执行后才能确定
-                # 由 conf.yaml 中的 Jinja2 模板变量引用
-                env_lines.append("# num_features 将在 qrun 时由 conf.yaml Jinja2 模板自动计算")
+        env_block = "\n".join(env_lines)
 
-            env_block = "\n".join(env_lines)
-
+        if has_custom_factors:
             return f"""# QuantEvolver 实验执行命令（含自定义因子预处理）
 # 请在WSL终端中执行以下命令：
 
 cd {wsl_path}
 conda activate rdagent-gpu
 
-# 步骤1: 预计算因子 → 生成 combined_factors_df.parquet
+# 步骤1: 预计算因子 -> 生成 combined_factors_df.parquet
 python prepare_factors.py
 
 # 步骤2: 设置环境变量
@@ -1419,6 +1670,23 @@ source .factor_env
 qrun conf.yaml
 
 # 步骤4: 读取结果
+python read_exp_res.py
+
+# 执行完成后，回到AIstock界面点击"同步结果"按钮"""
+        elif use_custom_model:
+            return f"""# QuantEvolver 实验执行命令（含自定义模型）
+# 请在WSL终端中执行以下命令：
+
+cd {wsl_path}
+conda activate rdagent-gpu
+
+# 设置环境变量
+{env_block}
+
+# 运行QLib回测
+qrun conf.yaml
+
+# 读取结果
 python read_exp_res.py
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
@@ -1780,9 +2048,16 @@ model_cls = {nn_class_name}
         shutil.copy2(qe_loader_source, qe_loader_dest)
         logger.info(f"复制QE独立loader: {qe_loader_dest}")
 
+    def _get_read_exp_res_content(self) -> str:
+        """返回 read_exp_res.py 模板内容（供 compose_experiment_in_memory 和 _copy_read_exp_res 共用）。"""
+        return self._READ_EXP_RES_TEMPLATE
+
     def _copy_read_exp_res(self, exp_dir: Path) -> None:
         """复制read_exp_res.py模板到实验目录。"""
-        template_content = '''"""
+        template_content = self._get_read_exp_res_content()
+        (exp_dir / "read_exp_res.py").write_text(template_content, encoding="utf-8")
+
+    _READ_EXP_RES_TEMPLATE = '''"""
 读取QLib实验结果并输出关键指标。
 支持mlflow metrics文件格式（timestamp value step）和pkl文件。
 输出结构化JSON供后续agent分析，包含交易统计和策略胜率。
@@ -2228,7 +2503,6 @@ def read_results():
 if __name__ == "__main__":
     read_results()
 '''
-        (exp_dir / "read_exp_res.py").write_text(template_content, encoding="utf-8")
 
     def _save_experiment_record(self, experiment_id: str, experiment_name: str,
                                 exp_dir: str, factor_names: List[str],
@@ -2265,62 +2539,6 @@ if __name__ == "__main__":
                     evolution_goal,
                     json.dumps(llm_hypothesis) if llm_hypothesis else None,
                 ))
-
-    def _init_trace_file(
-        self,
-        exp_dir: Path,
-        experiment_id: str,
-        experiment_name: str,
-        factor_names: List[str],
-        model_id: Optional[str],
-        strategy_id: Optional[str],
-        custom_params: Optional[Dict],
-        llm_hypothesis: Optional[Dict],
-    ) -> None:
-        """初始化轨迹文件，存储LLM假设和配置信息。"""
-        from .qe_evolution_models import QETrace, QELoopRecord, QEHypothesis
-
-        trace_path = exp_dir / "qe_trace.json"
-
-        # 构建配置信息
-        configuration = {
-            "factors": factor_names,
-            "model_id": model_id,
-            "strategy_id": strategy_id,
-            "strategy_params": custom_params.get("strategy_params", {}) if custom_params else {},
-            "custom_params": custom_params,
-        }
-
-        # 构建假设
-        hypothesis = None
-        if llm_hypothesis:
-            hypothesis = QEHypothesis(
-                hypothesis=llm_hypothesis.get("hypothesis", ""),
-                source=llm_hypothesis.get("source", "manual"),
-                configuration=configuration,
-                reasoning_process=llm_hypothesis.get("reasoning_process"),
-                loop_id=1,
-                experiment_id=experiment_id,
-            )
-
-        # 创建初始LOOP记录
-        loop_record = QELoopRecord(
-            loop_id=1,
-            hypothesis=hypothesis,
-            configuration=configuration,
-            results={},  # 实验运行后填充
-            is_new_sota=False,
-        )
-
-        # 创建轨迹
-        trace = QETrace(
-            trace_id=experiment_name,
-            loops=[loop_record],
-        )
-
-        # 保存轨迹文件
-        trace.to_json_file(str(trace_path))
-        logger.info(f"轨迹文件已初始化: {trace_path}")
 
     def _get_experiment_record(self, experiment_id: str) -> Optional[Dict]:
         """获取实验记录。"""
