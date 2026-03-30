@@ -472,7 +472,6 @@ def main() -> None:
                         upsert_checkpoint(conn, run_id, ts_code, last_date)
                         complete_task(conn, task_id, True, 100.0, None)
                         update_job_summary(conn, job_id, {"inserted_rows": inserted, "success_codes": 1})
-                        print(f"[OK] {ts_code}: inserted={inserted} rows last_date={last_date}")
                         log_ingestion(conn, job_id, "info", f"run {run_id} {ts_code} inserted={inserted} last_date={last_date}")
                     except Exception as exc:  # noqa: BLE001
                         # 若出现主键冲突（通常意味着在未清空表的情况下重复执行 INIT），

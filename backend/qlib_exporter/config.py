@@ -45,9 +45,6 @@ QLIB_MARKET = "aistock"
 # 不复权日线表（主要数据源）
 DAILY_RAW_TABLE = "market.kline_daily_raw"
 
-# 前复权日线表（兼容旧逻辑，逐步废弃）
-DAILY_QFQ_TABLE = "market.kline_daily_qfq"
-
 # 复权因子表（Tushare adj_factor）
 # 如果表不存在，将使用 Tushare API 实时获取
 ADJ_FACTOR_TABLE = "market.adj_factor"
@@ -55,11 +52,6 @@ ADJ_FACTOR_TABLE = "market.adj_factor"
 # 分钟线表名（原始 1m 行情）
 MINUTE_RAW_TABLE = "market.kline_minute_raw"
 MINUTE_QFQ_TABLE = "market.kline_minute_raw"  # 兼容旧配置
-
-# TDX 板块相关表
-TDX_BOARD_INDEX_TABLE = "market.tdx_board_index"
-TDX_BOARD_MEMBER_TABLE = "market.tdx_board_member"
-TDX_BOARD_DAILY_TABLE = "market.tdx_board_daily"
 
 # 指数相关表（用于导出 Qlib 指数 bin 数据）
 INDEX_BASIC_TABLE = "market.index_basic"

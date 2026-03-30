@@ -122,6 +122,22 @@ def _cyq_perf_source_to_export_map() -> Dict[str, str]:
     }
 
 
+def _sector_data_source_to_export_map() -> Dict[str, str]:
+    """sector_data 列映射（DB → export 一一对应，sw2_* 前缀已在 DB 中）。"""
+    cols = [
+        "sw2_open", "sw2_high", "sw2_low", "sw2_close", "sw2_pct_change",
+        "sw2_vol", "sw2_amount", "sw2_pe", "sw2_pb", "sw2_total_mv",
+        "sw2_mf_buy_sm_amt", "sw2_mf_sell_sm_amt",
+        "sw2_mf_buy_md_amt", "sw2_mf_sell_md_amt",
+        "sw2_mf_buy_lg_amt", "sw2_mf_sell_lg_amt",
+        "sw2_mf_buy_elg_amt", "sw2_mf_sell_elg_amt",
+        "sw2_mf_net_amt",
+        "sw2_mf_buy_elg_vol", "sw2_mf_sell_elg_vol",
+        "sw2_mf_net_vol",
+    ]
+    return {c: c for c in cols}
+
+
 def _moneyflow_source_to_export_map() -> Dict[str, str]:
     # DB column -> exported column
     return {
@@ -162,10 +178,12 @@ def build_field_map_rows_for_snapshot(
     moneyflow_columns: Sequence[str] | None,
     bak_basic_columns: Sequence[str] | None = None,
     cyq_perf_columns: Sequence[str] | None = None,
+    sector_data_columns: Sequence[str] | None = None,
     daily_basic_dtypes: Dict[str, str] | None = None,
     moneyflow_dtypes: Dict[str, str] | None = None,
     bak_basic_dtypes: Dict[str, str] | None = None,
     cyq_perf_dtypes: Dict[str, str] | None = None,
+    sector_data_dtypes: Dict[str, str] | None = None,
 ) -> List[FieldMapRow]:
     rows: List[FieldMapRow] = []
 
@@ -253,6 +271,30 @@ def build_field_map_rows_for_snapshot(
                     source_table="cyq_perf",
                     comment=cn,
                     dtype_hint=cyq_perf_dtypes.get(col, "float64") if cyq_perf_dtypes else "float64",
+                )
+            )
+
+    if sector_data_columns is not None:
+        comments = _fetch_pg_column_comments("market", "sector_data")
+        src2exp = _sector_data_source_to_export_map()
+        exp2src = {v: k for k, v in src2exp.items()}
+        for col in sector_data_columns:
+            src = exp2src.get(col)
+            if not src:
+                continue
+            cn = comments.get(src, "")
+            unit = ""
+            if col.endswith("_amt"):
+                unit = "万元"
+            elif col.endswith("_vol"):
+                unit = "万股" if "mf" not in col else "手"
+            rows.append(
+                FieldMapRow(
+                    name=col,
+                    meaning_cn=cn,
+                    source_table="sector_data",
+                    comment=cn,
+                    dtype_hint=sector_data_dtypes.get(col, "float32") if sector_data_dtypes else "float32",
                 )
             )
 

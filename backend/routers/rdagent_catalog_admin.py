@@ -16,7 +16,7 @@ router = APIRouter(prefix="/rdagent/catalogs", tags=["rdagent-catalogs"])
 
 
 @router.post("/asset-bundles/{asset_bundle_id}/download", summary="下载并解压指定资产包到本地")
-async def download_asset_bundle(asset_bundle_id: str) -> dict[str, Any]:
+def download_asset_bundle(asset_bundle_id: str) -> dict[str, Any]:
     bundle_id = str(asset_bundle_id).strip()
     if not bundle_id:
         raise HTTPException(status_code=422, detail="asset_bundle_id 不能为空")
@@ -37,7 +37,7 @@ async def download_asset_bundle(asset_bundle_id: str) -> dict[str, Any]:
 
 
 @router.post("/strategies/{strategy_id}/selection", summary="切换策略是否加入选股中心")
-async def toggle_strategy_selection(
+def toggle_strategy_selection(
     strategy_id: str,
     in_selection: bool = Body(..., embed=True)
 ) -> Dict[str, Any]:
@@ -53,7 +53,7 @@ async def toggle_strategy_selection(
 
 
 @router.get("/selection-center", summary="获取选股中心策略列表")
-async def list_selection_center_strategies() -> Dict[str, Any]:
+def list_selection_center_strategies() -> Dict[str, Any]:
     """获取所有勾选了 'in_selection_center' 的策略及其最新表现。"""
     sql = """
         SELECT sc.strategy_id, sc.example_task_run_id, sc.example_loop_id, 
@@ -88,26 +88,111 @@ async def list_selection_center_strategies() -> Dict[str, Any]:
 
 
 @router.get("/factors/source-tasks", summary="获取所有已同步的来源 Task 列表")
-async def list_factor_source_tasks() -> Dict[str, Any]:
-    """返回 aistock_factor_catalog 中所有不同的 source_task_id，用于前端下拉筛选。"""
-    sql = """
-        SELECT source_task_id, COUNT(*) as factor_count
-        FROM aistock_factor_catalog
-        WHERE source_task_id IS NOT NULL
-        GROUP BY source_task_id
-        ORDER BY source_task_id DESC
+def list_factor_source_tasks(
+    node_id: Optional[str] = Query(None, description="按节点过滤"),
+) -> Dict[str, Any]:
+    """返回 source_task_id 分组，含因子数和 ok/skipped/error 统计。"""
+    extra_where = ""
+    params: list[Any] = []
+    if node_id:
+        extra_where = " AND c.node_id = %s"
+        params.append(node_id)
+    sql = f"""
+        SELECT c.source_task_id,
+               COUNT(DISTINCT c.factor_name) AS factor_count,
+               COUNT(DISTINCT CASE WHEN l.status = 'ok' THEN l.factor_name || '|' || l.eval_window END) AS ok_count,
+               COUNT(DISTINCT CASE WHEN l.status = 'skipped' THEN l.factor_name || '|' || l.eval_window END) AS skipped_count,
+               COUNT(DISTINCT CASE WHEN l.status = 'error' THEN l.factor_name || '|' || l.eval_window END) AS error_count
+        FROM aistock_factor_catalog c
+        LEFT JOIN aistock_factor_calc_log l
+          ON l.source_task_id = c.source_task_id
+        WHERE c.source_task_id IS NOT NULL{extra_where}
+        GROUP BY c.source_task_id
+        ORDER BY c.source_task_id DESC
     """
     items: list[dict[str, Any]] = []
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql)
-            for tid, cnt in cur.fetchall():
-                items.append({"task_id": tid, "factor_count": cnt})
+            cur.execute(sql, params)
+            for tid, fc, ok_c, skip_c, err_c in cur.fetchall():
+                items.append({
+                    "task_id": tid,
+                    "factor_count": fc,
+                    "ok_count": ok_c,
+                    "skipped_count": skip_c,
+                    "error_count": err_c,
+                })
     return {"items": items}
 
 
+@router.get("/factors/source-tasks/{task_id}/calc-detail", summary="获取Task下因子计算详情")
+def get_task_calc_detail(task_id: str) -> Dict[str, Any]:
+    """返回该 Task 下所有因子在所有窗口的计算状态，按 factor_name 分组。"""
+    sql = """
+        SELECT factor_name, eval_window, status, error_message,
+               n_trading_days, required_days, data_start, data_end, calculated_at
+        FROM aistock_factor_calc_log
+        WHERE source_task_id = %s
+        ORDER BY factor_name, eval_window
+    """
+    rows: list[tuple] = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, [task_id])
+            rows = cur.fetchall()
+
+    if not rows:
+        return {"factors": [], "summary": {"ok_count": 0, "skipped_count": 0, "error_count": 0}}
+
+    from collections import OrderedDict
+    grouped: OrderedDict[str, list] = OrderedDict()
+    ok_count = skip_count = err_count = 0
+    for fname, ew, st, err_msg, n_days, req_days, d_start, d_end, calc_at in rows:
+        if fname not in grouped:
+            grouped[fname] = []
+        grouped[fname].append({
+            "eval_window": ew,
+            "status": st,
+            "error_message": err_msg,
+            "n_trading_days": n_days,
+            "required_days": req_days,
+            "data_start": str(d_start) if d_start else None,
+            "data_end": str(d_end) if d_end else None,
+            "calculated_at": str(calc_at) if calc_at else None,
+        })
+        if st == "ok":
+            ok_count += 1
+        elif st == "skipped":
+            skip_count += 1
+        elif st == "error":
+            err_count += 1
+
+    factors = [{"factor_name": fn, "windows": wins} for fn, wins in grouped.items()]
+    return {
+        "factors": factors,
+        "summary": {"ok_count": ok_count, "skipped_count": skip_count, "error_count": err_count},
+    }
+
+
+@router.post("/factors/compute-task-metrics", summary="触发单个Task的因子IC指标计算")
+def compute_task_metrics(
+    task_id: str = Body(..., embed=True),
+) -> Dict[str, Any]:
+    """调用 RD-Agent API 计算指定 task 的所有因子17项指标并入库。"""
+    from ..services.rdagent_factor_metrics_sync import sync_factor_metrics_for_task
+    result = sync_factor_metrics_for_task(task_id)
+    return {
+        "ok": result.ok,
+        "task_id": result.task_id,
+        "factor_count": result.factor_count,
+        "metrics_inserted": result.metrics_inserted,
+        "metrics_skipped": result.metrics_skipped,
+        "errors": result.errors,
+    }
+
+
 @router.get("/factors", summary="查询因子 Catalog 列表")
-async def list_factors(
+def list_factors(
     source: Optional[str] = Query(None, description="因子来源过滤, 例如 qlib_alpha158/rdagent"),
     exclude_source: Optional[str] = Query(None, description="排除的source，逗号分隔，如 alpha158,alpha360"),
     source_task_id: Optional[str] = Query(None, description="按来源 Task ID 过滤"),
@@ -115,6 +200,7 @@ async def list_factors(
     tag: Optional[str] = Query(None, description="按单个标签过滤, 如 alpha158"),
     factor_type: Optional[str] = Query(None, description="因子类型过滤: CrossSection(截面) / TimeSeries(时序)"),
     data_source: Optional[str] = Query(None, description="数据来源过滤: daily_pv/daily_basic/moneyflow/cyq_perf/bak_basic/multi"),
+    node_id: Optional[str] = Query(None, description="按来源节点过滤"),
     sort_by: Optional[str] = Query(None, description="排序字段: name/ic/sharpe/ann_ret"),
     sort_order: Optional[str] = Query(None, description="排序方向: asc/desc"),
     limit: int = Query(50, ge=1, le=2000),
@@ -149,6 +235,9 @@ async def list_factors(
     if data_source:
         conds.append("data_source = %s")
         params.append(data_source)
+    if node_id:
+        conds.append("node_id = %s")
+        params.append(node_id)
 
     where_sql = ""
     if conds:
@@ -182,7 +271,7 @@ async def list_factors(
                raw_payload,
                LEFT(code_text, 500) AS code_text_preview,
                ic, annualized_return, max_drawdown, sharpe,
-               factor_type, data_source, asset_path
+               factor_type, data_source, asset_path, node_id
         FROM aistock_factor_catalog
         {where_sql}
         ORDER BY {order_by}
@@ -211,7 +300,7 @@ async def list_factors(
         source_task_id, source_code_relpath, source_code_origin, source_loop_tag, source_index,
         raw_payload, code_text_preview,
         ic_val, ann_ret_val, max_dd_val, sharpe_val,
-        factor_type_val, data_source_val, asset_path_val
+        factor_type_val, data_source_val, asset_path_val, node_id_val
     ) in rows:
         items.append(
             {
@@ -253,6 +342,7 @@ async def list_factors(
                 "factor_type": factor_type_val,
                 "data_source": data_source_val,
                 "asset_path": asset_path_val,
+                "node_id": node_id_val,
             }
         )
 
@@ -260,7 +350,7 @@ async def list_factors(
 
 
 @router.get("/factors/{factor_name}", summary="获取单因子完整元数据")
-async def get_factor_detail(
+def get_factor_detail(
     factor_name: str,
     source: Optional[str] = Query(None, description="可选来源过滤"),
 ) -> Dict[str, Any]:
@@ -337,7 +427,7 @@ async def get_factor_detail(
 
 
 @router.get("/factors/{factor_name}/source-code", summary="下载因子源码文件")
-async def download_factor_source_code(
+def download_factor_source_code(
     factor_name: str,
     source: Optional[str] = Query(None, description="可选来源过滤"),
 ) -> FileResponse:
@@ -398,9 +488,10 @@ async def download_factor_source_code(
 
 
 @router.get("/models", summary="查询 model Catalog 列表")
-async def list_models(
+def list_models(
     task_run_id: Optional[str] = Query(None, description="按 task_run_id 过滤"),
     workspace_id: Optional[str] = Query(None, description="按 workspace_id 过滤"),
+    node_id: Optional[str] = Query(None, description="按来源节点过滤"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> Dict[str, Any]:
@@ -415,6 +506,9 @@ async def list_models(
     if workspace_id:
         conds.append("workspace_id = %s")
         params.append(workspace_id)
+    if node_id:
+        conds.append("node_id = %s")
+        params.append(node_id)
 
     where_sql = ""
     if conds:
@@ -424,7 +518,7 @@ async def list_models(
         SELECT task_run_id, loop_id, workspace_id,
                model_config, dataset_config, model_artifacts,
                model_id, model_type, feature_schema, log_dir, display_name, flattened_feature_list,
-               raw_payload
+               raw_payload, node_id
         FROM aistock_model_catalog
         {where_sql}
         ORDER BY task_run_id DESC, loop_id DESC
@@ -456,6 +550,7 @@ async def list_models(
         display_name,
         flattened_feature_list,
         raw_payload,
+        node_id_val,
     ) in rows:
         items.append(
             {
@@ -472,6 +567,7 @@ async def list_models(
                 "display_name": display_name,
                 "flattened_feature_list": flattened_feature_list,
                 "raw_payload": raw_payload,
+                "node_id": node_id_val,
             }
         )
 
@@ -479,7 +575,7 @@ async def list_models(
 
 
 @router.get("/loops/{task_run_id}/{loop_id}/artifacts", summary="通过 results-api 获取 loop artifacts 详情")
-async def get_loop_artifacts(task_run_id: str, loop_id: int) -> Dict[str, Any]:
+def get_loop_artifacts(task_run_id: str, loop_id: int) -> Dict[str, Any]:
     """Phase2 标准：AIstock 通过 HTTP 调用 RD-Agent results-api 获取 artifacts 详情。
 
     当前最小实现为 JSON 透传：直接返回 results-api 的响应内容。
@@ -491,7 +587,7 @@ async def get_loop_artifacts(task_run_id: str, loop_id: int) -> Dict[str, Any]:
 
 
 @router.get("/alpha158/meta", summary="查询 Alpha158 因子库元信息")
-async def list_alpha158_meta(
+def list_alpha158_meta(
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ) -> Dict[str, Any]:
@@ -538,7 +634,7 @@ async def list_alpha158_meta(
 
 
 @router.get("/strategy-loop-best", summary="按 strategy_id 汇总代表性 loop 指标摘要")
-async def get_strategy_best_loop_summaries() -> Dict[str, Any]:
+def get_strategy_best_loop_summaries() -> Dict[str, Any]:
     """为每个 strategy_id 选出一条代表性 loop 并返回其指标与摘要.
 
     选取规则（简化版）：
@@ -678,7 +774,7 @@ async def get_strategy_best_loop_summaries() -> Dict[str, Any]:
 
 
 @router.get("/factor-loop-best", summary="按 factor_name 汇总代表性 loop 指标摘要")
-async def get_factor_best_loop_summaries() -> Dict[str, Any]:
+def get_factor_best_loop_summaries() -> Dict[str, Any]:
     """为每个 factor_name 选出一条代表性 loop 并返回其指标与摘要.
     
     由于 loop 表中 factor_names 是 JSONB 数组，需要使用 JSONB 路径操作符进行关联。
@@ -785,9 +881,10 @@ async def get_factor_best_loop_summaries() -> Dict[str, Any]:
 
 
 @router.get("/strategies", summary="查询策略 Catalog 列表")
-async def list_strategies(
+def list_strategies(
     step_name: Optional[str] = Query(None, description="按 step_name 过滤, 如 running/feedback"),
     action: Optional[str] = Query(None, description="按 action 过滤, 如 factor/model"),
+    node_id: Optional[str] = Query(None, description="按来源节点过滤"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> Dict[str, Any]:
@@ -797,11 +894,14 @@ async def list_strategies(
     params: list[Any] = []
 
     if step_name:
-        conds.append("step_name = %s")
+        conds.append("sc.step_name = %s")
         params.append(step_name)
     if action:
-        conds.append("action = %s")
+        conds.append("sc.action = %s")
         params.append(action)
+    if node_id:
+        conds.append("sc.node_id = %s")
+        params.append(node_id)
 
     where_sql = ""
     if conds:
@@ -819,7 +919,7 @@ async def list_strategies(
                sc.example_task_run_id, sc.example_loop_id, sc.example_workspace_id, sc.example_workspace_path,
                sc.template_files, sc.data_config, sc.dataset_config, sc.portfolio_config, sc.backtest_config, sc.model_config,
                sc.feature_list, sc.market, sc.instruments, sc.freq, sc.python_implementation,
-               sc.raw_payload,
+               sc.raw_payload, sc.node_id,
                ll.annualized_return, ll.max_drawdown, ll.sharpe, ll.ic, ll.ic_ir, ll.win_rate, ll.asset_bundle_id
         FROM aistock_strategy_catalog sc
         LEFT JOIN latest_loops ll ON sc.strategy_id = ll.strategy_id
@@ -834,7 +934,7 @@ async def list_strategies(
     total = 0
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT COUNT(*) FROM aistock_strategy_catalog{where_sql}", params)
+            cur.execute(f"SELECT COUNT(*) FROM aistock_strategy_catalog sc{where_sql}", params)
             total = int(cur.fetchone()[0])
 
             cur.execute(sql, params_with_page)
@@ -846,7 +946,7 @@ async def list_strategies(
             task_run_id, loop_id, workspace_id, workspace_path,
             template_files, data_config, dataset_config, portfolio_config, backtest_config, model_config,
             feature_list, market, instruments, freq, py_impl,
-            raw_payload,
+            raw_payload, node_id_val,
             ann_ret, mdd, sharpe, ic, ic_ir, win_rate, bundle_id
         ) = row
         items.append(
@@ -875,6 +975,7 @@ async def list_strategies(
                 "python_implementation": py_impl,
                 "raw_payload": raw_payload,
                 "asset_bundle_id": bundle_id,
+                "node_id": node_id_val,
                 "metrics": {
                     "annualized_return": ann_ret,
                     "max_drawdown": mdd,
@@ -890,7 +991,7 @@ async def list_strategies(
 
 
 @router.get("/loops", summary="查询 loop Catalog 列表")
-async def list_loops(
+def list_loops(
     strategy_id: Optional[str] = Query(None, description="按 strategy_id 过滤"),
     status: Optional[str] = Query(None, description="按 loop 状态过滤, 如 success/failed"),
     step_name: Optional[str] = Query(None, description="按 step_name 过滤"),
@@ -1020,7 +1121,7 @@ async def list_loops(
 
 
 @router.get("/loops/{task_run_id}/{loop_id}/files/{file_path:path}", summary="访问 loop workspace 内的文件 (图片/JSON)")
-async def get_loop_file(task_run_id: str, loop_id: int, file_path: str):
+def get_loop_file(task_run_id: str, loop_id: int, file_path: str):
     """根据 task_run_id 和 loop_id 定位 workspace 并返回指定文件.
     
     主要用于在前端展示回测曲线图片 (ret_curve.png) 和读取 feedback.json 等.
@@ -1083,7 +1184,7 @@ async def get_loop_file(task_run_id: str, loop_id: int, file_path: str):
 
 
 @router.post("/reinit-database", summary="重新初始化数据库结构")
-async def reinit_database():
+def reinit_database():
     """重新初始化 RD-Agent Catalog 数据库结构。
     
     此操作将：

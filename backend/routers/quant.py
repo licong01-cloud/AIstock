@@ -13,7 +13,7 @@ router = APIRouter()
 
 
 @router.post("/api/quant/signals", response_model=QuantAnalystResponse)
-async def quant_signals(body: QuantAnalystRequest) -> QuantAnalystResponse:
+def quant_signals(body: QuantAnalystRequest) -> QuantAnalystResponse:
     try:
         return run_quant_analyst(body)
     except NotImplementedError as exc:

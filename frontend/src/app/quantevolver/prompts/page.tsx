@@ -21,7 +21,7 @@ type Prompt = {
 type LLMModel = { id: string; name: string; source: string };
 
 const AGENT_LABELS: Record<string, string> = {
-  factor_analyst: "因子分析师",
+  factor_analyst: "因子综合分析Agent",
   portfolio_architect: "组合架构师",
   model_analyst: "模型分析师",
   experiment_analyst: "实验结果分析师",
@@ -31,9 +31,8 @@ const AGENT_LABELS: Record<string, string> = {
   evolution_evaluator: "SOTA评估员(Evaluator)",
   evolution_researcher: "演进策略研究员(Researcher)",
   evolution_reviewer: "配置审查员(Reviewer)",
-  factor_classifier: "因子分类Agent",
-  factor_describer: "因子描述Agent",
   strategy_analyzer: "策略分析师",
+  correlation_analysis: "因子相关性分析",
 };
 
 // 分组配置：用于在模型配置区域分组展示
@@ -51,12 +50,17 @@ const AGENT_GROUPS: { label: string; color: string; types: string[] }[] = [
   {
     label: "因子库管理",
     color: "#10b981", // Emerald
-    types: ["factor_classifier", "factor_describer"],
+    types: ["factor_analyst"],
   },
   {
     label: "因子代码改写",
     color: "#0891b2",
     types: ["factor_repairer", "factor_analyzer"],
+  },
+  {
+    label: "因子相关性分析",
+    color: "#f97316",
+    types: ["correlation_analysis"],
   },
 ];
 
@@ -64,7 +68,8 @@ const AGENT_TYPES = [
   "evolution_analyst", "evolution_evaluator", "evolution_researcher", "evolution_reviewer",
   "portfolio_architect", "model_analyst", "experiment_analyst", "strategy_analyzer",
   "factor_repairer", "factor_analyzer",
-  "factor_classifier", "factor_describer",
+  "factor_analyst",
+  "correlation_analysis",
 ];
 
 export default function PromptsPage() {
@@ -395,8 +400,7 @@ export default function PromptsPage() {
               <option value="strategy_analyzer">策略分析师</option>
             </optgroup>
             <optgroup label="因子库管理">
-              <option value="factor_classifier">因子分类Agent</option>
-              <option value="factor_describer">因子描述Agent</option>
+              <option value="factor_analyst">因子综合分析Agent</option>
             </optgroup>
             <optgroup label="因子代码改写">
               <option value="factor_repairer">因子代码修复Agent</option>
@@ -515,8 +519,7 @@ export default function PromptsPage() {
                   <option value="strategy_analyzer">策略分析师</option>
                 </optgroup>
                 <optgroup label="因子库管理">
-                  <option value="factor_classifier">因子分类Agent</option>
-                  <option value="factor_describer">因子描述Agent</option>
+                  <option value="factor_analyst">因子综合分析Agent</option>
                 </optgroup>
                 <optgroup label="因子代码改写">
                   <option value="factor_repairer">因子代码修复Agent</option>

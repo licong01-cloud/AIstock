@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ...db.pg_pool import get_conn
 
@@ -129,6 +129,58 @@ class PortfolioArchitect:
             factor_summary_parts.append(f"{cat_name}({cat}): {info['count']}个因子 - {', '.join(info.get('factors', [])[:5])}")
         factor_summary = "\n".join(factor_summary_parts) if factor_summary_parts else "无分类信息"
 
+        # 构建因子详细数据（表达式、类型、来源等）
+        factor_details_parts = []
+        detail_rows = self._get_factor_details_for_llm(factor_names)
+        detail_map = {d["factor_name"]: d for d in detail_rows}
+        # 合并分类信息
+        parsed_keys = self._parse_factor_keys(factor_names)
+        for name, source in parsed_keys:
+            d = detail_map.get(name, {})
+            cat_info = ""
+            for cat, cinfo in categories.items():
+                if name in cinfo.get("factors", []):
+                    cat_name = FACTOR_CATEGORIES.get(cat, cat)
+                    cat_info = f"类别={cat_name}({cat})"
+                    break
+            expr = d.get("expression") or d.get("formula_hint") or "无"
+            ftype = d.get("factor_type") or "未知"
+            dsrc = d.get("data_source") or "未知"
+            desc = d.get("description_cn") or ""
+            if len(desc) > 80:
+                desc = desc[:80] + "..."
+            # 增强：IC/ICIR/最佳持有期/评级
+            ic_str = f"{float(d['ic_mean']):.4f}" if d.get("ic_mean") is not None else "N/A"
+            icir_str = f"{float(d['icir']):.4f}" if d.get("icir") is not None else "N/A"
+            grade_str = d.get("grade") or "N/A"
+            # 找最佳持有期
+            holding_periods = {}
+            for key_name, label in [("rank_ic_1d", "1d"), ("rank_ic_5d", "5d"), ("rank_ic_10d", "10d"), ("rank_ic_20d", "20d")]:
+                if d.get(key_name) is not None:
+                    holding_periods[label] = abs(float(d[key_name]))
+            best_holding = max(holding_periods, key=holding_periods.get) if holding_periods else "N/A"
+            # 互补类别（from factor_profile）
+            profile = d.get("factor_profile") or {}
+            if isinstance(profile, str):
+                try:
+                    profile = json.loads(profile)
+                except Exception:
+                    profile = {}
+            usage = profile.get("usage_guidance", {})
+            complement = ", ".join(usage.get("complementary_categories", [])[:3]) if usage.get("complementary_categories") else ""
+            role = usage.get("portfolio_role", "") if usage else ""
+
+            detail_line = f"- {name} | 来源={source} | {cat_info} | 表达式={expr} | 类型={ftype} | 数据源={dsrc}"
+            detail_line += f" | IC={ic_str} | ICIR={icir_str} | 评级={grade_str} | 最佳持有期={best_holding}"
+            if role:
+                detail_line += f" | 角色={role}"
+            if complement:
+                detail_line += f" | 互补类别={complement}"
+            if desc:
+                detail_line += f" | 说明={desc}"
+            factor_details_parts.append(detail_line)
+        factor_details = "\n".join(factor_details_parts) if factor_details_parts else "无详细数据"
+
         # 构建模型摘要
         model_summary = "未选择模型"
         if model_analysis and model_analysis.get("found"):
@@ -164,6 +216,7 @@ class PortfolioArchitect:
                 avg_grade_score=factor_analysis.get('avg_grade_score', 0),
                 diversity_score=factor_analysis.get('diversity_score', 0),
                 factor_summary=factor_summary,
+                factor_details=factor_details,
                 model_summary=model_summary,
                 strategy_summary=strategy_summary
             )
@@ -227,23 +280,48 @@ class PortfolioArchitect:
 
     # ---- 内部分析方法 ----
 
+    @staticmethod
+    def _parse_factor_keys(factor_keys: List[str]) -> List[Tuple[str, str]]:
+        """解析前端 'factorName||source' 格式为 (name, source) 元组。
+
+        兼容纯 factor_name 格式（source 默认 'unknown'）。
+        """
+        parsed = []
+        for key in factor_keys:
+            if "||" in key:
+                parts = key.split("||", 1)
+                parsed.append((parts[0].strip(), parts[1].strip()))
+            else:
+                parsed.append((key.strip(), "unknown"))
+        return parsed
+
     def _analyze_factors(self, factor_names: List[str]) -> Dict[str, Any]:
         """分析因子组合特征。"""
         if not factor_names:
             return {"count": 0, "categories": {}, "avg_grade_score": 0}
 
+        parsed = self._parse_factor_keys(factor_names)
+        names_only = [p[0] for p in parsed]
+
         with get_conn() as conn:
             with conn.cursor() as cur:
-                placeholders = ",".join(["%s"] * len(factor_names))
+                placeholders = ",".join(["%s"] * len(names_only))
                 cur.execute(f"""
-                    SELECT factor_name, category, grade, ic_value, sharpe_value, ann_ret_value
+                    SELECT factor_name, factor_source, category, grade,
+                           ic_value, sharpe_value, ann_ret_value
                     FROM qe_factor_classification
                     WHERE factor_name IN ({placeholders})
-                """, factor_names)
-                classified = {row[0]: {
-                    "category": row[1], "grade": row[2],
-                    "ic": row[3], "sharpe": row[4], "ann_ret": row[5],
-                } for row in cur.fetchall()}
+                """, names_only)
+                # (name, source) 精确匹配 + name-only fallback
+                classified_by_pair: Dict[Tuple[str, str], Dict] = {}
+                classified_by_name: Dict[str, Dict] = {}
+                for row in cur.fetchall():
+                    info = {
+                        "category": row[2], "grade": row[3],
+                        "ic": row[4], "sharpe": row[5], "ann_ret": row[6],
+                    }
+                    classified_by_pair[(row[0], row[1])] = info
+                    classified_by_name.setdefault(row[0], info)
 
         # 类别分布
         categories = {}
@@ -251,13 +329,14 @@ class PortfolioArchitect:
         total_grade_score = 0
         classified_count = 0
 
-        for fn in factor_names:
-            info = classified.get(fn, {})
+        for (name, source) in parsed:
+            # 优先精确匹配 (name, source)，fallback 到 name-only
+            info = classified_by_pair.get((name, source)) or classified_by_name.get(name, {})
             cat = info.get("category", "UNKNOWN")
             if cat not in categories:
                 categories[cat] = {"count": 0, "factors": []}
             categories[cat]["count"] += 1
-            categories[cat]["factors"].append(fn)
+            categories[cat]["factors"].append(name)
 
             grade = info.get("grade")
             if grade:
@@ -277,6 +356,55 @@ class PortfolioArchitect:
             "avg_grade_score": round(avg_grade_score, 2),
             "diversity_score": round(diversity, 3),
         }
+
+    def _get_factor_details_for_llm(self, factor_names: List[str]) -> List[Dict[str, Any]]:
+        """从 aistock_factor_catalog 获取因子详细数据供 LLM 评估使用。"""
+        parsed = self._parse_factor_keys(factor_names)
+        names_only = list({p[0] for p in parsed})
+        if not names_only:
+            return []
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                ph = ",".join(["%s"] * len(names_only))
+                cur.execute(f"""
+                    SELECT c.factor_name, c.source, c.expression, c.factor_type,
+                           c.data_source, c.description_cn, c.formula_hint,
+                           m.ic_mean, m.icir, m.rank_ic_mean, m.rank_icir,
+                           m.rank_ic_1d, m.rank_ic_5d, m.rank_ic_10d, m.rank_ic_20d,
+                           m.top_excess_sharpe, m.top_excess_annual_return,
+                           m.group_return_monotonicity, m.turnover,
+                           m.ic_decay_half_life,
+                           cl.category, cl.grade, cl.factor_dimension, cl.factor_profile
+                    FROM aistock_factor_catalog c
+                    LEFT JOIN LATERAL (
+                        SELECT ic_mean, icir, rank_ic_mean, rank_icir,
+                               rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d,
+                               top_excess_sharpe, top_excess_annual_return,
+                               group_return_monotonicity, turnover,
+                               ic_decay_half_life
+                        FROM aistock_factor_metrics
+                        WHERE factor_name = c.factor_name AND eval_window = 'full'
+                        ORDER BY calculated_at DESC
+                        LIMIT 1
+                    ) m ON TRUE
+                    LEFT JOIN qe_factor_classification cl
+                        ON c.factor_name = cl.factor_name AND c.source = cl.factor_source
+                    WHERE c.factor_name IN ({ph})
+                """, names_only)
+                cols = [d[0] for d in cur.description]
+                rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+        # 按 (name, source) 去重，优先匹配前端传入的 source
+        source_map = {p[0]: p[1] for p in parsed}
+        best: Dict[str, Dict] = {}
+        for r in rows:
+            name = r["factor_name"]
+            if name not in best:
+                best[name] = r
+            elif r["source"] == source_map.get(name):
+                best[name] = r
+        return list(best.values())
 
     def _analyze_model(self, model_id: str, factor_names: List[str]) -> Dict[str, Any]:
         """分析模型适配性。"""
@@ -703,17 +831,30 @@ class PortfolioArchitect:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT factor_name, factor_source, category, grade,
-                           ic_value, sharpe_value, ann_ret_value,
-                           description, classification_reason
-                    FROM qe_factor_classification
-                    WHERE grade IS NOT NULL
+                    SELECT c.factor_name, c.factor_source, c.category, c.grade,
+                           c.ic_value, c.sharpe_value, c.ann_ret_value,
+                           c.description, c.classification_reason,
+                           c.factor_profile, c.ic_decay_half_life,
+                           m.ic_mean, m.icir, m.rank_ic_mean, m.rank_icir,
+                           m.rank_ic_5d, m.rank_ic_10d, m.rank_ic_20d,
+                           m.group_return_monotonicity
+                    FROM qe_factor_classification c
+                    LEFT JOIN LATERAL (
+                        SELECT ic_mean, icir, rank_ic_mean, rank_icir,
+                               rank_ic_5d, rank_ic_10d, rank_ic_20d,
+                               group_return_monotonicity
+                        FROM aistock_factor_metrics
+                        WHERE factor_name = c.factor_name AND eval_window = 'full'
+                        ORDER BY calculated_at DESC
+                        LIMIT 1
+                    ) m ON TRUE
+                    WHERE c.grade IS NOT NULL
                     ORDER BY
-                        CASE grade
+                        CASE c.grade
                             WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
                             WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
                         END ASC,
-                        ic_value DESC NULLS LAST
+                        c.ic_value DESC NULLS LAST
                 """)
                 cols = [desc[0] for desc in cur.description]
                 factors = [dict(zip(cols, row)) for row in cur.fetchall()]
@@ -738,6 +879,209 @@ class PortfolioArchitect:
             "by_category": by_category,
             "grade_distribution": grade_dist,
         }
+
+    def _prefilter_factors(
+        self,
+        min_grade: str = "C",
+        min_ic: float = 0.02,
+        top_n_per_category: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """SQL 级预筛：grade >= min_grade, ic > min_ic, 每类别 top N。"""
+        grade_order = {"S": 0, "A": 1, "B": 2, "C": 3, "D": 4}
+        min_grade_val = grade_order.get(min_grade, 3)
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    WITH ranked AS (
+                        SELECT c.factor_name, c.factor_source, c.category, c.grade,
+                               c.ic_value, c.sharpe_value, c.factor_profile,
+                               m.ic_mean, m.icir, m.rank_ic_mean,
+                               m.top_excess_annual_return, m.ic_decay_half_life,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY c.category
+                                   ORDER BY
+                                       CASE c.grade
+                                           WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
+                                           WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
+                                       END ASC,
+                                       m.ic_mean DESC NULLS LAST
+                               ) AS rn
+                        FROM qe_factor_classification c
+                        LEFT JOIN LATERAL (
+                            SELECT ic_mean, icir, rank_ic_mean,
+                                   top_excess_annual_return, ic_decay_half_life
+                            FROM aistock_factor_metrics
+                            WHERE factor_name = c.factor_name AND eval_window = 'full'
+                            ORDER BY calculated_at DESC
+                            LIMIT 1
+                        ) m ON TRUE
+                        WHERE c.grade IS NOT NULL
+                          AND CASE c.grade
+                                  WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
+                                  WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
+                              END <= %s
+                          AND COALESCE(m.ic_mean, c.ic_value, 0) > %s
+                    )
+                    SELECT * FROM ranked WHERE rn <= %s
+                    ORDER BY category, rn
+                """, (min_grade_val, min_ic, top_n_per_category))
+                cols = [desc[0] for desc in cur.description]
+                return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def _build_screening_prompt(self, candidates: List[Dict], user_context: str = "") -> str:
+        """构建轻量筛选 prompt (~2000 tokens)，返回候选因子列表文本。"""
+        lines = []
+        for f in candidates:
+            ic = f.get("ic_mean") or f.get("ic_value")
+            ic_str = f"{float(ic):.4f}" if ic is not None else "N/A"
+            icir_str = f"{float(f['icir']):.4f}" if f.get("icir") is not None else "N/A"
+            lines.append(
+                f"{f['factor_name']} | {f['category']} | {f['grade']} | IC={ic_str} | ICIR={icir_str}"
+            )
+        factor_table = "\n".join(lines)
+
+        return f"""## 候选因子列表（{len(candidates)}个，已通过 SQL 预筛）
+
+{factor_table}
+
+{f'## 用户需求上下文: {user_context}' if user_context else ''}
+
+请从以上候选因子中，选出最具潜力的 15-25 个因子进入精选阶段。
+选择标准：
+1. 类别多样性：至少覆盖 4 个不同类别
+2. 质量优先：优先选择高评级(S/A)因子
+3. 避免冗余：同类别因子不超过 5 个
+4. IC/ICIR 综合考虑
+
+输出 JSON 格式：{{"selected_factors": ["因子名1", "因子名2", ...]}}"""
+
+    def _llm_screening(
+        self, candidates: List[Dict], user_context: str = ""
+    ) -> List[str]:
+        """轻量 LLM 筛选（~2000 tokens），返回通过筛选的因子名列表。"""
+        try:
+            import litellm
+        except ImportError:
+            return [f["factor_name"] for f in candidates[:25]]
+
+        prompt = self._build_screening_prompt(candidates, user_context)
+        system = "你是一位量化因子筛选专家。请根据候选因子数据进行筛选，输出 JSON。"
+
+        try:
+            from .llm_client import get_llm_kwargs
+            kwargs = get_llm_kwargs("portfolio_architect")
+            response = litellm.completion(
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=800,
+                response_format={"type": "json_object"},
+                **kwargs
+            )
+            content = response.choices[0].message.content.strip()
+            if content.startswith("```"):
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+            result = json.loads(content)
+            return result.get("selected_factors", [f["factor_name"] for f in candidates[:25]])
+        except Exception as e:
+            logger.warning(f"LLM screening failed: {e}, using top-N fallback")
+            return [f["factor_name"] for f in candidates[:25]]
+
+    def _llm_deep_select(
+        self,
+        screened_factors: List[Dict],
+        user_requirement: str,
+        max_factors: int = 20,
+    ) -> Optional[Dict[str, Any]]:
+        """精选组合 LLM 调用（~8000 tokens），返回最终组合设计。"""
+        try:
+            import litellm
+        except ImportError:
+            return None
+
+        # 构建详细的因子数据
+        detail_lines = []
+        for f in screened_factors:
+            ic = f.get("ic_mean") or f.get("ic_value")
+            ic_str = f"{float(ic):.4f}" if ic is not None else "N/A"
+            icir_str = f"{float(f['icir']):.4f}" if f.get("icir") is not None else "N/A"
+            rank_ic = f.get("rank_ic_mean")
+            rank_ic_str = f"{float(rank_ic):.4f}" if rank_ic is not None else "N/A"
+            ret_str = f"{float(f['top_excess_annual_return']):.2%}" if f.get("top_excess_annual_return") is not None else "N/A"
+
+            profile = f.get("factor_profile") or {}
+            if isinstance(profile, str):
+                try:
+                    profile = json.loads(profile)
+                except Exception:
+                    profile = {}
+            usage = profile.get("usage_guidance", {})
+            role = usage.get("portfolio_role", "")
+            complement = ", ".join(usage.get("complementary_categories", [])[:3]) if usage.get("complementary_categories") else ""
+
+            line = (
+                f"- {f['factor_name']} | 类别={f['category']} | 评级={f['grade']} | "
+                f"IC={ic_str} | ICIR={icir_str} | RankIC={rank_ic_str} | 超额收益={ret_str}"
+            )
+            if role:
+                line += f" | 角色={role}"
+            if complement:
+                line += f" | 互补={complement}"
+            detail_lines.append(line)
+
+        factor_data = "\n".join(detail_lines)
+
+        user_prompt = f"""## 用户需求
+{user_requirement}
+
+## 精选候选因子（{len(screened_factors)}个，已通过预筛和轻量筛选）
+
+{factor_data}
+
+## 设计要求
+请为用户设计一个最优的因子组合（最多 {max_factors} 个因子）。
+
+输出 JSON：
+{{
+    "selected_factors": ["因子名1", "因子名2", ...],
+    "design_rationale": "设计理由",
+    "category_distribution": {{"类别代码": 数量, ...}},
+    "risk_notes": ["风险提示1", ...],
+    "expected_profile": "预期组合风格（如稳健/进攻/均衡）"
+}}"""
+
+        system = (
+            "你是一位资深量化组合架构师。请根据用户需求和候选因子数据，"
+            "设计最优的因子组合。注重类别多样性、因子质量和风险控制。"
+        )
+
+        try:
+            from .llm_client import get_llm_kwargs
+            kwargs = get_llm_kwargs("portfolio_architect")
+            response = litellm.completion(
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.2,
+                max_tokens=2000,
+                response_format={"type": "json_object"},
+                **kwargs
+            )
+            content = response.choices[0].message.content.strip()
+            if content.startswith("```"):
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+            return json.loads(content)
+        except Exception as e:
+            logger.warning(f"LLM deep select failed: {e}")
+            return None
 
     def _get_model_metadata_summary(self) -> Dict[str, Any]:
         """获取模型库元数据摘要。"""
@@ -973,13 +1317,22 @@ class PortfolioArchitect:
         for cat, cat_factors in factor_metadata["by_category"].items():
             cat_name = FACTOR_CATEGORIES.get(cat, cat)
             grade_counts = {}
+            ic_values = []
+            icir_values = []
             for f in cat_factors:
                 g = f.get("grade", "D")
                 grade_counts[g] = grade_counts.get(g, 0) + 1
+                if f.get("ic_mean") is not None:
+                    ic_values.append(float(f["ic_mean"]))
+                if f.get("icir") is not None:
+                    icir_values.append(float(f["icir"]))
             grade_str = ", ".join(f"{g}级{c}个" for g, c in sorted(grade_counts.items()))
             top_factors = [f["factor_name"] for f in cat_factors[:5]]
+            avg_ic_str = f"{sum(ic_values)/len(ic_values):.4f}" if ic_values else "N/A"
+            avg_icir_str = f"{sum(icir_values)/len(icir_values):.4f}" if icir_values else "N/A"
             factor_summary_lines.append(
                 f"  {cat}({cat_name}): 共{len(cat_factors)}个因子, {grade_str}. "
+                f"均IC={avg_ic_str}, 均ICIR={avg_icir_str}. "
                 f"代表因子: {', '.join(top_factors)}"
             )
         factor_summary = "\n".join(factor_summary_lines)

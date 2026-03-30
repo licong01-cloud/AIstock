@@ -9,7 +9,7 @@ router = APIRouter(prefix="/stocks", tags=["stocks"])
 
 
 @router.post("/prices", summary="获取股票实时价格")
-async def get_stock_prices(
+def get_stock_prices(
     codes: List[str] = Body(..., embed=True)
 ) -> Dict[str, Any]:
     """获取股票实时价格"""

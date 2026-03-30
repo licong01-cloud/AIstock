@@ -58,6 +58,7 @@ class TaskSyncRequest(BaseModel):
     task_ids: List[str] = Field(..., description="要同步的 task_id 列表")
     operator: str = Field("ui", description="操作者标识（UI/脚本等）")
     mode: str = Field("log_only", description="同步模式：log_only / api / auto")
+    node_id: Optional[str] = Field(None, description="指定同步的节点 ID（None 使用默认节点）")
 
 
 class TaskSyncAllRequest(BaseModel):
@@ -106,7 +107,7 @@ def _selection_sse_format(event: str, data: str) -> str:
 
 
 @router.post("/selection-center/inference", summary="批量触发选股中心策略推理")
-async def trigger_batch_inference(req: BatchInferenceRequest) -> Dict[str, Any]:
+def trigger_batch_inference(req: BatchInferenceRequest) -> Dict[str, Any]:
     """REQ-UI-P3-020: 批量触发选股中心已勾选策略的推理任务。"""
     # 1. 获取选股中心已勾选的策略
     sql = "SELECT strategy_id FROM aistock_strategy_catalog WHERE in_selection_center = TRUE"
@@ -153,8 +154,11 @@ def list_latest_tasks(limit: int = Query(20, ge=1, le=200, description="返回�
 
 
 @router.get("/tasks/sync-candidates", summary="获取 task 同步候选（latest+summary+本地同步状态合并）")
-def list_task_sync_candidates(limit: int = Query(20, ge=1, le=200, description="候选数量，默认 20")) -> Dict[str, Any]:
-    return rdagent_task_sync_service.list_sync_candidates(limit=limit)
+def list_task_sync_candidates(
+    limit: int = Query(20, ge=1, le=200, description="候选数量，默认 20"),
+    node_id: Optional[str] = Query(None, description="按节点过滤"),
+) -> Dict[str, Any]:
+    return rdagent_task_sync_service.list_sync_candidates(limit=limit, node_id=node_id)
 
 
 @router.get("/tasks/{task_id}/summary", summary="获取 RD-Agent 单 task 概要信息")
@@ -180,11 +184,11 @@ def sync_tasks(req: TaskSyncRequest) -> Dict[str, Any]:
     ok_cnt = 0
     for tid in task_ids:
         if mode == "log_only":
-            r = rdagent_task_sync_service.sync_task_from_log(task_id=tid, operator=req.operator)
+            r = rdagent_task_sync_service.sync_task_from_log(task_id=tid, operator=req.operator, node_id=req.node_id)
         elif mode == "api":
-            r = rdagent_task_sync_service.sync_task(task_id=tid, operator=req.operator)
+            r = rdagent_task_sync_service.sync_task(task_id=tid, operator=req.operator, node_id=req.node_id)
         else:
-            r = rdagent_task_sync_service.sync_task(task_id=tid, operator=req.operator)
+            r = rdagent_task_sync_service.sync_task(task_id=tid, operator=req.operator, node_id=req.node_id)
         rr = {
             "task_id": r.task_id,
             "ok": bool(r.ok),
@@ -201,6 +205,138 @@ def sync_tasks(req: TaskSyncRequest) -> Dict[str, Any]:
     return {"ok": True, "total": len(task_ids), "success": ok_cnt, "results": results}
 
 
+@router.post("/tasks/sync-stream", summary="同步选中 task（SSE 流式进度）")
+async def sync_tasks_stream(req: TaskSyncRequest):
+    """SSE 流式同步：实时推送每个 task 的同步日志和进度事件。"""
+    task_ids = [str(x).strip() for x in (req.task_ids or []) if str(x).strip()]
+    if not task_ids:
+        raise HTTPException(status_code=422, detail="task_ids 不能为空")
+
+    mode = str(req.mode or "").strip().lower() or "log_only"
+    total = len(task_ids)
+
+    q: "queue.Queue[str]" = queue.Queue()
+    done = threading.Event()
+    results_holder: List[Dict[str, Any]] = []
+
+    # 复用 _SelectionStreamHandler 捕获同步过程中的所有日志
+    fmt = logging.Formatter("%(asctime)s %(levelname)s: %(message)s", datefmt="%H:%M:%S")
+    handler = _SelectionStreamHandler(q)
+    handler.setFormatter(fmt)
+    handler.setLevel(logging.INFO)
+
+    sync_loggers = [
+        logging.getLogger("aistock.rdagent_task_sync_service"),
+        logging.getLogger("aistock.rdagent_model_catalog_sync"),
+        logging.getLogger("aistock.factor_catalog_sync"),
+    ]
+
+    def _run_sync():
+        # 给 handler 注入一个固定 reqid 以通过过滤
+        reqid = str(uuid.uuid4())
+        token = _selection_stream_reqid.set(reqid)
+        for lg in sync_loggers:
+            try:
+                lg.addHandler(handler)
+                lg.setLevel(logging.INFO)
+            except Exception:
+                pass
+        try:
+            ok_cnt = 0
+            for i, tid in enumerate(task_ids, 1):
+                q.put_nowait(json.dumps({
+                    "_event": "task_begin",
+                    "current": i, "total": total, "task_id": tid,
+                }, ensure_ascii=False))
+
+                try:
+                    if mode == "log_only":
+                        r = rdagent_task_sync_service.sync_task_from_log(task_id=tid, operator=req.operator, node_id=req.node_id)
+                    else:
+                        r = rdagent_task_sync_service.sync_task(task_id=tid, operator=req.operator, node_id=req.node_id)
+                    rr = {
+                        "task_id": r.task_id,
+                        "ok": bool(r.ok),
+                        "sync_status": r.sync_status,
+                        "error": r.error,
+                        "diagnostics": r.diagnostics,
+                    }
+                except Exception as exc:
+                    rr = {"task_id": tid, "ok": False, "sync_status": "failed", "error": str(exc)}
+
+                if rr["ok"]:
+                    ok_cnt += 1
+                results_holder.append(rr)
+
+                q.put_nowait(json.dumps({
+                    "_event": "task_done",
+                    "current": i, "total": total,
+                    "task_id": tid, "ok": rr["ok"],
+                    "sync_status": rr.get("sync_status"),
+                    "error": rr.get("error"),
+                }, ensure_ascii=False))
+
+            q.put_nowait(json.dumps({
+                "_event": "done",
+                "total": total, "success": ok_cnt,
+                "failed": total - ok_cnt,
+            }, ensure_ascii=False))
+        finally:
+            for lg in sync_loggers:
+                try:
+                    lg.removeHandler(handler)
+                except Exception:
+                    pass
+            _selection_stream_reqid.reset(token)
+            done.set()
+
+    # 在后台线程中执行同步
+    sync_thread = threading.Thread(target=_run_sync, daemon=True)
+    sync_thread.start()
+
+    async def _gen():
+        yield _selection_sse_format("start", json.dumps({
+            "total": total, "task_ids": task_ids,
+        }, ensure_ascii=False))
+
+        last_ping = time.time()
+        while not done.is_set() or not q.empty():
+            try:
+                line = q.get_nowait()
+                # 区分结构化事件和普通日志
+                try:
+                    parsed = json.loads(line)
+                    evt = parsed.pop("_event", None)
+                    if evt:
+                        yield _selection_sse_format(evt, json.dumps(parsed, ensure_ascii=False))
+                        continue
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    pass
+                yield _selection_sse_format("log", line)
+                continue
+            except queue.Empty:
+                pass
+            now = time.time()
+            if now - last_ping >= 10:
+                last_ping = now
+                yield _selection_sse_format("ping", "")
+            await asyncio.sleep(0.15)
+
+        # 发送最终完整结果
+        yield _selection_sse_format("result", json.dumps({
+            "total": total,
+            "success": sum(1 for r in results_holder if r.get("ok")),
+            "failed": sum(1 for r in results_holder if not r.get("ok")),
+            "results": results_holder,
+        }, ensure_ascii=False))
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.post("/tasks/sync-log-only", summary="log-only 模式同步：直接从 RD-Agent log 落盘资产（包含 factor_order.json）")
 def sync_tasks_log_only(req: TaskSyncRequest) -> Dict[str, Any]:
     task_ids = [str(x).strip() for x in (req.task_ids or []) if str(x).strip()]
@@ -210,7 +346,7 @@ def sync_tasks_log_only(req: TaskSyncRequest) -> Dict[str, Any]:
     results: List[Dict[str, Any]] = []
     ok_cnt = 0
     for tid in task_ids:
-        r = rdagent_task_sync_service.sync_task_from_log(task_id=tid, operator=req.operator)
+        r = rdagent_task_sync_service.sync_task_from_log(task_id=tid, operator=req.operator, node_id=req.node_id)
         rr = {
             "task_id": r.task_id,
             "ok": bool(r.ok),
@@ -269,6 +405,124 @@ def get_local_task(task_id: str) -> Dict[str, Any]:
 @router.get("/tasks/local/{task_id}/manifest", summary="读取本地 task manifest.json（AIstock 同步生成）")
 def get_local_task_manifest(task_id: str) -> Dict[str, Any]:
     return rdagent_task_sync_service.get_local_manifest_text(task_id=task_id)
+
+
+@router.get("/tasks/local-with-metrics", summary="Task 列表 + SOTA 聚合指标")
+def list_local_tasks_with_metrics(
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    sort_by: str = Query("best_ic", description="排序字段"),
+    sort_order: str = Query("desc", description="asc/desc"),
+) -> Dict[str, Any]:
+    """返回 aistock_task_catalog 中的 task 列表，附带从 factor/model catalog 聚合的 SOTA 指标。"""
+    from psycopg2.extras import RealDictCursor
+
+    allowed_sort = {"best_ic", "best_sharpe", "best_ann_return", "best_max_drawdown", "sota_factors", "sota_models", "task_id"}
+    sort_col = sort_by if sort_by in allowed_sort else "best_ic"
+    order = "ASC" if sort_order.lower() == "asc" else "DESC"
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT t.task_id,
+                       t.sync_status,
+                       t.is_enabled_for_selection,
+                       t.sota_factors_count,
+                       t.sota_models_count,
+                       t.loops_count,
+                       t.created_at_utc,
+                       agg.sota_factors,
+                       agg.sota_models,
+                       agg.best_ic,
+                       agg.best_sharpe,
+                       agg.best_ann_return,
+                       agg.best_max_drawdown,
+                       agg.best_model_ic,
+                       agg.best_model_sharpe,
+                       agg.best_model_ann_return,
+                       agg.best_model_max_drawdown
+                FROM aistock_task_catalog t
+                LEFT JOIN LATERAL (
+                    SELECT
+                        COALESCE(f_agg.cnt, 0) AS sota_factors,
+                        COALESCE(m_agg.cnt, 0) AS sota_models,
+                        GREATEST(f_agg.best_ic, m_agg.best_ic) AS best_ic,
+                        GREATEST(f_agg.best_sharpe, m_agg.best_sharpe) AS best_sharpe,
+                        GREATEST(f_agg.best_ann_return, m_agg.best_ann_return) AS best_ann_return,
+                        LEAST(f_agg.best_max_drawdown, m_agg.best_max_drawdown) AS best_max_drawdown,
+                        m_agg.best_ic AS best_model_ic,
+                        m_agg.best_sharpe AS best_model_sharpe,
+                        m_agg.best_ann_return AS best_model_ann_return,
+                        m_agg.best_max_drawdown AS best_model_max_drawdown
+                    FROM
+                        (SELECT COUNT(*) AS cnt, MAX(ic) AS best_ic, MAX(sharpe) AS best_sharpe,
+                                MAX(annualized_return) AS best_ann_return, MAX(max_drawdown) AS best_max_drawdown
+                         FROM aistock_factor_catalog
+                         WHERE source_task_id = t.task_id AND is_sota_factor = TRUE) f_agg,
+                        (SELECT COUNT(*) AS cnt, MAX(ic) AS best_ic, MAX(sharpe) AS best_sharpe,
+                                MAX(annualized_return) AS best_ann_return, MAX(max_drawdown) AS best_max_drawdown
+                         FROM aistock_model_catalog
+                         WHERE task_run_id = t.task_id AND is_sota = TRUE) m_agg
+                ) agg ON TRUE
+                ORDER BY agg.{sort_col} {order} NULLS LAST
+                LIMIT %s OFFSET %s
+            """, (limit, offset))
+            items = [dict(r) for r in cur.fetchall()]
+
+            cur.execute("SELECT COUNT(*) FROM aistock_task_catalog")
+            total = cur.fetchone()["count"]
+
+    return {"ok": True, "items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/tasks/local/{task_id}/sota-details", summary="Task 的 SOTA 因子和模型详情")
+def get_task_sota_details(task_id: str) -> Dict[str, Any]:
+    """返回指定 task 的 SOTA 因子列表和 SOTA 模型列表。"""
+    from psycopg2.extras import RealDictCursor
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # SOTA factors
+            cur.execute("""
+                SELECT factor_name, source, ic, sharpe, annualized_return, max_drawdown,
+                       icir, factor_type, data_source, description_cn,
+                       source_loop_tag, code_text, expression
+                FROM aistock_factor_catalog
+                WHERE source_task_id = %s AND is_sota_factor = TRUE
+                ORDER BY ic DESC NULLS LAST
+            """, (task_id,))
+            factors = [dict(r) for r in cur.fetchall()]
+
+            # SOTA models
+            cur.execute("""
+                SELECT model_name, model_type, ic, sharpe, annualized_return, max_drawdown,
+                       information_ratio, loop_id, model_grade, grade_reason,
+                       best_epoch, total_epochs, convergence_ratio, overfit_ratio,
+                       training_failed, train_loss_final, val_loss_final,
+                       hypothesis_text, feedback_decision, feedback_reason,
+                       code_text
+                FROM aistock_model_catalog
+                WHERE task_run_id = %s AND is_sota = TRUE
+                ORDER BY ic DESC NULLS LAST
+            """, (task_id,))
+            models = [dict(r) for r in cur.fetchall()]
+
+            # Task basic info
+            cur.execute("""
+                SELECT task_id, sync_status, is_enabled_for_selection,
+                       sota_factors_count, sota_models_count, loops_count,
+                       created_at_utc, task_dir, manifest_path
+                FROM aistock_task_catalog WHERE task_id = %s
+            """, (task_id,))
+            task_info = cur.fetchone()
+
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "task_info": dict(task_info) if task_info else None,
+        "sota_factors": factors,
+        "sota_models": models,
+    }
 
 
 def _try_parse_json_text(txt: str) -> Optional[Dict[str, Any]]:
@@ -961,7 +1215,7 @@ def get_candidate_tasks(
     """
     获取备选TASK列表，优先从数据库缓存读取
     
-    如果auto_scan=True，会先扫描RD-Agent log目录发现新TASK
+    如果auto_scan=True，会先通过API扫描各计算节点发现新TASK
     """
     try:
         candidate_service = get_candidate_service()
@@ -1010,6 +1264,201 @@ def get_task_candidate_loops(
     except Exception as e:
         logging.error(f"获取TASK {task_id} LOOP详情失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/tasks/{task_id}/loops/{loop_id}/sync-factors", summary="同步指定Loop的因子到因子库")
+def sync_loop_factors(task_id: str, loop_id: int) -> Dict[str, Any]:
+    """从 RD-Agent API 获取指定 Loop 的因子代码和指标，
+    同步到 aistock_factor_catalog 表，标记为该 task 的 SOTA 因子。
+
+    同时更新 aistock_task_catalog 的 sota_factors_count。
+    """
+    from ..services.rdagent_results_api_client import RDAgentResultsApiClient
+    from ..services.rdagent_factor_catalog_sync import sync_factors_from_loop
+
+    try:
+        # 0. 前置检查：Task 必须已同步到 aistock_task_catalog
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT sync_status FROM aistock_task_catalog WHERE task_id = %s",
+                    (task_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Task {task_id} 尚未同步到 AIstock，请先在 Task Sync 页面同步该 Task",
+                    )
+                if row[0] != "success":
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Task {task_id} 同步状态为 {row[0]}，请先确保 Task 同步成功",
+                    )
+
+        # 1. 从 RDAgent API 获取指定 Loop 的因子
+        client = RDAgentResultsApiClient()
+        api_path = f"/api/extractors/sota_factors/v2/{task_id}/loops/{loop_id}/factors"
+        loop_factors_data = client._task_get_json(api_path, timeout=300.0)
+
+        if not loop_factors_data.get("success"):
+            raise HTTPException(
+                status_code=404,
+                detail=loop_factors_data.get("error", f"Loop {loop_id} 因子提取失败"),
+            )
+
+        factor_count = loop_factors_data.get("factor_count", 0)
+        if factor_count == 0:
+            return {
+                "ok": True,
+                "task_id": task_id,
+                "loop_id": loop_id,
+                "message": f"Loop {loop_id} 没有通过 final_decision 的因子",
+                "inserted": 0,
+            }
+
+        # 2. 确定 task_dir
+        aistock_root = Path(os.environ.get("AISTOCK_ROOT") or "f:/Dev/AIstock").resolve()
+        task_dir = aistock_root / "rdagent_assets" / "rdagent_tasks" / task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+
+        # 3. 调用同步函数入库
+        sync_result = sync_factors_from_loop(
+            task_id=task_id,
+            loop_id=loop_id,
+            loop_factors_data=loop_factors_data,
+            task_dir=str(task_dir),
+        )
+
+        return {
+            "ok": sync_result.ok,
+            "task_id": task_id,
+            "loop_id": loop_id,
+            "total_factors": sync_result.total_sota_factors,
+            "inserted": sync_result.inserted,
+            "updated": sync_result.updated,
+            "dedup_skipped": sync_result.dedup_skipped,
+            "errors": sync_result.errors,
+            "message": (
+                f"Loop {loop_id} 因子同步完成: "
+                f"{sync_result.inserted} 个因子入库"
+                + (f", {sync_result.dedup_skipped} 去重跳过" if sync_result.dedup_skipped else "")
+                + (f", {len(sync_result.errors)} 错误" if sync_result.errors else "")
+            ),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"同步 Loop {loop_id} 因子失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}/synced-loop-ids", summary="查询已同步因子的Loop ID列表")
+def get_synced_loop_ids(task_id: str) -> Dict[str, Any]:
+    """从 aistock_factor_catalog 查询该 Task 中哪些 Loop 已手动同步过因子。
+
+    返回 synced_loop_ids 列表和每个 Loop 同步的因子数。
+    """
+    import re as _re
+    try:
+        result: Dict[int, int] = {}  # loop_id -> factor_count
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT source_loop_tag, COUNT(*) AS cnt
+                    FROM aistock_factor_catalog
+                    WHERE source_task_id = %s
+                      AND catalog_source = 'rdagent_loop_manual_sync'
+                      AND source_loop_tag IS NOT NULL
+                    GROUP BY source_loop_tag
+                """, (task_id,))
+                for row in cur.fetchall():
+                    tag, cnt = row[0], row[1]
+                    m = _re.match(r"loop_(\d+)_manual_sync", tag or "")
+                    if m:
+                        result[int(m.group(1))] = cnt
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "synced_loop_ids": sorted(result.keys()),
+            "synced_loop_details": {str(k): v for k, v in result.items()},
+        }
+    except Exception as e:
+        logging.error(f"查询 Task {task_id} 已同步 Loop 失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}/workspaces", summary="获取Task的workspace信息（自动路由到所属节点）")
+def get_task_workspaces(task_id: str) -> Dict[str, Any]:
+    """通过自动路由获取 task 所属计算节点的 workspace 信息。"""
+    try:
+        candidate_service = get_candidate_service()
+        return candidate_service.get_task_workspaces(task_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"获取 Task {task_id} workspace 信息失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/tasks/{task_id}", summary="删除Task及其所有数据（自动路由到所属节点）")
+def delete_task(task_id: str) -> Dict[str, Any]:
+    """
+    自动路由到 task 所属计算节点执行删除，并清理 AIstock 本地数据：
+    1. 远端: task log + workspace + scheduler log（通过节点 API）
+    2. 本地: dispatch_logs/{task_id}/ 目录
+    3. DB: rdagent_candidate_loops + rdagent_candidate_tasks 缓存记录
+
+    任何步骤失败直接 raise，不做静默降级。
+    """
+    import shutil
+
+    candidate_service = get_candidate_service()
+
+    # 1. 调用远端节点 API 删除 task log + workspace + scheduler log
+    remote_result = candidate_service.delete_task_on_node(task_id)
+    if not remote_result.get("ok"):
+        raise HTTPException(
+            status_code=500,
+            detail=f"远端节点删除失败: {remote_result.get('error', '未知错误')}",
+        )
+
+    # 2. 删除 AIstock 本地 dispatch 日志
+    dispatch_dir = Path(__file__).resolve().parents[2] / "dispatch_logs" / task_id
+    dispatch_deleted = False
+    if dispatch_dir.exists() and dispatch_dir.is_dir():
+        shutil.rmtree(dispatch_dir)
+        dispatch_deleted = True
+
+    # 3. 清理 DB 缓存
+    conn = candidate_service._get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM rdagent.rdagent_candidate_loops WHERE task_id = %s", (task_id,))
+        db_loops_deleted = cur.rowcount
+        cur.execute("DELETE FROM rdagent.rdagent_candidate_tasks WHERE task_id = %s", (task_id,))
+        db_tasks_deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    parts = [remote_result.get("message", "远端文件已删除")]
+    if dispatch_deleted:
+        parts.append("dispatch日志已删除")
+    if db_loops_deleted or db_tasks_deleted:
+        parts.append(f"DB缓存已清理(loops={db_loops_deleted}, tasks={db_tasks_deleted})")
+
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "message": "；".join(parts),
+        "remote_result": remote_result,
+        "dispatch_deleted": dispatch_deleted,
+        "db_loops_deleted": db_loops_deleted,
+        "db_tasks_deleted": db_tasks_deleted,
+    }
 
 
 @router.post("/candidate-tasks/refresh", summary="手动刷新备选TASK列表")

@@ -82,7 +82,14 @@ class FactorCodeTransformer:
         try:
             code_type = self._detect_code_type(original_code)
             changes.append(f"检测到代码类型: {code_type}")
-            if code_type in ("rdagent_template", "rdagent_module_level", "unknown"):
+            if code_type == "unknown":
+                return TransformResult(
+                    success=False, transformed_code=original_code,
+                    original_code=original_code, changes=changes, warnings=warnings,
+                    error="无法识别因子代码类型，拒绝自动改造。"
+                          "请人工检查代码结构后手动指定类型或手动改造。",
+                )
+            if code_type in ("rdagent_template", "rdagent_module_level"):
                 code, sc, sw = self._transform_module_level_code(original_code, factor_name)
             elif code_type == "rdagent_factor":
                 code, sc, sw = self._transform_function_code(original_code, factor_name)
@@ -97,6 +104,12 @@ class FactorCodeTransformer:
                 changes.append("数据加载器头部已存在，跳过注入")
             code = self._add_transformation_marker(code, factor_name)
             changes.append("添加改造标记注释")
+            # 后处理：清理原始代码中残留的 try-except 兜底、空 DataFrame 返回、$ 前缀等违规模式
+            code, sanitize_removals, sanitize_warnings = self.sanitize_llm_output(code)
+            if sanitize_removals:
+                changes.extend(sanitize_removals)
+            if sanitize_warnings:
+                warnings.extend(sanitize_warnings)
             syntax_ok, syntax_error = self._check_syntax(code)
             if not syntax_ok:
                 return TransformResult(
@@ -115,14 +128,38 @@ class FactorCodeTransformer:
                 changes=changes, warnings=warnings, error=str(e),
             )
 
+    def _strip_comments_and_strings(self, code: str) -> str:
+        """移除代码中的注释和字符串字面量，保留代码结构，避免注释内容干扰类型检测"""
+        # 移除多行字符串
+        result = re.sub(r'""".*?"""', '""', code, flags=re.DOTALL)
+        result = re.sub(r"'''.*?'''", "''", result, flags=re.DOTALL)
+        # 移除单行注释
+        result = re.sub(r'#.*$', '', result, flags=re.MULTILINE)
+        # 移除单行字符串（简化处理）
+        result = re.sub(r'"[^"]*"', '""', result)
+        result = re.sub(r"'[^']*'", "''", result)
+        return result
+
     def _detect_code_type(self, code: str) -> str:
-        if "D.features" in code or "from qlib" in code or "import qlib" in code:
-            return "qlib_style"
-        if re.search(r"^def calculate_\w+\s*\(", code, re.MULTILINE):
+        """检测代码类型，排除注释和字符串中的干扰"""
+        effective_code = self._strip_comments_and_strings(code)
+
+        has_qlib = ("D.features" in effective_code
+                    or "from qlib" in effective_code
+                    or "import qlib" in effective_code)
+        has_calc_func = bool(re.search(
+            r"^def calculate_\w+\s*\(", effective_code, re.MULTILINE))
+        has_h5 = "result.h5" in effective_code or "daily_pv.h5" in effective_code
+        has_parquet = "static_factors.parquet" in effective_code
+
+        # 优先级：有明确函数定义且无qlib依赖 → rdagent_factor
+        if has_calc_func and not has_qlib:
             return "rdagent_factor"
-        if "result.h5" in code or "daily_pv.h5" in code or "static_factors.parquet" in code:
+        if has_qlib:
+            return "qlib_style"
+        if has_h5 or has_parquet:
             return "rdagent_template"
-        if "calculate_" in code:
+        if "calculate_" in effective_code:
             return "rdagent_module_level"
         return "unknown"
 
@@ -283,9 +320,10 @@ class FactorCodeTransformer:
 
         # 替换 pd.read_hdf('daily_pv.h5', ...) -> _REALTIME_LOADER.load(...)
         # 匹配：varname = pd.read_hdf('daily_pv.h5', ...).sort_index()
+        # 支持 ./daily_pv.h5、路径前缀等写法
         daily_pv_re = re.compile(
-            r"^([ \t]*)(\w+)\s*=\s*pd\.read_hdf\s*\(\s*['\"]daily_pv\.h5['\"][^)]*\)"
-            r"(?:\.sort_index\(\))?",
+            r"^([ \t]*)(\w+)\s*=\s*pd\.read_hdf\s*\(\s*['\"](?:\./)?daily_pv\.h5['\"][^)]*\)"
+            r"(?:\s*\.sort_index\(\))?",
             re.DOTALL | re.MULTILINE,
         )
         def _replace_daily_pv(m: re.Match) -> str:
@@ -306,11 +344,11 @@ class FactorCodeTransformer:
         new_code = daily_pv_re.sub(_replace_daily_pv, new_code)
 
         # 替换 pd.read_parquet('static_factors.parquet', columns=[...]/var) -> _STATIC_FACTORS_LOADER.load()
-        # 支持两种形式：columns=[...] 和 columns=var_name
+        # 支持两种形式：columns=[...] 和 columns=var_name，支持 ./static_factors.parquet
         static_parquet_re = re.compile(
-            r"^([ \t]*)(\w+)\s*=\s*pd\.read_parquet\s*\(\s*['\"]static_factors\.parquet['\"]"
+            r"^([ \t]*)(\w+)\s*=\s*pd\.read_parquet\s*\(\s*['\"](?:\./)?static_factors\.parquet['\"]"
             r"(?:\s*,\s*columns\s*=\s*(\[[^\]]+\]|\w+))?"
-            r"[^)]*\)(?:\.sort_index\(\))?",
+            r"[^)]*\)(?:\s*\.sort_index\(\))?",
             re.DOTALL | re.MULTILINE,
         )
         def _replace_static_parquet(m: re.Match) -> str:
@@ -358,16 +396,214 @@ class FactorCodeTransformer:
         for r in remaining:
             warnings.append(f"发现未处理的文件读取: {r[:60]}，需要LLM辅助处理")
 
+        # 替换 $ 前缀列名：改造后数据接口返回的列名无 $ 前缀
+        # 覆盖所有字符串上下文：df['$close']、fields=['$close']、"$close" 等
+        dollar_fields = ["open", "close", "high", "low", "volume", "amount", "factor", "vwap"]
+        for field in dollar_fields:
+            # 匹配引号内的 $field（单引号或双引号）
+            pattern = re.compile(rf"""(?<=['"])\${field}(?=['",\]\)])""")
+            if pattern.search(new_code):
+                new_code = pattern.sub(field, new_code)
+                changes.append(f"替换列名 ${field} -> {field}")
+
         return new_code, changes, warnings
 
+    def sanitize_llm_output(self, code: str) -> Tuple[str, List[str], List[str]]:
+        """
+        后处理：检测并移除 LLM 修复中常见的违规兜底模式。
+        返回 (cleaned_code, removals, warnings)。
+        在 LLM 每次返回代码后调用。
+        """
+        removals: List[str] = []
+        warnings: List[str] = []
+        new_code = code
+
+        # 1. 移除 except Exception 后返回空 DataFrame 的兜底
+        #    匹配: except Exception...: \n ... = pd.DataFrame()
+        pat_except_empty_df = re.compile(
+            r"^([ \t]*)except\s+(?:Exception|BaseException).*?:\s*\n"
+            r"(?:\1[ \t]+[^\n]*\n)*?"       # 可能有多行
+            r"\1[ \t]+\w+\s*=\s*pd\.DataFrame\(\)\s*$",
+            re.MULTILINE,
+        )
+        if pat_except_empty_df.search(new_code):
+            new_code = pat_except_empty_df.sub(
+                lambda m: m.group(1) + "except Exception as _e:\n"
+                + m.group(1) + "    raise  # 禁止兜底，必须暴露异常",
+                new_code,
+            )
+            removals.append("移除 except→空DataFrame 兜底，改为 raise")
+
+        # 2. 移除 if df.empty: return pd.DataFrame() 兜底
+        pat_empty_return = re.compile(
+            r"^([ \t]*)if\s+\w+\.empty\s*:\s*\n"
+            r"\1[ \t]+return\s+pd\.DataFrame\(\)\s*$",
+            re.MULTILINE,
+        )
+        if pat_empty_return.search(new_code):
+            new_code = pat_empty_return.sub("", new_code)
+            removals.append("移除 if empty→return空DataFrame 兜底")
+
+        # 2b. 单行形式: if df.empty: return pd.DataFrame()
+        pat_empty_return_oneline = re.compile(
+            r"^[ \t]*if\s+\w+\.empty\s*:\s*return\s+pd\.DataFrame\(\)\s*$",
+            re.MULTILINE,
+        )
+        if pat_empty_return_oneline.search(new_code):
+            new_code = pat_empty_return_oneline.sub("", new_code)
+            removals.append("移除单行 if empty→return空DataFrame 兜底")
+
+        # 3. 检测先填充 NaN 再检查缺失列的矛盾逻辑（仅警告）
+        if re.search(r"float\(['\"]nan['\"]\)", new_code):
+            if re.search(r"raise\s+ValueError.*[Mm]issing", new_code):
+                warnings.append(
+                    "检测到矛盾逻辑：先用NaN填充缺失列，又检查缺失列抛异常。"
+                    "NaN填充会导致检查永远不触发。"
+                )
+
+        # 4. 通用 try-except 解包：保留 try 体（去缩进），移除 except 块
+        new_code = self._unwrap_try_except(new_code, removals)
+
+        # 5. 移除 os.path.exists 文件检查（LLM 常添加的错误安全检查）
+        #    匹配: import os \n ... \n if not os.path.exists("static_factors.parquet"): \n raise ...
+        pat_os_path_block = re.compile(
+            r"^[ \t]*(?:import\s+os\s*\n)?"               # 可选的 import os
+            r"([ \t]*)if\s+not\s+os\.path\.(?:exists|isfile)\s*\("
+            r"\s*['\"](?:\./)?"
+            r"(?:static_factors\.parquet|daily_pv\.h5|result\.h5)['\"]"
+            r"\s*\)\s*:\s*\n"
+            r"(?:\1[ \t]+[^\n]*\n)*?"                      # if 体（raise 等）
+            r"(?:\1[ \t]+[^\n]*)\n?",                      # if 体最后一行
+            re.MULTILINE,
+        )
+        if pat_os_path_block.search(new_code):
+            count = len(pat_os_path_block.findall(new_code))
+            new_code = pat_os_path_block.sub("", new_code)
+            removals.append(f"移除 {count} 个 os.path.exists 文件检查（改造后代码不依赖本地文件）")
+
+        # 5b. 清理孤立的 import os（仅当代码中不再有其他 os. 引用时）
+        if re.search(r"^\s*import\s+os\s*$", new_code, re.MULTILINE):
+            # 检查除 import os 行外是否还有 os. 引用
+            code_without_import = re.sub(r"^\s*import\s+os\s*$", "", new_code, flags=re.MULTILINE)
+            if not re.search(r"\bos\.", code_without_import):
+                new_code = re.sub(r"^\s*import\s+os\s*\n", "", new_code, flags=re.MULTILINE)
+                removals.append("移除不再需要的 import os")
+
+        # 6. 检测 $ 前缀残留（LLM 可能重新引入）
+        dollar_fields = ["open", "close", "high", "low", "volume", "amount", "factor"]
+        for field in dollar_fields:
+            pat = re.compile(rf"""(?<=['"])\${field}(?=['",\]\)])""")
+            if pat.search(new_code):
+                new_code = pat.sub(field, new_code)
+                removals.append(f"清理 LLM 重新引入的 ${field} 前缀")
+
+        # 7. 清理多余空行（连续超过2个空行合并为2个）
+        new_code = re.sub(r"\n{4,}", "\n\n\n", new_code)
+
+        return new_code, removals, warnings
+
+    def _unwrap_try_except(self, code: str, removals: List[str]) -> str:
+        """解包所有 try-except 块：保留 try 体（去一级缩进），移除 except 块。"""
+        lines = code.split("\n")
+        result = []
+        i = 0
+        unwrap_count = 0
+        while i < len(lines):
+            stripped = lines[i].lstrip()
+            # 检测 try: 行
+            if stripped == "try:" or stripped.startswith("try:  ") or stripped.startswith("try: #"):
+                try_indent = len(lines[i]) - len(lines[i].lstrip())
+                try_indent_str = lines[i][:try_indent]
+                body_lines = []
+                i += 1
+                # 收集 try 体
+                while i < len(lines):
+                    if lines[i].strip() == "":
+                        body_lines.append("")
+                        i += 1
+                        continue
+                    cur_indent = len(lines[i]) - len(lines[i].lstrip())
+                    cur_stripped = lines[i].lstrip()
+                    # except/finally 同级 → try 体结束
+                    if cur_indent == try_indent and (
+                        cur_stripped.startswith("except") or cur_stripped.startswith("finally")
+                    ):
+                        break
+                    body_lines.append(lines[i])
+                    i += 1
+                # 跳过 except/finally 块
+                if i < len(lines):
+                    handler_indent = try_indent
+                    i += 1  # 跳过 except/finally 行
+                    while i < len(lines):
+                        if lines[i].strip() == "":
+                            i += 1
+                            continue
+                        cur_indent = len(lines[i]) - len(lines[i].lstrip())
+                        if cur_indent <= handler_indent:
+                            break
+                        i += 1
+                # 将 try 体去一级缩进后写入结果
+                for bl in body_lines:
+                    if bl == "":
+                        result.append("")
+                    elif bl.startswith(try_indent_str + "    "):
+                        result.append(try_indent_str + bl[try_indent + 4:])
+                    elif bl.startswith(try_indent_str + "\t"):
+                        result.append(try_indent_str + bl[try_indent + 1:])
+                    else:
+                        result.append(bl)
+                unwrap_count += 1
+            else:
+                result.append(lines[i])
+                i += 1
+        if unwrap_count > 0:
+            removals.append(f"解包 {unwrap_count} 个 try-except 块（因子代码禁止 try-except）")
+        return "\n".join(result)
+
     def _replace_h5_write_with_return(self, code: str, factor_name: str):
-        """确保函数末尾有 return result_df，而不是写入 result.h5"""
+        """确保函数末尾有 return 语句，自动识别结果变量名"""
         changes = []
-        # 已在 _replace_data_loads 中处理了 to_hdf，这里确保有 return 语句
-        # 如果代码中有 result_df 但没有 return，在末尾添加 return
-        if "result_df" in code and "return result_df" not in code and "return " not in code:
-            code = code.rstrip() + "\n    return result_df\n"
-            changes.append("添加 return result_df 语句")
+
+        if "return " in code:
+            return code, changes  # 已有 return，不处理
+
+        result_var = None
+
+        # 优先从被注释的 to_hdf 中提取变量名
+        commented_h5 = re.search(
+            r"# \[TRANSFORMED\] (\w+)\.to_hdf",
+            code,
+        )
+        if commented_h5:
+            result_var = commented_h5.group(1)
+
+        # 常见结果变量名
+        if not result_var:
+            for candidate in [
+                "result_df", "result", "df_result",
+                "factor_df", "final_df", "output_df",
+            ]:
+                if candidate in code:
+                    result_var = candidate
+                    break
+
+        # 最后手段：查找最后一个 DataFrame 赋值语句的变量名
+        if not result_var:
+            last_assign = re.findall(
+                r"^[ \t]*(\w+)\s*=\s*", code, re.MULTILINE,
+            )
+            if last_assign:
+                result_var = last_assign[-1]
+
+        if result_var:
+            code = code.rstrip() + f"\n    return {result_var}\n"
+            changes.append(f"添加 return {result_var} 语句")
+        else:
+            changes.append(
+                "警告：未能识别结果变量名，无法自动添加 return 语句，需要LLM辅助处理"
+            )
+
         return code, changes
 
     def _fix_function_signature(self, code: str, factor_name: str):
@@ -439,9 +675,11 @@ class FactorCodeTransformer:
         test_instruments: Optional[List[str]] = None,
         test_start_date: str = "2024-01-01",
         test_end_date: str = "2024-01-31",
+        timeout_seconds: int = 600,
     ) -> Tuple[bool, Optional[str], Optional[Any]]:
         """
-        执行测试：在沙箱环境中运行转换后的因子代码，验证能否正常执行
+        执行测试：在沙箱环境中运行转换后的因子代码，验证能否正常执行。
+        增加超时控制，防止死循环或极慢计算阻塞服务。
 
         Args:
             code: 转换后的因子代码
@@ -449,10 +687,13 @@ class FactorCodeTransformer:
             test_instruments: 测试用股票列表，默认使用少量样本
             test_start_date: 测试开始日期
             test_end_date: 测试结束日期
+            timeout_seconds: 执行超时秒数，默认300秒
 
         Returns:
             (success, error_message, result_sample)
         """
+        import threading
+
         if test_instruments is None:
             test_instruments = ["000001.SZ", "600000.SH", "000002.SZ"]
 
@@ -481,54 +722,69 @@ class FactorCodeTransformer:
             "_STATIC_FACTORS_LOADER": _static_loader_instance,
         }
 
-        try:
-            # 编译代码
-            compiled = compile(code, f"<factor_{factor_name}>", "exec")
+        # 使用线程+超时控制执行，防止死循环阻塞
+        container = {"result": None, "error": None}
 
-            # 执行代码（定义函数）
-            exec(compiled, exec_globals)
+        def _run_factor():
+            try:
+                compiled = compile(code, f"<factor_{factor_name}>", "exec")
+                exec(compiled, exec_globals)
 
-            # 查找 calculate_ 函数
-            calc_func_name = f"calculate_{factor_name}"
-            if calc_func_name not in exec_globals:
-                # 尝试查找任意 calculate_ 函数
-                calc_funcs = [k for k in exec_globals if k.startswith("calculate_")]
-                if not calc_funcs:
-                    return False, f"未找到 calculate_{factor_name} 函数", None
-                calc_func_name = calc_funcs[0]
+                calc_func_name = f"calculate_{factor_name}"
+                if calc_func_name not in exec_globals:
+                    calc_funcs = [k for k in exec_globals if k.startswith("calculate_")]
+                    if not calc_funcs:
+                        container["error"] = f"未找到 calculate_{factor_name} 函数"
+                        return
+                    calc_func_name = calc_funcs[0]
 
-            calc_func = exec_globals[calc_func_name]
+                calc_func = exec_globals[calc_func_name]
+                container["result"] = calc_func(
+                    instruments=test_instruments,
+                    start_date=test_start_date,
+                    end_date=test_end_date,
+                )
+            except Exception as e:
+                import traceback
+                container["error"] = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
 
-            # 尝试调用函数
-            result = calc_func(
-                instruments=test_instruments,
-                start_date=test_start_date,
-                end_date=test_end_date,
-            )
+        thread = threading.Thread(target=_run_factor, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout_seconds)
 
-            if result is None:
-                return False, "因子函数返回 None", None
+        if thread.is_alive():
+            logger.warning(f"因子执行超时(>{timeout_seconds}秒): {factor_name}")
+            return False, (
+                f"因子执行超时（>{timeout_seconds}秒），可能存在死循环或计算量过大"
+            ), None
 
-            if isinstance(result, pd.DataFrame):
-                if result.empty:
-                    return False, "因子函数返回空 DataFrame", None
-                
-                # 严格校验：禁止全 NaN 数据作为成功结果
-                non_nan_cols = [c for c in result.columns if c != 'instrument' and c != 'datetime']
-                if not non_nan_cols:
-                    return False, "因子函数返回的 DataFrame 没有有效的数据列", None
-                
-                if result[non_nan_cols].isna().all().all():
-                    return False, "因子计算结果全部为 NaN（可能是因为滚动窗口/预热期大于测试数据范围，或者是计算逻辑存在除以零等错误）。请修复计算逻辑，或者确保测试数据能够满足预热需求（禁止使用 fillna 兜底）。", None
-                    
-                return True, None, result
+        if container["error"]:
+            return False, container["error"], None
+
+        result = container["result"]
+
+        if result is None:
+            return False, "因子函数返回 None", None
+
+        if isinstance(result, pd.DataFrame):
+            if result.empty:
+                return False, "因子函数返回空 DataFrame", None
+
+            # 严格校验：禁止全 NaN 数据作为成功结果
+            non_nan_cols = [c for c in result.columns if c != 'instrument' and c != 'datetime']
+            if not non_nan_cols:
+                return False, "因子函数返回的 DataFrame 没有有效的数据列", None
+
+            if result[non_nan_cols].isna().all().all():
+                return False, (
+                    "因子计算结果全部为 NaN（可能是因为滚动窗口/预热期大于测试数据范围，"
+                    "或者是计算逻辑存在除以零等错误）。请修复计算逻辑，或者确保测试数据"
+                    "能够满足预热需求（禁止使用 fillna 兜底）。"
+                ), None
 
             return True, None, result
 
-        except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            return False, f"{type(e).__name__}: {e}\n{tb}", None
+        return True, None, result
 
     def compare_results(
         self,

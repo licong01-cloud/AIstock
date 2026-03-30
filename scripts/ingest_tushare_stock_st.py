@@ -281,7 +281,6 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
             inserted = _upsert_stock_st(conn, rows)
             stats["inserted_rows"] += inserted
             stats["success_days"] += 1
-            print(f"[OK] stock_st {d} inserted={inserted}")
         except Exception as exc:  # noqa: BLE001
             stats["failed_days"] += 1
             _log(conn, job_id, "error", f"stock_st {d} failed: {exc}")

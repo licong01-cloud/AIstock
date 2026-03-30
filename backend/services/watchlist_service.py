@@ -107,25 +107,32 @@ def _compute_realtime_fields(q: Dict[str, Any], entry_price: Optional[float] = N
     volume = q.get("volume")
     amount = q.get("amount")
 
+    # 停牌/盘前: price=0 但 pre_close 有效 → 用 pre_close 作为有效价格
+    effective_price = None
+    if isinstance(price, (int, float)) and float(price) > 0:
+        effective_price = float(price)
+    elif isinstance(pre_close, (int, float)) and float(pre_close) > 0:
+        effective_price = float(pre_close)
+
     pct = None
-    if isinstance(price, (int, float)) and isinstance(pre_close, (int, float)) and pre_close not in (0, None):
+    if effective_price is not None and isinstance(pre_close, (int, float)) and float(pre_close) > 0:
         try:
-            pct = (price - pre_close) / pre_close * 100.0
+            pct = (effective_price - pre_close) / pre_close * 100.0
         except Exception:
             pct = None
 
     # 计算加入以来涨幅
     pct_since_entry = None
-    if isinstance(price, (int, float)) and isinstance(entry_price, (int, float)) and entry_price > 0:
+    if effective_price is not None and isinstance(entry_price, (int, float)) and entry_price > 0:
         try:
-            pct_since_entry = (price - entry_price) / entry_price * 100.0
+            pct_since_entry = (effective_price - entry_price) / entry_price * 100.0
         except Exception:
             pct_since_entry = None
 
     volume_hand = volume / 100.0 if isinstance(volume, (int, float)) else None
 
     return {
-        "last": price,
+        "last": effective_price,
         "pct_change": pct,
         "pct_since_entry": pct_since_entry,
         "open": open_,
@@ -323,8 +330,32 @@ def add_single_item(
     return item_id
 
 
+def _get_close_price_by_date(ts_codes: List[str], trade_date: str) -> Dict[str, float]:
+    """从 market.kline_daily_raw 查询指定日期的收盘价（复权）。"""
+    if not ts_codes:
+        return {}
+    from ..db.pg_pool import get_conn
+    placeholders = ",".join(["%s"] * len(ts_codes))
+    sql = f"""
+        SELECT ts_code, close_li
+        FROM market.kline_daily_raw
+        WHERE ts_code IN ({placeholders}) AND trade_date = %s
+    """
+    results: Dict[str, float] = {}
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, [*ts_codes, trade_date])
+            for row in cur.fetchall():
+                ts_code, close_li = row
+                if close_li and int(close_li) > 0:
+                    results[ts_code] = float(close_li) / 1000.0
+    if results:
+        logger.info(f"指定日期({trade_date})收盘价查询: {len(results)}/{len(ts_codes)} 只")
+    return results
+
+
 def _get_entry_price_bulk(ts_codes: List[str]) -> Dict[str, float]:
-    """批量获取加入价格：TDX 优先，失败回退 miniQMT。
+    """批量获取加入价格：TDX 优先 → miniQMT → DB 最近收盘价。
 
     返回结果字典 {ts_code: price}，仅包含成功的项。
     """
@@ -335,7 +366,7 @@ def _get_entry_price_bulk(ts_codes: List[str]) -> Dict[str, float]:
     # 标准化代码用于查询
     code_to_ts = {}
     remaining_base_codes = []
-    
+
     for c in ts_codes:
         if not c: continue
         base = c
@@ -348,12 +379,10 @@ def _get_entry_price_bulk(ts_codes: List[str]) -> Dict[str, float]:
         remaining_base_codes.append(base)
 
     # 1) 尝试批量获取 TDX 行情
-    # 优化：优先使用本地 TDX 批量接口（如果存在），否则使用线程池加速单只请求
     from concurrent.futures import ThreadPoolExecutor
-    
+
     def _fetch_single_tdx(base):
         try:
-            # 增加超时控制，防止单只卡住
             q = data_source_manager.get_realtime_quotes(base)
             if isinstance(q, dict) and q.get("source") == "tdx":
                 p = q.get("price")
@@ -364,7 +393,6 @@ def _get_entry_price_bulk(ts_codes: List[str]) -> Dict[str, float]:
         return base, None
 
     if remaining_base_codes:
-        # 限制最大线程数，避免本地 API 过载
         with ThreadPoolExecutor(max_workers=5) as executor:
             future_results = list(executor.map(_fetch_single_tdx, remaining_base_codes))
             for base, p in future_results:
@@ -380,7 +408,6 @@ def _get_entry_price_bulk(ts_codes: List[str]) -> Dict[str, float]:
     # 2) xtquant/miniQMT 批量兜底
     remaining_ts_codes = [code_to_ts[b] for b in remaining_base_codes]
     try:
-        # xtquant 本身支持批量
         snap = xtquant_adapter.fetch_realtime_snapshot_xt(remaining_ts_codes, fields=["close"], freq="1d")
         if snap is not None and not snap.empty:
             for ts_code in remaining_ts_codes:
@@ -394,6 +421,32 @@ def _get_entry_price_bulk(ts_codes: List[str]) -> Dict[str, float]:
     except Exception as exc:
         logger.warning(f"xtquant 批量行情获取失败: {exc}")
 
+    # 3) DB kline_daily_raw 最近收盘价兜底（非交易时段 TDX/xtquant 均不可用时）
+    still_missing = [c for c in ts_codes if c not in results]
+    if still_missing:
+        try:
+            from ..db.pg_pool import get_conn
+            placeholders = ",".join(["%s"] * len(still_missing))
+            sql = f"""
+                SELECT DISTINCT ON (ts_code)
+                       ts_code, close_li
+                FROM market.kline_daily_raw
+                WHERE ts_code IN ({placeholders})
+                ORDER BY ts_code, trade_date DESC
+            """
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, still_missing)
+                    for row in cur.fetchall():
+                        ts_code, close_li = row
+                        if close_li and int(close_li) > 0:
+                            results[ts_code] = float(close_li) / 1000.0
+            filled = [c for c in still_missing if c in results]
+            if filled:
+                logger.info(f"DB收盘价兜底: {len(filled)}/{len(still_missing)} 只股票")
+        except Exception as exc:
+            logger.warning(f"DB收盘价兜底失败: {exc}")
+
     return results
 
 
@@ -403,12 +456,16 @@ def add_items_bulk_from_task_selection(
     category_id: int,
     on_conflict: str = "ignore",
     entry_source: str = "rdagent_task",
+    entry_price_date: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """从 task 选股结果批量加入自选池。
+    """从选股结果批量加入自选池（支持 rdagent_task / qe_experiment / qe_evolution）。
 
-    items: [{code, rank, name?, task_id?, as_of?}]
-    - 批量获取 entry_price(TDX->xtquant)，失败则记录 error。
-    - 写入 entry_rank/entry_source/entry_task_id/entry_as_of。
+    items: [{code, rank, name?, entry_price?, task_id?, loop_id?, as_of?}]
+    - entry_price: 选股时 DB 中的收盘价，优先使用；未提供时才走实时行情获取。
+    - entry_price_date: 指定以该日期收盘价覆盖所有 entry_price（用于"下一交易日收盘价入场"）。
+    - task_id: task_run_id 或 experiment_id，统一写入 entry_task_id
+    - loop_id: rdagent loop_id，写入 entry_loop_id
+    - 写入 entry_rank/entry_source/entry_task_id/entry_loop_id/entry_as_of。
     """
 
     if not items:
@@ -423,9 +480,27 @@ def add_items_bulk_from_task_selection(
             code_map[ts_code] = it
 
     all_ts_codes = list(code_map.keys())
-    
-    # 2. 批量获取价格
-    price_map = _get_entry_price_bulk(all_ts_codes)
+
+    # 2. 价格获取：若指定了 entry_price_date，从 DB 查该日收盘价覆盖所有
+    price_map: Dict[str, float] = {}
+    if entry_price_date:
+        price_map = _get_close_price_by_date(all_ts_codes, entry_price_date)
+        need_price_codes = [c for c in all_ts_codes if c not in price_map]
+    else:
+        # 分离：已有价格 vs 需要获取价格
+        need_price_codes: List[str] = []
+        for ts_code in all_ts_codes:
+            it = code_map[ts_code]
+            ep = it.get("entry_price")
+            if isinstance(ep, (int, float)) and float(ep) > 0:
+                price_map[ts_code] = float(ep)
+            else:
+                need_price_codes.append(ts_code)
+
+    # 仅对未提供价格的股票获取实时行情
+    if need_price_codes:
+        fetched = _get_entry_price_bulk(need_price_codes)
+        price_map.update(fetched)
 
     prepared: List[Dict[str, Any]] = []
     errors: List[Dict[str, Any]] = []
@@ -458,7 +533,7 @@ def add_items_bulk_from_task_selection(
                 "entry_rank": it.get("rank"),
                 "entry_source": it.get("entry_source") or entry_source,
                 "entry_task_id": it.get("task_id"),
-                "entry_loop_id": None,
+                "entry_loop_id": it.get("loop_id"),
                 "entry_as_of": as_of,
             }
         )

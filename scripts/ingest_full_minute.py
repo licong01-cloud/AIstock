@@ -715,7 +715,6 @@ def main() -> None:
                             last_ts_dt = dt.datetime.fromisoformat(last_ts) if last_ts else None
                             if last_ts_dt:
                                 upsert_state(conn, "kline_minute_raw", ts_code, trade_date, last_ts_dt)
-                            print(f"[OK] {ts_code} {trade_date} inserted={inserted}")
                             log_ingestion(
                                 conn,
                                 job_id,

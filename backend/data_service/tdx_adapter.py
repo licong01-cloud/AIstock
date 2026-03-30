@@ -7,13 +7,16 @@ historical windows compatible with other adapters.
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Dict, List, Optional
+import logging
+from datetime import date, datetime
+from typing import Dict, List, Optional, Tuple
 
 import os
 
 import pandas as pd
 import requests
+
+logger = logging.getLogger("aistock.tdx_adapter")
 
 
 def fetch_history_window_tdx(
@@ -39,6 +42,15 @@ def fetch_history_window_tdx(
 
 TDX_DEFAULT_PORT = os.environ.get("TDX_HTTP_PORT", "19080").strip() or "19080"
 TDX_BASE_URL = f"http://localhost:{TDX_DEFAULT_PORT}"
+
+
+def _to_tdx_code(inst: str) -> str:
+    """Convert single instrument like 000001.SZ to TDX code SZ000001."""
+    code, _, market = inst.partition(".")
+    market = market.upper()
+    if len(code) == 6 and market in {"SZ", "SH", "BJ"}:
+        return f"{market}{code}"
+    return inst
 
 
 def _to_tdx_codes(universe: List[str]) -> List[str]:
@@ -167,3 +179,94 @@ def fetch_realtime_snapshot_tdx(
         df = df[keep]
 
     return df
+
+
+# ---------------------------------------------------------------------------
+# 分钟 K 线接口 — GET /api/kline?code=XX&type=minute1
+# ---------------------------------------------------------------------------
+
+PRICE_SCALE = 1000.0  # TDX 价格单位为厘，/1000 转元
+
+
+def fetch_minute_kline_tdx(
+    instrument: str,
+    trade_date: date,
+) -> List[Dict]:
+    """从 TDX HTTP 获取单只股票的 1 分钟 K 线，筛选指定日期.
+
+    调用 /api/kline-all/tdx?code=SZ000001&type=minute1，返回全部分钟 K 线，
+    然后过滤出 trade_date 当天的数据。
+
+    Returns:
+        [{"time": datetime, "open": float, "high": float, "low": float,
+          "close": float, "volume": float}, ...]
+        价格单位：元，volume 单位：手。按时间升序。
+    """
+    tdx_code = _to_tdx_code(instrument)
+    url = f"{TDX_BASE_URL}/api/kline-all/tdx"
+    resp = requests.get(url, params={"code": tdx_code, "type": "minute1"}, timeout=10)
+    resp.raise_for_status()
+    payload = resp.json()
+
+    if not isinstance(payload, dict) or payload.get("code") != 0:
+        msg = payload.get("message", "") if isinstance(payload, dict) else ""
+        raise RuntimeError(f"TDX kline 请求失败: {instrument} — {msg}")
+
+    data = payload.get("data")
+    if not data or not isinstance(data, dict):
+        return []
+
+    kline_list = data.get("list") or []
+
+    bars: List[Dict] = []
+    for k in kline_list:
+        if not isinstance(k, dict):
+            continue
+
+        time_str = k.get("Time")
+        if not time_str:
+            continue
+
+        # Time 格式: "2026-03-18T09:31:00+08:00" 或类似 ISO 格式
+        try:
+            bar_time = datetime.fromisoformat(time_str)
+        except (ValueError, TypeError):
+            continue
+
+        # 只保留目标日期的数据
+        if bar_time.date() != trade_date:
+            continue
+
+        bars.append({
+            "time": bar_time,
+            "open": float(k.get("Open", 0)) / PRICE_SCALE,
+            "high": float(k.get("High", 0)) / PRICE_SCALE,
+            "low": float(k.get("Low", 0)) / PRICE_SCALE,
+            "close": float(k.get("Close", 0)) / PRICE_SCALE,
+            "volume": float(k.get("Volume", 0)),
+        })
+
+    bars.sort(key=lambda b: b["time"])
+    return bars
+
+
+def fetch_minute_kline_batch_tdx(
+    symbols: List[str],
+    trade_date: date,
+) -> Dict[str, List[Dict]]:
+    """批量获取多只股票的当日分钟 K 线.
+
+    逐只调用 fetch_minute_kline_tdx，汇总结果。
+
+    Returns:
+        {instrument: [bar_dict, ...]}
+    """
+    result: Dict[str, List[Dict]] = {}
+    for sym in symbols:
+        try:
+            bars = fetch_minute_kline_tdx(sym, trade_date)
+            if bars:
+                result[sym] = bars
+        except Exception:
+            logger.warning("TDX 分钟 K 线获取失败: %s", sym, exc_info=True)
+    return result

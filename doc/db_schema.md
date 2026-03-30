@@ -627,41 +627,6 @@
 
 ---
 
-### Table `market.moneyflow_ind_dc`
-
-| # | 字段名 | 类型 | 允许为空 | 默认值 | 是否主键 | 备注 |
-|---|--------|------|----------|--------|----------|------|
-| 1 | `trade_date` | `date` | NO |  | YES |  |
-| 2 | `ts_code` | `character(9)` | NO |  | YES |  |
-| 3 | `buy_elg_vol` | `numeric(20,4)` | YES |  |  |  |
-| 4 | `buy_elg_amount` | `numeric(28,2)` | YES |  |  |  |
-| 5 | `sell_elg_vol` | `numeric(20,4)` | YES |  |  |  |
-| 6 | `sell_elg_amount` | `numeric(28,2)` | YES |  |  |  |
-| 7 | `net_elg_amount` | `numeric(28,2)` | YES |  |  |  |
-| 8 | `buy_lg_vol` | `numeric(20,4)` | YES |  |  |  |
-| 9 | `buy_lg_amount` | `numeric(28,2)` | YES |  |  |  |
-| 10 | `sell_lg_vol` | `numeric(20,4)` | YES |  |  |  |
-| 11 | `sell_lg_amount` | `numeric(28,2)` | YES |  |  |  |
-| 12 | `net_lg_amount` | `numeric(28,2)` | YES |  |  |  |
-| 13 | `buy_md_vol` | `numeric(20,4)` | YES |  |  |  |
-| 14 | `buy_md_amount` | `numeric(28,2)` | YES |  |  |  |
-| 15 | `sell_md_vol` | `numeric(20,4)` | YES |  |  |  |
-| 16 | `sell_md_amount` | `numeric(28,2)` | YES |  |  |  |
-| 17 | `net_md_amount` | `numeric(28,2)` | YES |  |  |  |
-| 18 | `buy_sm_vol` | `numeric(20,4)` | YES |  |  |  |
-| 19 | `buy_sm_amount` | `numeric(28,2)` | YES |  |  |  |
-| 20 | `sell_sm_vol` | `numeric(20,4)` | YES |  |  |  |
-| 21 | `sell_sm_amount` | `numeric(28,2)` | YES |  |  |  |
-| 22 | `net_sm_amount` | `numeric(28,2)` | YES |  |  |  |
-| 23 | `total_value_traded` | `numeric(28,2)` | YES |  |  |  |
-
-**主键约束**
-
-- 名称: `moneyflow_ind_dc_pkey`
-- 字段: `ts_code`, `trade_date`
-
----
-
 ### Table `market.moneyflow_ts`
 
 > Tushare moneyflow 个股资金流（按交易日）

@@ -5,7 +5,7 @@ Design goals (aligned with docs/quant_model_evaluation.md §3.5 & §5.2.5):
 - Reuse existing Universe config and static features tables:
   - app.model_universe_config
   - app.stock_static_features
-- Reuse high-frequency aggregated factors (app.ts_lstm_trade_agg) via deepar_dataset helpers.
+- Reuse kline_5m VWAP factors via deepar_dataset helpers.
 - Record all training runs in app.model_train_run (model_name = DEEPAR_DAILY / DEEPAR_60M).
 
 This script lives under next_app/backend and does not touch legacy programs.

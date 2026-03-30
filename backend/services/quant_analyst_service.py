@@ -243,7 +243,7 @@ def load_data_for_quant(request: QuantAnalystRequest) -> Dict[str, Any]:
             # 确保窗口为正
             start_dt = as_of_time - timedelta(days=1)
 
-        lstm_cfg = LSTMDatasetConfig(include_trade_agg=need_hf)
+        lstm_cfg = LSTMDatasetConfig()
         lstm_df = load_lstm_timeseries_for_symbol(
             ts_code=ts_code,
             start=start_dt,

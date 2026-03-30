@@ -14,6 +14,7 @@ interface RDStrategy {
   created_at: string | null;
   updated_at: string | null;
   source_strategy_key: string;
+  node_id?: string | null;
 }
 
 interface RDStrategyVersion {
@@ -64,17 +65,29 @@ export default function RDagentStrategiesPage() {
   const [results, setResults] = useState<Record<string, any>>({});
   const [fullCurveStrategyId, setFullCurveStrategyId] = useState<string | null>(null);
   const [bestLoops, setBestLoops] = useState<Record<string, BestLoopSummary>>({});
+  const [filterNodeId, setFilterNodeId] = useState<string>("");
+  const [availableNodes, setAvailableNodes] = useState<{ node_id: string; display_name: string }[]>([]);
+
+  useEffect(() => {
+    loadBestLoops();
+    fetch(`${API_BASE}/dispatch/nodes`)
+      .then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
+      .then(nodes => setAvailableNodes(nodes.map((n: any) => ({ node_id: n.node_id, display_name: n.display_name }))))
+      .catch(e => console.warn("加载节点列表失败:", e));
+  }, []);
 
   useEffect(() => {
     loadStrategies();
-    loadBestLoops();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterNodeId]);
 
   async function loadStrategies() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/rdagent/strategies`);
+      const params = new URLSearchParams();
+      if (filterNodeId) params.set("node_id", filterNodeId);
+      const res = await fetch(`${API_BASE}/rdagent/strategies?${params.toString()}`);
       if (!res.ok) throw new Error(`加载策略失败: ${res.status}`);
       const data = await res.json();
       setStrategies(data.items || []);
@@ -185,6 +198,19 @@ export default function RDagentStrategiesPage() {
           }}
         >
           <h2 style={{ margin: 0 }}>已导入 RD-Agent 策略</h2>
+          <label style={{ fontSize: 12 }}>
+            来源节点:
+            <select
+              value={filterNodeId}
+              onChange={(e) => setFilterNodeId(e.target.value)}
+              style={{ marginLeft: 4, padding: 4, fontSize: 12 }}
+            >
+              <option value="">全部节点</option>
+              {availableNodes.map(n => (
+                <option key={n.node_id} value={n.node_id}>{n.display_name || n.node_id}</option>
+              ))}
+            </select>
+          </label>
         </div>
 
         {loading ? (
@@ -204,6 +230,7 @@ export default function RDagentStrategiesPage() {
                   <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>RD-Agent 实验最佳性能</th>
                   <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>状态</th>
                   <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>创建时间</th>
+                  <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>来源节点</th>
                   <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>版本 / 回测 / Catalog 联动</th>
                 </tr>
               </thead>
@@ -315,6 +342,7 @@ export default function RDagentStrategiesPage() {
                       </span>
                     </td>
                     <td style={{ padding: 12 }}>{formatDateTime(s.created_at)}</td>
+                    <td style={{ padding: 12, fontSize: 11, color: "#6b7280" }}>{s.node_id || "-"}</td>
                     <td style={{ padding: 12, minWidth: 320 }}>
                       <button
                         type="button"

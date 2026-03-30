@@ -705,14 +705,34 @@ function WatchlistPage() {
       const updated = allItems.map((item) => {
         const priceData = data.prices[item.code];
         if (!priceData) return item;
+        const rawLast = priceData.latestPrice ?? item.last;
+        const newPrevClose = priceData.closePrice ?? item.prev_close;
+        // 停牌/盘前: latestPrice=0 → 用 prev_close 作为有效价格
+        const effectivePrice =
+          rawLast != null && rawLast > 0
+            ? rawLast
+            : newPrevClose != null && newPrevClose > 0
+              ? newPrevClose
+              : item.last;
+        // 重新计算涨跌幅
+        let newPctChange = item.pct_change;
+        if (effectivePrice != null && effectivePrice > 0 && newPrevClose != null && newPrevClose > 0) {
+          newPctChange = ((effectivePrice - newPrevClose) / newPrevClose) * 100;
+        }
+        let newPctSinceEntry = item.pct_since_entry;
+        if (effectivePrice != null && effectivePrice > 0 && item.entry_price != null && item.entry_price > 0) {
+          newPctSinceEntry = ((effectivePrice - item.entry_price) / item.entry_price) * 100;
+        }
         return {
           ...item,
-          last: priceData.latestPrice ?? item.last,
+          last: effectivePrice,
           open: priceData.openPrice ?? item.open,
-          prev_close: priceData.closePrice ?? item.prev_close,
+          prev_close: newPrevClose,
           high: priceData.highPrice ?? item.high,
           low: priceData.lowPrice ?? item.low,
           last_rating: priceData.rating ?? item.last_rating,
+          pct_change: newPctChange,
+          pct_since_entry: newPctSinceEntry,
         };
       });
       setAllItems(updated);

@@ -1,8 +1,10 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from pathlib import Path
 import builtins
+import asyncio
 import logging
 import os
 import sys
@@ -28,7 +30,6 @@ from .routers import (
     monitor,
     news,
     portfolio,
-    prompt_packs,
     qmt,
     quant,
     sector_strategy,
@@ -47,8 +48,11 @@ from .routers import (
     rdagent_llm_config,
     rdagent_llm_config_v2,
     rdagent_llm_config_endpoints,
+    dispatch,
 )
 from .routers import llm_config
+from .routers import paper_trading
+from .routers import rl_execution
 from .qlib_exporter.router import router as qlib_router
 from .ingestion.tdx_scheduler import scheduler as ingestion_scheduler
 from .schedulers.strategy_scheduler import scheduler as strategy_scheduler
@@ -163,8 +167,184 @@ def _install_safe_print_and_logging() -> None:
         pass
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Lifespan context manager — startup runs before yield, shutdown after."""
+    # ── STARTUP ──
+    _install_safe_print_and_logging()
+
+    # 文件日志：aistock.log（INFO+）和 errors.log（ERROR+）
+    try:
+        from logging.handlers import RotatingFileHandler
+        _log_dir = Path(__file__).parent / "logs"
+        _log_dir.mkdir(exist_ok=True)
+        _fmt = logging.Formatter(
+            "%(asctime)s %(levelname)s [%(name)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        _fh = RotatingFileHandler(
+            _log_dir / "aistock.log", maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+        )
+        _fh.setLevel(logging.INFO)
+        _fh.setFormatter(_fmt)
+        _eh = RotatingFileHandler(
+            _log_dir / "errors.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
+        _eh.setLevel(logging.ERROR)
+        _eh.setFormatter(_fmt)
+        logging.getLogger().addHandler(_fh)
+        logging.getLogger().addHandler(_eh)
+    except Exception:
+        pass
+
+    try:
+        uv_err = logging.getLogger("uvicorn.error")
+        root = logging.getLogger()
+        if not getattr(root, "handlers", None):
+            for h in getattr(uv_err, "handlers", []) or []:
+                root.addHandler(h)
+        if root.level > logging.INFO:
+            root.setLevel(logging.INFO)
+        for name in (
+            "aistock", "aistock.inference",
+            "aistock.rdagent_selection", "aistock.rdagent_router",
+        ):
+            lg = logging.getLogger(name)
+            if lg.level > logging.INFO:
+                lg.setLevel(logging.INFO)
+            lg.propagate = True
+    except Exception:
+        pass
+
+    init_db_pool(minconn=5, maxconn=40)
+
+    if (os.getenv("DUMP_THREADS_ON_SIGNAL") or "").strip().lower() in {"1", "true", "yes", "y", "on"}:
+        try:
+            def _dump_threads(_signum, _frame):
+                try:
+                    faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+                except Exception:
+                    pass
+            signal.signal(signal.SIGINT, _dump_threads)
+            signal.signal(signal.SIGTERM, _dump_threads)
+        except Exception:
+            pass
+
+    try:
+        client = get_qmt_client_singleton()
+        ok, msg = client.connect()
+        _logger = logging.getLogger("uvicorn.error")
+        if ok:
+            _logger.warning("QMT 自动连接成功: %s", msg)
+        else:
+            _logger.warning("QMT 自动连接失败: %s", msg)
+    except Exception as e:
+        logging.getLogger("uvicorn.error").warning("QMT 自动连接异常: %s", e)
+
+    disable_scheduler = (os.getenv("DISABLE_INGESTION_SCHEDULER") or "").strip().lower()
+    if disable_scheduler not in {"1", "true", "yes", "y", "on"}:
+        refresh_interval = int((os.getenv("AISTOCK_INGESTION_SCHEDULE_REFRESH_INTERVAL_SEC") or "30").strip() or "30")
+        ingestion_scheduler.start(refresh_interval=refresh_interval)
+        logging.getLogger("uvicorn.error").info("TDX 数据调度器已启动 (REQ-SCHEDULER-P3-001)")
+
+    disable_strategy_scheduler = (os.getenv("DISABLE_STRATEGY_SCHEDULER") or "").strip().lower()
+    if disable_strategy_scheduler not in {"1", "true", "yes", "y", "on"}:
+        strategy_scheduler.start()
+
+    # 实盘演练调度器
+    disable_pt = (os.getenv("DISABLE_PAPER_TRADING_SCHEDULER") or "").strip().lower()
+    if disable_pt not in {"1", "true", "yes", "y", "on"}:
+        from .services.paper_trading.scheduler import paper_trading_scheduler
+        paper_trading_scheduler.start()
+
+    # 相关性计算调度器 — 默认禁用，仅在显式开启时启动
+    # 不允许后台自动计算，必须由用户在页面主动触发
+    enable_corr_scheduler = (os.getenv("ENABLE_CORRELATION_SCHEDULER") or "").strip().lower()
+    if enable_corr_scheduler in {"1", "true", "yes", "y", "on"}:
+        from .services.quantevolver.correlation_scheduler import correlation_scheduler
+        correlation_scheduler.start(refresh_interval=60)
+        logging.getLogger("uvicorn.error").info("相关性计算调度器已启动")
+
+    # 节点健康调度器
+    disable_node_health = (os.getenv("DISABLE_NODE_HEALTH_SCHEDULER") or "").strip().lower()
+    if disable_node_health not in {"1", "true", "yes", "y", "on"}:
+        from .schedulers.node_health_scheduler import node_health_scheduler
+        node_health_scheduler.start(loop=asyncio.get_running_loop())
+        logging.getLogger("uvicorn.error").info("节点健康调度器已启动")
+
+    # Evolution loop timer scanner (fallback for webhook-based flow)
+    shutdown_event = asyncio.Event()
+    scan_task = None
+    disable_evo_scanner = (os.getenv("DISABLE_EVOLUTION_SCANNER") or "").strip().lower()
+    if disable_evo_scanner not in {"1", "true", "yes", "y", "on"}:
+        async def _timer_scan_loop(stop_event: asyncio.Event):
+            from .services.quantevolver.qe_evolution_service import AutoEvolutionScheduler
+            scanner = AutoEvolutionScheduler()
+            scan_interval = int((os.getenv("QE_EVOLUTION_SCAN_INTERVAL_SEC") or "60").strip() or "60")
+            while not stop_event.is_set():
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=scan_interval)
+                    break  # stop_event was set
+                except asyncio.TimeoutError:
+                    pass  # Normal timeout, run scan
+                try:
+                    await scanner.scan_running_loops()
+                except Exception as e:
+                    logging.getLogger("aistock.evolution_scanner").warning(f"Evolution scan error: {e}")
+
+        scan_task = asyncio.create_task(_timer_scan_loop(shutdown_event))
+
+    try:
+        yield  # ── 应用运行中 ──
+    except asyncio.CancelledError:
+        pass  # uvicorn reload 发送的取消信号，正常处理
+    finally:
+        # ── SHUTDOWN ──
+        shutdown_event.set()
+        if scan_task is not None:
+            scan_task.cancel()
+            try:
+                await scan_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        # ── 先停所有后台线程（它们可能持有 DB 连接）──
+        try:
+            ingestion_scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        try:
+            strategy_scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        try:
+            from .services.quantevolver.correlation_scheduler import correlation_scheduler
+            correlation_scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        try:
+            from .schedulers.node_health_scheduler import node_health_scheduler
+            node_health_scheduler.shutdown()
+        except Exception:
+            pass
+        try:
+            from .services.paper_trading.scheduler import paper_trading_scheduler
+            paper_trading_scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        # ── 后台线程已停，再关闭 DB 连接池和外部连接 ──
+        try:
+            client = get_qmt_client_singleton()
+            client.disconnect()
+        except Exception:
+            pass
+        try:
+            close_db_pool()
+        except Exception:
+            pass
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="Aistock Next Backend", version="0.1.0")
+    app = FastAPI(title="Aistock Next Backend", version="0.1.0", lifespan=_lifespan)
 
     # 允许本地前端访问（含预检请求）
     origins = [
@@ -178,95 +358,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    @app.on_event("startup")
-    async def _on_startup() -> None:  # noqa: D401
-        """Initialize shared resources (DB pool, schedulers, QMT client)."""
-
-        import logging
-
-        _install_safe_print_and_logging()
-
-        # Ensure app loggers are visible under uvicorn default logging config.
-        try:
-            uv_err = logging.getLogger("uvicorn.error")
-            root = logging.getLogger()
-            if not getattr(root, "handlers", None):
-                for h in getattr(uv_err, "handlers", []) or []:
-                    root.addHandler(h)
-            if root.level > logging.INFO:
-                root.setLevel(logging.INFO)
-
-            for name in (
-                "aistock",
-                "aistock.inference",
-                "aistock.rdagent_selection",
-                "aistock.rdagent_router",
-            ):
-                lg = logging.getLogger(name)
-                if lg.level > logging.INFO:
-                    lg.setLevel(logging.INFO)
-                lg.propagate = True
-        except Exception:
-            pass
-
-        # 提高连接池上限以适配多路并发请求与后台任务
-        # 同时将 minconn 提高，以减少请求高峰时频繁 _connect（psycopg2 建连在本环境下可达 2s+）
-        init_db_pool(minconn=5, maxconn=40)
-
-        if (os.getenv("DUMP_THREADS_ON_SIGNAL") or "").strip().lower() in {"1", "true", "yes", "y", "on"}:
-            try:
-                def _dump_threads(_signum, _frame):
-                    try:
-                        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
-                    except Exception:
-                        pass
-
-                signal.signal(signal.SIGINT, _dump_threads)
-                signal.signal(signal.SIGTERM, _dump_threads)
-            except Exception:
-                pass
-
-        # 尝试自动连接 QMT（不影响服务启动，失败仅记录告警日志）
-        try:
-            client = get_qmt_client_singleton()
-            ok, msg = client.connect()
-            # Use uvicorn.error logger so messages are visible under uvicorn default logging config.
-            logger = logging.getLogger("uvicorn.error")
-            if ok:
-                logger.warning("QMT 自动连接成功: %s", msg)
-            else:
-                logger.warning("QMT 自动连接失败: %s", msg)
-        except Exception as e:  # noqa: BLE001
-            logging.getLogger("uvicorn.error").warning("QMT 自动连接异常: %s", e)
-
-        disable_scheduler = (os.getenv("DISABLE_INGESTION_SCHEDULER") or "").strip().lower()
-        enable_scheduler = (os.getenv("ENABLE_INGESTION_SCHEDULER") or "1").strip().lower()
-        if disable_scheduler in {"1", "true", "yes", "y", "on"}:
-            pass
-        else:
-            # REQ-SCHEDULER-P3-001: 默认开启数据调度器
-            refresh_interval = int((os.getenv("AISTOCK_INGESTION_SCHEDULE_REFRESH_INTERVAL_SEC") or "30").strip() or "30")
-            ingestion_scheduler.start(refresh_interval=refresh_interval)
-            logging.getLogger("uvicorn.error").info("TDX 数据调度器已启动 (REQ-SCHEDULER-P3-001)")
-        
-        # 启动策略调度器
-        disable_strategy_scheduler = (os.getenv("DISABLE_STRATEGY_SCHEDULER") or "").strip().lower()
-        if disable_strategy_scheduler not in {"1", "true", "yes", "y", "on"}:
-            strategy_scheduler.start()
-
-    @app.on_event("shutdown")
-    async def _on_shutdown() -> None:  # noqa: D401
-        """Close PostgreSQL connection pool on application shutdown."""
-        try:
-            client = get_qmt_client_singleton()
-            client.disconnect()
-        except Exception:
-            pass
-
-        close_db_pool()
-        ingestion_scheduler.shutdown(wait=False)
-        strategy_scheduler.shutdown(wait=False)
 
     # 业务路由（版本化）
     app.include_router(health.router, prefix="/api/v1")
@@ -282,7 +373,6 @@ def create_app() -> FastAPI:
     app.include_router(settings.router, prefix="/api/v1")
     app.include_router(config_env.router, prefix="/api/v1")
     app.include_router(smart_monitor.router, prefix="/api/v1")
-    app.include_router(prompt_packs.router, prefix="/api/v1")
     app.include_router(rdagent.router, prefix="/api/v1")
     app.include_router(rdagent_templates.router, prefix="/api/v1")
     app.include_router(rdagent_catalog_admin.router, prefix="/api/v1")
@@ -296,7 +386,9 @@ def create_app() -> FastAPI:
     app.include_router(quantevolver.router, prefix="/api/v1")
     app.include_router(quantevolver_evolution.router, prefix="/api/v1")
     app.include_router(llm_config.router)
-    app.include_router(rdagent_catalog_admin.router, prefix="/api/v1")
+    app.include_router(paper_trading.router, prefix="/api/v1")
+    app.include_router(dispatch.router, prefix="/api/v1")
+    app.include_router(rl_execution.router, prefix="/api/v1")
 
     # ingestion / 本地数据管理接口：保持与旧 tdx_backend 相同的 /api/* 路径
     app.include_router(ingestion.router, prefix="")

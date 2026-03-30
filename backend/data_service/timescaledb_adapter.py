@@ -131,7 +131,7 @@ def fetch_fundamental_data_ts(
     # 1. 获取 daily_basic
     basic_sql = """
         SELECT trade_date as datetime, ts_code as instrument,
-               turnover_rate, turnover_rate_f, volume_ratio, pe, pe_ttm, pb, ps, ps_ttm,
+               close, turnover_rate, turnover_rate_f, volume_ratio, pe, pe_ttm, pb, ps, ps_ttm,
                dv_ratio, dv_ttm, total_share, float_share, free_share, total_mv, circ_mv
         FROM market.daily_basic
         WHERE ts_code = ANY(%s) AND trade_date >= %s AND trade_date <= %s
@@ -179,6 +179,23 @@ def fetch_fundamental_data_ts(
         WHERE c.ts_code = ANY(%s)
           AND c.trade_date >= %s AND c.trade_date <= %s
           AND s.list_status = 'L'
+    """
+
+    # 5. 获取 sector_data（申万L2行业板块数据，sw2_*字段）
+    # 列名在数据库中已有 sw2_ 前缀，无需 rename
+    # 与 qe_data_service.py SECTOR_DATA_COLUMNS 完全一致的 22 列
+    sector_sql = """
+        SELECT trade_date as datetime, ts_code as instrument,
+               sw2_open, sw2_high, sw2_low, sw2_close, sw2_pct_change,
+               sw2_vol, sw2_amount, sw2_pe, sw2_pb, sw2_total_mv,
+               sw2_mf_net_amt, sw2_mf_net_vol,
+               sw2_mf_buy_elg_amt, sw2_mf_buy_elg_vol,
+               sw2_mf_sell_elg_amt, sw2_mf_sell_elg_vol,
+               sw2_mf_buy_lg_amt, sw2_mf_sell_lg_amt,
+               sw2_mf_buy_md_amt, sw2_mf_sell_md_amt,
+               sw2_mf_buy_sm_amt, sw2_mf_sell_sm_amt
+        FROM market.sector_data
+        WHERE ts_code = ANY(%s) AND trade_date >= %s AND trade_date <= %s
     """
 
     # bak_basic 字段映射（与 db_reader.py load_bak_basic_panel 一致）
@@ -232,6 +249,10 @@ def fetch_fundamental_data_ts(
             df_cyq = pd.read_sql(cyq_sql, conn, params=(universe, start_date, end_date))
             t_cyq1 = time.time()
 
+            t_sec0 = time.time()
+            df_sector = pd.read_sql(sector_sql, conn, params=(universe, start_date, end_date))
+            t_sec1 = time.time()
+
         logger.info(
             "fetch_fundamental_data_ts sql_done"
             f" universe_size={len(universe)} start_date={start_date} end_date={end_date}"
@@ -239,6 +260,7 @@ def fetch_fundamental_data_ts(
             f" moneyflow_rows={len(df_flow)} moneyflow_sec={t_flow1 - t_flow0:.3f}"
             f" bak_basic_rows={len(df_bak)} bak_basic_sec={t_bak1 - t_bak0:.3f}"
             f" cyq_perf_rows={len(df_cyq)} cyq_perf_sec={t_cyq1 - t_cyq0:.3f}"
+            f" sector_data_rows={len(df_sector)} sector_data_sec={t_sec1 - t_sec0:.3f}"
             f" total_sec={time.time() - t0:.3f}"
         )
 
@@ -274,6 +296,15 @@ def fetch_fundamental_data_ts(
                 df_cyq[c] = pd.to_numeric(df_cyq[c], errors="coerce").astype("float32")
             parts.append(df_cyq)
 
+        if not df_sector.empty:
+            df_sector["datetime"] = pd.to_datetime(df_sector["datetime"])
+            df_sector.set_index(["datetime", "instrument"], inplace=True)
+            sw2_cols = [c for c in df_sector.columns if c.startswith("sw2_")]
+            df_sector = df_sector[sw2_cols]
+            for c in sw2_cols:
+                df_sector[c] = pd.to_numeric(df_sector[c], errors="coerce").astype("float32")
+            parts.append(df_sector)
+
         if not parts:
             return pd.DataFrame()
 
@@ -292,6 +323,7 @@ def fetch_latest_market_dates_ts() -> dict:
         "kline_daily_raw": "SELECT MAX(trade_date) FROM market.kline_daily_raw",
         "daily_basic": "SELECT MAX(trade_date) FROM market.daily_basic",
         "moneyflow_ts": "SELECT MAX(trade_date) FROM market.moneyflow_ts",
+        "sector_data": "SELECT MAX(trade_date) FROM market.sector_data",
     }
 
     out: dict = {}

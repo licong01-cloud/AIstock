@@ -318,22 +318,29 @@ def backfill_loop_manifest_summaries(*, loops: List[Dict[str, Any]]) -> Dict[str
     return {"updated": updated, "skipped": skipped, "failed": failed}
 
 
-def run_full_sync(*, mode: SyncMode = "upsert", client: Optional[RDAgentResultsApiClient] = None, sync_metadata_only: bool = False, sync_assets_only: bool = False) -> Dict[str, Any]:
+def _make_client(node_id: Optional[str] = None) -> RDAgentResultsApiClient:
+    """根据 node_id 创建对应节点的 API 客户端，None 时使用默认客户端。"""
+    if node_id:
+        return RDAgentResultsApiClient.for_node(node_id)
+    return RDAgentResultsApiClient()
+
+
+def run_full_sync(*, mode: SyncMode = "upsert", client: Optional[RDAgentResultsApiClient] = None, sync_metadata_only: bool = False, sync_assets_only: bool = False, node_id: Optional[str] = None) -> Dict[str, Any]:
     with _LOCK:
         if _STATUS.state == "running" and _STATUS.phase not in ("materializing", "idle"):
             return get_sync_status()
-        
+
         if mode == "materialize_and_sync":
             _set_running(phase="materializing")
             # 启动物化+同步线程
             import threading
-            threading.Thread(target=_materialize_and_sync_task, name="RDAgentMaterializeSync").start()
+            threading.Thread(target=_materialize_and_sync_task, args=(node_id,), name="RDAgentMaterializeSync").start()
             return get_sync_status()
 
         if mode == "incremental":
             _set_running(phase="incremental_syncing")
             import threading
-            threading.Thread(target=_incremental_sync_task, name="RDAgentIncrementalSync").start()
+            threading.Thread(target=_incremental_sync_task, args=(node_id,), name="RDAgentIncrementalSync").start()
             return get_sync_status()
 
         if _STATUS.phase != "materializing":
@@ -341,7 +348,7 @@ def run_full_sync(*, mode: SyncMode = "upsert", client: Optional[RDAgentResultsA
         else:
             _update_progress(0.5, phase="syncing")
 
-    cli = client or RDAgentResultsApiClient()
+    cli = client or _make_client(node_id)
 
     try:
         # 2026-01-05 Fix: 增强探测逻辑，解决分页或过滤导致的 514+ 因子缺失问题
@@ -565,9 +572,9 @@ def run_full_sync(*, mode: SyncMode = "upsert", client: Optional[RDAgentResultsA
         return get_sync_status()
 
 
-def _incremental_sync_task():
+def _incremental_sync_task(node_id: Optional[str] = None):
     """增量同步后台任务 (Phase 3 Section 15.3)"""
-    client = RDAgentResultsApiClient()
+    client = _make_client(node_id)
     from .rdagent_asset_service import rdagent_asset_service
     from .rdagent_archive_service import archive_service
     
@@ -683,9 +690,9 @@ def _incremental_sync_task():
             _set_done_failed(f"Incremental sync failed: {str(exc)}")
 
 
-def _materialize_and_sync_task():
+def _materialize_and_sync_task(node_id: Optional[str] = None):
     """物化并同步的后台任务逻辑"""
-    client = RDAgentResultsApiClient()
+    client = _make_client(node_id)
     try:
         # 1. 触发物化 (长耗时)
         _update_progress(0.1, phase="materializing")
@@ -693,12 +700,12 @@ def _materialize_and_sync_task():
         _update_progress(0.5, phase="materialize_done")
 
         # 2. 物化成功后，执行一次增量同步
-        run_full_sync(mode="incremental", client=client)
+        run_full_sync(mode="incremental", client=client, node_id=node_id)
     except Exception as exc:
         with _LOCK:
             _set_done_failed(f"Materialize/Sync failed: {str(exc)}")
 
 
-def trigger_rdagent_materialize_and_sync() -> Dict[str, Any]:
+def trigger_rdagent_materialize_and_sync(node_id: Optional[str] = None) -> Dict[str, Any]:
     """触发 RD-Agent 侧物化并同步最新 Catalog (已整合进 run_full_sync)."""
-    return run_full_sync(mode="materialize_and_sync")
+    return run_full_sync(mode="materialize_and_sync", node_id=node_id)

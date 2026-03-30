@@ -84,3 +84,37 @@ test_loops_response.json
 # QuantEvolver data directories
 qe_data/
 qe_experiments/
+
+# MLflow experiment data (local runs, not tracked)
+mlruns/
+
+# Qlib data directories (large binary data, not tracked)
+qlib_minute_full/
+qlib_minute_prod/
+qlib_test_minute/
+qlib_bin/
+qlib_bin_full/
+qlib_csv/
+qlib_snapshots/
+qlib_src_backup/
+
+# Monitoring runtime files
+monitoring/textfile_collector/*.prom
+monitoring/textfile_collector/*.prom.*
+
+# Local data dirs
+data/
+data_governance/
+rl_data/
+rl_execution/
+reports/
+stock_pools/
+dispatch_logs/
+temp/
+tools/
+tdx-api-main/
+tdx_doc/
+
+# Environment files (already tracked by mistake — untrack separately)
+.env
+.claude/

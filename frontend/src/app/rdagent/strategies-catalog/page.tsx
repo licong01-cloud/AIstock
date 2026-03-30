@@ -32,6 +32,7 @@ interface StrategyCatalogItem {
     func: string;
   } | null;
   asset_bundle_id?: string | null;
+  node_id?: string | null;
   metrics?: {
     annualized_return?: number | null;
     max_drawdown?: number | null;
@@ -60,7 +61,9 @@ export default function RDagentStrategyCatalogPage() {
   const [stepName, setStepName] = useState<string>("");
   const [action, setAction] = useState<string>("");
   const [strategyIdFilter, setStrategyIdFilter] = useState<string>("");
-  
+  const [filterNodeId, setFilterNodeId] = useState<string>("");
+  const [availableNodes, setAvailableNodes] = useState<{ node_id: string; display_name: string }[]>([]);
+
   // 选股中心状态
   const [selectedForInference, setSelectedForInference] = useState<string[]>([]);
 
@@ -71,7 +74,11 @@ export default function RDagentStrategyCatalogPage() {
       setStrategyIdFilter(sid);
     }
     loadData();
-    
+    fetch(`${API_BASE}/dispatch/nodes`)
+      .then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
+      .then(nodes => setAvailableNodes(nodes.map((n: any) => ({ node_id: n.node_id, display_name: n.display_name }))))
+      .catch(e => console.warn("加载节点列表失败:", e));
+
     // 加载已选中的策略
     const stored = localStorage.getItem("aistock_inference_strategies");
     if (stored) {
@@ -211,6 +218,19 @@ export default function RDagentStrategyCatalogPage() {
               style={{ marginLeft: 4, padding: 4, fontSize: 12, minWidth: 140 }}
             />
           </label>
+          <label style={{ fontSize: 12 }}>
+            来源节点:
+            <select
+              value={filterNodeId}
+              onChange={(e) => setFilterNodeId(e.target.value)}
+              style={{ marginLeft: 4, padding: 4, fontSize: 12 }}
+            >
+              <option value="">全部节点</option>
+              {availableNodes.map(n => (
+                <option key={n.node_id} value={n.node_id}>{n.display_name || n.node_id}</option>
+              ))}
+            </select>
+          </label>
           <button
             type="button"
             onClick={loadData}
@@ -283,6 +303,9 @@ export default function RDagentStrategyCatalogPage() {
                     示例 workspace
                   </th>
                   <th style={{ padding: 8, textAlign: "left", borderBottom: "2px solid #e5e7eb", fontSize: 12 }}>
+                    来源节点
+                  </th>
+                  <th style={{ padding: 8, textAlign: "left", borderBottom: "2px solid #e5e7eb", fontSize: 12 }}>
                     操作
                   </th>
                 </tr>
@@ -294,6 +317,7 @@ export default function RDagentStrategyCatalogPage() {
                       ? s.strategy_id.toLowerCase().includes(strategyIdFilter.toLowerCase())
                       : true,
                   )
+                  .filter((s) => !filterNodeId || s.node_id === filterNodeId)
                   .map((s) => (
                   <tr
                     key={s.strategy_id}
@@ -359,6 +383,9 @@ export default function RDagentStrategyCatalogPage() {
                     <td style={{ padding: 8, fontSize: 11, color: "#6b7280" }}>
                       <div>task_run: {s.workspace_example?.task_run_id || "-"}</div>
                       <div>loop: {s.workspace_example?.loop_id ?? "-"}</div>
+                    </td>
+                    <td style={{ padding: 8, fontSize: 11, color: "#6b7280" }}>
+                      {s.node_id || "-"}
                     </td>
                     <td style={{ padding: 8, fontSize: 12 }}>
                       <div style={{ display: "flex", gap: 8 }}>

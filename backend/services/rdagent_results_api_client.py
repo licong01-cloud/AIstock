@@ -69,114 +69,59 @@ class RDAgentResultsApiClient:
         self.base_url = base
         self.timeout_s = float(timeout_s if timeout_s is not None else cfg.timeout_seconds)
         self.cfg = ResultsApiConfig(base_url=self.base_url, timeout_seconds=float(self.timeout_s))
-        # 记录成功探测到的前缀，避免后续子请求继续盲目探测
-        self._detected_prefix: Optional[str] = None
 
-    def _task_api_prefix_candidates(self) -> list[str]:
-        # 如果已经探测到成功的前缀，优先使用
-        if self._detected_prefix is not None:
-            return [self._detected_prefix]
+    @classmethod
+    def for_node(cls, node_id: str, timeout_s: Optional[float] = None) -> "RDAgentResultsApiClient":
+        """根据 node_id 从 compute_nodes 表获取 api_base_url 创建客户端实例。"""
+        try:
+            from ..db.pg_pool import get_conn
+            from psycopg2.extras import RealDictCursor
+            with get_conn() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT api_base_url FROM infra.compute_nodes WHERE node_id = %s",
+                        (node_id,),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        raise ValueError(f"节点不存在: {node_id}")
+                    return cls(base_url=row["api_base_url"], timeout_s=timeout_s)
+        except ImportError:
+            raise ValueError(f"无法加载数据库模块，for_node 仅在 AIstock 后端中可用")
 
-        raw = (os.getenv("RDAGENT_RESULTS_TASK_API_PREFIX") or "").strip().rstrip("/")
-        cand: list[str] = []
-        if raw:
-            cand.append(raw)
-        # 常见部署方式候选：
-        # - RD-Agent 侧标准的接口前缀：/api/v1/rdagent
-        # - 直接挂根路径: /tasks/...
-        # - 命名空间: /rdagent
-        # - 其他可能的前缀
-        cand.extend(["/api/v1/rdagent", "", "/rdagent", "/api/v1", "/api/v1/rdagent/tasks"])
-        out: list[str] = []
-        seen = set()
-        for p in cand:
-            p = (p or "").strip().rstrip("/")
-            if p in seen:
-                continue
-            seen.add(p)
-            out.append(p)
-        return out
-
-    def _task_get_json(self, path: str, params: dict | None = None) -> dict:
+    def _task_get_json(self, path: str, params: dict | None = None, *, timeout: float | None = None) -> dict:
+        """直接请求 RDAgent task API（根路径，无前缀）"""
         rp = "/" + str(path or "").lstrip("/")
-        last_exc: Optional[Exception] = None
-        
-        # 1. 如果已有探测成功的前缀，直接使用，不再遍历
-        if self._detected_prefix is not None:
-            url = f"{self.base_url}{self._detected_prefix}{rp}"
-            try:
-                resp = requests.get(url, params=params, timeout=self.timeout_s)
-                resp.raise_for_status()
-                return resp.json()
-            except Exception as e:
-                # 如果锁定前缀失效（例如服务重启且路径变了），重置前缀并进入全面探测
-                logger.warning(f"Sticky prefix '{self._detected_prefix}' failed for {rp}: {e}. Resetting...")
-                self._detected_prefix = None
-
-        # 2. 全面探测所有可能的候选路径
-        candidates = self._task_api_prefix_candidates()
-        for prefix in candidates:
-            url = f"{self.base_url}{prefix}{rp}"
-            try:
-                # 对于耗时的API（如sota_factor_anchor），使用完整超时时间
-                # 其他API使用较短超时避免阻塞
-                if "sota_factor_anchor" in rp or "session_anchor" in rp or "v2_alignment_preview" in rp:
-                    probe_timeout = self.timeout_s  # 使用完整超时（默认60秒）
-                else:
-                    probe_timeout = min(10.0, self.timeout_s)  # 其他API最多10秒
-                resp = requests.get(url, params=params, timeout=probe_timeout)
-                if resp.status_code == 404:
-                    continue
-                resp.raise_for_status()
-                
-                # 探测成功，锁定此前缀
-                logger.info(f"Successfully detected and locked RD-Agent task API prefix: '{prefix}'")
-                self._detected_prefix = prefix
-                return resp.json()
-            except Exception as e:
-                last_exc = e
-                continue
-        if last_exc is not None:
-            raise last_exc
-        raise HTTPException(status_code=404, detail=f"RD-Agent task API not found: {rp}")
+        url = f"{self.base_url}{rp}"
+        try:
+            resp = requests.get(url, params=params, timeout=timeout or self.timeout_s)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.ConnectionError:
+            raise HTTPException(status_code=503, detail=f"RD-Agent 服务器无法连接: {self.base_url}")
+        except requests.exceptions.Timeout:
+            raise HTTPException(status_code=504, detail=f"RD-Agent 请求超时({timeout or self.timeout_s}s): {rp}")
+        except requests.exceptions.HTTPError:
+            raise HTTPException(status_code=resp.status_code, detail=f"RD-Agent 返回错误 {resp.status_code}: {rp}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"RD-Agent 请求失败: {str(e)}")
 
     def _task_get_bytes(self, path: str, params: dict | None = None) -> bytes:
+        """直接请求 RDAgent task API 并返回二进制内容"""
         rp = "/" + str(path or "").lstrip("/")
-        last_exc: Optional[Exception] = None
-        
-        if self._detected_prefix is not None:
-            url = f"{self.base_url}{self._detected_prefix}{rp}"
-            try:
-                resp = requests.get(url, params=params, timeout=self.timeout_s)
-                if resp.status_code == 404:
-                    # 404表示资源不存在，但前缀本身是正确的，不重置
-                    raise HTTPException(status_code=404, detail=f"asset not found: {rp}")
-                resp.raise_for_status()
-                return resp.content
-            except HTTPException:
-                raise
-            except Exception as e:
-                # 连接错误等，重置前缀
-                logger.warning(f"Sticky prefix '{self._detected_prefix}' failed for bytes {rp}: {e}. Resetting...")
-                self._detected_prefix = None
-
-        candidates = self._task_api_prefix_candidates()
-        for prefix in candidates:
-            url = f"{self.base_url}{prefix}{rp}"
-            try:
-                probe_timeout = min(30.0, self.timeout_s)
-                resp = requests.get(url, params=params, timeout=probe_timeout)
-                if resp.status_code == 404:
-                    continue
-                resp.raise_for_status()
-                self._detected_prefix = prefix
-                return resp.content
-            except Exception as e:
-                last_exc = e
-                continue
-        if last_exc is not None:
-            raise last_exc
-        raise HTTPException(status_code=404, detail=f"RD-Agent task API not found: {rp}")
+        url = f"{self.base_url}{rp}"
+        try:
+            resp = requests.get(url, params=params, timeout=self.timeout_s)
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"asset not found: {rp}")
+            resp.raise_for_status()
+            return resp.content
+        except HTTPException:
+            raise
+        except requests.exceptions.ConnectionError:
+            raise HTTPException(status_code=503, detail=f"RD-Agent 服务器无法连接: {self.base_url}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"RD-Agent 请求失败: {str(e)}")
 
     def list_tasks(self) -> list[dict]:
         data = self._task_get_json("/tasks")
@@ -200,13 +145,61 @@ class RDAgentResultsApiClient:
         """调用 RD-Agent V2 aligned API，获取每个因子的 formulation、description、variables 等完整详情。"""
         return self._get_json(f"/api/extractors/sota_factors/v2/{task_id}/aligned")
 
+    def get_factor_metrics(self, task_id: str) -> dict:
+        """调用 RD-Agent 因子指标 API，获取单个 task 所有因子的 17 项单因子指标。"""
+        return self._get_json(f"/api/extractors/sota_factors/v2/{task_id}/factor_metrics", timeout=1200.0)
+
+    def get_loop_factor_metrics(self, task_id: str, loop_index: int) -> dict:
+        """调用 RD-Agent Loop 级因子指标 API，从指定 Loop 的 parquet 计算 17 项单因子指标。"""
+        return self._get_json(
+            f"/api/extractors/sota_factors/v2/{task_id}/loops/{loop_index}/factor_metrics",
+            timeout=1200.0,
+        )
+
+    def get_batch_factor_metrics(self, task_ids: list[str]) -> dict:
+        """批量调用 RD-Agent 因子指标 API。"""
+        url = f"{self.base_url}/api/extractors/sota_factors/v2/batch/factor_metrics"
+        try:
+            resp = requests.post(url, json={"task_ids": task_ids}, timeout=1200.0)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.ConnectionError:
+            logger.error(f"RD-Agent 结果服务器连接失败: {url}")
+            raise HTTPException(status_code=503, detail="RD-Agent 结果服务器无法连接")
+        except requests.exceptions.Timeout:
+            logger.error(f"RD-Agent 因子指标请求超时: {url}")
+            raise HTTPException(status_code=504, detail="RD-Agent 因子指标请求超时")
+        except Exception as e:
+            logger.error(f"RD-Agent 因子指标请求失败: {e}")
+            raise HTTPException(status_code=500, detail=f"RD-Agent 客户端错误: {e}")
+
+    def get_task_workspaces(self, task_id: str) -> dict:
+        return self._task_get_json(f"/tasks/{task_id}/workspaces", timeout=30.0)
+
+    def delete_task_remote(self, task_id: str) -> dict:
+        """DELETE /tasks/{task_id} — 删除 task log + workspace + scheduler log"""
+        url = f"{self.base_url}/tasks/{task_id}"
+        try:
+            resp = requests.delete(url, timeout=60.0)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.ConnectionError:
+            raise HTTPException(status_code=503, detail=f"RD-Agent 服务器无法连接: {self.base_url}")
+        except requests.exceptions.Timeout:
+            raise HTTPException(status_code=504, detail=f"RD-Agent 删除请求超时(60s): /tasks/{task_id}")
+        except requests.exceptions.HTTPError:
+            raise HTTPException(status_code=resp.status_code, detail=f"RD-Agent 返回错误 {resp.status_code}: DELETE /tasks/{task_id}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"RD-Agent 删除请求失败: {str(e)}")
+
     def download_task_asset_bytes(self, task_id: str, key: str) -> bytes:
         return self._task_get_bytes(f"/tasks/{task_id}/asset_bytes", params={"key": key})
 
-    def _get_json(self, path: str, *, params: Optional[Dict[str, Any]] = None) -> JsonDict:
+    def _get_json(self, path: str, *, params: Optional[Dict[str, Any]] = None, timeout: float | None = None) -> JsonDict:
         url = f"{self.base_url}{path}"
+        t = timeout or self.timeout_s
         try:
-            resp = requests.get(url, params=params, timeout=self.timeout_s)
+            resp = requests.get(url, params=params, timeout=t)
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.ConnectionError:
@@ -342,7 +335,8 @@ class RDAgentResultsApiClient:
     # --- Task 级增量同步 API ---
 
     def get_tasks_latest(self, *, limit: int = 20) -> JsonDict:
-        return self._task_get_json("/tasks/latest", params={"limit": int(limit)})
+        # /tasks/latest 只是目录扫描，不应等待300s；10s足够
+        return self._task_get_json("/tasks/latest", params={"limit": int(limit)}, timeout=10.0)
 
     def get_task_summary(self, *, task_id: str) -> JsonDict:
         tid = str(task_id).strip()
@@ -355,9 +349,9 @@ class RDAgentResultsApiClient:
     def download_task_asset(self, *, task_id: str, relpath: str, target_path: str) -> bool:
         tid = str(task_id).strip()
         rp = str(relpath).strip().lstrip("/\\")
-        self._task_download_file(
+        self._download_file(
             f"/tasks/{tid}/assets",
-            target_path,
+            target_path=target_path,
             params={"relpath": rp},
         )
         return True

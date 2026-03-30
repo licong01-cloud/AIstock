@@ -39,7 +39,7 @@ def _to_iso(ts: Optional[dt.datetime]) -> Optional[str]:
 
 
 @router.get("/stats", summary="新闻数据统计（本地数据管理用）")
-async def news_stats() -> Dict[str, Any]:
+def news_stats() -> Dict[str, Any]:
     """Return basic statistics about localized news data.
 
     - total_count: 总新闻条数
@@ -77,7 +77,7 @@ async def news_stats() -> Dict[str, Any]:
 
 
 @router.get("/fast", summary="市场快讯列表（本地数据库，供前端实时展示）")
-async def fast_news(
+def fast_news(
     limit: int = Query(100, ge=1, le=500, description="返回的最大新闻条数"),
     offset: int = Query(0, ge=0, description="起始偏移，用于分页"),
     source: Optional[str] = Query(None, description="按 source 精确过滤，可为空"),

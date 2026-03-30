@@ -18,6 +18,9 @@ from dotenv import load_dotenv
 from ..db.pg_pool import get_conn
 from ..strategies.ma_cross_strategy import MACrossStrategy
 from ..strategies.trend_following_strategy import TrendFollowingStrategy
+from ..strategies.twap_execution_strategy import TWAPExecutionStrategy
+from ..strategies.ema_momentum_strategy import EMAMomentumStrategy
+from ..strategies.volatility_breakout_strategy import VolatilityBreakoutStrategy
 from ..infra.strategy_executor import SimpleStrategyExecutor
 from ..data_service import api as data_api
 from ..infra.qmt_client import get_qmt_client_singleton, QMTNotAvailableError
@@ -114,17 +117,19 @@ class StrategyScheduler:
             for sid, ev in list(self._realtime_stop_events.items()):
                 try:
                     ev.set()
-                    t = self._realtime_threads.get(sid)
-                    if t and t.is_alive():
-                        t.join(timeout=5.0)
                 except Exception as e:
                     logger.warning(f"停止实时线程失败 {sid}: {e}")
+            if wait:
+                for sid in list(self._realtime_threads):
+                    t = self._realtime_threads.get(sid)
+                    if t and t.is_alive():
+                        t.join(timeout=2.0)
             self._realtime_stop_events.clear()
             self._realtime_threads.clear()
 
             if self._schedule_thread and self._schedule_thread.is_alive():
                 if wait:
-                    self._schedule_thread.join(timeout=5.0)
+                    self._schedule_thread.join(timeout=3.0)
             logger.info("策略调度器已关闭")
 
     def refresh_strategies(self) -> None:
@@ -213,6 +218,18 @@ class StrategyScheduler:
             return MACrossStrategy(strategy_id=strategy_id, executor=self._executor, config=config)
         elif strategy_type == "TREND_FOLLOWING":
             return TrendFollowingStrategy(
+                strategy_id=strategy_id, executor=self._executor, config=config
+            )
+        elif strategy_type == "TWAP_EXECUTION":
+            return TWAPExecutionStrategy(
+                strategy_id=strategy_id, executor=self._executor, config=config
+            )
+        elif strategy_type == "EMA_MOMENTUM":
+            return EMAMomentumStrategy(
+                strategy_id=strategy_id, executor=self._executor, config=config
+            )
+        elif strategy_type == "VOLATILITY_BREAKOUT":
+            return VolatilityBreakoutStrategy(
                 strategy_id=strategy_id, executor=self._executor, config=config
             )
         else:

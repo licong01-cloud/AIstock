@@ -31,6 +31,22 @@ logger = logging.getLogger("aistock.factor_catalog_sync")
 
 JsonDict = Dict[str, Any]
 
+
+def _normalize_factor_name_static(name: str) -> str:
+    """从因子文件名中提取归一化的英文名。
+
+    处理中文名（含英文括号）的情况，例如：
+      '主力资金净流入强度5日滚动（MainNetAmtRatio_5D）' -> 'MainNetAmtRatio_5D'
+      '主力资金净流入强度5日滚动(MainNetAmtRatio_5D)' -> 'MainNetAmtRatio_5D'
+      'MainNetAmtRatio_5D' -> 'MainNetAmtRatio_5D'
+    """
+    # 尝试从中文/全角括号中提取英文名
+    for pattern in [r'[（(]([A-Za-z_]\w*)[）)]', r'[（(]([A-Za-z_][\w.]*)[）)]']:
+        m = re.search(pattern, name)
+        if m:
+            return m.group(1)
+    return name
+
 _rdagent_client = RDAgentResultsApiClient()
 
 
@@ -228,8 +244,7 @@ def _fetch_loops_metrics(task_id: str) -> Dict[str, JsonDict]:
         resp.raise_for_status()
         loops_data = resp.json()
     except Exception as e:
-        logger.error(f"[{task_id}] 获取 loops 失败: {e}")
-        return {}
+        raise RuntimeError(f"[{task_id}] 获取 loops 失败: {e}") from e
 
     loops = loops_data.get("loops", [])
     factor_metrics: Dict[str, JsonDict] = {}
@@ -280,7 +295,6 @@ def sync_factors_from_task(
         anchor_resp: sota_factor_anchor API 返回数据
         task_dir: AIstock 侧 task 资产目录路径
     """
-    errors: List[str] = []
     sota_factor_names = v2_preview_data.get("sota_factors", [])
     if not sota_factor_names:
         return FactorSyncResult(
@@ -294,30 +308,9 @@ def sync_factors_from_task(
     factor_metrics = _fetch_loops_metrics(task_id)
     logger.info(f"[{task_id}] 获取到 {len(factor_metrics)} 个因子的回测指标")
 
-    # 2. 建立 SOTA loop 顺序列表（用于映射 based_factor 索引）
-    # based_factor_entries[0..N-1] 对应前 N 个 SOTA loops（按 loop_id 排序）
-    # 主 factor.py 对应最后一个 SOTA loop（last_sota_factor_index）
-    sota_loop_ids = sorted(
-        [lid for lid, m in factor_metrics.items()
-         if isinstance(factor_metrics.get(lid), dict)],
-        key=lambda x: 0
-    )
-    # 实际上 factor_metrics 的 key 是 factor_name，不是 loop_id
-    # 需要从 loops API 重新获取 SOTA loop 顺序
-    base_url = _rdagent_client.base_url.rstrip("/")
-    sota_loops_ordered = []
-    try:
-        resp = requests.get(f"{base_url}/tasks/{task_id}/loops", timeout=300.0)
-        resp.raise_for_status()
-        all_loops = resp.json().get("loops", [])
-        sota_loops_ordered = sorted(
-            [l for l in all_loops if l.get("is_sota")],
-            key=lambda x: x.get("loop_id", 0)
-        )
-    except Exception as e:
-        logger.warning(f"[{task_id}] 获取 loops 排序失败: {e}")
-
-    # 建立因子名 → (code_relpath, code_origin, code_text) 映射
+    # 2. 建立因子名 → 代码文件映射
+    # 仅对最后 SOTA loop 的因子使用主 factor.py（API 明确标记）
+    # 不再推测 based_entries 与 SOTA loop 的对应关系
     based_entries = anchor_resp.get("based_factor_entries", [])
     last_sota_idx = anchor_resp.get("last_sota_factor_index")
     resolved_factor_key = anchor_resp.get("resolved_factor_entry_key")
@@ -325,33 +318,40 @@ def sync_factors_from_task(
     # 因子名 → 代码文件信息
     factor_code_map: Dict[str, Dict[str, Any]] = {}
 
-    # 映射 based factors: sota_loops_ordered[i] 的 tested_factors → based_entries[i]
-    for i, sota_loop in enumerate(sota_loops_ordered):
-        loop_id = sota_loop.get("loop_id")
-        tested = sota_loop.get("tested_factors", [])
+    # 从 loops API 获取最后 SOTA loop 的 tested_factors
+    base_url = _rdagent_client.base_url.rstrip("/")
+    try:
+        resp = requests.get(f"{base_url}/tasks/{task_id}/loops", timeout=300.0)
+        resp.raise_for_status()
+        all_loops = resp.json().get("loops", [])
 
-        # 最后一个 SOTA loop 对应主 factor.py
-        if loop_id == last_sota_idx:
-            for fname in tested:
-                if isinstance(fname, str):
-                    factor_code_map[fname] = {
-                        "relpath": "factor.py",
-                        "origin": resolved_factor_key,
-                        "is_main": True,
-                    }
-        # 前面的 SOTA loops 对应 based_factor_entries
-        elif i < len(based_entries):
-            entry = based_entries[i]
-            based_idx = entry.get("based_index", i)
+        # 只处理最后 SOTA loop 对应主 factor.py（API 明确标记）
+        if last_sota_idx is not None:
+            for lp in all_loops:
+                if lp.get("loop_id") == last_sota_idx:
+                    tested = lp.get("tested_factors", [])
+                    for fname in tested:
+                        if isinstance(fname, str):
+                            factor_code_map[fname] = {
+                                "relpath": "factor.py",
+                                "origin": resolved_factor_key,
+                                "is_main": True,
+                            }
+                    break
+
+        # based_entries 有明确的 resolved_factor_entry_key，
+        # 但无法确定哪些因子名属于哪个 based_entry，不做推测映射
+        # 仅记录 based_entries 的代码下载路径供后续使用
+        for entry in based_entries:
+            based_idx = entry.get("based_index")
             entry_key = entry.get("resolved_factor_entry_key")
-            for fname in tested:
-                if isinstance(fname, str):
-                    factor_code_map[fname] = {
-                        "relpath": f"based_factors/based_factor_{based_idx}.py",
-                        "origin": entry_key,
-                        "is_main": False,
-                        "based_index": based_idx,
-                    }
+            if entry_key and based_idx is not None:
+                logger.debug(
+                    f"[{task_id}] based_entry[{based_idx}] 有代码 key={entry_key}，"
+                    f"但无法确定对应因子名，跳过映射"
+                )
+    except Exception as e:
+        raise RuntimeError(f"[{task_id}] 获取 loops 构建因子代码映射失败: {e}") from e
 
     logger.info(f"[{task_id}] 因子代码映射: {len(factor_code_map)}/{len(sota_factor_names)} 个因子有代码文件")
 
@@ -365,8 +365,7 @@ def sync_factors_from_task(
                 downloaded_codes["factor.py"] = _decode_code_bytes(code_bytes)
                 logger.info(f"[{task_id}] 下载主因子代码成功: {len(code_bytes)} bytes")
         except Exception as e:
-            errors.append(f"下载因子代码失败: {e}")
-            logger.warning(f"[{task_id}] 下载因子代码失败: {e}")
+            raise RuntimeError(f"[{task_id}] 下载主因子代码失败: {e}") from e
 
     for entry in based_entries:
         idx = entry.get("based_index")
@@ -378,7 +377,7 @@ def sync_factors_from_task(
                 if code_bytes:
                     downloaded_codes[relpath] = _decode_code_bytes(code_bytes)
             except Exception as e:
-                logger.warning(f"[{task_id}] 下载 based_factor_{idx} 失败: {e}")
+                raise RuntimeError(f"[{task_id}] 下载 based_factor_{idx} 失败: {e}") from e
 
     # 4. 从 RDAgent aligned API 获取每个因子的 formulation/description/variables/source_code
     # aligned API 返回每个因子独立的完整代码（source_code），比从共享 factor.py 提取更准确
@@ -396,15 +395,18 @@ def sync_factors_from_task(
                 }
             logger.info(f"[{task_id}] 从 aligned API 获取到 {len(aligned_factor_details)} 个因子的 formulation/description/source_code")
         else:
-            logger.warning(f"[{task_id}] aligned API 返回失败: {aligned_resp.get('error', 'unknown')}")
+            raise RuntimeError(f"[{task_id}] aligned API 返回失败: {aligned_resp.get('error', 'unknown') if aligned_resp else 'empty'}")
+    except RuntimeError:
+        raise
     except Exception as e:
-        logger.warning(f"[{task_id}] 调用 aligned API 获取因子详情失败（将回退到代码注释提取）: {e}")
+        raise RuntimeError(f"[{task_id}] 调用 aligned API 获取因子详情失败: {e}") from e
 
     # 5. 构造入库数据并执行 UPSERT
     now_utc = datetime.now(timezone.utc)
     inserted = 0
     updated = 0
     dedup_skipped = 0
+    errors: List[str] = []
 
     for i, fname in enumerate(sota_factor_names):
         try:
@@ -436,6 +438,17 @@ def sync_factors_from_task(
             asset_path_value: str = ""
             if task_dir:
                 factor_file = Path(task_dir) / "factors" / f"{fname}.py"
+                if not factor_file.exists():
+                    # 模糊匹配：parquet 名可能是英文，文件名可能是中文（含英文括号）
+                    factors_dir = Path(task_dir) / "factors"
+                    if factors_dir.exists():
+                        normalized = _normalize_factor_name_static(fname)
+                        candidates = [f for f in factors_dir.glob("*.py")
+                                      if normalized in f.stem or fname in f.stem]
+                        if candidates:
+                            factor_file = candidates[0]
+                            logger.info(f"[{task_id}] 因子 {fname} 精确匹配失败，模糊匹配到: {factor_file.name}")
+
                 if factor_file.exists():
                     full_code_from_file = factor_file.read_text(encoding="utf-8")
                     # 存储相对于 AIstock 项目根目录的相对路径（跨平台兼容）
@@ -448,7 +461,7 @@ def sync_factors_from_task(
                         asset_path_value = str(factor_file)
                     logger.info(f"[{task_id}] 因子 {fname} 从文件系统读取完整源码: {len(full_code_from_file)} chars, path={asset_path_value}")
                 else:
-                    logger.warning(f"[{task_id}] 因子 {fname} 文件不存在: {factor_file}")
+                    logger.warning(f"[{task_id}] 因子 {fname} 文件不存在（精确+模糊均未匹配）: {factor_file}")
 
             # 提取表达式（仅用于 expression 字段，不影响 code_text）
             core_code = ""
@@ -481,7 +494,9 @@ def sync_factors_from_task(
                             expression = _extract_factor_expression(code_for_factor, generic_name)
 
             # code_text 优先使用文件系统中的完整源代码；文件不存在时回退到 API 返回的代码
-            code_text_value = full_code_from_file if full_code_from_file else (code_for_factor or None)
+            code_text_value = full_code_from_file if full_code_from_file else code_for_factor
+            if not code_text_value:
+                raise ValueError(f"[{task_id}] 因子 {fname} 无任何代码来源（文件系统和 API 均为空）")
 
             # 计算去重哈希
             dedup_hash = compute_factor_dedup_hash(code_for_factor, fname) if code_for_factor else None
@@ -574,6 +589,7 @@ def sync_factors_from_task(
             err_msg = f"因子 {fname} 入库失败: {e}"
             errors.append(err_msg)
             logger.error(f"[{task_id}] {err_msg}")
+            continue
 
     logger.info(f"[{task_id}] 因子入库完成: {inserted} 入库, {dedup_skipped} 去重跳过, {len(errors)} 错误")
 
@@ -581,6 +597,212 @@ def sync_factors_from_task(
         ok=len(errors) == 0,
         task_id=task_id,
         total_sota_factors=len(sota_factor_names),
+        inserted=inserted,
+        updated=updated,
+        dedup_skipped=dedup_skipped,
+        errors=errors,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Loop 因子手动同步
+# ---------------------------------------------------------------------------
+
+def sync_factors_from_loop(
+    task_id: str,
+    loop_id: int,
+    loop_factors_data: JsonDict,
+    task_dir: Optional[str] = None,
+) -> FactorSyncResult:
+    """将指定 Loop 的因子入库到 aistock_factor_catalog。
+
+    与 sync_factors_from_task 复用相同的去重和代码解析逻辑，
+    但数据源来自 RDAgent API 的 extract_loop_factors 返回值。
+
+    Args:
+        task_id: Task ID
+        loop_id: Loop 索引 (0-based)
+        loop_factors_data: RDAgent API /v2/{task_id}/loops/{loop_id}/factors 响应
+        task_dir: AIstock 侧 task 资产目录路径 (可选)
+    """
+    errors: List[str] = []
+    factors = loop_factors_data.get("factors", {})
+    loop_metrics = loop_factors_data.get("loop_metrics", {})
+
+    if not factors:
+        return FactorSyncResult(
+            ok=True, task_id=task_id, total_sota_factors=0,
+            inserted=0, updated=0, dedup_skipped=0, errors=[],
+        )
+
+    factor_names = list(factors.keys())
+    logger.info(
+        f"[{task_id}] Loop {loop_id} 手动同步: {len(factor_names)} 个因子"
+    )
+
+    now_utc = datetime.now(timezone.utc)
+    inserted = 0
+    updated = 0
+    dedup_skipped = 0
+    source_loop_tag = f"loop_{loop_id}_manual_sync"
+
+    for i, fname in enumerate(factor_names):
+        try:
+            finfo = factors[fname]
+            code_for_factor = finfo.get("source_code", "") or ""
+            formulation = finfo.get("factor_formulation", "")
+            description = finfo.get("factor_description", "")
+
+            # 构建 expression
+            expression = None
+            if formulation and description:
+                expression = f"{formulation} | {description}"
+            elif formulation:
+                expression = formulation
+            elif description:
+                expression = description
+
+            # 如果没有从 API 获得表达式，尝试从代码提取
+            if not expression and code_for_factor:
+                expression = _extract_factor_expression(code_for_factor, fname)
+
+            # 计算去重哈希
+            dedup_hash = compute_factor_dedup_hash(code_for_factor, fname) if code_for_factor else None
+
+            # 去重检查
+            dedup_group_id = None
+            is_dedup_primary = True
+            if dedup_hash:
+                dedup_match = check_factor_dedup(dedup_hash, fname)
+                if dedup_match:
+                    dedup_group_id = dedup_match.get("dedup_group_id") or str(uuid.uuid4())[:12]
+                    is_dedup_primary = False
+                    logger.info(
+                        f"[{task_id}] Loop {loop_id} 因子 {fname} 与 "
+                        f"{dedup_match['matched_factor_name']} 代码哈希重复"
+                    )
+                else:
+                    dedup_group_id = str(uuid.uuid4())[:12]
+
+            # 回测指标来自 Loop 整体 metrics
+            ann_ret = loop_metrics.get("annualized_return")
+            max_dd = loop_metrics.get("max_drawdown")
+            info_ratio = loop_metrics.get("information_ratio")
+            ic_val = loop_metrics.get("ic")
+
+            # 保存因子代码文件到 task_dir (如果提供)
+            code_text_value = code_for_factor or None
+            asset_path_value = None
+            if task_dir and code_for_factor:
+                factors_dir = Path(task_dir) / "factors"
+                factors_dir.mkdir(parents=True, exist_ok=True)
+                factor_file = factors_dir / f"{fname}.py"
+                factor_file.write_text(code_for_factor, encoding="utf-8")
+                try:
+                    aistock_root = Path(task_dir).parent.parent.parent
+                    asset_path_value = factor_file.relative_to(aistock_root).as_posix()
+                except ValueError:
+                    asset_path_value = str(factor_file)
+                logger.info(f"[{task_id}] Loop {loop_id} 因子 {fname} 代码已保存: {factor_file}")
+
+            perf_metrics_json = json.dumps(loop_metrics, ensure_ascii=False) if loop_metrics else None
+
+            # UPSERT 到 aistock_factor_catalog
+            sql = """
+                INSERT INTO aistock_factor_catalog (
+                    factor_name, source, catalog_version, generated_at_utc, catalog_source,
+                    expression, is_sota_factor, first_sota_task_id,
+                    source_task_id, source_code_relpath, source_code_origin,
+                    source_loop_tag, source_index,
+                    ic, annualized_return, max_drawdown, sharpe,
+                    performance_metrics, best_performance_ann_ret, best_performance_sharpe,
+                    dedup_hash, dedup_group_id, is_dedup_primary, code_text, asset_path
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (factor_name, source) DO UPDATE SET
+                    catalog_version = EXCLUDED.catalog_version,
+                    generated_at_utc = EXCLUDED.generated_at_utc,
+                    expression = COALESCE(EXCLUDED.expression, aistock_factor_catalog.expression),
+                    source_task_id = EXCLUDED.source_task_id,
+                    source_code_relpath = EXCLUDED.source_code_relpath,
+                    source_code_origin = EXCLUDED.source_code_origin,
+                    source_loop_tag = EXCLUDED.source_loop_tag,
+                    source_index = EXCLUDED.source_index,
+                    ic = EXCLUDED.ic,
+                    annualized_return = EXCLUDED.annualized_return,
+                    max_drawdown = EXCLUDED.max_drawdown,
+                    sharpe = EXCLUDED.sharpe,
+                    performance_metrics = EXCLUDED.performance_metrics,
+                    best_performance_ann_ret = EXCLUDED.best_performance_ann_ret,
+                    best_performance_sharpe = EXCLUDED.best_performance_sharpe,
+                    first_sota_task_id = COALESCE(aistock_factor_catalog.first_sota_task_id, EXCLUDED.first_sota_task_id),
+                    dedup_hash = COALESCE(EXCLUDED.dedup_hash, aistock_factor_catalog.dedup_hash),
+                    dedup_group_id = COALESCE(EXCLUDED.dedup_group_id, aistock_factor_catalog.dedup_group_id),
+                    is_dedup_primary = EXCLUDED.is_dedup_primary,
+                    code_text = COALESCE(EXCLUDED.code_text, aistock_factor_catalog.code_text),
+                    asset_path = COALESCE(EXCLUDED.asset_path, aistock_factor_catalog.asset_path)
+            """
+
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, (
+                        fname, "rdagent_task_sync", "loop_sync_v1", now_utc, "rdagent_loop_manual_sync",
+                        expression, True, task_id,
+                        task_id, f"factors/{fname}.py", "loop_manual_sync",
+                        source_loop_tag, i,
+                        ic_val, ann_ret, max_dd, info_ratio,
+                        perf_metrics_json, ann_ret, info_ratio,
+                        dedup_hash, dedup_group_id, is_dedup_primary,
+                        code_text_value,
+                        asset_path_value,
+                    ))
+                    inserted += 1
+
+            logger.info(
+                f"[{task_id}] Loop {loop_id} 因子 {fname} 入库成功 "
+                f"(ic={ic_val}, ann_ret={ann_ret})"
+            )
+
+        except Exception as e:
+            err_msg = f"Loop {loop_id} 因子 {fname} 入库失败: {e}"
+            errors.append(err_msg)
+            logger.error(f"[{task_id}] {err_msg}")
+
+    # 更新 aistock_task_catalog.sota_factors_count
+    if inserted > 0:
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE aistock_task_catalog
+                        SET sota_factors_count = COALESCE(sota_factors_count, 0) + %s
+                        WHERE task_id = %s
+                    """, (inserted, task_id))
+                    if cur.rowcount > 0:
+                        logger.info(f"[{task_id}] sota_factors_count += {inserted}")
+                    else:
+                        logger.warning(f"[{task_id}] aistock_task_catalog 中未找到该 task")
+        except Exception as e:
+            errors.append(f"更新 sota_factors_count 失败: {e}")
+            logger.error(f"[{task_id}] 更新 sota_factors_count 失败: {e}")
+
+    logger.info(
+        f"[{task_id}] Loop {loop_id} 因子同步完成: "
+        f"{inserted} 入库, {dedup_skipped} 去重跳过, {len(errors)} 错误"
+    )
+
+    return FactorSyncResult(
+        ok=len(errors) == 0,
+        task_id=task_id,
+        total_sota_factors=len(factor_names),
         inserted=inserted,
         updated=updated,
         dedup_skipped=dedup_skipped,

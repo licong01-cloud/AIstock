@@ -1,0 +1,15 @@
+process_names:
+  # rdagent 主进程 (fin_quant / fin_factor)
+  - name: "rdagent_{{.Matches.rdtype}}"
+    cmdline:
+      - 'rdagent.*\s+fin_(?P<rdtype>\w+)'
+
+  # qlib qrun 训练子进程
+  - name: "qlib_qrun"
+    cmdline:
+      - 'qrun'
+
+  # Python 通用 (捕获所有 python 进程作为兜底)
+  - name: "{{.Comm}}"
+    cmdline:
+      - 'python'

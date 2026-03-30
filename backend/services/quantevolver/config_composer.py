@@ -36,34 +36,53 @@ QE_WORKSPACE_WSL = os.getenv(
     "/mnt/f/Dev/RD-Agent-main/qe_workspace"
 )
 
+# ── QE 专用程序目录（模板文件、脚本等，独立于 RD-Agent 核心代码） ──
+QE_PROGRAMS_WIN = Path(os.getenv(
+    "QE_PROGRAMS_WIN",
+    "F:/Dev/RD-Agent-main/qe_programs"
+))
+QE_PROGRAMS_WSL = os.getenv(
+    "QE_PROGRAMS_WSL",
+    "/mnt/f/Dev/RD-Agent-main/qe_programs"
+)
+
 # 旧的AIstock侧实验目录（保留兼容）
 QE_EXPERIMENTS_ROOT = Path(os.getenv(
     "QE_EXPERIMENTS_ROOT",
     "f:/Dev/AIstock/rdagent_assets/qe_experiments"
 ))
 
-# ── RDAgent 因子数据目录（包含 daily_pv.h5, static_factors.parquet 等） ──
+# ── RDAgent 因子数据目录（与 FACTOR_CoSTEER_data_folder 保持一致，包含 sw2 行业数据） ──
 RDAGENT_FACTOR_DATA_WSL = os.getenv(
     "RDAGENT_FACTOR_DATA_WSL",
-    "/mnt/f/Dev/RD-Agent-main/git_ignore_folder/factor_implementation_source_data"
+    "/mnt/f/dev/RD-Agent-main/git_ignore_folder/factor_implementation_source_data"
 )
 
 # ── QLib 数据路径（与 RDAgent conf_baseline.yaml 一致） ──
 QLIB_DATA_PATH_WSL = os.getenv(
     "QLIB_DATA_PATH_WSL",
-    "/mnt/f/Dev/AIstock/qlib_bin/qlib_bin_20251209"
+    "/home/lc999/data/qlib_bin"
+)
+QLIB_MINUTE_PATH_WSL = os.getenv(
+    "QLIB_MINUTE_PATH_WSL",
+    "/home/lc999/data/qlib_minute_bin"
 )
 
-# ── RDAgent 默认数据时间段（与 conf_baseline.yaml 一致，基于 2018-08-01~2025-12-01 数据集） ──
+# ── RDAgent 源码根目录（用于子进程 PYTHONPATH，执行节点 .env 中定义） ──
+RDAGENT_CODE_ROOT_WSL = os.getenv(
+    "QLIB_RDAGENT_ROOT_WSL",
+    "/mnt/f/Dev/RD-Agent-main"
+)
+
+# ── RDAgent 默认数据时间段（与 rdagent conf_baseline.yaml 保持一致） ──
 RDAGENT_DEFAULT_DATA_SPLIT = {
     "train_start": "2018-08-01",
     "train_end": "2022-12-31",
     "valid_start": "2023-01-01",
     "valid_end": "2024-06-30",
     "test_start": "2024-07-01",
-    "test_end": "2025-12-01",
-    # 回测截止日比数据截止日提前几天，避免 Qlib calendar_index+1 越界
-    "backtest_end": "2025-11-28",
+    "test_end": "2026-03-10",
+    # backtest_end 不再硬编码，在 compose 时从 test_end 自动计算 -7 天
 }
 
 # ── RDAgent 默认 LGBModel 超参数（与 conf_baseline.yaml 一致） ──
@@ -78,36 +97,85 @@ RDAGENT_DEFAULT_LGB_KWARGS = {
     "lambda_l2": 580.9768,
     "max_depth": 8,
     "num_leaves": 210,
-    "num_threads": 20,
+    "num_threads": 24,
 }
 
 
 class ConfigComposer:
     """配置组装器。"""
 
-    _rdagent_config_cache: Optional[Dict[str, str]] = None
+    _workspace_config_cache: Optional[Dict[str, str]] = None
 
-    def _fetch_rdagent_config(self) -> Dict[str, str]:
-        """
-        从 RDAgent /config 端点获取工作区配置（路径等），带类级缓存。
-        消除对 RDAgent 内部路径的硬编码依赖。
-        """
-        if ConfigComposer._rdagent_config_cache is not None:
-            return ConfigComposer._rdagent_config_cache
+    @staticmethod
+    def _validate_data_split(data_split: Dict[str, str]):
+        """校验 data_split 日期合法性。"""
+        from datetime import datetime
+        required = ["train_start", "train_end", "valid_start", "valid_end", "test_start", "test_end"]
+        for key in required:
+            if key not in data_split:
+                raise ValueError(f"data_split 缺少必填字段: {key}")
+            try:
+                datetime.strptime(data_split[key], "%Y-%m-%d")
+            except ValueError as e:
+                raise ValueError(f"data_split[{key}] 日期格式错误: {data_split[key]}，应为 YYYY-MM-DD") from e
 
-        rdagent_base = os.getenv("RDAGENT_API_BASE", "http://localhost:9000/api/v1/qe_workspace")
-        try:
-            resp = httpx.get(f"{rdagent_base}/config", timeout=10.0)
-            resp.raise_for_status()
-            ConfigComposer._rdagent_config_cache = resp.json()
-        except Exception as e:
-            logger.warning(f"Failed to fetch RDAgent config, falling back to env vars: {e}")
-            ConfigComposer._rdagent_config_cache = {
-                "workspace_base": QE_WORKSPACE_WSL,
-                "factor_data_dir": RDAGENT_FACTOR_DATA_WSL,
-                "qlib_data_path": QLIB_DATA_PATH_WSL,
-            }
-        return ConfigComposer._rdagent_config_cache
+        dates = {k: datetime.strptime(data_split[k], "%Y-%m-%d") for k in required}
+        if dates["train_end"] > dates["valid_start"]:
+            raise ValueError(f"train_end ({data_split['train_end']}) 不能晚于 valid_start ({data_split['valid_start']})")
+        if dates["valid_end"] > dates["test_start"]:
+            raise ValueError(f"valid_end ({data_split['valid_end']}) 不能晚于 test_start ({data_split['test_start']})")
+        if dates["test_end"] > datetime.now():
+            raise ValueError(f"test_end ({data_split['test_end']}) 不能超过当前日期")
+
+    @staticmethod
+    def _ensure_backtest_end(data_split: Dict[str, str]):
+        """从 test_end 自动派生 backtest_end（-7 天），确保回测结束日早于 Qlib 日历最后一条记录。
+
+        Qlib 回测在每步执行 calendar[index+1]，若 backtest_end 是日历最后一天则越界。
+        用 -7 自然日（约 5 个交易日）确保安全边距，跨过周末和节假日。
+        """
+        from datetime import datetime, timedelta
+        if "test_end" in data_split:
+            test_end_dt = datetime.strptime(data_split["test_end"], "%Y-%m-%d")
+            data_split["backtest_end"] = (test_end_dt - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    def _fetch_workspace_config(self) -> Dict[str, str]:
+        """
+        获取 QE 工作区路径配置。
+        所有路径直接从 AIstock 侧 .env 环境变量读取，不再依赖 RDAgent API。
+        """
+        if ConfigComposer._workspace_config_cache is not None:
+            return ConfigComposer._workspace_config_cache
+
+        ConfigComposer._workspace_config_cache = {
+            "workspace_base": QE_WORKSPACE_WSL,
+            "factor_data_dir": RDAGENT_FACTOR_DATA_WSL,
+            "qlib_data_path": QLIB_DATA_PATH_WSL,
+        }
+        return ConfigComposer._workspace_config_cache
+
+    def _generate_unique_experiment_id(self) -> str:
+        """生成基于日期时间的唯一实验ID，格式: qe_YYYYMMDD_HHMMSS"""
+        from datetime import datetime
+        base_id = f"qe_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM qe_experiments WHERE experiment_id = %s",
+                    (base_id,),
+                )
+                if not cur.fetchone():
+                    return base_id
+                # 极端冲突：追加序号
+                for i in range(2, 100):
+                    candidate = f"{base_id}_{i}"
+                    cur.execute(
+                        "SELECT 1 FROM qe_experiments WHERE experiment_id = %s",
+                        (candidate,),
+                    )
+                    if not cur.fetchone():
+                        return candidate
+        raise RuntimeError(f"无法生成唯一实验ID: {base_id}")
 
     def compose_experiment(
         self,
@@ -140,9 +208,8 @@ class ConfigComposer:
         Returns:
             包含conf.yaml内容、factor.py内容、WSL命令、实验目录等信息
         """
-        experiment_id = str(uuid.uuid4())[:8]
-        if not experiment_name:
-            experiment_name = f"qe_exp_{experiment_id}"
+        experiment_id = self._generate_unique_experiment_id()
+        experiment_name = experiment_id  # 两者统一
 
         # 创建实验目录（在 AIstock 侧本地保存一份）
         exp_dir = QE_EXPERIMENTS_ROOT / experiment_name
@@ -154,6 +221,8 @@ class ConfigComposer:
         # 默认数据划分（与 RDAgent conf_baseline.yaml 一致）
         if not data_split:
             data_split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
+        self._validate_data_split(data_split)
+        self._ensure_backtest_end(data_split)
 
         # 获取因子信息
         factors_info = self._get_factors_info(factor_names, factor_sources)
@@ -197,6 +266,9 @@ class ConfigComposer:
             disable_alpha158 = custom_params.get("disable_alpha158", False)
             quick_train = custom_params.get("quick_train", False)
 
+        # backtest_freq: "1min"（分钟线，默认）或 "day"（日线回退模式）
+        backtest_freq = (custom_params or {}).get("backtest_freq", "1min")
+
         # 生成conf.yaml
         conf_yaml = self._compose_conf_yaml(
             factors_info=factors_info,
@@ -209,6 +281,7 @@ class ConfigComposer:
             has_alpha360=has_alpha360,
             disable_alpha158=disable_alpha158,
             quick_train=quick_train,
+            backtest_freq=backtest_freq,
         )
 
         # 生成因子文件和预处理脚本（如果有自定义因子）
@@ -238,6 +311,27 @@ class ConfigComposer:
         # 复制read_exp_res.py模板
         self._copy_read_exp_res(exp_dir)
 
+        # 复制 qrun_limit runner（分钟线使用 qrun_limit_minute.py，日线使用 qrun_limit.py）
+        scripts_dir = Path(__file__).parent.parent.parent.parent / "scripts"
+        import shutil
+        if backtest_freq != "day":
+            # 分钟线：复制 qrun_limit_minute.py（含内存 patch + benchmark 注入）
+            minute_src = scripts_dir / "qrun_limit_minute.py"
+            if minute_src.exists():
+                shutil.copy2(minute_src, exp_dir / "qrun_limit_minute.py")
+            # 复制 TailTWAPWithLimitStrategy（分钟级执行策略）
+            twap_src = scripts_dir / "tail_twap_strategy.py"
+            if twap_src.exists():
+                shutil.copy2(twap_src, exp_dir / "tail_twap_strategy.py")
+            # benchmark parquet
+            bench_src = scripts_dir / "benchmark_sh000300.parquet"
+            if bench_src.exists():
+                shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
+        # 始终复制日线版作为 fallback
+        qrun_limit_src = scripts_dir / "qrun_limit.py"
+        if qrun_limit_src.exists():
+            shutil.copy2(qrun_limit_src, exp_dir / "qrun_limit.py")
+
         # 如果模型使用自定义源码，写入实验目录（model.py + model_cls导出）
         if model_info and model_info.get("code_text"):
             self._write_custom_model(exp_dir, model_info)
@@ -253,8 +347,9 @@ class ConfigComposer:
         wsl_path = f"{QE_WORKSPACE_WSL}/{experiment_name}"
         wsl_command = self._generate_wsl_command(
             wsl_path, has_custom_factors=has_custom_factors,
-            use_custom_model=has_custom_factors and model_info and bool(model_info.get("code_text")),
+            use_custom_model=bool(model_info and model_info.get("code_text")),
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
+            backtest_freq=backtest_freq,
         )
 
         # 保存实验记录到数据库
@@ -299,6 +394,10 @@ class ConfigComposer:
         experiment_name: Optional[str] = None,
         evolution_goal: Optional[str] = None,
         llm_hypothesis: Optional[Dict[str, Any]] = None,
+        skip_db_save: bool = False,
+        execution_algo: Optional[str] = None,
+        execution_algo_params: Optional[Dict[str, Any]] = None,
+        strategy_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """组装实验配置到内存字典，不写入磁盘。
 
@@ -323,6 +422,8 @@ class ConfigComposer:
 
         if not data_split:
             data_split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
+        self._validate_data_split(data_split)
+        self._ensure_backtest_end(data_split)
 
         # ── 获取因子 / 模型 / 策略信息 ──
         factors_info = self._get_factors_info(factor_names, factor_sources)
@@ -353,8 +454,11 @@ class ConfigComposer:
             disable_alpha158 = custom_params.get("disable_alpha158", False)
             quick_train = custom_params.get("quick_train", False)
 
+        # backtest_freq: "1min"（分钟线，默认）或 "day"（日线回退模式）
+        backtest_freq = (custom_params or {}).get("backtest_freq", "1min")
+
         # ── 从 RDAgent API 获取动态路径 ──
-        rdagent_cfg = self._fetch_rdagent_config()
+        rdagent_cfg = self._fetch_workspace_config()
         workspace_wsl = rdagent_cfg.get("workspace_base", QE_WORKSPACE_WSL)
         qlib_data_path = rdagent_cfg.get("qlib_data_path", QLIB_DATA_PATH_WSL)
         factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
@@ -375,6 +479,10 @@ class ConfigComposer:
             disable_alpha158=disable_alpha158,
             quick_train=quick_train,
             qlib_data_path=qlib_data_path,
+            backtest_freq=backtest_freq,
+            execution_algo=execution_algo,
+            execution_algo_params=execution_algo_params,
+            initial_cash=(strategy_params or {}).get("initial_cash"),
         )
         experiment_files["conf.yaml"] = conf_yaml
 
@@ -400,6 +508,27 @@ class ConfigComposer:
         # 4) read_exp_res.py
         experiment_files["read_exp_res.py"] = self._get_read_exp_res_content()
 
+        # 4b) qrun_limit runner（分钟线/日线双模板）
+        scripts_dir = Path(__file__).parent.parent.parent.parent / "scripts"
+        qrun_limit_path = scripts_dir / "qrun_limit.py"
+        if qrun_limit_path.exists():
+            experiment_files["qrun_limit.py"] = qrun_limit_path.read_text(encoding="utf-8")
+        if backtest_freq != "day":
+            minute_path = scripts_dir / "qrun_limit_minute.py"
+            if minute_path.exists():
+                experiment_files["qrun_limit_minute.py"] = minute_path.read_text(encoding="utf-8")
+            # TailTWAPWithLimitStrategy（分钟级执行策略）
+            twap_path = scripts_dir / "tail_twap_strategy.py"
+            if twap_path.exists():
+                experiment_files["tail_twap_strategy.py"] = twap_path.read_text(encoding="utf-8")
+            # benchmark parquet 是二进制文件，需要特殊处理
+            bench_path = scripts_dir / "benchmark_sh000300.parquet"
+            if bench_path.exists():
+                import base64
+                experiment_files["benchmark_sh000300.parquet.b64"] = base64.b64encode(
+                    bench_path.read_bytes()
+                ).decode("ascii")
+
         # 5) model.py（自定义模型）
         if model_info and model_info.get("code_text"):
             experiment_files["model.py"] = self._build_model_py_content(model_info)
@@ -413,23 +542,26 @@ class ConfigComposer:
         wsl_command = self._generate_wsl_command(
             wsl_path,
             has_custom_factors=has_custom_factors,
-            use_custom_model=has_custom_factors and model_info and bool(model_info.get("code_text")),
+            use_custom_model=bool(model_info and model_info.get("code_text")),
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
+            mode="auto",
+            backtest_freq=backtest_freq,
         )
 
         # ── 保存 DB 记录（不写文件） ──
-        self._save_experiment_record(
-            experiment_id=experiment_id,
-            experiment_name=experiment_name,
-            exp_dir=f"<in_memory>/{experiment_name}",
-            factor_names=factor_names,
-            model_id=model_id,
-            strategy_id=strategy_id,
-            data_split=data_split,
-            custom_params=custom_params,
-            evolution_goal=evolution_goal,
-            llm_hypothesis=llm_hypothesis,
-        )
+        if not skip_db_save:
+            self._save_experiment_record(
+                experiment_id=experiment_id,
+                experiment_name=experiment_name,
+                exp_dir=f"<in_memory>/{experiment_name}",
+                factor_names=factor_names,
+                model_id=model_id,
+                strategy_id=strategy_id,
+                data_split=data_split,
+                custom_params=custom_params,
+                evolution_goal=evolution_goal,
+                llm_hypothesis=llm_hypothesis,
+            )
 
         return {
             "experiment_files": experiment_files,
@@ -539,7 +671,7 @@ class ConfigComposer:
                     reader = csv.DictReader(f)
                     results["qlib_res"] = list(reader)
             except Exception as e:
-                results["qlib_res_error"] = str(e)
+                raise RuntimeError(f"读取qlib_res.csv失败: {e}") from e
 
         # 读取回测指标
         metrics = self._extract_metrics_from_results(exp_dir)
@@ -552,8 +684,7 @@ class ConfigComposer:
             try:
                 self._save_factor_experiment_metrics(experiment_id, metrics)
             except Exception as e:
-                logger.error(f"保存因子实验指标失败: {e}")
-                results["factor_metrics_error"] = str(e)
+                raise RuntimeError(f"保存因子实验指标失败: {e}") from e
 
         results["ok"] = True
         results["experiment_id"] = experiment_id
@@ -574,7 +705,12 @@ class ConfigComposer:
                     SELECT experiment_id, experiment_name, status,
                            factor_names, model_id, strategy_id,
                            workspace_path, wsl_command,
-                           result_metrics, created_at, updated_at
+                           result_metrics, qe_task_id, qe_loop_id,
+                           loop_index, parent_experiment_id, is_evolution_loop,
+                           ic, icir, rank_ic, rank_icir,
+                           annualized_return, max_drawdown, information_ratio,
+                           annualized_return_no_cost, max_drawdown_no_cost, information_ratio_no_cost,
+                           created_at, updated_at
                     FROM qe_experiments
                     ORDER BY created_at DESC
                     LIMIT %s OFFSET %s
@@ -624,14 +760,14 @@ class ConfigComposer:
             try:
                 import json as _json
                 data_split = _json.loads(data_split)
-            except Exception:
-                data_split = None
+            except Exception as e:
+                raise ValueError(f"data_split JSON 解析失败: {data_split!r}") from e
         if isinstance(custom_params, str):
             try:
                 import json as _json
                 custom_params = _json.loads(custom_params)
-            except Exception:
-                custom_params = None
+            except Exception as e:
+                raise ValueError(f"custom_params JSON 解析失败: {custom_params!r}") from e
 
         # 创建实验目录 (本地)
         exp_dir = QE_EXPERIMENTS_ROOT / experiment_name
@@ -640,6 +776,8 @@ class ConfigComposer:
         # 默认数据划分
         if not data_split:
             data_split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
+        self._validate_data_split(data_split)
+        self._ensure_backtest_end(data_split)
 
         # 获取因子信息
         factors_info = self._get_factors_info(factor_names)
@@ -677,6 +815,9 @@ class ConfigComposer:
             disable_alpha158 = custom_params.get("disable_alpha158", False)
             quick_train = custom_params.get("quick_train", False)
 
+        # backtest_freq: "1min"（分钟线，默认）或 "day"（日线回退模式）
+        backtest_freq = (custom_params or {}).get("backtest_freq", "1min")
+
         # 生成conf.yaml
         conf_yaml = self._compose_conf_yaml(
             factors_info=factors_info,
@@ -689,6 +830,7 @@ class ConfigComposer:
             has_alpha360=has_alpha360,
             disable_alpha158=disable_alpha158,
             quick_train=quick_train,
+            backtest_freq=backtest_freq,
         )
 
         # 生成因子文件和预处理脚本
@@ -710,8 +852,30 @@ class ConfigComposer:
             prepare_path = exp_dir / "prepare_factors.py"
             prepare_path.write_text(prepare_factors_py, encoding="utf-8")
 
+        # 如果使用 DynamicFactorsOnlyLoader，复制 QE 独立的 loader 文件到实验目录
+        if has_custom_factors and disable_alpha158:
+            self._copy_qe_custom_loaders(exp_dir)
+
         # 复制read_exp_res.py模板
         self._copy_read_exp_res(exp_dir)
+
+        # 复制 qrun_limit runner（分钟线使用 qrun_limit_minute.py，日线使用 qrun_limit.py）
+        scripts_dir = Path(__file__).parent.parent.parent.parent / "scripts"
+        import shutil
+        if backtest_freq != "day":
+            minute_src = scripts_dir / "qrun_limit_minute.py"
+            if minute_src.exists():
+                shutil.copy2(minute_src, exp_dir / "qrun_limit_minute.py")
+            # TailTWAPWithLimitStrategy（分钟级执行策略）
+            twap_src = scripts_dir / "tail_twap_strategy.py"
+            if twap_src.exists():
+                shutil.copy2(twap_src, exp_dir / "tail_twap_strategy.py")
+            bench_src = scripts_dir / "benchmark_sh000300.parquet"
+            if bench_src.exists():
+                shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
+        qrun_limit_src = scripts_dir / "qrun_limit.py"
+        if qrun_limit_src.exists():
+            shutil.copy2(qrun_limit_src, exp_dir / "qrun_limit.py")
 
         # 如果模型使用自定义源码
         if model_info and model_info.get("code_text"):
@@ -728,8 +892,9 @@ class ConfigComposer:
         wsl_path = f"{QE_WORKSPACE_WSL}/{experiment_name}"
         wsl_command = self._generate_wsl_command(
             wsl_path, has_custom_factors=has_custom_factors,
-            use_custom_model=has_custom_factors and model_info and bool(model_info.get("code_text")),
+            use_custom_model=bool(model_info and model_info.get("code_text")),
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
+            backtest_freq=backtest_freq,
         )
 
         # 更新数据库中的WSL命令和状态
@@ -768,6 +933,10 @@ class ConfigComposer:
         disable_alpha158: bool = False,
         quick_train: bool = False,  # 快速训练模式：训练时间缩短到20%
         qlib_data_path: Optional[str] = None,
+        backtest_freq: str = "1min",  # "1min" 分钟线回测 | "day" 日线回测
+        execution_algo: Optional[str] = None,  # None/"TWAP" → TailTWAPWithLimitStrategy | "CLOSE_PRICE" → CloseExecutionStrategy
+        execution_algo_params: Optional[Dict[str, Any]] = None,
+        initial_cash: Optional[int] = None,  # 初始资金，None → 100000000
     ) -> str:
         """生成QLib conf.yaml内容。
 
@@ -802,22 +971,35 @@ class ConfigComposer:
                 if isinstance(thp, str):
                     thp = json.loads(thp)
 
+                # batch_size 对齐 Qlib 官方 (2000-8000) 和 QE 数据库验证结果:
+                # batch=4096 → IC=0.051/AnnRet=89% (TOP1/TOP2 SOTA)
+                # batch=16384+ → 梯度过度平滑，弱信号学习困难
+                _DEFAULT_BATCH_SIZE = 4096
+
+                raw_bs = thp.get("batch_size")
+                if raw_bs is not None:
+                    if isinstance(raw_bs, str):
+                        raw_bs = int(raw_bs)
+                    gpu_batch_size = raw_bs
+                else:
+                    gpu_batch_size = _DEFAULT_BATCH_SIZE
+
                 model_kwargs = {
-                    "n_epochs": thp.get("n_epochs", 30),
-                    "lr": thp.get("lr", "1e-3"),
-                    "early_stop": thp.get("early_stop", 5),
-                    "batch_size": thp.get("batch_size", 4096),
-                    "weight_decay": thp.get("weight_decay", "1e-4"),
+                    "n_epochs": thp.get("n_epochs", 200),
+                    "lr": float(thp.get("lr", 1e-3)) if isinstance(thp.get("lr", 1e-3), str) else thp.get("lr", 1e-3),
+                    "early_stop": thp.get("early_stop", 20),
+                    "batch_size": gpu_batch_size,
+                    "weight_decay": float(thp.get("weight_decay", 1e-4)) if isinstance(thp.get("weight_decay", 1e-4), str) else thp.get("weight_decay", 1e-4),
                     "metric": "loss",
                     "loss": "mse",
-                    "n_jobs": 8,
+                    "n_jobs": 2,
                     "GPU": 0,
-                    "use_amp": True,
+                    "use_amp": False,
                     "gradient_accumulation_steps": 1,
                     "pin_memory": True,
-                    "prefetch_factor": 6,
-                    "persistent_workers": True,
-                    "pt_model_uri": '"model.model_cls"',
+                    "prefetch_factor": 2,
+                    "persistent_workers": False,
+                    "pt_model_uri": "model.model_cls",
                 }
 
                 # 快速训练模式：训练时间缩短到20%
@@ -836,12 +1018,13 @@ class ConfigComposer:
                 elif model_type_raw in ("Tabular", "tabular"):
                     model_type_tag = "Tabular"
                 else:
-                    # 从模型名称推断
-                    name_lower = model_name.lower()
-                    if any(k in name_lower for k in ["transformer", "lstm", "gru", "rnn", "timeseries", "temporal"]):
-                        model_type_tag = "TimeSeries"
-                    else:
-                        model_type_tag = "Tabular"
+                    # 模型类型无法确定，记录警告并使用 Tabular 作为安全默认值
+                    # （Tabular/LGBModel 不需要 GPU 训练，风险更低）
+                    logger.warning(
+                        f"模型 '{model_name}' 的 model_type='{model_type_raw}' "
+                        f"不在已知类型中 (TimeSeries/Tabular)，标记为 Tabular"
+                    )
+                    model_type_tag = "Tabular"
 
             elif "LGB" in model_type or "LGBM" in model_type or "GBDT" in model_type:
                 model_class = "LGBModel"
@@ -851,18 +1034,94 @@ class ConfigComposer:
                     if isinstance(hp, str):
                         hp = json.loads(hp)
                     model_kwargs.update(hp)
-            elif "PTNN" in model_type or "NN" in model_type:
-                model_class = "GeneralPTNN"
-                model_module = "qlib.contrib.model.pytorch_general_nn"
-                model_kwargs = {}
+            elif "XGB" in model_type or "XGBOOST" in model_type:
+                model_class = "XGBModel"
+                model_module = "qlib.contrib.model.xgboost"
+                model_kwargs = {
+                    "n_estimators": 500,
+                    "max_depth": 8,
+                    "learning_rate": 0.05,
+                    "subsample": 0.8,
+                    "colsample_bytree": 0.8,
+                    "reg_alpha": 0.1,
+                    "reg_lambda": 1.0,
+                    "n_jobs": -1,
+                }
                 hp = model_info.get("model_hyperparameters")
                 if hp:
                     if isinstance(hp, str):
                         hp = json.loads(hp)
                     model_kwargs.update(hp)
+            elif "CATBOOST" in model_type:
+                model_class = "CatBoostModel"
+                model_module = "qlib.contrib.model.catboost_model"
+                model_kwargs = {
+                    "iterations": 500,
+                    "depth": 8,
+                    "learning_rate": 0.05,
+                    "l2_leaf_reg": 3.0,
+                    "subsample": 0.8,
+                    "verbose": 0,
+                    "task_type": "CPU",
+                }
+                hp = model_info.get("model_hyperparameters")
+                if hp:
+                    if isinstance(hp, str):
+                        hp = json.loads(hp)
+                    model_kwargs.update(hp)
+            elif "LINEAR" in model_type or "RIDGE" in model_type or "LASSO" in model_type:
+                model_class = "LinearModel"
+                model_module = "qlib.contrib.model.linear"
+                model_kwargs = {
+                    "estimator": "ridge",
+                    "alpha": 0.05,
+                }
+                hp = model_info.get("model_hyperparameters")
+                if hp:
+                    if isinstance(hp, str):
+                        hp = json.loads(hp)
+                    model_kwargs.update(hp)
+            elif "PTNN" in model_type or "NN" in model_type:
+                # 无源代码的 GeneralPTNN：必须在 model_hyperparameters 中提供 pt_model_uri
+                model_class = "GeneralPTNN"
+                model_module = "qlib.contrib.model.pytorch_general_nn"
+
+                # 提供完整的默认训练参数（数值类型，不是字符串）
+                model_kwargs = {
+                    "n_epochs": 30,
+                    "lr": 1e-3,
+                    "early_stop": 5,
+                    "batch_size": 4096,
+                    "weight_decay": 1e-4,
+                    "metric": "loss",
+                    "loss": "mse",
+                    "n_jobs": 2,
+                    "GPU": 0,
+                }
+
+                hp = model_info.get("model_hyperparameters")
+                if hp:
+                    if isinstance(hp, str):
+                        hp = json.loads(hp)
+                    # 确保 lr 和 weight_decay 是数值类型
+                    if "lr" in hp and isinstance(hp["lr"], str):
+                        hp["lr"] = float(hp["lr"])
+                    if "weight_decay" in hp and isinstance(hp["weight_decay"], str):
+                        hp["weight_decay"] = float(hp["weight_decay"])
+                    model_kwargs.update(hp)
+
+                # 检查是否提供了 pt_model_uri
+                if "pt_model_uri" not in model_kwargs:
+                    raise ValueError(
+                        f"模型类型 '{model_type}' 无源代码，必须在 model_hyperparameters 中"
+                        f"提供 pt_model_uri 参数指定模型类路径"
+                    )
             else:
-                # 未知模型类型但无源代码，回退LGBModel
-                logger.warning(f"未知模型类型 '{model_type}'，无源代码，回退到LGBModel")
+                # 未知模型类型且无源代码，无法生成配置
+                raise ValueError(
+                    f"未知模型类型 '{model_type}'，无源代码可用，"
+                    f"无法生成 Qlib 配置。请检查模型数据完整性。"
+                )
 
         # ── 策略配置 ──
         # 默认值：仅在用户未选择策略时使用 qlib 内置 TopkDropoutStrategy
@@ -873,11 +1132,11 @@ class ConfigComposer:
             "topk": 50,
             "n_drop": 5,
             "method_buy": "top",
-            "hold_thresh": 1,
+            "hold_thresh": 2,
             "method_sell": "bottom",
             "risk_degree": 0.95,
-            "only_tradable": False,
-            "forbid_all_trade_at_limit": True,
+            "only_tradable": True,
+            "forbid_all_trade_at_limit": False,
         }
         if strategy_info:
             # 用户选择了策略 → 必须使用该策略的源代码
@@ -921,13 +1180,64 @@ class ConfigComposer:
                 for k, v in dk.items():
                     strategy_kwargs[k] = v
 
+        # ── 模型超参键白名单（始终可用，供策略安全过滤引用） ──
+        _PTNN_HP_KEYS = {
+            "n_epochs", "lr", "early_stop", "batch_size", "weight_decay",
+            "optimizer",
+        }
+        # NOTE: hidden_size, num_layers, dropout 是模型架构参数，属于 pt_model_kwargs，
+        # 由模型源码 (model.py) 硬编码，不能作为 GeneralPTNN.__init__() 的顶层参数传入。
+        _LGB_HP_KEYS = {
+            "learning_rate", "max_depth", "num_leaves", "lambda_l1", "lambda_l2",
+            "colsample_bytree", "subsample", "n_estimators", "min_child_samples",
+        }
+        _XGB_HP_KEYS = {
+            "n_estimators", "max_depth", "learning_rate", "subsample",
+            "colsample_bytree", "reg_alpha", "reg_lambda", "n_jobs",
+        }
+        _CATBOOST_HP_KEYS = {
+            "iterations", "depth", "learning_rate", "l2_leaf_reg",
+            "subsample", "verbose", "task_type",
+        }
+        _LINEAR_HP_KEYS = {
+            "estimator", "alpha",
+        }
+        _NON_STRATEGY_PARAMS = {
+            "disable_alpha158", "disable_alpha360", "use_custom_model",
+            "model_type", "dataset_cls", "step_len", "num_timesteps", "num_features",
+            "quick_train",  # 快速训练模式：控制模型训练参数
+        } | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _LINEAR_HP_KEYS
+
         if custom_params:
-            # 过滤掉非策略参数（如 disable_alpha158 是数据加载器配置，不是策略参数）
-            _NON_STRATEGY_PARAMS = {
-                "disable_alpha158", "disable_alpha360", "use_custom_model",
-                "model_type", "dataset_cls", "step_len", "num_timesteps", "num_features",
-                "quick_train",  # 快速训练模式：控制模型训练参数
-            }
+            # ── 模型超参透传: 从 custom_params 中提取模型超参 → model_kwargs ──
+            hp_keys = set()
+            if model_class in ("GeneralPTNN",):
+                hp_keys = _PTNN_HP_KEYS
+            elif model_class in ("LGBModel",):
+                hp_keys = _LGB_HP_KEYS
+            elif model_class in ("XGBModel",):
+                hp_keys = _XGB_HP_KEYS
+            elif model_class in ("CatBoostModel",):
+                hp_keys = _CATBOOST_HP_KEYS
+            elif model_class in ("LinearModel",):
+                hp_keys = _LINEAR_HP_KEYS
+            # 也包括有自定义代码的 PTNN 模型
+            if use_custom_model and model_type_tag in ("TimeSeries", "Tabular"):
+                hp_keys = hp_keys | _PTNN_HP_KEYS
+
+            model_hp_overrides = {}
+            for key in hp_keys:
+                if key in custom_params:
+                    val = custom_params[key]
+                    # 确保 GeneralPTNN 的 lr 和 weight_decay 是数值类型
+                    if model_class == "GeneralPTNN" and key in ("lr", "weight_decay") and isinstance(val, str):
+                        val = float(val)
+                    model_hp_overrides[key] = val
+            if model_hp_overrides:
+                logger.info(f"模型超参透传: {list(model_hp_overrides.keys())} → model_kwargs")
+                model_kwargs.update(model_hp_overrides)
+
+            # 过滤掉非策略参数（含模型超参、数据加载器配置等）
             filtered_params = {k: v for k, v in custom_params.items() if k not in _NON_STRATEGY_PARAMS}
             if set(custom_params.keys()) - set(filtered_params.keys()):
                 logger.info(f"策略参数过滤: 移除非策略参数 {set(custom_params.keys()) - set(filtered_params.keys())}")
@@ -948,7 +1258,11 @@ class ConfigComposer:
         _ENHANCED_TOPK_ALLOWED_KEYS = _TOPK_DROPOUT_ALLOWED_KEYS | {
             "min_score", "max_position_ratio", "stop_loss", "max_market_cap",
         }
-        
+        # SmallCapTopkDropoutStrategy 支持的参数
+        _SMALLCAP_TOPK_ALLOWED_KEYS = _TOPK_DROPOUT_ALLOWED_KEYS | {
+            "max_market_cap",
+        }
+
         if strategy_class == "TopkDropoutStrategy":
             _removed = {k for k in strategy_kwargs if k not in _TOPK_DROPOUT_ALLOWED_KEYS}
             if _removed:
@@ -957,6 +1271,12 @@ class ConfigComposer:
                     del strategy_kwargs[k]
         elif strategy_class == "EnhancedTopkDropoutStrategy":
             _removed = {k for k in strategy_kwargs if k not in _ENHANCED_TOPK_ALLOWED_KEYS}
+            if _removed:
+                logger.warning(f"策略参数安全过滤: 移除不支持的参数 {_removed}")
+                for k in _removed:
+                    del strategy_kwargs[k]
+        elif strategy_class == "SmallCapTopkDropoutStrategy":
+            _removed = {k for k in strategy_kwargs if k not in _SMALLCAP_TOPK_ALLOWED_KEYS}
             if _removed:
                 logger.warning(f"策略参数安全过滤: 移除不支持的参数 {_removed}")
                 for k in _removed:
@@ -970,15 +1290,22 @@ class ConfigComposer:
                     del strategy_kwargs[k]
 
         # 回测截止日（避免越界）
-        backtest_end = data_split.get("backtest_end", "2025-11-28")
+        backtest_end = data_split.get("backtest_end", "2026-03-05")  # 兜底值比日历末尾安全回退 7 天
 
         # ── 生成 YAML（与 RDAgent conf_baseline.yaml 结构一致） ──
         lines = []
         lines.append("qlib_init:")
-        lines.append(f'    provider_uri: "{qlib_data_path or QLIB_DATA_PATH_WSL}"')
+        _day_uri = qlib_data_path or QLIB_DATA_PATH_WSL
+        _min_uri = QLIB_MINUTE_PATH_WSL
+        lines.append("    provider_uri:")
+        lines.append(f'        day: "{_day_uri}"')
+        lines.append(f'        1min: "{_min_uri}"')
         lines.append("    region: cn")
+        lines.append("    dataset_cache: null")
+        lines.append("    expression_cache: null")
         lines.append("")
-        lines.append("market: &market all")
+        stock_pool = (custom_params or {}).get("stock_pool", "all")
+        lines.append(f"market: &market {stock_pool}")
         lines.append("benchmark: &benchmark 000300.SH")
         lines.append("")
 
@@ -1086,8 +1413,55 @@ class ConfigComposer:
 
         lines.append("")
 
-        # port_analysis_config
+        # port_analysis_config — executor 根据 backtest_freq 切换
         lines.append("port_analysis_config: &port_analysis_config")
+        lines.append("    executor:")
+        if backtest_freq == "day":
+            # 日线模式：单层 SimulatorExecutor
+            lines.append("        class: SimulatorExecutor")
+            lines.append("        module_path: qlib.backtest.executor")
+            lines.append("        kwargs:")
+            lines.append("            time_per_step: day")
+            lines.append("            generate_portfolio_metrics: true")
+        else:
+            # 分钟线模式：NestedExecutor + 执行算法策略
+            lines.append("        class: NestedExecutor")
+            lines.append("        module_path: qlib.backtest.executor")
+            lines.append("        kwargs:")
+            lines.append("            time_per_step: day")
+            lines.append("            inner_executor:")
+            lines.append("                class: SimulatorExecutor")
+            lines.append("                module_path: qlib.backtest.executor")
+            lines.append("                kwargs:")
+            lines.append("                    time_per_step: 1min")
+            lines.append("                    generate_portfolio_metrics: false")
+            lines.append("            inner_strategy:")
+            if execution_algo and execution_algo.upper() == "CLOSE_PRICE":
+                lines.append("                class: CloseExecutionStrategy")
+                lines.append("                module_path: close_execution_strategy")
+                if execution_algo_params:
+                    lines.append("                kwargs:")
+                    for k, v in execution_algo_params.items():
+                        if isinstance(v, bool):
+                            lines.append(f"                    {k}: {'true' if v else 'false'}")
+                        elif isinstance(v, str):
+                            lines.append(f"                    {k}: {v}")
+                        else:
+                            lines.append(f"                    {k}: {v}")
+            else:
+                # 默认：TailTWAPWithLimitStrategy
+                lines.append("                class: TailTWAPWithLimitStrategy")
+                lines.append("                module_path: tail_twap_strategy")
+                if execution_algo_params:
+                    lines.append("                kwargs:")
+                    for k, v in execution_algo_params.items():
+                        if isinstance(v, bool):
+                            lines.append(f"                    {k}: {'true' if v else 'false'}")
+                        elif isinstance(v, str):
+                            lines.append(f"                    {k}: {v}")
+                        else:
+                            lines.append(f"                    {k}: {v}")
+            lines.append("            generate_portfolio_metrics: true")
         lines.append("    strategy:")
         lines.append(f"        class: {strategy_class}")
         lines.append(f"        module_path: {strategy_module}")
@@ -1104,14 +1478,21 @@ class ConfigComposer:
         lines.append("    backtest:")
         lines.append(f"        start_time: {data_split['test_start']}")
         lines.append(f"        end_time: {backtest_end}")
-        lines.append("        account: 100000000")
-        lines.append("        benchmark: *benchmark")
+        _account_cash = int(initial_cash) if initial_cash else 100000000
+        lines.append(f"        account: {_account_cash}")
+        lines.append("        benchmark: ~")
         lines.append("        exchange_kwargs:")
-        lines.append("            limit_threshold: 0.095")
+        if backtest_freq == "day":
+            lines.append('            freq: day')
+            lines.append('            limit_threshold: ["$limit_up", "$limit_down"]')
+        else:
+            lines.append('            freq: 1min')
+            lines.append('            limit_threshold: ["$limit_up", "$limit_down"]')
         lines.append("            deal_price: close")
-        lines.append("            open_cost: 0.0005")
-        lines.append("            close_cost: 0.0015")
+        lines.append("            open_cost: 0.000095")
+        lines.append("            close_cost: 0.000595")
         lines.append("            min_cost: 5")
+        lines.append("            trade_unit: 100")
 
         # task（模型 + 数据集）
         lines.append("task:")
@@ -1326,7 +1707,7 @@ class ConfigComposer:
         lines.append("            [sys.executable, 'factor.py'],")
         lines.append("            cwd=factor_dir,")
         lines.append("            stderr=subprocess.STDOUT,")
-        lines.append("            timeout=300,")
+        lines.append("            timeout=600,")
         lines.append("        )")
         lines.append("        logger.info(f'  {factor_name}: execution succeeded')")
         lines.append("    except subprocess.CalledProcessError as e:")
@@ -1334,7 +1715,7 @@ class ConfigComposer:
         lines.append("        logger.error(f'  {factor_name}: execution failed: {err_msg}')")
         lines.append("        return None")
         lines.append("    except subprocess.TimeoutExpired:")
-        lines.append("        logger.error(f'  {factor_name}: execution timeout (300s)')")
+        lines.append("        logger.error(f'  {factor_name}: execution timeout (600s)')")
         lines.append("        return None")
         lines.append("")
         lines.append("    # 读取结果")
@@ -1553,23 +1934,32 @@ class ConfigComposer:
             if result.get("success"):
                 return result.get("source_code")
             else:
-                logger.warning(
+                raise RuntimeError(
                     f"[QE] 获取因子源码失败: factor={factor_name}, task={task_id}, "
                     f"error={result.get('error', 'unknown')}"
                 )
-                return None
         except Exception as e:
-            logger.error(f"[QE] 获取因子源码异常: factor={factor_name}, task={task_id}, {e}")
-            return None
+            raise RuntimeError(f"[QE] 获取因子源码异常: factor={factor_name}, task={task_id}, {e}") from e
+
+    # Qlib 内置模型定义（不需要自定义代码，仅超参数）
+    _BUILTIN_MODELS = {
+        "__builtin_LGBModel__": {"model_name": "LGBModel", "model_type": "LGB"},
+        "__builtin_XGBModel__": {"model_name": "XGBModel", "model_type": "XGB"},
+        "__builtin_CatBoostModel__": {"model_name": "CatBoostModel", "model_type": "CATBOOST"},
+        "__builtin_LinearModel__": {"model_name": "LinearModel", "model_type": "LINEAR"},
+        # 兼容旧数据中的小写 ID
+        "__builtin_lgbmodel__": {"model_name": "LGBModel", "model_type": "LGB"},
+    }
 
     def _get_model_info(self, model_id: str) -> Optional[Dict]:
         """获取模型信息（含源代码）。"""
-        # 内置LGBModel无需数据库查询
-        if model_id == "__builtin_lgbmodel__":
+        # 内置模型无需数据库查询
+        builtin = self._BUILTIN_MODELS.get(model_id)
+        if builtin:
             return {
-                "model_id": "__builtin_lgbmodel__",
-                "model_name": "LGBModel",
-                "model_type": "LGB",
+                "model_id": model_id,
+                "model_name": builtin["model_name"],
+                "model_type": builtin["model_type"],
                 "model_hyperparameters": None,
                 "model_training_hyperparameters": None,
                 "ic": None,
@@ -1620,17 +2010,19 @@ class ConfigComposer:
     def _generate_wsl_command(self, wsl_path: str,
                               has_custom_factors: bool = False,
                               use_custom_model: bool = False,
-                              model_type_tag: Optional[str] = None) -> str:
+                              model_type_tag: Optional[str] = None,
+                              mode: str = "manual",
+                              backtest_freq: str = "1min") -> str:
         """生成WSL执行命令。
-        与 RDAgent model_runner.py / factor_runner.py 完全一致的执行方式：
-        - 自定义因子：先执行 prepare_factors.py 生成 combined_factors_df.parquet
-        - 自定义模型：通过环境变量传递 num_features, dataset_cls, step_len 等
-        - PYTHONPATH 设置确保 model.py 可被 GeneralPTNN 加载
+
+        Args:
+            mode: "manual" — 面向用户手动复制执行（含注释、conda activate）
+                  "auto"   — 面向子进程自动执行（纯净命令链，用 && 连接）
         """
         env_lines = []
         if has_custom_factors or use_custom_model:
             # 环境变量设置
-            env_lines.append(f'export PYTHONPATH="{wsl_path}:/mnt/f/Dev/RD-Agent-main:$PYTHONPATH"')
+            env_lines.append(f'export PYTHONPATH="{wsl_path}:${{QLIB_RDAGENT_ROOT_WSL:-.}}:$PYTHONPATH"')
             
         if use_custom_model and model_type_tag:
             # 与 RDAgent model_runner.py 一致的环境变量
@@ -1642,8 +2034,8 @@ class ConfigComposer:
                 env_lines.append("export dataset_cls=DatasetH")
         
         if use_custom_model and not has_custom_factors:
-            # 如果没有自定义因子但有自定义模型，默认使用 Alpha158 的 158 个特征
-            env_lines.append("export num_features=158")
+            # Alpha158 经 FilterCol 过滤后实际只有 20 个特征（与 RDAgent conf_baseline 一致）
+            env_lines.append("export num_features=20")
         elif has_custom_factors:
             # num_features 在 prepare_factors.py 执行后才能确定
             # 供 conf.yaml 中的 Jinja2 模板变量引用
@@ -1651,12 +2043,51 @@ class ConfigComposer:
 
         env_block = "\n".join(env_lines)
 
+        # 数据文件链接命令（幂等）— 确保策略所需的 h5 文件始终可访问
+        # 使用 shell 变量 $RDAGENT_FACTOR_DATA_WSL（从执行节点 .env 继承到子进程环境）
+        _link_data_cmd = (
+            '_FDD="${RDAGENT_FACTOR_DATA_WSL:-.}" && '
+            'for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector_data.h5 static_factors.parquet; do '
+            '[ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .; done; true'
+        )
+
+        # 分钟线使用 qrun_limit_minute.py（含内存 patch + benchmark），日线使用 qrun_limit.py
+        runner = "qrun_limit_minute.py" if backtest_freq != "day" else "qrun_limit.py"
+
+        # ── auto 模式：纯净命令链，供子进程直接执行 ──
+        if mode == "auto":
+            # 过滤掉注释行，只保留实际命令
+            env_cmds = [l for l in env_lines if l and not l.startswith("#")]
+            parts = [f"cd {wsl_path}"]
+            # 限制 glibc malloc arena 数量，防止内存碎片膨胀（默认 8×CPU 核数）
+            parts.append("export MALLOC_ARENA_MAX=4")
+            # 强制禁用 Python stdout 缓冲，确保训练日志实时输出到 pipe
+            parts.append("export PYTHONUNBUFFERED=1")
+            parts.extend(env_cmds)
+            parts.append(_link_data_cmd)
+            if has_custom_factors:
+                parts.append("python prepare_factors.py")
+                parts.append(". ./.factor_env")
+            parts.append(f"python {runner} conf.yaml")
+            parts.append("python read_exp_res.py")
+            return " && ".join(parts)
+
+        # 手动模式的数据链接步骤（可读格式）
+        _link_data_manual = f"""# 链接策略所需数据文件到实验目录（幂等）
+_FDD="${{RDAGENT_FACTOR_DATA_WSL:-{RDAGENT_FACTOR_DATA_WSL}}}"
+for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector_data.h5 static_factors.parquet; do
+  [ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .
+done"""
+
+        # ── manual 模式：面向用户手动复制执行 ──
         if has_custom_factors:
             return f"""# QuantEvolver 实验执行命令（含自定义因子预处理）
 # 请在WSL终端中执行以下命令：
 
 cd {wsl_path}
 conda activate rdagent-gpu
+
+{_link_data_manual}
 
 # 步骤1: 预计算因子 -> 生成 combined_factors_df.parquet
 python prepare_factors.py
@@ -1667,7 +2098,7 @@ python prepare_factors.py
 source .factor_env
 
 # 步骤3: 运行QLib回测
-qrun conf.yaml
+python {runner} conf.yaml
 
 # 步骤4: 读取结果
 python read_exp_res.py
@@ -1683,8 +2114,10 @@ conda activate rdagent-gpu
 # 设置环境变量
 {env_block}
 
+{_link_data_manual}
+
 # 运行QLib回测
-qrun conf.yaml
+python {runner} conf.yaml
 
 # 读取结果
 python read_exp_res.py
@@ -1696,7 +2129,10 @@ python read_exp_res.py
 
 cd {wsl_path}
 conda activate rdagent-gpu
-qrun conf.yaml
+
+{_link_data_manual}
+
+python {runner} conf.yaml
 python read_exp_res.py
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
@@ -1723,9 +2159,9 @@ python read_exp_res.py
                             rel_path = f.relative_to(exp_dir).as_posix()
                             files_to_sync[rel_path] = f.read_text(encoding="utf-8")
                         except Exception as e:
-                            logger.warning(f"读取文件 {f} 失败: {e}")
+                            raise RuntimeError(f"读取文件 {f} 失败: {e}") from e
                 except OSError as e:
-                    logger.debug(f"检查文件状态失败(可能为无效的软链接或无权限): {f} - {e}")
+                    raise RuntimeError(f"检查文件状态失败: {f} - {e}") from e
             
             if not files_to_sync:
                 return
@@ -2049,460 +2485,28 @@ model_cls = {nn_class_name}
         logger.info(f"复制QE独立loader: {qe_loader_dest}")
 
     def _get_read_exp_res_content(self) -> str:
-        """返回 read_exp_res.py 模板内容（供 compose_experiment_in_memory 和 _copy_read_exp_res 共用）。"""
-        return self._READ_EXP_RES_TEMPLATE
+        """从 qe_programs/templates/ 读取 read_exp_res.py 模板内容。
+
+        模板文件维护在 QE 专用程序目录中，不再内嵌于本文件。
+        这样 Phase 3 增强的诊断提取功能可以直接生效。
+        """
+        template_path = QE_PROGRAMS_WIN / "templates" / "read_exp_res.py"
+        try:
+            return template_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            logger.error(f"QE read_exp_res.py 模板文件不存在: {template_path}")
+            raise FileNotFoundError(
+                f"QE 模板文件缺失: {template_path}，"
+                f"请确认 qe_programs/templates/read_exp_res.py 已部署"
+            )
 
     def _copy_read_exp_res(self, exp_dir: Path) -> None:
         """复制read_exp_res.py模板到实验目录。"""
         template_content = self._get_read_exp_res_content()
         (exp_dir / "read_exp_res.py").write_text(template_content, encoding="utf-8")
 
-    _READ_EXP_RES_TEMPLATE = '''"""
-读取QLib实验结果并输出关键指标。
-支持mlflow metrics文件格式（timestamp value step）和pkl文件。
-输出结构化JSON供后续agent分析，包含交易统计和策略胜率。
-"""
-import json
-import pickle
-import glob
-import os
-import numpy as np
-import pandas as pd
-from pathlib import Path
+    # NOTE: _READ_EXP_RES_TEMPLATE removed, now read from qe_programs/templates/read_exp_res.py
 
-
-def _parse_mlflow_metric(filepath):
-    """解析mlflow metric文件，格式: timestamp value step"""
-    content = open(filepath).read().strip()
-    parts = content.split()
-    if len(parts) >= 2:
-        return float(parts[1])
-    return float(content)
-
-
-def _calc_daily_win_stats(report_df):
-    """从report_normal_1day.pkl计算日/周胜率和连续盈亏统计。
-
-    report_df columns: return, bench, cost, turnover (index=datetime)
-    """
-    stats = {}
-    if report_df is None or report_df.empty:
-        return stats
-
-    # 超额收益 = return - bench - cost
-    excess = report_df["return"] - report_df["bench"] - report_df["cost"]
-    total_days = len(excess)
-    stats["total_trading_days"] = total_days
-
-    # 日胜率
-    win_days = int((excess > 0).sum())
-    stats["daily_win_rate"] = round(win_days / total_days, 4) if total_days > 0 else None
-
-    # 周胜率
-    weekly_excess = excess.resample("W").sum()
-    weekly_total = len(weekly_excess)
-    weekly_wins = int((weekly_excess > 0).sum())
-    stats["weekly_win_rate"] = round(weekly_wins / weekly_total, 4) if weekly_total > 0 else None
-
-    # 最大连续盈利/亏损天数
-    is_win = (excess > 0).astype(int)
-    max_con_win = 0
-    max_con_loss = 0
-    cur_win = 0
-    cur_loss = 0
-    for w in is_win:
-        if w == 1:
-            cur_win += 1
-            cur_loss = 0
-            max_con_win = max(max_con_win, cur_win)
-        else:
-            cur_loss += 1
-            cur_win = 0
-            max_con_loss = max(max_con_loss, cur_loss)
-    stats["max_consecutive_win"] = max_con_win
-    stats["max_consecutive_loss"] = max_con_loss
-
-    # 平均换手率
-    if "turnover" in report_df.columns:
-        stats["avg_turnover"] = round(float(report_df["turnover"].mean()), 6)
-
-    # 夏普比率 (年化超额收益 / 年化超额波动率)
-    if total_days > 1:
-        ann_factor = np.sqrt(252)
-        excess_mean = excess.mean()
-        excess_std = excess.std()
-        if excess_std > 0:
-            stats["sharpe_ratio"] = round(float(excess_mean / excess_std * ann_factor), 4)
-
-    return stats
-
-
-def _calc_stock_trade_stats(positions_dict, stop_loss_threshold=None, take_profit_threshold=None):
-    """从positions_normal_1day.pkl计算个股交易统计。
-
-    positions_dict: dict{date_str -> {instrument -> {amount, weight, price}}}
-    stop_loss_threshold: 止损阈值（负数，如-0.10表示亏损10%止损）
-    take_profit_threshold: 止盈阈值（正数，如0.15表示盈利15%止盈）
-
-    Returns:
-        stats: {
-            total_trades, winning_trades, losing_trades, stock_win_rate,
-            avg_profit_pct, avg_loss_pct, profit_loss_ratio,
-            max_single_profit_pct, max_single_loss_pct,
-            stop_loss_count: 止损触发次数,
-            take_profit_count: 止盈触发次数,
-            top_profit_stocks: [{instrument, profit_pct, holding_days, entry_date, exit_date, entry_price, exit_price, exit_reason}],
-            top_loss_stocks: [{instrument, loss_pct, holding_days, entry_date, exit_date, entry_price, exit_price, exit_reason}],
-            all_trades: [{instrument, profit_pct, holding_days, entry_date, exit_date, exit_reason}]
-        }
-    """
-    stats = {}
-    if not positions_dict or not isinstance(positions_dict, dict):
-        return stats
-
-    # 构建每只股票的持仓时间序列
-    # stock_history[instrument] = [(date, price, amount), ...]
-    stock_history = {}
-    sorted_dates = sorted(positions_dict.keys())
-
-    for date_key in sorted_dates:
-        pos = positions_dict[date_key]
-        if not isinstance(pos, dict):
-            continue
-        for instrument, info in pos.items():
-            if instrument == "cash" or not isinstance(info, dict):
-                continue
-            price = info.get("price", 0)
-            amount = info.get("amount", 0)
-            if instrument not in stock_history:
-                stock_history[instrument] = []
-            stock_history[instrument].append((date_key, price, amount))
-
-    # 分析每只股票的交易：找到买入和卖出点
-    trade_returns = []  # 每笔交易的收益率
-    trade_details = []  # 每笔交易的详细信息
-
-    for instrument, history in stock_history.items():
-        if len(history) < 2:
-            continue
-
-        # 找到持仓开始和结束的区间
-        i = 0
-        while i < len(history):
-            # 找到持仓开始（amount > 0）
-            if history[i][2] <= 0:
-                i += 1
-                continue
-
-            entry_date = history[i][0]
-            entry_price = history[i][1]
-            if entry_price <= 0:
-                i += 1
-                continue
-
-            # 找到持仓结束（amount变为0或到达末尾）
-            j = i + 1
-            while j < len(history) and history[j][2] > 0:
-                j += 1
-
-            # 退出价格和日期：最后一个有持仓的日期的价格
-            exit_date = history[j - 1][0]
-            exit_price = history[j - 1][1]
-            if exit_price > 0 and entry_price > 0:
-                ret_pct = (exit_price - entry_price) / entry_price * 100
-                ret_ratio = ret_pct / 100  # 转换为比率形式（如 -0.10）
-                trade_returns.append(ret_pct)
-
-                # 计算持仓天数
-                try:
-                    from datetime import datetime
-                    entry_dt = datetime.strptime(entry_date, "%Y-%m-%d") if isinstance(entry_date, str) else entry_date
-                    exit_dt = datetime.strptime(exit_date, "%Y-%m-%d") if isinstance(exit_date, str) else exit_date
-                    holding_days = (exit_dt - entry_dt).days + 1
-                except Exception:
-                    holding_days = j - i  # 回退到交易日数
-
-                # 推断退出原因
-                exit_reason = "signal"  # 默认为信号反转
-                if stop_loss_threshold is not None and stop_loss_threshold > -1.0:
-                    # 止损阈值是负数，如 -0.10，当 ret_ratio <= stop_loss_threshold 时触发
-                    if ret_ratio <= stop_loss_threshold:
-                        exit_reason = "stop_loss"
-                if take_profit_threshold is not None and take_profit_threshold > 0:
-                    # 止盈阈值是正数，如 0.15，当 ret_ratio >= take_profit_threshold 时触发
-                    if ret_ratio >= take_profit_threshold:
-                        exit_reason = "take_profit"
-
-                trade_details.append({
-                    "instrument": instrument,
-                    "profit_pct": round(ret_pct, 2),
-                    "holding_days": holding_days,
-                    "entry_date": entry_date,
-                    "exit_date": exit_date,
-                    "entry_price": round(entry_price, 4),
-                    "exit_price": round(exit_price, 4),
-                    "exit_reason": exit_reason,
-                })
-
-            i = j + 1 if j < len(history) else j
-
-    if not trade_returns:
-        return stats
-
-    trade_returns = np.array(trade_returns)
-    total = len(trade_returns)
-    winners = trade_returns[trade_returns > 0]
-    losers = trade_returns[trade_returns < 0]
-
-    stats["total_trades"] = total
-    stats["winning_trades"] = len(winners)
-    stats["losing_trades"] = len(losers)
-    stats["stock_win_rate"] = round(len(winners) / total, 4) if total > 0 else None
-
-    stats["avg_profit_pct"] = round(float(winners.mean()), 2) if len(winners) > 0 else None
-    stats["avg_loss_pct"] = round(float(losers.mean()), 2) if len(losers) > 0 else None
-
-    if stats.get("avg_profit_pct") and stats.get("avg_loss_pct") and stats["avg_loss_pct"] != 0:
-        stats["profit_loss_ratio"] = round(abs(stats["avg_profit_pct"] / stats["avg_loss_pct"]), 2)
-
-    stats["max_single_profit_pct"] = round(float(trade_returns.max()), 2) if total > 0 else None
-    stats["max_single_loss_pct"] = round(float(trade_returns.min()), 2) if total > 0 else None
-
-    # 统计止损/止盈触发次数
-    stop_loss_count = sum(1 for t in trade_details if t.get("exit_reason") == "stop_loss")
-    take_profit_count = sum(1 for t in trade_details if t.get("exit_reason") == "take_profit")
-    stats["stop_loss_count"] = stop_loss_count
-    stats["take_profit_count"] = take_profit_count
-
-    # 新增：按收益率排序的个股交易明细
-    # 盈利最多的前10只股票
-    profit_trades = [t for t in trade_details if t["profit_pct"] > 0]
-    profit_trades.sort(key=lambda x: x["profit_pct"], reverse=True)
-    stats["top_profit_stocks"] = profit_trades[:10]
-
-    # 亏损最多的前10只股票
-    loss_trades = [t for t in trade_details if t["profit_pct"] < 0]
-    loss_trades.sort(key=lambda x: x["profit_pct"])  # 升序，最亏损的在前面
-    stats["top_loss_stocks"] = loss_trades[:10]
-
-    # 所有交易记录（按收益率降序）
-    trade_details.sort(key=lambda x: x["profit_pct"], reverse=True)
-    stats["all_trades"] = trade_details
-
-    return stats
-
-
-def read_results():
-    """读取QLib回测结果。"""
-    result_dir = Path(".")
-    mlruns = result_dir / "mlruns"
-    if not mlruns.exists():
-        print("ERROR: 未找到mlruns目录，请确认qrun已执行完成")
-        return
-
-    # ── 1. 读取mlflow metrics ──
-    metrics = {}
-    metrics_dirs = glob.glob(str(mlruns / "*" / "*" / "metrics"))
-    for md in metrics_dirs:
-        for fname in os.listdir(md):
-            fp = os.path.join(md, fname)
-            if os.path.isfile(fp):
-                try:
-                    metrics[fname] = _parse_mlflow_metric(fp)
-                except Exception:
-                    pass
-
-    # ── 2. 读取portfolio analysis pkl ──
-    port_analysis = {}
-    pkl_files = glob.glob(str(mlruns / "*" / "*" / "artifacts" / "portfolio_analysis" / "port_analysis_1day.pkl"))
-    for pf in pkl_files:
-        try:
-            with open(pf, "rb") as f:
-                df = pickle.load(f)
-            if isinstance(df, pd.DataFrame):
-                for idx in df.index:
-                    if isinstance(idx, tuple):
-                        key = ".".join(str(x) for x in idx)
-                    else:
-                        key = str(idx)
-                    for col in df.columns:
-                        port_analysis[f"{key}.{col}"] = float(df.loc[idx, col])
-        except Exception as e:
-            print(f"WARNING: 读取{pf}失败: {e}")
-
-    # ── 3. 读取report_normal_1day.pkl → 日/周胜率统计 ──
-    daily_win_stats = {}
-    report_pkls = glob.glob(str(mlruns / "*" / "*" / "artifacts" / "portfolio_analysis" / "report_normal_1day.pkl"))
-    for rp in report_pkls:
-        try:
-            with open(rp, "rb") as f:
-                report_df = pickle.load(f)
-            if isinstance(report_df, pd.DataFrame):
-                daily_win_stats = _calc_daily_win_stats(report_df)
-                print(f"  report_normal_1day.pkl: {report_df.shape[0]} 天数据")
-        except Exception as e:
-            print(f"WARNING: 读取{rp}失败: {e}")
-
-    # ── 4. 读取positions_normal_1day.pkl → 个股交易统计 ──
-    stock_trade_stats = {}
-    pos_pkls = glob.glob(str(mlruns / "*" / "*" / "artifacts" / "portfolio_analysis" / "positions_normal_1day.pkl"))
-    
-    # 从conf.yaml读取止损/止盈参数
-    stop_loss_threshold = None
-    take_profit_threshold = None
-    conf_yaml_path = result_dir / "conf.yaml"
-    if conf_yaml_path.exists():
-        try:
-            import yaml
-            conf = yaml.safe_load(conf_yaml_path.read_text(encoding="utf-8"))
-            port_analysis_config = conf.get("port_analysis_config", {})
-            strategy_config = port_analysis_config.get("strategy", {})
-            kwargs = strategy_config.get("kwargs", {})
-            stop_loss_threshold = kwargs.get("stop_loss")  # 如 -0.10
-            take_profit_threshold = kwargs.get("take_profit")  # 如 0.15
-        except Exception:
-            pass
-    
-    for pp in pos_pkls:
-        try:
-            with open(pp, "rb") as f:
-                positions = pickle.load(f)
-            if isinstance(positions, dict):
-                stock_trade_stats = _calc_stock_trade_stats(
-                    positions, stop_loss_threshold, take_profit_threshold
-                )
-                print(f"  positions_normal_1day.pkl: {len(positions)} 天持仓数据")
-        except Exception as e:
-            print(f"WARNING: 读取{pp}失败: {e}")
-
-    # ── 5. 汇总关键指标 ──
-    summary = {
-        "IC": metrics.get("IC"),
-        "ICIR": metrics.get("ICIR"),
-        "Rank_IC": metrics.get("Rank IC"),
-        "Rank_ICIR": metrics.get("Rank ICIR"),
-        "excess_return_without_cost_annualized": metrics.get("1day.excess_return_without_cost.annualized_return"),
-        "excess_return_without_cost_IR": metrics.get("1day.excess_return_without_cost.information_ratio"),
-        "excess_return_without_cost_max_drawdown": metrics.get("1day.excess_return_without_cost.max_drawdown"),
-        "excess_return_with_cost_annualized": metrics.get("1day.excess_return_with_cost.annualized_return"),
-        "excess_return_with_cost_IR": metrics.get("1day.excess_return_with_cost.information_ratio"),
-        "excess_return_with_cost_max_drawdown": metrics.get("1day.excess_return_with_cost.max_drawdown"),
-    }
-
-    # 卡尔玛比率 = 年化收益 / |最大回撤|
-    calmar = None
-    ar_val = summary.get("excess_return_with_cost_annualized")
-    md_val = summary.get("excess_return_with_cost_max_drawdown")
-    if ar_val is not None and md_val is not None and md_val != 0:
-        calmar = round(ar_val / abs(md_val), 4)
-
-    # ── 6. 输出结果 ──
-    print("\\n" + "=" * 60)
-    print("QLib 回测结果摘要")
-    print("=" * 60)
-
-    print("\\n【信号质量】")
-    print(f"  IC:        {summary['IC']:.6f}" if summary['IC'] is not None else "  IC:        N/A")
-    print(f"  ICIR:      {summary['ICIR']:.6f}" if summary['ICIR'] is not None else "  ICIR:      N/A")
-    print(f"  Rank IC:   {summary['Rank_IC']:.6f}" if summary['Rank_IC'] is not None else "  Rank IC:   N/A")
-    print(f"  Rank ICIR: {summary['Rank_ICIR']:.6f}" if summary['Rank_ICIR'] is not None else "  Rank ICIR: N/A")
-
-    print("\\n【超额收益（不含成本）】")
-    ar = summary.get('excess_return_without_cost_annualized')
-    ir = summary.get('excess_return_without_cost_IR')
-    md = summary.get('excess_return_without_cost_max_drawdown')
-    print(f"  年化收益:   {ar*100:.2f}%" if ar is not None else "  年化收益:   N/A")
-    print(f"  信息比率:   {ir:.4f}" if ir is not None else "  信息比率:   N/A")
-    print(f"  最大回撤:   {md*100:.2f}%" if md is not None else "  最大回撤:   N/A")
-
-    print("\\n【超额收益（含成本）】")
-    ar2 = summary.get('excess_return_with_cost_annualized')
-    ir2 = summary.get('excess_return_with_cost_IR')
-    md2 = summary.get('excess_return_with_cost_max_drawdown')
-    print(f"  年化收益:   {ar2*100:.2f}%" if ar2 is not None else "  年化收益:   N/A")
-    print(f"  信息比率:   {ir2:.4f}" if ir2 is not None else "  信息比率:   N/A")
-    print(f"  最大回撤:   {md2*100:.2f}%" if md2 is not None else "  最大回撤:   N/A")
-
-    if daily_win_stats:
-        print("\\n【策略胜率】")
-        dwr = daily_win_stats.get("daily_win_rate")
-        wwr = daily_win_stats.get("weekly_win_rate")
-        print(f"  日胜率:     {dwr*100:.1f}%" if dwr is not None else "  日胜率:     N/A")
-        print(f"  周胜率:     {wwr*100:.1f}%" if wwr is not None else "  周胜率:     N/A")
-        print(f"  最大连赢:   {daily_win_stats.get('max_consecutive_win', 'N/A')} 天")
-        print(f"  最大连亏:   {daily_win_stats.get('max_consecutive_loss', 'N/A')} 天")
-        sr = daily_win_stats.get("sharpe_ratio")
-        print(f"  夏普比率:   {sr:.4f}" if sr is not None else "  夏普比率:   N/A")
-
-    if stock_trade_stats:
-        print("\\n【个股交易统计】")
-        print(f"  总交易数:   {stock_trade_stats.get('total_trades', 'N/A')}")
-        print(f"  盈利笔数:   {stock_trade_stats.get('winning_trades', 'N/A')}")
-        print(f"  亏损笔数:   {stock_trade_stats.get('losing_trades', 'N/A')}")
-        swr = stock_trade_stats.get("stock_win_rate")
-        print(f"  个股胜率:   {swr*100:.1f}%" if swr is not None else "  个股胜率:   N/A")
-        print(f"  平均盈利:   +{stock_trade_stats.get('avg_profit_pct', 'N/A')}%")
-        print(f"  平均亏损:   {stock_trade_stats.get('avg_loss_pct', 'N/A')}%")
-        print(f"  盈亏比:     {stock_trade_stats.get('profit_loss_ratio', 'N/A')}")
-        print(f"  最大单笔盈: +{stock_trade_stats.get('max_single_profit_pct', 'N/A')}%")
-        print(f"  最大单笔亏: {stock_trade_stats.get('max_single_loss_pct', 'N/A')}%")
-        
-        # 止损/止盈触发统计
-        sl_count = stock_trade_stats.get("stop_loss_count", 0)
-        tp_count = stock_trade_stats.get("take_profit_count", 0)
-        if sl_count > 0 or tp_count > 0:
-            print("\\n【风控触发统计】")
-            if sl_count > 0:
-                print(f"  止损触发:   {sl_count} 次")
-            if tp_count > 0:
-                print(f"  止盈触发:   {tp_count} 次")
-
-        # 新增：盈利最多的前10只股票
-        top_profit = stock_trade_stats.get("top_profit_stocks", [])
-        if top_profit:
-            print("\\n【盈利最多的前10只股票】")
-            for i, t in enumerate(top_profit, 1):
-                print(f"  {i}. {t['instrument']}: +{t['profit_pct']}% (持仓{t['holding_days']}天, {t['entry_date']}→{t['exit_date']})")
-
-        # 新增：亏损最多的前10只股票
-        top_loss = stock_trade_stats.get("top_loss_stocks", [])
-        if top_loss:
-            print("\\n【亏损最多的前10只股票】")
-            for i, t in enumerate(top_loss, 1):
-                print(f"  {i}. {t['instrument']}: {t['profit_pct']}% (持仓{t['holding_days']}天, {t['entry_date']}→{t['exit_date']})")
-
-    print("\\n" + "=" * 60)
-
-    # ── 7. 保存完整结果 ──
-    all_results = {
-        "summary": summary,
-        "metrics": metrics,
-        "port_analysis": port_analysis,
-        "daily_win_stats": daily_win_stats,
-        "stock_trade_stats": stock_trade_stats,
-        "calmar_ratio": calmar,
-    }
-
-    # 保存JSON（供后续agent分析）
-    with open("qlib_results.json", "w") as f:
-        json.dump(all_results, f, indent=2, default=str)
-    print("\\n完整结果已保存到 qlib_results.json")
-
-    # 保存CSV（摘要）
-    csv_row = {k: v for k, v in summary.items() if v is not None}
-    csv_row.update(daily_win_stats)
-    csv_row.update(stock_trade_stats)
-    if calmar is not None:
-        csv_row["calmar_ratio"] = calmar
-    pd.DataFrame([csv_row]).to_csv("qlib_res.csv", index=False)
-    print("摘要已保存到 qlib_res.csv")
-
-    return all_results
-
-
-if __name__ == "__main__":
-    read_results()
-'''
 
     def _save_experiment_record(self, experiment_id: str, experiment_name: str,
                                 exp_dir: str, factor_names: List[str],
@@ -2582,7 +2586,7 @@ if __name__ == "__main__":
                 logger.info(f"从qlib_results.json读取到 {len(metrics)} 个指标")
                 return metrics
             except Exception as e:
-                logger.warning(f"读取qlib_results.json失败: {e}")
+                raise RuntimeError(f"读取qlib_results.json失败: {e}") from e
 
         # 回退：读取qlib_res.csv
         csv_path = exp_dir / "qlib_res.csv"
@@ -2595,7 +2599,7 @@ if __name__ == "__main__":
                         metrics.update(row)
                         break  # 只取第一行
             except Exception as e:
-                logger.warning(f"读取qlib_res.csv失败: {e}")
+                raise RuntimeError(f"读取qlib_res.csv失败: {e}") from e
 
         return metrics
 
@@ -2655,9 +2659,25 @@ if __name__ == "__main__":
 
         with get_conn() as conn:
             with conn.cursor() as cur:
+                # 解析 model_catalog_id（可选）
+                model_catalog_id = None
+                qe_task_id = exp_record.get("qe_task_id")
+                if qe_task_id:
+                    cur.execute("""
+                        SELECT mc.id FROM qe_evolution_tasks et
+                        JOIN aistock_model_catalog mc ON mc.task_run_id = et.source_task_id
+                        WHERE et.task_id = %s LIMIT 1
+                    """, (qe_task_id,))
+                    mc_row = cur.fetchone()
+                    if mc_row:
+                        model_catalog_id = mc_row[0]
+
                 for factor_name in factor_names:
-                    # 确定因子来源
-                    factor_source = self._detect_factor_source(cur, factor_name)
+                    # 确定因子来源和 catalog_id
+                    factor_source, factor_catalog_id = self._detect_factor_source(cur, factor_name)
+                    if factor_catalog_id is None:
+                        logger.warning(f"因子 {factor_name} 未在 catalog 中找到，跳过指标保存")
+                        continue
                     other_factors = [f for f in factor_names if f != factor_name]
 
                     try:
@@ -2672,7 +2692,8 @@ if __name__ == "__main__":
                                 avg_profit_pct, avg_loss_pct, profit_loss_ratio,
                                 max_single_profit_pct, max_single_loss_pct,
                                 sharpe_ratio, calmar_ratio, avg_turnover, total_trading_days,
-                                model_id, other_factors, data_split, raw_metrics
+                                model_id, other_factors, data_split, raw_metrics,
+                                factor_catalog_id, model_catalog_id
                             ) VALUES (
                                 %s, %s, %s, %s,
                                 %s, %s, %s, %s,
@@ -2683,7 +2704,8 @@ if __name__ == "__main__":
                                 %s, %s, %s,
                                 %s, %s,
                                 %s, %s, %s, %s,
-                                %s, %s, %s, %s
+                                %s, %s, %s, %s,
+                                %s, %s
                             )
                             ON CONFLICT (factor_name, factor_source, experiment_id)
                             DO UPDATE SET
@@ -2717,6 +2739,8 @@ if __name__ == "__main__":
                                 other_factors = EXCLUDED.other_factors,
                                 data_split = EXCLUDED.data_split,
                                 raw_metrics = EXCLUDED.raw_metrics,
+                                factor_catalog_id = EXCLUDED.factor_catalog_id,
+                                model_catalog_id = EXCLUDED.model_catalog_id,
                                 collected_at = NOW()
                         """, (
                             factor_name, factor_source, experiment_id, experiment_name,
@@ -2751,21 +2775,25 @@ if __name__ == "__main__":
                             json.dumps(other_factors) if other_factors else None,
                             json.dumps(data_split, default=str) if data_split else None,
                             json.dumps(raw_metrics, default=str),
+                            factor_catalog_id,
+                            model_catalog_id,
                         ))
                         logger.info(f"保存因子实验指标: {factor_name} @ {experiment_id}")
                     except Exception as e:
-                        logger.error(f"保存因子 {factor_name} 实验指标失败: {e}")
+                        raise RuntimeError(f"保存因子 {factor_name} 实验指标失败: {e}") from e
 
-    def _detect_factor_source(self, cur, factor_name: str) -> str:
-        """检测因子来源。"""
+    def _detect_factor_source(self, cur, factor_name: str) -> tuple:
+        """检测因子来源并返回 catalog_id。Returns (source, catalog_id)."""
         try:
-            cur.execute(
-                "SELECT source FROM aistock_factor_catalog WHERE factor_name = %s LIMIT 1",
-                (factor_name,),
-            )
+            cur.execute("""
+                SELECT source, id FROM aistock_factor_catalog
+                WHERE factor_name = %s
+                ORDER BY CASE WHEN source = 'rdagent_task_sync' THEN 0 ELSE 1 END, id
+                LIMIT 1
+            """, (factor_name,))
             row = cur.fetchone()
             if row:
-                return row[0]
-        except Exception:
-            pass
-        return "unknown"
+                return row[0], row[1]
+            return (None, None)
+        except Exception as e:
+            raise RuntimeError(f"[QE] 因子来源检测失败: factor={factor_name}, {e}") from e

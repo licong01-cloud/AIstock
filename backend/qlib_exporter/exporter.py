@@ -29,9 +29,15 @@ class ExportResult:
 
 
 class QlibDailyExporter:
-    def __init__(self, db: Optional[DBReader] = None, writer: Optional[SnapshotWriter] = None) -> None:
+    def __init__(
+        self,
+        db: Optional[DBReader] = None,
+        writer: Optional[SnapshotWriter] = None,
+        meta: Optional[MetaRepo] = None,
+    ) -> None:
         self.db = db or DBReader()
         self.writer = writer or SnapshotWriter()
+        self.meta = meta or MetaRepo()
 
     def export_full(
         self,
@@ -71,6 +77,11 @@ class QlibDailyExporter:
 
         self.writer.write_daily_full(snapshot_id, df)
 
+        # 更新元数据
+        self.meta.ensure_table()
+        max_dt = df.index.get_level_values("datetime").max()
+        self.meta.upsert_last_datetime(snapshot_id, "daily", max_dt)
+
         return ExportResult(
             snapshot_id=snapshot_id,
             freq="1d",
@@ -80,49 +91,100 @@ class QlibDailyExporter:
             rows=int(df.shape[0]),
         )
 
-
-class QlibBoardExporter:
-    """TDX 板块日线导出协调器."""
-
-    def __init__(self, db: Optional[DBReader] = None, writer: Optional[SnapshotWriter] = None) -> None:
-        self.db = db or DBReader()
-        self.writer = writer or SnapshotWriter()
-
-    def export_full(
+    def export_incremental(
         self,
         snapshot_id: str,
-        start: date,
         end: date,
-        board_codes: Optional[Iterable[str]] = None,
-        idx_types: Optional[Sequence[str]] = None,
+        exchanges: Optional[Sequence[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
     ) -> ExportResult:
-        """执行一次板块日线行情的全量导出.
+        """增量导出日频数据。从上次导出位置继续。"""
+        self.meta.ensure_table()
 
-        - 若 board_codes 为 None，则从 tdx_board_index 中读取全部或指定类型的板块代码。
-        - 仅导出 [start, end] 区间内的数据。
-        """
-
-        if board_codes is None:
-            codes = self.db.get_all_board_codes(list(idx_types) if idx_types else None)
+        last_dt = self.meta.get_last_datetime(snapshot_id, "daily")
+        if last_dt:
+            start = (last_dt + timedelta(days=1)).date()
         else:
-            codes = list(board_codes)
+            start = end - timedelta(days=30)
 
-        if not codes:
-            raise ValueError("export_full: board_codes 为空，无法导出板块 Snapshot")
+        if start > end:
+            return ExportResult(
+                snapshot_id=snapshot_id, freq="1d",
+                start=start, end=end, ts_codes=[], rows=0,
+            )
 
-        df = self.db.load_board_daily(codes, start, end)
+        df = self.db.load_qlib_daily_data_all(
+            start, end,
+            exchanges=list(exchanges) if exchanges else None,
+            use_tushare_adj=True,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+
         if df.empty:
-            raise ValueError("export_full: 指定区间内无板块日线数据")
+            return ExportResult(
+                snapshot_id=snapshot_id, freq="1d",
+                start=start, end=end, ts_codes=[], rows=0,
+            )
 
-        self.writer.write_board_daily_full(snapshot_id, df)
+        self.writer.write_factor_data_incremental(snapshot_id, df, "daily_pv.h5")
 
+        # 增量后重新生成辅助文件
+        self._regenerate_auxiliary_files(snapshot_id)
+
+        max_dt = df.index.get_level_values("datetime").max()
+        self.meta.upsert_last_datetime(snapshot_id, "daily", max_dt)
+
+        instruments = df.index.get_level_values("instrument").unique().tolist()
         return ExportResult(
-            snapshot_id=snapshot_id,
-            freq="1d_board",
-            start=start,
-            end=end,
-            ts_codes=codes,
-            rows=int(df.shape[0]),
+            snapshot_id=snapshot_id, freq="1d",
+            start=start, end=end,
+            ts_codes=instruments, rows=int(df.shape[0]),
+        )
+
+    def _regenerate_auxiliary_files(self, snapshot_id: str) -> None:
+        """读取合并后的 daily_pv.h5，重新生成 instruments/all.txt + calendars/day.txt + meta.json."""
+        import json
+
+        snap_dir = self.writer.root / snapshot_id
+        h5_path = snap_dir / "daily_pv.h5"
+        if not h5_path.exists():
+            return
+
+        df = pd.read_hdf(str(h5_path), key="data")
+
+        # instruments/all.txt
+        instruments_dir = snap_dir / "instruments"
+        instruments_dir.mkdir(parents=True, exist_ok=True)
+        grp = df.groupby(level="instrument")
+        lines = []
+        for inst, sub in grp:
+            dts = sub.index.get_level_values("datetime")
+            s = dts.min().strftime("%Y-%m-%d")
+            e = dts.max().strftime("%Y-%m-%d")
+            lines.append(f"{inst}\t{s}\t{e}")
+        (instruments_dir / "all.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        # calendars/day.txt
+        calendars_dir = snap_dir / "calendars"
+        calendars_dir.mkdir(parents=True, exist_ok=True)
+        dates = sorted(df.index.get_level_values("datetime").unique())
+        date_lines = [d.strftime("%Y-%m-%d") for d in dates]
+        (calendars_dir / "day.txt").write_text("\n".join(date_lines) + "\n", encoding="utf-8")
+
+        # meta.json
+        meta = {
+            "snapshot_id": snapshot_id,
+            "market": "cn",
+            "start": dates[0].strftime("%Y-%m-%d") if dates else "",
+            "end": dates[-1].strftime("%Y-%m-%d") if dates else "",
+            "instruments": len(grp),
+            "columns": list(df.columns),
+            "generated_at": datetime.now().isoformat(),
+        }
+        (snap_dir / "meta.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
 
@@ -329,280 +391,6 @@ class QlibMinuteExporter:
         )
 
 
-class QlibBoardIndexExporter:
-    """TDX 板块索引导出协调器."""
-
-    def __init__(
-        self,
-        db: Optional[DBReader] = None,
-        writer: Optional[SnapshotWriter] = None,
-        meta: Optional[MetaRepo] = None,
-    ) -> None:
-        self.db = db or DBReader()
-        self.writer = writer or SnapshotWriter()
-        self.meta = meta or MetaRepo()
-
-    def export_full(
-        self,
-        snapshot_id: str,
-        start: date,
-        end: date,
-        idx_types: Optional[Sequence[str]] = None,
-    ) -> ExportResult:
-        """导出板块索引数据（tdx_board_index）到 boards/board_index.h5."""
-
-        df = self.db.load_board_index(start, end, list(idx_types) if idx_types else None)
-        if df.empty:
-            raise ValueError("export_full: 指定区间内无板块索引数据")
-
-        self.writer.write_board_index(snapshot_id, df)
-
-        # 更新元数据
-        self.meta.ensure_table()
-        max_dt = df["trade_date"].max()
-        self.meta.upsert_last_datetime(snapshot_id, "board_index", max_dt)
-
-        codes = df["ts_code"].unique().tolist()
-
-        return ExportResult(
-            snapshot_id=snapshot_id,
-            freq="board_index",
-            start=start,
-            end=end,
-            ts_codes=codes,
-            rows=int(df.shape[0]),
-        )
-
-    def export_incremental(
-        self,
-        snapshot_id: str,
-        end: date,
-        idx_types: Optional[Sequence[str]] = None,
-    ) -> ExportResult:
-        """增量导出板块索引数据."""
-        self.meta.ensure_table()
-
-        last_dt = self.meta.get_last_datetime(snapshot_id, "board_index")
-        if last_dt:
-            start = (last_dt + timedelta(days=1)).date()
-        else:
-            start = end - timedelta(days=30)
-
-        if start > end:
-            return ExportResult(
-                snapshot_id=snapshot_id,
-                freq="board_index",
-                start=start,
-                end=end,
-                ts_codes=[],
-                rows=0,
-            )
-
-        df = self.db.load_board_index(start, end, list(idx_types) if idx_types else None)
-        if df.empty:
-            return ExportResult(
-                snapshot_id=snapshot_id,
-                freq="board_index",
-                start=start,
-                end=end,
-                ts_codes=[],
-                rows=0,
-            )
-
-        self.writer.write_board_index_incremental(snapshot_id, df)
-
-        max_dt = df["trade_date"].max()
-        self.meta.upsert_last_datetime(snapshot_id, "board_index", max_dt)
-
-        codes = df["ts_code"].unique().tolist()
-
-        return ExportResult(
-            snapshot_id=snapshot_id,
-            freq="board_index",
-            start=start,
-            end=end,
-            ts_codes=codes,
-            rows=int(df.shape[0]),
-        )
-
-
-class QlibBoardMemberExporter:
-    """TDX 板块成员导出协调器."""
-
-    def __init__(
-        self,
-        db: Optional[DBReader] = None,
-        writer: Optional[SnapshotWriter] = None,
-        meta: Optional[MetaRepo] = None,
-    ) -> None:
-        self.db = db or DBReader()
-        self.writer = writer or SnapshotWriter()
-        self.meta = meta or MetaRepo()
-
-    def export_full(
-        self,
-        snapshot_id: str,
-        start: date,
-        end: date,
-        board_codes: Optional[Sequence[str]] = None,
-    ) -> ExportResult:
-        """导出板块成员数据（tdx_board_member）到 boards/board_member.h5."""
-
-        df = self.db.load_board_member(start, end, list(board_codes) if board_codes else None)
-        if df.empty:
-            raise ValueError("export_full: 指定区间内无板块成员数据")
-
-        self.writer.write_board_member(snapshot_id, df)
-
-        # 更新元数据
-        self.meta.ensure_table()
-        max_dt = df["trade_date"].max()
-        self.meta.upsert_last_datetime(snapshot_id, "board_member", max_dt)
-
-        codes = df["ts_code"].unique().tolist()
-
-        return ExportResult(
-            snapshot_id=snapshot_id,
-            freq="board_member",
-            start=start,
-            end=end,
-            ts_codes=codes,
-            rows=int(df.shape[0]),
-        )
-
-    def export_incremental(
-        self,
-        snapshot_id: str,
-        end: date,
-        board_codes: Optional[Sequence[str]] = None,
-    ) -> ExportResult:
-        """增量导出板块成员数据."""
-        self.meta.ensure_table()
-
-        last_dt = self.meta.get_last_datetime(snapshot_id, "board_member")
-        if last_dt:
-            start = (last_dt + timedelta(days=1)).date()
-        else:
-            start = end - timedelta(days=30)
-
-        if start > end:
-            return ExportResult(
-                snapshot_id=snapshot_id,
-                freq="board_member",
-                start=start,
-                end=end,
-                ts_codes=[],
-                rows=0,
-            )
-
-        df = self.db.load_board_member(start, end, list(board_codes) if board_codes else None)
-        if df.empty:
-            return ExportResult(
-                snapshot_id=snapshot_id,
-                freq="board_member",
-                start=start,
-                end=end,
-                ts_codes=[],
-                rows=0,
-            )
-
-        self.writer.write_board_member_incremental(snapshot_id, df)
-
-        max_dt = df["trade_date"].max()
-        self.meta.upsert_last_datetime(snapshot_id, "board_member", max_dt)
-
-        codes = df["ts_code"].unique().tolist()
-
-        return ExportResult(
-            snapshot_id=snapshot_id,
-            freq="board_member",
-            start=start,
-            end=end,
-            ts_codes=codes,
-            rows=int(df.shape[0]),
-        )
-
-
-class QlibBoardDailyExporter:
-    """TDX 板块日线增量导出协调器."""
-
-    def __init__(
-        self,
-        db: Optional[DBReader] = None,
-        writer: Optional[SnapshotWriter] = None,
-        meta: Optional[MetaRepo] = None,
-    ) -> None:
-        self.db = db or DBReader()
-        self.writer = writer or SnapshotWriter()
-        self.meta = meta or MetaRepo()
-
-    def export_incremental(
-        self,
-        snapshot_id: str,
-        end: date,
-        board_codes: Optional[Iterable[str]] = None,
-        idx_types: Optional[Sequence[str]] = None,
-    ) -> ExportResult:
-        """增量导出板块日线数据."""
-        self.meta.ensure_table()
-
-        last_dt = self.meta.get_last_datetime(snapshot_id, "board_daily")
-        if last_dt:
-            start = (last_dt + timedelta(days=1)).date()
-        else:
-            start = end - timedelta(days=30)
-
-        if start > end:
-            return ExportResult(
-                snapshot_id=snapshot_id,
-                freq="1d_board",
-                start=start,
-                end=end,
-                ts_codes=[],
-                rows=0,
-            )
-
-        if board_codes is None:
-            codes = self.db.get_all_board_codes(list(idx_types) if idx_types else None)
-        else:
-            codes = list(board_codes)
-
-        if not codes:
-            return ExportResult(
-                snapshot_id=snapshot_id,
-                freq="1d_board",
-                start=start,
-                end=end,
-                ts_codes=[],
-                rows=0,
-            )
-
-        df = self.db.load_board_daily(codes, start, end)
-        if df.empty:
-            return ExportResult(
-                snapshot_id=snapshot_id,
-                freq="1d_board",
-                start=start,
-                end=end,
-                ts_codes=codes,
-                rows=0,
-            )
-
-        self.writer.write_board_daily_incremental(snapshot_id, df)
-
-        max_dt = df.index.get_level_values("datetime").max()
-        self.meta.upsert_last_datetime(snapshot_id, "board_daily", max_dt)
-
-        return ExportResult(
-            snapshot_id=snapshot_id,
-            freq="1d_board",
-            start=start,
-            end=end,
-            ts_codes=codes,
-            rows=int(df.shape[0]),
-        )
-
-
 class QlibDailyBasicExporter:
     """Tushare daily_basic 指标导出协调器.
 
@@ -678,6 +466,60 @@ class QlibDailyBasicExporter:
             end=end,
             ts_codes=instruments,
             rows=int(df.shape[0]),
+        )
+
+    def export_incremental(
+        self,
+        snapshot_id: str,
+        end: date,
+        exchanges: Optional[Sequence[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+    ) -> ExportResult:
+        """增量导出 daily_basic 数据。从上次导出位置继续。"""
+        self.meta.ensure_table()
+
+        last_dt = self.meta.get_last_datetime(snapshot_id, "daily_basic")
+        if last_dt:
+            start = (last_dt + timedelta(days=1)).date()
+        else:
+            start = end - timedelta(days=30)
+
+        if start > end:
+            return ExportResult(
+                snapshot_id=snapshot_id, freq="daily_basic",
+                start=start, end=end, ts_codes=[], rows=0,
+            )
+
+        codes = self.db.get_base_ts_codes(
+            start=start, end=end,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+        df = self.db.load_daily_basic_panel(
+            start=start, end=end, ts_codes=codes,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+
+        if df.empty:
+            return ExportResult(
+                snapshot_id=snapshot_id, freq="daily_basic",
+                start=start, end=end, ts_codes=[], rows=0,
+            )
+
+        self.writer.write_factor_data_incremental(snapshot_id, df, "daily_basic.h5")
+
+        max_dt = df.index.get_level_values("datetime").max()
+        self.meta.upsert_last_datetime(snapshot_id, "daily_basic", max_dt)
+
+        instruments = df.index.get_level_values("instrument").unique().tolist()
+        return ExportResult(
+            snapshot_id=snapshot_id, freq="daily_basic",
+            start=start, end=end,
+            ts_codes=instruments, rows=int(df.shape[0]),
         )
 
 
@@ -758,116 +600,18 @@ class QlibMoneyflowExporter:
             rows=int(df.shape[0]),
         )
 
-
-class QlibFactorExporter:
-    """RD-Agent 因子数据导出协调器.
-
-    导出 daily_pv.h5 格式的因子数据，供 RD-Agent 使用。
-    
-    数据格式：
-    - Index: MultiIndex (datetime, instrument)
-    - Columns: $open, $close, $high, $low, $volume, $factor
-    - $close = 不复权价格 × 前复权因子（已复权价格）
-    - $factor = 前复权因子
-    """
-
-    def __init__(
-        self,
-        db: Optional[DBReader] = None,
-        writer: Optional[SnapshotWriter] = None,
-        meta: Optional[MetaRepo] = None,
-    ) -> None:
-        self.db = db or DBReader()
-        self.writer = writer or SnapshotWriter()
-        self.meta = meta or MetaRepo()
-
-    def export_full(
-        self,
-        snapshot_id: str,
-        start: date,
-        end: date,
-        ts_codes: Optional[Iterable[str]] = None,
-        exchanges: Optional[Sequence[str]] = None,
-        filename: str = "daily_pv.h5",
-        use_tushare_adj: bool = True,
-    ) -> ExportResult:
-        """全量导出因子数据.
-
-        使用新的复权策略：
-        - $close = 不复权价格 × 前复权因子
-        - $factor = 前复权因子 = adj_factor / 最新adj_factor
-
-        Args:
-            snapshot_id: Snapshot ID
-            start: 开始日期
-            end: 结束日期
-            ts_codes: 可选，指定股票代码列表
-            exchanges: 可选，交易所过滤
-            filename: 输出文件名
-            use_tushare_adj: 是否使用 Tushare 复权因子（默认 True）
-
-        Returns:
-            ExportResult
-        """
-        # 使用新的 Qlib 格式数据加载方法
-        if ts_codes:
-            df = self.db.load_qlib_daily_data(
-                list(ts_codes), start, end, use_tushare_adj=use_tushare_adj
-            )
-        else:
-            df = self.db.load_qlib_daily_data_all(
-                start, end, 
-                exchanges=list(exchanges) if exchanges else None,
-                use_tushare_adj=use_tushare_adj
-            )
-
-        if df.empty:
-            raise ValueError("export_full: 指定区间内无因子数据")
-
-        self.writer.write_factor_data(snapshot_id, df, filename)
-
-        # 更新元数据
-        self.meta.ensure_table()
-        max_dt = df.index.get_level_values("datetime").max()
-        self.meta.upsert_last_datetime(snapshot_id, "factor_data", max_dt)
-
-        # 获取唯一 instrument 列表
-        instruments = df.index.get_level_values("instrument").unique().tolist()
-
-        return ExportResult(
-            snapshot_id=snapshot_id,
-            freq="factor",
-            start=start,
-            end=end,
-            ts_codes=instruments,
-            rows=int(df.shape[0]),
-        )
-
     def export_incremental(
         self,
         snapshot_id: str,
         end: date,
-        ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
-        filename: str = "daily_pv.h5",
-        use_tushare_adj: bool = True,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
     ) -> ExportResult:
-        """增量导出因子数据.
-
-        Args:
-            snapshot_id: Snapshot ID
-            end: 结束日期
-            ts_codes: 可选，指定股票代码列表
-            exchanges: 可选，交易所过滤
-            filename: 输出文件名
-            use_tushare_adj: 是否使用 Tushare 复权因子
-
-        Returns:
-            ExportResult
-        """
+        """增量导出 moneyflow 数据。从上次导出位置继续。"""
         self.meta.ensure_table()
 
-        last_dt = self.meta.get_last_datetime(snapshot_id, "factor_data")
+        last_dt = self.meta.get_last_datetime(snapshot_id, "moneyflow")
         if last_dt:
             start = (last_dt + timedelta(days=1)).date()
         else:
@@ -875,50 +619,39 @@ class QlibFactorExporter:
 
         if start > end:
             return ExportResult(
-                snapshot_id=snapshot_id,
-                freq="factor",
-                start=start,
-                end=end,
-                ts_codes=[],
-                rows=0,
+                snapshot_id=snapshot_id, freq="moneyflow",
+                start=start, end=end, ts_codes=[], rows=0,
             )
 
-        # 使用新的 Qlib 格式数据加载方法
-        if ts_codes:
-            df = self.db.load_qlib_daily_data(
-                list(ts_codes), start, end, use_tushare_adj=use_tushare_adj
-            )
-        else:
-            df = self.db.load_qlib_daily_data_all(
-                start, end,
-                exchanges=list(exchanges) if exchanges else None,
-                use_tushare_adj=use_tushare_adj
-            )
+        codes = self.db.get_base_ts_codes(
+            start=start, end=end,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+        df = self.db.load_moneyflow_panel(
+            start=start, end=end, ts_codes=codes,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
 
         if df.empty:
             return ExportResult(
-                snapshot_id=snapshot_id,
-                freq="factor",
-                start=start,
-                end=end,
-                ts_codes=[],
-                rows=0,
+                snapshot_id=snapshot_id, freq="moneyflow",
+                start=start, end=end, ts_codes=[], rows=0,
             )
 
-        self.writer.write_factor_data_incremental(snapshot_id, df, filename)
+        self.writer.write_factor_data_incremental(snapshot_id, df, "moneyflow.h5")
 
         max_dt = df.index.get_level_values("datetime").max()
-        self.meta.upsert_last_datetime(snapshot_id, "factor_data", max_dt)
+        self.meta.upsert_last_datetime(snapshot_id, "moneyflow", max_dt)
 
         instruments = df.index.get_level_values("instrument").unique().tolist()
-
         return ExportResult(
-            snapshot_id=snapshot_id,
-            freq="factor",
-            start=start,
-            end=end,
-            ts_codes=instruments,
-            rows=int(df.shape[0]),
+            snapshot_id=snapshot_id, freq="moneyflow",
+            start=start, end=end,
+            ts_codes=instruments, rows=int(df.shape[0]),
         )
 
 
@@ -999,6 +732,60 @@ class QlibBakBasicExporter:
             rows=int(df.shape[0]),
         )
 
+    def export_incremental(
+        self,
+        snapshot_id: str,
+        end: date,
+        exchanges: Optional[Sequence[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+    ) -> ExportResult:
+        """增量导出 bak_basic 数据。从上次导出位置继续。"""
+        self.meta.ensure_table()
+
+        last_dt = self.meta.get_last_datetime(snapshot_id, "bak_basic")
+        if last_dt:
+            start = (last_dt + timedelta(days=1)).date()
+        else:
+            start = end - timedelta(days=30)
+
+        if start > end:
+            return ExportResult(
+                snapshot_id=snapshot_id, freq="bak_basic",
+                start=start, end=end, ts_codes=[], rows=0,
+            )
+
+        codes = self.db.get_base_ts_codes(
+            start=start, end=end,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+        df = self.db.load_bak_basic_panel(
+            start=start, end=end, ts_codes=codes,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+
+        if df.empty:
+            return ExportResult(
+                snapshot_id=snapshot_id, freq="bak_basic",
+                start=start, end=end, ts_codes=[], rows=0,
+            )
+
+        self.writer.write_factor_data_incremental(snapshot_id, df, "bak_basic.h5")
+
+        max_dt = df.index.get_level_values("datetime").max()
+        self.meta.upsert_last_datetime(snapshot_id, "bak_basic", max_dt)
+
+        instruments = df.index.get_level_values("instrument").unique().tolist()
+        return ExportResult(
+            snapshot_id=snapshot_id, freq="bak_basic",
+            start=start, end=end,
+            ts_codes=instruments, rows=int(df.shape[0]),
+        )
+
 
 class QlibCyqPerfExporter:
     """Tushare cyq_perf 每日筹码及胜率数据导出协调器.
@@ -1075,4 +862,179 @@ class QlibCyqPerfExporter:
             end=end,
             ts_codes=instruments,
             rows=int(df.shape[0]),
+        )
+
+    def export_incremental(
+        self,
+        snapshot_id: str,
+        end: date,
+        exchanges: Optional[Sequence[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+    ) -> ExportResult:
+        """增量导出 cyq_perf 数据。从上次导出位置继续。"""
+        self.meta.ensure_table()
+
+        last_dt = self.meta.get_last_datetime(snapshot_id, "cyq_perf")
+        if last_dt:
+            start = (last_dt + timedelta(days=1)).date()
+        else:
+            start = end - timedelta(days=30)
+
+        if start > end:
+            return ExportResult(
+                snapshot_id=snapshot_id, freq="cyq_perf",
+                start=start, end=end, ts_codes=[], rows=0,
+            )
+
+        codes = self.db.get_base_ts_codes(
+            start=start, end=end,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+        df = self.db.load_cyq_perf_panel(
+            start=start, end=end, ts_codes=codes,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+
+        if df.empty:
+            return ExportResult(
+                snapshot_id=snapshot_id, freq="cyq_perf",
+                start=start, end=end, ts_codes=[], rows=0,
+            )
+
+        self.writer.write_factor_data_incremental(snapshot_id, df, "cyq_perf.h5")
+
+        max_dt = df.index.get_level_values("datetime").max()
+        self.meta.upsert_last_datetime(snapshot_id, "cyq_perf", max_dt)
+
+        instruments = df.index.get_level_values("instrument").unique().tolist()
+        return ExportResult(
+            snapshot_id=snapshot_id, freq="cyq_perf",
+            start=start, end=end,
+            ts_codes=instruments, rows=int(df.shape[0]),
+        )
+
+
+class QlibSectorDataExporter:
+    """申万行业板块数据 (sector_data) 导出协调器.
+
+    输出文件 sector_data.h5，供 Qlib / RD-Agent 使用：
+    - Index: MultiIndex (datetime, instrument)
+    - Columns: sw2_* 系列 22 列
+    """
+
+    def __init__(
+        self,
+        db: Optional[DBReader] = None,
+        writer: Optional[SnapshotWriter] = None,
+        meta: Optional[MetaRepo] = None,
+    ) -> None:
+        self.db = db or DBReader()
+        self.writer = writer or SnapshotWriter()
+        self.meta = meta or MetaRepo()
+
+    def export_full(
+        self,
+        snapshot_id: str,
+        start: date,
+        end: date,
+        exchanges: Optional[Sequence[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+        filename: str = "sector_data.h5",
+    ) -> ExportResult:
+        """全量导出 sector_data 到 Snapshot."""
+
+        codes = self.db.get_base_ts_codes(
+            start=start,
+            end=end,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+        df = self.db.load_sector_data_panel(
+            start=start,
+            end=end,
+            ts_codes=codes,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+
+        if df.empty:
+            raise ValueError("export_full: 指定区间内无 sector_data 数据")
+
+        self.writer.write_factor_data(snapshot_id, df, filename)
+
+        self.meta.ensure_table()
+        max_dt = df.index.get_level_values("datetime").max()
+        self.meta.upsert_last_datetime(snapshot_id, "sector_data", max_dt)
+
+        instruments = df.index.get_level_values("instrument").unique().tolist()
+
+        return ExportResult(
+            snapshot_id=snapshot_id,
+            freq="sector_data",
+            start=start,
+            end=end,
+            ts_codes=instruments,
+            rows=int(df.shape[0]),
+        )
+
+    def export_incremental(
+        self,
+        snapshot_id: str,
+        end: date,
+        exchanges: Optional[Sequence[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+    ) -> ExportResult:
+        """增量导出 sector_data 数据。从上次导出位置继续。"""
+        self.meta.ensure_table()
+
+        last_dt = self.meta.get_last_datetime(snapshot_id, "sector_data")
+        if last_dt:
+            start = (last_dt + timedelta(days=1)).date()
+        else:
+            start = end - timedelta(days=30)
+
+        if start > end:
+            return ExportResult(
+                snapshot_id=snapshot_id, freq="sector_data",
+                start=start, end=end, ts_codes=[], rows=0,
+            )
+
+        codes = self.db.get_base_ts_codes(
+            start=start, end=end,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+        df = self.db.load_sector_data_panel(
+            start=start, end=end, ts_codes=codes,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+
+        if df.empty:
+            return ExportResult(
+                snapshot_id=snapshot_id, freq="sector_data",
+                start=start, end=end, ts_codes=[], rows=0,
+            )
+
+        self.writer.write_factor_data_incremental(snapshot_id, df, "sector_data.h5")
+
+        max_dt = df.index.get_level_values("datetime").max()
+        self.meta.upsert_last_datetime(snapshot_id, "sector_data", max_dt)
+
+        instruments = df.index.get_level_values("instrument").unique().tolist()
+        return ExportResult(
+            snapshot_id=snapshot_id, freq="sector_data",
+            start=start, end=end,
+            ts_codes=instruments, rows=int(df.shape[0]),
         )

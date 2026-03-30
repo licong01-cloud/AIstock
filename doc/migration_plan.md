@@ -272,7 +272,7 @@ GET /api/v1/datasets/kline_daily_qfq?ts_code=000001.SZ&start=2024-01-01&end=2024
       - 返回统一 JSON。
 
 - **首批支持的数据集**：
-  - `kline_daily_qfq`, `index_kline_daily_qfq`, `daily_basic`, `moneyflow_ind_dc` 等。
+  - `kline_daily_qfq`, `index_kline_daily_qfq`, `daily_basic`, `moneyflow_ts` 等。
 
 ---
 

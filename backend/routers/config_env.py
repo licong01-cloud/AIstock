@@ -11,7 +11,7 @@ router = APIRouter(prefix="/config", tags=["config"])
 
 
 @router.get("/env", summary="获取环境配置", response_model=Dict[str, Any])
-async def get_env_config() -> Dict[str, Any]:
+def get_env_config() -> Dict[str, Any]:
     """Return configuration metadata and current values.
 
     The shape matches the legacy ConfigManager.get_config_info output:
@@ -23,7 +23,7 @@ async def get_env_config() -> Dict[str, Any]:
 
 
 @router.post("/env", summary="保存环境配置")
-async def save_env_config(payload: Dict[str, Any]) -> Dict[str, Any]:
+def save_env_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Validate and persist environment configuration.
 
     Expected payload shape: {KEY: VALUE, ...} or {"config": {KEY: VALUE}}.

@@ -1,14 +1,13 @@
-"""Ingest weekly K-line data into TimescaleDB kline_weekly_qfq from daily QFQ.
+"""Ingest weekly K-line data into TimescaleDB kline_weekly_qfq from daily raw + adj_factor.
 
 Design:
-- init 模式：在给定日期区间内，从 market.kline_daily_qfq 聚合生成周线，写入
-  market.kline_weekly_qfq。
+- init 模式：在给定日期区间内，从 market.kline_daily_raw + market.adj_factor 实时计算
+  前复权价格后聚合生成周线，写入 market.kline_weekly_qfq。
 - incremental 模式：如果未指定 --start-date，则从当前表中最大 week_end_date
   的下一周开始聚合；否则使用显式起始日期。
 
 Notes:
-- 这里直接使用本地日线表做聚合，不依赖外部 Tushare 调用，避免大规模外部
-  请求与频率限制问题。
+- 使用本地日线表 + 复权因子做实时前复权聚合，不依赖外部 Tushare 调用。
 - 与其他 ingest 脚本一致，接入 ingestion_jobs / ingestion_logs，便于前端监控。
 """
 from __future__ import annotations
@@ -41,7 +40,7 @@ DB_CFG = dict(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Aggregate daily QFQ into weekly_kline_qfq")
+    parser = argparse.ArgumentParser(description="Aggregate daily raw + adj_factor into weekly_kline_qfq")
     parser.add_argument("--mode", type=str, default="init", choices=["init", "incremental"], help="Ingestion mode")
     parser.add_argument("--start-date", type=str, default=None, help="Start date YYYY-MM-DD (required for init mode unless table is empty)")
     parser.add_argument("--end-date", type=str, default=None, help="End date YYYY-MM-DD (defaults to today)")
@@ -130,29 +129,40 @@ def _log(conn, job_id: uuid.UUID, level: str, message: str) -> None:
 
 
 def _aggregate_weekly(conn, start_date: dt.date, end_date: dt.date, job_id: uuid.UUID) -> Dict[str, Any]:
-    """Aggregate daily QFQ rows into weekly QFQ rows.
+    """Aggregate daily raw + adj_factor rows into weekly QFQ rows.
 
     week_end_date 定义为每周周五日期：date_trunc('week', trade_date) + 4 天。
-    若该周无周五交易，则该周最后一个交易日的周五日期仍作为 week_end_date 锚点。
+    前复权价格 = raw_li × (adj_factor / adj_latest)，其中 adj_latest 为每只股票
+    在查询区间内的最大复权因子（等效于以最新日期为基准的前复权）。
     """
 
     stats = {"total_weeks": 0, "inserted_rows": 0}
     with conn.cursor() as cur:
         cur.execute(
             """
-            WITH daily AS (
+            WITH adj_latest AS (
+                SELECT ts_code, MAX(adj_factor) AS adj_max
+                FROM market.adj_factor
+                WHERE trade_date BETWEEN %s AND %s
+                GROUP BY ts_code
+            ),
+            daily AS (
                 SELECT
-                    ts_code,
-                    trade_date,
-                    (date_trunc('week', trade_date)::date + INTERVAL '4 days')::date AS week_end_date,
-                    open_li,
-                    high_li,
-                    low_li,
-                    close_li,
-                    volume_hand,
-                    amount_li
-                  FROM market.kline_daily_qfq
-                 WHERE trade_date BETWEEN %s AND %s
+                    r.ts_code,
+                    r.trade_date,
+                    (date_trunc('week', r.trade_date)::date + INTERVAL '4 days')::date AS week_end_date,
+                    ROUND(r.open_li  * COALESCE(a.adj_factor / NULLIF(al.adj_max, 0), 1.0))::integer AS open_li,
+                    ROUND(r.high_li  * COALESCE(a.adj_factor / NULLIF(al.adj_max, 0), 1.0))::integer AS high_li,
+                    ROUND(r.low_li   * COALESCE(a.adj_factor / NULLIF(al.adj_max, 0), 1.0))::integer AS low_li,
+                    ROUND(r.close_li * COALESCE(a.adj_factor / NULLIF(al.adj_max, 0), 1.0))::integer AS close_li,
+                    r.volume_hand,
+                    r.amount_li
+                  FROM market.kline_daily_raw r
+                  LEFT JOIN market.adj_factor a
+                    ON a.ts_code = r.ts_code AND a.trade_date = r.trade_date
+                  LEFT JOIN adj_latest al
+                    ON al.ts_code = r.ts_code
+                 WHERE r.trade_date BETWEEN %s AND %s
             ), agg AS (
                 SELECT
                     ts_code,
@@ -201,7 +211,7 @@ def _aggregate_weekly(conn, start_date: dt.date, end_date: dt.date, job_id: uuid
                 source = EXCLUDED.source
             RETURNING 1
             """,
-            (start_date, end_date),
+            (start_date, end_date, start_date, end_date),
         )
         rows = cur.fetchall()
         inserted = len(rows)
@@ -242,12 +252,12 @@ def main() -> None:
                     print("[ERROR] invalid --start-date format, expected YYYY-MM-DD")
                     sys.exit(1)
             else:
-                # 若未给出 start-date，则从日线表最早日期开始
+                # 从未复权日线表最早日期开始
                 with conn.cursor() as cur:
-                    cur.execute("SELECT MIN(trade_date) FROM market.kline_daily_qfq")
+                    cur.execute("SELECT MIN(trade_date) FROM market.kline_daily_raw")
                     row = cur.fetchone()
                     if not row or row[0] is None:
-                        print("[ERROR] kline_daily_qfq is empty; cannot infer start-date")
+                        print("[ERROR] kline_daily_raw is empty; cannot infer start-date")
                         sys.exit(1)
                     start_date = row[0]
         elif mode == "incremental":
@@ -260,12 +270,12 @@ def main() -> None:
             else:
                 max_week = _get_max_week_end_date(conn)
                 if max_week is None:
-                    # 若周线表为空，退化为从日线最早日期开始
+                    # 若周线表为空，从日线最早日期开始
                     with conn.cursor() as cur:
-                        cur.execute("SELECT MIN(trade_date) FROM market.kline_daily_qfq")
+                        cur.execute("SELECT MIN(trade_date) FROM market.kline_daily_raw")
                         row = cur.fetchone()
                         if not row or row[0] is None:
-                            print("[INFO] kline_daily_qfq is empty; nothing to aggregate")
+                            print("[INFO] kline_daily_raw is empty; nothing to aggregate")
                             return
                         start_date = row[0]
                 else:

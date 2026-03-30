@@ -73,7 +73,7 @@ def _get_client() -> BaseQMTClient:
 
 
 @router.post("/reload", summary="重新加载 QMT 配置并重建客户端")
-async def reload_client() -> Dict[str, Any]:
+def reload_client() -> Dict[str, Any]:
     """尝试通过断开+重连的方式刷新 QMT 连接.
 
     注意：由于客户端现为进程级单例，本接口不会重新构建实例，只会在
@@ -104,7 +104,7 @@ async def reload_client() -> Dict[str, Any]:
 
 
 @router.get("/status", summary="QMT/xtquant 连接状态")
-async def get_status() -> Dict[str, Any]:
+def get_status() -> Dict[str, Any]:
     client = _get_client()
     return {
         **client.status().__dict__,
@@ -115,7 +115,7 @@ async def get_status() -> Dict[str, Any]:
 
 
 @router.post("/connect", summary="连接 QMT（模拟盘/实盘取决于账户与 MINIQMT_MODE）")
-async def connect() -> Dict[str, Any]:
+def connect() -> Dict[str, Any]:
     client = _get_client()
     ok, msg = client.connect()
     return {
@@ -131,7 +131,7 @@ async def connect() -> Dict[str, Any]:
 
 
 @router.post("/disconnect", summary="断开 QMT 连接")
-async def disconnect() -> Dict[str, Any]:
+def disconnect() -> Dict[str, Any]:
     client = _get_client()
     ok, msg = client.disconnect()
     return {
@@ -147,7 +147,7 @@ async def disconnect() -> Dict[str, Any]:
 
 
 @router.get("/account", summary="获取 QMT 资金信息（快照）")
-async def get_account_info() -> Dict[str, Any]:
+def get_account_info() -> Dict[str, Any]:
     try:
         return _get_client().get_account_info()
     except QMTNotAvailableError as e:
@@ -155,7 +155,7 @@ async def get_account_info() -> Dict[str, Any]:
 
 
 @router.get("/positions", summary="获取 QMT 持仓列表（快照）")
-async def get_positions() -> List[Dict[str, Any]]:
+def get_positions() -> List[Dict[str, Any]]:
     try:
         return _get_client().get_positions()
     except QMTNotAvailableError as e:
@@ -163,7 +163,7 @@ async def get_positions() -> List[Dict[str, Any]]:
 
 
 @router.get("/snapshot", summary="获取 QMT 资金+持仓组合快照")
-async def get_snapshot() -> Dict[str, Any]:
+def get_snapshot() -> Dict[str, Any]:
     try:
         client = _get_client()
         return {
@@ -176,7 +176,7 @@ async def get_snapshot() -> Dict[str, Any]:
 
 
 @router.get("/orders", summary="获取 QMT 当日委托列表")
-async def get_orders(cancelable_only: bool = False) -> List[Dict[str, Any]]:
+def get_orders(cancelable_only: bool = False) -> List[Dict[str, Any]]:
     try:
         return _get_client().get_orders(cancelable_only=cancelable_only)
     except QMTNotAvailableError as e:
@@ -184,7 +184,7 @@ async def get_orders(cancelable_only: bool = False) -> List[Dict[str, Any]]:
 
 
 @router.get("/trades", summary="获取 QMT 当日成交列表")
-async def get_trades() -> List[Dict[str, Any]]:
+def get_trades() -> List[Dict[str, Any]]:
     try:
         return _get_client().get_trades()
     except QMTNotAvailableError as e:
@@ -192,7 +192,7 @@ async def get_trades() -> List[Dict[str, Any]]:
 
 
 @router.post("/order", summary="股票下单")
-async def place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
+def place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
     """股票下单接口
     
     参数：
@@ -246,7 +246,7 @@ async def place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @router.get("/monitor/config", summary="获取 QMT 持仓监控配置")
-async def get_qmt_monitor_config() -> Dict[str, Any]:
+def get_qmt_monitor_config() -> Dict[str, Any]:
     """返回当前 QMT 监控阈值配置.
 
     - global: 账户级阈值（总回撤、当日亏损、单票最大权重、最小现金比例）
@@ -258,7 +258,7 @@ async def get_qmt_monitor_config() -> Dict[str, Any]:
 
 
 @router.post("/monitor/config", summary="更新 QMT 持仓监控配置")
-async def update_qmt_monitor_config(payload: MonitorConfigModel) -> Dict[str, Any]:
+def update_qmt_monitor_config(payload: MonitorConfigModel) -> Dict[str, Any]:
     """更新 QMT 监控阈值配置.
 
     直接提交完整配置对象（global + per_symbol），后端进行覆盖写入。
@@ -269,7 +269,7 @@ async def update_qmt_monitor_config(payload: MonitorConfigModel) -> Dict[str, An
 
 
 @router.get("/monitor/summary", summary="获取 QMT 持仓监控摘要")
-async def get_qmt_monitor_summary() -> Dict[str, Any]:
+def get_qmt_monitor_summary() -> Dict[str, Any]:
     """基于当前 QMT 快照，返回账户/持仓 PnL 指标与告警列表.
 
     - account: total_asset / market_value / available_cash / total_position_profit / total_daily_profit
@@ -284,7 +284,7 @@ async def get_qmt_monitor_summary() -> Dict[str, Any]:
 
 
 @router.get("/monitor/strategies", summary="获取所有策略的 QMT 监控摘要")
-async def get_qmt_monitor_strategies() -> Dict[str, Any]:
+def get_qmt_monitor_strategies() -> Dict[str, Any]:
     """按 strategy_id 维度返回简要监控摘要.
 
     - items: 每个元素包含 strategy_id、orders_count、trades_count、
@@ -298,7 +298,7 @@ async def get_qmt_monitor_strategies() -> Dict[str, Any]:
 
 
 @router.get("/monitor/strategy/{strategy_id}/summary", summary="获取单个策略的 QMT 监控摘要")
-async def get_qmt_monitor_strategy_summary(strategy_id: str) -> Dict[str, Any]:
+def get_qmt_monitor_strategy_summary(strategy_id: str) -> Dict[str, Any]:
     """返回指定 strategy_id 对应的详细监控摘要.
 
     - pnl: 该策略相关持仓的总持仓盈亏 / 当日盈亏 / 市值及资产权重
@@ -313,7 +313,7 @@ async def get_qmt_monitor_strategy_summary(strategy_id: str) -> Dict[str, Any]:
 
 
 @router.post("/cancel", summary="撤单")
-async def cancel_order(payload: Dict[str, Any]) -> Dict[str, Any]:
+def cancel_order(payload: Dict[str, Any]) -> Dict[str, Any]:
     """撤单接口
     
     参数（二选一）：
@@ -347,7 +347,7 @@ async def cancel_order(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @router.post("/order/batch", summary="批量下单")
-async def batch_place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
+def batch_place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
     """批量下单接口
     
     参数：
@@ -417,7 +417,7 @@ async def batch_place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @router.get("/ipo/limit", summary="查询新股申购额度")
-async def get_new_purchase_limit() -> Dict[str, Any]:
+def get_new_purchase_limit() -> Dict[str, Any]:
     try:
         return _get_client().query_new_purchase_limit()
     except QMTNotAvailableError as e:
@@ -425,7 +425,7 @@ async def get_new_purchase_limit() -> Dict[str, Any]:
 
 
 @router.get("/ipo/list", summary="查询新股信息")
-async def get_ipo_data() -> List[Dict[str, Any]]:
+def get_ipo_data() -> List[Dict[str, Any]]:
     try:
         return _get_client().query_ipo_data()
     except QMTNotAvailableError as e:
@@ -433,7 +433,7 @@ async def get_ipo_data() -> List[Dict[str, Any]]:
 
 
 @router.post("/bank/transfer-in", summary="银行转证券")
-async def bank_transfer_in(payload: Dict[str, Any]) -> Dict[str, Any]:
+def bank_transfer_in(payload: Dict[str, Any]) -> Dict[str, Any]:
     """银行转证券
     
     参数：
@@ -467,7 +467,7 @@ async def bank_transfer_in(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @router.post("/bank/transfer-out", summary="证券转银行")
-async def bank_transfer_out(payload: Dict[str, Any]) -> Dict[str, Any]:
+def bank_transfer_out(payload: Dict[str, Any]) -> Dict[str, Any]:
     """证券转银行
     
     参数：
@@ -501,7 +501,7 @@ async def bank_transfer_out(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @router.get("/bank/info", summary="查询银行信息")
-async def get_bank_info() -> List[Dict[str, Any]]:
+def get_bank_info() -> List[Dict[str, Any]]:
     try:
         return _get_client().query_bank_info()
     except QMTNotAvailableError as e:
@@ -509,7 +509,7 @@ async def get_bank_info() -> List[Dict[str, Any]]:
 
 
 @router.get("/data/range", summary="查询 miniQMT 本地数据范围")
-async def get_local_data_range(stock_code: str, period: str) -> Dict[str, Any]:
+def get_local_data_range(stock_code: str, period: str) -> Dict[str, Any]:
     try:
         return _get_client().get_local_data_range(stock_code, period)
     except Exception as e:
@@ -517,7 +517,7 @@ async def get_local_data_range(stock_code: str, period: str) -> Dict[str, Any]:
 
 
 @router.post("/data/download", summary="下载 miniQMT 历史数据")
-async def download_history_data(payload: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, Any]:
+def download_history_data(payload: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, Any]:
     """
     异步下载历史数据。
     参数:
@@ -563,7 +563,7 @@ async def download_history_data(payload: Dict[str, Any], background_tasks: Backg
 
 
 @router.post("/data/download-financial", summary="下载 miniQMT 财务数据")
-async def download_financial_data(payload: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, Any]:
+def download_financial_data(payload: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, Any]:
     """
     异步下载财务数据。
     参数:
@@ -599,7 +599,7 @@ async def download_financial_data(payload: Dict[str, Any], background_tasks: Bac
 
 
 @router.get("/data/task/{task_id}/progress", summary="查询异步任务进度（QMT + Ingestion）")
-async def get_task_progress(task_id: str) -> Dict[str, Any]:
+def get_task_progress(task_id: str) -> Dict[str, Any]:
     try:
         # 优先从 QMT 内存任务中查询
         try:
@@ -678,7 +678,7 @@ async def get_task_progress(task_id: str) -> Dict[str, Any]:
 
 
 @router.get("/data/latest-day", summary="获取 miniQMT 最新交易日")
-async def get_latest_trading_day() -> Dict[str, Any]:
+def get_latest_trading_day() -> Dict[str, Any]:
     try:
         client = _get_client()
         latest_day = client.get_latest_trading_day()
@@ -689,7 +689,7 @@ async def get_latest_trading_day() -> Dict[str, Any]:
 
 
 @router.post("/data/one-click-update", summary="一键更新 miniQMT 历史数据")
-async def one_click_update(payload: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, Any]:
+def one_click_update(payload: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, Any]:
     """
     一键更新常用周期数据到最新（异步）。
     """
@@ -769,7 +769,7 @@ async def one_click_update(payload: Dict[str, Any], background_tasks: Background
 
 
 @router.get("/data/datasets/{dataset_id}/check-gap", summary="检查数据集缺口（直接查询数据表）")
-async def check_dataset_gap(dataset_id: str) -> Dict[str, Any]:
+def check_dataset_gap(dataset_id: str) -> Dict[str, Any]:
     """
     直接查询数据集自己的表获取 max_date，与最新交易日对比，返回缺口信息。
     不使用 refresh_data_stats()，避免超时和映射错误。
@@ -888,7 +888,7 @@ async def check_dataset_gap(dataset_id: str) -> Dict[str, Any]:
 # ==================== 数据集统计接口 ====================
 
 @router.get("/data/datasets", summary="获取所有数据集统计信息")
-async def get_all_datasets() -> Dict[str, Any]:
+def get_all_datasets() -> Dict[str, Any]:
     """
     获取所有数据集的统计信息，包括状态、数据范围、股票范围等。
     """
@@ -907,7 +907,7 @@ async def get_all_datasets() -> Dict[str, Any]:
 
 
 @router.get("/data/datasets/{dataset_id}", summary="获取指定数据集的详细统计")
-async def get_dataset_detail(dataset_id: str) -> Dict[str, Any]:
+def get_dataset_detail(dataset_id: str) -> Dict[str, Any]:
     """
     获取指定数据集的详细统计信息，包括日期范围、股票范围、质量指标等。
     """
@@ -928,7 +928,7 @@ async def get_dataset_detail(dataset_id: str) -> Dict[str, Any]:
 
 
 @router.post("/data/datasets/{dataset_id}/catch-up", summary="一键补齐数据集到当前日期")
-async def catch_up_dataset(dataset_id: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
+def catch_up_dataset(dataset_id: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     """
     一键补齐指定数据集到当前日期。
     支持 QMT 数据集（kline_1d/1m/5m/1h/tick）和 Tushare 数据集（daily_basic/bak_basic/stock_moneyflow_ts/cyq_perf/cyq_chips）。
@@ -1120,30 +1120,12 @@ async def catch_up_dataset(dataset_id: str, background_tasks: BackgroundTasks) -
 
 
 @router.get("/data/tasks", summary="获取所有同步任务")
-async def get_all_tasks(active_only: bool = False, limit: int = 50) -> Dict[str, Any]:
-    """
-    获取所有同步任务列表。
-    
-    参数：
-    - active_only: 是否仅显示运行中/排队的任务
-    - limit: 最多返回的任务数量
-    """
-    try:
-        client = _get_client()
-        tasks = client.get_all_tasks(active_only=active_only, limit=limit)
-        
-        return {
-            "tasks": tasks,
-            "total": len(tasks)
-        }
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"获取任务列表失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+def get_all_tasks(active_only: bool = False, limit: int = 50) -> Dict[str, Any]:
+    return {"tasks": [], "total": 0}
 
 
 @router.get("/data/tasks/{task_id}/progress", summary="获取任务详细进度")
-async def get_task_progress_detail(task_id: str) -> Dict[str, Any]:
+def get_task_progress_detail(task_id: str) -> Dict[str, Any]:
     """
     获取指定任务的详细进度信息，包括进度、日志、当前处理的股票等。
     """

@@ -36,7 +36,7 @@ def _mask(value: str | None) -> str | None:
 
 
 @router.get("/env-summary", summary="环境配置概览")
-async def get_env_summary() -> Dict[str, Any]:
+def get_env_summary() -> Dict[str, Any]:
     """Return a read-only summary of selected environment settings.
 
     Sensitive values are masked. The purpose of this endpoint is to

@@ -65,7 +65,7 @@ def _build_monitor_summary() -> Dict[str, Any]:
 
 
 @router.get("/summary", summary="监测概览")
-async def get_monitor_summary() -> Dict[str, Any]:
+def get_monitor_summary() -> Dict[str, Any]:
     """返回当前监测概览信息。
 
     语义等价于旧版 monitor_ui.get_monitor_summary / monitor_manager.get_monitor_summary。
@@ -75,12 +75,12 @@ async def get_monitor_summary() -> Dict[str, Any]:
 
 
 @router.get("/service/status", summary="监测服务运行状态")
-async def get_service_status() -> Dict[str, Any]:
+def get_service_status() -> Dict[str, Any]:
     return {"running": bool(getattr(monitor_service, "running", False))}
 
 
 @router.post("/service/start", summary="启动监测服务")
-async def start_service() -> Dict[str, Any]:
+def start_service() -> Dict[str, Any]:
     try:
         # start_monitoring 内部会启动后台线程，随后尝试调用 streamlit 的提示函数；
         # 在 FastAPI 环境下可能没有有效的 Streamlit 会话，这里忽略这类异常。
@@ -92,7 +92,7 @@ async def start_service() -> Dict[str, Any]:
 
 
 @router.post("/service/stop", summary="停止监测服务")
-async def stop_service() -> Dict[str, Any]:
+def stop_service() -> Dict[str, Any]:
     try:
         monitor_service.stop_monitoring()
     except Exception:
@@ -102,7 +102,7 @@ async def stop_service() -> Dict[str, Any]:
 
 
 @router.post("/service/manual-update-all", summary="手动更新所有需要更新的监测股票")
-async def manual_update_all() -> Dict[str, Any]:
+def manual_update_all() -> Dict[str, Any]:
     try:
         stocks = monitor_service.get_stocks_needing_update()
     except Exception as e:  # noqa: BLE001
@@ -121,7 +121,7 @@ async def manual_update_all() -> Dict[str, Any]:
 
 
 @router.get("/stocks", summary="监测股票列表")
-async def list_monitored_stocks() -> List[Dict[str, Any]]:
+def list_monitored_stocks() -> List[Dict[str, Any]]:
     """返回当前所有监测股票列表。
 
     对应旧版 monitor_manager.display_monitored_stocks / monitor_ui.display_monitored_stocks
@@ -137,7 +137,7 @@ def _validate_entry_range(data: MonitorStockBase) -> None:
 
 
 @router.post("/stocks", summary="添加监测股票")
-async def add_monitored_stock(payload: MonitorStockCreate) -> Dict[str, Any]:
+def add_monitored_stock(payload: MonitorStockCreate) -> Dict[str, Any]:
     """添加单只监测股票，语义等价于旧版“添加股票监测”表单提交。"""
 
     _validate_entry_range(payload)
@@ -167,7 +167,7 @@ async def add_monitored_stock(payload: MonitorStockCreate) -> Dict[str, Any]:
 
 
 @router.put("/stocks/{stock_id}", summary="编辑监测股票")
-async def update_monitored_stock(stock_id: int, payload: MonitorStockUpdate) -> Dict[str, Any]:
+def update_monitored_stock(stock_id: int, payload: MonitorStockUpdate) -> Dict[str, Any]:
     """编辑单只监测股票设置，对应旧版编辑对话框保存。"""
 
     existing = monitor_db.get_stock_by_id(stock_id)
@@ -194,7 +194,7 @@ async def update_monitored_stock(stock_id: int, payload: MonitorStockUpdate) -> 
 
 
 @router.delete("/stocks/{stock_id}", summary="删除监测股票")
-async def delete_monitored_stock(stock_id: int) -> Dict[str, Any]:
+def delete_monitored_stock(stock_id: int) -> Dict[str, Any]:
     ok = monitor_db.remove_monitored_stock(stock_id)
     if not ok:
         raise HTTPException(status_code=404, detail="监测股票不存在或已被删除")
@@ -202,7 +202,7 @@ async def delete_monitored_stock(stock_id: int) -> Dict[str, Any]:
 
 
 @router.post("/stocks/{stock_id}/manual-update", summary="手动更新指定监测股票")
-async def manual_update_stock(stock_id: int) -> Dict[str, Any]:
+def manual_update_stock(stock_id: int) -> Dict[str, Any]:
     ok = monitor_service.manual_update_stock(stock_id)
     if not ok:
         raise HTTPException(status_code=404, detail="监测股票不存在")
@@ -210,7 +210,7 @@ async def manual_update_stock(stock_id: int) -> Dict[str, Any]:
 
 
 @router.post("/stocks/{stock_id}/notification", summary="切换通知开关")
-async def toggle_stock_notification(
+def toggle_stock_notification(
     stock_id: int,
     enabled: bool = Body(..., embed=True),
 ) -> Dict[str, Any]:
@@ -223,7 +223,7 @@ async def toggle_stock_notification(
 
 
 @router.post("/stocks/batch-add", summary="批量添加或更新监测股票")
-async def batch_add_or_update_monitors(
+def batch_add_or_update_monitors(
     items: List[Dict[str, Any]] = Body(..., embed=True),
 ) -> Dict[str, int]:
     """批量添加或更新监测股票。
@@ -237,37 +237,37 @@ async def batch_add_or_update_monitors(
 
 
 @router.get("/notifications/recent", summary="最近通知列表")
-async def get_recent_notifications(
+def get_recent_notifications(
     limit: int = Query(10, ge=1, le=100),
 ) -> List[Dict[str, Any]]:
     return monitor_db.get_all_recent_notifications(limit=limit)
 
 
 @router.post("/notifications/mark-all-sent", summary="标记所有通知为已读")
-async def mark_all_notifications_sent() -> Dict[str, Any]:
+def mark_all_notifications_sent() -> Dict[str, Any]:
     count = monitor_db.mark_all_notifications_sent()
     return {"updated": int(count)}
 
 
 @router.post("/notifications/clear", summary="清空所有通知")
-async def clear_notifications() -> Dict[str, Any]:
+def clear_notifications() -> Dict[str, Any]:
     count = monitor_db.clear_all_notifications()
     return {"deleted": int(count)}
 
 
 @router.get("/notifications/email-config-status", summary="邮件通知配置状态")
-async def get_email_config_status() -> Dict[str, Any]:
+def get_email_config_status() -> Dict[str, Any]:
     return notification_service.get_email_config_status()
 
 
 @router.post("/notifications/send-test-email", summary="发送测试邮件")
-async def send_test_email() -> Dict[str, Any]:
+def send_test_email() -> Dict[str, Any]:
     success, message = notification_service.send_test_email()
     return {"success": success, "message": message}
 
 
 @router.get("/scheduler/status", summary="定时调度状态")
-async def get_scheduler_status() -> Dict[str, Any]:
+def get_scheduler_status() -> Dict[str, Any]:
     scheduler = monitor_service.get_scheduler()
     if scheduler is None:
         raise HTTPException(status_code=500, detail="调度器未初始化")
@@ -275,7 +275,7 @@ async def get_scheduler_status() -> Dict[str, Any]:
 
 
 @router.post("/scheduler/config", summary="更新定时调度配置")
-async def update_scheduler_config(payload: SchedulerConfigUpdate) -> Dict[str, Any]:
+def update_scheduler_config(payload: SchedulerConfigUpdate) -> Dict[str, Any]:
     scheduler = monitor_service.get_scheduler()
     if scheduler is None:
         raise HTTPException(status_code=500, detail="调度器未初始化")
@@ -293,7 +293,7 @@ async def update_scheduler_config(payload: SchedulerConfigUpdate) -> Dict[str, A
 
 
 @router.post("/scheduler/start", summary="启动定时调度器")
-async def start_scheduler() -> Dict[str, Any]:
+def start_scheduler() -> Dict[str, Any]:
     scheduler = monitor_service.get_scheduler()
     if scheduler is None:
         raise HTTPException(status_code=500, detail="调度器未初始化")
@@ -303,7 +303,7 @@ async def start_scheduler() -> Dict[str, Any]:
 
 
 @router.post("/scheduler/stop", summary="停止定时调度器")
-async def stop_scheduler() -> Dict[str, Any]:
+def stop_scheduler() -> Dict[str, Any]:
     scheduler = monitor_service.get_scheduler()
     if scheduler is None:
         raise HTTPException(status_code=500, detail="调度器未初始化")
@@ -313,7 +313,7 @@ async def stop_scheduler() -> Dict[str, Any]:
 
 
 @router.get("/miniqmt/status", summary="MiniQMT 状态")
-async def miniqmt_status() -> Dict[str, Any]:
+def miniqmt_status() -> Dict[str, Any]:
     """返回 MiniQMT 量化接口当前状态。
 
     与旧版中 miniqmt_interface.get_miniqmt_status 语义一致，用于前端展示量化组件是否启用、连接状态和账户信息。
@@ -323,7 +323,7 @@ async def miniqmt_status() -> Dict[str, Any]:
 
 
 @router.post("/miniqmt/connect", summary="连接 MiniQMT")
-async def miniqmt_connect() -> Dict[str, Any]:
+def miniqmt_connect() -> Dict[str, Any]:
     """尝试按照当前配置连接 MiniQMT。
 
     调用 init_miniqmt() 读取 config.MINIQMT_CONFIG / 环境变量并初始化全局 miniqmt 实例，
@@ -336,7 +336,7 @@ async def miniqmt_connect() -> Dict[str, Any]:
 
 
 @router.post("/miniqmt/disconnect", summary="断开 MiniQMT")
-async def miniqmt_disconnect() -> Dict[str, Any]:
+def miniqmt_disconnect() -> Dict[str, Any]:
     """断开与 MiniQMT 的连接，但保留当前启用配置。
 
     语义上等价于对全局 miniqmt 实例调用 disconnect()，不会修改 MINIQMT_ENABLED，便于之后再次手动连接。

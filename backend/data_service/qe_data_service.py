@@ -16,7 +16,7 @@
 - bak_basic：排除上市日期前的数据和停牌期间的数据（JOIN kline_daily_raw 过滤）
 - 预计算因子：从 moneyflow_ts 实时计算 mf_* 派生因子（与 generate_static_factors_bundle.py 逻辑一致）
 
-禁止直接访问 kline_daily_qfq 表（增量同步可能导致数据不准确）。
+日线数据统一通过 kline_daily_raw + adj_factor 实时计算前复权。
 """
 from __future__ import annotations
 
@@ -182,6 +182,19 @@ CYQ_PERF_FIELD_MAP: Dict[str, str] = {
     "weight_avg": "cp_weight_avg",
     "winner_rate":"cp_winner_rate",
 }
+
+# sector_data 列在数据库中已经是 sw2_* 前缀，无需重命名
+SECTOR_DATA_COLUMNS: List[str] = [
+    "sw2_open", "sw2_high", "sw2_low", "sw2_close", "sw2_pct_change",
+    "sw2_vol", "sw2_amount", "sw2_pe", "sw2_pb", "sw2_total_mv",
+    "sw2_mf_buy_sm_amt", "sw2_mf_sell_sm_amt",
+    "sw2_mf_buy_md_amt", "sw2_mf_sell_md_amt",
+    "sw2_mf_buy_lg_amt", "sw2_mf_sell_lg_amt",
+    "sw2_mf_buy_elg_amt", "sw2_mf_sell_elg_amt",
+    "sw2_mf_net_amt",
+    "sw2_mf_buy_elg_vol", "sw2_mf_sell_elg_vol",
+    "sw2_mf_net_vol",
+]
 
 
 def _normalize_instrument(code: str) -> str:
@@ -500,8 +513,6 @@ def load_bak_basic(
                b.gpr, b.npr, b.holder_num
         FROM market.bak_basic b
         INNER JOIN market.stock_basic s ON b.ts_code = s.ts_code
-        INNER JOIN market.kline_daily_raw k
-            ON b.ts_code = k.ts_code AND b.trade_date = k.trade_date
         WHERE b.ts_code IN ({placeholders})
           AND b.trade_date >= %s AND b.trade_date <= %s
           AND b.trade_date >= s.list_date
@@ -560,6 +571,47 @@ def load_cyq_perf(
     df = df.rename(columns=CYQ_PERF_FIELD_MAP)
     result = _build_multiindex_df(df, "cp_")
     _CACHE.set("load_cyq_perf", ts_codes, start.isoformat(), end.isoformat(), result)
+    return result
+
+
+def load_sector_data(
+    instruments: List[str],
+    start_date: Union[str, date],
+    end_date: Union[str, date],
+) -> pd.DataFrame:
+    """
+    加载申万 L2 行业板块数据（展开到个股级别），输出 sw2_* 前缀字段。
+    数据源：market.sector_data
+    """
+    start = _to_date(start_date)
+    end = _to_date(end_date)
+    ts_codes = [_normalize_instrument(i) for i in instruments]
+
+    cached = _CACHE.get("load_sector_data", ts_codes, start.isoformat(), end.isoformat())
+    if cached is not None:
+        logger.debug("load_sector_data: 缓存命中")
+        return cached
+
+    placeholders = ",".join(["%s"] * len(ts_codes))
+    col_list = ", ".join(SECTOR_DATA_COLUMNS)
+    sql = f"""
+        SELECT trade_date, ts_code, {col_list}
+        FROM market.sector_data
+        WHERE ts_code IN ({placeholders})
+          AND trade_date >= %s AND trade_date <= %s
+        ORDER BY trade_date, ts_code
+    """
+    params = ts_codes + [start.isoformat(), end.isoformat()]
+
+    with get_conn() as conn:
+        df = pd.read_sql(sql, conn, params=params)
+
+    if df.empty:
+        return pd.DataFrame()
+
+    # 列已经是 sw2_* 前缀，无需重命名
+    result = _build_multiindex_df(df, "sw2_")
+    _CACHE.set("load_sector_data", ts_codes, start.isoformat(), end.isoformat(), result)
     return result
 
 
@@ -761,10 +813,12 @@ def build_static_factors(
     2. df_mf_raw       - moneyflow 原始字段（mf_* 前缀）
     3. df_bb_raw       - bak_basic 原始字段（bb_* 前缀，已过滤上市前+停牌）
     4. df_cp_raw       - cyq_perf 原始字段（cp_* 前缀）
-    5. df_mf_derived   - moneyflow 派生因子（mf_total_net_amt 等）
-    6. df_db_precomp   - daily_basic 预计算因子（value_pe_inv 等5个）
+    5. df_sd_raw       - sector_data 原始字段（sw2_* 前缀，申万 L2 行业板块）
+    6. df_mf_derived   - moneyflow 派生因子（mf_total_net_amt 等）
+    7. df_db_precomp   - daily_basic 预计算因子（value_pe_inv 等5个）
+    8. df_price_momentum - 价格动量因子（PriceStrength_10D）
 
-    注意：ae_recon_error_10d（PriceStrength_10D）需要预训练模型，不在此处计算。
+    注意：ae_recon_error_10d 需要预训练模型，不在此处计算（该因子未出现在任何 RDAgent 工作区 schema 中）。
 
     Args:
         instruments: 股票代码列表（'000001.SZ' 格式）
@@ -781,11 +835,21 @@ def build_static_factors(
     df_mf_raw = load_moneyflow(instruments, start_date, end_date)
     df_bb_raw = load_bak_basic(instruments, start_date, end_date)
     df_cp_raw = load_cyq_perf(instruments, start_date, end_date)
+    df_sd_raw = load_sector_data(instruments, start_date, end_date)
     df_pv     = load_daily_pv(instruments, start_date, end_date)
 
     # 2. 计算派生因子
     df_mf_derived  = compute_moneyflow_derived_factors(df_mf_raw, df_pv)
     df_db_precomp  = compute_daily_basic_precomputed_factors(df_db_raw)
+
+    # 2.5 计算 PriceStrength_10D（10日价格动量）
+    df_price_momentum = pd.DataFrame()
+    if df_pv is not None and not df_pv.empty and "close" in df_pv.columns:
+        df_price_momentum = pd.DataFrame(index=df_pv.index)
+        df_price_momentum["PriceStrength_10D"] = (
+            df_pv["close"].groupby(level="instrument").pct_change(10)
+        )
+        logger.debug(f"  PriceStrength_10D: {df_price_momentum.shape}")
 
     # 3. 合并（与 generate_static_factors_bundle.py 的 left join 逻辑一致）
     dfs: List[pd.DataFrame] = []
@@ -794,8 +858,10 @@ def build_static_factors(
         ("moneyflow_raw",    df_mf_raw),
         ("bak_basic_raw",    df_bb_raw),
         ("cyq_perf_raw",     df_cp_raw),
+        ("sector_data_raw",  df_sd_raw),
         ("mf_derived",       df_mf_derived),
         ("db_precomputed",   df_db_precomp),
+        ("price_momentum",   df_price_momentum),
     ]:
         if df is not None and not df.empty:
             dfs.append(df)

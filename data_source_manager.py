@@ -32,12 +32,12 @@ class DataSourceManager:
                 ts.set_token(self.tushare_token)
                 self.tushare_api = ts.pro_api()
                 self.tushare_available = True
-                print("✅ Tushare数据源初始化成功")
+                print("[OK] Tushare数据源初始化成功")
             except Exception as e:
-                print(f"⚠️ Tushare数据源初始化失败: {e}")
+                print(f"[WARN] Tushare数据源初始化失败: {e}")
                 self.tushare_available = False
         else:
-            print("ℹ️ 未配置Tushare Token，将仅使用Akshare数据源")
+            print("[INFO] 未配置Tushare Token，将仅使用Akshare数据源")
 
         if self.tdx_available:
             print(f"✅ TDX API 数据源已启用 | Base URL = {self.tdx_api_base}")

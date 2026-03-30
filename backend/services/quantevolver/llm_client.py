@@ -90,7 +90,7 @@ def get_llm_kwargs(agent_type: str, default_model: str = "deepseek/deepseek-chat
                     return {"model": model_id_db}
 
     except Exception as e:
-        logger.error(f"获取Agent '{agent_type}' 的LLM配置失败: {e}")
+        raise RuntimeError(f"获取Agent '{agent_type}' 的LLM配置失败: {e}") from e
 
-    # Fallback
-    return {"model": os.getenv("QE_LLM_MODEL", default_model)}
+    # 未找到任何配置 → 使用默认模型
+    return {"model": default_model}

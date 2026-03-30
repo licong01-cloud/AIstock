@@ -36,7 +36,7 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 
 
 @router.post("/stock", response_model=StockAnalysisResponse, summary="股票分析（多智能体）")
-async def analyze_stock_endpoint(req: StockAnalysisRequest) -> StockAnalysisResponse:
+def analyze_stock_endpoint(req: StockAnalysisRequest) -> StockAnalysisResponse:
     """股票分析接口，复用统一数据访问与旧多智能体实现。"""
 
     return analyze_stock(req)
@@ -47,7 +47,7 @@ async def analyze_stock_endpoint(req: StockAnalysisRequest) -> StockAnalysisResp
     response_model=StockTrendAnalysisResponse,
     summary="股票趋势分析（多周期概率预测）",
 )
-async def analyze_stock_trend_endpoint(
+def analyze_stock_trend_endpoint(
     req: StockTrendAnalysisRequest,
 ) -> StockTrendAnalysisResponse:
     """股票趋势分析接口，复用统一数据访问与新趋势分析管线。"""
@@ -56,14 +56,14 @@ async def analyze_stock_trend_endpoint(
 
 
 @router.post("/stock/context", response_model=StockContextResponse, summary="股票概览与K线基础数据")
-async def stock_context_endpoint(req: StockAnalysisRequest) -> StockContextResponse:
+def stock_context_endpoint(req: StockAnalysisRequest) -> StockContextResponse:
     """返回单只股票的概览信息与基础K线数据。"""
 
     return get_stock_context(req)
 
 
 @router.get("/stock/quote/{symbol}", response_model=StockQuote, summary="获取单只股票的实时行情（TDX）")
-async def stock_quote_endpoint(symbol: str) -> StockQuote:
+def stock_quote_endpoint(symbol: str) -> StockQuote:
     """轻量级实时行情接口，仅依赖 TDX 等实时源。
 
     - 主要用于历史详情中的“当前价格/涨跌幅”卡片；
@@ -78,7 +78,7 @@ async def stock_quote_endpoint(symbol: str) -> StockQuote:
     response_model=BatchStockAnalysisResponse,
     summary="批量股票分析（顺序/并行）",
 )
-async def analyze_stock_batch_endpoint(
+def analyze_stock_batch_endpoint(
     req: BatchStockAnalysisRequest,
 ) -> BatchStockAnalysisResponse:
     """批量股票分析接口。
@@ -92,7 +92,7 @@ async def analyze_stock_batch_endpoint(
 
 
 @router.get("/stock/report/pdf/{record_id}")
-async def download_stock_report_pdf(record_id: int) -> StreamingResponse:
+def download_stock_report_pdf(record_id: int) -> StreamingResponse:
     """下载指定分析记录对应的 PDF 报告。
 
     - record_id 来自单股分析返回的 record_id 字段；
@@ -121,7 +121,7 @@ async def download_stock_report_pdf(record_id: int) -> StreamingResponse:
     "/stock/report/markdown/{record_id}",
     response_class=PlainTextResponse,
 )
-async def download_stock_report_markdown(record_id: int) -> PlainTextResponse:
+def download_stock_report_markdown(record_id: int) -> PlainTextResponse:
     """下载指定分析记录对应的 Markdown 报告文本。"""
 
     try:
@@ -143,7 +143,7 @@ async def download_stock_report_markdown(record_id: int) -> PlainTextResponse:
 
 
 @router.get("/stock/trend/report/pdf/{record_id}")
-async def download_trend_report_pdf(record_id: int) -> StreamingResponse:
+def download_trend_report_pdf(record_id: int) -> StreamingResponse:
     """下载指定趋势分析记录对应的 PDF 报告。"""
 
     try:
@@ -167,7 +167,7 @@ async def download_trend_report_pdf(record_id: int) -> StreamingResponse:
     "/stock/trend/report/markdown/{record_id}",
     response_class=PlainTextResponse,
 )
-async def download_trend_report_markdown(
+def download_trend_report_markdown(
     record_id: int,
 ) -> PlainTextResponse:
     """下载指定趋势分析记录对应的 Markdown 报告文本。"""
@@ -190,7 +190,7 @@ async def download_trend_report_markdown(
 
 
 @router.get("/history")
-async def list_history_records(
+def list_history_records(
     q: str | None = Query(None, description="按股票代码或名称模糊搜索"),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
@@ -224,7 +224,7 @@ async def list_history_records(
 
 
 @router.delete("/history/{record_id}")
-async def delete_history_record_endpoint(record_id: int) -> dict:
+def delete_history_record_endpoint(record_id: int) -> dict:
     """删除单条历史分析记录。
 
     - 语义对应旧版 db.delete_record(record_id)。
@@ -237,7 +237,7 @@ async def delete_history_record_endpoint(record_id: int) -> dict:
 
 
 @router.get("/history/{record_id}", response_model=StockAnalysisResponse)
-async def get_history_record_detail_endpoint(record_id: int) -> StockAnalysisResponse:
+def get_history_record_detail_endpoint(record_id: int) -> StockAnalysisResponse:
     try:
         return get_history_record_detail(record_id)
     except ValueError as e:
@@ -245,7 +245,7 @@ async def get_history_record_detail_endpoint(record_id: int) -> StockAnalysisRes
 
 
 @router.post("/history/{record_id}/monitor_quick_add")
-async def history_quick_add_monitor(record_id: int) -> dict:
+def history_quick_add_monitor(record_id: int) -> dict:
     """将指定历史记录一键加入监测。
 
     - 基于历史记录的 final_decision 自动提取关键价位和评级；
@@ -261,7 +261,7 @@ async def history_quick_add_monitor(record_id: int) -> dict:
 
 
 @router.get("/trend/history")
-async def list_trend_history_records(
+def list_trend_history_records(
     q: str | None = Query(None, description="按股票代码或名称模糊搜索"),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
@@ -294,7 +294,7 @@ async def list_trend_history_records(
     "/trend/history/{record_id}",
     response_model=StockTrendAnalysisResponse,
 )
-async def get_trend_history_record_detail_endpoint(
+def get_trend_history_record_detail_endpoint(
     record_id: int,
 ) -> StockTrendAnalysisResponse:
     try:

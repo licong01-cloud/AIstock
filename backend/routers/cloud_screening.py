@@ -38,13 +38,13 @@ class CloudHotStrategiesResponse(BaseModel):
 
 
 @router.get("/hot-strategies", response_model=CloudHotStrategiesResponse, summary="获取热门云选股策略列表")
-async def hot_strategies(limit: int = Query(20, ge=1, le=100)) -> CloudHotStrategiesResponse:
+def hot_strategies(limit: int = Query(20, ge=1, le=100)) -> CloudHotStrategiesResponse:
     strategies = get_hot_strategy_list(limit=limit)
     return CloudHotStrategiesResponse(strategies=strategies)
 
 
 @router.post("/search", response_model=CloudSearchResponse, summary="执行云选股搜索")
-async def cloud_search(req: CloudSearchRequest) -> CloudSearchResponse:
+def cloud_search(req: CloudSearchRequest) -> CloudSearchResponse:
     keyword = (req.keyword or "").strip()
     if not keyword:
         return CloudSearchResponse(

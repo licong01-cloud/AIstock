@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./localData.module.css";
 
 const TDX_BASE =
@@ -27,7 +27,7 @@ type LocalDataTab =
   | "schedules"
   | "logs";
 
-type DataSource = "TDX" | "Tushare" | "xtquant";
+type DataSource = "TDX" | "Tushare" | "xtquant" | "News";
 
 const FREQUENCY_CHOICES: { label: string; value: string }[] = [
   { label: "手动 (不调度)", value: "" },
@@ -44,25 +44,27 @@ const FREQUENCY_CHOICES: { label: string; value: string }[] = [
 
 const INGESTION_DATASETS_BY_SOURCE: Record<DataSource, Record<string, string>> = {
   TDX: {
-    kline_daily_qfq: "日线（前复权 QFQ）",
     kline_daily_raw: "日线（未复权 RAW）",
-    kline_daily_qfq_go: "日线（前复权 QFQ · Go 直连）",
     kline_daily_raw_go: "日线（未复权 RAW · Go 直连）",
-    tdx_board_index: "通达信板块信息",
-    tdx_board_member: "通达信板块成分",
-    tdx_board_daily: "通达信板块行情",
   },
   Tushare: {
-    stock_moneyflow: "个股资金流（moneyflow_ind_dc）",
     stock_moneyflow_ts: "个股资金流（moneyflow · Tushare）",
     daily_basic: "股票每日指标（Tushare daily_basic）",
     index_daily: "指数日线行情（Tushare index_daily）",
-    trade_agg_5m: "高频聚合 5m",
     cyq_perf: "筹码分布绩效（Tushare cyq_perf）",
     cyq_chips: "每日筹码分布（Tushare cyq_chips）",
+    sw_sector: "申万行业板块（分类+成分股+日线）",
+    sw_index_classify: "申万行业分类（Tushare index_classify）",
+    sw_index_member: "申万行业成分股PIT映射（Tushare index_member_all）",
+    sw_daily: "申万行业指数日线（Tushare sw_daily）",
+    sector_data: "申万L2行业展开到个股（22列，后处理）",
+    stk_limit: "每日涨跌停价格（Tushare stk_limit）",
   },
   xtquant: {
     xtquant_pershare_index: "每股主要指标（PershareIndex）",
+  },
+  News: {
+    news_realtime: "新闻实时入库（多源快讯）",
   },
 };
 
@@ -78,11 +80,19 @@ const TRUNCABLE_DATASETS: string[] = [
   "stock_moneyflow_ts",
   "stock_st",
   "bak_basic",
+  "stk_limit",
   "daily_basic",
   "anns_d",
   "cyq_perf",
   "cyq_chips",
   "stock_basic",
+  "sw_index_classify",
+  "sw_index_member",
+  "sw_daily",
+  "sw_sector",
+  "sector_data",
+  "index_daily",
+  "index_basic",
   // TDX数据集
   "kline_daily_raw",
   "kline_minute_raw",
@@ -240,18 +250,10 @@ export default function LocalDataPage() {
       let dataset: string | undefined;
       let symbolsScope: "watchlist" | "all" | undefined;
 
-      if (lower === "kline_daily_qfq_go" || lower === "kline_daily_qfq") {
-        dataset = "kline_daily_qfq_go";
-      } else if (lower === "kline_daily_raw_go" || lower === "kline_daily_raw") {
+      if (lower === "kline_daily_raw_go" || lower === "kline_daily_raw") {
         dataset = "kline_daily_raw_go";
       } else if (lower === "kline_minute_raw") {
         dataset = "kline_minute_raw";
-      } else if (lower === "trade_agg_5m") {
-        dataset = "trade_agg_5m";
-        symbolsScope = "all";
-      } else if (lower === "stock_moneyflow") {
-        dataSource = "Tushare";
-        dataset = "stock_moneyflow";
       } else if (lower === "stock_moneyflow_ts") {
         dataSource = "Tushare";
         dataset = "stock_moneyflow_ts";
@@ -267,13 +269,6 @@ export default function LocalDataPage() {
       } else if (lower === "index_daily") {
         dataSource = "Tushare";
         dataset = "index_daily";
-      } else if (
-        lower === "tdx_board_index" ||
-        lower === "tdx_board_member" ||
-        lower === "tdx_board_daily"
-      ) {
-        dataSource = "Tushare";
-        dataset = "tdx_board_all";
       } else if (lower === "adj_factor") {
         dataSource = "Tushare";
         dataset = "adj_factor";
@@ -286,6 +281,12 @@ export default function LocalDataPage() {
       } else if (lower === "daily_basic") {
         dataSource = "Tushare";
         dataset = "daily_basic";
+      } else if (lower === "stk_limit") {
+        dataSource = "Tushare";
+        dataset = "stk_limit";
+      } else if (lower === "stock_basic") {
+        dataSource = "Tushare";
+        dataset = "stock_basic";
       } else if (lower === "xtquant_pershare_index") {
         dataSource = "xtquant";
         dataset = "xtquant_pershare_index";
@@ -414,7 +415,7 @@ export default function LocalDataPage() {
 
 function InitTab() {
   const [dataSource, setDataSource] = useState<DataSource>("TDX");
-  const [dataset, setDataset] = useState<string>("kline_daily_qfq_go");
+  const [dataset, setDataset] = useState<string>("kline_daily_raw_go");
   const [tradeAggScope, setTradeAggScope] = useState<"all" | "watchlist">("all");
   const [startDate, setStartDate] = useState<string>("1990-01-01");
   const [endDate, setEndDate] = useState<string>(() => {
@@ -450,10 +451,6 @@ function InitTab() {
 
   const datasetOptionsTDX: { key: string; label: string }[] = [
     {
-      key: "kline_daily_qfq_go",
-      label: "kline_daily_qfq_go · 日线（前复权 QFQ · Go 直连）",
-    },
-    {
       key: "kline_daily_raw_go",
       label: "kline_daily_raw_go · 日线（未复权 RAW · Go 直连）",
     },
@@ -462,25 +459,13 @@ function InitTab() {
       label: "kline_minute_raw · 1 分钟原始（TDX 全量）",
     },
     {
-      key: "trade_agg_5m",
-      label: "trade_agg_5m · 高频聚合 5m",
-    },
-    {
       key: "symbol_dim",
       label: "symbol_dim · 股票基础信息（TDX /api/codes）",
     },
   ];
 
   const datasetOptionsTushare: { key: string; label: string }[] = [
-    { key: "tdx_board_all", label: "tdx_board_all · 通达信板块（信息+成分+行情）" },
-    { key: "tdx_board_index", label: "tdx_board_index · 通达信板块信息" },
-    { key: "tdx_board_member", label: "tdx_board_member · 通达信板块成分" },
-    { key: "tdx_board_daily", label: "tdx_board_daily · 通达信板块行情" },
     { key: "kline_weekly", label: "kline_weekly · 周线（由本地日线QFQ聚合）" },
-    {
-      key: "stock_moneyflow",
-      label: "stock_moneyflow · 个股资金流（moneyflow_ind_dc）",
-    },
     {
       key: "stock_moneyflow_ts",
       label: "stock_moneyflow_ts · 个股资金流 (Tushare moneyflow_ts)",
@@ -497,6 +482,7 @@ function InitTab() {
     { key: "stock_st", label: "stock_st · ST 股票列表" },
     { key: "bak_basic", label: "bak_basic · 历史股票列表" },
     { key: "daily_basic", label: "daily_basic · 股票每日指标（Tushare）" },
+    { key: "stk_limit", label: "stk_limit · 每日涨跌停价格（Tushare）" },
     {
       key: "anns_d",
       label: "anns_d · 上市公司公告（Tushare anns_d）",
@@ -513,6 +499,14 @@ function InitTab() {
       key: "cyq_chips",
       label: "cyq_chips · 每日筹码分布（Tushare）",
     },
+    {
+      key: "sw_sector",
+      label: "sw_sector · 申万行业板块（分类+成分股+日线，统一同步）",
+    },
+    {
+      key: "sector_data",
+      label: "sector_data · 申万L2行业展开到个股（22列，后处理）",
+    },
   ];
 
   const datasetOptionsXtquant: { key: string; label: string }[] = [
@@ -525,7 +519,7 @@ function InitTab() {
   // 根据数据源动态调整默认参数
   useEffect(() => {
     if (dataSource === "TDX") {
-      setDataset("kline_daily_qfq_go");
+      setDataset("kline_daily_raw_go");
       setStartDate("1990-01-01");
       setTruncate(true);
       setConfirmClear(false);
@@ -541,7 +535,7 @@ function InitTab() {
       const ago = new Date(d.getTime() - 365 * 24 * 60 * 60 * 1000)
         .toISOString()
         .slice(0, 10);
-      setDataset("tdx_board_all");
+      setDataset("kline_weekly");
       setStartDate(ago);
       setEndDate(today);
       setTruncate(false);
@@ -611,9 +605,7 @@ function InitTab() {
     setSubmitting(true);
     setError(null);
     try {
-      const forceTushareMoneyflow = dataset === "stock_moneyflow";
-
-      if (dataSource === "TDX" && !forceTushareMoneyflow) {
+      if (dataSource === "TDX") {
         // TDX 分支
         if (dataset === "symbol_dim") {
           const opts = {
@@ -623,31 +615,6 @@ function InitTab() {
               .filter(Boolean),
           };
           const payload = { dataset: "symbol_dim", mode: "init", options: opts };
-          const resp: any = await backendRequest(
-            "POST",
-            "/api/ingestion/run",
-            {
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            },
-          );
-          if (resp && resp.job_id) {
-            setJobId(String(resp.job_id));
-            setAutoRefresh(true);
-          }
-          return;
-        }
-
-        if (dataset === "trade_agg_5m") {
-          const opts = {
-            start_date: startDate,
-            end_date: endDate,
-            freq_minutes: 5,
-            symbols_scope: tradeAggScope,
-            batch_size: 50,
-            workers: Number(workers) || 1,
-          };
-          const payload = { dataset: "trade_agg_5m", mode: "init", options: opts };
           const resp: any = await backendRequest(
             "POST",
             "/api/ingestion/run",
@@ -750,12 +717,12 @@ function InitTab() {
       if (
         [
           "adj_factor",
-          "stock_moneyflow",
           "stock_basic",
           "index_basic",
           "index_daily",
           "stock_st",
           "bak_basic",
+          "stk_limit",
           "anns_d",
           "cyq_perf",
           "cyq_chips",
@@ -781,7 +748,6 @@ function InitTab() {
       }
       if (
         [
-          "stock_moneyflow",
           "stock_basic",
           "index_basic",
           "index_daily",
@@ -799,7 +765,7 @@ function InitTab() {
           opts.index_markets = indexMarkets;
         }
       }
-      if (dataset === "stock_st" || dataset === "bak_basic" || dataset === "anns_d" || dataset === "cyq_perf" || dataset === "cyq_chips") {
+      if (dataset === "stock_st" || dataset === "bak_basic" || dataset === "stk_limit" || dataset === "anns_d" || dataset === "cyq_perf" || dataset === "cyq_chips") {
         if (!opts.start_date || !opts.end_date) {
           setError("请填写起止日期再执行初始化。");
           return;
@@ -1001,17 +967,16 @@ function InitTab() {
 
         {((dataSource === "TDX" &&
           (dataset === "kline_minute_raw" ||
-            dataset === "kline_daily_raw_go" ||
-            dataset === "kline_daily_qfq_go")) ||
+            dataset === "kline_daily_raw_go")) ||
           (dataSource === "Tushare" &&
             [
               "adj_factor",
-              "stock_moneyflow",
               "stock_basic",
               "index_basic",
               "index_daily",
               "stock_st",
               "bak_basic",
+              "stk_limit",
               "anns_d",
             ].includes(dataset))) && (
           <div className={styles.formGroup}>
@@ -1157,7 +1122,7 @@ function IncrementalTab({
   onPrefillConsumed?: () => void;
 }) {
   const [dataSource, setDataSource] = useState<DataSource>("TDX");
-  const [dataset, setDataset] = useState<string>("kline_daily_qfq");
+  const [dataset, setDataset] = useState<string>("kline_daily_raw");
   const [date, setDate] = useState<string>(() => {
     const d = new Date();
     return d.toISOString().slice(0, 10);
@@ -1202,10 +1167,6 @@ function IncrementalTab({
 
   const datasetOptionsTDX = [
     {
-      key: "kline_daily_qfq_go",
-      label: "kline_daily_qfq_go · 日线（前复权 QFQ · Go 直连）",
-    },
-    {
       key: "kline_daily_raw_go",
       label: "kline_daily_raw_go · 日线（未复权 RAW · Go 直连）",
     },
@@ -1213,20 +1174,9 @@ function IncrementalTab({
       key: "kline_minute_raw",
       label: "kline_minute_raw · 1 分钟（原始 RAW）",
     },
-    {
-      key: "trade_agg_5m",
-      label: "trade_agg_5m · 高频聚合 5m",
-    },
   ];
 
   const datasetOptionsTushare = [
-    {
-      key: "tdx_board_all",
-      label: "tdx_board_all · 通达信板块（信息+成分+行情）",
-    },
-    { key: "tdx_board_index", label: "tdx_board_index · 通达信板块信息" },
-    { key: "tdx_board_member", label: "tdx_board_member · 通达信板块成分" },
-    { key: "tdx_board_daily", label: "tdx_board_daily · 通达信板块行情" },
     {
       key: "kline_weekly",
       label: "kline_weekly · 周线（由本地日线QFQ聚合）",
@@ -1236,13 +1186,9 @@ function IncrementalTab({
       label: "adj_factor · 复权因子（Tushare adj_factor）",
     },
     {
-      key: "stock_moneyflow",
-      label:
-        "stock_moneyflow · 个股资金流（按交易日增量，默认最近3个自然日）",
-    },
-    {
       key: "stock_moneyflow_ts",
-      label: "stock_moneyflow_ts · 个股资金流 (Tushare moneyflow_ts)",
+      label:
+        "stock_moneyflow_ts · 个股资金流（按交易日增量，默认最近3个自然日）",
     },
     {
       key: "index_daily",
@@ -1255,6 +1201,7 @@ function IncrementalTab({
     { key: "stock_st", label: "stock_st · ST 股票列表（按公告日增量）" },
     { key: "bak_basic", label: "bak_basic · 历史股票列表（按交易日增量）" },
     { key: "daily_basic", label: "daily_basic · 股票每日指标（Tushare）" },
+    { key: "stk_limit", label: "stk_limit · 每日涨跌停价格（Tushare）" },
     {
       key: "anns_d",
       label: "anns_d · 上市公司公告（Tushare anns_d）",
@@ -1270,6 +1217,14 @@ function IncrementalTab({
     {
       key: "tushare_trade_cal",
       label: "tushare_trade_cal · 交易日历（Tushare trade_cal 同步）",
+    },
+    {
+      key: "sw_sector",
+      label: "sw_sector · 申万行业板块（分类+成分股全量+日线增量）",
+    },
+    {
+      key: "sector_data",
+      label: "sector_data · 申万L2行业展开到个股（增量后处理）",
     },
   ];
 
@@ -1326,12 +1281,12 @@ function IncrementalTab({
         setDataset("xtquant_pershare_index");
       }
     } else {
-      // 切换到 Tushare 时，如果当前 dataset 不在 Tushare 选项里，则默认选 tdx_board_all
+      // 切换到 Tushare 时，如果当前 dataset 不在 Tushare 选项里，则默认选 kline_weekly
       const isTushareDataset = datasetOptionsTushare.some(
         (opt) => opt.key === dataset,
       );
       if (!isTushareDataset) {
-        setDataset("tdx_board_all");
+        setDataset("kline_weekly");
       }
       const d = new Date();
       const today = d.toISOString().slice(0, 10);
@@ -1392,48 +1347,8 @@ function IncrementalTab({
     setError(null);
     try {
       if (dataSource === "TDX") {
-        if (dataset === "trade_agg_5m") {
-          if (!symbolsScope) {
-            setError("错误：股票范围 (symbolsScope) 参数丢失。请重新选择股票范围（Watchlist 或 All）。");
-            return;
-          }
-          const argsParts: string[] = ["--mode", "incremental"];
-          if (startDate) {
-            argsParts.push("--start-date", startDate);
-          }
-          if (date) {
-            argsParts.push("--end-date", date);
-          }
-          argsParts.push("--freq-minutes", "5");
-          argsParts.push("--symbols-scope", symbolsScope);
-          argsParts.push("--batch-size", String(Number(batchSize) || 50));
-          argsParts.push("--workers", String(Number(workers) || 1));
-
-          console.log("[DEBUG] Submitting trade_agg_5m with args:", argsParts);
-          const opts = {
-            args: argsParts.join(" "),
-          };
-          const payload = {
-            dataset: "trade_agg_5m",
-            mode: "incremental",
-            options: opts,
-          };
-          const resp: any = await backendRequest(
-            "POST",
-            "/api/ingestion/run",
-            {
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            },
-          );
-          if (resp && resp.job_id) {
-            setJobId(String(resp.job_id));
-            setAutoRefresh(true);
-          }
-        } else {
           const isGoTdxSpecial =
             dataset === "kline_daily_raw_go" ||
-            dataset === "kline_daily_qfq_go" ||
             dataset === "kline_minute_raw";
           if (isGoTdxSpecial) {
             if (!startDate) {
@@ -1487,7 +1402,6 @@ function IncrementalTab({
               setAutoRefresh(true);
             }
           }
-        }
       } else if (dataSource === "xtquant") {
         // xtquant 增量分支
         const opts = {
@@ -1532,7 +1446,7 @@ function IncrementalTab({
         } else {
           let effectiveStart: string | null = startDate || null;
           const effectiveEnd: string | null = endDate || date || null;
-          if (dataset === "stock_moneyflow" && !startDate) {
+          if (dataset === "stock_moneyflow_ts" && !startDate) {
             try {
               const endDt = new Date(date);
               const defaultStart = new Date(
@@ -1625,7 +1539,6 @@ function IncrementalTab({
           {!(
             dataSource === "TDX" &&
             (dataset === "kline_daily_raw_go" ||
-              dataset === "kline_daily_qfq_go" ||
               dataset === "kline_minute_raw")
           ) && (
             <div>
@@ -1649,7 +1562,6 @@ function IncrementalTab({
             <label className={styles.label} htmlFor="incr-start-date">
               {dataSource === "TDX" &&
               (dataset === "kline_daily_raw_go" ||
-                dataset === "kline_daily_qfq_go" ||
                 dataset === "kline_minute_raw")
                 ? "增量起始日期"
                 : "覆盖起始日期(可选)"}
@@ -1666,7 +1578,6 @@ function IncrementalTab({
 
         {dataSource === "TDX" &&
           (dataset === "kline_daily_raw_go" ||
-            dataset === "kline_daily_qfq_go" ||
             dataset === "kline_minute_raw") && (
             <div className={styles.mb8}>
               <div className={styles.textMutedSmall}>
@@ -1737,24 +1648,6 @@ function IncrementalTab({
                 <option value="SZSE">SZSE</option>
               </select>
             </div>
-          </div>
-        )}
-
-        {dataSource === "TDX" && dataset === "trade_agg_5m" && (
-          <div className={styles.mb8}>
-            <label className={styles.label} htmlFor="incr-scope">
-              股票范围 (Scope)
-            </label>
-            <select
-              id="incr-scope"
-              value={symbolsScope}
-              onChange={(e) => setSymbolsScope(e.target.value as any)}
-              className={styles.select}
-              title="选择股票范围"
-            >
-              <option value="watchlist">Watchlist (自选股)</option>
-              <option value="all">All (全市场)</option>
-            </select>
           </div>
         )}
 
@@ -3105,11 +2998,11 @@ function JobsTab() {
                 </tr>
               </thead>
               <tbody>
-                {qmtTasks.map((task: any) => (
-                  <tr key={task.task_id} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                    <td style={{ padding: 8, fontSize: 11 }}>{task.task_id.slice(0, 8)}...</td>
-                    <td style={{ padding: 8 }}>{task.dataset_name || task.dataset_id || "—"}</td>
-                    <td style={{ padding: 8 }}>{task.type || "—"}</td>
+                {qmtTasks.map((task: any, idx: number) => (
+                  <tr key={task.task_id || task.job_id || idx} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                    <td style={{ padding: 8, fontSize: 11 }}>{(task.task_id || task.job_id || "—").slice(0, 8)}...</td>
+                    <td style={{ padding: 8 }}>{task.dataset_name || task.dataset_id || task.summary?.dataset || "—"}</td>
+                    <td style={{ padding: 8 }}>{task.type || task.job_type || "—"}</td>
                     <td style={{ padding: 8 }}>
                       <span style={{
                         color: task.status === "success" ? "#16a34a" : task.status === "failed" ? "#b91c1c" : "#374151",
@@ -3451,22 +3344,20 @@ function JobsTab() {
             let cat = "其他";
             const dsLower = String(dataset || "").toLowerCase();
             if (
-              ["kline_daily_qfq", "kline_daily", "kline_daily_raw"].includes(dsLower) &&
+              ["kline_daily", "kline_daily_raw"].includes(dsLower) &&
               mode === "init"
             ) {
               cat = "日线初始化";
             } else if (
-              ["kline_daily_qfq", "kline_daily", "kline_daily_raw"].includes(dsLower) &&
+              ["kline_daily", "kline_daily_raw"].includes(dsLower) &&
               mode === "incremental"
             ) {
               cat = "日线增量";
             } else if (dsLower === "adjust_daily" && ["rebuild", "init"].includes(mode)) {
               cat = "复权计算";
-            } else if (dsLower.startsWith("tdx_board_")) {
-              cat = "板块数据";
             } else if (["kline_weekly", "kline_weekly_qfq"].includes(dsLower)) {
               cat = "周线聚合";
-            } else if (dsLower === "stock_moneyflow") {
+            } else if (dsLower === "stock_moneyflow_ts") {
               cat = "资金流数据";
             }
 
@@ -3535,7 +3426,7 @@ function JobsTab() {
                 ? "TDX 接口"
                 : meta.source === "tushare"
                   ? "Tushare"
-                  : meta.source === "derived_from_kline_daily_qfq"
+                  : meta.source === "derived_from_kline_daily_raw"
                     ? "本地日线聚合"
                     : meta.source === "tdx_api_minute_trade_all"
                       ? "TDX 分钟成交聚合"
@@ -3890,31 +3781,26 @@ function DataStatsTab({
   const [newsLoading, setNewsLoading] = useState<boolean>(false);
 
   const [collapsedCategories, setCollapsedCategories] = useState<
-    Record<"market" | "board" | "basic" | "xtquant" | "other", boolean>
-  >({ market: false, board: false, basic: false, xtquant: false, other: false });
+    Record<"market" | "basic" | "xtquant" | "sector" | "other", boolean>
+  >({ market: false, basic: false, xtquant: false, sector: false, other: false });
 
-  const CATEGORY_LABELS: Record<"market" | "board" | "basic" | "xtquant" | "other", string> = {
+  const CATEGORY_LABELS: Record<"market" | "basic" | "xtquant" | "sector" | "other", string> = {
     market: "行情数据",
-    board: "板块数据",
     basic: "基础信息",
     xtquant: "xtquant 财务数据",
+    sector: "申万行业板块",
     other: "其他",
   };
 
-  const getCategoryKey = (kind: string): "market" | "board" | "basic" | "xtquant" | "other" => {
+  const getCategoryKey = (kind: string): "market" | "basic" | "xtquant" | "sector" | "other" => {
     const k = (kind || "").toLowerCase();
     if (
       k.startsWith("kline_") ||
       k === "kline_minute_raw" ||
-      k === "trade_agg_5m" ||
-      k === "stock_moneyflow" ||
       k === "stock_moneyflow_ts" ||
       k === "index_daily"
     ) {
       return "market";
-    }
-    if (k.startsWith("tdx_board_")) {
-      return "board";
     }
     if (
       k === "stock_basic" ||
@@ -3922,12 +3808,18 @@ function DataStatsTab({
       k === "bak_basic" ||
       k === "daily_basic" ||
       k === "adj_factor" ||
-      k === "symbol_dim"
+      k === "symbol_dim" ||
+      k === "index_basic" ||
+      k === "stk_limit"
     ) {
       return "basic";
     }
     if (k.startsWith("xtquant_")) {
       return "xtquant";
+    }
+    // 申万行业板块数据
+    if (k.startsWith("sw_") || k === "sector_data") {
+      return "sector";
     }
     // cyq数据集放到其他分类
     if (k === "cyq_perf" || k === "cyq_chips") {
@@ -4020,20 +3912,23 @@ function DataStatsTab({
       const lower = (kind || "").toLowerCase();
       try {
         if (
-          lower === "kline_daily_qfq_go" ||
-          lower === "kline_daily_qfq" ||
           lower === "kline_daily_raw_go" ||
           lower === "kline_daily_raw" ||
           lower === "kline_minute_raw" ||
           lower === "adj_factor" ||
-          lower === "stock_moneyflow" ||
+          lower === "daily_basic" ||
+          lower === "stock_basic" ||
+          lower === "stock_moneyflow_ts" ||
           lower === "stock_st" ||
           lower === "bak_basic" ||
+          lower === "stk_limit" ||
           lower === "anns_d" ||
           lower === "index_daily" ||
           lower === "xtquant_pershare_index" ||
           lower === "cyq_perf" ||
-          lower === "cyq_chips"
+          lower === "cyq_chips" ||
+          lower === "sw_daily" ||
+          lower === "sector_data"
         ) {
           const params = new URLSearchParams({ data_kind: kind });
           const data: any = await backendRequest(
@@ -4049,17 +3944,8 @@ function DataStatsTab({
           }
           onFillLatest(kind, String(startDate), String(latestTradingDate), currentMaxDate);
         } else {
-          // 对于其他数据集保持原有“补齐到最新交易日”的简化逻辑
-          const latestResp: any = await backendRequest(
-            "GET",
-            "/api/trading/latest-day",
-          );
-          const latest = latestResp?.latest_trading_day;
-          if (!latest) {
-            setError("无法获取最新交易日，请先同步交易日历。");
-            return;
-          }
-          onFillLatest(kind, minDate || String(latest), String(latest), null);
+          setError(`数据集 “${kind}” 未注册 auto-range 补齐逻辑，请在 handleFillLatestClick 中添加支持。`);
+          return;
         }
       } catch (e: any) {
         setError(e?.message || "自动补齐区间计算失败");
@@ -4192,20 +4078,20 @@ function DataStatsTab({
             <tbody>
               {(() => {
                 const grouped: Record<
-                  "market" | "board" | "basic" | "xtquant" | "other",
+                  "market" | "basic" | "xtquant" | "sector" | "other",
                   any[]
-                > = { market: [], board: [], basic: [], xtquant: [], other: [] };
+                > = { market: [], basic: [], xtquant: [], sector: [], other: [] };
                 items.forEach((it: any) => {
                   const kindKey = String(it.data_kind || it.kind || "");
                   const cat = getCategoryKey(kindKey);
                   grouped[cat].push(it);
                 });
 
-                const order: Array<"market" | "board" | "basic" | "xtquant" | "other"> = [
+                const order: Array<"market" | "basic" | "xtquant" | "sector" | "other"> = [
                   "market",
-                  "board",
                   "basic",
                   "xtquant",
+                  "sector",
                   "other",
                 ];
 
@@ -4280,17 +4166,6 @@ function DataStatsTab({
 
                     let description =
                       extra.desc || it.label || it.description || "—";
-                    if (kind === "trade_agg_5m") {
-                      description = description
-                        .replace(/（.*?）|\(.*?\)/g, "")
-                        .trim();
-                    }
-                    if (
-                      kind === "stock_moneyflow" &&
-                      (!description || description === "—")
-                    ) {
-                      description = "个股资金流（moneyflow_ind_dc）";
-                    }
                     if (
                       kind === "stock_moneyflow_ts" &&
                       (!description || description === "—")
@@ -4301,17 +4176,12 @@ function DataStatsTab({
                     const minDateStr =
                       it.min_date || it.date_min || it.start_date || null;
                     const canFillLatest = [
-                      "kline_daily_qfq",
-                      "kline_daily_qfq_go",
                       "kline_daily_raw",
                       "kline_daily_raw_go",
                       "kline_minute_raw",
-                      "tdx_board_index",
-                      "tdx_board_member",
-                      "tdx_board_daily",
-                      "trade_agg_5m",
                       "adj_factor",
-                      "stock_moneyflow",
+                      "daily_basic",
+                      "stock_basic",
                       "stock_moneyflow_ts",
                       "stock_st",
                       "bak_basic",
@@ -4320,6 +4190,7 @@ function DataStatsTab({
                       "xtquant_pershare_index",
                       "cyq_perf",
                       "cyq_chips",
+                      "stk_limit",
                     ].includes(kind);
 
                     rows.push(
@@ -4933,8 +4804,9 @@ function TestingTab() {
                       {formatDateTime(item.next_run_at)}
                     </div>
                     <div>
-                      上次状态：{item.last_status || "—"} · 错误信息：
-                      {item.last_error || "—"}
+                      上次状态：{item.last_status || "—"}
+                      {item.last_inserted_rows != null && ` · 写入 ${Number(item.last_inserted_rows).toLocaleString()} 条`}
+                      {" · "}错误信息：{item.last_error || "—"}
                     </div>
                   </div>
                   <div className={styles.rowWrap} style={{ fontSize: 12 }}>
@@ -5116,20 +4988,64 @@ function TestingTab() {
   );
 }
 
+// 支持并行度（workers）设置的数据集
+const WORKER_SUPPORTED_DATASETS = new Set([
+  "kline_daily_raw", "kline_minute_raw", "kline_daily",
+  "kline_daily_raw_go",
+  "xtquant_pershare_index", "adjust_daily", "kline_adjust_daily",
+]);
+
+// 每日定时调度快捷创建：12 个目标数据集及默认执行时间
+const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; defaultAt: string }[] = [
+  { dataset: "kline_daily_raw", label: "日线（未复权 RAW）", source: "TDX", defaultAt: "17:00" },
+  { dataset: "kline_minute_raw", label: "分钟线（RAW）", source: "TDX", defaultAt: "17:00" },
+  { dataset: "daily_basic", label: "股票每日指标", source: "Tushare", defaultAt: "16:30" },
+  { dataset: "stock_basic", label: "股票基础信息", source: "Tushare", defaultAt: "16:30" },
+  { dataset: "stock_moneyflow_ts", label: "个股资金流（TS）", source: "Tushare", defaultAt: "16:30" },
+  { dataset: "adj_factor", label: "复权因子", source: "Tushare", defaultAt: "16:30" },
+  { dataset: "index_daily", label: "指数日线行情", source: "Tushare", defaultAt: "16:30" },
+  { dataset: "stock_st", label: "ST 标记", source: "Tushare", defaultAt: "16:30" },
+  { dataset: "bak_basic", label: "备用基础信息", source: "Tushare", defaultAt: "16:30" },
+  { dataset: "stk_limit", label: "每日涨跌停价格", source: "Tushare", defaultAt: "16:30" },
+  { dataset: "sw_sector", label: "申万行业板块（统一同步）", source: "Tushare", defaultAt: "16:45" },
+  { dataset: "sector_data", label: "申万行业展开数据（后处理）", source: "Tushare", defaultAt: "17:00" },
+  { dataset: "cyq_perf", label: "每日筹码及胜率", source: "Tushare", defaultAt: "17:15" },
+];
+
 function IngestionSchedulesTab() {
   const [schedules, setSchedules] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [dataSource, setDataSource] = useState<DataSource>("TDX");
-  const [newDataset, setNewDataset] = useState<string>("kline_daily_qfq");
+  const [newDataset, setNewDataset] = useState<string>("kline_daily_raw");
   const [newMode, setNewMode] = useState<"incremental" | "init">(
     "incremental",
   );
   const [newFreq, setNewFreq] = useState<string>("5m");
+  const [newDailyAt, setNewDailyAt] = useState<string>("16:30");
   const [newEnabled, setNewEnabled] = useState<boolean>(true);
+  const [newWorkers, setNewWorkers] = useState<number>(0); // 0 = 默认
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  
+
+  // 编辑执行时间
+  const [editingAtTime, setEditingAtTime] = useState<Record<string, string>>({});
+
+  // 快捷创建：每个数据集的执行时间
+  const [presetTimes, setPresetTimes] = useState<Record<string, string>>(
+    () => Object.fromEntries(DAILY_SCHEDULE_PRESETS.map((p) => [p.dataset, p.defaultAt])),
+  );
+  const [batchCreating, setBatchCreating] = useState(false);
+  const [runningAll, setRunningAll] = useState(false);
+  const [runningDataset, setRunningDataset] = useState<string | null>(null);
+  const [presetWorkers, setPresetWorkers] = useState<Record<string, number>>({ kline_daily_raw: 4, kline_minute_raw: 4 });
+  const [presetStats, setPresetStats] = useState<Record<string, string | null>>({});
+  const [statsLoading, setStatsLoading] = useState(false);
+
+  // 每日执行状态
+  const [dailyStatus, setDailyStatus] = useState<Record<string, { status: string; created_at?: string; finished_at?: string } | undefined>>({});
+  const [dailyStatusLoading, setDailyStatusLoading] = useState(false);
+
   // truncate相关状态
   const [initTruncate, setInitTruncate] = useState<boolean>(false);
   const [showTruncateConfirm, setShowTruncateConfirm] = useState<boolean>(false);
@@ -5196,6 +5112,7 @@ function IngestionSchedulesTab() {
     mode: string,
     frequency: string,
     enabled: boolean,
+    options?: Record<string, any>,
   ) => {
     try {
       await backendRequest("POST", "/api/ingestion/schedule", {
@@ -5206,6 +5123,7 @@ function IngestionSchedulesTab() {
           mode,
           frequency,
           enabled,
+          options: options || {},
         }),
       });
       await loadSchedules();
@@ -5251,13 +5169,22 @@ function IngestionSchedulesTab() {
 
   const createSchedule = async () => {
     try {
+      const freq = newFreq || "5m";
+      const options: Record<string, any> = {};
+      if (freq === "daily" && newDailyAt) {
+        options.at = newDailyAt;
+      }
+      if (newWorkers > 0 && WORKER_SUPPORTED_DATASETS.has(newDataset)) {
+        options.workers = newWorkers;
+      }
       await backendRequest("POST", "/api/ingestion/schedule", {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           dataset: newDataset,
           mode: newMode,
-          frequency: newFreq || "5m",
+          frequency: freq,
           enabled: newEnabled,
+          options,
         }),
       });
       await loadSchedules();
@@ -5266,8 +5193,115 @@ function IngestionSchedulesTab() {
     }
   };
 
+  const batchCreateSchedules = async (datasets?: string[]) => {
+    setBatchCreating(true);
+    setError(null);
+    try {
+      const targets = datasets
+        ? DAILY_SCHEDULE_PRESETS.filter((p) => datasets.includes(p.dataset))
+        : DAILY_SCHEDULE_PRESETS;
+      const items = targets.map((p) => ({
+        dataset: p.dataset,
+        mode: "incremental" as const,
+        frequency: "daily",
+        enabled: true,
+        at: presetTimes[p.dataset] || p.defaultAt,
+        workers: presetWorkers[p.dataset] || undefined,
+      }));
+      await backendRequest("POST", "/api/ingestion/schedule/batch-create", {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      await loadSchedules();
+    } catch (e: any) {
+      setError(e?.message || "批量创建调度失败");
+    } finally {
+      setBatchCreating(false);
+    }
+  };
+
+  const runAllPresets = async () => {
+    setRunningAll(true);
+    setError(null);
+    try {
+      await backendRequest("POST", "/api/ingestion/schedule/run-all-presets", {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+    } catch (e: any) {
+      setError(e?.message || "立即执行全部失败");
+    } finally {
+      setRunningAll(false);
+    }
+  };
+
+  const runSinglePreset = async (dataset: string) => {
+    setRunningDataset(dataset);
+    setError(null);
+    try {
+      const body: any = { dataset };
+      if (presetWorkers[dataset]) body.workers = presetWorkers[dataset];
+      await backendRequest("POST", "/api/ingestion/schedule/run-single-preset", {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      loadDailyStatus();
+    } catch (e: any) {
+      setError(e?.message || `执行 ${dataset} 失败`);
+    } finally {
+      setRunningDataset(null);
+    }
+  };
+
+  const loadPresetStats = async () => {
+    setStatsLoading(true);
+    setError(null);
+    try {
+      const data: any = await backendRequest("GET", "/api/ingestion/schedule/preset-stats");
+      const map: Record<string, string | null> = {};
+      for (const item of data?.items || []) {
+        map[item.dataset] = item.current_max_date || null;
+      }
+      setPresetStats(map);
+    } catch (e: any) {
+      setError(e?.message || "刷新数据集统计失败");
+    } finally {
+      setStatsLoading(false);
+    }
+  };
+
+  const loadDailyStatus = useCallback(async () => {
+    setDailyStatusLoading(true);
+    try {
+      const data: any = await backendRequest("GET", "/api/ingestion/schedule/preset-daily-status");
+      setDailyStatus(data?.items || {});
+    } catch {
+      // 静默失败，不影响主流程
+    } finally {
+      setDailyStatusLoading(false);
+    }
+  }, []);
+
+  // 组件加载时获取每日状态
+  useEffect(() => {
+    loadDailyStatus();
+  }, [loadDailyStatus]);
+
+  // 自动刷新：有 running/queued 状态时每 5s 刷新
+  useEffect(() => {
+    const hasActive = Object.values(dailyStatus).some(
+      (ds) => ds && (ds.status === "running" || ds.status === "queued"),
+    );
+    if (!hasActive) return;
+    const timer = setInterval(() => {
+      loadDailyStatus();
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [dailyStatus, loadDailyStatus]);
+
   return (
     <div className={styles.section}>
+      <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
       <h3 className={styles.headingSmall}>📥 数据入库调度</h3>
 
       <div className={styles.rowWrap} style={{ marginBottom: 6 }}>
@@ -5280,6 +5314,164 @@ function IngestionSchedulesTab() {
         >
           创建默认调度
         </button>
+      </div>
+
+      {/* 每日定时调度快捷创建 */}
+      <div className={styles.card} style={{ marginBottom: 12 }}>
+        <h4 className={styles.headingSmall}>⏰ 每日定时调度 · 快捷创建</h4>
+        <p className={styles.textMutedSmall} style={{ marginBottom: 8 }}>
+          为 {DAILY_SCHEDULE_PRESETS.length} 个核心数据集创建每日增量调度，自动检测缺口并补齐到最新交易日。
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+          {DAILY_SCHEDULE_PRESETS.map((p) => {
+            const ds = dailyStatus[p.dataset];
+            const statusDot = (s: typeof ds) => {
+              if (!s) return { bg: "#d4d4d4", color: "#9ca3af", text: "未执行" };
+              if (s.status === "success") return { bg: "#22c55e", color: "#16a34a", text: "成功" };
+              if (s.status === "failed") return { bg: "#ef4444", color: "#dc2626", text: "失败" };
+              if (s.status === "running") return { bg: "#3b82f6", color: "#2563eb", text: "执行中" };
+              return { bg: "#eab308", color: "#ca8a04", text: "排队中" };
+            };
+            const mainSt = statusDot(ds);
+            return (
+            <React.Fragment key={p.dataset}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 12,
+                padding: "4px 0",
+              }}
+            >
+              <span
+                style={{
+                  background: p.source === "TDX" ? "#dbeafe" : "#fef3c7",
+                  color: p.source === "TDX" ? "#1d4ed8" : "#92400e",
+                  borderRadius: 4,
+                  padding: "1px 6px",
+                  fontSize: 11,
+                  fontWeight: 500,
+                }}
+              >
+                {p.source}
+              </span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                {p.dataset} · {p.label}
+                {presetStats[p.dataset] !== undefined && (
+                  <span style={{ marginLeft: 4, fontSize: 11, color: presetStats[p.dataset] ? "#16a34a" : "#dc2626" }}>
+                    [{presetStats[p.dataset] || "无数据"}]
+                  </span>
+                )}
+              </span>
+              {/* 每日执行状态 */}
+              <span style={{ fontSize: 11, display: "inline-flex", alignItems: "center", gap: 3, minWidth: 56 }}>
+                <span style={{
+                  width: 8, height: 8, borderRadius: "50%", display: "inline-block",
+                  background: mainSt.bg,
+                  animation: ds?.status === "running" ? "pulse 1.5s ease-in-out infinite" : undefined,
+                }} />
+                <span style={{ color: mainSt.color }}>{mainSt.text}</span>
+              </span>
+              <input
+                type="time"
+                value={presetTimes[p.dataset] || p.defaultAt}
+                onChange={(e) =>
+                  setPresetTimes((prev) => ({ ...prev, [p.dataset]: e.target.value }))
+                }
+                style={{ width: 90, fontSize: 12, padding: "2px 4px", borderRadius: 4, border: "1px solid #d4d4d4" }}
+                aria-label={`${p.dataset} 执行时间`}
+              />
+              {p.source === "TDX" && (
+                <select
+                  value={presetWorkers[p.dataset] || 4}
+                  onChange={(e) => setPresetWorkers((prev) => ({ ...prev, [p.dataset]: Number(e.target.value) }))}
+                  style={{ width: 58, fontSize: 11, padding: "2px 2px", borderRadius: 4, border: "1px solid #d4d4d4" }}
+                  aria-label={`${p.dataset} 并发度`}
+                >
+                  {[1, 2, 4, 8, 16].map((n) => (
+                    <option key={n} value={n}>{n}线程</option>
+                  ))}
+                </select>
+              )}
+              <button
+                type="button"
+                onClick={() => runSinglePreset(p.dataset)}
+                disabled={runningDataset === p.dataset}
+                className={styles.btnPrimary}
+                style={{ fontSize: 11, padding: "2px 8px", background: "#22c55e" }}
+              >
+                {runningDataset === p.dataset ? "执行中" : "执行"}
+              </button>
+              <button
+                type="button"
+                onClick={() => batchCreateSchedules([p.dataset])}
+                disabled={batchCreating}
+                className={styles.btnToggle}
+                style={{ fontSize: 11, padding: "2px 8px" }}
+              >
+                创建
+              </button>
+            </div>
+            {/* sw_sector 子任务展示 */}
+            {p.dataset === "sw_sector" && (
+              <div style={{ gridColumn: "1 / -1", paddingLeft: 40, fontSize: 11, color: "#6b7280", lineHeight: 1.8 }}>
+                {([
+                  ["sw_index_classify", "行业分类"],
+                  ["sw_index_member", "成分股映射"],
+                  ["sw_daily", "行业日线"],
+                ] as const).map(([subDs, subLabel], idx, arr) => {
+                  const subSt = statusDot(dailyStatus[subDs]);
+                  const prefix = idx < arr.length - 1 ? "├" : "└";
+                  return (
+                    <div key={subDs}>
+                      {prefix} {subDs} {subLabel}
+                      <span style={{ marginLeft: 8, display: "inline-flex", alignItems: "center", gap: 3 }}>
+                        <span style={{
+                          width: 6, height: 6, borderRadius: "50%", display: "inline-block",
+                          background: subSt.bg,
+                          animation: dailyStatus[subDs]?.status === "running" ? "pulse 1.5s ease-in-out infinite" : undefined,
+                        }} />
+                        <span style={{ color: subSt.color }}>{subSt.text}</span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            </React.Fragment>
+            );
+          })}
+        </div>
+        <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={() => batchCreateSchedules()}
+            disabled={batchCreating}
+            className={styles.btnPrimary}
+            style={{ fontSize: 13 }}
+          >
+            {batchCreating ? "创建中…" : "一键创建全部调度"}
+          </button>
+          <button
+            type="button"
+            onClick={runAllPresets}
+            disabled={runningAll}
+            className={styles.btnPrimary}
+            style={{ fontSize: 13, background: "#22c55e" }}
+          >
+            {runningAll ? "执行中…" : "立即执行全部"}
+          </button>
+          <button
+            type="button"
+            onClick={() => { loadPresetStats(); loadDailyStatus(); }}
+            disabled={statsLoading}
+            className={styles.btnToggle}
+            style={{ fontSize: 13 }}
+          >
+            {statsLoading ? "刷新中…" : "刷新数据集统计"}
+          </button>
+        </div>
       </div>
 
       <div className={styles.card}>
@@ -5438,24 +5630,84 @@ function IngestionSchedulesTab() {
           <p className={styles.textMuted}>尚未配置入库调度，使用下方表单新建。</p>
         ) : (
           <div className={styles.section}>
-            {schedules.map((item: any) => {
+            {[...schedules]
+              .sort((a, b) => {
+                // 启用的排前面
+                const aEnabled = a.enabled ?? true;
+                const bEnabled = b.enabled ?? true;
+                if (aEnabled !== bEnabled) return aEnabled ? -1 : 1;
+                // 按执行时间排序
+                const aAt = (a.options?.at || "99:99") as string;
+                const bAt = (b.options?.at || "99:99") as string;
+                return aAt.localeCompare(bAt);
+              })
+              .map((item: any) => {
               const schedId = item.schedule_id;
               const schedDataset = item.dataset;
               const mode = item.mode;
               const enabled = item.enabled ?? true;
               const freqValue = item.frequency || "";
-              const freqLabel =
+              const opts = item.options || {};
+              const atTime = opts.at || "";
+              const baseLabel =
                 FREQUENCY_CHOICES.find((f) => f.value === freqValue)?.label ||
                 (freqValue || "手动");
+              const freqLabel =
+                freqValue === "daily" && atTime
+                  ? `每日 ${atTime}`
+                  : baseLabel;
 
               return (
                 <div key={schedId} className={styles.cardSoft}>
                   <div className={styles.rowBetween} style={{ fontSize: 13 }}>
                     <div>
-                      调度 {schedId} · {schedDataset} · {mode}
+                      {schedDataset} · {mode}
                     </div>
-                    <div className={styles.textMuted}>
-                      {enabled ? "🟢 启用" : "⚪️ 停用"}
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {freqValue === "daily" && (() => {
+                        const isEditing = schedId in editingAtTime;
+                        return isEditing ? (
+                          <>
+                            <input
+                              type="time"
+                              value={editingAtTime[schedId] || atTime}
+                              onChange={(e) => setEditingAtTime(prev => ({ ...prev, [schedId]: e.target.value }))}
+                              style={{ fontSize: 11, padding: "1px 4px", border: "1px solid #93c5fd", borderRadius: 4, width: 80 }}
+                            />
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const newAt = editingAtTime[schedId];
+                                if (newAt && newAt !== atTime) {
+                                  await updateSchedule(schedId, schedDataset, mode, freqValue, enabled, { ...opts, at: newAt });
+                                }
+                                setEditingAtTime(prev => { const next = { ...prev }; delete next[schedId]; return next; });
+                              }}
+                              style={{ fontSize: 10, padding: "1px 6px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 3, cursor: "pointer" }}
+                            >
+                              确认
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingAtTime(prev => { const next = { ...prev }; delete next[schedId]; return next; })}
+                              style={{ fontSize: 10, padding: "1px 6px", background: "#e5e7eb", border: "none", borderRadius: 3, cursor: "pointer" }}
+                            >
+                              取消
+                            </button>
+                          </>
+                        ) : (
+                          <span
+                            style={{ fontSize: 11, background: "#e0f2fe", color: "#0369a1", borderRadius: 4, padding: "1px 6px", cursor: "pointer" }}
+                            title="点击编辑执行时间"
+                            onClick={() => setEditingAtTime(prev => ({ ...prev, [schedId]: atTime || "16:30" }))}
+                          >
+                            {atTime || "未设置"}
+                          </span>
+                        );
+                      })()}
+                      <span className={styles.textMuted}>
+                        {enabled ? "🟢 启用" : "⚪️ 停用"}
+                      </span>
                     </div>
                   </div>
                   <div className={styles.textMutedSmall}>
@@ -5465,9 +5717,13 @@ function IngestionSchedulesTab() {
                       {formatDateTime(item.next_run_at)}
                     </div>
                     <div>
-                      上次状态：{item.last_status || "—"} · 错误信息：
-                      {item.last_error || "—"}
+                      上次状态：{item.last_status || "—"}
+                      {item.last_inserted_rows != null && ` · 写入 ${Number(item.last_inserted_rows).toLocaleString()} 条`}
+                      {" · "}错误信息：{item.last_error || "—"}
                     </div>
+                    {WORKER_SUPPORTED_DATASETS.has(schedDataset) && (
+                      <div>并行度：{opts.workers || "默认"}</div>
+                    )}
                   </div>
                   <div className={styles.rowWrapSmall}>
                     <select
@@ -5479,6 +5735,7 @@ function IngestionSchedulesTab() {
                           mode,
                           e.target.value,
                           enabled,
+                          opts,
                         );
                       }}
                       className={styles.selectSmall}
@@ -5489,6 +5746,36 @@ function IngestionSchedulesTab() {
                         </option>
                       ))}
                     </select>
+                    {WORKER_SUPPORTED_DATASETS.has(schedDataset) && (
+                      <select
+                        value={opts.workers || ""}
+                        onChange={async (e) => {
+                          const newOpts = { ...opts };
+                          const val = Number(e.target.value);
+                          if (val > 0) {
+                            newOpts.workers = val;
+                          } else {
+                            delete newOpts.workers;
+                          }
+                          await updateSchedule(
+                            schedId,
+                            schedDataset,
+                            mode,
+                            freqValue,
+                            enabled,
+                            newOpts,
+                          );
+                        }}
+                        className={styles.selectSmall}
+                        style={{ width: 80 }}
+                        aria-label={`${schedDataset} 并行度`}
+                      >
+                        <option value="">默认</option>
+                        {[1, 2, 4, 8, 16].map((n) => (
+                          <option key={n} value={n}>{n} 线程</option>
+                        ))}
+                      </select>
+                    )}
                     <label>
                       <input
                         type="checkbox"
@@ -5500,6 +5787,7 @@ function IngestionSchedulesTab() {
                             mode,
                             freqValue,
                             e.target.checked,
+                            opts,
                           );
                         }}
                         className={styles.inputCheckbox}
@@ -5604,6 +5892,29 @@ function IngestionSchedulesTab() {
               </option>
             ))}
           </select>
+          {newFreq === "daily" && (
+            <input
+              type="time"
+              value={newDailyAt}
+              onChange={(e) => setNewDailyAt(e.target.value)}
+              style={{ width: 90, fontSize: 12, padding: "2px 4px", borderRadius: 4, border: "1px solid #d4d4d4" }}
+              aria-label="每日执行时间"
+            />
+          )}
+          {WORKER_SUPPORTED_DATASETS.has(newDataset) && (
+            <select
+              value={newWorkers}
+              onChange={(e) => setNewWorkers(Number(e.target.value))}
+              className={styles.selectSmall}
+              style={{ width: 80 }}
+              aria-label="并行度"
+            >
+              <option value={0}>默认</option>
+              {[1, 2, 4, 8, 16].map((n) => (
+                <option key={n} value={n}>{n} 线程</option>
+              ))}
+            </select>
+          )}
           <label className={styles.labelSmall}>
             <input
               type="checkbox"

@@ -299,6 +299,13 @@ def init_database():
                 "strategy_type": "TEXT",
                 "default_kwargs": "JSONB",
                 "display_name": "TEXT",
+                "description": "TEXT",
+                "source_code": "TEXT",
+                "param_schema": "JSONB",
+                "parent_strategy_id": "TEXT",
+                "llm_analysis": "TEXT",
+                "created_at": "TIMESTAMPTZ DEFAULT NOW()",
+                "updated_at": "TIMESTAMPTZ DEFAULT NOW()",
             }
             for col_name, col_type in qe_strategy_columns.items():
                 cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name='aistock_strategy_catalog' AND column_name='{col_name}';")
@@ -323,21 +330,40 @@ def init_database():
                         sharpe_value DOUBLE PRECISION,
                         ann_ret_value DOUBLE PRECISION,
                         llm_analysis TEXT,
+                        description TEXT,
+                        factor_dimension TEXT,
+                        factor_profile JSONB,
                         analyzed_at TIMESTAMPTZ DEFAULT NOW(),
                         analyzed_by TEXT DEFAULT 'factor_analyst',
+                        factor_catalog_id BIGINT NOT NULL REFERENCES aistock_factor_catalog(id) ON DELETE RESTRICT,
                         UNIQUE(factor_name, factor_source)
                     );
                 """,
                 "qe_factor_correlations": """
                     CREATE TABLE IF NOT EXISTS qe_factor_correlations (
+                        id                SERIAL PRIMARY KEY,
+                        factor_a_id       BIGINT NOT NULL REFERENCES aistock_factor_catalog(id) ON DELETE CASCADE,
+                        factor_b_id       BIGINT NOT NULL REFERENCES aistock_factor_catalog(id) ON DELETE CASCADE,
+                        correlation       DOUBLE PRECISION NOT NULL,
+                        method            TEXT NOT NULL DEFAULT 'spearman_ewma',
+                        as_of_date        DATE NOT NULL DEFAULT CURRENT_DATE,
+                        data_window_days  INTEGER NOT NULL DEFAULT 252,
+                        computed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        CONSTRAINT chk_factor_order CHECK (factor_a_id < factor_b_id),
+                        CONSTRAINT uq_factor_pair   UNIQUE (factor_a_id, factor_b_id)
+                    );
+                """,
+                "qe_correlation_metadata": """
+                    CREATE TABLE IF NOT EXISTS qe_correlation_metadata (
                         id SERIAL PRIMARY KEY,
-                        factor_a TEXT NOT NULL,
-                        factor_b TEXT NOT NULL,
-                        correlation DOUBLE PRECISION,
-                        method TEXT DEFAULT 'pearson',
-                        computed_at TIMESTAMPTZ DEFAULT NOW(),
-                        data_period TEXT,
-                        UNIQUE(factor_a, factor_b, method)
+                        as_of_date DATE NOT NULL,
+                        num_factors INT,
+                        num_high_corr_pairs INT,
+                        avg_correlation DOUBLE PRECISION,
+                        computation_time_sec DOUBLE PRECISION,
+                        hdf5_path TEXT,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        UNIQUE(as_of_date)
                     );
                 """,
                 "qe_tasks": """
@@ -390,6 +416,25 @@ def init_database():
                         result_metrics JSONB,
                         result_files JSONB,
                         ai_evaluation TEXT,
+                        qe_task_id TEXT,
+                        qe_loop_id TEXT,
+                        loop_index INTEGER DEFAULT 1,
+                        parent_experiment_id TEXT,
+                        is_evolution_loop BOOLEAN DEFAULT FALSE,
+                        -- 核心指标独立列（从 result_metrics 提取，便于查询/排序/演进诊断）
+                        ic DOUBLE PRECISION,
+                        icir DOUBLE PRECISION,
+                        rank_ic DOUBLE PRECISION,
+                        rank_icir DOUBLE PRECISION,
+                        annualized_return DOUBLE PRECISION,
+                        max_drawdown DOUBLE PRECISION,
+                        information_ratio DOUBLE PRECISION,
+                        excess_return_with_cost_mean DOUBLE PRECISION,
+                        excess_return_without_cost_mean DOUBLE PRECISION,
+                        annualized_return_no_cost DOUBLE PRECISION,
+                        max_drawdown_no_cost DOUBLE PRECISION,
+                        information_ratio_no_cost DOUBLE PRECISION,
+                        model_catalog_id BIGINT REFERENCES aistock_model_catalog(id) ON DELETE RESTRICT,
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         started_at TIMESTAMPTZ,
                         completed_at TIMESTAMPTZ
@@ -443,6 +488,9 @@ def init_database():
                         collected_at TIMESTAMPTZ DEFAULT NOW(),
                         raw_metrics JSONB,
 
+                        factor_catalog_id BIGINT NOT NULL REFERENCES aistock_factor_catalog(id) ON DELETE RESTRICT,
+                        model_catalog_id BIGINT REFERENCES aistock_model_catalog(id) ON DELETE RESTRICT,
+
                         UNIQUE(factor_name, factor_source, experiment_id)
                     );
                     CREATE INDEX IF NOT EXISTS idx_fexp_factor
@@ -467,6 +515,30 @@ def init_database():
                         updated_at TIMESTAMPTZ DEFAULT NOW(),
                         UNIQUE(agent_type, prompt_key)
                     );
+                """,
+                "factor_live_track": """
+                    CREATE TABLE IF NOT EXISTS factor_live_track (
+                        id SERIAL PRIMARY KEY,
+                        factor_name TEXT NOT NULL,
+                        strategy_id TEXT NOT NULL,
+                        trade_date DATE NOT NULL,
+                        daily_ic DOUBLE PRECISION,
+                        daily_rank_ic DOUBLE PRECISION,
+                        rolling_20d_ic DOUBLE PRECISION,
+                        rolling_20d_icir DOUBLE PRECISION,
+                        rolling_60d_ic DOUBLE PRECISION,
+                        rolling_60d_icir DOUBLE PRECISION,
+                        signal_hit_rate DOUBLE PRECISION,
+                        avg_slippage DOUBLE PRECISION,
+                        turnover_actual DOUBLE PRECISION,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        factor_catalog_id BIGINT NOT NULL REFERENCES aistock_factor_catalog(id) ON DELETE RESTRICT,
+                        UNIQUE(factor_name, strategy_id, trade_date)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_flt_factor_date
+                        ON factor_live_track(factor_name, trade_date);
+                    CREATE INDEX IF NOT EXISTS idx_flt_factor_catalog_id
+                        ON factor_live_track(factor_catalog_id);
                 """,
                 "qe_evolution_tasks": """
                     CREATE TABLE IF NOT EXISTS qe_evolution_tasks (
@@ -508,10 +580,376 @@ def init_database():
                         created_at TIMESTAMPTZ DEFAULT NOW()
                     );
                 """,
+                "qe_agent_model_config": """
+                    CREATE TABLE IF NOT EXISTS qe_agent_model_config (
+                        id SERIAL PRIMARY KEY,
+                        agent_type TEXT NOT NULL,
+                        model_provider TEXT DEFAULT 'openai',
+                        model_name TEXT DEFAULT 'gpt-4o',
+                        temperature DOUBLE PRECISION DEFAULT 0.7,
+                        max_tokens INTEGER DEFAULT 4096,
+                        extra_config JSONB,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW(),
+                        UNIQUE(agent_type)
+                    );
+                """,
+                "qe_loop_factor_records": """
+                    CREATE TABLE IF NOT EXISTS qe_loop_factor_records (
+                        id BIGSERIAL PRIMARY KEY,
+                        task_id TEXT NOT NULL REFERENCES qe_evolution_tasks(task_id) ON DELETE CASCADE,
+                        loop_id TEXT NOT NULL REFERENCES qe_evolution_loops(loop_id) ON DELETE CASCADE,
+                        loop_index INTEGER NOT NULL,
+                        factor_name TEXT NOT NULL,
+                        action_role TEXT,
+                        combo_ic DOUBLE PRECISION,
+                        combo_icir DOUBLE PRECISION,
+                        combo_sharpe DOUBLE PRECISION,
+                        combo_ann_return DOUBLE PRECISION,
+                        combo_max_drawdown DOUBLE PRECISION,
+                        factor_ic DOUBLE PRECISION,
+                        factor_rank_ic DOUBLE PRECISION,
+                        model_id TEXT,
+                        action_type TEXT,
+                        is_sota BOOLEAN DEFAULT FALSE,
+                        other_factors JSONB,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        factor_catalog_id BIGINT NOT NULL REFERENCES aistock_factor_catalog(id) ON DELETE RESTRICT,
+                        factor_source TEXT NOT NULL,
+                        model_catalog_id BIGINT REFERENCES aistock_model_catalog(id) ON DELETE RESTRICT,
+                        UNIQUE(loop_id, factor_name)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_qlfr_factor ON qe_loop_factor_records(factor_name);
+                    CREATE INDEX IF NOT EXISTS idx_qlfr_task   ON qe_loop_factor_records(task_id);
+                """,
+                "qe_loop_model_records": """
+                    CREATE TABLE IF NOT EXISTS qe_loop_model_records (
+                        id BIGSERIAL PRIMARY KEY,
+                        task_id TEXT NOT NULL REFERENCES qe_evolution_tasks(task_id) ON DELETE CASCADE,
+                        loop_id TEXT NOT NULL REFERENCES qe_evolution_loops(loop_id) ON DELETE CASCADE,
+                        loop_index INTEGER NOT NULL,
+                        model_id TEXT NOT NULL,
+                        model_type TEXT,
+                        combo_ic DOUBLE PRECISION,
+                        combo_icir DOUBLE PRECISION,
+                        combo_sharpe DOUBLE PRECISION,
+                        combo_ann_return DOUBLE PRECISION,
+                        combo_max_drawdown DOUBLE PRECISION,
+                        model_params JSONB,
+                        best_epoch INTEGER,
+                        total_epochs INTEGER,
+                        convergence_ratio DOUBLE PRECISION,
+                        overfit_ratio DOUBLE PRECISION,
+                        training_failed BOOLEAN DEFAULT FALSE,
+                        train_loss_final DOUBLE PRECISION,
+                        val_loss_final DOUBLE PRECISION,
+                        train_loss_curve JSONB,
+                        val_loss_curve JSONB,
+                        action_type TEXT,
+                        is_sota BOOLEAN DEFAULT FALSE,
+                        factor_count INTEGER,
+                        factor_list JSONB,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        model_catalog_id BIGINT NOT NULL REFERENCES aistock_model_catalog(id) ON DELETE RESTRICT,
+                        UNIQUE(loop_id, model_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_qlmr_model ON qe_loop_model_records(model_id);
+                    CREATE INDEX IF NOT EXISTS idx_qlmr_task  ON qe_loop_model_records(task_id);
+                """,
+                "aistock_factor_metrics": """
+                    CREATE TABLE IF NOT EXISTS aistock_factor_metrics (
+                        id SERIAL PRIMARY KEY,
+                        factor_name TEXT NOT NULL,
+                        ic_mean DOUBLE PRECISION,
+                        ic_std DOUBLE PRECISION,
+                        icir DOUBLE PRECISION,
+                        rank_ic_1d DOUBLE PRECISION,
+                        rank_ic_5d DOUBLE PRECISION,
+                        rank_ic_10d DOUBLE PRECISION,
+                        rank_ic_20d DOUBLE PRECISION,
+                        sharpe DOUBLE PRECISION,
+                        annual_return DOUBLE PRECISION,
+                        max_drawdown DOUBLE PRECISION,
+                        top_annual_return DOUBLE PRECISION,
+                        top_max_drawdown DOUBLE PRECISION,
+                        top_excess_annual_return DOUBLE PRECISION,
+                        benchmark_annual_return DOUBLE PRECISION,
+                        turnover DOUBLE PRECISION,
+                        ic_decay_half_life INTEGER,
+                        group_return_monotonicity DOUBLE PRECISION,
+                        best_holding_period TEXT,
+                        calculated_at TIMESTAMPTZ DEFAULT NOW(),
+                        raw_metrics JSONB,
+                        UNIQUE(factor_name, calculated_at)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_afm_factor_name
+                        ON aistock_factor_metrics(factor_name);
+                    CREATE INDEX IF NOT EXISTS idx_afm_calc_at
+                        ON aistock_factor_metrics(calculated_at DESC);
+                """,
             }
             for tbl_name, tbl_sql in qe_tables_sql.items():
                 print(f"Creating/Checking QE table: {tbl_name}...")
                 cur.execute(tbl_sql)
+
+            # ============================================================
+            # QE 单次实验执行：qe_experiments 新增列迁移
+            # ============================================================
+            qe_exp_migrations = [
+                ("qe_task_id", "TEXT"),
+                ("qe_loop_id", "TEXT"),
+                ("loop_index", "INTEGER DEFAULT 1"),
+                ("parent_experiment_id", "TEXT"),
+                ("is_evolution_loop", "BOOLEAN DEFAULT FALSE"),
+                ("updated_at", "TIMESTAMPTZ DEFAULT NOW()"),
+                ("evolution_goal", "TEXT"),
+                ("llm_hypothesis", "JSONB"),
+                ("llm_feedback", "JSONB"),
+                ("is_sota", "BOOLEAN DEFAULT FALSE"),
+            ]
+            for col_name, col_type in qe_exp_migrations:
+                cur.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='qe_experiments' AND column_name=%s;",
+                    (col_name,),
+                )
+                if not cur.fetchone():
+                    print(f"Adding column '{col_name}' to qe_experiments...")
+                    cur.execute(f"ALTER TABLE qe_experiments ADD COLUMN {col_name} {col_type};")
+
+            # ============================================================
+            # qe_factor_classification 新增列迁移
+            # ============================================================
+            fc_migrations = [
+                ("description", "TEXT"),
+                ("factor_dimension", "TEXT"),
+                ("factor_profile", "JSONB"),
+            ]
+            for col_name, col_type in fc_migrations:
+                cur.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='qe_factor_classification' AND column_name=%s;",
+                    (col_name,),
+                )
+                if not cur.fetchone():
+                    print(f"Adding column '{col_name}' to qe_factor_classification...")
+                    cur.execute(f"ALTER TABLE qe_factor_classification ADD COLUMN {col_name} {col_type};")
+
+            # ============================================================
+            # qe_evolution_tasks 新增列迁移（Phase 4: 多入口演进）
+            # ============================================================
+            evo_task_migrations = [
+                ("evolution_guidance", "TEXT"),
+                ("source_type", "TEXT DEFAULT 'qe_experiment'"),
+                ("source_task_id", "TEXT"),
+                ("evolution_mode", "TEXT DEFAULT 'auto'"),
+                ("fork_from_task_id", "TEXT"),
+                ("fork_from_loop_index", "INTEGER"),
+                ("inherit_history", "BOOLEAN DEFAULT FALSE"),
+            ]
+            for col_name, col_type in evo_task_migrations:
+                cur.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='qe_evolution_tasks' AND column_name=%s;",
+                    (col_name,),
+                )
+                if not cur.fetchone():
+                    print(f"Adding column '{col_name}' to qe_evolution_tasks...")
+                    cur.execute(f"ALTER TABLE qe_evolution_tasks ADD COLUMN {col_name} {col_type};")
+
+            # ============================================================
+            # 因子可用性管理: is_available 列 + 因子黑名单
+            # ============================================================
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name='aistock_factor_catalog' AND column_name='is_available'
+            """)
+            if not cur.fetchone():
+                print("Adding column 'is_available' to aistock_factor_catalog...")
+                cur.execute("ALTER TABLE aistock_factor_catalog ADD COLUMN is_available BOOLEAN NOT NULL DEFAULT TRUE")
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_factor_catalog_available
+                    ON aistock_factor_catalog (is_available) WHERE is_available = FALSE
+                """)
+
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name='qe_evolution_tasks' AND column_name='factor_blacklist'
+            """)
+            if not cur.fetchone():
+                print("Adding column 'factor_blacklist' to qe_evolution_tasks...")
+                cur.execute("ALTER TABLE qe_evolution_tasks ADD COLUMN factor_blacklist JSONB DEFAULT '[]'::jsonb")
+
+            # ============================================================
+            # catalog_id 关联列迁移（已有数据库升级用，新库由 CREATE TABLE 定义）
+            # ============================================================
+            def _add_col(table, column, col_type):
+                cur.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name=%s AND column_name=%s;",
+                    (table, column),
+                )
+                if not cur.fetchone():
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type};")
+                    print(f"[db][upgrade] Added {table}.{column}")
+
+            # 因子侧
+            _add_col("qe_loop_factor_records", "factor_catalog_id", "BIGINT")
+            _add_col("qe_loop_factor_records", "factor_source", "TEXT")
+            _add_col("qe_factor_classification", "factor_catalog_id", "BIGINT")
+            _add_col("aistock_factor_catalog", "correlation_computed_at", "TIMESTAMPTZ DEFAULT NULL")
+            _add_col("aistock_factor_catalog", "correlation_pair_count", "INTEGER DEFAULT 0")
+            _add_col("qe_factor_experiment_metrics", "factor_catalog_id", "BIGINT")
+            _add_col("factor_live_track", "factor_catalog_id", "BIGINT")
+
+            # 模型侧
+            _add_col("qe_loop_model_records", "model_catalog_id", "BIGINT")
+            _add_col("qe_loop_factor_records", "model_catalog_id", "BIGINT")
+            _add_col("qe_experiments", "model_catalog_id", "BIGINT")
+            _add_col("qe_factor_experiment_metrics", "model_catalog_id", "BIGINT")
+
+            # ============================================================
+            # Phase 2 日内执行: execution_algorithm_catalog 表
+            # ============================================================
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS public.execution_algorithm_catalog (
+                    id              SERIAL PRIMARY KEY,
+                    algo_code       TEXT NOT NULL UNIQUE,
+                    algo_name       TEXT NOT NULL,
+                    algo_type       TEXT NOT NULL DEFAULT 'execution',
+                    description     TEXT,
+                    source          TEXT DEFAULT 'builtin',
+                    source_code     TEXT,
+                    default_config  JSONB DEFAULT '{}'::jsonb,
+                    param_schema    JSONB DEFAULT '{}'::jsonb,
+                    supported_freqs TEXT[] DEFAULT '{5m}',
+                    min_bars        INTEGER DEFAULT 1,
+
+                    category        TEXT,
+                    category_reason TEXT,
+                    grade           TEXT,
+                    grade_score     INTEGER,
+                    analysis_profile JSONB DEFAULT '{}'::jsonb,
+                    llm_analysis_at TIMESTAMPTZ,
+
+                    is_enabled      BOOLEAN DEFAULT TRUE,
+                    sort_order      INTEGER DEFAULT 0,
+                    created_at      TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at      TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            print("Created/Checked table: execution_algorithm_catalog")
+
+            # 插入 6 个初始执行算法（ON CONFLICT 跳过已存在的）
+            cur.execute("""
+                INSERT INTO execution_algorithm_catalog
+                    (algo_code, algo_name, source, description, source_code, default_config, param_schema, supported_freqs, min_bars, sort_order)
+                VALUES
+                ('CLOSE_PRICE', '收盘价执行', 'builtin',
+                 '盘后按当日收盘价一次性执行全部订单。当前默认模式，无需分钟线数据。',
+                 'exec_price = daily_close\nexec_quantity = total_quantity\n# 一次性执行，无拆分',
+                 '{}', '{}', '{1d}', 0, 0),
+
+                ('TWAP', '时间加权均价 (TWAP)', 'qlib',
+                 '将目标订单均匀拆分到 N 个时间步执行。来源: Qlib TWAPStrategy。最后一步强制执行剩余数量，按100股对齐。',
+                 'step_qty = total_quantity / split_count\nfor t in range(split_count):\n    execute(step_qty, bar[t].close)\n# 最后一步: remaining = total - executed',
+                 '{"split_count": 12, "start_time": "09:35", "end_time": "14:50"}',
+                 '{"type": "object", "properties": {"split_count": {"type": "integer", "minimum": 2, "maximum": 48, "default": 12}, "start_time": {"type": "string", "default": "09:35"}, "end_time": {"type": "string", "default": "14:50"}}}',
+                 '{1m,5m,15m,30m}', 1, 10),
+
+                ('VWAP', '成交量加权均价 (VWAP)', 'custom',
+                 '按历史成交量分布拆分订单。高成交量时段分配更多份额，低成交量时段减少份额。需要历史分钟成交量数据。',
+                 'vol_profile[t] = avg_volume(t, lookback_days)\nweight[t] = vol_profile[t] / sum(vol_profile)\nstep_qty[t] = total_quantity * weight[t]\n# VWAP = sum(price*volume) / sum(volume)',
+                 '{"lookback_days": 5, "start_time": "09:35", "end_time": "14:50", "participation_rate": 0.1}',
+                 '{"type": "object", "properties": {"lookback_days": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5}, "participation_rate": {"type": "number", "minimum": 0.01, "maximum": 0.5, "default": 0.1}}}',
+                 '{1m,5m,15m}', 20, 20),
+
+                ('SBB_EMA', 'EMA择时执行 (SBB)', 'qlib',
+                 '在相邻两个 Bar 中选择更优时机执行。使用 EMA(10)-EMA(20) 预测短期价格趋势：看多时提前买入/延后卖出，看空时反之。来源: Qlib SBBStrategyEMA。',
+                 'signal = EMA(close, fast) - EMA(close, slow)\nif signal > 0:  # TREND_LONG\n    buy at bar[0], sell at bar[1]\nelif signal < 0:  # TREND_SHORT\n    sell at bar[0], buy at bar[1]\nelse:  # TREND_MID → TWAP fallback',
+                 '{"ema_fast": 10, "ema_slow": 20}',
+                 '{"type": "object", "properties": {"ema_fast": {"type": "integer", "minimum": 3, "maximum": 30, "default": 10}, "ema_slow": {"type": "integer", "minimum": 10, "maximum": 60, "default": 20}}}',
+                 '{1m,5m,15m,30m}', 20, 30),
+
+                ('AC_OPTIMAL', 'Almgren-Chriss 最优执行', 'qlib',
+                 '基于市场波动率计算最优执行计划。高波动期间减少交易量（降低市场冲击），低波动期间加大执行。无信号时降级为 TWAP。来源: Qlib ACStrategy。',
+                 'sigma = rolling_std(returns, vol_window)\nkappa = sqrt(lambda / eta)\nratio[t] = sinh(kappa*(T-t)) / sinh(kappa*T)\nstep_qty[t] = total_quantity * ratio[t]\n# lambda: 时间风险厌恶, eta: 市场冲击系数',
+                 '{"lambda": 1e-6, "eta": 2.5e-6, "vol_window": 20}',
+                 '{"type": "object", "properties": {"lambda": {"type": "number", "minimum": 1e-8, "maximum": 1e-3, "default": 1e-6}, "eta": {"type": "number", "minimum": 1e-8, "maximum": 1e-3, "default": 2.5e-6}, "vol_window": {"type": "integer", "minimum": 5, "maximum": 60, "default": 20}}}',
+                 '{1m,5m,15m}', 30, 40),
+
+                ('POV', '参与率执行 (POV)', 'custom',
+                 '按当前市场成交量的固定比例执行。确保不超过市场成交量的 N%，降低市场冲击。需要实时成交量数据。',
+                 'step_qty[t] = min(\n    remaining_quantity,\n    market_volume[t] * target_participation,\n    market_volume[t] * max_participation\n)\n# 跟随市场成交量节奏执行',
+                 '{"target_participation": 0.05, "max_participation": 0.15, "start_time": "09:35", "end_time": "14:50"}',
+                 '{"type": "object", "properties": {"target_participation": {"type": "number", "minimum": 0.01, "maximum": 0.3, "default": 0.05}, "max_participation": {"type": "number", "minimum": 0.05, "maximum": 0.5, "default": 0.15}}}',
+                 '{1m,5m,15m}', 30, 50)
+
+                ON CONFLICT (algo_code) DO NOTHING
+            """)
+            print("Inserted initial execution algorithms (6 items, ON CONFLICT skip)")
+
+            # ============================================================
+            # 注册 execution_analyst LLM prompt
+            # ============================================================
+            cur.execute("""
+                INSERT INTO qe_agent_prompts (agent_type, prompt_key, display_name, description, system_prompt, user_prompt_template)
+                VALUES (
+                    'execution_analyst',
+                    'analyze_execution_algo',
+                    '执行算法分析',
+                    '分析执行算法的分类、适用场景、优劣势和A股适用性',
+                    '你是量化交易执行算法专家，精通 TWAP/VWAP/AC/POV 等主流执行算法和 A股市场微观结构（T+1、涨跌停、100股整手、集合竞价）。请基于算法描述和核心公式进行专业分析。',
+                    '请分析以下日内执行算法：
+
+算法名称: {algo_name}
+算法代码: {algo_code}
+算法描述: {description}
+核心代码/公式:
+{source_code}
+默认参数: {default_config}
+支持频率: {supported_freqs}
+
+请返回严格 JSON 格式（不要 markdown 包裹）：
+{{
+  "category": "SCHEDULE 或 ADAPTIVE 或 PASSIVE 或 AGGRESSIVE 或 HYBRID",
+  "category_reason": "分类理由（一句话）",
+  "scores": {{
+    "execution_quality": 0到100的整数,
+    "adaptiveness": 0到100的整数,
+    "data_feasibility": 0到100的整数,
+    "complexity_benefit": 0到100的整数,
+    "a_share_suitability": 0到100的整数,
+    "robustness": 0到100的整数
+  }},
+  "applicable_scenarios": ["场景1", "场景2"],
+  "advantages": ["优势1", "优势2"],
+  "disadvantages": ["劣势1", "劣势2"],
+  "a_share_notes": "A股特殊注意事项（T+1、涨跌停、100股整手等）",
+  "usage_guidance": "使用建议（一段话）",
+  "best_for": ["最适合场景1", "最适合场景2"],
+  "avoid_for": ["应避免场景1", "应避免场景2"]
+}}
+
+分类定义：
+- SCHEDULE（定时调度型）：按预设时间表机械执行，不依赖实时行情
+- ADAPTIVE（自适应型）：根据实时市场状态动态调整执行节奏
+- PASSIVE（被动跟随型）：跟随市场成交量分布执行，最小化冲击
+- AGGRESSIVE（激进执行型）：追求最快完成或最优价格
+- HYBRID（混合型）：组合多种执行逻辑
+
+评分维度（各0-100分）：
+- execution_quality: 执行质量（价格改善/滑点控制）
+- adaptiveness: 市场自适应能力
+- data_feasibility: 数据可获取性（AIStock现有数据能否支撑）
+- complexity_benefit: 复杂度收益比
+- a_share_suitability: A股适用性
+- robustness: 鲁棒性'
+                )
+                ON CONFLICT (agent_type, prompt_key) DO NOTHING
+            """)
+            print("Registered execution_analyst prompt")
 
             conn.commit()
             cur.close()

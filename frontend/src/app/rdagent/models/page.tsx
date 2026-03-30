@@ -18,6 +18,7 @@ interface ModelItem {
   feature_schema: Record<string, any> | null;
   flattened_feature_list?: string[] | null;
   model_artifacts: Record<string, any> | null;
+  node_id?: string | null;
 }
 
 interface ModelResponse {
@@ -35,10 +36,21 @@ export default function RDagentModelsPage() {
   const [workspaceId, setWorkspaceId] = useState<string>("");
   const [selected, setSelected] = useState<ModelItem | null>(null);
 
+  // 节点筛选
+  const [filterNodeId, setFilterNodeId] = useState<string>("");
+  const [availableNodes, setAvailableNodes] = useState<{ node_id: string; display_name: string }[]>([]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/dispatch/nodes`)
+      .then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
+      .then(nodes => setAvailableNodes(nodes.map((n: any) => ({ node_id: n.node_id, display_name: n.display_name }))))
+      .catch(e => console.warn("加载节点列表失败:", e));
+  }, []);
+
   useEffect(() => {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [filterNodeId]);
 
   async function loadData() {
     setLoading(true);
@@ -49,6 +61,7 @@ export default function RDagentModelsPage() {
       params.set("offset", "0");
       if (taskRunId) params.set("task_run_id", taskRunId);
       if (workspaceId) params.set("workspace_id", workspaceId);
+      if (filterNodeId) params.set("node_id", filterNodeId);
 
       const res = await fetch(`${API_BASE}/rdagent/catalogs/models?${params.toString()}`);
       if (!res.ok) throw new Error(`加载 model 目录失败: ${res.status}`);
@@ -97,6 +110,19 @@ export default function RDagentModelsPage() {
               placeholder="如 71a7..."
               style={{ marginLeft: 4, padding: 4, fontSize: 12, minWidth: 260 }}
             />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            来源节点:
+            <select
+              value={filterNodeId}
+              onChange={(e) => setFilterNodeId(e.target.value)}
+              style={{ marginLeft: 4, padding: 4, fontSize: 12 }}
+            >
+              <option value="">全部节点</option>
+              {availableNodes.map(n => (
+                <option key={n.node_id} value={n.node_id}>{n.display_name || n.node_id}</option>
+              ))}
+            </select>
           </label>
           <label style={{ fontSize: 12 }}>
             workspace_id:
@@ -175,6 +201,9 @@ export default function RDagentModelsPage() {
                   <th style={{ padding: 8, textAlign: "left", borderBottom: "2px solid #e5e7eb", fontSize: 12 }}>
                     model_type
                   </th>
+                  <th style={{ padding: 8, textAlign: "left", borderBottom: "2px solid #e5e7eb", fontSize: 12 }}>
+                    来源节点
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -194,6 +223,9 @@ export default function RDagentModelsPage() {
                     </td>
                     <td style={{ padding: 8, fontSize: 11, color: "#4b5563" }}>
                       {m.model_type || "-"}
+                    </td>
+                    <td style={{ padding: 8, fontSize: 11, color: "#6b7280" }}>
+                      {m.node_id || "-"}
                     </td>
                   </tr>
                 ))}
@@ -260,6 +292,7 @@ export default function RDagentModelsPage() {
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>基本信息</div>
                 <div style={{ color: "#4b5563" }}>model_id: {selected.model_id || "-"}</div>
                 <div style={{ color: "#4b5563", marginTop: 4 }}>model_type: {selected.model_type || "-"}</div>
+                <div style={{ color: "#4b5563", marginTop: 4 }}>来源节点: {selected.node_id || "-"}</div>
                 {selected.workspace_path && (
                   <div style={{ color: "#4b5563", marginTop: 4, wordBreak: "break-all" }}>
                     workspace_path: {selected.workspace_path}

@@ -115,7 +115,7 @@ class AIstockAgentUpdate(BaseModel):
 
 
 @router.get("/providers")
-async def list_providers() -> dict[str, Any]:
+def list_providers() -> dict[str, Any]:
     """获取所有服务商列表"""
     with get_conn() as conn:
         cursor = conn.cursor()
@@ -152,7 +152,7 @@ async def list_providers() -> dict[str, Any]:
 
 
 @router.get("/providers/stats")
-async def get_providers_stats() -> dict[str, Any]:
+def get_providers_stats() -> dict[str, Any]:
     """获取服务商模型统计"""
     with get_conn() as conn:
         cursor = conn.cursor()
@@ -183,7 +183,7 @@ async def get_providers_stats() -> dict[str, Any]:
 
 
 @router.post("/providers")
-async def create_provider(provider: ProviderCreate) -> dict[str, Any]:
+def create_provider(provider: ProviderCreate) -> dict[str, Any]:
     """创建服务商"""
     with get_conn() as conn:
         cursor = conn.cursor()
@@ -213,7 +213,7 @@ async def create_provider(provider: ProviderCreate) -> dict[str, Any]:
 
 
 @router.put("/providers/{provider_id}")
-async def update_provider(provider_id: int, provider: ProviderUpdate) -> dict[str, Any]:
+def update_provider(provider_id: int, provider: ProviderUpdate) -> dict[str, Any]:
     """更新服务商"""
     update_fields = []
     update_values = []
@@ -246,7 +246,7 @@ async def update_provider(provider_id: int, provider: ProviderUpdate) -> dict[st
 
 
 @router.delete("/providers/{provider_id}")
-async def delete_provider(provider_id: int) -> dict[str, Any]:
+def delete_provider(provider_id: int) -> dict[str, Any]:
     """删除服务商（软删除）"""
     with get_conn() as conn:
         cursor = conn.cursor()
@@ -299,7 +299,7 @@ async def sync_models(provider_id: int, request: SyncModelsRequest) -> dict[str,
 
 
 @router.get("/api-configs")
-async def list_api_configs() -> dict[str, Any]:
+def list_api_configs() -> dict[str, Any]:
     """获取所有API配置"""
     with get_conn() as conn:
         cursor = conn.cursor()
@@ -331,7 +331,7 @@ async def list_api_configs() -> dict[str, Any]:
 
 
 @router.post("/api-configs")
-async def create_api_config(config: APIConfigCreate) -> dict[str, Any]:
+def create_api_config(config: APIConfigCreate) -> dict[str, Any]:
     """创建API配置"""
     with get_conn() as conn:
         cursor = conn.cursor()
@@ -363,7 +363,7 @@ async def create_api_config(config: APIConfigCreate) -> dict[str, Any]:
 
 
 @router.get("/models")
-async def list_models(
+def list_models(
     provider_id: int | None = None,
     model_type: str | None = None,
     is_active: bool = True
@@ -419,7 +419,7 @@ async def list_models(
 
 
 @router.post("/models")
-async def create_model(model: ModelCreate) -> dict[str, Any]:
+def create_model(model: ModelCreate) -> dict[str, Any]:
     """创建模型"""
     with get_conn() as conn:
         cursor = conn.cursor()
@@ -464,7 +464,7 @@ async def create_model(model: ModelCreate) -> dict[str, Any]:
 
 
 @router.post("/models/batch-import")
-async def batch_import_models_api(request: ModelBatchImport) -> dict[str, Any]:
+def batch_import_models_api(request: ModelBatchImport) -> dict[str, Any]:
     """批量导入模型"""
     result = batch_import_models(
         provider_id=request.provider_id,
@@ -476,7 +476,7 @@ async def batch_import_models_api(request: ModelBatchImport) -> dict[str, Any]:
 
 
 @router.delete("/models/{model_id}")
-async def delete_model(model_id: int) -> dict[str, Any]:
+def delete_model(model_id: int) -> dict[str, Any]:
     """删除模型（软删除）"""
     with get_conn() as conn:
         cursor = conn.cursor()
@@ -495,7 +495,7 @@ async def delete_model(model_id: int) -> dict[str, Any]:
 
 
 @router.get("/rdagent/stages")
-async def list_rdagent_stages() -> dict[str, Any]:
+def list_rdagent_stages() -> dict[str, Any]:
     """获取RDAgent阶段配置列表"""
     with get_conn() as conn:
         cursor = conn.cursor()
@@ -530,7 +530,7 @@ async def list_rdagent_stages() -> dict[str, Any]:
 
 
 @router.put("/rdagent/stages/{stage_name}")
-async def update_rdagent_stage(stage_name: str, update: RDAgentStageUpdate) -> dict[str, Any]:
+def update_rdagent_stage(stage_name: str, update: RDAgentStageUpdate) -> dict[str, Any]:
     """更新RDAgent阶段配置"""
     with get_conn() as conn:
         cursor = conn.cursor()
@@ -586,7 +586,7 @@ async def update_rdagent_stage(stage_name: str, update: RDAgentStageUpdate) -> d
 
 
 @router.get("/rdagent/config-preview")
-async def get_rdagent_config_preview() -> dict[str, Any]:
+def get_rdagent_config_preview() -> dict[str, Any]:
     """获取RDAgent配置预览（生成的.env内容）"""
     with get_conn() as conn:
         cursor = conn.cursor()
@@ -639,7 +639,7 @@ async def get_rdagent_config_preview() -> dict[str, Any]:
 
 
 @router.get("/aistock/agents")
-async def list_aistock_agents() -> dict[str, Any]:
+def list_aistock_agents() -> dict[str, Any]:
     """获取AIstock Agent配置列表"""
     with get_conn() as conn:
         cursor = conn.cursor()
@@ -676,7 +676,7 @@ async def list_aistock_agents() -> dict[str, Any]:
 
 
 @router.put("/aistock/agents/{agent_key}")
-async def update_aistock_agent(agent_key: str, update: AIstockAgentUpdate) -> dict[str, Any]:
+def update_aistock_agent(agent_key: str, update: AIstockAgentUpdate) -> dict[str, Any]:
     """更新AIstock Agent配置"""
     with get_conn() as conn:
         cursor = conn.cursor()
@@ -729,7 +729,7 @@ async def update_aistock_agent(agent_key: str, update: AIstockAgentUpdate) -> di
 
 
 @router.get("/aistock/agents/{agent_key}/config")
-async def get_aistock_agent_config(agent_key: str) -> dict[str, Any]:
+def get_aistock_agent_config(agent_key: str) -> dict[str, Any]:
     """获取单个AIstock Agent的完整配置（用于运行时调用）"""
     with get_conn() as conn:
         cursor = conn.cursor()

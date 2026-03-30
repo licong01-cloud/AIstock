@@ -17,7 +17,7 @@ class MetaRepo:
     
     表结构：
     - snapshot_id: Snapshot 标识
-    - data_type: 数据类型（minute_1m, board_daily, board_index, board_member）
+    - data_type: 数据类型（minute_1m, factor_data, daily_basic, moneyflow 等）
     - last_datetime: 已导出的最后时间点
     """
     

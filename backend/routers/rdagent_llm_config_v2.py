@@ -389,7 +389,7 @@ async def update_config_v2(config: ConfigUpdateV2) -> dict[str, Any]:
 
 
 @router.get("/validate-config")
-async def validate_config() -> dict[str, Any]:
+def validate_config() -> dict[str, Any]:
     """
     验证当前配置的完整性
     检查所有模型是否都有对应的API配置

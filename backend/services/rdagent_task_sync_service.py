@@ -38,8 +38,15 @@ except Exception:
 
 logger = logging.getLogger("aistock.rdagent_task_sync_service")
 
-# 初始化 API 客户端
+# 初始化 API 客户端（默认节点）
 _rdagent_client = RDAgentResultsApiClient()
+
+
+def _get_client_for_node(node_id: Optional[str] = None) -> RDAgentResultsApiClient:
+    """获取指定节点的 API 客户端。node_id=None 时返回默认客户端。"""
+    if node_id is None:
+        return _rdagent_client
+    return RDAgentResultsApiClient.for_node(node_id)
 
 JsonDict = Dict[str, Any]
 
@@ -176,16 +183,16 @@ class RDAgentTaskSyncService:
         aistock_root = Path(os.environ.get("AISTOCK_ROOT") or "f:/Dev/AIstock").resolve()
         self.assets_root = aistock_root / "rdagent_assets" / "rdagent_tasks"
 
-    def sync_task(self, *, task_id: str, operator: str = "script") -> TaskSyncResult:
+    def sync_task(self, *, task_id: str, operator: str = "script", node_id: Optional[str] = None) -> TaskSyncResult:
         """API 同步（严格模式）：强制调用 sync_task_from_log (v2 逻辑)。"""
         tid = str(task_id).strip()
         if not tid:
             return TaskSyncResult(ok=False, task_id=tid, sync_status="failed", task_dir="", manifest_path="", error="task_id 为空")
-        return self.sync_task_from_log(task_id=tid, operator=operator)
+        return self.sync_task_from_log(task_id=tid, operator=operator, node_id=node_id)
 
-    def sync_task_from_log(self, *, task_id: str, operator: str = "ui") -> TaskSyncResult:
+    def sync_task_from_log(self, *, task_id: str, operator: str = "ui", node_id: Optional[str] = None) -> TaskSyncResult:
         """从RD-Agent同步任务资产。基于《模型权重文件定位方案_v2.md》实现。
-        
+
         核心流程：
         1. 调用sota_factor_anchor API获取SOTA因子信息
         2. 下载模型权重（从最后一个SOTA因子实验）
@@ -193,22 +200,27 @@ class RDAgentTaskSyncService:
         4. 下载主因子和所有based factors
         5. 生成factor_order.json
         6. 填充catalog表（factor、alpha_baseline、factor_order）
+
+        node_id: 指定从哪个节点同步。None 使用默认节点。
         """
         tid = str(task_id).strip()
         task_dir = self.assets_root / tid
         manifest_path = task_dir / "manifest.json"
 
-        _upsert_task_catalog(
-            tid,
-            {
-                "task_dir": str(task_dir),
-                "manifest_path": str(manifest_path),
-                "sync_status": "syncing",
-                "sync_error": None,
-                "sync_diagnostics": None,
-                "updated_at_utc": datetime.utcnow(),
-            },
-        )
+        # 使用指定节点的客户端
+        _client = _get_client_for_node(node_id)
+
+        catalog_init: JsonDict = {
+            "task_dir": str(task_dir),
+            "manifest_path": str(manifest_path),
+            "sync_status": "syncing",
+            "sync_error": None,
+            "sync_diagnostics": None,
+            "updated_at_utc": datetime.utcnow(),
+        }
+        if node_id:
+            catalog_init["node_id"] = node_id
+        _upsert_task_catalog(tid, catalog_init)
 
         diagnostics: JsonDict = {"mode": "v2_sota_factor_anchor", "errors": [], "warnings": []}
 
@@ -272,8 +284,7 @@ class RDAgentTaskSyncService:
                     else:
                         diagnostics["warnings"].append(f"模型权重file_dict下载返回空: {resolved_weight_key}")
                 except Exception as e:
-                    diagnostics["warnings"].append(f"模型权重file_dict下载失败: {e}")
-                    logger.warning(f"[{tid}] 模型权重file_dict下载失败: {e}")
+                    raise RuntimeError(f"[{tid}] 模型权重file_dict下载失败: {e}") from e
 
             # 方式B: file_dict无权重时，通过complete_assets API获取（支持mlruns定位）
             if not has_model_weight:
@@ -287,52 +298,33 @@ class RDAgentTaskSyncService:
                     ca_data = ca_resp.json()
 
                     mw_info = ca_data.get("model_weight", {}) if ca_data else {}
-                    if mw_info.get("found"):
-                        mw_source = mw_info.get("source", "unknown")
-                        mw_file_path = mw_info.get("file_path")
-                        mw_key = mw_info.get("key") or mw_info.get("file_name")
+                    if not mw_info.get("found"):
+                        raise RuntimeError(f"[{tid}] complete_assets未找到模型权重")
 
-                        # complete_assets返回的model_weight不含bytes，需要通过asset_bytes下载
-                        # 对于mlruns来源，需要用file_path作为key
-                        download_key = mw_file_path or mw_key
-                        if download_key:
-                            logger.info(f"[{tid}] 通过asset_bytes下载模型权重(source={mw_source}): {download_key}")
-                            try:
-                                weight_bytes = _rdagent_client.download_task_asset_bytes(tid, download_key)
-                            except Exception:
-                                weight_bytes = None
+                    mw_source = mw_info.get("source", "unknown")
+                    mw_file_path = mw_info.get("file_path")
+                    mw_key = mw_info.get("key") or mw_info.get("file_name")
+                    download_key = mw_file_path or mw_key
+                    if not download_key:
+                        raise RuntimeError(f"[{tid}] complete_assets找到权重但无可用下载key")
 
-                            if not weight_bytes and mw_file_path:
-                                # asset_bytes端点可能不支持mlruns路径，尝试直接通过文件路径API获取
-                                logger.info(f"[{tid}] asset_bytes失败，尝试file_content API...")
-                                try:
-                                    fc_url = f"{base_url}/tasks/{tid}/file_content?path={mw_file_path}"
-                                    fc_resp = _req_mw.get(fc_url, timeout=120.0)
-                                    if fc_resp.status_code == 200:
-                                        weight_bytes = fc_resp.content
-                                except Exception as fc_err:
-                                    logger.warning(f"[{tid}] file_content API也失败: {fc_err}")
+                    logger.info(f"[{tid}] 通过asset_bytes下载模型权重(source={mw_source}): {download_key}")
+                    weight_bytes = _rdagent_client.download_task_asset_bytes(tid, download_key)
+                    if not weight_bytes:
+                        raise RuntimeError(f"[{tid}] asset_bytes下载模型权重返回空 (key={download_key})")
 
-                            if weight_bytes:
-                                has_model_weight = True
-                                diagnostics["model_weight"] = {
-                                    "key": download_key,
-                                    "path": "model.pkl",
-                                    "size": len(weight_bytes),
-                                    "source": mw_source,
-                                }
-                                logger.info(f"[{tid}] 模型权重下载成功(complete_assets/{mw_source}): {len(weight_bytes)} bytes")
-                            else:
-                                diagnostics["warnings"].append(
-                                    f"complete_assets找到权重(source={mw_source})但下载失败: {download_key}"
-                                )
-                        else:
-                            diagnostics["warnings"].append("complete_assets找到权重但无可用下载key")
-                    else:
-                        diagnostics["warnings"].append("complete_assets也未找到模型权重")
+                    has_model_weight = True
+                    diagnostics["model_weight"] = {
+                        "key": download_key,
+                        "path": "model.pkl",
+                        "size": len(weight_bytes),
+                        "source": mw_source,
+                    }
+                    logger.info(f"[{tid}] 模型权重下载成功(complete_assets/{mw_source}): {len(weight_bytes)} bytes")
+                except RuntimeError:
+                    raise
                 except Exception as ca_err:
-                    diagnostics["warnings"].append(f"complete_assets API调用失败: {ca_err}")
-                    logger.warning(f"[{tid}] complete_assets API调用失败: {ca_err}")
+                    raise RuntimeError(f"[{tid}] complete_assets API调用失败: {ca_err}") from ca_err
 
             # 保存模型权重文件
             if has_model_weight and weight_bytes:
@@ -340,8 +332,7 @@ class RDAgentTaskSyncService:
                 weight_path.write_bytes(weight_bytes)
                 logger.info(f"[{tid}] 模型权重已保存: {len(weight_bytes)} bytes")
             elif not has_model_weight:
-                diagnostics["warnings"].append("最终未获取到模型权重")
-                logger.warning(f"[{tid}] 最终未获取到模型权重")
+                raise RuntimeError(f"[{tid}] 最终未获取到模型权重")
 
             # ============================================================
             # 步骤3: 调用v2_alignment_preview获取对齐数据
@@ -406,8 +397,7 @@ class RDAgentTaskSyncService:
             except RuntimeError:
                 raise
             except Exception as v2_err:
-                logger.warning(f"[{tid}] V2 alignment preview调用异常: {v2_err}")
-                diagnostics["warnings"].append(f"V2 preview异常: {v2_err}")
+                raise RuntimeError(f"[{tid}] V2 alignment preview调用异常: {v2_err}") from v2_err
             
             diagnostics["alpha_baseline_factors"] = {
                 "count": len(alpha_baseline_factors),
@@ -512,33 +502,16 @@ class RDAgentTaskSyncService:
                         f"{len(merged_code)} chars"
                     )
                 else:
-                    diagnostics["warnings"].append("complete_assets未返回因子代码")
-                    
+                    raise RuntimeError(f"[{tid}] complete_assets未返回因子代码")
+
+            except RuntimeError:
+                raise
             except Exception as e:
-                diagnostics["warnings"].append(f"complete_assets因子代码获取失败: {e}")
-                logger.warning(f"[{tid}] complete_assets因子代码获取失败: {e}")
-                # 降级：尝试用anchor的主因子（只有1个）
-                resolved_factor_key = anchor_resp.get("resolved_factor_entry_key")
-                if resolved_factor_key:
-                    logger.info(f"[{tid}] 降级：使用anchor主因子 {resolved_factor_key}")
-                    try:
-                        factor_bytes = _rdagent_client.download_task_asset_bytes(tid, resolved_factor_key)
-                        if factor_bytes:
-                            factor_path = task_dir / "factor.py"
-                            factor_path.write_bytes(factor_bytes)
-                            all_factors.append({
-                                "type": "main_fallback",
-                                "key": resolved_factor_key,
-                                "path": "factor.py",
-                                "size": len(factor_bytes),
-                            })
-                    except Exception as e2:
-                        diagnostics["warnings"].append(f"anchor主因子下载也失败: {e2}")
-            
+                raise RuntimeError(f"[{tid}] complete_assets因子代码获取失败: {e}") from e
+
             diagnostics["all_factors"] = {
                 "total": len(all_factors),
                 "sota_from_complete_assets": sum(1 for f in all_factors if f.get("type") == "sota"),
-                "fallback": sum(1 for f in all_factors if f.get("type") == "main_fallback"),
             }
 
             # ============================================================
@@ -667,11 +640,9 @@ class RDAgentTaskSyncService:
             # ============================================================
             try:
                 from .rdagent_model_catalog_sync import sync_models_from_task
-                last_sota_idx = anchor_resp.get("last_sota_factor_index") if anchor_resp else None
                 model_sync_result = sync_models_from_task(
                     task_id=tid,
                     task_dir=str(task_dir),
-                    last_sota_index=last_sota_idx,
                 )
                 diagnostics["model_catalog_sync"] = {
                     "ok": model_sync_result.ok,
@@ -845,7 +816,7 @@ class RDAgentTaskSyncService:
                 cur.execute(sql, (tid,))
         return {"ok": True, "task_id": tid, "is_enabled_for_selection": False}
 
-    def list_sync_candidates(self, *, limit: int = 50) -> JsonDict:
+    def list_sync_candidates(self, *, limit: int = 50, node_id: str | None = None) -> JsonDict:
         """从 RD-Agent 侧 API 获取待同步的任务，并并发获取详细的 SOTA 因子状态。"""
         items = []
         synced_ids = set()
@@ -862,14 +833,19 @@ class RDAgentTaskSyncService:
         except Exception:
             pass
 
+        import time as _time
+        _t_start = _time.monotonic()
         try:
+            _t0 = _time.monotonic()
             local_tasks = self.list_local_tasks(limit=1000)
             synced_ids = {t["task_id"] for t in local_tasks.get("items", [])}
+            logger.info(f"[TIMING] list_local_tasks 耗时: {_time.monotonic() - _t0:.2f}s, 结果: {len(synced_ids)} 条")
         except Exception as e:
             logger.error(f"Failed to list local tasks: {e}")
-        
+
         # 从数据库读取已入库TASK的完整V2对齐信息
         try:
+            _t0 = _time.monotonic()
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
@@ -894,23 +870,112 @@ class RDAgentTaskSyncService:
                             'alpha_factors_list': alpha_list,
                             'hist_len': hist_len_val or 0,
                         }
-            logger.info(f"从数据库加载 {len(cached_tasks)} 个已入库TASK的V2对齐信息")
+            logger.info(f"[TIMING] DB缓存查询耗时: {_time.monotonic() - _t0:.2f}s, 加载 {len(cached_tasks)} 条")
         except Exception as e:
             logger.warning(f"从数据库读取TASK信息失败: {e}")
 
-        # 1. 尝试从 RD-Agent API 获取最新任务列表
+        # 从 rdagent_candidate_loops 批量查询每个 Task 的 SOTA Loop 摘要指标
+        # （SOTA Loop 数量 + 最终 SOTA Loop 的年化收益/最大回撤/IC）
+        sota_loop_summary: dict[str, dict] = {}  # task_id -> {sota_loops_count, ...}
         try:
+            _t0 = _time.monotonic()
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    # 1) 每个 task 的 SOTA Loop 计数
+                    cur.execute("""
+                        SELECT task_id, COUNT(*) as cnt
+                        FROM rdagent.rdagent_candidate_loops
+                        WHERE is_sota = TRUE
+                        GROUP BY task_id
+                    """)
+                    for row in cur.fetchall():
+                        sota_loop_summary[row[0]] = {"sota_loops_count": row[1]}
+
+                    # 2) 每个 task 最终 SOTA Loop（loop_id 最大）的指标
+                    cur.execute("""
+                        SELECT DISTINCT ON (task_id)
+                            task_id, loop_id, annualized_return, max_drawdown, valid_score
+                        FROM rdagent.rdagent_candidate_loops
+                        WHERE is_sota = TRUE
+                        ORDER BY task_id, loop_id DESC
+                    """)
+                    for row in cur.fetchall():
+                        tid_row, lid, ann_ret, mdd, ic = row
+                        entry = sota_loop_summary.setdefault(tid_row, {})
+                        entry["final_sota_loop_id"] = lid
+                        entry["final_sota_annualized_return"] = float(ann_ret) if ann_ret is not None else None
+                        entry["final_sota_max_drawdown"] = float(mdd) if mdd is not None else None
+                        entry["final_sota_ic"] = float(ic) if ic is not None else None
+            logger.info(f"[TIMING] SOTA Loop摘要查询耗时: {_time.monotonic() - _t0:.2f}s, 加载 {len(sota_loop_summary)} 条")
+        except Exception as e:
+            logger.warning(f"查询SOTA Loop摘要失败: {e}")
+
+        # 1. 尝试从 RD-Agent API 获取最新任务列表
+        uncached_task_ids: list[str] = []  # 收集未缓存V2信息的task，后续可异步获取
+        try:
+            _t0 = _time.monotonic()
             logger.info("Fetching task candidates from RD-Agent API...")
-            api_resp = _rdagent_client.get_tasks_latest(limit=limit)
-            
+
+            # 确定要查询的节点列表 + 构建 node_id → display_name 映射
+            node_display_names: dict[str, str] = {}
+            # 加载所有节点的 display_name 映射（无论是否单节点过滤）
+            try:
+                with get_conn() as _conn_dn:
+                    with _conn_dn.cursor() as _cur_dn:
+                        _cur_dn.execute("SELECT node_id, display_name FROM infra.compute_nodes")
+                        for _row_dn in _cur_dn.fetchall():
+                            node_display_names[_row_dn[0]] = _row_dn[1]
+            except Exception:
+                pass
+            if node_id:
+                query_nodes = [(node_id, _get_client_for_node(node_id))]
+            else:
+                # 全部节点：遍历所有在线节点
+                query_nodes = []
+                try:
+                    with get_conn() as _conn:
+                        with _conn.cursor() as _cur:
+                            _cur.execute("SELECT node_id, api_base_url FROM infra.compute_nodes")
+                            for _row in _cur.fetchall():
+                                try:
+                                    query_nodes.append((_row[0], RDAgentResultsApiClient(base_url=_row[1])))
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+                if not query_nodes:
+                    query_nodes = [("default", _get_client_for_node(None))]
+
             candidate_list = []
-            if isinstance(api_resp, list):
-                candidate_list = api_resp
-            elif isinstance(api_resp, dict):
-                for k in ("items", "tasks", "data"):
-                    if isinstance(api_resp.get(k), list):
-                        candidate_list = api_resp[k]
-                        break
+            for _nid, _client in query_nodes:
+                try:
+                    api_resp = _client.get_tasks_latest(limit=limit)
+                    _raw = []
+                    if isinstance(api_resp, list):
+                        _raw = api_resp
+                    elif isinstance(api_resp, dict):
+                        for k in ("items", "tasks", "data"):
+                            if isinstance(api_resp.get(k), list):
+                                _raw = api_resp[k]
+                                break
+                    # 附加 node_id 到每个候选
+                    for _t in _raw:
+                        _t["_node_id"] = _nid
+                    candidate_list.extend(_raw)
+                except Exception as _e:
+                    logger.warning(f"从节点 {_nid} 获取候选失败: {_e}")
+
+            # 按 task_id 去重（多节点可能有相同 task）
+            _seen = set()
+            _deduped = []
+            for _t in candidate_list:
+                _tid = _t.get("task_id")
+                if _tid and _tid not in _seen:
+                    _seen.add(_tid)
+                    _deduped.append(_t)
+            candidate_list = _deduped
+
+            logger.info(f"get_tasks_latest 耗时: {_time.monotonic() - _t0:.2f}s, 节点数: {len(query_nodes)}, 候选: {len(candidate_list)}")
 
             if candidate_list:
                 def fetch_task_detail(t):
@@ -938,146 +1003,20 @@ class RDAgentTaskSyncService:
                         logger.debug(f"TASK {tid} 从数据库读取V2信息: has_sota={cached_info['has_sota']}, "
                                      f"aligned={cached_info['is_aligned']}")
                     else:
-                        # 新TASK：调用V2对齐预览API获取完整信息并入库
-                        has_sota = None
-                        sota_factors_count = 0
-                        v2_alignment = None
+                        # 新TASK：不阻塞页面加载，标记为 pending 后由后台线程异步获取 V2 信息
+                        uncached_task_ids.append(tid)
+                        discovery = None  # 前端显示为"待分析"
 
-                        try:
-                            import requests
-                            from datetime import datetime, timezone
-                            import json as _json
+                    # 合并 SOTA Loop 摘要指标到 discovery
+                    sl = sota_loop_summary.get(tid)
+                    if sl and discovery is not None:
+                        discovery["sota_loop_summary"] = sl
 
-                            base_url = _rdagent_client.base_url.rstrip("/")
-
-                            logger.info(f"新TASK {tid}：正在从V2对齐预览API获取信息")
-                            v2_url = f"{base_url}/tasks/{tid}/v2_alignment_preview"
-                            v2_resp = requests.get(v2_url, timeout=300.0)
-                            v2_resp.raise_for_status()
-                            v2_data = v2_resp.json()
-
-                            if v2_data and v2_data.get('ok'):
-                                v2_sota_count = v2_data.get('sota_factors_count', 0)
-                                has_sota = v2_sota_count > 0
-                                sota_factors_count = v2_sota_count
-                                v2_alignment = {
-                                    "sota_factors_count": v2_data.get("sota_factors_count", 0),
-                                    "alpha_factors_count": v2_data.get("alpha_factors_count", 0),
-                                    "model_feature_count": v2_data.get("model_feature_count"),
-                                    "is_aligned": v2_data.get("is_aligned", False),
-                                    "hist_len": v2_data.get("hist_len", 0),
-                                }
-                                logger.info(f"TASK {tid} V2预览: SOTA={v2_sota_count}, "
-                                            f"Alpha={v2_data.get('alpha_factors_count')}, "
-                                            f"模型特征={v2_data.get('model_feature_count')}, "
-                                            f"对齐={v2_data.get('is_aligned')}")
-                                
-                                # 立即入库V2信息
-                                try:
-                                    now_utc = datetime.now(timezone.utc)
-                                    rdagent_root_raw = (os.environ.get("QLIB_RDAGENT_ROOT_WIN") or "").strip().strip('"')
-                                    log_dir_str = f"{rdagent_root_raw}/log/{tid}" if rdagent_root_raw else f"log/{tid}"
-                                    
-                                    with get_conn() as conn2:
-                                        with conn2.cursor() as cur2:
-                                            cur2.execute("""
-                                                INSERT INTO rdagent.rdagent_candidate_tasks
-                                                (task_id, log_dir, has_sota, sota_factors_count, sota_checked_at,
-                                                 alpha_factors_count, model_feature_count, is_aligned, v2_checked_at,
-                                                 sota_factors_list, alpha_factors_list, hist_len, dir_exists)
-                                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                                ON CONFLICT (task_id) DO UPDATE SET
-                                                    has_sota = EXCLUDED.has_sota,
-                                                    sota_factors_count = EXCLUDED.sota_factors_count,
-                                                    sota_checked_at = EXCLUDED.sota_checked_at,
-                                                    alpha_factors_count = EXCLUDED.alpha_factors_count,
-                                                    model_feature_count = EXCLUDED.model_feature_count,
-                                                    is_aligned = EXCLUDED.is_aligned,
-                                                    v2_checked_at = EXCLUDED.v2_checked_at,
-                                                    sota_factors_list = EXCLUDED.sota_factors_list,
-                                                    alpha_factors_list = EXCLUDED.alpha_factors_list,
-                                                    hist_len = EXCLUDED.hist_len,
-                                                    updated_at = CURRENT_TIMESTAMP
-                                            """, (
-                                                tid, log_dir_str, has_sota, sota_factors_count, now_utc,
-                                                v2_data.get('alpha_factors_count', 0),
-                                                v2_data.get('model_feature_count'),
-                                                v2_data.get('is_aligned', False),
-                                                now_utc,
-                                                _json.dumps(v2_data.get('sota_factors')) if v2_data.get('sota_factors') else None,
-                                                _json.dumps(v2_data.get('alpha_factors')) if v2_data.get('alpha_factors') else None,
-                                                v2_data.get('hist_len', 0),
-                                                True,
-                                            ))
-                                        conn2.commit()
-                                    logger.info(f"TASK {tid} V2信息已入库")
-                                except Exception as db_e:
-                                    logger.warning(f"TASK {tid} V2信息入库失败: {db_e}")
-
-                            elif v2_data and v2_data.get('error'):
-                                err_msg = v2_data.get('error', '')
-                                if 'no_sota' in err_msg or 'no_accepted' in err_msg:
-                                    has_sota = False
-                                    sota_factors_count = 0
-                                    logger.info(f"TASK {tid} V2确认无SOTA因子: {err_msg}")
-                                    # 无SOTA也入库
-                                    try:
-                                        now_utc = datetime.now(timezone.utc)
-                                        rdagent_root_raw = (os.environ.get("QLIB_RDAGENT_ROOT_WIN") or "").strip().strip('"')
-                                        log_dir_str = f"{rdagent_root_raw}/log/{tid}" if rdagent_root_raw else f"log/{tid}"
-                                        with get_conn() as conn2:
-                                            with conn2.cursor() as cur2:
-                                                cur2.execute("""
-                                                    INSERT INTO rdagent.rdagent_candidate_tasks
-                                                    (task_id, log_dir, has_sota, sota_factors_count, sota_checked_at, v2_checked_at, dir_exists)
-                                                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                                                    ON CONFLICT (task_id) DO UPDATE SET
-                                                        has_sota = EXCLUDED.has_sota,
-                                                        sota_factors_count = EXCLUDED.sota_factors_count,
-                                                        sota_checked_at = EXCLUDED.sota_checked_at,
-                                                        v2_checked_at = EXCLUDED.v2_checked_at,
-                                                        updated_at = CURRENT_TIMESTAMP
-                                                """, (tid, log_dir_str, False, 0, now_utc, now_utc, True))
-                                            conn2.commit()
-                                    except Exception:
-                                        pass
-                                elif 'session_not_found' in err_msg or 'session_root_not_found' in err_msg:
-                                    logger.debug(f"TASK {tid} 无session: {err_msg}")
-                                    # 无session的task也入库标记v2_checked_at，避免每次重复请求
-                                    try:
-                                        now_utc = datetime.now(timezone.utc)
-                                        rdagent_root_raw = (os.environ.get("QLIB_RDAGENT_ROOT_WIN") or "").strip().strip('"')
-                                        log_dir_str = f"{rdagent_root_raw}/log/{tid}" if rdagent_root_raw else f"log/{tid}"
-                                        with get_conn() as conn2:
-                                            with conn2.cursor() as cur2:
-                                                cur2.execute("""
-                                                    INSERT INTO rdagent.rdagent_candidate_tasks
-                                                    (task_id, log_dir, has_sota, sota_factors_count, v2_checked_at, dir_exists, task_status)
-                                                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                                                    ON CONFLICT (task_id) DO UPDATE SET
-                                                        has_sota = COALESCE(rdagent.rdagent_candidate_tasks.has_sota, EXCLUDED.has_sota),
-                                                        v2_checked_at = EXCLUDED.v2_checked_at,
-                                                        task_status = EXCLUDED.task_status,
-                                                        updated_at = CURRENT_TIMESTAMP
-                                                """, (tid, log_dir_str, False, 0, now_utc, True, 'no_session'))
-                                            conn2.commit()
-                                        logger.info(f"TASK {tid} 标记为no_session并入库")
-                                    except Exception:
-                                        pass
-                                else:
-                                    logger.warning(f"TASK {tid} V2预览返回错误: {err_msg}")
-                        except Exception as e:
-                            logger.warning(f"TASK {tid} V2对齐预览API失败: {e}")
-
-                        discovery = {
-                            "has_sota": has_sota,
-                            "sota_factors_count": sota_factors_count,
-                            "sota_checked_at_utc": datetime.now(timezone.utc).isoformat() if has_sota is not None else None,
-                            "v2_alignment": v2_alignment,
-                        }
-                    
+                    _nid = t.get("_node_id", "")
                     return {
                         "task_id": tid,
+                        "node_id": _nid,
+                        "node_display_name": node_display_names.get(_nid, _nid),
                         "last_modified": t.get("updated_at_utc") or t.get("last_modified"),
                         "is_synced": tid in synced_ids,
                         "discovery": discovery,
@@ -1085,11 +1024,14 @@ class RDAgentTaskSyncService:
                     }
 
                 # 使用线程池并发获取详情，提高加载速度
+                _t1 = _time.monotonic()
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     results = list(executor.map(fetch_task_detail, candidate_list))
-                
+
                 items = [r for r in results if r is not None]
-                logger.info(f"Successfully fetched {len(items)} tasks with V2 info from API.")
+                logger.info(f"[TIMING] ThreadPool fetch_task_detail 耗时: {_time.monotonic() - _t1:.2f}s, "
+                            f"候选={len(candidate_list)}, 有效={len(items)}, 未缓存={len(uncached_task_ids)}")
+                logger.info(f"[TIMING] list_sync_candidates 总耗时: {_time.monotonic() - _t_start:.2f}s")
                 
                 # 后台异步获取新Task的LOOP数据并缓存
                 # 检查哪些Task在数据库中还没有LOOP缓存
@@ -1229,27 +1171,14 @@ class RDAgentTaskSyncService:
             api_resp = resp.json()
             
             if api_resp and isinstance(api_resp, dict):
-                # 获取SOTA因子信息
-                sota_anchor_url = f"{base_url}/tasks/{tid}/sota_factor_anchor"
-                sota_factor_index = None
-                try:
-                    sota_resp = requests.get(sota_anchor_url, timeout=300.0)
-                    sota_resp.raise_for_status()
-                    sota_data = sota_resp.json()
-                    if sota_data and sota_data.get('ok'):
-                        sota_factor_index = sota_data.get('last_sota_factor_index')
-                except Exception as e:
-                    logger.warning(f"获取TASK {tid} SOTA信息失败: {e}")
-                
-                # 为每个LOOP添加is_sota标记
+                # 直接使用 API 返回的每个 loop 的 is_sota 字段
+                # 不再从 sota_factor_anchor 推测，避免错误标记非 SOTA loop
                 loops = api_resp.get('loops', [])
                 for loop in loops:
-                    loop_id = loop.get('loop_id')
-                    if sota_factor_index is not None and loop_id is not None:
-                        loop['is_sota'] = loop_id <= sota_factor_index
-                    else:
+                    # 确保 is_sota 字段存在，若 API 未返回则默认 False
+                    if 'is_sota' not in loop:
                         loop['is_sota'] = False
-                
+
                 return api_resp
             return {"ok": False, "error": "API 返回格式错误", "loops": []}
         except Exception as e:

@@ -38,7 +38,6 @@ interface ExportResponse {
   start: string;
   end: string;
   ts_codes?: string[];
-  board_codes?: string[];
   rows: number;
 }
 
@@ -47,14 +46,13 @@ interface SnapshotInfo {
   path: string;
   has_daily: boolean;
   has_minute: boolean;
-  has_board: boolean;
-  has_board_index: boolean;
-  has_board_member: boolean;
   has_factor_data: boolean;
   has_moneyflow: boolean;
   has_daily_basic: boolean;
   has_bak_basic: boolean;
   has_cyq_perf: boolean;
+  has_sector_data: boolean;
+  has_static_factors: boolean;
   meta: any;
   created_at: string | null;
 }
@@ -85,23 +83,41 @@ interface BinExportListResponse {
 type ExportType =
   | "daily"
   | "minute"
-  | "board"
-  | "board_index"
-  | "board_member"
-  | "factor"
   | "moneyflow"
   | "daily_basic"
   | "bak_basic"
-  | "cyq_perf";
-type ExportMode = "full" | "incremental";
+  | "cyq_perf"
+  | "sector_data";
+
+type ExportMode = "full" | "incremental" | "incremental_all";
 type ExportTab = "snapshot" | "bin";
-type BinTab = "stock" | "index";
 
-// 导出进度状态
-type ExportStatus = "idle" | "preparing" | "loading" | "writing" | "done" | "error";
+// 所有日频类型均支持增量
+const INCREMENTAL_TYPES: ExportType[] = [
+  "daily", "minute", "moneyflow", "daily_basic",
+  "bak_basic", "cyq_perf", "sector_data",
+];
 
-// 支持增量导出的类型
-const INCREMENTAL_TYPES: ExportType[] = ["minute", "board", "board_index", "board_member", "factor"];
+// 数据集配置
+const DATASET_CONFIG: Record<ExportType, { label: string; file: string; isDaily: boolean }> = {
+  daily: { label: "日频行情 (daily_pv.h5)", file: "daily_pv.h5", isDaily: true },
+  minute: { label: "分钟线 (minute_1min.h5)", file: "minute_1min.h5", isDaily: false },
+  moneyflow: { label: "个股资金流向 (moneyflow.h5)", file: "moneyflow.h5", isDaily: true },
+  daily_basic: { label: "每日指标 (daily_basic.h5)", file: "daily_basic.h5", isDaily: true },
+  bak_basic: { label: "历史股票列表 (bak_basic.h5)", file: "bak_basic.h5", isDaily: true },
+  cyq_perf: { label: "每日筹码及胜率 (cyq_perf.h5)", file: "cyq_perf.h5", isDaily: true },
+  sector_data: { label: "申万行业板块 (sector_data.h5)", file: "sector_data.h5", isDaily: true },
+};
+
+// 步骤进度
+type StepStatus = "pending" | "running" | "done" | "error" | "skipped";
+
+interface StepResult {
+  status: StepStatus;
+  rows?: number;
+  duration?: number;
+  error?: string;
+}
 
 // 数据检查响应
 interface DataCheckResponse {
@@ -157,36 +173,60 @@ interface IndexListResponse {
   total: number;
 }
 
-interface IndexBinExportResponse {
+interface UnifiedBinExportResponse {
   snapshot_id: string;
-  index_code: string;
-  csv_dir: string;
-  bin_dir: string;
-  dump_bin_ok: boolean;
-  check_ok: boolean | null;
-  stdout_dump: string | null;
-  stderr_dump: string | null;
-  stdout_check: string | null;
-  stderr_check: string | null;
+  stock_ok: boolean;
+  stock_csv_dir?: string | null;
+  stock_bin_dir?: string | null;
+  stock_stdout?: string | null;
+  stock_stderr?: string | null;
+  index_results: Array<Record<string, any>>;
+  check_ok?: boolean | null;
+  stdout_check?: string | null;
+  stderr_check?: string | null;
 }
 
-interface IndexHealthCheckResponse {
-  snapshot_id: string;
-  bin_dir: string;
-  has_index_file: boolean;
-  index_count: number;
-  check_ok: boolean | null;
-  stdout_check: string | null;
-  stderr_check: string | null;
+// V2 Bin 导出接口
+interface BinDatasetStepResult {
+  dataset: string;
+  ok: boolean;
+  rows?: number | null;
+  error?: string | null;
+  stdout?: string | null;
+  stderr?: string | null;
+  mode_used?: string | null;
 }
+
+interface UnifiedBinExportResponseV2 {
+  snapshot_id: string;
+  mode: string;
+  steps: BinDatasetStepResult[];
+  check_ok?: boolean | null;
+  stdout_check?: string | null;
+  stderr_check?: string | null;
+}
+
+// Bin 数据集配置
+const BIN_INDEX_OPTIONS: { code: string; label: string }[] = [
+  { code: "000300.SH", label: "沪深300" },
+  { code: "000905.SH", label: "中证500" },
+  { code: "000016.SH", label: "上证50" },
+  { code: "399006.SZ", label: "创业板指" },
+];
 
 export default function QlibPage() {
   // Snapshot 列表
   const [snapshots, setSnapshots] = useState<SnapshotInfo[]>([]);
   const [loadingList, setLoadingList] = useState(false);
 
-  // 导出表单
-  const [exportType, setExportType] = useState<ExportType>("daily");
+  // 多选数据集
+  const [selectedDatasets, setSelectedDatasets] = useState<Set<ExportType>>(
+    new Set(["daily", "moneyflow", "daily_basic", "bak_basic", "cyq_perf", "sector_data"]),
+  );
+  const [generateStaticFactors, setGenerateStaticFactors] = useState(true);
+  const [generateFieldMap, setGenerateFieldMap] = useState(true);
+
+  // 导出模式
   const [exportMode, setExportMode] = useState<ExportMode>("full");
   const [snapshotId, setSnapshotId] = useState<string>("qlib_export_" + new Date().toISOString().slice(0, 10).replace(/-/g, ""));
   const [exSh, setExSh] = useState<boolean>(true);
@@ -198,11 +238,9 @@ export default function QlibPage() {
   const [end, setEnd] = useState<string>("2025-12-01");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<ExportResponse | null>(null);
 
-  // 导出进度
-  const [exportStatus, setExportStatus] = useState<ExportStatus>("idle");
-  const [exportProgress, setExportProgress] = useState(0);
+  // 步骤进度
+  const [stepResults, setStepResults] = useState<Map<string, StepResult>>(new Map());
 
   // 详情弹窗
   const [detailSnapshot, setDetailSnapshot] = useState<SnapshotInfo | null>(null);
@@ -215,134 +253,46 @@ export default function QlibPage() {
   const [previewResult, setPreviewResult] = useState<DataPreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
-  // 字段说明（CSV + 写入 H5 attrs）
-  const [fieldMapLoading, setFieldMapLoading] = useState(false);
-  const [fieldMapError, setFieldMapError] = useState<string | null>(null);
-  const [fieldMapResult, setFieldMapResult] = useState<FieldMapExportResponse | null>(null);
-  // 自动字段映射生成状态
-  const [autoFieldMapStatus, setAutoFieldMapStatus] = useState<"idle" | "generating" | "success" | "error">("idle");
-
   // CSV导出相关状态
   const [csvDownloading, setCsvDownloading] = useState<string | null>(null);
 
-  // Qlib bin 导出（CSV -> bin）相关状态
+  // Qlib bin 导出相关状态
   const [binSnapshotId, setBinSnapshotId] = useState<string>(
     "qlib_bin_" + new Date().toISOString().slice(0, 10).replace(/-/g, ""),
   );
   const [binStart, setBinStart] = useState<string>(start);
   const [binEnd, setBinEnd] = useState<string>(end);
-  const [binFreq, setBinFreq] = useState<"day" | "1m">("day");
   const [binRunHealthCheck, setBinRunHealthCheck] = useState<boolean>(true);
   const [binLoading, setBinLoading] = useState<boolean>(false);
   const [binError, setBinError] = useState<string | null>(null);
-  const [binResult, setBinResult] = useState<{
-    snapshot_id: string;
-    csv_dir: string;
-    bin_dir: string;
-    dump_bin_ok: boolean;
-    check_ok: boolean | null;
-    stdout_dump: string;
-    stderr_dump: string;
-    stdout_check?: string | null;
-    stderr_check?: string | null;
-  } | null>(null);
+  const [binResultV2, setBinResultV2] = useState<UnifiedBinExportResponseV2 | null>(null);
+  const [binExpandedSteps, setBinExpandedSteps] = useState<Set<string>>(new Set());
+  const [binShowCheckLog, setBinShowCheckLog] = useState(false);
 
-  // 指数导出相关状态
+  // Bin 导出模式
+  const [binExportMode, setBinExportMode] = useState<"full" | "incremental">("full");
+
+  // Bin 数据集多选
+  const [binSelectedDatasets, setBinSelectedDatasets] = useState<Set<string>>(
+    new Set(["stock_daily", "000300.SH"]),
+  );
+  const [customIndexCode, setCustomIndexCode] = useState<string>("");
+
+  // 指数数据源
+  const [indexDataSource, setIndexDataSource] = useState<"tushare" | "tdx">("tushare");
   const [indexMarkets, setIndexMarkets] = useState<IndexMarketInfo[]>([]);
   const [indexMarketsLoaded, setIndexMarketsLoaded] = useState(false);
-  const [indexMarketsError, setIndexMarketsError] = useState<string | null>(null);
   const [selectedIndexMarkets, setSelectedIndexMarkets] = useState<string[]>([]);
-
   const [indices, setIndices] = useState<IndexInfo[]>([]);
   const [indicesLoading, setIndicesLoading] = useState(false);
-  const [indicesError, setIndicesError] = useState<string | null>(null);
-  const [selectedIndexCode, setSelectedIndexCode] = useState<string>("");
-
-  const [indexStart, setIndexStart] = useState<string>(binStart);
-  const [indexEnd, setIndexEnd] = useState<string>(binEnd);
-  const [indexDataSource, setIndexDataSource] = useState<"tushare" | "tdx">("tushare");
-  const [indexRunHealthCheck, setIndexRunHealthCheck] = useState<boolean>(true);
-  const [indexLoading, setIndexLoading] = useState<boolean>(false);
-  const [indexError, setIndexError] = useState<string | null>(null);
-  const [indexResult, setIndexResult] = useState<IndexBinExportResponse | null>(null);
-  const [indexShowDumpLog, setIndexShowDumpLog] = useState<boolean>(false);
-  const [indexShowCheckLog, setIndexShowCheckLog] = useState<boolean>(false);
-
-  const [indexHealthLoading, setIndexHealthLoading] = useState<boolean>(false);
-  const [indexHealthError, setIndexHealthError] = useState<string | null>(null);
-  const [indexHealthResult, setIndexHealthResult] = useState<IndexHealthCheckResponse | null>(null);
-  const [showDumpLog, setShowDumpLog] = useState<boolean>(false);
-  const [showCheckLog, setShowCheckLog] = useState<boolean>(false);
 
   // Qlib bin 导出列表
   const [binExports, setBinExports] = useState<BinExportInfo[]>([]);
   const [binExportsLoading, setBinExportsLoading] = useState(false);
   const [binExportsError, setBinExportsError] = useState<string | null>(null);
 
-  // 导出区域标签页：HDF5 Snapshot vs Qlib bin
+  // 导出区域标签页
   const [exportTab, setExportTab] = useState<ExportTab>("snapshot");
-
-  // Qlib bin 内部子标签：股票 vs 指数
-  const [binTab, setBinTab] = useState<BinTab>("stock");
-
-  // 记录导出时使用的过滤条件
-  const [lastExportConfig, setLastExportConfig] = useState<{
-    type: ExportType;
-    mode: ExportMode;
-    exchanges?: string[];
-    start: string;
-    end: string;
-  } | null>(null);
-
-  // 当导出类型改变时，如果不支持增量则重置为全量
-  const handleExportTypeChange = (type: ExportType) => {
-    setExportType(type);
-    // moneyflow 和日线/板块全量导出不支持增量
-    if (!INCREMENTAL_TYPES.includes(type)) {
-      setExportMode("full");
-    }
-  };
-
-  const handleExportFieldMapForSnapshot = async (sid: string) => {
-    const id = (sid || "").trim();
-    if (!id) return;
-
-    try {
-      const resp = await backendRequest<FieldMapExportResponse>(
-        "POST",
-        "/api/v1/qlib/field_map/export",
-        {
-          snapshot_id: id,
-          write_to_h5: true,
-        },
-      );
-      alert(`字段说明已生成\nCSV: ${resp.csv_path}\nrows: ${resp.rows}`);
-    } catch (e: any) {
-      alert(e?.message || "生成字段说明失败");
-    }
-  };
-
-  const handleExportFieldMap = async () => {
-    setFieldMapLoading(true);
-    setFieldMapError(null);
-    setFieldMapResult(null);
-
-    try {
-      const resp = await backendRequest<FieldMapExportResponse>(
-        "POST",
-        "/api/v1/qlib/field_map/export",
-        {
-          snapshot_id: snapshotId.trim(),
-          write_to_h5: true,
-        },
-      );
-      setFieldMapResult(resp);
-    } catch (e: any) {
-      setFieldMapError(e?.message || "生成字段说明失败");
-    } finally {
-      setFieldMapLoading(false);
-    }
-  };
 
   const formatDateTimeShanghai = (value?: string | null) => {
     if (!value) return "—";
@@ -351,29 +301,16 @@ export default function QlibPage() {
       if (Number.isNaN(d.getTime())) return value;
       return d.toLocaleString("zh-CN", {
         timeZone: "Asia/Shanghai",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
       }).replace(/\//g, "-");
-    } catch {
-      return value;
-    }
+    } catch { return value; }
   };
 
   const logBox: React.CSSProperties = {
     fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace",
-    fontSize: 12,
-    whiteSpace: "pre-wrap",
-    background: "#0f172a",
-    color: "#e5e7eb",
-    padding: 12,
-    borderRadius: 8,
-    maxHeight: 260,
-    overflow: "auto",
+    fontSize: 12, whiteSpace: "pre-wrap", background: "#0f172a",
+    color: "#e5e7eb", padding: 12, borderRadius: 8, maxHeight: 260, overflow: "auto",
   };
 
   // 加载 Snapshot 列表
@@ -389,9 +326,7 @@ export default function QlibPage() {
     }
   }, []);
 
-  useEffect(() => {
-    loadSnapshots();
-  }, [loadSnapshots]);
+  useEffect(() => { loadSnapshots(); }, [loadSnapshots]);
 
   // CSV下载函数
   const handleDownloadCSV = async (snapshotId: string, dataType: string) => {
@@ -400,13 +335,11 @@ export default function QlibPage() {
       const url = buildBackendUrl(
         `/api/v1/qlib/snapshots/${encodeURIComponent(snapshotId)}/csv?data_type=${encodeURIComponent(dataType)}`,
       );
-
       const response = await fetch(url);
       if (!response.ok) {
         const errorText = await response.text().catch(() => "");
         throw new Error(`下载失败: ${response.status} ${errorText}`);
       }
-
       const blob = await response.blob();
       const downloadUrl = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -435,86 +368,44 @@ export default function QlibPage() {
       setBinExportsLoading(false);
     }
   }, []);
-  // 在进入 "指数 bin 导出" 子标签时加载指数市场列表
+
+  // 加载指数市场 & 指数列表
   useEffect(() => {
-    if (exportTab === "bin" && binTab === "index" && indexDataSource !== "tdx" && !indexMarketsLoaded) {
+    if (exportTab === "bin" && indexDataSource !== "tdx" && !indexMarketsLoaded) {
       (async () => {
         try {
-          const resp = await backendRequest<IndexMarketListResponse>(
-            "GET",
-            "/api/v1/qlib/index/markets",
-          );
+          const resp = await backendRequest<IndexMarketListResponse>("GET", "/api/v1/qlib/index/markets");
           setIndexMarkets(resp.items || []);
           setIndexMarketsLoaded(true);
-        } catch (e: any) {
-          setIndexMarketsError(e?.message || "加载指数市场列表失败");
-        }
+        } catch (e: any) { console.error("加载指数市场列表失败:", e); }
       })();
     }
-  }, [exportTab, binTab, indexMarketsLoaded, indexDataSource]);
+  }, [exportTab, indexMarketsLoaded, indexDataSource]);
 
-  // 当选中的指数 market 变化时加载指数列表
   useEffect(() => {
-    if (exportTab !== "bin" || binTab !== "index") return;
-    if (indexDataSource === "tdx") return;
-    if (selectedIndexMarkets.length === 0) {
-      setIndices([]);
-      setSelectedIndexCode("");
-      return;
+    if (exportTab !== "bin") return;
+    if (indexDataSource === "tdx") {
+      (async () => {
+        setIndicesLoading(true);
+        try {
+          const resp = await backendRequest<IndexListResponse>("GET", "/api/v1/qlib/index/list?data_source=tdx");
+          setIndices(resp.items || []);
+        } catch (e: any) { setIndices([]); }
+        finally { setIndicesLoading(false); }
+      })();
+    } else if (selectedIndexMarkets.length > 0) {
+      (async () => {
+        setIndicesLoading(true);
+        try {
+          const marketsParam = selectedIndexMarkets.join(",");
+          const resp = await backendRequest<IndexListResponse>(
+            "GET", `/api/v1/qlib/index/list?markets=${encodeURIComponent(marketsParam)}`);
+          setIndices(resp.items || []);
+        } catch (e: any) { setIndices([]); }
+        finally { setIndicesLoading(false); }
+      })();
     }
-
-    (async () => {
-      setIndicesLoading(true);
-      setIndicesError(null);
-      try {
-        const marketsParam = selectedIndexMarkets.join(",");
-        const resp = await backendRequest<IndexListResponse>(
-          "GET",
-          `/api/v1/qlib/index/list?markets=${encodeURIComponent(marketsParam)}`,
-        );
-        setIndices(resp.items || []);
-        if (resp.items && resp.items.length > 0) {
-          setSelectedIndexCode(resp.items[0].ts_code);
-        } else {
-          setSelectedIndexCode("");
-        }
-      } catch (e: any) {
-        setIndicesError(e?.message || "加载指数列表失败");
-      } finally {
-        setIndicesLoading(false);
-      }
-    })();
-  }, [exportTab, binTab, selectedIndexMarkets, indexDataSource]);
-
-  // 选择 TDX 数据源时，从后端按实际数据表生成可选指数列表
-  useEffect(() => {
-    if (exportTab !== "bin" || binTab !== "index") return;
-    if (indexDataSource !== "tdx") return;
-
-    (async () => {
-      setIndicesLoading(true);
-      setIndicesError(null);
-      try {
-        const resp = await backendRequest<IndexListResponse>(
-          "GET",
-          "/api/v1/qlib/index/list?data_source=tdx",
-        );
-        setIndices(resp.items || []);
-        if (resp.items && resp.items.length > 0) {
-          setSelectedIndexCode(resp.items[0].ts_code);
-        } else {
-          setSelectedIndexCode("");
-        }
-        setSelectedIndexMarkets([]);
-      } catch (e: any) {
-        setIndicesError(e?.message || "加载 TDX 指数列表失败");
-        setIndices([]);
-        setSelectedIndexCode("");
-      } finally {
-        setIndicesLoading(false);
-      }
-    })();
-  }, [exportTab, binTab, indexDataSource]);
+  }, [exportTab, selectedIndexMarkets, indexDataSource]);
 
   // 删除 Snapshot
   const handleDelete = async (id: string) => {
@@ -527,195 +418,237 @@ export default function QlibPage() {
     }
   };
 
-  // 模拟进度更新
-  const simulateProgress = () => {
-    setExportProgress(0);
-    setExportStatus("preparing");
-    
-    const steps = [
-      { status: "preparing" as ExportStatus, progress: 10, delay: 200 },
-      { status: "loading" as ExportStatus, progress: 30, delay: 500 },
-      { status: "loading" as ExportStatus, progress: 50, delay: 800 },
-      { status: "writing" as ExportStatus, progress: 70, delay: 300 },
-      { status: "writing" as ExportStatus, progress: 90, delay: 200 },
-    ];
-
-    let currentStep = 0;
-    const runStep = () => {
-      if (currentStep < steps.length) {
-        const step = steps[currentStep];
-        setExportStatus(step.status);
-        setExportProgress(step.progress);
-        currentStep++;
-        setTimeout(runStep, step.delay);
-      }
-    };
-    runStep();
+  // 获取导出 endpoint
+  const getEndpoint = (type: ExportType, mode: ExportMode): string => {
+    if (mode === "incremental" || mode === "incremental_all") {
+      if (type === "minute") return "/api/v1/qlib/snapshots/minute/incremental";
+      return `/api/v1/qlib/snapshots/${type}/incremental`;
+    }
+    if (type === "sector_data") return "/api/v1/qlib/snapshots/sector_data";
+    if (type === "minute") return "/api/v1/qlib/snapshots/minute";
+    return `/api/v1/qlib/snapshots/${type}`;
   };
 
-  // 导出
+  // 多步骤导出
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
-    setResult(null);
-    simulateProgress();
+    setStepResults(new Map());
+
+    const exchanges: string[] = [];
+    if (exSh) exchanges.push("sh");
+    if (exSz) exchanges.push("sz");
+    if (exBj) exchanges.push("bj");
+
+    const datasets = Array.from(selectedDatasets);
+
+    // 当只生成附加文件（无 H5 数据集选中）时，验证 snapshot 中已有文件的完整性
+    if (datasets.length === 0 && (generateStaticFactors || generateFieldMap)) {
+      const sid = (snapshotId || "").trim();
+      const snap = snapshots.find(s => s.snapshot_id === sid);
+      if (!snap) {
+        setError(`Snapshot "${sid}" 不存在，请先导出 H5 数据集`);
+        setLoading(false);
+        return;
+      }
+      const required: { key: keyof SnapshotInfo; label: string }[] = [
+        { key: "has_daily", label: "daily_pv.h5" },
+        { key: "has_daily_basic", label: "daily_basic.h5" },
+        { key: "has_moneyflow", label: "moneyflow.h5" },
+        { key: "has_bak_basic", label: "bak_basic.h5" },
+        { key: "has_cyq_perf", label: "cyq_perf.h5" },
+        { key: "has_sector_data", label: "sector_data.h5" },
+      ];
+      const missing = required.filter(r => !snap[r.key]).map(r => r.label);
+      if (missing.length > 0) {
+        setError(`Snapshot "${sid}" 缺少以下文件，请先导出：${missing.join("、")}`);
+        setLoading(false);
+        return;
+      }
+    }
+
+    // 初始化所有步骤
+    const initMap = new Map<string, StepResult>();
+    for (const ds of datasets) {
+      initMap.set(ds, { status: "pending" });
+    }
+    if (generateStaticFactors) {
+      initMap.set("static_factors", { status: "pending" });
+    }
+    if (generateFieldMap) {
+      initMap.set("field_map", { status: "pending" });
+    }
+    setStepResults(new Map(initMap));
 
     try {
-      const exchanges: string[] = [];
-      if (exSh) exchanges.push("sh");
-      if (exSz) exchanges.push("sz");
-      if (exBj) exchanges.push("bj");
+      if (exportMode === "incremental_all") {
+        // 一键增量：调用单一 API
+        initMap.forEach((v, k) => { v.status = "running"; });
+        setStepResults(new Map(initMap));
 
-      let endpoint = "";
-      let payload: any = { snapshot_id: snapshotId.trim(), end };
-      
-      // 全量导出需要 start，增量导出不需要
-      if (exportMode === "full") {
-        payload.start = start;
+        const t0 = Date.now();
+        const resp = await backendRequest<{ snapshot_id: string; results: Record<string, any> }>(
+          "POST",
+          `/api/v1/qlib/snapshots/${encodeURIComponent(snapshotId.trim())}/incremental_all`,
+          {
+            snapshot_id: snapshotId.trim(),
+            end,
+            exchanges: exchanges.length > 0 ? exchanges : undefined,
+            exclude_st: excludeSt,
+            exclude_delisted_or_paused: excludeDelistedOrPaused,
+          },
+        );
+
+        const elapsed = Date.now() - t0;
+        const newMap = new Map<string, StepResult>();
+        for (const ds of datasets) {
+          const r = resp.results[ds];
+          if (!r) {
+            newMap.set(ds, { status: "skipped" });
+          } else if (r.error) {
+            newMap.set(ds, { status: "error", error: r.error });
+          } else if (r.skipped) {
+            newMap.set(ds, { status: "skipped" });
+          } else {
+            newMap.set(ds, { status: "done", rows: r.rows, duration: elapsed });
+          }
+        }
+        setStepResults(new Map(newMap));
+      } else {
+        // 逐个导出
+        for (const ds of datasets) {
+          setStepResults(prev => {
+            const m = new Map(prev);
+            m.set(ds, { status: "running" });
+            return m;
+          });
+
+          const t0 = Date.now();
+          try {
+            const endpoint = getEndpoint(ds, exportMode);
+            const payload: any = {
+              snapshot_id: snapshotId.trim(),
+              end,
+              exchanges: exchanges.length > 0 ? exchanges : undefined,
+              exclude_st: excludeSt,
+              exclude_delisted_or_paused: excludeDelistedOrPaused,
+            };
+            if (exportMode === "full") {
+              payload.start = start;
+            }
+            if (ds === "minute") {
+              payload.freq = "1m";
+            }
+
+            const resp = await backendRequest<ExportResponse>("POST", endpoint, payload);
+            const elapsed = Date.now() - t0;
+
+            setStepResults(prev => {
+              const m = new Map(prev);
+              m.set(ds, { status: "done", rows: resp.rows, duration: elapsed });
+              return m;
+            });
+          } catch (err: any) {
+            setStepResults(prev => {
+              const m = new Map(prev);
+              m.set(ds, { status: "error", error: err?.message, duration: Date.now() - t0 });
+              return m;
+            });
+          }
+        }
       }
 
-      // 根据导出类型和模式确定 endpoint
-      if (exportType === "daily") {
-        // 日频只支持全量
-        endpoint = "/api/v1/qlib/snapshots/daily";
-        payload.start = start;
-        if (exchanges.length > 0) payload.exchanges = exchanges;
-        payload.exclude_st = excludeSt;
-        payload.exclude_delisted_or_paused = excludeDelistedOrPaused;
-      } else if (exportType === "minute") {
-        if (exportMode === "incremental") {
-          endpoint = "/api/v1/qlib/snapshots/minute/incremental";
-        } else {
-          endpoint = "/api/v1/qlib/snapshots/minute";
-          payload.start = start;
+      // static_factors
+      if (generateStaticFactors) {
+        setStepResults(prev => {
+          const m = new Map(prev);
+          m.set("static_factors", { status: "running" });
+          return m;
+        });
+        const t0 = Date.now();
+        try {
+          await backendRequest("POST", `/api/v1/qlib/snapshots/${encodeURIComponent(snapshotId.trim())}/static_factors`);
+          setStepResults(prev => {
+            const m = new Map(prev);
+            m.set("static_factors", { status: "done", duration: Date.now() - t0 });
+            return m;
+          });
+        } catch (err: any) {
+          setStepResults(prev => {
+            const m = new Map(prev);
+            m.set("static_factors", { status: "error", error: err?.message, duration: Date.now() - t0 });
+            return m;
+          });
         }
-        if (exchanges.length > 0) payload.exchanges = exchanges;
-        payload.freq = "1m";
-        payload.exclude_st = excludeSt;
-        payload.exclude_delisted_or_paused = excludeDelistedOrPaused;
-      } else if (exportType === "board") {
-        if (exportMode === "incremental") {
-          endpoint = "/api/v1/qlib/boards/daily/incremental";
-        } else {
-          endpoint = "/api/v1/qlib/boards/daily";
-          payload.start = start;
-        }
-      } else if (exportType === "board_index") {
-        if (exportMode === "incremental") {
-          endpoint = "/api/v1/qlib/boards/index/incremental";
-        } else {
-          endpoint = "/api/v1/qlib/boards/index";
-          payload.start = start;
-        }
-      } else if (exportType === "board_member") {
-        if (exportMode === "incremental") {
-          endpoint = "/api/v1/qlib/boards/member/incremental";
-        } else {
-          endpoint = "/api/v1/qlib/boards/member";
-          payload.start = start;
-        }
-      } else if (exportType === "factor") {
-        if (exportMode === "incremental") {
-          endpoint = "/api/v1/qlib/factors/incremental";
-        } else {
-          endpoint = "/api/v1/qlib/factors";
-          payload.start = start;
-        }
-        if (exchanges.length > 0) payload.exchanges = exchanges;
-      } else if (exportType === "moneyflow") {
-        // 个股资金流向只支持全量导出
-        endpoint = "/api/v1/qlib/snapshots/moneyflow";
-        payload.start = start;
-        if (exchanges.length > 0) payload.exchanges = exchanges;
-        payload.exclude_st = excludeSt;
-        payload.exclude_delisted_or_paused = excludeDelistedOrPaused;
-      } else if (exportType === "daily_basic") {
-        // daily_basic 只支持全量导出，逻辑与 moneyflow/daily 一致
-        endpoint = "/api/v1/qlib/snapshots/daily_basic";
-        payload.start = start;
-        if (exchanges.length > 0) payload.exchanges = exchanges;
-        payload.exclude_st = excludeSt;
-        payload.exclude_delisted_or_paused = excludeDelistedOrPaused;
-      } else if (exportType === "bak_basic") {
-        // bak_basic 只支持全量导出
-        endpoint = "/api/v1/qlib/snapshots/bak_basic";
-        payload.start = start;
-        if (exchanges.length > 0) payload.exchanges = exchanges;
-        payload.exclude_st = excludeSt;
-        payload.exclude_delisted_or_paused = excludeDelistedOrPaused;
-      } else if (exportType === "cyq_perf") {
-        // cyq_perf 只支持全量导出
-        endpoint = "/api/v1/qlib/snapshots/cyq_perf";
-        payload.start = start;
-        if (exchanges.length > 0) payload.exchanges = exchanges;
-        payload.exclude_st = excludeSt;
-        payload.exclude_delisted_or_paused = excludeDelistedOrPaused;
       }
 
-      // 记录导出配置
-      setLastExportConfig({
-        type: exportType,
-        mode: exportMode,
-        exchanges: (exportType === "daily" || exportType === "minute" || exportType === "factor" || exportType === "moneyflow" || exportType === "daily_basic" || exportType === "bak_basic" || exportType === "cyq_perf")
-          ? exchanges
-          : undefined,
-        start,
-        end,
-      });
+      // field_map
+      if (generateFieldMap) {
+        setStepResults(prev => {
+          const m = new Map(prev);
+          m.set("field_map", { status: "running" });
+          return m;
+        });
+        const t0 = Date.now();
+        try {
+          await backendRequest("POST", "/api/v1/qlib/field_map/export", {
+            snapshot_id: snapshotId.trim(),
+            write_to_h5: true,
+          });
+          setStepResults(prev => {
+            const m = new Map(prev);
+            m.set("field_map", { status: "done", duration: Date.now() - t0 });
+            return m;
+          });
+        } catch (err: any) {
+          setStepResults(prev => {
+            const m = new Map(prev);
+            m.set("field_map", { status: "error", error: err?.message, duration: Date.now() - t0 });
+            return m;
+          });
+        }
+      }
 
-      const resp = await backendRequest<ExportResponse>("POST", endpoint, payload);
-      setResult(resp);
-      setExportStatus("done");
-      setExportProgress(100);
-      // 自动字段映射生成已在后端触发，更新前端状态
-      setAutoFieldMapStatus("success");
       loadSnapshots();
     } catch (e: any) {
       setError(e?.message || "导出失败");
-      setExportStatus("error");
     } finally {
       setLoading(false);
     }
   };
 
-  // 获取导出类型显示名称
-  const getExportTypeName = (type: ExportType) => {
-    const names: Record<ExportType, string> = {
-      daily: "日频行情",
-      minute: "分钟线",
-      board: "板块日线",
-      board_index: "板块索引",
-      board_member: "板块成员",
-      factor: "RD-Agent因子",
-      moneyflow: "个股资金流向 (moneyflow.h5)",
-      daily_basic: "每日指标 (daily_basic.h5)",
-      bak_basic: "历史股票列表 (bak_basic.h5)",
-      cyq_perf: "每日筹码及胜率 (cyq_perf.h5)",
-    };
-    return names[type];
+  // 数据集多选辅助
+  const toggleDataset = (ds: ExportType) => {
+    setSelectedDatasets(prev => {
+      const next = new Set(prev);
+      if (next.has(ds)) next.delete(ds); else next.add(ds);
+      return next;
+    });
   };
 
-  // 获取交易所显示名称
-  const getExchangeNames = (exchanges: string[]) => {
-    const names: Record<string, string> = {
-      sh: "上交所",
-      sz: "深交所",
-      bj: "北交所",
-    };
-    return exchanges.map(e => names[e] || e).join("、");
+  const selectAllDaily = () => {
+    setSelectedDatasets(new Set(["daily", "moneyflow", "daily_basic", "bak_basic", "cyq_perf", "sector_data"]));
   };
+  const selectAll = () => {
+    setSelectedDatasets(new Set(Object.keys(DATASET_CONFIG) as ExportType[]));
+  };
+  const selectNone = () => { setSelectedDatasets(new Set()); };
 
-  // 获取进度状态文字
-  const getProgressText = () => {
-    switch (exportStatus) {
-      case "preparing": return "准备中...";
-      case "loading": return "读取数据...";
-      case "writing": return "写入文件...";
-      case "done": return "完成";
-      case "error": return "失败";
-      default: return "";
+  const getStepIcon = (status: StepStatus) => {
+    switch (status) {
+      case "done": return "\u2705";
+      case "running": return "\u23f3";
+      case "error": return "\u274c";
+      case "skipped": return "\u23ed\ufe0f";
+      default: return "\u25cb";
     }
+  };
+
+  const getStepLabel = (key: string): string => {
+    if (key === "static_factors") return "生成预计算因子 (static_factors.parquet)";
+    if (key === "field_map") return "生成字段映射 CSV";
+    return DATASET_CONFIG[key as ExportType]?.label || key;
   };
 
   // 数据检查
@@ -723,19 +656,15 @@ export default function QlibPage() {
     setCheckLoading(true);
     setCheckError(null);
     setCheckResult(null);
-    
     try {
       const exchanges: string[] = [];
       if (exSh) exchanges.push("sh");
       if (exSz) exchanges.push("sz");
       if (exBj) exchanges.push("bj");
-      
       const resp = await backendRequest<DataCheckResponse>("POST", "/api/v1/qlib/data/check", {
-        start,
-        end,
+        start, end,
         exchanges: exchanges.length > 0 ? exchanges : undefined,
-        check_adj_factor: true,
-        sample_size: 5,
+        check_adj_factor: true, sample_size: 5,
       });
       setCheckResult(resp);
     } catch (e: any) {
@@ -750,7 +679,6 @@ export default function QlibPage() {
     if (!previewCode.trim()) return;
     setPreviewLoading(true);
     setPreviewResult(null);
-    
     try {
       const resp = await backendRequest<DataPreviewResponse>(
         "GET",
@@ -765,88 +693,40 @@ export default function QlibPage() {
   };
 
   const cardStyle: React.CSSProperties = {
-    padding: 16,
-    borderRadius: 12,
-    background: "#fff",
-    boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-    marginBottom: 16,
+    padding: 16, borderRadius: 12, background: "#fff",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.06)", marginBottom: 16,
   };
-
   const inputStyle: React.CSSProperties = {
-    width: "100%",
-    padding: "8px 10px",
-    borderRadius: 8,
-    border: "1px solid #d4d4d4",
-    fontSize: 14,
+    width: "100%", padding: "8px 10px", borderRadius: 8,
+    border: "1px solid #d4d4d4", fontSize: 14,
   };
-
   const btnPrimary: React.CSSProperties = {
-    padding: "8px 16px",
-    borderRadius: 8,
-    border: "none",
-    background: "#0ea5e9",
-    color: "#fff",
-    cursor: "pointer",
-    fontSize: 14,
+    padding: "8px 16px", borderRadius: 8, border: "none",
+    background: "#0ea5e9", color: "#fff", cursor: "pointer", fontSize: 14,
   };
-
   const btnSecondary: React.CSSProperties = {
-    padding: "4px 10px",
-    borderRadius: 6,
-    border: "1px solid #d4d4d4",
-    background: "#fff",
-    color: "#374151",
-    cursor: "pointer",
-    fontSize: 12,
+    padding: "4px 10px", borderRadius: 6, border: "1px solid #d4d4d4",
+    background: "#fff", color: "#374151", cursor: "pointer", fontSize: 12,
   };
-
   const btnDanger: React.CSSProperties = {
-    padding: "4px 10px",
-    borderRadius: 6,
-    border: "none",
-    background: "#ef4444",
-    color: "#fff",
-    cursor: "pointer",
-    fontSize: 12,
+    padding: "4px 10px", borderRadius: 6, border: "none",
+    background: "#ef4444", color: "#fff", cursor: "pointer", fontSize: 12,
   };
-
   const modalOverlay: React.CSSProperties = {
-    position: "fixed",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    background: "rgba(0,0,0,0.5)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 1000,
+    position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+    background: "rgba(0,0,0,0.5)", display: "flex",
+    alignItems: "center", justifyContent: "center", zIndex: 1000,
   };
-
   const modalContent: React.CSSProperties = {
-    background: "#fff",
-    borderRadius: 12,
-    padding: 24,
-    maxWidth: 600,
-    width: "90%",
-    maxHeight: "80vh",
-    overflow: "auto",
+    background: "#fff", borderRadius: 12, padding: 24,
+    maxWidth: 600, width: "90%", maxHeight: "80vh", overflow: "auto",
   };
-
   const tabButtonBase: React.CSSProperties = {
-    padding: "6px 10px",
-    borderRadius: 999,
-    border: "none",
-    background: "transparent",
-    color: "#374151",
-    cursor: "pointer",
-    fontSize: 13,
+    padding: "6px 10px", borderRadius: 999, border: "none",
+    background: "transparent", color: "#374151", cursor: "pointer", fontSize: 13,
   };
-
   const tabButtonActive: React.CSSProperties = {
-    ...tabButtonBase,
-    background: "#0f766e",
-    color: "#fff",
+    ...tabButtonBase, background: "#0f766e", color: "#fff",
   };
 
   return (
@@ -856,124 +736,112 @@ export default function QlibPage() {
         从本地 TimescaleDB 导出数据到 Qlib Snapshot，供 RD-Agent / Qlib 回测使用。
       </p>
 
-      {/* 导出（HDF5 Snapshot / Qlib bin）Tab 区域 */}
+      {/* Tab 区域 */}
       <section style={cardStyle}>
         <h2 className="text-lg font-semibold mb-1">Qlib 数据导出</h2>
         <p className="text-sm text-gray-500 mb-4">
-          在同一页面下，通过标签切换管理 HDF5 Snapshot 与 Qlib bin（CSV→bin）导出配置。
+          通过标签切换管理 HDF5 Snapshot 与 Qlib bin（CSV→bin）导出配置。
         </p>
 
-        {/* Tab 切换：HDF5 Snapshot / Qlib bin（风格对齐本地数据管理页） */}
         <div className="mb-4 flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => setExportTab("snapshot")}
-            style={exportTab === "snapshot" ? tabButtonActive : tabButtonBase}
-          >
+          <button type="button" onClick={() => setExportTab("snapshot")}
+            style={exportTab === "snapshot" ? tabButtonActive : tabButtonBase}>
             HDF5 Snapshot 导出
           </button>
-          <button
-            type="button"
-            onClick={() => setExportTab("bin")}
-            style={exportTab === "bin" ? tabButtonActive : tabButtonBase}
-          >
+          <button type="button" onClick={() => setExportTab("bin")}
+            style={exportTab === "bin" ? tabButtonActive : tabButtonBase}>
             Qlib bin 导出（CSV→bin）
           </button>
         </div>
 
+        {/* ======================== HDF5 Snapshot 导出 ======================== */}
         {exportTab === "snapshot" && (
           <form onSubmit={handleSubmit} className="space-y-4">
-          {/* 导出数据集选择 */}
-          <div>
-            <label className="block text-sm font-medium mb-2">导出数据集</label>
-            <select
-              value={exportType}
-              onChange={(e) => handleExportTypeChange(e.target.value as ExportType)}
-              style={inputStyle}
-            >
-              <option value="daily">日频行情</option>
-              <option value="minute">分钟线</option>
-              <option value="board">板块日线</option>
-              <option value="board_index">板块索引</option>
-              <option value="board_member">板块成员</option>
-              <option value="factor">RD-Agent因子</option>
-              <option value="moneyflow">个股资金流向 (moneyflow.h5)</option>
-              <option value="daily_basic">每日指标 (daily_basic.h5)</option>
-              <option value="bak_basic">历史股票列表 (bak_basic.h5)</option>
-              <option value="cyq_perf">每日筹码及胜率 (cyq_perf.h5)</option>
-            </select>
-          </div>
-
-          {/* 导出模式（仅支持增量的类型显示，moneyflow 一律全量） */}
-          {INCREMENTAL_TYPES.includes(exportType) && exportType !== "moneyflow" && (
+            {/* 多选 Checkbox 数据集 */}
             <div>
-              <label className="block text-sm font-medium mb-2">导出模式</label>
-              <div className="flex gap-4">
+              <label className="block text-sm font-medium mb-2">H5 数据集</label>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-1 text-sm">
+                {(Object.entries(DATASET_CONFIG) as [ExportType, typeof DATASET_CONFIG["daily"]][]).map(([key, cfg]) => (
+                  <label key={key} className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={selectedDatasets.has(key)}
+                      onChange={() => toggleDataset(key)} />
+                    <span>{cfg.label}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="border-t mt-2 pt-2 space-y-1 text-sm">
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="exportMode"
-                    checked={exportMode === "full"}
-                    onChange={() => setExportMode("full")}
-                  />
-                  <span className="text-sm">全量导出</span>
+                  <input type="checkbox" checked={generateStaticFactors}
+                    onChange={(e) => setGenerateStaticFactors(e.target.checked)} />
+                  <span>生成预计算因子 (static_factors.parquet)</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="exportMode"
-                    checked={exportMode === "incremental"}
-                    onChange={() => setExportMode("incremental")}
-                  />
+                  <input type="checkbox" checked={generateFieldMap}
+                    onChange={(e) => setGenerateFieldMap(e.target.checked)} />
+                  <span>生成字段映射 CSV</span>
+                </label>
+              </div>
+              <div className="mt-2 flex gap-2">
+                <button type="button" onClick={selectAllDaily} style={btnSecondary}>全选日频</button>
+                <button type="button" onClick={selectAll} style={btnSecondary}>全选</button>
+                <button type="button" onClick={selectNone} style={btnSecondary}>清空</button>
+              </div>
+            </div>
+
+            {/* 导出模式 */}
+            <div>
+              <label className="block text-sm font-medium mb-2">导出模式</label>
+              <div className="flex flex-wrap gap-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" name="exportMode" checked={exportMode === "full"}
+                    onChange={() => setExportMode("full")} />
+                  <span className="text-sm">全量导出</span>
+                  <span className="text-xs text-gray-400">指定日期范围，覆盖现有数据</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" name="exportMode" checked={exportMode === "incremental"}
+                    onChange={() => setExportMode("incremental")} />
                   <span className="text-sm">增量导出</span>
-                  <span className="text-xs text-gray-400">（从上次位置继续）</span>
+                  <span className="text-xs text-gray-400">从上次导出位置继续</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" name="exportMode" checked={exportMode === "incremental_all"}
+                    onChange={() => setExportMode("incremental_all")} />
+                  <span className="text-sm">一键增量更新</span>
+                  <span className="text-xs text-gray-400">对已有 Snapshot 全部增量</span>
                 </label>
               </div>
             </div>
-          )}
 
-          {/* 日线 / 分钟线 / 资金流向 / 每日指标 / 历史股票列表 / 每日筹码及胜率 专用：样本过滤（ST / 退市 / 暂停上市） */}
-          {(exportType === "daily" || exportType === "minute" || exportType === "moneyflow" || exportType === "daily_basic" || exportType === "bak_basic" || exportType === "cyq_perf") && (
+            {/* 样本过滤 */}
             <div>
               <label className="block text-sm font-medium mb-2">样本过滤</label>
               <div className="flex flex-col gap-1 text-sm text-gray-700">
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={excludeSt}
-                    onChange={(e) => setExcludeSt(e.target.checked)}
-                  />
+                  <input type="checkbox" checked={excludeSt}
+                    onChange={(e) => setExcludeSt(e.target.checked)} />
                   <span>排除所有有过 ST 记录的股票（包括当前 ST）</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={excludeDelistedOrPaused}
-                    onChange={(e) => setExcludeDelistedOrPaused(e.target.checked)}
-                  />
+                  <input type="checkbox" checked={excludeDelistedOrPaused}
+                    onChange={(e) => setExcludeDelistedOrPaused(e.target.checked)} />
                   <span>排除退市 / 当前暂停上市的股票</span>
                 </label>
               </div>
             </div>
-          )}
 
-          {/* Snapshot ID */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Snapshot ID</label>
-            <input
-              value={snapshotId}
-              onChange={(e) => setSnapshotId(e.target.value)}
-              style={inputStyle}
-              placeholder="例如：qlib_daily_2025Q1_all"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              将作为 qlib_snapshots/&lt;Snapshot ID&gt;/ 目录名
-              {exportMode === "incremental" && "（增量导出需使用已存在的 Snapshot ID）"}
-            </p>
-          </div>
+            {/* Snapshot ID */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Snapshot ID</label>
+              <input value={snapshotId} onChange={(e) => setSnapshotId(e.target.value)}
+                style={inputStyle} placeholder="例如：qlib_daily_2025Q1_all" />
+              <p className="text-xs text-gray-500 mt-1">
+                将作为 qlib_snapshots/&lt;Snapshot ID&gt;/ 目录名
+                {exportMode !== "full" && "（增量导出需使用已存在的 Snapshot ID）"}
+              </p>
+            </div>
 
-          {/* 交易所（日频、分钟线、因子数据、资金流向、每日指标、历史股票列表、每日筹码及胜率） */}
-          {(exportType === "daily" || exportType === "minute" || exportType === "factor" || exportType === "moneyflow" || exportType === "daily_basic" || exportType === "bak_basic" || exportType === "cyq_perf") && (
+            {/* 交易所 */}
             <div>
               <label className="block text-sm font-medium mb-2">交易所范围</label>
               <div className="flex gap-4">
@@ -991,757 +859,383 @@ export default function QlibPage() {
                 </label>
               </div>
             </div>
-          )}
 
-          {/* 日期范围 */}
-          <div className={exportMode === "incremental" ? "" : "grid grid-cols-2 gap-4"}>
-            {/* 开始日期（仅全量导出显示） */}
-            {exportMode === "full" && (
-              <div>
-                <label className="block text-sm font-medium mb-1">开始日期</label>
-                <input
-                  type="date"
-                  value={start}
-                  onChange={(e) => setStart(e.target.value)}
-                  style={inputStyle}
-                />
+            {/* 日期范围 */}
+            {exportMode !== "incremental_all" && (
+              <div className={exportMode === "incremental" ? "" : "grid grid-cols-2 gap-4"}>
+                {exportMode === "full" && (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">开始日期</label>
+                    <input type="date" value={start} onChange={(e) => setStart(e.target.value)} style={inputStyle} />
+                  </div>
+                )}
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    {exportMode === "incremental" ? "导出截止日期" : "结束日期"}
+                  </label>
+                  <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} style={inputStyle} />
+                  {exportMode === "incremental" && (
+                    <p className="text-xs text-gray-500 mt-1">将从上次导出位置继续，直到此日期</p>
+                  )}
+                </div>
               </div>
             )}
+            {exportMode === "incremental_all" && (
+              <div>
+                <label className="block text-sm font-medium mb-1">增量截止日期</label>
+                <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} style={inputStyle} />
+                <p className="text-xs text-gray-500 mt-1">对 Snapshot 中已有数据集从上次位置增量到此日期</p>
+              </div>
+            )}
+
+            {/* 提交按钮 */}
             <div>
-              <label className="block text-sm font-medium mb-1">
-                {exportMode === "incremental" ? "导出截止日期" : "结束日期"}
-              </label>
-              <input
-                type="date"
-                value={end}
-                onChange={(e) => setEnd(e.target.value)}
-                style={inputStyle}
-              />
-              {exportMode === "incremental" && (
-                <p className="text-xs text-gray-500 mt-1">
-                  将从上次导出位置继续，直到此日期
-                </p>
-              )}
+              <button type="submit" disabled={loading || (selectedDatasets.size === 0 && !generateStaticFactors && !generateFieldMap)}
+                style={{ ...btnPrimary, opacity: loading || (selectedDatasets.size === 0 && !generateStaticFactors && !generateFieldMap) ? 0.6 : 1 }}>
+                {loading ? "导出中..." : exportMode === "incremental_all" ? "一键增量更新" :
+                  exportMode === "incremental" ? "增量导出" :
+                  selectedDatasets.size === 0 ? "生成附加文件" : `全量导出 (${selectedDatasets.size} 个数据集)`}
+              </button>
             </div>
-          </div>
 
-          {/* 提交按钮 */}
-          <div>
-            <button
-              type="submit"
-              disabled={loading}
-              style={{ ...btnPrimary, opacity: loading ? 0.6 : 1 }}
-            >
-              {loading ? "导出中..." : exportMode === "incremental" ? "增量导出" : "全量导出"}
-            </button>
-          </div>
-
-          {/* 字段说明按钮：生成 aistock_field_map.csv 并写入 H5 attrs */}
-          <div>
-            <button
-              type="button"
-              disabled={fieldMapLoading}
-              onClick={handleExportFieldMap}
-              style={{ ...btnSecondary, opacity: fieldMapLoading ? 0.6 : 1 }}
-            >
-              {fieldMapLoading ? "生成字段说明中..." : "生成字段说明（CSV+写入H5）"}
-            </button>
-            <p className="text-xs text-gray-500 mt-1">
-              将读取数据库列 comment（daily_basic / moneyflow_ts），生成 <code>metadata/aistock_field_map.csv</code>，并写入该 Snapshot 下的 <code>daily_basic.h5</code>/<code>moneyflow.h5</code> attrs。
-            </p>
-          </div>
-
-          {/* 进度条 */}
-          {loading && (
-            <div className="space-y-2">
-              <div className="flex justify-between text-xs text-gray-500">
-                <span>{getProgressText()}</span>
-                <span>{exportProgress}%</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div
-                  className="bg-blue-500 h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${exportProgress}%` }}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* 错误提示 */}
-          {error && (
-            <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm">
-              {error}
-            </div>
-          )}
-
-          {fieldMapError && (
-            <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm">
-              {fieldMapError}
-            </div>
-          )}
-
-          {fieldMapResult && (
-            <div className="p-4 rounded-lg bg-blue-50 text-blue-800 text-sm space-y-2">
-              <div className="font-medium text-base">📄 字段说明已生成</div>
-              <div className="text-xs">
-                <div><span className="text-blue-700">Snapshot ID:</span> {fieldMapResult.snapshot_id}</div>
-                <div><span className="text-blue-700">CSV:</span> {fieldMapResult.csv_path}</div>
-                <div><span className="text-blue-700">字段数:</span> {fieldMapResult.rows}</div>
-                <div>
-                  <span className="text-blue-700">写入 H5:</span>
-                  {Object.keys(fieldMapResult.written_h5 || {}).length === 0
-                    ? " 无"
-                    : ""}
-                </div>
-                {Object.entries(fieldMapResult.written_h5 || {}).map(([p, n]) => (
-                  <div key={p} className="ml-4">- {p}（{n} 列）</div>
+            {/* 步骤进度 */}
+            {stepResults.size > 0 && (
+              <div className="space-y-1 p-3 rounded-lg bg-gray-50 text-sm">
+                <div className="font-medium mb-2">导出进度</div>
+                {Array.from(stepResults.entries()).map(([key, result]) => (
+                  <div key={key} className="flex items-center gap-2">
+                    <span>{getStepIcon(result.status)}</span>
+                    <span className={result.status === "running" ? "text-blue-600 font-medium" : ""}>
+                      {getStepLabel(key)}
+                    </span>
+                    {result.status === "done" && result.rows !== undefined && (
+                      <span className="text-green-600 text-xs">
+                        — {result.rows.toLocaleString()} 行
+                        {result.duration ? ` (${(result.duration / 1000).toFixed(1)}s)` : ""}
+                      </span>
+                    )}
+                    {result.status === "done" && result.rows === undefined && result.duration && (
+                      <span className="text-green-600 text-xs">
+                        — 完成 ({(result.duration / 1000).toFixed(1)}s)
+                      </span>
+                    )}
+                    {result.status === "running" && (
+                      <span className="text-blue-500 text-xs">导出中...</span>
+                    )}
+                    {result.status === "error" && (
+                      <span className="text-red-500 text-xs" title={result.error}>— 失败</span>
+                    )}
+                    {result.status === "skipped" && (
+                      <span className="text-gray-400 text-xs">— 已跳过</span>
+                    )}
+                  </div>
                 ))}
               </div>
-            </div>
-          )}
-
-          {/* 成功提示 - 增强版，显示过滤条件 */}
-          {result && lastExportConfig && (
-            <div className="p-4 rounded-lg bg-green-50 text-green-700 text-sm space-y-2">
-              <div className="font-medium text-base">
-                ✅ {lastExportConfig.mode === "incremental" ? "增量导出成功" : "全量导出成功"}
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div><span className="text-green-600">Snapshot ID:</span> {result.snapshot_id}</div>
-                <div><span className="text-green-600">导出类型:</span> {getExportTypeName(lastExportConfig.type)}</div>
-                <div><span className="text-green-600">导出模式:</span> {lastExportConfig.mode === "incremental" ? "增量" : "全量"}</div>
-                <div><span className="text-green-600">时间区间:</span> {result.start} ~ {result.end}</div>
-                <div><span className="text-green-600">频率:</span> {result.freq}</div>
-                {lastExportConfig.exchanges && lastExportConfig.exchanges.length > 0 && (
-                  <div><span className="text-green-600">交易所:</span> {getExchangeNames(lastExportConfig.exchanges)}</div>
-                )}
-                <div><span className="text-green-600">总行数:</span> {result.rows.toLocaleString()}</div>
-                {result.ts_codes && (
-                  <div><span className="text-green-600">股票/板块数:</span> {result.ts_codes.length.toLocaleString()}</div>
-                )}
-              </div>
-              {lastExportConfig.mode === "incremental" && result.rows === 0 && (
-                <div className="text-xs text-green-600 mt-2">
-                  💡 没有新数据需要导出，已是最新状态
-                </div>
-              )}
-            </div>
-          )}
-        </form>
-        )}
-
-        {exportTab === "bin" && (
-          <div className="space-y-4">
-            {/* Qlib bin 内部子标签：股票 / 指数 */}
-            <div className="mb-2 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => setBinTab("stock")}
-                style={binTab === "stock" ? tabButtonActive : tabButtonBase}
-              >
-                股票 bin 导出
-              </button>
-              <button
-                type="button"
-                onClick={() => setBinTab("index")}
-                style={binTab === "index" ? tabButtonActive : tabButtonBase}
-              >
-                指数 bin 导出
-              </button>
-            </div>
-
-            {/* 股票 bin 导出表单：保持原有逻辑不变 */}
-            {binTab === "stock" && (
-              <form
-                className="space-y-4"
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  setBinLoading(true);
-                  setBinError(null);
-                  setBinResult(null);
-                  setShowDumpLog(false);
-                  setShowCheckLog(false);
-
-                  try {
-                    const exchanges: string[] = [];
-                    if (exSh) exchanges.push("sh");
-                    if (exSz) exchanges.push("sz");
-                    if (exBj) exchanges.push("bj");
-
-                    const payload = {
-                      snapshot_id: binSnapshotId.trim(),
-                      start: binStart,
-                      end: binEnd,
-                      exchanges: exchanges.length > 0 ? exchanges : undefined,
-                      run_health_check: binRunHealthCheck,
-                      exclude_st: excludeSt,
-                      exclude_delisted_or_paused: excludeDelistedOrPaused,
-                      freq: binFreq,
-                    };
-
-                    const resp = await backendRequest<{
-                      snapshot_id: string;
-                      csv_dir: string;
-                      bin_dir: string;
-                      dump_bin_ok: boolean;
-                      check_ok: boolean | null;
-                      stdout_dump: string;
-                      stderr_dump: string;
-                      stdout_check?: string | null;
-                      stderr_check?: string | null;
-                    }>("POST", "/api/v1/qlib/bin/export", payload);
-
-                    setBinResult(resp);
-                  } catch (err: any) {
-                    setBinError(err?.message || "导出 Qlib bin 失败");
-                  } finally {
-                    setBinLoading(false);
-                  }
-                }}
-              >
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">bin Snapshot ID</label>
-                <input
-                  value={binSnapshotId}
-                  onChange={(e) => setBinSnapshotId(e.target.value)}
-                  style={inputStyle}
-                  placeholder="例如：qlib_bin_2025Q1_all"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  将作为 <code>QLIB_BIN_ROOT_WIN/&lt;Snapshot ID&gt;</code> 目录名，供 Qlib.init 使用。
-                </p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">导出日期区间</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <span className="block text-xs text-gray-500 mb-1">开始日期</span>
-                    <input
-                      type="date"
-                      value={binStart}
-                      onChange={(e) => setBinStart(e.target.value)}
-                      style={inputStyle}
-                    />
-                  </div>
-                  <div>
-                    <span className="block text-xs text-gray-500 mb-1">结束日期</span>
-                    <input
-                      type="date"
-                      value={binEnd}
-                      onChange={(e) => setBinEnd(e.target.value)}
-                      style={inputStyle}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* 导出频率：日线 / 分钟线 */}
-            <div>
-              <label className="block text-sm font-medium mb-1">导出频率</label>
-              <select
-                value={binFreq}
-                onChange={(e) => setBinFreq(e.target.value as "day" | "1m")}
-                style={inputStyle}
-              >
-                <option value="day">日线（日K）</option>
-                <option value="1m">1 分钟线</option>
-              </select>
-              <p className="text-xs text-gray-500 mt-1">
-                当前仅支持 day 和 1m；5m/15m 将在数据库准备好后扩展。
-              </p>
-            </div>
-
-            {/* 交易所范围 */}
-            <div>
-              <label className="block text-sm font-medium mb-2">交易所范围</label>
-              <div className="flex gap-4 flex-wrap">
-                <label className="flex items-center gap-2 cursor-pointer text-sm">
-                  <input
-                    type="checkbox"
-                    checked={exSh}
-                    onChange={(e) => setExSh(e.target.checked)}
-                  />
-                  <span>上交所 (SH)</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer text-sm">
-                  <input
-                    type="checkbox"
-                    checked={exSz}
-                    onChange={(e) => setExSz(e.target.checked)}
-                  />
-                  <span>深交所 (SZ)</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer text-sm">
-                  <input
-                    type="checkbox"
-                    checked={exBj}
-                    onChange={(e) => setExBj(e.target.checked)}
-                  />
-                  <span>北交所 (BJ)</span>
-                </label>
-              </div>
-            </div>
-
-            {/* 样本过滤，与 HDF5 Snapshot 一致 */}
-            <div>
-              <label className="block text-sm font-medium mb-2">样本过滤</label>
-              <div className="flex flex-col gap-1 text-sm text-gray-700">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={excludeSt}
-                    onChange={(e) => setExcludeSt(e.target.checked)}
-                  />
-                  <span>排除所有有过 ST 记录的股票（包括当前 ST）</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={excludeDelistedOrPaused}
-                    onChange={(e) => setExcludeDelistedOrPaused(e.target.checked)}
-                  />
-                  <span>排除退市 / 当前暂停上市的股票</span>
-                </label>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={binRunHealthCheck}
-                  onChange={(e) => setBinRunHealthCheck(e.target.checked)}
-                />
-                <span>
-                  运行 <code>check_data_health.py</code> 进行健康检查
-                </span>
-              </label>
-
-              <button
-                type="submit"
-                disabled={binLoading}
-                style={{ ...btnPrimary, opacity: binLoading ? 0.6 : 1 }}
-              >
-                {binLoading ? "导出 Qlib bin 中..." : "导出 Qlib bin"}
-              </button>
-            </div>
+            )}
 
             {/* 错误提示 */}
-            {binError && (
-              <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm mt-2">{binError}</div>
+            {error && (
+              <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm">{error}</div>
             )}
+          </form>
+        )}
 
-            {/* 结果展示 */}
-            {binTab === "stock" && binResult && (
-              <div className="mt-3 space-y-3 text-sm">
-                <div className="p-3 rounded-lg bg-green-50 text-green-700">
-                  <div className="font-medium mb-1">Qlib bin 导出完成</div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-1 text-xs text-green-800">
-                    <div className="text-xs">
-                      <span className="font-semibold">Snapshot ID: </span>
-                      <span className="font-mono">{binResult.snapshot_id}</span>
-                    </div>
-                    <div className="text-xs">
-                      <span className="font-semibold">CSV 目录: </span>
-                      <span className="font-mono">{binResult.csv_dir}</span>
-                    </div>
-                    <div className="text-xs">
-                      <span className="font-semibold">bin 目录: </span>
-                      <span className="font-mono">{binResult.bin_dir}</span>
-                    </div>
-                    <div className="text-xs">
-                      <span className="font-semibold">dump_bin: </span>
-                      <span>{binResult.dump_bin_ok ? "✅ 成功" : "❌ 失败"}</span>
-                    </div>
-                    {binResult.check_ok !== null && (
-                      <div className="text-xs">
-                        <span className="font-semibold">健康检查: </span>
-                        <span>{binResult.check_ok ? "✅ 通过" : "❌ 存在问题"}</span>
-                      </div>
-                    )}
-                  </div>
+        {/* ======================== Qlib bin 导出 V2 ======================== */}
+        {exportTab === "bin" && (
+          <div className="space-y-4">
+            <form className="space-y-4" onSubmit={async (e) => {
+              e.preventDefault();
+              setBinLoading(true);
+              setBinError(null);
+              setBinResultV2(null);
+              setBinExpandedSteps(new Set());
+              setBinShowCheckLog(false);
+
+              try {
+                if (binSelectedDatasets.size === 0) {
+                  throw new Error("请至少选择一个数据集");
+                }
+
+                const exchanges: string[] = [];
+                if (exSh) exchanges.push("sh");
+                if (exSz) exchanges.push("sz");
+                if (exBj) exchanges.push("bj");
+
+                const payload: Record<string, any> = {
+                  snapshot_id: binSnapshotId.trim(),
+                  mode: binExportMode,
+                  end: binEnd,
+                  datasets: Array.from(binSelectedDatasets),
+                  exchanges: exchanges.length > 0 ? exchanges : undefined,
+                  run_health_check: binRunHealthCheck,
+                  exclude_st: excludeSt,
+                  exclude_delisted_or_paused: excludeDelistedOrPaused,
+                  index_data_source: indexDataSource,
+                };
+                if (binExportMode === "full") {
+                  payload.start = binStart;
+                }
+
+                const resp = await backendRequest<UnifiedBinExportResponseV2>(
+                  "POST", "/api/v1/qlib/bin/unified_export_v2", payload);
+                setBinResultV2(resp);
+                loadBinExports();
+              } catch (err: any) {
+                setBinError(err?.message || "导出 Qlib bin 失败");
+              } finally {
+                setBinLoading(false);
+              }
+            }}>
+              {/* Snapshot ID + 导出模式 */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">bin Snapshot ID</label>
+                  <input value={binSnapshotId} onChange={(e) => setBinSnapshotId(e.target.value)}
+                    style={inputStyle} placeholder="例如：qlib_bin_2025Q1_all" />
                 </div>
-
-                {/* 日志折叠区 */}
-                <div className="space-y-2">
-                  <div>
-                    <button
-                      type="button"
-                      style={btnSecondary}
-                      onClick={() => setShowDumpLog((v) => !v)}
-                    >
-                      {showDumpLog ? "收起 dump_bin 日志" : "查看 dump_bin 日志"}
-                    </button>
-                    {showDumpLog && (
-                      <div className="mt-2" style={logBox}>
-                        {(binResult.stdout_dump || "").trim() || "<无标准输出>"}
-                        {binResult.stderr_dump && "\n\n[stderr]\n" + binResult.stderr_dump.trim()}
-                      </div>
-                    )}
+                <div>
+                  <label className="block text-sm font-medium mb-1">导出模式</label>
+                  <div className="flex gap-4 text-sm mt-1">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="binExportMode" value="full"
+                        checked={binExportMode === "full"}
+                        onChange={() => setBinExportMode("full")} />
+                      <span>全量导出</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="binExportMode" value="incremental"
+                        checked={binExportMode === "incremental"}
+                        onChange={() => setBinExportMode("incremental")} />
+                      <span>增量导出</span>
+                    </label>
                   </div>
-
-                  {binRunHealthCheck && (
-                    <div>
-                      <button
-                        type="button"
-                        style={btnSecondary}
-                        onClick={() => setShowCheckLog((v) => !v)}
-                      >
-                        {showCheckLog ? "收起健康检查日志" : "查看健康检查日志"}
-                      </button>
-                      {showCheckLog && (
-                        <div className="mt-2" style={logBox}>
-                          {(binResult.stdout_check || "").trim() || "<无标准输出>"}
-                          {binResult.stderr_check &&
-                            "\n\n[stderr]\n" + (binResult.stderr_check || "").trim()}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  <p className="text-xs text-gray-400 mt-1">
+                    {binExportMode === "full"
+                      ? "指定完整日期范围，覆盖已有数据"
+                      : "从上次导出位置继续（需已有 Bin 数据和 meta）"}
+                  </p>
                 </div>
               </div>
-            )}
-              </form>
-            )}
 
-            {/* 指数 bin 导出表单 */}
-            {binTab === "index" && (
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">bin Snapshot ID</label>
-                    <input
-                      value={binSnapshotId}
-                      onChange={(e) => setBinSnapshotId(e.target.value)}
-                      style={inputStyle}
-                      placeholder="例如：qlib_bin_index_2025_all"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      指数也会导出到同一个 Qlib bin 目录，便于与股票共用。
-                    </p>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">指数日期区间</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <span className="block text-xs text-gray-500 mb-1">开始日期</span>
-                        <input
-                          type="date"
-                          value={indexStart}
-                          onChange={(e) => setIndexStart(e.target.value)}
-                          style={inputStyle}
-                        />
-                      </div>
-                      <div>
-                        <span className="block text-xs text-gray-500 mb-1">结束日期</span>
-                        <input
-                          type="date"
-                          value={indexEnd}
-                          onChange={(e) => setIndexEnd(e.target.value)}
-                          style={inputStyle}
-                        />
-                      </div>
+              {/* 日期区间 */}
+              <div>
+                <label className="block text-sm font-medium mb-1">导出日期区间</label>
+                <div className="grid grid-cols-2 gap-2" style={{ maxWidth: 400 }}>
+                  {binExportMode === "full" && (
+                    <div>
+                      <span className="block text-xs text-gray-500 mb-1">开始日期</span>
+                      <input type="date" value={binStart} onChange={(e) => setBinStart(e.target.value)} style={inputStyle} />
                     </div>
-
-                    {/* 指数数据源 */}
-                    <div className="mt-3">
-                      <label className="block text-sm font-medium mb-1">指数数据源</label>
-                      <select
-                        value={indexDataSource}
-                        onChange={(e) => setIndexDataSource(e.target.value as "tushare" | "tdx")}
-                        style={inputStyle}
-                      >
-                        <option value="tushare">Tushare（market.index_daily）</option>
-                        <option value="tdx">TDX（market.index_daily_tdx）</option>
-                      </select>
-                      <p className="text-xs text-gray-500 mt-1">
-                        TDX 数据源将使用 <code>market.index_daily_tdx</code>（价格/金额为厘），导出时统一转换为元。
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 指数 market 选择 */}
-                <div>
-                  <label className="block text-sm font-medium mb-1">指数市场 (market)</label>
-                  {indexDataSource === "tdx" ? (
-                    <p className="text-xs text-gray-500">TDX 数据源当前不使用 market 过滤（固定提供可导出的指数列表）。</p>
-                  ) : (
-                    <>
-                      {indexMarketsError && (
-                        <div className="text-xs text-red-600 mb-1">{indexMarketsError}</div>
-                      )}
-                      {indexMarkets.length === 0 ? (
-                        <p className="text-xs text-gray-500">暂无指数市场信息，请检查后端配置。</p>
-                      ) : (
-                        <div className="flex flex-wrap gap-2 text-sm">
-                          {indexMarkets.map((m) => {
-                            const active = selectedIndexMarkets.includes(m.market);
-                            return (
-                              <button
-                                key={m.market}
-                                type="button"
-                                onClick={() => {
-                                  setSelectedIndexMarkets((prev) =>
-                                    prev.includes(m.market)
-                                      ? prev.filter((x) => x !== m.market)
-                                      : [...prev, m.market],
-                                  );
-                                }}
-                                style={active ? tabButtonActive : tabButtonBase}
-                              >
-                                {m.market}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                      <p className="text-xs text-gray-500 mt-1">
-                        先选择一个或多个 market，再从下方列表选择具体指数。
-                      </p>
-                    </>
                   )}
-                </div>
-
-                {/* 指数列表 */}
-                <div>
-                  <label className="block text-sm font-medium mb-1">指数列表</label>
-                  {indicesError && (
-                    <div className="text-xs text-red-600 mb-1">{indicesError}</div>
-                  )}
-                  {indicesLoading ? (
-                    <p className="text-xs text-gray-500">加载指数列表中...</p>
-                  ) : indices.length === 0 ? (
-                    <p className="text-xs text-gray-500">
-                      {indexDataSource === "tdx" ? "TDX 指数列表为空，请检查 market.index_daily_tdx 是否有数据。" : "请选择 market 以加载指数列表。"}
-                    </p>
-                  ) : (
-                    <select
-                      value={selectedIndexCode}
-                      onChange={(e) => setSelectedIndexCode(e.target.value)}
-                      style={inputStyle}
-                    >
-                      {indices.map((idx) => (
-                        <option key={idx.ts_code} value={idx.ts_code}>
-                          {idx.ts_code} {idx.name ? `- ${idx.name}` : ""}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={indexRunHealthCheck}
-                      onChange={(e) => setIndexRunHealthCheck(e.target.checked)}
-                    />
-                    <span>
-                      导出后运行 <code>check_data_health.py</code>（针对整个日频 bin）
+                  <div>
+                    <span className="block text-xs text-gray-500 mb-1">
+                      {binExportMode === "full" ? "结束日期" : "截止日期（起始自动推断）"}
                     </span>
-                  </label>
-
-                  <button
-                    type="button"
-                    disabled={indexLoading || !selectedIndexCode}
-                    style={{ ...btnPrimary, opacity: indexLoading || !selectedIndexCode ? 0.6 : 1 }}
-                    onClick={async () => {
-                      if (!selectedIndexCode) return;
-                      setIndexLoading(true);
-                      setIndexError(null);
-                      setIndexResult(null);
-                      setIndexShowDumpLog(false);
-                      setIndexShowCheckLog(false);
-                      try {
-                        const resp = await backendRequest<IndexBinExportResponse>(
-                          "POST",
-                          "/api/v1/qlib/index/bin/export",
-                          {
-                            snapshot_id: binSnapshotId.trim(),
-                            index_code: selectedIndexCode,
-                            start: indexStart,
-                            end: indexEnd,
-                            data_source: indexDataSource,
-                            run_health_check: indexRunHealthCheck,
-                          },
-                        );
-                        setIndexResult(resp);
-                        // 导出成功后刷新 bin 列表
-                        loadBinExports();
-                      } catch (e: any) {
-                        setIndexError(e?.message || "导出指数 bin 失败");
-                      } finally {
-                        setIndexLoading(false);
-                      }
-                    }}
-                  >
-                    {indexLoading ? "导出指数中..." : "导出选中指数到 bin"}
-                  </button>
-                </div>
-
-                {/* 指数 bin 健康检查（基于 snapshot_id） */}
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div className="text-xs text-gray-600">
-                    可单独对当前 bin Snapshot 做一次指数健康检查（检查 instruments/index.txt + 整体数据健康）。
+                    <input type="date" value={binEnd} onChange={(e) => setBinEnd(e.target.value)} style={inputStyle} />
                   </div>
-                  <button
-                    type="button"
-                    disabled={indexHealthLoading || !binSnapshotId.trim()}
-                    style={{ ...btnSecondary, opacity: indexHealthLoading || !binSnapshotId.trim() ? 0.6 : 1 }}
-                    onClick={async () => {
-                      if (!binSnapshotId.trim()) return;
-                      setIndexHealthLoading(true);
-                      setIndexHealthError(null);
-                      setIndexHealthResult(null);
-                      try {
-                        const resp = await backendRequest<IndexHealthCheckResponse>(
-                          "POST",
-                          "/api/v1/qlib/index/health_check",
-                          { snapshot_id: binSnapshotId.trim() },
-                        );
-                        setIndexHealthResult(resp);
-                      } catch (e: any) {
-                        setIndexHealthError(e?.message || "指数健康检查失败");
-                      } finally {
-                        setIndexHealthLoading(false);
-                      }
-                    }}
-                  >
-                    {indexHealthLoading ? "检查中..." : "指数 bin 健康检查"}
-                  </button>
                 </div>
+              </div>
 
-                {indexError && (
-                  <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm mt-2">{indexError}</div>
-                )}
-                {indexHealthError && (
-                  <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm mt-2">{indexHealthError}</div>
-                )}
+              {/* Bin 数据集多选 */}
+              <div>
+                <label className="block text-sm font-medium mb-2">Bin 数据集</label>
+                <div className="space-y-2">
+                  <div className="text-xs text-gray-400 font-medium">── 股票 ──</div>
+                  <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input type="checkbox" checked={binSelectedDatasets.has("stock_daily")}
+                      onChange={() => {
+                        setBinSelectedDatasets(prev => {
+                          const next = new Set(prev);
+                          if (next.has("stock_daily")) next.delete("stock_daily"); else next.add("stock_daily");
+                          return next;
+                        });
+                      }} />
+                    <span>股票日线 (features/*.day.bin)</span>
+                  </label>
+                  <div className="text-xs text-gray-400 font-medium mt-2">── 指数 ──</div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    {BIN_INDEX_OPTIONS.map(({ code, label }) => (
+                      <label key={code} className="flex items-center gap-2 cursor-pointer text-sm">
+                        <input type="checkbox" checked={binSelectedDatasets.has(code)}
+                          onChange={() => {
+                            setBinSelectedDatasets(prev => {
+                              const next = new Set(prev);
+                              if (next.has(code)) next.delete(code); else next.add(code);
+                              return next;
+                            });
+                          }} />
+                        <span>{code} {label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      type="text" value={customIndexCode}
+                      onChange={(e) => setCustomIndexCode(e.target.value.trim().toUpperCase())}
+                      placeholder="自定义指数代码，如 399001.SZ"
+                      style={{ ...inputStyle, maxWidth: 220, fontSize: 12 }}
+                    />
+                    <button type="button" style={{ ...btnSecondary, fontSize: 11, padding: "2px 8px" }}
+                      onClick={() => {
+                        const code = customIndexCode.trim();
+                        if (code && /^\d{6}\.[A-Z]{2}$/.test(code)) {
+                          setBinSelectedDatasets(prev => new Set(prev).add(code));
+                          setCustomIndexCode("");
+                        }
+                      }}
+                      disabled={!customIndexCode || !/^\d{6}\.[A-Z]{2}$/.test(customIndexCode)}>
+                      添加
+                    </button>
+                  </div>
+                </div>
+              </div>
 
-                {indexResult && (
-                  <div className="mt-3 space-y-3 text-sm">
-                    <div className="p-3 rounded-lg bg-green-50 text-green-700">
-                      <div className="font-medium mb-1">指数 bin 导出完成</div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-1 text-xs text-green-800">
-                        <div>
-                          <span className="font-semibold">Snapshot ID: </span>
-                          <span className="font-mono">{indexResult.snapshot_id}</span>
-                        </div>
-                        <div>
-                          <span className="font-semibold">指数代码: </span>
-                          <span className="font-mono">{indexResult.index_code}</span>
-                        </div>
-                        <div>
-                          <span className="font-semibold">CSV 目录: </span>
-                          <span className="font-mono">{indexResult.csv_dir}</span>
-                        </div>
-                        <div>
-                          <span className="font-semibold">bin 目录: </span>
-                          <span className="font-mono">{indexResult.bin_dir}</span>
-                        </div>
-                        <div>
-                          <span className="font-semibold">dump_bin: </span>
-                          <span>{indexResult.dump_bin_ok ? "✅ 成功" : "❌ 失败"}</span>
-                        </div>
-                        {indexResult.check_ok !== null && (
-                          <div>
-                            <span className="font-semibold">健康检查: </span>
-                            <span>{indexResult.check_ok ? "✅ 通过" : "❌ 存在问题"}</span>
-                          </div>
-                        )}
-                      </div>
+              {/* 交易所 + 样本过滤 */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2">交易所范围</label>
+                  <div className="flex gap-4 flex-wrap text-sm">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={exSh} onChange={(e) => setExSh(e.target.checked)} />
+                      <span>上交所 (SH)</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={exSz} onChange={(e) => setExSz(e.target.checked)} />
+                      <span>深交所 (SZ)</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={exBj} onChange={(e) => setExBj(e.target.checked)} />
+                      <span>北交所 (BJ)</span>
+                    </label>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2">样本过滤</label>
+                  <div className="flex flex-col gap-1 text-sm text-gray-700">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={excludeSt} onChange={(e) => setExcludeSt(e.target.checked)} />
+                      <span>排除 ST</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={excludeDelistedOrPaused}
+                        onChange={(e) => setExcludeDelistedOrPaused(e.target.checked)} />
+                      <span>排除退市/停牌</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* 指数数据源 + 健康检查 + 提交 */}
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <span>指数数据源:</span>
+                    <select value={indexDataSource}
+                      onChange={(e) => setIndexDataSource(e.target.value as "tushare" | "tdx")}
+                      className="text-xs border rounded px-1 py-0.5">
+                      <option value="tushare">Tushare</option>
+                      <option value="tdx">TDX</option>
+                    </select>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={binRunHealthCheck}
+                      onChange={(e) => setBinRunHealthCheck(e.target.checked)} />
+                    <span>运行 <code>check_data_health.py</code></span>
+                  </label>
+                </div>
+                <button type="submit" disabled={binLoading || binSelectedDatasets.size === 0}
+                  style={{ ...btnPrimary, opacity: (binLoading || binSelectedDatasets.size === 0) ? 0.6 : 1 }}>
+                  {binLoading ? "导出中..." : binExportMode === "incremental" ? "增量导出 Qlib bin" : "全量导出 Qlib bin"}
+                </button>
+              </div>
+
+              {binError && (
+                <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm mt-2">{binError}</div>
+              )}
+
+              {/* V2 结果展示 */}
+              {binResultV2 && (
+                <div className="mt-3 space-y-3 text-sm">
+                  <div className={`p-3 rounded-lg ${binResultV2.steps.every(s => s.ok) ? "bg-green-50 text-green-700" : "bg-yellow-50 text-yellow-800"}`}>
+                    <div className="font-medium mb-2">
+                      Qlib bin 导出完成 ({binResultV2.mode === "incremental" ? "增量" : "全量"})
                     </div>
-
-                    <div className="space-y-2">
-                      <div>
-                        <button
-                          type="button"
-                          style={btnSecondary}
-                          onClick={() => setIndexShowDumpLog((v) => !v)}
-                        >
-                          {indexShowDumpLog ? "收起 dump_bin 日志" : "查看 dump_bin 日志"}
-                        </button>
-                        {indexShowDumpLog && (
-                          <div className="mt-2" style={logBox}>
-                            {(indexResult.stdout_dump || "").trim() || "<无标准输出>"}
-                            {indexResult.stderr_dump &&
-                              "\n\n[stderr]\n" + (indexResult.stderr_dump || "").trim()}
+                    <div className="space-y-1">
+                      {binResultV2.steps.map((step, i) => {
+                        const isExpanded = binExpandedSteps.has(step.dataset);
+                        const datasetLabel = step.dataset === "stock_daily"
+                          ? "股票日线"
+                          : (BIN_INDEX_OPTIONS.find(o => o.code === step.dataset)?.label || step.dataset);
+                        return (
+                          <div key={i}>
+                            <div className="flex items-center gap-2">
+                              <span>{step.ok ? "\u2705" : "\u274c"}</span>
+                              <span className="font-medium">{step.dataset === "stock_daily" ? "股票日线" : step.dataset}</span>
+                              {datasetLabel !== step.dataset && step.dataset !== "stock_daily" && (
+                                <span className="text-xs text-gray-500">{datasetLabel}</span>
+                              )}
+                              <span className="text-xs text-gray-500">— {step.mode_used || "?"}</span>
+                              {step.rows !== undefined && step.rows !== null && (
+                                <span className="text-xs">{step.rows === 0 ? "（已是最新）" : ""}</span>
+                              )}
+                              {step.error && (
+                                <span className="text-xs text-red-600">{step.error}</span>
+                              )}
+                              {(step.stdout || step.stderr) && (
+                                <button type="button" className="text-xs text-blue-600 hover:underline ml-auto"
+                                  onClick={() => setBinExpandedSteps(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(step.dataset)) next.delete(step.dataset); else next.add(step.dataset);
+                                    return next;
+                                  })}>
+                                  {isExpanded ? "收起日志" : "查看日志"}
+                                </button>
+                              )}
+                            </div>
+                            {isExpanded && (
+                              <div style={logBox} className="mt-1">
+                                {(step.stdout || "").trim() || "<无标准输出>"}
+                                {step.stderr && "\n\n[stderr]\n" + step.stderr.trim()}
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-
-                      {indexRunHealthCheck && (
+                        );
+                      })}
+                      {binResultV2.check_ok !== null && binResultV2.check_ok !== undefined && (
                         <div>
-                          <button
-                            type="button"
-                            style={btnSecondary}
-                            onClick={() => setIndexShowCheckLog((v) => !v)}
-                          >
-                            {indexShowCheckLog ? "收起健康检查日志" : "查看健康检查日志"}
-                          </button>
-                          {indexShowCheckLog && (
-                            <div className="mt-2" style={logBox}>
-                              {(indexResult.stdout_check || "").trim() || "<无标准输出>"}
-                              {indexResult.stderr_check &&
-                                "\n\n[stderr]\n" + (indexResult.stderr_check || "").trim()}
+                          <div className="flex items-center gap-2">
+                            <span>{binResultV2.check_ok ? "\u2705" : "\u26a0\ufe0f"}</span>
+                            <span className="font-medium">健康检查</span>
+                            <span className="text-xs text-gray-500">— {binResultV2.check_ok ? "通过" : "存在问题"}</span>
+                            <button type="button" className="text-xs text-blue-600 hover:underline ml-auto"
+                              onClick={() => setBinShowCheckLog(v => !v)}>
+                              {binShowCheckLog ? "收起日志" : "查看日志"}
+                            </button>
+                          </div>
+                          {binShowCheckLog && (
+                            <div style={logBox} className="mt-1">
+                              {(binResultV2.stdout_check || "").trim() || "<无标准输出>"}
+                              {binResultV2.stderr_check && "\n\n[stderr]\n" + binResultV2.stderr_check.trim()}
                             </div>
                           )}
                         </div>
                       )}
                     </div>
                   </div>
-                )}
-
-                {indexHealthResult && (
-                  <div className="mt-3 space-y-2 text-sm">
-                    <div className="p-3 rounded-lg bg-sky-50 text-sky-700">
-                      <div className="font-medium mb-1">指数 bin 健康检查结果</div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-1 text-xs text-sky-800">
-                        <div>
-                          <span className="font-semibold">Snapshot ID: </span>
-                          <span className="font-mono">{indexHealthResult.snapshot_id}</span>
-                        </div>
-                        <div>
-                          <span className="font-semibold">bin 目录: </span>
-                          <span className="font-mono">{indexHealthResult.bin_dir}</span>
-                        </div>
-                        <div>
-                          <span className="font-semibold">指数注册文件: </span>
-                          <span>
-                            {indexHealthResult.has_index_file
-                              ? `✅ 存在，指数数目 ${indexHealthResult.index_count}`
-                              : "❌ 未找到有效的 instruments/index.txt"}
-                          </span>
-                        </div>
-                        {indexHealthResult.check_ok !== null && (
-                          <div>
-                            <span className="font-semibold">数据健康检查: </span>
-                            <span>{indexHealthResult.check_ok ? "✅ 通过" : "❌ 存在问题"}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+                </div>
+              )}
+            </form>
           </div>
         )}
       </section>
 
-      {/* Snapshot 列表：仅在 HDF5 Snapshot 导出标签下展示 */}
+      {/* Snapshot 列表 */}
       {exportTab === "snapshot" && (
         <section style={cardStyle}>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">现有 Snapshot</h2>
-            <button
-              onClick={loadSnapshots}
-              disabled={loadingList}
-              className="text-sm text-blue-600 hover:underline"
-            >
+            <button onClick={loadSnapshots} disabled={loadingList}
+              className="text-sm text-blue-600 hover:underline">
               {loadingList ? "刷新中..." : "刷新"}
             </button>
           </div>
@@ -1754,15 +1248,14 @@ export default function QlibPage() {
                 <thead>
                   <tr className="border-b">
                     <th className="text-left py-2 px-2">Snapshot ID</th>
-                    <th className="text-center py-2 px-2">日频</th>
-                    <th className="text-center py-2 px-2">分钟</th>
-                    <th className="text-center py-2 px-2">板块日线</th>
-                    <th className="text-center py-2 px-2">板块索引</th>
-                    <th className="text-center py-2 px-2">板块成员</th>
-                    <th className="text-center py-2 px-2">资金流向</th>
-                    <th className="text-center py-2 px-2">每日指标</th>
-                    <th className="text-center py-2 px-2">历史股票</th>
-                    <th className="text-center py-2 px-2">筹码胜率</th>
+                    <th className="text-center py-2 px-1">日频</th>
+                    <th className="text-center py-2 px-1">分钟</th>
+                    <th className="text-center py-2 px-1">资金流</th>
+                    <th className="text-center py-2 px-1">指标</th>
+                    <th className="text-center py-2 px-1">历史</th>
+                    <th className="text-center py-2 px-1">筹码</th>
+                    <th className="text-center py-2 px-1">行业</th>
+                    <th className="text-center py-2 px-1">因子</th>
                     <th className="text-left py-2 px-2">创建时间</th>
                     <th className="text-center py-2 px-2">操作</th>
                   </tr>
@@ -1771,90 +1264,26 @@ export default function QlibPage() {
                   {snapshots.map((s) => (
                     <tr key={s.snapshot_id} className="border-b hover:bg-gray-50">
                       <td className="py-2 px-2 font-mono text-xs">{s.snapshot_id}</td>
-                      <td className="py-2 px-2 text-center">{s.has_daily ? "✅" : "—"}</td>
-                      <td className="py-2 px-2 text-center">{s.has_minute ? "✅" : "—"}</td>
-                      <td className="py-2 px-2 text-center">{s.has_board ? "✅" : "—"}</td>
-                      <td className="py-2 px-2 text-center">{s.has_board_index ? "✅" : "—"}</td>
-                      <td className="py-2 px-2 text-center">{s.has_board_member ? "✅" : "—"}</td>
-                      <td className="py-2 px-2 text-center">{s.has_moneyflow ? "✅" : "—"}</td>
-                      <td className="py-2 px-2 text-center">{s.has_daily_basic ? "✅" : "—"}</td>
-                      <td className="py-2 px-2 text-center">{s.has_bak_basic ? "✅" : "—"}</td>
-                      <td className="py-2 px-2 text-center">{s.has_cyq_perf ? "✅" : "—"}</td>
+                      <td className="py-2 px-1 text-center text-xs">{s.has_daily ? "\u2705" : "\u2014"}</td>
+                      <td className="py-2 px-1 text-center text-xs">{s.has_minute ? "\u2705" : "\u2014"}</td>
+                      <td className="py-2 px-1 text-center text-xs">{s.has_moneyflow ? "\u2705" : "\u2014"}</td>
+                      <td className="py-2 px-1 text-center text-xs">{s.has_daily_basic ? "\u2705" : "\u2014"}</td>
+                      <td className="py-2 px-1 text-center text-xs">{s.has_bak_basic ? "\u2705" : "\u2014"}</td>
+                      <td className="py-2 px-1 text-center text-xs">{s.has_cyq_perf ? "\u2705" : "\u2014"}</td>
+                      <td className="py-2 px-1 text-center text-xs">{s.has_sector_data ? "\u2705" : "\u2014"}</td>
+                      <td className="py-2 px-1 text-center text-xs">{s.has_static_factors ? "\u2705" : "\u2014"}</td>
                       <td className="py-2 px-2 text-xs text-gray-500">
-                        {s.created_at ? new Date(s.created_at).toLocaleString() : "—"}
+                        {s.created_at ? new Date(s.created_at).toLocaleString() : "\u2014"}
                       </td>
                       <td className="py-2 px-2 text-center">
                         <div className="flex flex-wrap gap-1 justify-center">
-                          <button onClick={() => setDetailSnapshot(s)} style={btnSecondary}>
-                            详情
-                          </button>
-                          {/* CSV下载按钮组 */}
-                          {s.has_daily && (
-                            <button
-                              type="button"
-                              disabled={csvDownloading === `${s.snapshot_id}_daily`}
-                              onClick={() => handleDownloadCSV(s.snapshot_id, "daily")}
-                              style={{...btnSecondary, fontSize: "10px", padding: "2px 6px"}}
-                              title="下载日频CSV"
-                            >
-                              {csvDownloading === `${s.snapshot_id}_daily` ? "..." : "日线CSV"}
-                            </button>
-                          )}
-                          {s.has_daily_basic && (
-                            <button
-                              type="button"
-                              disabled={csvDownloading === `${s.snapshot_id}_daily_basic`}
-                              onClick={() => handleDownloadCSV(s.snapshot_id, "daily_basic")}
-                              style={{...btnSecondary, fontSize: "10px", padding: "2px 6px"}}
-                              title="下载每日指标CSV"
-                            >
-                              {csvDownloading === `${s.snapshot_id}_daily_basic` ? "..." : "指标CSV"}
-                            </button>
-                          )}
-                          {s.has_bak_basic && (
-                            <button
-                              type="button"
-                              disabled={csvDownloading === `${s.snapshot_id}_bak_basic`}
-                              onClick={() => handleDownloadCSV(s.snapshot_id, "bak_basic")}
-                              style={{...btnSecondary, fontSize: "10px", padding: "2px 6px"}}
-                              title="下载历史股票CSV"
-                            >
-                              {csvDownloading === `${s.snapshot_id}_bak_basic` ? "..." : "历史CSV"}
-                            </button>
-                          )}
-                          {s.has_cyq_perf && (
-                            <button
-                              type="button"
-                              disabled={csvDownloading === `${s.snapshot_id}_cyq_perf`}
-                              onClick={() => handleDownloadCSV(s.snapshot_id, "cyq_perf")}
-                              style={{...btnSecondary, fontSize: "10px", padding: "2px 6px"}}
-                              title="下载筹码胜率CSV"
-                            >
-                              {csvDownloading === `${s.snapshot_id}_cyq_perf` ? "..." : "筹码CSV"}
-                            </button>
-                          )}
-                          {s.has_moneyflow && (
-                            <button
-                              type="button"
-                              disabled={csvDownloading === `${s.snapshot_id}_moneyflow`}
-                              onClick={() => handleDownloadCSV(s.snapshot_id, "moneyflow")}
-                              style={{...btnSecondary, fontSize: "10px", padding: "2px 6px"}}
-                              title="下载资金流向CSV"
-                            >
-                              {csvDownloading === `${s.snapshot_id}_moneyflow` ? "..." : "资金CSV"}
-                            </button>
-                          )}
-                          <a
-                            href={buildBackendUrl(
-                              `/api/v1/qlib/snapshots/${encodeURIComponent(s.snapshot_id)}/export`,
-                            )}
-                            style={{ ...btnSecondary, display: "inline-block", fontSize: "10px", padding: "2px 6px" }}
-                          >
-                            导出ZIP
+                          <button onClick={() => setDetailSnapshot(s)} style={btnSecondary}>详情</button>
+                          <a href={buildBackendUrl(`/api/v1/qlib/snapshots/${encodeURIComponent(s.snapshot_id)}/export`)}
+                            style={{ ...btnSecondary, display: "inline-block", fontSize: "10px", padding: "2px 6px" }}>
+                            ZIP
                           </a>
-                          <button onClick={() => handleDelete(s.snapshot_id)} style={{...btnDanger, fontSize: "10px", padding: "2px 6px"}}>
-                            删除
-                          </button>
+                          <button onClick={() => handleDelete(s.snapshot_id)}
+                            style={{ ...btnDanger, fontSize: "10px", padding: "2px 6px" }}>删除</button>
                         </div>
                       </td>
                     </tr>
@@ -1866,24 +1295,19 @@ export default function QlibPage() {
         </section>
       )}
 
-      {/* Qlib bin 导出情况：仅在 bin 标签下展示 */}
+      {/* Qlib bin 导出情况 */}
       {exportTab === "bin" && (
         <section style={cardStyle}>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">已导出的 Qlib bin</h2>
-            <button
-              onClick={loadBinExports}
-              disabled={binExportsLoading}
-              className="text-sm text-blue-600 hover:underline"
-            >
+            <button onClick={loadBinExports} disabled={binExportsLoading}
+              className="text-sm text-blue-600 hover:underline">
               {binExportsLoading ? "刷新中..." : "刷新"}
             </button>
           </div>
 
           {binExportsError && (
-            <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm mb-3">
-              {binExportsError}
-            </div>
+            <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm mb-3">{binExportsError}</div>
           )}
 
           {binExports.length === 0 ? (
@@ -1896,35 +1320,17 @@ export default function QlibPage() {
                     <th className="text-left py-2 px-2">Snapshot ID</th>
                     <th className="text-left py-2 px-2">时间范围</th>
                     <th className="text-left py-2 px-2">数据类型</th>
-                    <th className="text-left py-2 px-2">样本过滤</th>
                     <th className="text-left py-2 px-2">bin 目录</th>
-                    <th className="text-left py-2 px-2">创建时间 (上海)</th>
-                    <th className="text-left py-2 px-2">最近修改 (上海)</th>
+                    <th className="text-left py-2 px-2">最近修改</th>
                   </tr>
                 </thead>
                 <tbody>
                   {binExports.map((b) => (
                     <tr key={b.snapshot_id} className="border-b hover:bg-gray-50 align-top">
                       <td className="py-2 px-2 font-mono">{b.snapshot_id}</td>
-                      <td className="py-2 px-2">
-                        {b.start && b.end ? `${b.start} ~ ${b.end}` : "—"}
-                        {b.exchanges && b.exchanges.length > 0 && (
-                          <div className="text-gray-500 mt-1">{b.exchanges.join(", ")}</div>
-                        )}
-                      </td>
-                      <td className="py-2 px-2">
-                        {b.freq_types && b.freq_types.length > 0 ? b.freq_types.join(", ") : "daily"}
-                      </td>
-                      <td className="py-2 px-2">
-                        <div>
-                          剔除 ST: {b.exclude_st === true ? "是" : b.exclude_st === false ? "否" : "未知"}
-                        </div>
-                        <div>
-                          剔除退市/停牌: {b.exclude_delisted_or_paused === true ? "是" : b.exclude_delisted_or_paused === false ? "否" : "未知"}
-                        </div>
-                      </td>
+                      <td className="py-2 px-2">{b.start && b.end ? `${b.start} ~ ${b.end}` : "\u2014"}</td>
+                      <td className="py-2 px-2">{b.freq_types?.join(", ") || "daily"}</td>
                       <td className="py-2 px-2 text-gray-700 break-all">{b.bin_dir}</td>
-                      <td className="py-2 px-2 text-gray-500">{formatDateTimeShanghai(b.created_at)}</td>
                       <td className="py-2 px-2 text-gray-500">{formatDateTimeShanghai(b.modified_at)}</td>
                     </tr>
                   ))}
@@ -1941,124 +1347,54 @@ export default function QlibPage() {
           <div style={modalContent} onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold">Snapshot 详情</h3>
-              <button
-                onClick={() => setDetailSnapshot(null)}
-                className="text-gray-400 hover:text-gray-600 text-xl"
-              >
-                ×
-              </button>
+              <button onClick={() => setDetailSnapshot(null)}
+                className="text-gray-400 hover:text-gray-600 text-xl">x</button>
             </div>
 
             <div className="space-y-4">
-              {/* 基本信息 */}
               <div>
                 <h4 className="text-sm font-medium text-gray-700 mb-2">基本信息</h4>
                 <div className="bg-gray-50 rounded-lg p-3 text-sm space-y-1">
                   <div><span className="text-gray-500">Snapshot ID:</span> <span className="font-mono">{detailSnapshot.snapshot_id}</span></div>
                   <div><span className="text-gray-500">路径:</span> <span className="font-mono text-xs break-all">{detailSnapshot.path}</span></div>
-                  <div><span className="text-gray-500">创建时间:</span> {detailSnapshot.created_at ? new Date(detailSnapshot.created_at).toLocaleString() : "—"}</div>
+                  <div><span className="text-gray-500">创建时间:</span> {detailSnapshot.created_at ? new Date(detailSnapshot.created_at).toLocaleString() : "\u2014"}</div>
                 </div>
               </div>
 
-              {/* 包含的数据 */}
               <div>
                 <h4 className="text-sm font-medium text-gray-700 mb-2">包含的数据</h4>
                 <div className="bg-gray-50 rounded-lg p-3 text-sm">
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="flex items-center gap-2">
-                      <span>{detailSnapshot.has_daily ? "✅" : "❌"}</span>
-                      <span>日频行情 (daily_pv.h5)</span>
-                      {detailSnapshot.has_daily && (
-                        <button
-                          type="button"
-                          disabled={csvDownloading === `${detailSnapshot.snapshot_id}_daily`}
-                          onClick={() => handleDownloadCSV(detailSnapshot.snapshot_id, "daily")}
-                          style={{...btnSecondary, fontSize: "10px", padding: "2px 6px", marginLeft: "auto"}}
-                        >
-                          {csvDownloading === `${detailSnapshot.snapshot_id}_daily` ? "..." : "下载CSV"}
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span>{detailSnapshot.has_minute ? "✅" : "❌"}</span>
-                      <span>分钟线 (minute_1min.h5)</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span>{detailSnapshot.has_board ? "✅" : "❌"}</span>
-                      <span>板块日线 (board_daily.h5)</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span>{detailSnapshot.has_board_index ? "✅" : "❌"}</span>
-                      <span>板块索引 (board_index.h5)</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span>{detailSnapshot.has_board_member ? "✅" : "❌"}</span>
-                      <span>板块成员 (board_member.h5)</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span>{detailSnapshot.has_moneyflow ? "✅" : "❌"}</span>
-                      <span>资金流向 (moneyflow.h5)</span>
-                      {detailSnapshot.has_moneyflow && (
-                        <button
-                          type="button"
-                          disabled={csvDownloading === `${detailSnapshot.snapshot_id}_moneyflow`}
-                          onClick={() => handleDownloadCSV(detailSnapshot.snapshot_id, "moneyflow")}
-                          style={{...btnSecondary, fontSize: "10px", padding: "2px 6px", marginLeft: "auto"}}
-                        >
-                          {csvDownloading === `${detailSnapshot.snapshot_id}_moneyflow` ? "..." : "下载CSV"}
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span>{detailSnapshot.has_daily_basic ? "✅" : "❌"}</span>
-                      <span>每日指标 (daily_basic.h5)</span>
-                      {detailSnapshot.has_daily_basic && (
-                        <button
-                          type="button"
-                          disabled={csvDownloading === `${detailSnapshot.snapshot_id}_daily_basic`}
-                          onClick={() => handleDownloadCSV(detailSnapshot.snapshot_id, "daily_basic")}
-                          style={{...btnSecondary, fontSize: "10px", padding: "2px 6px", marginLeft: "auto"}}
-                        >
-                          {csvDownloading === `${detailSnapshot.snapshot_id}_daily_basic` ? "..." : "下载CSV"}
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span>{detailSnapshot.has_bak_basic ? "✅" : "❌"}</span>
-                      <span>历史股票列表 (bak_basic.h5)</span>
-                      {detailSnapshot.has_bak_basic && (
-                        <button
-                          type="button"
-                          disabled={csvDownloading === `${detailSnapshot.snapshot_id}_bak_basic`}
-                          onClick={() => handleDownloadCSV(detailSnapshot.snapshot_id, "bak_basic")}
-                          style={{...btnSecondary, fontSize: "10px", padding: "2px 6px", marginLeft: "auto"}}
-                        >
-                          {csvDownloading === `${detailSnapshot.snapshot_id}_bak_basic` ? "..." : "下载CSV"}
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span>{detailSnapshot.has_cyq_perf ? "✅" : "❌"}</span>
-                      <span>每日筹码及胜率 (cyq_perf.h5)</span>
-                      {detailSnapshot.has_cyq_perf && (
-                        <button
-                          type="button"
-                          disabled={csvDownloading === `${detailSnapshot.snapshot_id}_cyq_perf`}
-                          onClick={() => handleDownloadCSV(detailSnapshot.snapshot_id, "cyq_perf")}
-                          style={{...btnSecondary, fontSize: "10px", padding: "2px 6px", marginLeft: "auto"}}
-                        >
-                          {csvDownloading === `${detailSnapshot.snapshot_id}_cyq_perf` ? "..." : "下载CSV"}
-                        </button>
-                      )}
-                    </div>
+                    {[
+                      { has: detailSnapshot.has_daily, label: "日频行情 (daily_pv.h5)", type: "daily" },
+                      { has: detailSnapshot.has_minute, label: "分钟线 (minute_1min.h5)", type: "minute" },
+                      { has: detailSnapshot.has_moneyflow, label: "资金流向 (moneyflow.h5)", type: "moneyflow" },
+                      { has: detailSnapshot.has_daily_basic, label: "每日指标 (daily_basic.h5)", type: "daily_basic" },
+                      { has: detailSnapshot.has_bak_basic, label: "历史股票列表 (bak_basic.h5)", type: "bak_basic" },
+                      { has: detailSnapshot.has_cyq_perf, label: "筹码及胜率 (cyq_perf.h5)", type: "cyq_perf" },
+                      { has: detailSnapshot.has_sector_data, label: "行业板块 (sector_data.h5)", type: "sector_data" },
+                      { has: detailSnapshot.has_static_factors, label: "预计算因子 (static_factors.parquet)", type: "" },
+                    ].map(item => (
+                      <div key={item.label} className="flex items-center gap-2">
+                        <span>{item.has ? "\u2705" : "\u274c"}</span>
+                        <span>{item.label}</span>
+                        {item.has && item.type && (
+                          <button type="button"
+                            disabled={csvDownloading === `${detailSnapshot.snapshot_id}_${item.type}`}
+                            onClick={() => handleDownloadCSV(detailSnapshot.snapshot_id, item.type)}
+                            style={{ ...btnSecondary, fontSize: "10px", padding: "2px 6px", marginLeft: "auto" }}>
+                            {csvDownloading === `${detailSnapshot.snapshot_id}_${item.type}` ? "..." : "CSV"}
+                          </button>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>
 
-              {/* Meta 信息 */}
               {detailSnapshot.meta && (
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">Meta 信息 (meta.json)</h4>
+                  <h4 className="text-sm font-medium text-gray-700 mb-2">Meta 信息</h4>
                   <div className="bg-gray-50 rounded-lg p-3 text-sm">
                     <pre className="text-xs overflow-auto max-h-60 whitespace-pre-wrap">
                       {JSON.stringify(detailSnapshot.meta, null, 2)}
@@ -2067,23 +1403,12 @@ export default function QlibPage() {
                 </div>
               )}
 
-              {/* 操作按钮 */}
               <div className="flex justify-end gap-2 pt-2">
-                <button
-                  onClick={() => {
-                    setSnapshotId(detailSnapshot.snapshot_id);
-                    setDetailSnapshot(null);
-                  }}
-                  style={btnSecondary}
-                >
-                  使用此 ID 导出
-                </button>
-                <button
-                  onClick={() => setDetailSnapshot(null)}
-                  style={btnPrimary}
-                >
-                  关闭
-                </button>
+                <button onClick={() => {
+                  setSnapshotId(detailSnapshot.snapshot_id);
+                  setDetailSnapshot(null);
+                }} style={btnSecondary}>使用此 ID 导出</button>
+                <button onClick={() => setDetailSnapshot(null)} style={btnPrimary}>关闭</button>
               </div>
             </div>
           </div>

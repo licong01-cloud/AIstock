@@ -8,7 +8,6 @@ from __future__ import annotations
 - DELETE /api/v1/qlib/snapshots/{id}    删除指定 Snapshot
 - POST /api/v1/qlib/snapshots/daily     日频全量导出
 - POST /api/v1/qlib/snapshots/minute    分钟线全量导出
-- POST /api/v1/qlib/boards/daily        板块日线导出
 """
 
 import json
@@ -17,7 +16,7 @@ import shutil
 import io
 import zipfile
 import traceback
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -28,30 +27,23 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..infra.wsl_qlib_runner import QlibWSLConfigError, run_qlib_script_in_wsl, win_to_wsl_path
 from .config import (
-    DAILY_QFQ_TABLE,
+    DAILY_RAW_TABLE,
     FIELD_MAPPING_DB_DAILY,
     FIELD_MAPPING_DB_MINUTE,
     MINUTE_QFQ_TABLE,
     MONEYFLOW_TS_TABLE,
     QLIB_MARKET,
     QLIB_SNAPSHOT_ROOT,
-    TDX_BOARD_DAILY_TABLE,
-    TDX_BOARD_INDEX_TABLE,
-    TDX_BOARD_MEMBER_TABLE,
 )
 from .exporter import (
     ExportResult,
     QlibBakBasicExporter,
-    QlibBoardDailyExporter,
-    QlibBoardExporter,
-    QlibBoardIndexExporter,
-    QlibBoardMemberExporter,
     QlibCyqPerfExporter,
     QlibDailyBasicExporter,
     QlibDailyExporter,
-    QlibFactorExporter,
     QlibMinuteExporter,
     QlibMoneyflowExporter,
+    QlibSectorDataExporter,
 )
 from .field_map_service import export_field_map_for_snapshot
 from .data_quality import DataReporter, DataValidator
@@ -213,14 +205,10 @@ except Exception:
 _daily_exporter = QlibDailyExporter()
 _daily_basic_exporter = QlibDailyBasicExporter()
 _minute_exporter = QlibMinuteExporter()
-_board_exporter = QlibBoardExporter()
-_board_daily_exporter = QlibBoardDailyExporter()
-_board_index_exporter = QlibBoardIndexExporter()
-_board_member_exporter = QlibBoardMemberExporter()
-_factor_exporter = QlibFactorExporter()
 _moneyflow_exporter = QlibMoneyflowExporter()
 _bak_basic_exporter = QlibBakBasicExporter()
 _cyq_perf_exporter = QlibCyqPerfExporter()
+_sector_data_exporter = QlibSectorDataExporter()
 
 
 @router.post("/api/v1/qlib/snapshots/daily", response_model=DailySnapshotResponse)
@@ -245,7 +233,8 @@ async def create_daily_snapshot(body: DailySnapshotRequest) -> DailySnapshotResp
         # 预留给未来增量导出等特性
         raise HTTPException(status_code=501, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
-        # 未预料的错误 → 500
+        import traceback as _tb_daily
+        _tb_daily.print_exc()
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -432,6 +421,8 @@ async def create_bak_basic_snapshot(body: BakBasicSnapshotRequest) -> BakBasicSn
     MultiIndex(datetime, instrument)，列名为 bb_* 系列字段。
     """
 
+    import traceback as _tb
+
     try:
         result = _bak_basic_exporter.export_full(
             snapshot_id=body.snapshot_id,
@@ -451,14 +442,13 @@ async def create_bak_basic_snapshot(body: BakBasicSnapshotRequest) -> BakBasicSn
             )
             print(f"[DEBUG] Field map generated: {fm_result.get('rows')} rows")
         except Exception as e:
-            import traceback
             print(f"[WARN] Auto field map failed: {e}")
-            traceback.print_exc()
+            _tb.print_exc()
         return BakBasicSnapshotResponse.from_result(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
-        traceback.print_exc()
+        _tb.print_exc()
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -635,11 +625,7 @@ try:
     MoneyflowSnapshotRequest.model_rebuild()
     FieldMapExportRequest.model_rebuild()
     MinuteSnapshotRequest.model_rebuild()
-    BoardDailySnapshotRequest.model_rebuild()
-    BoardIndexRequest.model_rebuild()
-    BoardMemberRequest.model_rebuild()
     IncrementalExportRequest.model_rebuild()
-    FactorExportRequest.model_rebuild()
     BinExportInfo.model_rebuild()
     BinExportListResponse.model_rebuild()
 except Exception:
@@ -849,6 +835,17 @@ def _export_minute_to_csv_for_dump_bin(
     elif "factor" in df_reset.columns:
         rename_cols["factor"] = "factor"
 
+
+    if "$limit_up" in df_reset.columns:
+        rename_cols["$limit_up"] = "limit_up"
+    elif "limit_up" in df_reset.columns:
+        rename_cols["limit_up"] = "limit_up"
+
+    if "$limit_down" in df_reset.columns:
+        rename_cols["$limit_down"] = "limit_down"
+    elif "limit_down" in df_reset.columns:
+        rename_cols["limit_down"] = "limit_down"
+
     df_reset = df_reset.rename(columns=rename_cols)
 
     csv_cols = [
@@ -861,6 +858,8 @@ def _export_minute_to_csv_for_dump_bin(
         "volume",
         "amount",
         "factor",
+        "limit_up",
+        "limit_down",
     ]
 
     # 缺列兜底：一律用 NaN（禁止用 0）
@@ -1689,75 +1688,6 @@ async def create_minute_snapshot(body: MinuteSnapshotRequest) -> MinuteSnapshotR
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-class BoardDailySnapshotRequest(BaseModel):
-    snapshot_id: str = Field(..., description="Snapshot ID，作为导出目录名（与日线/分钟共用目录）")
-    start: date = Field(..., description="开始日期，YYYY-MM-DD")
-    end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
-    board_codes: Optional[List[str]] = Field(
-        None,
-        description="可选，指定导出的板块代码列表；为空则导出全部板块",
-    )
-    idx_types: Optional[List[str]] = Field(
-        None,
-        description="可选，按板块类型过滤（来自 tdx_board_index.idx_type）",
-    )
-
-    @field_validator("snapshot_id")
-    @classmethod
-    def _snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
-        v2 = v.strip()
-        if not v2:
-            raise ValueError("snapshot_id 不能为空")
-        return v2
-
-    @model_validator(mode="after")
-    def _end_not_before_start(self) -> "BoardDailySnapshotRequest":  # noqa: D401, N805
-        if self.end < self.start:
-            raise ValueError("end 日期不能早于 start")
-        return self
-
-
-class BoardDailySnapshotResponse(BaseModel):
-    snapshot_id: str
-    freq: str
-    start: date
-    end: date
-    board_codes: List[str]
-    rows: int
-
-    @classmethod
-    def from_result(cls, result: ExportResult) -> "BoardDailySnapshotResponse":
-        return cls(
-            snapshot_id=result.snapshot_id,
-            freq=result.freq,
-            start=result.start,
-            end=result.end,
-            board_codes=result.ts_codes,
-            rows=result.rows,
-        )
-
-
-@router.post("/api/v1/qlib/boards/daily", response_model=BoardDailySnapshotResponse)
-async def create_board_daily_snapshot(body: BoardDailySnapshotRequest) -> BoardDailySnapshotResponse:
-    """导出 TDX 板块日线行情到 Snapshot 目录的 boards/board_daily.h5。"""
-
-    try:
-        result = _board_exporter.export_full(
-            snapshot_id=body.snapshot_id,
-            start=body.start,
-            end=body.end,
-            board_codes=body.board_codes,
-            idx_types=body.idx_types,
-        )
-        return BoardDailySnapshotResponse.from_result(result)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except NotImplementedError as exc:
-        raise HTTPException(status_code=501, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
 # =============================================================================
 # 配置与 Snapshot 管理 API
 # =============================================================================
@@ -1770,8 +1700,6 @@ class QlibConfigResponse(BaseModel):
     market: str = Field(..., description="市场标识")
     daily_table: str = Field(..., description="日频前复权表名")
     minute_table: str = Field(..., description="分钟线表名")
-    board_index_table: str = Field(..., description="板块索引表名")
-    board_daily_table: str = Field(..., description="板块日线表名")
     field_mapping_daily: Dict[str, str] = Field(..., description="日频字段映射")
     field_mapping_minute: Dict[str, str] = Field(..., description="分钟线字段映射")
 
@@ -1783,10 +1711,8 @@ async def get_qlib_config() -> QlibConfigResponse:
     return QlibConfigResponse(
         snapshot_root=str(QLIB_SNAPSHOT_ROOT.absolute()),
         market=QLIB_MARKET,
-        daily_table=DAILY_QFQ_TABLE,
+        daily_table=DAILY_RAW_TABLE,
         minute_table=MINUTE_QFQ_TABLE,
-        board_index_table=TDX_BOARD_INDEX_TABLE,
-        board_daily_table=TDX_BOARD_DAILY_TABLE,
         field_mapping_daily=FIELD_MAPPING_DB_DAILY,
         field_mapping_minute=FIELD_MAPPING_DB_MINUTE,
     )
@@ -1799,14 +1725,13 @@ class SnapshotInfo(BaseModel):
     path: str = Field(..., description="Snapshot 目录路径")
     has_daily: bool = Field(..., description="是否包含日频数据")
     has_minute: bool = Field(..., description="是否包含分钟线数据")
-    has_board: bool = Field(..., description="是否包含板块日线数据")
-    has_board_index: bool = Field(..., description="是否包含板块索引数据")
-    has_board_member: bool = Field(..., description="是否包含板块成员数据")
     has_factor_data: bool = Field(False, description="是否包含 RD-Agent 因子数据")
     has_moneyflow: bool = Field(False, description="是否包含资金流向数据")
     has_daily_basic: bool = Field(False, description="是否包含 daily_basic 指标数据")
     has_bak_basic: bool = Field(False, description="是否包含 bak_basic 历史股票数据")
     has_cyq_perf: bool = Field(False, description="是否包含 cyq_perf 筹码胜率数据")
+    has_sector_data: bool = Field(False, description="是否包含 sector_data 申万行业板块数据")
+    has_static_factors: bool = Field(False, description="是否包含 static_factors.parquet")
     meta: Optional[Dict[str, Any]] = Field(None, description="meta.json 内容（如存在）")
     created_at: Optional[str] = Field(None, description="创建时间（从 meta.json 读取）")
 
@@ -1834,13 +1759,12 @@ async def list_snapshots() -> SnapshotListResponse:
         snapshot_id = item.name
         has_daily_pv = (item / "daily_pv.h5").exists()
         has_minute = (item / "minute_1min.h5").exists()
-        has_board = (item / "boards" / "board_daily.h5").exists()
-        has_board_index = (item / "boards" / "board_index.h5").exists()
-        has_board_member = (item / "boards" / "board_member.h5").exists()
         has_moneyflow = (item / "moneyflow.h5").exists()
         has_daily_basic = (item / "daily_basic.h5").exists()
         has_bak_basic = (item / "bak_basic.h5").exists()
         has_cyq_perf = (item / "cyq_perf.h5").exists()
+        has_sector_data = (item / "sector_data.h5").exists()
+        has_static_factors = (item / "static_factors.parquet").exists()
 
         meta: Optional[Dict[str, Any]] = None
         created_at: Optional[str] = None
@@ -1858,14 +1782,13 @@ async def list_snapshots() -> SnapshotListResponse:
                 path=str(item.absolute()),
                 has_daily=has_daily_pv,
                 has_minute=has_minute,
-                has_board=has_board,
-                has_board_index=has_board_index,
-                has_board_member=has_board_member,
-                has_factor_data=has_daily_pv,  # daily_pv.h5 同时用于日线和因子数据
+                has_factor_data=has_daily_pv,
                 has_moneyflow=has_moneyflow,
                 has_daily_basic=has_daily_basic,
                 has_bak_basic=has_bak_basic,
                 has_cyq_perf=has_cyq_perf,
+                has_sector_data=has_sector_data,
+                has_static_factors=has_static_factors,
                 meta=meta,
                 created_at=created_at,
             )
@@ -1935,147 +1858,6 @@ async def delete_snapshot(snapshot_id: str) -> DeleteSnapshotResponse:
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"删除失败: {exc}")
-
-
-# =============================================================================
-# 板块索引和成员导出 API
-# =============================================================================
-
-
-class BoardIndexRequest(BaseModel):
-    """板块索引导出请求."""
-
-    snapshot_id: str = Field(..., description="Snapshot ID，作为导出目录名")
-    start: date = Field(..., description="开始日期，YYYY-MM-DD")
-    end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
-    idx_types: Optional[List[str]] = Field(
-        None,
-        description="可选，按板块类型过滤（如 'TDX_BOARD_HY', 'TDX_BOARD_GN' 等）",
-    )
-
-    @field_validator("snapshot_id")
-    @classmethod
-    def _snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
-        v2 = v.strip()
-        if not v2:
-            raise ValueError("snapshot_id 不能为空")
-        return v2
-
-    @model_validator(mode="after")
-    def _end_not_before_start(self) -> "BoardIndexRequest":  # noqa: D401, N805
-        if self.end < self.start:
-            raise ValueError("end 日期不能早于 start")
-        return self
-
-
-class BoardIndexResponse(BaseModel):
-    """板块索引导出响应."""
-
-    snapshot_id: str
-    freq: str
-    start: date
-    end: date
-    board_codes: List[str]
-    rows: int
-
-    @classmethod
-    def from_result(cls, result: ExportResult) -> "BoardIndexResponse":
-        return cls(
-            snapshot_id=result.snapshot_id,
-            freq=result.freq,
-            start=result.start,
-            end=result.end,
-            board_codes=result.ts_codes,
-            rows=result.rows,
-        )
-
-
-@router.post("/api/v1/qlib/boards/index", response_model=BoardIndexResponse)
-async def create_board_index_snapshot(body: BoardIndexRequest) -> BoardIndexResponse:
-    """导出板块索引数据（tdx_board_index）到 boards/board_index.h5。"""
-
-    try:
-        result = _board_index_exporter.export_full(
-            snapshot_id=body.snapshot_id,
-            start=body.start,
-            end=body.end,
-            idx_types=body.idx_types,
-        )
-        return BoardIndexResponse.from_result(result)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except NotImplementedError as exc:
-        raise HTTPException(status_code=501, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-class BoardMemberRequest(BaseModel):
-    """板块成员导出请求."""
-
-    snapshot_id: str = Field(..., description="Snapshot ID，作为导出目录名")
-    start: date = Field(..., description="开始日期，YYYY-MM-DD")
-    end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
-    board_codes: Optional[List[str]] = Field(
-        None,
-        description="可选，指定导出的板块代码列表；为空则导出全部",
-    )
-
-    @field_validator("snapshot_id")
-    @classmethod
-    def _snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
-        v2 = v.strip()
-        if not v2:
-            raise ValueError("snapshot_id 不能为空")
-        return v2
-
-    @model_validator(mode="after")
-    def _end_not_before_start(self) -> "BoardMemberRequest":  # noqa: D401, N805
-        if self.end < self.start:
-            raise ValueError("end 日期不能早于 start")
-        return self
-
-
-class BoardMemberResponse(BaseModel):
-    """板块成员导出响应."""
-
-    snapshot_id: str
-    freq: str
-    start: date
-    end: date
-    board_codes: List[str]
-    rows: int
-
-    @classmethod
-    def from_result(cls, result: ExportResult) -> "BoardMemberResponse":
-        return cls(
-            snapshot_id=result.snapshot_id,
-            freq=result.freq,
-            start=result.start,
-            end=result.end,
-            board_codes=result.ts_codes,
-            rows=result.rows,
-        )
-
-
-@router.post("/api/v1/qlib/boards/member", response_model=BoardMemberResponse)
-async def create_board_member_snapshot(body: BoardMemberRequest) -> BoardMemberResponse:
-    """导出板块成员数据（tdx_board_member）到 boards/board_member.h5。"""
-
-    try:
-        result = _board_member_exporter.export_full(
-            snapshot_id=body.snapshot_id,
-            start=body.start,
-            end=body.end,
-            board_codes=body.board_codes,
-        )
-        return BoardMemberResponse.from_result(result)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except NotImplementedError as exc:
-        raise HTTPException(status_code=501, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # =============================================================================
@@ -2152,136 +1934,775 @@ async def create_minute_snapshot_incremental(body: IncrementalExportRequest) -> 
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@router.post("/api/v1/qlib/boards/daily/incremental", response_model=IncrementalExportResponse)
-async def create_board_daily_snapshot_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
-    """增量导出板块日线数据。从上次导出位置继续。"""
-
-    try:
-        result = _board_daily_exporter.export_incremental(
-            snapshot_id=body.snapshot_id,
-            end=body.end,
-        )
-        return IncrementalExportResponse.from_result(result)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@router.post("/api/v1/qlib/boards/index/incremental", response_model=IncrementalExportResponse)
-async def create_board_index_snapshot_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
-    """增量导出板块索引数据。从上次导出位置继续。"""
-
-    try:
-        result = _board_index_exporter.export_incremental(
-            snapshot_id=body.snapshot_id,
-            end=body.end,
-        )
-        return IncrementalExportResponse.from_result(result)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@router.post("/api/v1/qlib/boards/member/incremental", response_model=IncrementalExportResponse)
-async def create_board_member_snapshot_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
-    """增量导出板块成员数据。从上次导出位置继续。"""
-
-    try:
-        result = _board_member_exporter.export_incremental(
-            snapshot_id=body.snapshot_id,
-            end=body.end,
-        )
-        return IncrementalExportResponse.from_result(result)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
 # =============================================================================
-# RD-Agent 因子数据导出 API
+# Sector Data 全量 + 增量导出 API
 # =============================================================================
 
 
-class FactorExportRequest(BaseModel):
-    """因子数据导出请求."""
-
+class SectorDataSnapshotRequest(BaseModel):
     snapshot_id: str = Field(..., description="Snapshot ID")
     start: date = Field(..., description="开始日期，YYYY-MM-DD")
     end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
-    exchanges: Optional[List[str]] = Field(
-        None,
-        description="可选，交易所过滤：sh, sz, bj",
-    )
-    filename: str = Field("daily_pv.h5", description="输出文件名")
+    exchanges: Optional[List[str]] = Field(None, description="可选，交易所过滤")
+    exclude_st: bool = Field(False)
+    exclude_delisted_or_paused: bool = Field(False)
 
     @field_validator("snapshot_id")
     @classmethod
-    def _snapshot_id_not_empty(cls, v: str) -> str:  # noqa: D401, N805
+    def _sector_data_snapshot_id_not_empty(cls, v: str) -> str:
         v2 = v.strip()
         if not v2:
             raise ValueError("snapshot_id 不能为空")
         return v2
 
+    @model_validator(mode="after")
+    def _sector_data_end_not_before_start(self):
+        if self.end < self.start:
+            raise ValueError("end 日期不能早于 start")
+        return self
 
-class FactorExportResponse(BaseModel):
-    """因子数据导出响应."""
 
+class SectorDataSnapshotResponse(BaseModel):
     snapshot_id: str
     freq: str
     start: date
     end: date
-    instruments: List[str]
+    ts_codes: List[str]
     rows: int
 
     @classmethod
-    def from_result(cls, result: ExportResult) -> "FactorExportResponse":
+    def from_result(cls, result: ExportResult) -> "SectorDataSnapshotResponse":
         return cls(
-            snapshot_id=result.snapshot_id,
-            freq=result.freq,
-            start=result.start,
-            end=result.end,
-            instruments=result.ts_codes,
-            rows=result.rows,
+            snapshot_id=result.snapshot_id, freq=result.freq,
+            start=result.start, end=result.end,
+            ts_codes=result.ts_codes, rows=result.rows,
         )
 
 
-@router.post("/api/v1/qlib/factors", response_model=FactorExportResponse)
-async def create_factor_snapshot(body: FactorExportRequest) -> FactorExportResponse:
-    """导出 RD-Agent 因子数据（daily_pv.h5 格式）."""
-
+@router.post("/api/v1/qlib/snapshots/sector_data", response_model=SectorDataSnapshotResponse)
+async def create_sector_data_snapshot(body: SectorDataSnapshotRequest) -> SectorDataSnapshotResponse:
+    """全量导出申万行业板块 sector_data 到 Snapshot."""
     try:
-        result = _factor_exporter.export_full(
-            snapshot_id=body.snapshot_id,
-            start=body.start,
-            end=body.end,
-            exchanges=body.exchanges,
-            filename=body.filename,
+        result = _sector_data_exporter.export_full(
+            snapshot_id=body.snapshot_id, start=body.start, end=body.end,
+            exchanges=body.exchanges, exclude_st=body.exclude_st,
+            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
         )
-        return FactorExportResponse.from_result(result)
+        return SectorDataSnapshotResponse.from_result(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@router.post("/api/v1/qlib/factors/incremental", response_model=FactorExportResponse)
-async def create_factor_snapshot_incremental(body: IncrementalExportRequest) -> FactorExportResponse:
-    """增量导出 RD-Agent 因子数据."""
-
+@router.post("/api/v1/qlib/snapshots/sector_data/incremental", response_model=IncrementalExportResponse)
+async def create_sector_data_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
+    """增量导出 sector_data 数据。"""
     try:
-        result = _factor_exporter.export_incremental(
-            snapshot_id=body.snapshot_id,
-            end=body.end,
-            exchanges=body.exchanges,
+        result = _sector_data_exporter.export_incremental(
+            snapshot_id=body.snapshot_id, end=body.end,
+            exchanges=body.exchanges, exclude_st=body.exclude_st,
+            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
         )
-        return FactorExportResponse.from_result(result)
+        return IncrementalExportResponse.from_result(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# =============================================================================
+# 日频数据增量导出 API（daily, moneyflow, daily_basic, bak_basic, cyq_perf）
+# =============================================================================
+
+
+@router.post("/api/v1/qlib/snapshots/daily/incremental", response_model=IncrementalExportResponse)
+async def create_daily_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
+    """增量导出日频行情数据。"""
+    try:
+        result = _daily_exporter.export_incremental(
+            snapshot_id=body.snapshot_id, end=body.end,
+            exchanges=body.exchanges, exclude_st=body.exclude_st,
+            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+        )
+        return IncrementalExportResponse.from_result(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/api/v1/qlib/snapshots/moneyflow/incremental", response_model=IncrementalExportResponse)
+async def create_moneyflow_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
+    """增量导出个股资金流向数据。"""
+    try:
+        result = _moneyflow_exporter.export_incremental(
+            snapshot_id=body.snapshot_id, end=body.end,
+            exchanges=body.exchanges, exclude_st=body.exclude_st,
+            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+        )
+        return IncrementalExportResponse.from_result(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/api/v1/qlib/snapshots/daily_basic/incremental", response_model=IncrementalExportResponse)
+async def create_daily_basic_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
+    """增量导出每日指标数据。"""
+    try:
+        result = _daily_basic_exporter.export_incremental(
+            snapshot_id=body.snapshot_id, end=body.end,
+            exchanges=body.exchanges, exclude_st=body.exclude_st,
+            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+        )
+        return IncrementalExportResponse.from_result(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/api/v1/qlib/snapshots/bak_basic/incremental", response_model=IncrementalExportResponse)
+async def create_bak_basic_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
+    """增量导出历史股票列表数据。"""
+    try:
+        result = _bak_basic_exporter.export_incremental(
+            snapshot_id=body.snapshot_id, end=body.end,
+            exchanges=body.exchanges, exclude_st=body.exclude_st,
+            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+        )
+        return IncrementalExportResponse.from_result(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/api/v1/qlib/snapshots/cyq_perf/incremental", response_model=IncrementalExportResponse)
+async def create_cyq_perf_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
+    """增量导出每日筹码及胜率数据。"""
+    try:
+        result = _cyq_perf_exporter.export_incremental(
+            snapshot_id=body.snapshot_id, end=body.end,
+            exchanges=body.exchanges, exclude_st=body.exclude_st,
+            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+        )
+        return IncrementalExportResponse.from_result(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# =============================================================================
+# Static Factors 生成 API
+# =============================================================================
+
+
+class StaticFactorsResponse(BaseModel):
+    snapshot_id: str
+    rows: int
+    columns: int
+    parquet_path: str
+
+
+@router.post("/api/v1/qlib/snapshots/{snapshot_id}/static_factors", response_model=StaticFactorsResponse)
+async def build_static_factors_for_snapshot(snapshot_id: str) -> StaticFactorsResponse:
+    """为指定 Snapshot 生成 static_factors.parquet."""
+    sid = (snapshot_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="snapshot_id 不能为空")
+
+    snap_dir = QLIB_SNAPSHOT_ROOT / sid
+    h5_path = snap_dir / "daily_pv.h5"
+    if not h5_path.exists():
+        raise HTTPException(status_code=404, detail=f"Snapshot {sid} 中未找到 daily_pv.h5，请先导出日频数据")
+
+    try:
+        df_daily = pd.read_hdf(str(h5_path), key="data")
+        instruments = df_daily.index.get_level_values("instrument").unique().tolist()
+        dates = df_daily.index.get_level_values("datetime")
+        start_date = dates.min().date()
+        end_date = dates.max().date()
+
+        from ..data_service.qe_data_service import build_static_factors
+        df_sf = build_static_factors(instruments, start_date, end_date)
+
+        parquet_path = snap_dir / "static_factors.parquet"
+        df_sf.to_parquet(str(parquet_path))
+
+        return StaticFactorsResponse(
+            snapshot_id=sid,
+            rows=len(df_sf),
+            columns=len(df_sf.columns),
+            parquet_path=str(parquet_path),
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# =============================================================================
+# 统一 Bin 导出 API（股票日线 + 指数一键导出）
+# =============================================================================
+
+
+class UnifiedBinExportRequest(BaseModel):
+    """统一 Bin 导出请求：股票日线 + 可选指数。"""
+    snapshot_id: str = Field(..., description="bin Snapshot ID")
+    start: date = Field(..., description="开始日期")
+    end: date = Field(..., description="结束日期")
+    exchanges: Optional[List[str]] = Field(None, description="交易所过滤")
+    exclude_st: bool = Field(False)
+    exclude_delisted_or_paused: bool = Field(False)
+    run_health_check: bool = Field(True)
+    index_codes: Optional[List[str]] = Field(None, description="指数代码列表，如 ['000300.SH']")
+    index_data_source: Literal["tushare", "tdx"] = Field("tushare")
+
+
+class UnifiedBinExportResponse(BaseModel):
+    snapshot_id: str
+    stock_ok: bool
+    stock_csv_dir: Optional[str] = None
+    stock_bin_dir: Optional[str] = None
+    stock_stdout: Optional[str] = None
+    stock_stderr: Optional[str] = None
+    index_results: List[Dict[str, Any]] = []
+    check_ok: Optional[bool] = None
+    stdout_check: Optional[str] = None
+    stderr_check: Optional[str] = None
+
+
+@router.post("/api/v1/qlib/bin/unified_export", response_model=UnifiedBinExportResponse)
+async def unified_bin_export(body: UnifiedBinExportRequest) -> UnifiedBinExportResponse:
+    """一键导出股票日线 bin + 指数 bin。"""
+    # 1. 导出股票日线
+    csv_dir = _export_daily_to_csv_for_dump_bin(
+        snapshot_id=body.snapshot_id, start=body.start, end=body.end,
+        exchanges=body.exchanges,
+        exclude_st=body.exclude_st,
+        exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+    )
+
+    bin_root = os.getenv("QLIB_BIN_ROOT_WIN")
+    if not bin_root:
+        raise HTTPException(status_code=500, detail="缺少环境变量 QLIB_BIN_ROOT_WIN")
+
+    bin_dir = Path(bin_root) / body.snapshot_id
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_dir_wsl = win_to_wsl_path(str(csv_dir))
+    bin_dir_wsl = win_to_wsl_path(str(bin_dir))
+
+    dump_args = [
+        "dump_all", "--data_path", csv_dir_wsl, "--qlib_dir", bin_dir_wsl,
+        "--freq", "day", "--date_field_name", "date",
+        "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
+    ]
+    dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
+
+    # 2. 导出指数（dump_bin 会覆盖 instruments/all.txt，需要先备份再还原，并将指数写入 index.txt）
+    index_results = []
+    if body.index_codes:
+        inst_dir = bin_dir / "instruments"
+        inst_file = inst_dir / "all.txt"
+        # 备份股票 instruments
+        stock_instruments_text = ""
+        if inst_file.exists():
+            stock_instruments_text = inst_file.read_text(encoding="utf-8")
+
+        index_instrument_lines: list[str] = []
+        for idx_code in body.index_codes:
+            try:
+                idx_csv_dir = _export_index_to_csv_for_dump_bin(
+                    snapshot_id=body.snapshot_id, index_code=idx_code,
+                    start=body.start, end=body.end,
+                    data_source=body.index_data_source,
+                )
+                idx_csv_wsl = win_to_wsl_path(str(idx_csv_dir))
+                idx_dump_args = [
+                    "dump_all", "--data_path", idx_csv_wsl, "--qlib_dir", bin_dir_wsl,
+                    "--freq", "day", "--date_field_name", "date",
+                    "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
+                ]
+                idx_res = run_qlib_script_in_wsl("dump_bin.py", idx_dump_args)
+                index_results.append({
+                    "index_code": idx_code, "ok": idx_res.ok,
+                    "stdout": idx_res.stdout, "stderr": idx_res.stderr,
+                })
+                # 收集指数 instrument 行（dump_bin 写入的 all.txt 内容）
+                if idx_res.ok and inst_file.exists():
+                    idx_lines = inst_file.read_text(encoding="utf-8").strip().splitlines()
+                    index_instrument_lines.extend(idx_lines)
+            except Exception as exc:
+                index_results.append({
+                    "index_code": idx_code, "ok": False, "error": str(exc),
+                })
+
+        # 还原股票 instruments/all.txt
+        if stock_instruments_text:
+            inst_file.write_text(stock_instruments_text, encoding="utf-8")
+
+        # 将指数写入单独的 instruments/index.txt
+        if index_instrument_lines:
+            idx_inst_file = inst_dir / "index.txt"
+            idx_inst_file.write_text("\n".join(index_instrument_lines) + "\n", encoding="utf-8")
+
+    # 3. 可选健康检查
+    check_ok = None
+    stdout_check = None
+    stderr_check = None
+    if body.run_health_check:
+        check_args = ["--qlib_dir", bin_dir_wsl, "--freq", "day"]
+        check_res = run_qlib_script_in_wsl("check_data_health.py", check_args)
+        check_ok = check_res.ok
+        stdout_check = check_res.stdout
+        stderr_check = check_res.stderr
+
+    # 4. 写出 meta
+    try:
+        meta = {
+            "snapshot_id": body.snapshot_id,
+            "start": body.start.isoformat(), "end": body.end.isoformat(),
+            "exchanges": list(body.exchanges) if body.exchanges else None,
+            "exclude_st": body.exclude_st,
+            "exclude_delisted_or_paused": body.exclude_delisted_or_paused,
+            "freq_types": ["daily"],
+            "index_codes": body.index_codes or [],
+        }
+        (bin_dir / "meta_export.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+    return UnifiedBinExportResponse(
+        snapshot_id=body.snapshot_id, stock_ok=dump_res.ok,
+        stock_csv_dir=str(csv_dir), stock_bin_dir=str(bin_dir),
+        stock_stdout=dump_res.stdout, stock_stderr=dump_res.stderr,
+        index_results=index_results,
+        check_ok=check_ok, stdout_check=stdout_check, stderr_check=stderr_check,
+    )
+
+
+# =============================================================================
+# 统一 Bin 导出 V2（多选数据集 + 增量模式）
+# =============================================================================
+
+
+class BinDatasetStepResult(BaseModel):
+    """V2 导出中每个数据集的结果。"""
+    dataset: str
+    ok: bool
+    rows: Optional[int] = None
+    error: Optional[str] = None
+    stdout: Optional[str] = None
+    stderr: Optional[str] = None
+    mode_used: Optional[str] = None  # "dump_all" | "dump_update"
+
+
+class UnifiedBinExportRequestV2(BaseModel):
+    """V2 统一 Bin 导出请求：多选数据集 + 全量/增量模式。"""
+    snapshot_id: str = Field(..., description="bin Snapshot ID")
+    mode: Literal["full", "incremental"] = Field("full", description="导出模式")
+    start: Optional[date] = Field(None, description="开始日期（full 模式必填）")
+    end: date = Field(..., description="截止日期")
+    datasets: List[str] = Field(..., description='数据集列表，如 ["stock_daily", "000300.SH"]')
+    exchanges: Optional[List[str]] = Field(None, description="交易所过滤")
+    exclude_st: bool = Field(False)
+    exclude_delisted_or_paused: bool = Field(False)
+    run_health_check: bool = Field(True)
+    index_data_source: Literal["tushare", "tdx"] = Field("tushare")
+
+    @model_validator(mode="after")
+    def _validate_full_mode_start(self) -> "UnifiedBinExportRequestV2":
+        if self.mode == "full" and self.start is None:
+            raise ValueError("全量模式下 start 不能为空")
+        return self
+
+
+class UnifiedBinExportResponseV2(BaseModel):
+    """V2 统一 Bin 导出响应。"""
+    snapshot_id: str
+    mode: str
+    steps: List[BinDatasetStepResult] = []
+    check_ok: Optional[bool] = None
+    stdout_check: Optional[str] = None
+    stderr_check: Optional[str] = None
+
+
+def _backup_file(path: Path) -> Optional[bytes]:
+    """读取文件内容用于备份，不存在返回 None。"""
+    if path.exists():
+        return path.read_bytes()
+    return None
+
+
+def _restore_file(path: Path, backup: Optional[bytes]) -> None:
+    """从备份恢复文件，若原本不存在则删除当前文件。"""
+    if backup is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(backup)
+    elif path.exists():
+        path.unlink()
+
+
+def _load_bin_meta(bin_dir: Path) -> dict:
+    """读取 meta_export.json，不存在返回空 dict。"""
+    meta_path = bin_dir / "meta_export.json"
+    if meta_path.exists():
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    return {}
+
+
+def _get_incremental_start(meta: dict, dataset_key: str) -> Optional[date]:
+    """从 meta.last_end_dates 推算增量起始日期 = last_end + 1 天。"""
+    last_end_dates = meta.get("last_end_dates", {})
+    last_end_str = last_end_dates.get(dataset_key)
+    if last_end_str is None:
+        return None
+    last_end = date.fromisoformat(last_end_str)
+    return last_end + timedelta(days=1)
+
+
+def _update_index_instruments(bin_dir: Path, index_code: str, start_str: str, end_str: str) -> None:
+    """将指数条目合并写入 instruments/index.txt（保留已有条目）。"""
+    instruments_dir = bin_dir / "instruments"
+    instruments_dir.mkdir(parents=True, exist_ok=True)
+    index_file = instruments_dir / "index.txt"
+
+    records: list[tuple[str, str, str]] = []
+    if index_file.exists():
+        raw = index_file.read_text(encoding="utf-8")
+        for line in raw.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            parts = s.split("\t")
+            if len(parts) >= 3:
+                records.append((parts[0].strip(), parts[1].strip(), parts[2].strip()))
+            else:
+                parts2 = s.split()
+                if parts2:
+                    records.append((parts2[0].strip(), "", ""))
+
+    updated = False
+    new_records: list[tuple[str, str, str]] = []
+    for code, s0, e0 in records:
+        if code == index_code:
+            # 合并日期范围：取 min(start), max(end)
+            merged_start = min(s0, start_str) if s0 else start_str
+            merged_end = max(e0, end_str) if e0 else end_str
+            new_records.append((code, merged_start, merged_end))
+            updated = True
+        else:
+            new_records.append((code, s0, e0))
+
+    if not updated:
+        new_records.append((index_code, start_str, end_str))
+
+    content = "".join([f"{c}\t{s}\t{e}\n" for c, s, e in new_records])
+    index_file.write_text(content, encoding="utf-8")
+
+
+def _extract_index_entry_from_all_txt(all_txt_path: Path, index_code: str) -> Optional[tuple[str, str, str]]:
+    """从 dump 后被覆盖的 all.txt 中提取指定指数的条目。"""
+    if not all_txt_path.exists():
+        return None
+    raw = all_txt_path.read_text(encoding="utf-8")
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        parts = s.split("\t")
+        if len(parts) >= 3:
+            code = parts[0].strip()
+            # dump_bin 会将 ts_code 转换为 Qlib 内部格式（小写前缀），如 000300.SH → sh000300
+            # 也可能直接保留原格式，需要两种都匹配
+            qlib_code = index_code.split(".")[0]  # "000300"
+            suffix = index_code.split(".")[-1].lower() if "." in index_code else ""  # "sh"
+            qlib_internal = f"{suffix}{qlib_code}"  # "sh000300"
+            if code == index_code or code == qlib_internal:
+                return (code, parts[1].strip(), parts[2].strip())
+    return None
+
+
+@router.post("/api/v1/qlib/bin/unified_export_v2", response_model=UnifiedBinExportResponseV2)
+async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinExportResponseV2:
+    """V2 统一导出：多选数据集 + 全量/增量模式 + instruments 双文件维护。"""
+
+    bin_root = os.getenv("QLIB_BIN_ROOT_WIN")
+    if not bin_root:
+        raise HTTPException(status_code=500, detail="缺少环境变量 QLIB_BIN_ROOT_WIN")
+
+    bin_dir = Path(bin_root) / body.snapshot_id
+    bin_dir_wsl = win_to_wsl_path(str(bin_dir))
+    all_txt = bin_dir / "instruments" / "all.txt"
+
+    # 增量模式前置校验
+    meta = _load_bin_meta(bin_dir)
+    if body.mode == "incremental":
+        if not bin_dir.exists() or not meta:
+            raise HTTPException(status_code=400, detail="增量模式要求 bin 目录已存在且有 meta_export.json（请先执行全量导出）")
+
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    steps: List[BinDatasetStepResult] = []
+    last_end_dates: Dict[str, str] = meta.get("last_end_dates", {})
+
+    # ──────────────────────────────────────────────────────
+    # 步骤 1：stock_daily
+    # ──────────────────────────────────────────────────────
+    if "stock_daily" in body.datasets:
+        try:
+            if body.mode == "incremental":
+                inc_start = _get_incremental_start(meta, "stock_daily")
+                if inc_start is None:
+                    raise HTTPException(status_code=400, detail="增量模式下 meta 中缺少 stock_daily 的 last_end_dates 记录")
+                if inc_start > body.end:
+                    steps.append(BinDatasetStepResult(
+                        dataset="stock_daily", ok=True, rows=0,
+                        mode_used="dump_update",
+                    ))
+                else:
+                    csv_dir = _export_daily_to_csv_for_dump_bin(
+                        snapshot_id=body.snapshot_id, start=inc_start, end=body.end,
+                        exchanges=body.exchanges,
+                        exclude_st=body.exclude_st,
+                        exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+                    )
+                    csv_dir_wsl = win_to_wsl_path(str(csv_dir))
+                    dump_args = [
+                        "dump_update", "--data_path", csv_dir_wsl, "--qlib_dir", bin_dir_wsl,
+                        "--freq", "day", "--date_field_name", "date",
+                        "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
+                    ]
+                    dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
+                    steps.append(BinDatasetStepResult(
+                        dataset="stock_daily", ok=dump_res.ok,
+                        stdout=dump_res.stdout, stderr=dump_res.stderr,
+                        mode_used="dump_update",
+                    ))
+                    if dump_res.ok:
+                        last_end_dates["stock_daily"] = body.end.isoformat()
+            else:
+                # full 模式
+                assert body.start is not None
+                csv_dir = _export_daily_to_csv_for_dump_bin(
+                    snapshot_id=body.snapshot_id, start=body.start, end=body.end,
+                    exchanges=body.exchanges,
+                    exclude_st=body.exclude_st,
+                    exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+                )
+                csv_dir_wsl = win_to_wsl_path(str(csv_dir))
+                dump_args = [
+                    "dump_all", "--data_path", csv_dir_wsl, "--qlib_dir", bin_dir_wsl,
+                    "--freq", "day", "--date_field_name", "date",
+                    "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
+                ]
+                dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
+                steps.append(BinDatasetStepResult(
+                    dataset="stock_daily", ok=dump_res.ok,
+                    stdout=dump_res.stdout, stderr=dump_res.stderr,
+                    mode_used="dump_all",
+                ))
+                if dump_res.ok:
+                    last_end_dates["stock_daily"] = body.end.isoformat()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            steps.append(BinDatasetStepResult(
+                dataset="stock_daily", ok=False, error=str(exc),
+            ))
+
+    # ──────────────────────────────────────────────────────
+    # 步骤 2：逐个指数
+    # ──────────────────────────────────────────────────────
+    index_datasets = [ds for ds in body.datasets if ds != "stock_daily"]
+    for idx_code in index_datasets:
+        dataset_key = f"index_{idx_code}"
+        try:
+            # 确定起止日期
+            if body.mode == "incremental":
+                inc_start = _get_incremental_start(meta, dataset_key)
+                if inc_start is None:
+                    raise HTTPException(status_code=400, detail=f"增量模式下 meta 中缺少 {dataset_key} 的 last_end_dates 记录")
+                if inc_start > body.end:
+                    steps.append(BinDatasetStepResult(
+                        dataset=idx_code, ok=True, rows=0,
+                        mode_used="dump_update",
+                    ))
+                    continue
+                idx_start = inc_start
+                dump_subcmd = "dump_update"
+            else:
+                assert body.start is not None
+                idx_start = body.start
+                dump_subcmd = "dump_all"
+
+            # BACKUP all.txt
+            all_backup = _backup_file(all_txt)
+
+            # 导出指数 CSV
+            idx_csv_dir = _export_index_to_csv_for_dump_bin(
+                snapshot_id=body.snapshot_id, index_code=idx_code,
+                start=idx_start, end=body.end,
+                data_source=body.index_data_source,
+            )
+            idx_csv_wsl = win_to_wsl_path(str(idx_csv_dir))
+
+            # dump
+            idx_dump_args = [
+                dump_subcmd, "--data_path", idx_csv_wsl, "--qlib_dir", bin_dir_wsl,
+                "--freq", "day", "--date_field_name", "date",
+                "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
+            ]
+            idx_res = run_qlib_script_in_wsl("dump_bin.py", idx_dump_args)
+
+            # 从被覆盖的 all.txt 提取指数条目
+            idx_entry = _extract_index_entry_from_all_txt(all_txt, idx_code)
+
+            # RESTORE all.txt
+            _restore_file(all_txt, all_backup)
+
+            # 写入 instruments/index.txt
+            if idx_entry:
+                _update_index_instruments(bin_dir, idx_entry[0], idx_entry[1], idx_entry[2])
+            else:
+                # 没从 all.txt 提取到，用请求的日期区间
+                _update_index_instruments(bin_dir, idx_code, idx_start.isoformat(), body.end.isoformat())
+
+            steps.append(BinDatasetStepResult(
+                dataset=idx_code, ok=idx_res.ok,
+                stdout=idx_res.stdout, stderr=idx_res.stderr,
+                mode_used=dump_subcmd,
+            ))
+            if idx_res.ok:
+                last_end_dates[dataset_key] = body.end.isoformat()
+
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # 确保 all.txt 被恢复
+            try:
+                _restore_file(all_txt, all_backup)  # type: ignore[possibly-undefined]
+            except Exception:
+                pass
+            steps.append(BinDatasetStepResult(
+                dataset=idx_code, ok=False, error=str(exc),
+            ))
+
+    # ──────────────────────────────────────────────────────
+    # 步骤 3：可选健康检查
+    # ──────────────────────────────────────────────────────
+    check_ok: Optional[bool] = None
+    stdout_check: Optional[str] = None
+    stderr_check: Optional[str] = None
+    if body.run_health_check:
+        check_args = ["--qlib_dir", bin_dir_wsl, "--freq", "day"]
+        check_res = run_qlib_script_in_wsl("check_data_health.py", check_args)
+        check_ok = check_res.ok
+        stdout_check = check_res.stdout
+        stderr_check = check_res.stderr
+
+    # ──────────────────────────────────────────────────────
+    # 步骤 4：更新 meta_export.json
+    # ──────────────────────────────────────────────────────
+    meta_update = {
+        "snapshot_id": body.snapshot_id,
+        "end": body.end.isoformat(),
+        "exchanges": list(body.exchanges) if body.exchanges else None,
+        "exclude_st": body.exclude_st,
+        "freq_types": ["daily"],
+        "index_codes": index_datasets,
+        "last_end_dates": last_end_dates,
+    }
+    if body.mode == "full" and body.start is not None:
+        meta_update["start"] = body.start.isoformat()
+    elif "start" in meta:
+        meta_update["start"] = meta["start"]
+    # 合并已有 index_codes
+    existing_index_codes = set(meta.get("index_codes", []))
+    existing_index_codes.update(index_datasets)
+    meta_update["index_codes"] = sorted(existing_index_codes)
+
+    meta_path = bin_dir / "meta_export.json"
+    meta_path.write_text(json.dumps(meta_update, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return UnifiedBinExportResponseV2(
+        snapshot_id=body.snapshot_id,
+        mode=body.mode,
+        steps=steps,
+        check_ok=check_ok,
+        stdout_check=stdout_check,
+        stderr_check=stderr_check,
+    )
+
+
+# =============================================================================
+# 一键增量更新 API
+# =============================================================================
+
+
+class IncrementalAllResponse(BaseModel):
+    snapshot_id: str
+    results: Dict[str, Any]
+
+
+@router.post("/api/v1/qlib/snapshots/{snapshot_id}/incremental_all", response_model=IncrementalAllResponse)
+async def incremental_all(snapshot_id: str, body: IncrementalExportRequest) -> IncrementalAllResponse:
+    """对已有 Snapshot 的所有数据集执行增量更新。"""
+    sid = (snapshot_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="snapshot_id 不能为空")
+
+    snap_dir = QLIB_SNAPSHOT_ROOT / sid
+    if not snap_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Snapshot {sid} 不存在")
+
+    results: Dict[str, Any] = {}
+
+    # 定义要增量更新的数据集及对应 exporter 和文件
+    dataset_map = [
+        ("daily", _daily_exporter, "daily_pv.h5"),
+        ("moneyflow", _moneyflow_exporter, "moneyflow.h5"),
+        ("daily_basic", _daily_basic_exporter, "daily_basic.h5"),
+        ("bak_basic", _bak_basic_exporter, "bak_basic.h5"),
+        ("cyq_perf", _cyq_perf_exporter, "cyq_perf.h5"),
+        ("sector_data", _sector_data_exporter, "sector_data.h5"),
+    ]
+
+    for data_type, exporter, filename in dataset_map:
+        # 仅对已存在的数据集执行增量
+        if not (snap_dir / filename).exists():
+            results[data_type] = {"skipped": True, "reason": "file_not_found"}
+            continue
+
+        try:
+            result = exporter.export_incremental(
+                snapshot_id=sid, end=body.end,
+                exchanges=body.exchanges,
+                exclude_st=body.exclude_st,
+                exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            )
+            results[data_type] = {
+                "rows": result.rows,
+                "start": str(result.start),
+                "end": str(result.end),
+            }
+        except Exception as exc:
+            results[data_type] = {"error": str(exc)}
+
+    return IncrementalAllResponse(snapshot_id=sid, results=results)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2294,7 +2715,7 @@ _data_validator = DataValidator()
 
 class QualityReportRequest(BaseModel):
     """数据质量报告请求."""
-    data_type: str = Field(..., description="数据类型: daily, minute, board_daily, board_index, board_member")
+    data_type: str = Field(..., description="数据类型: daily, minute")
     detect_anomalies: bool = Field(True, description="是否检测异常数据")
 
 
@@ -2323,7 +2744,7 @@ async def get_snapshot_quality_report(
     
     Args:
         snapshot_id: Snapshot ID
-        data_type: 数据类型 (daily, minute, board_daily, board_index, board_member)
+        data_type: 数据类型 (daily, minute)
         detect_anomalies: 是否检测异常数据
     """
     snapshot_path = Path(QLIB_SNAPSHOT_ROOT) / snapshot_id
@@ -2334,18 +2755,15 @@ async def get_snapshot_quality_report(
     file_map = {
         "daily": "daily_pv.h5",
         "minute": "minute_1min.h5",
-        "board_daily": "boards/board_daily.h5",
-        "board_index": "boards/board_index.h5",
-        "board_member": "boards/board_member.h5",
     }
-    
+
     if data_type not in file_map:
         raise HTTPException(status_code=400, detail=f"不支持的数据类型: {data_type}")
-    
+
     h5_file = snapshot_path / file_map[data_type]
     if not h5_file.exists():
         raise HTTPException(status_code=404, detail=f"数据文件不存在: {file_map[data_type]}")
-    
+
     try:
         stats = _data_reporter.generate_report_from_hdf5(
             h5_file,
@@ -2396,14 +2814,11 @@ async def generate_quality_report_file(
     file_map = {
         "daily": "daily_pv.h5",
         "minute": "minute_1min.h5",
-        "board_daily": "boards/board_daily.h5",
-        "board_index": "boards/board_index.h5",
-        "board_member": "boards/board_member.h5",
     }
-    
+
     if body.data_type not in file_map:
         raise HTTPException(status_code=400, detail=f"不支持的数据类型: {body.data_type}")
-    
+
     h5_file = snapshot_path / file_map[body.data_type]
     if not h5_file.exists():
         raise HTTPException(status_code=404, detail=f"数据文件不存在: {file_map[body.data_type]}")
@@ -2454,14 +2869,11 @@ async def validate_snapshot_data(
     file_map = {
         "daily": "daily_pv.h5",
         "minute": "minute_1min.h5",
-        "board_daily": "boards/board_daily.h5",
-        "board_index": "boards/board_index.h5",
-        "board_member": "boards/board_member.h5",
     }
-    
+
     if data_type not in file_map:
         raise HTTPException(status_code=400, detail=f"不支持的数据类型: {data_type}")
-    
+
     h5_file = snapshot_path / file_map[data_type]
     if not h5_file.exists():
         raise HTTPException(status_code=404, detail=f"数据文件不存在: {file_map[data_type]}")
@@ -2706,9 +3118,6 @@ async def export_h5_to_csv(
     - moneyflow: moneyflow.h5
     - daily: daily_pv.h5
     - minute: minute_1min.h5
-    - board_daily: boards/board_daily.h5
-    - board_index: boards/board_index.h5
-    - board_member: boards/board_member.h5
 
     Args:
         snapshot_id: Snapshot ID
@@ -2729,9 +3138,6 @@ async def export_h5_to_csv(
         "moneyflow": "moneyflow.h5",
         "daily": "daily_pv.h5",
         "minute": "minute_1min.h5",
-        "board_daily": "boards/board_daily.h5",
-        "board_index": "boards/board_index.h5",
-        "board_member": "boards/board_member.h5",
     }
 
     if data_type not in file_map:
@@ -2828,9 +3234,6 @@ async def preview_h5_as_csv(
         "moneyflow": "moneyflow.h5",
         "daily": "daily_pv.h5",
         "minute": "minute_1min.h5",
-        "board_daily": "boards/board_daily.h5",
-        "board_index": "boards/board_index.h5",
-        "board_member": "boards/board_member.h5",
     }
 
     if data_type not in file_map:

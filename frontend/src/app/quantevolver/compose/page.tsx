@@ -1,8 +1,17 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useMemo } from "react";
+import dynamic from "next/dynamic";
 import FactorList from "../components/FactorList";
 import ModelList from "../components/ModelList";
+import { useExperimentSSE } from "../components/useExperimentSSE";
+import LogTerminal from "../components/LogTerminal";
+import MetricsSummary from "../components/MetricsSummary";
+import SectorBlacklistPanel from "../components/SectorBlacklistPanel";
+
+const IcSeriesChart = dynamic(() => import("../components/charts/IcSeriesChart"), { ssr: false });
+const LossCurveChart = dynamic(() => import("../components/charts/LossCurveChart"), { ssr: false });
+const ReturnCurveChart = dynamic(() => import("../components/charts/ReturnCurveChart"), { ssr: false });
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 
@@ -145,19 +154,38 @@ export default function ComposePage() {
   const [nDrop, setNDrop] = useState(5);
   const [disableAlphaBaseline, setDisableAlphaBaseline] = useState(false);
   const [quickTrain, setQuickTrain] = useState(false);
+  const [blacklistEnabled, setBlacklistEnabled] = useState(false);
+  const [stockPoolPath, setStockPoolPath] = useState<string | null>(null);
   const [dataSplit, setDataSplit] = useState({
     train_start: "2018-08-01", train_end: "2022-12-31",
     valid_start: "2023-01-01", valid_end: "2024-06-30",
-    test_start: "2024-07-01", test_end: "2025-12-01",
+    test_start: "2024-07-01", test_end: "2026-03-10",
   });
   const [dispatchMode, setDispatchMode] = useState<"independent" | "evolution">("independent");
   const [evolutionLoops, setEvolutionLoops] = useState(5);
   const [evolutionObjective, setEvolutionObjective] = useState("");
 
+  /* ── RDAgent Task 导入 ── */
+  type SourceTask = { task_id: string; sota_factor_count: number; sota_model_count: number; best_ic: number | null; best_sharpe: number | null; best_annualized_return: number | null; worst_max_drawdown: number | null; total_loops: number; has_sota: boolean };
+  const [sourceTasks, setSourceTasks] = useState<SourceTask[]>([]);
+  const [sourceTaskId, setSourceTaskId] = useState<string>("");
+  const [importLoading, setImportLoading] = useState(false);
+  const [importExpanded, setImportExpanded] = useState(false);
+
+  /* ── 因子相关性 & 独立IC ── */
+  const [corrPairs, setCorrPairs] = useState<Array<{factor_a: string; factor_b: string; correlation: number}>>([]);
+  const [corrLoading, setCorrLoading] = useState(false);
+  const [corrAnalyzed, setCorrAnalyzed] = useState(false);
+  const [classificationMap, setClassificationMap] = useState<Record<string, {ic_value?: number; sharpe_value?: number; ann_ret_value?: number; grade?: string; category?: string}>>({});
+
   /* ── 结果状态 ── */
   const [evalResult, setEvalResult] = useState<EvalResult | null>(null);
   const [configResult, setConfigResult] = useState<ConfigResult | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [logsVisible, setLogsVisible] = useState(false); // 日志面板默认关闭
+
+  /* ── 单次实验执行（共享 Hook） ── */
+  const sse = useExperimentSSE({ pollAfterDisconnect: true });
 
   /* ── 加载数据 ── */
   const loadData = useCallback(async () => {
@@ -171,6 +199,7 @@ export default function ComposePage() {
       ]);
       const classMap: Record<string, any> = {};
       (cRes.items || []).forEach((c: any) => { classMap[c.factor_name] = c; });
+      setClassificationMap(classMap);
       
       const enrichedFactors = (fRes.items || []).map((f: any) => {
         const cls = classMap[f.name];
@@ -196,10 +225,47 @@ export default function ComposePage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  /* ── 加载 RDAgent Task 列表 ── */
+  useEffect(() => {
+    fetch(`${API}/quantevolver/evolution/source-tasks`)
+      .then(r => r.json())
+      .then(d => { if (d.status === "success") setSourceTasks(d.data || []); })
+      .catch(() => {});
+  }, []);
+
+  /* ── 从 RDAgent Task 导入配置 ── */
+  async function importFromTask() {
+    if (!sourceTaskId) return;
+    setImportLoading(true);
+    try {
+      const res = await fetch(`${API}/quantevolver/evolution/source-tasks/${sourceTaskId}/preview`);
+      const d = await res.json();
+      if (d.status !== "success" || !d.data) { alert("获取 Task 详情失败"); setImportLoading(false); return; }
+      const preview = d.data;
+      // 预填充因子
+      if (preview.sota_factors?.length) {
+        const keys = new Set<string>();
+        for (const f of preview.sota_factors) {
+          const match = factors.find((ff: Factor) => ff.factor_name === f.factor_name);
+          keys.add(match ? `${match.factor_name}||${match.source}` : f.factor_name);
+        }
+        setSelectedFactors(keys);
+      }
+      // 预填充模型
+      if (preview.sota_models?.length) {
+        setSelectedModel(preview.sota_models[0].model_id);
+      }
+      setCurrentStep(1);
+    } catch (e: any) { alert("导入失败: " + (e?.message || "")); }
+    setImportLoading(false);
+  }
+
   /* ── AI 智能生成 ── */
   async function aiGenerate() {
     if (!userRequirement.trim()) { alert("请输入实验组合设计目标"); return; }
     setAiLoading(true); setAiResult(null); setConfigResult(null); setEvalResult(null);
+    // 重置执行状态
+    sse.reset();
     try {
       const res = await fetch(`${API}/quantevolver/experiment/smart-select`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -261,6 +327,43 @@ export default function ComposePage() {
   const totalFactorPages = Math.max(1, Math.ceil(allFilteredFactors.length / factorPageSize));
   const pagedFactors = allFilteredFactors.slice((factorPage - 1) * factorPageSize, factorPage * factorPageSize);
 
+  /* ── 因子相关性检查 ── */
+  async function checkCorrelations() {
+    if (selectedFactors.size < 2) return;
+    setCorrLoading(true);
+    try {
+      const names = Array.from(selectedFactors).map(k => k.split("||")[0]);
+      const res = await fetch(`${API}/quantevolver/evolution/correlations/subset`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ factor_names: names, threshold: 0.5 }),
+      });
+      if (!res.ok) { setCorrLoading(false); return; }
+      const data = await res.json();
+      setCorrPairs(data.pairs || []);
+      setCorrAnalyzed(true);
+    } catch (e) { console.error("Correlation check failed:", e); }
+    setCorrLoading(false);
+  }
+
+  /* ── 已选因子的独立IC汇总 ── */
+  const selectedFactorMetrics = useMemo(() => {
+    const factorMap = new Map(factors.map(fac => [fac.factor_name, fac]));
+    const names = Array.from(selectedFactors).map(k => k.split("||")[0]);
+    return names.map(name => {
+      const cls = classificationMap[name];
+      const fac = factorMap.get(name);
+      return {
+        name,
+        ic: cls?.ic_value ?? fac?.ic ?? null,
+        sharpe: cls?.sharpe_value ?? fac?.sharpe ?? null,
+        ann_ret: cls?.ann_ret_value ?? fac?.ann_ret_value ?? null,
+        grade: cls?.grade ?? fac?.grade ?? null,
+        category: cls?.category ?? fac?.category ?? null,
+      };
+    }).sort((a, b) => (Math.abs(b.ic ?? 0)) - (Math.abs(a.ic ?? 0)));
+  }, [selectedFactors, classificationMap, factors]);
+
   /* ── 操作动作 ── */
   async function evaluateCombination() {
     if (selectedFactors.size === 0) { alert("请先选择因子"); return; }
@@ -269,8 +372,8 @@ export default function ComposePage() {
       const res = await fetch(`${API}/quantevolver/experiment/evaluate-portfolio`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          factor_names: Array.from(selectedFactors), model_id: selectedModel || undefined, strategy_id: selectedStrategy || undefined,
-          custom_params: { topk, n_drop: nDrop, disable_alpha158: disableAlphaBaseline, quick_train: quickTrain },
+          factor_names: Array.from(selectedFactors).map(k => k.split("||")[0]), model_id: selectedModel || undefined, strategy_id: selectedStrategy || undefined,
+          custom_params: { topk, n_drop: nDrop, disable_alpha158: disableAlphaBaseline, quick_train: quickTrain, ...(blacklistEnabled && stockPoolPath ? { stock_pool: stockPoolPath } : {}) },
         }),
       });
       const data = await res.json();
@@ -283,12 +386,14 @@ export default function ComposePage() {
   async function generateConfig() {
     if (selectedFactors.size === 0) { alert("请先选择因子"); return; }
     setActionLoading("generate");
+    // 重置上一次的执行状态
+    sse.reset();
     try {
       const res = await fetch(`${API}/quantevolver/config/generate`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          factor_names: Array.from(selectedFactors), model_id: selectedModel || undefined, strategy_id: selectedStrategy || undefined,
-          data_split: dataSplit, custom_params: { topk, n_drop: nDrop, disable_alpha158: disableAlphaBaseline, quick_train: quickTrain },
+          factor_names: Array.from(selectedFactors).map(k => k.split("||")[0]), model_id: selectedModel || undefined, strategy_id: selectedStrategy || undefined,
+          data_split: dataSplit, custom_params: { topk, n_drop: nDrop, disable_alpha158: disableAlphaBaseline, quick_train: quickTrain, ...(blacklistEnabled && stockPoolPath ? { stock_pool: stockPoolPath } : {}) },
           dispatch_mode: dispatchMode,
           evolution_params: dispatchMode === "evolution" ? { loops: evolutionLoops, objective: evolutionObjective } : undefined
         }),
@@ -299,7 +404,11 @@ export default function ComposePage() {
   }
 
   const getSortIndicator = (field: string) => factorSortKey === field ? (factorSortDir === "desc" ? " ▼" : factorSortDir === "asc" ? " ▲" : "") : "";
-  const toggleFactor = (name: string) => setSelectedFactors(prev => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n; });
+  const toggleFactor = (name: string) => setSelectedFactors(prev => {
+    const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name);
+    setCorrAnalyzed(false); setCorrPairs([]);
+    return n;
+  });
 
   return (
     <div style={{
@@ -350,6 +459,58 @@ export default function ComposePage() {
           </div>
         </div>
       </div>
+
+      {/* RDAgent Task 快速导入 */}
+      {sourceTasks.length > 0 && (
+        <div style={{ ...cardStyle, marginBottom: "24px" }}>
+          <div
+            onClick={() => setImportExpanded(!importExpanded)}
+            style={{ ...headerStyle, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+          >
+            <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#0891b2", display: "flex", alignItems: "center", gap: "8px" }}>
+              RDAgent Task 快速导入
+            </h2>
+            <span style={{ color: "#94a3b8", fontSize: "12px" }}>{importExpanded ? "收起" : "展开"}</span>
+          </div>
+          {importExpanded && (
+            <div style={{ padding: "20px" }}>
+              <p style={{ margin: "0 0 12px", fontSize: "13px", color: "#64748b" }}>
+                选择一个 RDAgent Task，一键导入其 SOTA 因子和模型作为起点，然后在后续步骤中自由调整。
+              </p>
+              <div style={{ display: "flex", gap: "12px", alignItems: "flex-end" }}>
+                <div style={{ flex: 1 }}>
+                  <select
+                    value={sourceTaskId}
+                    onChange={e => setSourceTaskId(e.target.value)}
+                    style={{ width: "100%", padding: "10px 12px", fontSize: "13px", border: "1px solid #e2e8f0", borderRadius: "8px", backgroundColor: "#f8fafc", color: "#1e293b" }}
+                  >
+                    <option value="">-- 选择 RDAgent Task --</option>
+                    {sourceTasks.map(t => (
+                      <option key={t.task_id} value={t.task_id}>
+                        {t.task_id} | 因子:{t.sota_factor_count} 模型:{t.sota_model_count} | IC:{t.best_ic != null ? t.best_ic.toFixed(4) : "-"} | 年化:{t.best_annualized_return != null ? (t.best_annualized_return * 100).toFixed(1) + "%" : "-"} | 回撤:{t.worst_max_drawdown != null ? (t.worst_max_drawdown * 100).toFixed(1) + "%" : "-"}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  onClick={importFromTask}
+                  disabled={!sourceTaskId || importLoading}
+                  style={{
+                    ...btnPrimary,
+                    backgroundColor: sourceTaskId ? "#0891b2" : "#94a3b8",
+                    padding: "10px 24px",
+                    fontSize: "14px",
+                    opacity: !sourceTaskId || importLoading ? 0.5 : 1,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {importLoading ? "导入中..." : "导入配置"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 流程导航 - 横向按钮样式 */}
       <div style={{ ...cardStyle, marginBottom: "24px" }}>
@@ -424,7 +585,7 @@ export default function ComposePage() {
               <FactorList
                 mode="selection"
                 selectedFactors={selectedFactors}
-                onFactorSelect={(selected) => setSelectedFactors(selected)}
+                onFactorSelect={(selected) => { setSelectedFactors(selected); setCorrAnalyzed(false); setCorrPairs([]); }}
               />
             </div>
 
@@ -643,6 +804,131 @@ export default function ComposePage() {
               </div>
             </div>
 
+            {/* 因子独立IC汇总 + 相关性检查 */}
+            {selectedFactors.size > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginTop: "20px" }}>
+                {/* 左: 因子独立IC汇总 */}
+                <div style={{ backgroundColor: "#f8fafc", borderRadius: "8px", padding: "16px", border: "1px solid #e2e8f0" }}>
+                  <h3 style={{ margin: "0 0 12px", fontSize: "13px", fontWeight: 700, color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                    已选因子独立指标 ({selectedFactorMetrics.length})
+                  </h3>
+                  <div style={{ maxHeight: "280px", overflowY: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: "#e2e8f0", position: "sticky", top: 0 }}>
+                          <th style={{ padding: "6px 8px", textAlign: "left", fontWeight: 600, color: "#475569" }}>因子</th>
+                          <th style={{ padding: "6px 8px", textAlign: "center", fontWeight: 600, color: "#475569", width: 50 }}>评级</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600, color: "#475569", width: 70 }}>IC</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600, color: "#475569", width: 70 }}>Sharpe</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600, color: "#475569", width: 80 }}>年化</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedFactorMetrics.map((f, i) => (
+                          <tr key={f.name} style={{ borderTop: "1px solid #f1f5f9", backgroundColor: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
+                            <td style={{ padding: "5px 8px", fontFamily: "monospace", fontSize: 11, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.name}>{f.name}</td>
+                            <td style={{ padding: "5px 8px", textAlign: "center" }}>
+                              {f.grade ? <span style={{ padding: "1px 6px", borderRadius: 3, fontSize: 10, fontWeight: 700, color: "#fff", backgroundColor: f.grade === "S" ? "#7c3aed" : f.grade === "A" ? "#2563eb" : f.grade === "B" ? "#10b981" : f.grade === "C" ? "#f59e0b" : "#ef4444" }}>{f.grade}</span> : "-"}
+                            </td>
+                            <td style={{ padding: "5px 8px", textAlign: "right", fontFamily: "monospace", color: (f.ic ?? 0) > 0.03 ? "#059669" : "#64748b" }}>{f.ic != null ? f.ic.toFixed(4) : "-"}</td>
+                            <td style={{ padding: "5px 8px", textAlign: "right", fontFamily: "monospace", color: "#64748b" }}>{f.sharpe != null ? f.sharpe.toFixed(3) : "-"}</td>
+                            <td style={{ padding: "5px 8px", textAlign: "right", fontFamily: "monospace", color: (f.ann_ret ?? 0) > 0 ? "#059669" : "#ef4444" }}>{f.ann_ret != null ? (f.ann_ret * 100).toFixed(1) + "%" : "-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {selectedFactorMetrics.length > 0 && (() => {
+                    const ics = selectedFactorMetrics.filter(f => f.ic != null).map(f => f.ic!);
+                    const avgIc = ics.length > 0 ? ics.reduce((a, b) => a + b, 0) / ics.length : null;
+                    const noIcCount = selectedFactorMetrics.filter(f => f.ic == null).length;
+                    return (
+                      <div style={{ marginTop: "8px", paddingTop: "8px", borderTop: "1px solid #e2e8f0", fontSize: 11, color: "#64748b", display: "flex", gap: "16px" }}>
+                        <span>平均 IC: <strong style={{ color: (avgIc ?? 0) > 0.03 ? "#059669" : "#64748b" }}>{avgIc != null ? avgIc.toFixed(4) : "N/A"}</strong></span>
+                        {noIcCount > 0 && <span style={{ color: "#f59e0b" }}>{noIcCount} 个因子无 IC 数据</span>}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* 右: 因子相关性检查 */}
+                <div style={{ backgroundColor: "#f8fafc", borderRadius: "8px", padding: "16px", border: "1px solid #e2e8f0" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                    <h3 style={{ margin: 0, fontSize: "13px", fontWeight: 700, color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.05em" }}>因子相关性检查</h3>
+                    <button
+                      onClick={() => { if (corrAnalyzed) { setCorrAnalyzed(false); setCorrPairs([]); } else { checkCorrelations(); } }}
+                      disabled={corrLoading || selectedFactors.size < 2}
+                      style={{
+                        padding: "4px 12px", fontSize: "11px", fontWeight: 600, borderRadius: "4px", cursor: corrLoading || selectedFactors.size < 2 ? "not-allowed" : "pointer",
+                        backgroundColor: corrAnalyzed ? "#fef3c7" : "#eff6ff", color: corrAnalyzed ? "#92400e" : "#2563eb",
+                        border: corrAnalyzed ? "1px solid #fde68a" : "1px solid #bfdbfe",
+                        opacity: corrLoading || selectedFactors.size < 2 ? 0.5 : 1,
+                      }}
+                    >
+                      {corrLoading ? "分析中..." : corrAnalyzed ? "收起" : "检查相关性"}
+                    </button>
+                  </div>
+
+                  {!corrAnalyzed ? (
+                    <div style={{ color: "#94a3b8", fontSize: 13, textAlign: "center", padding: "40px 0" }}>
+                      点击"检查相关性"查看已选因子间的相关性矩阵
+                    </div>
+                  ) : (
+                    <div style={{ maxHeight: "280px", overflowY: "auto" }}>
+                      {corrPairs.length === 0 ? (
+                        <div style={{ color: "#059669", fontSize: 13, textAlign: "center", padding: "40px 0" }}>
+                          已选因子间无高相关性对 (|corr| &lt; 0.5)，组合多样性良好
+                        </div>
+                      ) : (() => {
+                        const highPairs = corrPairs.filter(p => Math.abs(p.correlation) > 0.7);
+                        const medPairs = corrPairs.filter(p => Math.abs(p.correlation) > 0.5 && Math.abs(p.correlation) <= 0.7);
+                        return (
+                          <div>
+                            {highPairs.length > 0 && (
+                              <div style={{ marginBottom: "8px" }}>
+                                <div style={{ fontSize: 11, fontWeight: 600, color: "#dc2626", marginBottom: "4px" }}>高相关 (|corr| &gt; 0.7) - {highPairs.length} 对</div>
+                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                                  <tbody>
+                                    {highPairs.sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation)).map((p, i) => (
+                                      <tr key={i} style={{ backgroundColor: Math.abs(p.correlation) > 0.85 ? "#fecaca" : "#fed7aa", borderBottom: "1px solid #fde68a" }}>
+                                        <td style={{ padding: "3px 6px", fontFamily: "monospace" }}>{p.factor_a}</td>
+                                        <td style={{ padding: "3px 6px", fontFamily: "monospace" }}>{p.factor_b}</td>
+                                        <td style={{ padding: "3px 6px", textAlign: "right", fontWeight: 600 }}>{p.correlation.toFixed(4)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                            {medPairs.length > 0 && (
+                              <div>
+                                <div style={{ fontSize: 11, fontWeight: 600, color: "#d97706", marginBottom: "4px" }}>中等相关 (0.5 &lt; |corr| &le; 0.7) - {medPairs.length} 对</div>
+                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                                  <tbody>
+                                    {medPairs.sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation)).map((p, i) => (
+                                      <tr key={i} style={{ backgroundColor: "#fef9c3", borderBottom: "1px solid #fde68a" }}>
+                                        <td style={{ padding: "3px 6px", fontFamily: "monospace" }}>{p.factor_a}</td>
+                                        <td style={{ padding: "3px 6px", fontFamily: "monospace" }}>{p.factor_b}</td>
+                                        <td style={{ padding: "3px 6px", textAlign: "right", color: "#92400e" }}>{p.correlation.toFixed(4)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                            <div style={{ marginTop: "8px", paddingTop: "8px", borderTop: "1px solid #e2e8f0", fontSize: 11, color: "#64748b" }}>
+                              {highPairs.length > 0 && <span style={{ color: "#dc2626" }}>建议移除 {highPairs.length} 对高相关因子中的冗余项</span>}
+                              {highPairs.length === 0 && <span style={{ color: "#059669" }}>无高相关因子对，组合较为健康</span>}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: "24px", paddingTop: "20px", borderTop: "1px solid #f1f5f9" }}>
               <button onClick={() => setCurrentStep(3)} style={btnSecondary}>上一步</button>
               <button onClick={() => setCurrentStep(5)} style={{ ...btnPrimary, padding: "10px 28px", fontSize: "14px" }}>确认配置并进入下一步</button>
@@ -680,6 +966,12 @@ export default function ComposePage() {
                 </label>
               </div>
             </div>
+
+            <SectorBlacklistPanel
+              enabled={blacklistEnabled}
+              onEnabledChange={setBlacklistEnabled}
+              onPoolPathChange={setStockPoolPath}
+            />
 
             <div style={{ marginBottom: "32px" }}>
               <h3 style={{ margin: "0 0 16px", fontSize: "13px", fontWeight: 700, color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.05em" }}>选择任务分流模式</h3>
@@ -737,14 +1029,146 @@ export default function ComposePage() {
                 <div style={{ backgroundColor: "#0f172a", borderRadius: "6px", padding: "12px", overflowX: "auto" }}>
                   <pre style={{ margin: 0, fontSize: "12px", color: "#4ade80", fontFamily: "'Fira Code', Consolas, monospace" }}>{configResult.wsl_command}</pre>
                 </div>
-                <div style={{ marginTop: "12px", display: "flex", gap: "12px" }}>
+                <div style={{ marginTop: "12px", display: "flex", gap: "12px", flexWrap: "wrap" }}>
                   <button onClick={() => { navigator.clipboard.writeText(configResult.wsl_command || ""); alert("已复制命令"); }}
                     style={{ ...btnSecondary, fontSize: "13px", borderColor: "#86efac", color: "#166534" }}>复制终端命令</button>
+                  {dispatchMode === "independent" && configResult.experiment_id && (
+                    <button
+                      onClick={() => { if (configResult.experiment_id) sse.startRun(configResult.experiment_id).catch(() => {}); }}
+                      disabled={sse.runStatus === "running" || sse.runStatus === "starting"}
+                      style={{
+                        ...btnPrimary,
+                        backgroundColor: sse.runStatus === "running" || sse.runStatus === "starting" ? "#6b7280" : "#059669",
+                        fontSize: "13px",
+                        boxShadow: "0 2px 4px rgba(5, 150, 105, 0.2)",
+                        opacity: sse.runStatus === "running" || sse.runStatus === "starting" ? 0.7 : 1,
+                      }}
+                    >
+                      {sse.runStatus === "starting" ? "正在提交..." : sse.runStatus === "running" ? "执行中..." : "一键执行回测"}
+                    </button>
+                  )}
                   {dispatchMode === "evolution" && (
-                    <button onClick={() => window.open("/quantevolver/evolution", "_blank")}
+                    <button onClick={() => window.open(`/quantevolver/evolution?base_experiment_id=${configResult?.experiment_id || ""}`, "_blank")}
                       style={{ ...btnPrimary, backgroundColor: "#10b981", fontSize: "13px", boxShadow: "0 2px 4px rgba(16, 185, 129, 0.2)" }}>前往演进监控大屏</button>
                   )}
                 </div>
+              </div>
+            )}
+
+            {/* 实时日志面板 */}
+            {sse.runStatus && (
+              <div style={{ marginBottom: "24px" }}>
+                {/* 日志展开/收起按钮 */}
+                <div
+                  onClick={() => setLogsVisible(v => !v)}
+                  style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    padding: "8px 12px", borderRadius: logsVisible ? "8px 8px 0 0" : "8px",
+                    background: "#1e293b", cursor: "pointer", userSelect: "none",
+                  }}
+                >
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#94a3b8" }}>
+                    {logsVisible ? "▼" : "▶"} 执行日志
+                  </span>
+                  <span style={{
+                    fontSize: 11, padding: "2px 8px", borderRadius: 10, fontWeight: 600,
+                    background: sse.runStatus === "completed" ? "#10b98120" : sse.runStatus === "failed" ? "#ef444420" : "#f59e0b20",
+                    color: sse.runStatus === "completed" ? "#10b981" : sse.runStatus === "failed" ? "#ef4444" : "#f59e0b",
+                  }}>
+                    {sse.runStatus === "starting" ? "提交中" : sse.runStatus === "running" ? "执行中" : sse.runStatus === "completed" ? "已完成" : sse.runStatus === "failed" ? "失败" : sse.runStatus}
+                  </span>
+                </div>
+                {logsVisible && (
+                  <LogTerminal
+                    logs={sse.runLogs}
+                    logsEndRef={sse.logsEndRef}
+                    maxHeight={300}
+                    fontSize={12}
+                    statusLabel={
+                      sse.runStatus === "starting" ? "正在提交..." :
+                      sse.runStatus === "running" ? "回测执行中" :
+                      sse.runStatus === "completed" ? "执行完成" :
+                      sse.runStatus === "failed" ? "执行失败" : sse.runStatus
+                    }
+                    statusColor={
+                      sse.runStatus === "completed" ? "#10b981" :
+                      sse.runStatus === "failed" ? "#ef4444" : "#f59e0b"
+                    }
+                    statusPulse={sse.runStatus === "running" || sse.runStatus === "starting"}
+                  />
+                )}
+
+                {/* 完成后展示核心指标 */}
+                {sse.runStatus === "completed" && sse.runMetrics && (
+                  <div style={{ marginTop: 12 }}>
+                    <MetricsSummary metrics={sse.runMetrics} />
+                  </div>
+                )}
+
+                {/* 完成后展示图表 */}
+                {sse.runStatus === "completed" && sse.enhancedMetrics && (
+                  <div style={{ marginTop: 16, display: "grid", gap: 16 }}>
+                    {sse.enhancedMetrics.ic_series && (
+                      <div style={{ background: "#fff", borderRadius: 8, padding: 16, border: "1px solid #e5e7eb" }}>
+                        <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 600, color: "#374151" }}>IC 时序诊断</h4>
+                        <IcSeriesChart
+                          dates={sse.enhancedMetrics.dates || []}
+                          ic_series={sse.enhancedMetrics.ic_series}
+                          rank_ic_series={sse.enhancedMetrics.rank_ic_series}
+                          ic_rolling_30d_mean={sse.enhancedMetrics.ic_rolling_30d_mean}
+                          ic_rolling_30d_std={sse.enhancedMetrics.ic_rolling_30d_std}
+                          ic_positive_ratio={sse.enhancedMetrics.ic_positive_ratio}
+                        />
+                      </div>
+                    )}
+                    {sse.enhancedMetrics.cumulative_excess_with_cost && (
+                      <div style={{ background: "#fff", borderRadius: 8, padding: 16, border: "1px solid #e5e7eb" }}>
+                        <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 600, color: "#374151" }}>收益曲线</h4>
+                        <ReturnCurveChart
+                          dates={sse.enhancedMetrics.dates || []}
+                          cumulative_excess_no_cost={sse.enhancedMetrics.cumulative_excess_no_cost}
+                          cumulative_excess_with_cost={sse.enhancedMetrics.cumulative_excess_with_cost}
+                          cumulative_benchmark={sse.enhancedMetrics.cumulative_benchmark}
+                          drawdown_series={sse.enhancedMetrics.drawdown_series}
+                        />
+                      </div>
+                    )}
+                    {sse.enhancedMetrics.train_loss_curve && (
+                      <div style={{ background: "#fff", borderRadius: 8, padding: 16, border: "1px solid #e5e7eb" }}>
+                        <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 600, color: "#374151" }}>训练过程</h4>
+                        <LossCurveChart
+                          train_loss_curve={sse.enhancedMetrics.train_loss_curve}
+                          val_loss_curve={sse.enhancedMetrics.val_loss_curve}
+                          best_epoch={sse.enhancedMetrics.best_epoch}
+                          overfit_ratio={sse.enhancedMetrics.overfit_ratio}
+                          convergence_ratio={sse.enhancedMetrics.convergence_ratio}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 实验完成后自动弹出演进创建建议 */}
+                {sse.runStatus === "completed" && configResult?.experiment_id && dispatchMode === "independent" && (
+                  <div style={{ marginTop: 16, padding: 16, borderRadius: 8, backgroundColor: "#f0f9ff", border: "1px solid #bae6fd" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                      <strong style={{ color: "#0369a1", fontSize: 14 }}>基线实验已完成，是否启动自动演进？</strong>
+                    </div>
+                    <p style={{ margin: "0 0 12px", fontSize: 13, color: "#475569" }}>
+                      当前实验可作为演进起点，AI 将自动迭代优化因子组合和模型参数。
+                    </p>
+                    <a
+                      href={`/quantevolver/evolution?base_experiment_id=${configResult.experiment_id}`}
+                      style={{
+                        display: "inline-block", padding: "8px 16px", backgroundColor: "#6d28d9", color: "#fff",
+                        borderRadius: 6, fontSize: 13, fontWeight: 600, textDecoration: "none",
+                        boxShadow: "0 2px 4px rgba(109, 40, 217, 0.2)",
+                      }}
+                    >
+                      前往创建演进任务 (预填实验ID)
+                    </a>
+                  </div>
+                )}
               </div>
             )}
 
@@ -766,6 +1190,14 @@ export default function ComposePage() {
           </div>
         )}
       </div>
+
+      {/* 脉冲动画 CSS */}
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.3; }
+        }
+      `}</style>
     </div>
   );
 }

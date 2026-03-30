@@ -60,6 +60,274 @@ def _safe_get_datetime_level(df_or_index) -> pd.Index:
             # 尝试返回index本身
             return idx
 
+
+# ============================================================
+# 可复用的模块级函数（从 _run_inference_impl 中提取）
+# ============================================================
+
+def load_model_from_pkl(model_file: Path) -> Tuple[Any, str, Any, int]:
+    """加载模型 pkl 文件，检测类型，返回 (model, model_kind, inner_model, num_features).
+
+    model_kind: "lgb" | "pytorch" | "qlib_generic"
+    """
+    import sys
+
+    # 将模型所在目录添加到 sys.path，以便 pickle 能找到自定义类
+    model_dir = str(Path(model_file).parent)
+    if model_dir not in sys.path:
+        sys.path.insert(0, model_dir)
+
+    with open(model_file, "rb") as f:
+        model = pickle.load(f)
+
+    # PyTorch 设备处理
+    try:
+        import torch
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        if hasattr(model, "dnn_model") and hasattr(model.dnn_model, "parameters"):
+            try:
+                param = next(model.dnn_model.parameters())
+                if param.device.type != device:
+                    if device == "cuda":
+                        model.dnn_model = model.dnn_model.cuda()
+                    else:
+                        model.dnn_model = model.dnn_model.cpu()
+            except StopIteration:
+                pass
+
+        # eval 模式
+        if hasattr(model, "dnn_model") and isinstance(model.dnn_model, torch.nn.Module):
+            model.dnn_model.eval()
+        elif isinstance(model, torch.nn.Module):
+            model.eval()
+    except ModuleNotFoundError:
+        pass
+    except Exception as e:
+        logger.warning(f"PyTorch 模型初始化时出错: {e}")
+
+    # 确定性类型判断
+    model_kind = "unknown"
+    inner_model = None
+    num_features_expected = 0
+
+    if hasattr(model, "model") and model.model is not None:
+        inner_model = model.model
+        model_kind = "lgb"
+        val = getattr(inner_model, "num_feature", 0)
+        if callable(val):
+            num_features_expected = val()
+        else:
+            num_features_expected = int(val) if val else 0
+        if num_features_expected == 0:
+            num_features_expected = getattr(inner_model, "n_features_", 0)
+        logger.info(f"检测到LGB模型 (inner: {type(inner_model).__name__}), 特征数={num_features_expected}")
+    elif hasattr(model, "dnn_model") and model.dnn_model is not None:
+        inner_model = model.dnn_model
+        model_kind = "pytorch"
+        try:
+            first_layer = next(model.dnn_model.parameters(), None)
+            if first_layer is not None:
+                num_features_expected = first_layer.shape[-1]
+        except Exception:
+            pass
+        logger.info(f"检测到PyTorch模型 (inner: {type(inner_model).__name__}), 特征数={num_features_expected}")
+    elif hasattr(model, "predict") and callable(model.predict):
+        model_kind = "qlib_generic"
+        logger.info(f"检测到通用Qlib模型: {type(model).__name__}")
+    else:
+        raise ValueError(
+            f"无法识别的模型类型: {type(model).__name__}。"
+            f"期望 LGBModel(有model属性) 或 GeneralPTNN(有dnn_model属性) 或其他Qlib Model子类(有predict方法)。"
+            f"模型属性: {[a for a in dir(model) if not a.startswith('_')]}"
+        )
+
+    return model, model_kind, inner_model, num_features_expected
+
+
+def assemble_features(
+    alpha_subset: pd.DataFrame,
+    df_factors: pd.DataFrame,
+    factor_order: List[str],
+    alpha158_feats: List[str],
+    dynamic_feats: List[str],
+) -> pd.DataFrame:
+    """按 factor_order 顺序组装 alpha158 + dynamic 因子 → 单一 DataFrame."""
+    final_cols_data: Dict[str, pd.Series] = {}
+
+    # 索引对齐
+    if len(alpha158_feats) > 0 and not df_factors.empty and not alpha_subset.index.equals(df_factors.index):
+        common_index = alpha_subset.index.intersection(df_factors.index)
+        if len(common_index) == 0:
+            raise ValueError(
+                f"Alpha158因子和SOTA因子没有共同的索引。\n"
+                f"Alpha158索引范围: {alpha_subset.index.min()} 到 {alpha_subset.index.max()}\n"
+                f"SOTA因子索引范围: {df_factors.index.min()} 到 {df_factors.index.max()}"
+            )
+        alpha_subset = alpha_subset.loc[common_index]
+        df_factors = df_factors.loc[common_index]
+
+    for feat_name in factor_order:
+        if feat_name in alpha158_feats:
+            if feat_name not in alpha_subset.columns:
+                raise ValueError(f"Alpha158 因子 {feat_name} 计算失败，无法找到该列。")
+            col_data = alpha_subset[feat_name]
+            if not isinstance(col_data, pd.Series):
+                raise ValueError(f"Alpha158 因子 {feat_name} 数据类型错误: {type(col_data)}")
+            final_cols_data[feat_name] = col_data
+        elif feat_name in dynamic_feats:
+            if isinstance(df_factors.columns, pd.MultiIndex):
+                col_key = ("feature", feat_name)
+                if col_key not in df_factors.columns:
+                    raise ValueError(f"SOTA 动态因子 {feat_name} 无法找到（MultiIndex列）。")
+                col_data = df_factors[col_key]
+            else:
+                if feat_name not in df_factors.columns:
+                    raise ValueError(f"SOTA 动态因子 {feat_name} 无法找到。可用: {list(df_factors.columns)}")
+                col_data = df_factors[feat_name]
+            if not isinstance(col_data, pd.Series):
+                raise ValueError(f"SOTA 动态因子 {feat_name} 数据类型错误: {type(col_data)}")
+            final_cols_data[feat_name] = col_data
+        else:
+            raise ValueError(f"因子 {feat_name} 既不在alpha158_factors中，也不在dynamic_factors中。")
+
+    final_index = alpha_subset.index if len(alpha158_feats) > 0 else df_factors.index
+    df_combined = pd.DataFrame(final_cols_data, index=final_index)
+
+    # 确保列顺序严格匹配
+    available_cols = [c for c in factor_order if c in df_combined.columns]
+    df_combined = df_combined[available_cols]
+
+    if set(df_combined.columns.tolist()) != set(factor_order):
+        missing = [c for c in factor_order if c not in df_combined.columns]
+        if missing:
+            logger.error(f"assemble_features: 缺失列 {missing}")
+
+    return df_combined
+
+
+def predict_scores(
+    model: Any,
+    inner_model: Any,
+    model_kind: str,
+    X: pd.DataFrame,
+) -> np.ndarray:
+    """模型预测三分支: lgb / pytorch / qlib_generic → 返回 1-D scores 数组."""
+    # 确保数值类型
+    for col in X.columns:
+        if X[col].dtype == "object":
+            X[col] = pd.to_numeric(X[col], errors="coerce")
+    X = X.fillna(0)
+    X = X.replace([np.inf, -np.inf], 0)
+
+    if model_kind == "lgb":
+        scores = inner_model.predict(X.values)
+    elif model_kind == "pytorch":
+        import torch
+
+        inner_model.eval()
+        with torch.no_grad():
+            x_values = X.values.astype("float32")
+            x_tensor = torch.tensor(x_values, dtype=torch.float32)
+
+            model_type_name = type(inner_model).__name__
+            is_seq = any(kw in model_type_name for kw in ["GRU", "LSTM", "RNN", "Sequence", "Recurrent"])
+            if is_seq:
+                x_tensor = x_tensor.unsqueeze(1)
+
+            if torch.cuda.is_available():
+                x_tensor = x_tensor.cuda()
+            elif hasattr(model, "device"):
+                x_tensor = x_tensor.to(model.device)
+
+            output = inner_model(x_tensor)
+            scores = output.cpu().numpy()
+
+            if len(scores.shape) == 3:
+                scores = scores[:, -1, :]
+            if len(scores.shape) == 2 and scores.shape[1] > 1:
+                scores = scores[:, 0]
+    elif model_kind == "qlib_generic":
+        scores = model.predict(X)
+    else:
+        raise RuntimeError(f"无法预测: 未知的模型类型 model_kind={model_kind}")
+
+    if hasattr(scores, "values"):
+        scores = scores.values
+    if hasattr(scores, "flatten"):
+        scores = scores.flatten()
+
+    return scores
+
+
+def save_signals_to_db(
+    task_run_id: str,
+    loop_id: int,
+    trade_date: datetime,
+    df_scores: pd.DataFrame,
+) -> None:
+    """将选股结果存入 trading.rdagent_signal（从 InferenceEngine._save_signals_to_db 提取）."""
+    strategy_id_loop = str(uuid.uuid5(uuid.NAMESPACE_URL, f"rdagent_loop:{task_run_id}:{loop_id}"))
+
+    source_sql = """
+        INSERT INTO trading.strategy_source (source_type, name, description)
+        VALUES ('rdagent', 'RD-Agent', 'RD-Agent generated strategies')
+        ON CONFLICT (source_type) DO NOTHING
+    """
+    strategy_sql = """
+        INSERT INTO trading.strategy (strategy_id, source_id, source_strategy_key, strategy_name, strategy_kind, output_mode, created_at)
+        VALUES (%s, (SELECT source_id FROM trading.strategy_source WHERE source_type = 'rdagent'), %s, %s, 'portfolio', 'topk', NOW())
+        ON CONFLICT (strategy_id) DO NOTHING
+    """
+    v_sql = """
+        INSERT INTO trading.strategy_version (strategy_version_id, strategy_id, version_tag, artifact_root_path, import_status, created_at)
+        VALUES (%s, %s, 'replay', %s, 'imported', NOW())
+        ON CONFLICT (strategy_id, version_tag) DO UPDATE SET artifact_root_path = EXCLUDED.artifact_root_path
+    """
+
+    td = trade_date.date() if isinstance(trade_date, datetime) else trade_date
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(source_sql)
+
+                strategy_name = f"RDAgent_{task_run_id}_Loop{loop_id}"
+                source_strategy_key = f"{task_run_id}:{loop_id}"
+                cur.execute(strategy_sql, (strategy_id_loop, source_strategy_key, strategy_name))
+
+                sv_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"rdagent_version:{task_run_id}:{loop_id}:replay"))
+                cur.execute(v_sql, (sv_id, strategy_id_loop, f"rdagent_tasks/{task_run_id}"))
+
+                cur.execute(
+                    "SELECT strategy_version_id FROM trading.strategy_version WHERE strategy_id = %s AND version_tag = 'replay'",
+                    (strategy_id_loop,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    logger.error(f"无法定位 strategy_version_id: {strategy_id_loop}")
+                    return
+                sv_id = row[0]
+
+                df_sorted = df_scores.sort_values(by="score", ascending=False)
+                records = []
+                for rank, (idx, r) in enumerate(df_sorted.iterrows(), 1):
+                    instrument = idx[1] if isinstance(idx, tuple) else idx
+                    records.append((strategy_id_loop, sv_id, td, instrument, float(r["score"]), rank, "topk"))
+
+                from psycopg2.extras import execute_values
+                execute_values(cur, """
+                    INSERT INTO trading.rdagent_signal (strategy_id, strategy_version_id, trade_date, symbol, score, rank, output_mode)
+                    VALUES %s
+                    ON CONFLICT (strategy_version_id, trade_date, symbol) DO UPDATE SET score = EXCLUDED.score, rank = EXCLUDED.rank
+                """, records)
+            conn.commit()
+        logger.info(f"成功保存 {len(records)} 条信号到数据库")
+    except Exception as e:
+        logger.error(f"保存信号到数据库失败: {e}")
+
+
 class InferenceEngine:
     """Core engine to handle model loading and prediction."""
 
@@ -827,103 +1095,15 @@ class InferenceEngine:
         #   - GeneralPTNN: 有 self.dnn_model (nn.Module)，predict 接收 DatasetH
         #   - 其他Qlib Model子类: 统一 predict(dataset, segment) 接口
         
-        # 将实验工作目录添加到sys.path，以便pickle能找到自定义模型类（如QE实验的model.py）
+        # 将实验工作目录添加到sys.path，以便pickle能找到自定义模型类
         import sys
         task_dir_str = str(task_dir)
         if task_dir_str not in sys.path:
             sys.path.insert(0, task_dir_str)
             logger.info(f"已将实验目录添加到sys.path: {task_dir_str}")
-        
-        # 加载模型：使用pickle.load（更稳定，支持CUDA模型）
-        with open(model_file, "rb") as f:
-            model = pickle.load(f)
-        
-        # 如果有torch，处理PyTorch模型的设备
-        try:
-            import torch
-            
-            # 检测设备：优先使用CUDA
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            logger.info(f"检测到设备: {device}")
-            
-            # 如果模型有dnn_model属性（PyTorch模型）
-            if hasattr(model, 'dnn_model') and hasattr(model.dnn_model, 'parameters'):
-                try:
-                    param = next(model.dnn_model.parameters())
-                    current_device = param.device.type
-                    logger.info(f"模型当前设备: {current_device}")
-                    
-                    # 如果需要，移动到目标设备
-                    if current_device != device:
-                        if device == 'cuda':
-                            model.dnn_model = model.dnn_model.cuda()
-                            logger.info("模型已移到CUDA")
-                        else:
-                            model.dnn_model = model.dnn_model.cpu()
-                            logger.info("模型已移到CPU")
-                except StopIteration:
-                    pass
-                        
-        except ModuleNotFoundError:
-            pass
-        
-        model_type_name = type(model).__name__
-        logger.info(f"模型类型: {model_type_name}")
-        
-        # 如果是PyTorch模型，设置为eval模式
-        try:
-            import torch
-            
-            # 设置eval模式（禁用Dropout和BatchNorm训练行为）
-            if hasattr(model, 'dnn_model') and isinstance(model.dnn_model, torch.nn.Module):
-                model.dnn_model.eval()
-                logger.info("PyTorch模型已设置为eval模式")
-            elif isinstance(model, torch.nn.Module):
-                model.eval()
-                logger.info("PyTorch模型已设置为eval模式")
-            
-        except Exception as e:
-            logger.warning(f"设置PyTorch模型为eval模式时出错: {e}")
-        
-        # 确定性类型判断：基于属性存在性区分模型类型
-        model_kind = "unknown"
-        inner_model = None
-        num_features_expected = 0
-        
-        if hasattr(model, "model") and model.model is not None:
-            # LGBModel 路径: self.model 是 lgb.Booster
-            inner_model = model.model
-            model_kind = "lgb"
-            val = getattr(inner_model, "num_feature", 0)
-            if callable(val):
-                num_features_expected = val()
-            else:
-                num_features_expected = int(val) if val else 0
-            if num_features_expected == 0:
-                num_features_expected = getattr(inner_model, "n_features_", 0)
-            logger.info(f"检测到LGB模型 (inner: {type(inner_model).__name__}), 特征数={num_features_expected}")
-        elif hasattr(model, "dnn_model") and model.dnn_model is not None:
-            # GeneralPTNN 路径: self.dnn_model 是 nn.Module
-            inner_model = model.dnn_model
-            model_kind = "pytorch"
-            # PyTorch模型通过第一层的in_features获取特征数
-            try:
-                first_layer = next(model.dnn_model.parameters(), None)
-                if first_layer is not None:
-                    num_features_expected = first_layer.shape[-1]
-            except Exception:
-                pass
-            logger.info(f"检测到PyTorch模型 (inner: {type(inner_model).__name__}), 特征数={num_features_expected}")
-        elif hasattr(model, "predict") and callable(model.predict):
-            # 其他Qlib Model子类: 统一predict接口
-            model_kind = "qlib_generic"
-            logger.info(f"检测到通用Qlib模型: {model_type_name}")
-        else:
-            raise ValueError(
-                f"无法识别的模型类型: {model_type_name}。"
-                f"期望 LGBModel(有model属性) 或 GeneralPTNN(有dnn_model属性) 或其他Qlib Model子类(有predict方法)。"
-                f"模型属性: {[a for a in dir(model) if not a.startswith('_')]}"
-            )
+
+        # 使用提取的模块级函数加载模型
+        model, model_kind, inner_model, num_features_expected = load_model_from_pkl(model_file)
         
         # 4. 获取数据（支持内存缓存，同一交易日多次选股复用）
         universe = self._get_default_universe_excluding_st()
@@ -1028,6 +1208,7 @@ class InferenceEngine:
                 'net_mf_amount': 'mf_net_amt',
                 'net_mf_vol': 'mf_net_vol',
                 # 基本面字段（保持db_前缀）
+                'close': 'db_close',
                 'turnover_rate': 'db_turnover_rate',
                 'turnover_rate_f': 'db_turnover_rate_f',
                 'volume_ratio': 'db_volume_ratio',
@@ -1306,116 +1487,15 @@ class InferenceEngine:
             alpha_subset = pd.DataFrame(index=df_factors.index)
             logger.info("没有Alpha158基线因子，跳过计算")
         
-        # 7. 按正确顺序组合特征：按factor_order顺序组合
-        # 特征顺序必须与训练时完全一致
-        final_cols_data = {}
-        
-        # 7.1 验证索引一致性
-        # Alpha158和SOTA因子必须有相同的索引才能合并
-        if len(alpha158_feats) > 0 and not alpha_subset.index.equals(df_factors.index):
-            logger.warning("Alpha158索引与SOTA因子索引不一致，尝试对齐")
-            logger.debug(f"Alpha158索引: {alpha_subset.index}")
-            logger.debug(f"SOTA因子索引: {df_factors.index}")
-            
-            # 使用inner join确保只保留共同的索引
-            common_index = alpha_subset.index.intersection(df_factors.index)
-            if len(common_index) == 0:
-                raise ValueError(
-                    f"Alpha158因子和SOTA因子没有共同的索引。\n"
-                    f"Alpha158索引范围: {alpha_subset.index.min()} 到 {alpha_subset.index.max()}\n"
-                    f"SOTA因子索引范围: {df_factors.index.min()} 到 {df_factors.index.max()}"
-                )
-            
-            alpha_subset = alpha_subset.loc[common_index]
-            df_factors = df_factors.loc[common_index]
-            logger.info(f"索引对齐完成，共同索引数量: {len(common_index)}")
-        
-        # 7.2 按factor_order顺序添加因子
-        # factor_order = alpha158_factors + dynamic_factors
-        for feat_name in factor_order:
-            # 先检查是否在Alpha158因子中
-            if feat_name in alpha158_feats:
-                if feat_name not in alpha_subset.columns:
-                    raise ValueError(
-                        f"Alpha158 因子 {feat_name} 计算失败，无法找到该列。"
-                        f"可用的因子列: {list(alpha_subset.columns)}"
-                    )
-                col_data = alpha_subset[feat_name]
-                if not isinstance(col_data, pd.Series):
-                    raise ValueError(
-                        f"Alpha158 因子 {feat_name} 的数据类型错误: {type(col_data)}，期望 pd.Series"
-                    )
-                final_cols_data[feat_name] = col_data
-                logger.debug(f"添加 Alpha158 因子: {feat_name}")
-            
-            # 再检查是否在SOTA动态因子中
-            elif feat_name in dynamic_feats:
-                # 支持多级列索引：('feature', 'factor_name') 或直接 'factor_name'
-                if isinstance(df_factors.columns, pd.MultiIndex):
-                    # 多级列索引，尝试('feature', feat_name)
-                    col_key = ('feature', feat_name)
-                    if col_key not in df_factors.columns:
-                        raise ValueError(
-                            f"SOTA 动态因子 {feat_name} 计算失败，无法找到该列。"
-                            f"可用的SOTA因子列: {list(df_factors.columns)}。"
-                            f"请检查该因子的计算代码是否存在于task目录中。"
-                        )
-                    col_data = df_factors[col_key]
-                else:
-                    # 单级列索引
-                    if feat_name not in df_factors.columns:
-                        raise ValueError(
-                            f"SOTA 动态因子 {feat_name} 计算失败，无法找到该列。"
-                            f"可用的SOTA因子列: {list(df_factors.columns)}。"
-                            f"请检查该因子的计算代码是否存在于task目录中。"
-                        )
-                    col_data = df_factors[feat_name]
-                
-                if not isinstance(col_data, pd.Series):
-                    raise ValueError(
-                        f"SOTA 动态因子 {feat_name} 的数据类型错误: {type(col_data)}，期望 pd.Series"
-                    )
-                final_cols_data[feat_name] = col_data
-                logger.debug(f"添加 SOTA 动态因子: {feat_name}")
-            
-            else:
-                raise ValueError(
-                    f"因子 {feat_name} 既不在alpha158_factors中，也不在dynamic_factors中。"
-                    f"这是factor_order.json的数据错误。"
-                )
-        
-        # 7.4 构建最终的特征 DataFrame（使用对齐后的索引）
-        # 使用df_factors的索引（如果没有Alpha158因子）或alpha_subset的索引
-        final_index = alpha_subset.index if len(alpha158_feats) > 0 else df_factors.index
-        df_factors_combined = pd.DataFrame(final_cols_data, index=final_index)
-        
-        # ⚠️ 关键修复：强制确保只包含factor_order中的列，按正确顺序排列
-        # 这是防御性编程，确保即使前面有bug，最终输入模型的特征也是正确的
-        if set(df_factors_combined.columns) != set(factor_order):
-            logger.warning(f"特征列不匹配！期望{len(factor_order)}列，实际{len(df_factors_combined.columns)}列")
-            logger.warning(f"期望列: {factor_order}")
-            logger.warning(f"实际列: {list(df_factors_combined.columns)}")
-            
-            # 只保留factor_order中的列，按factor_order的顺序
-            missing_cols = [col for col in factor_order if col not in df_factors_combined.columns]
-            extra_cols = [col for col in df_factors_combined.columns if col not in factor_order]
-            
-            if missing_cols:
-                logger.error(f"缺失的列: {missing_cols}")
-            if extra_cols:
-                logger.warning(f"多余的列（将被删除）: {extra_cols[:20]}... (共{len(extra_cols)}列)")
-            
-            # 强制只保留factor_order中的列
-            df_factors_combined = df_factors_combined[[col for col in factor_order if col in df_factors_combined.columns]]
-        
-        # 确保列顺序与factor_order完全一致
-        df_factors_combined = df_factors_combined[factor_order]
-        
-        # 7.5 验证特征数量
+        # 7. 按正确顺序组合特征（使用提取的模块级函数）
+        df_factors_combined = assemble_features(
+            alpha_subset, df_factors, factor_order, alpha158_feats, dynamic_feats
+        )
+
         actual_count = len(df_factors_combined.columns)
         logger.info(f"特征组合完成: Alpha158={len(alpha158_feats)}, SOTA动态因子={actual_count - len(alpha158_feats)}, 总计={actual_count}")
         logger.info(f"最终特征列: {list(df_factors_combined.columns)}")
-        
+
         # 写入诊断文件
         with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
             f.write(f"df_factors_combined列数: {len(df_factors_combined.columns)}\n")
@@ -1459,221 +1539,26 @@ class InferenceEngine:
             f.write(f"df_today列数（索引过滤后）: {len(df_today.columns)}\n")
             f.write(f"df_today列名: {list(df_today.columns)[:50]}\n")
 
-        # 7. 模型预测（确定性分支，基于model_kind判断）
+        # 7. 模型预测（使用提取的模块级函数）
         X = df_today
-        
-        # 写入诊断文件
-        with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
-            f.write(f"X列数（赋值后）: {len(X.columns)}\n")
-            f.write(f"X形状: {X.shape}\n")
-        
-        # ⚠️ 关键检查：强制验证输入维度
-        if len(X.columns) != len(factor_order):
-            raise ValueError(
-                f"❌ 输入维度错误！\n"
-                f"期望特征数: {len(factor_order)}\n"
-                f"实际特征数: {len(X.columns)}\n"
-                f"期望特征: {factor_order}\n"
-                f"实际特征: {list(X.columns)[:50]}...\n"
-                f"df_factors_combined列数: {len(df_factors_combined.columns)}\n"
-                f"df_today来源于df_factors_combined，索引过滤后列数: {len(df_today.columns)}"
-            )
-        
-        # 确保所有列都是数值类型（转换object类型）
-        for col in X.columns:
-            if X[col].dtype == 'object':
-                logger.warning(f"列 {col} 是object类型，尝试转换为float")
-                X[col] = pd.to_numeric(X[col], errors='coerce')
-        
-        # 🔍 诊断：检查输入数据是否有NaN
-        nan_count_per_col = X.isna().sum()
-        total_nan = nan_count_per_col.sum()
-        if total_nan > 0:
-            logger.warning(f"⚠️ 输入数据包含NaN: 总计{total_nan}个NaN")
-            # 显示NaN最多的前10列
-            top_nan_cols = nan_count_per_col[nan_count_per_col > 0].sort_values(ascending=False).head(10)
-            for col, cnt in top_nan_cols.items():
-                logger.warning(f"  列 {col}: {cnt}个NaN ({cnt/len(X)*100:.1f}%)")
-        
-        # 写入诊断文件
-        with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
-            f.write(f"输入数据NaN统计: 总计{total_nan}个NaN\n")
-            if total_nan > 0:
-                f.write(f"NaN最多的列:\n")
-                for col, cnt in top_nan_cols.items():
-                    f.write(f"  {col}: {cnt}个NaN ({cnt/len(X)*100:.1f}%)\n")
-        
-        # 用0填充NaN（避免模型推理失败）
-        X = X.fillna(0)
-        
-        # 🔍 诊断：检查是否有inf值
-        inf_count = np.isinf(X.values).sum()
-        if inf_count > 0:
-            logger.warning(f"⚠️ 输入数据包含{inf_count}个inf值，将被替换为0")
-            X = X.replace([np.inf, -np.inf], 0)
-        
-        # 写入诊断文件
-        with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
-            f.write(f"inf值数量: {inf_count}\n")
-        
-        logger.info(f"模型预测: model_kind={model_kind}, X.shape={X.shape}, dtypes={X.dtypes.unique()}")
-        
-        if model_kind == "lgb":
-            # LGBModel: inner_model 是 lgb.Booster，predict 接收 numpy 数组
-            scores = inner_model.predict(X.values)
-        elif model_kind == "pytorch":
-            # GeneralPTNN: 使用 torch 推理
-            import torch
-            inner_model.eval()
-            with torch.no_grad():
-                # 确保数据是float32类型
-                x_values = X.values.astype('float32')
-                x_tensor = torch.tensor(x_values, dtype=torch.float32)
-                
-                # 🔍 诊断：检查模型类型
-                model_type_name = type(inner_model).__name__
-                logger.info(f"模型类型: {model_type_name}")
-                
-                # ⚠️ 关键修复：检查模型是否是序列模型（GRU/LSTM/RNN）
-                # 也检查模型类名中是否包含这些关键字
-                is_sequence_model = any(kw in model_type_name for kw in ['GRU', 'LSTM', 'RNN', 'Sequence', 'Recurrent'])
-                
-                if is_sequence_model:
-                    # 添加序列维度：(batch, features) -> (batch, 1, features)
-                    x_tensor = x_tensor.unsqueeze(1)
-                    logger.info(f"检测到序列模型 {model_type_name}，添加序列维度: {x_tensor.shape}")
-                
-                # 写入诊断文件
-                with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
-                    f.write(f"模型类型: {model_type_name}\n")
-                    f.write(f"是否序列模型: {is_sequence_model}\n")
-                    f.write(f"输入张量形状: {x_tensor.shape}\n")
-                
-                # 移动到正确的设备
-                if torch.cuda.is_available():
-                    x_tensor = x_tensor.cuda()
-                elif hasattr(model, "device"):
-                    x_tensor = x_tensor.to(model.device)
-                
-                output = inner_model(x_tensor)
-                scores = output.cpu().numpy()
-                
-                # 写入输出诊断
-                with open("f:/Dev/AIstock/debug_tools/qe_diagnosis.txt", "a", encoding="utf-8") as f:
-                    f.write(f"输出形状: {scores.shape}\n")
-                    f.write(f"输出范围: {scores.min():.6f} ~ {scores.max():.6f}\n")
-                    f.write(f"输出均值: {scores.mean():.6f}\n")
-                
-                # 如果输出是3D的，取最后一个时间步
-                if len(scores.shape) == 3:
-                    scores = scores[:, -1, :]
-                
-                # 如果输出是2D但有多列，取第一列
-                if len(scores.shape) == 2 and scores.shape[1] > 1:
-                    scores = scores[:, 0]
-        elif model_kind == "qlib_generic":
-            # 通用Qlib Model子类: predict 接收 DataFrame
-            scores = model.predict(X)
-        else:
-            raise RuntimeError(
-                f"无法预测: 未知的模型类型 model_kind={model_kind}, "
-                f"model_type={type(model).__name__}"
-            )
+        logger.info(f"模型预测: model_kind={model_kind}, X.shape={X.shape}")
 
-        if hasattr(scores, "values"):
-            scores = scores.values
-        if hasattr(scores, "flatten"):
-            scores = scores.flatten()
+        scores = predict_scores(model, inner_model, model_kind, X)
 
         if len(scores) != len(df_today) and scores.ndim > 1:
             scores = scores[:, -1]
 
         df_scores = pd.DataFrame(index=df_today.index)
         df_scores["score"] = scores
-        
-        # 保存信号到数据库
-        # 修复：使用用户请求的trade_date而不是归一化后的actual_date
-        # 这样查询时可以精确匹配用户请求的日期，避免触发Fallback
-        self._save_signals_to_db(task_run_id, loop_id, requested_trade_date, df_scores)
-        
+
+        # 保存信号到数据库（使用提取的模块级函数）
+        save_signals_to_db(task_run_id, loop_id, requested_trade_date, df_scores)
+
         return df_scores
 
     def _save_signals_to_db(self, task_run_id: str, loop_id: int, trade_date: datetime, df_scores: pd.DataFrame):
-        """将选股结果存入 trading.rdagent_signal"""
-        # 使用一致的 UUID 映射逻辑
-        strategy_id_loop = str(uuid.uuid5(uuid.NAMESPACE_URL, f"rdagent_loop:{task_run_id}:{loop_id}"))
-        
-        # 1. 先确保 strategy_source 表中有 RDAgent 记录
-        source_sql = """
-            INSERT INTO trading.strategy_source (source_type, name, description)
-            VALUES ('rdagent', 'RD-Agent', 'RD-Agent generated strategies')
-            ON CONFLICT (source_type) DO NOTHING
-        """
-        
-        # 2. 确保 strategy 表中存在记录（满足外键约束）
-        strategy_sql = """
-            INSERT INTO trading.strategy (strategy_id, source_id, source_strategy_key, strategy_name, strategy_kind, output_mode, created_at)
-            VALUES (%s, (SELECT source_id FROM trading.strategy_source WHERE source_type = 'rdagent'), %s, %s, 'portfolio', 'topk', NOW())
-            ON CONFLICT (strategy_id) DO NOTHING
-        """
-        
-        # 2. 确保 strategy_version 存在 (最小化写入)
-        v_sql = """
-            INSERT INTO trading.strategy_version (strategy_version_id, strategy_id, version_tag, artifact_root_path, import_status, created_at)
-            VALUES (%s, %s, 'replay', %s, 'imported', NOW())
-            ON CONFLICT (strategy_id, version_tag) DO UPDATE SET artifact_root_path = EXCLUDED.artifact_root_path
-        """
-        
-        # 2. 写入信号
-        # 修复：明确指定 output_mode 列，由于 trading.strategy 约束为 'topk'，这里也使用 'topk'
-        s_sql = """
-            INSERT INTO trading.rdagent_signal (strategy_id, strategy_version_id, trade_date, symbol, score, rank, output_mode)
-            VALUES %s
-            ON CONFLICT (strategy_version_id, trade_date, symbol) DO UPDATE SET score = EXCLUDED.score, rank = EXCLUDED.rank
-        """
-        
-        try:
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    # 先确保 strategy_source 表中有记录
-                    cur.execute(source_sql)
-                    
-                    # 确保 strategy 表中存在记录
-                    strategy_name = f"RDAgent_{task_run_id}_Loop{loop_id}"
-                    source_strategy_key = f"{task_run_id}:{loop_id}"
-                    cur.execute(strategy_sql, (strategy_id_loop, source_strategy_key, strategy_name))
-                    
-                    # 确保 version 存在
-                    # 生成 strategy_version_id
-                    sv_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"rdagent_version:{task_run_id}:{loop_id}:replay"))
-                    cur.execute(v_sql, (sv_id, strategy_id_loop, f"rdagent_tasks/{task_run_id}"))
-                    
-                    # 查询具体的 strategy_version_id (以防由于 ON CONFLICT 更新了 ID，虽然这里我们手动固定了 ID)
-                    cur.execute("SELECT strategy_version_id FROM trading.strategy_version WHERE strategy_id = %s AND version_tag = 'replay'", (strategy_id_loop,))
-                    row = cur.fetchone()
-                    if not row:
-                        logger.error(f"无法定位 strategy_version_id: {strategy_id_loop}")
-                        return
-                    sv_id = row[0]
-                    
-                    df_sorted = df_scores.sort_values(by="score", ascending=False)
-                    records = []
-                    for rank, (idx, row) in enumerate(df_sorted.iterrows(), 1):
-                        instrument = idx[1] if isinstance(idx, tuple) else idx
-                        # 修复：记录中增加 'topk' 作为 output_mode
-                        records.append((strategy_id_loop, sv_id, trade_date.date(), instrument, float(row["score"]), rank, 'topk'))
-                    
-                    from psycopg2.extras import execute_values
-                    # 修复：execute_values 默认使用 '%s' 占位符，且内部会自动处理，不需要在 s_sql 中写多个 %s
-                    execute_values(cur, """
-                        INSERT INTO trading.rdagent_signal (strategy_id, strategy_version_id, trade_date, symbol, score, rank, output_mode)
-                        VALUES %s
-                        ON CONFLICT (strategy_version_id, trade_date, symbol) DO UPDATE SET score = EXCLUDED.score, rank = EXCLUDED.rank
-                    """, records)
-                conn.commit()
-            logger.info(f"成功保存 {len(records)} 条信号到数据库")
-        except Exception as e:
-            logger.error(f"保存信号到数据库失败: {e}")
+        """将选股结果存入 trading.rdagent_signal（委托给模块级函数）"""
+        save_signals_to_db(task_run_id, loop_id, trade_date, df_scores)
 
     def run_task_inference(
         self,

@@ -10,7 +10,7 @@ router = APIRouter(prefix="/watchlist", tags=["watchlist"])
 
 
 @router.get("/all", summary="获取所有自选股票（全量数据，不分页）")
-async def list_items_all() -> Dict[str, Any]:
+def list_items_all() -> Dict[str, Any]:
     """获取所有自选股票数据（全量，不分页）"""
     try:
         conn = get_conn()
@@ -60,7 +60,7 @@ async def list_items_all() -> Dict[str, Any]:
 
 
 @router.get("/items/source-tasks", summary="获取自选股票池中所有来源TASK列表")
-async def list_source_tasks() -> List[Dict[str, Any]]:
+def list_source_tasks() -> List[Dict[str, Any]]:
     """从watchlist_items表中获取所有entry_task_id（非空且唯一），用于筛选下拉框"""
     try:
         with get_conn() as conn:
@@ -90,12 +90,12 @@ async def list_source_tasks() -> List[Dict[str, Any]]:
 
 
 @router.get("/categories", summary="自选分类列表")
-async def list_categories() -> List[Dict[str, Any]]:
+def list_categories() -> List[Dict[str, Any]]:
     return watchlist_service.list_categories()
 
 
 @router.post("/categories", summary="创建自选分类")
-async def create_category(
+def create_category(
     name: str = Body(..., embed=True),
     description: Optional[str] = Body(None, embed=True),
 ) -> Dict[str, Any]:
@@ -104,7 +104,7 @@ async def create_category(
 
 
 @router.patch("/categories/{category_id}", summary="重命名自选分类")
-async def rename_category(
+def rename_category(
     category_id: int,
     name: str = Body(..., embed=True),
     description: Optional[str] = Body(None, embed=True),
@@ -114,13 +114,13 @@ async def rename_category(
 
 
 @router.delete("/categories/{category_id}", summary="删除自选分类")
-async def delete_category(category_id: int) -> Dict[str, Any]:
+def delete_category(category_id: int) -> Dict[str, Any]:
     ok = watchlist_service.delete_category(category_id)
     return {"success": ok}
 
 
 @router.get("/items", summary="自选股票列表（含实时行情）")
-async def list_items(
+def list_items(
     category_id: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
@@ -137,7 +137,7 @@ async def list_items(
 
 
 @router.post("/items/bulk-add", summary="批量加入自选")
-async def bulk_add_items(
+def bulk_add_items(
     codes: List[str] = Body(..., embed=True),
     category_id: int = Body(..., embed=True),
     on_conflict: str = Body("ignore", embed=True),
@@ -146,7 +146,7 @@ async def bulk_add_items(
 
 
 @router.post("/items/bulk-add-from-selection", summary="从 task 选股结果批量加入自选（记录 rank/source/task/loop/as_of）")
-async def bulk_add_items_from_selection(
+def bulk_add_items_from_selection(
     items: List[Dict[str, Any]] = Body(..., embed=True),
     category_id: int = Body(..., embed=True),
     on_conflict: str = Body("ignore", embed=True),
@@ -161,7 +161,7 @@ async def bulk_add_items_from_selection(
 
 
 @router.post("/items/bulk-delete", summary="批量删除自选")
-async def bulk_delete_items(
+def bulk_delete_items(
     ids: List[int] = Body(..., embed=True),
 ) -> Dict[str, Any]:
     cnt = watchlist_service.delete_items(ids)
@@ -169,7 +169,7 @@ async def bulk_delete_items(
 
 
 @router.post("/items/add", summary="单只加入自选（支持多分类）")
-async def add_item(
+def add_item(
     code: str = Body(..., embed=True),
     category_id: int = Body(..., embed=True),
     name: Optional[str] = Body(None, embed=True),
@@ -198,7 +198,7 @@ async def add_item(
 
 
 @router.post("/items/bulk-set-category", summary="批量替换分类")
-async def bulk_set_category(
+def bulk_set_category(
     ids: List[int] = Body(..., embed=True),
     category_id: int = Body(..., embed=True),
 ) -> Dict[str, Any]:
@@ -209,7 +209,7 @@ async def bulk_set_category(
 
 
 @router.post("/items/bulk-add-categories", summary="批量追加分类映射")
-async def bulk_add_categories_to_items(
+def bulk_add_categories_to_items(
     ids: List[int] = Body(..., embed=True),
     category_ids: List[int] = Body(..., embed=True),
 ) -> Dict[str, Any]:
@@ -220,7 +220,7 @@ async def bulk_add_categories_to_items(
 
 
 @router.post("/items/bulk-remove-categories", summary="批量移除分类映射")
-async def bulk_remove_categories_from_items(
+def bulk_remove_categories_from_items(
     ids: List[int] = Body(..., embed=True),
     category_ids: List[int] = Body(..., embed=True),
 ) -> Dict[str, Any]:

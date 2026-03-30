@@ -16,7 +16,7 @@ import requests
 logger = logging.getLogger("aistock.quantevolver.qe_file_sync_client")
 
 
-def _get_rdagent_api_base() -> str:
+def _get_qe_api_base() -> str:
     """获取RDAgent API基础URL"""
     base = (os.getenv("RDAGENT_RESULTS_API_BASE_URL") or "").strip().rstrip("/")
     if not base:
@@ -37,7 +37,7 @@ class QEFileSyncClient:
         api_base_url: Optional[str] = None,
         timeout_s: float = 30.0,
     ):
-        self.api_base_url = (api_base_url or _get_rdagent_api_base()).rstrip("/")
+        self.api_base_url = (api_base_url or _get_qe_api_base()).rstrip("/")
         self.timeout_s = timeout_s
 
     def sync_experiment_files(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import os
 import uuid
 from typing import Any, Dict, List, Optional
@@ -14,6 +15,8 @@ from requests import exceptions as req_exc
 
 from ..db.pg_pool import get_conn
 from ..ingestion.tdx_scheduler import scheduler  # 1:1 复用现有调度器实现
+from ..services.tushare_dataset_specs import DATASET_REGISTRY
+from ..services.tushare_sync_engine import TushareSyncEngine
 
 
 router = APIRouter(prefix="/api", tags=["ingestion"])
@@ -199,6 +202,12 @@ def _serialize_ingestion_schedule(row: Dict[str, Any]) -> Dict[str, Any]:
         "dataset": row.get("dataset"),
         "mode": row.get("mode"),
     })
+    # Extract inserted_rows from the latest job's summary (joined in query)
+    job_summary_raw = row.get("last_job_summary")
+    if job_summary_raw:
+        job_summary = _json_load(job_summary_raw) if isinstance(job_summary_raw, str) else job_summary_raw
+        if isinstance(job_summary, dict):
+            base["last_inserted_rows"] = job_summary.get("inserted_rows")
     return base
 
 
@@ -279,16 +288,16 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
     ds = (dataset or "").strip().lower()
     if not ds:
         return None
-    if ds in {"kline_daily_qfq", "kline_daily_raw", "kline_minute_raw"}:
+    if ds in {"kline_daily_raw", "kline_minute_raw"}:
         return "tdx_api"
-    if ds.startswith("tdx_board_"):
+    if ds in {"stock_moneyflow_ts", "stock_basic", "stock_st", "bak_basic", "daily_basic", "stk_limit"}:
         return "tushare"
-    if ds in {"stock_moneyflow", "stock_moneyflow_ts", "stock_basic", "stock_st", "bak_basic", "daily_basic"}:
+    if ds in {"index_daily", "index_basic"}:
+        return "tushare"
+    if ds in {"sw_index_classify", "sw_index_member", "sw_daily", "sw_sector", "sector_data"}:
         return "tushare"
     if ds in {"kline_weekly"}:
-        return "derived_from_kline_daily_qfq"
-    if ds in {"trade_agg_5m"}:
-        return "tdx_api_minute_trade_all"
+        return "derived_from_kline_daily_raw"
     if ds.startswith("xtquant_"):
         return "xtquant"
     return None
@@ -526,6 +535,211 @@ def _job_status(job_id: uuid.UUID) -> Dict[str, Any]:
     }
 
 
+def _batch_job_statuses(job_ids: List[uuid.UUID]) -> List[Dict[str, Any]]:
+    """批量获取多个 job 的状态 — 替代逐个调用 _job_status() 的 N+1 模式。
+
+    将 N×5 次独立 DB 连接合并为单连接 5 次查询，
+    50 个 job 从 ~250 次 DB 连接降至 1 次。
+    """
+    if not job_ids:
+        return []
+
+    id_strs = [str(jid) for jid in job_ids]
+    ph = ",".join(["%s"] * len(id_strs))
+    id_tuple = tuple(id_strs)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Q1: 全部 job 主信息
+            cur.execute(
+                f"SELECT job_id, job_type, status, created_at, started_at, finished_at, summary"
+                f" FROM market.ingestion_jobs WHERE job_id IN ({ph})",
+                id_tuple,
+            )
+            cols = [c[0] for c in cur.description]
+            jobs_raw = [dict(zip(cols, r)) for r in cur.fetchall()]
+            job_map = {str(j["job_id"]): j for j in jobs_raw}
+
+            # Q2: task 统计 (按 job_id + status 分组)
+            cur.execute(
+                f"SELECT job_id::text AS jid, status, COUNT(*) AS cnt"
+                f" FROM market.ingestion_job_tasks"
+                f" WHERE job_id IN ({ph})"
+                f" GROUP BY job_id, status",
+                id_tuple,
+            )
+            task_cols = [c[0] for c in cur.description]
+            task_rows = [dict(zip(task_cols, r)) for r in cur.fetchall()]
+            task_map: Dict[str, Dict[str, int]] = {}
+            for r in task_rows:
+                task_map.setdefault(r["jid"], {})[(r["status"] or "").lower()] = int(r["cnt"])
+
+            # Q3: avg progress (用于 tasks 全部 running 但无 done 的情况)
+            cur.execute(
+                f"SELECT job_id::text AS jid, COALESCE(AVG(progress), 0) AS avg_progress"
+                f" FROM market.ingestion_job_tasks"
+                f" WHERE job_id IN ({ph})"
+                f" GROUP BY job_id",
+                id_tuple,
+            )
+            avg_cols = [c[0] for c in cur.description]
+            avg_rows = [dict(zip(avg_cols, r)) for r in cur.fetchall()]
+            avg_progress_map = {r["jid"]: float(r["avg_progress"] or 0) for r in avg_rows}
+
+            # Q4: logs (每个 job 最新 5 条)
+            cur.execute(
+                f"SELECT jid, message FROM ("
+                f"  SELECT job_id::text AS jid, message,"
+                f"    ROW_NUMBER() OVER (PARTITION BY job_id ORDER BY ts DESC) AS rn"
+                f"  FROM market.ingestion_logs"
+                f"  WHERE job_id IN ({ph})"
+                f") sub WHERE rn <= 5",
+                id_tuple,
+            )
+            log_cols = [c[0] for c in cur.description]
+            log_rows = [dict(zip(log_cols, r)) for r in cur.fetchall()]
+            log_map: Dict[str, List[str]] = {}
+            for r in log_rows:
+                log_map.setdefault(r["jid"], []).append(str(r["message"]))
+
+            # Q5: errors (每个 job 最多 20 条)
+            cur.execute(
+                f"SELECT run_id, ts_code, message, detail, jid FROM ("
+                f"  SELECT e.run_id, e.ts_code, e.message, e.detail,"
+                f"    r.params->>'job_id' AS jid,"
+                f"    ROW_NUMBER() OVER (PARTITION BY r.params->>'job_id' ORDER BY e.run_id, e.ts_code) AS rn"
+                f"  FROM market.ingestion_errors e"
+                f"  JOIN market.ingestion_runs r ON r.run_id = e.run_id"
+                f"  WHERE r.params->>'job_id' IN ({ph})"
+                f") sub WHERE rn <= 20",
+                id_tuple,
+            )
+            err_cols = [c[0] for c in cur.description]
+            err_rows = [dict(zip(err_cols, r)) for r in cur.fetchall()]
+            error_map: Dict[str, List[Dict]] = {}
+            for r in err_rows:
+                error_map.setdefault(r["jid"], []).append({
+                    "run_id": str(r["run_id"]),
+                    "ts_code": r["ts_code"],
+                    "message": r["message"],
+                    "detail": r["detail"],
+                })
+
+    # 组装结果 (保持与 _job_status() 完全一致的输出格式)
+    items = []
+    for jid_str in id_strs:
+        job = job_map.get(jid_str)
+        if not job:
+            continue
+        summary = _json_load(job.get("summary")) or {}
+        stats_by_status = task_map.get(jid_str, {})
+
+        # --- 计算 counters & percent (与 _job_status 逻辑完全一致) ---
+        total = sum(stats_by_status.values())
+        success = stats_by_status.get("success", 0)
+        failed = stats_by_status.get("failed", 0)
+        running = stats_by_status.get("running", 0)
+        pending = stats_by_status.get("queued", 0) + stats_by_status.get("pending", 0)
+        done = success + failed
+
+        percent = 0
+        if total > 0:
+            if done > 0:
+                percent = min(100, int((done / total) * 100))
+            else:
+                percent = max(0, min(100, int(avg_progress_map.get(jid_str, 0))))
+        else:
+            stats = summary.get("stats") or {}
+            total_codes = int(summary.get("total_codes") or stats.get("total_codes") or 0)
+            success_codes = int(summary.get("success_codes") or stats.get("success_codes") or 0)
+            failed_codes = int(summary.get("failed_codes") or stats.get("failed_codes") or 0)
+            total_days = int(summary.get("total_days") or 0)
+            done_days = int(summary.get("done_days") or 0)
+            if total_codes > 0:
+                percent = min(100, int(((success_codes + failed_codes) / total_codes) * 100))
+                total = total_codes
+                done = success_codes + failed_codes
+                success = success_codes
+                failed = failed_codes
+            elif total_days > 0:
+                percent = min(100, int((done_days / total_days) * 100))
+                total = total_days
+                done = done_days
+            else:
+                counters_from_summary = summary.get("counters") or {}
+                try:
+                    total_c = int(counters_from_summary.get("total") or 0)
+                    done_c = int(counters_from_summary.get("done") or 0)
+                except Exception:  # noqa: BLE001
+                    total_c = 0
+                    done_c = 0
+                if total_c > 0:
+                    total = total_c
+                    done = done_c
+                    success = int(counters_from_summary.get("success") or success)
+                    failed = int(counters_from_summary.get("failed") or failed)
+                    try:
+                        progress_val = counters_from_summary.get("progress")
+                        if progress_val is None:
+                            progress_val = summary.get("progress")
+                        if progress_val is not None:
+                            percent = max(0, min(100, int(float(progress_val))))
+                        else:
+                            percent = min(100, int((done / total) * 100))
+                    except Exception:  # noqa: BLE001
+                        percent = min(100, int((done / total) * 100)) if total > 0 else 0
+
+        inserted_rows = int(
+            summary.get("inserted_rows") or (summary.get("stats") or {}).get("inserted_rows") or 0
+        )
+        counters_from_summary = summary.get("counters") or {}
+        counters = {
+            "total": counters_from_summary.get("total", total),
+            "done": counters_from_summary.get("done", done),
+            "running": counters_from_summary.get("running", running),
+            "pending": counters_from_summary.get("pending", pending),
+            "failed": counters_from_summary.get("failed", failed),
+            "success": counters_from_summary.get("success", success),
+            "inserted_rows": counters_from_summary.get("inserted_rows", inserted_rows),
+            "success_codes": int(
+                summary.get("success_codes") or (summary.get("stats") or {}).get("success_codes") or 0
+            ),
+        }
+
+        dataset = _infer_dataset(summary)
+        mode = _infer_mode(job.get("job_type"), summary)
+        source = _infer_source(dataset)
+        date_range = _infer_date_range(summary)
+        meta = {
+            "dataset": dataset,
+            "mode": mode,
+            "type": job.get("job_type"),
+            "source": source,
+            "start_date": date_range["start_date"],
+            "end_date": date_range["end_date"],
+            "exchanges": summary.get("exchanges"),
+            "freq_minutes": summary.get("freq_minutes"),
+            "symbols_scope": summary.get("symbols_scope"),
+        }
+
+        items.append({
+            "job_id": str(job.get("job_id")),
+            "job_type": job.get("job_type"),
+            "status": job.get("status"),
+            "created_at": _isoformat(job.get("created_at")),
+            "started_at": _isoformat(job.get("started_at")),
+            "finished_at": _isoformat(job.get("finished_at")),
+            "summary": summary,
+            "progress": percent,
+            "counters": counters,
+            "logs": log_map.get(jid_str, []),
+            "error_samples": error_map.get(jid_str, []),
+            "meta": meta,
+        })
+
+    return items
+
+
 def _upsert_ingestion_schedule_entry(
     dataset: str,
     mode: str,
@@ -571,14 +785,12 @@ def _upsert_ingestion_schedule_entry(
 def _ensure_default_ingestion_schedules() -> List[Dict[str, Any]]:
     defaults = [
         # 说明：
-        # - kline_daily_qfq / kline_daily_raw / kline_minute_raw 的初始化和增量
+        # - kline_daily_raw / kline_minute_raw 的初始化和增量
         #   已统一切换为 Go 实现（init: /api/ingestion/init，incremental: /api/ingestion/incremental），
         #   不再通过 Python 调度器执行，因此这里不再为它们创建默认 schedule，
         #   以避免误触发 Python 版脚本。
-        ("stock_moneyflow", "incremental", "daily", True, {}),
         ("stock_moneyflow_ts", "incremental", "daily", True, {}),
         ("kline_weekly", "incremental", "daily", True, {}),
-        ("trade_agg_5m", "incremental", "10m", True, {"freq_minutes": 5, "symbols_scope": "watchlist"}),
     ]
     items: List[Dict[str, Any]] = []
     for ds, md, freq, en, opts in defaults:
@@ -588,13 +800,13 @@ def _ensure_default_ingestion_schedules() -> List[Dict[str, Any]]:
 
 
 @router.post("/testing/run")
-async def trigger_testing_run(payload: TestingRunRequest) -> Dict[str, Any]:
+def trigger_testing_run(payload: TestingRunRequest) -> Dict[str, Any]:
     run_id = scheduler.run_testing_now(triggered_by=payload.triggered_by, options=payload.options)
     return {"run_id": str(run_id)}
 
 
 @router.get("/testing/runs")
-async def list_testing_runs(limit: int = Query(20), offset: int = Query(0)) -> Dict[str, Any]:
+def list_testing_runs(limit: int = Query(20), offset: int = Query(0)) -> Dict[str, Any]:
     total_rows = _fetchall(
         """
         SELECT COUNT(*) AS cnt
@@ -621,7 +833,7 @@ async def list_testing_runs(limit: int = Query(20), offset: int = Query(0)) -> D
 
 
 @router.get("/testing/schedule")
-async def list_testing_schedules() -> Dict[str, Any]:
+def list_testing_schedules() -> Dict[str, Any]:
     rows = _fetchall(
         """
         SELECT schedule_id, enabled, frequency, options, last_run_at, next_run_at,
@@ -634,7 +846,7 @@ async def list_testing_schedules() -> Dict[str, Any]:
 
 
 @router.post("/testing/schedule")
-async def upsert_testing_schedule(payload: TestingScheduleUpsertRequest) -> Dict[str, Any]:
+def upsert_testing_schedule(payload: TestingScheduleUpsertRequest) -> Dict[str, Any]:
     schedule_id = payload.schedule_id or uuid.uuid4()
     sql = """
         INSERT INTO market.testing_schedules (
@@ -653,7 +865,7 @@ async def upsert_testing_schedule(payload: TestingScheduleUpsertRequest) -> Dict
 
 
 @router.post("/testing/schedule/{schedule_id}/toggle")
-async def toggle_testing_schedule(
+def toggle_testing_schedule(
     payload: ToggleRequest,
     schedule_id: uuid.UUID = Path(..., description="Testing schedule identifier"),
 ) -> Dict[str, Any]:
@@ -670,7 +882,7 @@ async def toggle_testing_schedule(
 
 
 @router.post("/testing/schedule/{schedule_id}/run")
-async def run_testing_schedule(schedule_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
+def run_testing_schedule(schedule_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
     data = _ensure_testing_schedule(schedule_id)
     run_id = scheduler.run_testing_for_schedule(schedule_id)
     data["last_status"] = "queued"
@@ -683,13 +895,12 @@ async def run_testing_schedule(schedule_id: uuid.UUID = Path(...)) -> Dict[str, 
 
 
 @router.post("/ingestion/init")
-async def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
+def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
     dataset = (payload.dataset or "").strip().lower()
     # 目前仅支持通过 Go 服务执行以下初始化：
     # - kline_minute_raw: 分钟线 RAW，全量 COPY 入库
     # - kline_daily_raw_go: 未复权日线 RAW（Go 直连版），全量 COPY 入库
-    # - kline_daily_qfq_go: 前复权日线 QFQ（Go 直连版），全量 COPY 入库
-    if dataset not in {"kline_minute_raw", "kline_daily_raw_go", "kline_daily_qfq_go"}:
+    if dataset not in {"kline_minute_raw", "kline_daily_raw_go"}:
         raise HTTPException(status_code=400, detail="unsupported dataset for init")
     options = dict(payload.options or {})
     summary = {"datasets": [dataset], **options}
@@ -859,87 +1070,17 @@ async def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
 
         return {"job_id": str(job_id), "task_id": task_id}
 
-    # 前复权日线（Go 直连版）初始化：调用新的 TDX Go API，将结果 COPY 至 kline_daily_qfq
-    if dataset == "kline_daily_qfq_go":
-        workers = int(options.get("workers") or 1)
-        truncate_before = bool(options.get("truncate"))
-        max_rows_per_chunk = int(options.get("max_rows_per_chunk") or 500_000)
-        codes = options.get("codes") or []
-
-        go_payload: Dict[str, Any] = {
-            "job_id": str(job_id),
-            "codes": codes,
-            "workers": workers,
-            "options": {
-                "truncate_before": truncate_before,
-                "max_rows_per_chunk": max_rows_per_chunk,
-                "source": "tdx_api",
-            },
-        }
-
-        base = os.getenv("TDX_API_BASE", "http://localhost:19080").rstrip("/")
-        url = f"{base}/api/tasks/ingest-daily-qfq-init"
-
-        try:
-            resp = requests.post(url, json=go_payload, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as exc:  # noqa: BLE001
-            err_summary = {**summary, "error": str(exc), "phase": "create_go_task"}
-            _execute(
-                """
-                UPDATE market.ingestion_jobs
-                   SET status='failed', finished_at=NOW(), summary=%s
-                 WHERE job_id=%s
-                """,
-                (_json_dump(err_summary), job_id),
-            )
-            raise HTTPException(status_code=502, detail=f"failed to start TDX daily qfq init task: {exc}")
-
-        if isinstance(data, dict) and data.get("code") not in (0, None):
-            msg = str(data)
-            err_summary = {**summary, "error": msg, "phase": "create_go_task"}
-            _execute(
-                """
-                UPDATE market.ingestion_jobs
-                   SET status='failed', finished_at=NOW(), summary=%s
-                 WHERE job_id=%s
-                """,
-                (_json_dump(err_summary), job_id),
-            )
-            raise HTTPException(status_code=502, detail=f"TDX daily qfq init task error: {msg}")
-
-        task_id: Optional[str] = None
-        payload_data = data.get("data") if isinstance(data, dict) else None
-        if isinstance(payload_data, dict):
-            raw_tid = payload_data.get("task_id")
-            if raw_tid is not None:
-                task_id = str(raw_tid)
-
-        if task_id is not None:
-            summary_with_task = {**summary, "go_task_id": task_id}
-            _execute(
-                """
-                UPDATE market.ingestion_jobs
-                   SET summary=%s
-                 WHERE job_id=%s
-                """,
-                (_json_dump(summary_with_task), job_id),
-            )
-
-        return {"job_id": str(job_id), "task_id": task_id}
-
     # 其它历史 init 任务路径（如旧版 kline_daily_raw Python 版）已关闭。
     raise HTTPException(status_code=400, detail="init path not implemented for this dataset")
 
 
 @router.get("/ingestion/job/{job_id}")
-async def get_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
+def get_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
     return _job_status(job_id)
 
 
 @router.post("/ingestion/job/{job_id}/cancel")
-async def cancel_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
+def cancel_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
     """取消正在运行的 Go 驱动的 ingestion 任务（目前主要用于 kline_minute_raw init）。
 
     - 从 ingestion_jobs.summary 中读取 go_task_id
@@ -997,31 +1138,303 @@ async def cancel_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
 
 
 @router.get("/ingestion/jobs")
-async def list_ingestion_jobs(limit: int = Query(50), active_only: bool = Query(False)) -> Dict[str, Any]:
+def list_ingestion_jobs(limit: int = Query(50), active_only: bool = Query(False)) -> Dict[str, Any]:
     base_sql = (
-        "SELECT job_id, status, created_at FROM market.ingestion_jobs "
+        "SELECT job_id FROM market.ingestion_jobs "
         + ("WHERE status IN ('running','queued','pending') " if active_only else "")
         + "ORDER BY created_at DESC LIMIT %s"
     )
     rows = _fetchall(base_sql, (limit,))
-    items: List[Dict[str, Any]] = []
-    for r in rows:
-        jid = r.get("job_id")
-        try:
-            items.append(_job_status(uuid.UUID(str(jid))))
-        except Exception:  # noqa: BLE001
-            continue
+    job_ids = [uuid.UUID(str(r["job_id"])) for r in rows]
+    items = _batch_job_statuses(job_ids)
     return {"items": items}
 
 
 @router.post("/ingestion/schedule/defaults")
-async def create_default_ingestion_schedules() -> Dict[str, Any]:
+def create_default_ingestion_schedules() -> Dict[str, Any]:
     items = _ensure_default_ingestion_schedules()
     return {"items": [_serialize_ingestion_schedule(row) for row in items]}
 
 
+class BatchScheduleItem(BaseModel):
+    dataset: str
+    mode: str = "incremental"
+    frequency: str = "daily"
+    enabled: bool = True
+    at: Optional[str] = None  # HH:MM format for daily schedules
+    workers: Optional[int] = None  # concurrency for TDX datasets
+
+
+class BatchCreateSchedulesRequest(BaseModel):
+    items: List[BatchScheduleItem]
+
+
+@router.post("/ingestion/schedule/batch-create")
+def batch_create_ingestion_schedules(payload: BatchCreateSchedulesRequest) -> Dict[str, Any]:
+    """Batch create/update daily ingestion schedules for multiple datasets."""
+    results: List[Dict[str, Any]] = []
+    for item in payload.items:
+        if item.mode not in SUPPORTED_INGESTION_MODES:
+            results.append({"dataset": item.dataset, "error": f"invalid mode: {item.mode}"})
+            continue
+        options: Dict[str, Any] = {}
+        if item.at:
+            options["at"] = item.at
+        if item.workers and item.workers > 0:
+            options["workers"] = item.workers
+
+        # upsert: find existing or create new
+        rows = _fetchall(
+            "SELECT schedule_id FROM market.ingestion_schedules WHERE dataset=%s AND mode=%s",
+            (item.dataset, item.mode),
+        )
+        schedule_id = rows[0]["schedule_id"] if rows else uuid.uuid4()
+        _execute(
+            """INSERT INTO market.ingestion_schedules
+                   (schedule_id, dataset, mode, enabled, frequency, options, created_at, updated_at)
+               VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
+               ON CONFLICT (schedule_id)
+               DO UPDATE SET enabled=EXCLUDED.enabled, frequency=EXCLUDED.frequency,
+                             options=EXCLUDED.options, updated_at=NOW()""",
+            (schedule_id, item.dataset, item.mode, item.enabled, item.frequency, _json_dump(options)),
+        )
+        data = _ensure_ingestion_schedule(schedule_id)
+        results.append(_serialize_ingestion_schedule(data))
+
+    scheduler.refresh_schedules()
+    return {"created": len(results), "items": results}
+
+
+# 每日定时调度目标数据集
+_DAILY_PRESETS = [
+    ("kline_daily_raw", "incremental"),
+    ("kline_minute_raw", "incremental"),
+    ("daily_basic", "incremental"),
+    ("stock_basic", "init"),
+    ("stock_moneyflow_ts", "incremental"),
+    ("adj_factor", "incremental"),
+    ("index_daily", "incremental"),
+    ("stock_st", "incremental"),
+    ("bak_basic", "incremental"),
+    ("stk_limit", "incremental"),
+    ("sw_sector", "incremental"),
+    ("sector_data", "incremental"),
+    ("cyq_perf", "incremental"),
+]
+
+
+def _create_sw_sector_jobs(
+    mode: str, options: Dict[str, Any], triggered_by: str,
+) -> tuple:
+    """Create 3 child jobs for sw_sector composite sync.
+
+    Returns (sub_job_ids: List[str], run_id: str).
+    Each child job appears individually in the task monitor.
+    """
+    sub_specs = [
+        ("sw_index_classify", "init"),
+        ("sw_index_member", "init"),
+        ("sw_daily", mode),
+    ]
+    sub_job_ids: List[str] = []
+    for ds_name, ds_mode in sub_specs:
+        summary: Dict[str, Any] = {
+            "dataset": ds_name, "mode": ds_mode,
+            "triggered_by": triggered_by, "composite": "sw_sector",
+        }
+        for k in ("start_date", "end_date", "exchanges"):
+            if k in options:
+                summary[k] = options[k]
+        jid = _create_job(ds_mode, summary)
+        sub_job_ids.append(str(jid))
+    opts = dict(options)
+    opts["sub_job_ids"] = sub_job_ids
+    run_id = scheduler.run_ingestion_now(
+        dataset="sw_sector", mode=mode, triggered_by=triggered_by, options=opts,
+    )
+    return sub_job_ids, str(run_id)
+
+
+class RunSinglePresetRequest(BaseModel):
+    dataset: str
+    workers: Optional[int] = None
+
+
+def _run_preset(dataset: str, mode: str, triggered_by: str, workers: Optional[int] = None) -> Dict[str, Any]:
+    if dataset == "sw_sector":
+        sub_job_ids, run_id = _create_sw_sector_jobs(mode, {}, triggered_by)
+        return {"dataset": dataset, "mode": mode, "job_id": sub_job_ids[-1],
+                "run_id": run_id, "sub_job_ids": sub_job_ids}
+    summary: Dict[str, Any] = {"dataset": dataset, "mode": mode, "triggered_by": triggered_by}
+    if workers:
+        summary["workers"] = workers
+    job_id = _create_job(mode, summary)
+    opts: Dict[str, Any] = {"job_id": str(job_id)}
+    if workers:
+        opts["workers"] = workers
+    run_id = scheduler.run_ingestion_now(
+        dataset=dataset, mode=mode, triggered_by=triggered_by, options=opts,
+    )
+    return {"dataset": dataset, "mode": mode, "job_id": str(job_id), "run_id": str(run_id)}
+
+
+@router.post("/ingestion/schedule/run-single-preset")
+def run_single_preset(req: RunSinglePresetRequest) -> Dict[str, Any]:
+    preset_map = {ds: m for ds, m in _DAILY_PRESETS}
+    mode = preset_map.get(req.dataset)
+    if not mode:
+        raise HTTPException(status_code=400, detail=f"Unknown preset dataset: {req.dataset}")
+    return _run_preset(req.dataset, mode, "preset-run-single", req.workers)
+
+
+@router.post("/ingestion/schedule/run-all-presets")
+def run_all_preset_schedules() -> Dict[str, Any]:
+    jobs = [_run_preset(ds, m, "preset-run-all") for ds, m in _DAILY_PRESETS]
+    return {"triggered": len(jobs), "jobs": jobs}
+
+
+@router.get("/ingestion/schedule/preset-stats")
+def get_preset_stats() -> Dict[str, Any]:
+    """Batch query latest data dates for the 9 preset datasets."""
+    results: List[Dict[str, Any]] = []
+    for dataset, mode in _DAILY_PRESETS:
+        entry: Dict[str, Any] = {"dataset": dataset, "mode": mode}
+        # sw_sector composite: use sw_daily stats as representative
+        stats_key = "sw_daily" if dataset == "sw_sector" else dataset
+        # query data_stats_config for table/column
+        cfg = _fetchone(
+            "SELECT table_name, date_column FROM market.data_stats_config WHERE data_kind = %s AND enabled",
+            (stats_key,),
+        )
+        if not cfg:
+            entry["current_max_date"] = None
+            entry["error"] = "no config"
+            results.append(entry)
+            continue
+        table_name = str(cfg.get("table_name") or "").strip()
+        date_column = str(cfg.get("date_column") or "trade_date").strip()
+        # query max date
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SET LOCAL statement_timeout = '10s'")
+                    cur.execute(f"SELECT MAX({date_column})::date FROM {table_name}")
+                    row = cur.fetchone()
+                    mx = row[0] if row else None
+            entry["current_max_date"] = mx.isoformat() if mx else None
+        except Exception as exc:
+            entry["current_max_date"] = None
+            entry["error"] = str(exc)
+        results.append(entry)
+    return {"items": results}
+
+
+@router.get("/ingestion/schedule/preset-daily-status")
+def get_preset_daily_status() -> Dict[str, Any]:
+    """查询每个 preset 数据集当天的执行状态。
+
+    返回每个 dataset 的状态: null(未执行) / queued / running / success / failed
+    sw_sector 额外返回 3 个子任务的独立状态。
+    """
+    results: Dict[str, Any] = {}
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for dataset, mode in _DAILY_PRESETS:
+                if dataset == "sw_sector":
+                    # sw_sector: 查 3 个子任务
+                    for sub_ds in ["sw_index_classify", "sw_index_member", "sw_daily"]:
+                        cur.execute("""
+                            SELECT status, created_at, finished_at
+                            FROM market.ingestion_jobs
+                            WHERE summary->>'dataset' = %s
+                              AND created_at::date = CURRENT_DATE
+                            ORDER BY created_at DESC LIMIT 1
+                        """, (sub_ds,))
+                        row = cur.fetchone()
+                        if row:
+                            results[sub_ds] = {
+                                "status": row[0],
+                                "created_at": _isoformat(row[1]),
+                                "finished_at": _isoformat(row[2]),
+                            }
+                    # sw_sector 本身取 3 个子任务的综合状态
+                    sub_statuses = [results.get(s, {}).get("status") for s in ["sw_index_classify", "sw_index_member", "sw_daily"]]
+                    if any(s == "failed" for s in sub_statuses):
+                        results["sw_sector"] = {"status": "failed"}
+                    elif any(s == "running" for s in sub_statuses):
+                        results["sw_sector"] = {"status": "running"}
+                    elif any(s == "queued" for s in sub_statuses):
+                        results["sw_sector"] = {"status": "queued"}
+                    elif all(s == "success" for s in sub_statuses):
+                        results["sw_sector"] = {"status": "success"}
+                    # else: 部分执行部分未执行, 不设置
+                else:
+                    cur.execute("""
+                        SELECT status, created_at, finished_at
+                        FROM market.ingestion_jobs
+                        WHERE summary->>'dataset' = %s
+                          AND created_at::date = CURRENT_DATE
+                        ORDER BY created_at DESC LIMIT 1
+                    """, (dataset,))
+                    row = cur.fetchone()
+                    if row:
+                        results[dataset] = {
+                            "status": row[0],
+                            "created_at": _isoformat(row[1]),
+                            "finished_at": _isoformat(row[2]),
+                        }
+
+    return {"items": results}
+
+
+@router.get("/ingestion/tushare/datasets")
+def list_tushare_datasets() -> Dict[str, Any]:
+    """Return all engine-managed DatasetSpec definitions with latest sync status."""
+    specs = []
+    for name, spec in DATASET_REGISTRY.items():
+        row = _fetchone(
+            """SELECT job_id, status, finished_at, summary
+                 FROM market.ingestion_jobs
+                WHERE summary::text LIKE %s
+                ORDER BY created_at DESC LIMIT 1""",
+            (f'%"dataset": "{name}"%',),
+        )
+        entry: Dict[str, Any] = {
+            "name": name,
+            "tushare_api": spec.tushare_api,
+            "target_table": spec.target_table,
+            "query_mode": spec.query_mode.value,
+            "supports_incremental": spec.supports_incremental,
+        }
+        if row:
+            entry["last_job_id"] = str(row["job_id"])
+            entry["last_status"] = row["status"]
+            entry["last_finished"] = _isoformat(row.get("finished_at"))
+        specs.append(entry)
+    return {"datasets": specs}
+
+
+@router.post("/ingestion/tushare/sync-all")
+def tushare_sync_all() -> Dict[str, Any]:
+    """Trigger incremental sync for all 7 engine-managed datasets."""
+    jobs: List[Dict[str, Any]] = []
+    for name, spec in DATASET_REGISTRY.items():
+        mode = "init" if not spec.supports_incremental else "incremental"
+        summary = {"dataset": name, "mode": mode}
+        job_id = _create_job(mode, summary)
+        run_id = scheduler.run_ingestion_now(
+            dataset=name, mode=mode,
+            triggered_by="api-sync-all",
+            options={"job_id": str(job_id)},
+        )
+        jobs.append({"dataset": name, "mode": mode,
+                      "job_id": str(job_id), "run_id": str(run_id)})
+    return {"triggered": len(jobs), "jobs": jobs}
+
+
 @router.post("/ingestion/run")
-async def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
+def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
     payload.validate_mode()
     dataset = (payload.dataset or "").strip().lower()
     mode = (payload.mode or "").strip().lower()
@@ -1033,7 +1446,7 @@ async def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
     #   - incremental: /api/ingestion/incremental
     # 这里显式禁止通过 Python 调度入口 /api/ingestion/run 触发，
     # 避免应用误走 Python 版脚本导致行为不一致或无法取消任务。
-    if dataset in {"kline_daily_qfq", "kline_daily_raw", "kline_minute_raw"} and mode in {"init", "incremental"}:
+    if dataset in {"kline_daily_raw", "kline_minute_raw"} and mode in {"init", "incremental"}:
         raise HTTPException(
             status_code=400,
             detail="dataset must be ingested via Go APIs (use /api/ingestion/init or /api/ingestion/incremental)",
@@ -1065,6 +1478,12 @@ async def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="daily_basic init requires start_date")
         if mode == "init" and not options.get("end_date"):
             raise HTTPException(status_code=400, detail="daily_basic init requires end_date")
+    elif dataset == "stk_limit":
+        # init: 需要 start_date/end_date；incremental: start_date 可选
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="stk_limit init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="stk_limit init requires end_date")
     elif dataset == "index_daily":
         # 指数日线行情 index_daily：
         # - init: 必须提供 start_date/end_date
@@ -1103,6 +1522,36 @@ async def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail=f"{dataset} init requires start_date")
         if mode == "init" and not options.get("end_date"):
             raise HTTPException(status_code=400, detail=f"{dataset} init requires end_date")
+    elif dataset == "sw_index_classify":
+        # 行业分类：仅 init（全量替换），无需日期参数
+        if mode != "init":
+            raise HTTPException(status_code=400, detail="sw_index_classify only supports init mode")
+    elif dataset == "sw_index_member":
+        # PIT 成分股映射：仅 init（全量替换），无需日期参数
+        if mode != "init":
+            raise HTTPException(status_code=400, detail="sw_index_member only supports init mode")
+    elif dataset == "sw_daily":
+        # 行业日线行情：init 需要 start_date/end_date；incremental 时自动推断
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="sw_daily init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="sw_daily init requires end_date")
+    elif dataset == "sw_sector":
+        # 复合数据集：classify(全量) + member(全量) + daily(按mode)
+        # init 需要 start_date/end_date（用于 sw_daily 部分）
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="sw_sector init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="sw_sector init requires end_date")
+        # 创建 3 个子 job（任务监视器分别显示）
+        sub_job_ids, run_id = _create_sw_sector_jobs(mode, options, payload.triggered_by)
+        return {"job_id": sub_job_ids[-1], "run_id": run_id, "sub_job_ids": sub_job_ids}
+    elif dataset == "sector_data":
+        # 后处理数据集：init 需要 start_date/end_date；incremental 自动推断日期范围
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="sector_data init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="sector_data init requires end_date")
 
     summary = {"dataset": payload.dataset, "mode": payload.mode, **(payload.options or {})}
     job_type = "init" if payload.mode == "init" else "incremental"
@@ -1113,27 +1562,6 @@ async def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
     if payload.dataset == "kline_daily_raw" and payload.mode == "incremental" and "workers" not in options:
         options["workers"] = 4
 
-    # 对 trade_agg_5m 增量任务：前端通过 options.args 传入完整命令行片段，
-    # 其中可能已经包含一个前端生成的 --job-id。这里需要将其替换为我们刚刚
-    # 在 ingestion_jobs 表中创建的 job_id，确保脚本在写入 ingestion_job_tasks
-    # 时不会触发外键约束错误。
-    if payload.dataset == "trade_agg_5m" and "args" in options and isinstance(options["args"], str):
-        raw_args = options["args"].strip()
-        if raw_args:
-            tokens = [tok for tok in raw_args.split(" ") if tok]
-            new_tokens: list[str] = []
-            skip_next = False
-            for tok in tokens:
-                if skip_next:
-                    skip_next = False
-                    continue
-                if tok == "--job-id":
-                    # 跳过旧的 --job-id 及其参数
-                    skip_next = True
-                    continue
-                new_tokens.append(tok)
-            new_tokens.extend(["--job-id", str(job_id)])
-            options["args"] = " ".join(new_tokens)
     run_id = scheduler.run_ingestion_now(
         dataset=payload.dataset,
         mode=payload.mode,
@@ -1144,21 +1572,30 @@ async def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
 
 
 @router.get("/ingestion/schedule")
-async def list_ingestion_schedules() -> Dict[str, Any]:
+def list_ingestion_schedules() -> Dict[str, Any]:
     rows = _fetchall(
         """
-        SELECT schedule_id, dataset, mode, enabled, frequency, options,
-               last_run_at, next_run_at, last_status, last_error,
-               created_at, updated_at
-          FROM market.ingestion_schedules
-         ORDER BY dataset, mode
+        SELECT s.schedule_id, s.dataset, s.mode, s.enabled, s.frequency, s.options,
+               s.last_run_at, s.next_run_at, s.last_status, s.last_error,
+               s.created_at, s.updated_at,
+               j.summary AS last_job_summary
+          FROM market.ingestion_schedules s
+          LEFT JOIN LATERAL (
+              SELECT summary
+                FROM market.ingestion_jobs
+               WHERE summary->>'schedule_id' = s.schedule_id::text
+                  OR summary->>'dataset' = s.dataset
+               ORDER BY created_at DESC
+               LIMIT 1
+          ) j ON TRUE
+         ORDER BY s.dataset, s.mode
         """,
     )
     return {"items": [_serialize_ingestion_schedule(row) for row in rows]}
 
 
 @router.post("/ingestion/schedule")
-async def upsert_ingestion_schedule(payload: IngestionScheduleUpsertRequest) -> Dict[str, Any]:
+def upsert_ingestion_schedule(payload: IngestionScheduleUpsertRequest) -> Dict[str, Any]:
     payload.validate_mode()
     schedule_id = payload.schedule_id
     if schedule_id is None:
@@ -1200,7 +1637,7 @@ async def upsert_ingestion_schedule(payload: IngestionScheduleUpsertRequest) -> 
 
 
 @router.post("/ingestion/schedule/{schedule_id}/toggle")
-async def toggle_ingestion_schedule(
+def toggle_ingestion_schedule(
     payload: ToggleRequest,
     schedule_id: uuid.UUID = Path(..., description="Ingestion schedule identifier"),
 ) -> Dict[str, Any]:
@@ -1217,7 +1654,7 @@ async def toggle_ingestion_schedule(
 
 
 @router.post("/ingestion/schedule/{schedule_id}/run")
-async def run_ingestion_schedule(schedule_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
+def run_ingestion_schedule(schedule_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
     data = _ensure_ingestion_schedule(schedule_id)
     run_id = scheduler.run_ingestion_for_schedule(schedule_id, data["dataset"], data["mode"])
     data["last_status"] = "queued"
@@ -1225,7 +1662,7 @@ async def run_ingestion_schedule(schedule_id: uuid.UUID = Path(...)) -> Dict[str
 
 
 @router.delete("/ingestion/schedule/{schedule_id}")
-async def delete_ingestion_schedule(schedule_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
+def delete_ingestion_schedule(schedule_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
     """Delete a single ingestion schedule and remove it from in-memory scheduler.
 
     仅删除调度配置本身，不会删除历史任务或日志记录。
@@ -1251,7 +1688,7 @@ async def delete_ingestion_schedule(schedule_id: uuid.UUID = Path(...)) -> Dict[
 
 
 @router.get("/ingestion/logs")
-async def list_ingestion_logs(
+def list_ingestion_logs(
     limit: int = Query(50),
     job_id: Optional[uuid.UUID] = Query(None),
     offset: int = Query(0),
@@ -1316,7 +1753,7 @@ async def list_ingestion_logs(
 
 
 @router.delete("/ingestion/logs")
-async def bulk_delete_ingestion_logs(
+def bulk_delete_ingestion_logs(
     payload: BulkDeleteIngestionLogsRequest = Body(...),
 ) -> Dict[str, Any]:
     """Bulk delete ingestion logs by (job_id, ts) pairs or clear all.
@@ -1343,7 +1780,7 @@ async def bulk_delete_ingestion_logs(
 
 
 @router.delete("/ingestion/jobs/queued")
-async def delete_queued_ingestion_jobs() -> Dict[str, Any]:
+def delete_queued_ingestion_jobs() -> Dict[str, Any]:
     """Bulk delete all queued/pending ingestion jobs and their tasks.
 
     仅清理队列中的待运行作业及子任务，不影响已完成/正在运行的任务。
@@ -1369,7 +1806,7 @@ async def delete_queued_ingestion_jobs() -> Dict[str, Any]:
     return {"deleted": deleted}
 
 @router.delete("/ingestion/job/{job_id}")
-async def delete_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
+def delete_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
     """Delete a historical ingestion job and its related records.
 
     仅删除数据库记录，不会取消正在运行的后台任务。
@@ -1439,7 +1876,7 @@ async def delete_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
 
 
 @router.delete("/testing/runs")
-async def bulk_delete_testing_runs(
+def bulk_delete_testing_runs(
     payload: BulkDeleteTestingRunsRequest = Body(...),
 ) -> Dict[str, Any]:
     """Bulk delete testing runs or clear all testing history.
@@ -1471,7 +1908,7 @@ async def bulk_delete_testing_runs(
 
 
 @router.post("/data-stats/refresh")
-async def refresh_data_stats() -> Dict[str, Any]:
+def refresh_data_stats() -> Dict[str, Any]:
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -1482,7 +1919,7 @@ async def refresh_data_stats() -> Dict[str, Any]:
 
 
 @router.get("/data-stats")
-async def list_data_stats() -> Dict[str, Any]:
+def list_data_stats() -> Dict[str, Any]:
     rows = _fetchall(
         """
         SELECT data_kind,
@@ -1502,7 +1939,7 @@ async def list_data_stats() -> Dict[str, Any]:
     return {"items": rows}
 
 @router.get("/data-stats/gaps")
-async def get_data_gaps(
+def get_data_gaps(
     data_kind: str = Query(..., description="数据集标识，对应 market.data_stats_config.data_kind"),
     start_date: Optional[str] = Query(
         default=None,
@@ -1539,7 +1976,7 @@ async def get_data_gaps(
     # 1) 从 data_stats_config 读取表名和日期列
     cfg_rows = _fetchall(
         """
-        SELECT data_kind, table_name, date_column
+        SELECT data_kind, table_name, date_column, extra_info
           FROM market.data_stats_config
          WHERE data_kind = %s AND enabled
         """,
@@ -1550,8 +1987,52 @@ async def get_data_gaps(
     cfg = cfg_rows[0]
     table_name = str(cfg.get("table_name") or "").strip()
     date_column = str(cfg.get("date_column") or "").strip()
-    if not table_name or not date_column:
+    if not table_name:
         raise HTTPException(status_code=400, detail="invalid data_stats_config for this data_kind")
+
+    # 非时序数据集（如 stock_basic）：返回行数统计而非交易日覆盖分析
+    extra_info = cfg.get("extra_info") or {}
+    if isinstance(extra_info, str):
+        import json as _json
+        extra_info = _json.loads(extra_info)
+    if extra_info.get("is_timeseries") is False:
+        count_rows = _fetchall(f"SELECT COUNT(*) AS cnt FROM {table_name}")
+        total_rows = count_rows[0]["cnt"] if count_rows else 0
+        result_payload = {
+            "data_kind": data_kind,
+            "table_name": table_name,
+            "is_timeseries": False,
+            "total_rows": total_rows,
+            "gap_check_supported": False,
+            "reason": "静态参考表，不适用交易日覆盖检查",
+        }
+        if not start_date and not end_date:
+            try:
+                now_ts = dt.datetime.now(dt.timezone.utc).isoformat()
+                result_payload["last_check_at"] = now_ts
+                _execute(
+                    """
+                    INSERT INTO market.data_stats (data_kind, table_name, last_check_result, last_check_at)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (data_kind)
+                    DO UPDATE SET
+                        last_check_result = EXCLUDED.last_check_result,
+                        last_check_at = EXCLUDED.last_check_at,
+                        table_name = EXCLUDED.table_name
+                    """,
+                    (data_kind, table_name, _json_dump(result_payload), now_ts),
+                )
+            except Exception as e:
+                print(f"Failed to update data_stats cache: {e}")
+        return result_payload
+
+    if not date_column:
+        return {
+            "data_kind": data_kind,
+            "table_name": table_name,
+            "gap_check_supported": False,
+            "reason": "该数据集无日期列，不支持按交易日历检测缺失",
+        }
 
     # 2) 确定检查区间：显式 start/end 优先，否则使用 data_stats 的 min/max
     start: Optional[dt.date]
@@ -1661,17 +2142,15 @@ async def get_data_gaps(
     
     # 确定代码列名
     code_col = None
-    if data_kind == "trade_agg_5m":
-        code_col = "symbol"
-    elif data_kind in (
-        "kline_daily_qfq", "kline_daily_raw", 
-        "kline_minute_raw", "kline_weekly", 
-        "stock_moneyflow", "stock_moneyflow_ts", "minute_1m",
+    if data_kind in (
+        "kline_daily_raw",
+        "kline_minute_raw", "kline_weekly",
+        "stock_moneyflow_ts", "minute_1m",
         "stock_st", "bak_basic",
-        "xtquant_pershare_index"
+        "xtquant_pershare_index",
+        "sw_daily", "sector_data",
+        "index_daily", "index_basic",
     ):
-        code_col = "ts_code"
-    elif data_kind.startswith("tdx_board_"):
         code_col = "ts_code"
 
     if code_col:
@@ -1743,7 +2222,7 @@ async def get_data_gaps(
 
 
 @router.get("/ingestion/auto-range")
-async def get_ingestion_auto_range(
+def get_ingestion_auto_range(
     data_kind: str = Query(..., description=" data_stats_config.data_kind"),
 ) -> Dict[str, Any]:
     """Calculate start_date and latest_trading_date for incremental catch-up.
@@ -1837,17 +2316,17 @@ class GoIncrementalRequest(BaseModel):
 
 
 @router.post("/ingestion/incremental")
-async def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any]:
+def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any]:
     """For specific TDX datasets, reuse Go init handlers as incremental tasks.
 
-    - data_kind: kline_daily_raw_go / kline_daily_qfq_go / kline_minute_raw
-    - start_date 
+    - data_kind: kline_daily_raw_go / kline_minute_raw
+    - start_date
     - end_date / target_date latest_trading_date
     - truncate_before false
     """
-    
+
     data_kind = (payload.data_kind or "").strip()
-    if data_kind not in {"kline_daily_raw_go", "kline_daily_qfq_go", "kline_minute_raw"}:
+    if data_kind not in {"kline_daily_raw_go", "kline_minute_raw"}:
         raise HTTPException(status_code=400, detail="unsupported data_kind for Go incremental")
     
     try:
@@ -1905,7 +2384,7 @@ async def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any
             },
         }
         url = f"{base}/api/tasks/ingest-minute-raw-init"
-    elif data_kind == "kline_daily_raw_go":
+    else:  # kline_daily_raw_go
         start_dt = dt.datetime.combine(start_date, dt.time.min).replace(tzinfo=tz)
         go_payload = {
             "job_id": str(job_id),
@@ -1919,19 +2398,7 @@ async def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any
             },
         }
         url = f"{base}/api/tasks/ingest-daily-raw-init"
-    else:  # kline_daily_qfq_go
-        go_payload = {
-            "job_id": str(job_id),
-            "codes": [],
-            "workers": workers,
-            "options": {
-                "truncate_before": False,
-                "max_rows_per_chunk": 500_000,
-                "source": "tdx_api",
-            },
-        }
-        url = f"{base}/api/tasks/ingest-daily-qfq-init"
-    
+
     try:
         resp = requests.post(url, json=go_payload, timeout=15)
         resp.raise_for_status()
@@ -1993,7 +2460,7 @@ async def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any
 # ---------------------------------------------------------------------------
 
 @router.get("/trading/latest-day")
-async def get_latest_trading_day() -> Dict[str, Any]:
+def get_latest_trading_day() -> Dict[str, Any]:
     """Return the latest trading day from market.trading_calendar.
 
     tdx_backend /api/trading/latest-day 
@@ -2020,7 +2487,7 @@ class CalendarSyncRequest(BaseModel):
 
 
 @router.post("/calendar/sync")
-async def calendar_sync(
+def calendar_sync(
     payload: Optional[CalendarSyncRequest] = Body(default=None),
     start_date: Optional[str] = Query(default=None),
     end_date: Optional[str] = Query(default=None),
@@ -2080,5 +2547,56 @@ async def calendar_sync(
     except HTTPException:
         # 直接透传业务性错误
         raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Sector Data: build + export
+# ---------------------------------------------------------------------------
+
+@router.post("/sector-data/build")
+def build_sector_data(
+    start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
+) -> Dict[str, Any]:
+    """预计算 sector_data（PIT映射 + 资金流聚合 + 展开到个股）。"""
+    from ..services.sector_data_builder import SectorDataBuilder
+
+    try:
+        builder = SectorDataBuilder()
+        rows = builder.build_range(
+            dt.date.fromisoformat(start_date),
+            dt.date.fromisoformat(end_date),
+        )
+        return {"rows": rows, "start_date": start_date, "end_date": end_date}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/sector-data/export")
+def export_sector_data(
+    snapshot_id: str = Query(..., description="Snapshot ID"),
+    start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
+) -> Dict[str, Any]:
+    """导出 sector_data.h5 到指定 snapshot。"""
+    from ..qlib_exporter.exporter import QlibSectorDataExporter
+
+    try:
+        exporter = QlibSectorDataExporter()
+        result = exporter.export_full(
+            snapshot_id=snapshot_id,
+            start=dt.date.fromisoformat(start_date),
+            end=dt.date.fromisoformat(end_date),
+        )
+        return {
+            "snapshot_id": result.snapshot_id,
+            "freq": result.freq,
+            "start": str(result.start),
+            "end": str(result.end),
+            "rows": result.rows,
+            "instruments": len(result.ts_codes),
+        }
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc))

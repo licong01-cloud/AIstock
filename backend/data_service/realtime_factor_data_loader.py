@@ -69,6 +69,9 @@ class RealtimeFactorDataLoader:
 
     def __init__(self):
         self._trading_calendar_cache: Optional[pd.DatetimeIndex] = None
+        # 全字段缓存: (instruments_hash, start_date, end_date, adjust) -> DataFrame
+        self._full_cache: Optional[pd.DataFrame] = None
+        self._full_cache_key: Optional[tuple] = None
 
     def _normalize_instrument(self, code: str) -> str:
         """标准化股票代码格式为 '000001.SZ' 格式"""
@@ -132,18 +135,26 @@ class RealtimeFactorDataLoader:
         if fields is None:
             fields = ["open", "close", "high", "low", "volume", "amount", "factor"]
 
+        # ── 缓存: 同 instruments+dates+adjust 只查一次 DB ──
+        cache_key = (tuple(sorted(instruments)), start_date, end_date, adjust)
+        if self._full_cache is not None and self._full_cache_key == cache_key:
+            # 从缓存中取请求的列
+            available = [f for f in fields if f in self._full_cache.columns]
+            if available:
+                return self._full_cache[available].copy()
+
+        # 首次加载: 全字段查询 → 缓存完整 DataFrame
+        all_fields = ["open", "close", "high", "low", "volume", "amount", "factor"]
+
         # 确定需要从数据库查询的列
         db_cols_needed = set()
-        for f in fields:
+        for f in all_fields:
             db_col = self.FIELD_MAP.get(f)
             if db_col:
                 db_cols_needed.add(db_col)
-            else:
-                logger.warning(f"未知字段: {f}，将忽略")
 
-        # 始终需要 adj_factor 用于前复权（如果请求了价格字段）
-        price_fields_requested = [f for f in fields if f in self.PRICE_FIELDS or f in self.VOLUME_FIELDS]
-        if price_fields_requested and adjust == "qfq":
+        # 始终需要 adj_factor 用于前复权
+        if adjust == "qfq":
             db_cols_needed.add("adj_factor")
 
         # 从数据库加载数据
@@ -157,10 +168,23 @@ class RealtimeFactorDataLoader:
         if adjust == "qfq" and "adj_factor" in df_raw.columns:
             df_raw = self._apply_qfq(df_raw)
 
-        # 重命名列为QLib字段名
-        df_result = self._rename_to_qlib_fields(df_raw, fields)
+        # 重命名列为QLib字段名 (全字段)
+        df_result = self._rename_to_qlib_fields(df_raw, all_fields)
 
-        return df_result
+        # 缓存完整结果
+        self._full_cache = df_result
+        self._full_cache_key = cache_key
+        logger.info(
+            f"行情数据已缓存: {len(instruments)} 只股票, "
+            f"{start_date}~{end_date}, {len(df_result)} 行, "
+            f"{df_result.memory_usage(deep=True).sum() / 1024 / 1024:.1f} MB"
+        )
+
+        # 返回请求的字段子集
+        available = [f for f in fields if f in df_result.columns]
+        if available:
+            return df_result[available].copy()
+        return df_result.copy()
 
     def _fetch_from_db(
         self,

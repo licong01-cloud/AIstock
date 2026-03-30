@@ -1,7 +1,7 @@
 """Incremental ingestion driver for TDX datasets.
 
 Supports incremental updates for:
-  - kline_daily_qfq: front-adjusted daily bars
+  - kline_daily_raw: unadjusted daily bars
   - kline_minute_raw: 1-minute raw bars
 
 The script uses the ingestion control tables (ingestion_runs,
@@ -39,10 +39,9 @@ DB_CFG = dict(
     application_name="AIstock-ingest-incremental",
 )
 # 支持增量更新的数据集：
-# - kline_daily_qfq: 前复权日线
 # - kline_daily_raw: 未复权日线（与 ingest_full_daily_raw 对齐）
 # - kline_minute_raw: 1 分钟线
-SUPPORTED_DATASETS = {"kline_daily_qfq", "kline_daily_raw", "kline_minute_raw"}
+SUPPORTED_DATASETS = {"kline_daily_raw", "kline_minute_raw"}
 EXCHANGE_MAP = {"sh": "SH", "sz": "SZ", "bj": "BJ"}
 
 
@@ -51,8 +50,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--datasets",
         type=str,
-        default="kline_daily_qfq,kline_minute_raw",
-        help="Comma separated datasets from {kline_daily_qfq,kline_daily_raw,kline_minute_raw}",
+        default="kline_daily_raw,kline_minute_raw",
+        help="Comma separated datasets from {kline_daily_raw,kline_minute_raw}",
     )
     parser.add_argument("--date", type=str, default=dt.date.today().isoformat(), help="Target date YYYY-MM-DD")
     parser.add_argument(
@@ -182,65 +181,6 @@ def _to_date(value: Any) -> Optional[str]:
     return text
 
 
-def fetch_daily(code: str, start: str, end: str) -> List[Dict[str, Any]]:
-    """Fetch front-adjusted daily bars for a single symbol within [start, end].
-
-    优先使用 /api/kline-history 按时间范围取数；当 start/end 缺失或格式异常时，
-    回退到原先的 /api/kline 行为以保证兼容性。
-    """
-
-    def _parse_iso(date_text: Optional[str]) -> Optional[dt.date]:
-        if not date_text:
-            return None
-        try:
-            return dt.date.fromisoformat(str(date_text))
-        except ValueError:
-            return None
-
-    start_dt = _parse_iso(start)
-    end_dt = _parse_iso(end)
-
-    # 当无法解析日期或区间非法时，退回到旧的 /api/kline 调用逻辑
-    if not start_dt or not end_dt or start_dt > end_dt:
-        params: Dict[str, Any] = {"code": code, "type": "day"}
-        if start:
-            params["start"] = start
-        if end:
-            params["end"] = end
-        data = http_get("/api/kline", params=params)
-        payload = data.get("data") if isinstance(data, dict) else None
-        if isinstance(payload, dict):
-            values = payload.get("List") or payload.get("list") or []
-        else:
-            values = payload or []
-        return list(values)
-
-    # 使用 /api/kline-history，按时间段拆分，确保单次请求不超过 limit=800 的上限
-    max_span_days = 750  # 保守值，避免极端情况下超过 800 条
-    all_values: List[Dict[str, Any]] = []
-    cur_start = start_dt
-    while cur_start <= end_dt:
-        cur_end = min(cur_start + dt.timedelta(days=max_span_days - 1), end_dt)
-        params = {
-            "code": code,
-            "type": "day",
-            "start_date": cur_start.strftime("%Y%m%d"),
-            "end_date": cur_end.strftime("%Y%m%d"),
-            "limit": 800,
-        }
-        data = http_get("/api/kline-history", params=params)
-        payload = data.get("data") if isinstance(data, dict) else None
-        if isinstance(payload, dict):
-            values = payload.get("List") or payload.get("list") or []
-        else:
-            values = payload or []
-        if isinstance(values, list):
-            all_values.extend(values)
-        cur_start = cur_end + dt.timedelta(days=1)
-
-    return all_values
-
-
 def fetch_daily_raw(code: str, start: str, end: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
     """Fetch *unadjusted* daily bars for a single symbol within [start, end].
 
@@ -317,35 +257,6 @@ def fetch_minute_range(code: str, start: dt.date, end: dt.date) -> List[Dict[str
     else:
         items = payload or []
     return list(items) if isinstance(items, list) else []
-
-
-def upsert_daily(conn, ts_code: str, bars: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
-    sql = (
-        "INSERT INTO market.kline_daily_qfq (trade_date, ts_code, open_li, high_li, low_li, close_li, volume_hand, amount_li, adjust_type, source) "
-        "VALUES %s ON CONFLICT (ts_code, trade_date) DO UPDATE SET "
-        "open_li=EXCLUDED.open_li, high_li=EXCLUDED.high_li, low_li=EXCLUDED.low_li, close_li=EXCLUDED.close_li, volume_hand=EXCLUDED.volume_hand, amount_li=EXCLUDED.amount_li"
-    )
-    values: List[Tuple[Any, ...]] = []
-    last_date: Optional[str] = None
-    for row in bars:
-        if not isinstance(row, dict):
-            continue
-        trade_date = _to_date(row.get("Date") or row.get("date") or row.get("Time") or row.get("time"))
-        open_li = row.get("Open") or row.get("open")
-        high_li = row.get("High") or row.get("high")
-        low_li = row.get("Low") or row.get("low")
-        close_li = row.get("Close") or row.get("close")
-        volume_hand = row.get("Volume") or row.get("volume") or 0
-        amount_li = row.get("Amount") or row.get("amount") or 0
-        if trade_date is None or open_li is None or high_li is None or low_li is None or close_li is None:
-            continue
-        last_date = trade_date if last_date is None or trade_date > last_date else last_date
-        values.append((trade_date, ts_code, open_li, high_li, low_li, close_li, volume_hand, amount_li, "qfq", "tdx_api"))
-    if not values:
-        return 0, None
-    with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, values)
-    return len(values), last_date
 
 
 def upsert_daily_raw(conn, ts_code: str, bars: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
@@ -647,100 +558,6 @@ def log_error(
         )
 
 
-def ingest_daily(
-    conn,
-    codes: List[str],
-    target_date: dt.date,
-    start_override: Optional[dt.date],
-    batch_size: int,
-    job_id_opt: Optional[str] = None,
-) -> None:
-    dataset = "kline_daily_qfq"
-    params = {
-        "target_date": target_date.isoformat(),
-        "start_date_override": start_override.isoformat() if start_override else None,
-        "batch_size": batch_size,
-    }
-    job_params = {"datasets": [dataset], **params}
-    job_id = uuid.UUID(job_id_opt) if job_id_opt else create_job(conn, "incremental", job_params)
-    if job_id_opt:
-        start_job(conn, job_id, job_params)
-    log_ingestion(conn, job_id, "info", "start incremental daily job")
-    params["job_id"] = str(job_id)
-    run_id = create_run(conn, dataset, params)
-    stats = {"total_codes": 0, "success_codes": 0, "failed_codes": 0, "inserted_rows": 0}
-    # Initialize summary counters for UI fallback
-    update_job_summary(conn, job_id, {"total_codes": len(codes), "success_codes": 0, "failed_codes": 0, "inserted_rows": 0})
-    pbar = None
-    if tqdm is not None:
-        try:
-            pbar = tqdm(total=len(codes), desc="kline_daily_qfq incr", unit="code")
-        except Exception:
-            pbar = None
-    for batch in chunked(codes, batch_size):
-        for ts_code in batch:
-            task_id = create_task(conn, job_id, dataset, ts_code, start_override, target_date)
-            ok = False
-            err: Optional[str] = None
-            try:
-                bars = fetch_daily(ts_code.split(".")[0], params["start_date_override"], target_date.isoformat())
-                inserted, last_fetched = upsert_daily(conn, ts_code, bars)
-                stats["inserted_rows"] += inserted
-                if inserted > 0 and last_fetched:
-                    new_last_date = dt.date.fromisoformat(last_fetched)
-                    upsert_state(conn, dataset, ts_code, new_last_date, None, None)
-                    upsert_checkpoint(conn, run_id, dataset, ts_code, new_last_date, None, None)
-                stats["success_codes"] += 1
-                try:
-                    update_job_summary(conn, job_id, {"inserted_rows": int(inserted), "success_codes": 1})
-                except Exception:
-                    pass
-                ok = True
-                print(f"[OK] {dataset} {ts_code} inserted={inserted}")
-                log_ingestion(conn, job_id, "info", f"run {run_id} {dataset} {ts_code} inserted={inserted}")
-            except Exception as exc:  # noqa: BLE001
-                # 任何写入/状态更新异常都需要先回滚当前事务，否则后续 SQL 会遇到
-                # "current transaction is aborted" 错误。
-                try:
-                    conn.rollback()
-                except Exception:
-                    # 在 autocommit 模式下 rollback 可能会抛错，忽略即可
-                    pass
-                err = str(exc)
-                stats["failed_codes"] += 1
-                try:
-                    update_job_summary(conn, job_id, {"failed_codes": 1})
-                except Exception:
-                    pass
-                log_error(
-                    conn,
-                    run_id,
-                    dataset,
-                    ts_code,
-                    err,
-                    detail={"code": ts_code.split(".")[0], "start": params["start_date_override"], "end": target_date.isoformat()},
-                )
-                print(f"[WARN] {dataset} {ts_code} failed: {err}")
-                log_ingestion(conn, job_id, "error", f"run {run_id} {dataset} {ts_code} failed: {err}")
-            complete_task(conn, task_id, ok, 100.0 if ok else 0.0, None if ok else err)
-            stats["total_codes"] += 1
-            if pbar is not None:
-                try:
-                    pbar.update(1)
-                except Exception:
-                    pass
-    if pbar is not None:
-        try:
-            pbar.close()
-        except Exception:
-            pass
-    status = "success" if stats["failed_codes"] == 0 else "failed"
-    finish_run(conn, run_id, status, stats)
-    finish_job(conn, job_id, status, {"run_id": str(run_id), "stats": stats})
-    log_ingestion(conn, job_id, "info", f"run {run_id} finished status={status} stats={json.dumps(stats, ensure_ascii=False)}")
-    print(f"[DONE] daily status={status} stats={stats}")
-
-
 def ingest_daily_raw(
     conn,
     codes: List[str],
@@ -833,7 +650,6 @@ def ingest_daily_raw(
                 except Exception:
                     pass
                 ok = True
-                print(f"[OK] {dataset} {ts_code} inserted={inserted}")
                 log_ingestion(conn, job_id, "info", f"run {run_id} {dataset} {ts_code} inserted={inserted}")
             except Exception as exc:  # noqa: BLE001
                 try:
@@ -1005,7 +821,6 @@ def ingest_minute(
                             last_dt = dt.datetime.fromisoformat(last_ts) if last_ts else None
                             upsert_state(conn, dataset, ts_code, trade_date, last_dt, None)
                             upsert_checkpoint(conn, run_id, dataset, ts_code, trade_date, last_ts, None)
-                        print(f"[OK] {dataset} {ts_code} {trade_date} inserted={inserted}")
                         log_ingestion(
                             conn,
                             job_id,
@@ -1117,9 +932,6 @@ def main() -> None:
             with conn.cursor() as cur:
                 cur.execute("SET synchronous_commit = off")
                 cur.execute("SET work_mem = '256MB'")
-
-        if "kline_daily_qfq" in datasets:
-            ingest_daily(conn, codes, target_date, start_override, args.batch_size, args.job_id)
 
         if "kline_daily_raw" in datasets:
             ingest_daily_raw(conn, codes, target_date, start_override, args.batch_size, args.job_id)

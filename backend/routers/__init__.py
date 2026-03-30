@@ -10,7 +10,6 @@ from . import settings
 from . import config_env
 from . import qmt
 from . import smart_monitor
-from . import prompt_packs
 from . import rdagent
 from . import rdagent_templates
 
@@ -27,7 +26,6 @@ __all__ = [
     "config_env",
     "qmt",
     "smart_monitor",
-    "prompt_packs",
     "rdagent",
     "rdagent_templates",
 ]

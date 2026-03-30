@@ -305,7 +305,140 @@ DDL: List[str] = [
         updated_at  TIMESTAMPTZ DEFAULT NOW()
     );
     """,
-    "INSERT INTO app.sync_meta (key, value) VALUES ('rdagent_last_sync_time', '2000-01-01T00:00:00Z') ON CONFLICT DO NOTHING;"
+    "INSERT INTO app.sync_meta (key, value) VALUES ('rdagent_last_sync_time', '2000-01-01T00:00:00Z') ON CONFLICT DO NOTHING;",
+    # aistock_factor_metrics: 单因子17项指标（支持多窗口、多时间段历史记录）
+    """
+    CREATE TABLE IF NOT EXISTS aistock_factor_metrics (
+        id                       BIGSERIAL PRIMARY KEY,
+        factor_name              TEXT NOT NULL,
+        calculated_at            TIMESTAMPTZ NOT NULL,
+        data_start               DATE NOT NULL,
+        data_end                 DATE NOT NULL,
+        eval_window              TEXT NOT NULL,
+        return_horizon           TEXT NOT NULL DEFAULT 'T2T1',
+        universe                 TEXT NOT NULL DEFAULT 'all',
+        ic_mean                  DOUBLE PRECISION,
+        ic_std                   DOUBLE PRECISION,
+        rank_ic_mean             DOUBLE PRECISION,
+        rank_ic_std              DOUBLE PRECISION,
+        icir                     DOUBLE PRECISION,
+        rank_icir                DOUBLE PRECISION,
+        ic_positive_ratio        DOUBLE PRECISION,
+        top_annual_return        DOUBLE PRECISION,
+        top_excess_annual_return DOUBLE PRECISION,
+        top_sharpe               DOUBLE PRECISION,
+        top_max_drawdown         DOUBLE PRECISION,
+        top_excess_sharpe        DOUBLE PRECISION,
+        benchmark_annual_return  DOUBLE PRECISION,
+        group_return_monotonicity DOUBLE PRECISION,
+        turnover                 DOUBLE PRECISION,
+        ic_decay_half_life       DOUBLE PRECISION,
+        ic_csz_mean              DOUBLE PRECISION,
+        rank_ic_1d               DOUBLE PRECISION,
+        rank_ic_5d               DOUBLE PRECISION,
+        rank_ic_10d              DOUBLE PRECISION,
+        rank_ic_20d              DOUBLE PRECISION,
+        coverage                 DOUBLE PRECISION,
+        n_trading_days           INTEGER,
+        source_task_id           TEXT,
+        factor_catalog_id        BIGINT,
+        calc_engine              TEXT NOT NULL DEFAULT 'rdagent',
+        created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (factor_name, eval_window, data_start, data_end, calculated_at)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_factor_metrics_name
+    ON aistock_factor_metrics (factor_name);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_factor_metrics_task
+    ON aistock_factor_metrics (source_task_id);
+    """,
+    # aistock_factor_metrics 表和字段中文注释
+    "COMMENT ON TABLE aistock_factor_metrics IS '单因子独立评估指标表，每个因子在不同评估窗口下的17项量化指标，支持历史多次计算记录';",
+    "COMMENT ON COLUMN aistock_factor_metrics.factor_name IS '因子名称，与 aistock_factor_catalog.factor_name 对应';",
+    "COMMENT ON COLUMN aistock_factor_metrics.calculated_at IS '指标计算时间(UTC)，同一因子可多次计算以追踪衰退';",
+    "COMMENT ON COLUMN aistock_factor_metrics.data_start IS '计算所用数据的起始日期';",
+    "COMMENT ON COLUMN aistock_factor_metrics.data_end IS '计算所用数据的截止日期';",
+    "COMMENT ON COLUMN aistock_factor_metrics.eval_window IS '评估窗口: full=全量, out_sample=样本外(2024-07-01起), recent_6m=近6月, recent_3m=近3月';",
+    "COMMENT ON COLUMN aistock_factor_metrics.return_horizon IS '收益率计算方式，T2T1表示Ref($close,-2)/Ref($close,-1)-1';",
+    "COMMENT ON COLUMN aistock_factor_metrics.universe IS '股票池范围，all=全市场';",
+    "COMMENT ON COLUMN aistock_factor_metrics.ic_mean IS 'IC均值：因子值与未来收益的Pearson相关系数的日均值';",
+    "COMMENT ON COLUMN aistock_factor_metrics.ic_std IS 'IC标准差：IC序列的波动率';",
+    "COMMENT ON COLUMN aistock_factor_metrics.rank_ic_mean IS 'Rank IC均值：因子排名与收益排名的Spearman相关系数日均值';",
+    "COMMENT ON COLUMN aistock_factor_metrics.rank_ic_std IS 'Rank IC标准差：Rank IC序列的波动率';",
+    "COMMENT ON COLUMN aistock_factor_metrics.icir IS 'ICIR：IC均值/IC标准差，衡量IC的稳定性';",
+    "COMMENT ON COLUMN aistock_factor_metrics.rank_icir IS 'Rank ICIR：Rank IC均值/Rank IC标准差';",
+    "COMMENT ON COLUMN aistock_factor_metrics.ic_positive_ratio IS 'IC胜率：IC>0的交易日占比';",
+    # 注意: top_annual_return 等纯多头列的 COMMENT 在迁移完成后执行（见 POST_MIGRATION_COMMENTS）
+    "COMMENT ON COLUMN aistock_factor_metrics.group_return_monotonicity IS '分组收益单调性：[-1,1]，1表示因子值越高收益越高，完美单调';",
+    "COMMENT ON COLUMN aistock_factor_metrics.turnover IS '因子换手率：相邻交易日因子排名变化程度，越低越稳定';",
+    "COMMENT ON COLUMN aistock_factor_metrics.ic_decay_half_life IS 'IC衰减半衰期(天)：IC随预测周期衰减到一半所需天数';",
+    "COMMENT ON COLUMN aistock_factor_metrics.coverage IS '因子覆盖率：有效因子值占总样本的比例';",
+    "COMMENT ON COLUMN aistock_factor_metrics.n_trading_days IS '评估窗口内的交易日数量';",
+    "COMMENT ON COLUMN aistock_factor_metrics.source_task_id IS '来源RD-Agent任务ID';",
+    "COMMENT ON COLUMN aistock_factor_metrics.calc_engine IS '计算引擎: rdagent=RD-Agent侧计算, aistock_local=AIstock本地计算';",
+    # aistock_factor_calc_log: 因子计算日志表，记录每个因子×窗口的计算状态
+    """
+    CREATE TABLE IF NOT EXISTS aistock_factor_calc_log (
+        id               BIGSERIAL PRIMARY KEY,
+        calc_batch_id    TEXT NOT NULL,
+        source_task_id   TEXT,
+        factor_name      TEXT NOT NULL,
+        eval_window      TEXT NOT NULL,
+        status           TEXT NOT NULL,
+        error_message    TEXT,
+        n_trading_days   INTEGER,
+        required_days    INTEGER,
+        data_start       DATE,
+        data_end         DATE,
+        data_source      TEXT NOT NULL DEFAULT 'parquet',
+        calc_engine      TEXT NOT NULL DEFAULT 'rdagent',
+        calculated_at    TIMESTAMPTZ NOT NULL,
+        factor_catalog_id BIGINT,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (calc_batch_id, factor_name, eval_window)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_calc_log_batch
+    ON aistock_factor_calc_log (calc_batch_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_calc_log_task
+    ON aistock_factor_calc_log (source_task_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_calc_log_factor
+    ON aistock_factor_calc_log (factor_name);
+    """,
+    "COMMENT ON TABLE aistock_factor_calc_log IS '因子计算日志表，记录每个因子在每个评估窗口下的计算状态（成功/跳过/失败），支持历史多次计算追溯';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.id IS '自增主键';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.calc_batch_id IS '计算批次ID(UUID v4)，同一次计算请求中所有因子×窗口记录共享同一个ID，关联aistock_factor_metrics表';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.source_task_id IS '来源RD-Agent任务ID，与aistock_factor_catalog.source_task_id对应';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.factor_name IS '因子名称，与aistock_factor_catalog.factor_name对应';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.eval_window IS '评估窗口: full=全量数据, out_sample=样本外(2024-07-01起), recent_6m=近6月(126交易日), recent_3m=近3月(63交易日)';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.status IS '计算状态: ok=计算成功, skipped=跳过(数据不足等), error=计算失败(异常)';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.error_message IS '错误或跳过原因的详细描述，status为ok时为NULL';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.n_trading_days IS '该窗口内实际可用的交易日数量，即使跳过或失败也记录';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.required_days IS '该评估窗口所需的最少交易日数: full=0, out_sample=0, recent_6m=126, recent_3m=63';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.data_start IS '计算所用数据的起始日期';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.data_end IS '计算所用数据的截止日期';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.data_source IS '数据来源: parquet=离线parquet文件, realtime=实时行情数据, merged=离线+实时合并数据';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.calc_engine IS '计算引擎标识: rdagent=RD-Agent侧计算引擎';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.calculated_at IS '计算执行时间(UTC)，记录引擎实际执行计算的时刻';",
+    "COMMENT ON COLUMN aistock_factor_calc_log.created_at IS '记录创建时间，数据库写入时自动生成';",
+]
+
+# 纯多头列的 COMMENT（必须在列迁移完成后执行）
+POST_MIGRATION_COMMENTS: List[str] = [
+    "COMMENT ON COLUMN aistock_factor_metrics.top_annual_return IS '多头组年化收益：因子值最高的20%股票组合年化收益率';",
+    "COMMENT ON COLUMN aistock_factor_metrics.top_excess_annual_return IS '多头超额年化收益：多头组年化收益 - 全市场等权基准年化收益';",
+    "COMMENT ON COLUMN aistock_factor_metrics.top_sharpe IS '多头组夏普比：多头组合的年化夏普比率';",
+    "COMMENT ON COLUMN aistock_factor_metrics.top_max_drawdown IS '多头组最大回撤：多头组合累计收益的最大回撤幅度(负值)';",
+    "COMMENT ON COLUMN aistock_factor_metrics.top_excess_sharpe IS '多头超额夏普比：多头超额收益序列的年化夏普比率';",
+    "COMMENT ON COLUMN aistock_factor_metrics.benchmark_annual_return IS '基准年化收益：全市场等权组合的年化收益率';",
 ]
 
 
@@ -339,6 +472,14 @@ def init_quant_schema() -> None:
             add_column_if_not_exists("aistock_loop_catalog", "log_uri", "TEXT")
             add_column_if_not_exists("aistock_loop_catalog", "display_name", "TEXT")
 
+            # Phase 3: 实验输出增强 — 新增诊断数据字段
+            add_column_if_not_exists("aistock_loop_catalog", "enhanced_metrics", "JSONB")
+            add_column_if_not_exists("aistock_loop_catalog", "ic_series", "JSONB")
+            add_column_if_not_exists("aistock_loop_catalog", "return_curve", "JSONB")
+            add_column_if_not_exists("aistock_loop_catalog", "training_diagnostics", "JSONB")
+            add_column_if_not_exists("aistock_loop_catalog", "hypothesis_dimension", "TEXT")
+            add_column_if_not_exists("aistock_loop_catalog", "hypothesis_summary", "TEXT")
+
             # aistock_strategy_catalog 补齐
             add_column_if_not_exists("aistock_strategy_catalog", "in_selection_center", "BOOLEAN DEFAULT FALSE")
             add_column_if_not_exists("aistock_strategy_catalog", "display_name", "TEXT")
@@ -346,6 +487,118 @@ def init_quant_schema() -> None:
             # aistock_model_catalog 补齐
             add_column_if_not_exists("aistock_model_catalog", "asset_bundle_id", "TEXT")
             add_column_if_not_exists("aistock_model_catalog", "display_name", "TEXT")
+
+            # aistock_model_catalog: 训练诊断列 (C1)
+            add_column_if_not_exists("aistock_model_catalog", "best_epoch", "INTEGER")
+            add_column_if_not_exists("aistock_model_catalog", "total_epochs", "INTEGER")
+            add_column_if_not_exists("aistock_model_catalog", "convergence_ratio", "DOUBLE PRECISION")
+            add_column_if_not_exists("aistock_model_catalog", "overfit_ratio", "DOUBLE PRECISION")
+            add_column_if_not_exists("aistock_model_catalog", "training_failed", "BOOLEAN DEFAULT FALSE")
+            add_column_if_not_exists("aistock_model_catalog", "train_loss_final", "DOUBLE PRECISION")
+            add_column_if_not_exists("aistock_model_catalog", "val_loss_final", "DOUBLE PRECISION")
+            add_column_if_not_exists("aistock_model_catalog", "training_curves", "JSONB")
+
+            # aistock_model_catalog: LLM 分析结果列 (E1)
+            add_column_if_not_exists("aistock_model_catalog", "analysis_profile", "JSONB")
+            add_column_if_not_exists("aistock_model_catalog", "model_grade", "VARCHAR(2)")
+            add_column_if_not_exists("aistock_model_catalog", "grade_reason", "TEXT")
+            add_column_if_not_exists("aistock_model_catalog", "training_quality_score", "DOUBLE PRECISION")
+
+            # aistock_factor_metrics / aistock_factor_calc_log: catalog_id 关联列
+            add_column_if_not_exists("aistock_factor_metrics", "factor_catalog_id", "BIGINT")
+            add_column_if_not_exists("aistock_factor_calc_log", "factor_catalog_id", "BIGINT")
+
+            # aistock_factor_metrics: 多空→纯多头列名迁移
+            def rename_column_if_exists(table, old_col, new_col):
+                cur.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    f"WHERE table_name='{table}' AND column_name='{old_col}';"
+                )
+                if cur.fetchone():
+                    cur.execute(
+                        f"ALTER TABLE {table} RENAME COLUMN {old_col} TO {new_col};"
+                    )
+                    print(f"[db][upgrade] Renamed {table}.{old_col} -> {new_col}")
+
+            def drop_column_if_exists(table, col):
+                cur.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    f"WHERE table_name='{table}' AND column_name='{col}';"
+                )
+                if cur.fetchone():
+                    cur.execute(f"ALTER TABLE {table} DROP COLUMN {col};")
+                    print(f"[db][upgrade] Dropped {table}.{col}")
+
+            # 旧列重命名为新列
+            rename_column_if_exists(
+                "aistock_factor_metrics",
+                "long_short_annual_return", "top_annual_return",
+            )
+            rename_column_if_exists(
+                "aistock_factor_metrics",
+                "long_short_sharpe", "top_sharpe",
+            )
+            rename_column_if_exists(
+                "aistock_factor_metrics",
+                "long_short_max_drawdown", "top_max_drawdown",
+            )
+            # 旧列删除（纯多头体系不再需要）
+            drop_column_if_exists(
+                "aistock_factor_metrics", "long_short_volatility",
+            )
+            drop_column_if_exists(
+                "aistock_factor_metrics", "top_group_return",
+            )
+            drop_column_if_exists(
+                "aistock_factor_metrics", "bottom_group_return",
+            )
+            # 新增列（旧表可能没有）
+            add_column_if_not_exists(
+                "aistock_factor_metrics",
+                "top_excess_annual_return", "DOUBLE PRECISION",
+            )
+            add_column_if_not_exists(
+                "aistock_factor_metrics",
+                "top_excess_sharpe", "DOUBLE PRECISION",
+            )
+            add_column_if_not_exists(
+                "aistock_factor_metrics",
+                "benchmark_annual_return", "DOUBLE PRECISION",
+            )
+
+            # 因子可用性管理: is_available 字段（软删除）
+            add_column_if_not_exists("aistock_factor_catalog", "is_available", "BOOLEAN NOT NULL DEFAULT TRUE")
+
+            # factor-calc-log: 新增 calc_batch_id 关联计算日志表
+            add_column_if_not_exists(
+                "aistock_factor_metrics",
+                "calc_batch_id", "TEXT",
+            )
+            try:
+                cur.execute(
+                    "COMMENT ON COLUMN aistock_factor_metrics.calc_batch_id IS "
+                    "'计算批次ID，关联aistock_factor_calc_log表的calc_batch_id，用于追溯本条指标属于哪次计算';"
+                )
+            except Exception:
+                pass  # 列可能尚不存在
+
+            # 清空旧的多空指标数据（列名迁移后数值语义不对，需重新计算）
+            cur.execute("""
+                DELETE FROM aistock_factor_metrics
+                WHERE top_excess_annual_return IS NULL
+                  AND top_excess_sharpe IS NULL
+                  AND benchmark_annual_return IS NULL
+            """)
+            deleted = cur.rowcount
+            if deleted > 0:
+                print(f"[db][upgrade] Cleared {deleted} stale long-short metrics rows")
+
+            # 3. 迁移后的 COMMENT（新列名必须在 rename 之后才能注释）
+            for sql in POST_MIGRATION_COMMENTS:
+                try:
+                    cur.execute(sql)
+                except Exception:
+                    pass  # 列可能尚不存在（全新建表时由 DDL 创建）
 
 
 if __name__ == "__main__":

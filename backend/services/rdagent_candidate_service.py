@@ -2,14 +2,13 @@
 RD-Agent 备选TASK和LOOP管理服务
 
 功能：
-1. 扫描RD-Agent log目录，发现新的TASK
+1. 通过各计算节点 API 发现新的TASK（多节点架构）
 2. 缓存TASK和LOOP信息到数据库
-3. 检查目录存在性
-4. 提供快速的数据查询接口
+3. 提供快速的数据查询接口
 """
 import os
 import logging
-from pathlib import Path
+import threading
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 import psycopg2
@@ -22,6 +21,10 @@ from .rdagent_results_api_client import RDAgentResultsApiClient
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# 防止多线程并发对同一 task 发起 V2 预览请求
+_task_fetch_lock = threading.Lock()
+_task_fetching: set[str] = set()
 
 
 class RDAgentCandidateService:
@@ -36,142 +39,228 @@ class RDAgentCandidateService:
             'user': os.getenv('TDX_DB_USER', 'postgres'),
             'password': os.getenv('TDX_DB_PASSWORD', '')
         }
-        
-        # RD-Agent API客户端
+
+        # RD-Agent API客户端（默认节点，用于 get_task_loops 等）
         self.rdagent_client = RDAgentResultsApiClient()
-        
-        # RD-Agent log目录
-        rdagent_root = os.getenv('QLIB_RDAGENT_ROOT_WIN', 'F:\\Dev\\RD-Agent-main')
-        self.log_root = Path(rdagent_root) / 'log'
     
     def _get_db_connection(self):
         """获取数据库连接"""
         return psycopg2.connect(**self.db_config)
     
+    def _get_all_node_clients(self) -> list[tuple[str, RDAgentResultsApiClient]]:
+        """从 infra.compute_nodes 获取所有节点的 API 客户端。"""
+        clients: list[tuple[str, RDAgentResultsApiClient]] = []
+        conn = None
+        try:
+            conn = self._get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT node_id, api_base_url FROM infra.compute_nodes")
+            for row in cur.fetchall():
+                try:
+                    clients.append((row[0], RDAgentResultsApiClient(base_url=row[1])))
+                except Exception:
+                    logger.warning(f"创建节点 {row[0]} 客户端失败，跳过")
+            cur.close()
+        except Exception as e:
+            logger.error(f"查询 compute_nodes 失败: {e}")
+        finally:
+            if conn is not None:
+                conn.close()
+        # fallback: 至少使用默认客户端
+        if not clients:
+            clients = [("default", self.rdagent_client)]
+        return clients
+
+    def _get_client_for_task(self, task_id: str, *, strict: bool = False) -> RDAgentResultsApiClient:
+        """根据 task_id 从 DB 的 log_dir 字段解析 node_id，返回对应节点的 API 客户端。
+
+        log_dir 格式: "node_id:task_id"（scan_and_sync_tasks 写入）。
+
+        strict=False（默认）: DB 无记录/log_dir 为空时返回默认客户端（兼容旧数据、读操作）。
+        strict=True: DB 无记录/log_dir 为空时直接 raise（用于删除等破坏性操作，防止误删）。
+
+        log_dir 有值但无 ":" 前缀 → 单节点时代数据，返回默认客户端（两种模式均如此）。
+        DB 连接失败或 for_node() 节点不存在直接抛异常，不静默降级。
+        """
+        conn = self._get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT log_dir FROM rdagent.rdagent_candidate_tasks WHERE task_id = %s", (task_id,))
+            row = cur.fetchone()
+            cur.close()
+        finally:
+            conn.close()
+
+        if not row or not row[0]:
+            if strict:
+                raise ValueError(f"Task {task_id} 在 DB 中无记录或 log_dir 为空，无法确定所属节点，拒绝执行破坏性操作")
+            return self.rdagent_client
+
+        log_dir = row[0]
+        if ":" not in log_dir:
+            # 旧格式，无节点前缀 → 单节点时代的 task，默认客户端即为正确节点
+            return self.rdagent_client
+
+        node_id = log_dir.split(":", 1)[0]
+        return RDAgentResultsApiClient.for_node(node_id)
+
+    def get_task_workspaces(self, task_id: str) -> dict:
+        """通过自动路由获取 task 所属节点的 workspace 信息。"""
+        client = self._get_client_for_task(task_id)
+        return client.get_task_workspaces(task_id)
+
+    def delete_task_on_node(self, task_id: str) -> dict:
+        """通过自动路由删除 task 所属节点上的 log + workspace + scheduler log。
+
+        使用 strict=True 确保必须能从 DB 明确解析节点归属，
+        DB 无记录时直接 raise，防止 fallback 到默认节点误删。
+        """
+        client = self._get_client_for_task(task_id, strict=True)
+        return client.delete_task_remote(task_id)
+
     def scan_and_sync_tasks(self, limit: Optional[int] = None) -> Dict[str, Any]:
         """
-        扫描RD-Agent log目录，发现新TASK并同步到数据库
-        
+        通过各计算节点 API 发现新TASK并同步到数据库（多节点架构）
+
         Returns:
             {
-                "total_dirs": int,  # 扫描到的目录总数
-                "new_tasks": int,  # 新发现的TASK数量
-                "updated_tasks": int,  # 更新的TASK数量
-                "deleted_tasks": int,  # 标记为删除的TASK数量
+                "total_discovered": int,  # API发现的任务总数
+                "new_tasks": int,         # 新发现的TASK数量
+                "updated_tasks": int,     # 更新的TASK数量
+                "deleted_tasks": int,     # 标记为不存在的TASK数量
+                "nodes_queried": int,     # 查询的节点数
+                "nodes_failed": int,      # 查询失败的节点数
             }
         """
-        logger.info(f"开始扫描RD-Agent log目录: {self.log_root}")
-        
-        if not self.log_root.exists():
-            logger.error(f"Log目录不存在: {self.log_root}")
-            return {"error": "log_dir_not_found", "total_dirs": 0, "new_tasks": 0, "updated_tasks": 0, "deleted_tasks": 0}
-        
-        # 1. 扫描所有TASK目录
-        task_dirs = []
-        for item in self.log_root.iterdir():
-            if item.is_dir() and not item.name.startswith('.'):
-                # 排除特殊目录
-                if item.name in ['__pycache__', 'scheduler_tasks']:
-                    continue
-                task_dirs.append({
-                    'task_id': item.name,
-                    'log_dir': str(item.resolve())
-                })
-        
-        logger.info(f"扫描到 {len(task_dirs)} 个TASK目录")
-        
+        logger.info("开始通过 API 扫描各计算节点的TASK")
+
+        # 1. 遍历所有计算节点，通过 API 获取任务列表
+        node_clients = self._get_all_node_clients()
+        # {task_id: {task_id, node_id, client}} — 保留 client 引用供后续 V2 调用
+        discovered_tasks: dict[str, dict] = {}
+        nodes_failed = 0
+        failed_node_ids: set[str] = set()
+
+        for node_id, client in node_clients:
+            try:
+                api_resp = client.get_tasks_latest(limit=limit or 200)
+                raw_items: list = []
+                if isinstance(api_resp, list):
+                    raw_items = api_resp
+                elif isinstance(api_resp, dict):
+                    for k in ("items", "tasks", "data"):
+                        if isinstance(api_resp.get(k), list):
+                            raw_items = api_resp[k]
+                            break
+
+                for t in raw_items:
+                    tid = t.get("task_id")
+                    if tid and tid not in discovered_tasks:
+                        discovered_tasks[tid] = {
+                            "task_id": tid,
+                            "node_id": node_id,
+                            "client": client,
+                        }
+
+                logger.info(f"节点 {node_id}: 发现 {len(raw_items)} 个TASK")
+            except Exception as e:
+                nodes_failed += 1
+                failed_node_ids.add(node_id)
+                logger.warning(f"节点 {node_id} 查询失败（继续处理其他节点）: {e}")
+
+        logger.info(f"API扫描完成: 查询 {len(node_clients)} 个节点, "
+                     f"发现 {len(discovered_tasks)} 个TASK（去重后）, 失败 {nodes_failed} 个")
+
         # 2. 获取数据库中已有的TASK
         conn = self._get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        cur.execute("SELECT task_id, dir_exists FROM rdagent.rdagent_candidate_tasks")
-        existing_tasks = {row['task_id']: row for row in cur.fetchall()}
-        
-        # 3. 处理新TASK和更新已有TASK
-        new_tasks = []
-        updated_tasks = []
-        current_task_ids = set()
-        
-        for task_dir in task_dirs[:limit] if limit else task_dirs:
-            task_id = task_dir['task_id']
-            current_task_ids.add(task_id)
-            
-            if task_id not in existing_tasks:
-                # 新TASK：获取详细信息并插入
-                task_info = self._fetch_task_info(task_id, task_dir['log_dir'])
-                if task_info:
-                    new_tasks.append(task_info)
-            else:
-                # 已有TASK：检查目录是否存在
-                if not existing_tasks[task_id]['dir_exists']:
-                    # 目录重新出现，更新状态
+        try:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+
+            cur.execute("SELECT task_id, dir_exists, log_dir FROM rdagent.rdagent_candidate_tasks")
+            existing_tasks = {row['task_id']: row for row in cur.fetchall()}
+
+            # 3. 处理新TASK和更新已有TASK（limit 限制新 task 获取数量）
+            new_tasks = []
+            updated_tasks = []
+            current_task_ids = set(discovered_tasks.keys())
+
+            for tid, item in discovered_tasks.items():
+                if tid not in existing_tasks:
+                    if limit and len(new_tasks) >= limit:
+                        continue  # 限制新 task 的 V2 预览请求数量
+                    task_info = self._fetch_task_info(tid, node_id=item['node_id'],
+                                                      client=item['client'])
+                    if task_info:
+                        new_tasks.append(task_info)
+                else:
+                    # 已有TASK：如果之前标记为不存在，恢复
+                    if not existing_tasks[tid]['dir_exists']:
+                        cur.execute("""
+                            UPDATE rdagent.rdagent_candidate_tasks
+                            SET dir_exists = TRUE,
+                                dir_checked_at = %s,
+                                updated_at = %s
+                            WHERE task_id = %s
+                        """, (datetime.now(timezone.utc), datetime.now(timezone.utc), tid))
+                        updated_tasks.append(tid)
+
+            # 4. 批量插入新TASK
+            if new_tasks:
+                self._batch_insert_tasks(cur, new_tasks)
+
+            # 5. 标记不再出现的TASK为不存在
+            # 关键：仅当所有节点都成功查询时才标记删除，
+            # 否则不可达节点上的任务会被误删
+            deleted_count = 0
+            if nodes_failed == 0:
+                deleted_task_ids = set(existing_tasks.keys()) - current_task_ids
+                if deleted_task_ids:
                     cur.execute("""
                         UPDATE rdagent.rdagent_candidate_tasks
-                        SET dir_exists = TRUE,
+                        SET dir_exists = FALSE,
                             dir_checked_at = %s,
                             updated_at = %s
-                        WHERE task_id = %s
-                    """, (datetime.now(timezone.utc), datetime.now(timezone.utc), task_id))
-                    updated_tasks.append(task_id)
-        
-        # 4. 批量插入新TASK
-        if new_tasks:
-            self._batch_insert_tasks(cur, new_tasks)
-        
-        # 5. 标记已删除的TASK
-        deleted_task_ids = set(existing_tasks.keys()) - current_task_ids
-        deleted_count = 0
-        if deleted_task_ids:
-            cur.execute("""
-                UPDATE rdagent.rdagent_candidate_tasks
-                SET dir_exists = FALSE,
-                    dir_checked_at = %s,
-                    updated_at = %s
-                WHERE task_id = ANY(%s)
-            """, (datetime.now(timezone.utc), datetime.now(timezone.utc), list(deleted_task_ids)))
-            deleted_count = cur.rowcount
-        
-        conn.commit()
-        cur.close()
-        conn.close()
-        
+                        WHERE task_id = ANY(%s)
+                    """, (datetime.now(timezone.utc), datetime.now(timezone.utc), list(deleted_task_ids)))
+                    deleted_count = cur.rowcount
+            elif failed_node_ids:
+                logger.info(f"有 {nodes_failed} 个节点不可达 ({failed_node_ids})，跳过删除标记")
+
+            conn.commit()
+            cur.close()
+        finally:
+            conn.close()
+
         result = {
-            "total_dirs": len(task_dirs),
+            "total_discovered": len(discovered_tasks),
             "new_tasks": len(new_tasks),
             "updated_tasks": len(updated_tasks),
-            "deleted_tasks": deleted_count
+            "deleted_tasks": deleted_count,
+            "nodes_queried": len(node_clients),
+            "nodes_failed": nodes_failed,
         }
-        
+
         logger.info(f"扫描完成: {result}")
         return result
     
-    def _fetch_task_info(self, task_id: str, log_dir: str) -> Optional[Dict[str, Any]]:
+    def _fetch_task_info(self, task_id: str, *, node_id: str = "default",
+                         client: Optional[RDAgentResultsApiClient] = None) -> Optional[Dict[str, Any]]:
         """
         从RD-Agent V2对齐预览API获取TASK详细信息
-        
+
         使用 /tasks/{task_id}/v2_alignment_preview API 获取完整对齐信息
         包括SOTA因子数、Alpha基线因子数、模型特征数、对齐状态
-        
-        Returns:
-            {
-                "task_id": str,
-                "log_dir": str,
-                "has_sota": bool,
-                "sota_factors_count": int,
-                "alpha_factors_count": int,
-                "model_feature_count": int | None,
-                "is_aligned": bool | None,
-                "sota_factors_list": list | None,
-                "alpha_factors_list": list | None,
-                "hist_len": int,
-                "task_status": str | None,
-            }
+
+        Args:
+            task_id: 任务ID
+            node_id: 所属计算节点ID（存入 log_dir 字段以标识来源节点）
+            client: 用于请求的 API 客户端（None 时使用默认客户端）
         """
         try:
             import requests
-            import json as _json
-            base_url = self.rdagent_client.base_url.rstrip("/")
-            
+            _client = client or self.rdagent_client
+            base_url = _client.base_url.rstrip("/")
+
             has_sota = False
             sota_factors_count = 0
             alpha_factors_count = 0
@@ -181,14 +270,14 @@ class RDAgentCandidateService:
             alpha_factors_list = None
             hist_len = 0
             task_status = None
-            
+
             # 优先使用V2对齐预览API
             try:
                 url = f"{base_url}/tasks/{task_id}/v2_alignment_preview"
                 resp = requests.get(url, timeout=300.0)
                 resp.raise_for_status()
                 v2_data = resp.json()
-                
+
                 if v2_data and v2_data.get('ok'):
                     sota_factors_count = v2_data.get('sota_factors_count', 0)
                     has_sota = sota_factors_count > 0
@@ -210,16 +299,19 @@ class RDAgentCandidateService:
                         logger.info(f"TASK {task_id} V2确认无SOTA因子: {err_msg}")
                     elif 'session_not_found' in err_msg:
                         logger.debug(f"TASK {task_id} 无session: {err_msg}")
+                    elif 'no_3_feedback' in err_msg or 'no_feedback' in err_msg:
+                        task_status = 'running'
+                        logger.debug(f"TASK {task_id} 尚未产生足够反馈: {err_msg}")
                     else:
                         logger.warning(f"TASK {task_id} V2预览返回错误: {err_msg}")
             except requests.exceptions.Timeout:
                 logger.warning(f"TASK {task_id} V2对齐预览API超时(300s)")
             except Exception as e:
                 logger.warning(f"TASK {task_id} V2对齐预览API失败: {e}")
-            
+
             return {
                 "task_id": task_id,
-                "log_dir": log_dir,
+                "log_dir": f"{node_id}:{task_id}",
                 "has_sota": has_sota,
                 "sota_factors_count": sota_factors_count,
                 "alpha_factors_count": alpha_factors_count,
@@ -232,7 +324,7 @@ class RDAgentCandidateService:
                 "hist_len": hist_len,
                 "task_status": task_status,
             }
-            
+
         except Exception as e:
             logger.error(f"获取TASK {task_id} 信息失败: {e}")
             import traceback
@@ -241,66 +333,103 @@ class RDAgentCandidateService:
     
     def _ensure_task_exists(self, task_id: str):
         """
-        确保TASK存在于数据库中，如果不存在则创建
-        
-        这是关键修复：在获取LOOP前必须先确保TASK已入库，避免外键约束错误
+        确保TASK存在于数据库中，如果不存在则通过 API 创建。
+
+        在获取LOOP前必须先确保TASK已入库，避免外键约束错误。
+        使用模块级锁防止多线程并发对同一 task 发起重复 V2 预览请求。
         """
         conn = self._get_db_connection()
-        cur = conn.cursor()
-        
-        # 检查TASK是否已存在
-        cur.execute("SELECT 1 FROM rdagent.rdagent_candidate_tasks WHERE task_id = %s", (task_id,))
-        if cur.fetchone():
-            cur.close()
+        try:
+            cur = conn.cursor()
+
+            # 检查TASK是否已存在
+            cur.execute("SELECT 1 FROM rdagent.rdagent_candidate_tasks WHERE task_id = %s", (task_id,))
+            if cur.fetchone():
+                cur.close()
+                return  # 已存在，直接返回
+
+            # 并发去重：如果另一个线程正在 fetch 同一 task，跳过
+            with _task_fetch_lock:
+                if task_id in _task_fetching:
+                    logger.debug(f"TASK {task_id} 正在被另一线程处理，跳过")
+                    cur.close()
+                    return
+                _task_fetching.add(task_id)
+
+            try:
+                # TASK不存在，需要创建（纯 API，不访问本地文件系统）
+                # 遍历所有节点尝试找到该 task（因为尚未入库，无法从 log_dir 推断节点）
+                logger.info(f"TASK {task_id} 不存在于数据库，正在通过 API 创建...")
+
+                task_info = None
+                for _nid, _client in self._get_all_node_clients():
+                    task_info = self._fetch_task_info(task_id, node_id=_nid, client=_client)
+                    if task_info and (task_info.get('has_sota') or task_info.get('hist_len', 0) > 0
+                                      or task_info.get('task_status')):
+                        break  # 节点返回了有效数据
+                if task_info is None:
+                    # 所有节点都没有有效数据，用默认客户端兜底
+                    task_info = self._fetch_task_info(task_id)
+
+                if task_info:
+                    import json as _json
+                    cur.execute("""
+                        INSERT INTO rdagent.rdagent_candidate_tasks
+                        (task_id, log_dir, has_sota, sota_factors_count, sota_checked_at,
+                         hist_len, task_status, dir_exists,
+                         alpha_factors_count, model_feature_count, is_aligned, v2_checked_at,
+                         sota_factors_list, alpha_factors_list)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (task_id) DO UPDATE SET
+                            has_sota = EXCLUDED.has_sota,
+                            sota_factors_count = EXCLUDED.sota_factors_count,
+                            sota_checked_at = EXCLUDED.sota_checked_at,
+                            hist_len = EXCLUDED.hist_len,
+                            task_status = EXCLUDED.task_status,
+                            dir_exists = EXCLUDED.dir_exists,
+                            alpha_factors_count = EXCLUDED.alpha_factors_count,
+                            model_feature_count = EXCLUDED.model_feature_count,
+                            is_aligned = EXCLUDED.is_aligned,
+                            v2_checked_at = EXCLUDED.v2_checked_at,
+                            sota_factors_list = EXCLUDED.sota_factors_list,
+                            alpha_factors_list = EXCLUDED.alpha_factors_list,
+                            updated_at = CURRENT_TIMESTAMP
+                    """, (
+                        task_info['task_id'],
+                        task_info['log_dir'],
+                        task_info['has_sota'],
+                        task_info['sota_factors_count'],
+                        task_info['sota_checked_at'],
+                        task_info['hist_len'],
+                        task_info['task_status'],
+                        True,  # API 能返回说明任务存在
+                        task_info.get('alpha_factors_count', 0),
+                        task_info.get('model_feature_count'),
+                        task_info.get('is_aligned'),
+                        task_info.get('v2_checked_at'),
+                        _json.dumps(task_info.get('sota_factors_list')) if task_info.get('sota_factors_list') else None,
+                        _json.dumps(task_info.get('alpha_factors_list')) if task_info.get('alpha_factors_list') else None,
+                    ))
+                    logger.info(f"TASK {task_id} 已创建（has_sota={task_info['has_sota']}, "
+                                f"alpha={task_info.get('alpha_factors_count')}, "
+                                f"aligned={task_info.get('is_aligned')}）")
+                else:
+                    cur.execute("""
+                        INSERT INTO rdagent.rdagent_candidate_tasks
+                        (task_id, log_dir, dir_exists)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (task_id) DO NOTHING
+                    """, (task_id, task_id, True))
+                    logger.warning(f"TASK {task_id} 已创建（仅基本信息）")
+
+                conn.commit()
+                cur.close()
+            finally:
+                with _task_fetch_lock:
+                    _task_fetching.discard(task_id)
+        finally:
             conn.close()
-            return  # 已存在，直接返回
-        
-        # TASK不存在，需要创建
-        logger.info(f"TASK {task_id} 不存在于数据库，正在创建...")
-        
-        # 构造log目录路径
-        log_root = os.getenv('QLIB_RDAGENT_ROOT_WIN', 'F:/Dev/RD-Agent-main')
-        log_dir = f"{log_root}/log/{task_id}"
-        
-        # 检查目录是否存在
-        dir_exists = os.path.isdir(log_dir)
-        
-        # 尝试获取TASK信息
-        task_info = self._fetch_task_info(task_id, log_dir)
-        
-        if task_info:
-            # 插入完整信息
-            cur.execute("""
-                INSERT INTO rdagent.rdagent_candidate_tasks 
-                (task_id, log_dir, has_sota, sota_factors_count, sota_checked_at, 
-                 hist_len, task_status, dir_exists)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (task_id) DO NOTHING
-            """, (
-                task_info['task_id'],
-                task_info['log_dir'],
-                task_info['has_sota'],
-                task_info['sota_factors_count'],
-                task_info['sota_checked_at'],
-                task_info['hist_len'],
-                task_info['task_status'],
-                dir_exists
-            ))
-            logger.info(f"TASK {task_id} 已创建（has_sota={task_info['has_sota']}）")
-        else:
-            # 插入基本信息
-            cur.execute("""
-                INSERT INTO rdagent.rdagent_candidate_tasks 
-                (task_id, log_dir, dir_exists)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (task_id) DO NOTHING
-            """, (task_id, log_dir, dir_exists))
-            logger.warning(f"TASK {task_id} 已创建（仅基本信息）")
-        
-        conn.commit()
-        cur.close()
-        conn.close()
-    
+
     def _batch_insert_tasks(self, cur, tasks: List[Dict[str, Any]]):
         """批量插入TASK到数据库（含V2对齐信息）"""
         if not tasks:
@@ -542,12 +671,13 @@ class RDAgentCandidateService:
                     result.append(d)
                 return result, True
         
-        # 2. 从RD-Agent API获取
+        # 2. 从RD-Agent API获取（路由到正确的计算节点）
         try:
             import requests
-            base_url = self.rdagent_client.base_url.rstrip("/")
+            _client = self._get_client_for_task(task_id)
+            base_url = _client.base_url.rstrip("/")
             url = f"{base_url}/tasks/{task_id}/loops"
-            
+
             resp = requests.get(url, timeout=300.0)
             resp.raise_for_status()
             api_resp = resp.json()

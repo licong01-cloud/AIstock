@@ -290,7 +290,6 @@ def run_ingestion(
             inserted = _upsert_anns(conn, rows)
             stats["inserted_rows"] += inserted
             stats["success_days"] += 1
-            print(f"[OK] anns_d {d} inserted={inserted}")
         except Exception as exc:  # noqa: BLE001
             stats["failed_days"] += 1
             # 该日期批次失败时，先回滚当前事务，避免后续 _log/_update_job_progress

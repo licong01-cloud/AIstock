@@ -83,7 +83,7 @@ class SectorStrategyHistoryDetailResponse(BaseModel):
 
 
 @router.post("/analyze", response_model=SectorStrategyAnalyzeResponse, summary="运行智策板块综合分析")
-async def analyze_sector_strategy(req: SectorStrategyAnalyzeRequest) -> SectorStrategyAnalyzeResponse:
+def analyze_sector_strategy(req: SectorStrategyAnalyzeRequest) -> SectorStrategyAnalyzeResponse:
     """运行一轮完整的智策板块分析。
 
     - 复用旧版 SectorStrategyDataFetcher 和 SectorStrategyEngine；
@@ -130,7 +130,7 @@ async def analyze_sector_strategy(req: SectorStrategyAnalyzeRequest) -> SectorSt
     "/export/markdown",
     summary="导出智策板块Markdown报告",
 )
-async def export_sector_strategy_markdown(
+def export_sector_strategy_markdown(
     payload: SectorStrategyExportRequest,
 ) -> Response:
     result_dict = payload.result.dict()
@@ -151,7 +151,7 @@ async def export_sector_strategy_markdown(
     "/export/pdf",
     summary="导出智策板块PDF报告",
 )
-async def export_sector_strategy_pdf(
+def export_sector_strategy_pdf(
     payload: SectorStrategyExportRequest,
 ) -> FileResponse:
     result_dict = payload.result.dict()
@@ -169,7 +169,7 @@ async def export_sector_strategy_pdf(
     response_model=SectorStrategyHistoryListResponse,
     summary="智策板块历史报告列表",
 )
-async def list_sector_strategy_history(
+def list_sector_strategy_history(
     limit: int = Query(20, ge=1, le=100, description="返回的历史报告数量上限"),
 ) -> SectorStrategyHistoryListResponse:
     """获取最近若干份智策板块历史报告。
@@ -222,7 +222,7 @@ async def list_sector_strategy_history(
     response_model=SectorStrategyHistoryDetailResponse,
     summary="获取单份智策板块历史报告详情",
 )
-async def get_sector_strategy_history_detail(report_id: int) -> SectorStrategyHistoryDetailResponse:
+def get_sector_strategy_history_detail(report_id: int) -> SectorStrategyHistoryDetailResponse:
     """获取单条历史报告完整内容。
 
     返回的数据结构与旧版 `SectorStrategyDatabase.get_analysis_report` 一致，
@@ -241,7 +241,7 @@ async def get_sector_strategy_history_detail(report_id: int) -> SectorStrategyHi
     "/history/{report_id}",
     summary="删除一条智策板块历史报告记录",
 )
-async def delete_sector_strategy_history(report_id: int) -> Dict[str, Any]:
+def delete_sector_strategy_history(report_id: int) -> Dict[str, Any]:
     """删除单条历史报告。
 
     语义对应旧版 `SectorStrategyEngine.delete_report`。

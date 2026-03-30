@@ -1,0 +1,413 @@
+##
+## postgres-exporter 自定义查询
+## 覆盖: 活跃会话、等待事件、锁、表膨胀、索引使用率、缓存命中率、复制延迟
+## 不依赖 pg_stat_statements（无需重启 PG）
+##
+
+pg_active_sessions:
+  query: |
+    SELECT
+      datname,
+      usename,
+      application_name,
+      client_addr::text AS client_addr,
+      state,
+      wait_event_type,
+      wait_event,
+      backend_type,
+      EXTRACT(EPOCH FROM (now() - query_start))::float AS query_duration_seconds,
+      EXTRACT(EPOCH FROM (now() - xact_start))::float AS xact_duration_seconds,
+      LEFT(query, 200) AS query_text
+    FROM pg_stat_activity
+    WHERE pid <> pg_backend_pid()
+      AND state IS NOT NULL
+    ORDER BY query_start ASC NULLS LAST
+    LIMIT 50
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - usename:
+        usage: "LABEL"
+        description: "User name"
+    - application_name:
+        usage: "LABEL"
+        description: "Application name"
+    - client_addr:
+        usage: "LABEL"
+        description: "Client address"
+    - state:
+        usage: "LABEL"
+        description: "Session state"
+    - wait_event_type:
+        usage: "LABEL"
+        description: "Wait event type"
+    - wait_event:
+        usage: "LABEL"
+        description: "Wait event"
+    - backend_type:
+        usage: "LABEL"
+        description: "Backend type"
+    - query_duration_seconds:
+        usage: "GAUGE"
+        description: "Duration of current query in seconds"
+    - xact_duration_seconds:
+        usage: "GAUGE"
+        description: "Duration of current transaction in seconds"
+    - query_text:
+        usage: "LABEL"
+        description: "Current query (truncated)"
+
+pg_wait_events:
+  query: |
+    SELECT
+      COALESCE(wait_event_type, 'CPU') AS wait_event_type,
+      COALESCE(wait_event, 'CPU') AS wait_event,
+      count(*)::float AS session_count
+    FROM pg_stat_activity
+    WHERE pid <> pg_backend_pid()
+      AND state = 'active'
+    GROUP BY wait_event_type, wait_event
+  metrics:
+    - wait_event_type:
+        usage: "LABEL"
+        description: "Type of wait event"
+    - wait_event:
+        usage: "LABEL"
+        description: "Wait event name"
+    - session_count:
+        usage: "GAUGE"
+        description: "Number of sessions in this wait state"
+
+pg_locks_count:
+  query: |
+    SELECT
+      d.datname,
+      l.mode,
+      CASE WHEN l.granted THEN 'granted' ELSE 'waiting' END AS lock_status,
+      count(*)::float AS lock_count
+    FROM pg_locks l
+    JOIN pg_database d ON d.oid = l.database
+    GROUP BY d.datname, l.mode, l.granted
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - mode:
+        usage: "LABEL"
+        description: "Lock mode"
+    - lock_status:
+        usage: "LABEL"
+        description: "granted or waiting"
+    - lock_count:
+        usage: "GAUGE"
+        description: "Number of locks"
+
+pg_blocking_queries:
+  query: |
+    SELECT
+      count(*)::float AS blocked_count
+    FROM pg_stat_activity
+    WHERE wait_event_type = 'Lock'
+      AND state = 'active'
+  metrics:
+    - blocked_count:
+        usage: "GAUGE"
+        description: "Number of queries blocked by locks"
+
+pg_long_running_queries:
+  query: |
+    SELECT
+      datname,
+      usename,
+      state,
+      EXTRACT(EPOCH FROM (now() - query_start))::float AS duration_seconds,
+      LEFT(query, 200) AS query_text
+    FROM pg_stat_activity
+    WHERE state IN ('active', 'idle in transaction')
+      AND query_start IS NOT NULL
+      AND pid <> pg_backend_pid()
+    ORDER BY query_start ASC
+    LIMIT 20
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - usename:
+        usage: "LABEL"
+        description: "User name"
+    - state:
+        usage: "LABEL"
+        description: "Session state"
+    - duration_seconds:
+        usage: "GAUGE"
+        description: "Query duration in seconds"
+    - query_text:
+        usage: "LABEL"
+        description: "Query text (truncated)"
+
+pg_session_counts:
+  query: |
+    SELECT
+      datname,
+      state,
+      count(*)::float AS count
+    FROM pg_stat_activity
+    WHERE pid <> pg_backend_pid()
+    GROUP BY datname, state
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - state:
+        usage: "LABEL"
+        description: "Connection state"
+    - count:
+        usage: "GAUGE"
+        description: "Number of connections"
+
+pg_table_bloat:
+  query: |
+    SELECT
+      schemaname, relname AS table_name, 'regular' AS table_type,
+      n_live_tup::float AS live_tuples, n_dead_tup::float AS dead_tuples,
+      CASE WHEN n_live_tup > 0 THEN n_dead_tup::float / n_live_tup::float ELSE 0 END AS dead_ratio
+    FROM pg_stat_user_tables
+    WHERE n_live_tup + n_dead_tup > 1000
+      AND relname NOT LIKE '_hyper_%'
+      AND schemaname NOT LIKE '_timescaledb_%'
+    ORDER BY n_dead_tup DESC
+    LIMIT 20
+  metrics:
+    - schemaname:
+        usage: "LABEL"
+        description: "Schema name"
+    - table_name:
+        usage: "LABEL"
+        description: "Table name"
+    - table_type:
+        usage: "LABEL"
+        description: "Table type"
+    - live_tuples:
+        usage: "GAUGE"
+        description: "Number of live tuples"
+    - dead_tuples:
+        usage: "GAUGE"
+        description: "Number of dead tuples"
+    - dead_ratio:
+        usage: "GAUGE"
+        description: "Ratio of dead tuples to live tuples"
+
+pg_hypertable_bloat:
+  query: |
+    SELECT
+      ht.schema_name AS schemaname,
+      ht.table_name,
+      SUM(s.n_live_tup)::float AS live_tuples,
+      SUM(s.n_dead_tup)::float AS dead_tuples,
+      CASE WHEN SUM(s.n_live_tup) > 0
+        THEN SUM(s.n_dead_tup)::float / SUM(s.n_live_tup)::float
+        ELSE 0 END AS dead_ratio
+    FROM _timescaledb_catalog.hypertable ht
+    JOIN _timescaledb_catalog.chunk ch ON ch.hypertable_id = ht.id
+    JOIN pg_stat_user_tables s
+      ON s.schemaname = ch.schema_name AND s.relname = ch.table_name
+    WHERE ht.schema_name NOT LIKE '_timescaledb_%'
+    GROUP BY ht.schema_name, ht.table_name
+    HAVING SUM(s.n_live_tup) + SUM(s.n_dead_tup) > 1000
+    ORDER BY SUM(s.n_dead_tup) DESC
+    LIMIT 20
+  metrics:
+    - schemaname:
+        usage: "LABEL"
+        description: "Schema name"
+    - table_name:
+        usage: "LABEL"
+        description: "Hypertable name"
+    - live_tuples:
+        usage: "GAUGE"
+        description: "Aggregated live tuples across all chunks"
+    - dead_tuples:
+        usage: "GAUGE"
+        description: "Aggregated dead tuples across all chunks"
+    - dead_ratio:
+        usage: "GAUGE"
+        description: "Dead tuple ratio"
+
+pg_index_usage:
+  query: |
+    SELECT
+      schemaname,
+      relname AS table_name,
+      indexrelname AS index_name,
+      idx_scan::float AS index_scans,
+      idx_tup_read::float AS tuples_read,
+      idx_tup_fetch::float AS tuples_fetched,
+      pg_relation_size(quote_ident(schemaname) || '.' || quote_ident(indexrelname))::float AS index_bytes
+    FROM pg_stat_user_indexes
+    ORDER BY idx_scan DESC
+    LIMIT 50
+  metrics:
+    - schemaname:
+        usage: "LABEL"
+        description: "Schema name"
+    - table_name:
+        usage: "LABEL"
+        description: "Table name"
+    - index_name:
+        usage: "LABEL"
+        description: "Index name"
+    - index_scans:
+        usage: "GAUGE"
+        description: "Number of index scans"
+    - tuples_read:
+        usage: "GAUGE"
+        description: "Number of tuples read"
+    - tuples_fetched:
+        usage: "GAUGE"
+        description: "Number of tuples fetched"
+    - index_bytes:
+        usage: "GAUGE"
+        description: "Index size in bytes"
+
+pg_unused_indexes:
+  query: |
+    SELECT
+      schemaname,
+      relname AS table_name,
+      indexrelname AS index_name,
+      idx_scan::float AS index_scans,
+      pg_relation_size(quote_ident(schemaname) || '.' || quote_ident(indexrelname))::float AS index_bytes
+    FROM pg_stat_user_indexes
+    WHERE idx_scan = 0
+      AND indexrelname NOT LIKE '%_pkey'
+    ORDER BY pg_relation_size(quote_ident(schemaname) || '.' || quote_ident(indexrelname)) DESC
+    LIMIT 20
+  metrics:
+    - schemaname:
+        usage: "LABEL"
+        description: "Schema name"
+    - table_name:
+        usage: "LABEL"
+        description: "Table name"
+    - index_name:
+        usage: "LABEL"
+        description: "Index name"
+    - index_scans:
+        usage: "GAUGE"
+        description: "Number of index scans (should be 0)"
+    - index_bytes:
+        usage: "GAUGE"
+        description: "Wasted index size in bytes"
+
+pg_cache_hit_ratio:
+  query: |
+    SELECT
+      datname,
+      blks_hit::float AS blocks_hit,
+      blks_read::float AS blocks_read,
+      CASE WHEN (blks_hit + blks_read) > 0
+        THEN blks_hit::float / (blks_hit + blks_read)::float
+        ELSE 1.0
+      END AS cache_hit_ratio
+    FROM pg_stat_database
+    WHERE datname IS NOT NULL AND datname NOT LIKE 'template%'
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - blocks_hit:
+        usage: "GAUGE"
+        description: "Blocks found in buffer cache"
+    - blocks_read:
+        usage: "GAUGE"
+        description: "Blocks read from disk"
+    - cache_hit_ratio:
+        usage: "GAUGE"
+        description: "Buffer cache hit ratio"
+
+pg_database_size:
+  query: |
+    SELECT
+      datname,
+      pg_database_size(datname)::float AS size_bytes
+    FROM pg_database
+    WHERE datname NOT LIKE 'template%'
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - size_bytes:
+        usage: "GAUGE"
+        description: "Database size in bytes"
+
+pg_table_size:
+  query: |
+    WITH all_tables AS (
+      -- Hypertables (通过 _timescaledb_catalog 查询，避免 information 视图慢查询)
+      SELECT
+        ht.schema_name AS schemaname,
+        ht.table_name,
+        'hypertable' AS table_type,
+        hypertable_size(format('%I.%I', ht.schema_name, ht.table_name)::regclass)::float AS total_bytes
+      FROM _timescaledb_catalog.hypertable ht
+      WHERE ht.schema_name NOT LIKE '_timescaledb_%'
+      UNION ALL
+      -- 普通表 (排除 chunk 子表和 timescaledb 内部表)
+      SELECT
+        schemaname,
+        relname AS table_name,
+        'regular' AS table_type,
+        pg_total_relation_size(quote_ident(schemaname) || '.' || quote_ident(relname))::float AS total_bytes
+      FROM pg_stat_user_tables
+      WHERE relname NOT LIKE '_hyper_%'
+        AND schemaname NOT LIKE '_timescaledb_%'
+    )
+    SELECT schemaname, table_name, table_type, total_bytes
+    FROM all_tables
+    ORDER BY total_bytes DESC
+    LIMIT 30
+  metrics:
+    - schemaname:
+        usage: "LABEL"
+        description: "Schema name"
+    - table_name:
+        usage: "LABEL"
+        description: "Table name"
+    - table_type:
+        usage: "LABEL"
+        description: "Table type (hypertable or regular)"
+    - total_bytes:
+        usage: "GAUGE"
+        description: "Total relation size"
+
+pg_hypertable_detail:
+  query: |
+    SELECT
+      ht.schema_name AS schemaname,
+      ht.table_name,
+      count(ch.id)::float AS chunk_count,
+      hypertable_size(format('%I.%I', ht.schema_name, ht.table_name)::regclass)::float AS total_bytes,
+      ht.num_dimensions::float AS num_dimensions
+    FROM _timescaledb_catalog.hypertable ht
+    LEFT JOIN _timescaledb_catalog.chunk ch ON ch.hypertable_id = ht.id
+    WHERE ht.schema_name NOT LIKE '_timescaledb_%'
+    GROUP BY ht.id, ht.schema_name, ht.table_name, ht.num_dimensions
+    ORDER BY hypertable_size(format('%I.%I', ht.schema_name, ht.table_name)::regclass) DESC
+    LIMIT 20
+  metrics:
+    - schemaname:
+        usage: "LABEL"
+        description: "Schema name"
+    - table_name:
+        usage: "LABEL"
+        description: "Hypertable name"
+    - chunk_count:
+        usage: "GAUGE"
+        description: "Number of chunks"
+    - total_bytes:
+        usage: "GAUGE"
+        description: "Total hypertable size including chunks and indexes"
+    - num_dimensions:
+        usage: "GAUGE"
+        description: "Number of partitioning dimensions"

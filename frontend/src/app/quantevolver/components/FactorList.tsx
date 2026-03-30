@@ -1,6 +1,7 @@
-﻿"use client";
+"use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
+import FullPipelineDialog from "./FullPipelineDialog";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 
@@ -15,22 +16,11 @@ type Factor = {
   catalog_source?: string;
   description_cn?: string;
   generated_at_utc?: string;
-};
-
-type Classification = {
-  id: number;
-  factor_name: string;
-  factor_source: string;
-  category: string;
-  grade: string;
-  grade_reason?: string;
-  classification_reason?: string;
-  ic_value?: number;
-  sharpe_value?: number;
-  ann_ret_value?: number;
-  description?: string;
-  factor_dimension?: string;
-  analyzed_at?: string;
+  ind_ic?: number | null;
+  ind_sharpe?: number | null;
+  ind_annual_return?: number | null;
+  ind_rank_ic?: number | null;
+  ind_icir?: number | null;
 };
 
 export type MergedFactor = {
@@ -48,6 +38,11 @@ export type MergedFactor = {
   factor_dimension?: string;
   description?: string;
   classification_id?: number;
+  ind_ic?: number | null;
+  ind_rank_ic?: number | null;
+  ind_sharpe?: number | null;
+  ind_annual_return?: number | null;
+  has_ind_metrics?: boolean;
 };
 
 const GRADE_COLORS: Record<string, string> = {
@@ -135,8 +130,6 @@ export default function FactorList({
   onFactorSelect?: (selected: Set<string>) => void;
 }) {
   const [factors, setFactors] = useState<Factor[]>([]);
-  const [classifications, setClassifications] = useState<Classification[]>([]);
-  const [mergedFactors, setMergedFactors] = useState<MergedFactor[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -148,6 +141,7 @@ export default function FactorList({
   const [pageSize] = useState(50);
   const [showAlpha, setShowAlpha] = useState(false);
   const [batchLoading, setBatchLoading] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; factor_name?: string } | null>(null);
   const [batchResult, setBatchResult] = useState<{ total?: number; analyzed?: number; errors?: string[] } | null>(null);
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(new Set());
   const [localSelectedFactors, setLocalSelectedFactors] = useState<Set<string>>(selectedFactors);
@@ -156,6 +150,35 @@ export default function FactorList({
   const [codeExpanded, setCodeExpanded] = useState<Set<string>>(new Set());
   const [factorExpMetrics, setFactorExpMetrics] = useState<Record<string, FactorExpMetrics>>({});
   const [expMetricsLoading, setExpMetricsLoading] = useState<Set<string>>(new Set());
+  const [metricsLoading, setMetricsLoading] = useState(false);
+  const [metricsResult, setMetricsResult] = useState<{ ok?: boolean; total_metrics_inserted?: number; total_metrics_skipped?: number; error?: string } | null>(null);
+  const [factorIndMetrics, setFactorIndMetrics] = useState<Record<string, any[]>>({});
+  const [indSummary, setIndSummary] = useState<Record<string, { ic_mean: number | null; sharpe: number | null; annual_return: number | null }>>({});
+
+  // Task分组相关状态
+  type SourceTask = { task_id: string; factor_count: number; ok_count: number; skipped_count: number; error_count: number };
+  const [viewMode, setViewMode] = useState<"list" | "task">("list");
+  const [sourceTasks, setSourceTasks] = useState<SourceTask[]>([]);
+  const [selectedTasks, setSelectedTasks] = useState<Set<string>>(new Set());
+  const [taskComputing, setTaskComputing] = useState<Set<string>>(new Set());
+  const [taskResults, setTaskResults] = useState<Record<string, { ok: boolean; msg: string }>>({});
+  const [expandedTask, setExpandedTask] = useState<string | null>(null);
+  const [taskFactors, setTaskFactors] = useState<Record<string, any[]>>({});
+  const [taskFactorsLoading, setTaskFactorsLoading] = useState<Set<string>>(new Set());
+  const [taskAnalyzing, setTaskAnalyzing] = useState(false);
+  const [taskAnalyzeResult, setTaskAnalyzeResult] = useState<{ ok?: boolean; total?: number; analyzed?: number; errors?: string[] } | null>(null);
+
+  // 全流程批处理
+  const [pipelineOpen, setPipelineOpen] = useState(false);
+  const [pipelineTaskIds, setPipelineTaskIds] = useState<string[]>([]);
+  const [pipelineFactorNames, setPipelineFactorNames] = useState<string[]>([]);
+
+  // 因子计算日志详情
+  type CalcWindow = { eval_window: string; status: string; error_message?: string | null; n_trading_days?: number | null; required_days?: number | null; data_start?: string | null; data_end?: string | null; calculated_at?: string | null };
+  type CalcFactor = { factor_name: string; windows: CalcWindow[] };
+  type CalcDetail = { factors: CalcFactor[]; summary: { ok_count: number; skipped_count: number; error_count: number } };
+  const [taskCalcDetail, setTaskCalcDetail] = useState<Record<string, CalcDetail>>({});
+  const [calcDetailLoading, setCalcDetailLoading] = useState<Set<string>>(new Set());
 
   // 排序状态
   const [sortField, setSortField] = useState<string | null>(null);
@@ -203,6 +226,7 @@ export default function FactorList({
         if (factorName && source && !factorDetails[key] && !detailLoading.has(key)) {
           loadFactorDetail(key, factorName, source);
         }
+        if (factorName) loadFactorIndependentMetrics(key, factorName);
       }
       return next;
     });
@@ -263,65 +287,41 @@ export default function FactorList({
   }
 
   function getSortIndicator(field: string) {
-    if (sortField !== field) return " ";
-    return sortOrder === "desc" ? " " : " ";
+    if (sortField !== field) return "";
+    return sortOrder === "desc" ? " ▼" : " ▲";
   }
 
-  // 合并因子目录和分类结果
-  useEffect(() => {
-    const classMap: Record<string, Classification> = {};
-    classifications.forEach(c => {
-      classMap[`${c.factor_name}||${c.factor_source}`] = c;
-    });
-
-    const merged: MergedFactor[] = factors.map(f => {
-      const cls = classMap[`${f.factor_name}||${f.source}`];
+  // 合并因子数据 — 排序已在后端完成，这里只做字段映射和客户端筛选
+  const mergedFactors = useMemo(() => {
+    const merged: MergedFactor[] = factors.map((f: any) => {
+      const ind = indSummary[f.factor_name];
       return {
         factor_name: f.factor_name,
         source: f.source,
-        ic: cls?.ic_value ?? f.ic,
-        sharpe: cls?.sharpe_value ?? f.sharpe,
-        annualized_return: cls?.ann_ret_value ?? f.annualized_return,
+        ic: f.ic,
+        sharpe: f.sharpe,
+        annualized_return: f.annualized_return,
         is_sota_factor: f.is_sota_factor,
         description_cn: f.description_cn,
-        category: cls?.category,
-        grade: cls?.grade,
-        grade_reason: cls?.grade_reason,
-        classification_reason: cls?.classification_reason,
-        factor_dimension: cls?.factor_dimension,
-        description: cls?.description,
-        classification_id: cls?.id,
+        category: f.category,
+        grade: f.grade,
+        grade_reason: f.grade_reason,
+        classification_reason: f.classification_reason,
+        factor_dimension: f.factor_dimension,
+        description: f.cl_description,
+        classification_id: f.classification_id,
+        ind_ic: f.ind_ic ?? ind?.ic_mean ?? null,
+        ind_rank_ic: f.ind_rank_ic ?? null,
+        ind_sharpe: f.ind_sharpe ?? ind?.sharpe ?? null,
+        ind_annual_return: f.ind_annual_return ?? ind?.annual_return ?? null,
+        has_ind_metrics: f.ind_ic != null || !!ind,
       };
     });
 
-    // 客户端筛选：类别和评级
     let filtered = merged;
-    if (categoryFilter) filtered = filtered.filter(f => f.category === categoryFilter);
-    if (gradeFilter) filtered = filtered.filter(f => f.grade === gradeFilter);
 
-    // 客户端排序
-    if (sortField) {
-      filtered.sort((a, b) => {
-        let va = (a as any)[sortField];
-        let vb = (b as any)[sortField];
-
-        // 处理特殊排序逻辑 (例如 grade 字母序相反，S>A>B>C>D)
-        if (sortField === "grade") {
-          const gradeOrder: Record<string, number> = { "S": 5, "A": 4, "B": 3, "C": 2, "D": 1 };
-          va = gradeOrder[va as string] || 0;
-          vb = gradeOrder[vb as string] || 0;
-        }
-
-        if (va === vb) return 0;
-        if (va == null) return 1;
-        if (vb == null) return -1;
-        
-        return sortOrder === "asc" ? (va > vb ? 1 : -1) : (va < vb ? 1 : -1);
-      });
-    }
-
-    setMergedFactors(filtered);
-  }, [factors, classifications, categoryFilter, gradeFilter, sortField, sortOrder]);
+    return filtered;
+  }, [factors, indSummary, categoryFilter, gradeFilter]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -331,32 +331,152 @@ export default function FactorList({
       if (sourceFilter) factorParams.set("source", sourceFilter);
       if (search) factorParams.set("search", search);
       if (!showAlpha) factorParams.set("exclude_source", "alpha158,alpha360");
+      if (sortField) factorParams.set("sort_field", sortField);
+      if (sortField) factorParams.set("sort_order", sortOrder);
+      if (categoryFilter) factorParams.set("category", categoryFilter);
+      if (gradeFilter) factorParams.set("grade", gradeFilter);
 
-      const classParams = new URLSearchParams({ limit: "500", offset: "0", active_only: "false" });
-      if (sourceFilter) classParams.set("source", sourceFilter);
-      if (!showAlpha) classParams.set("exclude_source", "alpha158,alpha360");
-
-      const [fRes, cRes] = await Promise.all([
-        fetch(`${API}/quantevolver/factors?${factorParams.toString()}`).then(r => r.json()),
-        fetch(`${API}/quantevolver/factor-analyst/classifications?${classParams.toString()}`).then(r => r.json()).catch(() => ({ items: [] })),
-      ]);
+      const fRes = await fetch(`${API}/quantevolver/factors?${factorParams.toString()}`).then(r => r.json());
 
       setFactors(fRes.items || []);
       setTotal(fRes.total || 0);
-      setClassifications(cRes.items || []);
     } catch (e: any) {
       setError(e?.message || "加载失败");
     }
     setLoading(false);
-  }, [sourceFilter, search, page, pageSize, showAlpha]);
+  }, [sourceFilter, search, page, pageSize, showAlpha, sortField, sortOrder, categoryFilter, gradeFilter]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  const loadIndSummary = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/quantevolver/factors/independent-metrics-summary`);
+      if (res.ok) { const d = await res.json(); if (d.ok) setIndSummary(d.summary || {}); }
+    } catch {}
+  }, []);
+
+  useEffect(() => { loadData(); loadIndSummary(); }, [loadData, loadIndSummary]);
+
+  // 加载 source tasks 列表
+  const loadSourceTasks = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/rdagent/catalogs/factors/source-tasks`);
+      if (res.ok) {
+        const data = await res.json();
+        setSourceTasks(data.items || []);
+      }
+    } catch (e) { console.warn("加载source tasks失败:", e); }
+  }, []);
+  useEffect(() => { loadSourceTasks(); }, [loadSourceTasks]);
+
+  function toggleTask(tid: string) {
+    setSelectedTasks(prev => {
+      const next = new Set(prev);
+      if (next.has(tid)) next.delete(tid); else next.add(tid);
+      return next;
+    });
+  }
+
+  async function toggleExpandTask(tid: string) {
+    if (expandedTask === tid) { setExpandedTask(null); return; }
+    setExpandedTask(tid);
+    if (taskFactors[tid]) return; // already loaded
+    setTaskFactorsLoading(prev => new Set(prev).add(tid));
+    try {
+      const res = await fetch(`${API}/rdagent/catalogs/factors?source_task_id=${encodeURIComponent(tid)}&limit=200`);
+      if (res.ok) {
+        const data = await res.json();
+        setTaskFactors(prev => ({ ...prev, [tid]: data.items || [] }));
+      }
+    } catch (e) { console.warn("加载task因子失败:", e); }
+    finally { setTaskFactorsLoading(prev => { const n = new Set(prev); n.delete(tid); return n; }); }
+    // 同时加载计算日志详情
+    if (!taskCalcDetail[tid]) loadCalcDetail(tid);
+  }
+
+  async function loadCalcDetail(tid: string) {
+    if (calcDetailLoading.has(tid)) return;
+    setCalcDetailLoading(prev => new Set(prev).add(tid));
+    try {
+      const res = await fetch(`${API}/rdagent/catalogs/factors/source-tasks/${encodeURIComponent(tid)}/calc-detail`);
+      if (res.ok) {
+        const data = await res.json();
+        setTaskCalcDetail(prev => ({ ...prev, [tid]: data }));
+      }
+    } catch (e) { console.warn("加载计算日志详情失败:", e); }
+    finally { setCalcDetailLoading(prev => { const n = new Set(prev); n.delete(tid); return n; }); }
+  }
+
+  async function computeSelectedTasksMetrics() {
+    const tasks = Array.from(selectedTasks);
+    if (tasks.length === 0) return;
+    setTaskResults({});
+    // 逐个计算，充分利用服务端收盘价缓存（第一个task加载后后续复用）
+    for (const tid of tasks) {
+      setTaskComputing(prev => new Set(prev).add(tid));
+      try {
+        const res = await fetch(`${API}/rdagent/catalogs/factors/compute-task-metrics`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ task_id: tid }),
+        });
+        const data = await res.json();
+        setTaskResults(prev => ({
+          ...prev,
+          [tid]: {
+            ok: data.ok,
+            msg: data.ok ? `${data.factor_count}因子, +${data.metrics_inserted}条` : (data.errors?.[0] || "失败"),
+          },
+        }));
+      } catch (e: any) {
+        setTaskResults(prev => ({ ...prev, [tid]: { ok: false, msg: e.message } }));
+      }
+      setTaskComputing(prev => { const n = new Set(prev); n.delete(tid); return n; });
+    }
+    loadSourceTasks(); // 刷新指标计数
+    loadIndSummary(); // 刷新独立指标摘要
+  }
+
+  async function analyzeSelectedTasksFactors() {
+    const tasks = Array.from(selectedTasks);
+    if (tasks.length === 0) return;
+    // 先查出所有选中 task 下的因子名称
+    const allFactorNames: string[] = [];
+    for (const tid of tasks) {
+      try {
+        const res = await fetch(`${API}/rdagent/catalogs/factors?source_task_id=${encodeURIComponent(tid)}&limit=500`);
+        if (res.ok) {
+          const data = await res.json();
+          const names = (data.items || []).map((f: any) => f.name || f.factor_name).filter(Boolean);
+          allFactorNames.push(...names);
+        }
+      } catch {}
+    }
+    if (allFactorNames.length === 0) { alert("选中的Task下没有因子"); return; }
+    const unique = [...new Set(allFactorNames)];
+    if (!confirm(`将对 ${tasks.length} 个Task下共 ${unique.length} 个因子执行分析，确定继续？`)) return;
+
+    setTaskAnalyzing(true);
+    setTaskAnalyzeResult(null);
+    try {
+      const res = await fetch(`${API}/quantevolver/factor-analyst/batch-analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ use_llm: true, factor_names: unique }),
+      });
+      const data = await res.json();
+      setTaskAnalyzeResult(data);
+      if (data.analyzed > 0) { loadData(); loadSourceTasks(); }
+    } catch (e: any) {
+      setTaskAnalyzeResult({ ok: false, errors: [e?.message || "分析失败"] });
+    }
+    setTaskAnalyzing(false);
+    setLocalSelectedFactors(new Set());
+  }
 
   useEffect(() => {
     setPage(1);
-  }, [sourceFilter, search, categoryFilter, gradeFilter, showAlpha]);
+  }, [sourceFilter, search, categoryFilter, gradeFilter, showAlpha, sortField, sortOrder]);
 
-  async function batchAnalyze(useLlm: boolean = false) {
+  async function batchAnalyze() {
     const selectedCount = actualSelectedFactors.size;
     if (selectedCount === 0) {
       alert("请先选择要分析的因子");
@@ -364,22 +484,113 @@ export default function FactorList({
     }
     const factorNames = Array.from(actualSelectedFactors).map(k => k.split("||")[0]);
     if (!confirm(`确定要批量分析选中的 ${selectedCount} 个因子吗？\n这可能需要一些时间。`)) return;
-    
+
     setBatchLoading(true);
+    setBatchProgress(null);
     setBatchResult(null);
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     try {
-      const res = await fetch(`${API}/quantevolver/factor-analyst/batch-analyze`, {
+      const body = { use_llm: true, source_filter: sourceFilter || undefined, factor_names: factorNames };
+      const res = await fetch(`${API}/quantevolver/factor-analyst/batch-analyze-stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ use_llm: useLlm, source_filter: sourceFilter || undefined, factor_names: factorNames }),
+        body: JSON.stringify(body),
       });
-      const data = await res.json();
-      setBatchResult(data);
-      if (data.analyzed > 0) loadData();
+
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      if (!reader) throw new Error("无法读取响应流");
+
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === 'progress') {
+                setBatchProgress({ current: data.current, total: data.total, factor_name: data.factor_name });
+              } else if (data.type === 'done') {
+                setBatchResult({ total: data.total, analyzed: data.analyzed, errors: data.errors });
+                if (data.analyzed > 0) loadData();
+              }
+            } catch (e) {
+              console.error('JSON解析失败:', line, e);
+            }
+          }
+        }
+      }
     } catch (e: any) {
       alert("批量分析失败: " + (e?.message || ""));
     }
     setBatchLoading(false);
+    setLocalSelectedFactors(new Set());
+    window.removeEventListener('beforeunload', handleBeforeUnload);
+  }
+
+  async function batchFetchMetrics() {
+    const selectedCount = actualSelectedFactors.size;
+    if (selectedCount === 0) { alert("请先选择要获取指标的因子"); return; }
+    const factorNames = Array.from(actualSelectedFactors).map(k => k.split("||")[0]);
+    setMetricsLoading(true);
+    setMetricsResult(null);
+    try {
+      const res = await fetch(`${API}/quantevolver/factors/batch-fetch-metrics`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ factor_names: factorNames }),
+      });
+      const data = await res.json();
+      setMetricsResult(data);
+      if (data.ok) { loadData(); loadIndSummary(); }
+    } catch (e: any) {
+      setMetricsResult({ ok: false, error: e?.message || "获取失败" });
+    }
+    setMetricsLoading(false);
+    setLocalSelectedFactors(new Set());
+  }
+
+  async function loadFactorIndependentMetrics(key: string, factorName: string) {
+    if (factorIndMetrics[key]) return;
+    try {
+      const res = await fetch(`${API}/quantevolver/factors/${encodeURIComponent(factorName)}/independent-metrics?limit=10`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.ok) setFactorIndMetrics(prev => ({ ...prev, [key]: data.metrics || [] }));
+      }
+    } catch (e) { console.error("加载独立指标失败:", e); }
+  }
+
+  async function deleteFactor(factorName: string, factorSource: string) {
+    if (!confirm(
+      `确定要删除因子「${factorName}」(来源: ${factorSource}) 吗？\n\n` +
+      `将同时删除：计算日志、独立指标、分类评级、实验指标、相关性矩阵、实时追踪等所有关联数据。\n\n此操作不可撤销！`
+    )) return;
+    try {
+      const params = new URLSearchParams({ factor_name: factorName, source: factorSource });
+      const res = await fetch(`${API}/quantevolver/factors?${params.toString()}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) {
+        alert("删除失败: " + (data.detail || res.statusText));
+        return;
+      }
+      alert(`因子「${factorName}」已删除`);
+      loadData();
+    } catch (e: any) {
+      alert("删除失败: " + (e?.message || "网络错误"));
+    }
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -438,6 +649,7 @@ export default function FactorList({
             style={{ padding: "6px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db" }}
           >
             <option value="">全部类别</option>
+            <option value="__empty__">未分类</option>
             {Object.entries(CATEGORY_NAMES).map(([k, v]) => (
               <option key={k} value={k}>{k} - {v}</option>
             ))}
@@ -450,6 +662,7 @@ export default function FactorList({
             style={{ padding: "6px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db" }}
           >
             <option value="">全部评级</option>
+            <option value="__empty__">未评级</option>
             {["S", "A", "B", "C", "D"].map(g => (
               <option key={g} value={g}>{g}</option>
             ))}
@@ -475,19 +688,7 @@ export default function FactorList({
           {!isSelection && (
             <>
               <button
-                onClick={() => batchAnalyze(false)}
-                disabled={batchLoading || actualSelectedFactors.size === 0}
-                style={{
-                  padding: "6px 14px", fontSize: 12, cursor: (batchLoading || actualSelectedFactors.size === 0) ? "not-allowed" : "pointer",
-                  borderRadius: 6, border: "none", background: "#7c3aed", color: "#fff", fontWeight: 600,
-                  opacity: (batchLoading || actualSelectedFactors.size === 0) ? 0.5 : 1,
-                }}
-              >
-                {batchLoading ? "批量分析中..." : `批量分析-规则(${actualSelectedFactors.size})`}
-              </button>
-
-              <button
-                onClick={() => batchAnalyze(true)}
+                onClick={() => batchAnalyze()}
                 disabled={batchLoading || actualSelectedFactors.size === 0}
                 style={{
                   padding: "6px 14px", fontSize: 12, cursor: (batchLoading || actualSelectedFactors.size === 0) ? "not-allowed" : "pointer",
@@ -495,7 +696,36 @@ export default function FactorList({
                   opacity: (batchLoading || actualSelectedFactors.size === 0) ? 0.5 : 1,
                 }}
               >
-                {batchLoading ? "分析中..." : `批量分析-LLM(${actualSelectedFactors.size})`}
+                {batchLoading ? "分析中..." : `批量分析(${actualSelectedFactors.size})`}
+              </button>
+
+              <button
+                onClick={batchFetchMetrics}
+                disabled={metricsLoading || actualSelectedFactors.size === 0}
+                style={{
+                  padding: "6px 14px", fontSize: 12, cursor: (metricsLoading || actualSelectedFactors.size === 0) ? "not-allowed" : "pointer",
+                  borderRadius: 6, border: "none", background: "#059669", color: "#fff", fontWeight: 600,
+                  opacity: (metricsLoading || actualSelectedFactors.size === 0) ? 0.5 : 1,
+                }}
+              >
+                {metricsLoading ? "获取中..." : `获取指标(${actualSelectedFactors.size})`}
+              </button>
+
+              <button
+                onClick={() => {
+                  const names = Array.from(actualSelectedFactors).map(key => key.split("||")[0]);
+                  setPipelineFactorNames(names);
+                  setPipelineTaskIds([]);
+                  setPipelineOpen(true);
+                }}
+                disabled={actualSelectedFactors.size === 0 || pipelineOpen}
+                style={{
+                  padding: "6px 14px", fontSize: 12, cursor: (actualSelectedFactors.size === 0 || pipelineOpen) ? "not-allowed" : "pointer",
+                  borderRadius: 6, border: "none", background: "#7c3aed", color: "#fff", fontWeight: 600,
+                  opacity: (actualSelectedFactors.size === 0 || pipelineOpen) ? 0.5 : 1,
+                }}
+              >
+                全流程处理({actualSelectedFactors.size})
               </button>
             </>
           )}
@@ -509,8 +739,33 @@ export default function FactorList({
             style={{ padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: "#fff" }}
           >清空</button>
 
+          {!isSelection && (
+            <div style={{ display: "flex", gap: 2, marginLeft: 8, background: "#f3f4f6", borderRadius: 6, padding: 2 }}>
+              {(["list", "task"] as const).map(m => (
+                <button key={m} onClick={() => setViewMode(m)} style={{
+                  padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "none", cursor: "pointer",
+                  background: viewMode === m ? "#fff" : "transparent", fontWeight: viewMode === m ? 600 : 400,
+                  color: viewMode === m ? "#7c3aed" : "#6b7280", boxShadow: viewMode === m ? "0 1px 2px rgba(0,0,0,0.1)" : "none",
+                }}>{m === "list" ? "列表视图" : "按Task分组"}</button>
+              ))}
+            </div>
+          )}
+
           <span style={{ fontSize: 12, color: "#9ca3af" }}>共 {total} 条  已选 {actualSelectedFactors.size}  第 {page}/{totalPages} 页</span>
         </div>
+
+        {/* 批量分析进度 */}
+        {batchProgress && (
+          <div style={{ marginTop: 8, padding: 10, borderRadius: 6, fontSize: 12, background: "#dbeafe", color: "#1e40af" }}>
+            <div style={{ marginBottom: 4 }}>
+              <strong>批量分析进行中：</strong> {batchProgress.current} / {batchProgress.total}
+              {batchProgress.factor_name && <span style={{ marginLeft: 8, color: "#3b82f6" }}>当前: {batchProgress.factor_name}</span>}
+            </div>
+            <div style={{ width: "100%", height: 8, background: "#e5e7eb", borderRadius: 4, overflow: "hidden" }}>
+              <div style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%`, height: "100%", background: "#2563eb", transition: "width 0.3s" }} />
+            </div>
+          </div>
+        )}
 
         {/* 批量分析结果提示 */}
         {batchResult && (
@@ -527,11 +782,249 @@ export default function FactorList({
           </div>
         )}
 
+        {/* 获取指标结果提示 */}
+        {metricsResult && (
+          <div style={{
+            marginTop: 8, padding: 10, borderRadius: 6, fontSize: 12,
+            background: metricsResult.ok ? "#d1fae5" : "#fee2e2",
+            color: metricsResult.ok ? "#065f46" : "#991b1b",
+          }}>
+            {metricsResult.ok ? (
+              <span>
+                <strong>指标获取完成：</strong>
+                新增 {metricsResult.total_metrics_inserted} 条，跳过 {metricsResult.total_metrics_skipped} 条（已存在）
+                {(metricsResult as any).fail_count > 0 && (
+                  <span style={{ color: "#b45309" }}>（{(metricsResult as any).fail_count} 个任务失败）</span>
+                )}
+              </span>
+            ) : (
+              <span><strong>指标获取失败：</strong>{metricsResult.error || ((metricsResult as any).details?.filter((d: any) => !d.ok).map((d: any) => d.errors?.[0]).filter(Boolean).join("; ")) || "未知错误"}</span>
+            )}
+          </div>
+        )}
+
         {error && <div style={{ marginTop: 8, padding: 8, background: "#fee2e2", borderRadius: 6, fontSize: 12 }}>{error}</div>}
       </section>
 
+      {/* Task分组视图 */}
+      {viewMode === "task" && (
+        <section style={{ background: "#fff", borderRadius: 12, padding: 16, marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <strong style={{ fontSize: 13 }}>Source Tasks</strong>
+            <span style={{ fontSize: 11, color: "#9ca3af" }}>共 {sourceTasks.length} 个Task</span>
+            <button onClick={() => { const all = new Set(sourceTasks.map(t => t.task_id)); setSelectedTasks(all); }}
+              style={{ padding: "3px 8px", fontSize: 10, borderRadius: 4, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>全选</button>
+            <button onClick={() => setSelectedTasks(new Set())}
+              style={{ padding: "3px 8px", fontSize: 10, borderRadius: 4, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>清空</button>
+            <button
+              onClick={computeSelectedTasksMetrics}
+              disabled={selectedTasks.size === 0 || taskComputing.size > 0 || pipelineOpen}
+              style={{
+                padding: "4px 12px", fontSize: 11, borderRadius: 6, border: "none", cursor: selectedTasks.size === 0 || taskComputing.size > 0 || pipelineOpen ? "not-allowed" : "pointer",
+                background: "#7c3aed", color: "#fff", fontWeight: 600,
+                opacity: selectedTasks.size === 0 || taskComputing.size > 0 || pipelineOpen ? 0.5 : 1,
+              }}
+            >
+              {taskComputing.size > 0 ? `计算中(${taskComputing.size})...` : `计算选中Task的IC指标(${selectedTasks.size})`}
+            </button>
+            <button
+              onClick={() => analyzeSelectedTasksFactors()}
+              disabled={selectedTasks.size === 0 || taskAnalyzing || pipelineOpen}
+              style={{
+                padding: "4px 12px", fontSize: 11, borderRadius: 6, border: "none", cursor: selectedTasks.size === 0 || taskAnalyzing || pipelineOpen ? "not-allowed" : "pointer",
+                background: "#2563eb", color: "#fff", fontWeight: 600,
+                opacity: selectedTasks.size === 0 || taskAnalyzing || pipelineOpen ? 0.5 : 1,
+              }}
+            >
+              {taskAnalyzing ? "分析中..." : `批量分析(${selectedTasks.size})`}
+            </button>
+            <button
+              onClick={() => {
+                const tasks = Array.from(selectedTasks);
+                if (tasks.length === 0) return;
+                setPipelineTaskIds(tasks);
+                setPipelineOpen(true);
+              }}
+              disabled={selectedTasks.size === 0 || taskComputing.size > 0 || taskAnalyzing || pipelineOpen}
+              style={{
+                padding: "4px 12px", fontSize: 11, borderRadius: 6, border: "none",
+                cursor: selectedTasks.size === 0 || taskComputing.size > 0 || taskAnalyzing || pipelineOpen ? "not-allowed" : "pointer",
+                background: "linear-gradient(135deg, #7c3aed, #2563eb)", color: "#fff", fontWeight: 600,
+                opacity: selectedTasks.size === 0 || taskComputing.size > 0 || taskAnalyzing || pipelineOpen ? 0.5 : 1,
+              }}
+            >
+              全流程处理({selectedTasks.size})
+            </button>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {sourceTasks.map(t => {
+              const sel = selectedTasks.has(t.task_id);
+              const computing = taskComputing.has(t.task_id);
+              const result = taskResults[t.task_id];
+              const done = t.ok_count > 0 || t.skipped_count > 0 || t.error_count > 0;
+              const isExp = expandedTask === t.task_id;
+              const factors = taskFactors[t.task_id];
+              const fLoading = taskFactorsLoading.has(t.task_id);
+              return (
+                <div key={t.task_id} style={{
+                  border: isExp ? "2px solid #2563eb" : sel ? "2px solid #7c3aed" : done ? "1px solid #86efac" : "1px solid #e5e7eb",
+                  borderRadius: 8, overflow: "hidden",
+                  background: isExp ? "#f0f7ff" : sel ? "#faf5ff" : done ? "#f0fdf4" : "#fff",
+                  transition: "all 0.15s",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 12, cursor: "pointer" }}
+                    onClick={() => toggleExpandTask(t.task_id)}>
+                    <input type="checkbox" checked={sel} style={{ accentColor: "#7c3aed" }}
+                      onClick={e => { e.stopPropagation(); toggleTask(t.task_id); }} readOnly />
+                    <span style={{ fontSize: 12, color: isExp ? "#2563eb" : "#6b7280" }}>{isExp ? "▼" : "▶"}</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 600, color: "#374151", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      title={t.task_id}>{t.task_id}</span>
+                    <span style={{ fontSize: 11, color: "#6b7280", whiteSpace: "nowrap" }}>因子: <strong>{t.factor_count}</strong></span>
+                    {(t.ok_count > 0 || t.skipped_count > 0 || t.error_count > 0) ? (
+                      <span style={{ fontSize: 11, whiteSpace: "nowrap" }}>
+                        <span style={{ color: "#059669" }}>✅{t.ok_count}</span>
+                        {t.skipped_count > 0 && <span style={{ color: "#d97706", marginLeft: 4 }}>⚠️{t.skipped_count}</span>}
+                        {t.error_count > 0 && <span style={{ color: "#dc2626", marginLeft: 4 }}>❌{t.error_count}</span>}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap" }}>未计算</span>
+                    )}
+                    {computing && <span style={{ fontSize: 11, color: "#7c3aed" }}>计算中...</span>}
+                    {result && <span style={{ fontSize: 11, color: result.ok ? "#059669" : "#dc2626", fontWeight: 600 }}>{result.msg}</span>}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setPipelineTaskIds([t.task_id]);
+                        setPipelineOpen(true);
+                      }}
+                      disabled={pipelineOpen}
+                      style={{
+                        padding: "2px 8px", fontSize: 10, borderRadius: 4,
+                        border: "1px solid #7c3aed", background: pipelineOpen ? "#f3f4f6" : "#faf5ff",
+                        color: pipelineOpen ? "#9ca3af" : "#7c3aed", fontWeight: 600,
+                        cursor: pipelineOpen ? "not-allowed" : "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      全流程
+                    </button>
+                  </div>
+                  {isExp && (
+                    <div style={{ borderTop: "1px solid #e5e7eb", padding: 12, background: "#fff" }}>
+                      {fLoading && <div style={{ textAlign: "center", padding: 16, color: "#9ca3af", fontSize: 12 }}>加载因子列表...</div>}
+                      {!fLoading && factors && factors.length === 0 && <div style={{ textAlign: "center", padding: 16, color: "#9ca3af", fontSize: 12 }}>该Task无因子</div>}
+                      {!fLoading && factors && factors.length > 0 && (
+                        <div style={{ overflowX: "auto" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                            <thead>
+                              <tr style={{ borderBottom: "1px solid #e5e7eb", textAlign: "left" }}>
+                                <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>因子名称</th>
+                                <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>类型</th>
+                                <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>IC</th>
+                                <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>Sharpe</th>
+                                <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>年化</th>
+                                <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>SOTA</th>
+                                <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>描述</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {factors.map((fac: any) => (
+                                <tr key={fac.name} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                                  <td style={{ padding: "4px 8px", fontFamily: "monospace", fontWeight: 600, color: "#374151" }}>{fac.name}</td>
+                                  <td style={{ padding: "4px 8px", color: "#6b7280" }}>{fac.factor_type || "-"}</td>
+                                  <td style={{ padding: "4px 8px", color: "#374151" }}>{fac.ic != null ? fac.ic.toFixed(4) : "-"}</td>
+                                  <td style={{ padding: "4px 8px", color: "#374151" }}>{fac.sharpe != null ? fac.sharpe.toFixed(3) : "-"}</td>
+                                  <td style={{ padding: "4px 8px", color: "#374151" }}>{fac.annualized_return != null ? (fac.annualized_return * 100).toFixed(2) + "%" : "-"}</td>
+                                  <td style={{ padding: "4px 8px" }}>{fac.is_sota_factor ? "✓" : ""}</td>
+                                  <td style={{ padding: "4px 8px", color: "#6b7280", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fac.description_cn || "-"}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* 因子×窗口计算状态矩阵 */}
+                      {(() => {
+                        const detail = taskCalcDetail[t.task_id];
+                        const dLoading = calcDetailLoading.has(t.task_id);
+                        if (dLoading) return <div style={{ textAlign: "center", padding: 12, color: "#9ca3af", fontSize: 11 }}>加载计算日志...</div>;
+                        if (!detail || detail.factors.length === 0) return <div style={{ textAlign: "center", padding: 12, color: "#9ca3af", fontSize: 11 }}>暂无计算日志</div>;
+                        const winLabels: Record<string, string> = { full: "全量", out_sample: "样本外", recent_6m: "近6月", recent_3m: "近3月" };
+                        const winKeys = ["full", "out_sample", "recent_6m", "recent_3m"];
+                        return (
+                          <div style={{ marginTop: 12, borderTop: "1px solid #e5e7eb", paddingTop: 10 }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
+                              计算状态矩阵
+                              <span style={{ fontSize: 10, fontWeight: 400, color: "#9ca3af", marginLeft: 8 }}>
+                                ✅{detail.summary.ok_count} ⚠️{detail.summary.skipped_count} ❌{detail.summary.error_count}
+                              </span>
+                            </div>
+                            <div style={{ overflowX: "auto" }}>
+                              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                                <thead>
+                                  <tr style={{ borderBottom: "1px solid #e5e7eb", textAlign: "center" }}>
+                                    <th style={{ padding: "4px 8px", textAlign: "left", color: "#6b7280", fontWeight: 500 }}>因子名称</th>
+                                    {winKeys.map(w => <th key={w} style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>{winLabels[w]}</th>)}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {detail.factors.map(f => {
+                                    const winMap: Record<string, CalcWindow> = {};
+                                    f.windows.forEach(w => { winMap[w.eval_window] = w; });
+                                    return (
+                                      <tr key={f.factor_name} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                                        <td style={{ padding: "4px 8px", fontFamily: "monospace", fontWeight: 600, color: "#374151" }}>{f.factor_name}</td>
+                                        {winKeys.map(wk => {
+                                          const w = winMap[wk];
+                                          if (!w) return <td key={wk} style={{ padding: "4px 8px", textAlign: "center", color: "#d1d5db" }}>-</td>;
+                                          const icon = w.status === "ok" ? "✅" : w.status === "skipped" ? "⚠️" : w.status === "error" ? "❌" : "-";
+                                          const tip = w.status === "ok"
+                                            ? `${w.n_trading_days ?? 0}天 (${w.data_start || "?"} ~ ${w.data_end || "?"})`
+                                            : w.error_message || `实际${w.n_trading_days ?? 0}天, 需要${w.required_days ?? 0}天`;
+                                          return (
+                                            <td key={wk} style={{ padding: "4px 8px", textAlign: "center", cursor: "help" }} title={tip}>
+                                              {icon}
+                                            </td>
+                                          );
+                                        })}
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {sourceTasks.length === 0 && <div style={{ textAlign: "center", padding: 30, color: "#9ca3af", fontSize: 12 }}>暂无 Source Task 数据</div>}
+
+          {/* Task分析结果提示 */}
+          {taskAnalyzeResult && (
+            <div style={{
+              marginTop: 12, padding: 10, borderRadius: 6, fontSize: 12,
+              background: (taskAnalyzeResult.errors?.length || 0) > 0 ? "#fef3c7" : "#d1fae5",
+              color: (taskAnalyzeResult.errors?.length || 0) > 0 ? "#92400e" : "#065f46",
+            }}>
+              <strong>因子分析完成：</strong>
+              共 {taskAnalyzeResult.total} 个因子，成功分析 {taskAnalyzeResult.analyzed} 个
+              {(taskAnalyzeResult.errors?.length || 0) > 0 && (
+                <span>，{taskAnalyzeResult.errors!.length} 个失败</span>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
       {/* 统一数据表格 */}
-      <section style={{ background: "#fff", borderRadius: 12, padding: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
+      {viewMode === "list" && <section style={{ background: "#fff", borderRadius: 12, padding: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
@@ -542,15 +1035,17 @@ export default function FactorList({
                     onChange={e => { if (e.target.checked) selectAll(); else clearSelection(); }}
                   />
                 </th>
-                <th style={{ ...thStyle, maxWidth: 180 }} onClick={() => handleSort("factor_name")}>因子名称{getSortIndicator("factor_name")}</th>
-                <th style={thStyle} onClick={() => handleSort("source")}>来源{getSortIndicator("source")}</th>
-                <th style={thStyle}>维度</th>
-                <th style={thStyle} onClick={() => handleSort("category")}>类别{getSortIndicator("category")}</th>
-                <th style={thStyle} onClick={() => handleSort("grade")}>评级{getSortIndicator("grade")}</th>
-                <th style={thStyle} onClick={() => handleSort("ic")}>IC{getSortIndicator("ic")}</th>
-                <th style={thStyle} onClick={() => handleSort("sharpe")}>Sharpe{getSortIndicator("sharpe")}</th>
-                <th style={thStyle} onClick={() => handleSort("annualized_return")}>年化{getSortIndicator("annualized_return")}</th>
-                <th style={thStyle}>SOTA</th>
+                <th style={{ ...thStyle, maxWidth: 180, cursor: "pointer" }} onClick={() => handleSort("factor_name")}>因子名称{getSortIndicator("factor_name")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("source")}>来源{getSortIndicator("source")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("factor_dimension")}>维度{getSortIndicator("factor_dimension")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("category")}>类别{getSortIndicator("category")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("grade")}>评级{getSortIndicator("grade")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("ic")}>IC(TASK){getSortIndicator("ic")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("ind_rank_ic")}>RankIC(独立){getSortIndicator("ind_rank_ic")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("ind_sharpe")}>Sharpe(独立){getSortIndicator("ind_sharpe")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("ind_annual_return")}>年化(独立){getSortIndicator("ind_annual_return")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("has_ind_metrics")}>独立指标{getSortIndicator("has_ind_metrics")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("is_sota_factor")}>SOTA{getSortIndicator("is_sota_factor")}</th>
                 <th style={thStyle}>说明</th>
               </tr>
             </thead>
@@ -631,11 +1126,42 @@ export default function FactorList({
                           <span style={{ color: "#d1d5db", fontSize: 10 }}>-</span>
                         )}
                       </td>
-                      <td style={tdStyle}>{f.ic != null ? f.ic.toFixed(4) : "-"}</td>
-                      <td style={tdStyle}>{f.sharpe != null ? f.sharpe.toFixed(3) : "-"}</td>
-                      <td style={tdStyle}>{f.annualized_return != null ? (f.annualized_return * 100).toFixed(1) + "%" : "-"}</td>
+                      <td style={tdStyle}>
+                        <span
+                          title="TASK多因子模型IC（LGBModel回测）"
+                          style={{ color: f.ic != null ? ((f.ic ?? 0) > 0 ? "#7c3aed" : "#dc2626") : "#d1d5db", fontSize: 11 }}
+                        >
+                          {f.ic != null ? f.ic.toFixed(4) : "-"}
+                        </span>
+                      </td>
+                      <td style={tdStyle}>
+                        <span
+                          title={f.ind_ic != null ? `Pearson IC: ${f.ind_ic.toFixed(4)}` : undefined}
+                          style={{ color: f.ind_rank_ic != null ? ((f.ind_rank_ic ?? 0) > 0 ? "#059669" : "#dc2626") : "#9ca3af" }}
+                        >
+                          {f.ind_rank_ic != null ? f.ind_rank_ic.toFixed(4) : "-"}
+                        </span>
+                      </td>
+                      <td style={tdStyle}>
+                        <span style={{ color: f.ind_sharpe != null ? "#2563eb" : "#9ca3af" }}>
+                          {f.ind_sharpe != null ? f.ind_sharpe.toFixed(3) : "-"}
+                        </span>
+                      </td>
+                      <td style={tdStyle}>
+                        <span style={{ color: f.ind_annual_return != null ? ((f.ind_annual_return ?? 0) > 0 ? "#059669" : "#dc2626") : "#9ca3af" }}>
+                          {f.ind_annual_return != null ? (f.ind_annual_return * 100).toFixed(1) + "%" : "-"}
+                        </span>
+                      </td>
+                      <td style={tdStyle}>
+                        {f.has_ind_metrics ? (
+                          <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600, background: "#d1fae5", color: "#059669" }}>已计算</span>
+                        ) : (
+                          <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 9, background: "#f3f4f6", color: "#9ca3af" }}>未计算</span>
+                        )}
+                      </td>
                       <td style={tdStyle}>{f.is_sota_factor ? "" : ""}</td>
                       <td style={tdStyle}>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                         {(f.description || f.classification_reason || f.source === "rdagent_task_sync") ? (
                           <span
                             onClick={(e) => {
@@ -653,6 +1179,19 @@ export default function FactorList({
                         ) : (
                           <span style={{ color: "#d1d5db", fontSize: 10 }}>-</span>
                         )}
+                        {!isSelection && (
+                          <span
+                            onClick={(e) => { e.stopPropagation(); deleteFactor(f.factor_name, f.source); }}
+                            title="删除此因子及所有关联数据"
+                            style={{
+                              color: "#dc2626", cursor: "pointer", fontSize: 10,
+                              opacity: 0.6, userSelect: "none",
+                            }}
+                            onMouseEnter={e => (e.currentTarget.style.opacity = "1")}
+                            onMouseLeave={e => (e.currentTarget.style.opacity = "0.6")}
+                          >删除</span>
+                        )}
+                        </div>
                       </td>
                     </tr>
                     {isExpanded && (() => {
@@ -662,7 +1201,7 @@ export default function FactorList({
 
                       return (
                       <tr style={{ borderBottom: "1px solid #f3f4f6" }}>
-                        <td colSpan={11} style={{ padding: "0 10px 10px 10px" }}>
+                        <td colSpan={13} style={{ padding: "0 10px 10px 10px" }}>
                           <div style={{
                             background: isSelection ? "#eff6ff" : "#faf5ff", borderRadius: 8, padding: "10px 14px",
                             fontSize: 12, lineHeight: 1.7, color: "#374151",
@@ -801,6 +1340,141 @@ export default function FactorList({
                                 )}
                               </div>
                             )}
+
+                            {/* TASK组合指标(参考) */}
+                            {(f.ic != null || f.sharpe != null || f.annualized_return != null) && (
+                              <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e5e7eb" }}>
+                                <strong style={{ color: "#9ca3af", fontSize: 11 }}>TASK组合指标(参考)</strong>
+                                <div style={{ display: "flex", gap: 12, marginTop: 4, fontSize: 11, color: "#6b7280" }}>
+                                  <span>IC: <strong>{f.ic != null ? f.ic.toFixed(4) : "-"}</strong></span>
+                                  <span>Sharpe: <strong>{f.sharpe != null ? f.sharpe.toFixed(3) : "-"}</strong></span>
+                                  <span>年化: <strong>{f.annualized_return != null ? (f.annualized_return * 100).toFixed(1) + "%" : "-"}</strong></span>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 独立因子指标（17项） */}
+                            {(() => {
+                              const indMetrics = factorIndMetrics[rowKey];
+                              if (!indMetrics || indMetrics.length === 0) return null;
+
+                              // 取 full 窗口的最新一条作为主指标
+                              const fullM = indMetrics.find((m: any) => m.eval_window === "full") || indMetrics[0];
+                              const windows = indMetrics.reduce((acc: Record<string, any>, m: any) => { acc[m.eval_window] = m; return acc; }, {});
+
+                              return (
+                                <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e5e7eb" }}>
+                                  <strong style={{ color: "#059669", fontSize: 11 }}>独立因子指标</strong>
+                                  <span style={{ fontSize: 10, color: "#9ca3af", marginLeft: 8 }}>
+                                    数据区间: {fullM.data_start} ~ {fullM.data_end}
+                                  </span>
+
+                                  {/* 核心指标卡片 */}
+                                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 5, marginTop: 6 }}>
+                                    {[
+                                      { label: "IC均值", value: fmtNum(fullM.ic_mean), color: (fullM.ic_mean ?? 0) > 0 ? "#059669" : "#dc2626" },
+                                      { label: "Rank IC", value: fmtNum(fullM.rank_ic_mean), color: (fullM.rank_ic_mean ?? 0) > 0 ? "#059669" : "#dc2626" },
+                                      { label: "ICIR", value: fmtNum(fullM.icir, 2), color: "#2563eb" },
+                                      { label: "Rank ICIR", value: fmtNum(fullM.rank_icir, 2), color: "#2563eb" },
+                                      { label: "IC胜率", value: fmtPct(fullM.ic_positive_ratio), color: "#7c3aed" },
+                                      { label: "多头年化", value: fmtPct(fullM.top_annual_return), color: (fullM.top_annual_return ?? 0) > 0 ? "#059669" : "#dc2626" },
+                                      { label: "超额年化", value: fmtPct(fullM.top_excess_annual_return), color: (fullM.top_excess_annual_return ?? 0) > 0 ? "#059669" : "#dc2626" },
+                                      { label: "多头夏普", value: fmtNum(fullM.top_sharpe, 2), color: "#0891b2" },
+                                      { label: "最大回撤", value: fmtPct(fullM.top_max_drawdown), color: "#dc2626" },
+                                      { label: "超额夏普", value: fmtNum(fullM.top_excess_sharpe, 2), color: "#0891b2" },
+                                      { label: "基准年化", value: fmtPct(fullM.benchmark_annual_return), color: "#6b7280" },
+                                      { label: "单调性", value: fmtNum(fullM.group_return_monotonicity, 2), color: "#6366f1" },
+                                      { label: "换手率", value: fmtNum(fullM.turnover, 4), color: "#d97706" },
+                                      { label: "IC半衰期", value: fullM.ic_decay_half_life != null ? fullM.ic_decay_half_life.toFixed(1) + "天" : "-", color: "#0891b2" },
+                                      { label: "覆盖率", value: fmtPct(fullM.coverage), color: "#7c3aed" },
+                                      { label: "交易日数", value: fullM.n_trading_days ?? "-", color: "#374151" },
+                                    ].map((item, idx) => (
+                                      <div key={idx} style={{
+                                        background: "#f0fdf4", borderRadius: 5, padding: "4px 6px",
+                                        border: "1px solid #d1fae5", textAlign: "center",
+                                      }}>
+                                        <div style={{ fontSize: 9, color: "#6b7280" }}>{item.label}</div>
+                                        <div style={{ fontSize: 12, fontWeight: 700, color: item.color, marginTop: 1 }}>{item.value}</div>
+                                      </div>
+                                    ))}
+                                  </div>
+
+                                  {/* 多持有期 Rank IC */}
+                                  {(fullM.rank_ic_1d != null || fullM.rank_ic_5d != null || fullM.rank_ic_10d != null || fullM.rank_ic_20d != null) && (
+                                    <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
+                                      <span style={{ fontSize: 10, color: "#6b7280", fontWeight: 600, whiteSpace: "nowrap" }}>多持有期RankIC:</span>
+                                      {[
+                                        { label: "1天", value: fullM.rank_ic_1d },
+                                        { label: "5天", value: fullM.rank_ic_5d },
+                                        { label: "10天", value: fullM.rank_ic_10d },
+                                        { label: "20天", value: fullM.rank_ic_20d },
+                                      ].map((item, idx) => (
+                                        <div key={idx} style={{
+                                          background: "#eff6ff", borderRadius: 4, padding: "3px 8px",
+                                          border: "1px solid #dbeafe", textAlign: "center", minWidth: 60,
+                                        }}>
+                                          <div style={{ fontSize: 9, color: "#6b7280" }}>{item.label}</div>
+                                          <div style={{
+                                            fontSize: 12, fontWeight: 700, marginTop: 1,
+                                            color: item.value != null ? ((item.value ?? 0) > 0 ? "#059669" : "#dc2626") : "#9ca3af",
+                                          }}>
+                                            {item.value != null ? item.value.toFixed(4) : "-"}
+                                          </div>
+                                        </div>
+                                      ))}
+                                      {fullM.ic_csz_mean != null && (
+                                        <div style={{
+                                          background: "#fef3c7", borderRadius: 4, padding: "3px 8px",
+                                          border: "1px solid #fde68a", textAlign: "center", minWidth: 70, marginLeft: 8,
+                                        }}>
+                                          <div style={{ fontSize: 9, color: "#92400e" }}>IC(截面)</div>
+                                          <div style={{
+                                            fontSize: 12, fontWeight: 700, marginTop: 1,
+                                            color: (fullM.ic_csz_mean ?? 0) > 0 ? "#059669" : "#dc2626",
+                                          }}>
+                                            {fullM.ic_csz_mean.toFixed(4)}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {/* 多窗口对比 */}
+                                  {Object.keys(windows).length > 1 && (
+                                    <div style={{ marginTop: 6, overflowX: "auto" }}>
+                                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+                                        <thead>
+                                          <tr style={{ background: "#f0fdf4", borderBottom: "1px solid #d1fae5" }}>
+                                            {["窗口", "IC均值", "Rank IC", "ICIR", "多头年化", "超额年化", "多头夏普", "最大回撤", "单调性"].map(h => (
+                                              <th key={h} style={{ padding: "3px 5px", fontWeight: 600, whiteSpace: "nowrap", textAlign: "left" }}>{h}</th>
+                                            ))}
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {["full", "out_sample", "recent_6m", "recent_3m"].filter(w => windows[w]).map(w => {
+                                            const wm = windows[w];
+                                            const wLabels: Record<string, string> = { full: "全量", out_sample: "样本外", recent_6m: "近6月", recent_3m: "近3月" };
+                                            return (
+                                              <tr key={w} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                                                <td style={{ padding: "2px 5px", fontWeight: 600 }}>{wLabels[w] || w}</td>
+                                                <td style={{ padding: "2px 5px", color: (wm.ic_mean ?? 0) > 0 ? "#059669" : "#dc2626" }}>{fmtNum(wm.ic_mean)}</td>
+                                                <td style={{ padding: "2px 5px", color: (wm.rank_ic_mean ?? 0) > 0 ? "#059669" : "#dc2626" }}>{fmtNum(wm.rank_ic_mean)}</td>
+                                                <td style={{ padding: "2px 5px" }}>{fmtNum(wm.icir, 2)}</td>
+                                                <td style={{ padding: "2px 5px", color: (wm.top_annual_return ?? 0) > 0 ? "#059669" : "#dc2626" }}>{fmtPct(wm.top_annual_return)}</td>
+                                                <td style={{ padding: "2px 5px", color: (wm.top_excess_annual_return ?? 0) > 0 ? "#059669" : "#dc2626" }}>{fmtPct(wm.top_excess_annual_return)}</td>
+                                                <td style={{ padding: "2px 5px" }}>{fmtNum(wm.top_sharpe, 2)}</td>
+                                                <td style={{ padding: "2px 5px", color: "#dc2626" }}>{fmtPct(wm.top_max_drawdown)}</td>
+                                                <td style={{ padding: "2px 5px" }}>{fmtNum(wm.group_return_monotonicity, 2)}</td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
 
                             {/* 历史实验表现 */}
                             {(() => {
@@ -946,7 +1620,21 @@ export default function FactorList({
             </button>
           </div>
         )}
-      </section>
+      </section>}
+
+      {pipelineOpen && (
+        <FullPipelineDialog
+          open={pipelineOpen}
+          taskIds={pipelineTaskIds.length > 0 ? pipelineTaskIds : undefined}
+          factorNames={pipelineFactorNames.length > 0 ? pipelineFactorNames : undefined}
+          onClose={() => setPipelineOpen(false)}
+          onComplete={() => {
+            loadData();
+            loadSourceTasks();
+            loadIndSummary();
+          }}
+        />
+      )}
     </div>
   );
 }

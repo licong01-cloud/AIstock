@@ -11,7 +11,6 @@ from __future__ import annotations
 支持的数据类型：
 - 日线数据（股票）
 - 分钟线数据（股票）
-- 板块数据（TDX）
 """
 
 import logging
@@ -25,7 +24,6 @@ from backend.db.pg_pool import get_conn
 
 from .config import (
     ADJ_FACTOR_TABLE,
-    DAILY_QFQ_TABLE,
     DAILY_RAW_TABLE,
     FACTOR_DATA_TABLE,
     FIELD_MAPPING_DB_DAILY,
@@ -38,9 +36,6 @@ from .config import (
     MINUTE_QFQ_TABLE,
     MONEYFLOW_TS_TABLE,
     PRICE_UNIT_DIVISOR,
-    TDX_BOARD_DAILY_TABLE,
-    TDX_BOARD_INDEX_TABLE,
-    TDX_BOARD_MEMBER_TABLE,
 )
 from .adj_factor_provider import AdjFactorProvider
 
@@ -420,38 +415,12 @@ class DBReader:
     def get_all_ts_codes(self) -> List[str]:
         sql = f"""
             SELECT DISTINCT ts_code
-            FROM {DAILY_QFQ_TABLE}
+            FROM {DAILY_RAW_TABLE}
             ORDER BY ts_code
         """
         with get_conn() as conn:  # type: ignore[attr-defined]
             with conn.cursor() as cur:
                 cur.execute(sql)
-                rows = cur.fetchall()
-        return [r[0] for r in rows]
-
-    def get_all_board_codes(self, idx_types: List[str] | None = None) -> List[str]:
-        """获取全部（或指定类型）板块代码列表.
-
-        来自 TDX_BOARD_INDEX_TABLE，按 ts_code 去重。
-        idx_types 为空时不过滤类型。
-        """
-
-        conditions: list[str] = []
-        params: dict[str, object] = {}
-        if idx_types:
-            conditions.append("idx_type = ANY(%(idx_types)s)")
-            params["idx_types"] = idx_types
-        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-
-        sql = f"""
-            SELECT DISTINCT ts_code
-              FROM {TDX_BOARD_INDEX_TABLE}
-              {where_clause}
-             ORDER BY ts_code
-        """
-        with get_conn() as conn:  # type: ignore[attr-defined]
-            with conn.cursor() as cur:
-                cur.execute(sql, params or None)
                 rows = cur.fetchall()
         return [r[0] for r in rows]
 
@@ -826,65 +795,6 @@ class DBReader:
 
         return df
 
-    def load_board_daily(
-        self,
-        board_codes: Iterable[str],
-        start: date | None,
-        end: date | None,
-    ) -> pd.DataFrame:
-        """加载指定板块在给定日期区间内的日线数据.
-
-        返回 MultiIndex (datetime, board) 的 DataFrame，列为 OHLCV+amount+pct_chg。
-        """
-
-        codes = list(board_codes)
-        if not codes:
-            return pd.DataFrame()
-
-        conditions: list[str] = ["ts_code = ANY(%(codes)s)"]
-        params: dict[str, object] = {"codes": codes}
-
-        if start is not None:
-            conditions.append("trade_date >= %(start)s")
-            params["start"] = start
-        if end is not None:
-            conditions.append("trade_date <= %(end)s")
-            params["end"] = end
-
-        where_clause = " AND ".join(conditions)
-
-        sql = f"""
-            SELECT
-                trade_date,
-                ts_code,
-                open,
-                high,
-                low,
-                close,
-                vol AS volume,
-                amount,
-                pct_chg
-            FROM {TDX_BOARD_DAILY_TABLE}
-            WHERE {where_clause}
-            ORDER BY trade_date, ts_code
-        """
-
-        with get_conn() as conn:  # type: ignore[attr-defined]
-            df = pd.read_sql(sql, conn, params=params)
-
-        if df.empty:
-            return df
-
-        df["datetime"] = pd.to_datetime(df["trade_date"], utc=False)
-        df = df.drop(columns=["trade_date"])
-        df = df.set_index(["datetime", "ts_code"])  # type: ignore[call-arg]
-        df.index = df.index.set_names(["datetime", "board"])
-
-        cols = ["open", "high", "low", "close", "volume", "amount", "pct_chg"]
-        df = df[cols]
-
-        return df
-
     def load_minute(
         self,
         ts_codes: Iterable[str],
@@ -1040,110 +950,6 @@ class DBReader:
                 cur.execute(sql, params)
                 row = cur.fetchone()
         return row[0] if row else 0
-
-    def load_board_index(
-        self,
-        start: date | None,
-        end: date | None,
-        idx_types: List[str] | None = None,
-    ) -> pd.DataFrame:
-        """加载板块索引数据（tdx_board_index）.
-
-        返回 DataFrame，列为 trade_date, ts_code, name, idx_type, idx_count。
-        """
-
-        conditions: list[str] = []
-        params: dict[str, object] = {}
-
-        if start is not None:
-            conditions.append("trade_date >= %(start)s")
-            params["start"] = start
-        if end is not None:
-            conditions.append("trade_date <= %(end)s")
-            params["end"] = end
-        if idx_types:
-            conditions.append("idx_type = ANY(%(idx_types)s)")
-            params["idx_types"] = idx_types
-
-        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-
-        sql = f"""
-            SELECT
-                trade_date,
-                ts_code,
-                name,
-                idx_type,
-                idx_count
-            FROM {TDX_BOARD_INDEX_TABLE}
-            {where_clause}
-            ORDER BY trade_date, ts_code
-        """
-
-        with get_conn() as conn:  # type: ignore[attr-defined]
-            df = pd.read_sql(sql, conn, params=params or None)
-
-        if df.empty:
-            return df
-
-        # 转换数据类型
-        df["trade_date"] = pd.to_datetime(df["trade_date"], utc=False)
-        df["ts_code"] = df["ts_code"].astype(str)
-        df["name"] = df["name"].astype(str)
-        df["idx_type"] = df["idx_type"].astype(str)
-        df["idx_count"] = pd.to_numeric(df["idx_count"], errors="coerce").fillna(0).astype(int)
-
-        return df
-
-    def load_board_member(
-        self,
-        start: date | None,
-        end: date | None,
-        board_codes: List[str] | None = None,
-    ) -> pd.DataFrame:
-        """加载板块成员数据（tdx_board_member）.
-
-        返回 DataFrame，列为 trade_date, ts_code (板块代码), con_code (成分股代码), con_name。
-        """
-
-        conditions: list[str] = []
-        params: dict[str, object] = {}
-
-        if start is not None:
-            conditions.append("trade_date >= %(start)s")
-            params["start"] = start
-        if end is not None:
-            conditions.append("trade_date <= %(end)s")
-            params["end"] = end
-        if board_codes:
-            conditions.append("ts_code = ANY(%(board_codes)s)")
-            params["board_codes"] = board_codes
-
-        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-
-        sql = f"""
-            SELECT
-                trade_date,
-                ts_code,
-                con_code,
-                con_name
-            FROM {TDX_BOARD_MEMBER_TABLE}
-            {where_clause}
-            ORDER BY trade_date, ts_code, con_code
-        """
-
-        with get_conn() as conn:  # type: ignore[attr-defined]
-            df = pd.read_sql(sql, conn, params=params or None)
-
-        if df.empty:
-            return df
-
-        # 转换数据类型
-        df["trade_date"] = pd.to_datetime(df["trade_date"], utc=False)
-        df["ts_code"] = df["ts_code"].astype(str)
-        df["con_code"] = df["con_code"].astype(str)
-        df["con_name"] = df["con_name"].astype(str)
-
-        return df
 
     # =========================================================================
     # Qlib 格式数据导出（daily_pv.h5 格式）
@@ -1572,6 +1378,99 @@ class DBReader:
 
         return result
 
+    def load_sector_data_panel(
+        self,
+        start: date,
+        end: date,
+        exchanges: Optional[List[str]] = None,
+        *,
+        ts_codes: Optional[List[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+    ) -> pd.DataFrame:
+        """加载 sector_data（申万 L2 行业展开到个股级别）并转换为 Qlib/RD-Agent 格式.
+
+        返回 DataFrame:
+        - Index: MultiIndex (datetime, instrument)
+        - Columns: sw2_* 系列 22 列, float32
+        """
+        exchange_conds = []
+        if exchanges:
+            normalized = {e.strip().lower() for e in exchanges if e and e.strip()}
+            if normalized:
+                if "sh" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
+                if "sz" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
+                if "bj" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
+        else:
+            exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
+
+        base_conds = [
+            "s.list_status = 'L'",
+            f"s.list_date <= '{end.isoformat()}'",
+        ]
+        if exclude_st:
+            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
+        if exclude_delisted_or_paused:
+            base_conds.append("s.list_status NOT IN ('D', 'P')")
+        if exchange_conds:
+            base_conds.append("(" + " OR ".join(exchange_conds) + ")")
+
+        where_clause = " AND ".join(base_conds)
+
+        ts_code_filter = ""
+        if ts_codes:
+            quoted = ", ".join(f"'{c}'" for c in ts_codes)
+            ts_code_filter = f" AND sd.ts_code IN ({quoted})"
+
+        sw2_cols = [
+            "sw2_open", "sw2_high", "sw2_low", "sw2_close", "sw2_pct_change",
+            "sw2_vol", "sw2_amount", "sw2_pe", "sw2_pb", "sw2_total_mv",
+            "sw2_mf_buy_sm_amt", "sw2_mf_sell_sm_amt",
+            "sw2_mf_buy_md_amt", "sw2_mf_sell_md_amt",
+            "sw2_mf_buy_lg_amt", "sw2_mf_sell_lg_amt",
+            "sw2_mf_buy_elg_amt", "sw2_mf_sell_elg_amt",
+            "sw2_mf_net_amt",
+            "sw2_mf_buy_elg_vol", "sw2_mf_sell_elg_vol",
+            "sw2_mf_net_vol",
+        ]
+        col_list = ", ".join(f"sd.{c}" for c in sw2_cols)
+
+        sql = f"""
+            SELECT
+                sd.trade_date,
+                sd.ts_code,
+                {col_list}
+            FROM market.sector_data sd
+            INNER JOIN market.stock_basic s ON sd.ts_code = s.ts_code
+            WHERE sd.trade_date >= '{start.isoformat()}'
+              AND sd.trade_date <= '{end.isoformat()}'
+              AND {where_clause}{ts_code_filter}
+            ORDER BY sd.trade_date, sd.ts_code
+        """
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+                colnames = [desc[0] for desc in cur.description]
+        df = pd.DataFrame(rows, columns=colnames)
+
+        if df.empty:
+            return df
+
+        # 构造 MultiIndex (datetime, instrument)
+        df["datetime"] = pd.to_datetime(df["trade_date"], utc=False)
+        df["instrument"] = df["ts_code"].apply(self._normalize_ts_code).astype(str)
+        df = df.set_index(["datetime", "instrument"])
+
+        # 仅保留 sw2_* 列，统一为 float32
+        result = df[sw2_cols].astype("float32")
+        result = result.sort_index()
+        return result
+
     def get_moneyflow_ts_codes(
         self,
         *,
@@ -1805,23 +1704,28 @@ class DBReader:
         if not codes:
             return pd.DataFrame()
 
-        # 1. 加载分钟线原始数据
+        # 1. 加载分钟线原始数据（含涨跌停价，用于生成 $limit_up/$limit_down）
         sql = f"""
             SELECT
-                trade_time,
-                ts_code,
-                open_li,
-                high_li,
-                low_li,
-                close_li,
-                volume_hand,
-                amount_li
-            FROM {MINUTE_RAW_TABLE}
-            WHERE ts_code = ANY(%(codes)s)
-              AND freq = %(freq)s
-              AND trade_time::date >= %(start)s
-              AND trade_time::date <= %(end)s
-            ORDER BY trade_time, ts_code
+                k.trade_time,
+                k.ts_code,
+                k.open_li,
+                k.high_li,
+                k.low_li,
+                k.close_li,
+                k.volume_hand,
+                k.amount_li,
+                sl.up_limit,
+                sl.down_limit
+            FROM {MINUTE_RAW_TABLE} k
+            LEFT JOIN market.stk_limit sl
+                ON k.ts_code = sl.ts_code
+                AND k.trade_time::date = sl.trade_date
+            WHERE k.ts_code = ANY(%(codes)s)
+              AND k.freq = %(freq)s
+              AND k.trade_time::date >= %(start)s
+              AND k.trade_time::date <= %(end)s
+            ORDER BY k.trade_time, k.ts_code
         """
         params = {"codes": codes, "freq": freq, "start": start, "end": end}
 
@@ -1881,6 +1785,31 @@ class DBReader:
 
         price_df["$factor"] = price_df["qfq_factor"].astype(np.float32)
 
+        # 4b. 计算涨跌停标志（不复权价格与 stk_limit 比较）
+        if "up_limit" in price_df.columns and "down_limit" in price_df.columns:
+            open_yuan  = price_df["open_li"]  / PRICE_UNIT_DIVISOR
+            high_yuan  = price_df["high_li"]  / PRICE_UNIT_DIVISOR
+            low_yuan   = price_df["low_li"]   / PRICE_UNIT_DIVISOR
+            close_yuan = price_df["close_li"] / PRICE_UNIT_DIVISOR
+            # 一字涨停：open/low/close 全部 >= up_limit
+            limit_up_mask = (
+                (close_yuan >= price_df["up_limit"]) &
+                (open_yuan  >= price_df["up_limit"]) &
+                (low_yuan   >= price_df["up_limit"])
+            )
+            # 一字跌停：open/high/close 全部 <= down_limit
+            limit_down_mask = (
+                (close_yuan <= price_df["down_limit"]) &
+                (open_yuan  <= price_df["down_limit"]) &
+                (high_yuan  <= price_df["down_limit"])
+            )
+            price_df["$limit_up"]   = limit_up_mask.astype(np.float32)
+            price_df["$limit_down"] = limit_down_mask.astype(np.float32)
+            # 无 stk_limit 数据或无 OHLC 时置 NaN
+            nan_mask = price_df["up_limit"].isna() | price_df["close_li"].isna()
+            price_df.loc[nan_mask, "$limit_up"]   = np.nan
+            price_df.loc[nan_mask, "$limit_down"] = np.nan
+
         # 5. 转换为 Qlib 格式
         price_df["instrument"] = price_df["ts_code"].astype(str)
         price_df["datetime"] = pd.to_datetime(price_df["trade_time"])
@@ -1888,92 +1817,17 @@ class DBReader:
         # 6. 设置 MultiIndex
         price_df = price_df.set_index(["datetime", "instrument"])
 
-        # 7. 只保留 Qlib 列（$amount 为可选列）
+        # 7. 只保留 Qlib 列（$amount/$limit_up/$limit_down 为可选列）
         qlib_cols = ["$open", "$close", "$high", "$low", "$volume", "$factor"]
         if "$amount" in price_df.columns:
             qlib_cols.append("$amount")
+        if "$limit_up" in price_df.columns:
+            qlib_cols.append("$limit_up")
+        if "$limit_down" in price_df.columns:
+            qlib_cols.append("$limit_down")
         result = price_df[qlib_cols].copy()
 
         # 8. 排序
-        result = result.sort_index()
-
-        return result
-
-    # =========================================================================
-    # 板块数据 Qlib 格式导出
-    # =========================================================================
-
-    def load_qlib_board_data(
-        self,
-        board_codes: Iterable[str],
-        start: date,
-        end: date,
-    ) -> pd.DataFrame:
-        """加载 Qlib 格式板块日线数据.
-
-        板块数据说明：
-        - 板块指数不需要复权（没有分红送股）
-        - $factor 固定为 1.0
-        - 价格单位已经是元
-
-        返回 DataFrame 格式:
-        - Index: MultiIndex (datetime, instrument)
-        - Columns: $open, $close, $high, $low, $volume, $factor
-        - 数据类型: float32
-
-        Args:
-            board_codes: 板块代码列表
-            start: 开始日期
-            end: 结束日期
-
-        Returns:
-            符合 Qlib 格式的 DataFrame
-        """
-        codes = list(board_codes)
-        if not codes:
-            return pd.DataFrame()
-
-        sql = f"""
-            SELECT
-                trade_date,
-                ts_code,
-                open,
-                high,
-                low,
-                close,
-                vol as volume
-            FROM {TDX_BOARD_DAILY_TABLE}
-            WHERE ts_code = ANY(%(codes)s)
-              AND trade_date >= %(start)s
-              AND trade_date <= %(end)s
-            ORDER BY trade_date, ts_code
-        """
-        params = {"codes": codes, "start": start, "end": end}
-
-        with get_conn() as conn:
-            df = pd.read_sql(sql, conn, params=params)
-
-        if df.empty:
-            return pd.DataFrame()
-
-        # 板块数据价格已经是元，不需要单位转换
-        # 板块不需要复权，$factor = 1.0
-        df["$open"] = df["open"].astype(np.float32)
-        df["$high"] = df["high"].astype(np.float32)
-        df["$low"] = df["low"].astype(np.float32)
-        df["$close"] = df["close"].astype(np.float32)
-        df["$volume"] = df["volume"].astype(np.float32)
-        df["$factor"] = np.float32(1.0)
-
-        # 转换为 Qlib 格式
-        # 板块代码格式：保持原样或添加前缀
-        df["instrument"] = df["ts_code"].astype(str)
-        df["datetime"] = pd.to_datetime(df["trade_date"])
-
-        df = df.set_index(["datetime", "instrument"])
-
-        qlib_cols = ["$open", "$close", "$high", "$low", "$volume", "$factor"]
-        result = df[qlib_cols].copy()
         result = result.sort_index()
 
         return result
@@ -2020,8 +1874,6 @@ class DBReader:
             "s.list_status = 'L'",  # 上市状态
             f"s.list_date <= '{end.isoformat()}'",  # 已上市
             "b.trade_date >= s.list_date",  # 只导出上市日期之后的数据
-            # 停牌数据对齐：只保留在kline_daily_raw表中有交易数据的日期
-            "EXISTS (SELECT 1 FROM market.kline_daily_raw d WHERE d.ts_code = b.ts_code AND d.trade_date = b.trade_date)",
         ]
         
         if exclude_st:

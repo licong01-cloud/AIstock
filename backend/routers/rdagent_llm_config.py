@@ -338,7 +338,7 @@ async def comprehensive_model_verification(
 
 
 @router.get("/providers")
-async def get_providers() -> dict[str, Any]:
+def get_providers() -> dict[str, Any]:
     """获取所有LLM服务商"""
     try:
         with get_conn() as conn:
@@ -374,7 +374,7 @@ async def get_providers() -> dict[str, Any]:
 
 
 @router.get("/models")
-async def get_models(
+def get_models(
     provider_id: Optional[int] = None,
     model_type: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -431,7 +431,7 @@ async def get_models(
 
 
 @router.get("/stage-mappings")
-async def get_stage_mappings() -> dict[str, Any]:
+def get_stage_mappings() -> dict[str, Any]:
     """获取所有阶段映射配置"""
     try:
         with get_conn() as conn:
@@ -859,7 +859,7 @@ async def get_current_config() -> dict[str, Any]:
 
 
 @router.get("/change-logs")
-async def get_change_logs(
+def get_change_logs(
     limit: int = 50,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -918,7 +918,7 @@ async def get_change_logs(
 
 
 @router.post("/providers")
-async def create_provider(provider: ProviderCreate) -> dict[str, Any]:
+def create_provider(provider: ProviderCreate) -> dict[str, Any]:
     """添加新的LLM服务商"""
     try:
         with get_conn() as conn:
@@ -961,7 +961,7 @@ async def create_provider(provider: ProviderCreate) -> dict[str, Any]:
 
 
 @router.put("/providers/{provider_id}")
-async def update_provider(provider_id: int, provider: ProviderUpdate) -> dict[str, Any]:
+def update_provider(provider_id: int, provider: ProviderUpdate) -> dict[str, Any]:
     """更新LLM服务商配置"""
     try:
         with get_conn() as conn:
@@ -1022,7 +1022,7 @@ async def update_provider(provider_id: int, provider: ProviderUpdate) -> dict[st
 
 
 @router.delete("/providers/{provider_id}")
-async def delete_provider(provider_id: int) -> dict[str, Any]:
+def delete_provider(provider_id: int) -> dict[str, Any]:
     """删除LLM服务商（软删除）"""
     try:
         with get_conn() as conn:
@@ -1194,7 +1194,7 @@ class ModelUpdate(BaseModel):
 
 
 @router.put("/models/{model_id}")
-async def update_model(model_id: int, model_update: ModelUpdate) -> dict[str, Any]:
+def update_model(model_id: int, model_update: ModelUpdate) -> dict[str, Any]:
     """更新模型基本信息"""
     try:
         # 验证描述长度
@@ -1248,7 +1248,7 @@ async def update_model(model_id: int, model_update: ModelUpdate) -> dict[str, An
 
 
 @router.get("/models/{model_id}/config")
-async def get_model_config(model_id: int) -> dict[str, Any]:
+def get_model_config(model_id: int) -> dict[str, Any]:
     """获取模型API配置（不包含敏感信息如API Key）"""
     try:
         with get_conn() as conn:

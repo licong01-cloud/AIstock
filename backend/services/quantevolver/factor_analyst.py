@@ -12,10 +12,15 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+from decimal import Decimal
+from datetime import datetime, date
 from typing import Any, Dict, List, Optional
 
+import numpy as np
+
 from ...db.pg_pool import get_conn
+from .factor_value_loader import FactorValueLoader
+from .correlation_engine import CorrelationEngine, CorrelationResult
 
 logger = logging.getLogger("aistock.quantevolver.factor_analyst")
 
@@ -81,6 +86,19 @@ def _get_llm_client():
 
 def _utc_now_iso() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _to_jsonable(obj):
+    """递归将 Decimal/date/datetime 转为 JSON 可序列化类型。"""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(i) for i in obj]
+    return obj
 
 
 def _classify_by_rules(factor_name: str, code_text: Optional[str] = None,
@@ -229,54 +247,6 @@ def _grade_by_metrics(ic: Optional[float], sharpe: Optional[float],
         return "C"
     else:
         return "D"
-
-
-def _classify_with_llm(factor_name: str, expression: Optional[str],
-                        code_text: Optional[str]) -> Optional[Dict[str, str]]:
-    """使用LLM进行因子分类。返回 {"category": "...", "reason": "..."}"""
-    llm = _get_llm_client()
-    if llm is None:
-        return None
-
-    from .prompt_manager import PromptManager, safe_format
-    pm = PromptManager()
-    prompt_data = pm.get_active_prompt_text("factor_classifier", "classify_factor")
-
-    if prompt_data:
-        system_prompt = prompt_data["system_prompt"]
-        user_prompt = safe_format(prompt_data["user_prompt_template"], 
-            factor_name=factor_name,
-            expression=expression or "无",
-            code_text=(code_text or "")[:500],
-        )
-    else:
-        raise ValueError("未配置 factor_classifier/classify_factor 的提示词，拒绝使用兜底策略")
-
-    try:
-        from .llm_client import get_llm_kwargs
-        kwargs = get_llm_kwargs("factor_classifier")
-        
-        response = llm.completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-            max_tokens=200,
-            response_format={"type": "json_object"},
-            **kwargs
-        )
-        content = response.choices[0].message.content.strip()
-        # 解析JSON
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-        result = json.loads(content)
-        return result
-    except Exception as e:
-        logger.warning(f"LLM分类失败 ({factor_name}): {e}")
-        return None
 
 
 def _determine_factor_dimension(factor_name: str, category: str,
@@ -508,36 +478,104 @@ def _generate_description_by_rules(factor_name: str, category: str,
     return desc[:250]
 
 
-def _generate_description_with_llm(factor_name: str, code_text: Optional[str],
-                                    expression: Optional[str]) -> Optional[str]:
-    """使用LLM生成因子描述。"""
+def _analyze_factor_v2(
+    factor_name: str,
+    factor_source: str,
+    expression: Optional[str],
+    code_text: Optional[str],
+    metrics: Dict[str, Any],
+    rule_grade: str,
+) -> Optional[Dict[str, Any]]:
+    """合并后的单次 LLM 调用：分类 + 评级审核 + 双描述生成。
+
+    Returns:
+        解析后的 JSON dict，包含 category, grade, grade_reason, dimension,
+        description, usage_guidance, risk_notes；失败返回 None。
+    """
     llm = _get_llm_client()
     if llm is None:
         return None
 
-    from .prompt_manager import PromptManager, safe_format
+    from .prompt_manager import PromptManager
     pm = PromptManager()
-    prompt_data = pm.get_active_prompt_text("factor_describer", "generate_description")
+    prompt_data = pm.get_active_prompt_text("factor_analyst", "analyze_factor_v2")
+
+    # 构建指标文本
+    def _fmt(v, pct=False):
+        if v is None:
+            return "N/A"
+        if pct:
+            return f"{float(v):.2%}" if isinstance(v, (int, float, Decimal)) else str(v)
+        return f"{float(v):.4f}" if isinstance(v, (float, Decimal)) else str(v)
+
+    has_metrics = bool(metrics and metrics.get('ic_mean') is not None)
+
+    if has_metrics:
+        # 多持有期IC
+        multi_holding = ""
+        if metrics.get('rank_ic_1d') is not None:
+            multi_holding = f"\n- 多持有期Rank IC: 1日={_fmt(metrics.get('rank_ic_1d'))} | 5日={_fmt(metrics.get('rank_ic_5d'))} | 10日={_fmt(metrics.get('rank_ic_10d'))} | 20日={_fmt(metrics.get('rank_ic_20d'))}"
+        if metrics.get('ic_csz_mean') is not None:
+            multi_holding += f" | 截面IC均值={_fmt(metrics.get('ic_csz_mean'))}"
+
+        metrics_block = f"""## 独立评测指标
+- IC均值: {_fmt(metrics.get('ic_mean'))} | Rank IC均值: {_fmt(metrics.get('rank_ic_mean'))}
+- ICIR: {_fmt(metrics.get('icir'))} | Rank ICIR: {_fmt(metrics.get('rank_icir'))}{multi_holding}
+- IC正比例: {_fmt(metrics.get('ic_positive_ratio'))} | IC衰减半衰期: {metrics.get('ic_decay_half_life', 'N/A')}天
+- 多空超额Sharpe: {_fmt(metrics.get('top_excess_sharpe'))} | 多空超额年化: {_fmt(metrics.get('top_excess_annual_return'), True)}
+- 分组单调性: {_fmt(metrics.get('group_return_monotonicity'))} | 换手率: {_fmt(metrics.get('turnover'), True)}
+- 覆盖率: {_fmt(metrics.get('coverage'))} | 交易天数: {metrics.get('n_trading_days', 'N/A')}
+
+## 纯多头收益
+- 多头年化: {_fmt(metrics.get('top_annual_return'), True)}
+- 多头最大回撤: {_fmt(metrics.get('top_max_drawdown'), True)}
+- 基准年化: {_fmt(metrics.get('benchmark_annual_return'), True)}"""
+
+        # 多窗口稳定性
+        multi_window = metrics.get('multi_window')
+        if multi_window:
+            window_lines = []
+            for window_name in ['out_sample', 'recent_6m', 'recent_3m']:
+                if window_name in multi_window:
+                    w = multi_window[window_name]
+                    window_lines.append(f"- {window_name}: IC={_fmt(w.get('ic_mean'))} ICIR={_fmt(w.get('icir'))} RankIC={_fmt(w.get('rank_ic_mean'))} RankICIR={_fmt(w.get('rank_icir'))}")
+            if window_lines:
+                metrics_block += "\n\n## 多窗口稳定性\n" + "\n".join(window_lines)
+
+        rule_grade_line = f"\n## 规则预评级: {rule_grade}（仅基于 IC={_fmt(metrics.get('ic_mean'))} + Sharpe={_fmt(metrics.get('top_excess_sharpe'))}）"
+    else:
+        metrics_block = "## 独立评测指标\n尚未计算独立指标，请仅根据因子代码和表达式进行分析分类。评级设为 P（待评估）。"
+        rule_grade_line = ""
+
+    user_prompt = f"""## 因子信息
+- 名称: {factor_name}
+- 来源: {factor_source}
+- 表达式: {expression or '无'}
+- 代码片段: {(code_text or '')[:1000]}
+
+{metrics_block}
+{rule_grade_line}
+
+请综合以上信息，输出 JSON。"""
 
     if prompt_data:
         system_prompt = prompt_data["system_prompt"]
-        user_prompt = f"""因子名称: {factor_name}
-因子表达式（QLib格式，仅供理解逻辑，不要在描述中展示）: {expression or '无'}
-因子代码（仅供理解逻辑，不要在描述中展示变量名）: {(code_text or '')[:800]}"""
     else:
-        raise ValueError("未配置 factor_describer/generate_description 的提示词，拒绝使用兜底策略")
+        # 内置兜底 system prompt
+        system_prompt = _get_default_v2_system_prompt()
 
     try:
         from .llm_client import get_llm_kwargs
-        kwargs = get_llm_kwargs("factor_describer")
-        
+        kwargs = get_llm_kwargs("factor_analyst")
+
         response = llm.completion(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.2,
-            max_tokens=500,
+            max_tokens=1500,
+            response_format={"type": "json_object"},
             **kwargs
         )
         content = response.choices[0].message.content.strip()
@@ -546,10 +584,79 @@ def _generate_description_with_llm(factor_name: str, code_text: Optional[str],
             if content.startswith("json"):
                 content = content[4:]
         result = json.loads(content)
-        return result.get("description", "")[:250]
+
+        # 校验必要字段
+        if "category" not in result or "grade" not in result:
+            logger.warning(f"LLM v2 输出缺少必要字段 ({factor_name}): {list(result.keys())}")
+            return None
+
+        # 规范化
+        cat = str(result["category"]).upper()
+        if cat not in FACTOR_CATEGORIES:
+            cat = "TECH"
+        result["category"] = cat
+
+        grade = str(result["grade"]).upper()
+        if grade not in FACTOR_GRADES and grade != "P":
+            grade = rule_grade
+        result["grade"] = grade
+
+        return result
     except Exception as e:
-        logger.warning(f"LLM描述生成失败 ({factor_name}): {e}")
+        logger.warning(f"LLM v2 分析失败 ({factor_name}): {e}")
         return None
+
+
+def _get_default_v2_system_prompt() -> str:
+    """内置的 factor_analyst/analyze_factor_v2 兜底 system prompt。"""
+    categories_desc = "\n".join(f"- {k}: {v}" for k, v in FACTOR_CATEGORIES.items())
+    return f"""你是一个专业的量化因子分析师。请根据提供的因子信息和独立评测指标，完成以下任务：
+
+1. **分类**：将因子归入以下 12 类之一：
+{categories_desc}
+
+2. **评级**：综合评估因子质量，给出 S/A/B/C/D 评级。
+   评级维度权重（8维度）：IC均值 20% + ICIR 15% + 多持有期IC一致性 15% + IC衰减 10% + 多窗口稳定性 15% + Sharpe 10% + 分组单调性 10% + 换手率 5%
+   - S: IC>0.05 且 ICIR>2.5，各维度均优秀
+   - A: IC>0.03 且 ICIR>1.5，多数维度良好
+   - B: IC>0.02 且 ICIR>1.0，整体可用
+   - C: IC>0.01，部分维度达标
+   - D: IC<=0.01 或多数维度不达标
+   你可以偏离规则预评级，但需给出理由。
+
+3. **维度判断**：判断因子是截面型(cross_sectional)还是时序型(time_series)。
+
+   **权威定义**：
+   - **截面因子(cross_sectional)**：在同一时间点对不同股票进行横向比较/排名。特征：使用rank/zscore/percentile等截面算子，或基于行业/市值等横向分组。
+   - **时序因子(time_series)**：对同一股票在不同时间点进行纵向分析。特征：使用时间窗口(如MA5/STD20/ROC10)、滚动计算、滞后项(ref/shift)等时序算子。
+
+   **判断标准**：
+   - 若因子名称或表达式包含时间窗口参数(如MA5、STD20、ROC10)，必须判断为time_series
+   - 若使用rolling/shift/ref/ma/std/roc等时序算子，必须判断为time_series
+   - 若仅使用rank/zscore/percentile等截面算子且无时间窗口，判断为cross_sectional
+
+4. **描述生成**：生成 300-500 字的可读文本描述，涵盖：核心逻辑 + 指标解读 + 适用场景 + 组合建议 + 风险提示。
+
+5. **使用指引**：给出组合使用建议。
+
+请严格输出以下 JSON 格式：
+{{
+  "category": "12类代码之一",
+  "category_reason": "分类理由",
+  "grade": "S/A/B/C/D",
+  "grade_reason": "评级理由",
+  "dimension": "cross_sectional 或 time_series",
+  "description": "300-500字可读文本描述",
+  "usage_guidance": {{
+    "optimal_holding_period": "Nd 或 Nd-Md",
+    "market_regime_fit": "适用市场环境",
+    "complement_categories": ["互补类别代码"],
+    "conflict_categories": ["冲突类别代码"],
+    "combo_role": "核心因子/辅助因子/对冲因子",
+    "suggested_weight_range": [min, max]
+  }},
+  "risk_notes": ["风险提示1", "风险提示2"]
+}}"""
 
 
 class FactorAnalyst:
@@ -561,17 +668,11 @@ class FactorAnalyst:
         factor_source: str,
         use_llm: bool = False,
     ) -> Dict[str, Any]:
-        """分析单个因子：分类 + 评级。
+        """分析单个因子：分类 + 评级 + 描述。
 
-        Args:
-            factor_name: 因子名称
-            factor_source: 因子来源（rdagent_task_sync / alpha158 / alpha360）
-            use_llm: 是否使用LLM进行分类
-
-        Returns:
-            分类和评级结果
+        use_llm=True 时走 v2 合并调用（单次 LLM），否则走规则。
+        无独立指标时仍调用 LLM 进行代码分析，由 LLM 决定评级。
         """
-        # 从数据库获取因子信息
         factor_info = self._get_factor_info(factor_name, factor_source)
         if not factor_info:
             return {"ok": False, "error": f"因子 {factor_name} (source={factor_source}) 不存在"}
@@ -582,60 +683,140 @@ class FactorAnalyst:
         sharpe = factor_info.get("sharpe")
         ann_ret = factor_info.get("annualized_return") or factor_info.get("best_performance_ann_ret")
 
-        # 分类
-        category = None
-        classification_reason = None
+        # 获取独立因子指标
+        ind = self._get_independent_metrics(factor_name) or {}
 
+        # 有独立指标 → 提取关键值
+        ic = ind.get("ic_mean") or ic
+        sharpe = ind.get("top_excess_sharpe") or sharpe
+        ann_ret = ind.get("top_excess_annual_return") or ann_ret
+        rule_grade = _grade_by_metrics(ic, sharpe, ann_ret)
+
+        # 获取多窗口稳定性指标
+        multi_window = self._get_multi_window_metrics(factor_name)
+        if multi_window:
+            ind['multi_window'] = multi_window
+
+        # ── v2 合并 LLM 调用 ──
+        factor_profile = None
         if use_llm:
-            llm_result = _classify_with_llm(factor_name, expression, code_text)
-            if llm_result:
-                category = llm_result.get("category")
-                classification_reason = llm_result.get("reason")
+            v2_result = _analyze_factor_v2(
+                factor_name, factor_source, expression, code_text, ind, rule_grade)
+            if v2_result:
+                llm_category = v2_result["category"]
+                llm_dimension = v2_result.get("dimension", "time_series")
 
+                # ── 双重校验机制：LLM ↔ 规则引擎交叉验证 ──
+                rule_category, rule_reason = _classify_by_rules(factor_name, code_text=code_text, expression=expression)
+                rule_dimension = _determine_factor_dimension(factor_name, llm_category, code_text=code_text, expression=expression)
+
+                # 计算规则置信度（基于匹配强度）
+                rule_confidence = 0
+                if rule_category:
+                    # 数据列扫描（最高置信度=3）
+                    if "数据列扫描" in rule_reason:
+                        rule_confidence = 3
+                    # 计算逻辑扫描（中等置信度=2）
+                    elif "计算逻辑扫描" in rule_reason:
+                        rule_confidence = 2
+                    # 名称关键词匹配（低置信度=1）
+                    else:
+                        rule_confidence = 1
+
+                # 规则置信度≥2时，以规则为准
+                if rule_confidence >= 2 and rule_category and rule_category != llm_category:
+                    category = rule_category
+                    classification_reason = f"双重校验：规则分类(置信度{rule_confidence})优先于LLM。{rule_reason}"
+                    logger.info(f"因子{factor_name}分类校验：LLM={llm_category} vs 规则={rule_category}(置信度{rule_confidence})，采用规则分类")
+                else:
+                    category = llm_category
+                    classification_reason = v2_result.get("category_reason", "LLM v2 分类")
+                    if rule_category and rule_category != llm_category:
+                        classification_reason += f" (规则建议:{rule_category},置信度{rule_confidence})"
+
+                # 维度校验：规则引擎的维度判断更可靠
+                if rule_dimension != llm_dimension:
+                    factor_dimension = rule_dimension
+                    logger.info(f"因子{factor_name}维度校验：LLM={llm_dimension} vs 规则={rule_dimension}，采用规则判断")
+                else:
+                    factor_dimension = llm_dimension
+
+                grade = v2_result["grade"]
+                grade_reason = v2_result.get("grade_reason", "")
+                # 规范化维度值
+                if factor_dimension == "cross_section":
+                    factor_dimension = "cross_sectional"
+                description = v2_result.get("description", "")
+
+                # 构建 factor_profile
+                factor_profile = {
+                    "category": category,
+                    "category_reason": classification_reason,
+                    "grade": grade,
+                    "grade_reason": grade_reason,
+                    "dimension": factor_dimension,
+                    "metrics_summary": _to_jsonable({k: v for k, v in ind.items() if v is not None}),
+                    "usage_guidance": v2_result.get("usage_guidance", {}),
+                    "risk_notes": v2_result.get("risk_notes", []),
+                }
+
+                # 聚合 L2 实验数据
+                exp_track = self._get_experiment_track_summary(factor_name)
+                if exp_track:
+                    factor_profile["experiment_track"] = _to_jsonable(exp_track)
+
+                self._upsert_classification(
+                    factor_name=factor_name, factor_source=factor_source,
+                    category=category, grade=grade,
+                    grade_reason=grade_reason,
+                    classification_reason=classification_reason,
+                    ic_value=ic, sharpe_value=sharpe, ann_ret_value=ann_ret,
+                    llm_analysis=classification_reason,
+                    description=description, factor_dimension=factor_dimension,
+                    factor_profile=factor_profile,
+                )
+                return {
+                    "ok": True, "factor_name": factor_name,
+                    "factor_source": factor_source,
+                    "category": category,
+                    "category_name": FACTOR_CATEGORIES.get(category, category),
+                    "factor_dimension": factor_dimension,
+                    "grade": grade,
+                    "grade_name": FACTOR_GRADES.get(grade, grade),
+                    "grade_reason": grade_reason,
+                    "classification_reason": classification_reason,
+                    "description": description,
+                    "ic": ic, "sharpe": sharpe, "ann_ret": ann_ret,
+                }
+
+        # ── fallback: 规则路径（use_llm=False 或 LLM 失败）──
+        category, classification_reason = _classify_by_rules(
+            factor_name, code_text=code_text, expression=expression)
         if not category:
-            rule_cat, rule_reason = _classify_by_rules(factor_name, code_text=code_text, expression=expression)
-            if rule_cat:
-                category = rule_cat
-                classification_reason = f"规则分类: {rule_reason}"
-            else:
-                category = "TECH"
-                classification_reason = f"默认分类: 未匹配到明确类别(source={factor_source})"
+            category = "TECH"
+            classification_reason = f"默认分类(source={factor_source})"
+        else:
+            classification_reason = f"规则分类: {classification_reason}"
 
-        # 评级
-        grade = _grade_by_metrics(ic, sharpe, ann_ret)
-        grade_reason = f"IC={ic}, Sharpe={sharpe}, AnnRet={ann_ret}"
-
-        # 判断因子维度（截面/时序）
+        grade = rule_grade
+        grade_reason = f"[独立指标] IC={ic}, Sharpe={sharpe}, AnnRet={ann_ret}"
         factor_dimension = _determine_factor_dimension(
             factor_name, category, code_text=code_text, expression=expression)
+        description = _generate_description_by_rules(
+            factor_name, category, code_text=code_text, expression=expression)
 
-        # 生成因子描述
-        description = None
-        if use_llm:
-            description = _generate_description_with_llm(factor_name, code_text, expression)
-        if not description:
-            description = _generate_description_by_rules(
-                factor_name, category, code_text=code_text, expression=expression)
-
-        # 保存到数据库
         self._upsert_classification(
-            factor_name=factor_name,
-            factor_source=factor_source,
-            category=category,
-            grade=grade,
+            factor_name=factor_name, factor_source=factor_source,
+            category=category, grade=grade,
             grade_reason=grade_reason,
             classification_reason=classification_reason,
-            ic_value=ic,
-            sharpe_value=sharpe,
-            ann_ret_value=ann_ret,
-            llm_analysis=classification_reason if use_llm else None,
-            description=description,
-            factor_dimension=factor_dimension,
+            ic_value=ic, sharpe_value=sharpe, ann_ret_value=ann_ret,
+            llm_analysis=None, description=description,
+            factor_dimension=factor_dimension, factor_profile=None,
         )
 
         return {
-            "ok": True,
-            "factor_name": factor_name,
+            "ok": True, "factor_name": factor_name,
             "factor_source": factor_source,
             "category": category,
             "category_name": FACTOR_CATEGORIES.get(category, category),
@@ -645,10 +826,58 @@ class FactorAnalyst:
             "grade_reason": grade_reason,
             "classification_reason": classification_reason,
             "description": description,
-            "ic": ic,
-            "sharpe": sharpe,
-            "ann_ret": ann_ret,
+            "ic": ic, "sharpe": sharpe, "ann_ret": ann_ret,
         }
+
+    async def batch_analyze_all_factors_async(
+        self,
+        use_llm: bool = False,
+        source_filter: Optional[str] = None,
+        factor_names: Optional[List[str]] = None,
+    ):
+        """批量分析因子（异步生成器，支持SSE流式推送）。
+
+        Yields:
+            进度事件字典: {"type": "progress", "current": int, "total": int, "factor_name": str}
+            或错误事件: {"type": "error", "factor_name": str, "error": str}
+            或完成事件: {"type": "done", "analyzed": int, "total": int, "errors": list}
+        """
+        import asyncio
+
+        factors = self._get_all_factors(source_filter)
+        if factor_names:
+            name_set = set(factor_names)
+            factors = [f for f in factors if f["factor_name"] in name_set]
+
+        total = len(factors)
+        analyzed = 0
+        errors = []
+        semaphore = asyncio.Semaphore(5)
+
+        async def analyze_one(f, index):
+            async with semaphore:
+                try:
+                    await asyncio.to_thread(
+                        self.analyze_single_factor,
+                        factor_name=f["factor_name"],
+                        factor_source=f["source"],
+                        use_llm=use_llm,
+                    )
+                    return {"ok": True, "factor_name": f["factor_name"], "index": index}
+                except Exception as e:
+                    return {"ok": False, "factor_name": f["factor_name"], "error": str(e), "index": index}
+
+        tasks = [analyze_one(f, i) for i, f in enumerate(factors, 1)]
+        for coro in asyncio.as_completed(tasks):
+            result = await coro
+            if result["ok"]:
+                analyzed += 1
+                yield {"type": "progress", "current": analyzed, "total": total, "factor_name": result["factor_name"]}
+            else:
+                errors.append(f"{result['factor_name']}: {result['error']}")
+                yield {"type": "error", "factor_name": result["factor_name"], "error": result["error"]}
+
+        yield {"type": "done", "analyzed": analyzed, "total": total, "errors": errors}
 
     def batch_analyze_all_factors(
         self,
@@ -656,18 +885,8 @@ class FactorAnalyst:
         source_filter: Optional[str] = None,
         factor_names: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """批量分析因子。
-
-        Args:
-            use_llm: 是否使用LLM
-            source_filter: 可选的source过滤
-            factor_names: 可选的因子名称列表，指定后只分析这些因子
-
-        Returns:
-            批量分析结果统计
-        """
+        """批量分析因子（同步版本，向后兼容）。"""
         factors = self._get_all_factors(source_filter)
-        # 如果指定了因子名称列表，只分析这些因子
         if factor_names:
             name_set = set(factor_names)
             factors = [f for f in factors if f["factor_name"] in name_set]
@@ -692,6 +911,23 @@ class FactorAnalyst:
             "analyzed": analyzed,
             "errors": errors,
         }
+
+    def clear_classifications(self, source_filter: Optional[str] = None) -> int:
+        """清空因子分类结果。
+
+        Args:
+            source_filter: 可选的source过滤，不提供则清空全部
+
+        Returns:
+            删除的记录数
+        """
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if source_filter:
+                    cur.execute("DELETE FROM qe_factor_classification WHERE factor_source = %s", (source_filter,))
+                else:
+                    cur.execute("DELETE FROM qe_factor_classification")
+                return cur.rowcount
 
     def get_classifications(
         self,
@@ -738,7 +974,7 @@ class FactorAnalyst:
                     f"""SELECT id, factor_name, factor_source, category, grade,
                                grade_reason, classification_reason, ic_value,
                                sharpe_value, ann_ret_value, description,
-                               factor_dimension, analyzed_at
+                               factor_dimension, factor_profile, analyzed_at
                         FROM qe_factor_classification
                         WHERE {where_clause}
                         ORDER BY grade ASC, ic_value DESC NULLS LAST
@@ -780,16 +1016,17 @@ class FactorAnalyst:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 sql = """
-                    SELECT factor_name, factor_source, category, grade,
-                           ic_value, sharpe_value, ann_ret_value
-                    FROM qe_factor_classification
-                    WHERE grade IS NOT NULL
+                    SELECT c.factor_name, c.factor_source, c.category, c.grade,
+                           c.ic_value, c.sharpe_value, c.ann_ret_value,
+                           c.factor_profile
+                    FROM qe_factor_classification c
+                    WHERE c.grade IS NOT NULL
                     ORDER BY
-                        CASE grade
+                        CASE c.grade
                             WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
                             WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
                         END ASC,
-                        ic_value DESC NULLS LAST
+                        c.ic_value DESC NULLS LAST
                 """
                 cur.execute(sql)
                 cols = [desc[0] for desc in cur.description]
@@ -808,22 +1045,85 @@ class FactorAnalyst:
         if not candidates:
             return {"ok": True, "factors": [], "message": "无符合条件的因子"}
 
+        # 构建互补/冲突类别映射
+        complement_map: Dict[str, List[str]] = {}  # category -> complementary categories
+        conflict_map: Dict[str, List[str]] = {}   # category -> conflicting categories
+        for f in candidates:
+            profile = f.get("factor_profile") or {}
+            if isinstance(profile, str):
+                try:
+                    profile = json.loads(profile)
+                except Exception:
+                    profile = {}
+            usage = profile.get("usage_guidance", {})
+            cat = f["category"]
+            if usage.get("complementary_categories") and cat not in complement_map:
+                complement_map[cat] = usage["complementary_categories"]
+            if usage.get("conflicting_categories") and cat not in conflict_map:
+                conflict_map[cat] = usage["conflicting_categories"]
+
+        # 加载已有相关性数据
+        candidate_names = [f["factor_name"] for f in candidates]
+        correlation_data: Dict[str, float] = {}
+        if len(candidate_names) >= 2:
+            try:
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        # 先获取 factor_name -> catalog_id 映射
+                        ph = ",".join(["%s"] * len(candidate_names))
+                        cur.execute(f"""
+                            SELECT DISTINCT ON (factor_name) factor_name, id
+                            FROM aistock_factor_catalog
+                            WHERE factor_name IN ({ph})
+                            ORDER BY factor_name, id
+                        """, candidate_names)
+                        id_map = {row[0]: row[1] for row in cur.fetchall()}
+                        id_to_name = {v: k for k, v in id_map.items()}
+                        factor_ids = list(id_map.values())
+
+                        if len(factor_ids) >= 2:
+                            cur.execute("""
+                                SELECT factor_a_id, factor_b_id, correlation
+                                FROM qe_factor_correlations
+                                WHERE factor_a_id = ANY(%s) AND factor_b_id = ANY(%s)
+                            """, (factor_ids, factor_ids))
+                            for row in cur.fetchall():
+                                name_a = id_to_name.get(row[0], "")
+                                name_b = id_to_name.get(row[1], "")
+                                correlation_data[f"{name_a}_{name_b}"] = float(row[2])
+                                correlation_data[f"{name_b}_{name_a}"] = float(row[2])
+            except Exception:
+                pass
+
         # 选择策略：先保证多样性，再按评级填充
         selected = []
-        category_count = {}
+        category_count: Dict[str, int] = {}
         max_per_category = max(1, int(target_count * 0.3))
 
-        # 第一轮：每个类别选最好的1个
-        seen_categories = set()
+        def _has_high_correlation(factor_name: str) -> bool:
+            """检查候选因子是否与已选因子高度相关 (|corr| > 0.7)"""
+            for s in selected:
+                key = f"{factor_name}_{s['factor_name']}"
+                corr = correlation_data.get(key)
+                if corr is not None and abs(corr) > 0.7:
+                    return True
+            return False
+
+        # 第一轮：每个类别选最好的1个（优先互补类别）
+        seen_categories: set = set()
+        # 收集所有类别，优先排列互补需求高的类别
+        all_cats = list(dict.fromkeys(f["category"] for f in candidates))
         for f in candidates:
             cat = f["category"]
             if cat not in seen_categories and len(selected) < target_count:
-                selected.append(f)
-                seen_categories.add(cat)
-                category_count[cat] = category_count.get(cat, 0) + 1
+                if not _has_high_correlation(f["factor_name"]):
+                    selected.append(f)
+                    seen_categories.add(cat)
+                    category_count[cat] = category_count.get(cat, 0) + 1
 
-        # 第二轮：按评级填充剩余
+        # 第二轮：按评级填充剩余（跳过冲突类别和高相关因子）
         selected_names = {f["factor_name"] for f in selected}
+        selected_cats = set(category_count.keys())
         for f in candidates:
             if len(selected) >= target_count:
                 break
@@ -832,9 +1132,21 @@ class FactorAnalyst:
             cat = f["category"]
             if category_count.get(cat, 0) >= max_per_category:
                 continue
+            # 检查冲突类别
+            is_conflict = False
+            for sel_cat in selected_cats:
+                if cat in conflict_map.get(sel_cat, []):
+                    is_conflict = True
+                    break
+            if is_conflict and diversity_weight > 0.3:
+                continue
+            # 检查高相关
+            if _has_high_correlation(f["factor_name"]):
+                continue
             selected.append(f)
             selected_names.add(f["factor_name"])
             category_count[cat] = category_count.get(cat, 0) + 1
+            selected_cats.add(cat)
 
         # 统计
         category_summary = {}
@@ -860,38 +1172,117 @@ class FactorAnalyst:
     def compute_correlation_matrix(
         self,
         factor_names: List[str],
-        method: str = "pearson",
+        method: str = "spearman_ewma",
+        as_of_date: Optional[str] = None,
     ) -> Dict[str, Any]:
         """计算因子间相关性矩阵。
 
-        注意：此功能需要实际的因子数据（QLib数据集），
-        当前版本基于因子类别的先验知识估算相关性。
+        优先使用 CorrelationEngine 基于真实截面数据计算（Spearman+EWMA）。
+        如果引擎计算失败（数据不足等），回退到基于分类的估算。
         """
-        # 获取因子分类信息
+        # 1. 尝试使用真实计算引擎
+        try:
+            loader = FactorValueLoader()
+            available = set(loader.get_available_factors())
+            computable = [f for f in factor_names if f in available]
+
+            if len(computable) >= 2:
+                engine = CorrelationEngine(loader)
+                result = engine.compute_full_matrix(
+                    computable,
+                    as_of_date=as_of_date,
+                    save_hdf5=True,
+                )
+
+                # 构建返回结构 + 持久化高相关对
+                correlations = []
+                for i, fa in enumerate(result.factor_names):
+                    for j, fb in enumerate(result.factor_names):
+                        if j <= i:
+                            continue
+                        corr = float(result.matrix[i, j])
+                        if np.isnan(corr):
+                            continue
+                        correlations.append({
+                            "factor_a": fa,
+                            "factor_b": fb,
+                            "correlation": round(corr, 6),
+                            "method": method,
+                            "is_estimated": False,
+                        })
+                        # 持久化到 DB（只存 |corr| > 0.3）
+                        if abs(corr) > 0.3:
+                            self._upsert_correlation(fa, fb, round(corr, 6), method)
+
+                # 对不在 Parquet 中的因子补充分类估算
+                non_computable = [f for f in factor_names if f not in available]
+                if non_computable:
+                    est_corrs = self._estimate_by_category(
+                        non_computable, computable + non_computable, method
+                    )
+                    correlations.extend(est_corrs)
+
+                return {
+                    "ok": True,
+                    "factor_count": len(factor_names),
+                    "computable_count": len(computable),
+                    "correlation_count": len(correlations),
+                    "correlations": correlations,
+                    "method": method,
+                    "engine": "spearman_ewma",
+                    "effective_window": result.effective_window,
+                    "metadata": result.metadata,
+                }
+
+        except Exception as e:
+            logger.warning(f"CorrelationEngine 计算失败，回退到分类估算: {e}")
+
+        # 2. 回退: 基于分类的估算（降级保护）
+        est_corrs = self._estimate_by_category(factor_names, factor_names, method)
+        return {
+            "ok": True,
+            "factor_count": len(factor_names),
+            "computable_count": 0,
+            "correlation_count": len(est_corrs),
+            "correlations": est_corrs,
+            "method": method,
+            "engine": "category_estimation",
+            "note": "基于因子类别估算（引擎不可用时的降级结果）",
+        }
+
+    def _estimate_by_category(
+        self,
+        target_factors: List[str],
+        all_factors: List[str],
+        method: str,
+    ) -> List[Dict[str, Any]]:
+        """基于因子类别估算相关性（降级回退方法）。"""
         with get_conn() as conn:
             with conn.cursor() as cur:
-                placeholders = ",".join(["%s"] * len(factor_names))
+                placeholders = ",".join(["%s"] * len(all_factors))
                 cur.execute(
                     f"""SELECT factor_name, category
                         FROM qe_factor_classification
                         WHERE factor_name IN ({placeholders})""",
-                    factor_names,
+                    all_factors,
                 )
                 factor_cats = {row[0]: row[1] for row in cur.fetchall()}
 
-        # 基于类别估算相关性（同类别高相关，不同类别低相关）
         correlations = []
-        for i, fa in enumerate(factor_names):
-            for j, fb in enumerate(factor_names):
+        target_set = set(target_factors)
+        for i, fa in enumerate(all_factors):
+            for j, fb in enumerate(all_factors):
                 if j <= i:
+                    continue
+                # 至少一个因子在 target 中
+                if fa not in target_set and fb not in target_set:
                     continue
                 cat_a = factor_cats.get(fa)
                 cat_b = factor_cats.get(fb)
                 if cat_a and cat_b and cat_a == cat_b:
-                    corr = 0.6  # 同类别估算高相关
+                    corr = 0.6
                 else:
-                    corr = 0.1  # 不同类别估算低相关
-
+                    corr = 0.1
                 correlations.append({
                     "factor_a": fa,
                     "factor_b": fb,
@@ -899,17 +1290,9 @@ class FactorAnalyst:
                     "method": method,
                     "is_estimated": True,
                 })
-
-                # 保存到数据库
                 self._upsert_correlation(fa, fb, corr, method)
 
-        return {
-            "ok": True,
-            "factor_count": len(factor_names),
-            "correlation_count": len(correlations),
-            "correlations": correlations,
-            "note": "当前版本基于因子类别估算相关性，实际相关性需要QLib数据计算",
-        }
+        return correlations
 
     # ---- 内部方法 ----
 
@@ -932,6 +1315,92 @@ class FactorAnalyst:
                 cols = [desc[0] for desc in cur.description]
                 return dict(zip(cols, row))
 
+    def _get_independent_metrics(self, factor_name: str) -> Optional[Dict]:
+        """从 aistock_factor_metrics 获取独立因子指标（full 窗口最新一条）。"""
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT ic_mean, ic_std, rank_ic_mean, rank_ic_std,
+                               icir, rank_icir, ic_positive_ratio,
+                               top_annual_return, top_excess_annual_return,
+                               top_sharpe, top_max_drawdown,
+                               top_excess_sharpe, benchmark_annual_return,
+                               group_return_monotonicity, turnover,
+                               ic_decay_half_life, coverage, n_trading_days,
+                               ic_csz_mean, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d
+                        FROM aistock_factor_metrics
+                        WHERE factor_name = %s AND eval_window = 'full'
+                        ORDER BY calculated_at DESC
+                        LIMIT 1
+                    """, (factor_name,))
+                    row = cur.fetchone()
+                    if not row:
+                        return None
+                    cols = [desc[0] for desc in cur.description]
+                    return dict(zip(cols, row))
+        except Exception:
+            return None
+
+    def _get_experiment_track_summary(self, factor_name: str) -> Optional[Dict]:
+        """从 qe_factor_experiment_metrics 聚合 L2 实验表现摘要。"""
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT COUNT(*) AS total_experiments,
+                               AVG(ic) AS avg_ic,
+                               AVG(sharpe_ratio) AS avg_sharpe_ratio,
+                               AVG(ann_return_no_cost) AS avg_ann_return,
+                               MAX(ic) AS best_ic,
+                               MIN(ic) AS worst_ic,
+                               MAX(collected_at) AS last_experiment_date
+                        FROM qe_factor_experiment_metrics
+                        WHERE factor_name = %s
+                    """, (factor_name,))
+                    row = cur.fetchone()
+                    if not row or not row[0]:
+                        return None
+                    cols = [desc[0] for desc in cur.description]
+                    summary = dict(zip(cols, row))
+                    if summary["total_experiments"] == 0:
+                        return None
+                    # 转换 datetime 为字符串
+                    if summary.get("last_experiment_date"):
+                        summary["last_experiment_date"] = str(summary["last_experiment_date"])[:10]
+                    return summary
+        except Exception:
+            return None
+
+    def _get_multi_window_metrics(self, factor_name: str) -> Optional[Dict]:
+        """从 aistock_factor_metrics 获取多窗口稳定性指标（out_sample/recent_6m/recent_3m）。"""
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT eval_window, ic_mean, icir, rank_ic_mean, rank_icir
+                        FROM aistock_factor_metrics
+                        WHERE factor_name = %s
+                          AND eval_window IN ('out_sample', 'recent_6m', 'recent_3m')
+                        ORDER BY calculated_at DESC, eval_window
+                    """, (factor_name,))
+                    rows = cur.fetchall()
+                    if not rows:
+                        return None
+                    result = {}
+                    for row in rows:
+                        window = row[0]
+                        if window not in result:
+                            result[window] = {
+                                'ic_mean': row[1],
+                                'icir': row[2],
+                                'rank_ic_mean': row[3],
+                                'rank_icir': row[4]
+                            }
+                    return result
+        except Exception:
+            return None
+
     def _get_all_factors(self, source_filter: Optional[str] = None) -> List[Dict]:
         """获取所有因子列表。"""
         with get_conn() as conn:
@@ -947,15 +1416,37 @@ class FactorAnalyst:
 
     def _upsert_classification(self, **kwargs) -> None:
         """UPSERT因子分类结果。"""
+        profile = kwargs.get("factor_profile")
+        profile_json = json.dumps(_to_jsonable(profile), ensure_ascii=False) if profile else None
+
         with get_conn() as conn:
             with conn.cursor() as cur:
+                # 解析 factor_catalog_id
+                cur.execute("""
+                    SELECT id FROM aistock_factor_catalog
+                    WHERE factor_name = %s AND source = %s
+                """, (kwargs["factor_name"], kwargs["factor_source"]))
+                row = cur.fetchone()
+                if not row:
+                    # 尝试不限 source 匹配
+                    cur.execute("""
+                        SELECT id FROM aistock_factor_catalog
+                        WHERE factor_name = %s ORDER BY id LIMIT 1
+                    """, (kwargs["factor_name"],))
+                    row = cur.fetchone()
+                if not row:
+                    logger.warning(f"因子 {kwargs['factor_name']} 未在 catalog 中找到，跳过分类写入")
+                    return
+                factor_catalog_id = row[0]
+
                 cur.execute("""
                     INSERT INTO qe_factor_classification
                         (factor_name, factor_source, category, grade,
                          grade_reason, classification_reason,
                          ic_value, sharpe_value, ann_ret_value,
-                         llm_analysis, description, factor_dimension, analyzed_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                         llm_analysis, description, factor_dimension,
+                         factor_profile, analyzed_at, factor_catalog_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
                     ON CONFLICT (factor_name, factor_source) DO UPDATE SET
                         category = EXCLUDED.category,
                         grade = EXCLUDED.grade,
@@ -967,6 +1458,8 @@ class FactorAnalyst:
                         llm_analysis = EXCLUDED.llm_analysis,
                         description = EXCLUDED.description,
                         factor_dimension = EXCLUDED.factor_dimension,
+                        factor_profile = COALESCE(EXCLUDED.factor_profile, qe_factor_classification.factor_profile),
+                        factor_catalog_id = EXCLUDED.factor_catalog_id,
                         analyzed_at = NOW()
                 """, (
                     kwargs["factor_name"],
@@ -981,18 +1474,36 @@ class FactorAnalyst:
                     kwargs.get("llm_analysis"),
                     kwargs.get("description"),
                     kwargs.get("factor_dimension"),
+                    profile_json,
+                    factor_catalog_id,
                 ))
 
     def _upsert_correlation(self, factor_a: str, factor_b: str,
                             correlation: float, method: str) -> None:
-        """UPSERT因子相关性。"""
+        """UPSERT因子相关性（新表结构：catalog_id 主键，CHECK a_id < b_id）。"""
         with get_conn() as conn:
             with conn.cursor() as cur:
+                # 解析 factor catalog IDs
+                cur.execute("""
+                    SELECT DISTINCT ON (factor_name) factor_name, id
+                    FROM aistock_factor_catalog
+                    WHERE factor_name IN (%s, %s)
+                    ORDER BY factor_name, id
+                """, (factor_a, factor_b))
+                catalog_map = {row[0]: row[1] for row in cur.fetchall()}
+                fa_id = catalog_map.get(factor_a)
+                fb_id = catalog_map.get(factor_b)
+                if fa_id is None or fb_id is None:
+                    logger.warning(f"因子 {factor_a} 或 {factor_b} 未在 catalog 中找到，跳过相关性写入")
+                    return
+
+                a_id, b_id = min(fa_id, fb_id), max(fa_id, fb_id)
                 cur.execute("""
                     INSERT INTO qe_factor_correlations
-                        (factor_a, factor_b, correlation, method, computed_at)
-                    VALUES (%s, %s, %s, %s, NOW())
-                    ON CONFLICT (factor_a, factor_b, method) DO UPDATE SET
+                        (factor_a_id, factor_b_id, correlation, method,
+                         as_of_date, computed_at)
+                    VALUES (%s, %s, %s, %s, CURRENT_DATE, NOW())
+                    ON CONFLICT (factor_a_id, factor_b_id) DO UPDATE SET
                         correlation = EXCLUDED.correlation,
                         computed_at = NOW()
-                """, (factor_a, factor_b, correlation, method))
+                """, (a_id, b_id, correlation, method))

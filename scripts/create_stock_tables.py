@@ -192,7 +192,7 @@ def main() -> None:
             INSERT INTO market.data_stats_config (data_kind, table_name, date_column, enabled, extra_info)
             VALUES
                 -- stock_basic 没有自然日期列，这里使用 list_date 作为统计日期列
-                ('stock_basic', 'market.stock_basic', 'list_date', TRUE, jsonb_build_object('desc','Tushare stock_basic 最新股票列表')),
+                ('stock_basic', 'market.stock_basic', 'list_date', TRUE, jsonb_build_object('desc','Tushare stock_basic 最新股票列表', 'is_timeseries', false)),
                 ('stock_st', 'market.stock_st', 'ann_date', TRUE, jsonb_build_object('desc','Tushare stock_st ST股票列表')),
                 ('bak_basic', 'market.bak_basic', 'trade_date', TRUE, jsonb_build_object('desc','Tushare bak_basic 历史股票列表')),
                 ('stock_moneyflow_ts', 'market.moneyflow_ts', 'trade_date', TRUE, jsonb_build_object('desc','Tushare moneyflow 个股资金流向（按交易日）'))

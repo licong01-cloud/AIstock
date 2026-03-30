@@ -304,7 +304,6 @@ def run_ingestion(
                         inserted = _upsert_adj_factor(conn, rows)
                     stats["inserted_rows"] += inserted
                     stats["success_days"] += 1
-                    print(f"[OK] adj_factor {d} inserted={inserted}")
                     break
                 except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as net_exc:
                     last_exc = net_exc

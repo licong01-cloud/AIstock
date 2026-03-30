@@ -34,8 +34,33 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import psycopg2
 import psycopg2.extras as pgx
+import requests
 import schedule
 from dotenv import load_dotenv
+
+from ..services.tushare_dataset_specs import DATASET_REGISTRY
+from ..services.tushare_sync_engine import TushareSyncEngine
+
+# Datasets that the unified engine handles (bypass subprocess scripts)
+_ENGINE_DATASETS = frozenset(DATASET_REGISTRY.keys())
+
+# TDX datasets whose incremental mode should go through Go backend API (not ingest_incremental.py)
+_GO_INCREMENTAL_DATASETS: Dict[str, Dict[str, str]] = {
+    "kline_daily_raw": {
+        "data_kind": "kline_daily_raw_go",
+        "go_endpoint": "/api/tasks/ingest-daily-raw-init",
+        "table": "market.kline_daily_raw",
+        "date_col": "trade_date",
+        "default_workers": "4",
+    },
+    "kline_minute_raw": {
+        "data_kind": "kline_minute_raw",
+        "go_endpoint": "/api/tasks/ingest-minute-raw-init",
+        "table": "market.kline_minute_raw",
+        "date_col": "trade_time",
+        "default_workers": "1",
+    },
+}
 
 pgx.register_uuid()
 
@@ -53,13 +78,9 @@ DEFAULT_DB_CFG = dict(
 DEFAULT_TEST_SCRIPT = ROOT_DIR / "scripts" / "test_tdx_all_api.py"
 DEFAULT_TEST_OUTPUT_DIR = ROOT_DIR / "tmp" / "testing_runs"
 DEFAULT_INGEST_INCREMENTAL = ROOT_DIR / "scripts" / "ingest_incremental.py"
-DEFAULT_INGEST_FULL_DAILY = ROOT_DIR / "scripts" / "ingest_full_daily.py"
 DEFAULT_INGEST_FULL_MINUTE = ROOT_DIR / "scripts" / "ingest_full_minute.py"
 DEFAULT_INGEST_FULL_DAILY_RAW = ROOT_DIR / "scripts" / "ingest_full_daily_raw.py"
-DEFAULT_INGEST_TRADE_AGG = ROOT_DIR / "scripts" / "ingest_trade_agg.py"
 DEFAULT_ADJUST_REBUILD = ROOT_DIR / "scripts" / "rebuild_adjusted_daily.py"
-DEFAULT_INGEST_TUSHARE_TDX_BOARD = ROOT_DIR / "scripts" / "ingest_tushare_tdx_board.py"
-DEFAULT_INGEST_TUSHARE_MONEYFLOW = ROOT_DIR / "scripts" / "ingest_tushare_moneyflow.py"
 DEFAULT_INGEST_TUSHARE_MONEYFLOW_TS = ROOT_DIR / "scripts" / "ingest_tushare_moneyflow_ts.py"
 DEFAULT_INGEST_WEEKLY_FROM_DAILY = ROOT_DIR / "scripts" / "ingest_tushare_weekly.py"
 DEFAULT_INGEST_TUSHARE_ADJ_FACTOR = ROOT_DIR / "scripts" / "ingest_tushare_adj_factor.py"
@@ -157,7 +178,17 @@ def _build_frequency_job(scheduler: schedule.Scheduler, frequency: str, options:
         if at_time:
             job = job.at(str(at_time))
     elif freq in {"weekly", "week", "1w"}:
-        job = scheduler.every().week
+        day_of_week = (options.get("day_of_week") or "").strip().lower()
+        day_map = {
+            "monday": scheduler.every().monday, "mon": scheduler.every().monday,
+            "tuesday": scheduler.every().tuesday, "tue": scheduler.every().tuesday,
+            "wednesday": scheduler.every().wednesday, "wed": scheduler.every().wednesday,
+            "thursday": scheduler.every().thursday, "thu": scheduler.every().thursday,
+            "friday": scheduler.every().friday, "fri": scheduler.every().friday,
+            "saturday": scheduler.every().saturday, "sat": scheduler.every().saturday,
+            "sunday": scheduler.every().sunday, "sun": scheduler.every().sunday,
+        }
+        job = day_map.get(day_of_week, scheduler.every().week)
         at_time = options.get("at")
         if at_time:
             job = job.at(str(at_time))
@@ -410,9 +441,23 @@ class TDXScheduler:
         triggered_by: str = "manual",
     ) -> uuid.UUID:
         sched_id = str(schedule_id)
-        run_id = self._submit_ingestion(sched_id, dataset, mode, triggered_by, {})
+        # Load schedule options from DB so that workers / other settings are applied
+        rows = self._fetchall(
+            "SELECT options FROM market.ingestion_schedules WHERE schedule_id=%s",
+            (schedule_id,),
+        )
+        options: Dict[str, Any] = {}
+        if rows:
+            raw = rows[0].get("options")
+            if raw:
+                try:
+                    options = json.loads(raw) if isinstance(raw, str) else dict(raw)
+                except Exception:  # noqa: BLE001
+                    options = {}
+        run_id = self._submit_ingestion(sched_id, dataset, mode, triggered_by, options)
         self._update_ingestion_schedule(sched_id, last_status="queued", next_run=self._next_run_for(sched_id))
         return run_id
+
 
     # ------------------------------------------------------------------
     # internal submitters
@@ -428,6 +473,74 @@ class TDXScheduler:
                 next_run=self._next_run_for(schedule_id),
             )
 
+    # ------------------------------------------------------------------
+    # auto-range & trading-day helpers for scheduled runs
+    def _is_trading_day(self, d: dt.date) -> bool:
+        """Check if *d* is a trading day according to market.trading_calendar."""
+        rows = self._fetchall(
+            "SELECT 1 FROM market.trading_calendar WHERE cal_date = %s AND is_trading = TRUE",
+            (d,),
+        )
+        return len(rows) > 0
+
+    def _compute_auto_range(self, dataset: str) -> Tuple[Optional[dt.date], Optional[dt.date]]:
+        """Return (start_date, end_date) for incremental catch-up, or (None, None) if up-to-date.
+
+        Reuses the same logic as the ``/api/ingestion/auto-range`` endpoint:
+        1. Look up table_name / date_column from ``market.data_stats_config``
+        2. Query MAX(date_column) to find current data boundary
+        3. Query ``market.trading_calendar`` for the latest trading date <= today
+        4. Derive start_date = first trading day after max_date
+        """
+        # 1) config lookup
+        cfg_rows = self._fetchall(
+            "SELECT table_name, date_column FROM market.data_stats_config WHERE data_kind = %s AND enabled",
+            (dataset,),
+        )
+        if not cfg_rows:
+            return None, None
+        table_name = str(cfg_rows[0].get("table_name") or "").strip()
+        date_column = str(cfg_rows[0].get("date_column") or "trade_date").strip()
+        if not table_name:
+            return None, None
+
+        # 2) current max date
+        current_max: Optional[dt.date] = None
+        try:
+            rows = self._fetchall(f"SELECT MAX({date_column})::date AS mx FROM {table_name}")
+            if rows and rows[0].get("mx"):
+                current_max = rows[0]["mx"]
+        except Exception as exc:
+            print(f"[TDX Scheduler] _compute_auto_range: failed to query max({date_column}) from {table_name}: {exc}")
+
+        # 3) latest trading date <= today
+        ltd_rows = self._fetchall(
+            "SELECT MAX(cal_date) AS latest FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date <= CURRENT_DATE"
+        )
+        latest_trading: Optional[dt.date] = ltd_rows[0].get("latest") if ltd_rows else None
+        if latest_trading is None:
+            return None, None
+
+        # 4) derive start_date
+        if current_max is None:
+            # no data at all – let the script/engine handle full range
+            return None, None
+
+        if current_max >= latest_trading:
+            # already up-to-date
+            return None, None
+
+        next_rows = self._fetchall(
+            "SELECT MIN(cal_date) AS nxt FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date > %s",
+            (current_max,),
+        )
+        start_date = next_rows[0].get("nxt") if next_rows else None
+        if start_date is None or start_date > latest_trading:
+            return None, None
+
+        return start_date, latest_trading
+
+    # ------------------------------------------------------------------
     def _scheduled_ingestion_run(
         self, schedule_id: str, dataset: str, mode: str, options: Dict[str, Any]
     ) -> None:
@@ -435,7 +548,58 @@ class TDXScheduler:
         if self._tracker.is_running(key):
             # avoid overlapping ingestion of same dataset/mode
             return
-        run_id = self._submit_ingestion(schedule_id, dataset, mode, "schedule", options)
+
+        # --- trading-day gate: skip execution on non-trading days ---
+        # news_realtime 不受交易日限制，非交易日也需正常入库
+        if dataset != "news_realtime":
+            today = dt.date.today()
+            try:
+                if not self._is_trading_day(today):
+                    if schedule_id:
+                        self._update_ingestion_schedule(
+                            schedule_id,
+                            last_run=_now(),
+                            last_status="skip_non_trade",
+                            next_run=self._next_run_for(schedule_id),
+                        )
+                    return
+            except Exception as exc:
+                print(f"[TDX Scheduler] trading-day check failed, proceeding: {exc}")
+
+        # --- auto-range: compute catch-up interval (skip for news_realtime) ---
+        effective_options = dict(options)
+        if dataset != "news_realtime":
+            try:
+                start_date, end_date = self._compute_auto_range(dataset)
+                if start_date is not None and end_date is not None:
+                    effective_options.setdefault("start_date", start_date.isoformat())
+                    effective_options.setdefault("end_date", end_date.isoformat())
+                    print(f"[TDX Scheduler] auto-range {dataset}: {start_date} → {end_date}")
+                elif start_date is None and end_date is None:
+                    pass
+            except Exception as exc:
+                print(f"[TDX Scheduler] auto-range failed for {dataset}, proceeding with defaults: {exc}")
+
+        # --- create job record so it appears in the job monitor ---
+        if dataset != "news_realtime" and "job_id" not in effective_options:
+            try:
+                job_id = uuid.uuid4()
+                summary = _json_dump({
+                    "dataset": dataset, "mode": mode,
+                    "triggered_by": "schedule",
+                    "schedule_id": schedule_id,
+                })
+                self._execute(
+                    """INSERT INTO market.ingestion_jobs
+                           (job_id, job_type, status, created_at, summary)
+                       VALUES (%s, %s, 'queued', NOW(), %s)""",
+                    (job_id, mode, summary),
+                )
+                effective_options["job_id"] = str(job_id)
+            except Exception as exc:
+                print(f"[TDX Scheduler] failed to create job record for {dataset}: {exc}")
+
+        run_id = self._submit_ingestion(schedule_id, dataset, mode, "schedule", effective_options)
         if schedule_id:
             self._update_ingestion_schedule(
                 schedule_id,
@@ -475,21 +639,45 @@ class TDXScheduler:
         triggered_by: str,
         options: Dict[str, Any],
     ) -> uuid.UUID:
-        # run_id: 调度器内部使用的执行 ID，与 ingestion_jobs.job_id 解耦。
-        # job_id 由调用方（API 路由或脚本本身）负责创建和管理：
-        # - 手动触发：/api/ingestion/run 先在 market.ingestion_jobs 中插入一行，
-        #   然后通过 options 传入统一的 job_id，CLI 使用该 job_id 进行任务/日志关联；
-        # - 定时任务：schedule options 通常不包含 job_id，CLI 脚本在未提供
-        #   --job-id 时会自行创建 ingestion_jobs 记录。
-        # 这里不再根据 job_id 派生 run_id，也不覆盖 options["job_id" ]，
-        # 只负责生成调度器自己的 run_id，并按调用方提供的 options 构造命令行。
         run_id = uuid.uuid4()
+        ds_lower = (dataset or "").strip().lower()
 
-        cmd_opts = options.copy()
-        cmd = self._build_ingestion_command(dataset, mode, cmd_opts)
-        future = self._executor.submit(
-            self._run_ingestion_process, run_id, schedule_id, dataset, mode, triggered_by, cmd
-        )
+        # Composite dataset: sw_sector = sw_index_classify + sw_index_member + sw_daily
+        if ds_lower == "sw_sector":
+            future = self._executor.submit(
+                self._run_sw_sector_composite_sync,
+                run_id, schedule_id, mode, triggered_by, options,
+            )
+        # Post-processing dataset: sector_data (PIT mapping + moneyflow aggregation)
+        elif ds_lower == "sector_data":
+            future = self._executor.submit(
+                self._run_sector_data_build,
+                run_id, schedule_id, mode, triggered_by, options,
+            )
+        # Data freshness check (scheduled at 18:00)
+        elif ds_lower == "_data_freshness_check":
+            future = self._executor.submit(
+                self._run_data_freshness_check,
+                run_id, schedule_id, triggered_by, options,
+            )
+        # Route engine-supported datasets through TushareSyncEngine
+        elif ds_lower in _ENGINE_DATASETS and not options.get("script"):
+            future = self._executor.submit(
+                self._run_tushare_engine_sync,
+                run_id, schedule_id, ds_lower, mode, triggered_by, options,
+            )
+        elif ds_lower in _GO_INCREMENTAL_DATASETS and mode == "incremental":
+            future = self._executor.submit(
+                self._run_go_incremental,
+                run_id, schedule_id, ds_lower, triggered_by, options,
+            )
+        else:
+            cmd_opts = options.copy()
+            cmd = self._build_ingestion_command(dataset, mode, cmd_opts)
+            future = self._executor.submit(
+                self._run_ingestion_process, run_id, schedule_id, dataset, mode, triggered_by, cmd
+            )
+
         key = f"ingestion:{dataset}:{mode}" if schedule_id else f"ingestion-manual:{run_id}"
         self._tracker.add(key, future)
 
@@ -558,12 +746,6 @@ class TDXScheduler:
         # Real-time news ingestion: use dedicated script for all modes
         if dataset == "news_realtime":
             return ROOT_DIR / "scripts" / "ingest_news_realtime.py"
-        # Tushare TDX board datasets must use the dedicated script for both modes
-        if dataset.startswith("tdx_board_") and mode in {"init", "incremental"}:
-            return DEFAULT_INGEST_TUSHARE_TDX_BOARD
-        # Tushare moneyflow_ind_dc uses its own ingestion script for both modes
-        if dataset == "stock_moneyflow" and mode in {"init", "incremental"}:
-            return DEFAULT_INGEST_TUSHARE_MONEYFLOW
         # Tushare moneyflow (TS source) uses its own ingestion script for both modes
         if dataset == "stock_moneyflow_ts" and mode in {"init", "incremental"}:
             return DEFAULT_INGEST_TUSHARE_MONEYFLOW_TS
@@ -603,13 +785,8 @@ class TDXScheduler:
         # Weekly aggregation uses dedicated script, both modes
         if dataset == "kline_weekly" and mode in {"init", "incremental"}:
             return DEFAULT_INGEST_WEEKLY_FROM_DAILY
-        # Trade aggregation uses dedicated script, both modes
-        if dataset == "trade_agg_5m" and mode in {"init", "incremental"}:
-            return DEFAULT_INGEST_TRADE_AGG
         if mode == "incremental":
             return DEFAULT_INGEST_INCREMENTAL
-        if mode == "init" and dataset in {"kline_daily_qfq", "kline_daily"}:
-            return DEFAULT_INGEST_FULL_DAILY
         if mode == "init" and dataset in {"kline_daily_raw"}:
             return DEFAULT_INGEST_FULL_DAILY_RAW
         if mode == "init" and dataset in {"kline_minute_raw", "minute_1m"}:
@@ -626,18 +803,7 @@ class TDXScheduler:
         dataset = (dataset or "").strip().lower()
         mode = (mode or "").strip().lower()
         if mode == "incremental":
-            # Tushare TDX Board special handling
-            if dataset.startswith("tdx_board_"):
-                args += ["--dataset", dataset, "--mode", "incremental"]
-                if options.get("start_date"):
-                    args += ["--start-date", str(options["start_date"])]
-                if options.get("end_date"):
-                    args += ["--end-date", str(options["end_date"])]
-                if options.get("batch_size"):
-                    args += ["--batch-size", str(options["batch_size"])]
-                if options.get("job_id"):
-                    args += ["--job-id", str(options["job_id"])]
-            elif dataset == "adj_factor":
+            if dataset == "adj_factor":
                 # Tushare adj_factor init: date range + optional truncate + job id
                 args += ["--mode", "init"]
                 if options.get("start_date"):
@@ -666,16 +832,6 @@ class TDXScheduler:
                 # 默认每批之间休眠 0.13 秒，除非调用方显式覆盖
                 sleep_val = options.get("batch_sleep", 0.13)
                 args += ["--batch-sleep", str(sleep_val)]
-                if options.get("job_id"):
-                    args += ["--job-id", str(options["job_id"])]
-            elif dataset == "stock_moneyflow":
-                # 个股资金流向增量：需要明确起止日期与 job_id，否则脚本会因缺少 start_date 直接退出，
-                # 导致数据库状态仍停留在 queued。
-                args += ["--mode", "incremental"]
-                if options.get("start_date"):
-                    args += ["--start-date", str(options["start_date"])]
-                if options.get("end_date"):
-                    args += ["--end-date", str(options["end_date"])]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
             elif dataset == "stock_moneyflow_ts":
@@ -860,22 +1016,7 @@ class TDXScheduler:
                     args += ["--retry-failed"]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
-            if dataset in {"kline_daily_qfq", "kline_daily"}:
-                if options.get("exchanges"):
-                    args += ["--exchanges", ",".join(options["exchanges"]) if isinstance(options["exchanges"], (list, tuple)) else str(options["exchanges"])]
-                if options.get("start_date"):
-                    args += ["--start-date", str(options["start_date"])]
-                if options.get("end_date"):
-                    args += ["--end-date", str(options["end_date"])]
-                if options.get("batch_size"):
-                    args += ["--batch-size", str(options["batch_size"])]
-                if options.get("limit_codes"):
-                    args += ["--limit-codes", str(options["limit_codes"])]
-                if options.get("job_id"):
-                    args += ["--job-id", str(options["job_id"])]
-                if options.get("workers"):
-                    args += ["--workers", str(options["workers"])]
-            elif dataset in {"kline_daily_raw"}:
+            if dataset in {"kline_daily_raw"}:
                 if options.get("exchanges"):
                     args += ["--exchanges", ",".join(options["exchanges"]) if isinstance(options["exchanges"], (list, tuple)) else str(options["exchanges"])]
                 if options.get("start_date"):
@@ -914,16 +1055,6 @@ class TDXScheduler:
                     args += ["--job-id", str(options["job_id"])]
                 if options.get("workers"):
                     args += ["--workers", str(options["workers"])]
-            elif dataset == "stock_moneyflow":
-                # 个股资金流向初始化：需要明确起止日期与 job_id，否则脚本会因缺少 start_date 直接退出，
-                # 导致数据库状态仍停留在 queued。
-                args += ["--mode", "init"]
-                if options.get("start_date"):
-                    args += ["--start-date", str(options["start_date"])]
-                if options.get("end_date"):
-                    args += ["--end-date", str(options["end_date"])]
-                if options.get("job_id"):
-                    args += ["--job-id", str(options["job_id"])]
             elif dataset == "stock_moneyflow_ts":
                 # Tushare moneyflow (TS) 初始化：需要起止日期 + job_id，可选 truncate
                 args += ["--mode", "init"]
@@ -935,16 +1066,6 @@ class TDXScheduler:
                     args += ["--truncate"]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
-            elif dataset.startswith("tdx_board_"):
-                args += ["--dataset", dataset, "--mode", "init"]
-                if options.get("start_date"):
-                    args += ["--start-date", str(options["start_date"])]
-                if options.get("end_date"):
-                    args += ["--end-date", str(options["end_date"])]
-                if options.get("batch_size"):
-                    args += ["--batch-size", str(options["batch_size"])]
-                if options.get("job_id"):
-                    args += ["--job-id", str(options["job_id"])]
             elif dataset == "kline_weekly":
                 args += ["--mode", "init"]
                 if options.get("start_date"):
@@ -953,23 +1074,6 @@ class TDXScheduler:
                     args += ["--end-date", str(options["end_date"])]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
-            elif dataset == "trade_agg_5m":
-                # Trade aggregation uses its own driver script with mode + date range
-                args += ["--mode", mode]
-                if options.get("start_date"):
-                    args += ["--start-date", str(options["start_date"])]
-                if options.get("end_date"):
-                    args += ["--end-date", str(options["end_date"])]
-                if options.get("freq_minutes"):
-                    args += ["--freq-minutes", str(options["freq_minutes"])]
-                if options.get("symbols_scope"):
-                    args += ["--symbols-scope", str(options["symbols_scope"])]
-                if options.get("batch_size"):
-                    args += ["--batch-size", str(options["batch_size"])]
-                if options.get("job_id"):
-                    args += ["--job-id", str(options["job_id"])]
-                if options.get("workers"):
-                    args += ["--workers", str(options["workers"])]
             elif dataset == "adj_factor":
                 # Tushare adj_factor init: date range + optional truncate + job id
                 args += ["--mode", "init"]
@@ -1070,6 +1174,501 @@ class TDXScheduler:
             if schedule_id:
                 self._update_testing_schedule(schedule_id, last_run=start_ts, last_status="failed", last_error=str(exc))
 
+    def _run_sw_sector_composite_sync(
+        self,
+        run_id: uuid.UUID,
+        schedule_id: Optional[str],
+        mode: str,
+        triggered_by: str,
+        options: Dict[str, Any],
+    ) -> None:
+        """顺序同步申万三张原始表: classify(全量) → member(全量) → daily(按mode).
+
+        每个子数据集有自己的 ingestion_jobs 行（通过 sub_job_ids），
+        任务监视器可以单独看到各数据集的进度。
+        """
+        import datetime as _dt
+        import logging
+        _logger = logging.getLogger(__name__)
+
+        start_ts = _now()
+        sub_job_ids = options.get("sub_job_ids", [])
+
+        start_date = None
+        end_date = None
+        if options.get("start_date"):
+            try:
+                start_date = _dt.date.fromisoformat(str(options["start_date"]))
+            except Exception:
+                pass
+        if options.get("end_date"):
+            try:
+                end_date = _dt.date.fromisoformat(str(options["end_date"]))
+            except Exception:
+                pass
+
+        # 子数据集: (name, mode_override)
+        # classify 和 member 始终全量替换，daily 跟随用户选择的 mode
+        sub_datasets = [
+            ("sw_index_classify", "init"),
+            ("sw_index_member", "init"),
+            ("sw_daily", mode),
+        ]
+
+        overall_status = "success"
+        try:
+            engine = TushareSyncEngine()
+            for i, (ds_name, ds_mode) in enumerate(sub_datasets):
+                child_job_id = None
+                if i < len(sub_job_ids):
+                    try:
+                        child_job_id = uuid.UUID(sub_job_ids[i])
+                    except Exception:
+                        pass
+
+                # 标记子 job 为 running
+                if child_job_id:
+                    try:
+                        self._execute(
+                            "UPDATE market.ingestion_jobs SET status='running', started_at=NOW() WHERE job_id=%s",
+                            (child_job_id,),
+                        )
+                    except Exception:
+                        pass
+
+                spec = DATASET_REGISTRY.get(ds_name)
+                if spec is None:
+                    raise RuntimeError(f"DatasetSpec '{ds_name}' not found in DATASET_REGISTRY")
+                _logger.info("sw_sector composite: syncing %s (mode=%s)", ds_name, ds_mode)
+                result = engine.sync(
+                    spec=spec, mode=ds_mode,
+                    start_date=start_date, end_date=end_date,
+                    job_id=child_job_id,
+                )
+
+                # 更新子 job 完成状态
+                if child_job_id:
+                    child_status = "success" if result.ok else "failed"
+                    try:
+                        summary_patch = json.dumps(
+                            {"rows": result.inserted_rows, "dataset": ds_name, "mode": ds_mode},
+                            ensure_ascii=False, default=str,
+                        )
+                        self._execute(
+                            """UPDATE market.ingestion_jobs
+                                  SET status=%s, finished_at=NOW(),
+                                      summary=COALESCE(summary::jsonb,'{}'::jsonb)||%s::jsonb
+                                WHERE job_id=%s""",
+                            (child_status, summary_patch, child_job_id),
+                        )
+                    except Exception:
+                        pass
+
+                if not result.ok:
+                    overall_status = "failed"
+                    # 标记剩余子 job 为 failed
+                    for j in range(i + 1, len(sub_job_ids)):
+                        try:
+                            remaining_jid = uuid.UUID(sub_job_ids[j])
+                            self._execute(
+                                """UPDATE market.ingestion_jobs
+                                      SET status='failed', finished_at=NOW(),
+                                          summary=COALESCE(summary::jsonb,'{}'::jsonb)||'{"error":"previous sub-dataset failed"}'::jsonb
+                                    WHERE job_id=%s""",
+                                (remaining_jid,),
+                            )
+                        except Exception:
+                            pass
+                    break
+
+            # sw_daily 同步完成后，补齐 6 个未发布 L2 行业的数据
+            if overall_status == "success":
+                try:
+                    import importlib.util
+                    _script = Path(__file__).resolve().parents[2] / "scripts" / "patch_sw_daily_unpublished.py"
+                    _spec = importlib.util.spec_from_file_location("patch_sw_daily_unpublished", _script)
+                    _mod = importlib.util.module_from_spec(_spec)
+                    _spec.loader.exec_module(_mod)
+                    start_str = start_date.strftime("%Y%m%d") if start_date else None
+                    end_str = end_date.strftime("%Y%m%d") if end_date else None
+                    patched = _mod.patch(start_str, end_str)
+                    _logger.info("sw_sector composite: patched %d rows for unpublished L2 industries", patched)
+                except Exception as patch_exc:
+                    _logger.warning("sw_sector composite: patch_sw_daily_unpublished failed: %s", patch_exc)
+
+        except Exception as exc:
+            overall_status = "failed"
+            _logger.exception("sw_sector composite sync error: %s", exc)
+
+        # 更新父 job (由 _scheduled_ingestion_run 预创建的 sw_sector job)
+        parent_job_id = options.get("job_id")
+        if parent_job_id:
+            try:
+                pjid = uuid.UUID(str(parent_job_id))
+                self._execute(
+                    "UPDATE market.ingestion_jobs SET status=%s, started_at=COALESCE(started_at, %s), finished_at=NOW() WHERE job_id=%s",
+                    (overall_status, start_ts, pjid),
+                )
+            except Exception:
+                pass
+
+        if schedule_id:
+            self._update_ingestion_schedule(
+                schedule_id, last_run=start_ts, last_status=overall_status, last_error=None,
+            )
+
+    def _run_sector_data_build(
+        self,
+        run_id: uuid.UUID,
+        schedule_id: Optional[str],
+        mode: str,
+        triggered_by: str,
+        options: Dict[str, Any],
+    ) -> None:
+        """Build sector_data via SectorDataBuilder (post-processing dataset).
+
+        sector_data 依赖 sw_index_member + sw_daily + moneyflow_ts 三张表。
+        - init: 用户指定 start_date/end_date，全量构建
+        - incremental: 自动推断 (sector_data.max+1 ~ min(sw_daily.max, moneyflow_ts.max))
+        """
+        import datetime as _dt
+        import logging
+        _logger = logging.getLogger(__name__)
+
+        start_ts = _now()
+        job_id_str = options.get("job_id")
+        job_id = uuid.UUID(job_id_str) if job_id_str else None
+
+        start_date = None
+        end_date = None
+        if options.get("start_date"):
+            try:
+                start_date = _dt.date.fromisoformat(str(options["start_date"]))
+            except Exception:
+                pass
+        if options.get("end_date"):
+            try:
+                end_date = _dt.date.fromisoformat(str(options["end_date"]))
+            except Exception:
+                pass
+
+        status = "success"
+        rows = 0
+        error_msg: Optional[str] = None
+        try:
+            # 标记 job 为 running
+            if job_id is not None:
+                try:
+                    self._execute(
+                        "UPDATE market.ingestion_jobs SET status='running', started_at=NOW() WHERE job_id=%s",
+                        (job_id,),
+                    )
+                except Exception:
+                    pass
+
+            from ..services.sector_data_builder import SectorDataBuilder
+            builder = SectorDataBuilder()
+
+            if mode == "init":
+                if start_date is None or end_date is None:
+                    raise ValueError("sector_data init requires start_date and end_date")
+                _logger.info("sector_data init: building %s ~ %s", start_date, end_date)
+                rows = builder.build_range(start_date, end_date)
+            else:
+                # incremental: 自动推断日期范围
+                latest_sector = self._query_max_date("market.sector_data", "trade_date")
+                latest_sw = self._query_max_date("market.sw_daily", "trade_date")
+                latest_mf = self._query_max_date("market.moneyflow_ts", "trade_date")
+                if not latest_sw or not latest_mf:
+                    raise ValueError("依赖表 sw_daily 或 moneyflow_ts 无数据，无法增量构建 sector_data")
+                auto_end = min(latest_sw, latest_mf)
+                if latest_sector:
+                    auto_start = latest_sector + _dt.timedelta(days=1)
+                else:
+                    auto_start = _dt.date(2018, 8, 1)
+                if auto_start > auto_end:
+                    _logger.info("sector_data incremental: already up-to-date (max=%s)", latest_sector)
+                    rows = 0
+                else:
+                    _logger.info("sector_data incremental: building %s ~ %s", auto_start, auto_end)
+                    rows = builder.build_range(auto_start, auto_end)
+
+            # 标记 job success
+            if job_id is not None:
+                try:
+                    summary_patch = json.dumps(
+                        {"rows": rows, "dataset": "sector_data", "mode": mode},
+                        ensure_ascii=False, default=str,
+                    )
+                    self._execute(
+                        """UPDATE market.ingestion_jobs
+                              SET status='success', finished_at=NOW(),
+                                  summary=COALESCE(summary::jsonb,'{}'::jsonb)||%s::jsonb
+                            WHERE job_id=%s""",
+                        (summary_patch, job_id),
+                    )
+                except Exception:
+                    pass
+
+        except Exception as exc:
+            status = "failed"
+            error_msg = str(exc)
+            _logger.exception("sector_data build error: %s", exc)
+            if job_id is not None:
+                try:
+                    self._execute(
+                        """UPDATE market.ingestion_jobs
+                              SET status='failed', finished_at=NOW(),
+                                  summary=COALESCE(summary::jsonb,'{}'::jsonb)||%s::jsonb
+                            WHERE job_id=%s""",
+                        (json.dumps({"error": error_msg}, ensure_ascii=False), job_id),
+                    )
+                except Exception:
+                    pass
+
+        # 写 ingestion_logs（成功和失败都写）
+        self._log_ingestion_run(
+            job_id or run_id,
+            schedule_id,
+            triggered_by,
+            start_ts,
+            status,
+            {"dataset": "sector_data", "mode": mode, "rows": rows},
+            {},
+            [],
+            error=error_msg,
+        )
+
+        if schedule_id:
+            self._update_ingestion_schedule(
+                schedule_id, last_run=start_ts, last_status=status, last_error=error_msg,
+            )
+
+    def _query_max_date(self, table: str, date_col: str):
+        """Query MAX(date_col) from a table. Returns date or None."""
+        try:
+            with _get_conn(self._db_cfg) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"SELECT MAX({date_col})::date FROM {table}")
+                    row = cur.fetchone()
+                    return row[0] if row and row[0] else None
+        except Exception:
+            return None
+
+    def _run_data_freshness_check(
+        self,
+        run_id: uuid.UUID,
+        schedule_id: Optional[str],
+        triggered_by: str,
+        options: Dict[str, Any],
+    ) -> None:
+        """18:00 执行：检查所有数据集是否更新到最新交易日."""
+        start_ts = _now()
+        job_id_str = options.get("job_id")
+        job_id = uuid.UUID(job_id_str) if job_id_str else None
+        job_status = "success"
+
+        try:
+            # 标记 job 为 running
+            if job_id is not None:
+                try:
+                    self._execute(
+                        "UPDATE market.ingestion_jobs SET status='running', started_at=NOW() WHERE job_id=%s",
+                        (job_id,),
+                    )
+                except Exception:
+                    pass
+
+            # 1. 获取 expected_date (最近交易日)
+            with _get_conn(self._db_cfg) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT MAX(cal_date) FROM market.trading_calendar
+                        WHERE cal_date <= CURRENT_DATE AND is_trading = TRUE
+                    """)
+                    expected_date = cur.fetchone()[0]
+
+            if expected_date is None:
+                raise RuntimeError("无法获取最近交易日（trading_calendar 为空或无匹配）")
+
+            # 2. 检查所有时序数据集的最新日期
+            with _get_conn(self._db_cfg) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT * FROM (VALUES
+                            ('kline_daily_raw',  (SELECT MAX(trade_date) FROM market.kline_daily_raw)),
+                            ('kline_minute_raw', (SELECT MAX(trade_time::date) FROM market.kline_minute_raw)),
+                            ('daily_basic',      (SELECT MAX(trade_date) FROM market.daily_basic)),
+                            ('adj_factor',       (SELECT MAX(trade_date) FROM market.adj_factor)),
+                            ('index_daily',      (SELECT MAX(trade_date) FROM market.index_daily)),
+                            ('stk_limit',        (SELECT MAX(trade_date) FROM market.stk_limit)),
+                            ('bak_basic',        (SELECT MAX(trade_date) FROM market.bak_basic)),
+                            ('moneyflow_ts',     (SELECT MAX(trade_date) FROM market.moneyflow_ts)),
+                            ('sw_daily',         (SELECT MAX(trade_date) FROM market.sw_daily)),
+                            ('sector_data',      (SELECT MAX(trade_date) FROM market.sector_data))
+                        ) AS t(dataset, max_date)
+                    """)
+                    ts_rows = cur.fetchall()
+
+            # 3. 非时序数据集检查 (stock_basic, sw_index_classify, sw_index_member)
+            with _get_conn(self._db_cfg) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT dataset, last_status, last_run_at::date
+                        FROM market.ingestion_schedules
+                        WHERE dataset IN ('stock_basic', 'stock_st', 'sw_index_classify', 'sw_index_member')
+                    """)
+                    schedule_rows = cur.fetchall()
+
+            # 4. sector_data 覆盖率检查
+            with _get_conn(self._db_cfg) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT COUNT(DISTINCT ts_code) FROM market.sector_data
+                        WHERE trade_date = (SELECT MAX(trade_date) FROM market.sector_data)
+                    """)
+                    sector_coverage = cur.fetchone()[0] or 0
+                    cur.execute("""
+                        SELECT COUNT(*) FROM market.stock_basic WHERE list_status = 'L'
+                    """)
+                    total_stocks = cur.fetchone()[0] or 1
+
+            # 5. 汇总结果
+            results = []
+            for dataset, max_date in ts_rows:
+                if max_date is None:
+                    status = "empty"
+                elif max_date >= expected_date:
+                    status = "ok"
+                else:
+                    status = "stale"
+                results.append({"dataset": dataset, "max_date": str(max_date), "status": status})
+
+            for dataset, last_status, last_run_date in schedule_rows:
+                if last_status == "success" and last_run_date and last_run_date >= expected_date:
+                    status = "ok"
+                else:
+                    status = "stale"
+                results.append({"dataset": dataset, "status": status, "last_status": last_status})
+
+            # sector_data 覆盖率
+            coverage_rate = sector_coverage / total_stocks if total_stocks > 0 else 0
+            for r in results:
+                if r["dataset"] == "sector_data" and coverage_rate < 0.9:
+                    r["warning"] = f"coverage={coverage_rate:.1%}"
+
+            stale = [r["dataset"] for r in results if r["status"] != "ok"]
+            overall = "ok" if not stale else "partial"
+            job_status = "success" if overall == "ok" else "failed"
+
+            summary = {
+                "dataset": "_data_freshness_check", "mode": "check",
+                "expected_date": str(expected_date),
+                "results": results, "overall": overall,
+                "stale_datasets": stale,
+            }
+
+            # 6. 写入 job
+            if job_id is not None:
+                try:
+                    self._execute(
+                        """UPDATE market.ingestion_jobs SET status=%s, started_at=%s, finished_at=NOW(),
+                           summary=%s WHERE job_id=%s""",
+                        (job_status, start_ts,
+                         json.dumps(summary, ensure_ascii=False, default=str), job_id),
+                    )
+                except Exception:
+                    pass
+
+            # 7. stale 数据集写 ERROR 日志
+            if stale and job_id is not None:
+                for ds in stale:
+                    try:
+                        self._execute(
+                            """INSERT INTO market.ingestion_logs (job_id, ts, level, message)
+                               VALUES (%s, NOW(), 'ERROR', %s)""",
+                            (job_id, f"数据集 {ds} 未更新到 {expected_date}"),
+                        )
+                    except Exception:
+                        pass
+
+        except Exception as exc:
+            job_status = "failed"
+            if job_id is not None:
+                try:
+                    self._execute(
+                        """UPDATE market.ingestion_jobs SET status='failed', finished_at=NOW(),
+                           summary=COALESCE(summary::jsonb,'{}'::jsonb)||%s::jsonb WHERE job_id=%s""",
+                        (json.dumps({"error": str(exc)}, ensure_ascii=False), job_id),
+                    )
+                except Exception:
+                    pass
+
+        if schedule_id:
+            self._update_ingestion_schedule(
+                schedule_id, last_run=start_ts, last_status=job_status, last_error=None,
+            )
+
+    def _run_tushare_engine_sync(
+        self,
+        run_id: uuid.UUID,
+        schedule_id: Optional[str],
+        dataset: str,
+        mode: str,
+        triggered_by: str,
+        options: Dict[str, Any],
+    ) -> None:
+        """Run a Tushare dataset sync via the unified engine (in-process)."""
+        import datetime as _dt
+        start_ts = _now()
+        spec = DATASET_REGISTRY.get(dataset)
+        if spec is None:
+            return
+
+        job_id_str = options.get("job_id")
+        job_id = uuid.UUID(job_id_str) if job_id_str else None
+
+        start_date = None
+        end_date = None
+        if options.get("start_date"):
+            try:
+                start_date = _dt.date.fromisoformat(str(options["start_date"]))
+            except Exception:
+                pass
+        if options.get("end_date"):
+            try:
+                end_date = _dt.date.fromisoformat(str(options["end_date"]))
+            except Exception:
+                pass
+
+        try:
+            engine = TushareSyncEngine()
+            result = engine.sync(
+                spec=spec, mode=mode,
+                start_date=start_date, end_date=end_date,
+                job_id=job_id,
+            )
+            status = "success" if result.ok else "failed"
+        except Exception as exc:
+            status = "failed"
+            result = None
+            if job_id is not None:
+                try:
+                    self._execute(
+                        """UPDATE market.ingestion_jobs
+                              SET status='failed', finished_at=NOW(),
+                                  summary=COALESCE(summary::jsonb,'{}'::jsonb)||%s::jsonb
+                            WHERE job_id=%s""",
+                        (json.dumps({"error": str(exc)}, ensure_ascii=False), job_id),
+                    )
+                except Exception:
+                    pass
+
+        if schedule_id:
+            self._update_ingestion_schedule(
+                schedule_id, last_run=start_ts, last_status=status, last_error=None,
+            )
+
     def _run_ingestion_process(
         self,
         run_id: uuid.UUID,
@@ -1165,6 +1764,183 @@ class TDXScheduler:
             )
             if job_uuid is not None:
                 self._update_ingestion_job_status(job_uuid, "failed", start_ts, {"dataset": dataset, "mode": mode, "error": str(exc)})
+
+    def _run_go_incremental(
+        self,
+        run_id: uuid.UUID,
+        schedule_id: Optional[str],
+        dataset: str,
+        triggered_by: str,
+        options: Dict[str, Any],
+    ) -> None:
+        """Route TDX kline_daily_raw / kline_minute_raw incremental through Go backend API.
+
+        Replicates the same logic as POST /api/ingestion/incremental (dashboard auto-fill).
+        """
+        start_ts = _now()
+        spec = _GO_INCREMENTAL_DATASETS[dataset]
+        status = "failed"
+        summary: Dict[str, Any] = {"dataset": dataset, "mode": "incremental", "via": "go_init"}
+        # Reuse job_id created by _scheduled_ingestion_run if available
+        existing_job_id = options.get("job_id")
+        job_id: Optional[uuid.UUID] = None
+        if existing_job_id:
+            try:
+                job_id = uuid.UUID(str(existing_job_id))
+            except Exception:
+                pass
+
+        try:
+            # 1) auto-range: query latest trading date and current max date
+            rows = self._fetchall(
+                "SELECT MAX(cal_date) AS latest FROM market.trading_calendar"
+                " WHERE is_trading = TRUE AND cal_date <= CURRENT_DATE"
+            )
+            latest_trading = rows[0]["latest"] if rows else None
+            if latest_trading is None:
+                raise RuntimeError("no trading_calendar rows")
+            if not isinstance(latest_trading, dt.date):
+                latest_trading = dt.date.fromisoformat(str(latest_trading))
+
+            # 直接查实际数据的 MAX date（TimescaleDB chunk range_end 是预分配区间，
+            # 不代表实际数据的最大日期，会导致误判 "already up to date"）
+            max_rows = self._fetchall(
+                f"SELECT MAX({spec['date_col']})::date AS mx FROM {spec['table']}"
+            )
+            current_max = max_rows[0]["mx"] if max_rows else None
+
+            if current_max is None:
+                start_date = dt.date(1990, 1, 1)
+            else:
+                next_rows = self._fetchall(
+                    "SELECT MIN(cal_date) AS nt FROM market.trading_calendar"
+                    " WHERE is_trading = TRUE AND cal_date > %s",
+                    (current_max,),
+                )
+                nt = next_rows[0]["nt"] if next_rows else None
+                start_date = nt if nt else latest_trading
+
+            if start_date > latest_trading:
+                # already up to date
+                status = "success"
+                summary["message"] = "already up to date"
+                # 更新 job 记录（由 _scheduled_ingestion_run 预创建）
+                if job_id:
+                    try:
+                        self._execute(
+                            "UPDATE market.ingestion_jobs SET status='success', finished_at=NOW(), summary=%s WHERE job_id=%s",
+                            (json.dumps(summary, ensure_ascii=False), job_id),
+                        )
+                    except Exception:
+                        pass
+                if schedule_id:
+                    self._update_ingestion_schedule(schedule_id, last_run=start_ts, last_status=status)
+                return
+
+            # 2) create job record (or reuse one from _scheduled_ingestion_run)
+            workers = int(options.get("workers") or spec["default_workers"])
+            summary.update({
+                "data_kind": spec["data_kind"],
+                "start_date": start_date.isoformat(),
+                "end_date": latest_trading.isoformat(),
+                "workers": workers,
+            })
+            if job_id:
+                self._execute(
+                    "UPDATE market.ingestion_jobs SET status='running', started_at=%s, summary=%s WHERE job_id=%s",
+                    (start_ts, json.dumps(summary, ensure_ascii=False), job_id),
+                )
+            else:
+                job_id = uuid.uuid4()
+                self._execute(
+                    "INSERT INTO market.ingestion_jobs"
+                    " (job_id, job_type, status, created_at, started_at, summary)"
+                    " VALUES (%s, 'incremental', 'running', %s, %s, %s)",
+                    (job_id, start_ts, start_ts, json.dumps(summary, ensure_ascii=False)),
+                )
+
+            # 3) call Go backend API
+            base = os.getenv("TDX_API_BASE", "http://localhost:19080").rstrip("/")
+            tz = dt.timezone(dt.timedelta(hours=8))
+            start_dt = dt.datetime.combine(start_date, dt.time.min).replace(tzinfo=tz)
+            go_payload = {
+                "job_id": str(job_id),
+                "codes": [],
+                "start_time": start_dt.isoformat(),
+                "workers": workers,
+                "options": {
+                    "truncate_before": False,
+                    "max_rows_per_chunk": 500_000,
+                    "source": "tdx_api",
+                },
+            }
+            url = f"{base}{spec['go_endpoint']}"
+            resp = requests.post(url, json=go_payload, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if isinstance(data, dict) and data.get("code") not in (0, None):
+                raise RuntimeError(f"Go task error: {data}")
+
+            # extract go task_id
+            payload_data = data.get("data") if isinstance(data, dict) else None
+            go_task_id = None
+            if isinstance(payload_data, dict):
+                raw_tid = payload_data.get("task_id")
+                if raw_tid is not None:
+                    go_task_id = str(raw_tid)
+
+            summary["go_task_id"] = go_task_id
+
+            # Poll Go task until it finishes (or timeout after 10 min).
+            # Go backend's markJobFinished() already updates ingestion_jobs
+            # with status, finished_at, and summary (including inserted_rows),
+            # so we only need to poll for status — no need to re-update the job.
+            if go_task_id:
+                poll_url = f"{base}/api/tasks/{go_task_id}"
+                poll_deadline = time.time() + 600  # 10 min
+                go_status = "unknown"
+                while time.time() < poll_deadline:
+                    time.sleep(3)
+                    try:
+                        poll_resp = requests.get(poll_url, timeout=10)
+                        poll_resp.raise_for_status()
+                        poll_data = poll_resp.json()
+                        task_info = poll_data.get("data") if isinstance(poll_data, dict) else poll_data
+                        if isinstance(task_info, dict):
+                            go_status = str(task_info.get("status", "")).lower()
+                        if go_status in ("done", "completed", "success", "finished"):
+                            break
+                        if go_status in ("failed", "error", "cancelled"):
+                            raise RuntimeError(
+                                f"Go task {go_task_id} failed: {task_info.get('error', go_status)}"
+                            )
+                    except requests.RequestException:
+                        # Go backend may be temporarily unreachable; keep trying
+                        continue
+                else:
+                    # Timeout — treat as failure so we don't silently lose data
+                    raise RuntimeError(f"Go task {go_task_id} timed out after 600s, status={go_status}")
+
+            status = "success"
+
+        except Exception as exc:  # noqa: BLE001
+            summary["error"] = str(exc)
+            if job_id is not None:
+                try:
+                    self._execute(
+                        "UPDATE market.ingestion_jobs SET status='failed', finished_at=NOW(), summary=%s WHERE job_id=%s",
+                        (json.dumps(summary, ensure_ascii=False), job_id),
+                    )
+                except Exception:
+                    pass
+            self._log_ingestion_run(
+                job_id or run_id, schedule_id, triggered_by, start_ts,
+                "failed", summary, {}, [], error=str(exc),
+            )
+        finally:
+            if schedule_id:
+                self._update_ingestion_schedule(schedule_id, last_run=start_ts, last_status=status)
 
     # ------------------------------------------------------------------
     # DB write helpers

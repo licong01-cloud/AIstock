@@ -9,7 +9,7 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
 @router.get("", summary="获取所有TASK列表")
-async def list_tasks() -> Dict[str, Any]:
+def list_tasks() -> Dict[str, Any]:
     """获取所有TASK列表"""
     try:
         # 从数据库查询所有tasks

@@ -82,11 +82,11 @@ def sync_models_from_task(
     task_id: str,
     task_dir: str,
     loops_data: Optional[List[Dict]] = None,
-    last_sota_index: Optional[int] = None,
 ) -> ModelSyncResult:
     """从Task中提取SOTA Model Loop数据并同步到aistock_model_catalog。
 
     只同步进入SOTA的模型（is_sota=True），非SOTA模型不入库。
+    严格依赖 API 返回的 loop.is_sota 字段判断，不做任何推测。
 
     流程：
     1. 使用传入的loops_data或调用API获取所有loop
@@ -102,7 +102,6 @@ def sync_models_from_task(
         task_id: Task ID
         task_dir: AIstock侧task资产目录路径
         loops_data: 已获取的loops列表（可选，避免重复API调用）
-        last_sota_index: SOTA因子/模型的最后索引（可选，用于判断SOTA）
     """
     result = ModelSyncResult()
 
@@ -117,20 +116,6 @@ def sync_models_from_task(
             resp.raise_for_status()
             loops_resp = resp.json()
             all_loops = loops_resp.get("loops", [])
-
-            # 如果没有传入last_sota_index，尝试从sota_factor_anchor获取
-            if last_sota_index is None:
-                try:
-                    anchor_resp = _req.get(
-                        f"{base_url}/tasks/{task_id}/sota_factor_anchor",
-                        timeout=300.0,
-                    )
-                    anchor_resp.raise_for_status()
-                    anchor_data = anchor_resp.json()
-                    if anchor_data.get("ok"):
-                        last_sota_index = anchor_data.get("last_sota_factor_index")
-                except Exception as e:
-                    logger.warning(f"[{task_id}] 获取sota_factor_anchor失败: {e}")
         except Exception as e:
             result.ok = False
             result.errors.append(f"获取loops失败: {e}")
@@ -149,10 +134,8 @@ def sync_models_from_task(
             continue
 
         loop_id = lp.get("loop_id")
-        # 判断SOTA：优先使用loop自带的is_sota字段，否则根据last_sota_index判断
-        is_sota = lp.get("is_sota", False)
-        if not is_sota and last_sota_index is not None and loop_id is not None:
-            is_sota = loop_id <= last_sota_index
+        # 严格依赖 API 返回的 is_sota 字段，不做任何推测
+        is_sota = bool(lp.get("is_sota", False))
         lp["is_sota"] = is_sota
 
         if is_sota:
@@ -239,6 +222,40 @@ def sync_models_from_task(
                 except Exception as e:
                     logger.warning(f"[{task_id}] loop {loop_id} 保存模型源代码失败: {e}")
 
+            # 提取训练诊断数据（从训练日志 pkl 直接解析）
+            training_diag = {}
+            try:
+                diag_resp = _rdagent_client._task_get_json(
+                    f"/tasks/{task_id}/loops/{loop_id}/training_diagnostics"
+                )
+                if diag_resp and diag_resp.get("ok"):
+                    training_diag = diag_resp
+                    logger.info(
+                        f"[{task_id}] loop {loop_id} 训练诊断: "
+                        f"best_epoch={diag_resp.get('best_epoch')}/{diag_resp.get('total_epochs')}, "
+                        f"convergence={diag_resp.get('convergence_ratio')}, "
+                        f"overfit={diag_resp.get('overfit_ratio')}, "
+                        f"failed={diag_resp.get('training_failed')}"
+                    )
+                else:
+                    logger.info(f"[{task_id}] loop {loop_id} 训练诊断: 无数据")
+            except Exception as e:
+                logger.warning(f"[{task_id}] loop {loop_id} 获取训练诊断失败: {e}")
+
+            best_epoch = training_diag.get("best_epoch")
+            total_epochs = training_diag.get("total_epochs")
+            convergence_ratio = training_diag.get("convergence_ratio")
+            overfit_ratio = training_diag.get("overfit_ratio")
+            training_failed = training_diag.get("training_failed", False)
+            train_loss_final = training_diag.get("final_train_loss")
+            val_loss_final = training_diag.get("final_val_loss")
+            training_curves = None
+            if training_diag.get("train_loss_curve") or training_diag.get("val_loss_curve"):
+                training_curves = json.dumps({
+                    "train_loss": training_diag.get("train_loss_curve", []),
+                    "val_loss": training_diag.get("val_loss_curve", []),
+                })
+
             # UPSERT到数据库
             _upsert_model_catalog(
                 model_id=model_id,
@@ -271,6 +288,15 @@ def sync_models_from_task(
                     "is_sota": is_sota,
                     "source_task_id": task_id,
                     "display_name": model_name,
+                    # 训练诊断字段
+                    "best_epoch": best_epoch,
+                    "total_epochs": total_epochs,
+                    "convergence_ratio": convergence_ratio,
+                    "overfit_ratio": overfit_ratio,
+                    "training_failed": training_failed,
+                    "train_loss_final": train_loss_final,
+                    "val_loss_final": val_loss_final,
+                    "training_curves": training_curves,
                 },
             )
             result.inserted += 1

@@ -145,7 +145,7 @@ class SnapshotWriter:
         tmp["datetime"] = pd.to_datetime(tmp["datetime"], utc=False).values  # numpy datetime64
         tmp["instrument"] = tmp["instrument"].astype("object")  # 强制 object dtype 而非 StringDtype
         # 强制将所有数值列转为 float64，避免扩展 dtype（如 Int64）导致 HDF5 写入失败
-        for col in ["open", "high", "low", "close", "volume", "amount"]:
+        for col in ["open", "high", "low", "close", "volume", "amount", "limit_up", "limit_down"]:
             if col in tmp.columns:
                 tmp[col] = pd.to_numeric(tmp[col], errors="coerce").astype("float64")
         df = tmp.set_index(["datetime", "instrument"])  # type: ignore[call-arg]
@@ -177,75 +177,6 @@ class SnapshotWriter:
         minute_lines = [d.strftime("%Y-%m-%d %H:%M:%S") for d in unique_ts]
         minute_txt.write_text("\n".join(minute_lines), encoding="utf-8")
 
-    def write_board_daily_full(self, snapshot_id: str, df: pd.DataFrame) -> None:
-        """全量写入指定 snapshot 的板块日线数据.
-
-        输出到 boards/board_daily.h5，索引要求为 MultiIndex[datetime, board]。
-        """
-
-        if df.empty:
-            raise ValueError("write_board_daily_full: 输入 DataFrame 为空，无法生成板块行情")
-
-        if not isinstance(df.index, pd.MultiIndex) or df.index.names != ["datetime", "board"]:
-            raise ValueError("write_board_daily_full: DataFrame 索引必须为 MultiIndex[datetime, board]")
-
-        snapshot_dir = self._snapshot_path(snapshot_id)
-        boards_dir = snapshot_dir / "boards"
-        boards_dir.mkdir(parents=True, exist_ok=True)
-
-        df = df.sort_index()
-
-        h5_path = boards_dir / "board_daily.h5"
-        df.to_hdf(h5_path, key="data", mode="w")
-
-    def write_board_index(self, snapshot_id: str, df: pd.DataFrame) -> None:
-        """写入板块索引数据到 boards/board_index.h5.
-
-        输入 DataFrame 应包含列：trade_date, ts_code, name, idx_type, idx_count。
-        """
-
-        if df.empty:
-            raise ValueError("write_board_index: 输入 DataFrame 为空")
-
-        snapshot_dir = self._snapshot_path(snapshot_id)
-        boards_dir = snapshot_dir / "boards"
-        boards_dir.mkdir(parents=True, exist_ok=True)
-
-        # 确保数据类型正确
-        df = df.copy()
-        df["trade_date"] = pd.to_datetime(df["trade_date"], utc=False)
-        for col in ["ts_code", "name", "idx_type"]:
-            if col in df.columns:
-                df[col] = df[col].astype("object")
-        if "idx_count" in df.columns:
-            df["idx_count"] = pd.to_numeric(df["idx_count"], errors="coerce").fillna(0).astype("float64")
-
-        h5_path = boards_dir / "board_index.h5"
-        df.to_hdf(h5_path, key="data", mode="w", format="fixed")
-
-    def write_board_member(self, snapshot_id: str, df: pd.DataFrame) -> None:
-        """写入板块成员数据到 boards/board_member.h5.
-
-        输入 DataFrame 应包含列：trade_date, ts_code, con_code, con_name。
-        """
-
-        if df.empty:
-            raise ValueError("write_board_member: 输入 DataFrame 为空")
-
-        snapshot_dir = self._snapshot_path(snapshot_id)
-        boards_dir = snapshot_dir / "boards"
-        boards_dir.mkdir(parents=True, exist_ok=True)
-
-        # 确保数据类型正确
-        df = df.copy()
-        df["trade_date"] = pd.to_datetime(df["trade_date"], utc=False)
-        for col in ["ts_code", "con_code", "con_name"]:
-            if col in df.columns:
-                df[col] = df[col].astype("object")
-
-        h5_path = boards_dir / "board_member.h5"
-        df.to_hdf(h5_path, key="data", mode="w", format="fixed")
-
     # =========================================================================
     # 增量写入方法
     # =========================================================================
@@ -270,7 +201,7 @@ class SnapshotWriter:
         tmp = df_new.reset_index()
         tmp["datetime"] = pd.to_datetime(tmp["datetime"], utc=False).values
         tmp["instrument"] = tmp["instrument"].astype("object")
-        for col in ["open", "high", "low", "close", "volume", "amount"]:
+        for col in ["open", "high", "low", "close", "volume", "amount", "limit_up", "limit_down"]:
             if col in tmp.columns:
                 tmp[col] = pd.to_numeric(tmp[col], errors="coerce").astype("float64")
         df_new = tmp.set_index(["datetime", "instrument"])
@@ -285,84 +216,6 @@ class SnapshotWriter:
         else:
             snapshot_dir.mkdir(parents=True, exist_ok=True)
             df_combined = df_new.sort_index()
-
-        df_combined.to_hdf(h5_path, key="data", mode="w", format="fixed")
-
-    def write_board_daily_incremental(self, snapshot_id: str, df_new: pd.DataFrame) -> None:
-        """增量追加板块日线数据."""
-        if df_new.empty:
-            return
-
-        snapshot_dir = self._snapshot_path(snapshot_id)
-        boards_dir = snapshot_dir / "boards"
-        h5_path = boards_dir / "board_daily.h5"
-
-        if h5_path.exists():
-            df_old = pd.read_hdf(h5_path, key="data")
-            df_combined = pd.concat([df_old, df_new])
-            df_combined = df_combined[~df_combined.index.duplicated(keep="last")]
-            df_combined = df_combined.sort_index()
-        else:
-            boards_dir.mkdir(parents=True, exist_ok=True)
-            df_combined = df_new.sort_index()
-
-        df_combined.to_hdf(h5_path, key="data", mode="w", format="fixed")
-
-    def write_board_index_incremental(self, snapshot_id: str, df_new: pd.DataFrame) -> None:
-        """增量追加板块索引数据."""
-        if df_new.empty:
-            return
-
-        snapshot_dir = self._snapshot_path(snapshot_id)
-        boards_dir = snapshot_dir / "boards"
-        h5_path = boards_dir / "board_index.h5"
-
-        # 数据类型标准化
-        df_new = df_new.copy()
-        df_new["trade_date"] = pd.to_datetime(df_new["trade_date"], utc=False)
-        for col in ["ts_code", "name", "idx_type"]:
-            if col in df_new.columns:
-                df_new[col] = df_new[col].astype("object")
-        if "idx_count" in df_new.columns:
-            df_new["idx_count"] = pd.to_numeric(df_new["idx_count"], errors="coerce").fillna(0).astype("float64")
-
-        if h5_path.exists():
-            df_old = pd.read_hdf(h5_path, key="data")
-            df_combined = pd.concat([df_old, df_new])
-            # 按 trade_date + ts_code 去重
-            df_combined = df_combined.drop_duplicates(subset=["trade_date", "ts_code"], keep="last")
-            df_combined = df_combined.sort_values(["trade_date", "ts_code"])
-        else:
-            boards_dir.mkdir(parents=True, exist_ok=True)
-            df_combined = df_new.sort_values(["trade_date", "ts_code"])
-
-        df_combined.to_hdf(h5_path, key="data", mode="w", format="fixed")
-
-    def write_board_member_incremental(self, snapshot_id: str, df_new: pd.DataFrame) -> None:
-        """增量追加板块成员数据."""
-        if df_new.empty:
-            return
-
-        snapshot_dir = self._snapshot_path(snapshot_id)
-        boards_dir = snapshot_dir / "boards"
-        h5_path = boards_dir / "board_member.h5"
-
-        # 数据类型标准化
-        df_new = df_new.copy()
-        df_new["trade_date"] = pd.to_datetime(df_new["trade_date"], utc=False)
-        for col in ["ts_code", "con_code", "con_name"]:
-            if col in df_new.columns:
-                df_new[col] = df_new[col].astype("object")
-
-        if h5_path.exists():
-            df_old = pd.read_hdf(h5_path, key="data")
-            df_combined = pd.concat([df_old, df_new])
-            # 按 trade_date + ts_code + con_code 去重
-            df_combined = df_combined.drop_duplicates(subset=["trade_date", "ts_code", "con_code"], keep="last")
-            df_combined = df_combined.sort_values(["trade_date", "ts_code", "con_code"])
-        else:
-            boards_dir.mkdir(parents=True, exist_ok=True)
-            df_combined = df_new.sort_values(["trade_date", "ts_code", "con_code"])
 
         df_combined.to_hdf(h5_path, key="data", mode="w", format="fixed")
 

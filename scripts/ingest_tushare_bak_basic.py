@@ -294,7 +294,6 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
             inserted = _upsert_bak_basic(conn, rows)
             stats["inserted_rows"] += inserted
             stats["success_days"] += 1
-            print(f"[OK] bak_basic {d} inserted={inserted}")
         except Exception as exc:  # noqa: BLE001
             stats["failed_days"] += 1
             _log(conn, job_id, "error", f"bak_basic {d} failed: {exc}")
@@ -317,6 +316,55 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
         if batch_sleep > 0:
             time.sleep(batch_sleep)
     return stats
+
+
+def _cleanup_bak_basic(conn, start_date: dt.date, end_date: dt.date) -> int:
+    """清洗指定日期范围内的脏数据：非交易日、上市前、孤儿 ts_code。"""
+    total_deleted = 0
+    with conn.cursor() as cur:
+        # 删除非交易日数据
+        cur.execute(
+            """
+            DELETE FROM market.bak_basic
+            WHERE trade_date BETWEEN %s AND %s
+              AND NOT EXISTS (
+                  SELECT 1 FROM market.trading_calendar c
+                  WHERE c.cal_date = bak_basic.trade_date AND c.is_trading = true
+              )
+            """,
+            (start_date, end_date),
+        )
+        total_deleted += cur.rowcount
+
+        # 删除上市前数据
+        cur.execute(
+            """
+            DELETE FROM market.bak_basic b
+            USING market.stock_basic s
+            WHERE b.ts_code = s.ts_code
+              AND b.trade_date < s.list_date
+              AND b.trade_date BETWEEN %s AND %s
+            """,
+            (start_date, end_date),
+        )
+        total_deleted += cur.rowcount
+
+        # 删除孤儿 ts_code（不在 stock_basic 中）
+        cur.execute(
+            """
+            DELETE FROM market.bak_basic
+            WHERE trade_date BETWEEN %s AND %s
+              AND NOT EXISTS (
+                  SELECT 1 FROM market.stock_basic s
+                  WHERE s.ts_code = bak_basic.ts_code
+              )
+            """,
+            (start_date, end_date),
+        )
+        total_deleted += cur.rowcount
+
+    conn.commit()
+    return total_deleted
 
 
 def main() -> None:
@@ -384,6 +432,12 @@ def main() -> None:
 
         try:
             stats = run_ingestion(conn, pro, mode, start_date, end_date, job_id, args.batch_sleep)
+            # 同步后清洗脏数据（非交易日、上市前、孤儿 ts_code）
+            cleaned = _cleanup_bak_basic(conn, start_date, end_date)
+            stats["cleaned_rows"] = cleaned
+            if cleaned > 0:
+                _log(conn, job_id, "info", f"post-sync cleanup: removed {cleaned} dirty rows")
+                print(f"[CLEANUP] removed {cleaned} dirty rows in [{start_date}, {end_date}]")
             _finish_job(conn, job_id, "success" if stats["failed_days"] == 0 else "failed", {"stats": stats})
             print(f"[DONE] bak_basic mode={mode} stats={stats}")
         except Exception as exc:  # noqa: BLE001

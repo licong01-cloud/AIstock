@@ -178,12 +178,12 @@ function btnStyle(bg: string): React.CSSProperties {
 }
 
 async function batchAnalyze() {
-  if (!confirm("确认批量分析所有因子？（使用规则分类，不调用LLM）")) return;
+  if (!confirm("确认批量分析所有因子？（使用LLM分析）")) return;
   try {
     const res = await fetch(`${API}/quantevolver/factor-analyst/batch-analyze`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ use_llm: false }),
+      body: JSON.stringify({ use_llm: true }),
     });
     const data = await res.json();
     alert(`分析完成: 总计${data.total}个, 已分析${data.analyzed}个, 错误${data.errors?.length || 0}个`);

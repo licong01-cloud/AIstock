@@ -58,35 +58,50 @@ def _call_llm(
     temperature: float = 0.3,
     max_tokens: int = 4096,
     agent_type: str = "factor_transformer",
-) -> Optional[str]:
-    try:
-        import litellm
-        from .llm_client import get_llm_kwargs
+    max_retries: int = 2,
+) -> str:
+    """调用LLM，失败时抛出异常而非返回None。
 
-        # 从数据库读取agent配置
-        db_model_id, db_system_prompt = _get_agent_config(agent_type)
+    量化因子改造场景要求LLM调用必须成功，不允许静默降级。
+    """
+    import litellm
+    from .llm_client import get_llm_kwargs
 
-        # system_prompt优先级：调用方传值 > 数据库配置
-        if db_system_prompt:
-            system_prompt = db_system_prompt
+    # 从数据库读取agent配置
+    db_model_id, db_system_prompt = _get_agent_config(agent_type)
 
-        kwargs = get_llm_kwargs(agent_type)
-        if model_id:
-            kwargs["model"] = model_id
+    # system_prompt优先级：调用方传值 > 数据库配置
+    if db_system_prompt:
+        system_prompt = db_system_prompt
 
-        response = litellm.completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **kwargs
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        logger.error(f"LLM调用失败: {e}")
-        return None
+    kwargs = get_llm_kwargs(agent_type)
+    if model_id:
+        kwargs["model"] = model_id
+
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = litellm.completion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs
+            )
+            content = response.choices[0].message.content
+            if not content or not content.strip():
+                raise ValueError("LLM返回空内容")
+            return content
+        except Exception as e:
+            last_error = e
+            logger.warning(f"LLM调用失败 (尝试 {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                import time
+                time.sleep(2 * attempt)
+
+    raise RuntimeError(f"LLM调用失败，已重试{max_retries}次。最后错误: {last_error}")
 
 
 class FactorTransformationService:
@@ -145,6 +160,11 @@ class FactorTransformationService:
             )
             current_code = rule_result.transformed_code if rule_result.success else original_code
 
+            # ── 提前计算有效测试区间，确保全流程（编译修复、执行测试、审核修复）使用一致的日期 ──
+            effective_start_date, effective_end_date, window_meta = self._select_effective_test_window(
+                test_start_date, test_end_date
+            )
+
             # ── Step 2: 编译测试 ──────────────────────────────────────────────
             self._update_job(job_id, status="COMPILE_TESTING")
             compile_ok, compile_error = self.transformer.compile_test(current_code)
@@ -154,18 +174,13 @@ class FactorTransformationService:
                 current_code, _ = self._llm_repair_loop(
                     job_id, factor_name, current_code, original_code,
                     "compile", compile_error, max_llm_retries, llm_model_id,
-                    test_instruments, test_start_date, test_end_date)
+                    test_instruments, effective_start_date, effective_end_date)
                 if current_code is None:
                     return self._fail_job(job_id, factor_name, factor_source,
                         f"LLM修复后仍无法通过编译测试，已尝试{max_llm_retries}次")
 
             # ── Step 3: 执行测试（改造后因子独立执行 + 原始因子独立执行 + 对比）─
             self._update_job(job_id, status="EXECUTION_TESTING")
-
-            # 使用交易日历选择有效测试区间：确保至少包含预热期 + 20个有效交易日
-            effective_start_date, effective_end_date, window_meta = self._select_effective_test_window(
-                test_start_date, test_end_date
-            )
 
             # 3a: 改造后因子独立执行
             exec_ok, exec_error, exec_result = self.transformer.execution_test(
@@ -184,13 +199,22 @@ class FactorTransformationService:
             )
             orig_sample = self._extract_result_sample(orig_result)
             
-            # 如果原始因子计算出来全是 NaN，说明原始因子本身在给定的数据区间就无法计算有效值
+            # 如果原始因子计算出来全是 NaN，记录警告但不直接阻断改造流程
+            # 由LLM审核综合判断（原始因子可能预热期需求极大）
             import pandas as pd
             if isinstance(orig_result, pd.DataFrame) and not orig_result.empty:
                 non_nan_cols = [c for c in orig_result.columns if c != 'instrument' and c != 'datetime']
                 if non_nan_cols and orig_result[non_nan_cols].isna().all().all():
-                    return self._fail_job(job_id, factor_name, factor_source, 
-                        f"原始因子执行失败: 在测试区间 {effective_start_date} ~ {effective_end_date} 内计算结果全部为 NaN。这通常意味着预热期不足或底层逻辑无法产生有效值，请先排查原始因子的正确性。")
+                    logger.warning(
+                        f"原始因子 {factor_name} 在测试区间 {effective_start_date}~{effective_end_date} "
+                        f"结果全NaN，可能预热期不足。将跳过结果对比，由LLM审核判断。"
+                    )
+                    orig_result = None
+                    orig_sample = None
+                    orig_error = (
+                        f"原始因子在测试区间 {effective_start_date}~{effective_end_date} 内"
+                        f"结果全NaN（预热期可能不足），跳过结果对比"
+                    )
 
             self._update_job(job_id, execution_test_result={
                 "success": exec_ok, "error": exec_error,
@@ -206,7 +230,7 @@ class FactorTransformationService:
                 current_code, _ = self._llm_repair_loop(
                     job_id, factor_name, current_code, original_code,
                     "execution", exec_error, max_llm_retries, llm_model_id,
-                    test_instruments, test_start_date, test_end_date)
+                    test_instruments, effective_start_date, effective_end_date)
                 if current_code is None:
                     return self._fail_job(job_id, factor_name, factor_source,
                         f"LLM修复后仍无法通过执行测试，已尝试{max_llm_retries}次")
@@ -265,7 +289,7 @@ class FactorTransformationService:
                 current_code, _ = self._llm_repair_loop(
                     job_id, factor_name, current_code, original_code,
                     "review", review_error, max_llm_retries, llm_model_id,
-                    test_instruments, test_start_date, test_end_date)
+                    test_instruments, effective_start_date, effective_end_date)
                 if current_code is None:
                     return self._fail_job(job_id, factor_name, factor_source,
                         f"LLM修复后仍无法通过审核，已尝试{max_llm_retries}次。最后审核结论: {review_reason}")
@@ -410,45 +434,47 @@ class FactorTransformationService:
                     fields=["open", "close", "high", "low", "volume", "amount", "factor"],
                     adjust="qfq",
                 )
-                # 重命名为 h5 格式（带 $ 前缀，与原始代码兼容）
-                rename_map = {
-                    "open": "$open", "high": "$high", "low": "$low",
-                    "close": "$close", "volume": "$volume",
-                    "amount": "$amount", "factor": "$factor",
-                }
-                df_pv = df_pv.rename(columns={k: v for k, v in rename_map.items() if k in df_pv.columns})
+                # RDAgent 因子使用无 $ 前缀列名（open, close, ...），
+                # RealtimeFactorDataLoader 返回的列名也是无前缀，直接写入即可
                 df_pv.to_hdf(os.path.join(tmpdir, "daily_pv.h5"), key="data", mode="w")
 
                 df_static = build_static_factors(instruments, start_date, end_date)
                 if not df_static.empty:
                     df_static.to_parquet(os.path.join(tmpdir, "static_factors.parquet"))
 
+                # 生成独立执行脚本（在子进程中运行，避免 os.chdir 线程安全问题）
+                runner_code = self._build_original_factor_runner_script(
+                    factor_name, tmpdir, instruments, start_date, end_date
+                )
+                runner_path = os.path.join(tmpdir, "_runner.py")
+                with open(runner_path, "w", encoding="utf-8") as fh:
+                    fh.write(runner_code)
+
                 code_path = os.path.join(tmpdir, f"{factor_name}.py")
                 with open(code_path, "w", encoding="utf-8") as fh:
                     fh.write(original_code)
 
-                old_cwd = os.getcwd()
-                os.chdir(tmpdir)
-                try:
-                    ns: Dict[str, Any] = {"__name__": "__main__", "__builtins__": __builtins__}
-                    exec(compile(original_code, code_path, "exec"), ns)
-                    func_name = f"calculate_{factor_name}"
-                    if func_name not in ns:
-                        funcs = [k for k in ns if k.startswith("calculate_")]
-                        if not funcs:
-                            return None, f"原始代码中未找到 calculate_{factor_name} 函数"
-                        func_name = funcs[0]
-                    result = ns[func_name]()
-                finally:
-                    os.chdir(old_cwd)
+                import subprocess
+                import sys
+                proc = subprocess.run(
+                    [sys.executable, runner_path],
+                    capture_output=True, text=True, timeout=600, cwd=tmpdir,
+                )
 
-                if result is None:
-                    return None, "原始因子函数返回 None"
-                if isinstance(result, pd.DataFrame):
+                if proc.returncode != 0:
+                    stderr_msg = proc.stderr[:500] if proc.stderr else "无错误输出"
+                    return None, f"原始因子执行失败(exit={proc.returncode}): {stderr_msg}"
+
+                # 读取子进程输出的结果文件
+                result_path = os.path.join(tmpdir, "_result.parquet")
+                if os.path.exists(result_path):
+                    result = pd.read_parquet(result_path)
                     if result.empty:
                         return None, "原始因子函数返回空 DataFrame"
                     return result, None
-                return result, None
+                else:
+                    stdout_msg = proc.stdout[:300] if proc.stdout else ""
+                    return None, f"原始因子执行完成但未生成结果文件。stdout: {stdout_msg}"
             finally:
                 shutil.rmtree(tmpdir, ignore_errors=True)
         except Exception as e:
@@ -457,6 +483,80 @@ class FactorTransformationService:
             logger.warning(f"原始因子执行失败（不影响改造流程）: {factor_name}: {e}")
             return None, f"{type(e).__name__}: {e}\n{tb[:500]}"
 
+    def _build_original_factor_runner_script(
+        self,
+        factor_name: str,
+        tmpdir: str,
+        instruments: List[str],
+        start_date: str,
+        end_date: str,
+    ) -> str:
+        """生成在子进程中执行原始因子代码的 runner 脚本。
+
+        脚本在 tmpdir 作为 cwd 运行，读取 daily_pv.h5 等本地文件，
+        执行因子计算后将结果写入 _result.parquet。
+        """
+        # 使用 repr 确保路径和参数在脚本中正确转义
+        return f'''# -*- coding: utf-8 -*-
+"""原始因子执行脚本（由 AIstock 因子改造系统自动生成）"""
+import sys
+import os
+import inspect
+import traceback
+
+# 确保 cwd 是 tmpdir（subprocess 已通过 cwd 参数设置）
+factor_name = {repr(factor_name)}
+instruments = {repr(instruments)}
+start_date = {repr(start_date)}
+end_date = {repr(end_date)}
+tmpdir = {repr(tmpdir)}
+
+try:
+    code_path = os.path.join(tmpdir, f"{{factor_name}}.py")
+    with open(code_path, "r", encoding="utf-8") as f:
+        original_code = f.read()
+
+    ns = {{"__name__": "__main__", "__builtins__": __builtins__}}
+    exec(compile(original_code, code_path, "exec"), ns)
+
+    # 查找 calculate_ 函数
+    func_name = f"calculate_{{factor_name}}"
+    if func_name not in ns:
+        funcs = [k for k in ns if k.startswith("calculate_")]
+        if not funcs:
+            print(f"ERROR: 未找到 calculate_{{factor_name}} 函数", file=sys.stderr)
+            sys.exit(1)
+        func_name = funcs[0]
+
+    func = ns[func_name]
+    sig = inspect.signature(func)
+    params = list(sig.parameters.keys())
+
+    if len(params) == 0:
+        result = func()
+    elif len(params) >= 3:
+        result = func(instruments=instruments, start_date=start_date, end_date=end_date)
+    else:
+        print(f"ERROR: 函数 {{func_name}} 参数数量异常({{len(params)}}): {{params}}", file=sys.stderr)
+        sys.exit(1)
+
+    if result is None:
+        print("ERROR: 因子函数返回 None", file=sys.stderr)
+        sys.exit(1)
+
+    import pandas as pd
+    if isinstance(result, pd.DataFrame):
+        result.to_parquet(os.path.join(tmpdir, "_result.parquet"))
+        print(f"OK: shape={{result.shape}}, columns={{list(result.columns)}}")
+    else:
+        print(f"WARN: 返回类型不是 DataFrame: {{type(result)}}", file=sys.stderr)
+        sys.exit(1)
+
+except Exception:
+    traceback.print_exc()
+    sys.exit(1)
+'''
+
     def batch_transform(
         self,
         factor_names: Optional[List[str]] = None,
@@ -464,30 +564,53 @@ class FactorTransformationService:
         max_llm_retries: int = 5,
         llm_model_id: Optional[str] = None,
         only_pending: bool = True,
+        max_workers: int = 3,
     ) -> Dict[str, Any]:
-        """批量改造因子"""
+        """批量改造因子，支持并发执行。
+
+        Args:
+            max_workers: 最大并发数，默认3。设为1则串行执行。
+        """
+        import concurrent.futures
+
         factors = self._get_factors_to_transform(factor_names, factor_source, only_pending)
         total = len(factors)
         results = []
-        success_count = 0
-        failed_count = 0
 
-        logger.info(f"批量因子改造开始: 共 {total} 个因子")
-        for i, (fname, fsource) in enumerate(factors):
-            logger.info(f"处理因子 [{i+1}/{total}]: {fname} ({fsource})")
-            result = self.transform_factor(
-                factor_name=fname, factor_source=fsource,
-                max_llm_retries=max_llm_retries, llm_model_id=llm_model_id)
-            results.append({
-                "factor_name": fname, "factor_source": fsource,
-                "ok": result.get("ok", False), "status": result.get("status", "UNKNOWN"),
-                "message": result.get("message", ""), "job_id": result.get("job_id"),
-            })
-            if result.get("ok"):
-                success_count += 1
-            else:
-                failed_count += 1
+        logger.info(f"批量因子改造开始: 共 {total} 个因子, 并发数: {max_workers}")
 
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_factor = {
+                executor.submit(
+                    self.transform_factor,
+                    factor_name=fname,
+                    factor_source=fsource,
+                    max_llm_retries=max_llm_retries,
+                    llm_model_id=llm_model_id,
+                ): (fname, fsource)
+                for fname, fsource in factors
+            }
+            for future in concurrent.futures.as_completed(future_to_factor):
+                fname, fsource = future_to_factor[future]
+                try:
+                    result = future.result()
+                except Exception as e:
+                    logger.exception(f"批量改造异常: {fname} ({fsource})")
+                    result = {
+                        "ok": False, "factor_name": fname,
+                        "factor_source": fsource, "status": "FAILED",
+                        "message": f"改造异常: {type(e).__name__}: {e}",
+                    }
+                results.append({
+                    "factor_name": fname, "factor_source": fsource,
+                    "ok": result.get("ok", False),
+                    "status": result.get("status", "UNKNOWN"),
+                    "message": result.get("message", ""),
+                    "job_id": result.get("job_id"),
+                })
+
+        success_count = sum(1 for r in results if r.get("ok"))
+        failed_count = total - success_count
         return {"ok": True, "total": total, "success": success_count,
                 "failed": failed_count, "results": results}
 
@@ -512,9 +635,18 @@ class FactorTransformationService:
 
         for attempt_num in range(1, max_retries + 1):
             logger.info(f"LLM修复尝试 {attempt_num}/{max_retries}: {factor_name}")
-            repaired_code = self._llm_repair_code(
-                factor_name, current_code, original_code, error_type, error_msg,
-                model_id, error_history=error_history)
+
+            try:
+                repaired_code = self._llm_repair_code(
+                    factor_name, current_code, original_code, error_type, error_msg,
+                    model_id, error_history=error_history)
+            except RuntimeError as e:
+                # 系统配置错误（提示词缺失/LLM服务不可用），直接终止修复循环
+                attempts.append({"attempt": attempt_num, "error_type": "system_error",
+                                 "error_msg": str(e), "result": "系统配置错误，终止修复"})
+                self._update_job(job_id, llm_repair_attempts=attempts)
+                logger.error(f"LLM修复循环因系统错误终止: {factor_name}: {e}")
+                return None, attempts
 
             attempt_record: Dict[str, Any] = {
                 "attempt": attempt_num, "error_type": error_type,
@@ -522,11 +654,18 @@ class FactorTransformationService:
             }
 
             if repaired_code is None:
-                attempt_record["result"] = "LLM未返回代码"
+                attempt_record["result"] = "LLM未返回有效代码"
                 attempts.append(attempt_record)
                 error_history.append({"attempt": attempt_num, "error_type": error_type,
-                                       "error_msg": error_msg, "result": "LLM未返回代码"})
+                                       "error_msg": error_msg, "result": "LLM未返回有效代码"})
                 continue
+
+            # 后处理：清理 LLM 引入的兜底模式和 $ 前缀残留
+            repaired_code, sanitize_removals, sanitize_warnings = self.transformer.sanitize_llm_output(repaired_code)
+            if sanitize_removals:
+                logger.info(f"LLM输出后处理清理: {factor_name}: {sanitize_removals}")
+            if sanitize_warnings:
+                logger.warning(f"LLM输出后处理警告: {factor_name}: {sanitize_warnings}")
 
             compile_ok, compile_error = self.transformer.compile_test(repaired_code)
             if not compile_ok:
@@ -633,12 +772,21 @@ df = df.join(static_df, how='left')
 | `result.to_hdf(...)` / `result.to_parquet(...)` | 删除，直接 return result_df |
 | `df['$close']` | `df['close']`（去掉 $ 前缀） |
 
-## ⚠️ 严格禁止事项（违反即为改造失败）
+## ⚠️ 严格禁止事项（违反任何一条即判定改造失败）
 
-1. **禁止任何兜底方案**：禁止 try-except 后 pass/continue/return空值、禁止用 NaN 填充缺失数据、禁止返回空 DataFrame 作为兜底
-2. **禁止改变计算逻辑**：因子的数学公式、计算步骤必须与原始代码完全一致
-3. **禁止文件读写**：禁止 pd.read_hdf、pd.read_parquet、pd.read_csv、to_hdf、to_parquet 等
-4. **禁止硬编码**：不得硬编码股票列表或日期
+1. **绝对禁止 try-except 兜底**：不得在代码中编写任何 try-except 块（参考 RDAgent 硬约束："Don't write any try-except block"）。数据加载失败、列缺失等异常必须直接抛出，由上层系统捕获处理。
+2. **绝对禁止空值兜底**：不得使用 `float('nan')` 填充缺失列、不得 `if df.empty: return pd.DataFrame()`、不得在 except 中赋值空 DataFrame。
+3. **禁止改变计算逻辑**：因子的数学公式、计算步骤必须与原始代码完全一致。
+4. **禁止文件读写**：禁止 pd.read_hdf、pd.read_parquet、pd.read_csv、to_hdf、to_parquet 等。
+5. **禁止硬编码**：不得硬编码股票列表或日期。
+6. **列名无 $ 前缀**：`_REALTIME_LOADER` 返回的列名为 `close`、`amount` 等，绝对不使用 `$close`、`$amount`。fields 参数也不使用 $ 前缀。
+
+## 常见错误预防（参考 RDAgent error_prevention）
+
+- groupby+rolling 后必须 `reset_index(level=0, drop=True)` 恢复索引对齐
+- 使用字段前先检查是否存在，缺失时 `raise ValueError`
+- 不要修改 df.index 结构，不要 reset_index(drop=True)
+- result_df.index.names 必须继承 df.index.names，禁止手写 ["datetime", "instrument"]
 
 ## 你的任务
 
@@ -704,12 +852,14 @@ df = df.join(static_df, how='left')
                 raise ValueError("未配置 factor_repairer/repair_factor_code 的提示词，拒绝使用兜底策略")
         except Exception as e:
             logger.error(f"获取 factor_repairer 提示词失败: {e}")
-            return None
+            raise RuntimeError(
+                f"LLM修复提示词获取失败，无法执行修复。"
+                f"请检查数据库中 factor_repairer/repair_factor_code 提示词配置。错误: {e}"
+            ) from e
 
+        # _call_llm 失败时会抛出 RuntimeError，由调用方 _llm_repair_loop 捕获
         response = _call_llm(system_prompt, user_prompt, model_id, temperature=0.2, max_tokens=6000,
                              agent_type="factor_repairer")
-        if not response:
-            return None
         return self._extract_code_from_response(response)
 
     def _llm_analysis_review(
@@ -824,15 +974,24 @@ RDAgent研发阶段生成的因子代码（原始代码）通过读取本地文�
 3. 若存在以下任一情况，改造视为失败：
    - 因子计算公式或步骤与原始代码不一致
    - 存在残留的文件读写操作（pd.read_hdf、pd.read_parquet 等）
-   - 存在兜底方案（try-except+pass、NaN填充、空DataFrame返回）
+   - 存在 try-except 块（参考 RDAgent 硬约束：因子代码禁止 try-except）
+   - 存在兜底方案（NaN填充缺失列、空DataFrame返回、except后pass/continue）
+   - 使用了 $ 前缀列名（如 $close、$amount），正确列名无 $ 前缀
    - 函数签名不符合规范
    - 代码无法执行或返回错误格式
+
+## 数据接口列名规范
+
+- `_REALTIME_LOADER.load()` 的 fields 参数和返回列名均无 $ 前缀：`open, close, high, low, volume, amount, factor`
+- `_STATIC_FACTORS_LOADER.load()` 返回的列名使用前缀标识数据源：`db_*`（每日基本面）、`mf_*`（资金流向）、`bb_*`（历史基本面）、`cp_*`（筹码分布）
+- 若代码中出现 `$close`、`fields=['$open', ...]` 等 $ 前缀用法，必须判定为失败
 
 ## ⚠️ 绝对禁止事项
 
 - **绝对禁止**在代码不完整时通过审核
 - **绝对禁止**使用数据库中存储的代码进行审核（必须基于文件系统中的完整代码）
 - **绝对禁止**因为"_REALTIME_LOADER未定义"等运行时注入对象的原因拒绝通过（这些对象在执行测试中已验证可用）
+- **绝对禁止**因为 expanding window 在有限时间范围内产生 NaN 而判定失败（这是正常的窗口预热行为）
 
 ## 输出格式
 
@@ -896,39 +1055,28 @@ RDAgent研发阶段生成的因子代码（原始代码）通过读取本地文�
                 raise ValueError("未配置 factor_analyzer/analyze_transformation 的提示词，拒绝使用兜底策略")
         except Exception as e:
             logger.error(f"获取 factor_analyzer 提示词失败: {e}")
-            if compile_ok and exec_ok:
-                return {
-                    "final_decision": True, "approved": True, "confidence": 0.75,
-                    "final_feedback": "提示词获取失败，基于编译测试通过、执行测试通过判定改造成功",
-                    "logic_preserved": True, "interface_correct": True,
-                    "issues": [], "suggestions": [],
-                }
-            else:
-                return {
-                    "final_decision": False, "approved": False, "confidence": 0.9,
-                    "final_feedback": "提示词获取失败，且自动化测试未全部通过，判定改造失败",
-                    "logic_preserved": None, "interface_correct": None,
-                    "issues": ["自动化测试未全部通过"], "suggestions": [],
-                }
+            return {
+                "final_decision": False, "approved": False, "confidence": 1.0,
+                "final_feedback": f"审核失败：无法获取审核提示词，拒绝通过。"
+                                  f"量化因子改造必须经过LLM审核确认计算逻辑一致性。错误: {e}",
+                "logic_preserved": None, "interface_correct": None,
+                "issues": [f"提示词获取失败: {e}"],
+                "suggestions": ["请检查数据库中 factor_analyzer/analyze_transformation 提示词配置"],
+            }
 
-        response = _call_llm(system_prompt, user_prompt, model_id, temperature=0.1, max_tokens=4096,
-                             agent_type="factor_analyzer")
-        if not response:
-            # LLM不可用时，基于自动化测试结果和文件完整性做保守判断
-            if compile_ok and exec_ok:
-                return {
-                    "final_decision": True, "approved": True, "confidence": 0.75,
-                    "final_feedback": "LLM审核服务不可用，基于编译测试通过、执行测试通过（含原始因子对比）判定改造成功",
-                    "logic_preserved": True, "interface_correct": True,
-                    "issues": [], "suggestions": [],
-                }
-            else:
-                return {
-                    "final_decision": False, "approved": False, "confidence": 0.9,
-                    "final_feedback": f"LLM审核服务不可用，且自动化测试未全部通过（编译:{compile_ok}, 执行:{exec_ok}），判定改造失败",
-                    "logic_preserved": None, "interface_correct": None,
-                    "issues": ["自动化测试未全部通过"], "suggestions": [],
-                }
+        try:
+            response = _call_llm(system_prompt, user_prompt, model_id, temperature=0.1, max_tokens=4096,
+                                 agent_type="factor_analyzer")
+        except RuntimeError as e:
+            logger.error(f"LLM审核服务调用失败: {e}")
+            return {
+                "final_decision": False, "approved": False, "confidence": 1.0,
+                "final_feedback": f"审核失败：LLM审核服务不可用，无法完成最终审核。"
+                                  f"量化因子改造必须经过LLM审核确认计算逻辑一致性，拒绝跳过。错误: {e}",
+                "logic_preserved": None, "interface_correct": None,
+                "issues": [f"LLM审核服务不可用: {e}"],
+                "suggestions": ["请检查LLM服务配置和网络连接"],
+            }
 
         try:
             json_str = self._extract_json_from_response(response)
@@ -937,17 +1085,15 @@ RDAgent研发阶段生成的因子代码（原始代码）通过读取本地文�
             result["approved"] = result.get("final_decision", result.get("approved", False))
             return result
         except Exception as e:
-            logger.warning(f"解析LLM审核结果失败: {e}, 原始响应: {response[:200]}")
-            if compile_ok and exec_ok:
-                return {
-                    "final_decision": True, "approved": True, "confidence": 0.6,
-                    "final_feedback": f"LLM响应解析失败，基于测试结果判定通过: {e}",
-                    "raw_response": response[:500],
-                }
+            logger.warning(f"解析LLM审核结果失败: {e}, 原始响应: {response[:500]}")
             return {
-                "final_decision": False, "approved": False, "confidence": 0.6,
-                "final_feedback": f"LLM响应解析失败，且测试未全部通过: {e}",
-                "raw_response": response[:500],
+                "final_decision": False, "approved": False, "confidence": 1.0,
+                "final_feedback": f"审核失败：LLM返回的审核结果无法解析为有效JSON。"
+                                  f"解析错误: {e}",
+                "logic_preserved": None, "interface_correct": None,
+                "issues": [f"LLM响应解析失败: {e}"],
+                "suggestions": ["请检查审核提示词中的输出格式要求，确保LLM返回标准JSON"],
+                "raw_response": response[:1000],
             }
 
     def _extract_code_from_response(self, response: str) -> str:

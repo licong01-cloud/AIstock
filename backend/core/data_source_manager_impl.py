@@ -40,17 +40,17 @@ class DataSourceManager:
                 ts.set_token(self.tushare_token)
                 self.tushare_api = ts.pro_api()
                 self.tushare_available = True
-                print("✅ Tushare数据源初始化成功")
+                print("[OK] Tushare数据源初始化成功")
             except Exception as e:  # noqa: BLE001
-                print(f"⚠️ Tushare数据源初始化失败: {e}")
+                print(f"[WARN] Tushare数据源初始化失败: {e}")
                 self.tushare_available = False
         else:
-            print("ℹ️ 未配置Tushare Token，将仅使用Akshare数据源")
+            print("[INFO] 未配置Tushare Token，将仅使用Akshare数据源")
 
         if self.tdx_available:
-            print(f"✅ TDX API 数据源已启用 | Base URL = {self.tdx_api_base}")
+            print(f"[OK] TDX API 数据源已启用 | Base URL = {self.tdx_api_base}")
         else:
-            print("ℹ️ 未配置TDX API基础地址，将跳过TDX数据源")
+            print("[INFO] 未配置TDX API基础地址，将跳过TDX数据源")
 
     # 下面的方法整体拷贝自根目录 data_source_manager.py，
     # 仅调整了导入路径以适配 next_app.backend.core 包结构。
@@ -112,20 +112,20 @@ class DataSourceManager:
                 )
 
                 if not isinstance(data, dict) or not data:
-                    print("[miniQMT] ⚠️ get_market_data 返回空或非 dict，跳过")
+                    print("[miniQMT] [WARN] get_market_data 返回空或非 dict，跳过")
                 else:
                     # 以 close 字段为基准检查是否有数据
                     close_df = data.get("close")
                     if not isinstance(close_df, pd.DataFrame) or close_df.empty:
-                        print("[miniQMT] ⚠️ close 数据为空，跳过")
+                        print("[miniQMT] [WARN] close 数据为空，跳过")
                     else:
                         try:
                             row_close = close_df.loc[ts_code]
                         except Exception:  # noqa: BLE001
-                            print(f"[miniQMT] ⚠️ 在 close 中找不到 {ts_code} 行，跳过")
+                            print(f"[miniQMT] [WARN] 在 close 中找不到 {ts_code} 行，跳过")
                         else:
                             if row_close.empty:
-                                print("[miniQMT] ⚠️ close 行数据为空，跳过")
+                                print("[miniQMT] [WARN] close 行数据为空，跳过")
                             else:
                                 # 时间索引通常为字符串时间戳，这里统一截取前8位作为 YYYYMMDD
                                 time_index = [str(t) for t in row_close.index]
@@ -176,14 +176,14 @@ class DataSourceManager:
                                     df_mini["date"] = pd.to_datetime(df_mini["date"], format="%Y-%m-%d")
                                     df_mini = df_mini.sort_values("date").reset_index(drop=True)
                                     print(
-                                        f"[miniQMT] ✅ 成功获取 {base_code} 的日线历史数据 (共{len(df_mini)}条)",
+                                        f"[miniQMT] [OK] 成功获取 {base_code} 的日线历史数据 (共{len(df_mini)}条)",
                                     )
                                     return df_mini
-                                print("[miniQMT] ⚠️ 组装后的 DataFrame 为空，跳过")
+                                print("[miniQMT] [WARN] 组装后的 DataFrame 为空，跳过")
             except ImportError:
-                print("[miniQMT] ⚠️ 未安装 xtquant，跳过 miniQMT 数据源")
+                print("[miniQMT] [WARN] 未安装 xtquant，跳过 miniQMT 数据源")
             except Exception as e:  # noqa: BLE001
-                print(f"[miniQMT] ❌ 通过 xtdata 获取历史数据失败: {e}")
+                print(f"[miniQMT] [FAIL] 通过 xtdata 获取历史数据失败: {e}")
 
         # 1. 优先使用本地 TDX API
         if self.tdx_available:
@@ -195,11 +195,11 @@ class DataSourceManager:
                     kline_type="day",
                 )
                 if df is not None and not df.empty:
-                    print(f"[TDX] ✅ 成功获取 {base_code} 的历史数据 (共{len(df)}条)")
+                    print(f"[TDX] [OK] 成功获取 {base_code} 的历史数据 (共{len(df)}条)")
                     return df
-                print(f"[TDX] ⚠️ 未获取到 {base_code} 的历史数据，尝试其他数据源")
+                print(f"[TDX] [WARN] 未获取到 {base_code} 的历史数据，尝试其他数据源")
             except Exception as e:  # noqa: BLE001
-                print(f"[TDX] ❌ 获取历史数据失败: {e}")
+                print(f"[TDX] [FAIL] 获取历史数据失败: {e}")
 
         # 2. 其次使用 Tushare
         if self.tushare_available:
@@ -216,9 +216,9 @@ class DataSourceManager:
                         adj=adj,
                     )
                 if df is None:
-                    print("[Tushare] ⚠️ 返回None")
+                    print("[Tushare] [WARN] 返回None")
                 elif isinstance(df, dict):
-                    print(f"[Tushare] ⚠️ 返回dict而非DataFrame: {list(df.keys())[:5]}")
+                    print(f"[Tushare] [WARN] 返回dict而非DataFrame: {list(df.keys())[:5]}")
                 elif isinstance(df, pd.DataFrame):
                     if not df.empty:
                         df = df.rename(
@@ -228,13 +228,13 @@ class DataSourceManager:
                         df = df.sort_values("date").reset_index(drop=True)
                         df["volume"] = df["volume"] * 100
                         df["amount"] = df["amount"] * 1000
-                        print(f"[Tushare] ✅ 成功获取 {len(df)} 条数据")
+                        print(f"[Tushare] [OK] 成功获取 {len(df)} 条数据")
                         return df
-                    print("[Tushare] ⚠️ DataFrame为空")
+                    print("[Tushare] [WARN] DataFrame为空")
                 else:
-                    print(f"[Tushare] ⚠️ 返回类型错误: {type(df).__name__}")
+                    print(f"[Tushare] [WARN] 返回类型错误: {type(df).__name__}")
             except Exception as e:  # noqa: BLE001
-                print(f"[Tushare] ❌ 获取失败: {e}")
+                print(f"[Tushare] [FAIL] 获取失败: {e}")
                 import traceback
 
                 traceback.print_exc()
@@ -253,9 +253,9 @@ class DataSourceManager:
                     adjust=adjust,
                 )
                 if df is None:
-                    print("[Akshare] ⚠️ 返回None")
+                    print("[Akshare] [WARN] 返回None")
                 elif isinstance(df, dict):
-                    print(f"[Akshare] ⚠️ 返回dict而非DataFrame: {list(df.keys())[:5]}")
+                    print(f"[Akshare] [WARN] 返回dict而非DataFrame: {list(df.keys())[:5]}")
                 elif isinstance(df, pd.DataFrame):
                     if not df.empty:
                         df = df.rename(
@@ -275,18 +275,18 @@ class DataSourceManager:
                         )
                         df["date"] = pd.to_datetime(df["date"])
                         df = df.sort_values("date").reset_index(drop=True)
-                        print(f"[Akshare] ✅ 成功获取 {len(df)} 条数据")
+                        print(f"[Akshare] [OK] 成功获取 {len(df)} 条数据")
                         return df
-                    print("[Akshare] ⚠️ DataFrame为空")
+                    print("[Akshare] [WARN] DataFrame为空")
                 else:
-                    print(f"[Akshare] ⚠️ 返回类型错误: {type(df).__name__}")
+                    print(f"[Akshare] [WARN] 返回类型错误: {type(df).__name__}")
         except Exception as e:  # noqa: BLE001
-            print(f"[Akshare] ❌ 获取失败: {e}")
+            print(f"[Akshare] [FAIL] 获取失败: {e}")
             import traceback
 
             traceback.print_exc()
 
-        print("❌ 所有数据源均获取失败")
+        print("[FAIL] 所有数据源均获取失败")
         return None
 
     def _fetch_tdx_kline(
@@ -321,11 +321,11 @@ class DataSourceManager:
             resp.raise_for_status()
             payload = resp.json()
         except Exception as exc:  # noqa: BLE001
-            print(f"[TDX] ❌ HTTP请求失败: {exc}")
+            print(f"[TDX] [FAIL] HTTP请求失败: {exc}")
             return None
 
         if not isinstance(payload, dict) or payload.get("code") != 0:
-            print(f"[TDX] ⚠️ 接口返回异常: {payload}")
+            print(f"[TDX] [WARN] 接口返回异常: {payload}")
             return None
 
         raw_data = payload.get("data")
@@ -335,7 +335,7 @@ class DataSourceManager:
             records = raw_data
 
         if not records:
-            print("[TDX] ⚠️ 返回数据为空")
+            print("[TDX] [WARN] 返回数据为空")
             return None
 
         rows = []
@@ -462,10 +462,10 @@ class DataSourceManager:
                             info["market"] = row.get("market")
                         if "list_date" in row and row.get("list_date"):
                             info["list_date"] = row.get("list_date")
-                        print("[Tushare] ✅ 成功获取基本信息")
+                        print("[Tushare] [OK] 成功获取基本信息")
                         return info
             except Exception as e:  # noqa: BLE001
-                print(f"[Tushare] ❌ 获取失败: {e}")
+                print(f"[Tushare] [FAIL] 获取失败: {e}")
 
         try:
             with network_optimizer.apply():
@@ -487,10 +487,10 @@ class DataSourceManager:
                         info["market_cap"] = value
                     elif key == "流通市值":
                         info["circulating_market_cap"] = value
-                print("[Akshare] ✅ 成功获取基本信息")
+                print("[Akshare] [OK] 成功获取基本信息")
                 return info
         except Exception as e:  # noqa: BLE001
-            print(f"[Akshare] ❌ 获取失败: {e}")
+            print(f"[Akshare] [FAIL] 获取失败: {e}")
 
         return info
 
@@ -526,10 +526,10 @@ class DataSourceManager:
                 resp.raise_for_status()
                 data = resp.json()
             except Exception as exc:  # noqa: BLE001
-                print(f"[TDX] ❌ 获取实时行情失败: {exc} (code={code})")
+                print(f"[TDX] [FAIL] 获取实时行情失败: {exc} (code={code})")
                 return None
             if not isinstance(data, dict) or data.get("code") != 0:
-                print(f"[TDX] ⚠️ 接口返回异常: {data}")
+                print(f"[TDX] [WARN] 接口返回异常: {data}")
                 return data
             return data
 
@@ -544,7 +544,7 @@ class DataSourceManager:
 
         data_list = payload.get("data") or []
         if not data_list:
-            print(f"[TDX] ⚠️ 未返回 {symbol} 的行情数据")
+            print(f"[TDX] [WARN] 未返回 {symbol} 的行情数据")
             return None
 
         quote = data_list[0]
@@ -584,7 +584,7 @@ class DataSourceManager:
         if close_price is not None and last_price not in (None, 0):
             change_percent = (close_price - last_price) / last_price * 100
 
-        print(f"[TDX] ✅ 成功获取 {symbol} 实时行情")
+        print(f"[TDX] [OK] 成功获取 {symbol} 实时行情")
         return {
             "symbol": symbol,
             "price": close_price,
@@ -659,10 +659,10 @@ class DataSourceManager:
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "source": "tushare",
                     }
-                    print("[Tushare] ✅ 成功获取实时行情")
+                    print("[Tushare] [OK] 成功获取实时行情")
                     return quotes
             except Exception as e:  # noqa: BLE001
-                print(f"[Tushare] ❌ 获取失败: {e}")
+                print(f"[Tushare] [FAIL] 获取失败: {e}")
 
         return quotes
 
@@ -683,10 +683,10 @@ class DataSourceManager:
                     else:
                         df = None
                 if df is not None and not df.empty:
-                    print("[Tushare] ✅ 成功获取财务数据")
+                    print("[Tushare] [OK] 成功获取财务数据")
                     return df
             except Exception as e:  # noqa: BLE001
-                print(f"[Tushare] ❌ 获取失败: {e}")
+                print(f"[Tushare] [FAIL] 获取失败: {e}")
 
         try:
             with network_optimizer.apply():
@@ -702,10 +702,10 @@ class DataSourceManager:
                 else:
                     df = None
             if df is not None and not df.empty:
-                print("[Akshare] ✅ 成功获取财务数据")
+                print("[Akshare] [OK] 成功获取财务数据")
                 return df
         except Exception as e:  # noqa: BLE001
-            print(f"[Akshare] ❌ 获取失败: {e}")
+            print(f"[Akshare] [FAIL] 获取失败: {e}")
 
         return None
 
