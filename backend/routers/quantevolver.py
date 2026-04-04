@@ -553,6 +553,23 @@ class BatchFactorActionRequest(BaseModel):
     )
 
 
+class ManualFactorCreate(BaseModel):
+    factor_name: str = Field(..., description="因子名（m_ 开头，英文+下划线）")
+    code_text: str = Field(..., description="因子 Python 代码")
+    description: Optional[str] = Field(None, description="因子描述")
+    expression: Optional[str] = Field(None, description="因子表达式（可选）")
+
+
+class ManualFactorValidate(BaseModel):
+    factor_name: str = Field(..., description="因子名")
+    code_text: str = Field(..., description="因子 Python 代码")
+
+
+class BatchComputeMetricsUnified(BaseModel):
+    factor_names: Optional[List[str]] = Field(None, description="指定因子名列表")
+    all_available: bool = Field(False, description="True=全部 is_available 因子")
+
+
 @router.post("/factors/batch-action", summary="批量因子操作（删除/设不可用）")
 def batch_factor_action(req: BatchFactorActionRequest):
     """批量对因子执行删除或设不可用操作。
@@ -1546,6 +1563,70 @@ def batch_fetch_factor_metrics(
 
 
 # ============================================================
+# 手工因子入库 + 统一独立指标计算
+# ============================================================
+
+@router.get("/factors/manual/template", summary="获取因子代码模板")
+async def get_factor_template(factor_name: str = "m_example_factor"):
+    """返回标准因子代码模板，包含所有数据集字段说明。"""
+    from ..services.manual_factor_service import ManualFactorService
+    svc = ManualFactorService()
+    return {"template": svc.get_template(factor_name)}
+
+
+@router.post("/factors/manual/validate", summary="验证因子代码")
+async def validate_manual_factor(req: ManualFactorValidate):
+    """在 WSL 中执行因子代码，验证 result.h5 格式。~30s。"""
+    from ..services.manual_factor_service import ManualFactorService
+    svc = ManualFactorService()
+    result = await svc.validate_factor_code(req.factor_name, req.code_text)
+    return result
+
+
+@router.post("/factors/manual", summary="手工因子入库")
+async def create_manual_factor(req: ManualFactorCreate):
+    """入库因子到 catalog + LLM 分类评级（不计算独立指标）。~10s。"""
+    from ..services.manual_factor_service import ManualFactorService
+    svc = ManualFactorService()
+    result = await svc.save_factor(
+        factor_name=req.factor_name,
+        code_text=req.code_text,
+        description=req.description,
+        expression=req.expression,
+    )
+    return result
+
+
+@router.post("/factors/manual/full-pipeline", summary="手工因子完整流水线")
+async def manual_factor_full_pipeline(req: ManualFactorCreate):
+    """验证 → 入库 → 计算独立指标 → LLM 分类评级。~3min。"""
+    from ..services.manual_factor_service import ManualFactorService
+    svc = ManualFactorService()
+    result = await svc.full_pipeline(
+        factor_name=req.factor_name,
+        code_text=req.code_text,
+        description=req.description,
+        expression=req.expression,
+    )
+    return result
+
+
+@router.post("/factors/batch-compute-metrics-unified", summary="统一批量独立指标计算")
+async def batch_compute_metrics_unified(req: BatchComputeMetricsUnified):
+    """统一批量计算因子独立指标（所有因子通用，不依赖 RDAgent task）。
+
+    从 DB 读取 code_text → WSL 批量执行 → engine 计算 17 指标 × 4 窗口。
+    """
+    from ..services.manual_factor_service import ManualFactorService
+    svc = ManualFactorService()
+    result = await svc.batch_compute_metrics(
+        factor_names=req.factor_names,
+        all_available=req.all_available,
+    )
+    return result
+
+
+# ============================================================
 # 全流程批处理 SSE 端点
 # ============================================================
 
@@ -1554,7 +1635,7 @@ def full_pipeline_stream(req: FullPipelineRequest):
     """因子全流程一键批处理（SSE 流式推送）。
 
     3 个阶段按顺序执行：
-    1. IC 指标计算 — 按 task_id 逐个调用 sync_factor_metrics_for_task
+    1. IC 指标计算 — 通过 ManualFactorService.batch_compute_metrics 统一计算
     2. 因子代码改造 — 逐个因子同步执行 transform_factor（跳过已完成）
     3. LLM 分析分类 — 复用 batch_analyze_all_factors_async
 
@@ -1565,7 +1646,7 @@ def full_pipeline_stream(req: FullPipelineRequest):
     from ..db.pg_pool import get_conn
     from ..services.quantevolver.factor_analyst import FactorAnalyst
     from ..services.quantevolver.factor_transformation_service import FactorTransformationService
-    from ..services.rdagent_factor_metrics_sync import sync_factor_metrics_for_task
+    from ..services.manual_factor_service import ManualFactorService
 
     def _sse(data: dict) -> str:
         return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -1619,18 +1700,29 @@ def full_pipeline_stream(req: FullPipelineRequest):
     async def event_generator():
         t0 = _time.time()
 
-        # 0) 支持 factor_names 输入：反查 task_ids
-        if req.factor_names and not req.task_ids:
-            task_ids = await asyncio.to_thread(_resolve_task_ids_from_factors, req.factor_names)
-            if not task_ids:
-                yield _sse({"type": "error", "message": "未找到对应的 task_id，无法执行全流程"})
-                return
-        else:
+        # 0) 收集因子名称（支持 factor_names 或 task_ids 输入）
+        if req.factor_names:
+            factor_names = req.factor_names
+            # 反查 factor_rows 用于 Phase 2/3
+            factor_rows = []
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    placeholders = ",".join(["%s"] * len(factor_names))
+                    cur.execute(f"SELECT factor_name, source FROM aistock_factor_catalog WHERE factor_name IN ({placeholders})", factor_names)
+                    factor_rows = cur.fetchall()
+            task_ids = req.task_ids or []
+        elif req.task_ids:
             task_ids = req.task_ids
+            factor_rows = await asyncio.to_thread(_get_factors_for_tasks, task_ids)
+            factor_names = [r[0] for r in factor_rows]
+        else:
+            yield _sse({"type": "error", "message": "需要提供 factor_names 或 task_ids"})
+            return
 
-        # 查询所有因子
-        factor_rows = await asyncio.to_thread(_get_factors_for_tasks, task_ids)
-        factor_names = [r[0] for r in factor_rows]
+        if not factor_names:
+            yield _sse({"type": "error", "message": "未找到可处理的因子"})
+            return
+
         phases = ["ic_metrics", "transform", "analyze"] if not req.skip_transform else ["ic_metrics", "analyze"]
         yield _sse({
             "type": "pipeline_start",
@@ -1639,56 +1731,47 @@ def full_pipeline_stream(req: FullPipelineRequest):
             "phases": phases,
         })
 
-        # ── Phase 1: IC 指标计算（并发，Semaphore 控制） ──
-        IC_CONCURRENCY = 3
-        yield _sse({"type": "phase_start", "phase": "ic_metrics", "phase_label": "IC指标计算", "total_tasks": len(task_ids)})
+        # ── Phase 1: IC 指标计算（统一计算，不依赖 task） ──
+        BATCH_SIZE = 10
+        yield _sse({"type": "phase_start", "phase": "ic_metrics", "phase_label": "IC指标计算(统一)", "total_tasks": len(factor_names)})
         ic_success = 0
         ic_failed = 0
         total_inserted = 0
-        total_skipped = 0
-        ic_done_count = 0
 
-        ic_sem = asyncio.Semaphore(IC_CONCURRENCY)
-        ic_queue: asyncio.Queue = asyncio.Queue()
-
-        async def _ic_worker(tid: str):
-            async with ic_sem:
-                try:
-                    result = await asyncio.to_thread(sync_factor_metrics_for_task, tid)
-                    await ic_queue.put(("ok", tid, result))
-                except Exception as e:
-                    await ic_queue.put(("error", tid, e))
-
-        ic_tasks = [asyncio.create_task(_ic_worker(tid)) for tid in task_ids]
-        # 发送初始 computing 状态
-        for tid in task_ids:
-            yield _sse({"type": "task_progress", "phase": "ic_metrics", "task_id": tid, "status": "computing", "current": 0, "total": len(task_ids)})
-
-        while ic_done_count < len(task_ids):
-            status, tid, payload = await ic_queue.get()
-            ic_done_count += 1
-            if status == "ok":
-                result = payload
-                total_inserted += result.metrics_inserted
-                total_skipped += result.metrics_skipped
-                if result.ok:
-                    ic_success += 1
-                    yield _sse({"type": "task_progress", "phase": "ic_metrics", "task_id": tid, "status": "done",
-                                "inserted": result.metrics_inserted, "skipped": result.metrics_skipped, "current": ic_done_count, "total": len(task_ids)})
+        svc_metrics = ManualFactorService()
+        # 分批计算，每批推送进度
+        for i in range(0, len(factor_names), BATCH_SIZE):
+            batch = factor_names[i:i + BATCH_SIZE]
+            batch_num = i // BATCH_SIZE + 1
+            yield _sse({"type": "task_progress", "phase": "ic_metrics", "status": "computing",
+                        "batch": batch_num, "factors": batch, "current": i, "total": len(factor_names)})
+            try:
+                result = await svc_metrics.batch_compute_metrics(factor_names=batch)
+                if result.get("success"):
+                    db_res = result.get("db_result", {})
+                    batch_ok = len(result.get("factors", {}))
+                    batch_err = len(batch) - batch_ok
+                    batch_saved = db_res.get("inserted", 0)
                 else:
-                    ic_failed += 1
-                    yield _sse({"type": "task_progress", "phase": "ic_metrics", "task_id": tid, "status": "failed",
-                                "error": result.errors[0] if result.errors else "未知错误", "current": ic_done_count, "total": len(task_ids)})
-            else:
-                ic_failed += 1
-                yield _sse({"type": "task_progress", "phase": "ic_metrics", "task_id": tid, "status": "failed",
-                            "error": str(payload), "current": ic_done_count, "total": len(task_ids)})
+                    batch_ok = 0
+                    batch_err = len(batch)
+                    batch_saved = 0
+                ic_success += batch_ok
+                ic_failed += batch_err
+                total_inserted += batch_saved
+                yield _sse({"type": "task_progress", "phase": "ic_metrics", "status": "done",
+                            "batch": batch_num, "ok": batch_ok, "failed": batch_err,
+                            "current": min(i + BATCH_SIZE, len(factor_names)), "total": len(factor_names)})
+            except Exception as e:
+                ic_failed += len(batch)
+                yield _sse({"type": "task_progress", "phase": "ic_metrics", "status": "failed",
+                            "batch": batch_num, "error": str(e),
+                            "current": min(i + BATCH_SIZE, len(factor_names)), "total": len(factor_names)})
 
-        await asyncio.gather(*ic_tasks, return_exceptions=True)
         yield _sse({
             "type": "phase_complete", "phase": "ic_metrics",
             "success": ic_success, "failed": ic_failed,
-            "inserted": total_inserted, "skipped": total_skipped,
+            "inserted": total_inserted, "skipped": 0,
             "elapsed": round(_time.time() - t0, 1),
         })
 
@@ -3592,7 +3675,8 @@ def generate_stock_pool(date: Optional[str] = None):
     try:
         result = subprocess.run(
             [sys.executable, str(script), "--date", target_date],
-            capture_output=True, text=True, timeout=60
+            capture_output=True, text=True, timeout=60,
+            encoding="utf-8", errors="replace",
         )
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail=result.stderr[-500:])

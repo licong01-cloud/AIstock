@@ -1,7 +1,8 @@
 "use client";
 
 import React from "react";
-import { GitMerge } from "lucide-react";
+import { GitMerge, RotateCcw } from "lucide-react";
+import LoopMetricsComparison from "./LoopMetricsComparison";
 
 export interface Loop {
   loop_id: string;
@@ -22,6 +23,8 @@ interface TopologyPanelProps {
   loops: Loop[];
   activeLoopIndex: number | null;
   onSelectLoop: (index: number) => void;
+  onRetryLoop?: (taskId: string, loopIndex: number) => void;
+  taskType?: string; // 任务类型：evolution 或 strategy_evo
 }
 
 const cardStyle: React.CSSProperties = {
@@ -44,7 +47,7 @@ const headerStyle: React.CSSProperties = {
   alignItems: "center",
 };
 
-export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSelectLoop }: TopologyPanelProps) {
+export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSelectLoop, onRetryLoop, taskType }: TopologyPanelProps) {
   // 找到第一个 SOTA Loop 的因子集作为基准（初始 SOTA）
   const sotaFactorSet = React.useMemo(() => {
     const sotaLoop = loops.find(l => l.is_sota);
@@ -125,7 +128,25 @@ export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSel
                     <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
                       {loop.is_sota && <span style={{ fontSize: "10px", color: "#d97706", backgroundColor: "#fef3c7", padding: "2px 6px", borderRadius: "4px" }}>SOTA</span>}
                       {loop.status === "running" && <span style={{ fontSize: "10px", color: "#3b82f6", backgroundColor: "#dbeafe", padding: "2px 6px", borderRadius: "4px" }}>运行中</span>}
-                      {loop.status === "failed" && <span style={{ fontSize: "10px", color: "#ef4444", backgroundColor: "#fef2f2", padding: "2px 6px", borderRadius: "4px" }}>失败</span>}
+                      {(loop.status === "failed" || loop.status === "cancelled") && <span style={{ fontSize: "10px", color: "#ef4444", backgroundColor: "#fef2f2", padding: "2px 6px", borderRadius: "4px" }}>{loop.status === "failed" ? "失败" : "已取消"}</span>}
+                      {(loop.status === "failed" || loop.status === "cancelled") && onRetryLoop && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRetryLoop(loop.task_id, loop.loop_index);
+                          }}
+                          style={{
+                            fontSize: "10px", color: "#ea580c", backgroundColor: "#fff7ed",
+                            padding: "2px 8px", borderRadius: "4px", border: "1px solid #fed7aa",
+                            cursor: "pointer", display: "flex", alignItems: "center", gap: "3px",
+                            fontWeight: 600,
+                          }}
+                          title="重试回测（训练已完成则跳过训练）"
+                        >
+                          <RotateCcw size={10} />
+                          重试
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div style={{ fontSize: "11px", color: "#64748b", marginTop: "4px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>{loop.action_type || "UNKNOWN"}</div>
@@ -173,6 +194,16 @@ export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSel
           })}
         </div>
       </div>
+
+      {/* Loop 指标对比表 */}
+      {loops.length > 0 && (
+        <LoopMetricsComparison
+          loops={loops}
+          taskType={taskType}
+          onLoopSelect={onSelectLoop}
+          selectedLoopIndex={activeLoopIndex ?? undefined}
+        />
+      )}
     </div>
   );
 });

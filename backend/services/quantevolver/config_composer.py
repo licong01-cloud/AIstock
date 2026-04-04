@@ -327,10 +327,20 @@ class ConfigComposer:
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
+                # 同时复制到 qe_workspace（实际执行目录，qrun_limit_minute.py 从此目录加载）
+                ws_dir = QE_WORKSPACE_WIN / experiment_name
+                if ws_dir.exists():
+                    shutil.copy2(bench_src, ws_dir / "benchmark_sh000300.parquet")
         # 始终复制日线版作为 fallback
         qrun_limit_src = scripts_dir / "qrun_limit.py"
         if qrun_limit_src.exists():
             shutil.copy2(qrun_limit_src, exp_dir / "qrun_limit.py")
+        # benchmark parquet 也复制到日线实验的 qe_workspace（qrun_limit.py 同样需要）
+        bench_src = scripts_dir / "benchmark_sh000300.parquet"
+        if bench_src.exists():
+            ws_dir = QE_WORKSPACE_WIN / experiment_name
+            if ws_dir.exists() and not (ws_dir / "benchmark_sh000300.parquet").exists():
+                shutil.copy2(bench_src, ws_dir / "benchmark_sh000300.parquet")
 
         # 如果模型使用自定义源码，写入实验目录（model.py + model_cls导出）
         if model_info and model_info.get("code_text"):
@@ -466,6 +476,38 @@ class ConfigComposer:
         # ── 生成各文件内容到 dict ──
         experiment_files: Dict[str, str] = {}
 
+        # 0) HMM 预计算（必须在 conf.yaml 之前，使 hmm_coefficients_file 写入策略 kwargs）
+        if strategy_params and strategy_params.get("enable_sector_hmm"):
+            # 预计算失败会直接 raise，不做静默跳过
+            hmm_json = self._precompute_hmm_coefficients(strategy_params, data_split)
+            experiment_files["hmm_sector_coefficients.json"] = hmm_json
+            strategy_params["hmm_coefficients_file"] = "hmm_sector_coefficients.json"
+            # 注入到 custom_params 以便 _compose_conf_yaml 写入 strategy kwargs
+            if custom_params is None:
+                custom_params = {}
+            custom_params["hmm_coefficients_file"] = "hmm_sector_coefficients.json"
+
+            # 策略自动升级：Qlib 内置 TopkDropoutStrategy 不接受未知 kwargs，
+            # 需要使用支持 HMM 的 TopkDropoutWithRiskControlStrategy
+            if not strategy_info or not strategy_info.get("source_code"):
+                rc_qlib_path = Path(__file__).parent.parent.parent.parent / "qe_strategies" / "topk_dropout_rc_qlib.py"
+                if not rc_qlib_path.exists():
+                    raise FileNotFoundError(
+                        f"HMM 自动升级: RC 策略文件不存在 {rc_qlib_path}，"
+                        f"无法为 TopkDropoutStrategy 注入 HMM 支持"
+                    )
+                rc_source = rc_qlib_path.read_text(encoding="utf-8")
+                # 构造 strategy_info，步骤 6 会自动写入 custom_strategy.py
+                strategy_info = {
+                    "source_code": rc_source,
+                    "strategy_id": "__hmm_auto__",
+                    "portfolio_config": {
+                        "class": "TopkDropoutWithRiskControlStrategy",
+                        "kwargs": {},
+                    },
+                }
+                logger.info("HMM 启用: 自动升级策略为 TopkDropoutWithRiskControlStrategy")
+
         # 1) conf.yaml
         conf_yaml = self._compose_conf_yaml(
             factors_info=factors_info,
@@ -535,7 +577,12 @@ class ConfigComposer:
 
         # 6) custom_strategy.py（自定义策略）
         if strategy_info and strategy_info.get("source_code"):
-            experiment_files["custom_strategy.py"] = self._build_strategy_py_content(strategy_info)
+            strategy_content, strategy_deps = self._build_strategy_py_content(strategy_info)
+            experiment_files["custom_strategy.py"] = strategy_content
+            for dep_name, dep_content in strategy_deps.items():
+                experiment_files[dep_name] = dep_content
+
+        # 7) hmm_sector_coefficients.json — 已在步骤 0 提前处理
 
         # ── 生成 WSL 命令 ──
         wsl_path = f"{workspace_wsl}/{experiment_name}"
@@ -582,14 +629,17 @@ class ConfigComposer:
         nn_class_name = class_match.group(1) if class_match else model_name
         return f'"""\nRDAgent SOTA模型: {model_name}\nQuantEvolver自动生成 - 由 GeneralPTNN 通过 pt_model_uri: "model.model_cls" 加载\n"""\n{code_text}\n\n# GeneralPTNN 通过此变量加载 NN 类\nmodel_cls = {nn_class_name}\n'
 
-    def _build_strategy_py_content(self, strategy_info: Dict) -> str:
+    def _build_strategy_py_content(self, strategy_info: Dict) -> tuple:
         """生成 custom_strategy.py 文件内容（不写磁盘）。
 
         复用 _write_custom_strategy 中的验证和 import 处理逻辑。
+
+        Returns:
+            (source_code, deps_dict) — deps_dict: {filename: content} 依赖文件
         """
         source_code = strategy_info.get("source_code", "")
         if not source_code:
-            return ""
+            return "", {}
 
         validation_result = self._validate_strategy_code(source_code)
         if not validation_result["ok"]:
@@ -597,6 +647,35 @@ class ConfigComposer:
                 f"策略代码编译验证失败:\n{validation_result['error']}\n"
                 f"请修复策略代码后再创建实验。"
             )
+
+        # 处理相对导入：读取依赖文件，转换为本地导入
+        import re as _re
+        strategy_pkg_dir = Path(__file__).parent.parent / "rebalance_strategies"
+        deps_dict: Dict[str, str] = {}
+
+        def _resolve_deps(code: str, collected: set) -> str:
+            """递归处理相对导入并收集依赖文件内容."""
+            out_lines = []
+            for ln in code.split("\n"):
+                s = ln.strip()
+                m = _re.match(r'^(\s*)from\s+\.(\w+)\s+import\s+(.+)$', s)
+                if m:
+                    indent, mod, imps = m.group(1), m.group(2), m.group(3)
+                    dep = strategy_pkg_dir / f"{mod}.py"
+                    if dep.exists() and mod not in collected:
+                        collected.add(mod)
+                        dep_code = dep.read_text(encoding="utf-8")
+                        dep_code = _resolve_deps(dep_code, collected)
+                        deps_dict[f"{mod}.py"] = dep_code
+                    out_lines.append(f"{indent}from {mod} import {imps}")
+                    continue
+                if s == "@register":
+                    continue
+                out_lines.append(ln)
+            return "\n".join(out_lines)
+
+        collected_mods: set = set()
+        source_code = _resolve_deps(source_code, collected_mods)
 
         # 自动添加缺失的 import
         required_imports = ["import pandas as pd", "import numpy as np"]
@@ -644,7 +723,7 @@ class ConfigComposer:
                                 stripped.startswith("import numpy")):
                 continue
             cleaned_lines.append(line)
-        return "\n".join(cleaned_lines)
+        return "\n".join(cleaned_lines), deps_dict
 
     def sync_experiment_results(self, experiment_id: str) -> Dict[str, Any]:
         """同步实验结果。
@@ -873,9 +952,19 @@ class ConfigComposer:
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
+                # 同时复制到 qe_workspace（实际执行目录）
+                ws_dir = QE_WORKSPACE_WIN / experiment_name
+                if ws_dir.exists():
+                    shutil.copy2(bench_src, ws_dir / "benchmark_sh000300.parquet")
         qrun_limit_src = scripts_dir / "qrun_limit.py"
         if qrun_limit_src.exists():
             shutil.copy2(qrun_limit_src, exp_dir / "qrun_limit.py")
+        # benchmark parquet 也复制到日线实验的 qe_workspace
+        bench_src = scripts_dir / "benchmark_sh000300.parquet"
+        if bench_src.exists():
+            ws_dir = QE_WORKSPACE_WIN / experiment_name
+            if ws_dir.exists() and not (ws_dir / "benchmark_sh000300.parquet").exists():
+                shutil.copy2(bench_src, ws_dir / "benchmark_sh000300.parquet")
 
         # 如果模型使用自定义源码
         if model_info and model_info.get("code_text"):
@@ -1248,11 +1337,15 @@ class ConfigComposer:
 
         # 安全过滤：只保留策略支持的参数
         # 避免不支持的参数通过 **kwargs 传递到 BaseStrategy 导致 TypeError
-        # TopkDropoutStrategy 支持的参数
+        # HMM 参数放在基础白名单中，所有策略均可接收（预计算系数通过文件注入）
         _TOPK_DROPOUT_ALLOWED_KEYS = {
             "signal", "topk", "n_drop", "method_sell", "method_buy",
             "hold_thresh", "only_tradable", "forbid_all_trade_at_limit",
             "risk_degree",
+            # HMM 预计算参数 — 所有策略通用
+            "enable_sector_hmm", "sector_hmm_model_path",
+            "hmm_signal_preset", "hmm_signal_presets",
+            "hmm_coefficients_file",
         }
         # EnhancedTopkDropoutStrategy 支持的额外参数
         _ENHANCED_TOPK_ALLOWED_KEYS = _TOPK_DROPOUT_ALLOWED_KEYS | {
@@ -1261,6 +1354,11 @@ class ConfigComposer:
         # SmallCapTopkDropoutStrategy 支持的参数
         _SMALLCAP_TOPK_ALLOWED_KEYS = _TOPK_DROPOUT_ALLOWED_KEYS | {
             "max_market_cap",
+        }
+        # TopkDropoutWithRiskControlStrategy 支持的参数
+        _RC_TOPK_ALLOWED_KEYS = _TOPK_DROPOUT_ALLOWED_KEYS | {
+            "stop_loss_pct", "max_daily_turnover_pct",
+            "stock_pool",
         }
 
         if strategy_class == "TopkDropoutStrategy":
@@ -1277,6 +1375,12 @@ class ConfigComposer:
                     del strategy_kwargs[k]
         elif strategy_class == "SmallCapTopkDropoutStrategy":
             _removed = {k for k in strategy_kwargs if k not in _SMALLCAP_TOPK_ALLOWED_KEYS}
+            if _removed:
+                logger.warning(f"策略参数安全过滤: 移除不支持的参数 {_removed}")
+                for k in _removed:
+                    del strategy_kwargs[k]
+        elif strategy_class == "TopkDropoutWithRiskControlStrategy":
+            _removed = {k for k in strategy_kwargs if k not in _RC_TOPK_ALLOWED_KEYS}
             if _removed:
                 logger.warning(f"策略参数安全过滤: 移除不支持的参数 {_removed}")
                 for k in _removed:
@@ -2148,18 +2252,26 @@ python read_exp_res.py
             from .qe_file_sync_client import QEFileSyncClient
             client = QEFileSyncClient()
             
-            # 递归收集实验目录中的所有文本文件（包含 factors/ 子目录）
-            # 这样独立部署场景下也能同步 factors/*.py、custom_strategy.py、model.py 等关键文件
+            # 递归收集实验目录中的所有文件（包含 factors/ 子目录）
+            # 文本文件直接同步，二进制文件（parquet 等）以 base64 编码同步
+            import base64 as _b64
             files_to_sync = {}
-            allowed_suffixes = {".yaml", ".yml", ".py", ".txt", ".json"}
+            text_suffixes = {".yaml", ".yml", ".py", ".txt", ".json"}
+            binary_suffixes = {".parquet"}
             for f in exp_dir.rglob("*"):
                 try:
-                    if f.is_file() and f.suffix in allowed_suffixes:
+                    if f.is_file() and f.suffix in text_suffixes:
                         try:
                             rel_path = f.relative_to(exp_dir).as_posix()
                             files_to_sync[rel_path] = f.read_text(encoding="utf-8")
                         except Exception as e:
                             raise RuntimeError(f"读取文件 {f} 失败: {e}") from e
+                    elif f.is_file() and f.suffix in binary_suffixes:
+                        try:
+                            rel_path = f.relative_to(exp_dir).as_posix()
+                            files_to_sync[rel_path + ".b64"] = _b64.b64encode(f.read_bytes()).decode("ascii")
+                        except Exception as e:
+                            raise RuntimeError(f"读取二进制文件 {f} 失败: {e}") from e
                 except OSError as e:
                     raise RuntimeError(f"检查文件状态失败: {f} - {e}") from e
             
@@ -2173,9 +2285,14 @@ python read_exp_res.py
                     f"{result.get('success_count', 0)} 个文件"
                 )
             else:
+                logger.error(
+                    f"[QESync] API同步失败: {experiment_name}, "
+                    f"full_result={result}"
+                )
                 raise RuntimeError(
                     f"[QESync] API同步失败: {experiment_name}, "
-                    f"error={result.get('error', 'unknown')}"
+                    f"error={result.get('error', 'unknown')}, "
+                    f"failed={result.get('failed', [])}"
                 )
         except Exception as e:
             # 独立部署场景必须保证同步成功，否则RDAgent侧可能缺文件导致实验失败
@@ -2252,6 +2369,150 @@ model_cls = {nn_class_name}
         (exp_dir / "model.py").write_text(model_py_content, encoding="utf-8")
         logger.info(f"写入模型文件: {exp_dir / 'model.py'} (NN类: {nn_class_name}, 由GeneralPTNN加载)")
 
+    def _precompute_hmm_coefficients(
+        self, strategy_params: Dict[str, Any], data_split: Dict[str, str],
+    ) -> str:
+        """获取 HMM 行业热度系数 JSON 字符串.
+
+        优先读取训练时预生成的系数文件（毫秒级），文件不存在时走 WSL 子进程实时计算。
+        系数文件命名: coefficients_{preset}_{test_start}_{backtest_end}.json
+        存放在 model_path 同级目录。
+
+        Raises ValueError/RuntimeError on any failure — no silent fallback.
+        """
+        import subprocess
+
+        model_path = strategy_params.get("sector_hmm_model_path")
+        if not model_path:
+            raise ValueError("enable_sector_hmm=True 但未提供 sector_hmm_model_path")
+
+        test_start = data_split.get("test_start")
+        backtest_end = data_split.get("backtest_end")
+        if not test_start or not backtest_end:
+            raise ValueError(f"data_split 缺少 test_start 或 backtest_end: {data_split}")
+
+        preset_key = strategy_params.get("hmm_signal_preset", "preset_A")
+        presets = strategy_params.get("hmm_signal_presets", {})
+        preset_coeffs = None
+        if preset_key and preset_key in presets:
+            day_coeffs = presets[preset_key].get("coefficients", {})
+            preset_coeffs = day_coeffs.get("1") or next(iter(day_coeffs.values()), None)
+        if not preset_coeffs:
+            preset_coeffs = {"trending": 1.05, "neutral": 1.00, "fading": 0.96}
+
+        # Windows 路径自动转 WSL 路径
+        if not model_path.startswith("/"):
+            mp = model_path.replace("\\", "/")
+            if len(mp) >= 2 and mp[1] == ":":
+                model_path = f"/mnt/{mp[0].lower()}{mp[2:]}"
+            else:
+                raise ValueError(f"无法识别的 model_path 格式: {model_path}")
+            logger.info(f"HMM model_path 自动转换为 WSL 路径: {model_path}")
+
+        # ── 优先读取训练时预生成的系数文件 ──
+        model_dir = model_path.rsplit("/", 1)[0]
+        coeff_filename = f"coefficients_{preset_key}_{test_start}_{backtest_end}.json"
+        coeff_path = f"{model_dir}/{coeff_filename}"
+
+        read_result = subprocess.run(
+            ["wsl", "bash", "-c", f"cat '{coeff_path}'"],
+            capture_output=True, text=True, timeout=10,
+            encoding="utf-8", errors="replace",
+        )
+        if read_result.returncode == 0 and read_result.stdout.strip():
+            data = json.loads(read_result.stdout)
+            if "daily_coefficients" in data and "stock_sector_map" in data:
+                logger.info(
+                    f"HMM 系数文件命中: {coeff_filename} "
+                    f"({data.get('sector_count', '?')} 行业, "
+                    f"{len(data['daily_coefficients'])} 天)"
+                )
+                return read_result.stdout.strip()
+
+        # ── 文件未命中 → WSL 子进程实时预计算 ──
+        logger.info(f"HMM 系数文件未命中: {coeff_path}，启动实时预计算")
+
+        # WSL 中访问 Windows 主机 DB
+        db_params = {
+            "db_host": os.getenv("TDX_DB_HOST", "127.0.0.1"),
+            "db_port": int(os.getenv("TDX_DB_PORT", "5432")),
+            "db_name": os.getenv("TDX_DB_NAME", "aistock"),
+            "db_user": os.getenv("TDX_DB_USER", "postgres"),
+            "db_password": os.environ["TDX_DB_PASSWORD"],
+        }
+        if db_params["db_host"] in ("127.0.0.1", "localhost"):
+            try:
+                _res = subprocess.run(
+                    ["wsl", "bash", "-c",
+                     "sed -n 's/^nameserver //p' /etc/resolv.conf | head -1"],
+                    capture_output=True, text=True, timeout=5,
+                    encoding="utf-8", errors="replace",
+                )
+                wsl_host_ip = _res.stdout.strip()
+                if wsl_host_ip and wsl_host_ip not in ("10.255.255.254", ""):
+                    db_params["db_host"] = wsl_host_ip
+            except Exception:
+                pass
+
+        stdin_params = {
+            "model_path": model_path,
+            "test_start": test_start,
+            "backtest_end": backtest_end,
+            "preset_coeffs": preset_coeffs,
+            "preset_key": preset_key,
+            **db_params,
+        }
+
+        _script_abs = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts", "precompute_hmm_coefficients.py")
+        )
+        _mp = _script_abs.replace("\\", "/")
+        wsl_script = f"/mnt/{_mp[0].lower()}{_mp[2:]}" if len(_mp) >= 2 and _mp[1] == ":" else _mp
+        wsl_cmd = (
+            "source ~/miniconda3/etc/profile.d/conda.sh && "
+            "conda activate rdagent-gpu && "
+            f"python {wsl_script} --output-path '{coeff_path}'"
+        )
+
+        logger.info(
+            f"HMM 预计算: model={model_path}, "
+            f"日期={test_start}~{backtest_end}, preset={preset_key}"
+        )
+
+        proc = subprocess.run(
+            ["wsl", "bash", "-c", wsl_cmd],
+            input=json.dumps(stdin_params, ensure_ascii=False),
+            capture_output=True, text=True, timeout=300,
+            encoding="utf-8", errors="replace",
+        )
+
+        if proc.stderr:
+            for line in proc.stderr.strip().splitlines():
+                logger.info(f"[HMM-WSL] {line}")
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"WSL HMM 预计算失败 (exit={proc.returncode}):\n{proc.stderr}"
+            )
+
+        stdout = proc.stdout.strip()
+        if not stdout:
+            raise RuntimeError("WSL HMM 预计算返回空结果")
+
+        result = json.loads(stdout)
+        if "daily_coefficients" not in result or "stock_sector_map" not in result:
+            raise RuntimeError(
+                f"WSL HMM 预计算结果缺少必要字段: keys={list(result.keys())}"
+            )
+
+        logger.info(
+            f"HMM 预计算完成并已缓存到文件: {coeff_filename}, "
+            f"{result.get('sector_count', '?')} 行业, "
+            f"{len(result['daily_coefficients'])} 天"
+        )
+
+        return stdout
+
     def _write_custom_strategy(self, exp_dir: Path, strategy_info: Dict) -> None:
         """将自定义策略源码写入实验目录的 custom_strategy.py。
         
@@ -2269,6 +2530,38 @@ model_cls = {nn_class_name}
                 f"策略代码编译验证失败:\n{validation_result['error']}\n"
                 f"请修复策略代码后再创建实验。"
             )
+        
+        # 处理相对导入：递归复制依赖文件到实验目录，将相对导入转为本地导入
+        import re as _re
+        strategy_pkg_dir = Path(__file__).parent.parent / "rebalance_strategies"
+
+        def _copy_deps_recursive(code: str, copied: set) -> str:
+            """递归处理相对导入：转换为本地导入并复制依赖文件."""
+            out_lines = []
+            for ln in code.split("\n"):
+                s = ln.strip()
+                m = _re.match(r'^(\s*)from\s+\.(\w+)\s+import\s+(.+)$', s)
+                if m:
+                    indent, mod, imps = m.group(1), m.group(2), m.group(3)
+                    dep = strategy_pkg_dir / f"{mod}.py"
+                    if dep.exists() and mod not in copied:
+                        copied.add(mod)
+                        dep_code = dep.read_text(encoding="utf-8")
+                        # 递归处理依赖的依赖
+                        dep_code = _copy_deps_recursive(dep_code, copied)
+                        (exp_dir / f"{mod}.py").write_text(dep_code, encoding="utf-8")
+                        logger.info(f"复制策略依赖文件: {mod}.py")
+                    out_lines.append(f"{indent}from {mod} import {imps}")
+                    continue
+                if s == "@register":
+                    continue
+                out_lines.append(ln)
+            return "\n".join(out_lines)
+
+        copied_deps: set = set()
+        source_code = _copy_deps_recursive(source_code, copied_deps)
+        if copied_deps:
+            logger.info(f"共复制 {len(copied_deps)} 个策略依赖文件: {copied_deps}")
         
         # 自动添加必要的import语句（如果源码中没有）
         required_imports = [

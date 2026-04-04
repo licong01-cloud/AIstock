@@ -68,6 +68,7 @@ interface LoopDetailPanelProps {
   configDiffLines: string[];
   onSyncAssets: (loopIndex: number) => void;
   onForkFromLoop?: (loopIndex: number) => void;
+  taskType?: string; // 任务类型：evolution 或 strategy_evo
 }
 
 const cardStyle: React.CSSProperties = {
@@ -117,8 +118,13 @@ export default React.memo(function LoopDetailPanel({
   configDiffLines,
   onSyncAssets,
   onForkFromLoop,
+  taskType,
 }: LoopDetailPanelProps) {
   const [expandedStock, setExpandedStock] = React.useState<string | null>(null);
+
+  // 策略演进任务：隐藏训练过程 Tab 和相关内容
+  const isStrategyEvo = taskType === "strategy_evo";
+  const detailTabsForEvo = DETAIL_TABS.filter(tab => tab.key !== "training" && tab.key !== "prediction");
 
   if (!activeLoopData && rightPanelView !== "trajectory") {
     return (
@@ -151,7 +157,7 @@ export default React.memo(function LoopDetailPanel({
           ))}
           {rightPanelView === "loop" && activeLoopData && (
             <>
-              {activeLoopData.status === "completed" && onForkFromLoop && (
+              {activeLoopData.status === "completed" && onForkFromLoop && !isStrategyEvo && (
                 <button onClick={() => onForkFromLoop(activeLoopData.loop_index)}
                   style={{
                     padding: "5px 12px", backgroundColor: "#8b5cf6", color: "#fff", border: "none", borderRadius: "6px",
@@ -185,7 +191,7 @@ export default React.memo(function LoopDetailPanel({
             display: "flex", gap: "4px", padding: "8px 20px", borderBottom: "1px solid #e2e8f0",
             backgroundColor: "#fff", overflowX: "auto",
           }}>
-            {DETAIL_TABS.map((tab) => (
+            {(isStrategyEvo ? detailTabsForEvo : DETAIL_TABS).map((tab) => (
               <button key={tab.key} onClick={() => onSetDetailTab(tab.key)}
                 style={{
                   padding: "6px 14px", border: "none", borderRadius: "6px", fontSize: "12px",

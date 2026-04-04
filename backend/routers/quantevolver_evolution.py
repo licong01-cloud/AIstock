@@ -55,6 +55,10 @@ class EvolutionTaskCreateRequest(BaseModel):
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数覆盖，如 {topk: 30, n_drop: 3}")
     execution_algo: Optional[str] = Field(None, description="日内执行算法code，如 TWAP/VWAP/CLOSE_PRICE")
     execution_algo_params: Optional[Dict[str, Any]] = Field(None, description="执行算法参数覆盖")
+    enable_sector_hmm: bool = Field(False, description="是否启用行业 HMM 热度调整")
+    hmm_model_version_id: Optional[str] = Field(None, description="HMM 模型快照 ID (snapshot_id)")
+    hmm_signal_preset: Optional[str] = Field(None, description="HMM 信号系数档位: preset_A(保守,最高+5%) / preset_B(激进,最高+10%)")
+    additional_factor_keys: Optional[List[str]] = Field(None, description="从因子库额外添加的因子key列表，格式 ['name||source', ...]，与来源默认因子合并")
 
 @router.post("/tasks", summary="创建并启动新的自动演进任务")
 async def create_evolution_task(req: EvolutionTaskCreateRequest, background_tasks: BackgroundTasks):
@@ -103,6 +107,58 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
         if not base_experiment_id:
             raise HTTPException(status_code=400, detail="需要提供 base_experiment_id 或 source_task_id")
 
+        # --- 合并从因子库额外添加的因子 ---
+        if req.additional_factor_keys and len(req.additional_factor_keys) > 0:
+            try:
+                with get_conn() as conn:
+                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        cur.execute("SELECT factor_names FROM qe_experiments WHERE experiment_id = %s", (base_experiment_id,))
+                        row = cur.fetchone()
+                        if row:
+                            existing = row["factor_names"]
+                            if isinstance(existing, str):
+                                existing = json.loads(existing)
+                            if not isinstance(existing, list):
+                                existing = []
+                            additional_names = [k.split("||")[0] for k in req.additional_factor_keys]
+                            existing_set = set(existing)
+                            merged = existing + [n for n in additional_names if n not in existing_set]
+                            cur.execute(
+                                "UPDATE qe_experiments SET factor_names = %s WHERE experiment_id = %s",
+                                (json.dumps(merged), base_experiment_id),
+                            )
+                    conn.commit()
+                logger.info(f"Merged {len(req.additional_factor_keys)} additional factors into experiment {base_experiment_id}")
+            except Exception as e:
+                logger.error(f"合并额外因子失败: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"合并额外因子失败: {e}")
+
+        # --- HMM 模型验证 (Task 10.1) ---
+        hmm_model_path = None
+        if req.enable_sector_hmm:
+            if not req.hmm_model_version_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="启用行业 HMM 时必须提供 hmm_model_version_id",
+                )
+            from ..services.hmm_training_service import HMMTrainingService
+            hmm_svc = HMMTrainingService()
+            snapshot = hmm_svc.get_snapshot(req.hmm_model_version_id)
+            if snapshot is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"HMM 快照 {req.hmm_model_version_id} 不存在",
+                )
+            if snapshot.get("status") != "completed":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"HMM 快照状态为 '{snapshot.get('status')}'，需要 'completed'",
+                )
+            hmm_model_path = snapshot["model_path"]
+            # 模型文件存储在 WSL 文件系统中，回测/推理在 WSL 环境执行，
+            # Windows 侧无法直接用 os.path.exists 检查 WSL 路径，跳过文件检查。
+            # 推理时若文件缺失会在 WSL 侧报错。
+
         # rdagent_task_sota 来源允许 created 状态（Loop 1 会执行初始回测建立基线）
         allow_created = (req.source_type == "rdagent_task_sota")
         start_from_loop_zero = (req.source_type == "rdagent_task_sota")
@@ -117,7 +173,6 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
         )
 
         # 保存额外字段（含 evolution_mode）
-        from ..db.pg_pool import get_conn
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -135,15 +190,44 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
                       task_id))
             conn.commit()
 
+        # --- 注入 HMM 模型路径到 strategy_params ---
+        if req.enable_sector_hmm and hmm_model_path:
+            merged_params = dict(req.strategy_params) if req.strategy_params else {}
+            merged_params["sector_hmm_model_path"] = hmm_model_path
+            merged_params["enable_sector_hmm"] = True
+            if req.hmm_signal_preset:
+                merged_params["hmm_signal_preset"] = req.hmm_signal_preset
+                # 从 DB 读取模型的 signal_presets 注入到 strategy_params
+                try:
+                    snapshot = hmm_svc.get_snapshot(req.hmm_model_version_id)
+                    if snapshot:
+                        config_id = snapshot["config_id"]
+                        configs = hmm_svc.list_configs("sector_hmm")
+                        for cfg in configs:
+                            if cfg["config_id"] == config_id:
+                                cj = cfg["config_json"]
+                                if isinstance(cj, str):
+                                    cj = json.loads(cj)
+                                if "signal_presets" in cj:
+                                    merged_params["hmm_signal_presets"] = cj["signal_presets"]
+                                break
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"读取 HMM signal_presets 失败: {e}")
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE qe_evolution_tasks
+                           SET strategy_params = %s, updated_at = NOW()
+                           WHERE task_id = %s""",
+                        (json.dumps(merged_params), task_id),
+                    )
+                conn.commit()
+
         # 提交第一轮 Loop（事件驱动路径，非阻塞）
         # 先验证因子可用性
-        try:
-            base_config = scheduler._load_base_config_from_experiment(base_experiment_id)
-            factor_list = base_config.get("factor_list", [])
-            validation = scheduler.validate_factor_availability(factor_list)
-        except Exception as ve:
-            logger.warning(f"因子验证异常（不阻止创建）: {ve}")
-            validation = {"has_issues": False}
+        base_config = scheduler._load_base_config_from_experiment(base_experiment_id)
+        factor_list = base_config.get("factor_list", [])
+        validation = scheduler.validate_factor_availability(factor_list)
 
         if validation.get("has_issues"):
             # 不阻止创建，但返回验证信息让前端处理
@@ -325,6 +409,44 @@ async def resume_evolution_task(task_id: str, req: EvolutionTaskResumeRequest, b
         logger.error(f"Failed to resume task {task_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.post("/tasks/{task_id}/loops/{loop_index}/retry", summary="重试失败的 Loop（自动判断从训练或回测恢复）")
+async def retry_evolution_loop(task_id: str, loop_index: int, background_tasks: BackgroundTasks):
+    """重试失败的 Loop。
+
+    自动检测 workspace 中训练状态：
+    - 训练已完成（params.pkl 存在）→ 跳过训练，只重跑回测（backtest-only）
+    - 训练未完成 → 全量重跑（训练 + 回测）
+
+    适用场景：回测因策略 bug 失败，修复后重试无需等待 1 小时训练。
+    """
+    try:
+        # 预检查：验证 loop 状态（快速返回错误，不进 background）
+        from ..services.quantevolver.qe_evolution_service import get_conn
+        from psycopg2.extras import RealDictCursor
+        evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT status FROM qe_evolution_loops WHERE loop_id = %s", (evolution_loop_db_id,))
+                row = cur.fetchone()
+        if not row:
+            raise ValueError(f"Loop {evolution_loop_db_id} 不存在")
+        if row["status"] not in ("failed", "cancelled"):
+            raise ValueError(f"Loop 状态为 '{row['status']}'，只有 failed/cancelled 可以重试")
+
+        background_tasks.add_task(scheduler.retry_loop, task_id, loop_index)
+        return {
+            "status": "success",
+            "loop_id": evolution_loop_db_id,
+            "mode": "pending",
+            "message": f"Loop {loop_index} 重试已提交到后台",
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to retry loop {loop_index} for task {task_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 class EvolutionTaskForkRequest(BaseModel):
     from_loop_index: int = Field(..., description="从哪个 loop 分叉（必须是已完成的 loop）")
     task_name: Optional[str] = Field(None, description="新任务名称，默认 '{原名}_from_L{N}'")
@@ -336,6 +458,7 @@ class EvolutionTaskForkRequest(BaseModel):
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="覆盖策略参数")
     execution_algo: Optional[str] = Field(None, description="覆盖执行算法code")
     execution_algo_params: Optional[Dict[str, Any]] = Field(None, description="覆盖执行算法参数")
+    additional_factor_keys: Optional[List[str]] = Field(None, description="从因子库额外添加的因子key列表，格式 ['name||source', ...]")
 
 @router.post("/tasks/{task_id}/fork", summary="从指定 Loop 分叉出全新演进任务")
 async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, background_tasks: BackgroundTasks):
@@ -357,6 +480,36 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
             execution_algo=req.execution_algo,
             execution_algo_params=req.execution_algo_params,
         )
+
+        # 合并从因子库额外添加的因子
+        if req.additional_factor_keys and len(req.additional_factor_keys) > 0:
+            try:
+                with get_conn() as conn:
+                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        cur.execute("SELECT base_experiment_id FROM qe_evolution_tasks WHERE task_id = %s", (new_task_id,))
+                        task_row = cur.fetchone()
+                        if task_row and task_row["base_experiment_id"]:
+                            exp_id = task_row["base_experiment_id"]
+                            cur.execute("SELECT factor_names FROM qe_experiments WHERE experiment_id = %s", (exp_id,))
+                            exp_row = cur.fetchone()
+                            if exp_row:
+                                existing = exp_row["factor_names"]
+                                if isinstance(existing, str):
+                                    existing = json.loads(existing)
+                                if not isinstance(existing, list):
+                                    existing = []
+                                additional_names = [k.split("||")[0] for k in req.additional_factor_keys]
+                                existing_set = set(existing)
+                                merged = existing + [n for n in additional_names if n not in existing_set]
+                                cur.execute(
+                                    "UPDATE qe_experiments SET factor_names = %s WHERE experiment_id = %s",
+                                    (json.dumps(merged), exp_id),
+                                )
+                    conn.commit()
+                logger.info(f"Merged {len(req.additional_factor_keys)} additional factors into forked task {new_task_id}")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"合并额外因子到 fork 任务失败: {e}")
+
         background_tasks.add_task(scheduler.submit_next_loop, new_task_id)
         return {
             "status": "success",
@@ -370,6 +523,65 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to fork task {task_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+class StrategyLoopConfig(BaseModel):
+    label: Optional[str] = Field(None, description="Loop 标签/描述")
+    loop_index: Optional[int] = Field(None, description="Loop 索引（自动填充）")
+    strategy_params: Dict[str, Any] = Field(..., description="策略参数: topk, n_drop, hold_thresh, risk_degree 等")
+    strategy_id: Optional[str] = Field(None, description="交易策略ID，None=继承源Loop")
+    execution_algo: Optional[str] = Field(None, description="日内执行算法code")
+    execution_algo_params: Optional[Dict[str, Any]] = Field(None, description="执行算法参数")
+    enable_sector_hmm: bool = Field(False, description="是否启用行业 HMM")
+    hmm_model_version_id: Optional[str] = Field(None, description="HMM 模型快照 ID")
+    hmm_signal_preset: Optional[str] = Field(None, description="HMM 信号系数档位: preset_A/preset_B")
+    sector_blacklist: Optional[List[str]] = Field(None, description="行业黑名单")
+    stock_pool: Optional[str] = Field(None, description="Qlib股票池文件WSL路径")
+
+class StrategyEvolutionForkRequest(BaseModel):
+    from_loop_index: int = Field(..., description="从哪个 loop 分叉（必须已完成且有模型文件）")
+    task_name: Optional[str] = Field(None, description="新任务名称")
+    loops: List[StrategyLoopConfig] = Field(..., description="每个 Loop 的策略参数配置", min_length=1)
+    execution_mode: str = Field("serial", description="执行方式: serial / parallel")
+    inherit_history: bool = Field(False, description="是否继承截止到该 loop 的演进历史")
+
+@router.post("/tasks/{task_id}/strategy-fork", summary="从指定 Loop 分叉出策略演进任务（跳过训练）")
+async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
+    """
+    从指定 task 的某个已完成 loop 创建策略演进任务。
+    复用源 loop 的已训练模型（mlruns 中的 params.pkl），仅修改策略参数进行批量回测。
+    所有 Loop 使用 --backtest-only 模式，跳过模型训练。
+    """
+    try:
+        # 为 loops 配置分配 loop_index
+        loops_config = []
+        for i, loop_cfg in enumerate(req.loops, start=1):
+            cfg_dict = loop_cfg.dict()
+            cfg_dict["loop_index"] = i
+            loops_config.append(cfg_dict)
+
+        new_task_id = await scheduler.strategy_fork_task(
+            source_task_id=task_id,
+            from_loop_index=req.from_loop_index,
+            task_name=req.task_name,
+            loops_config=loops_config,
+            execution_mode=req.execution_mode or "serial",
+            inherit_history=req.inherit_history,
+        )
+
+        return {
+            "status": "success",
+            "task_id": new_task_id,
+            "source_task_id": task_id,
+            "from_loop_index": req.from_loop_index,
+            "total_loops": len(loops_config),
+            "execution_mode": req.execution_mode or "serial",
+            "message": f"策略演进任务已创建，{len(loops_config)} 个策略回测 Loop 后台启动中",
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to create strategy evolution task from {task_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/tasks/{task_id}/logs", summary="获取实时的任务运行及 Agent 思考日志流 (SSE)")
@@ -1307,8 +1519,8 @@ def get_correlation_status():
                             "hdf5_path": row[5],
                             "created_at": row[6].isoformat() if row[6] else None,
                         }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"读取相关性 job 元数据失败: {e}")
 
         db_count = 0
         uncorrelated_count = 0
@@ -1325,8 +1537,8 @@ def get_correlation_status():
                           AND correlation_computed_at IS NULL
                     """)
                     uncorrelated_count = cur.fetchone()[0]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"读取相关性统计计数失败: {e}")
 
         _status_db_cache["meta"] = meta
         _status_db_cache["db_count"] = db_count
@@ -1475,7 +1687,8 @@ async def get_correlation_pair(
                         WHERE factor_a_id = %s AND factor_b_id = %s
                     """, (a_id, b_id))
                     row = cur.fetchone()
-    except Exception:
+    except Exception as e:
+        logger.warning(f"查询因子对相关性失败: {e}")
         row = None
 
     db_result = None
@@ -1524,8 +1737,8 @@ async def get_correlation_pair(
                 "avg_stocks_per_day": pair_result.avg_stocks_per_day,
                 "daily_correlations": pair_result.daily_correlations[-60:],
             }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"构建缓存的快速相关性结果失败: {e}")
 
     # 查询两个因子的完整指标（catalog + independent + classification + source_code）
     factor_metrics = {}
@@ -1573,8 +1786,8 @@ async def get_correlation_pair(
                                         try:
                                             with open(full_path, "r", encoding="utf-8") as f:
                                                 source_code = f.read()
-                                        except Exception:
-                                            pass
+                                        except Exception as e:
+                                            logger.warning(f"读取因子源码文件失败 {full_path}: {e}")
                                         break
 
                     # 构建 catalog dict，移除内部字段

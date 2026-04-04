@@ -41,19 +41,28 @@ class QEWorkspaceClient:
         await self.close()
         
     async def create_and_run_loop(
-        self, task_id: str, loop_index: int, config: Dict[str, Any], experiment_files: Dict[str, str] = None, wsl_command: str = ""
+        self, task_id: str, loop_index: int, config: Dict[str, Any], experiment_files: Dict[str, str] = None, wsl_command: str = "",
+        model_source: Dict[str, Any] = None
     ) -> str:
         """
         通知 RDAgent 根据配置生成代码并启动执行 QLib 回测
         返回 RDAgent 端生成的 loop_id
+
+        model_source: 策略演进时传入模型来源信息，用于创建 mlruns 符号链接
+            {
+                "source_task_id": "qe_xxx",
+                "source_loop": "Loop3",
+            }
         """
         url = f"{self.base_url}/tasks/{task_id}/loops"
         payload = {
             "loop_index": loop_index,
             "config": config,
             "experiment_files": experiment_files or {},
-            "wsl_command": wsl_command
+            "wsl_command": wsl_command,
         }
+        if model_source:
+            payload["model_source"] = model_source
         
         try:
             response = await self.client.post(url, json=payload)

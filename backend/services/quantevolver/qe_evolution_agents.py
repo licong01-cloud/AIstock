@@ -465,7 +465,7 @@ class EvolutionAgents:
             raise ValueError("Reviewer rejected config: factor_list must be an array")
 
         action_type = draft_config["action_type"]
-        allowed_action_types = {"initial", "factor_adjust", "param_tune", "model_switch", "factor_model_joint"}
+        allowed_action_types = {"initial", "factor_adjust", "param_tune", "model_switch", "factor_model_joint", "factor_expand"}
         if not isinstance(action_type, str) or action_type not in allowed_action_types:
             raise ValueError(
                 f"Reviewer rejected config: action_type must be one of {sorted(allowed_action_types)}"
@@ -535,6 +535,20 @@ class EvolutionFactorAgent:
         total = sum(abs(v) for v in ic_map.values()) or 1.0
         return {fn: abs(ic_map.get(fn, 0.0)) / total for fn in factor_names}, "independent_ic"
 
+    def _get_factor_categories(self, factor_names: List[str]) -> set:
+        """查询因子列表对应的类别集合，用于 factor_expand 时识别未覆盖类别。"""
+        if not factor_names:
+            return set()
+        from ...db.pg_pool import get_conn
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                ph = ",".join(["%s"] * len(factor_names))
+                cur.execute(f"""
+                    SELECT DISTINCT category FROM qe_factor_classification
+                    WHERE factor_name IN ({ph}) AND category IS NOT NULL
+                """, factor_names)
+                return {row[0] for row in cur.fetchall()}
+
     async def run(
         self,
         analyst_result: 'AnalystResult',
@@ -581,9 +595,14 @@ class EvolutionFactorAgent:
         importance_map, imp_method = self._get_factor_importance_map(current_factors, evolution_history)
         sorted_factors = sorted(importance_map.items(), key=lambda x: -x[1])
         n_total = len(sorted_factors)
-        n_protected = max(1, int(n_total * 0.7))
+        if n_total < 15:
+            # 小因子集：保护降到50%，放宽turnover到最少3个，鼓励探索
+            n_protected = max(1, int(n_total * 0.5))
+            max_turnover = max(3, int(n_total * 0.5))
+        else:
+            n_protected = max(1, int(n_total * 0.7))
+            max_turnover = max(1, int(n_total * 0.3))
         protected_set = {f for f, _ in sorted_factors[:n_protected]}
-        max_turnover = max(1, int(n_total * 0.3))
 
         importance_lines = []
         for fn, imp in sorted_factors:
@@ -630,6 +649,14 @@ class EvolutionFactorAgent:
             bl = researcher_context["factor_blacklist"]
             direction_prompt += f"\n\n【因子黑名单】以下因子已被标记不可用，请勿建议添加: {', '.join(bl)}"
 
+        # factor_expand 强制指令：当因子数 < 15 时由 service 层注入方向
+        if len(current_factors) < 15:
+            direction_prompt += (
+                f"\n\n【强制指令】当前因子数={len(current_factors)} < 15，本轮必须执行 factor_expand 方向。"
+                f"\n请在 JSON 中设置 direction=\"factor_expand\"，factors_to_remove=[]（不删除任何因子），"
+                f"\ntarget_categories 设为当前组合未覆盖的因子类别（避免同类型重复）。"
+            )
+
         try:
             direction_resp = await self._agents.async_call_llm(
                 "evolution_factor_agent", direction_system, direction_prompt, step="factor_agent_step2_direction"
@@ -642,19 +669,24 @@ class EvolutionFactorAgent:
 
         logger.info(f"EvolutionFactorAgent Step 2 direction: {direction.get('direction')}")
 
-        # ── 重要性保护过滤: 从 factors_to_remove 中移除受保护因子 ──
-        original_removals = set(direction.get("factors_to_remove", []))
-        protected_removals = original_removals & protected_set
-        if protected_removals:
-            logger.warning(f"重要性保护: 阻止删除 Top70% 因子 {protected_removals}")
-            direction["factors_to_remove"] = [
-                f for f in direction.get("factors_to_remove", []) if f not in protected_set
-            ]
-        # Max turnover 限制
-        if len(direction.get("factors_to_remove", [])) > max_turnover:
-            removals = direction["factors_to_remove"]
-            removals.sort(key=lambda f: importance_map.get(f, 0.0))
-            direction["factors_to_remove"] = removals[:max_turnover]
+        # ── factor_expand 模式: 只加不删 ──
+        if direction.get("direction") == "factor_expand":
+            direction["factors_to_remove"] = []
+            logger.info("factor_expand 模式: 跳过所有因子删除，只加不删")
+        else:
+            # ── 重要性保护过滤: 从 factors_to_remove 中移除受保护因子 ──
+            original_removals = set(direction.get("factors_to_remove", []))
+            protected_removals = original_removals & protected_set
+            if protected_removals:
+                logger.warning(f"重要性保护: 阻止删除 Top70% 因子 {protected_removals}")
+                direction["factors_to_remove"] = [
+                    f for f in direction.get("factors_to_remove", []) if f not in protected_set
+                ]
+            # Max turnover 限制
+            if len(direction.get("factors_to_remove", [])) > max_turnover:
+                removals = direction["factors_to_remove"]
+                removals.sort(key=lambda f: importance_map.get(f, 0.0))
+                direction["factors_to_remove"] = removals[:max_turnover]
 
         # ── Step 3: search_candidate_factors [工具] ──
         # 获取因子黑名单
@@ -663,6 +695,19 @@ class EvolutionFactorAgent:
             factor_blacklist = set(researcher_context["factor_blacklist"])
 
         target_cats = direction.get("target_categories", [])
+
+        # factor_expand: 优先搜索当前因子组合未覆盖的类别，实现类别多样性
+        if direction.get("direction") == "factor_expand":
+            covered_cats = self._get_factor_categories(current_factors)
+            all_cats = list((researcher_context or {}).get("factor_library_summary", {}).keys())
+            uncovered = [c for c in all_cats if c not in covered_cats]
+            if uncovered:
+                target_cats = uncovered
+                logger.info(f"factor_expand: 优先搜索未覆盖类别 {uncovered}（已覆盖: {covered_cats}）")
+            else:
+                logger.info(f"factor_expand: 所有类别已覆盖，全库搜索")
+                target_cats = []
+
         if not target_cats:
             # 从 direction rationale 中推断类别关键词
             rationale = direction.get("rationale", "")
@@ -691,8 +736,7 @@ class EvolutionFactorAgent:
                         FROM qe_factor_classification c
                         JOIN aistock_factor_catalog fc
                           ON c.factor_name = fc.factor_name AND c.factor_source = fc.source
-                        WHERE c.grade IN ('S', 'A', 'B', 'C', 'D')
-                          AND c.category IN ({ph})
+                        WHERE c.category IN ({ph})
                           AND fc.is_available = TRUE
                         ORDER BY RANDOM()
                         LIMIT 60
@@ -704,8 +748,7 @@ class EvolutionFactorAgent:
                         FROM qe_factor_classification c
                         JOIN aistock_factor_catalog fc
                           ON c.factor_name = fc.factor_name AND c.factor_source = fc.source
-                        WHERE c.grade IN ('S', 'A', 'B', 'C', 'D')
-                          AND fc.is_available = TRUE
+                        WHERE fc.is_available = TRUE
                         ORDER BY RANDOM()
                         LIMIT 60
                     """)
@@ -713,11 +756,14 @@ class EvolutionFactorAgent:
                 candidates = [dict(zip(cols, row)) for row in cur.fetchall()]
 
         # 加权抽样偏向高评级（类别过滤后再加权）
+        # 未评级/D级因子权重=0.5（取整为1），允许进入候选池但优先级低
         import random
-        grade_weights = {"S": 4, "A": 3, "B": 2, "C": 1}
+        import math
+        grade_weights = {"S": 4, "A": 3, "B": 2, "C": 1, "D": 1}
         weighted = []
         for c in candidates:
-            w = grade_weights.get(c.get("grade", "C"), 1)
+            grade = c.get("grade") or ""
+            w = grade_weights.get(grade, 1)  # 未评级同D级处理，权重=1
             weighted.extend([c] * w)
         if len(weighted) > 40:
             sampled = random.sample(weighted, 40)
@@ -1041,6 +1087,7 @@ class EvolutionModelAgent:
         model_context: Optional[Dict[str, Any]] = None,
         factor_context: Optional[Dict[str, Any]] = None,
         sota_context: Optional[Dict[str, Any]] = None,
+        task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """执行 7 步模型编排，返回 model_id + model_params 配置。"""
         from ...db.pg_pool import get_conn
@@ -1268,6 +1315,38 @@ class EvolutionModelAgent:
             model_param_history=json.dumps(model_history[-5:], ensure_ascii=False),
         )
 
+        # ── Optuna 集成：param_tune 时注入贝叶斯建议 ──
+        _optuna_trial = None
+        if model_decision == "tune_hyperparams" and task_id:
+            try:
+                from .optuna_optimizer import OptunaHyperparamOptimizer, OPTUNA_AVAILABLE
+                if OPTUNA_AVAILABLE:
+                    optimizer = OptunaHyperparamOptimizer(task_id, selected_model_type)
+                    ask_result = optimizer.ask()
+                    if ask_result is not None:
+                        _optuna_trial, optuna_params = ask_result
+                        step6_user += (
+                            f"\n\n【Optuna 贝叶斯建议】以下超参数由 Optuna TPE 基于历史 trial 生成，"
+                            f"请参考但可根据诊断信息微调：\n"
+                            f"{json.dumps(optuna_params, ensure_ascii=False)}"
+                        )
+                        logger.info(
+                            f"EvolutionModelAgent Step 6: Optuna 建议已注入, "
+                            f"trial_number={_optuna_trial.number}"
+                        )
+                    else:
+                        logger.warning(
+                            "EvolutionModelAgent Step 6: Optuna ask() 返回 None，回退到纯 LLM 模式"
+                        )
+                else:
+                    logger.warning(
+                        "EvolutionModelAgent Step 6: optuna 未安装，回退到纯 LLM 模式"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"EvolutionModelAgent Step 6: Optuna 集成失败: {e}，回退到纯 LLM 模式"
+                )
+
         try:
             resp6 = await self._agents.async_call_llm("evolution_model_agent", step6_system, step6_user, step="model_agent_step6_compose")
             s = resp6.find("{")
@@ -1311,6 +1390,10 @@ class EvolutionModelAgent:
         for key in ["factor_list", "strategy_id", "data_split", "base_experiment_id"]:
             if key in current_config:
                 result[key] = current_config[key]
+
+        # 附加 Optuna trial 对象（供 process_completed_loop 调用 tell() 反馈结果）
+        if _optuna_trial is not None:
+            result["_optuna_trial"] = _optuna_trial
 
         logger.info(f"EvolutionModelAgent Step 7: validated, model={output_model_id}")
         return result

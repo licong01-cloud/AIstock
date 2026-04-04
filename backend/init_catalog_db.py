@@ -759,6 +759,26 @@ def init_database():
                     cur.execute(f"ALTER TABLE qe_evolution_tasks ADD COLUMN {col_name} {col_type};")
 
             # ============================================================
+            # qe_evolution_tasks 新增列迁移（Phase: 策略演进）
+            # ============================================================
+            strategy_evo_migrations = [
+                ("task_type", "TEXT DEFAULT 'evolution'"),
+                ("strategy_evo_config", "JSONB"),
+                ("strategy_evo_execution_mode", "TEXT DEFAULT 'serial'"),
+                ("model_source_task_id", "TEXT"),
+                ("model_source_loop_index", "INTEGER"),
+            ]
+            for col_name, col_type in strategy_evo_migrations:
+                cur.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='qe_evolution_tasks' AND column_name=%s;",
+                    (col_name,),
+                )
+                if not cur.fetchone():
+                    print(f"Adding column '{col_name}' to qe_evolution_tasks (Strategy Evolution)...")
+                    cur.execute(f"ALTER TABLE qe_evolution_tasks ADD COLUMN {col_name} {col_type};")
+
+            # ============================================================
             # 因子可用性管理: is_available 列 + 因子黑名单
             # ============================================================
             cur.execute("""

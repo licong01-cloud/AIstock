@@ -51,6 +51,7 @@ interface Task {
   status: string;
   base_experiment_id: string;
   source_type?: string;
+  task_type?: string;  // 'evolution' | 'strategy_evo'
   created_at: string;
   updated_at: string;
 }
@@ -79,8 +80,16 @@ export default function EvolutionDashboard() {
     strategy_params: {} as Record<string, any>,
     execution_algo: "",
     execution_algo_params: {} as Record<string, any>,
+    enable_sector_hmm: false,
+    hmm_model_version_id: "",
+    hmm_signal_preset: "preset_A",
   });
   const [isCreating, setIsCreating] = useState(false);
+
+  // HMM 模型选择器状态
+  const [hmmConfigs, setHmmConfigs] = useState<any[]>([]);
+  const [hmmSnapshots, setHmmSnapshots] = useState<any[]>([]);
+  const [hmmSelectedConfigId, setHmmSelectedConfigId] = useState("");
   const [blacklistEnabled, setBlacklistEnabled] = useState(false);
   const [stockPoolPath, setStockPoolPath] = useState<string | null>(null);
   const [sourceTasks, setSourceTasks] = useState<any[]>([]);
@@ -98,6 +107,10 @@ export default function EvolutionDashboard() {
   const [selectedFactorsForEvo, setSelectedFactorsForEvo] = useState<Set<string>>(new Set());
   const [selectedModelForEvo, setSelectedModelForEvo] = useState<string>("");
 
+  // 从因子库额外添加因子
+  const [showFactorLibrary, setShowFactorLibrary] = useState(false);
+  const [additionalFactorKeys, setAdditionalFactorKeys] = useState<Set<string>>(new Set());
+
   // 因子相关性分析
   const [corrPairs, setCorrPairs] = useState<Array<{factor_a: string; factor_b: string; correlation: number}>>([]);
   const [corrLoading, setCorrLoading] = useState(false);
@@ -110,6 +123,7 @@ export default function EvolutionDashboard() {
 
   // Fork 状态
   const [showForkDialog, setShowForkDialog] = useState<number | null>(null); // from_loop_index or null
+  const [forkType, setForkType] = useState<"evolution" | "strategy_evo">("evolution"); // fork 类型
   const [forkForm, setForkForm] = useState({
     task_name: "",
     max_loops: 10,
@@ -121,6 +135,10 @@ export default function EvolutionDashboard() {
     execution_algo: "",
     execution_algo_params: {} as Record<string, any>,
   });
+
+  // 策略演进相关状态
+  const [strategyEvoLoops, setStrategyEvoLoops] = useState<any[]>([]);
+  const [strategyEvoExecutionMode, setStrategyEvoExecutionMode] = useState<"serial" | "parallel">("serial");
   const [isForking, setIsForking] = useState(false);
 
   // Phase 3: 增强诊断状态
@@ -191,11 +209,20 @@ export default function EvolutionDashboard() {
     }
   }, []);
 
+  // 动态轮询: 有 running 任务 10s，否则 60s
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hasRunningTask = useMemo(() => tasks.some(t => t.status === "running"), [tasks]);
+
   useEffect(() => {
     fetchTasks();
-    const interval = setInterval(fetchTasks, 10000);
-    return () => clearInterval(interval);
   }, [fetchTasks]);
+
+  useEffect(() => {
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    const delay = hasRunningTask ? 10_000 : 60_000;
+    pollIntervalRef.current = setInterval(fetchTasks, delay);
+    return () => { if (pollIntervalRef.current) clearInterval(pollIntervalRef.current); };
+  }, [hasRunningTask, fetchTasks]);
 
   useEffect(() => {
     fetch(`${API}/quantevolver/strategies?limit=100`)
@@ -346,7 +373,10 @@ export default function EvolutionDashboard() {
       eventSourceRef.current = sse;
 
       // 定时刷新任务详情（更新 loop 列表），但不重建 SSE
-      const detailInterval = setInterval(() => fetchTaskDetail(activeTaskId), 15000);
+      // 仅当选中任务为 running 时才定时刷新，否则依赖手动刷新
+      const selectedTask = tasks.find(t => t.task_id === activeTaskId);
+      const detailDelay = selectedTask?.status === "running" ? 15000 : 60000;
+      const detailInterval = setInterval(() => fetchTaskDetail(activeTaskId), detailDelay);
       return () => {
         activeTaskIdRef.current = null; // 标记已清理，阻止旧 reconnect timer
         clearInterval(detailInterval);
@@ -409,6 +439,29 @@ export default function EvolutionDashboard() {
       console.error("Failed to fetch SOTA preview:", e);
     }
   }, [newTask.include_alpha_baseline]);
+
+  // ── HMM 模型选择器数据获取 ──
+  const fetchHmmConfigs = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/hmm-training/configs?model_type=sector_hmm`);
+      if (res.ok) {
+        const data = await res.json();
+        setHmmConfigs(Array.isArray(data) ? data : []);
+      }
+    } catch (e) { console.error("Failed to fetch HMM configs:", e); }
+  }, []);
+
+  const fetchHmmSnapshots = useCallback(async (configId: string) => {
+    if (!configId) { setHmmSnapshots([]); return; }
+    try {
+      const res = await fetch(`${API}/hmm-training/configs/${configId}/snapshots`);
+      if (res.ok) {
+        const data = await res.json();
+        // Only show completed snapshots
+        setHmmSnapshots((Array.isArray(data) ? data : []).filter((s: any) => s.status === "completed"));
+      }
+    } catch (e) { console.error("Failed to fetch HMM snapshots:", e); }
+  }, []);
 
   // 提交新建任务
   const handleCreateTask = async () => {
@@ -481,6 +534,7 @@ export default function EvolutionDashboard() {
             strategy_params: Object.keys(newTask.strategy_params).length > 0 ? newTask.strategy_params : undefined,
             execution_algo: newTask.execution_algo || undefined,
             execution_algo_params: Object.keys(newTask.execution_algo_params).length > 0 ? newTask.execution_algo_params : undefined,
+            additional_factor_keys: additionalFactorKeys.size > 0 ? Array.from(additionalFactorKeys) : undefined,
           }),
         });
         if (!res.ok) {
@@ -493,8 +547,10 @@ export default function EvolutionDashboard() {
         if (data.status === "success") {
           alert(`已从 Loop ${newTask.fork_from_loop_index} 创建新演进任务！`);
           setShowCreateTask(false);
-          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {} });
+          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A" });
           setForkSourceLoops([]);
+          setShowFactorLibrary(false);
+          setAdditionalFactorKeys(new Set());
           fetchTasks();
           setTimeout(() => setActiveTaskId(data.task_id), 500);
         } else {
@@ -528,11 +584,15 @@ export default function EvolutionDashboard() {
         ...newTask,
         selected_model_id: selectedModelForEvo || undefined,
         selected_factor_keys: factorKeys,
+        additional_factor_keys: additionalFactorKeys.size > 0 ? Array.from(additionalFactorKeys) : undefined,
         ...(blacklistEnabled && stockPoolPath ? { stock_pool: stockPoolPath } : {}),
         strategy_id: newTask.strategy_id || undefined,
         strategy_params: Object.keys(newTask.strategy_params).length > 0 ? newTask.strategy_params : undefined,
         execution_algo: newTask.execution_algo || undefined,
         execution_algo_params: Object.keys(newTask.execution_algo_params).length > 0 ? newTask.execution_algo_params : undefined,
+        enable_sector_hmm: newTask.enable_sector_hmm || undefined,
+        hmm_model_version_id: newTask.enable_sector_hmm ? (newTask.hmm_model_version_id || undefined) : undefined,
+        hmm_signal_preset: newTask.enable_sector_hmm ? (newTask.hmm_signal_preset || undefined) : undefined,
       };
       const res = await fetch(`${API}/quantevolver/evolution/tasks`, {
         method: "POST",
@@ -545,26 +605,30 @@ export default function EvolutionDashboard() {
           // 有因子验证问题 — 弹出处理弹窗
           setFactorValidation({ taskId: data.task_id, validation: data.factor_validation });
           setShowCreateTask(false);
-          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {} });
+          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A" });
           setSotaPreview(null);
           setDetectedTaskType("none");
           setSelectedFactorsForEvo(new Set());
           setSelectedModelForEvo("");
           setShowCustomizeFactors(false);
           setShowCustomizeModel(false);
+          setShowFactorLibrary(false);
+          setAdditionalFactorKeys(new Set());
           setCorrPairs([]); setCorrAnalyzed(false); setCorrLoading(false); setFactorsToRemove(new Set());
           fetchTasks();
           setActiveTaskId(data.task_id);
         } else {
           alert("演进任务创建成功并已在后台启动！");
           setShowCreateTask(false);
-          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {} });
+          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A" });
           setSotaPreview(null);
           setDetectedTaskType("none");
           setSelectedFactorsForEvo(new Set());
           setSelectedModelForEvo("");
           setShowCustomizeFactors(false);
           setShowCustomizeModel(false);
+          setShowFactorLibrary(false);
+          setAdditionalFactorKeys(new Set());
           setCorrPairs([]); setCorrAnalyzed(false); setCorrLoading(false); setFactorsToRemove(new Set());
           fetchTasks();
           setActiveTaskId(data.task_id);
@@ -600,19 +664,31 @@ export default function EvolutionDashboard() {
   // 恢复任务
   const handleResumeTask = async () => {
     if (!showResumeDialog) return;
+    const resumingTaskId = showResumeDialog;
     try {
-      const res = await fetch(`${API}/quantevolver/evolution/tasks/${showResumeDialog}/resume`, {
+      const res = await fetch(`${API}/quantevolver/evolution/tasks/${resumingTaskId}/resume`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ additional_loops: additionalLoops }),
       });
       const data = await res.json();
       if (data.status === "success") {
-        appendLogs([`[System] 任务 ${showResumeDialog} 已恢复演进`]);
+        appendLogs([`[System] 任务 ${resumingTaskId} 已恢复演进`]);
         setShowResumeDialog(null);
         setAdditionalLoops(0);
-        fetchTasks();
         setActiveTaskId(data.task_id);
+        // 延迟刷新：等待 background task 执行结果反映到 DB
+        setTimeout(async () => {
+          const freshRes = await fetch(`${API}/quantevolver/evolution/tasks`);
+          const freshData = await freshRes.json();
+          if (freshData.tasks) {
+            const resumedTask = freshData.tasks.find((t: any) => t.task_id === resumingTaskId);
+            if (resumedTask && resumedTask.status === "failed") {
+              appendLogs([`[Error] 任务 ${resumingTaskId} 恢复后立即失败，请检查后端日志`]);
+            }
+            setTasks(freshData.tasks);
+          }
+        }, 3000);
       } else {
         alert("恢复失败: " + (data.detail || "未知错误"));
       }
@@ -642,7 +718,112 @@ export default function EvolutionDashboard() {
   const handleForkCancel = () => {
     setShowForkDialog(null);
     setIsForking(false);
+    setForkType("evolution");
     setForkForm({ task_name: "", max_loops: 10, evolution_guidance: "", evolution_mode: "auto", inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {} });
+    setStrategyEvoLoops([]);
+    setStrategyEvoExecutionMode("serial");
+  };
+
+  // 策略演进 Loop 配置管理
+  const addStrategyEvoLoop = () => {
+    const sourceLoop = loops.find(l => l.loop_index === showForkDialog);
+    const newLoop = {
+      loop_index: strategyEvoLoops.length + 1,
+      label: `Loop ${strategyEvoLoops.length + 1}`,
+      strategy_params: {
+        topk: 50,
+        n_drop: 5,
+        hold_thresh: 2,
+        risk_degree: 0.95,
+      },
+      strategy_id: "",
+      execution_algo: "",
+      execution_algo_params: {},
+      enable_sector_hmm: false,
+      hmm_model_version_id: "",
+      hmm_signal_preset: "",
+      sector_blacklist: [],
+      stock_pool: "",
+    };
+    setStrategyEvoLoops([...strategyEvoLoops, newLoop]);
+  };
+
+  const removeStrategyEvoLoop = (index: number) => {
+    const newLoops = strategyEvoLoops.filter((_, i) => i !== index);
+    // 重新编号
+    const renumbered = newLoops.map((loop, i) => ({ ...loop, loop_index: i + 1 }));
+    setStrategyEvoLoops(renumbered);
+  };
+
+  const updateStrategyEvoLoop = (index: number, updates: any) => {
+    const newLoops = [...strategyEvoLoops];
+    newLoops[index] = { ...newLoops[index], ...updates };
+    setStrategyEvoLoops(newLoops);
+  };
+
+  // 从源 Loop 配置复制
+  const copyFromSourceLoop = () => {
+    const sourceLoop = loops.find(l => l.loop_index === showForkDialog);
+    if (!sourceLoop) return;
+
+    const config = sourceLoop.config_json || {};
+    const newLoop = {
+      loop_index: strategyEvoLoops.length + 1,
+      label: `Loop ${strategyEvoLoops.length + 1} (源配置)`,
+      strategy_params: {
+        topk: config.strategy_params?.topk || 50,
+        n_drop: config.strategy_params?.n_drop || 5,
+        hold_thresh: config.strategy_params?.hold_thresh || 2,
+        risk_degree: config.strategy_params?.risk_degree || 0.95,
+      },
+      strategy_id: config.strategy_id || "",
+      execution_algo: config.execution_algo || "",
+      execution_algo_params: {},
+      enable_sector_hmm: false,
+      hmm_model_version_id: "",
+      hmm_signal_preset: "",
+      sector_blacklist: [],
+      stock_pool: "",
+    };
+    setStrategyEvoLoops([...strategyEvoLoops, newLoop]);
+  };
+
+  // 策略演进提交
+  const handleStrategyEvoSubmit = async () => {
+    if (!activeTaskId || showForkDialog === null) return;
+    if (strategyEvoLoops.length === 0) {
+      alert("请至少配置一个策略回测 Loop");
+      return;
+    }
+
+    setIsForking(true);
+    try {
+      const res = await fetch(`${API}/quantevolver/evolution/tasks/${activeTaskId}/strategy-fork`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from_loop_index: showForkDialog,
+          task_name: forkForm.task_name || undefined,
+          loops: strategyEvoLoops,
+          execution_mode: strategyEvoExecutionMode,
+          inherit_history: forkForm.inherit_history,
+        }),
+      });
+      const data = await res.json();
+      if (data.status === "success") {
+        appendLogs([`[System] 已从 Loop ${showForkDialog} 创建策略演进任务 ${data.task_id}`]);
+        appendLogs([`[System] 共 ${data.total_loops} 个策略回测 Loop，执行方式: ${data.execution_mode}`]);
+        handleForkCancel();
+        fetchTasks();
+        setTimeout(() => setActiveTaskId(data.task_id), 500);
+      } else {
+        alert("策略演进创建失败: " + (data.detail || "未知错误"));
+      }
+    } catch (err: any) {
+      alert("策略演进创建失败: " + (err?.message || "网络错误"));
+    } finally {
+      setIsForking(false);
+    }
   };
 
   const handleForkSubmit = async () => {
@@ -790,6 +971,24 @@ export default function EvolutionDashboard() {
     }
   }, [activeTaskId]);
 
+  // 重试失败的 Loop
+  const handleRetryLoop = async (taskId: string, loopIndex: number) => {
+    if (!confirm("确定要重试 Loop " + loopIndex + " 的回测吗？（跳过训练）")) return;
+    try {
+      const res = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}/loops/${loopIndex}/retry`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        alert("重试失败: " + (data.detail || "未知错误"));
+        return;
+      }
+      appendLogs([`[INFO] Loop ${loopIndex} 重试已提交`]);
+      fetchTasks();
+      if (activeTaskId) fetchTaskDetail(activeTaskId);
+    } catch (err: any) {
+      alert("重试失败: " + (err?.message || "网络错误"));
+    }
+  };
+
   // 删除任务
   const handleDeleteTask = async (taskId: string, taskName: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -859,6 +1058,7 @@ export default function EvolutionDashboard() {
             </button>
             <button
               onClick={() => { fetchTasks(); if (activeTaskId) fetchTaskDetail(activeTaskId); }}
+              title={hasRunningTask ? "自动刷新: 每10秒" : "自动刷新: 每60秒（无活跃任务）"}
               style={{
                 padding: "6px 14px",
                 backgroundColor: "#fff",
@@ -874,6 +1074,9 @@ export default function EvolutionDashboard() {
               }}>
               <RefreshCw size={12} />
               刷新
+              <span style={{ fontSize: "10px", color: "#94a3b8", fontWeight: 400 }}>
+                {hasRunningTask ? "10s" : "60s"}
+              </span>
             </button>
           </div>
 
@@ -1025,6 +1228,8 @@ export default function EvolutionDashboard() {
           loops={loops}
           activeLoopIndex={activeLoopIndex}
           onSelectLoop={handleSelectLoop}
+          onRetryLoop={handleRetryLoop}
+          taskType={tasks.find(t => t.task_id === activeTaskId)?.task_type}
         />
 
         {/* Loop 详情看板 — React.memo 子组件 */}
@@ -1040,6 +1245,7 @@ export default function EvolutionDashboard() {
           configDiffLines={configDiffLines}
           onSyncAssets={handleSyncAssets}
           onForkFromLoop={handleForkFromLoop}
+          taskType={tasks.find(t => t.task_id === activeTaskId)?.task_type}
         />
 
       </div>
@@ -1090,6 +1296,8 @@ export default function EvolutionDashboard() {
                         setSelectedModelForEvo("");
                         setShowCustomizeFactors(false);
                         setShowCustomizeModel(false);
+                        setShowFactorLibrary(false);
+                        setAdditionalFactorKeys(new Set());
                         setCorrPairs([]);
                         setCorrAnalyzed(false);
                         setCorrLoading(false);
@@ -1170,6 +1378,8 @@ export default function EvolutionDashboard() {
                         setSelectedModelForEvo("");
                         setShowCustomizeFactors(false);
                         setShowCustomizeModel(false);
+                        setShowFactorLibrary(false);
+                        setAdditionalFactorKeys(new Set());
                         setCorrPairs([]);
                         setCorrAnalyzed(false);
                         setCorrLoading(false);
@@ -1654,6 +1864,42 @@ export default function EvolutionDashboard() {
                 />
               </div>
 
+              {/* ── 自定义添加因子（从因子库） ── */}
+              <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", overflow: "hidden", backgroundColor: "#f8fafc" }}>
+                <button
+                  type="button"
+                  onClick={() => setShowFactorLibrary(!showFactorLibrary)}
+                  style={{
+                    width: "100%", padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center",
+                    background: "none", border: "none", cursor: "pointer", fontSize: "13px", fontWeight: 700, color: "#334155",
+                  }}
+                >
+                  <span>
+                    自定义添加因子（从因子库）
+                    {additionalFactorKeys.size > 0 && (
+                      <span style={{ marginLeft: "8px", fontSize: "12px", color: "#059669", fontWeight: 600 }}>
+                        已添加 {additionalFactorKeys.size} 个因子
+                      </span>
+                    )}
+                  </span>
+                  <span style={{ fontSize: "12px", color: "#94a3b8" }}>{showFactorLibrary ? "▲" : "▼"}</span>
+                </button>
+                {showFactorLibrary && (
+                  <div style={{ borderTop: "1px solid #e2e8f0" }}>
+                    <div style={{ padding: "8px 16px", backgroundColor: "#eff6ff", fontSize: "12px", color: "#1e40af" }}>
+                      从因子库中选择额外因子，这些因子将与来源默认因子合并
+                    </div>
+                    <div style={{ maxHeight: "400px", overflow: "auto" }}>
+                      <FactorList
+                        mode="selection"
+                        selectedFactors={additionalFactorKeys}
+                        onFactorSelect={(selected: Set<string>) => setAdditionalFactorKeys(selected)}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* 交易策略 & 执行算法选择 */}
               <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", padding: "16px", backgroundColor: "#f8fafc" }}>
                 <div style={{ fontSize: "13px", fontWeight: 700, color: "#334155", marginBottom: "12px" }}>交易策略 & 执行算法（可选）</div>
@@ -1790,6 +2036,84 @@ export default function EvolutionDashboard() {
               onPoolPathChange={setStockPoolPath}
             />
 
+            {/* ── HMM 模型选择器 ── */}
+            <div style={{ padding: "12px 16px", backgroundColor: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: newTask.enable_sector_hmm ? "12px" : "0" }}>
+                <input
+                  type="checkbox"
+                  id="enable-sector-hmm"
+                  checked={newTask.enable_sector_hmm}
+                  onChange={e => {
+                    const enabled = e.target.checked;
+                    setNewTask(prev => ({ ...prev, enable_sector_hmm: enabled, hmm_model_version_id: "" }));
+                    setHmmSelectedConfigId("");
+                    setHmmSnapshots([]);
+                    if (enabled) fetchHmmConfigs();
+                  }}
+                />
+                <label htmlFor="enable-sector-hmm" style={{ fontSize: "13px", fontWeight: 600, color: "#475569" }}>
+                  启用行业 HMM 热度调整
+                </label>
+              </div>
+              {newTask.enable_sector_hmm && (
+                <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                  <div>
+                    <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#6b7280", marginBottom: "4px" }}>选择配置版本</label>
+                    <select
+                      value={hmmSelectedConfigId}
+                      onChange={e => {
+                        const cid = e.target.value;
+                        setHmmSelectedConfigId(cid);
+                        setNewTask(prev => ({ ...prev, hmm_model_version_id: "" }));
+                        fetchHmmSnapshots(cid);
+                      }}
+                      style={{ width: "100%", padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box", backgroundColor: "white" }}
+                    >
+                      <option value="">-- 选择配置 --</option>
+                      {hmmConfigs.map((c: any) => (
+                        <option key={c.config_id} value={c.config_id}>{c.display_name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#6b7280", marginBottom: "4px" }}>选择时间快照</label>
+                    <select
+                      value={newTask.hmm_model_version_id}
+                      onChange={e => setNewTask(prev => ({ ...prev, hmm_model_version_id: e.target.value }))}
+                      disabled={!hmmSelectedConfigId}
+                      style={{ width: "100%", padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box", backgroundColor: hmmSelectedConfigId ? "white" : "#f1f5f9" }}
+                    >
+                      <option value="">-- 选择快照 --</option>
+                      {hmmSnapshots.map((s: any) => (
+                        <option key={s.snapshot_id} value={s.snapshot_id}>
+                          {new Date(s.trained_at).toLocaleString("zh-CN")} ({s.sector_count} 行业)
+                        </option>
+                      ))}
+                    </select>
+                    {hmmSelectedConfigId && hmmSnapshots.length === 0 && (
+                      <div style={{ fontSize: "11px", color: "#d97706", marginTop: "4px" }}>该配置暂无已完成的快照</div>
+                    )}
+                  </div>
+                </div>
+                {/* 信号系数档位选择 */}
+                <div style={{ marginTop: "12px" }}>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#6b7280", marginBottom: "6px" }}>信号系数档位</label>
+                  <div style={{ display: "flex", gap: "12px" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "13px", color: "#374151" }}>
+                      <input type="radio" name="hmm_preset" value="preset_A" checked={newTask.hmm_signal_preset === "preset_A"} onChange={() => setNewTask(prev => ({ ...prev, hmm_signal_preset: "preset_A" }))} />
+                      保守档（热态+5% / 冷态-4%）
+                    </label>
+                    <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "13px", color: "#374151" }}>
+                      <input type="radio" name="hmm_preset" value="preset_B" checked={newTask.hmm_signal_preset === "preset_B"} onChange={() => setNewTask(prev => ({ ...prev, hmm_signal_preset: "preset_B" }))} />
+                      激进档（热态+10% / 冷态-8%）
+                    </label>
+                  </div>
+                </div>
+                </>
+              )}
+            </div>
+
             <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px", marginTop: "24px", paddingTop: "16px", borderTop: "1px solid #f1f5f9" }}>
               <button
                 onClick={() => setShowCreateTask(false)}
@@ -1860,15 +2184,61 @@ export default function EvolutionDashboard() {
         }}>
           <div style={{
             backgroundColor: "#fff", padding: "24px", borderRadius: "12px",
-            width: "520px", maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)"
+            width: forkType === "strategy_evo" ? "640px" : "520px",
+            maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)"
           }}>
-            <h2 style={{ margin: "0 0 16px", fontSize: "18px", color: "#1e293b", display: "flex", alignItems: "center", gap: "8px" }}>
-              <GitMerge size={20} color="#8b5cf6" />
-              以 Loop {showForkDialog} 为基础演进
-            </h2>
-            <p style={{ margin: "0 0 16px", fontSize: "13px", color: "#64748b" }}>
-              将使用该 Loop 的因子+模型配置创建全新演进任务，Loop 1 为初始回测建立基线。
-            </p>
+            {/* Fork 类型选择 */}
+            <div style={{ display: "flex", gap: "8px", marginBottom: "16px", borderBottom: "1px solid #e5e7eb", paddingBottom: "16px" }}>
+              <button
+                onClick={() => setForkType("evolution")}
+                style={{
+                  flex: 1,
+                  padding: "10px 16px",
+                  borderRadius: "8px",
+                  border: forkType === "evolution" ? "2px solid #8b5cf6" : "1px solid #cbd5e1",
+                  backgroundColor: forkType === "evolution" ? "#f5f3ff" : "#fff",
+                  fontWeight: forkType === "evolution" ? 600 : 400,
+                  fontSize: "14px",
+                  cursor: "pointer",
+                  transition: "all 0.2s",
+                  color: forkType === "evolution" ? "#7c3aed" : "#64748b",
+                }}>
+                普通演进
+              </button>
+              <button
+                onClick={() => {
+                  setForkType("strategy_evo");
+                  // 初始化一个默认 Loop
+                  if (strategyEvoLoops.length === 0) {
+                    addStrategyEvoLoop();
+                  }
+                }}
+                style={{
+                  flex: 1,
+                  padding: "10px 16px",
+                  borderRadius: "8px",
+                  border: forkType === "strategy_evo" ? "2px solid #f59e0b" : "1px solid #cbd5e1",
+                  backgroundColor: forkType === "strategy_evo" ? "#fffbeb" : "#fff",
+                  fontWeight: forkType === "strategy_evo" ? 600 : 400,
+                  fontSize: "14px",
+                  cursor: "pointer",
+                  transition: "all 0.2s",
+                  color: forkType === "strategy_evo" ? "#d97706" : "#64748b",
+                }}>
+                策略演进（跳过训练）
+              </button>
+            </div>
+
+            {forkType === "evolution" ? (
+              <>
+                {/* 原有普通演进内容 */}
+                <h2 style={{ margin: "0 0 16px", fontSize: "18px", color: "#1e293b", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <GitMerge size={20} color="#8b5cf6" />
+                  以 Loop {showForkDialog} 为基础演进
+                </h2>
+                <p style={{ margin: "0 0 16px", fontSize: "13px", color: "#64748b" }}>
+                  将使用该 Loop 的因子+模型配置创建全新演进任务，Loop 1 为初始回测建立基线。
+                </p>
             <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
               <div>
                 <label style={{ display: "block", fontSize: "13px", fontWeight: 600, color: "#475569", marginBottom: "4px" }}>
@@ -1982,14 +2352,274 @@ export default function EvolutionDashboard() {
                 )}
               </div>
             </div>
+            </>
+            ) : (
+              <>
+                {/* 策略演进配置表单 */}
+                <h2 style={{ margin: "0 0 16px", fontSize: "18px", color: "#1e293b", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <Activity size={20} color="#f59e0b" />
+                  策略演进（跳过训练）
+                </h2>
+                <p style={{ margin: "0 0 16px", fontSize: "13px", color: "#64748b" }}>
+                  复用 Loop {showForkDialog} 的已训练模型，仅修改策略参数进行批量回测。
+                </p>
+
+                {/* 模型来源信息 */}
+                <div style={{ padding: "12px", backgroundColor: "#f8fafc", borderRadius: "8px", marginBottom: "16px", border: "1px solid #e5e7eb" }}>
+                  <div style={{ fontSize: "12px", color: "#64748b", marginBottom: "4px" }}>
+                    <strong>模型来源：</strong> Loop {showForkDialog}
+                  </div>
+                  {(() => {
+                    const sourceLoop = loops.find(l => l.loop_index === showForkDialog);
+                    if (!sourceLoop) return null;
+                    const config = sourceLoop.config_json || {};
+                    return (
+                      <div style={{ fontSize: "12px", color: "#475569" }}>
+                        模型 ID: {config.model_id || "N/A"} | 因子数: {config.factor_names?.length || 0}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* 执行方式 */}
+                <div style={{ marginBottom: "16px" }}>
+                  <label style={{ display: "block", fontSize: "13px", fontWeight: 600, color: "#475569", marginBottom: "6px" }}>
+                    执行方式
+                  </label>
+                  <div style={{ display: "flex", gap: "12px" }}>
+                    <button
+                      onClick={() => setStrategyEvoExecutionMode("serial")}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "8px",
+                        border: strategyEvoExecutionMode === "serial" ? "2px solid #8b5cf6" : "1px solid #cbd5e1",
+                        backgroundColor: strategyEvoExecutionMode === "serial" ? "#f5f3ff" : "#fff",
+                        fontWeight: strategyEvoExecutionMode === "serial" ? 600 : 400,
+                        cursor: "pointer",
+                      }}
+                    >
+                      串行（逐个执行）
+                    </button>
+                    <button
+                      onClick={() => setStrategyEvoExecutionMode("parallel")}
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        borderRadius: "8px",
+                        border: strategyEvoExecutionMode === "parallel" ? "2px solid #8b5cf6" : "1px solid #cbd5e1",
+                        backgroundColor: strategyEvoExecutionMode === "parallel" ? "#f5f3ff" : "#fff",
+                        fontWeight: strategyEvoExecutionMode === "parallel" ? 600 : 400,
+                        cursor: "pointer",
+                      }}
+                    >
+                      并行（同时执行）
+                    </button>
+                  </div>
+                </div>
+
+                {/* Loop 配置列表 */}
+                <div style={{ marginBottom: "16px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                    <label style={{ fontSize: "13px", fontWeight: 600, color: "#475569" }}>
+                      策略回测 Loop 配置
+                    </label>
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <button
+                        onClick={copyFromSourceLoop}
+                        style={{
+                          padding: "6px 12px",
+                          backgroundColor: "#e0e7ff",
+                          color: "#4338ca",
+                          border: "none",
+                          borderRadius: "6px",
+                          fontSize: "12px",
+                          fontWeight: 500,
+                          cursor: "pointer",
+                        }}
+                      >
+                        从源配置复制
+                      </button>
+                      <button
+                        onClick={addStrategyEvoLoop}
+                        style={{
+                          padding: "6px 12px",
+                          backgroundColor: "#8b5cf6",
+                          color: "#fff",
+                          border: "none",
+                          borderRadius: "6px",
+                          fontSize: "12px",
+                          fontWeight: 500,
+                          cursor: "pointer",
+                        }}
+                      >
+                        + 添加 Loop
+                      </button>
+                    </div>
+                  </div>
+
+                  {strategyEvoLoops.map((loop, index) => (
+                    <div
+                      key={index}
+                      style={{
+                        border: "1px solid #e5e7eb",
+                        borderRadius: "8px",
+                        padding: "12px",
+                        marginBottom: "12px",
+                        backgroundColor: "#fff",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                        <input
+                          type="text"
+                          value={loop.label || ""}
+                          onChange={e => updateStrategyEvoLoop(index, { label: e.target.value })}
+                          placeholder={`Loop ${loop.loop_index}`}
+                          style={{
+                            flex: 1,
+                            padding: "6px 10px",
+                            borderRadius: "6px",
+                            border: "1px solid #cbd5e1",
+                            fontSize: "14px",
+                            marginRight: "12px",
+                          }}
+                        />
+                        {strategyEvoLoops.length > 1 && (
+                          <button
+                            onClick={() => removeStrategyEvoLoop(index)}
+                            style={{
+                              padding: "4px 8px",
+                              backgroundColor: "#fee2e2",
+                              color: "#dc2626",
+                              border: "none",
+                              borderRadius: "4px",
+                              fontSize: "12px",
+                              cursor: "pointer",
+                            }}
+                          >
+                            删除
+                          </button>
+                        )}
+                      </div>
+
+                      {/* 策略参数 */}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "8px", marginBottom: "8px" }}>
+                        <div>
+                          <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>topk</label>
+                          <input
+                            type="number"
+                            value={loop.strategy_params?.topk || 50}
+                            onChange={e => updateStrategyEvoLoop(index, { strategy_params: { ...loop.strategy_params, topk: parseInt(e.target.value) || 50 } })}
+                            style={{ width: "100%", padding: "4px 6px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px" }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>n_drop</label>
+                          <input
+                            type="number"
+                            value={loop.strategy_params?.n_drop || 5}
+                            onChange={e => updateStrategyEvoLoop(index, { strategy_params: { ...loop.strategy_params, n_drop: parseInt(e.target.value) || 5 } })}
+                            style={{ width: "100%", padding: "4px 6px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px" }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>hold_thresh</label>
+                          <input
+                            type="number"
+                            value={loop.strategy_params?.hold_thresh || 2}
+                            onChange={e => updateStrategyEvoLoop(index, { strategy_params: { ...loop.strategy_params, hold_thresh: parseInt(e.target.value) || 2 } })}
+                            style={{ width: "100%", padding: "4px 6px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px" }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>risk_degree</label>
+                          <input
+                            type="number"
+                            step="0.05"
+                            min="0.1"
+                            max="1.0"
+                            value={loop.strategy_params?.risk_degree || 0.95}
+                            onChange={e => updateStrategyEvoLoop(index, { strategy_params: { ...loop.strategy_params, risk_degree: parseFloat(e.target.value) || 0.95 } })}
+                            style={{ width: "100%", padding: "4px 6px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px" }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* 执行算法和 HMM */}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "8px" }}>
+                        <div>
+                          <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>执行算法</label>
+                          <select
+                            value={loop.execution_algo || ""}
+                            onChange={e => updateStrategyEvoLoop(index, { execution_algo: e.target.value })}
+                            style={{ width: "100%", padding: "4px 6px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px" }}
+                          >
+                            <option value="">继承源任务</option>
+                            {executionAlgoCatalog.map(a => (
+                              <option key={a.algo_code} value={a.algo_code}>{a.algo_name || a.algo_code}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", paddingTop: "16px" }}>
+                          <input
+                            type="checkbox"
+                            id={`hmm-${index}`}
+                            checked={loop.enable_sector_hmm || false}
+                            onChange={e => updateStrategyEvoLoop(index, { enable_sector_hmm: e.target.checked })}
+                            style={{ marginRight: "6px" }}
+                          />
+                          <label htmlFor={`hmm-${index}`} style={{ fontSize: "12px", color: "#64748b", cursor: "pointer" }}>
+                            启用 HMM 行业热度调整
+                          </label>
+                        </div>
+                      </div>
+
+                      {loop.enable_sector_hmm && (
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", padding: "8px", backgroundColor: "#fffbeb", borderRadius: "6px", marginBottom: "8px" }}>
+                          <div>
+                            <label style={{ display: "block", fontSize: "11px", color: "#92400e", marginBottom: "2px" }}>HMM 模型版本</label>
+                            <select
+                              value={loop.hmm_model_version_id || ""}
+                              onChange={e => updateStrategyEvoLoop(index, { hmm_model_version_id: e.target.value })}
+                              style={{ width: "100%", padding: "4px 6px", borderRadius: "4px", border: "1px solid #fcd34d", fontSize: "12px" }}
+                            >
+                              <option value="">选择模型...</option>
+                              {hmmSnapshots.map(s => (
+                                <option key={s.snapshot_id} value={s.snapshot_id}>{s.snapshot_id}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label style={{ display: "block", fontSize: "11px", color: "#92400e", marginBottom: "2px" }}>信号预设</label>
+                            <select
+                              value={loop.hmm_signal_preset || ""}
+                              onChange={e => updateStrategyEvoLoop(index, { hmm_signal_preset: e.target.value })}
+                              style={{ width: "100%", padding: "4px 6px", borderRadius: "4px", border: "1px solid #fcd34d", fontSize: "12px" }}
+                            >
+                              <option value="">选择预设...</option>
+                              <option value="preset_A">预设 A (保守, 最高+5%)</option>
+                              <option value="preset_B">预设 B (激进, 最高+10%)</option>
+                            </select>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
             <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px", marginTop: "20px" }}>
               <button onClick={handleForkCancel}
                 style={{ padding: "8px 16px", backgroundColor: "#f1f5f9", color: "#475569", border: "none", borderRadius: "6px", fontSize: "14px", fontWeight: 600, cursor: "pointer" }}>
                 取消
               </button>
-              <button onClick={handleForkSubmit} disabled={isForking}
-                style={{ padding: "8px 16px", backgroundColor: "#8b5cf6", color: "#fff", border: "none", borderRadius: "6px", fontSize: "14px", fontWeight: 600, cursor: "pointer", opacity: isForking ? 0.6 : 1 }}>
-                {isForking ? "创建中..." : "创建分叉任务"}
+              <button
+                onClick={forkType === "strategy_evo" ? handleStrategyEvoSubmit : handleForkSubmit}
+                disabled={isForking}
+                style={{ padding: "8px 16px", backgroundColor: forkType === "strategy_evo" ? "#f59e0b" : "#8b5cf6", color: "#fff", border: "none", borderRadius: "6px", fontSize: "14px", fontWeight: 600, cursor: "pointer", opacity: isForking ? 0.6 : 1 }}
+              >
+                {isForking ? "创建中..." : (forkType === "strategy_evo" ? `创建策略演进任务 (${strategyEvoLoops.length} Loops)` : "创建分叉任务")}
               </button>
             </div>
           </div>
