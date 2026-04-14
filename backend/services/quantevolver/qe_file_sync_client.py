@@ -65,9 +65,29 @@ class QEFileSyncClient:
             result = resp.json()
             logger.info(
                 f"[QESync] 实验 {exp_id} 文件同步完成: "
-                f"{result.get('success_count', 0)}/{result.get('total', 0)} 成功"
+                f"{result.get('success_count', 0)}/{result.get('total', 0)} 成功, "
+                f"success={result.get('success')}"
             )
             return result
+        except requests.exceptions.HTTPError as he:
+            status_code = he.response.status_code if he.response is not None else "?"
+            body = ""
+            try:
+                body = he.response.text[:500] if he.response is not None else ""
+            except Exception:
+                pass
+            logger.error(
+                f"[QESync] 文件同步HTTP错误: {exp_id}, status={status_code}, body={body}"
+            )
+            return {
+                "success": False,
+                "exp_id": exp_id,
+                "error": f"HTTP {status_code}: {body[:200]}",
+                "uploaded": [],
+                "failed": list(files.keys()),
+                "total": len(files),
+                "success_count": 0,
+            }
         except requests.exceptions.ConnectionError:
             logger.warning(
                 f"[QESync] RDAgent API ({self.api_base_url}) 无法连接，"

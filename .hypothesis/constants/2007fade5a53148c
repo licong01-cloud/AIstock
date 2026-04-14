@@ -1,0 +1,4 @@
+# file: F:\Dev\AIstock\backend\quant_models\hmm\infer.py
+# hypothesis_version: 6.151.10
+
+['--as-of', '--freq', '--symbol', '1d', 'HMM_DAILY', '__main__']

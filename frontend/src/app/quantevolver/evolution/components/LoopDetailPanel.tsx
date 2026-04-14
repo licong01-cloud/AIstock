@@ -6,39 +6,15 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import type { Loop } from "./TopologyPanel";
+import LoopMetricsComparison from "./LoopMetricsComparison";
+import { AllStocksTable } from "../../components/AllStocksTable";
+import { FactorAnalysisPanel } from "../../components/FactorAnalysisPanel";
+import { StrategyConfigCard } from "../../components/StrategyConfigCard";
 
 const IcSeriesChart = dynamic(() => import("../../components/charts/IcSeriesChart"), { ssr: false });
 const LossCurveChart = dynamic(() => import("../../components/charts/LossCurveChart"), { ssr: false });
 const ReturnCurveChart = dynamic(() => import("../../components/charts/ReturnCurveChart"), { ssr: false });
 const EvolutionTrajectory = dynamic(() => import("../../components/EvolutionTrajectory"), { ssr: false });
-
-function StockTradeDetail({ trades }: { trades?: Array<{ date: string; type: string; price: number; amount: number; pnl: number }> }) {
-  if (!trades || trades.length === 0) return <div style={{ padding: "12px", color: "#94a3b8", fontSize: 12 }}>暂无交易记录</div>;
-  return (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace", marginTop: 6 }}>
-      <thead>
-        <tr style={{ borderBottom: "1px solid #e2e8f0" }}>
-          <th style={{ padding: "4px 8px", color: "#64748b", textAlign: "left" }}>日期</th>
-          <th style={{ padding: "4px 8px", color: "#64748b", textAlign: "left" }}>操作</th>
-          <th style={{ padding: "4px 8px", color: "#64748b", textAlign: "right" }}>价格</th>
-          <th style={{ padding: "4px 8px", color: "#64748b", textAlign: "right" }}>金额</th>
-          <th style={{ padding: "4px 8px", color: "#64748b", textAlign: "right" }}>本次盈亏</th>
-        </tr>
-      </thead>
-      <tbody>
-        {trades.map((t, i) => (
-          <tr key={i} style={{ borderBottom: "1px solid #f8fafc" }}>
-            <td style={{ padding: "4px 8px", color: "#475569" }}>{t.date}</td>
-            <td style={{ padding: "4px 8px", color: t.type === "buy" ? "#e53935" : "#22a35a", fontWeight: 600 }}>{t.type === "buy" ? "买入" : "卖出"}</td>
-            <td style={{ padding: "4px 8px", textAlign: "right", color: "#334155" }}>{t.price.toFixed(4)}</td>
-            <td style={{ padding: "4px 8px", textAlign: "right", color: "#334155" }}>{t.amount.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-            <td style={{ padding: "4px 8px", textAlign: "right", color: t.pnl == null ? "#94a3b8" : t.pnl >= 0 ? "#e53935" : "#22a35a", fontWeight: 600 }}>{t.pnl == null ? "-" : (t.pnl >= 0 ? "+" : "") + t.pnl.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
 
 export function getTaskStatusInfo(status: string): { color: string; bgColor: string; label: string } {
   switch (status) {
@@ -56,6 +32,13 @@ export function getTaskStatusInfo(status: string): { color: string; bgColor: str
   }
 }
 
+interface TaskInfo {
+  strategy_id?: string;
+  execution_algo?: string;
+  unfilled_handler?: string;
+  enable_sector_hmm?: boolean;
+}
+
 interface LoopDetailPanelProps {
   activeLoopData: Loop | undefined;
   prevLoopData: Loop | undefined;
@@ -65,10 +48,14 @@ interface LoopDetailPanelProps {
   onSetDetailTab: (tab: string) => void;
   enhancedMetrics: any;
   activeTaskId: string | null;
+  activeTask?: TaskInfo;
   configDiffLines: string[];
   onSyncAssets: (loopIndex: number) => void;
   onForkFromLoop?: (loopIndex: number) => void;
-  taskType?: string; // 任务类型：evolution 或 strategy_evo
+  taskType?: string;
+  // Loop 指标对比表数据（从 TopologyPanel 移到轨迹视图下方）
+  loops?: Loop[];
+  onLoopSelect?: (index: number) => void;
 }
 
 const cardStyle: React.CSSProperties = {
@@ -115,12 +102,14 @@ export default React.memo(function LoopDetailPanel({
   onSetDetailTab,
   enhancedMetrics,
   activeTaskId,
+  activeTask,
   configDiffLines,
   onSyncAssets,
   onForkFromLoop,
   taskType,
+  loops,
+  onLoopSelect,
 }: LoopDetailPanelProps) {
-  const [expandedStock, setExpandedStock] = React.useState<string | null>(null);
 
   // 策略演进任务：隐藏训练过程 Tab 和相关内容
   const isStrategyEvo = taskType === "strategy_evo";
@@ -181,8 +170,16 @@ export default React.memo(function LoopDetailPanel({
       </div>
 
       {rightPanelView === "trajectory" ? (
-        <div style={{ flex: 1, overflowY: "auto", padding: "24px", backgroundColor: "#fafaf9" }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "24px", backgroundColor: "#fafaf9", display: "flex", flexDirection: "column", gap: "16px" }}>
           <EvolutionTrajectory taskId={activeTaskId} />
+          {loops && loops.length > 0 && (
+            <LoopMetricsComparison
+              loops={loops}
+              taskType={taskType}
+              onLoopSelect={onLoopSelect}
+              selectedLoopIndex={activeLoopData?.loop_index}
+            />
+          )}
         </div>
       ) : activeLoopData ? (
         <>
@@ -206,11 +203,39 @@ export default React.memo(function LoopDetailPanel({
 
           <div style={{ flex: 1, overflowY: "auto", padding: "24px", display: "flex", flexDirection: "column", gap: "24px", backgroundColor: "#fafaf9" }}>
             {detailTab === "overview" && (
+              <>
               <OverviewContent
                 activeLoopData={activeLoopData}
                 prevLoopData={prevLoopData}
                 configDiffLines={configDiffLines}
+                activeTask={activeTask}
               />
+              {/* 绝对收益指标（与单次实验详情页对齐） */}
+              {enhancedMetrics?.absolute_returns && (
+                <div style={{ backgroundColor: "#fff", borderRadius: 8, border: "1px solid #e2e8f0", padding: 20 }}>
+                  <h3 style={{ margin: "0 0 16px", fontSize: 13, fontWeight: 700, color: "#059669", textTransform: "uppercase", letterSpacing: "0.05em" }}>绝对收益</h3>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
+                    {[
+                      { label: "初始资金", value: enhancedMetrics.absolute_returns.initial_cash != null ? `${(enhancedMetrics.absolute_returns.initial_cash / 10000).toFixed(0)}万` : "-" },
+                      { label: "最终总资产", value: enhancedMetrics.absolute_returns.final_total_value != null ? `${(enhancedMetrics.absolute_returns.final_total_value / 10000).toFixed(1)}万` : "-" },
+                      { label: "CAGR", value: enhancedMetrics.absolute_returns.cagr != null ? `${(enhancedMetrics.absolute_returns.cagr * 100).toFixed(1)}%` : "-" },
+                      { label: "最大回撤", value: enhancedMetrics.absolute_returns.max_drawdown != null ? `${(enhancedMetrics.absolute_returns.max_drawdown * 100).toFixed(1)}%` : "-" },
+                      { label: "夏普", value: enhancedMetrics.absolute_returns.sharpe != null ? enhancedMetrics.absolute_returns.sharpe.toFixed(2) : "-" },
+                      { label: "最终现金", value: enhancedMetrics.absolute_returns.final_cash != null ? `${(enhancedMetrics.absolute_returns.final_cash / 10000).toFixed(1)}万` : "-" },
+                      { label: "最终股票市值", value: enhancedMetrics.absolute_returns.final_stock_value != null ? `${(enhancedMetrics.absolute_returns.final_stock_value / 10000).toFixed(1)}万` : "-" },
+                      { label: "总收益率", value: enhancedMetrics.absolute_returns.total_return != null ? `${(enhancedMetrics.absolute_returns.total_return * 100).toFixed(1)}%` : "-" },
+                      { label: "波动率", value: enhancedMetrics.absolute_returns.volatility != null ? `${(enhancedMetrics.absolute_returns.volatility * 100).toFixed(1)}%` : "-" },
+                      { label: "资金利用率", value: enhancedMetrics.absolute_returns.capital_utilization != null ? `${(enhancedMetrics.absolute_returns.capital_utilization * 100).toFixed(1)}%` : "-" },
+                    ].map((m) => (
+                      <div key={m.label} style={{ textAlign: "center", padding: 10, backgroundColor: "#f0fdf4", borderRadius: 6, border: "1px solid #bbf7d0" }}>
+                        <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>{m.label}</div>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", fontFamily: "monospace", marginTop: 2 }}>{m.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              </>
             )}
 
             {/* IC 诊断 Tab */}
@@ -272,114 +297,28 @@ export default React.memo(function LoopDetailPanel({
                   )}
                 </div>
 
-                {/* Top 10 盈利股票 */}
-                {enhancedMetrics?.top_stocks && enhancedMetrics.top_stocks.length > 0 && (
-                  <div style={{ backgroundColor: "#fff", borderRadius: 8, border: "1px solid #e2e8f0", padding: 20 }}>
-                    <h3 style={{ margin: "0 0 16px", fontSize: 13, fontWeight: 700, color: "#e53935", textTransform: "uppercase", letterSpacing: "0.05em" }}>Top 10 盈利股票</h3>
-                    <div style={{ overflowX: "auto" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: "monospace" }}>
-                        <thead>
-                          <tr style={{ borderBottom: "2px solid #e2e8f0", textAlign: "left" }}>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600 }}>#</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600 }}>股票代码</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600, textAlign: "right" }}>累计盈亏</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600, textAlign: "right" }}>收益率</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600, textAlign: "right" }}>均价成本</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600, textAlign: "right" }}>最新价</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600, textAlign: "right" }}>持仓天数</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600 }}>首次持仓</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600 }}>最后持仓</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {enhancedMetrics.top_stocks.map((s: any, i: number) => (
-                            <React.Fragment key={s.code}>
-                              <tr
-                                style={{ borderBottom: "1px solid #f1f5f9", cursor: "pointer", backgroundColor: expandedStock === s.code ? "#fff7f7" : undefined }}
-                                onClick={() => setExpandedStock(expandedStock === s.code ? null : s.code)}
-                              >
-                                <td style={{ padding: "6px", color: "#94a3b8" }}>{i + 1}</td>
-                                <td style={{ padding: "6px", fontWeight: 600, color: "#0f172a" }}>{s.code} <span style={{ color: "#94a3b8", fontSize: 10 }}>{expandedStock === s.code ? "▲" : "▼"}</span></td>
-                                <td style={{ padding: "6px", textAlign: "right", color: "#e53935", fontWeight: 600 }}>
-                                  +{s.profit.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </td>
-                                <td style={{ padding: "6px", textAlign: "right", color: "#e53935" }}>
-                                  {(s.profit_pct * 100).toFixed(2)}%
-                                </td>
-                                <td style={{ padding: "6px", textAlign: "right", color: "#334155" }}>{s.avg_cost?.toFixed(2) ?? "-"}</td>
-                                <td style={{ padding: "6px", textAlign: "right", color: "#334155" }}>{s.last_price?.toFixed(2) ?? "-"}</td>
-                                <td style={{ padding: "6px", textAlign: "right", color: "#334155" }}>{s.holding_days}</td>
-                                <td style={{ padding: "6px", color: "#64748b" }}>{s.first_date}</td>
-                                <td style={{ padding: "6px", color: "#64748b" }}>{s.last_date}</td>
-                              </tr>
-                              {expandedStock === s.code && (
-                                <tr>
-                                  <td colSpan={9} style={{ padding: "0 0 8px 24px", backgroundColor: "#fafafa" }}>
-                                    <StockTradeDetail trades={enhancedMetrics.stock_trades?.[s.code]} />
-                                  </td>
-                                </tr>
-                              )}
-                            </React.Fragment>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                {/* 全部持仓股票（支持排序） */}
+                {enhancedMetrics?.all_stocks?.length > 0 ? (
+                  <AllStocksTable
+                    stocks={enhancedMetrics.all_stocks}
+                    stockTrades={enhancedMetrics?.stock_trades}
+                  />
+                ) : (enhancedMetrics?.top_stocks || enhancedMetrics?.bottom_stocks) ? (
+                  <AllStocksTable
+                    stocks={[...(enhancedMetrics?.top_stocks ?? []), ...(enhancedMetrics?.bottom_stocks ?? [])]}
+                    stockTrades={enhancedMetrics?.stock_trades}
+                  />
+                ) : (
+                  <div style={{ backgroundColor: "#fff", borderRadius: 8, border: "1px solid #e2e8f0", padding: 20, color: "#94a3b8", textAlign: "center" }}>
+                    暂无持仓数据
                   </div>
                 )}
 
-                {/* Bottom 10 亏损股票 */}
-                {enhancedMetrics?.bottom_stocks && enhancedMetrics.bottom_stocks.length > 0 && (
-                  <div style={{ backgroundColor: "#fff", borderRadius: 8, border: "1px solid #e2e8f0", padding: 20 }}>
-                    <h3 style={{ margin: "0 0 16px", fontSize: 13, fontWeight: 700, color: "#22a35a", textTransform: "uppercase", letterSpacing: "0.05em" }}>Top 10 亏损股票</h3>
-                    <div style={{ overflowX: "auto" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: "monospace" }}>
-                        <thead>
-                          <tr style={{ borderBottom: "2px solid #e2e8f0", textAlign: "left" }}>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600 }}>#</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600 }}>股票代码</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600, textAlign: "right" }}>累计亏损</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600, textAlign: "right" }}>亏损率</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600, textAlign: "right" }}>均价成本</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600, textAlign: "right" }}>最新价</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600, textAlign: "right" }}>持仓天数</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600 }}>首次持仓</th>
-                            <th style={{ padding: "8px 6px", color: "#64748b", fontWeight: 600 }}>最后持仓</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {enhancedMetrics.bottom_stocks.map((s: any, i: number) => (
-                            <React.Fragment key={s.code}>
-                              <tr
-                                style={{ borderBottom: "1px solid #f1f5f9", cursor: "pointer", backgroundColor: expandedStock === s.code ? "#f0fff4" : undefined }}
-                                onClick={() => setExpandedStock(expandedStock === s.code ? null : s.code)}
-                              >
-                                <td style={{ padding: "6px", color: "#94a3b8" }}>{i + 1}</td>
-                                <td style={{ padding: "6px", fontWeight: 600, color: "#0f172a" }}>{s.code} <span style={{ color: "#94a3b8", fontSize: 10 }}>{expandedStock === s.code ? "▲" : "▼"}</span></td>
-                                <td style={{ padding: "6px", textAlign: "right", color: "#22a35a", fontWeight: 600 }}>
-                                  {s.profit.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </td>
-                                <td style={{ padding: "6px", textAlign: "right", color: "#22a35a" }}>
-                                  {(s.profit_pct * 100).toFixed(2)}%
-                                </td>
-                                <td style={{ padding: "6px", textAlign: "right", color: "#334155" }}>{s.avg_cost?.toFixed(2) ?? "-"}</td>
-                                <td style={{ padding: "6px", textAlign: "right", color: "#334155" }}>{s.last_price?.toFixed(2) ?? "-"}</td>
-                                <td style={{ padding: "6px", textAlign: "right", color: "#334155" }}>{s.holding_days}</td>
-                                <td style={{ padding: "6px", color: "#64748b" }}>{s.first_date}</td>
-                                <td style={{ padding: "6px", color: "#64748b" }}>{s.last_date}</td>
-                              </tr>
-                              {expandedStock === s.code && (
-                                <tr>
-                                  <td colSpan={9} style={{ padding: "0 0 8px 24px", backgroundColor: "#fafafa" }}>
-                                    <StockTradeDetail trades={enhancedMetrics.stock_trades?.[s.code]} />
-                                  </td>
-                                </tr>
-                              )}
-                            </React.Fragment>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
+                {/* 因子贡献度 */}
+                {(enhancedMetrics?.factor_analysis?.feature_importance || enhancedMetrics?.feature_importance) && (
+                  <FactorAnalysisPanel
+                    featureImportance={enhancedMetrics?.factor_analysis?.feature_importance || enhancedMetrics?.feature_importance}
+                  />
                 )}
               </>
             )}
@@ -420,12 +359,14 @@ interface OverviewContentProps {
   activeLoopData: Loop;
   prevLoopData: Loop | undefined;
   configDiffLines: string[];
+  activeTask?: TaskInfo;
 }
 
 const OverviewContent = React.memo(function OverviewContent({
   activeLoopData,
   prevLoopData,
   configDiffLines,
+  activeTask,
 }: OverviewContentProps) {
   const m = activeLoopData.metrics_json || {};
   const pm = prevLoopData?.metrics_json || {};
@@ -506,6 +447,9 @@ const OverviewContent = React.memo(function OverviewContent({
           )}
         </div>
       </div>
+
+      {/* 策略与执行配置 */}
+      <StrategyConfigCard source={{ loopConfig: activeLoopData.config_json, taskConfig: activeTask }} />
 
       {/* 回测表现指标 */}
       <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #e2e8f0", padding: "20px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
@@ -666,3 +610,4 @@ const OverviewContent = React.memo(function OverviewContent({
     </>
   );
 });
+

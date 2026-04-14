@@ -39,6 +39,12 @@ class NodeCreateRequest(BaseModel):
     capabilities: List[str] = Field(default_factory=list)
     grafana_dashboard_url: Optional[str] = None
     prometheus_target: Optional[str] = None
+    workspace_base: Optional[str] = Field(None, description="QE 工作空间根目录（Linux 路径）")
+    factor_data_dir: Optional[str] = Field(None, description="因子数据目录（Linux 路径）")
+    qlib_data_path: Optional[str] = Field(None, description="Qlib 日线数据目录（Linux 路径）")
+    qlib_minute_path: Optional[str] = Field(None, description="Qlib 分钟线数据目录（Linux 路径）")
+    qlib_rdagent_root: Optional[str] = Field(None, description="RDAgent 代码根目录（Linux 路径）")
+    callback_url: Optional[str] = Field(None, description="Loop 完成回调地址（自动检测）")
 
 
 class NodeUpdateRequest(BaseModel):
@@ -49,6 +55,12 @@ class NodeUpdateRequest(BaseModel):
     capabilities: Optional[List[str]] = None
     grafana_dashboard_url: Optional[str] = None
     prometheus_target: Optional[str] = None
+    workspace_base: Optional[str] = None
+    factor_data_dir: Optional[str] = None
+    qlib_data_path: Optional[str] = None
+    qlib_minute_path: Optional[str] = None
+    qlib_rdagent_root: Optional[str] = None
+    callback_url: Optional[str] = None
 
 
 class QEEvolutionConfig(BaseModel):

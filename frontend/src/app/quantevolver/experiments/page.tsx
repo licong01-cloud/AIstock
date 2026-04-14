@@ -117,6 +117,12 @@ export default function ExperimentsPage() {
   const [actionId, setActionId] = useState<string | null>(null);
   const [actionType, setActionType] = useState<string>("");
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [engineMode, setEngineMode] = useState<"legacy" | "unified">("legacy");
+
+  // 分页状态
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   /* ── 单次实验执行（共享 Hook） ── */
   const [logsExpId, setLogsExpId] = useState<string | null>(null);
@@ -130,21 +136,24 @@ export default function ExperimentsPage() {
     setTimeout(() => setToast(null), 3500);
   }, []);
 
-  async function loadExperiments() {
+  async function loadExperiments(page?: number) {
     setLoading(true);
     setError(null);
+    const targetPage = page ?? currentPage;
+    const offset = (targetPage - 1) * pageSize;
     try {
-      const res = await fetch(`${API}/quantevolver/experiments?limit=50`);
+      const res = await fetch(`${API}/quantevolver/experiments?limit=${pageSize}&offset=${offset}`);
       const data = await res.json();
       setExperiments(data.items || []);
       setTotal(data.total || 0);
+      if (page !== undefined) setCurrentPage(page);
     } catch (e: any) {
       setError(e?.message || "加载失败");
     }
     setLoading(false);
   }
 
-  useEffect(() => { loadExperiments(); }, []);
+  useEffect(() => { loadExperiments(1); }, []);
 
   // 页面加载后自动连接第一个 running 实验的日志流
   useEffect(() => {
@@ -161,7 +170,7 @@ export default function ExperimentsPage() {
   // 自动刷新：仅在用户开启时按设定间隔刷新
   useEffect(() => {
     if (!autoRefresh) return;
-    const timer = setInterval(() => loadExperiments(), refreshInterval * 1000);
+    const timer = setInterval(() => loadExperiments(currentPage), refreshInterval * 1000);
     return () => clearInterval(timer);
   }, [autoRefresh, refreshInterval]);
 
@@ -209,7 +218,7 @@ export default function ExperimentsPage() {
     try {
       setLogsExpId(expId);
       setExpandedId(expId);
-      await sse.startRun(expId);
+      await sse.startRun(expId, engineMode);
       showToast("实验已提交执行", true);
       loadExperiments();
     } catch (e: any) {
@@ -326,10 +335,18 @@ export default function ExperimentsPage() {
       {/* 工具栏 */}
       <section style={{ background: "#fff", borderRadius: 12, padding: 16, marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <button onClick={loadExperiments} disabled={loading} style={{ padding: "6px 12px", fontSize: 12, cursor: "pointer", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff" }}>
+          <button onClick={() => loadExperiments(currentPage)} disabled={loading} style={{ padding: "6px 12px", fontSize: 12, cursor: "pointer", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff" }}>
             {loading ? "加载中..." : "手动刷新"}
           </button>
-          <span style={{ fontSize: 12, color: "#9ca3af" }}>共 {total} 条</span>
+          <span style={{ fontSize: 12, color: "#9ca3af" }}>共 {total} 条 | 第 {currentPage}/{totalPages} 页</span>
+
+          <select
+            value={pageSize}
+            onChange={e => { setPageSize(Number(e.target.value)); loadExperiments(1); }}
+            style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db", background: "#f9fafb", color: "#374151" }}
+          >
+            {[10, 20, 50, 100, 200].map(n => <option key={n} value={n}>{n} 条/页</option>)}
+          </select>
 
           <span style={{ width: 1, height: 16, background: "#e5e7eb" }} />
 
@@ -564,16 +581,22 @@ export default function ExperimentsPage() {
                     )}
 
                     {/* 操作按钮 */}
-                    <div style={{ display: "flex", gap: 8, marginTop: 12, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", gap: 8, marginTop: 12, justifyContent: "flex-end", flexWrap: "wrap", alignItems: "center" }}>
                       {canRun && (
-                        <button onClick={() => runExperiment(exp.experiment_id)}
-                          disabled={isActioning}
-                          style={{
-                            padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4,
-                            border: "1px solid #059669", background: "#ecfdf5", color: "#059669", fontWeight: 600,
-                          }}>
-                          {isActioning && actionType === "run" ? "提交中..." : "执行回测"}
-                        </button>
+                        <>
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <button onClick={() => setEngineMode("legacy")} style={{ padding: "3px 8px", fontSize: 10, cursor: "pointer", borderRadius: 4, border: engineMode === "legacy" ? "1.5px solid #64748b" : "1px solid #cbd5e1", background: engineMode === "legacy" ? "#f1f5f9" : "#fff", color: engineMode === "legacy" ? "#334155" : "#94a3b8", fontWeight: 600 }}>旧版</button>
+                            <button onClick={() => setEngineMode("unified")} style={{ padding: "3px 8px", fontSize: 10, cursor: "pointer", borderRadius: 4, border: engineMode === "unified" ? "1.5px solid #0ea5e9" : "1px solid #cbd5e1", background: engineMode === "unified" ? "#f0f9ff" : "#fff", color: engineMode === "unified" ? "#0284c7" : "#94a3b8", fontWeight: 600 }}>统一引擎</button>
+                          </div>
+                          <button onClick={() => runExperiment(exp.experiment_id)}
+                            disabled={isActioning}
+                            style={{
+                              padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4,
+                              border: "1px solid #059669", background: "#ecfdf5", color: "#059669", fontWeight: 600,
+                            }}>
+                            {isActioning && actionType === "run" ? "提交中..." : "执行回测"}
+                          </button>
+                        </>
                       )}
                       {exp.status === "running" && !isShowingLogs && (
                         <button onClick={() => openLogs(exp.experiment_id)}
@@ -594,6 +617,10 @@ export default function ExperimentsPage() {
                           {isActioning && actionType === "check" ? "查询中..." : "刷新状态"}
                         </button>
                       )}
+                      <button onClick={() => window.open(`/quantevolver/experiments/${exp.experiment_id}`, '_blank')}
+                        style={{ padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4, border: "1px solid #3b82f6", background: "#eff6ff", color: "#3b82f6", fontWeight: 600 }}>
+                        查看详情
+                      </button>
                       <button onClick={() => syncResult(exp.experiment_id)}
                         disabled={isActioning}
                         style={{ padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: "#fff" }}>
@@ -712,6 +739,10 @@ export default function ExperimentsPage() {
                                     </div>
                                   )}
                                   <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                                    <button onClick={() => window.open(`/quantevolver/experiments/${child.experiment_id}`, '_blank')}
+                                      style={{ padding: "3px 8px", fontSize: 10, cursor: "pointer", borderRadius: 4, border: "1px solid #3b82f6", background: "#eff6ff", color: "#3b82f6", fontWeight: 600 }}>
+                                      详情
+                                    </button>
                                     <button onClick={() => syncResult(child.experiment_id)}
                                       disabled={actionId === child.experiment_id}
                                       style={{ padding: "3px 8px", fontSize: 10, cursor: "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: "#fff" }}>
@@ -740,6 +771,31 @@ export default function ExperimentsPage() {
           );
         })}
       </div>
+
+      {/* 分页控件 */}
+      {total > 0 && (
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", marginTop: 16, gap: 6 }}>
+          <button onClick={() => loadExperiments(1)} disabled={currentPage <= 1 || loading}
+            style={{ padding: "4px 8px", fontSize: 11, cursor: currentPage <= 1 ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: currentPage <= 1 ? "#f3f4f6" : "#fff" }}>
+            首页
+          </button>
+          <button onClick={() => loadExperiments(currentPage - 1)} disabled={currentPage <= 1 || loading}
+            style={{ padding: "4px 10px", fontSize: 11, cursor: currentPage <= 1 ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: currentPage <= 1 ? "#f3f4f6" : "#fff" }}>
+            上一页
+          </button>
+          <span style={{ fontSize: 12, fontWeight: 500, minWidth: 80, textAlign: "center" }}>
+            {currentPage} / {totalPages}
+          </span>
+          <button onClick={() => loadExperiments(currentPage + 1)} disabled={currentPage >= totalPages || loading}
+            style={{ padding: "4px 10px", fontSize: 11, cursor: currentPage >= totalPages ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: currentPage >= totalPages ? "#f3f4f6" : "#fff" }}>
+            下一页
+          </button>
+          <button onClick={() => loadExperiments(totalPages)} disabled={currentPage >= totalPages || loading}
+            style={{ padding: "4px 8px", fontSize: 11, cursor: currentPage >= totalPages ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: currentPage >= totalPages ? "#f3f4f6" : "#fff" }}>
+            末页
+          </button>
+        </div>
+      )}
 
       {!loading && experiments.length === 0 && (
         <div style={{ textAlign: "center", padding: 60, color: "#9ca3af", background: "#fff", borderRadius: 12 }}>

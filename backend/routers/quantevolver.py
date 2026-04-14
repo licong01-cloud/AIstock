@@ -80,6 +80,7 @@ class FullPipelineRequest(BaseModel):
     skip_completed: bool = True
     max_transform_retries: int = 3
     skip_transform: bool = False
+    data_date: Optional[str] = None
 
 
 class RecommendFactorsRequest(BaseModel):
@@ -129,6 +130,11 @@ class GenerateConfigRequest(BaseModel):
     experiment_name: Optional[str] = None
     dispatch_mode: Optional[str] = Field(None, description="调度模式: normal / evolution")
     evolution_params: Optional[Dict[str, Any]] = Field(None, description="演进参数（dispatch_mode=evolution时）")
+    enable_sector_hmm: bool = Field(False, description="是否启用行业 HMM 热度调整")
+    hmm_model_version_id: Optional[str] = Field(None, description="HMM 模型快照 ID (snapshot_id)")
+    hmm_signal_preset: Optional[str] = Field(None, description="HMM 信号系数档位: preset_A/preset_B")
+    unfilled_handler: Optional[str] = Field(None, description="尾盘涨停未成交处理: TAIL_BOOST(加仓持仓股) / TAIL_SUBSTITUTE(替补买入)")
+    unfilled_handler_params: Optional[Dict[str, Any]] = Field(None, description="尾盘处理参数，如 {backup_depth: 15, trigger_minute: 210}")
 
 
 class CreateStrategyRequest(BaseModel):
@@ -220,9 +226,10 @@ def list_factors(
     search: Optional[str] = Query(None, description="搜索因子名称"),
     category: Optional[str] = Query(None, description="过滤类别，__empty__表示未分类"),
     grade: Optional[str] = Query(None, description="过滤评级，__empty__表示未评级"),
+    availability: Optional[str] = Query(None, description="过滤可用状态: enabled/disabled/all"),
     sort_field: Optional[str] = Query(None, description="排序字段"),
     sort_order: Optional[str] = Query("desc", description="排序方向: asc/desc"),
-    limit: int = Query(200, ge=1, le=1000),
+    limit: int = Query(200, ge=1, le=5000),
     offset: int = Query(0, ge=0),
 ):
     """获取全部因子列表。"""
@@ -247,6 +254,10 @@ def list_factors(
         if search:
             conditions.append("c.factor_name ILIKE %s")
             params.append(f"%{search}%")
+        if availability == "enabled":
+            conditions.append("c.is_available = TRUE")
+        elif availability == "disabled":
+            conditions.append("c.is_available = FALSE")
 
         # category / grade 筛选：__empty__ 表示未分类/未评级
         if category == "__empty__":
@@ -281,6 +292,9 @@ def list_factors(
             "grade": "cl.grade",
             "category": "cl.category",
             "factor_dimension": "cl.factor_dimension",
+            "generated_at_utc": "c.generated_at_utc",
+            "ind_calculated_at": "m.calculated_at",
+            "decay_status": "m1m.rank_ic_mean",
         }
         direction = "ASC" if sort_order == "asc" else "DESC"
         if sort_field and sort_field in SORT_FIELD_MAP:
@@ -315,22 +329,31 @@ def list_factors(
                 cur.execute(f"""
                     SELECT c.factor_name, c.source, c.expression, c.ic, c.sharpe,
                            c.annualized_return, c.is_sota_factor, c.catalog_source,
-                           c.description_cn, c.generated_at_utc,
+                           c.description_cn, c.generated_at_utc, c.is_available,
                            m.ic_mean AS ind_ic, m.top_excess_sharpe AS ind_sharpe,
                            m.top_excess_annual_return AS ind_annual_return,
                            m.rank_ic_mean AS ind_rank_ic, m.icir AS ind_icir,
+                           m.calculated_at AS ind_calculated_at,
+                           m1m.rank_ic_mean AS ind_rank_ic_1m,
                            cl.category, cl.grade, cl.grade_reason,
                            cl.classification_reason, cl.factor_dimension,
                            cl.description AS cl_description, cl.id AS classification_id
                     FROM aistock_factor_catalog c
                     LEFT JOIN LATERAL (
                         SELECT ic_mean, top_excess_sharpe, top_excess_annual_return,
-                               rank_ic_mean, icir
+                               rank_ic_mean, icir, calculated_at
                         FROM aistock_factor_metrics
                         WHERE factor_name = c.factor_name AND eval_window = 'full'
                         ORDER BY calculated_at DESC
                         LIMIT 1
                     ) m ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT rank_ic_mean
+                        FROM aistock_factor_metrics
+                        WHERE factor_name = c.factor_name AND eval_window = 'recent_1m'
+                        ORDER BY calculated_at DESC
+                        LIMIT 1
+                    ) m1m ON TRUE
                     LEFT JOIN qe_factor_classification cl
                         ON cl.factor_name = c.factor_name AND cl.factor_source = c.source
                     WHERE {where_clause}{cl_where}
@@ -531,15 +554,43 @@ class FactorAvailabilityRequest(BaseModel):
 
 @router.patch("/factors/{factor_name}/availability", summary="设置因子可用状态")
 def set_factor_availability(factor_name: str, req: FactorAvailabilityRequest):
-    """设置因子为可用/不可用（软删除）。is_available=false 不参与 SOTA 保护和新实验，可恢复。"""
+    """设置因子为可用/不可用（软删除）。is_available=false 不参与 SOTA 保护和新实验，可恢复。
+    
+    重新启用时清除 correlation_computed_at，确保 smart_incremental 能重新计算相关性。
+    设为不可用时清理 qe_factor_correlations 中的旧相关性记录。
+    """
     from ..db.pg_pool import get_conn
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE aistock_factor_catalog SET is_available = %s, updated_at = NOW() "
-                "WHERE factor_name = %s AND source = %s",
-                (req.is_available, factor_name, req.source),
-            )
+            if req.is_available:
+                cur.execute(
+                    "UPDATE aistock_factor_catalog "
+                    "SET is_available = TRUE, correlation_computed_at = NULL, updated_at = NOW() "
+                    "WHERE factor_name = %s AND source = %s",
+                    (factor_name, req.source),
+                )
+            else:
+                # 获取因子 ID，清理相关性记录
+                cur.execute(
+                    "SELECT id FROM aistock_factor_catalog "
+                    "WHERE factor_name = %s AND source = %s",
+                    (factor_name, req.source),
+                )
+                row = cur.fetchone()
+                if row:
+                    fid = row[0]
+                    cur.execute(
+                        "DELETE FROM qe_factor_correlations "
+                        "WHERE factor_a_id = %s OR factor_b_id = %s",
+                        (fid, fid),
+                    )
+                cur.execute(
+                    "UPDATE aistock_factor_catalog "
+                    "SET is_available = FALSE, correlation_computed_at = NULL, "
+                    "correlation_pair_count = 0, updated_at = NOW() "
+                    "WHERE factor_name = %s AND source = %s",
+                    (factor_name, req.source),
+                )
             if cur.rowcount == 0:
                 raise HTTPException(404, f"因子 {factor_name} (source={req.source}) 不存在")
         conn.commit()
@@ -568,6 +619,7 @@ class ManualFactorValidate(BaseModel):
 class BatchComputeMetricsUnified(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="指定因子名列表")
     all_available: bool = Field(False, description="True=全部 is_available 因子")
+    data_date: Optional[str] = Field(None, description="快照日期 (YYYYMMDD)，指定后使用磁盘快照数据")
 
 
 @router.post("/factors/batch-action", summary="批量因子操作（删除/设不可用）")
@@ -594,8 +646,23 @@ def batch_factor_action(req: BatchFactorActionRequest):
                     if not fn or not src:
                         failed.append({"factor_name": fn, "error": "缺少 factor_name 或 source"})
                         continue
+                    # 获取因子 ID，清理相关性记录
                     cur.execute(
-                        "UPDATE aistock_factor_catalog SET is_available = FALSE, updated_at = NOW() "
+                        "SELECT id FROM aistock_factor_catalog "
+                        "WHERE factor_name = %s AND source = %s",
+                        (fn, src),
+                    )
+                    fid_row = cur.fetchone()
+                    if fid_row:
+                        cur.execute(
+                            "DELETE FROM qe_factor_correlations "
+                            "WHERE factor_a_id = %s OR factor_b_id = %s",
+                            (fid_row[0], fid_row[0]),
+                        )
+                    cur.execute(
+                        "UPDATE aistock_factor_catalog "
+                        "SET is_available = FALSE, correlation_computed_at = NULL, "
+                        "correlation_pair_count = 0, updated_at = NOW() "
                         "WHERE factor_name = %s AND source = %s",
                         (fn, src),
                     )
@@ -1351,9 +1418,99 @@ def generate_from_requirement(req: GenerateFromRequirementRequest):
 
 @router.post("/config/generate")
 def generate_config(req: GenerateConfigRequest):
-    """生成QLib配置文件。dispatch_mode=evolution时标记为待演进。"""
+    """生成QLib配置文件。支持 HMM 板块轮动和分钟线策略。dispatch_mode=evolution时标记为待演进。"""
     try:
         from ..services.quantevolver.config_composer import ConfigComposer
+
+        # --- 严格参数验证（禁止静默兜底）---
+        if req.strategy_id:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1 FROM aistock_strategy_catalog WHERE strategy_id = %s", (req.strategy_id,))
+                    if not cur.fetchone():
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"strategy_id='{req.strategy_id}' 在策略目录中不存在",
+                        )
+
+        if req.model_id:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1 FROM aistock_model_catalog WHERE model_id = %s", (req.model_id,))
+                    if not cur.fetchone():
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"model_id='{req.model_id}' 在模型目录中不存在",
+                        )
+
+        # --- HMM 模型验证与路径注入（对齐自动演进逻辑）---
+        custom_params = dict(req.custom_params or {})
+
+        # --- 尾盘涨停未成交处理注入（对齐演进任务逻辑）---
+        _VALID_UNFILLED_HANDLERS = {"TAIL_BOOST", "TAIL_SUBSTITUTE"}
+        if req.unfilled_handler:
+            if req.unfilled_handler not in _VALID_UNFILLED_HANDLERS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"unfilled_handler='{req.unfilled_handler}' 无效，允许值: {', '.join(sorted(_VALID_UNFILLED_HANDLERS))}",
+                )
+            custom_params["unfilled_handler"] = req.unfilled_handler
+            uf_params = req.unfilled_handler_params or {}
+            if uf_params.get("trigger_minute"):
+                custom_params["unfilled_trigger_minute"] = uf_params["trigger_minute"]
+            if uf_params.get("backup_depth"):
+                custom_params["unfilled_backup_depth"] = uf_params["backup_depth"]
+
+        if custom_params.get("enable_sector_hmm"):
+            hmm_version_id = custom_params.get("hmm_model_version_id")
+            if not hmm_version_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="启用行业 HMM 时必须提供 hmm_model_version_id",
+                )
+            from ..services.hmm_training_service import HMMTrainingService
+            hmm_svc = HMMTrainingService()
+            snapshot = hmm_svc.get_snapshot(hmm_version_id)
+            if snapshot is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"HMM 快照 {hmm_version_id} 不存在",
+                )
+            if snapshot.get("status") != "completed":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"HMM 快照状态为 '{snapshot.get('status')}'，需要 'completed'",
+                )
+            hmm_model_path = snapshot["model_path"]
+            custom_params["sector_hmm_model_path"] = hmm_model_path
+            # 从 DB 读取 signal_presets
+            try:
+                config_id = snapshot["config_id"]
+                configs = hmm_svc.list_configs("sector_hmm")
+                found_config = False
+                for cfg in configs:
+                    if cfg["config_id"] == config_id:
+                        cj = cfg["config_json"]
+                        if isinstance(cj, str):
+                            cj = json.loads(cj)
+                        if "signal_presets" in cj:
+                            custom_params["hmm_signal_presets"] = cj["signal_presets"]
+                        found_config = True
+                        break
+                if not found_config:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"HMM config_id='{config_id}' 未在系统中找到",
+                    )
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"读取 HMM signal_presets 失败: {e}",
+                )
+
+
         cc = ConfigComposer()
         result = cc.compose_experiment(
             factor_names=req.factor_names,
@@ -1361,7 +1518,7 @@ def generate_config(req: GenerateConfigRequest):
             model_id=req.model_id,
             strategy_id=req.strategy_id,
             data_split=req.data_split,
-            custom_params=req.custom_params,
+            custom_params=custom_params,
             experiment_name=req.experiment_name,
         )
 
@@ -1370,6 +1527,8 @@ def generate_config(req: GenerateConfigRequest):
             result["evolution_params"] = req.evolution_params or {}
 
         return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception("配置生成失败")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1494,74 +1653,6 @@ def trigger_experiment_selection(experiment_id: str, req: ExperimentSelectionReq
 # Phase 2 API: 单因子独立指标（17项）
 # ============================================================
 
-@router.post("/factors/batch-fetch-metrics")
-def batch_fetch_factor_metrics(
-    factor_names: List[str] = Body(..., embed=True),
-):
-    """批量获取选中因子的独立指标。
-
-    流程：factor_names → 查 aistock_factor_catalog 得到 source_task_id → 调 RD-Agent API 计算 → 写入 aistock_factor_metrics。
-    """
-    from ..db.pg_pool import get_conn
-    from ..services.rdagent_factor_metrics_sync import sync_factor_metrics_batch
-
-    # 1) 查找因子对应的 source_task_id
-    task_id_map: Dict[str, List[str]] = {}  # task_id -> [factor_names]
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            placeholders = ",".join(["%s"] * len(factor_names))
-            cur.execute(f"""
-                SELECT factor_name, source_task_id
-                FROM aistock_factor_catalog
-                WHERE factor_name IN ({placeholders})
-                  AND source_task_id IS NOT NULL
-            """, factor_names)
-            for row in cur.fetchall():
-                fname, tid = row
-                task_id_map.setdefault(tid, []).append(fname)
-
-    if not task_id_map:
-        return {"ok": False, "error": "所选因子均无 source_task_id，无法获取独立指标"}
-
-    # 2) 按 task_id 批量调用 RD-Agent API
-    task_ids = list(task_id_map.keys())
-    results = sync_factor_metrics_batch(task_ids)
-
-    ok_count = sum(1 for r in results if r.ok)
-    total_inserted = sum(r.metrics_inserted for r in results)
-    total_skipped = sum(r.metrics_skipped for r in results)
-
-    # 汇总失败原因到顶层 error 字段，方便前端直接展示
-    fail_errors = []
-    for r in results:
-        if not r.ok and r.errors:
-            tid_short = r.task_id[:20]
-            fail_errors.append(f"{tid_short}: {r.errors[0]}")
-    error_summary = "; ".join(fail_errors) if fail_errors else None
-
-    return {
-        "ok": ok_count > 0,
-        "error": error_summary,
-        "total_tasks": len(results),
-        "success_count": ok_count,
-        "fail_count": len(results) - ok_count,
-        "total_metrics_inserted": total_inserted,
-        "total_metrics_skipped": total_skipped,
-        "task_factor_map": {tid: fnames for tid, fnames in task_id_map.items()},
-        "details": [
-            {
-                "task_id": r.task_id,
-                "ok": r.ok,
-                "factor_count": r.factor_count,
-                "inserted": r.metrics_inserted,
-                "skipped": r.metrics_skipped,
-                "errors": r.errors,
-            }
-            for r in results
-        ],
-    }
-
-
 # ============================================================
 # 手工因子入库 + 统一独立指标计算
 # ============================================================
@@ -1615,15 +1706,58 @@ async def manual_factor_full_pipeline(req: ManualFactorCreate):
 async def batch_compute_metrics_unified(req: BatchComputeMetricsUnified):
     """统一批量计算因子独立指标（所有因子通用，不依赖 RDAgent task）。
 
-    从 DB 读取 code_text → WSL 批量执行 → engine 计算 17 指标 × 4 窗口。
+    从 DB 读取 code_text → WSL 批量执行 → engine 计算 17 指标 × 5 窗口。
+    必须指定 data_date（快照日期），确保所有因子使用相同数据计算。
     """
+    if not req.data_date:
+        raise HTTPException(
+            400,
+            "必须指定 data_date（快照日期），确保所有因子使用相同数据计算，便于横向比对。"
+            "请在因子库页面选择或创建数据快照。"
+        )
     from ..services.manual_factor_service import ManualFactorService
     svc = ManualFactorService()
     result = await svc.batch_compute_metrics(
         factor_names=req.factor_names,
         all_available=req.all_available,
+        data_date=req.data_date,
     )
     return result
+
+
+@router.post("/factors/batch-compute-metrics-stream", summary="流式批量独立指标计算（SSE）")
+def batch_compute_metrics_stream(req: BatchComputeMetricsUnified):
+    """流式批量计算因子独立指标 — 每完成一个因子立即推送结果 + 入库。
+
+    SSE 事件类型:
+    - stream_start: 开始，包含因子列表
+    - init: shared context 加载完成
+    - factor_progress: 单因子完成（ok/timeout/error），已入库
+    - stream_complete: 全部完成，包含汇总
+    - error: 异常
+    """
+    from starlette.responses import StreamingResponse
+    from ..services.manual_factor_service import batch_compute_metrics_stream as _stream_fn
+
+    def _sse(data: dict) -> str:
+        return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    async def event_generator():
+        try:
+            async for event in _stream_fn(
+                factor_names=req.factor_names,
+                all_available=req.all_available,
+                data_date=req.data_date,
+            ):
+                yield _sse(event)
+        except Exception as e:
+            yield _sse({"type": "error", "error": str(e)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 # ============================================================
@@ -1746,7 +1880,7 @@ def full_pipeline_stream(req: FullPipelineRequest):
             yield _sse({"type": "task_progress", "phase": "ic_metrics", "status": "computing",
                         "batch": batch_num, "factors": batch, "current": i, "total": len(factor_names)})
             try:
-                result = await svc_metrics.batch_compute_metrics(factor_names=batch)
+                result = await svc_metrics.batch_compute_metrics(factor_names=batch, data_date=req.data_date)
                 if result.get("success"):
                     db_res = result.get("db_result", {})
                     batch_ok = len(result.get("factors", {}))
@@ -2428,8 +2562,8 @@ class FactorTransformRequest(BaseModel):
     max_llm_retries: int = 3
     llm_model_id: Optional[str] = None
     test_instruments: Optional[list] = None
-    test_start_date: str = "2023-01-01"
-    test_end_date: str = "2023-12-31"
+    test_start_date: str = "2022-01-01"
+    test_end_date: str = "2024-12-31"
 
 
 class BatchTransformRequest(BaseModel):
@@ -3057,14 +3191,17 @@ def _update_experiment_with_metrics(experiment_id: str, metrics: dict):
 
 
 @router.post("/experiments/{experiment_id}/run")
-async def run_experiment(experiment_id: str):
+async def run_experiment(experiment_id: str, engine_mode: str = "unified", node_id: str = None):
     """一键执行单次实验：读取配置 → compose_in_memory → 提交 RDAgent。
-    
+
     实验状态由前端通过 get_experiment_run_status 按需查询并自动同步，
     不再使用后台轮询（避免阻塞 uvicorn reload）。
     """
     from ..services.quantevolver.config_composer import ConfigComposer
     from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
+
+    if engine_mode == "unified":
+        return await _run_experiment_unified(experiment_id, node_id=node_id)
 
     try:
         # 1) 从 DB 读取实验记录
@@ -3091,6 +3228,19 @@ async def run_experiment(experiment_id: str):
 
         experiment_name = exp_record.get("experiment_name") or f"qe_exp_{experiment_id}"
 
+        # 从 custom_params 提取 execution_algo / strategy_params（与 evolution service 对齐）
+        _cp = custom_params or {}
+        execution_algo = _cp.get("execution_algo")
+        execution_algo_params = dict(_cp.get("execution_algo_params") or {})
+
+        # strategy_params: 从 custom_params 中提取策略相关参数（HMM 等）
+        # compose_experiment_in_memory 需要 strategy_params 来触发 HMM 预计算
+        strategy_params = {}
+        for _hmm_key in ("enable_sector_hmm", "sector_hmm_model_path",
+                         "hmm_signal_preset", "hmm_signal_presets"):
+            if _hmm_key in _cp:
+                strategy_params[_hmm_key] = _cp[_hmm_key]
+
         compose_res = cc.compose_experiment_in_memory(
             factor_names=factor_names_raw,
             model_id=exp_record.get("model_id"),
@@ -3099,9 +3249,17 @@ async def run_experiment(experiment_id: str):
             custom_params=custom_params,
             experiment_name=experiment_name,
             skip_db_save=True,  # 已有 DB 记录，不重复写入
+            execution_algo=execution_algo,
+            execution_algo_params=execution_algo_params,
+            strategy_params=strategy_params if strategy_params else None,
+            node_id=node_id,
         )
         experiment_files = compose_res["experiment_files"]
         wsl_command = compose_res.get("wsl_command", "")
+        if not wsl_command:
+            raise ValueError(
+                f"compose_experiment_in_memory returned empty wsl_command for experiment={experiment_id}"
+            )
 
         # 3) task_id = experiment_name（已与 experiment_id 统一），修复原 f"{name}_{id}" 拼接导致的 404
         qe_task_id = experiment_name  # experiment_name = experiment_id（已统一）
@@ -3116,7 +3274,8 @@ async def run_experiment(experiment_id: str):
         }
 
         # 4) 提交到 RDAgent 执行
-        async with QEWorkspaceClient() as client:
+        client = QEWorkspaceClient.for_node(node_id) if node_id else QEWorkspaceClient()
+        async with client:
             qe_loop_id = await client.create_and_run_loop(
                 qe_task_id, loop_index, config, experiment_files, wsl_command
             )
@@ -3144,6 +3303,74 @@ async def run_experiment(experiment_id: str):
         raise
     except Exception as e:
         logger.exception(f"执行实验失败: {experiment_id}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _run_experiment_unified(experiment_id: str, node_id: str = None):
+    """统一引擎路径：使用 ExperimentConfig + BacktestExecutor 执行单次实验（Path 1）。"""
+    from ..services.quantevolver.config_composer import ConfigComposer
+    from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
+    from ..services.quantevolver.experiment_config_builders import build_config_from_exp_record
+    from ..services.quantevolver.executors.backtest import BacktestExecutor, BacktestMode
+    from ..services.quantevolver.executors.base import ExecutionContext
+
+    try:
+        cc = ConfigComposer()
+        exp_record = cc._get_experiment_record(experiment_id)
+        if not exp_record:
+            raise HTTPException(status_code=404, detail=f"实验 {experiment_id} 不存在")
+        if exp_record.get("status") == "running":
+            raise HTTPException(status_code=409, detail="实验正在执行中，请勿重复提交")
+
+        experiment_name = exp_record.get("experiment_name") or f"qe_exp_{experiment_id}"
+        cfg = build_config_from_exp_record(exp_record, experiment_name=experiment_name)
+
+        # 查询远端节点 callback_url
+        callback_url = None
+        if node_id:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT callback_url FROM infra.compute_nodes WHERE node_id = %s", (node_id,))
+                    row = cur.fetchone()
+                    if row:
+                        callback_url = row[0]
+
+        ctx = ExecutionContext(
+            task_id=experiment_name,
+            loop_index=1,
+            experiment_name=experiment_name,
+            node_id=node_id,
+            callback_url=callback_url,
+        )
+
+        client = QEWorkspaceClient.for_node(node_id) if node_id else QEWorkspaceClient()
+        async with client:
+            executor = BacktestExecutor(cc, client)
+            result = await executor.submit(cfg, ctx, mode=BacktestMode.FULL_TRAIN)
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE qe_experiments
+                    SET status = 'running',
+                        qe_task_id = %s,
+                        qe_loop_id = %s,
+                        started_at = NOW()
+                    WHERE experiment_id = %s
+                """, (experiment_name, result.job_id, experiment_id))
+            conn.commit()
+
+        return {
+            "ok": True,
+            "experiment_id": experiment_id,
+            "qe_task_id": experiment_name,
+            "qe_loop_id": result.job_id,
+            "engine": "unified",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"[unified] 执行实验失败: {experiment_id}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3312,8 +3539,11 @@ async def get_experiment_enhanced_metrics(experiment_id: str):
             flat["ic_positive_ratio"] = ic.get("ic_positive_ratio")
         if "return_curves" in data:
             rc = data["return_curves"]
+            rc_dates = rc.get("dates", [])
             if not flat.get("dates"):
-                flat["dates"] = rc.get("dates", [])
+                flat["dates"] = rc_dates
+            # 收益曲线日期可能与 IC 日期不同，单独保存供前端收益图使用
+            flat["return_dates"] = rc_dates
             flat["cumulative_excess_no_cost"] = rc.get("cumulative_excess_no_cost")
             flat["cumulative_excess_with_cost"] = rc.get("cumulative_excess_with_cost")
             flat["cumulative_benchmark"] = rc.get("cumulative_benchmark")
@@ -3327,6 +3557,20 @@ async def get_experiment_enhanced_metrics(experiment_id: str):
             flat["convergence_ratio"] = td.get("convergence_ratio")
         if "summary" in data:
             flat["summary"] = data["summary"]
+        # 透传交易分析相关字段（不展平，直接传递）
+        for passthrough_key in ["top_stocks", "bottom_stocks", "stock_trades",
+                                 "trade_diagnostics", "prediction_diagnostics",
+                                 "all_stocks", "stock_pnl_summary", "limit_analysis",
+                                 "factor_analysis", "feature_importance",
+                                 "absolute_returns"]:
+            if passthrough_key in data:
+                val = data[passthrough_key]
+                # 跳过空值，避免前端收到空壳数据
+                if val is None:
+                    continue
+                if isinstance(val, (dict, list)) and len(val) == 0:
+                    continue
+                flat[passthrough_key] = val
         return flat
     except HTTPException:
         raise
@@ -3373,6 +3617,32 @@ async def delete_experiment(
         except Exception as e:
             errors.append(f"workspace清理失败: {e}")
             logger.warning(f"Workspace cleanup failed for {experiment_id}: {e}")
+
+    # 2b. 清理本地文件系统（workspace、实验副本、SOTA 资产、Optuna study）
+    import shutil
+    from pathlib import Path
+    from ..services.quantevolver.config_composer import QE_WORKSPACE_WIN, QE_EXPERIMENTS_ROOT
+    sota_dir = os.environ.get("QE_SOTA_ASSETS_DIR", "f:/Dev/AIstock/rdagent_assets/qe_sota_assets")
+    for dir_path in [
+        QE_WORKSPACE_WIN / experiment_id,
+        QE_EXPERIMENTS_ROOT / experiment_id,
+        Path(sota_dir) / experiment_id,
+    ]:
+        try:
+            if dir_path.exists() and dir_path.is_dir():
+                shutil.rmtree(dir_path, ignore_errors=True)
+                logger.info(f"已清理本地实验目录: {dir_path}")
+        except Exception as e:
+            errors.append(f"本地目录清理失败({dir_path}): {e}")
+    # 清理 Optuna study 文件
+    try:
+        optuna_dir = Path(sota_dir) / "optuna_studies"
+        if optuna_dir.exists():
+            for f in optuna_dir.glob(f"{experiment_id}_*.db"):
+                f.unlink(missing_ok=True)
+                logger.info(f"已清理 Optuna study: {f}")
+    except Exception as e:
+        errors.append(f"Optuna study清理失败: {e}")
 
     # 3. 清理DB记录（事务内，按外键依赖顺序删除）
     with get_conn() as conn:
@@ -3697,3 +3967,64 @@ def generate_stock_pool(date: Optional[str] = None):
     except Exception as e:
         logger.exception("生成股票池文件失败")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── IC 衰变趋势查询 ──
+
+@router.get("/factors/{factor_name}/ic-decay-trend")
+def get_ic_decay_trend(
+    factor_name: str,
+    eval_window: str = "full",
+):
+    """查询因子在不同 snapshot_date 下的 IC 指标变化趋势。
+
+    返回按 snapshot_date 排序的 IC/ICIR/Rank IC 序列，用于绘制衰变趋势图。
+    """
+    from ..db.pg_pool import get_conn
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    snapshot_date,
+                    data_start,
+                    data_end,
+                    ic_mean,
+                    rank_ic_mean,
+                    icir,
+                    rank_icir,
+                    ic_positive_ratio,
+                    n_trading_days,
+                    rank_ic_1d,
+                    rank_ic_5d,
+                    rank_ic_10d,
+                    rank_ic_20d,
+                    top_annual_return,
+                    top_excess_annual_return,
+                    top_sharpe,
+                    group_return_monotonicity,
+                    calculated_at
+                FROM aistock_factor_metrics
+                WHERE factor_name = %s
+                  AND eval_window = %s
+                  AND snapshot_date IS NOT NULL
+                ORDER BY snapshot_date ASC
+            """, (factor_name, eval_window))
+
+            columns = [desc[0] for desc in cur.description]
+            rows = cur.fetchall()
+
+    trend = []
+    for row in rows:
+        d = dict(zip(columns, row))
+        for k in ("snapshot_date", "data_start", "data_end", "calculated_at"):
+            if d.get(k) is not None:
+                d[k] = str(d[k])
+        trend.append(d)
+
+    return {
+        "factor_name": factor_name,
+        "eval_window": eval_window,
+        "count": len(trend),
+        "trend": trend,
+    }

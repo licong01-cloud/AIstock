@@ -49,6 +49,7 @@ from .routers import (
     rdagent_llm_config_v2,
     rdagent_llm_config_endpoints,
     dispatch,
+    hmm_training,
 )
 from .routers import llm_config
 from .routers import paper_trading
@@ -272,6 +273,12 @@ async def _lifespan(app: FastAPI):
         node_health_scheduler.start(loop=asyncio.get_running_loop())
         logging.getLogger("uvicorn.error").info("节点健康调度器已启动")
 
+    # HMM 滚动训练调度器
+    disable_hmm_scheduler = (os.getenv("DISABLE_HMM_SCHEDULER") or "").strip().lower()
+    if disable_hmm_scheduler not in {"1", "true", "yes", "y", "on"}:
+        from .routers.hmm_training import init_hmm_scheduler
+        init_hmm_scheduler()
+
     # Evolution loop timer scanner (fallback for webhook-based flow)
     shutdown_event = asyncio.Event()
     scan_task = None
@@ -324,6 +331,11 @@ async def _lifespan(app: FastAPI):
         try:
             from .schedulers.node_health_scheduler import node_health_scheduler
             node_health_scheduler.shutdown()
+        except Exception:
+            pass
+        try:
+            from .routers.hmm_training import shutdown_hmm_scheduler
+            shutdown_hmm_scheduler()
         except Exception:
             pass
         try:
@@ -385,6 +397,7 @@ def create_app() -> FastAPI:
     app.include_router(stocks.router, prefix="/api/v1")
     app.include_router(quantevolver.router, prefix="/api/v1")
     app.include_router(quantevolver_evolution.router, prefix="/api/v1")
+    app.include_router(hmm_training.router, prefix="/api/v1")
     app.include_router(llm_config.router)
     app.include_router(paper_trading.router, prefix="/api/v1")
     app.include_router(dispatch.router, prefix="/api/v1")

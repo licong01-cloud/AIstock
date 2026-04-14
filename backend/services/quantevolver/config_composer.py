@@ -139,11 +139,15 @@ class ConfigComposer:
             test_end_dt = datetime.strptime(data_split["test_end"], "%Y-%m-%d")
             data_split["backtest_end"] = (test_end_dt - timedelta(days=7)).strftime("%Y-%m-%d")
 
-    def _fetch_workspace_config(self) -> Dict[str, str]:
+    def _fetch_workspace_config(self, node_id: Optional[str] = None) -> Dict[str, str]:
         """
         获取 QE 工作区路径配置。
         所有路径直接从 AIstock 侧 .env 环境变量读取，不再依赖 RDAgent API。
+        node_id: 指定节点时从 infra.compute_nodes 查询路径，None 则使用默认常量。
         """
+        if node_id:
+            return self._get_node_paths(node_id)
+
         if ConfigComposer._workspace_config_cache is not None:
             return ConfigComposer._workspace_config_cache
 
@@ -151,8 +155,43 @@ class ConfigComposer:
             "workspace_base": QE_WORKSPACE_WSL,
             "factor_data_dir": RDAGENT_FACTOR_DATA_WSL,
             "qlib_data_path": QLIB_DATA_PATH_WSL,
+            "qlib_minute_path": QLIB_MINUTE_PATH_WSL,
+            "qlib_rdagent_root": RDAGENT_CODE_ROOT_WSL,
         }
         return ConfigComposer._workspace_config_cache
+
+    def _get_node_paths(self, node_id: str) -> Dict[str, str]:
+        """查询目标节点的路径配置。所有路径字段必须已配置，缺失则报错。"""
+        from ...db.pg_pool import get_conn
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT workspace_base, factor_data_dir, qlib_data_path, "
+                    "       qlib_minute_path, qlib_rdagent_root "
+                    "FROM infra.compute_nodes WHERE node_id = %s",
+                    (node_id,),
+                )
+                row = cur.fetchone()
+        if not row or not row[0]:
+            raise ValueError(f"节点 {node_id} 未配置 workspace_base，请先在节点管理中设置路径")
+        missing = []
+        if not row[1]:
+            missing.append("factor_data_dir")
+        if not row[2]:
+            missing.append("qlib_data_path")
+        if not row[3]:
+            missing.append("qlib_minute_path")
+        if not row[4]:
+            missing.append("qlib_rdagent_root")
+        if missing:
+            raise ValueError(f"节点 {node_id} 缺少必要路径配置: {', '.join(missing)}，请在节点管理中补全")
+        return {
+            "workspace_base": row[0],
+            "factor_data_dir": row[1],
+            "qlib_data_path": row[2],
+            "qlib_minute_path": row[3],
+            "qlib_rdagent_root": row[4],
+        }
 
     def _generate_unique_experiment_id(self) -> str:
         """生成基于日期时间的唯一实验ID，格式: qe_YYYYMMDD_HHMMSS"""
@@ -233,9 +272,9 @@ class ConfigComposer:
         # 获取策略信息
         strategy_info = self._get_strategy_info(strategy_id) if strategy_id else None
 
-        # 判断因子类型：是否包含RDAgent自定义因子
+        # 判断因子类型：是否包含需要执行代码的自定义因子
         has_custom_factors = any(
-            f.get("source") == "rdagent_task_sync" for f in factors_info
+            f.get("code_text") for f in factors_info
         )
         has_alpha158 = any(
             f.get("source") == "alpha158" for f in factors_info
@@ -257,7 +296,10 @@ class ConfigComposer:
                 if any(k in name_lower for k in ["transformer", "lstm", "gru", "rnn", "timeseries", "temporal"]):
                     model_type_tag = "TimeSeries"
                 else:
-                    model_type_tag = "Tabular"
+                    raise ValueError(
+                        f"模型 '{model_info.get('model_name', '?')}' 的 model_type='{model_type_raw}' "
+                        f"不在已知类型中 (TimeSeries/Tabular)，请更新模型目录中的 model_type 字段"
+                    )
 
         # 从custom_params提取disable_alpha158和quick_train参数
         disable_alpha158 = False
@@ -268,6 +310,50 @@ class ConfigComposer:
 
         # backtest_freq: "1min"（分钟线，默认）或 "day"（日线回退模式）
         backtest_freq = (custom_params or {}).get("backtest_freq", "1min")
+        execution_algo = (custom_params or {}).get("execution_algo")
+        execution_algo_params = dict((custom_params or {}).get("execution_algo_params") or {})
+
+        # 尾盘涨停未成交处理：从 custom_params 提取并注入到 execution_algo_params
+        # （这些参数是给 inner_strategy TailTWAPWithLimitStrategy 的）
+        _cp = custom_params or {}
+        if _cp.get("unfilled_handler"):
+            execution_algo_params["unfilled_handler"] = _cp["unfilled_handler"]
+        if _cp.get("unfilled_trigger_minute"):
+            execution_algo_params["unfilled_trigger_minute"] = _cp["unfilled_trigger_minute"]
+        if _cp.get("unfilled_backup_depth"):
+            execution_algo_params["unfilled_backup_depth"] = _cp["unfilled_backup_depth"]
+
+        # HMM 预计算（必须在 conf.yaml 之前，使 hmm_coefficients_file 写入策略 kwargs）
+        hmm_json_content: Optional[str] = None
+        if _cp.get("enable_sector_hmm"):
+            # 构造 strategy_params 供 _precompute_hmm_coefficients 使用
+            _hmm_sp = dict(custom_params or {})
+            hmm_json_content = self._precompute_hmm_coefficients(_hmm_sp, data_split)
+            custom_params["hmm_coefficients_file"] = "hmm_sector_coefficients.json"
+
+            # 严格验证：策略必须原生支持 HMM
+            _hmm_supported_classes = {
+                "TopkDropoutWithRiskControlStrategy",
+                "ScoreWeightedTopkStrategy",
+                "ScoreWeightedTopkStrategyV2",
+                "EnhancedTopkDropoutStrategy",
+                "SmallCapTopkDropoutStrategy",
+            }
+            _strategy_class = None
+            if strategy_info:
+                _pc = strategy_info.get("portfolio_config")
+                if isinstance(_pc, str):
+                    import json as _json2
+                    _pc = _json2.loads(_pc)
+                if _pc:
+                    _strategy_class = _pc.get("class")
+                if not _strategy_class:
+                    _strategy_class = strategy_info.get("strategy_name", "")
+            if _strategy_class and _strategy_class not in _hmm_supported_classes:
+                raise ValueError(
+                    f"enable_sector_hmm=True 但策略 '{_strategy_class}' 不支持 HMM。"
+                    f"支持的策略: {', '.join(sorted(_hmm_supported_classes))}"
+                )
 
         # 生成conf.yaml
         conf_yaml = self._compose_conf_yaml(
@@ -282,6 +368,8 @@ class ConfigComposer:
             disable_alpha158=disable_alpha158,
             quick_train=quick_train,
             backtest_freq=backtest_freq,
+            execution_algo=execution_algo,
+            execution_algo_params=execution_algo_params,
         )
 
         # 生成因子文件和预处理脚本（如果有自定义因子）
@@ -295,6 +383,11 @@ class ConfigComposer:
         # 保存文件
         conf_path = exp_dir / "conf.yaml"
         conf_path.write_text(conf_yaml, encoding="utf-8")
+
+        # 写入 HMM 系数文件（如果启用了 HMM）
+        if hmm_json_content:
+            hmm_path = exp_dir / "hmm_sector_coefficients.json"
+            hmm_path.write_text(hmm_json_content, encoding="utf-8")
 
         # 写入因子原始代码到 factors/ 子目录（保持原始格式不变）
         if has_factor_files:
@@ -323,6 +416,10 @@ class ConfigComposer:
             twap_src = scripts_dir / "tail_twap_strategy.py"
             if twap_src.exists():
                 shutil.copy2(twap_src, exp_dir / "tail_twap_strategy.py")
+            # 复制 v24 Plan 执行策略（依赖 tail_twap_strategy.py）
+            v24_src = scripts_dir / "tail_twap_v24_strategy.py"
+            if v24_src.exists():
+                shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
             # benchmark parquet
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
@@ -408,6 +505,7 @@ class ConfigComposer:
         execution_algo: Optional[str] = None,
         execution_algo_params: Optional[Dict[str, Any]] = None,
         strategy_params: Optional[Dict[str, Any]] = None,
+        node_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """组装实验配置到内存字典，不写入磁盘。
 
@@ -440,7 +538,7 @@ class ConfigComposer:
         model_info = self._get_model_info(model_id) if model_id else None
         strategy_info = self._get_strategy_info(strategy_id) if strategy_id else None
 
-        has_custom_factors = any(f.get("source") == "rdagent_task_sync" for f in factors_info)
+        has_custom_factors = any(f.get("code_text") for f in factors_info)
         has_alpha158 = any(f.get("source") == "alpha158" for f in factors_info)
         has_alpha360 = any(f.get("source") == "alpha360" for f in factors_info)
 
@@ -456,7 +554,10 @@ class ConfigComposer:
                 if any(k in name_lower for k in ["transformer", "lstm", "gru", "rnn", "timeseries", "temporal"]):
                     model_type_tag = "TimeSeries"
                 else:
-                    model_type_tag = "Tabular"
+                    raise ValueError(
+                        f"模型 '{model_info.get('model_name', '?')}' 的 model_type='{model_type_raw}' "
+                        f"不在已知类型中 (TimeSeries/Tabular)，请更新模型目录中的 model_type 字段"
+                    )
 
         disable_alpha158 = False
         quick_train = False
@@ -467,46 +568,71 @@ class ConfigComposer:
         # backtest_freq: "1min"（分钟线，默认）或 "day"（日线回退模式）
         backtest_freq = (custom_params or {}).get("backtest_freq", "1min")
 
-        # ── 从 RDAgent API 获取动态路径 ──
-        rdagent_cfg = self._fetch_workspace_config()
+        # 尾盘涨停未成交处理：从 custom_params 提取并注入到 execution_algo_params
+        # （这些参数是给 inner_strategy TailTWAPWithLimitStrategy 的）
+        _cp = custom_params or {}
+        if execution_algo_params is None:
+            execution_algo_params = {}
+        else:
+            execution_algo_params = dict(execution_algo_params)
+        if _cp.get("unfilled_handler"):
+            execution_algo_params["unfilled_handler"] = _cp["unfilled_handler"]
+        if _cp.get("unfilled_trigger_minute"):
+            execution_algo_params["unfilled_trigger_minute"] = _cp["unfilled_trigger_minute"]
+        if _cp.get("unfilled_backup_depth"):
+            execution_algo_params["unfilled_backup_depth"] = _cp["unfilled_backup_depth"]
+
+        # ── 获取路径配置（支持多节点） ──
+        rdagent_cfg = self._fetch_workspace_config(node_id)
         workspace_wsl = rdagent_cfg.get("workspace_base", QE_WORKSPACE_WSL)
         qlib_data_path = rdagent_cfg.get("qlib_data_path", QLIB_DATA_PATH_WSL)
         factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
+        qlib_minute_path = rdagent_cfg.get("qlib_minute_path", QLIB_MINUTE_PATH_WSL)
 
         # ── 生成各文件内容到 dict ──
         experiment_files: Dict[str, str] = {}
 
         # 0) HMM 预计算（必须在 conf.yaml 之前，使 hmm_coefficients_file 写入策略 kwargs）
-        if strategy_params and strategy_params.get("enable_sector_hmm"):
-            # 预计算失败会直接 raise，不做静默跳过
-            hmm_json = self._precompute_hmm_coefficients(strategy_params, data_split)
+        # 与 compose_experiment() 一致，从 custom_params 检查 enable_sector_hmm
+        if _cp.get("enable_sector_hmm"):
+            # 构造 strategy_params 供 _precompute_hmm_coefficients 使用
+            _hmm_sp = dict(_cp)
+            hmm_json = self._precompute_hmm_coefficients(_hmm_sp, data_split)
             experiment_files["hmm_sector_coefficients.json"] = hmm_json
-            strategy_params["hmm_coefficients_file"] = "hmm_sector_coefficients.json"
             # 注入到 custom_params 以便 _compose_conf_yaml 写入 strategy kwargs
             if custom_params is None:
                 custom_params = {}
             custom_params["hmm_coefficients_file"] = "hmm_sector_coefficients.json"
 
-            # 策略自动升级：Qlib 内置 TopkDropoutStrategy 不接受未知 kwargs，
-            # 需要使用支持 HMM 的 TopkDropoutWithRiskControlStrategy
-            if not strategy_info or not strategy_info.get("source_code"):
-                rc_qlib_path = Path(__file__).parent.parent.parent.parent / "qe_strategies" / "topk_dropout_rc_qlib.py"
-                if not rc_qlib_path.exists():
-                    raise FileNotFoundError(
-                        f"HMM 自动升级: RC 策略文件不存在 {rc_qlib_path}，"
-                        f"无法为 TopkDropoutStrategy 注入 HMM 支持"
-                    )
-                rc_source = rc_qlib_path.read_text(encoding="utf-8")
-                # 构造 strategy_info，步骤 6 会自动写入 custom_strategy.py
-                strategy_info = {
-                    "source_code": rc_source,
-                    "strategy_id": "__hmm_auto__",
-                    "portfolio_config": {
-                        "class": "TopkDropoutWithRiskControlStrategy",
-                        "kwargs": {},
-                    },
-                }
-                logger.info("HMM 启用: 自动升级策略为 TopkDropoutWithRiskControlStrategy")
+            # 严格验证：策略必须原生支持 HMM，禁止静默替换策略
+            _hmm_supported_classes = {
+                "TopkDropoutWithRiskControlStrategy",
+                "ScoreWeightedTopkStrategy",
+                "ScoreWeightedTopkStrategyV2",
+                "EnhancedTopkDropoutStrategy",
+                "SmallCapTopkDropoutStrategy",
+            }
+            _strategy_class = None
+            if strategy_info:
+                _pc = strategy_info.get("portfolio_config")
+                if isinstance(_pc, str):
+                    import json as _json
+                    _pc = _json.loads(_pc)
+                if _pc:
+                    _strategy_class = _pc.get("class")
+                if not _strategy_class:
+                    _sc = strategy_info.get("source_code", "")
+                    import re as _re
+                    _class_match = _re.search(r'class\s+(\w+)\s*\(', _sc)
+                    if _class_match:
+                        _strategy_class = _class_match.group(1)
+
+            if _strategy_class and _strategy_class not in _hmm_supported_classes:
+                raise ValueError(
+                    f"enable_sector_hmm=True 但策略 '{_strategy_class}' 不支持 HMM。"
+                    f"已支持 HMM 的策略: {', '.join(sorted(_hmm_supported_classes))}。"
+                    f"请切换到支持 HMM 的策略或关闭 HMM。"
+                )
 
         # 1) conf.yaml
         conf_yaml = self._compose_conf_yaml(
@@ -521,6 +647,7 @@ class ConfigComposer:
             disable_alpha158=disable_alpha158,
             quick_train=quick_train,
             qlib_data_path=qlib_data_path,
+            qlib_minute_path=qlib_minute_path,
             backtest_freq=backtest_freq,
             execution_algo=execution_algo,
             execution_algo_params=execution_algo_params,
@@ -531,8 +658,7 @@ class ConfigComposer:
         # 2) 因子文件 + prepare_factors.py
         if has_custom_factors:
             # 因子代码文件 → factors/<name>.py
-            custom_factors = [f for f in factors_info if f.get("source") == "rdagent_task_sync"]
-            for f in custom_factors:
+            for f in factors_info:
                 code = f.get("code_text")
                 if code:
                     experiment_files[f"factors/{f['factor_name']}.py"] = code
@@ -563,6 +689,10 @@ class ConfigComposer:
             twap_path = scripts_dir / "tail_twap_strategy.py"
             if twap_path.exists():
                 experiment_files["tail_twap_strategy.py"] = twap_path.read_text(encoding="utf-8")
+            # v24 Plan 执行策略（继承 TailTWAPWithLimitStrategy）
+            v24_path = scripts_dir / "tail_twap_v24_strategy.py"
+            if v24_path.exists():
+                experiment_files["tail_twap_v24_strategy.py"] = v24_path.read_text(encoding="utf-8")
             # benchmark parquet 是二进制文件，需要特殊处理
             bench_path = scripts_dir / "benchmark_sh000300.parquet"
             if bench_path.exists():
@@ -639,7 +769,10 @@ class ConfigComposer:
         """
         source_code = strategy_info.get("source_code", "")
         if not source_code:
-            return "", {}
+            raise ValueError(
+                f"策略 '{strategy_info.get('strategy_id', '?')}' 没有源代码 (source_code)，"
+                f"无法生成策略文件。请检查策略目录。"
+            )
 
         validation_result = self._validate_strategy_code(source_code)
         if not validation_result["ok"]:
@@ -651,6 +784,12 @@ class ConfigComposer:
         # 处理相对导入：读取依赖文件，转换为本地导入
         import re as _re
         strategy_pkg_dir = Path(__file__).parent.parent / "rebalance_strategies"
+        # factor_template 目录：score_weighted_strategy.py 等策略基类所在位置
+        _rdagent_root = QE_WORKSPACE_WIN.parent  # F:/Dev/RD-Agent-main
+        factor_template_dir = _rdagent_root / "rdagent" / "scenarios" / "qlib" / "experiment" / "factor_template"
+        # 只允许复制策略类文件，避免误复制 qrun_limit.py / read_exp_res.py 等运行时文件
+        _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
+                                   "tail_twap_strategy", "tail_twap_v24_strategy"}
         deps_dict: Dict[str, str] = {}
 
         def _resolve_deps(code: str, collected: set) -> str:
@@ -658,16 +797,35 @@ class ConfigComposer:
             out_lines = []
             for ln in code.split("\n"):
                 s = ln.strip()
+                # 匹配 from .module import ... (相对导入)
                 m = _re.match(r'^(\s*)from\s+\.(\w+)\s+import\s+(.+)$', s)
                 if m:
                     indent, mod, imps = m.group(1), m.group(2), m.group(3)
+                    # 先查 rebalance_strategies，再查 factor_template（仅白名单模块）
                     dep = strategy_pkg_dir / f"{mod}.py"
+                    if not dep.exists() and mod in _STRATEGY_DEP_WHITELIST:
+                        dep = factor_template_dir / f"{mod}.py"
                     if dep.exists() and mod not in collected:
                         collected.add(mod)
                         dep_code = dep.read_text(encoding="utf-8")
                         dep_code = _resolve_deps(dep_code, collected)
                         deps_dict[f"{mod}.py"] = dep_code
                     out_lines.append(f"{indent}from {mod} import {imps}")
+                    continue
+                # 匹配 from module import ... (无点号，检查是否为本地策略包模块)
+                m2 = _re.match(r'^(\s*)from\s+(\w+)\s+import\s+(.+)$', s)
+                if m2:
+                    indent, mod, imps = m2.group(1), m2.group(2), m2.group(3)
+                    # 先查 rebalance_strategies，再查 factor_template（仅白名单模块）
+                    dep = strategy_pkg_dir / f"{mod}.py"
+                    if not dep.exists() and mod in _STRATEGY_DEP_WHITELIST:
+                        dep = factor_template_dir / f"{mod}.py"
+                    if dep.exists() and mod not in collected:
+                        collected.add(mod)
+                        dep_code = dep.read_text(encoding="utf-8")
+                        dep_code = _resolve_deps(dep_code, collected)
+                        deps_dict[f"{mod}.py"] = dep_code
+                    out_lines.append(ln)
                     continue
                 if s == "@register":
                     continue
@@ -868,7 +1026,7 @@ class ConfigComposer:
         strategy_info = self._get_strategy_info(strategy_id) if strategy_id else None
 
         # 判断因子类型
-        has_custom_factors = any(f.get("source") == "rdagent_task_sync" for f in factors_info)
+        has_custom_factors = any(f.get("code_text") for f in factors_info)
         has_alpha158 = any(f.get("source") == "alpha158" for f in factors_info)
         has_alpha360 = any(f.get("source") == "alpha360" for f in factors_info)
 
@@ -885,7 +1043,10 @@ class ConfigComposer:
                 if any(k in name_lower for k in ["transformer", "lstm", "gru", "rnn", "timeseries", "temporal"]):
                     model_type_tag = "TimeSeries"
                 else:
-                    model_type_tag = "Tabular"
+                    raise ValueError(
+                        f"模型 '{model_info.get('model_name', '?')}' 的 model_type='{model_type_raw}' "
+                        f"不在已知类型中 (TimeSeries/Tabular)，请更新模型目录中的 model_type 字段"
+                    )
 
         # 从custom_params提取disable_alpha158和quick_train参数
         disable_alpha158 = False
@@ -949,7 +1110,10 @@ class ConfigComposer:
             twap_src = scripts_dir / "tail_twap_strategy.py"
             if twap_src.exists():
                 shutil.copy2(twap_src, exp_dir / "tail_twap_strategy.py")
-            bench_src = scripts_dir / "benchmark_sh000300.parquet"
+            # v24 Plan 执行策略（继承 TailTWAPWithLimitStrategy）
+            v24_src = scripts_dir / "tail_twap_v24_strategy.py"
+            if v24_src.exists():
+                shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
                 # 同时复制到 qe_workspace（实际执行目录）
@@ -1022,6 +1186,7 @@ class ConfigComposer:
         disable_alpha158: bool = False,
         quick_train: bool = False,  # 快速训练模式：训练时间缩短到20%
         qlib_data_path: Optional[str] = None,
+        qlib_minute_path: Optional[str] = None,
         backtest_freq: str = "1min",  # "1min" 分钟线回测 | "day" 日线回测
         execution_algo: Optional[str] = None,  # None/"TWAP" → TailTWAPWithLimitStrategy | "CLOSE_PRICE" → CloseExecutionStrategy
         execution_algo_params: Optional[Dict[str, Any]] = None,
@@ -1107,13 +1272,10 @@ class ConfigComposer:
                 elif model_type_raw in ("Tabular", "tabular"):
                     model_type_tag = "Tabular"
                 else:
-                    # 模型类型无法确定，记录警告并使用 Tabular 作为安全默认值
-                    # （Tabular/LGBModel 不需要 GPU 训练，风险更低）
-                    logger.warning(
-                        f"模型 '{model_name}' 的 model_type='{model_type_raw}' "
-                        f"不在已知类型中 (TimeSeries/Tabular)，标记为 Tabular"
+                    raise ValueError(
+                        f"模型 '{model_info.get('model_name', '?')}' 的 model_type='{model_type_raw}' "
+                        f"不在已知类型中 (TimeSeries/Tabular)，请更新模型目录中的 model_type 字段"
                     )
-                    model_type_tag = "Tabular"
 
             elif "LGB" in model_type or "LGBM" in model_type or "GBDT" in model_type:
                 model_class = "LGBModel"
@@ -1295,6 +1457,16 @@ class ConfigComposer:
             "disable_alpha158", "disable_alpha360", "use_custom_model",
             "model_type", "dataset_cls", "step_len", "num_timesteps", "num_features",
             "quick_train",  # 快速训练模式：控制模型训练参数
+            "label_type",   # 训练标签类型：close/open/vwap
+            "stock_pool",   # 股票池文件路径
+            "backtest_freq",        # 回测频率（已在上层提取）
+            "execution_algo",       # 执行算法（已在上层提取到 inner_strategy）
+            "execution_algo_params",  # 执行算法参数（已在上层提取到 inner_strategy）
+            "unfilled_handler",       # 尾盘涨停处理（已在上层提取到 inner_strategy.kwargs）
+            "unfilled_trigger_minute", # 尾盘处理触发分钟（已在上层提取到 inner_strategy.kwargs）
+            "unfilled_backup_depth",   # 替补候选深度（已在上层提取到 inner_strategy.kwargs）
+            "initial_cash",         # 初始资金（已在上层处理）
+            "hmm_model_version_id", # HMM 版本 ID（已在上层处理为 hmm_coefficients_file）
         } | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _LINEAR_HP_KEYS
 
         if custom_params:
@@ -1337,70 +1509,103 @@ class ConfigComposer:
 
         # 安全过滤：只保留策略支持的参数
         # 避免不支持的参数通过 **kwargs 传递到 BaseStrategy 导致 TypeError
-        # HMM 参数放在基础白名单中，所有策略均可接收（预计算系数通过文件注入）
-        _TOPK_DROPOUT_ALLOWED_KEYS = {
-            "signal", "topk", "n_drop", "method_sell", "method_buy",
-            "hold_thresh", "only_tradable", "forbid_all_trade_at_limit",
-            "risk_degree",
-            # HMM 预计算参数 — 所有策略通用
+        _HMM_KEYS = {
             "enable_sector_hmm", "sector_hmm_model_path",
             "hmm_signal_preset", "hmm_signal_presets",
             "hmm_coefficients_file",
         }
+        _UNFILLED_KEYS = {
+            "unfilled_handler", "unfilled_trigger_minute", "unfilled_backup_depth",
+        }
+        _TOPK_DROPOUT_ALLOWED_KEYS = {
+            "signal", "topk", "n_drop", "method_sell", "method_buy",
+            "hold_thresh", "only_tradable", "forbid_all_trade_at_limit",
+            "risk_degree",
+        } | _UNFILLED_KEYS
         # EnhancedTopkDropoutStrategy 支持的额外参数
         _ENHANCED_TOPK_ALLOWED_KEYS = _TOPK_DROPOUT_ALLOWED_KEYS | {
             "min_score", "max_position_ratio", "stop_loss", "max_market_cap",
-        }
+        } | _HMM_KEYS
         # SmallCapTopkDropoutStrategy 支持的参数
         _SMALLCAP_TOPK_ALLOWED_KEYS = _TOPK_DROPOUT_ALLOWED_KEYS | {
             "max_market_cap",
-        }
-        # TopkDropoutWithRiskControlStrategy 支持的参数
+        } | _HMM_KEYS
+        # TopkDropoutWithRiskControlStrategy 支持的参数（含 HMM）
         _RC_TOPK_ALLOWED_KEYS = _TOPK_DROPOUT_ALLOWED_KEYS | {
             "stop_loss_pct", "max_daily_turnover_pct",
             "stock_pool",
-        }
+        } | _HMM_KEYS
+        # ScoreWeightedTopkStrategy 支持的参数（T1.1+T1.3, 2026-04-06）
+        _SCORE_WEIGHTED_TOPK_ALLOWED_KEYS = _TOPK_DROPOUT_ALLOWED_KEYS | {
+            "weight_method", "temperature", "score_clip_quantile",
+            "max_weight", "min_weight", "max_position_ratio",
+            "enable_dynamic_ndrop", "max_n_drop", "min_n_drop",
+            "threshold_method", "min_improvement", "adaptive_multiplier",
+            "threshold_floor", "min_trade_price", "max_trade_price",
+            "max_single_order_value", "lot_size",
+        } | _UNFILLED_KEYS | _HMM_KEYS
 
         if strategy_class == "TopkDropoutStrategy":
             _removed = {k for k in strategy_kwargs if k not in _TOPK_DROPOUT_ALLOWED_KEYS}
             if _removed:
-                logger.warning(f"策略参数安全过滤: 移除不支持的参数 {_removed}")
-                for k in _removed:
-                    del strategy_kwargs[k]
+                raise ValueError(
+                    f"策略 '{strategy_class}' 不支持参数: {sorted(_removed)}。"
+                    f"允许的参数: {sorted(_TOPK_DROPOUT_ALLOWED_KEYS)}"
+                )
         elif strategy_class == "EnhancedTopkDropoutStrategy":
             _removed = {k for k in strategy_kwargs if k not in _ENHANCED_TOPK_ALLOWED_KEYS}
             if _removed:
-                logger.warning(f"策略参数安全过滤: 移除不支持的参数 {_removed}")
-                for k in _removed:
-                    del strategy_kwargs[k]
+                raise ValueError(
+                    f"策略 '{strategy_class}' 不支持参数: {sorted(_removed)}。"
+                    f"允许的参数: {sorted(_ENHANCED_TOPK_ALLOWED_KEYS)}"
+                )
         elif strategy_class == "SmallCapTopkDropoutStrategy":
             _removed = {k for k in strategy_kwargs if k not in _SMALLCAP_TOPK_ALLOWED_KEYS}
             if _removed:
-                logger.warning(f"策略参数安全过滤: 移除不支持的参数 {_removed}")
-                for k in _removed:
-                    del strategy_kwargs[k]
+                raise ValueError(
+                    f"策略 '{strategy_class}' 不支持参数: {sorted(_removed)}。"
+                    f"允许的参数: {sorted(_SMALLCAP_TOPK_ALLOWED_KEYS)}"
+                )
         elif strategy_class == "TopkDropoutWithRiskControlStrategy":
             _removed = {k for k in strategy_kwargs if k not in _RC_TOPK_ALLOWED_KEYS}
             if _removed:
-                logger.warning(f"策略参数安全过滤: 移除不支持的参数 {_removed}")
-                for k in _removed:
-                    del strategy_kwargs[k]
+                raise ValueError(
+                    f"策略 '{strategy_class}' 不支持参数: {sorted(_removed)}。"
+                    f"允许的参数: {sorted(_RC_TOPK_ALLOWED_KEYS)}"
+                )
+        elif strategy_class == "ScoreWeightedTopkStrategy":
+            _removed = {k for k in strategy_kwargs if k not in _SCORE_WEIGHTED_TOPK_ALLOWED_KEYS}
+            if _removed:
+                raise ValueError(
+                    f"策略 '{strategy_class}' 不支持参数: {sorted(_removed)}。"
+                    f"允许的参数: {sorted(_SCORE_WEIGHTED_TOPK_ALLOWED_KEYS)}"
+                )
+        elif strategy_class == "ScoreWeightedTopkStrategyV2":
+            # V2 与 V1 参数集相同，修复了补仓模式 Bug #1 和幽灵持仓 Bug #2
+            _removed = {k for k in strategy_kwargs if k not in _SCORE_WEIGHTED_TOPK_ALLOWED_KEYS}
+            if _removed:
+                raise ValueError(
+                    f"策略 '{strategy_class}' 不支持参数: {sorted(_removed)}。"
+                    f"允许的参数: {sorted(_SCORE_WEIGHTED_TOPK_ALLOWED_KEYS)}"
+                )
         else:
-            # 其他自定义策略：过滤掉已知的非策略参数（更宽松的过滤）
+            # 未知策略类型：只过滤已知的非策略参数（如 backtest_freq, execution_algo 等）
             _removed = {k for k in strategy_kwargs if k in _NON_STRATEGY_PARAMS}
             if _removed:
-                logger.warning(f"策略参数安全过滤: 移除非策略参数 {_removed}")
+                logger.info(f"未知策略 '{strategy_class}': 移除非策略参数 {sorted(_removed)}")
                 for k in _removed:
                     del strategy_kwargs[k]
 
-        # 回测截止日（避免越界）
-        backtest_end = data_split.get("backtest_end", "2026-03-05")  # 兜底值比日历末尾安全回退 7 天
+        # 回测截止日（必须由 data_split 提供，禁止硬编码兜底）
+        backtest_end = data_split.get("backtest_end")
+        if not backtest_end:
+            raise ValueError("data_split 缺少 backtest_end，无法生成回测配置")
 
         # ── 生成 YAML（与 RDAgent conf_baseline.yaml 结构一致） ──
         lines = []
         lines.append("qlib_init:")
         _day_uri = qlib_data_path or QLIB_DATA_PATH_WSL
-        _min_uri = QLIB_MINUTE_PATH_WSL
+        _min_uri = qlib_minute_path or QLIB_MINUTE_PATH_WSL
         lines.append("    provider_uri:")
         lines.append(f'        day: "{_day_uri}"')
         lines.append(f'        1min: "{_min_uri}"')
@@ -1409,6 +1614,23 @@ class ConfigComposer:
         lines.append("    expression_cache: null")
         lines.append("")
         stock_pool = (custom_params or {}).get("stock_pool", "all")
+        # 训练标签选择（custom_params.label_type 可选覆盖）
+        # close: Ref($close,-2)/Ref($close,-1)-1  — 传统 close-to-close（默认）
+        # open:  Ref($open,-2)/Ref($open,-1)-1    — open-to-open（更贴近可执行价）
+        # vwap:  Ref($vwap,-2)/Ref($vwap,-1)-1    — vwap-to-vwap
+        _LABEL_FORMULAS = {
+            "close": "Ref($close, -2) / Ref($close, -1) - 1",
+            "open":  "Ref($open, -2) / Ref($open, -1) - 1",
+            "vwap":  "Ref($vwap, -2) / Ref($vwap, -1) - 1",
+        }
+        _label_type = (custom_params or {}).get("label_type", "close")
+        if _label_type not in _LABEL_FORMULAS:
+            raise ValueError(
+                f"label_type='{_label_type}' invalid, must be one of {list(_LABEL_FORMULAS.keys())}"
+            )
+        _label_formula = _LABEL_FORMULAS[_label_type]
+        if _label_type != "close":
+            logger.info(f"使用非默认训练标签: label_type={_label_type}, formula={_label_formula}")
         lines.append(f"market: &market {stock_pool}")
         lines.append("benchmark: &benchmark 000300.SH")
         lines.append("")
@@ -1435,7 +1657,7 @@ class ConfigComposer:
             lines.append("                  kwargs:")
             lines.append("                    config:")
             lines.append("                        label: ")
-            lines.append('                            - ["Ref($close, -2)/Ref($close, -1) - 1"]')
+            lines.append(f'                            - ["{_label_formula}"]')
             lines.append('                            - ["LABEL0"]')
             lines.append("                        feature:")
             lines.append('                            - ["Resi($close, 5)/$close", "Std(Abs($close/Ref($close, 1)-1)*$volume, 5)/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 5)+1e-12)",')
@@ -1513,7 +1735,7 @@ class ConfigComposer:
             lines.append("        - class: CSRankNorm")
             lines.append("          kwargs:")
             lines.append("              fields_group: label")
-            lines.append('    label: ["Ref($close, -2) / Ref($close, -1) - 1"]')
+            lines.append(f'    label: ["{_label_formula}"]')
 
         lines.append("")
 
@@ -1540,7 +1762,8 @@ class ConfigComposer:
             lines.append("                    time_per_step: 1min")
             lines.append("                    generate_portfolio_metrics: false")
             lines.append("            inner_strategy:")
-            if execution_algo and execution_algo.upper() == "CLOSE_PRICE":
+            _algo_upper = (execution_algo or "").upper()
+            if _algo_upper == "CLOSE_PRICE":
                 lines.append("                class: CloseExecutionStrategy")
                 lines.append("                module_path: close_execution_strategy")
                 if execution_algo_params:
@@ -1552,6 +1775,21 @@ class ConfigComposer:
                             lines.append(f"                    {k}: {v}")
                         else:
                             lines.append(f"                    {k}: {v}")
+            elif _algo_upper == "V24_PLAN":
+                # v24 方向感知执行计划 (继承 TailTWAPWithLimitStrategy)
+                lines.append("                class: TailTWAPWithV24PlanStrategy")
+                lines.append("                module_path: tail_twap_v24_strategy")
+                lines.append("                kwargs:")
+                # model_path 默认值 (可被 execution_algo_params 覆盖)
+                _v24_params = dict(execution_algo_params or {})
+                _v24_params.setdefault("model_path", "/home/lc999/data/rl_models/v24/v24_plan_net.pt")
+                for k, v in _v24_params.items():
+                    if isinstance(v, bool):
+                        lines.append(f"                    {k}: {'true' if v else 'false'}")
+                    elif isinstance(v, str):
+                        lines.append(f"                    {k}: {v}")
+                    else:
+                        lines.append(f"                    {k}: {v}")
             else:
                 # 默认：TailTWAPWithLimitStrategy
                 lines.append("                class: TailTWAPWithLimitStrategy")
@@ -1678,7 +1916,7 @@ class ConfigComposer:
         Returns:
             返回一个标记字符串表示有因子文件（实际文件在compose_experiment中写入）
         """
-        custom_factors = [f for f in factors_info if f.get("source") == "rdagent_task_sync"]
+        custom_factors = [f for f in factors_info if f.get("code_text")]
         if not custom_factors:
             return None
 
@@ -1692,7 +1930,7 @@ class ConfigComposer:
         prepare_factors.py 会从 factors/ 目录读取每个因子代码，
         在独立的临时目录中执行（python factor.py），读取 result.h5。
         """
-        custom_factors = [f for f in factors_info if f.get("source") == "rdagent_task_sync"]
+        custom_factors = [f for f in factors_info if f.get("code_text")]
         if not custom_factors:
             return
 
@@ -1718,11 +1956,11 @@ class ConfigComposer:
         3. 每个因子输出 result.h5，与 RDAgent 因子执行方式完全一致
         4. 合并所有因子结果为 combined_factors_df.parquet（NestedDataLoader StaticDataLoader 所需格式）
         """
-        custom_factors = [f for f in factors_info if f.get("source") == "rdagent_task_sync"]
+        custom_factors = [f for f in factors_info if f.get("code_text")]
         if not custom_factors:
             return None
 
-        factor_names = [f["factor_name"] for f in custom_factors if f.get("code_text")]
+        factor_names = [f["factor_name"] for f in custom_factors]
 
         lines: list[str] = []
         lines.append('"""')
@@ -2163,6 +2401,11 @@ class ConfigComposer:
             # 过滤掉注释行，只保留实际命令
             env_cmds = [l for l in env_lines if l and not l.startswith("#")]
             parts = [f"cd {wsl_path}"]
+            # conda activate — 确保远端节点子进程能找到 python 和依赖包
+            parts.append(
+                '. "${QLIB_WSL_CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}" && '
+                'conda activate "${QLIB_WSL_CONDA_ENV:-rdagent-gpu}"'
+            )
             # 限制 glibc malloc arena 数量，防止内存碎片膨胀（默认 8×CPU 核数）
             parts.append("export MALLOC_ARENA_MAX=4")
             # 强制禁用 Python stdout 缓冲，确保训练日志实时输出到 pipe
@@ -2199,7 +2442,7 @@ python prepare_factors.py
 # 步骤2: 设置环境变量
 {env_block}
 # 加载因子预处理输出的 num_features（由 prepare_factors.py 自动计算）
-source .factor_env
+. .factor_env
 
 # 步骤3: 运行QLib回测
 python {runner} conf.yaml
@@ -2451,8 +2694,8 @@ model_cls = {nn_class_name}
                 wsl_host_ip = _res.stdout.strip()
                 if wsl_host_ip and wsl_host_ip not in ("10.255.255.254", ""):
                     db_params["db_host"] = wsl_host_ip
-            except Exception:
-                pass
+            except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
+                logger.debug("WSL host IP detection failed (non-critical): %s", e)
 
         stdin_params = {
             "model_path": model_path,
@@ -2469,7 +2712,7 @@ model_cls = {nn_class_name}
         _mp = _script_abs.replace("\\", "/")
         wsl_script = f"/mnt/{_mp[0].lower()}{_mp[2:]}" if len(_mp) >= 2 and _mp[1] == ":" else _mp
         wsl_cmd = (
-            "source ~/miniconda3/etc/profile.d/conda.sh && "
+            '. "${QLIB_WSL_CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}" && '
             "conda activate rdagent-gpu && "
             f"python {wsl_script} --output-path '{coeff_path}'"
         )
@@ -2521,7 +2764,10 @@ model_cls = {nn_class_name}
         """
         source_code = strategy_info.get("source_code", "")
         if not source_code:
-            return
+            raise ValueError(
+                f"策略 '{strategy_info.get('strategy_id', '?')}' 没有源代码 (source_code)，"
+                f"无法写入策略文件。请检查策略目录。"
+            )
         
         # 编译验证：检查语法错误
         validation_result = self._validate_strategy_code(source_code)
@@ -2534,24 +2780,49 @@ model_cls = {nn_class_name}
         # 处理相对导入：递归复制依赖文件到实验目录，将相对导入转为本地导入
         import re as _re
         strategy_pkg_dir = Path(__file__).parent.parent / "rebalance_strategies"
+        # factor_template 目录：score_weighted_strategy.py 等策略基类所在位置
+        _rdagent_root = QE_WORKSPACE_WIN.parent  # F:/Dev/RD-Agent-main
+        factor_template_dir = _rdagent_root / "rdagent" / "scenarios" / "qlib" / "experiment" / "factor_template"
+        # 只允许复制策略类文件，避免误复制 qrun_limit.py / read_exp_res.py 等运行时文件
+        _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
+                                   "tail_twap_strategy", "tail_twap_v24_strategy"}
 
         def _copy_deps_recursive(code: str, copied: set) -> str:
             """递归处理相对导入：转换为本地导入并复制依赖文件."""
             out_lines = []
             for ln in code.split("\n"):
                 s = ln.strip()
+                # 匹配 from .module import ... (相对导入)
                 m = _re.match(r'^(\s*)from\s+\.(\w+)\s+import\s+(.+)$', s)
                 if m:
                     indent, mod, imps = m.group(1), m.group(2), m.group(3)
+                    # 先查 rebalance_strategies，再查 factor_template（仅白名单模块）
                     dep = strategy_pkg_dir / f"{mod}.py"
+                    if not dep.exists() and mod in _STRATEGY_DEP_WHITELIST:
+                        dep = factor_template_dir / f"{mod}.py"
                     if dep.exists() and mod not in copied:
                         copied.add(mod)
                         dep_code = dep.read_text(encoding="utf-8")
-                        # 递归处理依赖的依赖
                         dep_code = _copy_deps_recursive(dep_code, copied)
                         (exp_dir / f"{mod}.py").write_text(dep_code, encoding="utf-8")
                         logger.info(f"复制策略依赖文件: {mod}.py")
                     out_lines.append(f"{indent}from {mod} import {imps}")
+                    continue
+                # 匹配 from module import ... (无点号，检查是否为本地策略包模块)
+                m2 = _re.match(r'^(\s*)from\s+(\w+)\s+import\s+(.+)$', s)
+                if m2:
+                    indent, mod, imps = m2.group(1), m2.group(2), m2.group(3)
+                    # 先查 rebalance_strategies，再查 factor_template（仅白名单模块）
+                    dep = strategy_pkg_dir / f"{mod}.py"
+                    if not dep.exists() and mod in _STRATEGY_DEP_WHITELIST:
+                        dep = factor_template_dir / f"{mod}.py"
+                    if dep.exists() and mod not in copied:
+                        copied.add(mod)
+                        dep_code = dep.read_text(encoding="utf-8")
+                        dep_code = _copy_deps_recursive(dep_code, copied)
+                        (exp_dir / f"{mod}.py").write_text(dep_code, encoding="utf-8")
+                        logger.info(f"复制策略依赖文件: {mod}.py")
+                    out_lines.append(ln)
                     continue
                 if s == "@register":
                     continue
@@ -2697,7 +2968,8 @@ model_cls = {nn_class_name}
                 return result
             
             # 检查是否继承自BaseSignalStrategy或其子类
-            valid_base_classes = {"BaseSignalStrategy", "BaseStrategy", "TopkDropoutStrategy"}
+            valid_base_classes = {"BaseSignalStrategy", "BaseStrategy", "TopkDropoutStrategy",
+                                   "ScoreWeightedTopkStrategy"}
             found_valid_class = False
             
             for class_def in class_defs:
@@ -2754,7 +3026,22 @@ model_cls = {nn_class_name}
         
         if result["warnings"]:
             logger.warning(f"策略代码验证警告: {result['warnings']}")
-        
+
+        # 5. 检查 HMM 调用顺序：_apply_hmm_adjustment 必须在 None 检查之后
+        if "_apply_hmm_adjustment" in source_code:
+            lines = source_code.split("\n")
+            hmm_line = next((i for i, l in enumerate(lines) if "_apply_hmm_adjustment" in l), None)
+            none_check_line = next((i for i, l in enumerate(lines)
+                                    if ("is None" in l or "if not" in l) and
+                                    ("pred_score" in l or "all_pred_scores" in l or "scores" in l)
+                                    and i < (hmm_line or 9999)), None)
+            if hmm_line is not None and none_check_line is None:
+                result["warnings"].append(
+                    f"[HMM顺序警告] _apply_hmm_adjustment (行{hmm_line+1}) 在 None 检查之前调用，"
+                    f"当 get_signal 返回 None 时会触发 AttributeError。"
+                    f"请确保 None 检查在 HMM 调用之前。"
+                )
+
         return result
 
     def _copy_qe_custom_loaders(self, exp_dir: Path) -> None:
@@ -2919,7 +3206,8 @@ model_cls = {nn_class_name}
         if isinstance(factor_names, str):
             try:
                 factor_names = json.loads(factor_names)
-            except Exception:
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning("factor_names JSON 解析失败，作为单字符串处理: %s (error: %s)", factor_names[:80], e)
                 factor_names = [factor_names]
 
         if not factor_names:

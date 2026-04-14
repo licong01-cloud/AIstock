@@ -115,6 +115,11 @@ tools/
 tdx-api-main/
 tdx_doc/
 
+# Additional business data dirs
+qe_strategies/
+model_training_workspace/
+report/
+
 # Environment files (already tracked by mistake — untrack separately)
 .env
 .claude/

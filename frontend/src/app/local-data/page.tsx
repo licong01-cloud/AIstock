@@ -59,6 +59,7 @@ const INGESTION_DATASETS_BY_SOURCE: Record<DataSource, Record<string, string>> =
     sw_daily: "申万行业指数日线（Tushare sw_daily）",
     sector_data: "申万L2行业展开到个股（22列，后处理）",
     stk_limit: "每日涨跌停价格（Tushare stk_limit）",
+    margin_detail: "融资融券明细（Tushare margin_detail）",
   },
   xtquant: {
     xtquant_pershare_index: "每股主要指标（PershareIndex）",
@@ -81,6 +82,7 @@ const TRUNCABLE_DATASETS: string[] = [
   "stock_st",
   "bak_basic",
   "stk_limit",
+  "margin_detail",
   "daily_basic",
   "anns_d",
   "cyq_perf",
@@ -287,6 +289,9 @@ export default function LocalDataPage() {
       } else if (lower === "stock_basic") {
         dataSource = "Tushare";
         dataset = "stock_basic";
+      } else if (lower === "margin_detail") {
+        dataSource = "Tushare";
+        dataset = "margin_detail";
       } else if (lower === "xtquant_pershare_index") {
         dataSource = "xtquant";
         dataset = "xtquant_pershare_index";
@@ -507,6 +512,10 @@ function InitTab() {
       key: "sector_data",
       label: "sector_data · 申万L2行业展开到个股（22列，后处理）",
     },
+    {
+      key: "margin_detail",
+      label: "margin_detail · 融资融券交易明细（Tushare）",
+    },
   ];
 
   const datasetOptionsXtquant: { key: string; label: string }[] = [
@@ -723,6 +732,7 @@ function InitTab() {
           "stock_st",
           "bak_basic",
           "stk_limit",
+          "margin_detail",
           "anns_d",
           "cyq_perf",
           "cyq_chips",
@@ -756,6 +766,7 @@ function InitTab() {
           "anns_d",
           "cyq_perf",
           "cyq_chips",
+          "margin_detail",
         ].includes(dataset)
       ) {
         opts.truncate = Boolean(truncate);
@@ -765,7 +776,7 @@ function InitTab() {
           opts.index_markets = indexMarkets;
         }
       }
-      if (dataset === "stock_st" || dataset === "bak_basic" || dataset === "stk_limit" || dataset === "anns_d" || dataset === "cyq_perf" || dataset === "cyq_chips") {
+      if (dataset === "stock_st" || dataset === "bak_basic" || dataset === "stk_limit" || dataset === "margin_detail" || dataset === "anns_d" || dataset === "cyq_perf" || dataset === "cyq_chips") {
         if (!opts.start_date || !opts.end_date) {
           setError("请填写起止日期再执行初始化。");
           return;
@@ -977,6 +988,7 @@ function InitTab() {
               "stock_st",
               "bak_basic",
               "stk_limit",
+              "margin_detail",
               "anns_d",
             ].includes(dataset))) && (
           <div className={styles.formGroup}>
@@ -1226,6 +1238,14 @@ function IncrementalTab({
       key: "sector_data",
       label: "sector_data · 申万L2行业展开到个股（增量后处理）",
     },
+    {
+      key: "margin_detail",
+      label: "margin_detail · 融资融券交易明细（Tushare）",
+    },
+    {
+      key: "stock_basic",
+      label: "stock_basic · 最新股票列表（全量刷新，init 模式）",
+    },
   ];
 
   const datasetOptionsXtquant = [
@@ -1464,7 +1484,8 @@ function IncrementalTab({
             end_date: effectiveEnd,
             batch_size: Number(batchSize) || 100,
           };
-          const payload = { dataset, mode: "incremental", options: opts };
+          const isInitOnlyDataset = dataset === "stock_basic" || dataset === "index_basic";
+          const payload = { dataset, mode: isInitOnlyDataset ? "init" : "incremental", options: opts };
           const resp: any = await backendRequest(
             "POST",
             "/api/ingestion/run",
@@ -3798,6 +3819,7 @@ function DataStatsTab({
       k.startsWith("kline_") ||
       k === "kline_minute_raw" ||
       k === "stock_moneyflow_ts" ||
+      k === "margin_detail" ||
       k === "index_daily"
     ) {
       return "market";
@@ -3922,6 +3944,7 @@ function DataStatsTab({
           lower === "stock_st" ||
           lower === "bak_basic" ||
           lower === "stk_limit" ||
+          lower === "margin_detail" ||
           lower === "anns_d" ||
           lower === "index_daily" ||
           lower === "xtquant_pershare_index" ||
@@ -4191,6 +4214,7 @@ function DataStatsTab({
                       "cyq_perf",
                       "cyq_chips",
                       "stk_limit",
+                      "margin_detail",
                     ].includes(kind);
 
                     rows.push(
@@ -4999,17 +5023,20 @@ const WORKER_SUPPORTED_DATASETS = new Set([
 const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; defaultAt: string }[] = [
   { dataset: "kline_daily_raw", label: "日线（未复权 RAW）", source: "TDX", defaultAt: "17:00" },
   { dataset: "kline_minute_raw", label: "分钟线（RAW）", source: "TDX", defaultAt: "17:00" },
+  // Tushare 盘后数据（按执行时间排序）
   { dataset: "daily_basic", label: "股票每日指标", source: "Tushare", defaultAt: "16:30" },
-  { dataset: "stock_basic", label: "股票基础信息", source: "Tushare", defaultAt: "16:30" },
   { dataset: "stock_moneyflow_ts", label: "个股资金流（TS）", source: "Tushare", defaultAt: "16:30" },
   { dataset: "adj_factor", label: "复权因子", source: "Tushare", defaultAt: "16:30" },
   { dataset: "index_daily", label: "指数日线行情", source: "Tushare", defaultAt: "16:30" },
-  { dataset: "stock_st", label: "ST 标记", source: "Tushare", defaultAt: "16:30" },
-  { dataset: "bak_basic", label: "备用基础信息", source: "Tushare", defaultAt: "16:30" },
-  { dataset: "stk_limit", label: "每日涨跌停价格", source: "Tushare", defaultAt: "16:30" },
   { dataset: "sw_sector", label: "申万行业板块（统一同步）", source: "Tushare", defaultAt: "16:45" },
   { dataset: "sector_data", label: "申万行业展开数据（后处理）", source: "Tushare", defaultAt: "17:00" },
+  { dataset: "margin_detail", label: "融资融券明细", source: "Tushare", defaultAt: "17:07" },
   { dataset: "cyq_perf", label: "每日筹码及胜率", source: "Tushare", defaultAt: "17:15" },
+  // Tushare 低频/不定期数据
+  { dataset: "stock_basic", label: "股票基础信息", source: "Tushare", defaultAt: "17:30" },
+  { dataset: "stock_st", label: "ST 标记", source: "Tushare", defaultAt: "17:33" },
+  { dataset: "bak_basic", label: "备用基础信息", source: "Tushare", defaultAt: "17:36" },
+  { dataset: "stk_limit", label: "每日涨跌停价格", source: "Tushare", defaultAt: "09:10" },
 ];
 
 function IngestionSchedulesTab() {

@@ -20,8 +20,10 @@ class BaseRebalanceStrategy(ABC):
       - 返回 signal 列表
     """
 
-    def __init__(self, config: Dict[str, Any] | None = None) -> None:
+    def __init__(self, config: Dict[str, Any] | None = None, **kwargs) -> None:
         self.config = config or {}
+        # Qlib passes all YAML strategy kwargs to __init__; merge them
+        self.config.update(kwargs)
 
     @abstractmethod
     def generate_orders(

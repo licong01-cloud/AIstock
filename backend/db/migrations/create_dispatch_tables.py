@@ -121,6 +121,17 @@ def run_migration():
         ("public", "qe_evolution_tasks", "node_id", "TEXT"),
         ("public", "qe_evolution_loops", "node_id", "TEXT"),
     ]
+    # ── 5.5. compute_nodes 增加路径配置列 ──
+    node_path_stmts = [
+        ("infra", "compute_nodes", "workspace_base", "TEXT"),
+        ("infra", "compute_nodes", "factor_data_dir", "TEXT"),
+        ("infra", "compute_nodes", "qlib_data_path", "TEXT"),
+        ("infra", "compute_nodes", "qlib_minute_path", "TEXT"),
+        ("infra", "compute_nodes", "qlib_rdagent_root", "TEXT"),
+        ("infra", "compute_nodes", "callback_url", "TEXT"),
+        ("infra", "compute_nodes", "ssh_user", "TEXT"),
+    ]
+    alter_stmts.extend(node_path_stmts)
     for schema, table, col, col_type in alter_stmts:
         cur.execute("""
             SELECT 1 FROM information_schema.columns
@@ -145,19 +156,57 @@ def run_migration():
         cur.execute(f"UPDATE {table} SET node_id = 'wsl2-5080' WHERE node_id IS NULL")
         print(f"  回填 {table}.node_id = 'wsl2-5080' — 完成 ({cur.rowcount} 行)")
 
-    # ── 7. 初始节点数据 ──
+    # ── 7. 初始节点数据（含路径配置 + callback_url） ──
+    import socket
+    def _detect_callback_url(port: int = 8000) -> str:
+        """自动检测本机局域网 IP，拼接端口生成 callback_url。"""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return f"http://{ip}:{port}"
+        except Exception:
+            return f"http://127.0.0.1:{port}"
+
+    callback_url = _detect_callback_url()
     cur.execute("""
-        INSERT INTO infra.compute_nodes (node_id, display_name, api_base_url, gpu_model, gpu_vram_mb, capabilities, prometheus_target)
+        INSERT INTO infra.compute_nodes (
+            node_id, display_name, api_base_url, gpu_model, gpu_vram_mb,
+            capabilities, prometheus_target,
+            workspace_base, factor_data_dir, qlib_data_path, qlib_minute_path,
+            qlib_rdagent_root, callback_url, ssh_user
+        )
         VALUES
           ('wsl2-5080', '本机 WSL (RTX 5080)', 'http://127.0.0.1:9000', 'RTX 5080', 16384,
            '["fin_factor","fin_model","fin_quant","fin_factor_report","qe_evolution"]',
-           'localhost:9100'),
+           'localhost:9100',
+           '/mnt/f/Dev/RD-Agent-main/qe_workspace',
+           '/mnt/f/dev/RD-Agent-main/git_ignore_folder/factor_implementation_source_data',
+           '/home/lc999/data/qlib_bin',
+           '/home/lc999/data/qlib_minute_bin',
+           '/mnt/f/Dev/RD-Agent-main',
+           %s, 'lc999'),
           ('rdagent-node1', 'Linux 独立机 (RTX 2060)', 'http://192.168.50.215:9000', 'RTX 2060', 6144,
            '["fin_factor","fin_model","fin_quant","fin_factor_report","qe_evolution"]',
-           '192.168.50.215:9100')
-        ON CONFLICT (node_id) DO NOTHING
-    """)
-    print(f"初始节点数据插入完成 ({cur.rowcount} 行)")
+           '192.168.50.215:9100',
+           '/home/lc999/projects/RD-Agent-main/qe_workspace',
+           '/home/lc999/data/factor_data',
+           '/home/lc999/data/qlib_bin',
+           '/home/lc999/data/qlib_minute_bin',
+           '/home/lc999/projects/RD-Agent-main',
+           %s, 'lc999')
+        ON CONFLICT (node_id) DO UPDATE SET
+            workspace_base = EXCLUDED.workspace_base,
+            factor_data_dir = EXCLUDED.factor_data_dir,
+            qlib_data_path = EXCLUDED.qlib_data_path,
+            qlib_minute_path = EXCLUDED.qlib_minute_path,
+            qlib_rdagent_root = EXCLUDED.qlib_rdagent_root,
+            callback_url = EXCLUDED.callback_url,
+            ssh_user = EXCLUDED.ssh_user,
+            updated_at = NOW()
+    """, (callback_url, callback_url))
+    print(f"初始节点数据 upsert 完成 ({cur.rowcount} 行)")
 
     # ── 8. updated_at 触发器 ──
     for table in ("infra.compute_nodes", "infra.dispatch_tasks"):

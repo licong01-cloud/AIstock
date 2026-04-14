@@ -102,12 +102,15 @@ class RDAgentCandidateService:
             return self.rdagent_client
 
         node_id = log_dir.split(":", 1)[0]
+        # Windows 盘符 (如 "F:\...") → 单节点时代旧数据，回退到默认客户端
+        if len(node_id) == 1 and node_id.isalpha():
+            return self.rdagent_client
         return RDAgentResultsApiClient.for_node(node_id)
 
-    def get_task_workspaces(self, task_id: str) -> dict:
+    def get_task_workspaces(self, task_id: str, *, quick: bool = True) -> dict:
         """通过自动路由获取 task 所属节点的 workspace 信息。"""
         client = self._get_client_for_task(task_id)
-        return client.get_task_workspaces(task_id)
+        return client.get_task_workspaces(task_id, quick=quick)
 
     def delete_task_on_node(self, task_id: str) -> dict:
         """通过自动路由删除 task 所属节点上的 log + workspace + scheduler log。
@@ -141,28 +144,43 @@ class RDAgentCandidateService:
         nodes_failed = 0
         failed_node_ids: set[str] = set()
 
+        PAGE_SIZE = 200  # 每次请求的最大数量
         for node_id, client in node_clients:
             try:
-                api_resp = client.get_tasks_latest(limit=limit or 200)
-                raw_items: list = []
-                if isinstance(api_resp, list):
-                    raw_items = api_resp
-                elif isinstance(api_resp, dict):
-                    for k in ("items", "tasks", "data"):
-                        if isinstance(api_resp.get(k), list):
-                            raw_items = api_resp[k]
-                            break
+                # 分页循环：持续拉取直到获取全部 task
+                node_offset = 0
+                node_total = None
+                while True:
+                    api_resp = client.get_tasks_latest(limit=PAGE_SIZE, offset=node_offset)
+                    raw_items: list = []
+                    if isinstance(api_resp, list):
+                        raw_items = api_resp
+                    elif isinstance(api_resp, dict):
+                        # 首次请求时记录 total 总数
+                        if node_total is None:
+                            node_total = api_resp.get("total")
+                        for k in ("items", "tasks", "data"):
+                            if isinstance(api_resp.get(k), list):
+                                raw_items = api_resp[k]
+                                break
 
-                for t in raw_items:
-                    tid = t.get("task_id")
-                    if tid and tid not in discovered_tasks:
-                        discovered_tasks[tid] = {
-                            "task_id": tid,
-                            "node_id": node_id,
-                            "client": client,
-                        }
+                    for t in raw_items:
+                        tid = t.get("task_id")
+                        if tid and tid not in discovered_tasks:
+                            discovered_tasks[tid] = {
+                                "task_id": tid,
+                                "node_id": node_id,
+                                "client": client,
+                            }
 
-                logger.info(f"节点 {node_id}: 发现 {len(raw_items)} 个TASK")
+                    # 本页无数据或已拉取全部 → 退出
+                    if not raw_items:
+                        break
+                    node_offset += len(raw_items)
+                    if node_total is not None and node_offset >= node_total:
+                        break
+
+                logger.info(f"节点 {node_id}: 发现 {len([t for t in discovered_tasks.values() if t['node_id'] == node_id])} 个TASK (分页拉取完成)")
             except Exception as e:
                 nodes_failed += 1
                 failed_node_ids.add(node_id)
@@ -179,19 +197,23 @@ class RDAgentCandidateService:
             cur.execute("SELECT task_id, dir_exists, log_dir FROM rdagent.rdagent_candidate_tasks")
             existing_tasks = {row['task_id']: row for row in cur.fetchall()}
 
-            # 3. 处理新TASK和更新已有TASK（limit 限制新 task 获取数量）
+            # 3. 处理新TASK和更新已有TASK
             new_tasks = []
             updated_tasks = []
             current_task_ids = set(discovered_tasks.keys())
 
             for tid, item in discovered_tasks.items():
                 if tid not in existing_tasks:
-                    if limit and len(new_tasks) >= limit:
-                        continue  # 限制新 task 的 V2 预览请求数量
-                    task_info = self._fetch_task_info(tid, node_id=item['node_id'],
-                                                      client=item['client'])
-                    if task_info:
-                        new_tasks.append(task_info)
+                    # 快速入库：不阻塞等 V2 预览，先写入基本信息
+                    new_tasks.append({
+                        "task_id": tid,
+                        "log_dir": f"{item['node_id']}:{tid}",
+                        "node_id": item['node_id'],
+                        "has_sota": None,
+                        "sota_factors_count": None,
+                        "task_status": "discovered",
+                        "discovered_at": datetime.now(timezone.utc),
+                    })
                 else:
                     # 已有TASK：如果之前标记为不存在，恢复
                     if not existing_tasks[tid]['dir_exists']:
@@ -241,6 +263,42 @@ class RDAgentCandidateService:
         }
 
         logger.info(f"扫描完成: {result}")
+
+        # 后台异步补全新 task 的 V2 详情（不阻塞返回）
+        if new_tasks:
+            _uncached_tids = [t["task_id"] for t in new_tasks]
+            import threading
+            def _bg_backfill_v2(tids, node_map):
+                """后台线程：逐个补全 V2 对齐信息"""
+                try:
+                    svc = get_candidate_service()
+                    conn_bg = svc._get_db_connection()
+                    try:
+                        cur_bg = conn_bg.cursor()
+                        for _tid in tids:
+                            try:
+                                _item = node_map.get(_tid)
+                                _nid = _item["node_id"] if _item else "default"
+                                _cli = _item["client"] if _item else None
+                                _info = svc._fetch_task_info(_tid, node_id=_nid, client=_cli)
+                                if _info:
+                                    svc._batch_insert_tasks(cur_bg, [_info])
+                                    conn_bg.commit()
+                                    logger.info(f"V2补全: {_tid} done")
+                            except Exception as e:
+                                logger.warning(f"V2补全: {_tid} 失败: {e}")
+                        cur_bg.close()
+                    finally:
+                        conn_bg.close()
+                    logger.info(f"V2后台补全完成: {len(tids)} 个task")
+                except Exception as e:
+                    logger.error(f"V2后台补全异常: {e}")
+
+            t = threading.Thread(target=_bg_backfill_v2,
+                                 args=(_uncached_tids, discovered_tasks), daemon=True)
+            t.start()
+            logger.info(f"已启动后台V2补全线程: {len(_uncached_tids)} 个task")
+
         return result
     
     def _fetch_task_info(self, task_id: str, *, node_id: str = "default",
@@ -304,6 +362,12 @@ class RDAgentCandidateService:
                         logger.debug(f"TASK {task_id} 尚未产生足够反馈: {err_msg}")
                     else:
                         logger.warning(f"TASK {task_id} V2预览返回错误: {err_msg}")
+            except requests.exceptions.HTTPError as e:
+                # 404 = task 不存在于该节点，立即返回 None（不继续填充假数据）
+                if resp.status_code == 404:
+                    logger.debug(f"TASK {task_id} 在节点 {node_id} 不存在(404)")
+                    return None
+                logger.warning(f"TASK {task_id} V2预览API失败: {e}")
             except requests.exceptions.Timeout:
                 logger.warning(f"TASK {task_id} V2对齐预览API超时(300s)")
             except Exception as e:
@@ -363,12 +427,14 @@ class RDAgentCandidateService:
 
                 task_info = None
                 for _nid, _client in self._get_all_node_clients():
-                    task_info = self._fetch_task_info(task_id, node_id=_nid, client=_client)
-                    if task_info and (task_info.get('has_sota') or task_info.get('hist_len', 0) > 0
-                                      or task_info.get('task_status')):
-                        break  # 节点返回了有效数据
+                    _info = self._fetch_task_info(task_id, node_id=_nid, client=_client)
+                    if _info is not None:
+                        # 节点确认 task 存在（非 None = V2 API 返回了数据）
+                        task_info = _info
+                        logger.info(f"TASK {task_id} 在节点 {_nid} 上找到")
+                        break  # 找到即停，不继续遍历其他节点
                 if task_info is None:
-                    # 所有节点都没有有效数据，用默认客户端兜底
+                    # 所有节点都返回 None（task 不存在于任何节点），用默认客户端兜底
                     task_info = self._fetch_task_info(task_id)
 
                 if task_info:
@@ -381,6 +447,7 @@ class RDAgentCandidateService:
                          sota_factors_list, alpha_factors_list)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (task_id) DO UPDATE SET
+                            log_dir = EXCLUDED.log_dir,
                             has_sota = EXCLUDED.has_sota,
                             sota_factors_count = EXCLUDED.sota_factors_count,
                             sota_checked_at = EXCLUDED.sota_checked_at,
@@ -445,6 +512,7 @@ class RDAgentCandidateService:
              sota_factors_list, alpha_factors_list)
             VALUES %s
             ON CONFLICT (task_id) DO UPDATE SET
+                log_dir = EXCLUDED.log_dir,
                 has_sota = EXCLUDED.has_sota,
                 sota_factors_count = EXCLUDED.sota_factors_count,
                 sota_checked_at = EXCLUDED.sota_checked_at,

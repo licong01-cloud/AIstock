@@ -41,6 +41,7 @@ export default React.memo(function TaskTableSection({
   const [syncedLoopIds, setSyncedLoopIds] = useState<Record<string, Set<number>>>({});
   const [workspaceData, setWorkspaceData] = useState<Record<string, any>>({});
   const [workspaceLoading, setWorkspaceLoading] = useState<Record<string, boolean>>({});
+  const [workspaceScanning, setWorkspaceScanning] = useState<Record<string, boolean>>({});
   const [showWorkspaceModal, setShowWorkspaceModal] = useState<string | null>(null);
   const [deleteConfirmStep, setDeleteConfirmStep] = useState<number>(0);
 
@@ -167,7 +168,7 @@ export default React.memo(function TaskTableSection({
             return newData;
           });
         }
-        alert(`✓ Task ${taskId} 数据已刷新\n\n清除了 ${data.deleted_loops || 0} 条旧缓存，已重新获取LOOP数据`);
+        alert(`✓ Task ${taskId} 数据已刷新\n\n清除了 ${data.deleted_loops || 0} 条旧LOOP缓存，${data.v2_updated ? 'V2信息已更新，' : ''}重新获取了 ${data.refreshed_loops || 0} 个LOOP`);
         onRefreshItemsRef.current();
       } else {
         throw new Error(data.error || "刷新Task失败");
@@ -227,22 +228,59 @@ export default React.memo(function TaskTableSection({
     }
   }, []);
 
+  // 阶段1：快速加载 log 目录信息，立即弹窗
   const loadWorkspaceInfo = useCallback(async (taskId: string) => {
     setWorkspaceLoading((prev) => ({ ...prev, [taskId]: true }));
     try {
-      const res = await fetch(`${API_BASE}/rdagent/tasks/${encodeURIComponent(taskId)}/workspaces`);
+      const res = await fetch(`${API_BASE}/rdagent/tasks/${encodeURIComponent(taskId)}/workspaces?quick=true`);
       const data = await res.json();
-      if (data.ok) {
-        setWorkspaceData((prev) => ({ ...prev, [taskId]: data }));
-        setShowWorkspaceModal(taskId);
-        setDeleteConfirmStep(0);
-      } else {
-        alert(`获取workspace信息失败: ${data.error || "未知错误"}`);
+      setWorkspaceData((prev) => ({ ...prev, [taskId]: data }));
+      setShowWorkspaceModal(taskId);
+      setDeleteConfirmStep(0);
+      // log目录存在时，自动启动阶段2：后台扫描 workspace
+      if (data.log_dir_exists && data.workspaces_scanned === false) {
+        scanWorkspaces(taskId);
       }
     } catch (error: any) {
-      alert(`获取workspace信息失败: ${error?.message || "网络错误"}`);
+      setWorkspaceData((prev) => ({ ...prev, [taskId]: {
+        ok: false, task_id: taskId, error: error?.message || "网络错误",
+        workspaces: [], total_size_mb: 0, log_dir_exists: false,
+      } }));
+      setShowWorkspaceModal(taskId);
+      setDeleteConfirmStep(0);
     } finally {
       setWorkspaceLoading((prev) => ({ ...prev, [taskId]: false }));
+    }
+  }, []);
+
+  // 阶段2：后台完整 pickle 扫描 workspace（可能耗时 1-3 分钟）
+  const scanWorkspaces = useCallback(async (taskId: string) => {
+    setWorkspaceScanning((prev) => ({ ...prev, [taskId]: true }));
+    try {
+      const res = await fetch(`${API_BASE}/rdagent/tasks/${encodeURIComponent(taskId)}/workspaces?quick=false`);
+      const data = await res.json();
+      // 合并 workspace 列表到已有数据（保留 log 目录信息）
+      setWorkspaceData((prev) => ({
+        ...prev,
+        [taskId]: {
+          ...(prev[taskId] || {}),
+          workspaces: data.workspaces || [],
+          total_size_mb: data.total_size_mb ?? prev[taskId]?.total_size_mb ?? 0,
+          workspaces_scanned: true,
+          scan_error: data.error,
+        },
+      }));
+    } catch (error: any) {
+      setWorkspaceData((prev) => ({
+        ...prev,
+        [taskId]: {
+          ...(prev[taskId] || {}),
+          workspaces_scanned: true,
+          scan_error: error?.message || "扫描失败",
+        },
+      }));
+    } finally {
+      setWorkspaceScanning((prev) => ({ ...prev, [taskId]: false }));
     }
   }, []);
 
@@ -286,12 +324,12 @@ export default React.memo(function TaskTableSection({
           <colgroup>
             <col style={{ width: 32 }} />
             <col style={{ width: 180 }} />
-            <col style={{ width: 90 }} />
+            <col style={{ width: 130 }} />
             <col style={{ width: 120 }} />
             <col style={{ width: 70 }} />
             <col style={{ width: 90 }} />
             <col style={{ width: 120 }} />
-            <col />
+            <col style={{ width: "20%" }} />
             <col style={{ width: 320 }} />
           </colgroup>
           <thead>
@@ -357,12 +395,48 @@ export default React.memo(function TaskTableSection({
             {deleteConfirmStep === 0 && (
               <>
                 <h3 style={{ margin: '0 0 16px 0', fontSize: 18, fontWeight: 600 }}>Workspace详情</h3>
+                {/* 节点不可达或log目录不存在的警告 */}
+                {(!workspaceData[showWorkspaceModal]?.ok || workspaceData[showWorkspaceModal]?.log_dir_exists === false) && (
+                  <div style={{ marginBottom: 12, padding: 10, background: '#fef3c7', borderRadius: 8, border: '1px solid #fde68a', fontSize: 12, color: '#92400e' }}>
+                    {workspaceData[showWorkspaceModal]?.error
+                      ? `节点返回错误: ${workspaceData[showWorkspaceModal].error}`
+                      : 'Task的log目录在节点上不存在（可能已被手动删除或任务未在节点上创建）。仍可删除以清理DB缓存。'}
+                  </div>
+                )}
                 <div style={{ marginBottom: 16, padding: 12, background: '#f3f4f6', borderRadius: 8 }}>
                   <div style={{ fontSize: 13, marginBottom: 4 }}><strong>Task ID:</strong> {showWorkspaceModal}</div>
-                  <div style={{ fontSize: 13, marginBottom: 4 }}><strong>Task目录:</strong> {workspaceData[showWorkspaceModal]?.task_dir}</div>
-                  <div style={{ fontSize: 13 }}><strong>总大小:</strong> {workspaceData[showWorkspaceModal]?.total_size_mb?.toFixed(2) || 0} MB</div>
+                  <div style={{ fontSize: 13, marginBottom: 4 }}><strong>Task目录:</strong> {workspaceData[showWorkspaceModal]?.task_dir || '-'}</div>
+                  <div style={{ fontSize: 13, marginBottom: 4 }}>
+                    <strong>Log目录:</strong>{' '}
+                    {workspaceData[showWorkspaceModal]?.log_dir_exists === true ? (
+                      <span style={{ color: '#059669' }}>存在</span>
+                    ) : (
+                      <span style={{ color: '#dc2626' }}>不存在</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 13, marginBottom: 4 }}>
+                    <strong>总大小:</strong> {workspaceData[showWorkspaceModal]?.total_size_mb?.toFixed(2) || 0} MB
+                    {workspaceData[showWorkspaceModal]?.loop_count != null && (
+                      <span style={{ marginLeft: 12, color: '#6b7280' }}>| Loop 数量: {workspaceData[showWorkspaceModal].loop_count}</span>
+                    )}
+                  </div>
                 </div>
                 <h4 style={{ margin: '16px 0 8px 0', fontSize: 14, fontWeight: 600 }}>Workspace列表</h4>
+                {/* 扫描中状态 */}
+                {workspaceScanning[showWorkspaceModal] && (
+                  <div style={{ padding: 16, textAlign: 'center', background: '#eff6ff', borderRadius: 8, border: '1px solid #bfdbfe', marginBottom: 8 }}>
+                    <div style={{ fontSize: 13, color: '#1d4ed8', fontWeight: 600 }}>
+                      <span style={{ animation: 'pulse 1.5s infinite', display: 'inline-block' }}>●</span>
+                      {' '}Workspace 扫描中（pickle 反序列化，可能需要 1-3 分钟）...
+                    </div>
+                  </div>
+                )}
+                {/* 扫描失败提示 */}
+                {!workspaceScanning[showWorkspaceModal] && workspaceData[showWorkspaceModal]?.scan_error && (
+                  <div style={{ padding: 10, background: '#fef3c7', borderRadius: 8, fontSize: 12, color: '#92400e', marginBottom: 8 }}>
+                    Workspace 扫描失败: {workspaceData[showWorkspaceModal].scan_error}
+                  </div>
+                )}
                 {workspaceData[showWorkspaceModal]?.workspaces?.length > 0 ? (
                   <div style={{ maxHeight: 300, overflow: 'auto', border: '1px solid #e5e7eb', borderRadius: 8 }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>

@@ -20,17 +20,16 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "daily_basic",        "mode": "incremental", "frequency": "daily", "at": "16:40"},
     {"dataset": "adj_factor",         "mode": "incremental", "frequency": "daily", "at": "16:43"},
     {"dataset": "index_daily",        "mode": "incremental", "frequency": "daily", "at": "16:46"},
-    {"dataset": "sw_daily",           "mode": "incremental", "frequency": "daily", "at": "16:49"},
+    {"dataset": "sw_sector",          "mode": "incremental", "frequency": "daily", "at": "16:49"},
 
     # Tushare 较晚更新数据（16:30-17:00 更新 +10min 缓冲）
+    {"dataset": "margin_detail",      "mode": "incremental", "frequency": "daily", "at": "17:07"},
     {"dataset": "moneyflow_ts",       "mode": "incremental", "frequency": "daily", "at": "17:10"},
     {"dataset": "bak_basic",          "mode": "incremental", "frequency": "daily", "at": "17:13"},
 
     # 不定期数据集 → 17:30 之后
     {"dataset": "stock_basic",        "mode": "init",        "frequency": "daily", "at": "17:30"},
     {"dataset": "stock_st",           "mode": "incremental", "frequency": "daily", "at": "17:33"},
-    {"dataset": "sw_index_classify",  "mode": "init",        "frequency": "daily", "at": "17:36"},
-    {"dataset": "sw_index_member",    "mode": "init",        "frequency": "daily", "at": "17:39"},
 
     # 派生数据（等上游全部完成）
     {"dataset": "sector_data",        "mode": "incremental", "frequency": "daily", "at": "17:50"},

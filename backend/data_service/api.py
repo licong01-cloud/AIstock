@@ -362,8 +362,8 @@ def get_history_window(
             else:
                 df_result["factor"] = 1.0
         except Exception as e:
-            logger.warning(f"Failed to fetch adj_factor: {e}")
-            df_result["factor"] = 1.0
+            logger.error(f"Failed to fetch adj_factor: {e}")
+            raise DataSourceError(f"复权因子查询失败，不应默认使用 factor=1.0: {e}") from e
 
     return _apply_nan_policy(df_result, nan_policy)
 

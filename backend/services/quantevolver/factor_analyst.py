@@ -49,6 +49,32 @@ FACTOR_GRADES = {
     "D": "较差 - IC<=0.01或无数据",
 }
 
+# IC半衰期分界点（天）— 基于2026-04-10 P0分析确认
+HALF_LIFE_SHORT_THRESHOLD = 8    # <8d → short
+HALF_LIFE_LONG_THRESHOLD = 25    # >25d → long, 8-25d → medium
+
+
+def classify_holding_period(half_life) -> str:
+    """基于IC半衰期分类因子持仓周期。
+
+    分界点来源: dual_pipeline_strategy_design_20260410.md §3.3 方案2
+    """
+    if half_life is None:
+        return "unknown"
+    try:
+        hl = float(half_life)
+    except (TypeError, ValueError):
+        return "unknown"
+    import math
+    if math.isnan(hl) or math.isinf(hl):
+        return "unknown"
+    if hl < HALF_LIFE_SHORT_THRESHOLD:
+        return "short"
+    elif hl > HALF_LIFE_LONG_THRESHOLD:
+        return "long"
+    else:
+        return "medium"
+
 # 基于因子名称前缀的规则分类（不依赖LLM的快速分类）
 RULE_BASED_CLASSIFICATION = {
     # 动量因子
@@ -774,6 +800,7 @@ class FactorAnalyst:
                     llm_analysis=classification_reason,
                     description=description, factor_dimension=factor_dimension,
                     factor_profile=factor_profile,
+                    holding_period_class=classify_holding_period(ind.get("ic_decay_half_life")),
                 )
                 return {
                     "ok": True, "factor_name": factor_name,
@@ -813,6 +840,7 @@ class FactorAnalyst:
             ic_value=ic, sharpe_value=sharpe, ann_ret_value=ann_ret,
             llm_analysis=None, description=description,
             factor_dimension=factor_dimension, factor_profile=None,
+            holding_period_class=classify_holding_period(ind.get("ic_decay_half_life")),
         )
 
         return {
@@ -1210,9 +1238,8 @@ class FactorAnalyst:
                             "method": method,
                             "is_estimated": False,
                         })
-                        # 持久化到 DB（只存 |corr| > 0.3）
-                        if abs(corr) > 0.3:
-                            self._upsert_correlation(fa, fb, round(corr, 6), method)
+                        # 持久化到 DB（全量存储，供组合分析参考）
+                        self._upsert_correlation(fa, fb, round(corr, 6), method)
 
                 # 对不在 Parquet 中的因子补充分类估算
                 non_computable = [f for f in factor_names if f not in available]
@@ -1445,8 +1472,9 @@ class FactorAnalyst:
                          grade_reason, classification_reason,
                          ic_value, sharpe_value, ann_ret_value,
                          llm_analysis, description, factor_dimension,
-                         factor_profile, analyzed_at, factor_catalog_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+                         factor_profile, holding_period_class,
+                         analyzed_at, factor_catalog_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
                     ON CONFLICT (factor_name, factor_source) DO UPDATE SET
                         category = EXCLUDED.category,
                         grade = EXCLUDED.grade,
@@ -1459,6 +1487,7 @@ class FactorAnalyst:
                         description = EXCLUDED.description,
                         factor_dimension = EXCLUDED.factor_dimension,
                         factor_profile = COALESCE(EXCLUDED.factor_profile, qe_factor_classification.factor_profile),
+                        holding_period_class = EXCLUDED.holding_period_class,
                         factor_catalog_id = EXCLUDED.factor_catalog_id,
                         analyzed_at = NOW()
                 """, (
@@ -1475,6 +1504,7 @@ class FactorAnalyst:
                     kwargs.get("description"),
                     kwargs.get("factor_dimension"),
                     profile_json,
+                    kwargs.get("holding_period_class"),
                     factor_catalog_id,
                 ))
 

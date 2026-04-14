@@ -1,0 +1,4 @@
+# file: F:\Dev\AIstock\backend\rebalance_strategies\base_strategy.py
+# hypothesis_version: 6.151.10
+
+[0.1, 0.95, 1.0, 100, 'max_position_pct', 'max_positions', 'risk_degree']

@@ -32,3 +32,4 @@ __all__ = [
 
 from . import quantevolver
 from . import quantevolver_evolution
+from . import hmm_training

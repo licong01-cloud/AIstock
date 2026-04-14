@@ -110,6 +110,18 @@ class FactorCodeTransformer:
                 changes.extend(sanitize_removals)
             if sanitize_warnings:
                 warnings.extend(sanitize_warnings)
+            # 后处理：修复 .rolling().corr() 产生非唯一 MultiIndex 的问题
+            code, corr_fix = self._fix_rolling_corr_pattern(code, factor_name)
+            if corr_fix:
+                changes.append(corr_fix)
+            # 后处理：修复 LLM 生成的 .groupby().apply(lambda...).swaplevel() 错误模式
+            # groupby(level='instrument').apply(lambda g: ...) 会产生3层索引，
+            # swaplevel() 需要替换为 droplevel(0) 才能得到正确的 (datetime, instrument)
+            if '.swaplevel()' in code:
+                swaplevel_fix_re = re.compile(r'\.swaplevel\(\)\.sort_index\(\)')
+                if swaplevel_fix_re.search(code):
+                    code = swaplevel_fix_re.sub('.droplevel(0).sort_index()', code)
+                    changes.append("修复 LLM 错误: .swaplevel() -> .droplevel(0) (3层索引问题)")
             syntax_ok, syntax_error = self._check_syntax(code)
             if not syntax_ok:
                 return TransformResult(
@@ -149,19 +161,86 @@ class FactorCodeTransformer:
                     or "import qlib" in effective_code)
         has_calc_func = bool(re.search(
             r"^def calculate_\w+\s*\(", effective_code, re.MULTILINE))
-        has_h5 = "result.h5" in effective_code or "daily_pv.h5" in effective_code
-        has_parquet = "static_factors.parquet" in effective_code
+        # 用 raw code 检测文件名（文件名在字符串字面量中，strip 后会消失）
+        has_h5 = ("result.h5" in code or "daily_pv.h5" in code
+                  or "daily_basic.h5" in code or "sector_data.h5" in code)
+        has_parquet = "static_factors.parquet" in code
+        has_read_hdf = "read_hdf" in effective_code
 
         # 优先级：有明确函数定义且无qlib依赖 → rdagent_factor
         if has_calc_func and not has_qlib:
             return "rdagent_factor"
         if has_qlib:
             return "qlib_style"
-        if has_h5 or has_parquet:
+        if has_h5 or has_parquet or has_read_hdf:
             return "rdagent_template"
         if "calculate_" in effective_code:
             return "rdagent_module_level"
         return "unknown"
+
+    def _unwrap_compute_function(self, code: str, factor_name: str):
+        """如果代码包含 compute_factor() / main() 等无参函数，提取其函数体作为主代码。
+        同时处理模块级常量引用（FACTOR_NAME, DATA_DIR 等）。
+
+        处理逻辑：
+        1. 检测 def compute_factor(): 或 def main(): 模式
+        2. 提取函数体（去一级缩进）
+        3. 如果函数体引用 FACTOR_NAME，在顶部注入 FACTOR_NAME = "{factor_name}"
+        4. 如果函数体引用 DATA_DIR（且不在 pd.read_hdf 参数中，因为后续会被替换），移除引用
+        """
+        match = re.search(r'^def (?:compute_factor|main)\s*\(\s*\)\s*:', code, re.MULTILINE)
+        if not match:
+            return code, []
+
+        changes = []
+        lines = code.split('\n')
+        func_start_line = match.start()
+        func_indent = len(match.group(0)) - len(match.group(0).lstrip())
+        # 如果匹配行有缩进（嵌套函数），取其缩进级别
+        match_line = code[:match.start()].count('\n')  # 行号
+        actual_line = lines[match_line]
+        func_indent = len(actual_line) - len(actual_line.lstrip())
+
+        body_lines = []
+        in_func = False
+        for i, line in enumerate(lines):
+            if i == match_line:
+                in_func = True
+                continue
+            if in_func:
+                if line.strip() == '':
+                    body_lines.append('')
+                    continue
+                cur_indent = len(line) - len(line.lstrip())
+                if cur_indent <= func_indent and line.strip():
+                    # End of function body (dedented to same or lower level)
+                    break
+                # Remove one level of indentation (4 spaces or 1 tab)
+                indent_to_remove = 4
+                if line.startswith(' ' * (func_indent + indent_to_remove)):
+                    body_lines.append(line[indent_to_remove:])
+                elif line.startswith('\t') and func_indent == 0:
+                    body_lines.append(line[1:])
+                else:
+                    body_lines.append(line)
+
+        # Remove trailing empty lines
+        while body_lines and body_lines[-1].strip() == '':
+            body_lines.pop()
+
+        if not body_lines:
+            return code, []
+
+        extracted = '\n'.join(body_lines)
+
+        # 如果提取的代码引用了 FACTOR_NAME，注入常量定义
+        if 'FACTOR_NAME' in extracted:
+            extracted = f'FACTOR_NAME = "{factor_name}"\n{extracted}'
+            changes.append(f"注入 FACTOR_NAME = \"{factor_name}\" 常量")
+
+        func_name = actual_line.strip().split('(')[0].replace('def ', '')
+        changes.append(f"提取 {func_name}() 函数体作为主代码（{len(body_lines)} 行）")
+        return extracted, changes
 
     def _transform_module_level_code(self, code: str, factor_name: str):
         """将模块级代码包装成标准函数（解决 unexpected indent 问题）"""
@@ -204,33 +283,41 @@ class FactorCodeTransformer:
             if any(p in stripped for p in ["qlib", "from qlib", "import qlib"]):
                 filtered_imports.append(f"# [TRANSFORMED] {line}  # qlib import removed")
                 changes.append(f"移除qlib import: {stripped[:60]}")
-            elif stripped in ("import numpy as np", "import pandas as pd", "import sys", "import os"):
+            elif stripped in ("import numpy as np", "import pandas as pd", "import sys", "import os",
+                              "from pathlib import Path"):
                 pass
             else:
                 filtered_imports.append(line)
         body_code = "\n".join(body_lines)
 
-        # Step1: 先 dedent 去掉原始模板代码的公共缩进（模板代码 body 已有4格缩进）
-        # 手动计算非空、非注释行的最小缩进量
-        raw_lines = body_code.split("\n")
-        min_indent = float("inf")
-        for bl in raw_lines:
-            stripped_bl = bl.lstrip()
-            if stripped_bl and not stripped_bl.startswith("#"):
-                indent_len = len(bl) - len(stripped_bl)
-                if indent_len > 0:
-                    min_indent = min(min_indent, indent_len)
-        if min_indent == float("inf") or min_indent == 0:
-            min_indent = 0
-        dedented_lines = []
-        for bl in raw_lines:
-            if bl.strip() == "":
-                dedented_lines.append("")
-            elif min_indent > 0 and len(bl) >= min_indent and bl[:min_indent].strip() == "":
-                dedented_lines.append(bl[min_indent:])
-            else:
-                dedented_lines.append(bl)
-        body_code = "\n".join(dedented_lines)
+        # Step0: 如果body包含 compute_factor()/main() 等无参函数，先提取其函数体
+        # 必须在 dedent 之前执行，否则函数体的缩进会被去除导致无法区分
+        body_code, unwrap_changes = self._unwrap_compute_function(body_code, factor_name)
+        changes.extend(unwrap_changes)
+        unwrapped = bool(unwrap_changes)
+
+        # Step1: dedent 去掉原始模板代码的公共缩进
+        # 如果已经通过 unwrap 提取了函数体，跳过 dedent（函数体已有正确的相对缩进）
+        if not unwrapped:
+            raw_lines = body_code.split("\n")
+            min_indent = float("inf")
+            for bl in raw_lines:
+                stripped_bl = bl.lstrip()
+                if stripped_bl and not stripped_bl.startswith("#"):
+                    indent_len = len(bl) - len(stripped_bl)
+                    if indent_len > 0:
+                        min_indent = min(min_indent, indent_len)
+            if min_indent == float("inf") or min_indent == 0:
+                min_indent = 0
+            dedented_lines = []
+            for bl in raw_lines:
+                if bl.strip() == "":
+                    dedented_lines.append("")
+                elif min_indent > 0 and len(bl) >= min_indent and bl[:min_indent].strip() == "":
+                    dedented_lines.append(bl[min_indent:])
+                else:
+                    dedented_lines.append(bl)
+            body_code = "\n".join(dedented_lines)
 
         # Step2: 在 dedent 后的代码上做数据替换（此时代码是0缩进的模块级代码）
         body_code, lc, lw = self._replace_data_loads(body_code, factor_name)
@@ -238,6 +325,20 @@ class FactorCodeTransformer:
         warnings.extend(lw)
         body_code, rc = self._replace_h5_write_with_return(body_code, factor_name)
         changes.extend(rc)
+        # 清理 print(f"{FACTOR_NAME}: ...") 行（改造后不再需要调试输出）
+        body_code = re.sub(
+            r'^[ \t]*print\s*\(\s*f?["\'].*?FACTOR_NAME.*?["\'].*?\)\s*$',
+            "",
+            body_code, flags=re.MULTILINE,
+        )
+        # 清理 result = result[np.isfinite(result[FACTOR_NAME])] 和类似布尔索引行
+        body_code = re.sub(
+            r'^[ \t]*\w+\s*=\s*\w+\[np\.isfinite\([^)]+\)\]\s*$',
+            "",
+            body_code, flags=re.MULTILINE,
+        )
+        # 替换 FACTOR_NAME → 实际因子名字符串
+        body_code = re.sub(r'\bFACTOR_NAME\b', f'"{factor_name}"', body_code)
         body_code = re.sub(
             r'if\s+__name__\s*==\s*[\'"]__main__[\'"]\s*:.*',
             "# [TRANSFORMED] __main__ block removed",
@@ -313,23 +414,31 @@ class FactorCodeTransformer:
     # ── 数据加载替换 ──────────────────────────────────────────────────
 
     def _replace_data_loads(self, code: str, factor_name: str):
-        """替换 daily_pv.h5 和 static_factors.parquet 读取为实时加载器调用"""
+        """替换各种数据文件读取为实时加载器调用
+
+        支持的文件类型：
+        - daily_pv.h5 → _REALTIME_LOADER（OHLCV 行情数据）
+        - daily_basic.h5 → _STATIC_FACTORS_LOADER（每日基本面，db_* 前缀列）
+        - sector_data.h5 → _STATIC_FACTORS_LOADER（申万行业板块，sw2_* 前缀列）
+        - static_factors.parquet → _STATIC_FACTORS_LOADER（综合静态因子）
+        """
         changes = []
         warnings = []
         new_code = code
 
-        # 替换 pd.read_hdf('daily_pv.h5', ...) -> _REALTIME_LOADER.load(...)
-        # 匹配：varname = pd.read_hdf('daily_pv.h5', ...).sort_index()
-        # 支持 ./daily_pv.h5、路径前缀等写法
+        # ── 替换 pd.read_hdf('daily_pv.h5', ...) → _REALTIME_LOADER.load(...) ──
+        # 支持两种路径写法：
+        #   1. 字符串字面量: pd.read_hdf('daily_pv.h5') 或 pd.read_hdf('./daily_pv.h5')
+        #   2. Python 表达式: pd.read_hdf(DATA_DIR / "daily_pv.h5")
         daily_pv_re = re.compile(
-            r"^([ \t]*)(\w+)\s*=\s*pd\.read_hdf\s*\(\s*['\"](?:\./)?daily_pv\.h5['\"][^)]*\)"
+            r"^([ \t]*)(\w+)\s*=\s*pd\.read_hdf\s*\([^)]*daily_pv\.h5[^)]*\)"
             r"(?:\s*\.sort_index\(\))?",
             re.DOTALL | re.MULTILINE,
         )
         def _replace_daily_pv(m: re.Match) -> str:
             indent = m.group(1)
             var = m.group(2)
-            changes.append(f"替换 pd.read_hdf('daily_pv.h5') -> _REALTIME_LOADER.load() (变量: {var})")
+            changes.append(f"替换 pd.read_hdf(.*daily_pv.h5) -> _REALTIME_LOADER.load() (变量: {var})")
             lines = [
                 f"{var} = _REALTIME_LOADER.load(",
                 f"    instruments=instruments,",
@@ -343,7 +452,117 @@ class FactorCodeTransformer:
             return "\n".join(indent + ln for ln in lines)
         new_code = daily_pv_re.sub(_replace_daily_pv, new_code)
 
-        # 替换 pd.read_parquet('static_factors.parquet', columns=[...]/var) -> _STATIC_FACTORS_LOADER.load()
+        # ── 替换 pd.read_hdf('daily_basic.h5') → _STATIC_FACTORS_LOADER.load(...) ──
+        daily_basic_re = re.compile(
+            r"^([ \t]*)(\w+)\s*=\s*pd\.read_hdf\s*\([^)]*daily_basic\.h5[^)]*\)"
+            r"(?:\s*\.sort_index\(\))?",
+            re.DOTALL | re.MULTILINE,
+        )
+        def _replace_daily_basic(m: re.Match) -> str:
+            indent = m.group(1)
+            var = m.group(2)
+            changes.append(f"替换 pd.read_hdf(.*daily_basic.h5) -> _STATIC_FACTORS_LOADER.load() (变量: {var})")
+            lines = [
+                f"# [TRANSFORMED] daily_basic.h5 -> _STATIC_FACTORS_LOADER.load()",
+                f"{var} = _STATIC_FACTORS_LOADER.load(",
+                f"    instruments=instruments,",
+                f"    start_date=start_date,",
+                f"    end_date=end_date,",
+                f")",
+                f"{var} = {var}.sort_index()",
+            ]
+            return "\n".join(indent + ln for ln in lines)
+        new_code = daily_basic_re.sub(_replace_daily_basic, new_code)
+
+        # ── 替换 pd.read_hdf('sector_data.h5') → _STATIC_FACTORS_LOADER.load(...) ──
+        sector_data_re = re.compile(
+            r"^([ \t]*)(\w+)\s*=\s*pd\.read_hdf\s*\([^)]*sector_data\.h5[^)]*\)"
+            r"(?:\s*\.sort_index\(\))?",
+            re.DOTALL | re.MULTILINE,
+        )
+        def _replace_sector_data(m: re.Match) -> str:
+            indent = m.group(1)
+            var = m.group(2)
+            changes.append(f"替换 pd.read_hdf(.*sector_data.h5) -> _STATIC_FACTORS_LOADER.load() (变量: {var})")
+            lines = [
+                f"# [TRANSFORMED] sector_data.h5 -> _STATIC_FACTORS_LOADER.load()",
+                f"{var} = _STATIC_FACTORS_LOADER.load(",
+                f"    instruments=instruments,",
+                f"    start_date=start_date,",
+                f"    end_date=end_date,",
+                f")",
+                f"{var} = {var}.sort_index()",
+            ]
+            return "\n".join(indent + ln for ln in lines)
+        new_code = sector_data_re.sub(_replace_sector_data, new_code)
+
+        # ── 替换 pd.read_hdf('margin_detail.h5') → _STATIC_FACTORS_LOADER.load(...) ──
+        margin_detail_re = re.compile(
+            r"^([ \t]*)(\w+)\s*=\s*pd\.read_hdf\s*\([^)]*margin_detail\.h5[^)]*\)"
+            r"(?:\s*\.sort_index\(\))?",
+            re.DOTALL | re.MULTILINE,
+        )
+        def _replace_margin_detail(m: re.Match) -> str:
+            indent = m.group(1)
+            var = m.group(2)
+            changes.append(f"替换 pd.read_hdf(.*margin_detail.h5) -> _STATIC_FACTORS_LOADER.load() (变量: {var})")
+            lines = [
+                f"# [TRANSFORMED] margin_detail.h5 -> _STATIC_FACTORS_LOADER.load()",
+                f"{var} = _STATIC_FACTORS_LOADER.load(",
+                f"    instruments=instruments,",
+                f"    start_date=start_date,",
+                f"    end_date=end_date,",
+                f")",
+                f"{var} = {var}.sort_index()",
+            ]
+            return "\n".join(indent + ln for ln in lines)
+        new_code = margin_detail_re.sub(_replace_margin_detail, new_code)
+
+        # ── 替换 pd.read_hdf('moneyflow.h5') → _STATIC_FACTORS_LOADER.load(...) ──
+        moneyflow_h5_re = re.compile(
+            r"^([ \t]*)(\w+)\s*=\s*pd\.read_hdf\s*\([^)]*moneyflow\.h5[^)]*\)"
+            r"(?:\s*\.sort_index\(\))?",
+            re.DOTALL | re.MULTILINE,
+        )
+        def _replace_moneyflow_h5(m: re.Match) -> str:
+            indent = m.group(1)
+            var = m.group(2)
+            changes.append(f"替换 pd.read_hdf(.*moneyflow.h5) -> _STATIC_FACTORS_LOADER.load() (变量: {var})")
+            lines = [
+                f"# [TRANSFORMED] moneyflow.h5 -> _STATIC_FACTORS_LOADER.load()",
+                f"{var} = _STATIC_FACTORS_LOADER.load(",
+                f"    instruments=instruments,",
+                f"    start_date=start_date,",
+                f"    end_date=end_date,",
+                f")",
+                f"{var} = {var}.sort_index()",
+            ]
+            return "\n".join(indent + ln for ln in lines)
+        new_code = moneyflow_h5_re.sub(_replace_moneyflow_h5, new_code)
+
+        # ── 替换 pd.read_hdf('cyq_perf.h5') → _STATIC_FACTORS_LOADER.load(...) ──
+        cyq_perf_h5_re = re.compile(
+            r"^([ \t]*)(\w+)\s*=\s*pd\.read_hdf\s*\([^)]*cyq_perf\.h5[^)]*\)"
+            r"(?:\s*\.sort_index\(\))?",
+            re.DOTALL | re.MULTILINE,
+        )
+        def _replace_cyq_perf_h5(m: re.Match) -> str:
+            indent = m.group(1)
+            var = m.group(2)
+            changes.append(f"替换 pd.read_hdf(.*cyq_perf.h5) -> _STATIC_FACTORS_LOADER.load() (变量: {var})")
+            lines = [
+                f"# [TRANSFORMED] cyq_perf.h5 -> _STATIC_FACTORS_LOADER.load()",
+                f"{var} = _STATIC_FACTORS_LOADER.load(",
+                f"    instruments=instruments,",
+                f"    start_date=start_date,",
+                f"    end_date=end_date,",
+                f")",
+                f"{var} = {var}.sort_index()",
+            ]
+            return "\n".join(indent + ln for ln in lines)
+        new_code = cyq_perf_h5_re.sub(_replace_cyq_perf_h5, new_code)
+
+        # ── 替换 pd.read_parquet('static_factors.parquet') → _STATIC_FACTORS_LOADER.load(...) ──
         # 支持两种形式：columns=[...] 和 columns=var_name，支持 ./static_factors.parquet
         static_parquet_re = re.compile(
             r"^([ \t]*)(\w+)\s*=\s*pd\.read_parquet\s*\(\s*['\"](?:\./)?static_factors\.parquet['\"]"
@@ -370,13 +589,14 @@ class FactorCodeTransformer:
             return "\n".join(indent + l for l in lines)
         new_code = static_parquet_re.sub(_replace_static_parquet, new_code)
 
-        # 替换 result_df.to_hdf('result.h5', ...) -> 注释掉
+        # ── 替换 result_df.to_hdf('result.h5', ...) 或表达式路径 → 注释掉 ──
+        # 使用 [\s\S]*? 匹配任意字符（包括换行），处理 Path(__file__).resolve().parent 等复杂路径
         h5_write_re = re.compile(
-            r"(\w+)\.to_hdf\s*\(\s*['\"]result\.h5['\"][^)]*\)"
+            r"(\w+)\.to_hdf\s*\([\s\S]*?result\.h5[\s\S]*?\)",
         )
         if h5_write_re.search(new_code):
             new_code = h5_write_re.sub(
-                r"# [TRANSFORMED] \1.to_hdf('result.h5') removed",
+                r"# [TRANSFORMED] \1.to_hdf(result.h5) removed",
                 new_code,
             )
             changes.append("移除 result.h5 写入")
@@ -390,8 +610,10 @@ class FactorCodeTransformer:
             )
             changes.append("移除 qlib.init() 调用")
 
-        # 检查是否还有未处理的文件读取
-        remaining_re = re.compile(r"pd\.read_(?:hdf|parquet|csv|feather)\s*\(\s*['\"][^'\"]+['\"]")
+        # 检查是否还有未处理的文件读取（包括 DATA_DIR / "xxx.h5" 和字符串路径）
+        remaining_re = re.compile(
+            r"pd\.read_(?:hdf|parquet|csv|feather)\s*\(\s*(?:['\"][^'\"]+['\"]|DATA_DIR\b)"
+        )
         remaining = remaining_re.findall(new_code)
         for r in remaining:
             warnings.append(f"发现未处理的文件读取: {r[:60]}，需要LLM辅助处理")
@@ -405,6 +627,33 @@ class FactorCodeTransformer:
             if pattern.search(new_code):
                 new_code = pattern.sub(field, new_code)
                 changes.append(f"替换列名 ${field} -> {field}")
+
+        # ── 清理 DATA_DIR / Path(__file__) 残留引用 ──
+        # 移除模块级 DATA_DIR = Path(__file__).resolve().parent.parent 定义
+        data_dir_def_re = re.compile(
+            r"^[ \t]*DATA_DIR\s*=\s*Path\s*\(\s*__file__\s*\)\s*\.resolve\(\)\s*\.parent(?:\s*\.parent)?\s*$",
+            re.MULTILINE,
+        )
+        if data_dir_def_re.search(new_code):
+            new_code = data_dir_def_re.sub("# [TRANSFORMED] DATA_DIR removed (data loaded via loaders)", new_code)
+            changes.append("移除 DATA_DIR = Path(__file__).resolve().parent.parent 定义")
+
+        # 移除 FACTOR_NAME = "xxx" 定义（如果存在且已被注入替代）
+        factor_name_def_re = re.compile(
+            r'^[ \t]*FACTOR_NAME\s*=\s*["\'][^"\']+["\']\s*$',
+            re.MULTILINE,
+        )
+        if factor_name_def_re.search(new_code):
+            new_code = factor_name_def_re.sub("", new_code)
+            changes.append("移除 FACTOR_NAME 常量定义（已由参数替代）")
+
+        # 清理 from pathlib import Path（如果不再使用 Path）
+        pathlib_import_re = re.compile(r"^from pathlib import Path\s*$", re.MULTILINE)
+        if pathlib_import_re.search(new_code):
+            code_without_import = pathlib_import_re.sub("", new_code)
+            if "Path(" not in code_without_import and "Path(" not in code_without_import:
+                new_code = code_without_import
+                changes.append("移除 from pathlib import Path（不再需要）")
 
         return new_code, changes, warnings
 
@@ -531,18 +780,24 @@ class FactorCodeTransformer:
                         break
                     body_lines.append(lines[i])
                     i += 1
-                # 跳过 except/finally 块
-                if i < len(lines):
-                    handler_indent = try_indent
-                    i += 1  # 跳过 except/finally 行
-                    while i < len(lines):
-                        if lines[i].strip() == "":
+                # 跳除 except/finally 块（可能有多条 except 分支）
+                while i < len(lines):
+                    cur_stripped = lines[i].lstrip()
+                    cur_indent = len(lines[i]) - len(lines[i].lstrip())
+                    if cur_indent == try_indent and (
+                        cur_stripped.startswith("except") or cur_stripped.startswith("finally")
+                    ):
+                        i += 1  # 跳过 except/finally 行本身
+                        while i < len(lines):
+                            if lines[i].strip() == "":
+                                i += 1
+                                continue
+                            inner_indent = len(lines[i]) - len(lines[i].lstrip())
+                            if inner_indent <= try_indent:
+                                break
                             i += 1
-                            continue
-                        cur_indent = len(lines[i]) - len(lines[i].lstrip())
-                        if cur_indent <= handler_indent:
-                            break
-                        i += 1
+                    else:
+                        break
                 # 将 try 体去一级缩进后写入结果
                 for bl in body_lines:
                     if bl == "":
@@ -560,6 +815,80 @@ class FactorCodeTransformer:
         if unwrap_count > 0:
             removals.append(f"解包 {unwrap_count} 个 try-except 块（因子代码禁止 try-except）")
         return "\n".join(result)
+
+    def _fix_rolling_corr_pattern(self, code: str, factor_name: str) -> Tuple[str, Optional[str]]:
+        """修复 .groupby().rolling().corr(other_series).droplevel(0) 导致非唯一 MultiIndex 的问题。
+
+        pandas 的 .groupby().rolling().corr() 会产生 MultiIndex(instrument, datetime)，
+        而 .droplevel(0) 后只剩 datetime 索引，导致非唯一索引错误。
+
+        修复方式：替换为 groupby(level='instrument').apply(lambda g: ...) 模式，
+        在 apply 内部直接使用 g[col1].rolling().corr(g[col2])，返回 (datetime, instrument) MultiIndex。
+        """
+        # 匹配模式: df['col1'].groupby(level='instrument').rolling(window=N, ...).corr(df['col2']).droplevel(0)
+        corr_pattern = re.compile(
+            r"([ \t]*)(\w+)\s*=\s*\(\s*\n?"
+            r"\s*(\w+)\['([^']+)'\]\s*\n?"
+            r"\s*\.groupby\s*\(\s*level\s*=\s*['\"]instrument['\"]\s*\)\s*\n?"
+            r"\s*\.rolling\s*\(\s*window\s*=\s*(\d+)\s*(?:,\s*min_periods\s*=\s*\d+)?\s*\)\s*\n?"
+            r"\s*\.corr\s*\(\s*(\w+)\['([^']+)'\]\s*\)\s*\n?"
+            r"\s*\.droplevel\s*\(\s*0\s*\)\s*\n?"
+            r"\s*\)",
+            re.MULTILINE,
+        )
+        m = corr_pattern.search(code)
+        if not m:
+            # 尝试单行模式: series = df['col1'].groupby(level='instrument').rolling(N).corr(df['col2']).droplevel(0)
+            corr_oneline = re.compile(
+                r"([ \t]*)(\w+)\s*=\s*\(?(\w+)\['([^']+)'\]"
+                r"\.groupby\s*\(\s*level\s*=\s*['\"]instrument['\"]\s*\)"
+                r"\.rolling\s*\(\s*window\s*=\s*(\d+)\s*(?:,\s*min_periods\s*=\s*(\d+))?\s*\)"
+                r"\.corr\s*\(\s*(\w+)\['([^']+)'\]\s*\)"
+                r"\.droplevel\s*\(\s*0\s*\)\)?",
+            )
+            m = corr_oneline.search(code)
+            if not m:
+                return code, None
+            indent = m.group(1)
+            var = m.group(2)
+            df1 = m.group(3)
+            col1 = m.group(4)
+            window = m.group(5)
+            min_periods = m.group(6) or window
+            df2 = m.group(7)
+            col2 = m.group(8)
+        else:
+            indent = m.group(1)
+            var = m.group(2)
+            df1 = m.group(3)
+            col1 = m.group(4)
+            window = m.group(5)
+            min_periods = window
+            df2 = m.group(6)
+            col2 = m.group(7)
+
+        # 生成替换代码：使用 groupby.apply 在每组内部计算 rolling corr
+        # 关键：使用 swaplevel().sort_index() 替代 droplevel(0) 避免 datetime 索引不唯一
+        if df1 == df2:
+            # 同一个 DataFrame，使用 lambda g: 模式
+            fixed = (
+                f"{indent}# [FIXED] rolling().corr() -> groupby.apply() + swaplevel 避免非唯一索引\n"
+                f"{indent}{var} = {df1}.groupby(level='instrument').apply(\n"
+                f"{indent}    lambda g: g['{col1}'].rolling({window}, min_periods={min_periods}).corr(g['{col2}'])\n"
+                f"{indent}).swaplevel().sort_index()"
+            )
+        else:
+            # 不同 DataFrame（不常见，但需要处理）
+            fixed = (
+                f"{indent}# [FIXED] rolling().corr() -> groupby.apply() + swaplevel 避免非唯一索引\n"
+                f"{indent}{var} = {df1}.groupby(level='instrument').apply(\n"
+                f"{indent}    lambda g: g['{col1}'].rolling({window}, min_periods={min_periods})\n"
+                f"{indent}    .corr({df2}.loc[g.index, '{col2}'])\n"
+                f"{indent}).swaplevel().sort_index()"
+            )
+
+        code = code[:m.start()] + fixed + code[m.end():]
+        return code, f"修复 .rolling().corr() 非唯一索引问题 (变量: {var}, window={window})"
 
     def _replace_h5_write_with_return(self, code: str, factor_name: str):
         """确保函数末尾有 return 语句，自动识别结果变量名"""
@@ -597,7 +926,7 @@ class FactorCodeTransformer:
                 result_var = last_assign[-1]
 
         if result_var:
-            code = code.rstrip() + f"\n    return {result_var}\n"
+            code = code.rstrip() + f"\nreturn {result_var}\n"
             changes.append(f"添加 return {result_var} 语句")
         else:
             changes.append(
@@ -785,80 +1114,3 @@ class FactorCodeTransformer:
             return True, None, result
 
         return True, None, result
-
-    def compare_results(
-        self,
-        original_result: Any,
-        transformed_result: Any,
-        tolerance: float = 1e-6,
-    ) -> Tuple[bool, str]:
-        """
-        比较原始因子和转换后因子的计算结果是否一致
-
-        Args:
-            original_result: 原始因子计算结果
-            transformed_result: 转换后因子计算结果
-            tolerance: 浮点数比较容差
-
-        Returns:
-            (is_consistent, report_message)
-        """
-        import pandas as pd
-        import numpy as np
-
-        if not isinstance(original_result, pd.DataFrame) or not isinstance(transformed_result, pd.DataFrame):
-            return False, "结果类型不匹配，无法比较"
-
-        if original_result.empty and transformed_result.empty:
-            return True, "两个结果均为空，视为一致"
-
-        if original_result.shape != transformed_result.shape:
-            return False, (
-                f"结果形状不匹配: 原始={original_result.shape}, "
-                f"转换后={transformed_result.shape}"
-            )
-
-        # 对齐索引
-        try:
-            orig_aligned, trans_aligned = original_result.align(transformed_result)
-        except Exception as e:
-            return False, f"索引对齐失败: {e}"
-
-        # 数值比较
-        try:
-            import pandas as pd
-            import numpy as np
-            
-            # 首先检查是否所有的非 NaN 值都一致，并且 NaN 的位置也一致
-            # 如果两个 dataframe 的 NaN 掩码完全一样，且非 NaN 的部分差异极小，则认为一致
-            isna_orig = orig_aligned.isna()
-            isna_trans = trans_aligned.isna()
-            
-            if not isna_orig.equals(isna_trans):
-                return False, "NaN 值分布不一致"
-                
-            # 只比较非 NaN 的部分
-            diff = (orig_aligned - trans_aligned).abs()
-            
-            # 如果 diff 全是 NaN（说明原本数据就全是 NaN）
-            if diff.isna().all().all():
-                return True, "结果完全一致 (全部为 NaN)"
-                
-            max_diff = diff.max().max()
-            mean_diff = diff.mean().mean()
-
-            if max_diff <= tolerance:
-                return True, (
-                    f"结果完全一致 (最大差异={max_diff:.2e}, "
-                    f"平均差异={mean_diff:.2e}, 容差={tolerance:.2e})"
-                )
-            else:
-                # 找出差异最大的位置
-                max_loc = diff.stack().idxmax() if not diff.empty else None
-                return False, (
-                    f"结果不一致: 最大差异={max_diff:.6f} > 容差={tolerance:.2e}, "
-                    f"平均差异={mean_diff:.6f}, "
-                    f"最大差异位置={max_loc}"
-                )
-        except Exception as e:
-            return False, f"数值比较失败: {e}"

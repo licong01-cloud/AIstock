@@ -38,12 +38,14 @@ SCORE_WEIGHTS = {
 
 # 规则引擎分类映射
 RULE_BASED_CATEGORIES = {
-    "CLOSE_PRICE": "SCHEDULE",
-    "TWAP":        "SCHEDULE",
-    "VWAP":        "PASSIVE",
-    "POV":         "PASSIVE",
-    "SBB_EMA":     "ADAPTIVE",
-    "AC_OPTIMAL":  "ADAPTIVE",
+    "CLOSE_PRICE":     "SCHEDULE",
+    "TWAP":            "SCHEDULE",
+    "VWAP":            "PASSIVE",
+    "POV":             "PASSIVE",
+    "SBB_EMA":         "ADAPTIVE",
+    "AC_OPTIMAL":      "ADAPTIVE",
+    "TAIL_BOOST":      "ADAPTIVE",
+    "TAIL_SUBSTITUTE": "ADAPTIVE",
 }
 
 

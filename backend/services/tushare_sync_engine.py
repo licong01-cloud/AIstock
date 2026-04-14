@@ -71,6 +71,8 @@ def _parse_ymd(val) -> Optional[dt.date]:
             return dt.date(int(s[:4]), int(s[4:6]), int(s[6:]))
         return dt.date.fromisoformat(s)
     except Exception:
+        import logging
+        logging.getLogger(__name__).warning("_parse_ymd: failed to parse date value %r", val)
         return None
 
 
@@ -134,6 +136,8 @@ class TushareSyncEngine:
                 try:
                     base = json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
                 except Exception:
+                    import logging
+                    logging.getLogger(__name__).warning("_finish_job: failed to parse existing summary for job %s", job_id)
                     base = {}
             base.update(summary or {})
             cur.execute(
@@ -272,8 +276,9 @@ class TushareSyncEngine:
 
             try:
                 self._update_progress(conn, job_id, result)
-            except Exception:
-                pass
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("_sync_by_date: progress update failed for job %s: %s", job_id, exc)
 
             if spec.batch_sleep > 0:
                 time.sleep(spec.batch_sleep)
@@ -297,8 +302,9 @@ class TushareSyncEngine:
 
         try:
             self._update_progress(conn, job_id, result)
-        except Exception:
-            pass
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("_sync_single_call: progress update failed for job %s: %s", job_id, exc)
         return result
 
     def _fetch_code_list(self, conn, spec: DatasetSpec) -> List[str]:
@@ -447,7 +453,8 @@ class TushareSyncEngine:
                     except Exception as exc:
                         result.failed_batches += 1
                         self._log(conn, job_id, "error", f"{spec.name} {code_val} failed: {exc}")
-                        raise  # fatal for BY_CODE (mirrors original script behavior)
+                        # Continue with remaining codes instead of aborting entire batch
+                        continue
 
                     if spec.batch_sleep > 0:
                         time.sleep(spec.batch_sleep)
@@ -455,7 +462,8 @@ class TushareSyncEngine:
                 # 每批结束更新进度
                 try:
                     self._update_progress(conn, job_id, result)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    import logging
+                    logging.getLogger(__name__).warning("_sync_by_code_batched: progress update failed for job %s: %s", job_id, exc)
 
         return result

@@ -9,7 +9,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, Future, as_completed
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request, Query
 from fastapi.responses import StreamingResponse
 import httpx
 
@@ -30,6 +30,80 @@ _PROJECT_ROOT = os.path.normpath(
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _sync_stock_pool_to_remote(stock_pool_path: str, node: dict):
+    """通过 WSL scp 同步 filtered_pool 股票池文件到远程节点的 qlib instruments 目录。
+
+    stock_pool_path: WSL/Linux 路径，如 /home/lc999/data/qlib_bin/instruments/filtered_pool_20260405.txt
+    node: infra.compute_nodes 行（dict）
+    """
+    import subprocess as _sp
+
+    node_host = node.get("api_base_url", "").replace("http://", "").rstrip("/").split(":")[0]
+    if not node_host:
+        return
+
+    ssh_user = node.get("ssh_user", "lc999")
+    ssh_target = f"{ssh_user}@{node_host}"
+    stock_pool_basename = os.path.basename(stock_pool_path)
+
+    # 推断远端 instruments 目录：从节点的 qlib_data_path 配置
+    remote_qlib_data = node.get("qlib_data_path") or ""
+    if not remote_qlib_data:
+        logger.warning(f"节点 {node.get('node_id')} 未配置 qlib_data_path，跳过股票池同步")
+        return
+    remote_instruments_dir = f"{remote_qlib_data}/instruments"
+
+    # 确保远端目录存在
+    _sp.run(["ssh", ssh_target, "mkdir", "-p", remote_instruments_dir], timeout=10, check=False)
+
+    # 通过 WSL scp 同步（因为源文件在 WSL 文件系统中）
+    result = _sp.run(
+        ["wsl", "-d", "Ubuntu", "--", "bash", "-c",
+         f"scp -o ConnectTimeout=10 '{stock_pool_path}' '{ssh_target}:{remote_instruments_dir}/'"],
+        timeout=30, check=False, capture_output=True,
+    )
+    if result.returncode == 0:
+        logger.info(f"同步股票池 {stock_pool_basename} → {ssh_target}:{remote_instruments_dir}/")
+    else:
+        stderr = result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
+        logger.warning(f"同步股票池失败: {stderr.strip()}")
+
+
+def _sync_all_filtered_pools_to_remote(node: dict):
+    """同步本机所有 filtered_pool_*.txt 文件到远程节点。
+
+    用于节点首次配置或全量同步场景。
+    """
+    import subprocess as _sp
+
+    node_host = node.get("api_base_url", "").replace("http://", "").rstrip("/").split(":")[0]
+    if not node_host:
+        return
+    ssh_user = node.get("ssh_user", "lc999")
+    ssh_target = f"{ssh_user}@{node_host}"
+
+    remote_qlib_data = node.get("qlib_data_path") or ""
+    if not remote_qlib_data:
+        return
+    remote_instruments_dir = f"{remote_qlib_data}/instruments"
+
+    # 确保远端目录存在
+    _sp.run(["ssh", ssh_target, "mkdir", "-p", remote_instruments_dir], timeout=10, check=False)
+
+    # WSL 路径下查找本机的 filtered_pool 文件
+    local_instruments_dir = "/home/lc999/data/qlib_bin/instruments"
+    result = _sp.run(
+        ["wsl", "-d", "Ubuntu", "--", "bash", "-c",
+         f"scp -o ConnectTimeout=10 {local_instruments_dir}/filtered_pool_*.txt '{ssh_target}:{remote_instruments_dir}/'"],
+        timeout=60, check=False, capture_output=True,
+    )
+    if result.returncode == 0:
+        logger.info(f"全量同步 filtered_pool → {ssh_target}:{remote_instruments_dir}/")
+    else:
+        stderr = result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
+        logger.warning(f"全量同步 filtered_pool 失败: {stderr.strip()}")
 
 router = APIRouter(
     prefix="/quantevolver/evolution",
@@ -55,10 +129,14 @@ class EvolutionTaskCreateRequest(BaseModel):
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数覆盖，如 {topk: 30, n_drop: 3}")
     execution_algo: Optional[str] = Field(None, description="日内执行算法code，如 TWAP/VWAP/CLOSE_PRICE")
     execution_algo_params: Optional[Dict[str, Any]] = Field(None, description="执行算法参数覆盖")
+    unfilled_handler: Optional[str] = Field(None, description="尾盘涨停未成交处理: TAIL_BOOST(加仓持仓股) / TAIL_SUBSTITUTE(替补买入)")
+    unfilled_handler_params: Optional[Dict[str, Any]] = Field(None, description="尾盘处理参数，如 {backup_depth: 15, trigger_minute: 210}")
     enable_sector_hmm: bool = Field(False, description="是否启用行业 HMM 热度调整")
     hmm_model_version_id: Optional[str] = Field(None, description="HMM 模型快照 ID (snapshot_id)")
     hmm_signal_preset: Optional[str] = Field(None, description="HMM 信号系数档位: preset_A(保守,最高+5%) / preset_B(激进,最高+10%)")
     additional_factor_keys: Optional[List[str]] = Field(None, description="从因子库额外添加的因子key列表，格式 ['name||source', ...]，与来源默认因子合并")
+    node_id: Optional[str] = Field(None, description="执行节点 ID，None=默认本地节点")
+    label_type: Optional[str] = Field(None, description="训练标签类型: close(默认) / open(可执行价) / vwap(均价)")
 
 @router.post("/tasks", summary="创建并启动新的自动演进任务")
 async def create_evolution_task(req: EvolutionTaskCreateRequest, background_tasks: BackgroundTasks):
@@ -159,6 +237,52 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
             # Windows 侧无法直接用 os.path.exists 检查 WSL 路径，跳过文件检查。
             # 推理时若文件缺失会在 WSL 侧报错。
 
+        # 节点可用性校验
+        if req.node_id:
+            from ..services.dispatch_service import DispatchService
+            svc = DispatchService()
+            node = svc.get_node(req.node_id)
+            if not node:
+                raise HTTPException(status_code=400, detail=f"节点 {req.node_id} 不存在")
+            if node.get("status") == "offline":
+                raise HTTPException(status_code=400, detail=f"节点 {req.node_id} 离线，无法接受任务")
+
+            # 远程节点：同步 filtered_pool 股票池文件到远端 qlib instruments 目录
+            if req.stock_pool and "filtered_pool" in req.stock_pool:
+                _sync_stock_pool_to_remote(req.stock_pool, node)
+
+        # --- 严格参数验证（禁止静默兜底）---
+        _VALID_EVOLUTION_MODES = {"auto", "factor_only", "model_only", "joint"}
+        if req.evolution_mode and req.evolution_mode not in _VALID_EVOLUTION_MODES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"evolution_mode='{req.evolution_mode}' 无效，允许值: {', '.join(sorted(_VALID_EVOLUTION_MODES))}",
+            )
+
+        _VALID_LABEL_TYPES = {"close", "open", "vwap"}
+        if req.label_type and req.label_type not in _VALID_LABEL_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"label_type='{req.label_type}' 无效，允许值: {', '.join(sorted(_VALID_LABEL_TYPES))}",
+            )
+
+        _VALID_EXECUTION_ALGOS = {"TWAP", "VWAP", "CLOSE_PRICE", "V24_PLAN"}
+        if req.execution_algo and req.execution_algo not in _VALID_EXECUTION_ALGOS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"execution_algo='{req.execution_algo}' 无效，允许值: {', '.join(sorted(_VALID_EXECUTION_ALGOS))}",
+            )
+
+        if req.strategy_id:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1 FROM aistock_strategy_catalog WHERE strategy_id = %s", (req.strategy_id,))
+                    if not cur.fetchone():
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"strategy_id='{req.strategy_id}' 在策略目录中不存在",
+                        )
+
         # rdagent_task_sota 来源允许 created 状态（Loop 1 会执行初始回测建立基线）
         allow_created = (req.source_type == "rdagent_task_sota")
         start_from_loop_zero = (req.source_type == "rdagent_task_sota")
@@ -170,6 +294,7 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
             allow_created=allow_created,
             start_from_loop_zero=start_from_loop_zero,
             stock_pool=req.stock_pool,
+            node_id=req.node_id,
         )
 
         # 保存额外字段（含 evolution_mode）
@@ -179,7 +304,9 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
                     UPDATE qe_evolution_tasks
                     SET evolution_guidance = %s, source_type = %s, source_task_id = %s,
                         evolution_mode = %s, strategy_id = %s, strategy_params = %s,
-                        execution_algo = %s, execution_algo_params = %s, updated_at = NOW()
+                        execution_algo = %s, execution_algo_params = %s,
+                        unfilled_handler = %s, unfilled_handler_params = %s,
+                        label_type = %s, updated_at = NOW()
                     WHERE task_id = %s
                 """, (req.evolution_guidance, req.source_type, req.source_task_id,
                       req.evolution_mode or "auto",
@@ -187,6 +314,9 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
                       json.dumps(req.strategy_params) if req.strategy_params else None,
                       req.execution_algo,
                       json.dumps(req.execution_algo_params) if req.execution_algo_params else None,
+                      req.unfilled_handler,
+                      json.dumps(req.unfilled_handler_params) if req.unfilled_handler_params else None,
+                      req.label_type,
                       task_id))
             conn.commit()
 
@@ -200,17 +330,20 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
                 # 从 DB 读取模型的 signal_presets 注入到 strategy_params
                 try:
                     snapshot = hmm_svc.get_snapshot(req.hmm_model_version_id)
-                    if snapshot:
-                        config_id = snapshot["config_id"]
-                        configs = hmm_svc.list_configs("sector_hmm")
-                        for cfg in configs:
-                            if cfg["config_id"] == config_id:
-                                cj = cfg["config_json"]
-                                if isinstance(cj, str):
-                                    cj = json.loads(cj)
-                                if "signal_presets" in cj:
-                                    merged_params["hmm_signal_presets"] = cj["signal_presets"]
-                                break
+                    if snapshot is None:
+                        raise HTTPException(status_code=400, detail=f"HMM 快照 {req.hmm_model_version_id} 不存在，无法读取 signal_presets")
+                    config_id = snapshot["config_id"]
+                    configs = hmm_svc.list_configs("sector_hmm")
+                    for cfg in configs:
+                        if cfg["config_id"] == config_id:
+                            cj = cfg["config_json"]
+                            if isinstance(cj, str):
+                                cj = json.loads(cj)
+                            if "signal_presets" in cj:
+                                merged_params["hmm_signal_presets"] = cj["signal_presets"]
+                            break
+                except HTTPException:
+                    raise
                 except Exception as e:
                     raise HTTPException(status_code=500, detail=f"读取 HMM signal_presets 失败: {e}")
             with get_conn() as conn:
@@ -230,13 +363,17 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
         validation = scheduler.validate_factor_availability(factor_list)
 
         if validation.get("has_issues"):
-            # 不阻止创建，但返回验证信息让前端处理
-            return {
-                "status": "success",
-                "task_id": task_id,
-                "factor_validation": validation,
-                "message": "演进任务已创建，部分因子需要处理",
-            }
+            # 严格模式：因子验证失败直接报错，不允许带问题启动
+            issues = []
+            if validation.get("unavailable_factors"):
+                issues.append(f"不可用因子: {', '.join(validation['unavailable_factors'])}")
+            if validation.get("deleted_factors"):
+                issues.append(f"已删除因子: {', '.join(validation['deleted_factors'])}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"因子验证失败，无法启动演进任务。{'; '.join(issues)}。"
+                       f"请先通过 /evolution/tasks/{{task_id}}/resolve-factors 修复因子问题。",
+            )
 
         background_tasks.add_task(scheduler.submit_next_loop, task_id)
         return {"status": "success", "task_id": task_id, "message": "演进任务已创建并在后台启动"}
@@ -392,17 +529,36 @@ async def delete_evolution_task(task_id: str):
 
 class EvolutionTaskResumeRequest(BaseModel):
     additional_loops: int = Field(0, description="额外增加的演进轮数（0 表示使用原 max_loops）")
+    force_full_train: bool = Field(False, description="强制完整训练+回测，忽略 loop 配置中的 backtest_only")
 
 @router.post("/tasks/{task_id}/resume", summary="恢复已暂停/已完成的演进任务，继续演进")
 async def resume_evolution_task(task_id: str, req: EvolutionTaskResumeRequest, background_tasks: BackgroundTasks):
     """
     恢复已暂停、已完成或已失败的演进任务，从上次的 current_loop 继续。
     可选增加额外轮数。
+    force_full_train=True 时，忽略各 loop 的 backtest_only 设置，强制执行完整训练+回测。
     """
     try:
-        resumed_id = await scheduler.resume_task(task_id, additional_loops=req.additional_loops)
-        background_tasks.add_task(scheduler.submit_next_loop, resumed_id)
-        return {"status": "success", "task_id": resumed_id, "message": "演进任务已恢复并在后台继续执行"}
+        result = await scheduler.resume_task(
+            task_id,
+            additional_loops=req.additional_loops,
+            force_full_train=req.force_full_train,
+        )
+        resumed_id = result["task_id"]
+        task_type = result["task_type"]
+        if task_type == "strategy_evo":
+            background_tasks.add_task(scheduler.submit_strategy_evo_all_loops, resumed_id)
+            return {"status": "success", "task_id": resumed_id, "message": "策略演进任务已恢复（backtest-only 模式）"}
+        elif task_type == "custom_evo":
+            background_tasks.add_task(
+                scheduler.submit_custom_evo_all_loops, resumed_id,
+                force_full_train=req.force_full_train,
+            )
+            msg = "自定义演进任务已恢复（强制完整训练模式）" if req.force_full_train else "自定义演进任务已恢复"
+            return {"status": "success", "task_id": resumed_id, "message": msg}
+        else:
+            background_tasks.add_task(scheduler.submit_next_loop, resumed_id)
+            return {"status": "success", "task_id": resumed_id, "message": "演进任务已恢复并在后台继续执行"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -458,7 +614,10 @@ class EvolutionTaskForkRequest(BaseModel):
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="覆盖策略参数")
     execution_algo: Optional[str] = Field(None, description="覆盖执行算法code")
     execution_algo_params: Optional[Dict[str, Any]] = Field(None, description="覆盖执行算法参数")
-    additional_factor_keys: Optional[List[str]] = Field(None, description="从因子库额外添加的因子key列表，格式 ['name||source', ...]")
+    unfilled_handler: Optional[str] = Field(None, description="尾盘涨停处理: TAIL_BOOST / TAIL_SUBSTITUTE / 空=不使用")
+    unfilled_handler_params: Optional[Dict[str, Any]] = Field(None, description="尾盘处理参数，如 {backup_depth: 15}")
+    additional_factor_keys: Optional[List[str]] = Field(None, description="从因子库额外添加的因子key列表")
+    node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
 
 @router.post("/tasks/{task_id}/fork", summary="从指定 Loop 分叉出全新演进任务")
 async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, background_tasks: BackgroundTasks):
@@ -479,6 +638,9 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
             strategy_params=req.strategy_params,
             execution_algo=req.execution_algo,
             execution_algo_params=req.execution_algo_params,
+            unfilled_handler=req.unfilled_handler,
+            unfilled_handler_params=req.unfilled_handler_params,
+            node_id=req.node_id,
         )
 
         # 合并从因子库额外添加的因子
@@ -535,6 +697,7 @@ class StrategyLoopConfig(BaseModel):
     enable_sector_hmm: bool = Field(False, description="是否启用行业 HMM")
     hmm_model_version_id: Optional[str] = Field(None, description="HMM 模型快照 ID")
     hmm_signal_preset: Optional[str] = Field(None, description="HMM 信号系数档位: preset_A/preset_B")
+    unfilled_handler: Optional[str] = Field(None, description="尾盘涨停处理: TAIL_BOOST / TAIL_SUBSTITUTE / 空=不使用")
     sector_blacklist: Optional[List[str]] = Field(None, description="行业黑名单")
     stock_pool: Optional[str] = Field(None, description="Qlib股票池文件WSL路径")
 
@@ -542,8 +705,9 @@ class StrategyEvolutionForkRequest(BaseModel):
     from_loop_index: int = Field(..., description="从哪个 loop 分叉（必须已完成且有模型文件）")
     task_name: Optional[str] = Field(None, description="新任务名称")
     loops: List[StrategyLoopConfig] = Field(..., description="每个 Loop 的策略参数配置", min_length=1)
-    execution_mode: str = Field("serial", description="执行方式: serial / parallel")
+    execution_mode: str = Field("serial", description="执行方式: serial / parallel_N (N=2,4,6,8 并行度)")
     inherit_history: bool = Field(False, description="是否继承截止到该 loop 的演进历史")
+    node_id: Optional[str] = Field(None, description="执行节点 ID, None=继承源任务节点")
 
 @router.post("/tasks/{task_id}/strategy-fork", summary="从指定 Loop 分叉出策略演进任务（跳过训练）")
 async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
@@ -567,6 +731,7 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
             loops_config=loops_config,
             execution_mode=req.execution_mode or "serial",
             inherit_history=req.inherit_history,
+            node_id=req.node_id,
         )
 
         return {
@@ -582,6 +747,144 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to create strategy evolution task from {task_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _get_source_loop_factors(task_id: str, loop_index: int) -> list[str] | None:
+    """从源 Loop 的 config_json 中读取因子列表，用于 backtest-only 因子一致性校验。"""
+    from ..services.quantevolver.qe_evolution_service import get_conn
+    from psycopg2.extras import RealDictCursor
+    import json as _json
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT config_json FROM qe_evolution_loops WHERE task_id = %s AND loop_index = %s",
+                (task_id, loop_index),
+            )
+            row = cur.fetchone()
+    if not row:
+        # 源 Loop 可能来自 QE 单次实验（qe_experiments 表）
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT factor_names FROM qe_experiments WHERE qe_task_id = %s AND loop_index = %s",
+                    (task_id, loop_index),
+                )
+                exp_row = cur.fetchone()
+        if not exp_row:
+            return None
+        factor_names = exp_row.get("factor_names") or []
+        if isinstance(factor_names, str):
+            factor_names = _json.loads(factor_names)
+        return sorted(factor_names)
+    config = row.get("config_json") or {}
+    if isinstance(config, str):
+        config = _json.loads(config)
+    return sorted(config.get("factor_list") or [])
+
+
+class CustomEvoLoopConfig(BaseModel):
+    """单个自定义演进 Loop 的完整配置"""
+    label: Optional[str] = Field(None, description="Loop 标签/描述")
+    loop_index: Optional[int] = Field(None, description="Loop 索引（自动填充）")
+    factor_keys: List[str] = Field(..., description="因子 key 列表 ['name||source', ...]")
+    model_id: str = Field(..., description="模型 ID")
+    strategy_id: Optional[str] = Field(None, description="交易策略ID，None=使用默认 TopkDropoutStrategy")
+    strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数: topk, n_drop, hold_thresh, risk_degree 等")
+    execution_algo: Optional[str] = Field(None, description="日内执行算法code")
+    execution_algo_params: Optional[Dict[str, Any]] = Field(None, description="执行算法参数")
+    enable_sector_hmm: bool = Field(False, description="是否启用行业 HMM")
+    hmm_model_version_id: Optional[str] = Field(None, description="HMM 模型快照 ID")
+    hmm_signal_preset: Optional[str] = Field(None, description="HMM 信号系数档位: preset_A/preset_B")
+    unfilled_handler: Optional[str] = Field(None, description="尾盘涨停处理: TAIL_BOOST / TAIL_SUBSTITUTE / 空=不使用")
+    unfilled_handler_params: Optional[Dict[str, Any]] = Field(None, description="尾盘处理参数")
+    sector_blacklist: Optional[List[str]] = Field(None, description="行业黑名单")
+    stock_pool: Optional[str] = Field(None, description="Qlib股票池文件WSL路径")
+    label_type: Optional[str] = Field(None, description="训练标签类型: close/open/vwap")
+    data_split: Optional[Dict[str, str]] = Field(None, description="数据划分覆盖，None=使用系统默认")
+    # backtest-only 模式（复用已训练模型，仅回测）
+    backtest_only: bool = Field(False, description="是否跳过训练仅回测（需提供 model_source，且因子不可变更）")
+    model_source_task_id: Optional[str] = Field(None, description="模型来源任务 ID（backtest_only=True 时必填）")
+    model_source_loop_index: Optional[int] = Field(None, description="模型来源 Loop 索引（backtest_only=True 时必填）")
+
+class CustomEvolutionCreateRequest(BaseModel):
+    task_name: str = Field(..., description="任务名称")
+    target_desc: str = Field("", description="任务描述")
+    loops: List[CustomEvoLoopConfig] = Field(..., description="Loop 配置列表，至少1个", min_length=1)
+    execution_mode: str = Field("serial", description="执行方式: serial / parallel_N (N=2,4,6,8)")
+    node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
+    engine_mode: str = Field("unified", description="引擎模式: legacy=旧路径, unified=统一引擎")
+
+@router.post("/custom-tasks", summary="创建自定义演进任务（每个 Loop 完全自定义因子+模型+策略）")
+async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, background_tasks: BackgroundTasks):
+    """
+    创建自定义演进任务。与策略演进不同，每个 Loop 都可以完全自定义因子、模型、策略配置，
+    执行完整的训练+回测流程（非 backtest-only）。
+    """
+    try:
+        # 验证 loops 配置
+        for i, loop_cfg in enumerate(req.loops):
+            if not loop_cfg.factor_keys or len(loop_cfg.factor_keys) == 0:
+                raise HTTPException(status_code=400, detail=f"Loop {i+1} 必须选择至少一个因子")
+            if not loop_cfg.model_id:
+                raise HTTPException(status_code=400, detail=f"Loop {i+1} 必须选择一个模型")
+            # HMM 验证
+            if loop_cfg.enable_sector_hmm and not loop_cfg.hmm_model_version_id:
+                raise HTTPException(status_code=400, detail=f"Loop {i+1} 启用 HMM 时必须提供 hmm_model_version_id")
+            # backtest-only 验证：因子不可变更
+            if loop_cfg.backtest_only:
+                if not loop_cfg.model_source_task_id or loop_cfg.model_source_loop_index is None:
+                    raise HTTPException(status_code=400, detail=f"Loop {i+1} 启用 backtest-only 但未指定 model_source")
+                source_factors = _get_source_loop_factors(loop_cfg.model_source_task_id, loop_cfg.model_source_loop_index)
+                if source_factors is None:
+                    raise HTTPException(status_code=400, detail=(
+                        f"Loop {i+1}: 源 Loop {loop_cfg.model_source_task_id}/Loop{loop_cfg.model_source_loop_index} "
+                        f"不存在或无法读取因子配置，无法启用 backtest-only 模式"
+                    ))
+                current_factors = sorted(k.split("||")[0] for k in loop_cfg.factor_keys)
+                if current_factors != sorted(source_factors):
+                    raise HTTPException(status_code=400, detail=(
+                        f"Loop {i+1} 启用 backtest-only 但因子列表与源模型不一致。"
+                        f"backtest-only 模式要求因子不可变更，请关闭 backtest-only 或恢复原因子配置。"
+                    ))
+
+        # 为 loops 配置分配 loop_index
+        loops_config = []
+        for i, loop_cfg in enumerate(req.loops, start=1):
+            cfg_dict = loop_cfg.dict()
+            cfg_dict["loop_index"] = i
+            loops_config.append(cfg_dict)
+
+        # 节点可用性校验
+        if req.node_id:
+            from ..services.dispatch_service import DispatchService
+            svc = DispatchService()
+            node = svc.get_node(req.node_id)
+            if not node or node.get("status") == "offline":
+                raise HTTPException(status_code=400, detail=f"节点 {req.node_id} 不存在或离线")
+
+        new_task_id = await scheduler.create_custom_evo_task(
+            task_name=req.task_name,
+            target_desc=req.target_desc,
+            loops_config=loops_config,
+            execution_mode=req.execution_mode or "serial",
+            node_id=req.node_id,
+            engine_mode=req.engine_mode or "legacy",
+        )
+
+        return {
+            "status": "success",
+            "task_id": new_task_id,
+            "total_loops": len(loops_config),
+            "execution_mode": req.execution_mode or "serial",
+            "message": f"自定义演进任务已创建，{len(loops_config)} 个 Loop 后台启动中",
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to create custom evolution task: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/tasks/{task_id}/logs", summary="获取实时的任务运行及 Agent 思考日志流 (SSE)")
@@ -687,7 +990,11 @@ async def get_loop_enhanced_metrics(task_id: str, loop_id: str):
             if cached_em:
                 return {"status": "success", "data": cached_em}
 
-        url = f"{RDAGENT_QE_BASE}/api/v1/qe_workspace/tasks/{task_id}/loops/{loop_id}/enhanced-metrics"
+        # DB 中 loop_id 格式为 "{task_id}_{LoopN}"，RDAgent 文件系统期望 "LoopN"
+        rdagent_loop_id = loop_id
+        if loop_id.startswith(task_id + "_"):
+            rdagent_loop_id = loop_id[len(task_id) + 1:]
+        url = f"{RDAGENT_QE_BASE}/api/v1/qe_workspace/tasks/{task_id}/loops/{rdagent_loop_id}/enhanced-metrics"
         async with httpx.AsyncClient(timeout=RDAGENT_QE_TIMEOUT) as client:
             resp = await client.get(url)
             resp.raise_for_status()
@@ -1006,13 +1313,19 @@ def _update_job_status(job_id, status, error=None):
         logger.warning(f"更新 job 状态失败: {e}")
 
 
-def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = None, job_id: str = None):
+def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = None, job_id: str = None, data_date: str = None):
     """统一相关性计算入口 — 同步函数，在 ThreadPoolExecutor 中执行。
 
     mode: "full" | "cache_only" | "smart_incremental" | "incremental"
+    data_date: 快照日期 (YYYYMMDD)，指定后使用磁盘快照数据
     """
+    # 自动推导 data_date: as_of_date (YYYY-MM-DD) → data_date (YYYYMMDD)
+    if not data_date and as_of_date:
+        data_date = as_of_date.replace("-", "")
+
     global _latest_result
     timeout_timer = None
+    pipeline = None  # 提前声明，防止 finally 中 NameError
     with _computing_lock:
         try:
             _stop_event.clear()
@@ -1029,6 +1342,65 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
             phase3_elapsed = 0.0
             success_factors = []
             failed_factors: list[tuple[str, str]] = []  # [(factor_name, error_msg), ...]
+
+            # ═══ 全量模式：清空所有历史缓存和 DB 相关性数据 ═══
+            if mode == "full":
+                import glob as _glob
+                _correlation_logs.append("[清空] 全量模式: 清空所有历史相关性数据和因子缓存...")
+
+                # 1. TRUNCATE qe_factor_correlations
+                try:
+                    with get_conn() as _conn:
+                        with _conn.cursor() as _cur:
+                            _cur.execute("TRUNCATE TABLE qe_factor_correlations")
+                        _conn.commit()
+                    _correlation_logs.append("[清空] DB: qe_factor_correlations 已清空")
+                except Exception as e:
+                    _correlation_logs.append(f"[清空] DB 清空失败，终止计算: {e}", "ERROR")
+                    logger.error(f"全量模式 TRUNCATE 失败: {e}")
+                    _correlation_progress.finish("failed", f"DB 清空失败: {e}")
+                    _update_job_status(job_id, "failed")
+                    return
+
+                # 2. 删除 HDF5 相关性矩阵缓存
+                _hdf5_dir = os.path.join(
+                    os.path.dirname(__file__), "..", "..",
+                    "data", "correlation_matrices",
+                )
+                _hdf5_dir = os.path.normpath(_hdf5_dir)
+                for _h5 in _glob.glob(os.path.join(_hdf5_dir, "corr_*.h5")):
+                    os.remove(_h5)
+                    _correlation_logs.append(f"[清空] 删除 HDF5: {os.path.basename(_h5)}")
+
+                # 3. 删除所有单因子 parquet 缓存
+                _single_dir = os.path.normpath(os.path.join(
+                    os.path.dirname(__file__), "..", "..",
+                    "rdagent_assets", "factor_values", "single",
+                ))
+                _removed_pq = 0
+                if os.path.isdir(_single_dir):
+                    for _f in os.listdir(_single_dir):
+                        if _f.endswith(".parquet"):
+                            os.remove(os.path.join(_single_dir, _f))
+                            _removed_pq += 1
+                _correlation_logs.append(f"[清空] 删除 {_removed_pq} 个单因子 parquet 缓存")
+
+                # 4. 重置 _meta.json
+                _meta_path = os.path.normpath(os.path.join(
+                    os.path.dirname(__file__), "..", "..",
+                    "rdagent_assets", "factor_values", "_meta.json",
+                ))
+                if os.path.isfile(_meta_path):
+                    import json as _json
+                    with open(_meta_path, "w", encoding="utf-8") as _mf:
+                        _json.dump({"factors": {}}, _mf)
+                    _correlation_logs.append("[清空] _meta.json 已重置")
+
+                # 5. 清除内存缓存
+                from ..services.quantevolver.factor_value_loader import FactorValueLoader
+                FactorValueLoader.invalidate_single_cache()
+                FactorValueLoader.invalidate_merged_cache()
+                _correlation_logs.append("[清空] 内存缓存已清除")
 
             # Phase 1: 生成单因子缓存
             if mode in ("full", "smart_incremental", "incremental"):
@@ -1047,17 +1419,21 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
 
                 # 预热数据缓存（静态因子 ~300s + 行情 ~40s），
                 # 传入 effective_end_date 确保与因子计算使用相同日期
-                _correlation_logs.append(f"[预热] 加载静态因子数据 + 行情数据到缓存 (end_date={effective_end_date or 'today'})...")
+                _correlation_logs.append(f"[预热] 加载静态因子数据 + 行情数据到缓存 (end_date={effective_end_date or 'today'}, data_date={data_date or 'none'})...")
                 _correlation_progress.advance(phase="cache_gen", phase_label="预热数据缓存")
                 try:
-                    warmup_timings = pipeline.warm_caches(end_date=effective_end_date or None)
+                    warmup_timings = pipeline.warm_caches(
+                        end_date=effective_end_date or None,
+                        data_date=data_date,
+                    )
                     _correlation_logs.append(
                         f"[预热完成] 静态因子={warmup_timings.get('static', 0)}s, "
                         f"行情数据={warmup_timings.get('realtime', 0)}s"
                     )
                 except Exception as e:
                     logger.error(f"缓存预热失败: {e}", exc_info=True)
-                    _correlation_logs.append(f"[预热失败] {e} — 继续执行，部分因子可能超时")
+                    _correlation_logs.append(f"[预热失败] {e}")
+                    raise RuntimeError(f"数据快照预热失败，中止计算: {e}") from e
 
                 # Phase 1a: 如果指定了新日期且比现有缓存新，增量扩展存量因子
                 if effective_end_date and effective_end_date > existing_as_of and mode in ("smart_incremental", "incremental"):
@@ -1177,16 +1553,17 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
                 _update_job_status(job_id, "failed")
                 return
 
-            # ── Phase 1 → Phase 2 过渡：释放因子计算加载器，回收 ~15-20GB 内存 ──
+            # ── Phase 1 → Phase 2 过渡：释放因子计算加载器，回收内存 ──
             if mode in ("full", "smart_incremental", "incremental"):
                 try:
+                    pipeline.clear_snapshot()  # 清除 RealtimeFactorDataLoader._snapshot_df 类变量
                     pipeline._loader_instance = None
                     pipeline._static_loader_instance = None
-                    del pipeline
+                    pipeline = None  # 置 None 而非 del，保证 finally 中可安全访问
                     import gc
                     gc.collect()
                     _correlation_logs.append(
-                        f"已释放 Phase 1 数据加载器 (static_factors + realtime 缓存)"
+                        f"已释放 Phase 1 数据加载器 (static_factors + realtime 快照)"
                     )
                 except Exception as e:
                     logger.warning(f"释放 Phase 1 加载器异常: {e}")
@@ -1289,6 +1666,15 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
                 timeout_timer.cancel()
             _stop_event.clear()
 
+            # 清除快照内存缓存（如果使用了快照模式）
+            if data_date and pipeline is not None:
+                try:
+                    pipeline.clear_snapshot()
+                    logger.info(f"已清除快照内存缓存: {data_date}")
+                except Exception as e:
+                    logger.error(f"清除快照缓存失败: {e}", exc_info=True)
+                    raise
+
             # 强制内存清理：无论成功/失败/取消，都释放大对象
             try:
                 FactorValueLoader.invalidate_single_cache()  # 清空类级别因子缓存
@@ -1331,7 +1717,22 @@ def compute_correlations(req: CorrelationComputeRequest):
 
     # 确定因子列表
     if req.factor_names:
-        factor_names = req.factor_names
+        # 显式指定因子时，仍需校验 is_available 和 transformation_status
+        ph = ",".join(["%s"] * len(req.factor_names))
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT factor_name FROM aistock_factor_catalog
+                    WHERE factor_name IN ({ph})
+                      AND transformation_status = 'SUCCESS'
+                      AND is_available = TRUE
+                      AND qe_code_path IS NOT NULL
+                    ORDER BY factor_name
+                """, req.factor_names)
+                factor_names = [row[0] for row in cur.fetchall()]
+        skipped = set(req.factor_names) - set(factor_names)
+        if skipped:
+            logger.warning(f"跳过不可用/未改造的因子: {skipped}")
     else:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -1376,10 +1777,42 @@ def compute_incremental_correlations(req: IncrementalComputeRequest):
     global _compute_future
     _compute_future = _compute_executor.submit(_run_correlation_compute, "incremental", req.factor_names, req.as_of_date)
 
+
+
+@router.post("/correlations/compute-incremental", summary="增量相关性计算")
+def compute_incremental_correlations(req: IncrementalComputeRequest):
+    """增量计算指定因子与全部已缓存因子之间的相关性。
+
+    流程: 执行新因子代码 → 存单因子缓存 → 读已有缓存 → 逐对计算 → UPSERT DB
+    """
+    if _computing_lock.locked():
+        return {"status": "computing", "message": "正在计算中", "progress": _correlation_progress.snapshot()}
+
+    # 校验因子可用性，过滤禁用因子
+    ph = ",".join(["%s"] * len(req.factor_names))
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT factor_name FROM aistock_factor_catalog
+                WHERE factor_name IN ({ph})
+                  AND transformation_status = 'SUCCESS'
+                  AND is_available = TRUE
+                  AND qe_code_path IS NOT NULL
+            """, req.factor_names)
+            valid_names = [row[0] for row in cur.fetchall()]
+    skipped = set(req.factor_names) - set(valid_names)
+    if skipped:
+        logger.warning(f"增量计算跳过不可用/未改造的因子: {skipped}")
+    if not valid_names:
+        return {"status": "error", "message": "所有请求的因子均不可用或未改造"}
+
+    global _compute_future
+    _compute_future = _compute_executor.submit(_run_correlation_compute, "incremental", valid_names, req.as_of_date)
+
     return {
         "status": "accepted",
-        "message": f"已提交 {len(req.factor_names)} 个因子的增量相关性计算",
-        "factor_names": req.factor_names,
+        "message": f"已提交 {len(valid_names)} 个因子的增量相关性计算（跳过 {len(skipped)} 个不可用因子）",
+        "factor_names": valid_names,
     }
 
 
@@ -1613,16 +2046,25 @@ def get_correlation_matrix(
     pair_threshold = max(threshold, 0.5)
     high_pairs = result.get_high_corr_pairs(pair_threshold)
 
-    # 过滤已删除的因子（HDF5 矩阵可能包含已删除因子的旧数据）
+    # 过滤已删除/禁用的因子（HDF5 矩阵可能包含已删除因子的旧数据）
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT factor_name FROM aistock_factor_catalog")
-                existing_factors = {row[0] for row in cur.fetchall()}
+                cur.execute("""
+                    SELECT factor_name FROM aistock_factor_catalog
+                    WHERE is_available = TRUE
+                """)
+                available_factors = {row[0] for row in cur.fetchall()}
         high_pairs = [
             p for p in high_pairs
-            if p.get("factor_a") in existing_factors and p.get("factor_b") in existing_factors
+            if p.get("factor_a") in available_factors and p.get("factor_b") in available_factors
         ]
+        # 过滤矩阵行/列：只保留可用因子
+        if result.factor_names and available_factors:
+            keep_indices = [i for i, fn in enumerate(result.factor_names) if fn in available_factors]
+            if len(keep_indices) < len(result.factor_names):
+                result.factor_names = [result.factor_names[i] for i in keep_indices]
+                result.matrix = result.matrix[np.ix_(keep_indices, keep_indices)]
     except Exception as e:
         logger.warning(f"过滤已删除因子时出错: {e}")
 
@@ -1719,6 +2161,7 @@ async def get_correlation_pair(
                 "daily_correlations": pair_result.daily_correlations[-60:],
             }
         except Exception as e:
+            logger.warning("Daily correlation 计算失败: factor_a=%s, factor_b=%s, error=%s", factor_a, factor_b, e)
             daily_data = {"error": str(e)}
 
     # 无 DB 记录且无 daily_data 时，使用缓存计算兜底
@@ -1837,6 +2280,7 @@ def get_correlation_subset(
                     SELECT DISTINCT ON (factor_name) id, factor_name
                     FROM aistock_factor_catalog
                     WHERE factor_name = ANY(%s)
+                      AND is_available = TRUE
                     ORDER BY factor_name, id
                 """, (factor_names,))
                 id_map = {}
@@ -1921,7 +2365,9 @@ def get_related_factors(
                                  ELSE cat_a.is_available END AS factor_available
                         FROM qe_factor_correlations c
                         JOIN aistock_factor_catalog cat_a ON c.factor_a_id = cat_a.id
+                            AND cat_a.is_available = TRUE
                         JOIN aistock_factor_catalog cat_b ON c.factor_b_id = cat_b.id
+                            AND cat_b.is_available = TRUE
                         WHERE (c.factor_a_id = %s OR c.factor_b_id = %s)
                           AND ABS(c.correlation) > %s
                         ORDER BY ABS(c.correlation) DESC
@@ -2004,7 +2450,9 @@ def get_related_factors(
                             c.computed_at
                         FROM qe_factor_correlations c
                         JOIN aistock_factor_catalog cat_a ON c.factor_a_id = cat_a.id
+                            AND cat_a.is_available = TRUE
                         JOIN aistock_factor_catalog cat_b ON c.factor_b_id = cat_b.id
+                            AND cat_b.is_available = TRUE
                         WHERE (c.factor_a_id = %s OR c.factor_b_id = %s)
                           AND ABS(c.correlation) > %s
                         ORDER BY ABS(c.correlation) DESC
@@ -2124,8 +2572,18 @@ def _persist_correlations_batch(records: List[Dict[str, Any]]) -> int:
                 )
 
             # 批量更新 catalog 的 correlation_computed_at 和 pair_count
-            if catalog_map:
-                catalog_ids = list(catalog_map.values())
+            # 只更新 records 中实际存在的因子（排除 parquet 生成失败但仍在 catalog_map 中的因子）
+            if seen:
+                actually_computed_ids = set()
+                for (a_id, b_id) in seen.keys():
+                    actually_computed_ids.add(a_id)
+                    actually_computed_ids.add(b_id)
+                computed_id_list = list(actually_computed_ids)
+            elif catalog_map:
+                computed_id_list = list(catalog_map.values())
+            else:
+                computed_id_list = []
+            if computed_id_list:
                 cur.execute("""
                     UPDATE aistock_factor_catalog c SET
                         correlation_computed_at = NOW(),
@@ -2140,7 +2598,7 @@ def _persist_correlations_batch(records: List[Dict[str, Any]]) -> int:
                         ) t GROUP BY factor_id
                     ) sub
                     WHERE c.id = sub.factor_id
-                """, (catalog_ids, catalog_ids))
+                """, (computed_id_list, computed_id_list))
 
         conn.commit()
 
@@ -2354,17 +2812,20 @@ def _get_pipeline():
 @router.post("/factor-values/compute")
 async def compute_factor_values(
     background_tasks: BackgroundTasks,
-    factor_names: Optional[List[str]] = None,
-    start_date: str = "2024-12-01",
-    end_date: str = "2025-12-01",
-    max_workers: int = 1,
-    timeout_per_factor: int = 600,
+    factor_names: Optional[List[str]] = Query(None),
+    start_date: str = Query("2024-12-01"),
+    end_date: str = Query("2025-12-01"),
+    max_workers: int = Query(1),
+    timeout_per_factor: int = Query(600),
+    data_date: Optional[str] = Query(None),
 ):
     """触发批量因子值计算。
 
     - factor_names: 指定因子列表；为空则计算所有已改造因子
     - start_date/end_date: 计算日期范围
     - max_workers: 并发线程数（建议 1-3）
+    - data_date: 快照日期 (YYYYMMDD)，如 "20260403"。指定后使用磁盘快照数据，
+                 首次自动创建快照，后续从缓存读取。所有因子共享同一快照。
     """
     global _pipeline_computing
     if _pipeline_computing:
@@ -2383,6 +2844,7 @@ async def compute_factor_values(
                 end_date=end_date,
                 max_workers=max_workers,
                 timeout_per_factor=timeout_per_factor,
+                data_date=data_date,
             )
             logger.info(
                 f"因子值计算完成: {result.success}/{result.total} 成功, "
@@ -2394,12 +2856,16 @@ async def compute_factor_values(
             _pipeline_computing = False
 
     background_tasks.add_task(_run)
-    return {
+    resp = {
         "status": "started",
         "message": "因子值计算已在后台启动",
         "factor_count": len(factor_names) if factor_names else "all",
         "date_range": f"{start_date}~{end_date}",
     }
+    if data_date:
+        resp["data_date"] = data_date
+        resp["message"] = f"因子值计算已在后台启动（快照模式: {data_date}）"
+    return resp
 
 
 @router.get("/factor-values/status")
@@ -2412,6 +2878,106 @@ def factor_values_status():
         "cached_files": cached,
         "cache_count": len(cached),
     }
+
+
+@router.get("/factor-values/time-estimate")
+def factor_values_time_estimate(
+    factor_count: Optional[int] = Query(None, description="要计算的因子数量；None 则用全部已改造因子数"),
+):
+    """基于历史执行耗时预估批量因子计算时间。
+
+    从 _meta.json 读取每个因子的历史 elapsed_sec，计算统计量，
+    给出总时间预估（含缓存预热）。
+    """
+    pipeline = _get_pipeline()
+    meta = pipeline._load_meta()
+    factors = meta.get("factors", {})
+
+    # 收集有 elapsed_sec 的因子
+    timings = []
+    for fname, info in factors.items():
+        if isinstance(info, dict) and info.get("elapsed_sec") is not None:
+            timings.append({
+                "factor_name": fname,
+                "elapsed_sec": info["elapsed_sec"],
+            })
+
+    if not timings:
+        return {
+            "has_history": False,
+            "message": "暂无历史耗时数据，需要先执行一次因子计算",
+            "default_estimate_per_factor_sec": 120,
+        }
+
+    elapsed_values = [t["elapsed_sec"] for t in timings]
+    avg_sec = sum(elapsed_values) / len(elapsed_values)
+    median_sec = sorted(elapsed_values)[len(elapsed_values) // 2]
+    max_sec = max(elapsed_values)
+    p90_sec = sorted(elapsed_values)[int(len(elapsed_values) * 0.9)]
+
+    # 预估
+    n = factor_count or len(factors)
+    # 缓存预热约 300s（首次快照）或 30s（已有快照）
+    warmup_estimate = 30
+    # 串行: n * avg; 并行(4线程): n * avg / 4
+    serial_estimate = n * avg_sec + warmup_estimate
+    parallel_estimate = n * avg_sec / 4 + warmup_estimate
+
+    # 找出最慢的 5 个因子
+    slowest = sorted(timings, key=lambda x: x["elapsed_sec"], reverse=True)[:5]
+
+    return {
+        "has_history": True,
+        "history_count": len(timings),
+        "stats": {
+            "avg_sec": round(avg_sec, 1),
+            "median_sec": round(median_sec, 1),
+            "p90_sec": round(p90_sec, 1),
+            "max_sec": round(max_sec, 1),
+        },
+        "estimate": {
+            "factor_count": n,
+            "serial_sec": round(serial_estimate, 0),
+            "serial_min": round(serial_estimate / 60, 1),
+            "parallel_4_sec": round(parallel_estimate, 0),
+            "parallel_4_min": round(parallel_estimate / 60, 1),
+            "warmup_sec": warmup_estimate,
+        },
+        "slowest_5": slowest,
+    }
+
+
+# ── 数据快照管理 ──
+
+@router.get("/factor-values/snapshots")
+def list_snapshots():
+    """列出所有数据快照及其元数据。"""
+    from ..services.quantevolver.data_snapshot_manager import DataSnapshotManager
+    mgr = DataSnapshotManager()
+    snapshots = mgr.list_snapshots()
+    return {
+        "total": len(snapshots),
+        "snapshots": snapshots,
+    }
+
+
+@router.delete("/factor-values/snapshots/{data_date}")
+def delete_snapshot(data_date: str):
+    """删除指定数据快照。
+
+    - data_date: 快照日期 (YYYYMMDD)，如 "20260403"
+    """
+    from ..services.quantevolver.data_snapshot_manager import DataSnapshotManager
+
+    if _pipeline_computing:
+        raise HTTPException(409, "因子值计算正在进行中，不能删除快照")
+
+    mgr = DataSnapshotManager()
+    if not mgr.snapshot_exists(data_date):
+        raise HTTPException(404, f"快照 {data_date} 不存在")
+
+    mgr.delete_snapshot(data_date)
+    return {"status": "deleted", "data_date": data_date}
 
 
 @router.get("/factor-values/available")

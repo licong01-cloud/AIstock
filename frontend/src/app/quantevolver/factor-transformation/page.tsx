@@ -68,7 +68,7 @@ export default function FactorTransformationPage() {
   const loadFactors = useCallback(async () => {
     setLoading(true);
     try {
-      const p = new URLSearchParams({ limit: "500", offset: "0" });
+      const p = new URLSearchParams({ limit: "2000", offset: "0" });
       if (sourceFilter !== "all") p.set("factor_source", sourceFilter);
       const r = await fetch(`${API}/quantevolver/factor-transformation/status?${p}`);
       const d = await r.json();
@@ -106,7 +106,7 @@ export default function FactorTransformationPage() {
   // 静默刷新因子数据（不触发loading状态）
   const silentLoadFactors = useCallback(async () => {
     try {
-      const p = new URLSearchParams({ limit: "500", offset: "0" });
+      const p = new URLSearchParams({ limit: "2000", offset: "0" });
       if (sourceFilter !== "all") p.set("factor_source", sourceFilter);
       const r = await fetch(`${API}/quantevolver/factor-transformation/status?${p}`);
       const d = await r.json();

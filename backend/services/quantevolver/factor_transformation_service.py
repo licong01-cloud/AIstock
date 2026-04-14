@@ -117,8 +117,8 @@ class FactorTransformationService:
         max_llm_retries: int = 5,
         llm_model_id: Optional[str] = None,
         test_instruments: Optional[List[str]] = None,
-        test_start_date: str = "2023-01-01",
-        test_end_date: str = "2023-12-31",
+        test_start_date: str = "2022-01-01",
+        test_end_date: str = "2024-12-31",
     ) -> Dict[str, Any]:
         """对单个因子执行完整的改造工作流
 
@@ -369,7 +369,7 @@ class FactorTransformationService:
         self,
         requested_start_date: str,
         requested_end_date: str,
-        warmup_trading_days: int = 120,
+        warmup_trading_days: int = 300,
         compare_trading_days: int = 20,
     ) -> Tuple[str, str, Dict[str, Any]]:
         """基于交易日历选择有效测试区间，避免长假导致测试样本落在预热阶段。"""
@@ -442,6 +442,15 @@ class FactorTransformationService:
                 if not df_static.empty:
                     df_static.to_parquet(os.path.join(tmpdir, "static_factors.parquet"))
 
+                # 创建子目录存放因子脚本，模拟原始目录结构：
+                #   tmpdir/                    ← Path(__file__).parent.parent（数据文件所在）
+                #   ├── daily_pv.h5
+                #   └── factors/               ← Path(__file__).parent
+                #       └── {factor_name}.py   ← __file__
+                # 这确保 Path(__file__).parent.parent 正确指向 tmpdir（数据文件所在目录）
+                factors_subdir = os.path.join(tmpdir, "factors")
+                os.makedirs(factors_subdir, exist_ok=True)
+
                 # 生成独立执行脚本（在子进程中运行，避免 os.chdir 线程安全问题）
                 runner_code = self._build_original_factor_runner_script(
                     factor_name, tmpdir, instruments, start_date, end_date
@@ -450,7 +459,7 @@ class FactorTransformationService:
                 with open(runner_path, "w", encoding="utf-8") as fh:
                     fh.write(runner_code)
 
-                code_path = os.path.join(tmpdir, f"{factor_name}.py")
+                code_path = os.path.join(factors_subdir, f"{factor_name}.py")
                 with open(code_path, "w", encoding="utf-8") as fh:
                     fh.write(original_code)
 
@@ -459,6 +468,7 @@ class FactorTransformationService:
                 proc = subprocess.run(
                     [sys.executable, runner_path],
                     capture_output=True, text=True, timeout=600, cwd=tmpdir,
+                    encoding="utf-8", errors="replace",
                 )
 
                 if proc.returncode != 0:
@@ -512,11 +522,11 @@ end_date = {repr(end_date)}
 tmpdir = {repr(tmpdir)}
 
 try:
-    code_path = os.path.join(tmpdir, f"{{factor_name}}.py")
+    code_path = os.path.join(tmpdir, "factors", f"{{factor_name}}.py")
     with open(code_path, "r", encoding="utf-8") as f:
         original_code = f.read()
 
-    ns = {{"__name__": "__main__", "__builtins__": __builtins__}}
+    ns = {{"__name__": "__main__", "__builtins__": __builtins__, "__file__": code_path}}
     exec(compile(original_code, code_path, "exec"), ns)
 
     # 查找 calculate_ 函数
@@ -749,24 +759,45 @@ df = _REALTIME_LOADER.load(
 # 列名直接使用：df['close'], df['volume'] 等（无 $ 前缀）
 ```
 
-### _STATIC_FACTORS_LOADER（替代 static_factors.parquet）
+### _STATIC_FACTORS_LOADER（替代 static_factors.parquet / daily_basic.h5 / sector_data.h5）
 ```python
-required_cols = ['FactorA', 'FactorB']
+# 加载全部列
+static_df = _STATIC_FACTORS_LOADER.load(
+    instruments=instruments,
+    start_date=start_date,
+    end_date=end_date,
+)
+static_df = static_df.sort_index()
+
+# 或指定列（推荐）
+required_cols = ['db_pb', 'sw2_close']
 static_df = _STATIC_FACTORS_LOADER.load(
     instruments=instruments,
     start_date=start_date,
     end_date=end_date,
     columns=required_cols,
 )
-static_df = static_df.sort_index()
-df = df.join(static_df, how='left')
 ```
+
+**_STATIC_FACTORS_LOADER 包含的列（原始代码中的文件→列名映射）：**
+
+| 原始文件 | 列名前缀 | 示例列 |
+|---------|---------|-------|
+| `daily_basic.h5` | `db_` | `db_pb`, `db_pe`, `db_turnover_rate`, `db_total_mv` |
+| `sector_data.h5` | `sw2_` | `sw2_close`, `sw2_open`, `sw2_pb`, `sw2_pe`, `sw2_pct_change` |
+| `static_factors.parquet` | `mf_`, `bb_`, `cp_` 等 | `mf_net_amt`, `bb_total_assets`, `cp_avg_cost` |
+
+**重要**：`daily_basic.h5` 和 `sector_data.h5` 的数据已合并到 `_STATIC_FACTORS_LOADER` 中，列名不变（保留 `db_`/`sw2_` 前缀）。
+原始代码中 `db = pd.read_hdf("daily_basic.h5"); db["db_pb"]` 应改为 `static_df["db_pb"]`。
+原始代码中 `sector = pd.read_hdf("sector_data.h5"); sector["sw2_close"]` 应改为 `static_df["sw2_close"]`。
 
 ## 改造规则
 
 | 原始代码 | 改造后代码 |
 |---------|-----------|
 | `pd.read_hdf('daily_pv.h5', key='data')` | `_REALTIME_LOADER.load(instruments, start_date, end_date, fields=[...], adjust='qfq')` |
+| `pd.read_hdf('daily_basic.h5')` | `_STATIC_FACTORS_LOADER.load(instruments, start_date, end_date)` |
+| `pd.read_hdf('sector_data.h5')` | `_STATIC_FACTORS_LOADER.load(instruments, start_date, end_date)` |
 | `pd.read_parquet('static_factors.parquet', columns=[...])` | `_STATIC_FACTORS_LOADER.load(instruments, start_date, end_date, columns=[...])` |
 | `D.features(instruments, fields, start_time, end_time)` | `_REALTIME_LOADER.load(instruments=instruments, start_date=start_time, end_date=end_time, fields=fields)` |
 | `result.to_hdf(...)` / `result.to_parquet(...)` | 删除，直接 return result_df |

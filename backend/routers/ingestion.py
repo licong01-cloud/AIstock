@@ -38,8 +38,10 @@ def _json_load(value: Any) -> Any:
         return value
     try:
         return json.loads(value)
-    except Exception:  # noqa: BLE001 - fallback raw
-        return value
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning("_json_load: failed to parse value as JSON, returning empty dict: %.120s", value)
+        return {}
 
 
 def _isoformat(value: Optional[dt.datetime]) -> Optional[str]:
@@ -290,7 +292,7 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
         return None
     if ds in {"kline_daily_raw", "kline_minute_raw"}:
         return "tdx_api"
-    if ds in {"stock_moneyflow_ts", "stock_basic", "stock_st", "bak_basic", "daily_basic", "stk_limit"}:
+    if ds in {"stock_moneyflow_ts", "stock_basic", "stock_st", "bak_basic", "daily_basic", "stk_limit", "margin_detail"}:
         return "tushare"
     if ds in {"index_daily", "index_basic"}:
         return "tushare"
@@ -406,6 +408,7 @@ def _job_status(job_id: uuid.UUID) -> Dict[str, Any]:
             try:
                 avg_progress = int(float((avg_rows[0] or {}).get("avg_progress") or 0))
             except Exception:  # noqa: BLE001
+                import logging; logging.getLogger(__name__).debug("progress parse fallback: avg_progress")
                 avg_progress = 0
             percent = max(percent, min(100, avg_progress))
     else:
@@ -432,6 +435,7 @@ def _job_status(job_id: uuid.UUID) -> Dict[str, Any]:
                 total_c = int(counters_from_summary.get("total") or 0)
                 done_c = int(counters_from_summary.get("done") or 0)
             except Exception:  # noqa: BLE001
+                import logging; logging.getLogger(__name__).debug("progress parse fallback: total_c")
                 total_c = 0
                 done_c = 0
             if total_c > 0:
@@ -449,6 +453,7 @@ def _job_status(job_id: uuid.UUID) -> Dict[str, Any]:
                     else:
                         percent = min(100, int((done / total) * 100))
                 except Exception:  # noqa: BLE001
+                    import logging; logging.getLogger(__name__).debug("progress parse fallback: percent")
                     percent = min(100, int((done / total) * 100)) if total > 0 else 0
 
     log_rows = _fetchall(
@@ -671,6 +676,7 @@ def _batch_job_statuses(job_ids: List[uuid.UUID]) -> List[Dict[str, Any]]:
                     total_c = int(counters_from_summary.get("total") or 0)
                     done_c = int(counters_from_summary.get("done") or 0)
                 except Exception:  # noqa: BLE001
+                    import logging; logging.getLogger(__name__).debug("progress parse fallback: total_c")
                     total_c = 0
                     done_c = 0
                 if total_c > 0:
@@ -687,6 +693,7 @@ def _batch_job_statuses(job_ids: List[uuid.UUID]) -> List[Dict[str, Any]]:
                         else:
                             percent = min(100, int((done / total) * 100))
                     except Exception:  # noqa: BLE001
+                        import logging; logging.getLogger(__name__).debug("progress parse fallback: percent")
                         percent = min(100, int((done / total) * 100)) if total > 0 else 0
 
         inserted_rows = int(
@@ -1102,7 +1109,8 @@ def cancel_ingestion_job(job_id: uuid.UUID = Path(...)) -> Dict[str, Any]:
     summary_raw = row.get("summary") or {}
     try:
         summary_obj = json.loads(summary_raw) if isinstance(summary_raw, str) else dict(summary_raw)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("cancel_ingestion_job: failed to parse summary JSON for job %s: %s", job_id, exc)
         summary_obj = {}
 
     go_task_id = summary_obj.get("go_task_id")
@@ -1217,6 +1225,7 @@ _DAILY_PRESETS = [
     ("stock_st", "incremental"),
     ("bak_basic", "incremental"),
     ("stk_limit", "incremental"),
+    ("margin_detail", "incremental"),
     ("sw_sector", "incremental"),
     ("sector_data", "incremental"),
     ("cyq_perf", "incremental"),
@@ -1484,6 +1493,11 @@ def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="stk_limit init requires start_date")
         if mode == "init" and not options.get("end_date"):
             raise HTTPException(status_code=400, detail="stk_limit init requires end_date")
+    elif dataset == "margin_detail":
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="margin_detail init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="margin_detail init requires end_date")
     elif dataset == "index_daily":
         # 指数日线行情 index_daily：
         # - init: 必须提供 start_date/end_date
@@ -1960,18 +1974,39 @@ def get_data_gaps(
     """
 
     # 0) 如果不强制刷新且没有指定日期范围（即查全量），尝试读缓存
+    # 缓存有效期 1 小时，过期后重新计算
+    _CACHE_TTL_SECONDS = 3600
     if not refresh and not start_date and not end_date:
         cached_rows = _fetchall(
             "SELECT last_check_result, last_check_at FROM market.data_stats WHERE data_kind=%s",
             (data_kind,),
         )
         if cached_rows:
-            res = _json_load(cached_rows[0].get("last_check_result"))
-            chk_at = _isoformat(cached_rows[0].get("last_check_at"))
-            if isinstance(res, dict) and res:
-                # 将 last_check_at 注入返回结果
-                res["last_check_at"] = chk_at
-                return res
+            chk_at_raw = cached_rows[0].get("last_check_at")
+            chk_at = _isoformat(chk_at_raw)
+            # Check cache TTL
+            cache_valid = False
+            age: float = 0.0
+            if chk_at_raw:
+                try:
+                    if isinstance(chk_at_raw, str):
+                        cache_ts = dt.datetime.fromisoformat(chk_at_raw)
+                    elif hasattr(chk_at_raw, "timestamp"):
+                        cache_ts = chk_at_raw if isinstance(chk_at_raw, dt.datetime) else None
+                    else:
+                        cache_ts = None
+                    if cache_ts and hasattr(cache_ts, "timestamp"):
+                        age = (dt.datetime.now(dt.timezone.utc) - cache_ts).total_seconds()
+                        cache_valid = age < _CACHE_TTL_SECONDS
+                except Exception as exc:
+                    import logging
+                    logging.getLogger(__name__).warning("gap cache TTL: failed to parse last_check_at %r: %s", chk_at_raw, exc)
+            if cache_valid:
+                res = _json_load(cached_rows[0].get("last_check_result"))
+                if isinstance(res, dict) and res:
+                    res["last_check_at"] = chk_at
+                    res["cache_age_seconds"] = int(age)
+                    return res
 
     # 1) 从 data_stats_config 读取表名和日期列
     cfg_rows = _fetchall(
@@ -2249,6 +2284,7 @@ def get_ingestion_auto_range(
 
     # 2) 直接查询该表的 max_date（使用 statement_timeout 防止大表超时）
     current_max_date: Optional[dt.date] = None
+    max_query_failed = False
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -2260,6 +2296,7 @@ def get_ingestion_auto_range(
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning(f"[{data_kind}] 查询 MAX({date_column}) from {table_name} 失败: {exc}")
+        max_query_failed = True
 
     # 4) latest_trading_date：仅考虑当前日期及之前的交易日，避免拿到未来计划交易日
     latest_rows = _fetchall(
@@ -2278,6 +2315,11 @@ def get_ingestion_auto_range(
 
     # 5)  start_date
     if current_max_date is None:
+        if max_query_failed:
+            raise HTTPException(
+                status_code=503,
+                detail=f"[{data_kind}] 无法查询 MAX date，请检查数据库后重试，不要自动全量拉取",
+            )
         start_date = dt.date(1990, 1, 1)
         has_data = False
     else:

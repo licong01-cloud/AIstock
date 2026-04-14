@@ -1,0 +1,4 @@
+# file: F:\Dev\AIstock\backend\rebalance_strategies\topk_dropout.py
+# hypothesis_version: 6.151.10
+
+[0.0, 0.15, 'BUY', 'SELL', 'TOPK_DROPOUT', 'max_positions', 'max_turnover_pct', 'portfolio_id', 'quantity', 'score', 'side', 'signal_date', 'symbol', 'target_quantity', 'target_weight', 'trade_date']

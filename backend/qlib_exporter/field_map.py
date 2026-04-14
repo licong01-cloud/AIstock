@@ -138,6 +138,20 @@ def _sector_data_source_to_export_map() -> Dict[str, str]:
     return {c: c for c in cols}
 
 
+def _margin_detail_source_to_export_map() -> Dict[str, str]:
+    """DB column -> exported column (md_* prefix)"""
+    return {
+        "rzye": "md_rzye",
+        "rqye": "md_rqye",
+        "rzmre": "md_rzmre",
+        "rqyl": "md_rqyl",
+        "rzche": "md_rzche",
+        "rqchl": "md_rqchl",
+        "rqmcl": "md_rqmcl",
+        "rzrqye": "md_rzrqye",
+    }
+
+
 def _moneyflow_source_to_export_map() -> Dict[str, str]:
     # DB column -> exported column
     return {
@@ -177,11 +191,13 @@ def build_field_map_rows_for_snapshot(
     daily_basic_columns: Sequence[str] | None,
     moneyflow_columns: Sequence[str] | None,
     bak_basic_columns: Sequence[str] | None = None,
+    margin_detail_columns: Sequence[str] | None = None,
     cyq_perf_columns: Sequence[str] | None = None,
     sector_data_columns: Sequence[str] | None = None,
     daily_basic_dtypes: Dict[str, str] | None = None,
     moneyflow_dtypes: Dict[str, str] | None = None,
     bak_basic_dtypes: Dict[str, str] | None = None,
+    margin_detail_dtypes: Dict[str, str] | None = None,
     cyq_perf_dtypes: Dict[str, str] | None = None,
     sector_data_dtypes: Dict[str, str] | None = None,
 ) -> List[FieldMapRow]:
@@ -251,6 +267,25 @@ def build_field_map_rows_for_snapshot(
                     source_table="bak_basic",
                     comment=cn,
                     dtype_hint=bak_basic_dtypes.get(col, "float64") if bak_basic_dtypes else "float64",
+                )
+            )
+
+    if margin_detail_columns is not None:
+        comments = _fetch_pg_column_comments("market", "margin_detail")
+        src2exp = _margin_detail_source_to_export_map()
+        exp2src = {v: k for k, v in src2exp.items()}
+        for col in margin_detail_columns:
+            src = exp2src.get(col)
+            if not src:
+                continue
+            cn = comments.get(src, "")
+            rows.append(
+                FieldMapRow(
+                    name=col,
+                    meaning_cn=cn,
+                    source_table="margin_detail",
+                    comment=cn,
+                    dtype_hint=margin_detail_dtypes.get(col, "float32") if margin_detail_dtypes else "float32",
                 )
             )
 

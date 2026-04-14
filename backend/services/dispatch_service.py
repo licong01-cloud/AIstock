@@ -76,14 +76,19 @@ class DispatchService:
                 cur.execute("""
                     INSERT INTO infra.compute_nodes
                         (node_id, display_name, api_base_url, gpu_model, gpu_vram_mb,
-                         capabilities, grafana_dashboard_url, prometheus_target)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                         capabilities, grafana_dashboard_url, prometheus_target,
+                         workspace_base, factor_data_dir, qlib_data_path,
+                         qlib_minute_path, qlib_rdagent_root, callback_url)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING *
                 """, (
                     data["node_id"], data["display_name"], data["api_base_url"],
                     data.get("gpu_model"), data.get("gpu_vram_mb"),
                     json.dumps(data.get("capabilities", [])),
                     data.get("grafana_dashboard_url"), data.get("prometheus_target"),
+                    data.get("workspace_base"), data.get("factor_data_dir"),
+                    data.get("qlib_data_path"), data.get("qlib_minute_path"),
+                    data.get("qlib_rdagent_root"), data.get("callback_url"),
                 ))
                 return dict(cur.fetchone())
 
@@ -91,6 +96,8 @@ class DispatchService:
         allowed = {
             "display_name", "api_base_url", "gpu_model", "gpu_vram_mb",
             "capabilities", "grafana_dashboard_url", "prometheus_target",
+            "workspace_base", "factor_data_dir", "qlib_data_path",
+            "qlib_minute_path", "qlib_rdagent_root", "callback_url",
         }
         sets = []
         vals = []

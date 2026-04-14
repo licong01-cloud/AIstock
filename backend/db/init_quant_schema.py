@@ -343,8 +343,10 @@ DDL: List[str] = [
         source_task_id           TEXT,
         factor_catalog_id        BIGINT,
         calc_engine              TEXT NOT NULL DEFAULT 'rdagent',
+        calc_batch_id            TEXT,
+        snapshot_date            DATE,
         created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (factor_name, eval_window, data_start, data_end, calculated_at)
+        UNIQUE (factor_name, eval_window, data_start, data_end, snapshot_date)
     );
     """,
     """
@@ -354,6 +356,10 @@ DDL: List[str] = [
     """
     CREATE INDEX IF NOT EXISTS idx_factor_metrics_task
     ON aistock_factor_metrics (source_task_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_factor_metrics_snapshot
+    ON aistock_factor_metrics (factor_name, snapshot_date);
     """,
     # aistock_factor_metrics 表和字段中文注释
     "COMMENT ON TABLE aistock_factor_metrics IS '单因子独立评估指标表，每个因子在不同评估窗口下的17项量化指标，支持历史多次计算记录';",
@@ -379,6 +385,7 @@ DDL: List[str] = [
     "COMMENT ON COLUMN aistock_factor_metrics.n_trading_days IS '评估窗口内的交易日数量';",
     "COMMENT ON COLUMN aistock_factor_metrics.source_task_id IS '来源RD-Agent任务ID';",
     "COMMENT ON COLUMN aistock_factor_metrics.calc_engine IS '计算引擎: rdagent=RD-Agent侧计算, aistock_local=AIstock本地计算';",
+    "COMMENT ON COLUMN aistock_factor_metrics.snapshot_date IS '数据快照日期，标识本次计算使用的数据截止时间点，用于追踪因子IC衰变趋势';",
     # aistock_factor_calc_log: 因子计算日志表，记录每个因子×窗口的计算状态
     """
     CREATE TABLE IF NOT EXISTS aistock_factor_calc_log (
@@ -429,6 +436,57 @@ DDL: List[str] = [
     "COMMENT ON COLUMN aistock_factor_calc_log.calc_engine IS '计算引擎标识: rdagent=RD-Agent侧计算引擎';",
     "COMMENT ON COLUMN aistock_factor_calc_log.calculated_at IS '计算执行时间(UTC)，记录引擎实际执行计算的时刻';",
     "COMMENT ON COLUMN aistock_factor_calc_log.created_at IS '记录创建时间，数据库写入时自动生成';",
+    # ── 通用模型训练管理表 ──────────────────────────────────────────
+    # model_train_configs: 通用模型训练超参配置版本（通过 model_type 区分模型类型）
+    """
+    CREATE TABLE IF NOT EXISTS model_train_configs (
+        config_id        TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+        model_type       TEXT NOT NULL,
+        display_name     TEXT NOT NULL,
+        config_json      JSONB NOT NULL,
+        cron_expression  TEXT,
+        cron_enabled     BOOLEAN DEFAULT FALSE,
+        created_at       TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    # model_train_snapshots: 时间版本快照（同一超参版本下不同训练日期的模型产出）
+    """
+    CREATE TABLE IF NOT EXISTS model_train_snapshots (
+        snapshot_id      TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+        config_id        TEXT NOT NULL REFERENCES model_train_configs(config_id) ON DELETE RESTRICT,
+        trained_at       TIMESTAMPTZ DEFAULT NOW(),
+        model_path       TEXT NOT NULL,
+        sector_count     INTEGER DEFAULT 0,
+        status           TEXT DEFAULT 'pending',
+        metrics_json     JSONB
+    )
+    """,
+    # model_train_jobs: 训练任务执行跟踪
+    """
+    CREATE TABLE IF NOT EXISTS model_train_jobs (
+        job_id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+        config_id        TEXT NOT NULL REFERENCES model_train_configs(config_id) ON DELETE RESTRICT,
+        snapshot_id      TEXT REFERENCES model_train_snapshots(snapshot_id),
+        status           TEXT DEFAULT 'pending',
+        started_at       TIMESTAMPTZ,
+        completed_at     TIMESTAMPTZ,
+        error_message    TEXT
+    )
+    """,
+    # (model_type, display_name) 联合唯一索引
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_model_train_configs_type_name
+    ON model_train_configs (model_type, display_name)
+    """,
+    # config_id 外键索引
+    """
+    CREATE INDEX IF NOT EXISTS idx_model_train_snapshots_config_id
+    ON model_train_snapshots (config_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_model_train_jobs_config_id
+    ON model_train_jobs (config_id)
+    """,
 ]
 
 # 纯多头列的 COMMENT（必须在列迁移完成后执行）

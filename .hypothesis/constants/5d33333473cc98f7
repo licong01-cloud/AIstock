@@ -1,0 +1,4 @@
+# file: F:\Dev\AIstock\backend\db\pg_pool.py
+# hypothesis_version: 6.151.10
+
+[0.0, 0.1, 0.2, 0.5, 1.0, '..', '/', '/contextlib.py', '/lib/', '/site-packages/', '/threading.py', '1', '127.0.0.1', '5432', '<caller not found>', '<caller unavailable>', 'AIstock-backend', 'DB_POOL_DEBUG', 'TDX_DB_HOST', 'TDX_DB_NAME', 'TDX_DB_PASSWORD', 'TDX_DB_PORT', 'TDX_DB_USER', '\\', '_lock', '_pool', '_used', 'aistock', 'application_name', 'checkout_ts', 'dbname', 'host', 'locked', 'maxconn', 'on', 'options', 'password', 'port', 'postgres', 'stack', 'thread', 'true', 'user', 'y', 'yes']

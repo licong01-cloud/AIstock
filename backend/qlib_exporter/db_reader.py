@@ -32,6 +32,7 @@ from .config import (
     INDEX_BASIC_TABLE,
     INDEX_DAILY_TABLE,
     INDEX_DAILY_TDX_TABLE,
+    IPO_FILTER_DAYS,
     MINUTE_RAW_TABLE,
     MINUTE_QFQ_TABLE,
     MONEYFLOW_TS_TABLE,
@@ -104,7 +105,7 @@ class DBReader:
         # 构建基础过滤条件
         base_conds = [
             "s.list_status = 'L'",
-            f"s.list_date <= '{end.isoformat()}'",
+            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
         ]
         
         if exclude_st:
@@ -215,7 +216,7 @@ class DBReader:
         # 构建基础过滤条件
         base_conds = [
             "s.list_status = 'L'",
-            f"s.list_date <= '{end.isoformat()}'",
+            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
         ]
         
         if exclude_st:
@@ -272,7 +273,7 @@ class DBReader:
         # 构建基础过滤条件
         base_conds = [
             "s.list_status = 'L'",
-            f"s.list_date <= '{end.isoformat()}'",
+            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
         ]
         
         if exclude_st:
@@ -330,7 +331,7 @@ class DBReader:
         # 构建基础过滤条件
         base_conds = [
             "s.list_status = 'L'",
-            f"s.list_date <= '{end.isoformat()}'",
+            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
         ]
         
         if exclude_st:
@@ -376,7 +377,11 @@ class DBReader:
         conditions: list[str] = []
 
         # 时间过滤规则 A：仅要求 end 之前已上市（字段可能为空，保守处理）
-        conditions.append("(list_date IS NULL OR list_date <= '%s')" % end.isoformat())
+        # IPO 过滤：上市满 IPO_FILTER_DAYS 天后才纳入股票池
+        conditions.append(
+            "(list_date IS NULL OR list_date + INTERVAL '%d days' <= '%s')"
+            % (IPO_FILTER_DAYS, end.isoformat())
+        )
 
         # 按交易所过滤（基于 ts_code 后缀 .SH / .SZ / .BJ；兼容 SHxxxxxx 形式）
         if exchanges:
@@ -1247,7 +1252,7 @@ class DBReader:
         # 构建基础过滤条件
         base_conds = [
             "s.list_status = 'L'",
-            f"s.list_date <= '{end.isoformat()}'",
+            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
         ]
         
         if exclude_st:
@@ -1409,7 +1414,7 @@ class DBReader:
 
         base_conds = [
             "s.list_status = 'L'",
-            f"s.list_date <= '{end.isoformat()}'",
+            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
         ]
         if exclude_st:
             base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
@@ -1872,7 +1877,7 @@ class DBReader:
         # 构建基础过滤条件（ST、退市、上市时间）
         base_conds = [
             "s.list_status = 'L'",  # 上市状态
-            f"s.list_date <= '{end.isoformat()}'",  # 已上市
+            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",  # 已上市
             "b.trade_date >= s.list_date",  # 只导出上市日期之后的数据
         ]
         
@@ -2024,7 +2029,7 @@ class DBReader:
         # 构建基础过滤条件
         base_conds = [
             "s.list_status = 'L'",
-            f"s.list_date <= '{end.isoformat()}'",
+            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
         ]
         
         if exclude_st:
@@ -2088,4 +2093,85 @@ class DBReader:
             result[c] = pd.to_numeric(result[c], errors="coerce").astype("float32")
         result = result.sort_index()
 
+        return result
+
+    def load_margin_detail_panel(
+        self,
+        *,
+        start: date,
+        end: date,
+        ts_codes: Optional[List[str]] = None,
+        exchanges: Optional[List[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+    ) -> pd.DataFrame:
+        """加载融资融券明细数据并转换为 Qlib 面板格式.
+
+        源表：market.margin_detail
+
+        Returns:
+            DataFrame - Index: MultiIndex (datetime, instrument), Columns: md_* (float32)
+        """
+        exchange_conds = []
+        if exchanges:
+            normalized = {e.strip().lower() for e in exchanges if e and e.strip()}
+            if normalized:
+                if "sh" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
+                if "sz" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
+                if "bj" in normalized:
+                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
+        else:
+            exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
+
+        base_conds = [
+            "s.list_status = 'L'",
+            f"s.list_date + INTERVAL '{IPO_FILTER_DAYS} days' <= '{end.isoformat()}'",
+            "m.trade_date >= s.list_date",
+        ]
+        if exclude_st:
+            base_conds.append(f"s.ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
+        if exclude_delisted_or_paused:
+            base_conds.append("s.list_status NOT IN ('D', 'P')")
+        if exchange_conds:
+            base_conds.append("(" + " OR ".join(exchange_conds) + ")")
+
+        where_clause = " AND ".join(base_conds)
+
+        sql = f"""
+            SELECT
+                m.trade_date, m.ts_code,
+                m.rzye, m.rqye, m.rzmre, m.rqyl,
+                m.rzche, m.rqchl, m.rqmcl, m.rzrqye
+            FROM market.margin_detail m
+            INNER JOIN market.stock_basic s ON m.ts_code = s.ts_code
+            WHERE m.trade_date >= '{start.isoformat()}'
+              AND m.trade_date <= '{end.isoformat()}'
+              AND {where_clause}
+            ORDER BY m.trade_date, m.ts_code
+        """
+
+        with get_conn() as conn:
+            df = pd.read_sql(sql, conn)
+
+        if df.empty:
+            return df
+
+        df["datetime"] = pd.to_datetime(df["trade_date"], utc=False)
+        df["instrument"] = df["ts_code"].apply(self._normalize_ts_code).astype(str)
+        df = df.set_index(["datetime", "instrument"])
+
+        rename_map = {
+            "rzye": "md_rzye", "rqye": "md_rqye", "rzmre": "md_rzmre",
+            "rqyl": "md_rqyl", "rzche": "md_rzche", "rqchl": "md_rqchl",
+            "rqmcl": "md_rqmcl", "rzrqye": "md_rzrqye",
+        }
+        df = df.rename(columns=rename_map)
+
+        md_cols = [c for c in df.columns if c.startswith("md_")]
+        result = df[md_cols].copy()
+        for c in md_cols:
+            result[c] = pd.to_numeric(result[c], errors="coerce").astype("float32")
+        result = result.sort_index()
         return result

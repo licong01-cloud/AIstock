@@ -8,3 +8,5 @@ from . import vwap_algo  # noqa: F401
 from . import sbb_ema_algo  # noqa: F401
 from . import ac_optimal_algo  # noqa: F401
 from . import pov_algo  # noqa: F401
+from . import tail_boost_algo  # noqa: F401
+from . import tail_substitute_algo  # noqa: F401

@@ -117,7 +117,7 @@ INSERT INTO aistock_factor_metrics (
     group_return_monotonicity, turnover, ic_decay_half_life,
     ic_csz_mean, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d,
     coverage, n_trading_days, source_task_id, calc_batch_id, calc_engine,
-    factor_catalog_id
+    factor_catalog_id, snapshot_date
 ) VALUES (
     %(factor_name)s, %(calculated_at)s, %(data_start)s, %(data_end)s, %(eval_window)s,
     %(return_horizon)s, %(universe)s,
@@ -127,10 +127,11 @@ INSERT INTO aistock_factor_metrics (
     %(group_return_monotonicity)s, %(turnover)s, %(ic_decay_half_life)s,
     %(ic_csz_mean)s, %(rank_ic_1d)s, %(rank_ic_5d)s, %(rank_ic_10d)s, %(rank_ic_20d)s,
     %(coverage)s, %(n_trading_days)s, %(source_task_id)s, %(calc_batch_id)s, %(calc_engine)s,
-    %(factor_catalog_id)s
+    %(factor_catalog_id)s, %(snapshot_date)s
 )
-ON CONFLICT (factor_name, eval_window, data_start, data_end, calculated_at)
+ON CONFLICT (factor_name, eval_window, data_start, data_end, snapshot_date)
 DO UPDATE SET
+    calculated_at = EXCLUDED.calculated_at,
     ic_mean = EXCLUDED.ic_mean,
     ic_std = EXCLUDED.ic_std,
     rank_ic_mean = EXCLUDED.rank_ic_mean,
@@ -214,6 +215,7 @@ def _insert_metrics_batch(
                     "calc_batch_id": m.get("calc_batch_id"),
                     "calc_engine": "rdagent",
                     "factor_catalog_id": fc_id,
+                    "snapshot_date": m.get("snapshot_date") or m["data_end"],
                 }
                 cur.execute(_UPSERT_SQL, params)
                 if cur.rowcount > 0:

@@ -10,15 +10,18 @@ from __future__ import annotations
 """
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 import json
+import logging
 
 import pandas as pd
 
-from .config import QLIB_MARKET, ensure_snapshot_root
+from .config import IPO_FILTER_DAYS, QLIB_MARKET, ensure_snapshot_root
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -35,6 +38,21 @@ class SnapshotMeta:
 class SnapshotWriter:
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or ensure_snapshot_root()
+
+    def _load_list_date_map(self) -> Dict[str, pd.Timestamp]:
+        """从 market.stock_basic 加载 ts_code -> list_date 映射."""
+        try:
+            from backend.db.pg_pool import get_conn
+            sql = "SELECT ts_code, list_date FROM market.stock_basic WHERE list_date IS NOT NULL"
+            with get_conn() as conn:
+                df = pd.read_sql(sql, conn)
+            if df.empty:
+                return {}
+            df["list_date"] = pd.to_datetime(df["list_date"], utc=False)
+            return dict(zip(df["ts_code"].astype(str), df["list_date"]))
+        except Exception as e:
+            logger.warning("无法加载 stock_basic.list_date，跳过 IPO 过滤: %s", e)
+            return {}
 
     def _normalize_dollar_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         if df.empty:
@@ -89,14 +107,41 @@ class SnapshotWriter:
         instruments_dir.mkdir(parents=True, exist_ok=True)
         all_txt = instruments_dir / "all.txt"
 
+        # 加载 list_date 用于 IPO 过滤：上市不满 IPO_FILTER_DAYS 天的数据不纳入
+        list_date_map = self._load_list_date_map()
+        ipo_delta = timedelta(days=IPO_FILTER_DAYS)
+
         inst_group = df.reset_index().groupby("instrument")["datetime"]
         lines: List[str] = []
+        skipped_ipo = 0
         for inst, series in inst_group:
             series_sorted = series.sort_values()
-            start_dt = series_sorted.iloc[0].strftime("%Y-%m-%d")
-            end_dt = series_sorted.iloc[-1].strftime("%Y-%m-%d")
+            data_start = series_sorted.iloc[0]
+            data_end = series_sorted.iloc[-1]
+
+            # 计算 IPO 过滤后的 start_date: max(数据首日, list_date + IPO_FILTER_DAYS)
+            list_date = list_date_map.get(str(inst))
+            if list_date is not None:
+                ipo_eligible = list_date + ipo_delta
+                effective_start = max(data_start, ipo_eligible)
+            else:
+                effective_start = data_start
+
+            # 如果过滤后 start > end，说明该股票在数据范围内全部处于 IPO 保护期
+            if effective_start > data_end:
+                skipped_ipo += 1
+                continue
+
+            start_dt = effective_start.strftime("%Y-%m-%d")
+            end_dt = data_end.strftime("%Y-%m-%d")
             # Qlib expects instruments/all.txt as CSV with 3 columns: instrument,start,end
             lines.append(f"{inst},{start_dt},{end_dt}")
+
+        if skipped_ipo > 0:
+            logger.info(
+                "[SnapshotWriter] IPO 过滤: %d 只股票因上市不满 %d 天被排除",
+                skipped_ipo, IPO_FILTER_DAYS,
+            )
 
         all_txt.write_text("\n".join(lines), encoding="utf-8")
 
@@ -157,13 +202,38 @@ class SnapshotWriter:
         instruments_dir.mkdir(parents=True, exist_ok=True)
         all_txt = instruments_dir / "all.txt"
 
+        # 加载 list_date 用于 IPO 过滤（与 write_daily_full 一致）
+        list_date_map = self._load_list_date_map()
+        ipo_delta = timedelta(days=IPO_FILTER_DAYS)
+
         inst_group = df.reset_index().groupby("instrument")["datetime"]
         lines: List[str] = []
+        skipped_ipo = 0
         for inst, series in inst_group:
             series_sorted = series.sort_values()
-            start_dt = series_sorted.iloc[0].strftime("%Y-%m-%d")
-            end_dt = series_sorted.iloc[-1].strftime("%Y-%m-%d")
+            data_start = series_sorted.iloc[0]
+            data_end = series_sorted.iloc[-1]
+
+            list_date = list_date_map.get(str(inst))
+            if list_date is not None:
+                ipo_eligible = list_date + ipo_delta
+                effective_start = max(data_start, ipo_eligible)
+            else:
+                effective_start = data_start
+
+            if effective_start > data_end:
+                skipped_ipo += 1
+                continue
+
+            start_dt = effective_start.strftime("%Y-%m-%d")
+            end_dt = data_end.strftime("%Y-%m-%d")
             lines.append(f"{inst} {start_dt} {end_dt}")
+
+        if skipped_ipo > 0:
+            logger.info(
+                "[SnapshotWriter] minute IPO 过滤: %d 只股票因上市不满 %d 天被排除",
+                skipped_ipo, IPO_FILTER_DAYS,
+            )
 
         all_txt.write_text("\n".join(lines), encoding="utf-8")
 

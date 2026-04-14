@@ -44,10 +44,15 @@ class ExecutionEngine:
         self._executed_buys: int = 0
         self._executed_sells: int = 0
         self._limit_prices: Dict[str, Dict[str, float]] = {}
+        # 涨停未成交资金处理
+        self._score_items: List[Dict[str, Any]] = []
+        self._unfilled_checked: bool = False
 
-    def initialize(self) -> None:
+    def initialize(self, score_items: Optional[List[Dict[str, Any]]] = None) -> None:
         """读取配置、加载算法、初始化订单状态."""
         self._config = TradeExecutor._get_config(self.portfolio_id)
+        if score_items:
+            self._score_items = score_items
 
         # 费用配置
         fc = self._config.get("fee_config", {})
@@ -220,6 +225,16 @@ class ExecutionEngine:
             # 更新内存持仓
             self._update_positions_in_memory(result)
 
+        # 尾盘涨停未成交资金处理
+        unfilled_handler = self._config.get("unfilled_handler")
+        trigger_minute = int(self._config.get("unfilled_trigger_minute", 210))
+        if (unfilled_handler
+                and self._step_count == trigger_minute
+                and not self._unfilled_checked):
+            unfilled_fills = self._handle_unfilled_buys(bar_data_map, market_context, unfilled_handler, bar_time)
+            fills.extend(unfilled_fills)
+            self._unfilled_checked = True
+
         return fills
 
     def finalize(self) -> Dict[str, Any]:
@@ -369,3 +384,232 @@ class ExecutionEngine:
                     del self._positions[symbol]
                 else:
                     self._positions[symbol] = {**old, "quantity": remaining}
+
+    # ── 涨停未成交资金处理 ───────────────────────────────────────
+
+    def _handle_unfilled_buys(
+        self,
+        bar_data_map: Dict[str, Dict[str, Any]],
+        market_context: Dict[str, Any],
+        handler_code: str,
+        bar_time: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """检测涨停未成交买单，生成替代订单并立即执行一步."""
+        # 1. 找出涨停未成交的买单
+        unfilled_symbols = []
+        released_cash = 0.0
+        for key, state in self._orders.items():
+            if state.side != "BUY":
+                continue
+            remaining = state.total_quantity - state.executed_quantity
+            if remaining <= 0:
+                continue
+            limits = self._limit_prices.get(state.symbol)
+            bar = bar_data_map.get(state.symbol)
+            cur_price = bar.get("close", 0) if bar else 0
+            # 涨停判定: 当前价触及涨停价，或无行情且全天零成交（一字板）
+            is_limit_up = False
+            if limits and cur_price > 0:
+                if cur_price >= limits.get("up_limit", 1e18) * 0.999:
+                    is_limit_up = True
+            elif bar is None and state.executed_quantity == 0:
+                # 无行情且零成交 — 大概率停牌或一字板
+                is_limit_up = True
+            if is_limit_up:
+                price_for_calc = cur_price if cur_price > 0 else limits.get("up_limit", 0) if limits else 0
+                if price_for_calc > 0:
+                    unfilled_symbols.append(state.symbol)
+                    released_cash += remaining * price_for_calc
+
+        if not unfilled_symbols or released_cash < 1000:
+            return []
+
+        logger.info(
+            "unfilled 检测: portfolio=%s handler=%s unfilled=%d symbols=%s cash=%.0f",
+            self.portfolio_id, handler_code, len(unfilled_symbols),
+            unfilled_symbols, released_cash,
+        )
+
+        # 2. 生成替代订单
+        if handler_code == "TAIL_BOOST":
+            new_orders = self._generate_boost_orders(released_cash, bar_data_map)
+        elif handler_code == "TAIL_SUBSTITUTE":
+            backup_depth = int(self._config.get("unfilled_backup_depth", 15))
+            new_orders = self._generate_substitute_orders(
+                released_cash, bar_data_map, backup_depth)
+        else:
+            return []
+
+        if not new_orders:
+            logger.info("unfilled: 无可用替代标的 handler=%s", handler_code)
+            return []
+
+        # 3. 注入新订单并立即执行
+        fills: List[Dict[str, Any]] = []
+        for order in new_orders:
+            symbol = order["symbol"]
+            qty = order["quantity"]
+            order_key = f"{symbol}_BUY_unfilled_{self._step_count}"
+
+            state = self._algo.init_order(symbol, "BUY", qty)
+            state.child_fills.append({"signal_id": None, "reason": handler_code})
+            self._orders[order_key] = state
+
+            # 加载替补标的的涨跌停价格（如果尚未加载）
+            if symbol not in self._limit_prices:
+                new_limits = MinuteDataProvider.fetch_limit_prices([symbol], self.trade_date)
+                self._limit_prices.update(new_limits)
+
+            # 立即执行一步
+            bar = bar_data_map.get(symbol)
+            if bar is None:
+                continue
+            result = self._algo.compute_step(state, bar, {})
+            if result is None:
+                continue
+            if result.price <= 0:
+                continue
+
+            # 涨跌停封板检查
+            limits = self._limit_prices.get(symbol)
+            if limits and result.price >= limits.get("up_limit", 1e18) * 0.999:
+                continue
+
+            # 资金验证
+            needed = result.price * result.quantity * 1.005
+            if needed > self._cash:
+                max_qty = int(self._cash / (result.price * 1.005))
+                max_qty = BaseExecutionAlgo._round_lot(max_qty)
+                if max_qty <= 0:
+                    continue
+                result.quantity = max_qty
+                # 同步 state 的 executed_quantity（algo 已标记为全额执行）
+                state.executed_quantity = max_qty
+
+            # 计算费用并成交
+            costs = calculate_trade_cost(
+                result.symbol, result.side, result.price, result.quantity, self._fee_config,
+            )
+            amount = result.price * result.quantity
+            net_amount = amount + costs["total_cost"]
+            self._cash -= net_amount
+            self._buy_amount_total += amount
+            self._executed_buys += 1
+            self._total_commission += costs["commission"]
+            self._total_stamp_tax += costs["stamp_tax"]
+            self._total_transfer_fee += costs["transfer_fee"]
+            self._total_slippage += costs["slippage_cost"]
+
+            name = TradeExecutor._get_stock_name(result.symbol)
+            exec_time = bar_time or datetime.now()
+
+            fill_record = self._write_trade(
+                result, costs, amount, net_amount, name,
+                None, None, None, None,
+                exec_time=exec_time,
+            )
+            fills.append(fill_record)
+            state.child_fills.append({
+                "step": self._step_count,
+                "quantity": result.quantity,
+                "price": result.price,
+            })
+            self._update_positions_in_memory(result)
+
+        logger.info(
+            "unfilled 处理完成: portfolio=%s handler=%s 注入=%d 成交=%d",
+            self.portfolio_id, handler_code, len(new_orders), len(fills),
+        )
+        return fills
+
+    def _generate_boost_orders(
+        self, cash: float, bar_data_map: Dict[str, Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """策略A: 按持仓市值等比例加仓已持有股票."""
+        candidates: Dict[str, Dict[str, Any]] = {}
+        for sym, pos in self._positions.items():
+            if pos.get("entry_date") == self.trade_date:
+                continue
+            limits = self._limit_prices.get(sym)
+            bar = bar_data_map.get(sym)
+            price = bar.get("close", 0) if bar else 0
+            if price <= 0:
+                continue
+            if limits and price >= limits.get("up_limit", 1e18) * 0.999:
+                continue
+            mv = pos.get("quantity", 0) * price
+            candidates[sym] = {"price": price, "market_value": mv}
+
+        if not candidates:
+            return []
+
+        total_mv = sum(c["market_value"] for c in candidates.values())
+        if total_mv <= 0:
+            return []
+        orders = []
+        for sym, info in candidates.items():
+            weight = info["market_value"] / total_mv
+            alloc = cash * weight
+            qty = int(alloc / info["price"])
+            qty = (qty // 100) * 100
+            if qty >= 100:
+                orders.append({"symbol": sym, "quantity": qty})
+        return orders
+
+    def _generate_substitute_orders(
+        self, cash: float, bar_data_map: Dict[str, Dict[str, Any]], backup_depth: int,
+    ) -> List[Dict[str, Any]]:
+        """策略B: 按评分排名替补买入 topk 之后的候选股.
+
+        注意: 替补候选的分钟线可能不在 bar_data_map 中（只包含原始信号的 symbol），
+        此时尝试从 MinuteDataProvider 获取最新价格。
+        """
+        if not self._score_items:
+            return []
+
+        topk = int(self._config.get("max_positions", 20))
+        existing = set(self._positions.keys())
+        existing |= {
+            state.symbol for state in self._orders.values()
+            if state.side == "BUY"
+        }
+
+        candidates = []
+        for item in self._score_items[topk:topk + backup_depth]:
+            sym = item["symbol"]
+            if sym in existing:
+                continue
+            # 尝试从 bar_data_map 获取价格，缺失时从涨跌停价格估算
+            bar = bar_data_map.get(sym, {})
+            price = bar.get("close", 0) if bar else 0
+            if price <= 0:
+                # bar_data_map 中无数据，用前收盘价估算（涨跌停价格反推）
+                lim = self._limit_prices.get(sym)
+                if not lim:
+                    new_lim = MinuteDataProvider.fetch_limit_prices([sym], self.trade_date)
+                    self._limit_prices.update(new_lim)
+                    lim = new_lim.get(sym)
+                if lim:
+                    # 用涨跌停中间价作为估算价
+                    up = lim.get("up_limit", 0)
+                    down = lim.get("down_limit", 0)
+                    if up > 0 and down > 0:
+                        price = (up + down) / 2
+                if price <= 0:
+                    continue
+            limits = self._limit_prices.get(sym)
+            if limits and price >= limits.get("up_limit", 1e18) * 0.999:
+                continue
+            candidates.append({"symbol": sym, "price": price})
+
+        if not candidates:
+            return []
+
+        per_stock = cash / len(candidates)
+        orders = []
+        for c in candidates:
+            qty = int(per_stock / c["price"])
+            qty = (qty // 100) * 100
+            if qty >= 100:
+                orders.append({"symbol": c["symbol"], "quantity": qty})
+        return orders

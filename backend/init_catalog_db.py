@@ -549,6 +549,7 @@ def init_database():
                         current_loop INTEGER DEFAULT 0,
                         status TEXT DEFAULT 'pending',
                         base_experiment_id TEXT REFERENCES qe_experiments(experiment_id),
+                        node_id TEXT,
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         updated_at TIMESTAMPTZ DEFAULT NOW()
                     );
@@ -725,6 +726,7 @@ def init_database():
                 ("description", "TEXT"),
                 ("factor_dimension", "TEXT"),
                 ("factor_profile", "JSONB"),
+                ("holding_period_class", "TEXT"),  # short(<8d) / medium(8-25d) / long(>25d) / unknown
             ]
             for col_name, col_type in fc_migrations:
                 cur.execute(
@@ -904,11 +906,18 @@ def init_database():
                  'step_qty[t] = min(\n    remaining_quantity,\n    market_volume[t] * target_participation,\n    market_volume[t] * max_participation\n)\n# 跟随市场成交量节奏执行',
                  '{"target_participation": 0.05, "max_participation": 0.15, "start_time": "09:35", "end_time": "14:50"}',
                  '{"type": "object", "properties": {"target_participation": {"type": "number", "minimum": 0.01, "maximum": 0.3, "default": 0.05}, "max_participation": {"type": "number", "minimum": 0.05, "maximum": 0.5, "default": 0.15}}}',
-                 '{1m,5m,15m}', 30, 50)
+                 '{1m,5m,15m}', 30, 50),
+
+                ('V24_PLAN', 'v24 方向感知执行计划 (SL)', 'custom',
+                 'v24 B1: 1D-CNN + 归一化缺口 embedding 执行计划网络。开盘30分钟采集特征后生成210分钟softmax执行分布。买入PA相比v20提升+30%, 总PA=+6.35bps。继承尾盘未成交再分配(TAIL_BOOST/TAIL_SUBSTITUTE)。需要模型文件v24_plan_net.pt (168K参数)。',
+                 '# v24 Plan Net: 归一化缺口感知 + 买卖不对称\ngap_ratio = gap_pct / limit_pct  # [-1, +1]\nminute_feats = CNN_1D(close, vol, high, low, rsi)[0:30]  # [30, 5]\nplan[210] = softmax(MLP(CNN(minute_feats) || day_feats || gap_embedding))\n# 条件比例执行: frac = plan[t] / sum(plan[t:])',
+                 '{"model_path": "/home/lc999/data/rl_models/v24/v24_plan_net.pt", "warmup_minutes": 30, "warmup_alloc": 0.20, "device": "cpu"}',
+                 '{"type": "object", "properties": {"model_path": {"type": "string", "description": "v24 plan net 模型文件路径 (.pt)"}, "warmup_minutes": {"type": "integer", "minimum": 10, "maximum": 60, "default": 30, "description": "WARMUP 采集分钟数"}, "warmup_alloc": {"type": "number", "minimum": 0.05, "maximum": 0.50, "default": 0.20, "description": "WARMUP 期间预分配比例"}, "device": {"type": "string", "enum": ["cpu", "cuda"], "default": "cpu", "description": "模型推理设备"}}}',
+                 '{1m}', 30, 5)
 
                 ON CONFLICT (algo_code) DO NOTHING
             """)
-            print("Inserted initial execution algorithms (6 items, ON CONFLICT skip)")
+            print("Inserted initial execution algorithms (7 items, ON CONFLICT skip)")
 
             # ============================================================
             # 注册 execution_analyst LLM prompt

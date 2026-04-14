@@ -63,12 +63,14 @@ def export_field_map_for_snapshot(
     daily_basic_h5 = snap_dir / "daily_basic.h5"
     moneyflow_h5 = snap_dir / "moneyflow.h5"
     bak_basic_h5 = snap_dir / "bak_basic.h5"
+    margin_detail_h5 = snap_dir / "margin_detail.h5"
     cyq_perf_h5 = snap_dir / "cyq_perf.h5"
     sector_data_h5 = snap_dir / "sector_data.h5"
 
     daily_basic_cols, daily_basic_dtypes = _read_h5_columns_and_dtypes(daily_basic_h5) if daily_basic_h5.exists() else (None, None)
     moneyflow_cols, moneyflow_dtypes = _read_h5_columns_and_dtypes(moneyflow_h5) if moneyflow_h5.exists() else (None, None)
     bak_basic_cols, bak_basic_dtypes = _read_h5_columns_and_dtypes(bak_basic_h5) if bak_basic_h5.exists() else (None, None)
+    margin_detail_cols, margin_detail_dtypes = _read_h5_columns_and_dtypes(margin_detail_h5) if margin_detail_h5.exists() else (None, None)
     cyq_perf_cols, cyq_perf_dtypes = _read_h5_columns_and_dtypes(cyq_perf_h5) if cyq_perf_h5.exists() else (None, None)
     sector_data_cols, sector_data_dtypes = _read_h5_columns_and_dtypes(sector_data_h5) if sector_data_h5.exists() else (None, None)
 
@@ -76,11 +78,13 @@ def export_field_map_for_snapshot(
         daily_basic_columns=daily_basic_cols,
         moneyflow_columns=moneyflow_cols,
         bak_basic_columns=bak_basic_cols,
+        margin_detail_columns=margin_detail_cols,
         cyq_perf_columns=cyq_perf_cols,
         sector_data_columns=sector_data_cols,
         daily_basic_dtypes=daily_basic_dtypes,
         moneyflow_dtypes=moneyflow_dtypes,
         bak_basic_dtypes=bak_basic_dtypes,
+        margin_detail_dtypes=margin_detail_dtypes,
         cyq_perf_dtypes=cyq_perf_dtypes,
         sector_data_dtypes=sector_data_dtypes,
     )
@@ -113,6 +117,12 @@ def export_field_map_for_snapshot(
                 {c: col2cn.get(c, "") for c in bak_basic_cols},
             )
             written_h5[str(bak_basic_h5)] = len(bak_basic_cols)
+        if margin_detail_h5.exists() and margin_detail_cols is not None:
+            attach_column_comments_to_h5(
+                margin_detail_h5,
+                {c: col2cn.get(c, "") for c in margin_detail_cols},
+            )
+            written_h5[str(margin_detail_h5)] = len(margin_detail_cols)
         if cyq_perf_h5.exists() and cyq_perf_cols is not None:
             attach_column_comments_to_h5(
                 cyq_perf_h5,
@@ -157,6 +167,7 @@ def export_field_map_for_snapshot(
         "has_daily_basic": daily_basic_h5.exists(),
         "has_moneyflow": moneyflow_h5.exists(),
         "has_bak_basic": bak_basic_h5.exists(),
+        "has_margin_detail": margin_detail_h5.exists(),
         "has_cyq_perf": cyq_perf_h5.exists(),
         "has_sector_data": sector_data_h5.exists(),
     }

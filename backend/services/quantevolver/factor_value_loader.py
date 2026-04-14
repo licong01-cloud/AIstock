@@ -307,13 +307,13 @@ class FactorValueLoader:
 
         优化策略:
         1. 优先尝试读取合并面板缓存 (_merged_panel.parquet)
-        2. 缓存未命中时并行加载，numpy 预分配合并（替代 pd.concat）
+        2. 缓存未命中时流式加载：先建 master_index，再逐批填充 float32 数组
         3. 后续调用直接读取合并缓存
 
-        内存优化:
-        - 批量加载(>50因子)时绕过 _single_cache
-        - numpy 预分配 + 逐列 reindex 填充，避免 pd.concat 的中间内存爆炸
-        - 峰值内存 ≈ 最终 DataFrame 大小（~5GB），无 10-15GB 中间开销
+        内存优化 (v2):
+        - float32 替代 float64，面板内存减半（秩相关不需要 float64 精度）
+        - 流式批量填充：每批 16 因子加载→填充→释放，不累积全量 Series
+        - 峰值内存 ≈ float32 面板本身（~3.4GB for 611因子），无 Series 堆积
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -334,104 +334,113 @@ class FactorValueLoader:
             )
             return cached_panel
 
-        # ── 2. 并行加载各因子数据 ──
+        # ── 2. 检查可用因子 + 构建 master_index ──
         bulk_mode = len(factor_names) > 50
-        max_workers = min(32, len(factor_names))
+        sd, ed = pd.Timestamp(start_date), pd.Timestamp(end_date)
 
         if bulk_mode:
             logger.info(
-                f"批量加载模式: {len(factor_names)} 因子, "
-                f"绕过 _single_cache 节省内存"
+                f"流式加载模式: {len(factor_names)} 因子, float32 + 批量填充"
             )
 
-        # 加载函数：返回 (factor_name, Series with MultiIndex)
-        def _load_one(fname: str) -> Tuple[str, Optional[pd.Series]]:
-            if bulk_mode:
-                df = self._read_single_filtered(fname, start_date, end_date)
-            else:
-                df = self.load_single_factor(fname, start_date, end_date)
-            if df is None or df.empty:
-                return fname, None
-            # 取第一列作为 Series（列名即因子名）
-            return fname, df.iloc[:, 0]
+        # 筛选有 parquet 文件的因子
+        available_names = [
+            fn for fn in factor_names
+            if os.path.isfile(os.path.join(self._single_dir, f"{fn}.parquet"))
+        ]
+        if not available_names:
+            logger.warning(f"single 模式: 无可用因子文件 ({factor_names[:5]}...)")
+            return pd.DataFrame()
 
-        # 并行读取
+        # 从首个 parquet 获取 master_index（同一 pipeline 生成的因子共享索引）
         t1 = _time.time()
-        factor_series: Dict[str, pd.Series] = {}
+        first_path = os.path.join(self._single_dir, f"{available_names[0]}.parquet")
+        first_idx = pd.read_parquet(first_path, columns=[]).index
+        date_vals = first_idx.get_level_values(0)
+        master_index = first_idx[(date_vals >= sd) & (date_vals <= ed)].sort_values()
+        del first_idx, date_vals
 
-        if max_workers <= 1:
-            for fname in factor_names:
-                fname, series = _load_one(fname)
-                if series is not None:
-                    factor_series[fname] = series
-        else:
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {executor.submit(_load_one, fn): fn for fn in factor_names}
-                for future in as_completed(futures):
-                    try:
-                        fname, series = future.result()
-                        if series is not None:
-                            factor_series[fname] = series
-                    except Exception as e:
-                        fn = futures[future]
-                        logger.warning(f"并行加载因子 {fn} 失败: {e}")
+        N = len(master_index)
+        K = len(available_names)
+        t_idx = round(_time.time() - t1, 1)
+        logger.info(f"[计时] master_index: {t_idx}s, {N} 行 × {K} 列")
 
-        if not factor_series:
+        # ── 3. 预分配 float32 数组 + 流式批量填充 ──
+        t2 = _time.time()
+        data = np.full((N, K), np.nan, dtype=np.float32)
+        loaded_names: List[str] = []
+        batch_size = 16
+        max_workers = min(batch_size, 8)
+
+        def _read_as_array(fname: str) -> Tuple[str, Optional[np.ndarray]]:
+            """读取单因子 parquet，返回对齐到 master_index 的 float32 数组。"""
+            fpath = os.path.join(self._single_dir, f"{fname}.parquet")
+            try:
+                df = pd.read_parquet(fpath)
+                if "value" in df.columns:
+                    df = df.rename(columns={"value": fname})
+                idx_dates = df.index.get_level_values(0)
+                df = df.loc[(idx_dates >= sd) & (idx_dates <= ed)]
+                series = df.iloc[:, 0]
+                if series.index.equals(master_index):
+                    return fname, series.values.astype(np.float32)
+                else:
+                    return fname, series.reindex(master_index).values.astype(np.float32)
+            except Exception as e:
+                logger.warning(f"加载因子 {fname} 失败: {e}")
+                return fname, None
+
+        for batch_start in range(0, K, batch_size):
+            batch_names = available_names[batch_start:batch_start + batch_size]
+
+            if len(batch_names) <= 2:
+                batch_results = []
+                for fn in batch_names:
+                    batch_results.append(_read_as_array(fn))
+            else:
+                batch_results = []
+                with ThreadPoolExecutor(max_workers=min(max_workers, len(batch_names))) as executor:
+                    futures = {executor.submit(_read_as_array, fn): fn for fn in batch_names}
+                    for future in as_completed(futures):
+                        try:
+                            batch_results.append(future.result())
+                        except Exception as e:
+                            fn = futures[future]
+                            logger.warning(f"并行加载因子 {fn} 异常: {e}")
+
+            for fname, arr in batch_results:
+                if arr is not None:
+                    col_idx = len(loaded_names)
+                    data[:, col_idx] = arr
+                    loaded_names.append(fname)
+            del batch_results
+
+        if not loaded_names:
             logger.warning(f"single 模式: 无法加载任何因子 ({factor_names[:5]}...)")
             return pd.DataFrame()
 
-        loaded_names = list(factor_series.keys())
-        t_read = round(_time.time() - t1, 1)
-        logger.info(f"[计时] 并行读取 {len(loaded_names)} 因子: {t_read}s")
+        # 裁剪未使用的列
+        if len(loaded_names) < K:
+            data = data[:, :len(loaded_names)]
 
-        # ── 3. 构建 union index（替代 pd.concat 的 448-way 对齐）──
-        t2 = _time.time()
-        all_indexes = [s.index for s in factor_series.values()]
-        master_index = all_indexes[0]
-        for idx in all_indexes[1:]:
-            if not master_index.equals(idx):
-                master_index = master_index.union(idx)
-        master_index = master_index.sort_values()
-        N = len(master_index)
-        K = len(loaded_names)
-        t_idx = round(_time.time() - t2, 1)
-        logger.info(f"[计时] union index: {t_idx}s, {N} 行 × {K} 列")
-
-        # ── 4. 预分配 numpy 数组 + 逐列 reindex 填充 ──
-        t3 = _time.time()
-        data = np.full((N, K), np.nan, dtype=np.float64)
-
-        for col_idx, fname in enumerate(loaded_names):
-            series = factor_series[fname]
-            if series.index.equals(master_index):
-                # 索引完全一致，直接赋值（最快路径）
-                data[:, col_idx] = series.values
-            else:
-                # 索引不一致，reindex 对齐（自动补 NaN）
-                aligned = series.reindex(master_index)
-                data[:, col_idx] = aligned.values
-
-        # 释放中间数据
-        del factor_series, all_indexes
+        t_fill = round(_time.time() - t2, 1)
+        logger.info(f"[计时] 流式加载+填充 {len(loaded_names)} 因子: {t_fill}s")
 
         merged = pd.DataFrame(data, index=master_index, columns=loaded_names)
         del data
-        t_fill = round(_time.time() - t3, 1)
-        logger.info(f"[计时] numpy 预分配+填充: {t_fill}s")
+        mem_mb = merged.memory_usage(deep=True).sum() / (1024 ** 2)
+        logger.info(f"[内存] 面板: {mem_mb:.0f}MB (float32)")
 
-        # ── 5. 保存合并缓存 ──
+        # ── 4. 保存合并缓存 ──
         try:
-            estimated_mb = merged.memory_usage(deep=True).sum() / (1024 ** 2)
-            if estimated_mb > 3000:
-                logger.warning(
-                    f"合并面板过大 ({estimated_mb:.0f}MB), 跳过缓存保存"
-                )
+            if mem_mb > 3000:
+                logger.warning(f"合并面板过大 ({mem_mb:.0f}MB), 跳过缓存保存")
             else:
                 merged.to_parquet(merged_path, engine="pyarrow")
                 file_mb = os.path.getsize(merged_path) / (1024 ** 2)
                 logger.info(
                     f"已保存合并面板缓存: {len(merged.columns)} 因子, "
-                    f"{len(merged)} 行, 内存 {estimated_mb:.0f}MB, "
+                    f"{len(merged)} 行, 内存 {mem_mb:.0f}MB, "
                     f"文件 {file_mb:.0f}MB"
                 )
         except Exception as e:
@@ -445,9 +454,9 @@ class FactorValueLoader:
 
         load_elapsed = round(_time.time() - t0, 1)
         logger.info(
-            f"single 模式加载(numpy预分配): {len(loaded_names)}/{len(factor_names)} 因子, "
+            f"single 模式加载(float32流式): {len(loaded_names)}/{len(factor_names)} 因子, "
             f"{start_date}~{end_date}, {len(merged)} 行, "
-            f"总耗时 {load_elapsed}s (读取 {t_read}s + 索引 {t_idx}s + 填充 {t_fill}s)"
+            f"总耗时 {load_elapsed}s (索引 {t_idx}s + 加载填充 {t_fill}s)"
         )
         return merged
 
@@ -652,7 +661,8 @@ class FactorValueLoader:
             logger.info(f"T3 因子合并完成: +{len(new_cols)} 列 ({new_cols[:5]}...)")
 
         except Exception as e:
-            logger.warning(f"合并 Pipeline 缓存失败: {e}")
+            logger.error(f"合并 Pipeline 缓存失败: {e}")
+            raise RuntimeError(f"合并 Pipeline 缓存失败: {e}") from e
 
     def _find_latest_pipeline_parquet(self) -> Optional[str]:
         """查找最新的 Pipeline 缓存 Parquet 文件。"""

@@ -272,7 +272,7 @@ class TrainingService:
             process = subprocess.Popen(
                 train_cmd, shell=True,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
+                text=True, bufsize=1, encoding="utf-8", errors="replace",
             )
 
             best_epoch = None

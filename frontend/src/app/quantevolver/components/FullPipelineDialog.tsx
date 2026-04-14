@@ -26,6 +26,7 @@ interface FullPipelineDialogProps {
   open: boolean;
   taskIds?: string[];
   factorNames?: string[];
+  dataDate?: string;
   onClose: () => void;
   onComplete: () => void;
 }
@@ -50,7 +51,7 @@ function formatTime(seconds: number): string {
   return `${m}分${s}秒`;
 }
 
-export default function FullPipelineDialog({ open, taskIds, factorNames, onClose, onComplete }: FullPipelineDialogProps) {
+export default function FullPipelineDialog({ open, taskIds, factorNames, dataDate, onClose, onComplete }: FullPipelineDialogProps) {
   const [phases, setPhases] = useState<Record<Phase, PhaseStatus>>({
     ic_metrics: "pending",
     transform: "pending",
@@ -194,8 +195,8 @@ export default function FullPipelineDialog({ open, taskIds, factorNames, onClose
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(
         taskIds?.length
-          ? { task_ids: taskIds, skip_completed: true }
-          : { factor_names: factorNames, skip_completed: true }
+          ? { task_ids: taskIds, skip_completed: true, data_date: dataDate || undefined }
+          : { factor_names: factorNames, skip_completed: true, data_date: dataDate || undefined }
       ),
       signal: controller.signal,
     }).then(async (res) => {

@@ -1,0 +1,4 @@
+# file: F:\Dev\AIstock\backend\quant_models\hmm\sector_hmm.py
+# hypothesis_version: 6.151.10
+
+[0.0, 0.5, 1.0, 1.5, 3.0, 100.0, 100, 120, 365, 'amount', 'close', 'covars', 'end_date', 'fading', 'full', 'high', 'limit_up', 'low', 'means', 'n_states', 'open', 'pct_change', 'r', 'sector_code', 'sector_name', 'start_date', 'state_labels', 'total', 'trained_at', 'training_days', 'transmat', 'trending', 'utf-8', 'vol', 'w']

@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Loader2 } from "lucide-react";
+import LITELLM_PROVIDERS, { getProviderModels, LiteLLMProviderPreset } from "../litellm-providers";
 
 interface Provider {
   id: number;
@@ -49,6 +50,7 @@ export default function AddModelDialog({
   apiBase,
 }: AddModelDialogProps) {
   const [loading, setLoading] = useState(false);
+  const [selectedSuggestion, setSelectedSuggestion] = useState("");
   const [formData, setFormData] = useState({
     model_name: "",
     display_name: "",
@@ -57,6 +59,28 @@ export default function AddModelDialog({
     description: "",
     api_key: "",
   });
+
+  const preset: LiteLLMProviderPreset | undefined = LITELLM_PROVIDERS.find((p) => p.provider_name === provider.provider_name);
+  const suggestions = getProviderModels(provider.provider_name);
+  const litellmPrefix = preset?.litellm_prefix || "";
+
+  const handleSuggestionSelect = (modelName: string) => {
+    setSelectedSuggestion(modelName);
+    if (!modelName) {
+      setFormData({ ...formData, model_name: "", display_name: "", model_type: "", model_category: "" });
+      return;
+    }
+    const m = suggestions.find((s) => s.model_name === modelName);
+    if (m) {
+      setFormData({
+        ...formData,
+        model_name: m.model_name,
+        display_name: m.display_name,
+        model_type: m.model_type,
+        model_category: m.model_category,
+      });
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,6 +112,7 @@ export default function AddModelDialog({
         description: "",
         api_key: "",
       });
+      setSelectedSuggestion("");
     } catch (err) {
       onError(err instanceof Error ? err.message : "Failed to add model");
     } finally {
@@ -103,6 +128,9 @@ export default function AddModelDialog({
     return types;
   };
 
+  const placeholder = suggestions.length > 0 ? suggestions[0].model_name : "deepseek-chat";
+  const displayPlaceholder = suggestions.length > 0 ? suggestions[0].display_name : "DeepSeek Chat";
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
@@ -114,12 +142,31 @@ export default function AddModelDialog({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* 推荐模型选择 */}
+          {suggestions.length > 0 && (
+            <div className="space-y-2">
+              <Label>推荐模型 (LiteLLM)</Label>
+              <Select value={selectedSuggestion} onValueChange={handleSuggestionSelect}>
+                <SelectTrigger>
+                  <SelectValue placeholder="-- 选择推荐模型 或 手动填写下方字段 --" />
+                </SelectTrigger>
+                <SelectContent>
+                  {suggestions.map((s) => (
+                    <SelectItem key={s.model_name} value={s.model_name}>
+                      {s.display_name} [{s.model_type}]
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="model_name">模型名称 *</Label>
               <Input
                 id="model_name"
-                placeholder="例如: deepseek-chat"
+                placeholder={`例如: ${placeholder}`}
                 value={formData.model_name}
                 onChange={(e) =>
                   setFormData({ ...formData, model_name: e.target.value })
@@ -132,7 +179,7 @@ export default function AddModelDialog({
               <Label htmlFor="display_name">显示名称 *</Label>
               <Input
                 id="display_name"
-                placeholder="例如: DeepSeek Chat"
+                placeholder={`例如: ${displayPlaceholder}`}
                 value={formData.display_name}
                 onChange={(e) =>
                   setFormData({ ...formData, display_name: e.target.value })

@@ -2,7 +2,7 @@ import logging
 import os
 import aiofiles
 import zipfile
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,13 @@ class QEWorkspaceClient:
     def __init__(self, base_url: str = "http://localhost:9000/api/v1/qe_workspace"):
         self.base_url = base_url
         self.client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0))
+
+    @staticmethod
+    def _to_rdagent_loop_id(task_id: str, loop_id: str) -> str:
+        """DB 中 loop_id 格式为 '{task_id}_{LoopN}'，RDAgent 文件系统期望 'LoopN'"""
+        if loop_id.startswith(task_id + "_"):
+            return loop_id[len(task_id) + 1:]
+        return loop_id
 
     @classmethod
     def for_node(cls, node_id: str) -> "QEWorkspaceClient":
@@ -42,7 +49,8 @@ class QEWorkspaceClient:
         
     async def create_and_run_loop(
         self, task_id: str, loop_index: int, config: Dict[str, Any], experiment_files: Dict[str, str] = None, wsl_command: str = "",
-        model_source: Dict[str, Any] = None
+        model_source: Dict[str, Any] = None,
+        callback_url: str = None,
     ) -> str:
         """
         通知 RDAgent 根据配置生成代码并启动执行 QLib 回测
@@ -53,6 +61,7 @@ class QEWorkspaceClient:
                 "source_task_id": "qe_xxx",
                 "source_loop": "Loop3",
             }
+        callback_url: Loop 完成后回调 AIstock 的 URL（远端节点主动通知）
         """
         url = f"{self.base_url}/tasks/{task_id}/loops"
         payload = {
@@ -63,6 +72,8 @@ class QEWorkspaceClient:
         }
         if model_source:
             payload["model_source"] = model_source
+        if callback_url:
+            payload["callback_url"] = callback_url
         
         try:
             response = await self.client.post(url, json=payload)
@@ -80,7 +91,7 @@ class QEWorkspaceClient:
         """
         查询 WSL 侧 QLib 任务执行的状态（双参数：task_id + loop_id）
         """
-        url = f"{self.base_url}/tasks/{task_id}/loops/{loop_id}/status"
+        url = f"{self.base_url}/tasks/{task_id}/loops/{self._to_rdagent_loop_id(task_id, loop_id)}/status"
         try:
             response = await self.client.get(url)
             response.raise_for_status()
@@ -95,7 +106,7 @@ class QEWorkspaceClient:
         容错：404 时重试一次（等待 5s，可能 read_exp_res.py 还未完成），
         最终失败返回空 dict，不阻塞主流程。
         """
-        url = f"{self.base_url}/tasks/{task_id}/loops/{loop_id}/metrics"
+        url = f"{self.base_url}/tasks/{task_id}/loops/{self._to_rdagent_loop_id(task_id, loop_id)}/metrics"
         import asyncio
         for attempt in range(2):
             try:
@@ -116,7 +127,7 @@ class QEWorkspaceClient:
 
     async def kill_loop(self, task_id: str, loop_id: str) -> Dict[str, Any]:
         """终止 RDAgent 侧正在运行的 Loop 进程。"""
-        url = f"{self.base_url}/tasks/{task_id}/loops/{loop_id}/kill"
+        url = f"{self.base_url}/tasks/{task_id}/loops/{self._to_rdagent_loop_id(task_id, loop_id)}/kill"
         try:
             response = await self.client.post(url)
             response.raise_for_status()
@@ -130,7 +141,8 @@ class QEWorkspaceClient:
         获取增强诊断指标（训练曲线、IC 时间序列、收益曲线等）。
         Loop 已完成时调用，数据必须存在。404 时重试一次（read_exp_res.py 可能尚未写完）。
         """
-        url = f"{self.base_url}/tasks/{task_id}/loops/{loop_id}/enhanced-metrics"
+        rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
+        url = f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}/enhanced-metrics"
         import asyncio
         for attempt in range(2):
             try:
@@ -160,13 +172,27 @@ class QEWorkspaceClient:
                     if not line:
                         continue
                     yield line
-        
+
+    async def download_mlruns_params(self, task_id: str, loop_id: str) -> Optional[bytes]:
+        """从节点下载指定 loop 的 mlruns params.pkl（tar.gz 打包，保留目录结构）。
+
+        Returns: tar.gz bytes, or None if not available.
+        """
+        url = f"{self.base_url}/tasks/{task_id}/loops/{self._to_rdagent_loop_id(task_id, loop_id)}/mlruns-params"
+        try:
+            response = await self.client.get(url, timeout=60.0)
+            response.raise_for_status()
+            return response.content
+        except Exception as e:
+            logger.warning(f"download_mlruns_params failed: {e}")
+            return None
+
     async def download_loop_assets(self, task_id: str, loop_id: str, dest_dir: str) -> str:
         """
         调用 API 将 models/*.pkl 和 features_order.txt 打包下载，并解压到 AIstock 本地的 dest_dir
         （双参数：task_id + loop_id）
         """
-        url = f"{self.base_url}/tasks/{task_id}/loops/{loop_id}/assets/download"
+        url = f"{self.base_url}/tasks/{task_id}/loops/{self._to_rdagent_loop_id(task_id, loop_id)}/assets/download"
         zip_path = os.path.join(dest_dir, f"{loop_id}_assets.zip")
         
         try:

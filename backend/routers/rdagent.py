@@ -149,16 +149,17 @@ def trigger_batch_inference(req: BatchInferenceRequest) -> Dict[str, Any]:
 
 
 @router.get("/tasks/latest", summary="获取 RD-Agent 最新 task 列表（供 UI 增量同步前预览）")
-def list_latest_tasks(limit: int = Query(20, ge=1, le=200, description="返回数量，默认 20")) -> Dict[str, Any]:
+def list_latest_tasks(limit: int = Query(20, ge=1, le=10000, description="返回数量，默认 20")) -> Dict[str, Any]:
     return rdagent_task_sync_service.list_latest_tasks(limit=limit)
 
 
-@router.get("/tasks/sync-candidates", summary="获取 task 同步候选（latest+summary+本地同步状态合并）")
+@router.get("/tasks/sync-candidates", summary="获取 task 同步候选（latest+summary+本地同步状态合并，支持翻页）")
 def list_task_sync_candidates(
-    limit: int = Query(20, ge=1, le=200, description="候选数量，默认 20"),
+    limit: int = Query(20, ge=1, le=10000, description="每页数量，默认 20"),
+    offset: int = Query(0, ge=0, description="偏移量，用于翻页"),
     node_id: Optional[str] = Query(None, description="按节点过滤"),
 ) -> Dict[str, Any]:
-    return rdagent_task_sync_service.list_sync_candidates(limit=limit, node_id=node_id)
+    return rdagent_task_sync_service.list_sync_candidates(limit=limit, offset=offset, node_id=node_id)
 
 
 @router.get("/tasks/{task_id}/summary", summary="获取 RD-Agent 单 task 概要信息")
@@ -1390,11 +1391,16 @@ def get_synced_loop_ids(task_id: str) -> Dict[str, Any]:
 
 
 @router.get("/tasks/{task_id}/workspaces", summary="获取Task的workspace信息（自动路由到所属节点）")
-def get_task_workspaces(task_id: str) -> Dict[str, Any]:
-    """通过自动路由获取 task 所属计算节点的 workspace 信息。"""
+def get_task_workspaces(
+    task_id: str,
+    quick: bool = Query(True, description="快速模式：只返回log目录信息，不扫描workspace"),
+) -> Dict[str, Any]:
+    """通过自动路由获取 task 所属计算节点的 workspace 信息。
+    quick=True: 秒级返回log目录大小+Loop数量；quick=False: 完整pickle扫描获取workspace列表。
+    """
     try:
         candidate_service = get_candidate_service()
-        return candidate_service.get_task_workspaces(task_id)
+        return candidate_service.get_task_workspaces(task_id, quick=quick)
     except HTTPException:
         raise
     except Exception as e:
@@ -1410,19 +1416,20 @@ def delete_task(task_id: str) -> Dict[str, Any]:
     2. 本地: dispatch_logs/{task_id}/ 目录
     3. DB: rdagent_candidate_loops + rdagent_candidate_tasks 缓存记录
 
-    任何步骤失败直接 raise，不做静默降级。
+    远端无文件时仍继续清理本地DB和dispatch日志。
     """
     import shutil
 
     candidate_service = get_candidate_service()
+    remote_warning = None
 
     # 1. 调用远端节点 API 删除 task log + workspace + scheduler log
-    remote_result = candidate_service.delete_task_on_node(task_id)
-    if not remote_result.get("ok"):
-        raise HTTPException(
-            status_code=500,
-            detail=f"远端节点删除失败: {remote_result.get('error', '未知错误')}",
-        )
+    try:
+        remote_result = candidate_service.delete_task_on_node(task_id)
+        if not remote_result.get("ok"):
+            remote_warning = f"远端节点: {remote_result.get('error', '未知错误')}"
+    except Exception as e:
+        remote_warning = f"远端节点不可达: {e}"
 
     # 2. 删除 AIstock 本地 dispatch 日志
     dispatch_dir = Path(__file__).resolve().parents[2] / "dispatch_logs" / task_id
@@ -1432,6 +1439,8 @@ def delete_task(task_id: str) -> Dict[str, Any]:
         dispatch_deleted = True
 
     # 3. 清理 DB 缓存
+    db_loops_deleted = 0
+    db_tasks_deleted = 0
     conn = candidate_service._get_db_connection()
     try:
         cur = conn.cursor()
@@ -1444,7 +1453,11 @@ def delete_task(task_id: str) -> Dict[str, Any]:
     finally:
         conn.close()
 
-    parts = [remote_result.get("message", "远端文件已删除")]
+    parts = []
+    if remote_warning:
+        parts.append(remote_warning)
+    else:
+        parts.append(remote_result.get("message", "远端文件已删除"))
     if dispatch_deleted:
         parts.append("dispatch日志已删除")
     if db_loops_deleted or db_tasks_deleted:
@@ -1454,7 +1467,8 @@ def delete_task(task_id: str) -> Dict[str, Any]:
         "ok": True,
         "task_id": task_id,
         "message": "；".join(parts),
-        "remote_result": remote_result,
+        "remote_result": remote_result if not remote_warning else None,
+        "remote_warning": remote_warning,
         "dispatch_deleted": dispatch_deleted,
         "db_loops_deleted": db_loops_deleted,
         "db_tasks_deleted": db_tasks_deleted,
@@ -1484,53 +1498,100 @@ def refresh_candidate_tasks(
 @router.post("/tasks/{task_id}/refresh", summary="刷新指定TASK的数据")
 def refresh_single_task(task_id: str) -> Dict[str, Any]:
     """
-    清除指定TASK在数据库中的LOOP缓存和候选任务缓存，并从RD-Agent API重新获取最新数据
-    
-    这将：
-    1. 删除数据库中该TASK的所有LOOP缓存记录（rdagent_candidate_loops）
-    2. 删除数据库中该TASK的候选任务缓存记录（rdagent_candidate_tasks），
-       使 list_sync_candidates 下次调用时重新从 RD-Agent API 获取最新 SOTA 数量
-    3. 从RD-Agent API获取最新的LOOP数据并重新缓存
+    清除指定TASK的LOOP缓存，重新获取V2对齐信息和LOOP数据
+
+    注意：不再删除 rdagent_candidate_tasks 记录（保留节点路由信息和V2历史数据），
+    而是通过 UPDATE 刷新 V2 对齐字段。
     """
     try:
         candidate_service = get_candidate_service()
-        
+
+        # 1. 仅删除LOOP缓存（保留 candidate_tasks 记录以维持节点路由信息）
         conn = candidate_service._get_db_connection()
         cur = conn.cursor()
-        
-        # 1. 删除数据库中的LOOP缓存
         cur.execute("""
             DELETE FROM rdagent.rdagent_candidate_loops
             WHERE task_id = %s
         """, (task_id,))
         deleted_loops = cur.rowcount
-
-        # 2. 删除候选任务缓存（rdagent_candidate_tasks），
-        #    使 list_sync_candidates 重新调用 v2_alignment_preview API 获取最新 SOTA 数量
-        cur.execute("""
-            DELETE FROM rdagent.rdagent_candidate_tasks
-            WHERE task_id = %s
-        """, (task_id,))
-        deleted_candidate = cur.rowcount
-
         conn.commit()
         cur.close()
         conn.close()
-        
-        logging.info(f"已删除Task {task_id} 的 {deleted_loops} 条LOOP缓存、{deleted_candidate} 条候选任务缓存")
-        
+
+        logging.info(f"已删除Task {task_id} 的 {deleted_loops} 条LOOP缓存")
+
+        # 2. 重新获取V2对齐信息并UPDATE候选任务记录
+        v2_updated = False
+        try:
+            client = candidate_service._get_client_for_task(task_id)
+            # 从DB读取节点信息
+            conn2 = candidate_service._get_db_connection()
+            cur2 = conn2.cursor()
+            cur2.execute("SELECT log_dir FROM rdagent.rdagent_candidate_tasks WHERE task_id = %s", (task_id,))
+            row = cur2.fetchone()
+            cur2.close()
+            conn2.close()
+
+            node_id = "default"
+            if row and row[0] and ":" in row[0]:
+                potential = row[0].split(":", 1)[0]
+                if not (len(potential) == 1 and potential.isalpha()):
+                    node_id = potential
+
+            task_info = candidate_service._fetch_task_info(task_id, node_id=node_id, client=client)
+            if task_info:
+                import json as _json
+                conn3 = candidate_service._get_db_connection()
+                cur3 = conn3.cursor()
+                cur3.execute("""
+                    UPDATE rdagent.rdagent_candidate_tasks
+                    SET has_sota = %s,
+                        sota_factors_count = %s,
+                        sota_checked_at = %s,
+                        alpha_factors_count = %s,
+                        model_feature_count = %s,
+                        is_aligned = %s,
+                        v2_checked_at = %s,
+                        sota_factors_list = %s,
+                        alpha_factors_list = %s,
+                        hist_len = %s,
+                        task_status = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE task_id = %s
+                """, (
+                    task_info['has_sota'],
+                    task_info['sota_factors_count'],
+                    task_info.get('sota_checked_at'),
+                    task_info.get('alpha_factors_count', 0),
+                    task_info.get('model_feature_count'),
+                    task_info.get('is_aligned'),
+                    task_info.get('v2_checked_at'),
+                    _json.dumps(task_info['sota_factors_list']) if task_info.get('sota_factors_list') else None,
+                    _json.dumps(task_info['alpha_factors_list']) if task_info.get('alpha_factors_list') else None,
+                    task_info.get('hist_len', 0),
+                    task_info.get('task_status'),
+                    task_id,
+                ))
+                conn3.commit()
+                cur3.close()
+                conn3.close()
+                v2_updated = True
+                logging.info(f"Task {task_id} V2信息已更新: sota={task_info['sota_factors_count']}, aligned={task_info.get('is_aligned')}")
+        except Exception as e:
+            logging.warning(f"刷新Task {task_id} V2信息失败（继续刷新LOOP）: {e}")
+
         # 3. 强制从RD-Agent API重新获取LOOP数据
         loops, from_cache = candidate_service.get_task_loops(task_id, force_refresh=True)
-        
+
         return {
             "ok": True,
             "task_id": task_id,
             "deleted_loops": deleted_loops,
-            "deleted_candidate_cache": deleted_candidate,
+            "v2_updated": v2_updated,
             "refreshed_loops": len(loops),
             "message": (
-                f"已刷新Task {task_id}：清除 {deleted_loops} 条LOOP缓存、"
-                f"{deleted_candidate} 条候选任务缓存，重新获取了 {len(loops)} 个LOOP"
+                f"已刷新Task {task_id}：清除 {deleted_loops} 条LOOP缓存，"
+                f"{'V2信息已更新，' if v2_updated else ''}重新获取了 {len(loops)} 个LOOP"
             )
         }
     except Exception as e:

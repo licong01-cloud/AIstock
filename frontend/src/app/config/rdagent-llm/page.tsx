@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from "react";
 import styles from "./page.module.css";
+import LITELLM_PROVIDERS from "./litellm-providers";
+import { LiteLLMProviderPreset, LiteLLMModelPreset, getProviderModels } from "./litellm-providers";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8001";
 
@@ -72,6 +74,7 @@ export default function RDAgentLLMConfigPage() {
   const [showAddModel, setShowAddModel] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<number | null>(null);
   const [showMoreLogs, setShowMoreLogs] = useState(false);
+  const [selectedPresetProvider, setSelectedPresetProvider] = useState<string>("custom");
 
   // 表单状态
   const [providerForm, setProviderForm] = useState({
@@ -191,6 +194,35 @@ export default function RDAgentLLMConfigPage() {
     setChangeLogs(data.logs || []);
   };
 
+  // 从预设列表选择服务商
+  const handlePresetProviderSelect = (providerName: string) => {
+    setSelectedPresetProvider(providerName);
+    if (providerName === "custom") {
+      setProviderForm({
+        provider_name: "",
+        display_name: "",
+        api_base_url: "",
+        litellm_prefix: "",
+        supports_chat: true,
+        supports_embedding: false,
+        supports_reasoner: false,
+      });
+    } else {
+      const preset = LITELLM_PROVIDERS.find((p) => p.provider_name === providerName);
+      if (preset) {
+        setProviderForm({
+          provider_name: preset.provider_name,
+          display_name: preset.display_name,
+          api_base_url: preset.api_base_url,
+          litellm_prefix: preset.litellm_prefix,
+          supports_chat: preset.supports_chat,
+          supports_embedding: preset.supports_embedding,
+          supports_reasoner: preset.supports_reasoner,
+        });
+      }
+    }
+  };
+
   // 添加服务商
   const handleAddProvider = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -209,8 +241,9 @@ export default function RDAgentLLMConfigPage() {
 
       setSuccessMessage("服务商添加成功");
       setShowAddProvider(false);
+      setSelectedPresetProvider("custom");
       await loadProviders();
-      
+
       // 重置表单
       setProviderForm({
         provider_name: "",
@@ -530,8 +563,8 @@ export default function RDAgentLLMConfigPage() {
     setCollapsedProviders(newCollapsed);
   };
 
-  // 获取服务商的模型
-  const getProviderModels = (providerId: number) => {
+  // 获取服务商下的已有模型列表
+  const getModelsByProviderId = (providerId: number) => {
     return models.filter((m) => m.provider_id === providerId);
   };
 
@@ -597,7 +630,19 @@ export default function RDAgentLLMConfigPage() {
             <h2>服务商管理</h2>
             <button
               className={styles.btnPrimary}
-              onClick={() => setShowAddProvider(true)}
+              onClick={() => {
+                setSelectedPresetProvider("custom");
+                setProviderForm({
+                  provider_name: "",
+                  display_name: "",
+                  api_base_url: "",
+                  litellm_prefix: "",
+                  supports_chat: true,
+                  supports_embedding: false,
+                  supports_reasoner: false,
+                });
+                setShowAddProvider(true);
+              }}
             >
               + 添加服务商
             </button>
@@ -640,8 +685,8 @@ export default function RDAgentLLMConfigPage() {
                     )}
 
                     <div className={styles.modelList}>
-                      <h4>模型列表 ({getProviderModels(provider.id).length})</h4>
-                      {getProviderModels(provider.id).map((model) => (
+                      <h4>模型列表 ({getModelsByProviderId(provider.id).length})</h4>
+                      {getModelsByProviderId(provider.id).map((model) => (
                         <div key={model.id} className={styles.modelItem}>
                           <div>
                             <strong>{model.display_name}</strong>
@@ -656,7 +701,7 @@ export default function RDAgentLLMConfigPage() {
                           )}
                         </div>
                       ))}
-                      {getProviderModels(provider.id).length === 0 && (
+                      {getModelsByProviderId(provider.id).length === 0 && (
                         <p className={styles.noData}>暂无模型</p>
                       )}
                     </div>
@@ -672,6 +717,34 @@ export default function RDAgentLLMConfigPage() {
               <div className={styles.modalContent}>
                 <h2>添加服务商</h2>
                 <form onSubmit={handleAddProvider}>
+                  {/* 预设服务商选择 */}
+                  <div className={styles.formGroup}>
+                    <label>从 LiteLLM 支持列表选择</label>
+                    <select
+                      value={selectedPresetProvider}
+                      onChange={(e) => handlePresetProviderSelect(e.target.value)}
+                    >
+                      <option value="custom">-- 自定义服务商 --</option>
+                      {(() => {
+                        const categories = ["国产", "国际", "云平台", "推理平台"];
+                        return categories.map((cat) => (
+                          <optgroup key={cat} label={cat}>
+                            {LITELLM_PROVIDERS.filter((p) => p.category === cat).map((p) => (
+                              <option key={p.provider_name} value={p.provider_name}>
+                                {p.display_name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ));
+                      })()}
+                    </select>
+                    {selectedPresetProvider !== "custom" && (
+                      <p className={styles.hint}>
+                        已自动填充 {LITELLM_PROVIDERS.find((p) => p.provider_name === selectedPresetProvider)?.display_name} 的默认配置，可在下方手动调整
+                      </p>
+                    )}
+                  </div>
+
                   <div className={styles.formGroup}>
                     <label>服务商名称 *</label>
                     <input
@@ -762,7 +835,10 @@ export default function RDAgentLLMConfigPage() {
                     <button
                       type="button"
                       className={styles.btnSecondary}
-                      onClick={() => setShowAddProvider(false)}
+                      onClick={() => {
+                        setShowAddProvider(false);
+                        setSelectedPresetProvider("custom");
+                      }}
                     >
                       取消
                     </button>
@@ -867,9 +943,18 @@ export default function RDAgentLLMConfigPage() {
                     <select
                       required
                       value={modelForm.provider_id}
-                      onChange={(e) =>
-                        setModelForm({ ...modelForm, provider_id: parseInt(e.target.value) })
-                      }
+                      onChange={(e) => {
+                        const pid = parseInt(e.target.value);
+                        setModelForm({
+                          ...modelForm,
+                          provider_id: pid,
+                          // 清空模型字段，等待用户选择推荐或手动输入
+                          model_name: "",
+                          display_name: "",
+                          full_model_id: "",
+                        });
+                        setSelectedProvider(pid);
+                      }}
                     >
                       <option value={0}>请选择服务商</option>
                       {providers.map((p) => (
@@ -880,6 +965,44 @@ export default function RDAgentLLMConfigPage() {
                     </select>
                   </div>
 
+                  {/* 推荐模型选择 */}
+                  {modelForm.provider_id > 0 && (() => {
+                    const selectedProv = providers.find((p) => p.id === modelForm.provider_id);
+                    const suggestions = selectedProv ? getProviderModels(selectedProv.provider_name) : [];
+                    if (suggestions.length === 0) return null;
+                    const litellmPrefix = selectedProv?.provider_name
+                      ? LITELLM_PROVIDERS.find((p) => p.provider_name === selectedProv.provider_name)?.litellm_prefix || ""
+                      : "";
+                    return (
+                      <div className={styles.formGroup}>
+                        <label>推荐模型 (LiteLLM)</label>
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            const m = suggestions.find((s) => s.model_name === e.target.value);
+                            if (m) {
+                              setModelForm({
+                                ...modelForm,
+                                model_name: m.model_name,
+                                display_name: m.display_name,
+                                full_model_id: litellmPrefix ? `${litellmPrefix}/${m.model_name}` : m.model_name,
+                                model_type: m.model_type,
+                                model_category: m.model_category,
+                              });
+                            }
+                          }}
+                        >
+                          <option value="">-- 选择推荐模型 或 手动填写下方字段 --</option>
+                          {suggestions.map((s) => (
+                            <option key={s.model_name} value={s.model_name}>
+                              {s.display_name} [{s.model_type}]
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  })()}
+
                   <div className={styles.formGroup}>
                     <label>模型名称 *</label>
                     <input
@@ -889,7 +1012,13 @@ export default function RDAgentLLMConfigPage() {
                       onChange={(e) =>
                         setModelForm({ ...modelForm, model_name: e.target.value })
                       }
-                      placeholder="例如: deepseek-chat"
+                      placeholder={(() => {
+                        const p = providers.find((p) => p.id === modelForm.provider_id);
+                        const preset = p ? LITELLM_PROVIDERS.find((pr) => pr.provider_name === p.provider_name) : undefined;
+                        return preset && preset.default_models.length > 0
+                          ? `例如: ${preset.default_models[0].model_name}`
+                          : "例如: deepseek-chat";
+                      })()}
                     />
                   </div>
 
@@ -902,7 +1031,13 @@ export default function RDAgentLLMConfigPage() {
                       onChange={(e) =>
                         setModelForm({ ...modelForm, display_name: e.target.value })
                       }
-                      placeholder="例如: DeepSeek Chat"
+                      placeholder={(() => {
+                        const p = providers.find((p) => p.id === modelForm.provider_id);
+                        const preset = p ? LITELLM_PROVIDERS.find((pr) => pr.provider_name === p.provider_name) : undefined;
+                        return preset && preset.default_models.length > 0
+                          ? `例如: ${preset.default_models[0].display_name}`
+                          : "例如: DeepSeek Chat";
+                      })()}
                     />
                   </div>
 
@@ -915,7 +1050,15 @@ export default function RDAgentLLMConfigPage() {
                       onChange={(e) =>
                         setModelForm({ ...modelForm, full_model_id: e.target.value })
                       }
-                      placeholder="例如: deepseek/deepseek-chat"
+                      placeholder={(() => {
+                        const p = providers.find((p) => p.id === modelForm.provider_id);
+                        if (!p) return "例如: deepseek/deepseek-chat";
+                        const preset = LITELLM_PROVIDERS.find((pr) => pr.provider_name === p.provider_name);
+                        if (preset && preset.default_models.length > 0) {
+                          return `例如: ${preset.litellm_prefix}/${preset.default_models[0].model_name}`;
+                        }
+                        return "例如: deepseek/deepseek-chat";
+                      })()}
                     />
                   </div>
 

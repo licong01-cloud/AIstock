@@ -1,0 +1,4 @@
+# file: F:\Dev\AIstock\backend\quant_models\hmm\train.py
+# hypothesis_version: 6.151.10
+
+[3.0, '--config-json', '1d', 'ALL_EQ_CLEAN', 'HMM_DAILY', '__main__']

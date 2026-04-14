@@ -10,20 +10,21 @@ const API_BASE =
 type SyncCandidatesResp = {
   ok: boolean;
   count: number;
+  total_count: number;
   items: SyncCandidateItem[];
 };
 
 export default function RDAgentTaskSyncPage() {
-  // ── 页面级状态（仅 10 个，不包含表格内部状态） ──
+  // ── 页面级状态 ──
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<SyncCandidateItem[]>([]);
 
-  const [limit, setLimit] = useState<number>(100);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
 
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(20);
+  const [totalCount, setTotalCount] = useState<number>(0);
 
   const [syncRunning, setSyncRunning] = useState(false);
   const [syncResult, setSyncResult] = useState<any>(null);
@@ -41,33 +42,38 @@ export default function RDAgentTaskSyncPage() {
   const logsEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  // 扫描发现状态
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<string | null>(null);
 
-  // ref 用于 useCallback 读取最新 limit
-  const limitRef = useRef(limit);
-  limitRef.current = limit;
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   const selectedIds = useMemo(
     () => Object.entries(selected).filter(([, v]) => !!v).map(([k]) => k),
     [selected],
   );
 
-  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
-  const pagedItems = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return items.slice(start, start + pageSize);
-  }, [items, currentPage, pageSize]);
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
-  // ref 用于 useCallback 读取最新 selectedNodeId
+  // ref 用于 useCallback 读取最新状态
   const selectedNodeIdRef = useRef(selectedNodeId);
   selectedNodeIdRef.current = selectedNodeId;
+  const currentPageRef = useRef(currentPage);
+  currentPageRef.current = currentPage;
+  const pageSizeRef = useRef(pageSize);
+  pageSizeRef.current = pageSize;
 
-  // 使用 useCallback + ref 让 loadCandidates 引用稳定
-  const loadCandidates = useCallback(async () => {
+  // 加载候选列表（服务端分页）
+  const loadCandidates = useCallback(async (page?: number) => {
     setLoading(true);
     setError(null);
+    const targetPage = page ?? currentPageRef.current;
+    const offset = (targetPage - 1) * pageSizeRef.current;
     try {
-      const params = new URLSearchParams({ limit: String(limitRef.current) });
+      const params = new URLSearchParams({
+        limit: String(pageSizeRef.current),
+        offset: String(offset),
+      });
       if (selectedNodeIdRef.current) params.set("node_id", selectedNodeIdRef.current);
       const res = await fetch(`${API_BASE}/rdagent/tasks/sync-candidates?${params}`);
       if (!res.ok) {
@@ -76,7 +82,8 @@ export default function RDAgentTaskSyncPage() {
       }
       const data = (await res.json()) as SyncCandidatesResp;
       setItems(data.items || []);
-      setCurrentPage(1);
+      setTotalCount(data.total_count || 0);
+      if (page !== undefined) setCurrentPage(page);
 
       setSelected((prev) => {
         const next: Record<string, boolean> = {};
@@ -94,8 +101,29 @@ export default function RDAgentTaskSyncPage() {
     }
   }, []);
 
+  // 扫描发现：调用 API 从各节点拉取全部 task 写入 DB
+  const handleScanDiscover = useCallback(async () => {
+    setScanning(true);
+    setScanResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/rdagent/candidate-tasks/refresh`, { method: "POST" });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        throw new Error(payload?.detail || `扫描失败: ${res.status}`);
+      }
+      const data = await res.json();
+      const msg = `发现 ${data.total_discovered} 个, 新增 ${data.new_tasks} 个, 更新 ${data.updated_tasks} 个 (查询 ${data.nodes_queried} 节点)`;
+      setScanResult(msg);
+      loadCandidates(1);
+    } catch (e: any) {
+      setScanResult(`扫描失败: ${e?.message || "未知错误"}`);
+    } finally {
+      setScanning(false);
+    }
+  }, [loadCandidates]);
+
   useEffect(() => {
-    loadCandidates();
+    loadCandidates(1);
     // 加载可用节点
     fetch(`${API_BASE}/dispatch/nodes`)
       .then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
@@ -218,12 +246,41 @@ export default function RDAgentTaskSyncPage() {
       setSyncRunning(false);
       abortRef.current = null;
       setSelected({});
-      await loadCandidates();
+      await loadCandidates(currentPage);
     }
   }
 
   const handleSelectChange = useCallback((taskId: string, checked: boolean) => {
     setSelected((prev) => ({ ...prev, [taskId]: checked }));
+  }, []);
+
+  // 翻页处理
+  const handlePageChange = useCallback((page: number) => {
+    setCurrentPage(page);
+    setSelected({});
+    loadCandidates(page);
+  }, [loadCandidates]);
+
+  // 切换每页数量
+  const handlePageSizeChange = useCallback((newSize: number) => {
+    setPageSize(newSize);
+    setCurrentPage(1);
+    setSelected({});
+    // 需要用新 pageSize 重新请求
+    const offset = 0;
+    setLoading(true);
+    setError(null);
+    const params = new URLSearchParams({ limit: String(newSize), offset: String(offset) });
+    if (selectedNodeIdRef.current) params.set("node_id", selectedNodeIdRef.current);
+    fetch(`${API_BASE}/rdagent/tasks/sync-candidates?${params}`)
+      .then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
+      .then(data => {
+        setItems(data.items || []);
+        setTotalCount(data.total_count || 0);
+        setSelected({});
+      })
+      .catch(e => setError(e?.message || "加载失败"))
+      .finally(() => setLoading(false));
   }, []);
 
   return (
@@ -259,7 +316,13 @@ export default function RDAgentTaskSyncPage() {
             节点:
             <select
               value={selectedNodeId}
-              onChange={(e) => { const v = e.target.value; setSelectedNodeId(v); selectedNodeIdRef.current = v; loadCandidates(); }}
+              onChange={(e) => {
+                const v = e.target.value;
+                setSelectedNodeId(v);
+                selectedNodeIdRef.current = v;
+                setCurrentPage(1);
+                loadCandidates(1);
+              }}
               style={{ marginLeft: 6, padding: 4, fontSize: 12, minWidth: 120 }}
             >
               <option value="">全部节点</option>
@@ -271,25 +334,30 @@ export default function RDAgentTaskSyncPage() {
             </select>
           </label>
 
-          <label style={{ fontSize: 12 }}>
-            候选数量:
-            <input
-              value={String(limit)}
-              onChange={(e) => setLimit(Number(e.target.value || 20))}
-              type="number"
-              min={1}
-              max={200}
-              style={{ marginLeft: 6, padding: 4, fontSize: 12, width: 90 }}
-            />
-          </label>
-
           <button
-            onClick={() => loadCandidates()}
+            onClick={() => loadCandidates(1)}
             disabled={loading}
             style={{ padding: "6px 10px", fontSize: 12, cursor: "pointer" }}
           >
             {loading ? "加载中..." : "刷新候选"}
           </button>
+
+          <button
+            onClick={handleScanDiscover}
+            disabled={scanning}
+            style={{
+              padding: "6px 10px", fontSize: 12, cursor: scanning ? "not-allowed" : "pointer",
+              background: scanning ? "#e5e7eb" : "#0369a1", color: scanning ? "#6b7280" : "#fff",
+              borderRadius: 8, border: "none",
+            }}
+          >
+            {scanning ? "扫描中..." : "扫描发现"}
+          </button>
+          {scanResult && (
+            <span style={{ fontSize: 11, color: scanResult.startsWith("扫描失败") ? "#dc2626" : "#16a34a" }}>
+              {scanResult}
+            </span>
+          )}
 
           <button
             onClick={handleSyncSelected}
@@ -333,18 +401,16 @@ export default function RDAgentTaskSyncPage() {
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, opacity: 0.8, marginBottom: 8 }}>
           <span>
-            共 {items.length} 个候选（来自 RD-Agent latest + summary，与本地 task_catalog 合并）
-            {items.length > pageSize && (
-              <span style={{ marginLeft: 8 }}>
-                | 第 {currentPage}/{totalPages} 页
-              </span>
-            )}
+            共 <strong>{totalCount}</strong> 个候选 Task
+            <span style={{ marginLeft: 8 }}>
+              | 第 {currentPage} / {totalPages} 页（每页 {pageSize} 条）
+            </span>
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ color: "#6b7280" }}>每页</span>
             <select
               value={pageSize}
-              onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+              onChange={(e) => handlePageSizeChange(Number(e.target.value))}
               style={{ padding: "4px 8px", fontSize: 12, borderRadius: 4, border: "1px solid #d1d5db" }}
             >
               {[20, 50, 100, 200].map((n) => (
@@ -354,28 +420,28 @@ export default function RDAgentTaskSyncPage() {
           </span>
         </div>
 
-        {/* ── 表格区域：独立组件，内部状态变化不触发本页重渲染 ── */}
+        {/* ── 表格区域 ── */}
         <TaskTableSection
-          pagedItems={pagedItems}
+          pagedItems={items}
           selected={selected}
           onSelectChange={handleSelectChange}
-          onRefreshItems={loadCandidates}
+          onRefreshItems={() => loadCandidates(currentPage)}
         />
 
         {/* 分页控件 */}
-        {items.length > 0 && (
+        {totalCount > 0 && (
           <div style={{ display: "flex", justifyContent: "center", alignItems: "center", marginTop: 12, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <button
-                onClick={() => setCurrentPage(1)}
-                disabled={currentPage <= 1}
+                onClick={() => handlePageChange(1)}
+                disabled={currentPage <= 1 || loading}
                 style={{ padding: "4px 8px", fontSize: 11, cursor: currentPage <= 1 ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: currentPage <= 1 ? "#f3f4f6" : "#fff" }}
               >
                 首页
               </button>
               <button
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage <= 1}
+                onClick={() => handlePageChange(currentPage - 1)}
+                disabled={currentPage <= 1 || loading}
                 style={{ padding: "4px 10px", fontSize: 11, cursor: currentPage <= 1 ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: currentPage <= 1 ? "#f3f4f6" : "#fff" }}
               >
                 上一页
@@ -384,15 +450,15 @@ export default function RDAgentTaskSyncPage() {
                 {currentPage} / {totalPages}
               </span>
               <button
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage >= totalPages}
+                onClick={() => handlePageChange(currentPage + 1)}
+                disabled={currentPage >= totalPages || loading}
                 style={{ padding: "4px 10px", fontSize: 11, cursor: currentPage >= totalPages ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: currentPage >= totalPages ? "#f3f4f6" : "#fff" }}
               >
                 下一页
               </button>
               <button
-                onClick={() => setCurrentPage(totalPages)}
-                disabled={currentPage >= totalPages}
+                onClick={() => handlePageChange(totalPages)}
+                disabled={currentPage >= totalPages || loading}
                 style={{ padding: "4px 8px", fontSize: 11, cursor: currentPage >= totalPages ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: currentPage >= totalPages ? "#f3f4f6" : "#fff" }}
               >
                 末页

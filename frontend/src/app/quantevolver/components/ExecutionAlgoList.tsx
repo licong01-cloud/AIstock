@@ -81,6 +81,9 @@ export default function ExecutionAlgoList() {
   // 单个分析中
   const [analyzingCode, setAnalyzingCode] = useState<string | null>(null);
 
+  // 多选
+  const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set());
+
   const loadAlgos = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -158,6 +161,40 @@ export default function ExecutionAlgoList() {
 
     setBatchLoading(false);
     setBatchProgress(null);
+  }
+
+  // ---- 选中分析 ----
+  async function analyzeSelected() {
+    if (selectedCodes.size === 0) return;
+    const codes = Array.from(selectedCodes);
+    for (const code of codes) {
+      setAnalyzingCode(code);
+      try {
+        await fetch(
+          `${API}/quantevolver/execution-algorithms/${encodeURIComponent(code)}/analyze`,
+          { method: "POST" },
+        );
+      } catch {}
+    }
+    setAnalyzingCode(null);
+    setSelectedCodes(new Set());
+    await loadAlgos();
+  }
+
+  function toggleSelect(code: string) {
+    setSelectedCodes(prev => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code); else next.add(code);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selectedCodes.size === filtered.length) {
+      setSelectedCodes(new Set());
+    } else {
+      setSelectedCodes(new Set(filtered.map(a => a.algo_code)));
+    }
   }
 
   // ---- 启用/禁用切换 ----
@@ -241,6 +278,21 @@ export default function ExecutionAlgoList() {
             {batchLoading ? "分析中..." : "批量LLM分析"}
           </button>
 
+          {selectedCodes.size > 0 && (
+            <button
+              onClick={analyzeSelected}
+              disabled={!!analyzingCode}
+              style={{
+                padding: "6px 14px", fontSize: 12,
+                cursor: analyzingCode ? "not-allowed" : "pointer",
+                borderRadius: 6, border: "none", background: "#2563eb", color: "#fff", fontWeight: 600,
+                opacity: analyzingCode ? 0.5 : 1,
+              }}
+            >
+              {analyzingCode ? `分析中(${analyzingCode})...` : `分析选中(${selectedCodes.size})`}
+            </button>
+          )}
+
           <span style={{ fontSize: 12, color: "#9ca3af" }}>
             共 {filtered.length} 个算法
           </span>
@@ -283,6 +335,14 @@ export default function ExecutionAlgoList() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>
+                <th style={{ ...thStyle, width: 32 }}>
+                  <input
+                    type="checkbox"
+                    checked={filtered.length > 0 && selectedCodes.size === filtered.length}
+                    onChange={toggleSelectAll}
+                    style={{ cursor: "pointer" }}
+                  />
+                </th>
                 <th style={thStyle}>算法名称</th>
                 <th style={thStyle}>代码</th>
                 <th style={thStyle}>分类</th>
@@ -303,6 +363,14 @@ export default function ExecutionAlgoList() {
                   <React.Fragment key={algo.algo_code}>
                     {/* 主行 */}
                     <tr style={{ borderBottom: isExpanded ? "none" : "1px solid #f3f4f6" }}>
+                      <td style={{ ...tdStyle, width: 32 }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedCodes.has(algo.algo_code)}
+                          onChange={() => toggleSelect(algo.algo_code)}
+                          style={{ cursor: "pointer" }}
+                        />
+                      </td>
                       <td style={{ ...tdStyle, fontWeight: 600 }}>
                         {algo.algo_name}
                       </td>
@@ -391,7 +459,7 @@ export default function ExecutionAlgoList() {
                     {/* 展开详情行 */}
                     {isExpanded && (
                       <tr style={{ background: "#faf5ff" }}>
-                        <td colSpan={9} style={{ padding: 0 }}>
+                        <td colSpan={10} style={{ padding: 0 }}>
                           <AlgoDetail algo={algo} />
                         </td>
                       </tr>

@@ -163,7 +163,7 @@ def fetch_fundamental_data_ts(
         WHERE b.ts_code = ANY(%s)
           AND b.trade_date >= %s AND b.trade_date <= %s
           AND s.list_status = 'L'
-          AND b.trade_date >= s.list_date
+          AND b.trade_date >= s.list_date + INTERVAL '365 days'
     """
 
     # 4. 获取 cyq_perf（每日筹码及胜率数据，cp_*字段）

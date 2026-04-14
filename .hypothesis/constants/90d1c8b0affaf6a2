@@ -1,0 +1,4 @@
+# file: F:\Dev\AIstock\backend\rebalance_strategies\topk_dropout_rc.py
+# hypothesis_version: 6.151.10
+
+[0.0, 0.1, 0.3, 1.0, '%s', ',', 'BUY', 'SELL', 'TOPK_DROPOUT_RC', 'avg_cost', 'enable_sector_hmm', 'market_value', 'max_positions', 'portfolio_id', 'priority', 'quantity', 'reason', 'score', 'side', 'signal', 'signal_date', 'stop_loss', 'stop_loss_pct', 'symbol', 'target_quantity', 'target_weight', 'trade_date', '冷态行业: %s', '查询股票行业映射失败，将使用中性系数', '热态行业: %s']

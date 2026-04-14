@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body
-from fastapi.responses import StreamingResponse
 
 from ..services.rdagent_http_sync_service import SyncMode, get_sync_status, run_full_sync, trigger_rdagent_materialize_and_sync
 
@@ -141,90 +140,3 @@ def get_task_complete_assets(task_id: str) -> Dict[str, Any]:
             "error": str(e),
             "traceback": traceback.format_exc()
         }
-
-
-# ================================================================
-# 单因子指标同步端点
-# ================================================================
-
-@router.post("/factor_metrics/sync", summary="批量同步因子指标")
-def sync_factor_metrics(
-    task_ids: Optional[List[str]] = Body(None, embed=True),
-    from_catalog: bool = Body(False, embed=True),
-) -> Dict[str, Any]:
-    """从 RD-Agent 获取单因子 17 项指标并写入 aistock_factor_metrics 表。
-
-    两种模式：
-    - from_catalog=True: 自动从 aistock_factor_catalog 提取所有 source_task_id
-    - task_ids=[...]: 指定 task_id 列表
-    """
-    from ..services.rdagent_factor_metrics_sync import (
-        sync_all_factor_metrics_from_catalog,
-        sync_factor_metrics_batch,
-    )
-
-    if from_catalog:
-        results = sync_all_factor_metrics_from_catalog()
-    elif task_ids:
-        results = sync_factor_metrics_batch(task_ids)
-    else:
-        return {"error": "请提供 task_ids 或设置 from_catalog=true"}
-
-    ok_count = sum(1 for r in results if r.ok)
-    total_inserted = sum(r.metrics_inserted for r in results)
-    total_skipped = sum(r.metrics_skipped for r in results)
-
-    return {
-        "total_tasks": len(results),
-        "success_count": ok_count,
-        "fail_count": len(results) - ok_count,
-        "total_metrics_inserted": total_inserted,
-        "total_metrics_skipped": total_skipped,
-        "details": [
-            {
-                "task_id": r.task_id,
-                "ok": r.ok,
-                "factor_count": r.factor_count,
-                "inserted": r.metrics_inserted,
-                "skipped": r.metrics_skipped,
-                "errors": r.errors,
-            }
-            for r in results
-        ],
-    }
-
-
-@router.post("/factor_metrics/sync-stream", summary="异步并行同步因子指标（SSE 流式）")
-def sync_factor_metrics_stream(
-    task_ids: Optional[List[str]] = Body(None, embed=True),
-    from_catalog: bool = Body(False, embed=True),
-    concurrency: int = Body(4, embed=True),
-):
-    """异步并发同步因子指标，SSE 流式推送进度。
-
-    并发度由 concurrency 控制（默认 4），按 Task 为单位并行调用 RDAgent API。
-    """
-    import json
-
-    from ..services.rdagent_factor_metrics_sync import sync_factor_metrics_batch_async
-    from ..db.pg_pool import get_conn
-
-    # 获取 task_ids
-    if from_catalog:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT DISTINCT source_task_id
-                    FROM aistock_factor_catalog
-                    WHERE source_task_id IS NOT NULL AND source_task_id != ''
-                    ORDER BY source_task_id
-                """)
-                task_ids = [row[0] for row in cur.fetchall()]
-    elif not task_ids:
-        return {"error": "请提供 task_ids 或设置 from_catalog=true"}
-
-    async def event_generator():
-        async for event in sync_factor_metrics_batch_async(task_ids, concurrency=concurrency):
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")

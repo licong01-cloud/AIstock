@@ -2,7 +2,9 @@ import json
 import logging
 import os
 import asyncio
+import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 import aiofiles
 from psycopg2.extras import RealDictCursor
@@ -39,6 +41,19 @@ class AutoEvolutionScheduler:
                 self._node_clients[node_id] = QEWorkspaceClient.for_node(node_id)
             return self._node_clients[node_id]
         return self.workspace_client
+
+    def _get_callback_url_for_task(self, task_id: str) -> Optional[str]:
+        """查询任务关联节点的 callback_url，用于 Loop 完成后主动回调。"""
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT cn.callback_url
+                    FROM qe_evolution_tasks t
+                    LEFT JOIN infra.compute_nodes cn ON t.node_id = cn.node_id
+                    WHERE t.task_id = %s
+                """, (task_id,))
+                row = cur.fetchone()
+        return row.get("callback_url") if row else None
         
     async def create_task(self, task_name: str, target_desc: str, max_loops: int, base_experiment_id: str, allow_created: bool = False, start_from_loop_zero: bool = False, node_id: Optional[str] = None, stock_pool: Optional[str] = None) -> str:
         """
@@ -1004,9 +1019,13 @@ class AutoEvolutionScheduler:
                             reviewer_config = (analysis.get("reviewer") or {}).get("validated_config")
                             if isinstance(reviewer_config, dict):
                                 config = reviewer_config
+                                logger.info(f"Loop {loop_index}: 配置来源 = reviewer_config (prev loop {prev_loop_db_id})")
+                            else:
+                                logger.warning(f"Loop {loop_index}: 上轮 loop {prev_loop_db_id} 缺少 reviewer.validated_config")
 
             if config is None:
                 config = self._load_base_config_from_experiment(task["base_experiment_id"])
+                logger.info(f"Loop {loop_index}: 配置来源 = base_experiment {task['base_experiment_id']}")
 
             action_type = config.get("action_type", "initial" if current_loop == 0 else "param_tune")
 
@@ -1015,26 +1034,26 @@ class AutoEvolutionScheduler:
             validation = self.validate_factor_availability(factor_list)
             if validation["has_issues"]:
                 removed = validation["deleted_factors"] + validation["unavailable_factors"]
-                config["factor_list"] = validation["valid_factors"]
-                logger.warning(
-                    f"Loop {loop_index} 自动移除 {len(removed)} 个不可用因子: {removed}"
+                # 严格模式：因子不可用时暂停任务，不静默移除
+                logger.error(
+                    f"Loop {loop_index} 因子可用性检查失败。"
+                    f"已删除: {validation['deleted_factors']}, "
+                    f"不可用: {validation['unavailable_factors']}。"
+                    f"任务暂停，请修复因子后恢复。"
                 )
-                self._add_to_factor_blacklist(task_id, removed)
-
-                if not config["factor_list"]:
-                    logger.error("所有因子均已删除或不可用，无法继续演进")
-                    with get_conn() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute("""
-                                UPDATE qe_evolution_tasks SET status = 'error', updated_at = NOW()
-                                WHERE task_id = %s
-                            """, (task_id,))
-                            cur.execute("""
-                                UPDATE qe_evolution_loops SET status = 'error', updated_at = NOW()
-                                WHERE loop_id = %s
-                            """, (evolution_loop_db_id,))
-                        conn.commit()
-                    return None
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            UPDATE qe_evolution_tasks SET status = 'paused', updated_at = NOW()
+                            WHERE task_id = %s
+                        """, (task_id,))
+                    conn.commit()
+                raise ValueError(
+                    f"Loop {loop_index}: 因子可用性检查失败。"
+                    f"已删除: {validation['deleted_factors']}, "
+                    f"不可用: {validation['unavailable_factors']}。"
+                    f"任务已暂停，请通过 /evolution/tasks/{task_id}/resolve-factors 修复。"
+                )
 
             # 使用 ConfigComposer 在内存中生成实验文件
             from .config_composer import ConfigComposer
@@ -1044,6 +1063,9 @@ class AutoEvolutionScheduler:
             task_stock_pool = task.get("stock_pool")
             if task_stock_pool:
                 loop_custom_params["stock_pool"] = task_stock_pool
+            task_label_type = task.get("label_type")
+            if task_label_type:
+                loop_custom_params["label_type"] = task_label_type
             # task 级别的策略/执行算法覆盖（优先于 config 继承值）
             effective_strategy_id = task.get("strategy_id") or config.get("strategy_id")
             effective_strategy_params = task.get("strategy_params") or {}
@@ -1058,6 +1080,20 @@ class AutoEvolutionScheduler:
                 loop_custom_params.update(effective_strategy_params)
             # initial_cash 从 strategy_params 单独提取，不混入 custom_params（避免被当作策略参数）
             _sp = effective_strategy_params.copy() if effective_strategy_params else {}
+
+            # 注入尾盘未成交处理配置 → custom_params（config_composer 从 custom_params 提取）
+            _uf = task.get("unfilled_handler")
+            if _uf:
+                loop_custom_params["unfilled_handler"] = _uf
+                _uf_params = task.get("unfilled_handler_params") or {}
+                if isinstance(_uf_params, str):
+                    import json as _json
+                    _uf_params = _json.loads(_uf_params)
+                if _uf_params.get("trigger_minute"):
+                    loop_custom_params["unfilled_trigger_minute"] = _uf_params["trigger_minute"]
+                if _uf_params.get("backup_depth"):
+                    loop_custom_params["unfilled_backup_depth"] = _uf_params["backup_depth"]
+
             loop_custom_params.pop("initial_cash", None)
             compose_res = composer.compose_experiment_in_memory(
                 factor_names=config.get("factor_list", []),
@@ -1070,6 +1106,7 @@ class AutoEvolutionScheduler:
                 execution_algo=effective_execution_algo,
                 execution_algo_params=effective_execution_algo_params,
                 strategy_params=_sp,
+                node_id=task.get("node_id"),
             )
             experiment_files = compose_res["experiment_files"]
             wsl_command = compose_res.get("wsl_command", "")
@@ -1085,8 +1122,10 @@ class AutoEvolutionScheduler:
 
             # 调用节点执行（异步，不等待完成）
             client = self._get_workspace_client_for_task(task_id)
+            callback_url = self._get_callback_url_for_task(task_id)
             await client.create_and_run_loop(
-                task_id, loop_index, config, experiment_files, wsl_command
+                task_id, loop_index, config, experiment_files, wsl_command,
+                callback_url=callback_url,
             )
         except Exception as e:
             import traceback
@@ -1095,10 +1134,19 @@ class AutoEvolutionScheduler:
             # 幂等保护：独立 try/except 确保 DB 状态不泄漏
             try:
                 with get_conn() as conn:
-                    with conn.cursor() as cur:
+                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
                         error_detail = json.dumps({"_error": str(e), "_traceback": tb_str}, ensure_ascii=False)
                         cur.execute("UPDATE qe_evolution_loops SET status = 'failed', agent_analysis = %s, updated_at = NOW() WHERE loop_id = %s", (error_detail, evolution_loop_db_id))
-                        cur.execute("UPDATE qe_evolution_tasks SET status = 'failed', updated_at = NOW() WHERE task_id = %s", (task_id,))
+                        # custom_evo/strategy_evo：单个 loop 失败不标记整个 task，只有所有 loop 都失败才标记
+                        cur.execute("SELECT task_type FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                        task_row = cur.fetchone()
+                        if not task_row or task_row.get("task_type") not in ("strategy_evo", "custom_evo"):
+                            cur.execute("UPDATE qe_evolution_tasks SET status = 'failed', updated_at = NOW() WHERE task_id = %s", (task_id,))
+                        else:
+                            cur.execute("SELECT COUNT(*) FROM qe_evolution_loops WHERE task_id = %s AND status != 'failed'", (task_id,))
+                            non_failed = cur.fetchone()
+                            if non_failed and non_failed[0] == 0:
+                                cur.execute("UPDATE qe_evolution_tasks SET status = 'failed', updated_at = NOW() WHERE task_id = %s", (task_id,))
                     conn.commit()
             except Exception as db_err:
                 logger.critical(f"FATAL: Failed to mark loop/task as failed for {task_id}: {db_err}")
@@ -1118,7 +1166,7 @@ class AutoEvolutionScheduler:
                 cur.execute("SELECT task_type FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                 task_row = cur.fetchone()
 
-        if task_row and task_row.get("task_type") == "strategy_evo":
+        if task_row and task_row.get("task_type") in ("strategy_evo", "custom_evo"):
             return await self.process_strategy_evo_completed_loop(task_id, loop_id_str)
 
         # 提取 loop_index from loop_id_str (format: "{task_id}_Loop{N}")
@@ -1307,6 +1355,10 @@ class AutoEvolutionScheduler:
                     sota_protected_factors=sota_protected_factors,
                     sota_context=sota_context,
                 )
+                if not isinstance(next_config_draft, dict):
+                    raise ValueError(f"Factor Agent 返回无效输出: type={type(next_config_draft)}")
+                if "factor_list" not in next_config_draft:
+                    raise ValueError("Factor Agent 输出缺少 'factor_list' 字段")
             elif decided_action_type in ("param_tune", "model_switch"):
                 next_config_draft = await self.model_agent.run(
                     analyst_result, is_sota, config,
@@ -1314,6 +1366,8 @@ class AutoEvolutionScheduler:
                     sota_context=sota_context,
                     task_id=task_id,
                 )
+                if not isinstance(next_config_draft, dict):
+                    raise ValueError(f"Model Agent 返回无效输出: type={type(next_config_draft)}")
                 # 模型轮保留因子
                 next_config_draft["factor_list"] = config.get("factor_list", [])
             elif decided_action_type == "factor_model_joint":
@@ -1535,11 +1589,20 @@ class AutoEvolutionScheduler:
             tb_str = traceback.format_exc()
             logger.error(f"Error processing completed loop {evolution_loop_db_id} for task {task_id}: {e}\n{tb_str}")
             with get_conn() as conn:
-                with conn.cursor() as cur:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     # 将完整错误信息写入 agent_analysis 以便调试（保留已收集的 LLM trace）
                     error_detail = json.dumps({"_error": str(e), "_traceback": tb_str, "llm_trace": self.agents.get_trace()}, ensure_ascii=False)
                     cur.execute("UPDATE qe_evolution_loops SET status = 'failed', agent_analysis = %s, updated_at = NOW() WHERE loop_id = %s", (error_detail, evolution_loop_db_id))
-                    cur.execute("UPDATE qe_evolution_tasks SET status = 'failed', updated_at = NOW() WHERE task_id = %s", (task_id,))
+                    # custom_evo/strategy_evo：单个 loop 失败不标记整个 task，只有所有 loop 都失败才标记
+                    cur.execute("SELECT task_type FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                    task_row = cur.fetchone()
+                    if not task_row or task_row.get("task_type") not in ("strategy_evo", "custom_evo"):
+                        cur.execute("UPDATE qe_evolution_tasks SET status = 'failed', updated_at = NOW() WHERE task_id = %s", (task_id,))
+                    else:
+                        cur.execute("SELECT COUNT(*) FROM qe_evolution_loops WHERE task_id = %s AND status != 'failed'", (task_id,))
+                        non_failed = cur.fetchone()
+                        if non_failed and non_failed[0] == 0:
+                            cur.execute("UPDATE qe_evolution_tasks SET status = 'failed', updated_at = NOW() WHERE task_id = %s", (task_id,))
                 conn.commit()
             return False
 
@@ -1623,9 +1686,13 @@ class AutoEvolutionScheduler:
                     elif rd_status in ("failed", "error"):
                         logger.warning(f"Timer scan: Loop {evolution_loop_db_id} failed on RDAgent side.")
                         with get_conn() as conn:
-                            with conn.cursor() as cur:
+                            with conn.cursor(cursor_factory=RealDictCursor) as cur:
                                 cur.execute("UPDATE qe_evolution_loops SET status = 'failed', updated_at = NOW() WHERE loop_id = %s", (evolution_loop_db_id,))
-                                cur.execute("UPDATE qe_evolution_tasks SET status = 'failed', updated_at = NOW() WHERE task_id = %s", (task_id,))
+                                # 策略演进任务：单个 loop 失败不标记整个 task 为 failed（其他 loop 可能还在跑）
+                                cur.execute("SELECT task_type FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                                task_row = cur.fetchone()
+                                if not task_row or task_row.get("task_type") not in ("strategy_evo", "custom_evo"):
+                                    cur.execute("UPDATE qe_evolution_tasks SET status = 'failed', updated_at = NOW() WHERE task_id = %s", (task_id,))
                             conn.commit()
                 except Exception as e:
                     # 单个 loop 检查失败（超时/网络等）不应中断整个扫描
@@ -1677,11 +1744,20 @@ class AutoEvolutionScheduler:
                              f"(attempt {attempt}/{max_retries}, transient={is_transient}): {e}", exc_info=True)
                 try:
                     with get_conn() as conn:
-                        with conn.cursor() as cur:
+                        with conn.cursor(cursor_factory=RealDictCursor) as cur:
                             cur.execute("UPDATE qe_evolution_loops SET status = 'failed', updated_at = NOW() WHERE loop_id = %s", (loop_id,))
-                            cur.execute("UPDATE qe_evolution_tasks SET status = 'failed', updated_at = NOW() WHERE task_id = %s", (task_id,))
+                            # custom_evo/strategy_evo：单个 loop 失败不标记整个 task，只有所有 loop 都失败才标记
+                            cur.execute("SELECT task_type FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                            task_row = cur.fetchone()
+                            if not task_row or task_row.get("task_type") not in ("strategy_evo", "custom_evo"):
+                                cur.execute("UPDATE qe_evolution_tasks SET status = 'failed', updated_at = NOW() WHERE task_id = %s", (task_id,))
+                            else:
+                                cur.execute("SELECT COUNT(*) FROM qe_evolution_loops WHERE task_id = %s AND status != 'failed'", (task_id,))
+                                non_failed = cur.fetchone()
+                                if non_failed and non_failed[0] == 0:
+                                    cur.execute("UPDATE qe_evolution_tasks SET status = 'failed', updated_at = NOW() WHERE task_id = %s", (task_id,))
                         conn.commit()
-                    logger.error(f"Marked loop {loop_id} and task {task_id} as failed due to process_completed_loop error")
+                    logger.error(f"Marked loop {loop_id} as failed due to process_completed_loop error")
                 except Exception as db_err:
                     logger.critical(f"FATAL: Failed to mark loop/task as failed after process_completed_loop error: {db_err}")
                     raise RuntimeError(f"Failed to mark loop/task as failed: {db_err}") from db_err
@@ -1693,10 +1769,12 @@ class AutoEvolutionScheduler:
                 cur.execute("SELECT * FROM qe_evolution_tasks ORDER BY created_at DESC")
                 return [dict(row) for row in cur.fetchall()]
 
-    async def resume_task(self, task_id: str, additional_loops: int = 0) -> str:
+    async def resume_task(self, task_id: str, additional_loops: int = 0, force_full_train: bool = False) -> dict:
         """
         恢复已暂停/已完成/已失败的演进任务，继续从上次的 current_loop 开始。
         如果 additional_loops > 0，则增加 max_loops。
+        force_full_train=True 时，忽略各 loop 的 backtest_only，强制完整训练。
+        Returns: {"task_id": str, "task_type": str, "force_full_train": bool}
         """
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -1709,20 +1787,38 @@ class AutoEvolutionScheduler:
         if task['status'] == 'running':
             raise ValueError(f"演进任务正在运行中: {task_id}")
 
+        task_type = task.get('task_type', 'evolution')
+
         new_max = task['max_loops']
         if additional_loops > 0:
             new_max = task['current_loop'] + additional_loops
 
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE qe_evolution_tasks SET status = 'pending', max_loops = %s, updated_at = NOW() WHERE task_id = %s",
-                    (new_max, task_id),
-                )
-            conn.commit()
+        # 策略演进/自定义演进恢复：将失败的 loop 状态重置为 pending
+        if task_type in ('strategy_evo', 'custom_evo'):
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE qe_evolution_loops SET status = 'pending', updated_at = NOW() WHERE task_id = %s AND status IN ('failed', 'cancelled')",
+                        (task_id,),
+                    )
+                    reset_count = cur.rowcount
+                    cur.execute(
+                        "UPDATE qe_evolution_tasks SET status = 'pending', max_loops = %s, updated_at = NOW() WHERE task_id = %s",
+                        (new_max, task_id),
+                    )
+                conn.commit()
+            logger.info(f"Resumed {task_type} task {task_id}, reset {reset_count} failed loops, max_loops={new_max}")
+        else:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE qe_evolution_tasks SET status = 'pending', max_loops = %s, updated_at = NOW() WHERE task_id = %s",
+                        (new_max, task_id),
+                    )
+                conn.commit()
+            logger.info(f"Resumed evolution task {task_id}, max_loops={new_max}")
 
-        logger.info(f"Resumed evolution task {task_id}, max_loops={new_max}")
-        return task_id
+        return {"task_id": task_id, "task_type": task_type, "force_full_train": force_full_train}
 
     async def fork_task(
         self,
@@ -1737,6 +1833,9 @@ class AutoEvolutionScheduler:
         strategy_params: Optional[Dict[str, Any]] = None,
         execution_algo: Optional[str] = None,
         execution_algo_params: Optional[Dict[str, Any]] = None,
+        unfilled_handler: Optional[str] = None,
+        unfilled_handler_params: Optional[Dict[str, Any]] = None,
+        node_id: Optional[str] = None,
     ) -> str:
         """
         从指定 task 的某个已完成 loop 分叉出新的演进任务。
@@ -1776,6 +1875,8 @@ class AutoEvolutionScheduler:
         effective_strategy_params = strategy_params if strategy_params is not None else (source_task.get("strategy_params") or {})
         effective_execution_algo = execution_algo if execution_algo is not None else source_task.get("execution_algo")
         effective_execution_algo_params = execution_algo_params if execution_algo_params is not None else (source_task.get("execution_algo_params") or {})
+        effective_unfilled_handler = unfilled_handler if unfilled_handler is not None else source_task.get("unfilled_handler")
+        effective_unfilled_handler_params = unfilled_handler_params if unfilled_handler_params is not None else (source_task.get("unfilled_handler_params") or {})
         if isinstance(effective_strategy_params, str):
             effective_strategy_params = json.loads(effective_strategy_params)
         if isinstance(effective_execution_algo_params, str):
@@ -1800,7 +1901,8 @@ class AutoEvolutionScheduler:
 
         # 4+5. 在同一事务中创建 base experiment + evolution task（防止孤儿记录）
         base_exp_id = f"{new_task_id}_base"
-        node_id = source_task.get("node_id")
+        # node_id: 入参优先，否则继承源任务
+        effective_node_id = node_id if node_id is not None else source_task.get("node_id")
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -1826,18 +1928,21 @@ class AutoEvolutionScheduler:
                      base_experiment_id, node_id, source_type,
                      evolution_guidance, evolution_mode,
                      fork_from_task_id, fork_from_loop_index, inherit_history,
-                     strategy_id, strategy_params, execution_algo, execution_algo_params)
+                     strategy_id, strategy_params, execution_algo, execution_algo_params,
+                     unfilled_handler, unfilled_handler_params)
                     VALUES (%s, %s, %s, %s, 0, 'pending', %s, %s, 'fork', %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s)
+                            %s, %s, %s, %s, %s, %s)
                 """, (
                     new_task_id, task_name, target_desc, max_loops,
-                    base_exp_id, node_id,
+                    base_exp_id, effective_node_id,
                     evolution_guidance, evolution_mode,
                     source_task_id, from_loop_index, inherit_history,
                     effective_strategy_id,
                     json.dumps(effective_strategy_params) if effective_strategy_params else None,
                     effective_execution_algo,
                     json.dumps(effective_execution_algo_params) if effective_execution_algo_params else None,
+                    effective_unfilled_handler,
+                    json.dumps(effective_unfilled_handler_params) if effective_unfilled_handler_params else None,
                 ))
             conn.commit()
 
@@ -1854,13 +1959,88 @@ class AutoEvolutionScheduler:
                 task = cur.fetchone()
                 if not task:
                     return None
-                    
+
                 cur.execute("SELECT * FROM qe_evolution_loops WHERE task_id = %s ORDER BY loop_index ASC", (task_id,))
                 loops = cur.fetchall()
-                
+
                 result = dict(task)
                 result['loops'] = [dict(loop_row) for loop_row in loops]
-                return result
+
+        # Live status 检查：对 running 状态的 loop 查询 RDAgent 侧真实状态
+        # 对于 custom_evo/strategy_evo 并行调度任务，不能直接修改 loop status（会破坏
+        # submit_custom_evo_all_loops 的 run_with_sem 调度循环），改为触发完整的
+        # process_completed_loop 流程。
+        task_type = result.get('task_type')
+        any_synced = False
+        for loop_data in result['loops']:
+            if loop_data.get('status') not in ('running', 'processing'):
+                continue
+            loop_id = loop_data['loop_id']
+            loop_index = loop_data['loop_index']
+            try:
+                client = self._get_workspace_client_for_task(task_id)
+                live = await client.get_loop_status(task_id, f"Loop{loop_index}")
+                rd_status = live.get("status")
+            except Exception as e:
+                logger.warning(f"[get_task_detail] live status check failed for {loop_id}: {e}")
+                rd_status = "failed"  # RDAgent 不可达，视为失败
+
+            if rd_status in ("completed", "failed", "not_found"):
+                if task_type in ("custom_evo", "strategy_evo"):
+                    # 并行调度任务：触发完整处理流程（metrics采集+DB更新+后续loop调度），
+                    # 不直接改 status，避免抢跑 run_with_sem 的调度循环
+                    try:
+                        logger.info(f"[get_task_detail] 触发完整处理: {loop_id} (rd_status={rd_status})")
+                        await self._safe_process_completed_loop(task_id, loop_id)
+                        # 重新读取 loop 状态以反映处理结果
+                        with get_conn() as conn:
+                            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                                cur.execute("SELECT * FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
+                                updated = cur.fetchone()
+                                if updated:
+                                    for i, lp in enumerate(result['loops']):
+                                        if lp.get('loop_id') == loop_id:
+                                            result['loops'][i] = dict(updated)
+                                            break
+                        any_synced = True
+                    except Exception as e:
+                        logger.error(f"[get_task_detail] 完整处理失败 for {loop_id}: {e}")
+                else:
+                    # 标准演进任务：保留原有快速同步逻辑
+                    new_status = "failed" if rd_status in ("failed", "not_found") else "completed"
+                    with get_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "UPDATE qe_evolution_loops SET status = %s, updated_at = NOW() WHERE loop_id = %s AND status IN ('running', 'processing')",
+                                (new_status, loop_id),
+                            )
+                        conn.commit()
+                    loop_data['status'] = new_status
+                    any_synced = True
+                    logger.info(f"[get_task_detail] auto-synced loop {loop_id}: {rd_status} -> {new_status}")
+
+        # 仅对标准演进任务（非 custom_evo/strategy_evo）自动更新 task 状态。
+        # custom_evo/strategy_evo 的 task 状态由 process_strategy_evo_completed_loop 或
+        # submit_custom_evo_all_loops 的 final status check 管理。
+        if any_synced and task_type not in ("custom_evo", "strategy_evo"):
+            all_terminal = all(
+                lp.get('status') in ('completed', 'failed', 'cancelled')
+                for lp in result['loops']
+            )
+            if all_terminal and result.get('status') == 'running':
+                has_failed = any(lp.get('status') == 'failed' for lp in result['loops'])
+                new_task_status = 'failed' if has_failed else 'completed'
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE qe_evolution_tasks SET status = %s, updated_at = NOW() WHERE task_id = %s AND status = 'running'",
+                            (new_task_status, task_id),
+                        )
+                    conn.commit()
+                result['status'] = new_task_status
+                logger.info(f"[get_task_detail] auto-synced task {task_id} -> {new_task_status}")
+
+        return result
         
     async def stop_task(self, task_id: str) -> dict:
         """
@@ -1967,15 +2147,16 @@ class AutoEvolutionScheduler:
                 f"只有 failed 或 cancelled 状态的 loop 可以重试"
             )
 
-        # 2. 验证 task 不在运行中
+        # 2. 获取 task 信息（retry 需要 task 元数据，但不再因 task running 而拒绝）
+        # parallel custom_evo 任务中，一个 loop 失败时其他 loop 可能仍在运行，
+        # 此时 task 状态为 running 是正常的，不应阻塞失败 loop 的重试。
+        # loop 级别的状态校验已在步骤 1 完成（只允许 failed/cancelled）。
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("SELECT * FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                 task = cur.fetchone()
         if not task:
             raise ValueError(f"任务不存在: {task_id}")
-        if task["status"] == "running":
-            raise ValueError("任务正在运行中，无法重试 loop")
 
         # 3. 检查 workspace 中训练是否已完成
         workspace_dir = QE_WORKSPACE_WIN / task_id / loop_id
@@ -2012,62 +2193,30 @@ class AutoEvolutionScheduler:
                 )
             conn.commit()
 
-        # 5. 重新 compose 并提交
+        # 5. 使用统一引擎重新 compose 并提交
         try:
             config = loop_row["config_json"]
             if isinstance(config, str):
                 config = json.loads(config)
 
+            from .experiment_config_builders import build_config_from_retry_loop
+            from .executors.backtest import BacktestExecutor, BacktestMode
+            from .executors.base import ExecutionContext
+
+            cfg = build_config_from_retry_loop(config, task, experiment_name=f"{task_id}/{loop_id}")
+
             composer = ConfigComposer()
-            loop_custom_params = dict(config.get("model_params") or {})
-            task_stock_pool = task.get("stock_pool")
-            if task_stock_pool:
-                loop_custom_params["stock_pool"] = task_stock_pool
-
-            effective_strategy_params = task.get("strategy_params") or {}
-            if isinstance(effective_strategy_params, str):
-                effective_strategy_params = json.loads(effective_strategy_params)
-            effective_execution_algo = task.get("execution_algo")
-            effective_execution_algo_params = task.get("execution_algo_params") or {}
-            if isinstance(effective_execution_algo_params, str):
-                effective_execution_algo_params = json.loads(effective_execution_algo_params)
-            if effective_strategy_params:
-                loop_custom_params.update(effective_strategy_params)
-
-            _sp = effective_strategy_params.copy() if effective_strategy_params else {}
-            loop_custom_params.pop("initial_cash", None)
-
-            compose_res = composer.compose_experiment_in_memory(
-                factor_names=config.get("factor_list", []),
-                model_id=config.get("model_id"),
-                strategy_id=task.get("strategy_id"),
-                data_split=config.get("data_split"),
-                custom_params=loop_custom_params,
-                experiment_name=f"{task_id}/{loop_id}",
-                skip_db_save=True,
-                execution_algo=effective_execution_algo,
-                execution_algo_params=effective_execution_algo_params,
-                strategy_params=_sp,
-            )
-
-            experiment_files = compose_res["experiment_files"]
-            wsl_command = compose_res.get("wsl_command", "")
-
-            # 始终使用 backtest-only 模式（retry 的唯一用途就是跳过训练）
-            # 注意：--backtest-only 必须插入到 qrun_limit_minute.py conf.yaml 之后，
-            # 而不是追加到 wsl_command 末尾（否则会变成 read_exp_res.py 的参数）
-            import re as _re
-            wsl_command = _re.sub(
-                r"(python\s+qrun_limit_minute\.py\s+\S+\.yaml)",
-                r"\1 --backtest-only",
-                wsl_command,
-            )
-            logger.info(f"Retry in backtest-only mode: {wsl_command}")
-
             client = self._get_workspace_client_for_task(task_id)
-            await client.create_and_run_loop(
-                task_id, loop_index, config, experiment_files, wsl_command
+            executor = BacktestExecutor(composer, client)
+            ctx = ExecutionContext(
+                task_id=task_id,
+                loop_index=loop_index,
+                experiment_name=f"{task_id}/{loop_id}",
+                node_id=task.get("node_id"),
+                callback_url=self._get_callback_url_for_task(task_id),
             )
+            result = await executor.submit(cfg, ctx, mode=BacktestMode.BACKTEST_ONLY)
+            logger.info(f"Retry in backtest-only mode via unified engine: {result.wsl_command}")
 
         except Exception as e:
             import traceback
@@ -2156,6 +2305,14 @@ class AutoEvolutionScheduler:
 
             conn.commit()
 
+        # 5b. 清理远端 WSL workspace（如果任务在远端节点执行）
+        try:
+            client = self._get_workspace_client_for_task(task_id)
+            await client.cleanup_task_workspace(task_id)
+            logger.info(f"已清理远端 workspace: {task_id}")
+        except Exception as e:
+            logger.warning(f"远端 workspace 清理失败（非致命）: {task_id}: {e}")
+
         # 6. 清理文件系统上的实验目录
         import shutil
         from .config_composer import QE_WORKSPACE_WIN, QE_EXPERIMENTS_ROOT
@@ -2170,6 +2327,16 @@ class AutoEvolutionScheduler:
                 shutil.rmtree(dir_path, ignore_errors=False)
                 cleaned_dirs.append(str(dir_path))
                 logger.info(f"已清理实验目录: {dir_path}")
+
+        # 6b. 清理 Optuna study 文件
+        try:
+            optuna_dir = Path(SOTA_ASSETS_DIR) / "optuna_studies"
+            if optuna_dir.exists():
+                for f in optuna_dir.glob(f"{task_id}_*.db"):
+                    f.unlink(missing_ok=True)
+                    logger.info(f"已清理 Optuna study: {f}")
+        except Exception as e:
+            logger.warning(f"Optuna study cleanup failed for {task_id}: {e}")
 
         deleted_counts["cleaned_dirs"] = len(cleaned_dirs)
 
@@ -2450,6 +2617,7 @@ class AutoEvolutionScheduler:
         loops_config: List[Dict[str, Any]] = None,
         execution_mode: str = "serial",
         inherit_history: bool = False,
+        node_id: Optional[str] = None,
     ) -> str:
         """
         从指定 task 的某个已完成 loop 创建策略演进任务。
@@ -2517,7 +2685,8 @@ class AutoEvolutionScheduler:
         if isinstance(metrics, str):
             metrics = json.loads(metrics)
 
-        node_id = source_task.get("node_id")
+        # node_id: 入参优先，否则继承源任务
+        effective_node_id = node_id if node_id is not None else source_task.get("node_id")
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -2555,7 +2724,7 @@ class AutoEvolutionScheduler:
                             'strategy_evo', %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     new_task_id, task_name, target_desc, len(loops_config),
-                    base_exp_id, node_id,
+                    base_exp_id, effective_node_id,
                     json.dumps({"loops": loops_config}),
                     execution_mode,
                     source_task_id, from_loop_index,
@@ -2611,7 +2780,7 @@ class AutoEvolutionScheduler:
 
         if not loop_config:
             logger.error(f"Loop {loop_index} 的配置未找到")
-            return None
+            raise ValueError(f"Loop configuration not found for loop_index={loop_index} in task {task_id}")
 
         # 加载源 Loop 的基础配置
         source_task_id = task.get("model_source_task_id")
@@ -2679,8 +2848,19 @@ class AutoEvolutionScheduler:
                 loop_custom_params["enable_sector_hmm"] = True
                 hmm_model_version = loop_config.get("hmm_model_version_id")
                 hmm_preset = loop_config.get("hmm_signal_preset")
-                if hmm_model_version:
-                    loop_custom_params["hmm_model_version_id"] = hmm_model_version
+                if not hmm_model_version:
+                    raise ValueError(
+                        "enable_sector_hmm=True 但 hmm_model_version_id 未配置。"
+                        "请在任务配置中指定 HMM 模型版本。"
+                    )
+                loop_custom_params["hmm_model_version_id"] = hmm_model_version
+                # 解析 snapshot_id → sector_hmm_model_path
+                from ..hmm_training_service import HMMTrainingService
+                _hmm_svc = HMMTrainingService()
+                _snapshot = _hmm_svc.get_snapshot(hmm_model_version)
+                if _snapshot is None:
+                    raise ValueError(f"HMM 快照 {hmm_model_version} 不存在")
+                loop_custom_params["sector_hmm_model_path"] = _snapshot["model_path"]
                 if hmm_preset:
                     loop_custom_params["hmm_signal_preset"] = hmm_preset
 
@@ -2691,8 +2871,23 @@ class AutoEvolutionScheduler:
 
             if task_stock_pool:
                 loop_custom_params["stock_pool"] = task_stock_pool
+            task_label_type = task.get("label_type")
+            if task_label_type:
+                loop_custom_params["label_type"] = task_label_type
 
             _sp = strategy_params.copy() if strategy_params else {}
+            # 注入尾盘未成交处理配置 → custom_params（优先 loop 级别，fallback 到 task 级别）
+            _uf = loop_config.get("unfilled_handler") or task.get("unfilled_handler")
+            if _uf:
+                loop_custom_params["unfilled_handler"] = _uf
+                _uf_params = loop_config.get("unfilled_handler_params") or task.get("unfilled_handler_params") or {}
+                if isinstance(_uf_params, str):
+                    import json as _json
+                    _uf_params = _json.loads(_uf_params)
+                if _uf_params.get("trigger_minute"):
+                    loop_custom_params["unfilled_trigger_minute"] = _uf_params["trigger_minute"]
+                if _uf_params.get("backup_depth"):
+                    loop_custom_params["unfilled_backup_depth"] = _uf_params["backup_depth"]
             loop_custom_params.pop("initial_cash", None)
 
             compose_res = composer.compose_experiment_in_memory(
@@ -2706,11 +2901,10 @@ class AutoEvolutionScheduler:
                 execution_algo=execution_algo,
                 execution_algo_params=execution_algo_params,
                 strategy_params=_sp,
+                node_id=task.get("node_id"),
             )
             experiment_files = compose_res["experiment_files"]
             wsl_command = compose_res.get("wsl_command", "")
-
-            # 保存本轮配置到 loop 记录
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
@@ -2732,10 +2926,37 @@ class AutoEvolutionScheduler:
                 "source_task_id": source_task_id,
                 "source_loop": f"Loop{source_loop_idx}",
             }
+
+            # 跨节点检测：源 task 和目标 task 在不同节点时，同步 mlruns 中的 params.pkl
+            target_node_id = task.get("node_id")
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT node_id FROM qe_evolution_tasks WHERE task_id = %s", (source_task_id,))
+                    src_row = cur.fetchone()
+            source_node_id = src_row[0] if src_row else None
+
+            if (target_node_id or None) != (source_node_id or None):
+                # 跨节点：从源节点下载 params.pkl，通过 experiment_files 传给目标节点
+                logger.info(f"跨节点策略演进: 源={source_node_id or 'local'} → 目标={target_node_id or 'local'}，同步 mlruns")
+                try:
+                    source_client = self.workspace_client if not source_node_id else self._node_clients.get(source_node_id) or QEWorkspaceClient.for_node(source_node_id)
+                    mlruns_tar = await source_client.download_mlruns_params(source_task_id, f"Loop{source_loop_idx}")
+                    if mlruns_tar:
+                        import base64
+                        experiment_files["mlruns_params.tar.gz.b64"] = base64.b64encode(mlruns_tar).decode("ascii")
+                        model_source["cross_node"] = True
+                        logger.info(f"跨节点 mlruns 同步完成: {len(mlruns_tar)} bytes")
+                    else:
+                        logger.warning("跨节点 mlruns 下载返回空，回测可能失败")
+                except Exception as e:
+                    logger.error(f"跨节点 mlruns 同步失败: {e}，回测可能失败")
+
             client = self._get_workspace_client_for_task(task_id)
+            callback_url = self._get_callback_url_for_task(task_id)
             await client.create_and_run_loop(
                 task_id, loop_index, base_config, experiment_files, wsl_command,
                 model_source=model_source,
+                callback_url=callback_url,
             )
 
             logger.info(f"策略演进 Loop {loop_index} 已提交 (backtest-only)")
@@ -2781,7 +3002,14 @@ class AutoEvolutionScheduler:
             logger.error(f"策略演进任务 {task_id} 没有 loops 配置")
             return
 
-        execution_mode = task.get("strategy_evo_execution_mode", "serial")
+        execution_mode_raw = task.get("strategy_evo_execution_mode", "serial")
+        if execution_mode_raw.startswith("parallel"):
+            mode = "parallel"
+            parts = execution_mode_raw.split("_")
+            parallelism = int(parts[1]) if len(parts) > 1 else 2
+        else:
+            mode = "serial"
+            parallelism = 1
 
         # 标记任务为 running
         with get_conn() as conn:
@@ -2789,9 +3017,35 @@ class AutoEvolutionScheduler:
                 cur.execute("UPDATE qe_evolution_tasks SET status = 'running', updated_at = NOW() WHERE task_id = %s", (task_id,))
             conn.commit()
 
-        if execution_mode == "serial":
+        # 恢复场景：过滤掉已完成的 loop，只提交 pending/failed 的
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT loop_index, status FROM qe_evolution_loops WHERE task_id = %s",
+                    (task_id,),
+                )
+                existing_loops = {row["loop_index"]: row["status"] for row in cur.fetchall()}
+
+        loops_to_run = []
+        for loop_config in loops_config:
+            loop_index = loop_config.get("loop_index", len(loops_config))
+            status = existing_loops.get(loop_index)
+            if status == "completed":
+                logger.info(f"策略演进 Loop {loop_index} 已完成，跳过")
+                continue
+            loops_to_run.append(loop_config)
+
+        if not loops_to_run:
+            logger.info(f"策略演进任务 {task_id} 所有 Loop 已完成")
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE qe_evolution_tasks SET status = 'completed', updated_at = NOW() WHERE task_id = %s", (task_id,))
+                conn.commit()
+            return
+
+        if mode == "serial":
             # 串行模式：逐个提交并等待完成
-            for loop_config in loops_config:
+            for loop_config in loops_to_run:
                 loop_index = loop_config.get("loop_index", len(loops_config))
                 loop_id = await self.submit_strategy_evo_loop(task_id, loop_index)
                 if not loop_id:
@@ -2837,16 +3091,40 @@ class AutoEvolutionScheduler:
                     await self._safe_process_completed_loop(task_id, loop_id)
 
         else:
-            # 并行模式：一次性提交所有 Loop
-            tasks = []
-            for loop_config in loops_config:
-                loop_index = loop_config.get("loop_index", len(loops_config))
-                tasks.append(self.submit_strategy_evo_loop(task_id, loop_index))
+            # 并行模式：使用 semaphore 控制并行度（持有到 loop 完成）
+            sem = asyncio.Semaphore(parallelism)
+            logger.info(f"策略演进 {task_id} 并行模式启动，并行度={parallelism}，共 {len(loops_to_run)} 个 Loop（跳过 {len(loops_config) - len(loops_to_run)} 个已完成）")
 
+            async def run_with_sem(loop_config):
+                loop_index = loop_config.get("loop_index", len(loops_config))
+                async with sem:
+                    loop_id = await self.submit_strategy_evo_loop(task_id, loop_index)
+                    if not loop_id:
+                        return None
+                    # 等待 loop 完成后才释放 semaphore
+                    max_wait = 7200
+                    waited = 0
+                    interval = 10
+                    while waited < max_wait:
+                        await asyncio.sleep(interval)
+                        waited += interval
+                        with get_conn() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute("SELECT status FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
+                                row = cur.fetchone()
+                        if not row or row[0] in ("completed", "failed", "cancelled"):
+                            break
+                    if waited >= max_wait:
+                        logger.error(f"并行模式 Loop {loop_index} 等待超时（{max_wait}s）")
+                    if loop_id:
+                        await self._safe_process_completed_loop(task_id, loop_id)
+                    return loop_id
+
+            tasks = [run_with_sem(lc) for lc in loops_to_run]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    logger.error(f"并行模式 Loop {loops_config[i].get('loop_index', i+1)} 提交失败: {result}")
+                    logger.error(f"并行模式 Loop {loops_to_run[i].get('loop_index', i+1)} 提交失败: {result}")
 
     async def process_strategy_evo_completed_loop(self, task_id: str, loop_id_str: str) -> bool:
         """
@@ -2903,6 +3181,15 @@ class AutoEvolutionScheduler:
                 if src in metrics and dst not in metrics:
                     metrics[dst] = metrics[src]
 
+            # 拉取增强诊断指标（与 process_completed_loop:1227-1234 对齐）
+            # 失败时 raise — 前端 on-demand API 依赖 metrics_json 中的 enhanced_metrics 字段
+            enhanced_data = await client.get_enhanced_metrics(task_id, loop_id)
+            td = enhanced_data.get("training_diagnostics", {})
+            if not td and "training_curves" in enhanced_data:
+                td = self._compute_training_diagnostics(enhanced_data.get("training_curves", {}))
+                enhanced_data["training_diagnostics"] = td
+            metrics["enhanced_metrics"] = enhanced_data
+
             # 读取配置
             with get_conn() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -2950,7 +3237,7 @@ class AutoEvolutionScheduler:
 
             # 更新任务进度
             with get_conn() as conn:
-                with conn.cursor() as cur:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute("SELECT current_loop, max_loops FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                     task_row = cur.fetchone()
 
@@ -2996,3 +3283,556 @@ class AutoEvolutionScheduler:
             except Exception as db_err:
                 logger.critical(f"FATAL: 策略演进 Loop {evolution_loop_db_id} 失败标记失败: {db_err}")
             return False
+
+    # ═══════════════════════════════════════════════════════════════════
+    # 自定义演进 (Custom Evolution) — 每个 Loop 完全自定义因子+模型+策略
+    # ═══════════════════════════════════════════════════════════════════
+
+    async def create_custom_evo_task(
+        self,
+        task_name: str,
+        target_desc: str = "",
+        loops_config: List[Dict[str, Any]] = None,
+        execution_mode: str = "serial",
+        node_id: Optional[str] = None,
+        engine_mode: str = "legacy",
+    ) -> str:
+        """
+        创建自定义演进任务。每个 Loop 都可以完全自定义因子、模型、策略配置，
+        执行完整的训练+回测流程。
+        """
+        if not loops_config or len(loops_config) == 0:
+            raise ValueError("loops_config 不能为空，至少需要配置一个 Loop")
+
+        # 生成 task_id
+        suffix = uuid.uuid4().hex[:4]
+        new_task_id = f"qe_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{suffix}"
+
+        # 用第一个 Loop 的配置创建 base experiment 记录
+        first_loop = loops_config[0]
+        factor_names = [k.split("||")[0] for k in first_loop.get("factor_keys", [])]
+        base_exp_id = f"{new_task_id}_base"
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO qe_experiments
+                    (experiment_id, experiment_name, qe_task_id,
+                     is_evolution_loop, factor_names, model_id, strategy_id,
+                     data_split, custom_params, status, is_sota)
+                    VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s, 'created', FALSE)
+                """, (
+                    base_exp_id,
+                    f"自定义演进基准 {task_name}",
+                    new_task_id,
+                    json.dumps(factor_names),
+                    first_loop.get("model_id"),
+                    first_loop.get("strategy_id"),
+                    json.dumps(first_loop.get("data_split") or {}),
+                    json.dumps(first_loop.get("strategy_params") or {}),
+                ))
+
+                # 创建自定义演进任务
+                cur.execute("""
+                    INSERT INTO qe_evolution_tasks
+                    (task_id, task_name, target_desc, max_loops, current_loop, status,
+                     base_experiment_id, node_id, source_type,
+                     task_type, strategy_evo_config, strategy_evo_execution_mode)
+                    VALUES (%s, %s, %s, %s, 0, 'pending', %s, %s, 'custom',
+                            'custom_evo', %s, %s)
+                """, (
+                    new_task_id, task_name, target_desc, len(loops_config),
+                    base_exp_id, node_id,
+                    json.dumps({"loops": loops_config, "engine_mode": engine_mode}),
+                    execution_mode,
+                ))
+            conn.commit()
+
+        logger.info(
+            f"创建自定义演进任务 {new_task_id}, "
+            f"共 {len(loops_config)} 个 Loop, 执行方式={execution_mode}"
+        )
+
+        # 异步启动批量调度
+        bg_task = asyncio.create_task(self.submit_custom_evo_all_loops(new_task_id))
+        bg_task.add_done_callback(
+            lambda t: logger.error(f"submit_custom_evo_all_loops failed: {t.exception()}") if t.exception() else None
+        )
+
+        return new_task_id
+
+    async def submit_custom_evo_loop(self, task_id: str, loop_index: int, force_full_train: bool = False) -> Optional[str]:
+        """
+        提交单个自定义演进 Loop（完整训练+回测）。
+        从 strategy_evo_config.loops 中读取该 Loop 的完整因子+模型+策略配置。
+        force_full_train=True 时，忽略 backtest_only，强制完整训练。
+        """
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                task = cur.fetchone()
+
+        if not task:
+            logger.error(f"Task {task_id} not found")
+            return None
+
+        custom_evo_config = task.get("strategy_evo_config")
+        if not custom_evo_config:
+            logger.error(f"Task {task_id} strategy_evo_config 为空")
+            return None
+        if isinstance(custom_evo_config, str):
+            custom_evo_config = json.loads(custom_evo_config)
+
+        loops_config = custom_evo_config.get("loops", [])
+        loop_config = None
+        for cfg in loops_config:
+            if cfg.get("loop_index") == loop_index:
+                loop_config = cfg
+                break
+
+        if not loop_config:
+            logger.error(f"Loop {loop_index} 的配置未找到")
+            raise ValueError(f"Loop configuration not found for loop_index={loop_index} in task {task_id}")
+
+        # engine_mode 分发：从 strategy_evo_config 读取
+        _engine_mode = custom_evo_config.get("engine_mode", "legacy")
+        if _engine_mode == "unified":
+            return await self._submit_custom_evo_loop_unified(task_id, loop_index, loop_config, task, force_full_train=force_full_train)
+        elif _engine_mode != "legacy":
+            logger.error(
+                f"Task {task_id} Loop {loop_index}: 未知 engine_mode={_engine_mode!r}，"
+                f"回退到 legacy 路径。请检查任务配置。"
+            )
+
+        evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
+        loop_id = f"Loop{loop_index}"
+
+        # 创建 LOOP 记录
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO qe_evolution_loops
+                    (loop_id, task_id, loop_index, status, action_type)
+                    VALUES (%s, %s, %s, 'running', 'custom_config')
+                    ON CONFLICT (loop_id) DO UPDATE SET status = 'running', updated_at = NOW()
+                """, (evolution_loop_db_id, task_id, loop_index))
+            conn.commit()
+
+        try:
+            from .config_composer import ConfigComposer
+            composer = ConfigComposer()
+
+            # 从 loop_config 提取完整配置
+            factor_keys = loop_config.get("factor_keys", [])
+            factor_names = [k.split("||")[0] for k in factor_keys]
+            model_id = loop_config.get("model_id")
+            strategy_id = loop_config.get("strategy_id")
+            strategy_params = loop_config.get("strategy_params") or {}
+            execution_algo = loop_config.get("execution_algo")
+            execution_algo_params = loop_config.get("execution_algo_params") or {}
+            data_split = loop_config.get("data_split")
+            label_type = loop_config.get("label_type")
+
+            # 构建 custom_params
+            loop_custom_params = dict(strategy_params)
+
+            if loop_config.get("enable_sector_hmm"):
+                loop_custom_params["enable_sector_hmm"] = True
+                hmm_ver = loop_config.get("hmm_model_version_id")
+                if not hmm_ver:
+                    raise ValueError(f"Loop {loop_index}: enable_sector_hmm=True 但 hmm_model_version_id 未配置")
+                loop_custom_params["hmm_model_version_id"] = hmm_ver
+                # 解析 snapshot_id → sector_hmm_model_path
+                from ..hmm_training_service import HMMTrainingService
+                _hmm_svc = HMMTrainingService()
+                _snapshot = _hmm_svc.get_snapshot(hmm_ver)
+                if _snapshot is None:
+                    raise ValueError(f"Loop {loop_index}: HMM 快照 {hmm_ver} 不存在")
+                loop_custom_params["sector_hmm_model_path"] = _snapshot["model_path"]
+                hmm_preset = loop_config.get("hmm_signal_preset")
+                if hmm_preset:
+                    loop_custom_params["hmm_signal_preset"] = hmm_preset
+
+            if loop_config.get("sector_blacklist"):
+                loop_custom_params["sector_blacklist"] = loop_config["sector_blacklist"]
+
+            if loop_config.get("stock_pool"):
+                loop_custom_params["stock_pool"] = loop_config["stock_pool"]
+
+            if label_type:
+                loop_custom_params["label_type"] = label_type
+
+            # 尾盘处理
+            _uf = loop_config.get("unfilled_handler")
+            if _uf:
+                loop_custom_params["unfilled_handler"] = _uf
+                _uf_params = loop_config.get("unfilled_handler_params") or {}
+                if isinstance(_uf_params, str):
+                    _uf_params = json.loads(_uf_params)
+                if _uf_params.get("trigger_minute"):
+                    loop_custom_params["unfilled_trigger_minute"] = _uf_params["trigger_minute"]
+                if _uf_params.get("backup_depth"):
+                    loop_custom_params["unfilled_backup_depth"] = _uf_params["backup_depth"]
+
+            loop_custom_params.pop("initial_cash", None)
+            _sp = strategy_params.copy() if strategy_params else {}
+
+            # 构建 config 记录（用于 DB 存储）
+            config = {
+                "action_type": "custom_config",
+                "label": loop_config.get("label"),
+                "factor_list": factor_names,
+                "model_id": model_id,
+                "strategy_id": strategy_id,
+                "model_params": strategy_params,
+                "data_split": data_split or {},
+            }
+
+            compose_res = composer.compose_experiment_in_memory(
+                factor_names=factor_names,
+                model_id=model_id,
+                strategy_id=strategy_id,
+                data_split=data_split,
+                custom_params=loop_custom_params,
+                experiment_name=f"{task_id}/{loop_id}",
+                skip_db_save=True,
+                execution_algo=execution_algo,
+                execution_algo_params=execution_algo_params,
+                strategy_params=_sp,
+                node_id=task.get("node_id"),
+            )
+            experiment_files = compose_res["experiment_files"]
+            wsl_command = compose_res.get("wsl_command", "")
+
+            # 保存配置到 loop 记录
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE qe_evolution_loops SET config_json = %s, updated_at = NOW()
+                        WHERE loop_id = %s
+                    """, (json.dumps(config), evolution_loop_db_id))
+                conn.commit()
+
+            # 提交到节点执行（完整训练+回测，不加 --backtest-only）
+            client = self._get_workspace_client_for_task(task_id)
+            callback_url = self._get_callback_url_for_task(task_id)
+            await client.create_and_run_loop(
+                task_id, loop_index, config, experiment_files, wsl_command,
+                callback_url=callback_url,
+            )
+
+            logger.info(f"自定义演进 Loop {loop_index} 已提交 (完整训练+回测)")
+            return evolution_loop_db_id
+
+        except Exception as e:
+            import traceback
+            tb_str = traceback.format_exc()
+            logger.error(f"自定义演进 Loop {loop_index} 提交失败: {e}\n{tb_str}")
+            try:
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        error_detail = json.dumps({"_error": str(e), "_traceback": tb_str}, ensure_ascii=False)
+                        cur.execute("UPDATE qe_evolution_loops SET status = 'failed', agent_analysis = %s, updated_at = NOW() WHERE loop_id = %s", (error_detail, evolution_loop_db_id))
+                        # 不标记整个 task 为 failed — 其他 loop 可能还在跑（并行模式）
+                    conn.commit()
+            except Exception as db_err:
+                logger.critical(f"自定义演进 Loop {loop_index} 失败标记失败: {db_err}")
+            return None
+
+    async def _submit_custom_evo_loop_unified(
+        self,
+        task_id: str,
+        loop_index: int,
+        loop_config: Dict[str, Any],
+        task: Dict[str, Any],
+        force_full_train: bool = False,
+    ) -> Optional[str]:
+        """
+        统一引擎路径：使用 ExperimentConfig + BacktestExecutor 提交自定义演进 Loop。
+        替代 submit_custom_evo_loop 中的手动参数组装代码。
+        """
+        from .experiment_config_builders import build_config_from_custom_evo_loop
+        from .executors.backtest import BacktestExecutor, BacktestMode
+        from .executors.base import ExecutionContext
+        from .config_composer import ConfigComposer
+        from .qe_workspace_client import QEWorkspaceClient
+
+        evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
+        loop_id = f"Loop{loop_index}"
+
+        # 创建 LOOP 记录
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO qe_evolution_loops
+                    (loop_id, task_id, loop_index, status, action_type)
+                    VALUES (%s, %s, %s, 'running', 'custom_config')
+                    ON CONFLICT (loop_id) DO UPDATE SET status = 'running', updated_at = NOW()
+                """, (evolution_loop_db_id, task_id, loop_index))
+            conn.commit()
+
+        try:
+            # 1. 构建 ExperimentConfig（配置层）
+            experiment_name = f"{task_id}/{loop_id}"
+            cfg = build_config_from_custom_evo_loop(
+                loop_config=loop_config,
+                task=task,
+                experiment_name=experiment_name,
+            )
+
+            # 2. 保存 config 记录到 loop
+            config_record = {
+                "action_type": "custom_config",
+                "label": loop_config.get("label"),
+                "factor_list": cfg.factor_names,
+                "model_id": cfg.model_id,
+                "strategy_id": cfg.strategy_id,
+                "model_params": cfg.build_custom_params(),
+                "data_split": cfg.data_split or {},
+            }
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE qe_evolution_loops SET config_json = %s, updated_at = NOW()
+                        WHERE loop_id = %s
+                    """, (json.dumps(config_record), evolution_loop_db_id))
+                conn.commit()
+
+            # 3. 执行层提交
+            composer = ConfigComposer()
+            client = self._get_workspace_client_for_task(task_id)
+            executor = BacktestExecutor(composer, client)
+            ctx = ExecutionContext(
+                task_id=task_id,
+                loop_index=loop_index,
+                experiment_name=experiment_name,
+                node_id=task.get("node_id"),
+                callback_url=self._get_callback_url_for_task(task_id),
+            )
+            # backtest-only 模式：注入 model_source 并切换执行模式
+            # force_full_train 可覆盖 backtest_only 配置，用于恢复时源模型不可用的场景
+            if cfg.backtest_only and not force_full_train:
+                if not cfg.model_source_task_id or cfg.model_source_loop_index is None:
+                    raise ValueError(
+                        f"Loop {loop_index}: backtest_only=True 但未指定 model_source"
+                    )
+                ctx = ExecutionContext(
+                    task_id=task_id,
+                    loop_index=loop_index,
+                    experiment_name=experiment_name,
+                    node_id=task.get("node_id"),
+                    callback_url=self._get_callback_url_for_task(task_id),
+                    model_source={
+                        "source_task_id": cfg.model_source_task_id,
+                        "source_loop": f"Loop{cfg.model_source_loop_index}",
+                    },
+                )
+                mode = BacktestMode.BACKTEST_ONLY
+                logger.info(
+                    f"[unified] 自定义演进 Loop {loop_index} 使用 backtest-only 模式，"
+                    f"model_source={cfg.model_source_task_id}/Loop{cfg.model_source_loop_index}"
+                )
+            else:
+                if force_full_train and cfg.backtest_only:
+                    logger.info(
+                        f"[unified] 自定义演进 Loop {loop_index} force_full_train=True，"
+                        f"忽略 backtest_only 配置，执行完整训练"
+                    )
+                mode = BacktestMode.FULL_TRAIN
+            await executor.submit(cfg, ctx, mode=mode)
+
+            logger.info(f"[unified] 自定义演进 Loop {loop_index} 已提交")
+            return evolution_loop_db_id
+
+        except Exception as e:
+            import traceback
+            tb_str = traceback.format_exc()
+            logger.error(f"[unified] 自定义演进 Loop {loop_index} 提交失败: {e}\n{tb_str}")
+            try:
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        error_detail = json.dumps({"_error": str(e), "_traceback": tb_str}, ensure_ascii=False)
+                        cur.execute(
+                            "UPDATE qe_evolution_loops SET status = 'failed', agent_analysis = %s, updated_at = NOW() WHERE loop_id = %s",
+                            (error_detail, evolution_loop_db_id),
+                        )
+                    conn.commit()
+            except Exception as db_err:
+                logger.critical(f"[unified] Loop {loop_index} 失败标记失败: {db_err}")
+            return None
+
+    async def submit_custom_evo_all_loops(self, task_id: str, force_full_train: bool = False):
+        """
+        批量调度自定义演进 Loops，支持串行/并行模式。
+        与 submit_strategy_evo_all_loops 逻辑相同，但调用 submit_custom_evo_loop。
+        """
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                task = cur.fetchone()
+
+        if not task:
+            logger.error(f"Task {task_id} not found")
+            return
+
+        custom_evo_config = task.get("strategy_evo_config")
+        if not custom_evo_config:
+            logger.error(f"Task {task_id} strategy_evo_config 为空")
+            return
+        if isinstance(custom_evo_config, str):
+            custom_evo_config = json.loads(custom_evo_config)
+
+        loops_config = custom_evo_config.get("loops", [])
+        if not loops_config:
+            logger.error(f"自定义演进任务 {task_id} 没有 loops 配置")
+            return
+
+        execution_mode_raw = task.get("strategy_evo_execution_mode", "serial")
+        if execution_mode_raw.startswith("parallel"):
+            mode = "parallel"
+            parts = execution_mode_raw.split("_")
+            parallelism = int(parts[1]) if len(parts) > 1 else 2
+        else:
+            mode = "serial"
+            parallelism = 1
+
+        # 标记任务为 running
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE qe_evolution_tasks SET status = 'running', updated_at = NOW() WHERE task_id = %s", (task_id,))
+            conn.commit()
+
+        # 过滤已完成的 loop
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT loop_index, status FROM qe_evolution_loops WHERE task_id = %s",
+                    (task_id,),
+                )
+                existing_loops = {row["loop_index"]: row["status"] for row in cur.fetchall()}
+
+        loops_to_run = []
+        for loop_config in loops_config:
+            loop_index = loop_config.get("loop_index")
+            status = existing_loops.get(loop_index)
+            if status == "completed":
+                logger.info(f"自定义演进 Loop {loop_index} 已完成，跳过")
+                continue
+            loops_to_run.append(loop_config)
+
+        if not loops_to_run:
+            logger.info(f"自定义演进任务 {task_id} 所有 Loop 已完成")
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE qe_evolution_tasks SET status = 'completed', updated_at = NOW() WHERE task_id = %s", (task_id,))
+                conn.commit()
+            return
+
+        if mode == "serial":
+            for loop_config in loops_to_run:
+                loop_index = loop_config.get("loop_index")
+                loop_id = await self.submit_custom_evo_loop(task_id, loop_index, force_full_train=force_full_train)
+                if not loop_id:
+                    logger.error(f"自定义演进 Loop {loop_index} 提交失败，停止后续 Loops")
+                    break
+
+                # 等待完成（超时 4 小时，因为包含训练）
+                max_wait = 14400
+                waited = 0
+                interval = 15
+                while waited < max_wait:
+                    await asyncio.sleep(interval)
+                    waited += interval
+                    with get_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("SELECT status FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
+                            row = cur.fetchone()
+                    if not row or row[0] in ("completed", "failed", "cancelled"):
+                        break
+
+                if waited >= max_wait:
+                    logger.error(f"自定义演进 Loop {loop_index} 等待超时（{max_wait}s），标记为 failed")
+                    with get_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "UPDATE qe_evolution_loops SET status = 'failed', updated_at = NOW() WHERE loop_id = %s AND status = 'running'",
+                                (loop_id,),
+                            )
+                        conn.commit()
+                    continue
+
+                if loop_id:
+                    await self._safe_process_completed_loop(task_id, loop_id)
+        else:
+            sem = asyncio.Semaphore(parallelism)
+            logger.info(f"自定义演进 {task_id} 并行模式启动，并行度={parallelism}，共 {len(loops_to_run)} 个 Loop")
+
+            async def run_with_sem(loop_config):
+                loop_index = loop_config.get("loop_index")
+                async with sem:
+                    loop_id = await self.submit_custom_evo_loop(task_id, loop_index, force_full_train=force_full_train)
+                    if not loop_id:
+                        return None
+                    max_wait = 14400
+                    waited = 0
+                    interval = 15
+                    while waited < max_wait:
+                        await asyncio.sleep(interval)
+                        waited += interval
+                        with get_conn() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute("SELECT status FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
+                                row = cur.fetchone()
+                        if not row or row[0] in ("completed", "failed", "cancelled"):
+                            break
+                    if waited >= max_wait:
+                        logger.error(f"并行模式 Loop {loop_index} 等待超时（{max_wait}s）")
+                    if loop_id:
+                        await self._safe_process_completed_loop(task_id, loop_id)
+                    return loop_id
+
+            tasks = [run_with_sem(lc) for lc in loops_to_run]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.error(f"并行模式 Loop {loops_to_run[i].get('loop_index', i+1)} 提交失败: {result}")
+
+        # ── 所有 loop 调度结束，确保 task 有最终状态 ──
+        # process_strategy_evo_completed_loop 内部会在 loop_index >= max_loops 时标记 completed，
+        # 但串行 break 或并行 loop 全部失败时可能漏掉，这里做兜底。
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT status FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                final_task = cur.fetchone()
+        if final_task and final_task["status"] == "running":
+            # 检查是否还有 running 的 loop
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM qe_evolution_loops WHERE task_id = %s AND status = 'running'",
+                        (task_id,),
+                    )
+                    running_count = cur.fetchone()[0]
+            if running_count == 0:
+                # 没有正在跑的 loop 了，检查结果
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT COUNT(*) FROM qe_evolution_loops WHERE task_id = %s AND status = 'completed'",
+                            (task_id,),
+                        )
+                        completed_count = cur.fetchone()[0]
+                        cur.execute(
+                            "SELECT COUNT(*) FROM qe_evolution_loops WHERE task_id = %s AND status = 'failed'",
+                            (task_id,),
+                        )
+                        failed_count = cur.fetchone()[0]
+                final_status = "completed" if completed_count > 0 else "failed"
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE qe_evolution_tasks SET status = %s, updated_at = NOW() WHERE task_id = %s AND status = 'running'",
+                            (final_status, task_id),
+                        )
+                    conn.commit()
+                logger.info(f"自定义演进任务 {task_id} 最终状态: {final_status} (completed={completed_count}, failed={failed_count})")

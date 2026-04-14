@@ -220,19 +220,37 @@ class CorrelationScheduler:
     @staticmethod
     def _resolve_factor_names(mode: str, options: Dict[str, Any]) -> List[str]:
         """根据模式和选项确定因子列表。"""
-        # 如果选项中指定了因子列表
+        base_filter = (
+            "transformation_status = 'SUCCESS' "
+            "AND is_available = TRUE "
+            "AND qe_code_path IS NOT NULL"
+        )
+
+        # 如果选项中指定了因子列表，仍需校验可用性
         if options.get("factor_names"):
-            return options["factor_names"]
+            factor_names = options["factor_names"]
+            ph = ",".join(["%s"] * len(factor_names))
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"""
+                        SELECT factor_name FROM aistock_factor_catalog
+                        WHERE factor_name IN ({ph})
+                          AND {base_filter}
+                        ORDER BY factor_name
+                    """, factor_names)
+                    valid = [row[0] for row in cur.fetchall()]
+            skipped = set(factor_names) - set(valid)
+            if skipped:
+                logger.warning(f"跳过不可用/未改造的调度因子: {skipped}")
+            return valid
 
         # smart_incremental: 查询未计算过的因子
         if mode == "smart_incremental":
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("""
+                    cur.execute(f"""
                         SELECT factor_name FROM aistock_factor_catalog
-                        WHERE transformation_status = 'SUCCESS'
-                          AND is_available = TRUE
-                          AND qe_code_path IS NOT NULL
+                        WHERE {base_filter}
                           AND correlation_computed_at IS NULL
                         ORDER BY factor_name
                     """)
@@ -241,11 +259,9 @@ class CorrelationScheduler:
         # full / cache_only: 所有已改造因子
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(f"""
                     SELECT factor_name FROM aistock_factor_catalog
-                    WHERE transformation_status = 'SUCCESS'
-                      AND is_available = TRUE
-                      AND qe_code_path IS NOT NULL
+                    WHERE {base_filter}
                     ORDER BY factor_name
                 """)
                 return [row[0] for row in cur.fetchall()]

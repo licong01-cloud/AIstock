@@ -248,15 +248,31 @@ class CorrelationEngine:
             end_date=window_dates[-1],
         )
 
-        # 对齐因子名：面板可能只加载了部分因子（缺少 parquet 的跳过）
+        # 无条件同步 factor_names 与面板实际列顺序（修复列错位 bug）
         actual_factors = list(panel.columns)
         if len(actual_factors) != K:
             logger.warning(
                 f"面板因子数 ({len(actual_factors)}) != 请求因子数 ({K}), "
                 f"缺失: {set(factor_names) - set(actual_factors)}"
             )
-            factor_names = actual_factors
-            K = len(factor_names)
+        factor_names = actual_factors
+        K = len(factor_names)
+
+        # 剔除退化因子：要求每个因子在 ≥80% 的交易日有非 NaN 值
+        total_rows = len(panel)
+        if total_rows > 0:
+            non_nan_ratio = panel.count() / total_rows
+            degenerate = non_nan_ratio[non_nan_ratio < 0.8].index.tolist()
+            if degenerate:
+                logger.warning(
+                    f"剔除 {len(degenerate)} 个退化因子 (NaN覆盖率>20%): "
+                    f"{degenerate[:10]}{'...' if len(degenerate) > 10 else ''}"
+                )
+                panel = panel.drop(columns=degenerate)
+                factor_names = [f for f in factor_names if f not in set(degenerate)]
+                K = len(factor_names)
+                if K < 2:
+                    raise ValueError(f"剔除退化因子后仅剩 {K} 个，无法计算相关性")
 
         # 逐日计算截面 Spearman 相关
         daily_corrs = []
@@ -529,7 +545,15 @@ class CorrelationEngine:
         var_y = N_pairs * SX2.T - SX.T ** 2
         denominator = np.sqrt(np.maximum(var_x * var_y, 0.0))
 
-        valid_pair = (denominator > 1e-8) & (N_pairs >= 30)
+        # 相对阈值：要求每个因子的方差 > 理论最大方差的 1%
+        # rank 1..N 的方差 = N*(N^2-1)/12，对应 N*var = N^2*(N^2-1)/12
+        # 这里 var_x = N*SX2 - SX^2，量级 ~ N^2 * var(rank)
+        # 当大量 tied ranks 时 var 坍缩，denominator 虽 > 1e-8 但数值不稳定
+        max_var = N_pairs * N_pairs * (N_pairs + 1) / 12.0  # 理论最大 N*var
+        var_threshold = 0.01  # 要求方差 > 理论最大的 1%
+        var_ok = (var_x > var_threshold * max_var) & (var_y > var_threshold * max_var)
+
+        valid_pair = var_ok & (N_pairs >= 30)
         sub_mat = np.where(valid_pair, numerator / denominator, np.nan)
         np.fill_diagonal(sub_mat, 1.0)
         return sub_mat
@@ -549,7 +573,12 @@ class CorrelationEngine:
         var_y = N_pairs * SX2.T - SX.T ** 2
         denominator = torch.sqrt(torch.clamp(var_x * var_y, min=0.0))
 
-        valid_pair = (denominator > 1e-8) & (N_pairs >= 30)
+        # 相对阈值：与 CPU 版本一致
+        max_var = N_pairs * N_pairs * (N_pairs + 1) / 12.0
+        var_threshold = 0.01
+        var_ok = (var_x > var_threshold * max_var) & (var_y > var_threshold * max_var)
+
+        valid_pair = var_ok & (N_pairs >= 30)
         sub_mat = torch.where(valid_pair, numerator / denominator, torch.tensor(float("nan"), device="cuda"))
         sub_mat.fill_diagonal_(1.0)
 
@@ -584,7 +613,7 @@ class CorrelationEngine:
 
         # 有效天数检查
         valid_count = np.sum(valid_mask, axis=0)  # (K, K)
-        min_valid = self._min_days // 2
+        min_valid = self._min_days
 
         result = np.where(
             (weight_sum > 0) & (valid_count >= min_valid),

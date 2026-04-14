@@ -193,6 +193,258 @@ def analyze_signal(workspace: Path) -> dict:
     return result
 
 
+def analyze_stock_trades(positions_dict: dict, ind_df: pd.DataFrame,
+                         ind_obj, bt_start: str, bt_end: str) -> dict:
+    """从原始回测 pkl 数据提取个股交易记录、盈亏、涨跌停限制。
+
+    Args:
+        positions_dict: positions_normal_1day.pkl — dict[Timestamp, Position]
+        ind_df: indicators_normal_1day.pkl — DataFrame with ffr/pa/deal_amount 等
+        ind_obj: indicators_normal_1day_obj.pkl — Indicator 对象 (有 order_indicator_his)
+        bt_start, bt_end: 回测起止日期
+    """
+    from qlib.data import D
+    import logging
+    logger = logging.getLogger(__name__)
+
+    result = {
+        "stock_pnl_summary": {},
+        "top_winners": [],
+        "top_losers": [],
+        "limit_analysis": {},
+        "trade_analysis_warnings": [],
+    }
+
+    # 类型验证
+    if not isinstance(positions_dict, dict) or len(positions_dict) == 0:
+        result["trade_analysis_warnings"].append("positions_dict 为空或类型错误")
+        return result
+
+    dates = sorted(positions_dict.keys())
+    if len(dates) < 2:
+        result["trade_analysis_warnings"].append(f"交易日不足: {len(dates)}")
+        return result
+
+    # 验证 Position 对象结构
+    sample_pos = positions_dict[dates[1]] if len(dates) > 1 else positions_dict[dates[0]]
+    if not hasattr(sample_pos, 'position'):
+        result["trade_analysis_warnings"].append(f"Position 对象缺少 position 属性, type={type(sample_pos)}")
+        return result
+
+    # ── 1. 重建每日持仓快照 ──
+    daily_holdings = {}
+    for date in dates:
+        pos = positions_dict[date]
+        holdings = {}
+        if hasattr(pos, 'position'):
+            for k, v in pos.position.items():
+                if k in ('cash', 'now_account_value'):
+                    continue
+                if isinstance(v, dict) and v.get('amount', 0) > 0:
+                    holdings[k] = (v['amount'], v.get('price', 0))
+        daily_holdings[date] = holdings
+
+    all_traded = set()
+    for h in daily_holdings.values():
+        all_traded.update(h.keys())
+    all_traded = sorted(all_traded)
+
+    if not all_traded:
+        return result
+
+    # ── 2. 加载 qlib 收盘价 (用于修复卖出价格) ──
+    try:
+        price_data = D.features(
+            all_traded, ["$close"],
+            start_time=bt_start, end_time=bt_end, freq="day"
+        )
+        price_data.columns = ["close"]
+    except Exception:
+        price_data = pd.DataFrame()
+
+    # ── 3. 从持仓差分重建交易记录 ──
+    stock_trades = {}
+    for i in range(len(dates)):
+        date = dates[i]
+        prev = daily_holdings[dates[i - 1]] if i > 0 else {}
+        curr = daily_holdings[date]
+
+        for stock in set(list(prev.keys()) + list(curr.keys())):
+            prev_amt = prev.get(stock, (0, 0))[0]
+            curr_amt, curr_price = curr.get(stock, (0, 0))
+
+            if stock not in stock_trades:
+                stock_trades[stock] = {
+                    'buys': [], 'sells': [],
+                    'total_buy_value': 0, 'total_sell_value': 0,
+                }
+
+            delta = curr_amt - prev_amt
+            if delta > 1:  # 买入
+                try:
+                    qprice = float(price_data.loc[(stock, date), 'close'])
+                except Exception:
+                    qprice = curr_price
+                value = delta * qprice
+                stock_trades[stock]['buys'].append({
+                    'date': str(date.date()) if hasattr(date, 'date') else str(date),
+                    'amount': round(delta), 'price': round(qprice, 2),
+                    'value': round(value),
+                })
+                stock_trades[stock]['total_buy_value'] += value
+            elif delta < -1:  # 卖出
+                sell_amt = abs(delta)
+                try:
+                    qprice = float(price_data.loc[(stock, date), 'close'])
+                except Exception:
+                    qprice = curr_price if curr_price > 0 else prev.get(stock, (0, 0))[1]
+                value = sell_amt * qprice
+                stock_trades[stock]['sells'].append({
+                    'date': str(date.date()) if hasattr(date, 'date') else str(date),
+                    'amount': round(sell_amt), 'price': round(qprice, 2),
+                    'value': round(value),
+                })
+                stock_trades[stock]['total_sell_value'] += value
+
+    # 标记仍持有 + 计算 PnL
+    final = daily_holdings[dates[-1]]
+    for stock, data in stock_trades.items():
+        if stock in final:
+            amt, price = final[stock]
+            unrealized = amt * price
+            data['total_sell_value'] += unrealized
+            data['still_held'] = True
+            data['held_amount'] = round(amt)
+            data['held_price'] = round(price, 2)
+            data['unrealized_value'] = round(unrealized)
+        else:
+            data['still_held'] = False
+            data['unrealized_value'] = 0
+
+        data['pnl'] = round(data['total_sell_value'] - data['total_buy_value'])
+        data['pnl_pct'] = round(data['pnl'] / data['total_buy_value'] * 100, 2) if data['total_buy_value'] > 0 else 0
+        data['total_buy_value'] = round(data['total_buy_value'])
+        data['total_sell_value'] = round(data['total_sell_value'])
+
+    sorted_stocks = sorted(stock_trades.items(), key=lambda x: x[1]['pnl'], reverse=True)
+
+    # ── 4. 盈亏汇总 ──
+    profitable = sum(1 for _, d in sorted_stocks if d['pnl'] > 0)
+    losing = sum(1 for _, d in sorted_stocks if d['pnl'] < 0)
+    total_profit = sum(d['pnl'] for _, d in sorted_stocks if d['pnl'] > 0)
+    total_loss = sum(d['pnl'] for _, d in sorted_stocks if d['pnl'] < 0)
+
+    result["stock_pnl_summary"] = {
+        "total_stocks": len(sorted_stocks),
+        "profitable": profitable,
+        "losing": losing,
+        "total_profit": total_profit,
+        "total_loss": total_loss,
+        "win_rate": round(profitable / (profitable + losing) * 100, 1) if (profitable + losing) > 0 else 0,
+        "profit_loss_ratio": round(abs(total_profit / total_loss), 2) if total_loss != 0 else None,
+    }
+
+    result["top_winners"] = [{"stock": s, **d} for s, d in sorted_stocks[:10]]
+    losers = [(s, d) for s, d in sorted_stocks if d['pnl'] < 0]
+    losers.sort(key=lambda x: x[1]['pnl'])
+    result["top_losers"] = [{"stock": s, **d} for s, d in losers[:10]]
+
+    # ── 5. 涨跌停限制分析 (从 order_indicator_his 精确提取) ──
+    limit = {
+        "total_holding_stock_days": sum(len(h) for h in daily_holdings.values()),
+        "ffr_stats": {},
+        "blocked_buy_orders": [],   # ffr=0 的买入订单 (涨停买不进)
+        "blocked_sell_orders": [],  # ffr=0 的卖出订单 (跌停卖不出)
+        "partial_buy_orders": [],   # 0<ffr<1 的买入订单
+        "partial_sell_orders": [],  # 0<ffr<1 的卖出订单
+        "total_blocked_buy": 0,
+        "total_blocked_sell": 0,
+        "total_partial_buy": 0,
+        "total_partial_sell": 0,
+    }
+
+    # 从 order_indicator_his 提取每笔订单的成交情况
+    if ind_obj is not None and hasattr(ind_obj, 'order_indicator_his'):
+        oih = ind_obj.order_indicator_his
+        for date, noi in oih.items():
+            if not hasattr(noi, 'data'):
+                continue
+            data = noi.data
+            try:
+                ffr_data = data.get('ffr')
+                amount_data = data.get('amount')
+                deal_amount_data = data.get('deal_amount')
+                trade_dir_data = data.get('trade_dir')
+                base_price_data = data.get('base_price')
+                trade_value_data = data.get('trade_value')
+
+                if ffr_data is None or amount_data is None:
+                    continue
+
+                # SingleData.to_dict() 返回 {stock: value}
+                ffr_dict = ffr_data.to_dict()
+                amount_dict = amount_data.to_dict()
+                deal_dict = deal_amount_data.to_dict() if deal_amount_data is not None else {}
+                dir_dict = trade_dir_data.to_dict() if trade_dir_data is not None else {}
+                price_dict = base_price_data.to_dict() if base_price_data is not None else {}
+
+                date_str = str(date.date()) if hasattr(date, 'date') else str(date)
+
+                for stock, ffr_val in ffr_dict.items():
+                    amt_val = amount_dict.get(stock, 0)
+                    if pd.isna(ffr_val) or amt_val == 0:
+                        continue
+
+                    is_buy = dir_dict.get(stock, 1) > 0
+                    abs_amt = abs(amt_val)
+                    est_value = round(abs_amt * price_dict.get(stock, 0))
+                    actual_deal = abs(deal_dict.get(stock, 0))
+
+                    entry = {
+                        "date": date_str, "stock": str(stock),
+                        "planned_amount": round(abs_amt),
+                        "deal_amount": round(actual_deal),
+                        "ffr": round(abs(float(ffr_val)), 4),
+                        "est_value": est_value,
+                        "direction": "buy" if is_buy else "sell",
+                    }
+
+                    ffr_abs = abs(float(ffr_val))
+                    if ffr_abs == 0:
+                        if is_buy:
+                            limit["blocked_buy_orders"].append(entry)
+                            limit["total_blocked_buy"] += 1
+                        else:
+                            limit["blocked_sell_orders"].append(entry)
+                            limit["total_blocked_sell"] += 1
+                    elif ffr_abs < 1.0:
+                        if is_buy:
+                            limit["partial_buy_orders"].append(entry)
+                            limit["total_partial_buy"] += 1
+                        else:
+                            limit["partial_sell_orders"].append(entry)
+                            limit["total_partial_sell"] += 1
+            except Exception as e:
+                logger.warning(f"订单数据解析失败({date}): {e}")
+                result["trade_analysis_warnings"].append(f"订单解析失败({date}): {e}")
+                continue
+
+    # FFR 日级统计 (从 indicators DataFrame)
+    if isinstance(ind_df, pd.DataFrame) and 'ffr' in ind_df.columns:
+        ffr = ind_df['ffr'].dropna()
+        if len(ffr) > 0:
+            limit["ffr_stats"] = {
+                "trade_days": len(ffr),
+                "full_fill_days": int((ffr >= 1.0).sum()),
+                "partial_fill_days": int(((ffr > 0) & (ffr < 1.0)).sum()),
+                "zero_fill_days": int((ffr == 0).sum()),
+                "avg_ffr": round(float(ffr.mean()), 4),
+            }
+
+    result["limit_analysis"] = limit
+    return result
+
+
 def run_backtest_and_analyze(workspace: Path, conf: dict) -> dict:
     """执行回测并提取完整的交易和收益指标"""
     # 确保 workspace 在 sys.path 中，以便 Qlib 能导入 custom_strategy 等模块
@@ -401,6 +653,60 @@ def run_backtest_and_analyze(workspace: Path, conf: dict) -> dict:
         "max_market_cap": strat_kwargs.get("max_market_cap"),
         "max_position_ratio": strat_kwargs.get("max_position_ratio"),
     }
+
+    # ── 个股交易明细 + 涨跌停分析 (优先使用原始 mlruns pkl) ──
+    try:
+        import pickle
+        import logging as _logging
+        _logger = _logging.getLogger(__name__)
+        # 查找 mlruns 中的原始回测 pkl
+        mlruns_dir = workspace / "mlruns"
+        pkl_loaded = False
+        if mlruns_dir.exists():
+            # 遍历找到 artifacts 目录
+            for artifacts_dir in mlruns_dir.rglob("artifacts"):
+                pa_dir = artifacts_dir / "portfolio_analysis"
+                pos_pkl = pa_dir / "positions_normal_1day.pkl"
+                ind_pkl = pa_dir / "indicators_normal_1day.pkl"
+                ind_obj_pkl = pa_dir / "indicators_normal_1day_obj.pkl"
+                if pos_pkl.exists() and ind_pkl.exists():
+                    try:
+                        with open(pos_pkl, "rb") as f:
+                            orig_positions = pickle.load(f)
+                        with open(ind_pkl, "rb") as f:
+                            orig_ind_df = pickle.load(f)
+                        orig_ind_obj = None
+                        if ind_obj_pkl.exists():
+                            with open(ind_obj_pkl, "rb") as f:
+                                orig_ind_obj = pickle.load(f)
+                    except Exception as e:
+                        _logger.error(f"原始 pkl 加载失败: {e}")
+                        result["trade_analysis_error"] = f"pkl加载失败: {e}"
+                        break
+                    trade_analysis = analyze_stock_trades(
+                        orig_positions, orig_ind_df, orig_ind_obj,
+                        bt_config["start_time"], bt_config["end_time"]
+                    )
+                    result.update(trade_analysis)
+                    result["trade_data_source"] = "original_mlruns"
+                    pkl_loaded = True
+                    break
+
+        # Fallback: 用当前回测的 ind (positions dict)
+        if not pkl_loaded and ind:
+            _logger.warning("原始 mlruns pkl 不存在，使用重跑回测的 ind 数据（日线模式，非原始分钟线）")
+            trade_analysis = analyze_stock_trades(
+                ind, None, None,
+                bt_config["start_time"], bt_config["end_time"]
+            )
+            result.update(trade_analysis)
+            result["trade_data_source"] = "rerun_backtest_daily"
+            result.setdefault("trade_analysis_warnings", []).append(
+                "使用重跑日线回测数据，非原始分钟线回测，交易数量和盈亏可能有偏差"
+            )
+    except Exception as e:
+        result["trade_analysis_error"] = str(e)
+        _logging.getLogger(__name__).error(f"交易分析失败: {e}")
 
     return result
 
@@ -659,6 +965,121 @@ def generate_report(workspace: Path, signal: dict, config: dict,
         for i, rec in enumerate(recommendations, 1):
             lines.append(f"{i}. {rec}")
         lines.append("")
+
+    # ── §12 涨跌停与成交限制分析 ──
+    la = bt.get("limit_analysis", {})
+    if la:
+        lines.append("## 12. 涨跌停与成交限制分析\n")
+
+        # 数据来源标记
+        src = bt.get("trade_data_source", "unknown")
+        if src == "original_mlruns":
+            lines.append("*数据来源: 原始分钟线回测 (NestedExecutor + TWAP)*\n")
+        elif src == "rerun_backtest":
+            lines.append("*数据来源: 重跑日线回测 (SimulatorExecutor)*\n")
+
+        ffr = la.get("ffr_stats", {})
+        if ffr:
+            lines.append("### 日级订单成交率 (FFR)\n")
+            lines.append("| 指标 | 值 |")
+            lines.append("|------|-----|")
+            lines.append(f"| 有换仓需求天数 | {ffr['trade_days']} |")
+            if ffr['trade_days'] > 0:
+                lines.append(f"| 完全成交 (FFR=1.0) | {ffr['full_fill_days']} ({ffr['full_fill_days']/ffr['trade_days']*100:.1f}%) |")
+            lines.append(f"| 部分成交 (0<FFR<1) | {ffr['partial_fill_days']} |")
+            lines.append(f"| 完全未成交 (FFR=0) | {ffr['zero_fill_days']} |")
+            lines.append(f"| 平均成交率 | {ffr['avg_ffr']:.1%} |")
+            lines.append("")
+
+        # 订单级涨跌停限制统计
+        tb = la.get("total_blocked_buy", 0)
+        ts = la.get("total_blocked_sell", 0)
+        pb = la.get("total_partial_buy", 0)
+        ps = la.get("total_partial_sell", 0)
+        total_blocked = tb + ts
+        total_partial = pb + ps
+
+        if total_blocked > 0 or total_partial > 0:
+            lines.append("### 订单级成交限制统计\n")
+            lines.append("| 类型 | 买入 | 卖出 | 合计 |")
+            lines.append("|------|------|------|------|")
+            lines.append(f"| 完全被限制 (FFR=0) | {tb} | {ts} | {total_blocked} |")
+            lines.append(f"| 部分成交 (0<FFR<1) | {pb} | {ps} | {total_partial} |")
+            lines.append("")
+
+        thsd = la.get("total_holding_stock_days", 0)
+        if thsd > 0:
+            lines.append(f"持仓总天数 (stock-days): {thsd:,}\n")
+
+        # 被完全限制的买入订单明细 (涨停买不进)
+        blocked_buys = la.get("blocked_buy_orders", [])
+        if blocked_buys:
+            lines.append(f"### 涨停限制 — 买入被完全拒绝 (共 {len(blocked_buys)} 笔)\n")
+            lines.append("| 日期 | 股票 | 计划数量 | 估算金额 |")
+            lines.append("|------|------|----------|----------|")
+            for item in sorted(blocked_buys, key=lambda x: -x['est_value'])[:15]:
+                lines.append(f"| {item['date']} | {item['stock']} | {item['planned_amount']:,} | {item['est_value']:,.0f} |")
+            if len(blocked_buys) > 15:
+                lines.append(f"\n(共 {len(blocked_buys)} 笔，仅显示金额最大的15笔)")
+            lines.append("")
+
+        # 被完全限制的卖出订单明细 (跌停卖不出)
+        blocked_sells = la.get("blocked_sell_orders", [])
+        if blocked_sells:
+            lines.append(f"### 跌停限制 — 卖出被完全拒绝 (共 {len(blocked_sells)} 笔)\n")
+            lines.append("| 日期 | 股票 | 计划数量 | 估算金额 |")
+            lines.append("|------|------|----------|----------|")
+            for item in sorted(blocked_sells, key=lambda x: -x['est_value'])[:15]:
+                lines.append(f"| {item['date']} | {item['stock']} | {item['planned_amount']:,} | {item['est_value']:,.0f} |")
+            if len(blocked_sells) > 15:
+                lines.append(f"\n(共 {len(blocked_sells)} 笔，仅显示金额最大的15笔)")
+            lines.append("")
+
+    # ── §13 盈利 Top 10 ──
+    pnl_sum = bt.get("stock_pnl_summary", {})
+    if pnl_sum:
+        lines.append("## 13. 个股盈亏统计\n")
+        lines.append("| 指标 | 值 |")
+        lines.append("|------|-----|")
+        lines.append(f"| 交易股票总数 | {pnl_sum['total_stocks']} |")
+        lines.append(f"| 盈利股票 | {pnl_sum['profitable']} ({pnl_sum['profitable']/pnl_sum['total_stocks']*100:.1f}%) |" if pnl_sum['total_stocks'] > 0 else "")
+        lines.append(f"| 亏损股票 | {pnl_sum['losing']} ({pnl_sum['losing']/pnl_sum['total_stocks']*100:.1f}%) |" if pnl_sum['total_stocks'] > 0 else "")
+        lines.append(f"| 胜率 | {pnl_sum['win_rate']:.1f}% |")
+        lines.append(f"| 总盈利 | {pnl_sum['total_profit']:+,.0f} |")
+        lines.append(f"| 总亏损 | {pnl_sum['total_loss']:+,.0f} |")
+        plr = pnl_sum.get('profit_loss_ratio')
+        lines.append(f"| 盈亏比 | {plr:.2f} |" if plr is not None else "| 盈亏比 | ∞ (无亏损) |")
+        lines.append("")
+
+    def _render_stock_table(stock_list, title):
+        if not stock_list:
+            return
+        lines.append(f"### {title}\n")
+        for i, item in enumerate(stock_list, 1):
+            held = " [仍持有]" if item.get('still_held') else " [已清仓]"
+            lines.append(f"**#{i} {item['stock']}** — 盈亏: {item['pnl']:+,.0f} ({item['pnl_pct']:+.2f}%){held}")
+            lines.append(f"- 总买入: {item['total_buy_value']:,.0f} | 总卖出(含未平仓): {item['total_sell_value']:,.0f}")
+            if item.get('still_held'):
+                lines.append(f"- 未平仓: 数量 {item['held_amount']:,} 价格 {item['held_price']:.2f} 市值 {item['unrealized_value']:,.0f}")
+
+            if item.get('buys'):
+                lines.append("\n| 买入日期 | 数量 | 价格 | 金额 |")
+                lines.append("|----------|------|------|------|")
+                for t in item['buys']:
+                    lines.append(f"| {t['date']} | {t['amount']:,} | {t['price']:.2f} | {t['value']:,.0f} |")
+
+            if item.get('sells'):
+                lines.append("\n| 卖出日期 | 数量 | 价格 | 金额 |")
+                lines.append("|----------|------|------|------|")
+                for t in item['sells']:
+                    lines.append(f"| {t['date']} | {t['amount']:,} | {t['price']:.2f} | {t['value']:,.0f} |")
+            elif not item.get('still_held'):
+                lines.append("- 无卖出记录")
+
+            lines.append("")
+
+    _render_stock_table(bt.get("top_winners", []), "盈利 Top 10")
+    _render_stock_table(bt.get("top_losers", []), "亏损 Top 10")
 
     return "\n".join(lines)
 

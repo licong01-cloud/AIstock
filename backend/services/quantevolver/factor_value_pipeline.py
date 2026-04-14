@@ -63,9 +63,10 @@ class BatchComputeResult:
     output_path: Optional[str] = None
     total_elapsed_sec: float = 0.0
     merged_shape: Optional[str] = None
+    warmup_timings: Optional[Dict[str, float]] = None  # 快照/缓存预热耗时
 
     def summary(self) -> Dict[str, Any]:
-        return {
+        result = {
             "total": self.total,
             "success": self.success,
             "failed": self.failed,
@@ -85,6 +86,9 @@ class BatchComputeResult:
                 for r in self.factor_results
             ],
         }
+        if self.warmup_timings:
+            result["warmup_timings"] = self.warmup_timings
+        return result
 
 
 class FactorValuePipeline:
@@ -102,6 +106,9 @@ class FactorValuePipeline:
         self._static_loader_instance = None
         self._init_lock = threading.Lock()
         self._meta_lock = threading.Lock()  # 保护 _meta.json 并发读写
+        # ── 快照模式 ──
+        self._snapshot_static_df: Optional[pd.DataFrame] = None  # 批次内静态因子内存缓存
+        self._snapshot_data_date: Optional[str] = None  # 当前快照日期
 
     def _ensure_loaders(self) -> None:
         """懒初始化数据加载器（线程安全）。"""
@@ -120,6 +127,9 @@ class FactorValuePipeline:
                 build_static_factors as _build_sf,
             )
 
+            # 捕获 pipeline 实例引用，供 _StaticFactorsLoader 快照检查
+            _pipeline_ref = self
+
             class _StaticFactorsLoader:
                 """静态因子加载器 — 磁盘缓存 + 按列读取，避免 10GB+ 内存常驻。
 
@@ -127,6 +137,7 @@ class FactorValuePipeline:
                 后续调用: pyarrow 列裁剪读取，仅加载请求的列 (~200-500MB vs 10GB)
                 线程安全: _build_lock 防止多线程同时重建
                 持久化: cache_key 写入 JSON 文件，服务重启后可跳过 DB 重建
+                快照模式: 当 pipeline._snapshot_static_df 存在时，从内存快照切片
                 """
                 _TEMP_PARQUET = os.path.join(
                     os.path.dirname(__file__), "..", "..", "..",
@@ -164,9 +175,44 @@ class FactorValuePipeline:
                                 "end_date": key[2],
                             }, f)
                     except Exception as e:
-                        logger.warning(f"持久化 cache_key 失败: {e}")
+                        logger.error(f"持久化 cache_key 失败: {e}", exc_info=True)
+                        raise
 
                 def load(self, instruments, start_date, end_date, columns=None):
+                    # ── 快照模式：从 pipeline 内存缓存切片 ──
+                    snap_df = _pipeline_ref._snapshot_static_df
+                    if snap_df is not None:
+                        sd, ed = pd.Timestamp(start_date), pd.Timestamp(end_date)
+                        dates = snap_df.index.get_level_values(0)
+                        mask = (dates >= sd) & (dates <= ed)
+                        result = snap_df.loc[mask]
+                        if result.empty:
+                            raise RuntimeError(
+                                f"静态因子快照切片结果为空: "
+                                f"date_range={start_date}~{end_date}, "
+                                f"快照日期范围={dates.min()}~{dates.max()}"
+                            )
+                        if columns:
+                            available = [c for c in columns if c in result.columns]
+                            if available:
+                                return result[available].copy()
+                            # 请求的列都不存在，返回空 DataFrame 而非全部列
+                            logger.warning(
+                                f"快照模式: 请求列 {columns} 均不在快照中 "
+                                f"(快照列: {list(result.columns[:5])}...共{len(result.columns)}列)"
+                            )
+                            return result[[]].copy()
+                        return result.copy()
+
+                    # ── 防护：如果快照曾被注入但被意外清除，不允许静默回退到 DB ──
+                    if _pipeline_ref._snapshot_data_date is not None:
+                        raise RuntimeError(
+                            f"静态因子快照已被清除但 snapshot_data_date="
+                            f"{_pipeline_ref._snapshot_data_date} 仍存在。"
+                            "拒绝回退到 DB 查询。"
+                        )
+
+                    # ── DB 缓存模式：仅用于快照创建 ──
                     key = (
                         tuple(sorted(instruments)) if isinstance(instruments, list) else instruments,
                         str(start_date), str(end_date),
@@ -207,49 +253,90 @@ class FactorValuePipeline:
         instruments: Optional[List[str]] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        data_date: Optional[str] = None,
     ) -> Dict[str, float]:
-        """预热数据缓存：静态因子数据 + 行情数据。
+        """预热数据缓存（快照模式）。
 
-        在批量计算前调用，避免首个因子因冷缓存超时。
-        build_static_factors() 需 4-5 分钟（~16M 行 DB 查询），
-        必须在因子超时线程（300s）外提前完成。
+        所有因子批量计算必须使用快照模式，确保数据一致性和横向可比。
+        首次调用时从 DB 加载创建快照，后续从磁盘读取。
 
-        Returns: {"static": elapsed_sec, "realtime": elapsed_sec}
+        Parameters
+        ----------
+        data_date : 快照日期 (YYYYMMDD)，必填。
+
+        Returns: {"realtime_load": sec, "static_load": sec, ...}
+
+        Raises
+        ------
+        ValueError : data_date 未指定
         """
+        if not data_date:
+            raise ValueError(
+                "data_date 参数必填。所有因子计算必须使用快照模式，"
+                "确保所有因子使用相同数据计算。"
+            )
         self._ensure_loaders()
+        return self._warm_from_snapshot(data_date, instruments)
 
-        # 使用与 compute_single_factor 相同的默认参数
-        if end_date is None:
-            from datetime import date
-            end_date = date.today().strftime("%Y-%m-%d")
-        if start_date is None:
-            from datetime import date, timedelta
-            d = date.today() - timedelta(days=730)
-            start_date = d.strftime("%Y-%m-%d")
-        if instruments is None:
-            from ...data_service.qe_data_service import get_instruments_universe
-            instruments = get_instruments_universe()
+    def _warm_from_snapshot(
+        self,
+        data_date: str,
+        instruments: Optional[List[str]] = None,
+    ) -> Dict[str, float]:
+        """从磁盘快照预热数据缓存。首次自动创建快照。
 
+        加载后注入到 RealtimeFactorDataLoader（类级别）和 self._snapshot_static_df，
+        批次内所有因子线程共享同一内存数据。
+        """
+        from .data_snapshot_manager import DataSnapshotManager
+        from ...data_service.realtime_factor_data_loader import RealtimeFactorDataLoader
+
+        mgr = DataSnapshotManager()
         timings: Dict[str, float] = {}
 
-        # 1. 预热静态因子缓存（build_static_factors: 6 张表，~16M 行，冷缓存 260-300s）
-        logger.info(f"预热静态因子缓存: {len(instruments)} 只股票, {start_date}~{end_date}")
-        t0 = time.time()
-        self._static_loader_instance.load(instruments, start_date, end_date)
-        timings["static"] = round(time.time() - t0, 1)
-        logger.info(f"静态因子缓存预热完成: {timings['static']}s")
+        # 1. 快照不存在 → 创建（首次执行，从 DB 加载）
+        if not mgr.snapshot_exists(data_date):
+            if instruments is None:
+                from ...data_service.qe_data_service import get_instruments_universe
+                instruments = get_instruments_universe()
 
-        # 2. 预热行情数据缓存（kline_daily_raw + adj_factor，冷缓存 ~40s）
-        logger.info(f"预热行情数据缓存...")
+            logger.info(f"[快照] 首次创建快照 {data_date}，从 DB 加载数据...")
+            t0 = time.time()
+            mgr.create_snapshot(data_date, instruments)
+            timings["snapshot_create"] = round(time.time() - t0, 1)
+            logger.info(f"[快照] 创建完成: {timings['snapshot_create']}s")
+        else:
+            logger.info(f"[快照] 快照 {data_date} 已存在，跳过创建")
+
+        # 2. 从磁盘加载到内存（批次内只加载一次）
         t0 = time.time()
-        self._loader_instance.load(
-            instruments=instruments, start_date=start_date,
-            end_date=end_date, fields=["open", "close", "high", "low", "volume", "amount", "factor"],
+        realtime_df = mgr.load_realtime(data_date)
+        timings["realtime_load"] = round(time.time() - t0, 1)
+
+        t0 = time.time()
+        static_df = mgr.load_static(data_date)
+        timings["static_load"] = round(time.time() - t0, 1)
+
+        # 3. 注入到 Loader（类级别，所有实例共享）
+        RealtimeFactorDataLoader.set_snapshot(realtime_df, data_date)
+        self._snapshot_static_df = static_df
+        self._snapshot_data_date = data_date
+
+        logger.info(
+            f"[快照] 数据已注入内存: realtime={len(realtime_df)}行 "
+            f"({timings['realtime_load']}s), "
+            f"static={len(static_df)}行×{len(static_df.columns)}列 "
+            f"({timings['static_load']}s)"
         )
-        timings["realtime"] = round(time.time() - t0, 1)
-        logger.info(f"行情数据缓存预热完成: {timings['realtime']}s")
-
         return timings
+
+    def clear_snapshot(self) -> None:
+        """清除快照内存缓存，恢复 DB 查询模式。"""
+        from ...data_service.realtime_factor_data_loader import RealtimeFactorDataLoader
+        RealtimeFactorDataLoader.clear_snapshot()
+        self._snapshot_static_df = None
+        self._snapshot_data_date = None
+        import gc; gc.collect()
 
     # ── 公共接口 ──
 
@@ -324,31 +411,59 @@ class FactorValuePipeline:
         max_workers: int = 1,
         timeout_per_factor: int = 600,
         save_parquet: bool = True,
+        data_date: Optional[str] = None,
     ) -> BatchComputeResult:
-        """批量执行因子代码，计算因子值。
+        """批量执行因子代码，计算因子值（快照模式）。
 
         Parameters
         ----------
-        factor_names : 要计算的因子名列表；None 则计算所有已改造因子
-        instruments : 股票池；None 则使用全 A 股
-        start_date : 起始日期
-        end_date : 截止日期
-        max_workers : 并发线程数（建议 1-3，避免 DB 压力）
-        timeout_per_factor : 每个因子的超时秒数
-        save_parquet : 是否保存合并结果为 Parquet
+        data_date : 快照日期 (YYYYMMDD)，必填。所有因子使用相同快照数据。
 
         Returns
         -------
         BatchComputeResult
         """
+        if not data_date:
+            raise ValueError("data_date 参数必填，所有因子计算必须使用快照模式。")
+
         t0 = time.time()
         self._ensure_loaders()
 
-        # 获取股票池
+        from .data_snapshot_manager import _parse_data_date
+        end_date = _parse_data_date(data_date)
+        from datetime import timedelta as _td
+        ed = datetime.strptime(end_date, "%Y-%m-%d")
+        start_date = (ed - _td(days=730)).strftime("%Y-%m-%d")
+
         if instruments is None:
             from ...data_service.qe_data_service import get_instruments_universe
             instruments = get_instruments_universe()
             logger.info(f"使用全 A 股票池: {len(instruments)} 只")
+
+        warmup_timings = self._warm_from_snapshot(data_date, instruments)
+
+        try:
+            return self._do_compute_factor_values(
+                factor_names=factor_names,
+                instruments=instruments,
+                start_date=start_date,
+                end_date=end_date,
+                max_workers=max_workers,
+                timeout_per_factor=timeout_per_factor,
+                save_parquet=save_parquet,
+                t0=t0,
+                warmup_timings=warmup_timings,
+            )
+        finally:
+            self.clear_snapshot()
+
+    def _do_compute_factor_values(
+        self,
+        factor_names, instruments, start_date, end_date,
+        max_workers, timeout_per_factor, save_parquet,
+        t0, warmup_timings,
+    ) -> BatchComputeResult:
+        """compute_factor_values 的实际执行逻辑（分离出来以便 try/finally 清理快照）。"""
 
         # 获取因子列表及其代码路径
         factor_infos = self._resolve_factors(factor_names)
@@ -440,6 +555,7 @@ class FactorValuePipeline:
                 )
             except Exception as e:
                 logger.error(f"合并/保存 Parquet 失败: {e}")
+                raise RuntimeError(f"合并/保存 Parquet 失败: {e}") from e
             finally:
                 del merged_df
                 import gc; gc.collect()
@@ -453,6 +569,7 @@ class FactorValuePipeline:
             output_path=output_path,
             total_elapsed_sec=round(elapsed, 1),
             merged_shape=merged_shape,
+            warmup_timings=warmup_timings or None,
         )
 
         logger.info(
@@ -547,10 +664,33 @@ class FactorValuePipeline:
             ), None
 
         # 构建执行环境
+        # monkey-patch pd.read_parquet: 当路径为 static_factors.parquet 时
+        # 自动转发到 _STATIC_FACTORS_LOADER，确保使用快照数据 + 列裁剪
+        _original_read_parquet = pd.read_parquet
+        _static_loader = self._static_loader_instance
+        _snap_date = self._snapshot_data_date
+
+        def _patched_read_parquet(path_or_buf, **kwargs):
+            path_str = str(path_or_buf)
+            if "static_factors" in path_str and _static_loader is not None:
+                cols = kwargs.get("columns", None)
+                return _static_loader.load(
+                    instruments=instruments,
+                    start_date=start_date,
+                    end_date=end_date,
+                    columns=cols,
+                )
+            return _original_read_parquet(path_or_buf, **kwargs)
+
+        import types
+        _patched_pd = types.ModuleType("pandas")
+        _patched_pd.__dict__.update(pd.__dict__)
+        _patched_pd.read_parquet = _patched_read_parquet
+
         exec_globals = {
             "__name__": "__factor_pipeline__",
             "__builtins__": __builtins__,
-            "pd": pd,
+            "pd": _patched_pd,
             "np": np,
             "_REALTIME_LOADER": self._loader_instance,
             "_STATIC_FACTORS_LOADER": self._static_loader_instance,
@@ -772,8 +912,11 @@ class FactorValuePipeline:
                 try:
                     with open(p, "r", encoding="utf-8") as f:
                         return json.load(f)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(f"_meta.json 解析失败，将重置: {e}")
+                    raise RuntimeError(
+                        f"_meta.json 损坏无法解析: {p}, error={e}"
+                    ) from e
             return {"factors": {}}
 
     def _save_meta(self, meta: Dict[str, Any]) -> None:
@@ -857,6 +1000,7 @@ class FactorValuePipeline:
             "rows": result.num_rows,
             "date_range": result.date_range,
             "as_of_date": end_date,
+            "elapsed_sec": round(result.elapsed_sec, 2),
         }
         meta["as_of_date"] = end_date
         self._save_meta(meta)
@@ -1005,35 +1149,56 @@ class FactorValuePipeline:
         max_workers: int = 4,
         timeout_per_factor: int = 600,
         factor_names: Optional[List[str]] = None,
+        data_date: Optional[str] = None,
     ) -> BatchComputeResult:
-        """遍历全部已改造因子 → 并发执行 → 各存独立 parquet。
+        """遍历全部已改造因子 → 并发执行 → 各存独立 parquet（快照模式）。
 
         Parameters
         ----------
-        instruments : 股票池；None 则使用全 A 股
-        start_date : 起始日期；None 则使用 2 年前
-        end_date : 截止日期；None 则使用最新交易日
-        max_workers : 并发线程数
-        timeout_per_factor : 每个因子超时秒数
-        factor_names : 指定因子列表；None 则全部已改造因子
+        data_date : 快照日期 (YYYYMMDD)，必填。所有因子使用相同快照数据。
 
         Returns
         -------
         BatchComputeResult
         """
+        if not data_date:
+            raise ValueError("data_date 参数必填，所有因子计算必须使用快照模式。")
+
         t0 = time.time()
         self._ensure_loaders()
 
-        if end_date is None:
-            from datetime import date
-            end_date = date.today().strftime("%Y-%m-%d")
-        if start_date is None:
-            from datetime import date, timedelta
-            d = date.today() - timedelta(days=730)
-            start_date = d.strftime("%Y-%m-%d")
+        from .data_snapshot_manager import _parse_data_date
+        end_date = _parse_data_date(data_date)
+        from datetime import timedelta as _td
+        ed = datetime.strptime(end_date, "%Y-%m-%d")
+        start_date = (ed - _td(days=730)).strftime("%Y-%m-%d")
+
         if instruments is None:
             from ...data_service.qe_data_service import get_instruments_universe
             instruments = get_instruments_universe()
+
+        warmup_timings = self._warm_from_snapshot(data_date, instruments)
+
+        try:
+            return self._do_compute_all_singles(
+                factor_names=factor_names,
+                instruments=instruments,
+                start_date=start_date,
+                end_date=end_date,
+                max_workers=max_workers,
+                timeout_per_factor=timeout_per_factor,
+                t0=t0,
+                warmup_timings=warmup_timings,
+            )
+        finally:
+            self.clear_snapshot()
+
+    def _do_compute_all_singles(
+        self,
+        factor_names, instruments, start_date, end_date,
+        max_workers, timeout_per_factor, t0, warmup_timings,
+    ) -> BatchComputeResult:
+        """compute_all_singles 的实际执行逻辑。"""
 
         factor_infos = self._resolve_factors(factor_names)
         if not factor_infos:
@@ -1112,6 +1277,7 @@ class FactorValuePipeline:
             failed=len(all_results) - success_count,
             factor_results=all_results,
             total_elapsed_sec=round(elapsed, 1),
+            warmup_timings=warmup_timings or None,
         )
 
     def get_cached_singles(self) -> List[Dict[str, Any]]:

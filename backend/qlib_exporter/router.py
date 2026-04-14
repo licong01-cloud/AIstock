@@ -41,6 +41,7 @@ from .exporter import (
     QlibCyqPerfExporter,
     QlibDailyBasicExporter,
     QlibDailyExporter,
+    QlibMarginDetailExporter,
     QlibMinuteExporter,
     QlibMoneyflowExporter,
     QlibSectorDataExporter,
@@ -189,7 +190,9 @@ class FieldMapExportResponse(BaseModel):
     has_daily_basic: bool
     has_moneyflow: bool
     has_bak_basic: bool
+    has_margin_detail: bool = False
     has_cyq_perf: bool
+    has_sector_data: bool = False
 
 
 # NOTE: FastAPI builds request body TypeAdapters while registering routes.
@@ -207,6 +210,7 @@ _daily_basic_exporter = QlibDailyBasicExporter()
 _minute_exporter = QlibMinuteExporter()
 _moneyflow_exporter = QlibMoneyflowExporter()
 _bak_basic_exporter = QlibBakBasicExporter()
+_margin_detail_exporter = QlibMarginDetailExporter()
 _cyq_perf_exporter = QlibCyqPerfExporter()
 _sector_data_exporter = QlibSectorDataExporter()
 
@@ -452,6 +456,75 @@ async def create_bak_basic_snapshot(body: BakBasicSnapshotRequest) -> BakBasicSn
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+class MarginDetailSnapshotRequest(BaseModel):
+    snapshot_id: str = Field(..., description="Snapshot ID，作为导出目录名")
+    start: date = Field(..., description="开始日期，YYYY-MM-DD")
+    end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
+    exchanges: Optional[List[str]] = Field(None, description="可选，按交易所过滤")
+    exclude_st: bool = Field(False, description="是否排除 ST 股票")
+    exclude_delisted_or_paused: bool = Field(False, description="是否排除退市或暂停上市股票")
+
+    @field_validator("snapshot_id")
+    @classmethod
+    def _margin_detail_snapshot_id_not_empty(cls, v: str) -> str:
+        v2 = v.strip()
+        if not v2:
+            raise ValueError("snapshot_id 不能为空")
+        return v2
+
+    @model_validator(mode="after")
+    def _margin_detail_end_not_before_start(self):
+        if self.end < self.start:
+            raise ValueError("end 日期不能早于 start")
+        return self
+
+
+class MarginDetailSnapshotResponse(BaseModel):
+    snapshot_id: str
+    freq: str
+    start: date
+    end: date
+    ts_codes: List[str]
+    rows: int
+
+    @classmethod
+    def from_result(cls, result: ExportResult) -> "MarginDetailSnapshotResponse":
+        return cls(**result.__dict__)
+
+
+@router.post("/api/v1/qlib/snapshots/margin_detail", response_model=MarginDetailSnapshotResponse)
+async def create_margin_detail_snapshot(body: MarginDetailSnapshotRequest) -> MarginDetailSnapshotResponse:
+    """全量导出 margin_detail 融资融券明细数据到 Snapshot."""
+
+    import traceback as _tb
+
+    try:
+        result = _margin_detail_exporter.export_full(
+            snapshot_id=body.snapshot_id,
+            start=body.start,
+            end=body.end,
+            exchanges=body.exchanges,
+            exclude_st=body.exclude_st,
+            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+        )
+        try:
+            from .field_map_service import export_field_map_for_snapshot
+            fm_result = export_field_map_for_snapshot(
+                snapshot_id=body.snapshot_id,
+                write_to_h5=True,
+            )
+            print(f"[DEBUG] Field map generated: {fm_result.get('rows')} rows")
+        except Exception as e:
+            print(f"[WARN] Auto field map failed: {e}")
+            _tb.print_exc()
+        return MarginDetailSnapshotResponse.from_result(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        _tb.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 class CyqPerfSnapshotRequest(BaseModel):
     snapshot_id: str = Field(..., description="Snapshot ID，作为导出目录名（与日线/分钟共用目录）")
     start: date = Field(..., description="开始日期，YYYY-MM-DD")
@@ -621,6 +694,7 @@ try:
     DailySnapshotRequest.model_rebuild()
     DailyBasicSnapshotRequest.model_rebuild()
     BakBasicSnapshotRequest.model_rebuild()
+    MarginDetailSnapshotRequest.model_rebuild()
     CyqPerfSnapshotRequest.model_rebuild()
     MoneyflowSnapshotRequest.model_rebuild()
     FieldMapExportRequest.model_rebuild()
@@ -1729,6 +1803,7 @@ class SnapshotInfo(BaseModel):
     has_moneyflow: bool = Field(False, description="是否包含资金流向数据")
     has_daily_basic: bool = Field(False, description="是否包含 daily_basic 指标数据")
     has_bak_basic: bool = Field(False, description="是否包含 bak_basic 历史股票数据")
+    has_margin_detail: bool = Field(False, description="是否包含 margin_detail 融资融券明细数据")
     has_cyq_perf: bool = Field(False, description="是否包含 cyq_perf 筹码胜率数据")
     has_sector_data: bool = Field(False, description="是否包含 sector_data 申万行业板块数据")
     has_static_factors: bool = Field(False, description="是否包含 static_factors.parquet")
@@ -1762,6 +1837,7 @@ async def list_snapshots() -> SnapshotListResponse:
         has_moneyflow = (item / "moneyflow.h5").exists()
         has_daily_basic = (item / "daily_basic.h5").exists()
         has_bak_basic = (item / "bak_basic.h5").exists()
+        has_margin_detail = (item / "margin_detail.h5").exists()
         has_cyq_perf = (item / "cyq_perf.h5").exists()
         has_sector_data = (item / "sector_data.h5").exists()
         has_static_factors = (item / "static_factors.parquet").exists()
@@ -1786,6 +1862,7 @@ async def list_snapshots() -> SnapshotListResponse:
                 has_moneyflow=has_moneyflow,
                 has_daily_basic=has_daily_basic,
                 has_bak_basic=has_bak_basic,
+                has_margin_detail=has_margin_detail,
                 has_cyq_perf=has_cyq_perf,
                 has_sector_data=has_sector_data,
                 has_static_factors=has_static_factors,
@@ -1979,6 +2056,12 @@ class SectorDataSnapshotResponse(BaseModel):
         )
 
 
+try:
+    SectorDataSnapshotRequest.model_rebuild()
+except Exception:
+    pass
+
+
 @router.post("/api/v1/qlib/snapshots/sector_data", response_model=SectorDataSnapshotResponse)
 async def create_sector_data_snapshot(body: SectorDataSnapshotRequest) -> SectorDataSnapshotResponse:
     """全量导出申万行业板块 sector_data 到 Snapshot."""
@@ -2074,6 +2157,23 @@ async def create_bak_basic_incremental(body: IncrementalExportRequest) -> Increm
     """增量导出历史股票列表数据。"""
     try:
         result = _bak_basic_exporter.export_incremental(
+            snapshot_id=body.snapshot_id, end=body.end,
+            exchanges=body.exchanges, exclude_st=body.exclude_st,
+            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+        )
+        return IncrementalExportResponse.from_result(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/api/v1/qlib/snapshots/margin_detail/incremental", response_model=IncrementalExportResponse)
+async def create_margin_detail_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
+    """增量导出融资融券明细数据。"""
+    try:
+        result = _margin_detail_exporter.export_incremental(
             snapshot_id=body.snapshot_id, end=body.end,
             exchanges=body.exchanges, exclude_st=body.exclude_st,
             exclude_delisted_or_paused=body.exclude_delisted_or_paused,
@@ -2677,6 +2777,7 @@ async def incremental_all(snapshot_id: str, body: IncrementalExportRequest) -> I
         ("moneyflow", _moneyflow_exporter, "moneyflow.h5"),
         ("daily_basic", _daily_basic_exporter, "daily_basic.h5"),
         ("bak_basic", _bak_basic_exporter, "bak_basic.h5"),
+        ("margin_detail", _margin_detail_exporter, "margin_detail.h5"),
         ("cyq_perf", _cyq_perf_exporter, "cyq_perf.h5"),
         ("sector_data", _sector_data_exporter, "sector_data.h5"),
     ]
@@ -3100,7 +3201,7 @@ async def preview_qlib_data(
 
 
 # =============================================================================
-# H5 文件导出 CSV API（支持 daily_basic、bak_basic、cyq_perf、moneyflow 等）
+# H5 文件导出 CSV API（支持 daily_basic、bak_basic、margin_detail、cyq_perf、sector_data、moneyflow 等）
 # =============================================================================
 
 
@@ -3114,7 +3215,9 @@ async def export_h5_to_csv(
     支持的数据类型：
     - daily_basic: daily_basic.h5
     - bak_basic: bak_basic.h5
+    - margin_detail: margin_detail.h5
     - cyq_perf: cyq_perf.h5
+    - sector_data: sector_data.h5
     - moneyflow: moneyflow.h5
     - daily: daily_pv.h5
     - minute: minute_1min.h5
@@ -3134,7 +3237,9 @@ async def export_h5_to_csv(
     file_map = {
         "daily_basic": "daily_basic.h5",
         "bak_basic": "bak_basic.h5",
+        "margin_detail": "margin_detail.h5",
         "cyq_perf": "cyq_perf.h5",
+        "sector_data": "sector_data.h5",
         "moneyflow": "moneyflow.h5",
         "daily": "daily_pv.h5",
         "minute": "minute_1min.h5",
@@ -3230,7 +3335,9 @@ async def preview_h5_as_csv(
     file_map = {
         "daily_basic": "daily_basic.h5",
         "bak_basic": "bak_basic.h5",
+        "margin_detail": "margin_detail.h5",
         "cyq_perf": "cyq_perf.h5",
+        "sector_data": "sector_data.h5",
         "moneyflow": "moneyflow.h5",
         "daily": "daily_pv.h5",
         "minute": "minute_1min.h5",

@@ -173,14 +173,16 @@ class RDAgentResultsApiClient:
             logger.error(f"RD-Agent 因子指标请求失败: {e}")
             raise HTTPException(status_code=500, detail=f"RD-Agent 客户端错误: {e}")
 
-    def get_task_workspaces(self, task_id: str) -> dict:
-        return self._task_get_json(f"/tasks/{task_id}/workspaces", timeout=30.0)
+    def get_task_workspaces(self, task_id: str, *, quick: bool = True) -> dict:
+        params = {"quick": "true" if quick else "false"}
+        timeout = 10.0 if quick else 180.0
+        return self._task_get_json(f"/tasks/{task_id}/workspaces", params=params, timeout=timeout)
 
     def delete_task_remote(self, task_id: str) -> dict:
         """DELETE /tasks/{task_id} — 删除 task log + workspace + scheduler log"""
         url = f"{self.base_url}/tasks/{task_id}"
         try:
-            resp = requests.delete(url, timeout=60.0)
+            resp = requests.delete(url, timeout=180.0)
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.ConnectionError:
@@ -334,9 +336,9 @@ class RDAgentResultsApiClient:
 
     # --- Task 级增量同步 API ---
 
-    def get_tasks_latest(self, *, limit: int = 20) -> JsonDict:
+    def get_tasks_latest(self, *, limit: int = 20, offset: int = 0) -> JsonDict:
         # /tasks/latest 只是目录扫描，不应等待300s；10s足够
-        return self._task_get_json("/tasks/latest", params={"limit": int(limit)}, timeout=10.0)
+        return self._task_get_json("/tasks/latest", params={"limit": int(limit), "offset": int(offset)}, timeout=10.0)
 
     def get_task_summary(self, *, task_id: str) -> JsonDict:
         tid = str(task_id).strip()

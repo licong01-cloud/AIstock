@@ -197,6 +197,28 @@ BAK_BASIC = DatasetSpec(
     rate_per_minute=300,
 )
 
+MARGIN_DETAIL = DatasetSpec(
+    name="margin_detail",
+    tushare_api="margin_detail",
+    target_table="market.margin_detail",
+    primary_keys=["trade_date", "ts_code"],
+    query_mode=QueryMode.BY_DATE,
+    columns={
+        "trade_date": "date",
+        "ts_code": "text",
+        "rzye": "numeric",
+        "rqye": "numeric",
+        "rzmre": "numeric",
+        "rqyl": "numeric",
+        "rzche": "numeric",
+        "rqchl": "numeric",
+        "rqmcl": "numeric",
+        "rzrqye": "numeric",
+    },
+    batch_sleep=0.2,
+    rate_per_minute=500,
+)
+
 STK_LIMIT = DatasetSpec(
     name="stk_limit",
     tushare_api="stk_limit",
@@ -316,6 +338,7 @@ DATASET_REGISTRY: Dict[str, DatasetSpec] = {
         STOCK_ST,
         BAK_BASIC,
         STK_LIMIT,
+        MARGIN_DETAIL,
         SW_INDEX_CLASSIFY,
         SW_INDEX_MEMBER,
         SW_DAILY,

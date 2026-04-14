@@ -171,6 +171,17 @@ BAK_BASIC_FIELD_MAP: Dict[str, str] = {
     "holder_num":        "bb_holder_num",
 }
 
+MARGIN_DETAIL_FIELD_MAP: Dict[str, str] = {
+    "rzye":   "md_rzye",
+    "rqye":   "md_rqye",
+    "rzmre":  "md_rzmre",
+    "rqyl":   "md_rqyl",
+    "rzche":  "md_rzche",
+    "rqchl":  "md_rqchl",
+    "rqmcl":  "md_rqmcl",
+    "rzrqye": "md_rzrqye",
+}
+
 CYQ_PERF_FIELD_MAP: Dict[str, str] = {
     "his_low":    "cp_his_low",
     "his_high":   "cp_his_high",
@@ -515,7 +526,7 @@ def load_bak_basic(
         INNER JOIN market.stock_basic s ON b.ts_code = s.ts_code
         WHERE b.ts_code IN ({placeholders})
           AND b.trade_date >= %s AND b.trade_date <= %s
-          AND b.trade_date >= s.list_date
+          AND b.trade_date >= s.list_date + INTERVAL '365 days'
         ORDER BY b.trade_date, b.ts_code
     """
     params = ts_codes + [start.isoformat(), end.isoformat()]
@@ -612,6 +623,47 @@ def load_sector_data(
     # 列已经是 sw2_* 前缀，无需重命名
     result = _build_multiindex_df(df, "sw2_")
     _CACHE.set("load_sector_data", ts_codes, start.isoformat(), end.isoformat(), result)
+    return result
+
+
+def load_margin_detail(
+    instruments: List[str],
+    start_date: Union[str, date],
+    end_date: Union[str, date],
+) -> pd.DataFrame:
+    """
+    加载融资融券数据，输出 md_* 前缀字段。
+    数据源：market.margin_detail
+    """
+    start = _to_date(start_date)
+    end = _to_date(end_date)
+    ts_codes = [_normalize_instrument(i) for i in instruments]
+
+    cached = _CACHE.get("load_margin_detail", ts_codes, start.isoformat(), end.isoformat())
+    if cached is not None:
+        logger.debug("load_margin_detail: 缓存命中")
+        return cached
+
+    placeholders = ",".join(["%s"] * len(ts_codes))
+    sql = f"""
+        SELECT trade_date, ts_code,
+               rzye, rqye, rzmre, rqyl, rzche, rqchl, rqmcl, rzrqye
+        FROM market.margin_detail
+        WHERE ts_code IN ({placeholders})
+          AND trade_date >= %s AND trade_date <= %s
+        ORDER BY trade_date, ts_code
+    """
+    params = ts_codes + [start.isoformat(), end.isoformat()]
+
+    with get_conn() as conn:
+        df = pd.read_sql(sql, conn, params=params)
+
+    if df.empty:
+        return pd.DataFrame()
+
+    df = df.rename(columns=MARGIN_DETAIL_FIELD_MAP)
+    result = _build_multiindex_df(df, "md_")
+    _CACHE.set("load_margin_detail", ts_codes, start.isoformat(), end.isoformat(), result)
     return result
 
 
@@ -836,6 +888,7 @@ def build_static_factors(
     df_bb_raw = load_bak_basic(instruments, start_date, end_date)
     df_cp_raw = load_cyq_perf(instruments, start_date, end_date)
     df_sd_raw = load_sector_data(instruments, start_date, end_date)
+    df_md_raw = load_margin_detail(instruments, start_date, end_date)
     df_pv     = load_daily_pv(instruments, start_date, end_date)
 
     # 2. 计算派生因子
@@ -859,6 +912,7 @@ def build_static_factors(
         ("bak_basic_raw",    df_bb_raw),
         ("cyq_perf_raw",     df_cp_raw),
         ("sector_data_raw",  df_sd_raw),
+        ("margin_detail_raw", df_md_raw),
         ("mf_derived",       df_mf_derived),
         ("db_precomputed",   df_db_precomp),
         ("price_momentum",   df_price_momentum),
@@ -909,6 +963,8 @@ def get_instruments_universe(
     _EXCHANGE_MAP = {"SH": "SSE", "SZ": "SZSE", "BJ": "BSE"}
 
     conditions = ["list_status = 'L'"]
+    # 上市满1年才纳入股票池（与 db_reader/snapshot_writer 一致）
+    conditions.append("list_date + INTERVAL '365 days' <= CURRENT_DATE")
     params: list = []
 
     if exchanges:

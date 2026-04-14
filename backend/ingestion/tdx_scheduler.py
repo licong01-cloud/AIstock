@@ -36,10 +36,13 @@ import psycopg2
 import psycopg2.extras as pgx
 import requests
 import schedule
+import logging
 from dotenv import load_dotenv
 
 from ..services.tushare_dataset_specs import DATASET_REGISTRY
 from ..services.tushare_sync_engine import TushareSyncEngine
+
+_logger = logging.getLogger(__name__)
 
 # Datasets that the unified engine handles (bypass subprocess scripts)
 _ENGINE_DATASETS = frozenset(DATASET_REGISTRY.keys())
@@ -58,7 +61,7 @@ _GO_INCREMENTAL_DATASETS: Dict[str, Dict[str, str]] = {
         "go_endpoint": "/api/tasks/ingest-minute-raw-init",
         "table": "market.kline_minute_raw",
         "date_col": "trade_time",
-        "default_workers": "1",
+        "default_workers": "4",
     },
 }
 
@@ -247,7 +250,7 @@ class TDXScheduler:
             try:
                 self.refresh_schedules()
             except Exception as exc:  # noqa: BLE001
-                print(f"[TDX Scheduler] initial refresh failed (DB unavailable?): {exc}")
+                _logger.warning("initial refresh failed (DB unavailable?): %s", exc)
             self._schedule_thread = threading.Thread(target=self._run_loop, name="tdx-schedule", daemon=True)
             self._schedule_thread.start()
             if int(refresh_interval) > 0:
@@ -271,7 +274,7 @@ class TDXScheduler:
             try:
                 self._scheduler.run_pending()
             except Exception as exc:  # noqa: BLE001
-                print(f"[TDX Scheduler] run_pending error: {exc}")
+                _logger.error("run_pending error: %s", exc)
             time.sleep(1)
 
     def _refresh_loop(self, interval: int) -> None:
@@ -282,7 +285,7 @@ class TDXScheduler:
             try:
                 self.refresh_schedules()
             except Exception as exc:  # noqa: BLE001
-                print(f"[TDX Scheduler] refresh error: {exc}")
+                _logger.error("refresh error: %s", exc)
 
     # ------------------------------------------------------------------
     # DB helpers
@@ -297,9 +300,9 @@ class TDXScheduler:
             cost_ms = (time.time() - t0) * 1000.0
             if cost_ms >= float(slow_ms):
                 preview = " ".join((sql or "").split())[:240]
-                print(
-                    "[TDX DB] slow fetchall %.1fms thread=%s sql=%s params=%s"
-                    % (cost_ms, threading.current_thread().name, preview, params)
+                _logger.debug(
+                    "slow fetchall %.1fms thread=%s sql=%s params=%s",
+                    cost_ms, threading.current_thread().name, preview, params,
                 )
         return rows
 
@@ -313,9 +316,9 @@ class TDXScheduler:
             cost_ms = (time.time() - t0) * 1000.0
             if cost_ms >= float(slow_ms):
                 preview = " ".join((sql or "").split())[:240]
-                print(
-                    "[TDX DB] slow execute %.1fms thread=%s sql=%s params=%s"
-                    % (cost_ms, threading.current_thread().name, preview, params)
+                _logger.debug(
+                    "slow execute %.1fms thread=%s sql=%s params=%s",
+                    cost_ms, threading.current_thread().name, preview, params,
                 )
 
     # ------------------------------------------------------------------
@@ -452,7 +455,8 @@ class TDXScheduler:
             if raw:
                 try:
                     options = json.loads(raw) if isinstance(raw, str) else dict(raw)
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
+                    _logger.warning("run_ingestion_for_schedule: failed to parse options JSON for schedule %s: %s", schedule_id, exc)
                     options = {}
         run_id = self._submit_ingestion(sched_id, dataset, mode, triggered_by, options)
         self._update_ingestion_schedule(sched_id, last_status="queued", next_run=self._next_run_for(sched_id))
@@ -511,7 +515,7 @@ class TDXScheduler:
             if rows and rows[0].get("mx"):
                 current_max = rows[0]["mx"]
         except Exception as exc:
-            print(f"[TDX Scheduler] _compute_auto_range: failed to query max({date_column}) from {table_name}: {exc}")
+            _logger.error("_compute_auto_range: failed to query max(%s) from %s: %s", date_column, table_name, exc)
 
         # 3) latest trading date <= today
         ltd_rows = self._fetchall(
@@ -564,7 +568,7 @@ class TDXScheduler:
                         )
                     return
             except Exception as exc:
-                print(f"[TDX Scheduler] trading-day check failed, proceeding: {exc}")
+                _logger.error("trading-day check failed, proceeding: %s", exc)
 
         # --- auto-range: compute catch-up interval (skip for news_realtime) ---
         effective_options = dict(options)
@@ -574,11 +578,11 @@ class TDXScheduler:
                 if start_date is not None and end_date is not None:
                     effective_options.setdefault("start_date", start_date.isoformat())
                     effective_options.setdefault("end_date", end_date.isoformat())
-                    print(f"[TDX Scheduler] auto-range {dataset}: {start_date} → {end_date}")
+                    _logger.info("auto-range %s: %s → %s", dataset, start_date, end_date)
                 elif start_date is None and end_date is None:
-                    pass
+                    _logger.warning("auto-range for %s returned (None, None) — table may be empty or already up-to-date", dataset)
             except Exception as exc:
-                print(f"[TDX Scheduler] auto-range failed for {dataset}, proceeding with defaults: {exc}")
+                _logger.error("auto-range failed for %s, proceeding with defaults: %s", dataset, exc)
 
         # --- create job record so it appears in the job monitor ---
         if dataset != "news_realtime" and "job_id" not in effective_options:
@@ -597,7 +601,7 @@ class TDXScheduler:
                 )
                 effective_options["job_id"] = str(job_id)
             except Exception as exc:
-                print(f"[TDX Scheduler] failed to create job record for {dataset}: {exc}")
+                _logger.error("failed to create job record for %s: %s", dataset, exc)
 
         run_id = self._submit_ingestion(schedule_id, dataset, mode, "schedule", effective_options)
         if schedule_id:
@@ -658,6 +662,12 @@ class TDXScheduler:
         elif ds_lower == "_data_freshness_check":
             future = self._executor.submit(
                 self._run_data_freshness_check,
+                run_id, schedule_id, triggered_by, options,
+            )
+        # Auto-retry stale/failed datasets (scheduled at 18:30)
+        elif ds_lower == "_auto_retry_stale":
+            future = self._executor.submit(
+                self._run_auto_retry_stale,
                 run_id, schedule_id, triggered_by, options,
             )
         # Route engine-supported datasets through TushareSyncEngine
@@ -1136,7 +1146,7 @@ class TDXScheduler:
         self._insert_testing_run(run_id, schedule_id, triggered_by, start_ts)
         log_lines: List[str] = []
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False, encoding="utf-8", errors="replace")
             log_lines.append(proc.stdout)
             log_lines.append(proc.stderr)
             status = "success" if proc.returncode == 0 else "failed"
@@ -1199,13 +1209,13 @@ class TDXScheduler:
         if options.get("start_date"):
             try:
                 start_date = _dt.date.fromisoformat(str(options["start_date"]))
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.error("unexpected error: %s", exc)
         if options.get("end_date"):
             try:
                 end_date = _dt.date.fromisoformat(str(options["end_date"]))
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.error("unexpected error: %s", exc)
 
         # 子数据集: (name, mode_override)
         # classify 和 member 始终全量替换，daily 跟随用户选择的 mode
@@ -1223,8 +1233,8 @@ class TDXScheduler:
                 if i < len(sub_job_ids):
                     try:
                         child_job_id = uuid.UUID(sub_job_ids[i])
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _logger.error("unexpected error: %s", exc)
 
                 # 标记子 job 为 running
                 if child_job_id:
@@ -1233,8 +1243,8 @@ class TDXScheduler:
                             "UPDATE market.ingestion_jobs SET status='running', started_at=NOW() WHERE job_id=%s",
                             (child_job_id,),
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _logger.error("sw_sector: failed to mark child job %s as running: %s", child_job_id, exc)
 
                 spec = DATASET_REGISTRY.get(ds_name)
                 if spec is None:
@@ -1261,8 +1271,8 @@ class TDXScheduler:
                                 WHERE job_id=%s""",
                             (child_status, summary_patch, child_job_id),
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _logger.error("unexpected error: %s", exc)
 
                 if not result.ok:
                     overall_status = "failed"
@@ -1277,8 +1287,8 @@ class TDXScheduler:
                                     WHERE job_id=%s""",
                                 (remaining_jid,),
                             )
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            _logger.error("unexpected error: %s", exc)
                     break
 
             # sw_daily 同步完成后，补齐 6 个未发布 L2 行业的数据
@@ -1309,8 +1319,8 @@ class TDXScheduler:
                     "UPDATE market.ingestion_jobs SET status=%s, started_at=COALESCE(started_at, %s), finished_at=NOW() WHERE job_id=%s",
                     (overall_status, start_ts, pjid),
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.error("unexpected error: %s", exc)
 
         if schedule_id:
             self._update_ingestion_schedule(
@@ -1344,13 +1354,13 @@ class TDXScheduler:
         if options.get("start_date"):
             try:
                 start_date = _dt.date.fromisoformat(str(options["start_date"]))
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.error("unexpected error: %s", exc)
         if options.get("end_date"):
             try:
                 end_date = _dt.date.fromisoformat(str(options["end_date"]))
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.error("unexpected error: %s", exc)
 
         status = "success"
         rows = 0
@@ -1363,8 +1373,8 @@ class TDXScheduler:
                         "UPDATE market.ingestion_jobs SET status='running', started_at=NOW() WHERE job_id=%s",
                         (job_id,),
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.error("failed to mark job %s as running: %s", job_id, exc)
 
             from ..services.sector_data_builder import SectorDataBuilder
             builder = SectorDataBuilder()
@@ -1407,8 +1417,8 @@ class TDXScheduler:
                             WHERE job_id=%s""",
                         (summary_patch, job_id),
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.error("unexpected error: %s", exc)
 
         except Exception as exc:
             status = "failed"
@@ -1423,8 +1433,8 @@ class TDXScheduler:
                             WHERE job_id=%s""",
                         (json.dumps({"error": error_msg}, ensure_ascii=False), job_id),
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.error("unexpected error: %s", exc)
 
         # 写 ingestion_logs（成功和失败都写）
         self._log_ingestion_run(
@@ -1452,7 +1462,8 @@ class TDXScheduler:
                     cur.execute(f"SELECT MAX({date_col})::date FROM {table}")
                     row = cur.fetchone()
                     return row[0] if row and row[0] else None
-        except Exception:
+        except Exception as exc:
+            _logger.error("_query_max_date: failed to query MAX(%s) from %s: %s", date_col, table, exc)
             return None
 
     def _run_data_freshness_check(
@@ -1476,8 +1487,8 @@ class TDXScheduler:
                         "UPDATE market.ingestion_jobs SET status='running', started_at=NOW() WHERE job_id=%s",
                         (job_id,),
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.error("failed to mark job %s as running: %s", job_id, exc)
 
             # 1. 获取 expected_date (最近交易日)
             with _get_conn(self._db_cfg) as conn:
@@ -1577,8 +1588,8 @@ class TDXScheduler:
                         (job_status, start_ts,
                          json.dumps(summary, ensure_ascii=False, default=str), job_id),
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.error("unexpected error: %s", exc)
 
             # 7. stale 数据集写 ERROR 日志
             if stale and job_id is not None:
@@ -1589,8 +1600,8 @@ class TDXScheduler:
                                VALUES (%s, NOW(), 'ERROR', %s)""",
                             (job_id, f"数据集 {ds} 未更新到 {expected_date}"),
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _logger.error("unexpected error: %s", exc)
 
         except Exception as exc:
             job_status = "failed"
@@ -1601,13 +1612,214 @@ class TDXScheduler:
                            summary=COALESCE(summary::jsonb,'{}'::jsonb)||%s::jsonb WHERE job_id=%s""",
                         (json.dumps({"error": str(exc)}, ensure_ascii=False), job_id),
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.error("unexpected error: %s", exc)
 
         if schedule_id:
             self._update_ingestion_schedule(
                 schedule_id, last_run=start_ts, last_status=job_status, last_error=None,
             )
+
+    # ------------------------------------------------------------------
+    def _run_auto_retry_stale(
+        self,
+        run_id: uuid.UUID,
+        schedule_id: Optional[str],
+        triggered_by: str,
+        options: Dict[str, Any],
+    ) -> None:
+        """23:00 执行：检查今日所有调度任务结果，生成报告，并对失败/过时数据集自动补齐.
+
+        Phase 1: 数据新鲜度检查 — 查询每个时序数据集的 MAX(date)
+        Phase 2: 今日 job 扫描 — 提取 status + inserted_rows（兼容3种格式）
+        Phase 3: 生成报告 — 每个数据集一行，含 status/rows/gap/action
+        Phase 4: 自动重试 — 对 failed 或 stale 的数据集重新提交 incremental
+        """
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+        start_ts = _now()
+        job_id_str = options.get("job_id")
+        job_id = uuid.UUID(job_id_str) if job_id_str else None
+
+        retried: list = []
+        errors: list = []
+        report_rows: list = []
+
+        try:
+            if job_id is not None:
+                try:
+                    self._execute(
+                        "UPDATE market.ingestion_jobs SET status='running', started_at=NOW() WHERE job_id=%s",
+                        (job_id,),
+                    )
+                except Exception as exc:
+                    _logger.error("failed to mark job %s as running: %s", job_id, exc)
+
+            # ── Phase 1: 数据新鲜度 ──────────────────────────────────
+            ltd_rows = self._fetchall(
+                "SELECT MAX(cal_date) AS latest FROM market.trading_calendar"
+                " WHERE is_trading = TRUE AND cal_date <= CURRENT_DATE"
+            )
+            latest_trading = ltd_rows[0]["latest"] if ltd_rows else None
+            if latest_trading is None:
+                raise RuntimeError("trading_calendar 无数据")
+            _log.info("auto-retry Phase 1: latest_trading=%s", latest_trading)
+
+            freshness_rows = self._fetchall("""
+                SELECT * FROM (VALUES
+                    ('kline_daily_raw',  (SELECT MAX(trade_date)::date FROM market.kline_daily_raw)),
+                    ('kline_minute_raw', (SELECT MAX(trade_time)::date FROM market.kline_minute_raw)),
+                    ('daily_basic',      (SELECT MAX(trade_date)::date FROM market.daily_basic)),
+                    ('adj_factor',       (SELECT MAX(trade_date)::date FROM market.adj_factor)),
+                    ('index_daily',      (SELECT MAX(trade_date)::date FROM market.index_daily)),
+                    ('stk_limit',        (SELECT MAX(trade_date)::date FROM market.stk_limit)),
+                    ('bak_basic',        (SELECT MAX(trade_date)::date FROM market.bak_basic)),
+                    ('moneyflow_ts',     (SELECT MAX(trade_date)::date FROM market.moneyflow_ts)),
+                    ('sw_daily',         (SELECT MAX(trade_date)::date FROM market.sw_daily)),
+                    ('sector_data',      (SELECT MAX(trade_date)::date FROM market.sector_data)),
+                    ('cyq_perf',         (SELECT MAX(trade_date)::date FROM market.cyq_perf)),
+                    ('margin_detail',    (SELECT MAX(trade_date)::date FROM market.margin_detail))
+                ) AS t(dataset, max_date)
+            """)
+            freshness_map: Dict[str, Any] = {r["dataset"]: r["max_date"] for r in freshness_rows}
+
+            # ── Phase 2: 今日 job 结果扫描 ───────────────────────────
+            # inserted_rows 兼容3种格式: 顶层 / stats 嵌套 / rows 字段
+            today_jobs = self._fetchall("""
+                SELECT
+                    (summary::json->>'dataset') AS dataset,
+                    status,
+                    COALESCE(
+                        (summary::json->>'inserted_rows')::bigint,
+                        (summary::json#>>'{stats,inserted_rows}')::bigint,
+                        (summary::json->>'rows')::bigint
+                    ) AS inserted_rows,
+                    summary::json->>'start_date' AS start_date,
+                    summary::json->>'end_date' AS end_date,
+                    summary::json->>'skipped' AS skipped,
+                    summary::json->>'message' AS message
+                FROM market.ingestion_jobs
+                WHERE started_at >= CURRENT_DATE
+                  AND summary::json->>'dataset' IS NOT NULL
+                  AND (summary::json->>'dataset') NOT IN ('_data_freshness_check', '_auto_retry_stale')
+                ORDER BY started_at DESC
+            """)
+
+            # 取每个数据集最近一条 job 的状态
+            job_map: Dict[str, Dict[str, Any]] = {}
+            for r in today_jobs:
+                ds = r["dataset"]
+                if ds and ds not in job_map:
+                    job_map[ds] = {
+                        "status": r["status"] or "unknown",
+                        "inserted_rows": r["inserted_rows"],
+                        "start_date": r["start_date"],
+                        "end_date": r["end_date"],
+                        "skipped": r["skipped"] == "True",
+                        "message": r["message"],
+                    }
+
+            # ── Phase 3: 生成报告 ────────────────────────────────────
+            # 所有已启用的增量调度
+            active_schedules = self._fetchall(
+                "SELECT schedule_id, dataset FROM market.ingestion_schedules"
+                " WHERE enabled = TRUE AND dataset NOT IN ('_data_freshness_check', '_auto_retry_stale')"
+            )
+            schedule_map = {r["dataset"]: r["schedule_id"] for r in active_schedules}
+            all_report_datasets = sorted(
+                set(freshness_map.keys()) | set(job_map.keys()) | set(schedule_map.keys())
+            )
+
+            for ds in all_report_datasets:
+                entry: Dict[str, Any] = {"dataset": ds}
+                # job 状态
+                job_info = job_map.get(ds, {})
+                entry["today_job_status"] = job_info.get("status", "no_job_today")
+                entry["inserted_rows"] = job_info.get("inserted_rows")
+                entry["skipped"] = job_info.get("skipped", False)
+                # 数据新鲜度
+                mx = freshness_map.get(ds)
+                entry["data_max_date"] = str(mx) if mx else None
+                entry["is_fresh"] = mx is not None and mx >= latest_trading
+                # 判定 action
+                action = "none"
+                if entry["today_job_status"] == "failed":
+                    action = "retry"
+                elif not entry["is_fresh"] and ds in schedule_map:
+                    action = "retry"
+                elif entry["skipped"] and "up to date" in str(job_info.get("message", "")):
+                    entry["note"] = "already up to date"
+                entry["action"] = action
+                report_rows.append(entry)
+
+            stale_count = sum(1 for e in report_rows if not e["is_fresh"])
+            failed_count = sum(1 for e in report_rows if e["today_job_status"] == "failed")
+            retry_count = sum(1 for e in report_rows if e["action"] == "retry")
+            _log.info(
+                "auto-retry Phase 3 report: stale=%d, failed=%d, need_retry=%d",
+                stale_count, failed_count, retry_count,
+            )
+
+            # ── Phase 4: 自动重试 ────────────────────────────────────
+            for entry in report_rows:
+                if entry["action"] != "retry":
+                    continue
+                ds = entry["dataset"]
+                sid = schedule_map.get(ds)
+                if not sid:
+                    _log.warning("auto-retry: %s has no active schedule, skipping", ds)
+                    entry["action"] = "skip_no_schedule"
+                    continue
+                try:
+                    _log.info("auto-retry: re-triggering %s incremental (reason: job=%s, max=%s)",
+                              ds, entry["today_job_status"], entry["data_max_date"])
+                    self._scheduled_ingestion_run(
+                        schedule_id=sid,
+                        dataset=ds,
+                        mode="incremental",
+                        options={"triggered_by": "auto_retry"},
+                    )
+                    retried.append(ds)
+                    entry["retry_status"] = "submitted"
+                except Exception as exc:
+                    _log.exception("auto-retry failed for %s: %s", ds, exc)
+                    errors.append({"dataset": ds, "error": str(exc)})
+                    entry["retry_status"] = "error"
+                    entry["retry_error"] = str(exc)
+
+        except Exception as exc:
+            _log.exception("auto-retry scan error: %s", exc)
+            errors.append({"dataset": "_scan", "error": str(exc)})
+
+        # ── 写入报告 ────────────────────────────────────────────────
+        overall = "ok" if not errors and not retried else ("partial" if retried else "failed")
+        summary = {
+            "dataset": "_auto_retry_stale",
+            "mode": "check_and_retry",
+            "check_time": start_ts.isoformat(),
+            "latest_trading_day": str(latest_trading) if latest_trading else None,
+            "overall": overall,
+            "datasets": report_rows,
+            "retried_datasets": retried,
+            "retry_errors": errors,
+        }
+        final_status = "success" if overall == "ok" else "partial"
+        if job_id is not None:
+            try:
+                self._execute(
+                    "UPDATE market.ingestion_jobs SET status=%s, finished_at=NOW(), summary=%s WHERE job_id=%s",
+                    (final_status, json.dumps(summary, ensure_ascii=False, default=str), job_id),
+                )
+            except Exception as exc:
+                _logger.error("unexpected error: %s", exc)
+
+        if schedule_id:
+            self._update_ingestion_schedule(
+                schedule_id, last_run=start_ts, last_status=final_status, last_error=None,
+            )
+
+        _log.info("auto-retry done: overall=%s, retried=%s, errors=%s",
+                  overall, retried, [e.get("dataset") for e in errors])
 
     def _run_tushare_engine_sync(
         self,
@@ -1633,13 +1845,13 @@ class TDXScheduler:
         if options.get("start_date"):
             try:
                 start_date = _dt.date.fromisoformat(str(options["start_date"]))
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.error("unexpected error: %s", exc)
         if options.get("end_date"):
             try:
                 end_date = _dt.date.fromisoformat(str(options["end_date"]))
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.error("unexpected error: %s", exc)
 
         try:
             engine = TushareSyncEngine()
@@ -1661,8 +1873,8 @@ class TDXScheduler:
                             WHERE job_id=%s""",
                         (json.dumps({"error": str(exc)}, ensure_ascii=False), job_id),
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.error("unexpected error: %s", exc)
 
         if schedule_id:
             self._update_ingestion_schedule(
@@ -1691,10 +1903,10 @@ class TDXScheduler:
                     """
                 )
                 self._execute(sql, (start_ts, job_uuid))
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.error("unexpected error: %s", exc)
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False, encoding="utf-8", errors="replace")
             log_lines.append(proc.stdout)
             log_lines.append(proc.stderr)
             status = "success" if proc.returncode == 0 else "failed"
@@ -1744,8 +1956,8 @@ class TDXScheduler:
                          WHERE job_id=%s AND status IN ('queued','pending')
                     """
                     self._execute(sql, (status, job_uuid))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.error("unexpected error: %s", exc)
         except Exception as exc:  # noqa: BLE001
             if schedule_id:
                 self._update_ingestion_schedule(schedule_id, last_run=start_ts, last_status="failed", last_error=str(exc))
@@ -1787,8 +1999,8 @@ class TDXScheduler:
         if existing_job_id:
             try:
                 job_id = uuid.UUID(str(existing_job_id))
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.error("unexpected error: %s", exc)
 
         try:
             # 1) auto-range: query latest trading date and current max date
@@ -1831,8 +2043,8 @@ class TDXScheduler:
                             "UPDATE market.ingestion_jobs SET status='success', finished_at=NOW(), summary=%s WHERE job_id=%s",
                             (json.dumps(summary, ensure_ascii=False), job_id),
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _logger.error("unexpected error: %s", exc)
                 if schedule_id:
                     self._update_ingestion_schedule(schedule_id, last_run=start_ts, last_status=status)
                 return
@@ -1892,13 +2104,14 @@ class TDXScheduler:
 
             summary["go_task_id"] = go_task_id
 
-            # Poll Go task until it finishes (or timeout after 10 min).
+            # Poll Go task until it finishes (or timeout after 40 min).
             # Go backend's markJobFinished() already updates ingestion_jobs
             # with status, finished_at, and summary (including inserted_rows),
             # so we only need to poll for status — no need to re-update the job.
+            # NOTE: kline_minute_raw takes ~33 min; timeout must exceed that.
             if go_task_id:
                 poll_url = f"{base}/api/tasks/{go_task_id}"
-                poll_deadline = time.time() + 600  # 10 min
+                poll_deadline = time.time() + 2400  # 40 min
                 go_status = "unknown"
                 while time.time() < poll_deadline:
                     time.sleep(3)
@@ -1920,7 +2133,7 @@ class TDXScheduler:
                         continue
                 else:
                     # Timeout — treat as failure so we don't silently lose data
-                    raise RuntimeError(f"Go task {go_task_id} timed out after 600s, status={go_status}")
+                    raise RuntimeError(f"Go task {go_task_id} timed out after 2400s, status={go_status}")
 
             status = "success"
 
@@ -1928,15 +2141,32 @@ class TDXScheduler:
             summary["error"] = str(exc)
             if job_id is not None:
                 try:
-                    self._execute(
-                        "UPDATE market.ingestion_jobs SET status='failed', finished_at=NOW(), summary=%s WHERE job_id=%s",
-                        (json.dumps(summary, ensure_ascii=False), job_id),
+                    # Defensive: check if Go backend already marked job as success
+                    # (e.g., poll timed out but task actually finished).
+                    actual_rows = self._fetchall(
+                        "SELECT status FROM market.ingestion_jobs WHERE job_id = %s",
+                        (job_id,),
                     )
-                except Exception:
-                    pass
+                    actual_status = actual_rows[0].get("status") if actual_rows else None
+                    if actual_status == "success":
+                        # Go backend completed — poll timeout was a false alarm.
+                        status = "success"
+                        summary.pop("error", None)
+                        summary["poll_warning"] = str(exc)
+                        self._execute(
+                            "UPDATE market.ingestion_jobs SET summary=%s WHERE job_id=%s",
+                            (json.dumps(summary, ensure_ascii=False), job_id),
+                        )
+                    else:
+                        self._execute(
+                            "UPDATE market.ingestion_jobs SET status='failed', finished_at=NOW(), summary=%s WHERE job_id=%s",
+                            (json.dumps(summary, ensure_ascii=False), job_id),
+                        )
+                except Exception as exc:
+                    _logger.error("unexpected error: %s", exc)
             self._log_ingestion_run(
                 job_id or run_id, schedule_id, triggered_by, start_ts,
-                "failed", summary, {}, [], error=str(exc),
+                status, summary, {}, [], error=str(exc),
             )
         finally:
             if schedule_id:
@@ -2046,6 +2276,7 @@ class TDXScheduler:
                 try:
                     return _make_uuid(cmd[i + 1])
                 except Exception:  # noqa: BLE001
+                    _logger.warning("_extract_job_id_from_cmd: invalid UUID '%s'", cmd[i + 1])
                     return None
         return None
 
@@ -2062,6 +2293,7 @@ class TDXScheduler:
                 try:
                     base = json.loads(raw) if isinstance(raw, str) else dict(raw)
                 except Exception:  # noqa: BLE001
+                    _logger.warning("_update_ingestion_job_status: failed to parse existing summary for job %s: %s", job_id, exc)
                     base = {}
         base.update(summary or {})
         sql = """

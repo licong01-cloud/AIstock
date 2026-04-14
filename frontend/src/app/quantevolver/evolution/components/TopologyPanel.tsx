@@ -1,8 +1,7 @@
 "use client";
 
-import React from "react";
-import { GitMerge, RotateCcw } from "lucide-react";
-import LoopMetricsComparison from "./LoopMetricsComparison";
+import React, { useState } from "react";
+import { GitMerge, RotateCcw, ExternalLink, ChevronDown, ChevronRight } from "lucide-react";
 
 export interface Loop {
   loop_id: string;
@@ -24,7 +23,7 @@ interface TopologyPanelProps {
   activeLoopIndex: number | null;
   onSelectLoop: (index: number) => void;
   onRetryLoop?: (taskId: string, loopIndex: number) => void;
-  taskType?: string; // 任务类型：evolution 或 strategy_evo
+  taskType?: string;
 }
 
 const cardStyle: React.CSSProperties = {
@@ -48,12 +47,23 @@ const headerStyle: React.CSSProperties = {
 };
 
 export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSelectLoop, onRetryLoop, taskType }: TopologyPanelProps) {
-  // 找到第一个 SOTA Loop 的因子集作为基准（初始 SOTA）
+  const [expandedFactors, setExpandedFactors] = useState<Set<number>>(new Set());
+
   const sotaFactorSet = React.useMemo(() => {
     const sotaLoop = loops.find(l => l.is_sota);
     const factors: string[] = sotaLoop?.config_json?.factor_list || [];
     return new Set(factors);
   }, [loops]);
+
+  const toggleFactors = (loopIndex: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandedFactors(prev => {
+      const next = new Set(prev);
+      if (next.has(loopIndex)) next.delete(loopIndex);
+      else next.add(loopIndex);
+      return next;
+    });
+  };
 
   return (
     <div style={cardStyle}>
@@ -64,7 +74,6 @@ export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSel
         </h2>
       </div>
       <div style={{ flex: 1, overflowY: "auto", padding: "24px", position: "relative", backgroundColor: "#fafaf9" }}>
-        {/* 垂直时间线 */}
         <div style={{ position: "absolute", left: "43px", top: "24px", bottom: "24px", width: "2px", backgroundColor: "#e5e7eb", zIndex: 0 }}></div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "24px", position: "relative", zIndex: 1 }}>
@@ -79,25 +88,18 @@ export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSel
             let iconColor = "#64748b";
 
             if (loop.is_sota) {
-              iconBg = "#fef3c7";
-              iconBorder = "#f59e0b";
-              iconColor = "#d97706";
+              iconBg = "#fef3c7"; iconBorder = "#f59e0b"; iconColor = "#d97706";
             } else if (loop.status === "completed") {
-              iconBg = "#dcfce7";
-              iconBorder = "#22c55e";
-              iconColor = "#15803d";
+              iconBg = "#dcfce7"; iconBorder = "#22c55e"; iconColor = "#15803d";
             } else if (loop.status === "running") {
-              iconBg = "#dbeafe";
-              iconBorder = "#3b82f6";
-              iconColor = "#1d4ed8";
+              iconBg = "#dbeafe"; iconBorder = "#3b82f6"; iconColor = "#1d4ed8";
             }
 
-            // 因子列表：以初始 SOTA 因子集为基准，标记保留/删除/新增
             const thisFactors: string[] = loop.config_json?.factor_list || [];
             const thisFactorSet = new Set(thisFactors);
-            // 显示：SOTA 因子先列出（保留绿色/删除红色删除线），再列新增因子
             const sotaFactorsArr = Array.from(sotaFactorSet) as string[];
             const newFactors = thisFactors.filter((f: string) => !sotaFactorSet.has(f));
+            const isFactorsExpanded = expandedFactors.has(loop.loop_index);
 
             return (
               <div
@@ -131,36 +133,40 @@ export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSel
                       {(loop.status === "failed" || loop.status === "cancelled") && <span style={{ fontSize: "10px", color: "#ef4444", backgroundColor: "#fef2f2", padding: "2px 6px", borderRadius: "4px" }}>{loop.status === "failed" ? "失败" : "已取消"}</span>}
                       {(loop.status === "failed" || loop.status === "cancelled") && onRetryLoop && (
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onRetryLoop(loop.task_id, loop.loop_index);
-                          }}
-                          style={{
-                            fontSize: "10px", color: "#ea580c", backgroundColor: "#fff7ed",
-                            padding: "2px 8px", borderRadius: "4px", border: "1px solid #fed7aa",
-                            cursor: "pointer", display: "flex", alignItems: "center", gap: "3px",
-                            fontWeight: 600,
-                          }}
+                          onClick={(e) => { e.stopPropagation(); onRetryLoop(loop.task_id, loop.loop_index); }}
+                          style={{ fontSize: "10px", color: "#ea580c", backgroundColor: "#fff7ed", padding: "2px 8px", borderRadius: "4px", border: "1px solid #fed7aa", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px", fontWeight: 600 }}
                           title="重试回测（训练已完成则跳过训练）"
                         >
-                          <RotateCcw size={10} />
-                          重试
+                          <RotateCcw size={10} /> 重试
                         </button>
+                      )}
+                      {loop.status === "completed" && (
+                        <a
+                          href={`/quantevolver/evolution/${loop.task_id}/loops/${loop.loop_index}`}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{ fontSize: "10px", color: "#3b82f6", backgroundColor: "#eff6ff", padding: "2px 8px", borderRadius: "4px", border: "1px solid #bfdbfe", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px", fontWeight: 600, textDecoration: "none" }}
+                          title="查看完整详情"
+                        >
+                          <ExternalLink size={10} /> 详情
+                        </a>
                       )}
                     </div>
                   </div>
                   <div style={{ fontSize: "11px", color: "#64748b", marginTop: "4px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>{loop.action_type || "UNKNOWN"}</div>
-                  {/* 指标速览 */}
                   {loop.metrics_json && loop.status === "completed" && (
                     <div style={{ display: "flex", gap: "8px", marginTop: "6px", fontSize: "11px", color: "#475569", fontFamily: "monospace" }}>
                       {loop.metrics_json.IC != null && <span>IC:{typeof loop.metrics_json.IC === "number" ? loop.metrics_json.IC.toFixed(4) : loop.metrics_json.IC}</span>}
                       {loop.metrics_json.sharpe != null && <span>Sh:{typeof loop.metrics_json.sharpe === "number" ? loop.metrics_json.sharpe.toFixed(2) : loop.metrics_json.sharpe}</span>}
                     </div>
                   )}
-                  {/* 因子列表：以 SOTA 因子为基准显示保留/删除/新增 */}
+                  {/* 因子列表：默认折叠，点击展开 */}
                   {thisFactors.length > 0 && (
                     <div style={{ marginTop: "8px" }}>
-                      <div style={{ fontSize: "10px", color: "#94a3b8", fontWeight: 600, marginBottom: "4px" }}>
+                      <div
+                        style={{ fontSize: "10px", color: "#94a3b8", fontWeight: 600, marginBottom: isFactorsExpanded ? "4px" : "0", cursor: "pointer", display: "flex", alignItems: "center", gap: "2px", userSelect: "none" }}
+                        onClick={(e) => toggleFactors(loop.loop_index, e)}
+                      >
+                        {isFactorsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                         因子 {thisFactors.length} 个
                         {sotaFactorSet.size > 0 && loop.loop_index > 0 && (() => {
                           const removed = sotaFactorsArr.filter((f: string) => !thisFactorSet.has(f)).length;
@@ -173,19 +179,21 @@ export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSel
                           );
                         })()}
                       </div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: "3px" }}>
-                        {sotaFactorsArr.map((f: string) => {
-                          const kept = thisFactorSet.has(f);
-                          return kept ? (
-                            <span key={f} style={{ display: "inline-block", padding: "1px 6px", borderRadius: "3px", fontSize: "10px", fontFamily: "monospace", backgroundColor: "#f0f9ff", color: "#0369a1", border: "1px solid #bae6fd" }}>{f}</span>
-                          ) : (
-                            <span key={f} style={{ display: "inline-block", padding: "1px 6px", borderRadius: "3px", fontSize: "10px", fontFamily: "monospace", backgroundColor: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca", textDecoration: "line-through", opacity: 0.7 }}>{f}</span>
-                          );
-                        })}
-                        {newFactors.map((f: string) => (
-                          <span key={f} style={{ display: "inline-block", padding: "1px 6px", borderRadius: "3px", fontSize: "10px", fontFamily: "monospace", backgroundColor: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0" }}>+{f}</span>
-                        ))}
-                      </div>
+                      {isFactorsExpanded && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "3px" }}>
+                          {sotaFactorsArr.map((f: string) => {
+                            const kept = thisFactorSet.has(f);
+                            return kept ? (
+                              <span key={f} style={{ display: "inline-block", padding: "1px 6px", borderRadius: "3px", fontSize: "10px", fontFamily: "monospace", backgroundColor: "#f0f9ff", color: "#0369a1", border: "1px solid #bae6fd" }}>{f}</span>
+                            ) : (
+                              <span key={f} style={{ display: "inline-block", padding: "1px 6px", borderRadius: "3px", fontSize: "10px", fontFamily: "monospace", backgroundColor: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca", textDecoration: "line-through", opacity: 0.7 }}>{f}</span>
+                            );
+                          })}
+                          {newFactors.map((f: string) => (
+                            <span key={f} style={{ display: "inline-block", padding: "1px 6px", borderRadius: "3px", fontSize: "10px", fontFamily: "monospace", backgroundColor: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0" }}>+{f}</span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -194,16 +202,6 @@ export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSel
           })}
         </div>
       </div>
-
-      {/* Loop 指标对比表 */}
-      {loops.length > 0 && (
-        <LoopMetricsComparison
-          loops={loops}
-          taskType={taskType}
-          onLoopSelect={onSelectLoop}
-          selectedLoopIndex={activeLoopIndex ?? undefined}
-        />
-      )}
     </div>
   );
 });

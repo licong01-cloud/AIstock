@@ -174,23 +174,6 @@ def get_task_calc_detail(task_id: str) -> Dict[str, Any]:
     }
 
 
-@router.post("/factors/compute-task-metrics", summary="触发单个Task的因子IC指标计算")
-def compute_task_metrics(
-    task_id: str = Body(..., embed=True),
-) -> Dict[str, Any]:
-    """调用 RD-Agent API 计算指定 task 的所有因子17项指标并入库。"""
-    from ..services.rdagent_factor_metrics_sync import sync_factor_metrics_for_task
-    result = sync_factor_metrics_for_task(task_id)
-    return {
-        "ok": result.ok,
-        "task_id": result.task_id,
-        "factor_count": result.factor_count,
-        "metrics_inserted": result.metrics_inserted,
-        "metrics_skipped": result.metrics_skipped,
-        "errors": result.errors,
-    }
-
-
 @router.get("/factors", summary="查询因子 Catalog 列表")
 def list_factors(
     source: Optional[str] = Query(None, description="因子来源过滤, 例如 qlib_alpha158/rdagent"),
@@ -355,75 +338,93 @@ def get_factor_detail(
     source: Optional[str] = Query(None, description="可选来源过滤"),
 ) -> Dict[str, Any]:
     """按名称返回单个因子的完整元数据 (REQ-API-P2-001)."""
-    conds = ["factor_name = %s"]
+    conds = ["c.factor_name = %s"]
     params = [factor_name]
     if source:
-        conds.append("source = %s")
+        conds.append("c.source = %s")
         params.append(source)
 
     where_sql = " WHERE " + " AND ".join(conds)
     sql = f"""
-        SELECT factor_name, expression, source, region, tags,
-               description_cn, formula_hint, variables, freq, align, nan_policy,
-               created_at_utc, experiment_id, impl_module, impl_func, impl_version,
-               performance_metrics, first_sota_task_id, is_sota_factor, interface_info, best_performance,
-               best_performance_sharpe, best_performance_ann_ret, asset_bundle_id,
-               source_task_id, source_code_relpath, source_code_origin, source_loop_tag, source_index,
-               raw_payload, code_text
-        FROM aistock_factor_catalog
+        SELECT c.factor_name, c.expression, c.source, c.region, c.tags,
+               c.description_cn, c.formula_hint, c.variables, c.freq, c.align, c.nan_policy,
+               c.created_at_utc, c.experiment_id, c.impl_module, c.impl_func, c.impl_version,
+               c.performance_metrics, c.first_sota_task_id, c.is_sota_factor, c.interface_info,
+               c.best_performance, c.best_performance_sharpe, c.best_performance_ann_ret,
+               c.asset_bundle_id,
+               c.source_task_id, c.source_code_relpath, c.source_code_origin,
+               c.source_loop_tag, c.source_index,
+               c.raw_payload, c.code_text,
+               c.factor_type, c.data_source,
+               cl.category AS cl_category, cl.grade AS cl_grade,
+               cl.llm_analysis AS cl_llm_analysis, cl.description AS cl_description,
+               cl.factor_dimension AS cl_factor_dimension,
+               cl.factor_profile AS cl_factor_profile,
+               cl.classification_reason AS cl_classification_reason,
+               cl.grade_reason AS cl_grade_reason
+        FROM aistock_factor_catalog c
+        LEFT JOIN qe_factor_classification cl
+            ON cl.factor_name = c.factor_name AND cl.factor_source = c.source
         {where_sql}
         LIMIT 1
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
+            col_names = [desc[0] for desc in cur.description]
             row = cur.fetchone()
 
     if not row:
         raise HTTPException(status_code=404, detail=f"因子 {factor_name} 不存在")
 
-    (
-        name, expr, src, reg, tags,
-        desc, formula, vars_json, freq, align, nan_pol,
-        created, exp_id, impl_mod, impl_func, impl_v,
-        perf, first_sota_task_id, is_sota_factor, info, best_perf, best_sharpe, best_ann, bundle_id,
-        source_task_id, source_code_relpath, source_code_origin, source_loop_tag, source_index,
-        raw_payload, code_text
-    ) = row
+    data = dict(zip(col_names, row))
 
-    return {
-        "name": name,
-        "expression": expr,
-        "source": src,
-        "region": reg,
-        "tags": tags,
-        "description_cn": desc,
-        "formula_hint": formula,
-        "variables": vars_json,
-        "freq": freq,
-        "align": align,
-        "nan_policy": nan_pol,
-        "created_at_utc": created,
-        "experiment_id": exp_id,
-        "impl_module": impl_mod,
-        "impl_func": impl_func,
-        "impl_version": impl_v,
-        "performance_metrics": perf,
-        "first_sota_task_id": first_sota_task_id,
-        "is_sota_factor": is_sota_factor,
-        "interface_info": info,
-        "best_performance": best_perf,
-        "best_performance_sharpe": best_sharpe,
-        "best_performance_ann_ret": best_ann,
-        "asset_bundle_id": bundle_id,
-        "source_task_id": source_task_id,
-        "source_code_relpath": source_code_relpath,
-        "source_code_origin": source_code_origin,
-        "source_loop_tag": source_loop_tag,
-        "source_index": source_index,
-        "raw_payload": raw_payload,
-        "code_text": code_text,
+    # Flatten classification fields to top level with "classification_" prefix
+    result = {
+        "name": data["factor_name"],
+        "expression": data["expression"],
+        "source": data["source"],
+        "region": data["region"],
+        "tags": data["tags"],
+        "description_cn": data["description_cn"],
+        "formula_hint": data["formula_hint"],
+        "variables": data["variables"],
+        "freq": data["freq"],
+        "align": data["align"],
+        "nan_policy": data["nan_policy"],
+        "created_at_utc": data["created_at_utc"],
+        "experiment_id": data["experiment_id"],
+        "impl_module": data["impl_module"],
+        "impl_func": data["impl_func"],
+        "impl_version": data["impl_version"],
+        "performance_metrics": data["performance_metrics"],
+        "first_sota_task_id": data["first_sota_task_id"],
+        "is_sota_factor": data["is_sota_factor"],
+        "interface_info": data["interface_info"],
+        "best_performance": data["best_performance"],
+        "best_performance_sharpe": data["best_performance_sharpe"],
+        "best_performance_ann_ret": data["best_performance_ann_ret"],
+        "asset_bundle_id": data["asset_bundle_id"],
+        "source_task_id": data["source_task_id"],
+        "source_code_relpath": data["source_code_relpath"],
+        "source_code_origin": data["source_code_origin"],
+        "source_loop_tag": data["source_loop_tag"],
+        "source_index": data["source_index"],
+        "raw_payload": data["raw_payload"],
+        "code_text": data["code_text"],
+        "factor_type": data.get("factor_type"),
+        "data_source": data.get("data_source"),
+        # Classification (from qe_factor_classification JOIN)
+        "category": data.get("cl_category"),
+        "grade": data.get("cl_grade"),
+        "llm_analysis": data.get("cl_llm_analysis"),
+        "classification_description": data.get("cl_description"),
+        "factor_dimension": data.get("cl_factor_dimension"),
+        "factor_profile": data.get("cl_factor_profile"),
+        "classification_reason": data.get("cl_classification_reason"),
+        "grade_reason": data.get("cl_grade_reason"),
     }
+    return result
 
 
 @router.get("/factors/{factor_name}/source-code", summary="下载因子源码文件")

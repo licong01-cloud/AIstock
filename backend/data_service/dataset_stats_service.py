@@ -7,6 +7,7 @@ miniQMT 数据集统计服务
 from __future__ import annotations
 
 import logging
+import random
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
@@ -153,17 +154,17 @@ class DatasetStatsService:
                     self._update_cache(config["id"], summary)
                     datasets.append(summary)
             except Exception as e:
-                logger.warning(f"获取数据集 {config['id']} 统计信息失败: {e}")
-                # 返回一个空的数据集摘要
+                logger.error("获取数据集 %s 统计信息失败: %s", config["id"], e, exc_info=True)
+                # 返回一个标记为 error 的数据集摘要，不隐藏失败
                 datasets.append(DatasetSummary(
                     id=config["id"],
                     name=config["name"],
                     period=config["period"],
-                    status="unknown",
+                    status="error",
                     date_range=DateRange(),
                     stock_range=StockRange(),
                     data_size=DataSize(),
-                    update_status="unknown"
+                    update_status="error"
                 ))
         
         return datasets
@@ -338,7 +339,7 @@ class DatasetStatsService:
                 covered_trading_days=len(trading_calendar) - len(gap_days) if trading_calendar else 0
             )
         except Exception as e:
-            logger.warning(f"获取数据集 {dataset_id} 日期范围失败: {e}")
+            logger.error("获取数据集 %s 日期范围失败: %s", dataset_id, e, exc_info=True)
             return DateRange()
 
     def _get_stock_range(self, dataset_id: str, period: str) -> StockRange:
@@ -365,9 +366,9 @@ class DatasetStatsService:
             
             total_count = len(all_stocks)
             
-            # 随机抽样检查股票是否覆盖
-            sample_size = min(10, total_count)
-            sample_stocks = all_stocks[:sample_size]
+            # 随机抽样检查股票是否覆盖（避免仅取列表头部导致覆盖率偏高）
+            sample_size = min(30, total_count)
+            sample_stocks = random.sample(all_stocks, sample_size)
             
             covered_count = 0
             sample_details = []
@@ -384,8 +385,8 @@ class DatasetStatsService:
                             "end": self._format_date(range_info.get("end")),
                             "count": range_info.get("count", 0)
                         })
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("_get_stock_range: failed to check stock %s: %s", stock_code, exc)
             
             # 估算覆盖率
             coverage_rate = covered_count / sample_size if sample_size > 0 else 0.0
@@ -397,7 +398,7 @@ class DatasetStatsService:
                 sample_stocks=sample_details
             )
         except Exception as e:
-            logger.warning(f"获取数据集 {dataset_id} 股票范围失败: {e}")
+            logger.error("获取数据集 %s 股票范围失败: %s", dataset_id, e, exc_info=True)
             return StockRange()
 
     def _get_data_size(self, dataset_id: str, period: str) -> DataSize:
@@ -435,7 +436,7 @@ class DatasetStatsService:
                 size_mb=round(size_mb, 2)
             )
         except Exception as e:
-            logger.warning(f"获取数据集 {dataset_id} 数据规模失败: {e}")
+            logger.error("获取数据集 %s 数据规模失败: %s", dataset_id, e, exc_info=True)
             return DataSize()
 
     def _determine_status(self, date_range: DateRange, stock_range: StockRange) -> str:
@@ -483,7 +484,8 @@ class DatasetStatsService:
             else:
                 days_outdated = (latest_trading - latest_available).days
                 return f"outdated_{days_outdated}"
-        except Exception:
+        except Exception as exc:
+            logger.warning("_determine_update_status: failed to compare dates: %s", exc)
             return "unknown"
 
     def _get_last_updated(self, dataset_id: str, period: str) -> Optional[str]:
@@ -498,10 +500,17 @@ class DatasetStatsService:
             最后更新时间（ISO 8601 格式）
         """
         try:
-            # 使用文件修改时间作为最后更新时间
-            # 这里简化处理，实际应该查询数据文件的修改时间
-            return datetime.now().isoformat()
-        except Exception:
+            # 尝试通过数据范围推断最后更新时间
+            stocks = self.qmt_client.get_stock_list_in_sector("沪深A股")
+            reference = stocks[0] if stocks else ""
+            if reference:
+                range_info = self.qmt_client.get_local_data_range(reference, period)
+                end = range_info.get("end")
+                if end:
+                    return str(end)
+            return None
+        except Exception as exc:
+            logger.error("_get_last_updated: failed for dataset=%s period=%s: %s", dataset_id, period, exc)
             return None
 
     def _calculate_quality_metrics(self, summary: DatasetSummary) -> QualityMetrics:
@@ -550,20 +559,27 @@ class DatasetStatsService:
     def _has_data_on_date(self, stock_code: str, period: str, date: str) -> bool:
         """
         检查指定股票在指定日期是否有数据
-        
+
         Args:
             stock_code: 股票代码
             period: 周期
             date: 日期（YYYYMMDD 格式）
-            
+
         Returns:
             是否有数据
         """
         try:
-            # 查询该日期的数据
-            # 这里简化处理，实际应该查询具体数据
-            return True
-        except Exception:
+            range_info = self.qmt_client.get_local_data_range(stock_code, period)
+            start = range_info.get("start")
+            end = range_info.get("end")
+            if not start or not end:
+                return False
+            # Normalize: strip time portion if present, compare date strings
+            start_day = str(start)[:8] if len(str(start)) >= 8 else str(start)
+            end_day = str(end)[:8] if len(str(end)) >= 8 else str(end)
+            return start_day <= date <= end_day
+        except Exception as exc:
+            logger.debug("_has_data_on_date: failed for %s/%s/%s: %s", stock_code, period, date, exc)
             return False
 
     def _format_date(self, date_str: Optional[str]) -> Optional[str]:
@@ -591,6 +607,7 @@ class DatasetStatsService:
                 return date_str.split("T", 1)[0]
             return None
         except Exception:
+            logger.debug("_format_date: failed to parse %r", date_str)
             return None
 
     def _get_reference_stock(self, period: str) -> Optional[str]:

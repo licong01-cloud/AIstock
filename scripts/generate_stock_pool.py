@@ -135,8 +135,17 @@ def generate_pool(query_date: date, output_dir: Path) -> Path:
     instrument_name = f"filtered_pool_{query_date.strftime('%Y%m%d')}"
     qlib_dest = QLIB_INSTRUMENTS_DIR / f"{instrument_name}.txt"
     try:
-        import shutil
-        shutil.copy2(str(output_path), str(qlib_dest))
+        import shutil, tempfile
+        # 原子写入：先写临时文件再 rename，避免目标文件被其他进程锁定时 PermissionError
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(QLIB_INSTRUMENTS_DIR), suffix=".tmp")
+        os.close(tmp_fd)
+        try:
+            shutil.copy2(str(output_path), tmp_path)
+            os.replace(tmp_path, str(qlib_dest))
+        except BaseException:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
         print(f"[INFO] 已同步到 Qlib instruments: {qlib_dest}")
     except Exception as e:
         print(f"[ERROR] 同步到 Qlib instruments 失败: {e}")

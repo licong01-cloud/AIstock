@@ -8,6 +8,7 @@ import { useExperimentSSE } from "../components/useExperimentSSE";
 import LogTerminal from "../components/LogTerminal";
 import MetricsSummary from "../components/MetricsSummary";
 import SectorBlacklistPanel from "../components/SectorBlacklistPanel";
+import ParamSchemaForm from "../evolution/components/ParamSchemaForm";
 
 const IcSeriesChart = dynamic(() => import("../components/charts/IcSeriesChart"), { ssr: false });
 const LossCurveChart = dynamic(() => import("../components/charts/LossCurveChart"), { ssr: false });
@@ -154,6 +155,7 @@ export default function ComposePage() {
   const [nDrop, setNDrop] = useState(5);
   const [disableAlphaBaseline, setDisableAlphaBaseline] = useState(false);
   const [quickTrain, setQuickTrain] = useState(false);
+  const [labelType, setLabelType] = useState<"close" | "open" | "vwap">("close");
   const [blacklistEnabled, setBlacklistEnabled] = useState(false);
   const [stockPoolPath, setStockPoolPath] = useState<string | null>(null);
   const [dataSplit, setDataSplit] = useState({
@@ -164,6 +166,26 @@ export default function ComposePage() {
   const [dispatchMode, setDispatchMode] = useState<"independent" | "evolution">("independent");
   const [evolutionLoops, setEvolutionLoops] = useState(5);
   const [evolutionObjective, setEvolutionObjective] = useState("");
+
+  /* ── HMM 板块轮动 ── */
+  const [enableSectorHmm, setEnableSectorHmm] = useState(false);
+  const [hmmConfigs, setHmmConfigs] = useState<any[]>([]);
+  const [hmmSelectedConfigId, setHmmSelectedConfigId] = useState("");
+  const [hmmSnapshots, setHmmSnapshots] = useState<any[]>([]);
+  const [hmmModelVersionId, setHmmModelVersionId] = useState("");
+  const [hmmSignalPreset, setHmmSignalPreset] = useState<string>("preset_A");
+
+  /* ── 回测频率 ── */
+  const [backtestFreq, setBacktestFreq] = useState<"1min" | "day">("1min");
+
+  /* ── 执行算法 ── */
+  const [executionAlgoCatalog, setExecutionAlgoCatalog] = useState<any[]>([]);
+  const [executionAlgo, setExecutionAlgo] = useState<string>("");
+  const [executionAlgoParams, setExecutionAlgoParams] = useState<Record<string, any>>({});
+
+  /* ── 尾盘涨停未成交资金处理 ── */
+  const [unfilledHandler, setUnfilledHandler] = useState<string>(""); // "" | "TAIL_BOOST" | "TAIL_SUBSTITUTE"
+  const [unfilledBackupDepth, setUnfilledBackupDepth] = useState<number>(15);
 
   /* ── RDAgent Task 导入 ── */
   type SourceTask = { task_id: string; sota_factor_count: number; sota_model_count: number; best_ic: number | null; best_sharpe: number | null; best_annualized_return: number | null; worst_max_drawdown: number | null; total_loops: number; has_sota: boolean };
@@ -182,6 +204,7 @@ export default function ComposePage() {
   const [evalResult, setEvalResult] = useState<EvalResult | null>(null);
   const [configResult, setConfigResult] = useState<ConfigResult | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [engineMode, setEngineMode] = useState<"legacy" | "unified">("legacy");
   const [logsVisible, setLogsVisible] = useState(false); // 日志面板默认关闭
 
   /* ── 单次实验执行（共享 Hook） ── */
@@ -229,8 +252,56 @@ export default function ComposePage() {
   useEffect(() => {
     fetch(`${API}/quantevolver/evolution/source-tasks`)
       .then(r => r.json())
-      .then(d => { if (d.status === "success") setSourceTasks(d.data || []); })
-      .catch(() => {});
+      .then(d => {
+        if (d.status === "success") setSourceTasks(d.data || []);
+        else console.error("加载 source tasks 失败:", d);
+      })
+      .catch((e) => {
+        console.error("加载 source tasks 失败", e);
+      });
+  }, []);
+
+  /* ── 加载执行算法目录 ── */
+  useEffect(() => {
+    fetch(`${API}/quantevolver/execution-algorithms`)
+      .then(r => r.json())
+      .then(d => { if (d.ok) setExecutionAlgoCatalog(d.items || []); })
+      .catch((e) => { console.error("加载执行算法目录失败", e); });
+  }, []);
+
+  /* ── HMM 配置/快照加载 ── */
+  const fetchHmmConfigs = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/hmm-training/configs?model_type=sector_hmm`);
+      if (res.ok) {
+        const d = await res.json();
+        setHmmConfigs(Array.isArray(d) ? d : []);
+      }
+    } catch (e) {
+      console.error("加载 HMM 配置列表失败", e);
+      setHmmConfigs([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (enableSectorHmm && hmmConfigs.length === 0) fetchHmmConfigs();
+  }, [enableSectorHmm, fetchHmmConfigs, hmmConfigs.length]);
+
+  const fetchHmmSnapshots = useCallback(async (configId: string) => {
+    if (!configId) { setHmmSnapshots([]); return; }
+    try {
+      const res = await fetch(`${API}/hmm-training/configs/${configId}/snapshots`);
+      if (res.ok) {
+        const data = await res.json();
+        setHmmSnapshots((Array.isArray(data) ? data : []).filter((s: any) => s.status === "completed"));
+      } else {
+        console.error("加载 HMM 快照列表失败: HTTP", res.status, res.statusText);
+        setHmmSnapshots([]);
+      }
+    } catch (e) {
+      console.error("加载 HMM 快照列表失败", e);
+      setHmmSnapshots([]);
+    }
   }, []);
 
   /* ── 从 RDAgent Task 导入配置 ── */
@@ -373,7 +444,7 @@ export default function ComposePage() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           factor_names: Array.from(selectedFactors).map(k => k.split("||")[0]), model_id: selectedModel || undefined, strategy_id: selectedStrategy || undefined,
-          custom_params: { topk, n_drop: nDrop, disable_alpha158: disableAlphaBaseline, quick_train: quickTrain, ...(blacklistEnabled && stockPoolPath ? { stock_pool: stockPoolPath } : {}) },
+          custom_params: { topk, n_drop: nDrop, disable_alpha158: disableAlphaBaseline, quick_train: quickTrain, label_type: labelType, ...(blacklistEnabled && stockPoolPath ? { stock_pool: stockPoolPath } : {}) },
         }),
       });
       const data = await res.json();
@@ -393,12 +464,28 @@ export default function ComposePage() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           factor_names: Array.from(selectedFactors).map(k => k.split("||")[0]), model_id: selectedModel || undefined, strategy_id: selectedStrategy || undefined,
-          data_split: dataSplit, custom_params: { topk, n_drop: nDrop, disable_alpha158: disableAlphaBaseline, quick_train: quickTrain, ...(blacklistEnabled && stockPoolPath ? { stock_pool: stockPoolPath } : {}) },
+          data_split: dataSplit, custom_params: {
+            topk, n_drop: nDrop, disable_alpha158: disableAlphaBaseline, quick_train: quickTrain, label_type: labelType,
+            backtest_freq: backtestFreq,
+            ...(executionAlgo ? { execution_algo: executionAlgo, execution_algo_params: executionAlgoParams } : {}),
+            ...(blacklistEnabled && stockPoolPath ? { stock_pool: stockPoolPath } : {}),
+            ...(enableSectorHmm && hmmModelVersionId ? { enable_sector_hmm: true, hmm_model_version_id: hmmModelVersionId, hmm_signal_preset: hmmSignalPreset } : {}),
+          },
+          ...(unfilledHandler ? {
+            unfilled_handler: unfilledHandler,
+            unfilled_handler_params: unfilledHandler === "TAIL_SUBSTITUTE" ? { backup_depth: unfilledBackupDepth } : {},
+          } : {}),
           dispatch_mode: dispatchMode,
           evolution_params: dispatchMode === "evolution" ? { loops: evolutionLoops, objective: evolutionObjective } : undefined
         }),
       });
-      setConfigResult(await res.json());
+      const data = await res.json();
+      if (!res.ok) {
+        alert("生成失败: " + (data?.detail || res.statusText || "未知错误"));
+        setActionLoading(null);
+        return;
+      }
+      setConfigResult(data);
     } catch (e: any) { alert("生成失败: " + (e?.message || "")); }
     setActionLoading(null);
   }
@@ -705,6 +792,94 @@ export default function ComposePage() {
               </div>
             </div>
 
+            {/* ── 执行算法选择 ── */}
+            <div style={{ backgroundColor: "#f8fafc", borderRadius: "8px", padding: "20px", border: "1px solid #e2e8f0", marginBottom: "24px" }}>
+              <h3 style={{ margin: "0 0 16px", fontSize: "13px", fontWeight: 700, color: "#1e293b" }}>日内执行算法（决定分钟线/日线执行方式）</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "12px" }}>
+                <div>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "4px" }}>执行算法</label>
+                  <select
+                    value={executionAlgo}
+                    onChange={e => {
+                      const code = e.target.value;
+                      const info = executionAlgoCatalog.find((a: any) => a.algo_code === code);
+                      setExecutionAlgo(code);
+                      setExecutionAlgoParams(info?.default_config || {});
+                      setBacktestFreq(code === "CLOSE_PRICE" ? "day" : "1min");
+                      if (code === "CLOSE_PRICE") {
+                        setUnfilledHandler("");
+                        setUnfilledBackupDepth(15);
+                      }
+                    }}
+                    style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box", backgroundColor: "white" }}
+                  >
+                    <option value="">默认（TailTWAP 分钟线执行）</option>
+                    {executionAlgoCatalog.map((a: any) => (
+                      <option key={a.algo_code} value={a.algo_code}>{a.algo_name || a.algo_code}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ display: "flex", alignItems: "flex-end" }}>
+                  <div style={{ padding: "7px 12px", borderRadius: "6px", fontSize: "12px", fontWeight: 600,
+                    backgroundColor: executionAlgo === "CLOSE_PRICE" ? "#fef3c7" : executionAlgo ? "#dbeafe" : "#e0e7ff",
+                    color: executionAlgo === "CLOSE_PRICE" ? "#92400e" : executionAlgo ? "#1d4ed8" : "#4338ca",
+                    border: "1px solid " + (executionAlgo === "CLOSE_PRICE" ? "#fcd34d" : executionAlgo ? "#93c5fd" : "#a5b4fc"),
+                  }}>
+                    {executionAlgo === "CLOSE_PRICE" ? "日线回测 (收盘价执行)" : executionAlgo ? "分钟线回测 (日内拆单)" : "分钟线回测 (TailTWAP)"}
+                  </div>
+                </div>
+              </div>
+              {executionAlgo && (() => {
+                const algoInfo = executionAlgoCatalog.find((a: any) => a.algo_code === executionAlgo);
+                const schema = algoInfo?.param_schema?.properties;
+                if (!schema || Object.keys(schema).length === 0) return null;
+                return (
+                  <div style={{ marginTop: "8px" }}>
+                    <div style={{ fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "6px" }}>算法参数（{algoInfo?.algo_name || executionAlgo}）</div>
+                    <ParamSchemaForm
+                      schema={schema}
+                      values={executionAlgoParams}
+                      onChange={(key, val) => setExecutionAlgoParams(prev => ({ ...prev, [key]: val }))}
+                    />
+                  </div>
+                );
+              })()}
+
+              {/* ── 尾盘涨停未成交资金处理策略（仅分钟线回测有效） ── */}
+              {executionAlgo !== "CLOSE_PRICE" && (
+                <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px dashed #cbd5e1" }}>
+                  <div style={{ fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "6px" }}>
+                    尾盘涨停未成交资金处理（仅分钟线回测有效）
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                    <select
+                      value={unfilledHandler}
+                      onChange={e => setUnfilledHandler(e.target.value)}
+                      style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box", backgroundColor: "white" }}
+                    >
+                      <option value="">不处理（资金闲置）</option>
+                      <option value="TAIL_BOOST">TAIL_BOOST — 加仓已持有股票（14:50）</option>
+                      <option value="TAIL_SUBSTITUTE">TAIL_SUBSTITUTE — 替补买入候选股（14:55）</option>
+                    </select>
+                    {unfilledHandler === "TAIL_SUBSTITUTE" && (
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={unfilledBackupDepth}
+                        onChange={e => setUnfilledBackupDepth(Number(e.target.value) || 15)}
+                        placeholder="候选深度（默认15）"
+                        style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box" }}
+                      />
+                    )}
+                  </div>
+                  <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "6px" }}>
+                    TAIL_BOOST 按持仓市值比例加仓已有持仓 / TAIL_SUBSTITUTE 等额买入排名 topk 之后的候选股
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: "24px" }}>
               <button onClick={() => setCurrentStep(2)} style={btnSecondary}>上一步</button>
               <button onClick={() => setCurrentStep(4)} style={{ ...btnPrimary, padding: "10px 28px", fontSize: "14px" }}>下一步：组合配置与评估</button>
@@ -756,6 +931,12 @@ export default function ComposePage() {
                         const s = strategies.find(s => s.strategy_id === selectedStrategy);
                         return `${s?.display_name || selectedStrategy} (TopK=${topk}, n_drop=${nDrop})`;
                       })()}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                    <span style={{ color: "#64748b", fontWeight: 500 }}>执行算法</span>
+                    <span style={{ fontWeight: 600, color: "#1e293b" }}>
+                      {executionAlgo === "CLOSE_PRICE" ? "收盘价执行 (日线)" : executionAlgo ? `${executionAlgoCatalog.find((a: any) => a.algo_code === executionAlgo)?.algo_name || executionAlgo} (分钟线)` : "默认 TailTWAP (分钟线)"}
                     </span>
                   </div>
                 </div>
@@ -965,6 +1146,29 @@ export default function ComposePage() {
                   启用快速训练模式 <span style={{ fontSize: "12px", color: "#d97706", marginLeft: "4px" }}>(训练时间缩短至20%)</span>
                 </label>
               </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginTop: "12px" }}>
+                <span style={{ fontSize: "14px", color: "#475569", fontWeight: 600, whiteSpace: "nowrap" }}>训练标签</span>
+                {(["close", "open", "vwap"] as const).map(lt => (
+                  <label key={lt} onClick={() => setLabelType(lt)} style={{
+                    display: "flex", alignItems: "center", gap: "6px", padding: "6px 14px",
+                    borderRadius: "6px", cursor: "pointer", fontSize: "13px", fontWeight: 500, transition: "all 0.2s",
+                    border: labelType === lt ? "2px solid #3b82f6" : "2px solid #e2e8f0",
+                    backgroundColor: labelType === lt ? "#eff6ff" : "#ffffff",
+                    color: labelType === lt ? "#1d4ed8" : "#64748b",
+                  }}>
+                    <div style={{
+                      width: "14px", height: "14px", borderRadius: "50%",
+                      border: `2px solid ${labelType === lt ? "#3b82f6" : "#cbd5e1"}`,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>
+                      {labelType === lt && <div style={{ width: "6px", height: "6px", backgroundColor: "#3b82f6", borderRadius: "50%" }} />}
+                    </div>
+                    {lt === "close" ? "Close-to-Close" : lt === "open" ? "Open-to-Open" : "VWAP-to-VWAP"}
+                    {lt === "close" && <span style={{ fontSize: "11px", color: "#94a3b8" }}>(默认)</span>}
+                    {lt === "open" && <span style={{ fontSize: "11px", color: "#d97706" }}>(可执行价)</span>}
+                  </label>
+                ))}
+              </div>
             </div>
 
             <SectorBlacklistPanel
@@ -972,6 +1176,79 @@ export default function ComposePage() {
               onEnabledChange={setBlacklistEnabled}
               onPoolPathChange={setStockPoolPath}
             />
+
+            {/* ── HMM 行业板块轮动 ── */}
+            <div style={{ marginBottom: "24px", padding: "16px 20px", backgroundColor: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: enableSectorHmm ? "12px" : "0" }}>
+                <input type="checkbox" id="compose-enable-hmm" checked={enableSectorHmm}
+                  onChange={e => {
+                    const v = e.target.checked;
+                    setEnableSectorHmm(v);
+                    if (!v) { setHmmSelectedConfigId(""); setHmmSnapshots([]); setHmmModelVersionId(""); }
+                    if (v && hmmConfigs.length === 0) fetchHmmConfigs();
+                  }}
+                />
+                <label htmlFor="compose-enable-hmm" style={{ fontSize: "13px", fontWeight: 600, color: "#475569" }}>
+                  启用行业 HMM 热度调整（板块轮动）
+                </label>
+              </div>
+              {enableSectorHmm && (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                    <div>
+                      <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#6b7280", marginBottom: "4px" }}>选择配置版本</label>
+                      <select value={hmmSelectedConfigId}
+                        onChange={e => { const cid = e.target.value; setHmmSelectedConfigId(cid); setHmmModelVersionId(""); fetchHmmSnapshots(cid); }}
+                        style={{ width: "100%", padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box", backgroundColor: "white" }}
+                      >
+                        <option value="">-- 选择配置 --</option>
+                        {hmmConfigs.map((c: any) => <option key={c.config_id} value={c.config_id}>{c.display_name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#6b7280", marginBottom: "4px" }}>选择时间快照</label>
+                      <select value={hmmModelVersionId}
+                        onChange={e => setHmmModelVersionId(e.target.value)}
+                        disabled={!hmmSelectedConfigId}
+                        style={{ width: "100%", padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box", backgroundColor: hmmSelectedConfigId ? "white" : "#f1f5f9" }}
+                      >
+                        <option value="">-- 选择快照 --</option>
+                        {hmmSnapshots.map((s: any) => (
+                          <option key={s.snapshot_id} value={s.snapshot_id}>
+                            {new Date(s.trained_at).toLocaleString("zh-CN")} ({s.sector_count} 行业)
+                          </option>
+                        ))}
+                      </select>
+                      {hmmSelectedConfigId && hmmSnapshots.length === 0 && (
+                        <div style={{ fontSize: "11px", color: "#d97706", marginTop: "4px" }}>该配置暂无已完成的快照</div>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ marginTop: "12px" }}>
+                    <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#6b7280", marginBottom: "6px" }}>信号系数档位</label>
+                    <div style={{ display: "flex", gap: "12px" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "13px", color: "#374151" }}>
+                        <input type="radio" name="compose-hmm-preset" value="preset_A" checked={hmmSignalPreset === "preset_A"} onChange={() => setHmmSignalPreset("preset_A")} />
+                        保守档（热态+5% / 冷态-4%）
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "13px", color: "#374151" }}>
+                        <input type="radio" name="compose-hmm-preset" value="preset_B" checked={hmmSignalPreset === "preset_B"} onChange={() => setHmmSignalPreset("preset_B")} />
+                        激进档（热态+10% / 冷态-8%）
+                      </label>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* ── 回测频率（已在策略选择步骤配置）── */}
+            <div style={{ marginBottom: "24px", padding: "16px 20px", backgroundColor: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+              <div style={{ fontSize: "13px", fontWeight: 600, color: "#475569", marginBottom: "8px" }}>回测执行频率</div>
+              <div style={{ fontSize: "13px", color: "#334155" }}>
+                {executionAlgo === "CLOSE_PRICE" ? "日线回测（收盘价执行）" : executionAlgo ? `分钟线回测（${executionAlgoCatalog.find((a: any) => a.algo_code === executionAlgo)?.algo_name || executionAlgo}）` : "分钟线回测（默认 TailTWAP 执行）"}
+                <span style={{ fontSize: "11px", color: "#94a3b8", marginLeft: "8px" }}>← 在「策略选择」步骤中配置</span>
+              </div>
+            </div>
 
             <div style={{ marginBottom: "32px" }}>
               <h3 style={{ margin: "0 0 16px", fontSize: "13px", fontWeight: 700, color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.05em" }}>选择任务分流模式</h3>
@@ -1033,19 +1310,26 @@ export default function ComposePage() {
                   <button onClick={() => { navigator.clipboard.writeText(configResult.wsl_command || ""); alert("已复制命令"); }}
                     style={{ ...btnSecondary, fontSize: "13px", borderColor: "#86efac", color: "#166534" }}>复制终端命令</button>
                   {dispatchMode === "independent" && configResult.experiment_id && (
-                    <button
-                      onClick={() => { if (configResult.experiment_id) sse.startRun(configResult.experiment_id).catch(() => {}); }}
-                      disabled={sse.runStatus === "running" || sse.runStatus === "starting"}
-                      style={{
-                        ...btnPrimary,
-                        backgroundColor: sse.runStatus === "running" || sse.runStatus === "starting" ? "#6b7280" : "#059669",
-                        fontSize: "13px",
-                        boxShadow: "0 2px 4px rgba(5, 150, 105, 0.2)",
-                        opacity: sse.runStatus === "running" || sse.runStatus === "starting" ? 0.7 : 1,
-                      }}
-                    >
-                      {sse.runStatus === "starting" ? "正在提交..." : sse.runStatus === "running" ? "执行中..." : "一键执行回测"}
-                    </button>
+                    <>
+                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                        <span style={{ fontSize: 11, color: "#94a3b8", marginRight: 2 }}>引擎:</span>
+                        <button onClick={() => setEngineMode("legacy")} style={{ padding: "3px 8px", fontSize: 10, cursor: "pointer", borderRadius: 4, border: engineMode === "legacy" ? "1.5px solid #64748b" : "1px solid #cbd5e1", background: engineMode === "legacy" ? "#f1f5f9" : "#fff", color: engineMode === "legacy" ? "#334155" : "#94a3b8", fontWeight: 600 }}>旧版</button>
+                        <button onClick={() => setEngineMode("unified")} style={{ padding: "3px 8px", fontSize: 10, cursor: "pointer", borderRadius: 4, border: engineMode === "unified" ? "1.5px solid #0ea5e9" : "1px solid #cbd5e1", background: engineMode === "unified" ? "#f0f9ff" : "#fff", color: engineMode === "unified" ? "#0284c7" : "#94a3b8", fontWeight: 600 }}>统一引擎</button>
+                      </div>
+                      <button
+                        onClick={() => { if (configResult.experiment_id) sse.startRun(configResult.experiment_id, engineMode).catch((err) => { console.error("Failed to start experiment run:", err); alert("启动实验运行失败，请查看控制台日志"); }); }}
+                        disabled={sse.runStatus === "running" || sse.runStatus === "starting"}
+                        style={{
+                          ...btnPrimary,
+                          backgroundColor: sse.runStatus === "running" || sse.runStatus === "starting" ? "#6b7280" : "#059669",
+                          fontSize: "13px",
+                          boxShadow: "0 2px 4px rgba(5, 150, 105, 0.2)",
+                          opacity: sse.runStatus === "running" || sse.runStatus === "starting" ? 0.7 : 1,
+                        }}
+                      >
+                        {sse.runStatus === "starting" ? "正在提交..." : sse.runStatus === "running" ? "执行中..." : "一键执行回测"}
+                      </button>
+                    </>
                   )}
                   {dispatchMode === "evolution" && (
                     <button onClick={() => window.open(`/quantevolver/evolution?base_experiment_id=${configResult?.experiment_id || ""}`, "_blank")}

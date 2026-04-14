@@ -146,6 +146,11 @@ class QlibDailyExporter:
     def _regenerate_auxiliary_files(self, snapshot_id: str) -> None:
         """读取合并后的 daily_pv.h5，重新生成 instruments/all.txt + calendars/day.txt + meta.json."""
         import json
+        import logging
+
+        from .config import IPO_FILTER_DAYS
+
+        _logger = logging.getLogger(__name__)
 
         snap_dir = self.writer.root / snapshot_id
         h5_path = snap_dir / "daily_pv.h5"
@@ -154,16 +159,42 @@ class QlibDailyExporter:
 
         df = pd.read_hdf(str(h5_path), key="data")
 
+        # 加载 list_date 用于 IPO 过滤（与 snapshot_writer 一致）
+        list_date_map = self.writer._load_list_date_map()
+        ipo_delta = timedelta(days=IPO_FILTER_DAYS)
+
         # instruments/all.txt
         instruments_dir = snap_dir / "instruments"
         instruments_dir.mkdir(parents=True, exist_ok=True)
         grp = df.groupby(level="instrument")
         lines = []
+        skipped_ipo = 0
         for inst, sub in grp:
             dts = sub.index.get_level_values("datetime")
-            s = dts.min().strftime("%Y-%m-%d")
-            e = dts.max().strftime("%Y-%m-%d")
+            data_start = dts.min()
+            data_end = dts.max()
+
+            # IPO 过滤：上市不满 IPO_FILTER_DAYS 天的数据不纳入
+            list_date = list_date_map.get(str(inst))
+            if list_date is not None:
+                ipo_eligible = list_date + ipo_delta
+                effective_start = max(data_start, ipo_eligible)
+            else:
+                effective_start = data_start
+
+            if effective_start > data_end:
+                skipped_ipo += 1
+                continue
+
+            s = effective_start.strftime("%Y-%m-%d")
+            e = data_end.strftime("%Y-%m-%d")
             lines.append(f"{inst}\t{s}\t{e}")
+
+        if skipped_ipo > 0:
+            _logger.info(
+                "[exporter] IPO 过滤: %d 只股票因上市不满 %d 天被排除",
+                skipped_ipo, IPO_FILTER_DAYS,
+            )
         (instruments_dir / "all.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         # calendars/day.txt
@@ -914,6 +945,127 @@ class QlibCyqPerfExporter:
         instruments = df.index.get_level_values("instrument").unique().tolist()
         return ExportResult(
             snapshot_id=snapshot_id, freq="cyq_perf",
+            start=start, end=end,
+            ts_codes=instruments, rows=int(df.shape[0]),
+        )
+
+
+class QlibMarginDetailExporter:
+    """Tushare margin_detail 融资融券明细数据导出协调器.
+
+    输出文件 margin_detail.h5，供 Qlib / RD-Agent 使用：
+    - Index: MultiIndex (datetime, instrument)
+    - Columns: md_* 系列字段（rzye, rqye, rzmre, rqyl, rzche, rqchl, rqmcl, rzrqye）
+    """
+
+    def __init__(
+        self,
+        db: Optional[DBReader] = None,
+        writer: Optional[SnapshotWriter] = None,
+        meta: Optional[MetaRepo] = None,
+    ) -> None:
+        self.db = db or DBReader()
+        self.writer = writer or SnapshotWriter()
+        self.meta = meta or MetaRepo()
+
+    def export_full(
+        self,
+        snapshot_id: str,
+        start: date,
+        end: date,
+        exchanges: Optional[Sequence[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+        filename: str = "margin_detail.h5",
+    ) -> ExportResult:
+        """全量导出 margin_detail 融资融券明细数据到 Snapshot."""
+
+        codes = self.db.get_base_ts_codes(
+            start=start,
+            end=end,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+        df = self.db.load_margin_detail_panel(
+            start=start,
+            end=end,
+            ts_codes=codes,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+
+        if df.empty:
+            raise ValueError("export_full: 指定区间内无 margin_detail 数据")
+
+        self.writer.write_factor_data(snapshot_id, df, filename)
+
+        self.meta.ensure_table()
+        max_dt = df.index.get_level_values("datetime").max()
+        self.meta.upsert_last_datetime(snapshot_id, "margin_detail", max_dt)
+
+        instruments = df.index.get_level_values("instrument").unique().tolist()
+
+        return ExportResult(
+            snapshot_id=snapshot_id,
+            freq="margin_detail",
+            start=start,
+            end=end,
+            ts_codes=instruments,
+            rows=int(df.shape[0]),
+        )
+
+    def export_incremental(
+        self,
+        snapshot_id: str,
+        end: date,
+        exchanges: Optional[Sequence[str]] = None,
+        exclude_st: bool = False,
+        exclude_delisted_or_paused: bool = False,
+    ) -> ExportResult:
+        """增量导出 margin_detail 数据。从上次导出位置继续。"""
+        self.meta.ensure_table()
+
+        last_dt = self.meta.get_last_datetime(snapshot_id, "margin_detail")
+        if last_dt:
+            start = (last_dt + timedelta(days=1)).date()
+        else:
+            start = end - timedelta(days=30)
+
+        if start > end:
+            return ExportResult(
+                snapshot_id=snapshot_id, freq="margin_detail",
+                start=start, end=end, ts_codes=[], rows=0,
+            )
+
+        codes = self.db.get_base_ts_codes(
+            start=start, end=end,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+        df = self.db.load_margin_detail_panel(
+            start=start, end=end, ts_codes=codes,
+            exchanges=list(exchanges) if exchanges else None,
+            exclude_st=exclude_st,
+            exclude_delisted_or_paused=exclude_delisted_or_paused,
+        )
+
+        if df.empty:
+            return ExportResult(
+                snapshot_id=snapshot_id, freq="margin_detail",
+                start=start, end=end, ts_codes=[], rows=0,
+            )
+
+        self.writer.write_factor_data_incremental(snapshot_id, df, "margin_detail.h5")
+
+        max_dt = df.index.get_level_values("datetime").max()
+        self.meta.upsert_last_datetime(snapshot_id, "margin_detail", max_dt)
+
+        instruments = df.index.get_level_values("instrument").unique().tolist()
+        return ExportResult(
+            snapshot_id=snapshot_id, freq="margin_detail",
             start=start, end=end,
             ts_codes=instruments, rows=int(df.shape[0]),
         )

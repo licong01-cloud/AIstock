@@ -50,6 +50,7 @@ interface SnapshotInfo {
   has_moneyflow: boolean;
   has_daily_basic: boolean;
   has_bak_basic: boolean;
+  has_margin_detail: boolean;
   has_cyq_perf: boolean;
   has_sector_data: boolean;
   has_static_factors: boolean;
@@ -86,6 +87,7 @@ type ExportType =
   | "moneyflow"
   | "daily_basic"
   | "bak_basic"
+  | "margin_detail"
   | "cyq_perf"
   | "sector_data";
 
@@ -95,7 +97,7 @@ type ExportTab = "snapshot" | "bin";
 // 所有日频类型均支持增量
 const INCREMENTAL_TYPES: ExportType[] = [
   "daily", "minute", "moneyflow", "daily_basic",
-  "bak_basic", "cyq_perf", "sector_data",
+  "bak_basic", "margin_detail", "cyq_perf", "sector_data",
 ];
 
 // 数据集配置
@@ -105,6 +107,7 @@ const DATASET_CONFIG: Record<ExportType, { label: string; file: string; isDaily:
   moneyflow: { label: "个股资金流向 (moneyflow.h5)", file: "moneyflow.h5", isDaily: true },
   daily_basic: { label: "每日指标 (daily_basic.h5)", file: "daily_basic.h5", isDaily: true },
   bak_basic: { label: "历史股票列表 (bak_basic.h5)", file: "bak_basic.h5", isDaily: true },
+  margin_detail: { label: "融资融券明细 (margin_detail.h5)", file: "margin_detail.h5", isDaily: true },
   cyq_perf: { label: "每日筹码及胜率 (cyq_perf.h5)", file: "cyq_perf.h5", isDaily: true },
   sector_data: { label: "申万行业板块 (sector_data.h5)", file: "sector_data.h5", isDaily: true },
 };
@@ -221,7 +224,7 @@ export default function QlibPage() {
 
   // 多选数据集
   const [selectedDatasets, setSelectedDatasets] = useState<Set<ExportType>>(
-    new Set(["daily", "moneyflow", "daily_basic", "bak_basic", "cyq_perf", "sector_data"]),
+    new Set(["daily", "moneyflow", "daily_basic", "bak_basic", "margin_detail", "cyq_perf", "sector_data"]),
   );
   const [generateStaticFactors, setGenerateStaticFactors] = useState(true);
   const [generateFieldMap, setGenerateFieldMap] = useState(true);
@@ -628,7 +631,7 @@ export default function QlibPage() {
   };
 
   const selectAllDaily = () => {
-    setSelectedDatasets(new Set(["daily", "moneyflow", "daily_basic", "bak_basic", "cyq_perf", "sector_data"]));
+    setSelectedDatasets(new Set(["daily", "moneyflow", "daily_basic", "bak_basic", "margin_detail", "cyq_perf", "sector_data"]));
   };
   const selectAll = () => {
     setSelectedDatasets(new Set(Object.keys(DATASET_CONFIG) as ExportType[]));
@@ -1253,6 +1256,7 @@ export default function QlibPage() {
                     <th className="text-center py-2 px-1">资金流</th>
                     <th className="text-center py-2 px-1">指标</th>
                     <th className="text-center py-2 px-1">历史</th>
+                    <th className="text-center py-2 px-1">融券</th>
                     <th className="text-center py-2 px-1">筹码</th>
                     <th className="text-center py-2 px-1">行业</th>
                     <th className="text-center py-2 px-1">因子</th>
@@ -1269,6 +1273,7 @@ export default function QlibPage() {
                       <td className="py-2 px-1 text-center text-xs">{s.has_moneyflow ? "\u2705" : "\u2014"}</td>
                       <td className="py-2 px-1 text-center text-xs">{s.has_daily_basic ? "\u2705" : "\u2014"}</td>
                       <td className="py-2 px-1 text-center text-xs">{s.has_bak_basic ? "\u2705" : "\u2014"}</td>
+                      <td className="py-2 px-1 text-center text-xs">{s.has_margin_detail ? "\u2705" : "\u2014"}</td>
                       <td className="py-2 px-1 text-center text-xs">{s.has_cyq_perf ? "\u2705" : "\u2014"}</td>
                       <td className="py-2 px-1 text-center text-xs">{s.has_sector_data ? "\u2705" : "\u2014"}</td>
                       <td className="py-2 px-1 text-center text-xs">{s.has_static_factors ? "\u2705" : "\u2014"}</td>
@@ -1371,6 +1376,7 @@ export default function QlibPage() {
                       { has: detailSnapshot.has_moneyflow, label: "资金流向 (moneyflow.h5)", type: "moneyflow" },
                       { has: detailSnapshot.has_daily_basic, label: "每日指标 (daily_basic.h5)", type: "daily_basic" },
                       { has: detailSnapshot.has_bak_basic, label: "历史股票列表 (bak_basic.h5)", type: "bak_basic" },
+                      { has: detailSnapshot.has_margin_detail, label: "融资融券明细 (margin_detail.h5)", type: "margin_detail" },
                       { has: detailSnapshot.has_cyq_perf, label: "筹码及胜率 (cyq_perf.h5)", type: "cyq_perf" },
                       { has: detailSnapshot.has_sector_data, label: "行业板块 (sector_data.h5)", type: "sector_data" },
                       { has: detailSnapshot.has_static_factors, label: "预计算因子 (static_factors.parquet)", type: "" },

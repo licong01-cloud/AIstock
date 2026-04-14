@@ -37,3 +37,4 @@ def _ensure_strategies_loaded() -> None:
     """确保所有内置策略已注册（延迟导入避免循环依赖）."""
     if not STRATEGY_REGISTRY:
         from . import topk_dropout  # noqa: F401
+        from . import topk_dropout_rc  # noqa: F401

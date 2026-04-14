@@ -32,7 +32,7 @@ export interface UseExperimentSSEReturn {
   /** 日志底部锚点 ref（绑定到 <div ref={logsEndRef} />） */
   logsEndRef: React.RefObject<HTMLDivElement>;
   /** 提交实验并建立 SSE：POST /experiments/{id}/run → SSE */
-  startRun: (experimentId: string) => Promise<void>;
+  startRun: (experimentId: string, engineMode?: "legacy" | "unified") => Promise<void>;
   /** 仅建立 SSE 日志连接（实验已在执行中） */
   openLogs: (experimentId: string) => void;
   /** 关闭 SSE 连接并清除日志 */
@@ -212,7 +212,7 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
   }, [pollAfterDisconnect, pollFinalStatus, appendLog, handleCompleted]);
 
   /** POST /run → 建立 SSE */
-  const startRun = useCallback(async (experimentId: string) => {
+  const startRun = useCallback(async (experimentId: string, engineMode: "legacy" | "unified" = "legacy") => {
     abortRef.current = false;
     reconnectCountRef.current = 0;
     setRunStatus("starting");
@@ -221,7 +221,10 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
     setEnhancedMetrics(null);
 
     try {
-      const res = await fetch(`${API}/quantevolver/experiments/${experimentId}/run`, { method: "POST" });
+      const runUrl = engineMode === "unified"
+        ? `${API}/quantevolver/experiments/${experimentId}/run?engine_mode=unified`
+        : `${API}/quantevolver/experiments/${experimentId}/run`;
+      const res = await fetch(runUrl, { method: "POST" });
       const data = await res.json();
       if (!data.ok) {
         setRunStatus("failed");
