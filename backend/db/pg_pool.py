@@ -11,6 +11,16 @@ from typing import Any, Dict, Optional
 import psycopg2
 from psycopg2.pool import ThreadedConnectionPool
 
+# pandas 2.x 对 psycopg2 原生连接发出 UserWarning（非 SQLAlchemy），
+# 这是已知兼容用法，全局抑制此警告避免日志噪音
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message="pandas only supports SQLAlchemy connectable",
+    category=UserWarning,
+    module="pandas",
+)
+
 
 _DB_POOL: Optional[ThreadedConnectionPool] = None
 

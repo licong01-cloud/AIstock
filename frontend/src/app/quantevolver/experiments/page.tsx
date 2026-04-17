@@ -37,6 +37,7 @@ type Experiment = {
   annualized_return_no_cost?: number | null;
   max_drawdown_no_cost?: number | null;
   information_ratio_no_cost?: number | null;
+  alpha_mode?: string;
   created_at?: string;
   updated_at?: string;
 };
@@ -429,6 +430,11 @@ export default function ExperimentsPage() {
                     <span style={{ fontSize: 11, background: `${sm.color}15`, color: sm.color, padding: "2px 8px", borderRadius: 12, fontWeight: 600 }}>
                       {sm.label}
                     </span>
+                    {exp.alpha_mode === "multi" && (
+                      <span style={{ fontSize: 10, background: "#8b5cf615", color: "#8b5cf6", padding: "2px 6px", borderRadius: 12, fontWeight: 600 }}>
+                        多Alpha
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -621,6 +627,12 @@ export default function ExperimentsPage() {
                         style={{ padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4, border: "1px solid #3b82f6", background: "#eff6ff", color: "#3b82f6", fontWeight: 600 }}>
                         查看详情
                       </button>
+                      {exp.alpha_mode === "multi" && (
+                        <button onClick={() => window.open(`/quantevolver/multi-alpha/diagnostics/${exp.experiment_id}`, '_blank')}
+                          style={{ padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4, border: "1px solid #8b5cf6", background: "#f5f3ff", color: "#7c3aed", fontWeight: 600 }}>
+                          查看诊断
+                        </button>
+                      )}
                       <button onClick={() => syncResult(exp.experiment_id)}
                         disabled={isActioning}
                         style={{ padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: "#fff" }}>

@@ -250,7 +250,7 @@ def list_factors(
                performance_metrics, first_sota_task_id, is_sota_factor,
                interface_info, best_performance,
                best_performance_sharpe, best_performance_ann_ret, asset_bundle_id,
-               source_task_id, source_code_relpath, source_code_origin, source_loop_tag, source_index,
+               source_task_id, source_code_origin, source_loop_tag, source_index,
                raw_payload,
                LEFT(code_text, 500) AS code_text_preview,
                ic, annualized_return, max_drawdown, sharpe,
@@ -280,7 +280,7 @@ def list_factors(
         desc, formula, vars_json, freq, align, nan_pol,
         created, exp_id, impl_mod, impl_func, impl_v,
         perf, first_sota_task_id, is_sota_factor, info, best_perf, best_sharpe, best_ann, bundle_id,
-        source_task_id, source_code_relpath, source_code_origin, source_loop_tag, source_index,
+        source_task_id, source_code_origin, source_loop_tag, source_index,
         raw_payload, code_text_preview,
         ic_val, ann_ret_val, max_dd_val, sharpe_val,
         factor_type_val, data_source_val, asset_path_val, node_id_val
@@ -312,7 +312,6 @@ def list_factors(
                 "best_performance_ann_ret": best_ann,
                 "asset_bundle_id": bundle_id,
                 "source_task_id": source_task_id,
-                "source_code_relpath": source_code_relpath,
                 "source_code_origin": source_code_origin,
                 "source_loop_tag": source_loop_tag,
                 "source_index": source_index,
@@ -352,11 +351,12 @@ def get_factor_detail(
                c.performance_metrics, c.first_sota_task_id, c.is_sota_factor, c.interface_info,
                c.best_performance, c.best_performance_sharpe, c.best_performance_ann_ret,
                c.asset_bundle_id,
-               c.source_task_id, c.source_code_relpath, c.source_code_origin,
+               c.source_task_id, c.source_code_origin,
                c.source_loop_tag, c.source_index,
                c.raw_payload, c.code_text,
                c.factor_type, c.data_source,
-               cl.category AS cl_category, cl.grade AS cl_grade,
+               cl.category AS cl_category,
+               fr.official_grade AS cl_grade,
                cl.llm_analysis AS cl_llm_analysis, cl.description AS cl_description,
                cl.factor_dimension AS cl_factor_dimension,
                cl.factor_profile AS cl_factor_profile,
@@ -365,6 +365,15 @@ def get_factor_detail(
         FROM aistock_factor_catalog c
         LEFT JOIN qe_factor_classification cl
             ON cl.factor_name = c.factor_name AND cl.factor_source = c.source
+        LEFT JOIN LATERAL (
+            SELECT official_grade FROM qe_factor_official_ratings r
+            WHERE r.factor_catalog_id = c.id
+              AND r.rule_version = (
+                  SELECT rule_version FROM qe_rating_rule_versions
+                  WHERE status = 'active' ORDER BY activated_at DESC LIMIT 1
+              )
+            ORDER BY r.graded_at DESC LIMIT 1
+        ) fr ON TRUE
         {where_sql}
         LIMIT 1
     """
@@ -406,7 +415,6 @@ def get_factor_detail(
         "best_performance_ann_ret": data["best_performance_ann_ret"],
         "asset_bundle_id": data["asset_bundle_id"],
         "source_task_id": data["source_task_id"],
-        "source_code_relpath": data["source_code_relpath"],
         "source_code_origin": data["source_code_origin"],
         "source_loop_tag": data["source_loop_tag"],
         "source_index": data["source_index"],
@@ -440,7 +448,7 @@ def download_factor_source_code(
 
     where_sql = " WHERE " + " AND ".join(conds)
     sql = f"""
-        SELECT source_task_id, source_code_relpath, asset_path
+        SELECT asset_path
         FROM aistock_factor_catalog
         {where_sql}
         ORDER BY created_at_utc DESC
@@ -454,36 +462,20 @@ def download_factor_source_code(
     if not row:
         raise HTTPException(status_code=404, detail=f"因子 {factor_name} 不存在")
 
-    task_id, relpath, asset_path = row
+    asset_path = row[0]
+
+    if not asset_path:
+        raise HTTPException(status_code=404, detail="因子未配置源码文件路径 (asset_path 为空)")
 
     aistock_root = Path(__file__).resolve().parents[2]
-
-    # 优先使用 asset_path（相对于 AIstock 根目录的 posix 路径，由回填脚本/同步服务写入）
-    if asset_path:
-        file_path = (aistock_root / asset_path).resolve()
-        try:
-            file_path.relative_to(aistock_root)
-        except ValueError:
-            raise HTTPException(status_code=404, detail="factor_source_path_invalid")
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(path=str(file_path), filename=file_path.name, media_type="text/plain")
-
-    # 兜底：使用 source_code_relpath（旧格式，相对于 task 目录）
-    if not task_id or not relpath:
-        raise HTTPException(status_code=404, detail="factor_source_code_not_available")
-
-    assets_root = (aistock_root / "rdagent_assets" / "rdagent_tasks").resolve()
-    task_dir = (assets_root / str(task_id)).resolve()
-    rel = str(relpath).strip().lstrip("/\\")
-    file_path = (task_dir / rel).resolve()
-
+    file_path = (aistock_root / asset_path).resolve()
     try:
-        file_path.relative_to(task_dir)
+        file_path.relative_to(aistock_root)
     except ValueError:
         raise HTTPException(status_code=404, detail="factor_source_path_invalid")
 
     if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="factor_source_code_missing")
+        raise HTTPException(status_code=404, detail=f"因子源码文件不存在: {asset_path}")
 
     return FileResponse(path=str(file_path), filename=file_path.name, media_type="text/plain")
 

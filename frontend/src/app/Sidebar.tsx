@@ -19,6 +19,8 @@ const NAV_GROUPS: {
       { href: "/quantevolver/compose", label: "🔧 组合配置" },
       { href: "/quantevolver/experiments", label: "🧪 实验历史" },
       { href: "/quantevolver/evolution", label: "🔁 自动演进" },
+      { href: "/quantevolver/multi-alpha/diagnostics", label: "🔮 多Alpha 诊断" },
+      { href: "/quantevolver/multi-alpha/evolve-wizard", label: "🧬 多Alpha 演进" },
       { href: "/quantevolver/evolution/sota", label: "🏆 SOTA 殿堂" },
       { href: "/quantevolver/model-training", label: "🧠 模型训练" },
       { href: "/quantevolver/selection", label: "🚀 实验选股" },

@@ -4,6 +4,10 @@ import React, { useEffect, useState, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
 import FactorList from "../components/FactorList";
 import ModelList from "../components/ModelList";
+import MultiAlphaModeToggle from "../components/MultiAlphaModeToggle";
+import MultiAlphaGroupEditor, { type MultiAlphaConfig } from "../components/MultiAlphaGroupEditor";
+import MultiAlphaResults from "../components/MultiAlphaResults";
+import MultiAlphaProgress from "../components/MultiAlphaProgress";
 import { useExperimentSSE } from "../components/useExperimentSSE";
 import LogTerminal from "../components/LogTerminal";
 import MetricsSummary from "../components/MetricsSummary";
@@ -43,6 +47,14 @@ type ConfigResult = {
   experiment_dir?: string;
   wsl_command?: string;
   error?: string;
+  // 多Alpha 特有字段
+  alpha_mode?: string;
+  execution_mode?: string;
+  total_groups?: number;
+  meta_method?: string;
+  group_configs?: Array<{ group_name: string; node_id: string; model_id: string; factor_count: number; reuse_mode?: string }>;
+  node_distribution?: Record<string, string[]>;
+  is_distributed?: boolean;
 };
 
 /* ━━ 类型标签颜色 ━━ */
@@ -167,6 +179,22 @@ export default function ComposePage() {
   const [evolutionLoops, setEvolutionLoops] = useState(5);
   const [evolutionObjective, setEvolutionObjective] = useState("");
 
+  /* ── Multi-Alpha 模式 ── */
+  const [alphaMode, setAlphaMode] = useState<"single" | "multi">("single");
+  const [multiAlphaConfig, setMultiAlphaConfig] = useState<MultiAlphaConfig | null>(null);
+
+  const handleAlphaModeChange = useCallback((mode: "single" | "multi") => {
+    setAlphaMode(mode);
+    if (mode === "multi") {
+      setSelectedFactors(new Set());
+      setSelectedModel("");
+    } else {
+      setMultiAlphaConfig(null);
+    }
+    setCorrAnalyzed(false);
+    setCorrPairs([]);
+  }, []);
+
   /* ── HMM 板块轮动 ── */
   const [enableSectorHmm, setEnableSectorHmm] = useState(false);
   const [hmmConfigs, setHmmConfigs] = useState<any[]>([]);
@@ -186,6 +214,13 @@ export default function ComposePage() {
   /* ── 尾盘涨停未成交资金处理 ── */
   const [unfilledHandler, setUnfilledHandler] = useState<string>(""); // "" | "TAIL_BOOST" | "TAIL_SUBSTITUTE"
   const [unfilledBackupDepth, setUnfilledBackupDepth] = useState<number>(15);
+
+  /* ── 从已有实验继承 ── */
+  type PriorExperiment = { experiment_id: string; alpha_mode?: string; factor_names?: string[]; model_id?: string; strategy_id?: string; data_split?: any; custom_params?: any; multi_alpha_config?: any; created_at?: string; result_metrics?: any; ic?: number | null };
+  const [priorExperiments, setPriorExperiments] = useState<PriorExperiment[]>([]);
+  const [priorExpId, setPriorExpId] = useState<string>("");
+  const [inheritLoading, setInheritLoading] = useState(false);
+  const [inheritExpanded, setInheritExpanded] = useState(false);
 
   /* ── RDAgent Task 导入 ── */
   type SourceTask = { task_id: string; sota_factor_count: number; sota_model_count: number; best_ic: number | null; best_sharpe: number | null; best_annualized_return: number | null; worst_max_drawdown: number | null; total_loops: number; has_sota: boolean };
@@ -303,6 +338,53 @@ export default function ComposePage() {
       setHmmSnapshots([]);
     }
   }, []);
+
+  /* ── 从已有实验继承配置 ── */
+  async function inheritFromExperiment() {
+    if (!priorExpId) return;
+    setInheritLoading(true);
+    try {
+      const res = await fetch(`${API}/quantevolver/experiments/${priorExpId}`);
+      const d = await res.json();
+      if (!d.ok) { alert("获取实验详情失败"); setInheritLoading(false); return; }
+      const exp = d.experiment || d;
+      if (exp.alpha_mode === "multi") {
+        if (!exp.multi_alpha_config) {
+          alert("该多Alpha实验缺少分组配置数据 (multi_alpha_config 为空)，无法继承");
+          setInheritLoading(false);
+          return;
+        }
+        setAlphaMode("multi");
+        setMultiAlphaConfig(exp.multi_alpha_config);
+        setSelectedFactors(new Set());
+        setSelectedModel("");
+      } else {
+        setAlphaMode("single");
+        setMultiAlphaConfig(null);
+        if (exp.factor_names?.length) {
+          const keys = new Set<string>();
+          for (const name of exp.factor_names) {
+            const match = factors.find((f: Factor) => f.factor_name === name);
+            keys.add(match ? `${match.factor_name}||${match.source}` : name);
+          }
+          setSelectedFactors(keys);
+        }
+        if (exp.model_id) setSelectedModel(exp.model_id);
+      }
+      if (exp.strategy_id) setSelectedStrategy(exp.strategy_id);
+      if (exp.data_split) setDataSplit(exp.data_split);
+      if (exp.custom_params) {
+        if (exp.custom_params.topk) setTopk(exp.custom_params.topk);
+        if (exp.custom_params.n_drop) setNDrop(exp.custom_params.n_drop);
+        if (exp.custom_params.execution_algo) setExecutionAlgo(exp.custom_params.execution_algo);
+        if (exp.custom_params.execution_algo_params) setExecutionAlgoParams(exp.custom_params.execution_algo_params);
+      }
+      setCurrentStep(1);
+      setCorrAnalyzed(false);
+      setCorrPairs([]);
+    } catch (e: any) { alert("继承失败: " + (e?.message || "")); }
+    setInheritLoading(false);
+  }
 
   /* ── 从 RDAgent Task 导入配置 ── */
   async function importFromTask() {
@@ -437,14 +519,23 @@ export default function ComposePage() {
 
   /* ── 操作动作 ── */
   async function evaluateCombination() {
-    if (selectedFactors.size === 0) { alert("请先选择因子"); return; }
+    if (alphaMode === "single" && selectedFactors.size === 0) { alert("请先选择因子"); return; }
+    if (alphaMode === "multi" && !multiAlphaConfig) { alert("请先生成多Alpha分组配置"); return; }
     setActionLoading("evaluate");
     try {
+      // Multi-Alpha: 聚合各组因子
+      const factorNames = alphaMode === "multi" && multiAlphaConfig
+        ? [...new Set(multiAlphaConfig.alpha_groups.flatMap(g => g.factor_names))]
+        : Array.from(selectedFactors).map(k => k.split("||")[0]);
+
       const res = await fetch(`${API}/quantevolver/experiment/evaluate-portfolio`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          factor_names: Array.from(selectedFactors).map(k => k.split("||")[0]), model_id: selectedModel || undefined, strategy_id: selectedStrategy || undefined,
+          factor_names: factorNames,
+          model_id: alphaMode === "single" ? (selectedModel || undefined) : multiAlphaConfig?.alpha_groups[0]?.model_id,
+          strategy_id: selectedStrategy || undefined,
           custom_params: { topk, n_drop: nDrop, disable_alpha158: disableAlphaBaseline, quick_train: quickTrain, label_type: labelType, ...(blacklistEnabled && stockPoolPath ? { stock_pool: stockPoolPath } : {}) },
+          ...(alphaMode === "multi" && multiAlphaConfig ? { alpha_mode: "multi", multi_alpha_config: multiAlphaConfig } : {}),
         }),
       });
       const data = await res.json();
@@ -455,15 +546,23 @@ export default function ComposePage() {
   }
 
   async function generateConfig() {
-    if (selectedFactors.size === 0) { alert("请先选择因子"); return; }
+    if (alphaMode === "single" && selectedFactors.size === 0) { alert("请先选择因子"); return; }
+    if (alphaMode === "multi" && !multiAlphaConfig) { alert("请先生成多Alpha分组配置"); return; }
     setActionLoading("generate");
     // 重置上一次的执行状态
     sse.reset();
     try {
+      // Multi-Alpha 模式: 因子由各组管理，聚合所有组的因子作为 factor_names
+      const factorNames = alphaMode === "multi" && multiAlphaConfig
+        ? [...new Set(multiAlphaConfig.alpha_groups.flatMap(g => g.factor_names))]
+        : Array.from(selectedFactors).map(k => k.split("||")[0]);
+
       const res = await fetch(`${API}/quantevolver/config/generate`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          factor_names: Array.from(selectedFactors).map(k => k.split("||")[0]), model_id: selectedModel || undefined, strategy_id: selectedStrategy || undefined,
+          factor_names: factorNames,
+          model_id: alphaMode === "single" ? (selectedModel || undefined) : multiAlphaConfig?.alpha_groups[0]?.model_id,
+          strategy_id: selectedStrategy || undefined,
           data_split: dataSplit, custom_params: {
             topk, n_drop: nDrop, disable_alpha158: disableAlphaBaseline, quick_train: quickTrain, label_type: labelType,
             backtest_freq: backtestFreq,
@@ -476,7 +575,12 @@ export default function ComposePage() {
             unfilled_handler_params: unfilledHandler === "TAIL_SUBSTITUTE" ? { backup_depth: unfilledBackupDepth } : {},
           } : {}),
           dispatch_mode: dispatchMode,
-          evolution_params: dispatchMode === "evolution" ? { loops: evolutionLoops, objective: evolutionObjective } : undefined
+          evolution_params: dispatchMode === "evolution" ? { loops: evolutionLoops, objective: evolutionObjective } : undefined,
+          // Multi-Alpha 字段
+          ...(alphaMode === "multi" && multiAlphaConfig ? {
+            alpha_mode: "multi",
+            multi_alpha_config: multiAlphaConfig,
+          } : {}),
         }),
       });
       const data = await res.json();
@@ -545,6 +649,64 @@ export default function ComposePage() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* 从已有实验继承配置 */}
+      <div style={{ ...cardStyle, marginBottom: "24px" }}>
+        <div
+          onClick={() => {
+            setInheritExpanded(!inheritExpanded);
+            if (!inheritExpanded && priorExperiments.length === 0) {
+              fetch(`${API}/quantevolver/experiments?limit=20`)
+                .then(r => r.json())
+                .then(d => { if (d.ok || d.items) setPriorExperiments(d.items || []); })
+                .catch(() => {});
+            }
+          }}
+          style={{ ...headerStyle, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+        >
+          <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#059669", display: "flex", alignItems: "center", gap: "8px" }}>
+            从已有实验继承配置
+          </h2>
+          <span style={{ color: "#94a3b8", fontSize: "12px" }}>{inheritExpanded ? "收起" : "展开"}</span>
+        </div>
+        {inheritExpanded && (
+          <div style={{ padding: "20px" }}>
+            <p style={{ margin: "0 0 12px", fontSize: "13px", color: "#64748b" }}>
+              选择一个已有实验（支持单Alpha和多Alpha），一键继承其因子、模型、策略等完整配置。
+            </p>
+            <div style={{ display: "flex", gap: "12px", alignItems: "flex-end" }}>
+              <div style={{ flex: 1 }}>
+                <select
+                  value={priorExpId}
+                  onChange={e => setPriorExpId(e.target.value)}
+                  style={{ width: "100%", padding: "10px 12px", fontSize: "13px", border: "1px solid #e2e8f0", borderRadius: "8px", backgroundColor: "#f8fafc", color: "#1e293b" }}
+                >
+                  <option value="">-- 选择已有实验 --</option>
+                  {priorExperiments.map(exp => (
+                    <option key={exp.experiment_id} value={exp.experiment_id}>
+                      {exp.experiment_id} | {exp.alpha_mode === "multi" ? "多Alpha" : "单Alpha"} | IC:{exp.ic != null ? Number(exp.ic).toFixed(4) : "-"} | {exp.created_at ? new Date(exp.created_at).toLocaleDateString("zh-CN") : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                onClick={inheritFromExperiment}
+                disabled={!priorExpId || inheritLoading}
+                style={{
+                  ...btnPrimary,
+                  backgroundColor: priorExpId ? "#059669" : "#94a3b8",
+                  padding: "10px 24px",
+                  fontSize: "14px",
+                  opacity: !priorExpId || inheritLoading ? 0.5 : 1,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {inheritLoading ? "加载中..." : "继承配置"}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* RDAgent Task 快速导入 */}
@@ -660,40 +822,126 @@ export default function ComposePage() {
       {/* 下部：分步卡片区 */}
       <div style={{ ...cardStyle, minHeight: "500px" }}>
 
-        {/* Step 1: 因子选择 */}
+        {/* Step 1: 因子选择 / Multi-Alpha 分组 */}
         {currentStep === 1 && (
           <div style={{ padding: "24px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
-              <h2 style={{ margin: 0, fontSize: "18px", fontWeight: 700, color: "#1e293b" }}>1. 因子选择 (Factor Selection)</h2>
-              <span style={{ backgroundColor: "#dbeafe", color: "#2563eb", padding: "4px 12px", borderRadius: "12px", fontSize: "13px", fontWeight: 600 }}>已选 {selectedFactors.size} 项</span>
-            </div>
+            {/* Alpha 模式切换 — 始终显示 */}
+            <MultiAlphaModeToggle alphaMode={alphaMode} onModeChange={handleAlphaModeChange} />
 
-            <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", overflow: "hidden" }}>
-              <FactorList
-                mode="selection"
-                selectedFactors={selectedFactors}
-                onFactorSelect={(selected) => { setSelectedFactors(selected); setCorrAnalyzed(false); setCorrPairs([]); }}
-              />
-            </div>
+            {alphaMode === "single" ? (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                  <h2 style={{ margin: 0, fontSize: "18px", fontWeight: 700, color: "#1e293b" }}>1. 因子选择 (Factor Selection)</h2>
+                  <span style={{ backgroundColor: "#dbeafe", color: "#2563eb", padding: "4px 12px", borderRadius: "12px", fontSize: "13px", fontWeight: 600 }}>已选 {selectedFactors.size} 项</span>
+                </div>
+
+                <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", overflow: "hidden" }}>
+                  <FactorList
+                    mode="selection"
+                    selectedFactors={selectedFactors}
+                    onFactorSelect={(selected) => { setSelectedFactors(selected); setCorrAnalyzed(false); setCorrPairs([]); }}
+                    cacheContext={{
+                      experimentId: configResult?.experiment_id || priorExpId || null,
+                      trainStart: dataSplit.train_start,
+                      backtestEnd: dataSplit.test_end,
+                    }}
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                  <h2 style={{ margin: 0, fontSize: "18px", fontWeight: 700, color: "#1e293b" }}>1. 多Alpha因子分组 (Multi-Alpha Groups)</h2>
+                  {multiAlphaConfig && (
+                    <span style={{ backgroundColor: "#f3e8ff", color: "#7c3aed", padding: "4px 12px", borderRadius: "12px", fontSize: "13px", fontWeight: 600 }}>
+                      {multiAlphaConfig.alpha_groups.length} 组 / {multiAlphaConfig.alpha_groups.reduce((s, g) => s + g.factor_names.length, 0)} 因子
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", padding: "16px" }}>
+                  <MultiAlphaGroupEditor
+                    config={multiAlphaConfig}
+                    onConfigChange={setMultiAlphaConfig}
+                    apiBase={API}
+                  />
+                </div>
+              </>
+            )}
 
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "24px" }}>
-              <button onClick={() => setCurrentStep(2)} style={{ ...btnPrimary, padding: "10px 28px", fontSize: "14px" }}>下一步：选择模型</button>
+              <button
+                onClick={() => setCurrentStep(2)}
+                disabled={alphaMode === "single" ? selectedFactors.size === 0 : !multiAlphaConfig}
+                style={{
+                  ...btnPrimary, padding: "10px 28px", fontSize: "14px",
+                  opacity: (alphaMode === "single" ? selectedFactors.size === 0 : !multiAlphaConfig) ? 0.5 : 1,
+                }}
+              >
+                下一步：{alphaMode === "single" ? "选择模型" : "模型汇总"}
+              </button>
             </div>
           </div>
         )}
 
-        {/* Step 2: 模型选择 */}
+        {/* Step 2: 模型选择 / Multi-Alpha 模型汇总 */}
         {currentStep === 2 && (
           <div style={{ padding: "24px" }}>
-            <h2 style={{ margin: "0 0 16px", fontSize: "18px", fontWeight: 700, color: "#1e293b" }}>2. 模型选择 (Model Selection)</h2>
-
-            <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", overflow: "hidden", marginBottom: "24px" }}>
-              <ModelList
-                mode="selection"
-                selectedModel={selectedModel}
-                onSelectModel={(modelId) => setSelectedModel(modelId)}
-              />
-            </div>
+            {alphaMode === "single" ? (
+              <>
+                <h2 style={{ margin: "0 0 16px", fontSize: "18px", fontWeight: 700, color: "#1e293b" }}>2. 模型选择 (Model Selection)</h2>
+                <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", overflow: "hidden", marginBottom: "24px" }}>
+                  <ModelList
+                    mode="selection"
+                    selectedModel={selectedModel}
+                    onSelectModel={(modelId) => setSelectedModel(modelId)}
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 style={{ margin: "0 0 16px", fontSize: "18px", fontWeight: 700, color: "#1e293b" }}>2. 各组模型汇总 (Group Model Summary)</h2>
+                {multiAlphaConfig ? (
+                  <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", overflow: "hidden", marginBottom: "24px" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ background: "#f9fafb", textAlign: "left" }}>
+                          <th style={{ padding: "10px 16px", fontWeight: 500, color: "#6b7280", fontSize: 12 }}>组名</th>
+                          <th style={{ padding: "10px 16px", fontWeight: 500, color: "#6b7280", fontSize: 12, width: 60, textAlign: "center" }}>因子数</th>
+                          <th style={{ padding: "10px 16px", fontWeight: 500, color: "#6b7280", fontSize: 12 }}>模型</th>
+                          <th style={{ padding: "10px 16px", fontWeight: 500, color: "#6b7280", fontSize: 12 }}>数据集</th>
+                          <th style={{ padding: "10px 16px", fontWeight: 500, color: "#6b7280", fontSize: 12, width: 60, textAlign: "center" }}>计算</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {multiAlphaConfig.alpha_groups.map((g) => (
+                          <tr key={g.group_name} style={{ borderTop: "1px solid #f3f4f6" }}>
+                            <td style={{ padding: "10px 16px", fontWeight: 600, color: "#111827" }}>{g.group_name}</td>
+                            <td style={{ padding: "10px 16px", textAlign: "center", fontFamily: "monospace" }}>{g.factor_names.length}</td>
+                            <td style={{ padding: "10px 16px", fontFamily: "monospace", fontSize: 12, color: "#4b5563" }}>{g.model_id.replace(/__seed_|__/g, "")}</td>
+                            <td style={{ padding: "10px 16px", fontSize: 12, color: "#6b7280" }}>{g.dataset_type}</td>
+                            <td style={{ padding: "10px 16px", textAlign: "center" }}>
+                              <span style={{
+                                padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
+                                backgroundColor: g.compute_resource === "gpu" ? "#dcfce7" : "#dbeafe",
+                                color: g.compute_resource === "gpu" ? "#166534" : "#1e40af",
+                              }}>{g.compute_resource.toUpperCase()}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div style={{ padding: "12px 16px", backgroundColor: "#f8fafc", borderTop: "1px solid #e2e8f0", fontSize: 12, color: "#64748b" }}>
+                      模型已在分组中配置（Step 1），如需调整请返回上一步。Meta-Model: {multiAlphaConfig.meta_model.method} | 执行模式: {multiAlphaConfig.execution_mode}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ padding: "40px", textAlign: "center", color: "#94a3b8", fontSize: 14 }}>
+                    请先在 Step 1 中生成分组配置
+                  </div>
+                )}
+              </>
+            )}
 
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: "24px" }}>
               <button onClick={() => setCurrentStep(1)} style={btnSecondary}>上一步</button>
@@ -896,54 +1144,107 @@ export default function ComposePage() {
               {/* 左侧预览 */}
               <div style={{ backgroundColor: "#f8fafc", borderRadius: "8px", padding: "20px", border: "1px solid #e2e8f0" }}>
                 <h3 style={{ margin: "0 0 16px", fontSize: "13px", fontWeight: 700, color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.05em" }}>当前配置清单</h3>
-                <div style={{ fontSize: "14px", display: "flex", flexDirection: "column", gap: "16px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
-                    <span style={{ color: "#64748b", fontWeight: 500 }}>已选因子数量</span>
-                    <span style={{ fontSize: "20px", fontWeight: 700, fontFamily: "monospace", color: "#059669" }}>{selectedFactors.size} 个</span>
-                  </div>
-                  {selectedFactors.size > 0 && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", paddingBottom: "12px", borderBottom: "1px solid #f1f5f9", maxHeight: "120px", overflowY: "auto" }}>
-                      {Array.from(selectedFactors).map(k => {
-                        const name = k.split("||")[0];
-                        return (
-                          <span key={k} style={{ padding: "2px 8px", backgroundColor: "#dbeafe", color: "#2563eb", fontSize: "11px", borderRadius: "4px", fontFamily: "monospace", border: "1px solid #bfdbfe" }}>
-                            {name}
-                          </span>
-                        );
-                      })}
+
+                {alphaMode === "multi" && multiAlphaConfig ? (
+                  /* Multi-Alpha 配置预览 */
+                  <div style={{ fontSize: "14px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                      <span style={{ color: "#64748b", fontWeight: 500 }}>Alpha 模式</span>
+                      <span style={{ fontSize: "14px", fontWeight: 700, color: "#7c3aed" }}>多Alpha (Phase 3)</span>
                     </div>
-                  )}
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
-                    <span style={{ color: "#64748b", fontWeight: 500 }}>选定模型</span>
-                    <span style={{ fontWeight: 600, color: "#1e293b", textAlign: "right", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={selectedModel}>
-                      {(() => {
-                        if (!selectedModel) return "未选择";
-                        const m = models.find(m => m.model_id === selectedModel);
-                        return m ? `${m.display_name || m.model_name} (${m.model_type || "未知类型"})` : selectedModel;
-                      })()}
-                    </span>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                      <span style={{ color: "#64748b", fontWeight: 500 }}>分组数 / 总因子</span>
+                      <span style={{ fontSize: "20px", fontWeight: 700, fontFamily: "monospace", color: "#7c3aed" }}>
+                        {multiAlphaConfig.alpha_groups.length} 组 / {multiAlphaConfig.alpha_groups.reduce((s, g) => s + g.factor_names.length, 0)} 因子
+                      </span>
+                    </div>
+                    {/* 各组摘要 */}
+                    <div style={{ maxHeight: "140px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px", paddingBottom: "12px", borderBottom: "1px solid #f1f5f9" }}>
+                      {multiAlphaConfig.alpha_groups.map(g => (
+                        <div key={g.group_name} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0" }}>
+                          <span style={{ fontWeight: 600, color: "#374151" }}>{g.group_name}</span>
+                          <span style={{ color: "#64748b", fontFamily: "monospace" }}>
+                            {g.factor_names.length}因子 | {g.model_id.replace(/__seed_|__/g, "")} | {g.compute_resource.toUpperCase()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                      <span style={{ color: "#64748b", fontWeight: 500 }}>Meta-Model</span>
+                      <span style={{ fontWeight: 600, color: "#1e293b" }}>{multiAlphaConfig.meta_model.method} | {multiAlphaConfig.meta_model.cv_strategy}</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                      <span style={{ color: "#64748b", fontWeight: 500 }}>执行模式</span>
+                      <span style={{ fontWeight: 600, color: "#1e293b" }}>{multiAlphaConfig.execution_mode}</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                      <span style={{ color: "#64748b", fontWeight: 500 }}>选定策略</span>
+                      <span style={{ fontWeight: 600, color: "#1e293b" }}>
+                        {(() => {
+                          if (!selectedStrategy) return "未选择";
+                          const s = strategies.find(s => s.strategy_id === selectedStrategy);
+                          return `${s?.display_name || selectedStrategy} (TopK=${topk}, n_drop=${nDrop})`;
+                        })()}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                      <span style={{ color: "#64748b", fontWeight: 500 }}>执行算法</span>
+                      <span style={{ fontWeight: 600, color: "#1e293b" }}>
+                        {executionAlgo === "CLOSE_PRICE" ? "收盘价执行 (日线)" : executionAlgo ? `${executionAlgoCatalog.find((a: any) => a.algo_code === executionAlgo)?.algo_name || executionAlgo} (分钟线)` : "默认 TailTWAP (分钟线)"}
+                      </span>
+                    </div>
                   </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
-                    <span style={{ color: "#64748b", fontWeight: 500 }}>选定策略</span>
-                    <span style={{ fontWeight: 600, color: "#1e293b" }}>
-                      {(() => {
-                        if (!selectedStrategy) return "未选择";
-                        const s = strategies.find(s => s.strategy_id === selectedStrategy);
-                        return `${s?.display_name || selectedStrategy} (TopK=${topk}, n_drop=${nDrop})`;
-                      })()}
-                    </span>
+                ) : (
+                  /* Single-Alpha 配置预览（原有逻辑） */
+                  <div style={{ fontSize: "14px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                      <span style={{ color: "#64748b", fontWeight: 500 }}>已选因子数量</span>
+                      <span style={{ fontSize: "20px", fontWeight: 700, fontFamily: "monospace", color: "#059669" }}>{selectedFactors.size} 个</span>
+                    </div>
+                    {selectedFactors.size > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", paddingBottom: "12px", borderBottom: "1px solid #f1f5f9", maxHeight: "120px", overflowY: "auto" }}>
+                        {Array.from(selectedFactors).map(k => {
+                          const name = k.split("||")[0];
+                          return (
+                            <span key={k} style={{ padding: "2px 8px", backgroundColor: "#dbeafe", color: "#2563eb", fontSize: "11px", borderRadius: "4px", fontFamily: "monospace", border: "1px solid #bfdbfe" }}>
+                              {name}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                      <span style={{ color: "#64748b", fontWeight: 500 }}>选定模型</span>
+                      <span style={{ fontWeight: 600, color: "#1e293b", textAlign: "right", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={selectedModel}>
+                        {(() => {
+                          if (!selectedModel) return "未选择";
+                          const m = models.find(m => m.model_id === selectedModel);
+                          return m ? `${m.display_name || m.model_name} (${m.model_type || "未知类型"})` : selectedModel;
+                        })()}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                      <span style={{ color: "#64748b", fontWeight: 500 }}>选定策略</span>
+                      <span style={{ fontWeight: 600, color: "#1e293b" }}>
+                        {(() => {
+                          if (!selectedStrategy) return "未选择";
+                          const s = strategies.find(s => s.strategy_id === selectedStrategy);
+                          return `${s?.display_name || selectedStrategy} (TopK=${topk}, n_drop=${nDrop})`;
+                        })()}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
+                      <span style={{ color: "#64748b", fontWeight: 500 }}>执行算法</span>
+                      <span style={{ fontWeight: 600, color: "#1e293b" }}>
+                        {executionAlgo === "CLOSE_PRICE" ? "收盘价执行 (日线)" : executionAlgo ? `${executionAlgoCatalog.find((a: any) => a.algo_code === executionAlgo)?.algo_name || executionAlgo} (分钟线)` : "默认 TailTWAP (分钟线)"}
+                      </span>
+                    </div>
                   </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px" }}>
-                    <span style={{ color: "#64748b", fontWeight: 500 }}>执行算法</span>
-                    <span style={{ fontWeight: 600, color: "#1e293b" }}>
-                      {executionAlgo === "CLOSE_PRICE" ? "收盘价执行 (日线)" : executionAlgo ? `${executionAlgoCatalog.find((a: any) => a.algo_code === executionAlgo)?.algo_name || executionAlgo} (分钟线)` : "默认 TailTWAP (分钟线)"}
-                    </span>
-                  </div>
-                </div>
+                )}
 
                 <div style={{ marginTop: "20px", paddingTop: "16px", borderTop: "1px solid #e2e8f0" }}>
-                  <button onClick={evaluateCombination} disabled={actionLoading === "evaluate"}
-                    style={{ ...btnPrimary, width: "100%", justifyContent: "center", padding: "10px 20px", fontSize: "14px", backgroundColor: "#3b82f6", opacity: actionLoading === "evaluate" ? 0.5 : 1 }}>
+                  <button onClick={evaluateCombination} disabled={actionLoading === "evaluate" || (alphaMode === "single" && selectedFactors.size === 0)}
+                    style={{ ...btnPrimary, width: "100%", justifyContent: "center", padding: "10px 20px", fontSize: "14px", backgroundColor: "#3b82f6", opacity: (actionLoading === "evaluate" || (alphaMode === "single" && selectedFactors.size === 0)) ? 0.5 : 1 }}>
                     {actionLoading === "evaluate" ? "正在调用 LLM 进行深度评估..." : "AI 评估此组合的合理性"}
                   </button>
                 </div>
@@ -1299,12 +1600,33 @@ export default function ComposePage() {
             </div>
 
             {configResult?.ok && (
-              <div style={{ backgroundColor: "#dcfce7", border: "1px solid #86efac", borderRadius: "8px", padding: "20px", marginBottom: "24px" }}>
-                <h3 style={{ margin: "0 0 8px", fontWeight: 700, color: "#166534", fontSize: "15px" }}>任务已成功生成！</h3>
-                <p style={{ margin: "0 0 4px", fontSize: "13px", color: "#15803d" }}><strong>Experiment ID:</strong> {configResult.experiment_id}</p>
-                <p style={{ margin: "0 0 12px", fontSize: "13px", color: "#15803d" }}><strong>工作目录:</strong> {configResult.experiment_dir}</p>
+              <div style={{ backgroundColor: configResult.alpha_mode === "multi" ? "#faf5ff" : "#dcfce7", border: `1px solid ${configResult.alpha_mode === "multi" ? "#d8b4fe" : "#86efac"}`, borderRadius: "8px", padding: "20px", marginBottom: "24px" }}>
+                <h3 style={{ margin: "0 0 8px", fontWeight: 700, color: configResult.alpha_mode === "multi" ? "#7c3aed" : "#166534", fontSize: "15px" }}>
+                  {configResult.alpha_mode === "multi" ? "多Alpha 实验已生成！" : "任务已成功生成！"}
+                </h3>
+                <p style={{ margin: "0 0 4px", fontSize: "13px", color: configResult.alpha_mode === "multi" ? "#6d28d9" : "#15803d" }}><strong>Experiment ID:</strong> {configResult.experiment_id}</p>
+                <p style={{ margin: "0 0 4px", fontSize: "13px", color: configResult.alpha_mode === "multi" ? "#6d28d9" : "#15803d" }}><strong>工作目录:</strong> {configResult.experiment_dir}</p>
+
+                {/* 多Alpha 节点分配展示 */}
+                {configResult.alpha_mode === "multi" && configResult.node_distribution && (
+                  <div style={{ margin: "8px 0 12px", padding: "10px", background: "#f5f3ff", borderRadius: 6, fontSize: 12 }}>
+                    <div style={{ fontWeight: 600, color: "#5b21b6", marginBottom: 6 }}>
+                      {configResult.total_groups} 组 | {configResult.execution_mode} 模式 | Meta: {configResult.meta_method}
+                      {configResult.is_distributed && <span style={{ marginLeft: 6, padding: "1px 6px", background: "#7c3aed", color: "#fff", borderRadius: 10, fontSize: 10, fontWeight: 700 }}>分布式</span>}
+                    </div>
+                    {Object.entries(configResult.node_distribution).map(([nodeId, groupNames]) => (
+                      <div key={nodeId} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                        <span style={{ padding: "1px 6px", background: nodeId.includes("wsl") ? "#dbeafe" : "#fef3c7", borderRadius: 4, fontSize: 10, fontWeight: 600, color: nodeId.includes("wsl") ? "#1d4ed8" : "#92400e" }}>
+                          {nodeId}
+                        </span>
+                        <span style={{ color: "#6b7280" }}>{(groupNames as string[]).join(", ")}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div style={{ backgroundColor: "#0f172a", borderRadius: "6px", padding: "12px", overflowX: "auto" }}>
-                  <pre style={{ margin: 0, fontSize: "12px", color: "#4ade80", fontFamily: "'Fira Code', Consolas, monospace" }}>{configResult.wsl_command}</pre>
+                  <pre style={{ margin: 0, fontSize: "12px", color: configResult.alpha_mode === "multi" ? "#c4b5fd" : "#4ade80", fontFamily: "'Fira Code', Consolas, monospace", whiteSpace: "pre-wrap" }}>{configResult.wsl_command}</pre>
                 </div>
                 <div style={{ marginTop: "12px", display: "flex", gap: "12px", flexWrap: "wrap" }}>
                   <button onClick={() => { navigator.clipboard.writeText(configResult.wsl_command || ""); alert("已复制命令"); }}
@@ -1382,6 +1704,20 @@ export default function ComposePage() {
                   />
                 )}
 
+                {/* 多Alpha执行进度 */}
+                {alphaMode === "multi" && configResult?.experiment_id && (sse.runStatus === "running" || sse.runStatus === "starting") && (
+                  <div style={{ marginTop: 12 }}>
+                    <MultiAlphaProgress experimentId={configResult.experiment_id} apiBase={API} />
+                  </div>
+                )}
+
+                {/* 多Alpha完成后结果 */}
+                {alphaMode === "multi" && configResult?.experiment_id && sse.runStatus === "completed" && (
+                  <div style={{ marginTop: 12 }}>
+                    <MultiAlphaResults experimentId={configResult.experiment_id} apiBase={API} />
+                  </div>
+                )}
+
                 {/* 完成后展示核心指标 */}
                 {sse.runStatus === "completed" && sse.runMetrics && (
                   <div style={{ marginTop: 12 }}>
@@ -1433,7 +1769,36 @@ export default function ComposePage() {
                 )}
 
                 {/* 实验完成后自动弹出演进创建建议 */}
-                {sse.runStatus === "completed" && configResult?.experiment_id && dispatchMode === "independent" && (
+                {sse.runStatus === "completed" && configResult?.experiment_id && dispatchMode === "independent" && alphaMode === "multi" && (
+                  <div style={{ marginTop: 16, padding: 16, borderRadius: 8, backgroundColor: "#faf5ff", border: "1px solid #d8b4fe" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                      <strong style={{ color: "#7c3aed", fontSize: 14 }}>多Alpha 实验已完成</strong>
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <a
+                        href={`/quantevolver/multi-alpha/diagnostics/${configResult.experiment_id}`}
+                        style={{
+                          display: "inline-block", padding: "8px 16px", backgroundColor: "#7c3aed", color: "#fff",
+                          borderRadius: 6, fontSize: 13, fontWeight: 600, textDecoration: "none",
+                          boxShadow: "0 2px 4px rgba(124, 58, 237, 0.2)",
+                        }}
+                      >
+                        查看多Alpha诊断
+                      </a>
+                      <a
+                        href={`/quantevolver/multi-alpha/evolve-wizard?source_exp=${configResult.experiment_id}`}
+                        style={{
+                          display: "inline-block", padding: "8px 16px", backgroundColor: "#fff", color: "#7c3aed",
+                          borderRadius: 6, fontSize: 13, fontWeight: 600, textDecoration: "none",
+                          border: "1px solid #8b5cf6",
+                        }}
+                      >
+                        基于此实验演进
+                      </a>
+                    </div>
+                  </div>
+                )}
+                {sse.runStatus === "completed" && configResult?.experiment_id && dispatchMode === "independent" && alphaMode !== "multi" && (
                   <div style={{ marginTop: 16, padding: 16, borderRadius: 8, backgroundColor: "#f0f9ff", border: "1px solid #bae6fd" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                       <strong style={{ color: "#0369a1", fontSize: 14 }}>基线实验已完成，是否启动自动演进？</strong>
@@ -1458,17 +1823,17 @@ export default function ComposePage() {
 
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: "24px", paddingTop: "20px", borderTop: "1px solid #f1f5f9" }}>
               <button onClick={() => setCurrentStep(4)} style={btnSecondary}>上一步</button>
-              <button onClick={generateConfig} disabled={actionLoading === "generate" || selectedFactors.size === 0}
+              <button onClick={generateConfig} disabled={actionLoading === "generate" || (alphaMode === "single" ? selectedFactors.size === 0 : !multiAlphaConfig)}
                 style={{
                   ...btnPrimary,
                   padding: "12px 32px",
                   fontSize: "15px",
                   fontWeight: 700,
-                  backgroundColor: "#1e293b",
-                  boxShadow: "0 4px 12px rgba(0, 0, 0, 0.15)",
-                  opacity: (actionLoading === "generate" || selectedFactors.size === 0) ? 0.5 : 1,
+                  backgroundColor: alphaMode === "multi" ? "#7c3aed" : "#1e293b",
+                  boxShadow: alphaMode === "multi" ? "0 4px 12px rgba(124, 58, 237, 0.25)" : "0 4px 12px rgba(0, 0, 0, 0.15)",
+                  opacity: (actionLoading === "generate" || (alphaMode === "single" ? selectedFactors.size === 0 : !multiAlphaConfig)) ? 0.5 : 1,
                 }}>
-                {actionLoading === "generate" ? "正在执行生成中..." : dispatchMode === "independent" ? "执行独立任务 (Generate)" : "启动 QE 自动演进 (Start Evolution)"}
+                {actionLoading === "generate" ? "正在执行生成中..." : alphaMode === "multi" ? (dispatchMode === "independent" ? "执行多Alpha实验 (Multi-Alpha)" : "启动多Alpha演进 (Multi-Alpha Evolution)") : (dispatchMode === "independent" ? "执行独立任务 (Generate)" : "启动 QE 自动演进 (Start Evolution)")}
               </button>
             </div>
           </div>

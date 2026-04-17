@@ -47,6 +47,8 @@ for noisy in ("qlib", "rdagent", "urllib3", "filelock"):
 
 FACTOR_EXEC_TIMEOUT = 600  # 单因子执行超时秒数
 
+# PyTables C 扩展不是完全线程安全的，多线程并发 pd.read_hdf() 可导致 SIGSEGV
+_hdf_read_lock = threading.Lock()
 
 DATA_H5_FILES = [
     "daily_pv.h5", "daily_basic.h5", "moneyflow.h5",
@@ -112,7 +114,9 @@ def execute_factor(workspace: Path, factor_name: str) -> dict:
 def read_and_validate_result(h5_path: str, factor_name: str) -> dict:
     """读取 result.h5 并验证格式。"""
     try:
-        df = pd.read_hdf(h5_path)
+        # PyTables 不是线程安全的，必须串行读取防止 SIGSEGV
+        with _hdf_read_lock:
+            df = pd.read_hdf(h5_path)
 
         if not isinstance(df.index, pd.MultiIndex):
             return {"success": False, "error": "result.h5 缺少 MultiIndex(datetime, instrument)"}

@@ -230,6 +230,52 @@ class QEWorkspaceClient:
             logger.error(f"Failed to get workspace config: {e}")
             raise
 
+    async def download_group_predictions(
+        self, task_id: str, loop_id: str, group_name: str
+    ) -> Optional[bytes]:
+        """从节点下载指定组的 pred.pkl（用于多Alpha跨节点预测收集）。
+
+        Returns: pred.pkl bytes, 或 None 如果不存在。
+        """
+        rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
+        url = f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}/groups/{group_name}/predictions"
+        try:
+            response = await self.client.get(url, timeout=60.0)
+            response.raise_for_status()
+            return response.content
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.warning(f"Group predictions not found: {task_id}/{loop_id}/{group_name}")
+                return None
+            raise RuntimeError(f"下载组预测失败: {e}") from e
+        except Exception as e:
+            raise RuntimeError(f"下载组预测失败 (网络): {e}") from e
+
+    async def get_workspace_file(self, task_id: str, loop_id: str, file_path: str) -> Optional[str]:
+        """读取 workspace 中的指定文件内容。
+
+        用于获取 multi_alpha_results.json 等多Alpha产出文件。
+        若端点不存在或文件不存在，返回 None（降级容错）。
+        """
+        rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
+        url = f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}/files/{file_path}"
+        try:
+            response = await self.client.get(url, timeout=30.0)
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "")
+            if "json" in content_type:
+                return response.json()
+            return response.text
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (404, 501):
+                logger.debug(f"Workspace file not available: {task_id}/{loop_id}/{file_path}")
+                return None
+            logger.warning(f"Failed to get workspace file {file_path}: {e}")
+            return None
+        except Exception as e:
+            logger.debug(f"get_workspace_file failed (degraded): {e}")
+            return None
+
     async def cleanup_task_workspace(self, task_id: str) -> bool:
         """
         要求 RDAgent 彻底删除任务工作区

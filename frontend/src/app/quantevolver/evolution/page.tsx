@@ -2286,6 +2286,11 @@ export default function EvolutionDashboard() {
                           mode="selection"
                           selectedFactors={selectedFactorsForEvo}
                           onFactorSelect={(selected: Set<string>) => setSelectedFactorsForEvo(selected)}
+                          cacheContext={{
+                            experimentId: newTask.base_experiment_id || null,
+                            trainStart: null,
+                            backtestEnd: null,
+                          }}
                         />
                       </div>
                       {detectedTaskType === "model" && selectedFactorsForEvo.size === 0 && (
@@ -2419,6 +2424,11 @@ export default function EvolutionDashboard() {
                         mode="selection"
                         selectedFactors={additionalFactorKeys}
                         onFactorSelect={(selected: Set<string>) => setAdditionalFactorKeys(selected)}
+                        cacheContext={{
+                          experimentId: newTask.base_experiment_id || null,
+                          trainStart: null,
+                          backtestEnd: null,
+                        }}
                       />
                     </div>
                   </div>
@@ -2864,7 +2874,7 @@ export default function EvolutionDashboard() {
                         <span>因子选择（已选 {loop.factor_keys.size} 个）</span>
                       </div>
                       <div style={{ maxHeight: "250px", overflow: "auto" }}>
-                        <FactorList mode="selection" selectedFactors={loop.factor_keys} onFactorSelect={(selected: Set<string>) => updateCustomEvoLoop(loopIdx, { factor_keys: selected })} />
+                        <FactorList mode="selection" selectedFactors={loop.factor_keys} onFactorSelect={(selected: Set<string>) => updateCustomEvoLoop(loopIdx, { factor_keys: selected })} cacheContext={{ experimentId: customEvoSourceExpId || null, trainStart: loop.data_split?.train_start || null, backtestEnd: loop.data_split?.backtest_end || loop.data_split?.test_end || null }} />
                       </div>
                     </div>
 

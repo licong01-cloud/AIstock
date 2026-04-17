@@ -15,6 +15,7 @@ Phase B: 单因子 Parquet 缓存（因子相关性计算用）
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -50,7 +51,13 @@ class FactorComputeResult:
     nan_rate: float = 0.0
     elapsed_sec: float = 0.0
     error: Optional[str] = None
+    error_type: Optional[str] = None
+    error_short: Optional[str] = None
+    traceback_full: Optional[str] = None
     date_range: Optional[str] = None
+    # 附带 meta 信息，由调用方决定何时批量写入（避免并发竞态）
+    meta_entry: Optional[Dict[str, Any]] = None
+    meta_as_of_date: Optional[str] = None
 
 
 @dataclass
@@ -81,7 +88,7 @@ class BatchComputeResult:
                     "rows": r.num_rows,
                     "nan_rate": f"{r.nan_rate:.1%}",
                     "time": f"{r.elapsed_sec:.1f}s",
-                    "error": r.error,
+                    "error": r.error_short or r.error,
                 }
                 for r in self.factor_results
             ],
@@ -660,6 +667,9 @@ class FactorValuePipeline:
                 factor_name=factor_name,
                 success=False,
                 error=f"读取代码失败: {e}",
+                error_short=f"读取代码失败: {e}",
+                error_type=type(e).__name__,
+                traceback_full=traceback.format_exc(),
                 elapsed_sec=time.time() - t0,
             ), None
 
@@ -697,7 +707,7 @@ class FactorValuePipeline:
         }
 
         # 使用线程 + 超时控制
-        container: Dict[str, Any] = {"result": None, "error": None}
+        container: Dict[str, Any] = {"result": None, "error": None, "error_type": None, "error_short": None, "traceback_full": None}
 
         def _run():
             try:
@@ -723,9 +733,10 @@ class FactorValuePipeline:
                     end_date=end_date,
                 )
             except Exception as e:
-                container["error"] = (
-                    f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
-                )
+                container["error_type"] = type(e).__name__
+                container["error_short"] = f"{type(e).__name__}: {e}"
+                container["traceback_full"] = traceback.format_exc()
+                container["error"] = container["traceback_full"]
 
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()
@@ -739,15 +750,21 @@ class FactorValuePipeline:
                 factor_name=factor_name,
                 success=False,
                 error=f"执行超时(>{timeout}s)",
+                error_short=f"执行超时(>{timeout}s)",
+                error_type="TimeoutError",
                 elapsed_sec=elapsed,
             ), None
 
         if container["error"]:
-            logger.warning(f"因子执行失败: {factor_name}: {container['error'][:200]}")
+            short = container.get("error_short") or str(container["error"]).splitlines()[0][:500]
+            logger.warning(f"因子执行失败: {factor_name}: {short[:200]}")
             return FactorComputeResult(
                 factor_name=factor_name,
                 success=False,
-                error=container["error"][:500],
+                error=short,
+                error_short=short,
+                error_type=container.get("error_type"),
+                traceback_full=container.get("traceback_full"),
                 elapsed_sec=elapsed,
             ), None
 
@@ -926,6 +943,11 @@ class FactorValuePipeline:
             with open(self._meta_path(), "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
 
+    def _compute_source_hash_raw(self, code_path: str) -> str:
+        with open(code_path, "r", encoding="utf-8") as f:
+            raw = f.read()
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
     def compute_single_factor(
         self,
         factor_name: str,
@@ -960,7 +982,7 @@ class FactorValuePipeline:
 
         if instruments is None:
             from ...data_service.qe_data_service import get_instruments_universe
-            instruments = get_instruments_universe()
+            instruments = get_instruments_universe(as_of_date=end_date)
 
         # 解析因子代码路径
         factor_infos = self._resolve_factors([factor_name])
@@ -969,9 +991,11 @@ class FactorValuePipeline:
                 factor_name=factor_name,
                 success=False,
                 error="未找到因子代码或代码文件不存在",
+                error_short="未找到因子代码或代码文件不存在",
             )
 
         info = factor_infos[0]
+        source_hash_raw = self._compute_source_hash_raw(info["abs_code_path"])
         result, df = self._execute_single_factor(
             factor_name=info["factor_name"],
             code_path=info["abs_code_path"],
@@ -993,20 +1017,40 @@ class FactorValuePipeline:
         del save_df, df
         import gc; gc.collect()
 
-        # 更新 _meta.json
-        meta = self._load_meta()
-        meta.setdefault("factors", {})[factor_name] = {
+        # 附带 meta 信息，由调用方批量写入（避免并发写 _meta.json 竞态）
+        result.meta_entry = {
             "computed_at": datetime.now().isoformat(),
             "rows": result.num_rows,
             "date_range": result.date_range,
             "as_of_date": end_date,
             "elapsed_sec": round(result.elapsed_sec, 2),
+            "source_hash_raw": source_hash_raw,
         }
-        meta["as_of_date"] = end_date
-        self._save_meta(meta)
+        result.meta_as_of_date = end_date
 
         logger.info(f"单因子缓存已保存: {out_path} ({result.num_rows} 行)")
         return result
+
+    def flush_meta_batch(self, results: List[FactorComputeResult]) -> int:
+        """批量写入多个因子的 meta 信息到 _meta.json（主线程调用，无竞态）。
+
+        Returns: 成功写入的因子数量。
+        """
+        if not results:
+            return 0
+        meta = self._load_meta()
+        count = 0
+        as_of_date = None
+        for r in results:
+            if r.success and r.meta_entry:
+                meta.setdefault("factors", {})[r.factor_name] = r.meta_entry
+                as_of_date = r.meta_as_of_date
+                count += 1
+        if as_of_date:
+            meta["as_of_date"] = as_of_date
+        if count:
+            self._save_meta(meta)
+        return count
 
     def extend_single_factor_cache(
         self,
@@ -1056,9 +1100,7 @@ class FactorValuePipeline:
 
         if instruments is None:
             from ...data_service.qe_data_service import get_instruments_universe
-            instruments = get_instruments_universe()
-
-        # 计算增量：使用 buffer 天数保证滚动窗口正确
+            instruments = get_instruments_universe(as_of_date=new_end_date)
         from datetime import timedelta
         buffer_start = (last_cached_date - timedelta(days=buffer_days)).strftime("%Y-%m-%d")
 
@@ -1067,6 +1109,7 @@ class FactorValuePipeline:
             return FactorComputeResult(
                 factor_name=factor_name, success=False,
                 error="未找到因子代码或代码文件不存在",
+                error_short="未找到因子代码或代码文件不存在",
             )
 
         t0 = time.time()
@@ -1120,26 +1163,27 @@ class FactorValuePipeline:
         del existing_df, df_new, df_append, merged
         import gc; gc.collect()
 
-        meta = self._load_meta()
-        meta.setdefault("factors", {})[factor_name] = {
-            "computed_at": datetime.now().isoformat(),
-            "rows": num_rows,
-            "date_range": date_range,
-            "as_of_date": new_end_date,
-        }
-        self._save_meta(meta)
-
         elapsed = round(time.time() - t0, 1)
         logger.info(
             f"因子缓存增量扩展: {factor_name}, "
             f"+{new_days} 天, 总 {num_rows} 行, 耗时 {elapsed}s"
         )
 
-        return FactorComputeResult(
+        source_hash_raw = self._compute_source_hash_raw(factor_infos[0]["abs_code_path"])
+        result = FactorComputeResult(
             factor_name=factor_name, success=True,
             num_rows=num_rows, date_range=date_range,
             elapsed_sec=elapsed,
         )
+        result.meta_entry = {
+            "computed_at": datetime.now().isoformat(),
+            "rows": num_rows,
+            "date_range": date_range,
+            "as_of_date": new_end_date,
+            "source_hash_raw": source_hash_raw,
+        }
+        result.meta_as_of_date = new_end_date
+        return result
 
     def compute_all_singles(
         self,
@@ -1213,7 +1257,6 @@ class FactorValuePipeline:
 
         all_results: List[FactorComputeResult] = []
         single_dir = self._single_dir()
-        meta = self._load_meta()
 
         def _process_one(info: Dict[str, str]) -> FactorComputeResult:
             fname = info["factor_name"]
@@ -1230,12 +1273,14 @@ class FactorValuePipeline:
                 save_df = df.rename(columns={df.columns[0]: "value"})
                 save_df.to_parquet(out_path, engine="pyarrow", compression="snappy")
                 del save_df
-                meta.setdefault("factors", {})[fname] = {
+                result.meta_entry = {
                     "computed_at": datetime.now().isoformat(),
                     "rows": result.num_rows,
                     "date_range": result.date_range,
                     "as_of_date": end_date,
+                    "source_hash_raw": self._compute_source_hash_raw(info["abs_code_path"]),
                 }
+                result.meta_as_of_date = end_date
             del df  # 立即释放因子 DataFrame
             return result
 
@@ -1257,11 +1302,13 @@ class FactorValuePipeline:
                             factor_name=info["factor_name"],
                             success=False,
                             error=f"ThreadPool error: {e}",
+                            error_short=f"ThreadPool error: {e}",
+                            error_type=type(e).__name__,
+                            traceback_full=traceback.format_exc(),
                         ))
 
-        # 保存 meta
-        meta["as_of_date"] = end_date
-        self._save_meta(meta)
+        # 批量写入 meta（主线程，无竞态）
+        self.flush_meta_batch(all_results)
 
         success_count = sum(1 for r in all_results if r.success)
         elapsed = time.time() - t0

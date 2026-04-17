@@ -409,9 +409,20 @@ class CorrelationLLMAgent:
                 # classification: 描述
                 cur.execute(
                     """
-                    SELECT description, category, grade
-                    FROM qe_factor_classification
-                    WHERE factor_name = %s LIMIT 1
+                    SELECT cl.description, cl.category, fr.official_grade
+                    FROM qe_factor_classification cl
+                    LEFT JOIN aistock_factor_catalog c
+                        ON c.factor_name = cl.factor_name AND c.source = cl.factor_source
+                    LEFT JOIN LATERAL (
+                        SELECT official_grade FROM qe_factor_official_ratings r
+                        WHERE r.factor_catalog_id = c.id
+                          AND r.rule_version = (
+                              SELECT rule_version FROM qe_rating_rule_versions
+                              WHERE status = 'active' ORDER BY activated_at DESC LIMIT 1
+                          )
+                        ORDER BY r.graded_at DESC LIMIT 1
+                    ) fr ON TRUE
+                    WHERE cl.factor_name = %s LIMIT 1
                     """,
                     (factor_name,),
                 )

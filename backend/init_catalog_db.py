@@ -237,11 +237,6 @@ def init_database():
                         print("Adding missing column 'source_task_id' to aistock_factor_catalog...")
                         cur.execute("ALTER TABLE aistock_factor_catalog ADD COLUMN source_task_id TEXT;")
 
-                    cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='aistock_factor_catalog' AND column_name='source_code_relpath';")
-                    if not cur.fetchone():
-                        print("Adding missing column 'source_code_relpath' to aistock_factor_catalog...")
-                        cur.execute("ALTER TABLE aistock_factor_catalog ADD COLUMN source_code_relpath TEXT;")
-
                     cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='aistock_factor_catalog' AND column_name='source_code_origin';")
                     if not cur.fetchone():
                         print("Adding missing column 'source_code_origin' to aistock_factor_catalog...")
@@ -274,7 +269,6 @@ def init_database():
                 "sharpe": "DOUBLE PRECISION",
                 "information_ratio": "DOUBLE PRECISION",
                 "all_metrics": "JSONB",
-                "source_code_relpath": "TEXT",
                 "code_text": "TEXT",
                 "hypothesis_text": "TEXT",
                 "feedback_observations": "TEXT",
@@ -500,6 +494,57 @@ def init_database():
                     CREATE INDEX IF NOT EXISTS idx_fexp_ic
                         ON qe_factor_experiment_metrics(ic DESC NULLS LAST);
                 """,
+                "qe_factor_official_ratings": """
+                    CREATE TABLE IF NOT EXISTS qe_factor_official_ratings (
+                        id BIGSERIAL PRIMARY KEY,
+                        factor_catalog_id BIGINT NOT NULL REFERENCES aistock_factor_catalog(id) ON DELETE CASCADE,
+                        rule_version TEXT NOT NULL,
+                        run_id TEXT NOT NULL,
+                        snapshot_date DATE,
+                        official_score DOUBLE PRECISION NOT NULL,
+                        official_grade TEXT NOT NULL,
+                        dimension_scores JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        hard_gate_flags JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        grade_reason_structured JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        metrics_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        llm_audit_summary TEXT,
+                        llm_risk_notes JSONB,
+                        graded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        UNIQUE (factor_catalog_id, rule_version, snapshot_date)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_qe_factor_official_ratings_factor_version
+                        ON qe_factor_official_ratings(factor_catalog_id, rule_version);
+                    CREATE INDEX IF NOT EXISTS idx_qe_factor_official_ratings_grade
+                        ON qe_factor_official_ratings(rule_version, official_grade);
+                """,
+                "qe_rating_rule_versions": """
+                    CREATE TABLE IF NOT EXISTS qe_rating_rule_versions (
+                        rule_version TEXT PRIMARY KEY,
+                        version_name TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'draft',
+                        rule_file_path TEXT NOT NULL,
+                        description_md TEXT,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        activated_at TIMESTAMPTZ
+                    );
+                """,
+                "qe_factor_rating_runs": """
+                    CREATE TABLE IF NOT EXISTS qe_factor_rating_runs (
+                        run_id TEXT PRIMARY KEY,
+                        rule_version TEXT NOT NULL REFERENCES qe_rating_rule_versions(rule_version) ON DELETE RESTRICT,
+                        scope_type TEXT NOT NULL,
+                        scope_payload JSONB,
+                        snapshot_date DATE,
+                        triggered_from TEXT NOT NULL DEFAULT 'ui_toolbar',
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        summary JSONB,
+                        error_message TEXT,
+                        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        finished_at TIMESTAMPTZ
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_qe_factor_rating_runs_started_at
+                        ON qe_factor_rating_runs(started_at DESC);
+                """,
                 "qe_agent_prompts": """
                     CREATE TABLE IF NOT EXISTS qe_agent_prompts (
                         id SERIAL PRIMARY KEY,
@@ -718,6 +763,58 @@ def init_database():
                 if not cur.fetchone():
                     print(f"Adding column '{col_name}' to qe_experiments...")
                     cur.execute(f"ALTER TABLE qe_experiments ADD COLUMN {col_name} {col_type};")
+
+            # ============================================================
+            # 正式评级表迁移
+            # ============================================================
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS qe_rating_rule_versions (
+                    rule_version TEXT PRIMARY KEY,
+                    version_name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    rule_file_path TEXT NOT NULL,
+                    description_md TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    activated_at TIMESTAMPTZ
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS qe_factor_rating_runs (
+                    run_id TEXT PRIMARY KEY,
+                    rule_version TEXT NOT NULL REFERENCES qe_rating_rule_versions(rule_version) ON DELETE RESTRICT,
+                    scope_type TEXT NOT NULL,
+                    scope_payload JSONB,
+                    snapshot_date DATE,
+                    triggered_from TEXT NOT NULL DEFAULT 'ui_toolbar',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    summary JSONB,
+                    error_message TEXT,
+                    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    finished_at TIMESTAMPTZ
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_qe_factor_rating_runs_started_at ON qe_factor_rating_runs(started_at DESC)")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS qe_factor_official_ratings (
+                    id BIGSERIAL PRIMARY KEY,
+                    factor_catalog_id BIGINT NOT NULL REFERENCES aistock_factor_catalog(id) ON DELETE CASCADE,
+                    rule_version TEXT NOT NULL REFERENCES qe_rating_rule_versions(rule_version) ON DELETE RESTRICT,
+                    run_id TEXT NOT NULL REFERENCES qe_factor_rating_runs(run_id) ON DELETE CASCADE,
+                    snapshot_date DATE,
+                    official_score DOUBLE PRECISION NOT NULL,
+                    official_grade TEXT NOT NULL,
+                    dimension_scores JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    hard_gate_flags JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    grade_reason_structured JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    metrics_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    llm_audit_summary TEXT,
+                    llm_risk_notes JSONB,
+                    graded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (factor_catalog_id, rule_version, snapshot_date)
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_qe_factor_official_ratings_factor_version ON qe_factor_official_ratings(factor_catalog_id, rule_version)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_qe_factor_official_ratings_grade ON qe_factor_official_ratings(rule_version, official_grade)")
 
             # ============================================================
             # qe_factor_classification 新增列迁移

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
@@ -91,6 +91,14 @@ function ansiToSpans(text: string): React.ReactNode[] {
 }
 
 export default function LogViewerPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24, color: "#9ca3af" }}>加载中...</div>}>
+      <LogViewerContent />
+    </Suspense>
+  );
+}
+
+function LogViewerContent() {
   const searchParams = useSearchParams();
   const taskId = searchParams.get("task_id") || "";
 

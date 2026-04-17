@@ -41,7 +41,7 @@ interface AnalysisResult {
 type SortKey = "abs_corr" | "ic_mean" | "rank_ic" | "icir" | "sharpe" | "return" | "drawdown" | "factor";
 type SortDir = "asc" | "desc";
 
-const THRESHOLD_OPTIONS = [0.7, 0.8, 0.9, 0.95, 0.99];
+const THRESHOLD_OPTIONS = [0.7, 0.8, 0.9, 0.95, 0.99, 1.0];
 
 function fmtMetric(v: number | null | undefined, pct = false): string {
   if (v == null) return "-";
@@ -69,8 +69,11 @@ function isAllWorse(
   base: FactorMetrics | undefined
 ): boolean {
   if (!m || !base) return false;
+  // |IC| 比较：IC 的绝对值代表预测力，符号只代表方向
+  const absIc = (v: number | null) => v == null ? null : Math.abs(v);
   const checks: [number | null, number | null, boolean][] = [
-    [m.ic_mean, base.ic_mean, true],
+    [absIc(m.ic_mean), absIc(base.ic_mean), true],
+    [absIc(m.rank_ic_mean), absIc(base.rank_ic_mean), true],
     [m.icir, base.icir, true],
     [m.top_sharpe, base.top_sharpe, true],
     [m.top_annual_return, base.top_annual_return, true],
@@ -102,6 +105,7 @@ interface Props {
   initialBaseFactor?: string;
   showToast: (text: string, type: "success" | "error") => void;
   onRefreshMatrix?: () => void;
+  includeDisabled?: boolean;
 }
 
 export default function FactorDedupPanel({
@@ -109,6 +113,7 @@ export default function FactorDedupPanel({
   initialBaseFactor,
   showToast,
   onRefreshMatrix,
+  includeDisabled,
 }: Props) {
   const [baseFactor, setBaseFactor] = useState(initialBaseFactor || "");
   const [threshold, setThreshold] = useState(0.9);
@@ -150,7 +155,7 @@ export default function FactorDedupPanel({
     try {
       const res = await fetch(
         `${BASE}/correlations/factors/${encodeURIComponent(factorToQuery)}/related` +
-          `?threshold=${thresholdVal}&limit=500&include_metrics=true`
+          `?threshold=${thresholdVal}&limit=500&include_metrics=true&include_disabled=${includeDisabled ?? false}`
       );
       if (!res.ok) {
         showToast("查询失败", "error");
@@ -186,7 +191,7 @@ export default function FactorDedupPanel({
     } finally {
       setLoading(false);
     }
-  }, [showToast]);
+  }, [showToast, includeDisabled]);
 
   const handleQuery = useCallback(() => {
     doQuery(baseFactor, threshold);

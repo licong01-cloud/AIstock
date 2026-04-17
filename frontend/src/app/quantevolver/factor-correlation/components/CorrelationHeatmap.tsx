@@ -8,12 +8,14 @@ const Plot = dynamic(() => import("react-plotly.js"), { ssr: false }) as any;
 interface Props {
   factorNames: string[];
   matrix: number[][];
+  disabledFactors?: string[];
   onCellClick: (fa: string, fb: string, corr: number) => void;
 }
 
 export default function CorrelationHeatmap({
   factorNames,
   matrix,
+  disabledFactors = [],
   onCellClick,
 }: Props) {
   const [search, setSearch] = useState("");
@@ -30,6 +32,13 @@ export default function CorrelationHeatmap({
     const mat = indices.map((r) => indices.map((c) => matrix[r][c]));
     return { filteredNames: names, filteredMatrix: mat };
   }, [factorNames, matrix, search]);
+
+  // 为禁用因子添加显示标记
+  const disabledSet = useMemo(() => new Set(disabledFactors), [disabledFactors]);
+  const displayNames = useMemo(
+    () => filteredNames.map((n) => (disabledSet.has(n) ? `${n} [OFF]` : n)),
+    [filteredNames, disabledSet]
+  );
 
   const size = filteredNames.length;
   const chartHeight = Math.max(400, Math.min(800, size * 14 + 120));
@@ -65,8 +74,8 @@ export default function CorrelationHeatmap({
           data={[
             {
               z: filteredMatrix,
-              x: filteredNames,
-              y: filteredNames,
+              x: displayNames,
+              y: displayNames,
               type: "heatmap",
               colorscale: [
                 [0, "#2563eb"],

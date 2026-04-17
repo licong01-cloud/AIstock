@@ -1,0 +1,63 @@
+version: v1.0.0
+version_name: AIstock Multi-Alpha Daily Production Grade v1
+applicability: 日频、多Alpha、低换手生产场景
+weights:
+  predictive_strength: 25
+  stability: 25
+  economic_quality: 15
+  selection_stability_cost: 15
+  monotonicity_reliability: 10
+  multi_alpha_fitness: 10
+thresholds:
+  core_ic:
+    weak: 0.01
+    excellent: 0.05
+  rank_ic_mean_abs:
+    weak: 0.01
+    excellent: 0.05
+  icir_annualized:
+    weak: 0.5
+    excellent: 2.0
+  rank_icir_annualized:
+    weak: 0.5
+    excellent: 2.0
+  ic_positive_ratio:
+    weak: 0.45
+    excellent: 0.60
+  top_excess_annual_return:
+    weak: 0.00
+    excellent: 0.20
+  top_excess_sharpe:
+    weak: 0.50
+    excellent: 2.00
+  top_max_drawdown_abs:
+    excellent: 0.15
+    weak: 0.45
+  turnover:
+    excellent: 0.03
+    weak: 0.20
+  ic_decay_half_life:
+    weak: 3
+    excellent: 15
+  group_return_monotonicity:
+    weak: 0.10
+    excellent: 0.80
+  coverage:
+    weak: 0.50
+    excellent: 0.90
+  n_trading_days:
+    weak: 120
+    excellent: 500
+hard_gates:
+  recent_negative_threshold: -0.005
+  S:
+    min_core_ic: 0.05
+    min_monotonicity: 0.0
+    min_excess_annual_return: 0.0
+    min_coverage: 0.70
+    max_turnover: 0.08
+  A:
+    min_core_ic: 0.03
+    min_monotonicity: -0.10
+    min_coverage: 0.60
+    max_turnover: 0.12

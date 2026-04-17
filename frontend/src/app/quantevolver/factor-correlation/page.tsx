@@ -19,6 +19,7 @@ interface MatrixData {
   factor_count: number;
   effective_window: number;
   metadata: Record<string, any>;
+  disabled_factors?: string[];
 }
 
 export default function FactorCorrelationPage() {
@@ -29,6 +30,7 @@ export default function FactorCorrelationPage() {
   const [computing, setComputing] = useState(false);
   const [computeScope, setComputeScope] = useState<ComputeScope>("smart_incremental");
   const [asOfDate, setAsOfDate] = useState("");
+  const [includeDisabled, setIncludeDisabled] = useState(false);
   const [selectedPair, setSelectedPair] = useState<{ fa: string; fb: string }>({
     fa: "",
     fb: "",
@@ -74,7 +76,7 @@ export default function FactorCorrelationPage() {
   // ── 加载矩阵数据 ──
   const loadMatrix = useCallback(async () => {
     try {
-      const res = await fetch(`${BASE}/correlations/matrix?threshold=0`);
+      const res = await fetch(`${BASE}/correlations/matrix?threshold=0&include_disabled=${includeDisabled}`);
       if (res.ok) {
         const data = await res.json();
         setMatrixData(data);
@@ -89,7 +91,7 @@ export default function FactorCorrelationPage() {
       console.error("加载矩阵失败", e);
     }
     return null;
-  }, []);
+  }, [includeDisabled]);
 
   // ── 加载因子对详情 ──
   const loadPairDetail = useCallback(async (fa: string, fb: string) => {
@@ -103,7 +105,7 @@ export default function FactorCorrelationPage() {
           `${BASE}/correlations/pair?fa=${encodeURIComponent(fa)}&fb=${encodeURIComponent(fb)}&include_daily=true`
         ),
         fetch(
-          `${BASE}/correlations/factors/${encodeURIComponent(fa)}/related?threshold=0.3&limit=10`
+          `${BASE}/correlations/factors/${encodeURIComponent(fa)}/related?threshold=0.3&limit=10&include_disabled=${includeDisabled}`
         ),
       ]);
 
@@ -120,7 +122,7 @@ export default function FactorCorrelationPage() {
     } finally {
       setPairLoading(false);
     }
-  }, []);
+  }, [includeDisabled]);
 
   // ── 触发计算 ──
   const handleCompute = useCallback(async () => {
@@ -134,13 +136,15 @@ export default function FactorCorrelationPage() {
 
       if (computeScope === "full") {
         body.mode = "full";
+        body.include_disabled = includeDisabled;
       } else if (computeScope === "cache") {
         body.mode = "cache_only";
+        body.include_disabled = includeDisabled;
       } else if (computeScope === "smart_incremental") {
         // 智能增量: 先 dry_run 预览，再确认计算
         const previewUrl = asOfDate
-          ? `${BASE}/correlations/compute-smart-incremental?dry_run=true&as_of_date=${asOfDate}`
-          : `${BASE}/correlations/compute-smart-incremental?dry_run=true`;
+          ? `${BASE}/correlations/compute-smart-incremental?dry_run=true&as_of_date=${asOfDate}&include_disabled=${includeDisabled}`
+          : `${BASE}/correlations/compute-smart-incremental?dry_run=true&include_disabled=${includeDisabled}`;
         const res = await fetch(previewUrl, { method: "POST" });
         if (!res.ok) {
           showToast("查询新因子失败", "error");
@@ -221,7 +225,7 @@ export default function FactorCorrelationPage() {
       showToast("触发计算异常", "error");
       setComputing(false);
     }
-  }, [loadStatus, loadMatrix, computeScope, asOfDate]);
+  }, [loadStatus, loadMatrix, computeScope, asOfDate, includeDisabled]);
 
   // ── 智能增量: 用户确认后开始计算 ──
   const handleSmartIncrementalConfirm = useCallback(async () => {
@@ -229,8 +233,8 @@ export default function FactorCorrelationPage() {
     setComputing(true);
     try {
       const url = asOfDate
-        ? `${BASE}/correlations/compute-smart-incremental?as_of_date=${asOfDate}`
-        : `${BASE}/correlations/compute-smart-incremental`;
+        ? `${BASE}/correlations/compute-smart-incremental?as_of_date=${asOfDate}&include_disabled=${includeDisabled}`
+        : `${BASE}/correlations/compute-smart-incremental?include_disabled=${includeDisabled}`;
       const res = await fetch(url, { method: "POST" });
       if (!res.ok) {
         showToast("触发智能增量计算失败", "error");
@@ -257,7 +261,7 @@ export default function FactorCorrelationPage() {
       showToast("触发智能增量计算异常", "error");
       setComputing(false);
     }
-  }, [loadStatus, loadMatrix, asOfDate]);
+  }, [loadStatus, loadMatrix, asOfDate, includeDisabled]);
 
   // ── 热力图点击 / 预警表点击 → 跳转因子对分析 ──
   const handleSelectPair = useCallback(
@@ -306,6 +310,15 @@ export default function FactorCorrelationPage() {
     setDedupBaseFactor(factorName);
     setActiveTab("dedup");
   }, []);
+
+  // ── 切换"含禁用因子"时重新加载矩阵 ──
+  const prevIncludeDisabled = useRef(includeDisabled);
+  useEffect(() => {
+    if (prevIncludeDisabled.current !== includeDisabled) {
+      prevIncludeDisabled.current = includeDisabled;
+      loadMatrix();
+    }
+  }, [includeDisabled, loadMatrix]);
 
   // ── 初始加载（仅 mount 时执行一次）──
   const initRef = useRef(false);
@@ -469,8 +482,10 @@ export default function FactorCorrelationPage() {
         computing={computing}
         scope={computeScope}
         asOfDate={asOfDate}
+        includeDisabled={includeDisabled}
         onScopeChange={setComputeScope}
         onAsOfDateChange={setAsOfDate}
+        onIncludeDisabledChange={setIncludeDisabled}
         onCompute={handleCompute}
       />
 
@@ -520,6 +535,7 @@ export default function FactorCorrelationPage() {
                 <CorrelationHeatmap
                   factorNames={matrixData.factor_names}
                   matrix={matrixData.matrix}
+                  disabledFactors={matrixData.disabled_factors || []}
                   onCellClick={(fa, fb, corr) => handleSelectPair(fa, fb)}
                 />
               ) : (
@@ -579,6 +595,7 @@ export default function FactorCorrelationPage() {
                 initialBaseFactor={dedupBaseFactor}
                 showToast={showToast}
                 onRefreshMatrix={loadMatrix}
+                includeDisabled={includeDisabled}
               />
             )}
           </>

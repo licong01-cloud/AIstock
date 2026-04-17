@@ -266,6 +266,13 @@ async def _lifespan(app: FastAPI):
         correlation_scheduler.start(refresh_interval=60)
         logging.getLogger("uvicorn.error").info("相关性计算调度器已启动")
 
+    # 因子独立指标计算调度器
+    enable_fm_scheduler = (os.getenv("ENABLE_FACTOR_METRICS_SCHEDULER") or "").strip().lower()
+    if enable_fm_scheduler in {"1", "true", "yes", "y", "on"}:
+        from .services.quantevolver.factor_metrics_scheduler import factor_metrics_scheduler
+        factor_metrics_scheduler.start(refresh_interval=60)
+        logging.getLogger("uvicorn.error").info("因子指标计算调度器已启动")
+
     # 节点健康调度器
     disable_node_health = (os.getenv("DISABLE_NODE_HEALTH_SCHEDULER") or "").strip().lower()
     if disable_node_health not in {"1", "true", "yes", "y", "on"}:
@@ -326,6 +333,11 @@ async def _lifespan(app: FastAPI):
         try:
             from .services.quantevolver.correlation_scheduler import correlation_scheduler
             correlation_scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        try:
+            from .services.quantevolver.factor_metrics_scheduler import factor_metrics_scheduler
+            factor_metrics_scheduler.shutdown(wait=False)
         except Exception:
             pass
         try:

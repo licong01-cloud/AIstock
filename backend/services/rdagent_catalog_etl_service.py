@@ -177,7 +177,6 @@ def import_alpha_meta_from_payload(data: JsonDict, kind: Literal["alpha158", "al
             "interface_info",
             "asset_bundle_id",
             "source_task_id",
-            "source_code_relpath",
             "source_code_origin",
             "source_loop_tag",
             "source_index",
@@ -250,7 +249,6 @@ def import_alpha_meta_from_payload(data: JsonDict, kind: Literal["alpha158", "al
             interface_info = EXCLUDED.interface_info,
             asset_bundle_id = EXCLUDED.asset_bundle_id,
             source_task_id = EXCLUDED.source_task_id,
-            source_code_relpath = EXCLUDED.source_code_relpath,
             source_code_origin = EXCLUDED.source_code_origin,
             source_loop_tag = EXCLUDED.source_loop_tag,
             source_index = EXCLUDED.source_index,
@@ -399,7 +397,6 @@ def import_factor_catalog_from_payload(data: JsonDict) -> ImportSummary:
         impl_version = item.get("impl_version")
         performance_metrics = item.get("performance_metrics")
         source_task_id = item.get("source_task_id")
-        source_code_relpath = item.get("source_code_relpath")
         source_code_origin = item.get("source_code_origin")
         source_loop_tag = item.get("source_loop_tag")
         source_index = item.get("source_index")
@@ -478,7 +475,6 @@ def import_factor_catalog_from_payload(data: JsonDict) -> ImportSummary:
                 json.dumps(interface_info) if interface_info is not None else None,
                 asset_bundle_id,
                 source_task_id,
-                source_code_relpath,
                 source_code_origin,
                 source_loop_tag,
                 int(source_index) if source_index is not None else None,
@@ -516,7 +512,6 @@ def import_factor_catalog_from_payload(data: JsonDict) -> ImportSummary:
             interface_info,
             asset_bundle_id,
             source_task_id,
-            source_code_relpath,
             source_code_origin,
             source_loop_tag,
             source_index,

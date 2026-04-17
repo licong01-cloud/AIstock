@@ -20,7 +20,6 @@ from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from ..db.pg_pool import get_conn
-from ..services.rdagent_registry_service import RDRegistryReader
 from ..services.rdagent_signals_service import (
     load_signals_for_date,
     load_signals_overview,
@@ -901,29 +900,6 @@ def trigger_strategy_inference(strategy_id: str, req: InferenceRequest) -> Dict[
         raise HTTPException(status_code=422 if known_asset_issue else 500, detail=msg)
 
 
-def _normalize_workspace_path(raw: str) -> str:
-    p = (raw or "").strip()
-    if os.name != "nt":
-        return p
-    if p.startswith("/mnt/") and len(p) > 6:
-        drive = p[5]
-        if p[6:7] == "/":
-            rest = p[7:]
-            return f"{drive.upper()}:/{rest}"
-    return p
-
-
-def _safe_read_json(abs_path: Path) -> Any | None:
-    try:
-        if not abs_path.exists() or not abs_path.is_file():
-            return None
-        if abs_path.stat().st_size > 2 * 1024 * 1024:
-            return {"_error": "file too large", "path": str(abs_path)}
-        return json.loads(abs_path.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001
-        return {"_error": str(exc), "path": str(abs_path)}
-
-
 @router.get("/strategies", summary="列出已导入的 RD-Agent 策略")
 def list_rdagent_strategies(
     enabled: Optional[bool] = Query(None, description="按是否启用过滤"),
@@ -977,161 +953,6 @@ def list_rdagent_strategies(
             )
 
         return {"items": strategies}
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@router.get("/strategies/{strategy_id}/result", summary="获取 RD-Agent 策略的回测结果概览")
-def get_rdagent_strategy_result(strategy_id: str) -> Dict[str, Any]:
-    """Return minimal backtest metrics and equity curve for a given RD-Agent strategy.
-
-    This endpoint:
-    - looks up the strategy row in trading.strategy and ensures source_type='rdagent';
-    - parses source_strategy_key to extract task_run/loop/workspace identifiers;
-    - uses RDRegistryReader to locate the corresponding workspace in RD-Agent registry;
-    - reads backtest_metrics (qlib_res.csv) and backtest_curve (ret.pkl) if available;
-    - returns key metrics and an equity curve series.
-    """
-
-    try:
-        # 1) resolve RD-Agent source strategy
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT s.source_strategy_key
-                    FROM trading.strategy AS s
-                    JOIN trading.strategy_source AS ss ON s.source_id = ss.source_id
-                    WHERE s.strategy_id = %s
-                      AND ss.source_type = 'rdagent'
-                    """,
-                    (strategy_id,),
-                )
-                row = cur.fetchone()
-
-        if not row:
-            raise HTTPException(status_code=404, detail="strategy not found or not rdagent source")
-
-        source_strategy_key = row[0]
-
-        # 2) parse workspace_id from source_strategy_key: task_run:XXX/loop:YYY/workspace:ZZZ
-        workspace_id: Optional[str] = None
-        try:
-            parts = str(source_strategy_key).split("/")
-            for p in parts:
-                if p.startswith("workspace:"):
-                    workspace_id = p.split(":", 1)[1]
-                    break
-        except Exception:
-            workspace_id = None
-
-        if not workspace_id:
-            raise HTTPException(status_code=400, detail="invalid source_strategy_key format (missing workspace)")
-
-        # 3) locate workspace in RD-Agent registry
-        db_path = RDRegistryReader.resolve_db_path()
-        reader = RDRegistryReader(db_path)
-        try:
-            ws = reader.get_workspace(workspace_id)
-        except KeyError as exc:  # noqa: PERF203
-            raise HTTPException(status_code=404, detail=str(exc))
-
-        raw_workspace_path = _normalize_workspace_path(ws.workspace_path)
-        workspace_root = Path(raw_workspace_path)
-        if not workspace_root.exists():
-            raise HTTPException(status_code=404, detail=f"workspace_path not found: {workspace_root}")
-
-        # 4) resolve artifact file paths relative to workspace
-        metrics_rel = reader.find_backtest_metrics_file(workspace_id)
-        curve_rel = reader.find_backtest_curve_file(workspace_id)
-
-        metrics_abs = workspace_root / metrics_rel if metrics_rel else None
-        curve_abs = workspace_root / curve_rel if curve_rel else None
-
-        metrics: Dict[str, Any] = {}
-        equity_curve: List[Dict[str, Any]] = []
-
-        # 5) load metrics from qlib_res.csv (if present)
-        if metrics_abs and metrics_abs.exists():
-            try:
-                df_metrics = pd.read_csv(metrics_abs)
-                if not df_metrics.empty:
-                    row0 = df_metrics.iloc[0].to_dict()
-                    # best-effort selection of common fields
-                    preferred_keys = [
-                        "ann_ret",
-                        "annual_return",
-                        "excess_return_annual",
-                        "max_drawdown",
-                        "mdd",
-                        "sharpe",
-                        "information_ratio",
-                        "info_ratio",
-                        "ic",
-                        "ic_mean",
-                    ]
-                    for k in preferred_keys:
-                        if k in row0:
-                            metrics[k] = row0[k]
-                    # always include raw row for inspection
-                    metrics["raw"] = row0
-            except Exception as exc:  # noqa: BLE001
-                metrics["_error"] = str(exc)
-
-        # 6) load equity curve from ret.pkl (if present)
-        if curve_abs and curve_abs.exists():
-            try:
-                obj = pd.read_pickle(curve_abs)
-                # heuristics: Series or DataFrame
-                if isinstance(obj, pd.Series):
-                    series = obj
-                elif isinstance(obj, pd.DataFrame):
-                    col = None
-                    for c in [
-                        "cum",
-                        "cum_ret",
-                        "nav",
-                        "equity",
-                        "value",
-                        "portfolio_value",
-                    ]:
-                        if c in obj.columns:
-                            col = c
-                            break
-                    if col is None:
-                        col = obj.columns[0]
-                    series = obj[col]
-                else:
-                    series = None
-
-                if series is not None:
-                    series = series.dropna().copy()
-                    # attempt to interpret as returns and build cumulative nav if looks small
-                    vals = series.astype(float)
-                    if (vals.abs() < 0.5).all():
-                        nav = (1.0 + vals).cumprod()
-                    else:
-                        nav = vals
-                    # convert to list of {date, nav}
-                    if isinstance(nav.index, (pd.DatetimeIndex, pd.PeriodIndex)):
-                        for ts, v in nav.items():
-                            equity_curve.append({"date": str(ts.date()), "nav": float(v)})
-                    else:
-                        for i, v in enumerate(nav.values):
-                            equity_curve.append({"index": int(i), "nav": float(v)})
-            except Exception as exc:  # noqa: BLE001
-                metrics.setdefault("curve_error", str(exc))
-
-        return {
-            "registry_db_path": db_path,
-            "workspace_id": workspace_id,
-            "workspace_path": ws.workspace_path,
-            "metrics": metrics,
-            "equity_curve": equity_curve,
-        }
-    except HTTPException:
-        # already structured
-        raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc))
 

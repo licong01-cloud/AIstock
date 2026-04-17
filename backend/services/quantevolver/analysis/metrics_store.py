@@ -88,6 +88,18 @@ class MetricsStore:
         name_suffix = experiment_name_suffix or f"Loop{loop_index}"
         experiment_name = f"{task_id} {name_suffix}"
 
+        # 序列化 multi_alpha_config（如果存在）
+        multi_alpha_json = None
+        if config.multi_alpha_config is not None:
+            try:
+                multi_alpha_json = json.dumps(
+                    config.multi_alpha_config.model_dump()
+                    if hasattr(config.multi_alpha_config, "model_dump")
+                    else config.multi_alpha_config
+                )
+            except Exception as e:
+                logger.warning("序列化 multi_alpha_config 失败: %s", e)
+
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -96,14 +108,18 @@ class MetricsStore:
                      loop_index, parent_experiment_id,
                      is_evolution_loop, factor_names, model_id, strategy_id,
                      data_split, custom_params,
-                     result_metrics, status, is_sota)
-                    VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s, %s, 'completed', %s)
+                     result_metrics, status, is_sota,
+                     alpha_mode, multi_alpha_config)
+                    VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s, %s, 'completed', %s,
+                            %s, %s::jsonb)
                     ON CONFLICT (experiment_id) DO UPDATE SET
                         result_metrics = EXCLUDED.result_metrics,
                         status = EXCLUDED.status,
                         is_sota = EXCLUDED.is_sota,
                         qe_task_id = EXCLUDED.qe_task_id,
-                        qe_loop_id = EXCLUDED.qe_loop_id
+                        qe_loop_id = EXCLUDED.qe_loop_id,
+                        alpha_mode = EXCLUDED.alpha_mode,
+                        multi_alpha_config = EXCLUDED.multi_alpha_config
                 """, (
                     experiment_id,
                     experiment_name,
@@ -118,6 +134,8 @@ class MetricsStore:
                     json.dumps(config.build_custom_params()),
                     json.dumps(metrics),
                     is_sota,
+                    config.alpha_mode or "single",
+                    multi_alpha_json,
                 ))
             conn.commit()
 

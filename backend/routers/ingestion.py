@@ -210,6 +210,9 @@ def _serialize_ingestion_schedule(row: Dict[str, Any]) -> Dict[str, Any]:
         job_summary = _json_load(job_summary_raw) if isinstance(job_summary_raw, str) else job_summary_raw
         if isinstance(job_summary, dict):
             base["last_inserted_rows"] = job_summary.get("inserted_rows")
+            # 仅对数据检查类调度透传完整报告，避免其他调度传输大量无关数据
+            if row.get("dataset") == "_auto_retry_stale":
+                base["last_job_summary"] = job_summary
     return base
 
 

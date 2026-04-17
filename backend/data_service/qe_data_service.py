@@ -945,6 +945,7 @@ def build_static_factors(
 def get_instruments_universe(
     exchanges: List[str] = None,
     exclude_st: bool = False,
+    as_of_date: str | None = None,
 ) -> List[str]:
     """
     从数据库获取股票池（不硬编码）。
@@ -955,6 +956,7 @@ def get_instruments_universe(
                    - 简写格式：['SH', 'SZ', 'BJ']（自动映射到 SSE/SZSE/BSE）
                    None 表示全部
         exclude_st: 是否排除 ST 股票
+        as_of_date: 历史时点 (YYYY-MM-DD)；为空则使用当前日期
 
     Returns:
         股票代码列表（'000001.SZ' 格式）
@@ -963,9 +965,12 @@ def get_instruments_universe(
     _EXCHANGE_MAP = {"SH": "SSE", "SZ": "SZSE", "BJ": "BSE"}
 
     conditions = ["list_status = 'L'"]
-    # 上市满1年才纳入股票池（与 db_reader/snapshot_writer 一致）
-    conditions.append("list_date + INTERVAL '365 days' <= CURRENT_DATE")
     params: list = []
+    as_of_sql = "%s"
+    as_of_value = as_of_date or datetime.now().date().isoformat()
+    # 上市满1年才纳入股票池（与 db_reader/snapshot_writer 一致）
+    conditions.append(f"list_date + INTERVAL '365 days' <= {as_of_sql}")
+    params.append(as_of_value)
 
     if exchanges:
         normalized = [_EXCHANGE_MAP.get(e.upper(), e.upper()) for e in exchanges]

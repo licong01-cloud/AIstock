@@ -209,32 +209,8 @@ export default React.memo(function LoopDetailPanel({
                 prevLoopData={prevLoopData}
                 configDiffLines={configDiffLines}
                 activeTask={activeTask}
+                enhancedMetrics={enhancedMetrics}
               />
-              {/* 绝对收益指标（与单次实验详情页对齐） */}
-              {enhancedMetrics?.absolute_returns && (
-                <div style={{ backgroundColor: "#fff", borderRadius: 8, border: "1px solid #e2e8f0", padding: 20 }}>
-                  <h3 style={{ margin: "0 0 16px", fontSize: 13, fontWeight: 700, color: "#059669", textTransform: "uppercase", letterSpacing: "0.05em" }}>绝对收益</h3>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
-                    {[
-                      { label: "初始资金", value: enhancedMetrics.absolute_returns.initial_cash != null ? `${(enhancedMetrics.absolute_returns.initial_cash / 10000).toFixed(0)}万` : "-" },
-                      { label: "最终总资产", value: enhancedMetrics.absolute_returns.final_total_value != null ? `${(enhancedMetrics.absolute_returns.final_total_value / 10000).toFixed(1)}万` : "-" },
-                      { label: "CAGR", value: enhancedMetrics.absolute_returns.cagr != null ? `${(enhancedMetrics.absolute_returns.cagr * 100).toFixed(1)}%` : "-" },
-                      { label: "最大回撤", value: enhancedMetrics.absolute_returns.max_drawdown != null ? `${(enhancedMetrics.absolute_returns.max_drawdown * 100).toFixed(1)}%` : "-" },
-                      { label: "夏普", value: enhancedMetrics.absolute_returns.sharpe != null ? enhancedMetrics.absolute_returns.sharpe.toFixed(2) : "-" },
-                      { label: "最终现金", value: enhancedMetrics.absolute_returns.final_cash != null ? `${(enhancedMetrics.absolute_returns.final_cash / 10000).toFixed(1)}万` : "-" },
-                      { label: "最终股票市值", value: enhancedMetrics.absolute_returns.final_stock_value != null ? `${(enhancedMetrics.absolute_returns.final_stock_value / 10000).toFixed(1)}万` : "-" },
-                      { label: "总收益率", value: enhancedMetrics.absolute_returns.total_return != null ? `${(enhancedMetrics.absolute_returns.total_return * 100).toFixed(1)}%` : "-" },
-                      { label: "波动率", value: enhancedMetrics.absolute_returns.volatility != null ? `${(enhancedMetrics.absolute_returns.volatility * 100).toFixed(1)}%` : "-" },
-                      { label: "资金利用率", value: enhancedMetrics.absolute_returns.capital_utilization != null ? `${(enhancedMetrics.absolute_returns.capital_utilization * 100).toFixed(1)}%` : "-" },
-                    ].map((m) => (
-                      <div key={m.label} style={{ textAlign: "center", padding: 10, backgroundColor: "#f0fdf4", borderRadius: 6, border: "1px solid #bbf7d0" }}>
-                        <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>{m.label}</div>
-                        <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", fontFamily: "monospace", marginTop: 2 }}>{m.value}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
               </>
             )}
 
@@ -360,6 +336,7 @@ interface OverviewContentProps {
   prevLoopData: Loop | undefined;
   configDiffLines: string[];
   activeTask?: TaskInfo;
+  enhancedMetrics?: any;
 }
 
 const OverviewContent = React.memo(function OverviewContent({
@@ -367,18 +344,9 @@ const OverviewContent = React.memo(function OverviewContent({
   prevLoopData,
   configDiffLines,
   activeTask,
+  enhancedMetrics,
 }: OverviewContentProps) {
   const m = activeLoopData.metrics_json || {};
-  const pm = prevLoopData?.metrics_json || {};
-
-  const fmt = (v: any, digits = 4) => typeof v === "number" && isFinite(v) ? v.toFixed(digits) : "-";
-  const delta = (curr: any, prev: any, digits = 4) => {
-    if (typeof curr !== "number" || typeof prev !== "number" || !isFinite(curr) || !isFinite(prev)) return null;
-    const d = curr - prev;
-    return { value: d, text: (d >= 0 ? "+" : "") + d.toFixed(digits), color: d > 0 ? "#059669" : d < 0 ? "#ef4444" : "#94a3b8" };
-  };
-
-  const statusInfo = getTaskStatusInfo(activeLoopData.status);
 
   const cfg = activeLoopData.config_json;
   const actionType = cfg?.action_type || "initial";
@@ -395,14 +363,37 @@ const OverviewContent = React.memo(function OverviewContent({
   const hyperKeys = ["topk", "n_drop", "lr", "batch_size", "d_model", "n_head", "dropout", "n_epochs", "early_stop"];
   const hyperParams = hyperKeys.filter(k => cfg?.[k] !== undefined).map(k => ({ key: k, val: cfg[k] }));
 
-  const metrics = [
-    { label: "IC", key: "IC", digits: 4 },
-    { label: "Rank IC", key: "Rank_IC", digits: 4 },
-    { label: "ICIR", key: "ICIR", digits: 4 },
-    { label: "Sharpe", key: "sharpe", digits: 2 },
-    { label: "年化收益", key: "annualized_return", digits: 3, pct: true },
-    { label: "CAGR", key: "cagr", digits: 3, pct: true },
-    { label: "Status", key: "__status__" },
+  const ar = enhancedMetrics?.absolute_returns;
+
+  // 合并指标：信号质量 + 超额收益 + 绝对收益
+  const metricGroups = [
+    {
+      label: "信号质量", color: "#3b82f6", items: [
+        { label: "IC", source: m, key: "IC", digits: 4 },
+        { label: "Rank IC", source: m, key: "Rank_IC", digits: 4 },
+        { label: "ICIR", source: m, key: "ICIR", digits: 4 },
+      ],
+    },
+    {
+      label: "超额收益(相对300)", color: "#8b5cf6", items: [
+        { label: "超额 Sharpe", source: m, key: "sharpe", digits: 2 },
+        { label: "超额年化", source: m, key: "annualized_return", digits: 3, pct: true },
+        { label: "超额最大回撤", source: m, key: "max_drawdown", digits: 1, pct: true },
+      ],
+    },
+    {
+      label: "绝对收益(账户)", color: "#059669", items: ar ? [
+        { label: "CAGR", source: ar, key: "cagr", digits: 1, pct: true },
+        { label: "总收益率", source: ar, key: "total_return", digits: 1, pct: true },
+        { label: "绝对夏普", source: ar, key: "sharpe", digits: 2 },
+        { label: "绝对最大回撤", source: ar, key: "max_drawdown", digits: 1, pct: true },
+        { label: "年化波动率", source: ar, key: "annualized_volatility", digits: 1, pct: true },
+        { label: "资金利用率", source: ar, key: "avg_cash_ratio", digits: 1, pct: true, invert: true },
+        { label: "期末持仓数", source: ar, key: "final_stock_count", digits: 0 },
+      ] : [
+        { label: "CAGR", source: m, key: "cagr", digits: 3, pct: true },
+      ],
+    },
   ];
 
   return (
@@ -457,35 +448,35 @@ const OverviewContent = React.memo(function OverviewContent({
           核心指标
           {activeLoopData.is_sota && <span style={{ marginLeft: "8px", fontSize: "11px", color: "#d97706", backgroundColor: "#fef3c7", padding: "2px 8px", borderRadius: "4px" }}>SOTA</span>}
         </h3>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px" }}>
-          {metrics.map(({ label, key, digits = 4, pct }) => {
-            if (key === "__status__") {
-              return (
-                <div key={key} style={{ textAlign: "center", padding: "12px", backgroundColor: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
-                  <div style={{ fontSize: "11px", color: "#64748b", fontWeight: 600, textTransform: "uppercase" }}>{label}</div>
-                  <div style={{ fontSize: "16px", fontWeight: 700, fontFamily: "monospace", color: statusInfo.color, textTransform: "uppercase", marginTop: "4px" }}>
-                    {activeLoopData.status}
+        {metricGroups.map((group) => (
+          <div key={group.label} style={{ marginBottom: "16px" }}>
+            <div style={{ fontSize: "11px", fontWeight: 700, color: group.color, marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.05em" }}>{group.label}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px" }}>
+              {group.items.map(({ label, source, key, digits = 4, pct, invert }) => {
+                const v = source?.[key];
+                let displayVal = "-";
+                if (typeof v === "number" && isFinite(v)) {
+                  if (key === "final_stock_count") {
+                    displayVal = String(Math.round(v));
+                  } else if (pct) {
+                    const pctVal = invert ? (1 - v) * 100 : v * 100;
+                    displayVal = pctVal.toFixed(digits) + "%";
+                  } else {
+                    displayVal = v.toFixed(digits);
+                  }
+                }
+                return (
+                  <div key={key} style={{ textAlign: "center", padding: "12px", backgroundColor: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                    <div style={{ fontSize: "11px", color: "#64748b", fontWeight: 600, textTransform: "uppercase" }}>{label}</div>
+                    <div style={{ fontSize: "20px", fontWeight: 700, fontFamily: "monospace", color: "#059669", marginTop: "4px" }}>
+                      {displayVal}
+                    </div>
                   </div>
-                </div>
-              );
-            }
-            const v = m[key];
-            const d = delta(v, pm[key], digits);
-            return (
-              <div key={key} style={{ textAlign: "center", padding: "12px", backgroundColor: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
-                <div style={{ fontSize: "11px", color: "#64748b", fontWeight: 600, textTransform: "uppercase" }}>{label}</div>
-                <div style={{ fontSize: "20px", fontWeight: 700, fontFamily: "monospace", color: "#059669", marginTop: "4px" }}>
-                  {pct && typeof v === "number" ? (v * 100).toFixed(1) + "%" : fmt(v, digits)}
-                </div>
-                {d && (
-                  <div style={{ fontSize: "11px", fontFamily: "monospace", color: d.color, marginTop: "2px" }}>
-                    {d.text}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>

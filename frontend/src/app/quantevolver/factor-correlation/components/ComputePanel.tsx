@@ -66,8 +66,10 @@ interface Props {
   computing: boolean;
   scope: ComputeScope;
   asOfDate: string;
+  includeDisabled: boolean;
   onScopeChange: (s: ComputeScope) => void;
   onAsOfDateChange: (d: string) => void;
+  onIncludeDisabledChange: (v: boolean) => void;
   onCompute: () => void;
 }
 
@@ -126,8 +128,10 @@ export default function ComputePanel({
   computing,
   scope,
   asOfDate,
+  includeDisabled,
   onScopeChange,
   onAsOfDateChange,
+  onIncludeDisabledChange,
   onCompute,
 }: Props) {
   const lc = status?.latest_computation;
@@ -306,6 +310,29 @@ export default function ComputePanel({
               colorScheme: "dark",
             }}
           />
+          <label
+            title="包含已禁用因子参与计算和展示"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12,
+              cursor: isComputing ? "not-allowed" : "pointer",
+              color: "#fff",
+              opacity: isComputing ? 0.5 : 1,
+              userSelect: "none",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={includeDisabled}
+              onChange={(e) => onIncludeDisabledChange(e.target.checked)}
+              disabled={isComputing}
+              style={{ width: 14, height: 14, accentColor: "#7c3aed" }}
+            />
+            含禁用因子
+          </label>
           <button
             onClick={onCompute}
             disabled={isComputing}

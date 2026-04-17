@@ -527,7 +527,18 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
         if trade_step < start_idx or trade_step > end_idx:
             return TradeDecisionWO(order_list=[], strategy=self)
 
+        # 计算相对时间步
         rel_trade_step = trade_step - start_idx
+
+        # 根据总长度判断是否有集合竞价
+        has_auction = (trade_len == 241)  # 包含集合竞价的交易日
+        if has_auction:
+            # 早期数据：跳过集合竞价（第一个时间步，09:25）
+            if rel_trade_step == 0:
+                return TradeDecisionWO(order_list=[], strategy=self)
+            # 调整相对时间步，排除集合竞价
+            rel_trade_step = rel_trade_step - 1
+        # 后期数据（trade_len=240）：不跳过，直接使用rel_trade_step
 
         # 更新已执行数量 (同父类)
         if execute_result is not None:
@@ -546,9 +557,18 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
         is_last_step = (rel_trade_step == trade_len - 1)
 
         # ================================================
-        # P4: 尾盘触发闲置资金再分配 (仅一次) — 完全复用父类逻辑
+        # P4: 尾盘触发闲置资金再分配 (仅一次) — 14:55 触发
         # ================================================
-        if rel_trade_step >= self._realloc_offset and not self._realloc_done:
+        # REALLOC_OFFSET=235 是相对于241根数据(含集合竞价)的第235分钟(14:55)
+        # 对于240根数据，对应的是第234分钟
+        if has_auction:
+            # 早期数据(241根): 第235分钟 = rel_step 234
+            trigger_step = REALLOC_OFFSET - 1  # 235-1=234
+        else:
+            # 后期数据(240根): 第234分钟 = rel_step 234
+            trigger_step = REALLOC_OFFSET - 1  # 235-1=234
+
+        if rel_trade_step >= trigger_step and not self._realloc_done:
             self._realloc_done = True
             if self._unfilled_handler == "TAIL_SUBSTITUTE":
                 self._do_realloc_substitute(trade_start_time, trade_end_time)
@@ -756,8 +776,14 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
         # TAIL_SUBSTITUTE: 为备选股生成买入订单 (尾盘段, 复用父类逻辑)
         # 备选股不在 outer_trade_decision 中, 没有 v24 plan, 用均匀 TWAP
         # ================================================
-        if (rel_trade_step >= TAIL_START_OFFSET
-                and self._unfilled_handler == "TAIL_SUBSTITUTE"):
+        # TAIL_START_OFFSET=210 是相对于241根数据的第210分钟(14:30)
+        # 对于240根数据，对应的是第209分钟
+        if has_auction:
+            trigger_step = TAIL_START_OFFSET - 1  # 210-1=209
+        else:
+            trigger_step = TAIL_START_OFFSET - 1  # 210-1=209
+
+        if rel_trade_step >= trigger_step and self._unfilled_handler == "TAIL_SUBSTITUTE":
             existing_sids = {o.stock_id for o in order_list}
             for sid, extra in self._realloc_extra.items():
                 if extra <= 1e-5 or sid in existing_sids:

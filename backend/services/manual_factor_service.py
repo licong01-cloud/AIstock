@@ -272,7 +272,7 @@ class ManualFactorService:
                         (description, catalog_id),
                     )
 
-        # LLM 分类+评级
+        # LLM 分类（评级只读，由 FactorRatingService 统一管理）
         classification_result = None
         try:
             from .quantevolver.factor_analyst import FactorAnalyst
@@ -282,7 +282,7 @@ class ManualFactorService:
                 factor_source="manual",
                 use_llm=True,
             )
-            logger.info(f"LLM 分类完成: {factor_name} -> {classification_result.get('category')}/{classification_result.get('grade')}")
+            logger.info(f"LLM 分类完成: {factor_name} -> {classification_result.get('category')}")
         except Exception as e:
             logger.warning(f"LLM 分类失败 {factor_name}: {e}")
 
@@ -516,7 +516,7 @@ class ManualFactorService:
                             "WHERE factor_name=%s AND source='manual'",
                             (ic, sharpe, ann_ret, factor_name),
                         )
-                # 用真实指标重新 LLM 分类
+                # 用真实指标重新 LLM 分类（评级不变，只更新分类和描述）
                 try:
                     from .quantevolver.factor_analyst import FactorAnalyst
                     analyst = FactorAnalyst()

@@ -375,7 +375,8 @@ class PortfolioArchitect:
                            m.top_excess_sharpe, m.top_excess_annual_return,
                            m.group_return_monotonicity, m.turnover,
                            m.ic_decay_half_life,
-                           cl.category, cl.grade, cl.factor_dimension, cl.factor_profile
+                           cl.category, fr.official_grade AS grade,
+                           cl.factor_dimension, cl.factor_profile
                     FROM aistock_factor_catalog c
                     LEFT JOIN LATERAL (
                         SELECT ic_mean, icir, rank_ic_mean, rank_icir,
@@ -390,6 +391,15 @@ class PortfolioArchitect:
                     ) m ON TRUE
                     LEFT JOIN qe_factor_classification cl
                         ON c.factor_name = cl.factor_name AND c.source = cl.factor_source
+                    LEFT JOIN LATERAL (
+                        SELECT official_grade FROM qe_factor_official_ratings r
+                        WHERE r.factor_catalog_id = c.id
+                          AND r.rule_version = (
+                              SELECT rule_version FROM qe_rating_rule_versions
+                              WHERE status = 'active' ORDER BY activated_at DESC LIMIT 1
+                          )
+                        ORDER BY r.graded_at DESC LIMIT 1
+                    ) fr ON TRUE
                     WHERE c.factor_name IN ({ph})
                 """, names_only)
                 cols = [d[0] for d in cur.description]

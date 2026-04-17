@@ -378,7 +378,7 @@ class ConfigComposer:
         if has_custom_factors:
             factor_marker = self._compose_factor_file(factors_info)
             has_factor_files = factor_marker is not None
-            prepare_factors_py = self._compose_prepare_factors(factors_info)
+            prepare_factors_py = self._compose_prepare_factors(factors_info, data_split=data_split)
 
         # 保存文件
         conf_path = exp_dir / "conf.yaml"
@@ -663,7 +663,7 @@ class ConfigComposer:
                 if code:
                     experiment_files[f"factors/{f['factor_name']}.py"] = code
 
-            prepare_factors_py = self._compose_prepare_factors(factors_info, factor_data_dir=factor_data_dir)
+            prepare_factors_py = self._compose_prepare_factors(factors_info, factor_data_dir=factor_data_dir, data_split=data_split)
             if prepare_factors_py:
                 experiment_files["prepare_factors.py"] = prepare_factors_py
 
@@ -947,7 +947,8 @@ class ConfigComposer:
                            ic, icir, rank_ic, rank_icir,
                            annualized_return, max_drawdown, information_ratio,
                            annualized_return_no_cost, max_drawdown_no_cost, information_ratio_no_cost,
-                           created_at, updated_at
+                           created_at, updated_at,
+                           alpha_mode, multi_alpha_config, parent_multi_alpha_id
                     FROM qe_experiments
                     ORDER BY created_at DESC
                     LIMIT %s OFFSET %s
@@ -1079,7 +1080,7 @@ class ConfigComposer:
         if has_custom_factors:
             factor_marker = self._compose_factor_file(factors_info)
             has_factor_files = factor_marker is not None
-            prepare_factors_py = self._compose_prepare_factors(factors_info)
+            prepare_factors_py = self._compose_prepare_factors(factors_info, data_split=data_split)
 
         # 保存文件
         conf_path = exp_dir / "conf.yaml"
@@ -1207,6 +1208,8 @@ class ConfigComposer:
         model_kwargs = dict(RDAGENT_DEFAULT_LGB_KWARGS)  # 默认使用RDAgent超参
         use_custom_model = False  # 是否使用自定义模型源代码（GeneralPTNN + model.model_cls）
         model_type_tag = None  # "TimeSeries" | "Tabular" | None
+        model_dataset_cls = "DatasetH"
+        model_step_len: Optional[int] = None
 
         if model_info:
             model_name = model_info.get("model_name", "")
@@ -1269,8 +1272,12 @@ class ConfigComposer:
                 model_type_raw = model_info.get("model_type") or ""
                 if model_type_raw in ("TimeSeries", "timeseries"):
                     model_type_tag = "TimeSeries"
+                    model_dataset_cls = "TSDatasetH"
+                    model_step_len = 20
                 elif model_type_raw in ("Tabular", "tabular"):
                     model_type_tag = "Tabular"
+                    model_dataset_cls = "DatasetH"
+                    model_step_len = None
                 else:
                     raise ValueError(
                         f"模型 '{model_info.get('model_name', '?')}' 的 model_type='{model_type_raw}' "
@@ -1338,6 +1345,8 @@ class ConfigComposer:
                 model_module = "qlib.contrib.model.pytorch_general_nn"
 
                 # 提供完整的默认训练参数（数值类型，不是字符串）
+                model_dataset_cls = model_info.get("default_dataset_type") or "DatasetH"
+                model_step_len = 20 if model_dataset_cls == "TSDatasetH" else None
                 model_kwargs = {
                     "n_epochs": 30,
                     "lr": 1e-3,
@@ -1350,6 +1359,16 @@ class ConfigComposer:
                     "GPU": 0,
                 }
 
+                training_hp = model_info.get("model_training_hyperparameters")
+                if training_hp:
+                    if isinstance(training_hp, str):
+                        training_hp = json.loads(training_hp)
+                    if "lr" in training_hp and isinstance(training_hp["lr"], str):
+                        training_hp["lr"] = float(training_hp["lr"])
+                    if "weight_decay" in training_hp and isinstance(training_hp["weight_decay"], str):
+                        training_hp["weight_decay"] = float(training_hp["weight_decay"])
+                    model_kwargs.update(training_hp)
+
                 hp = model_info.get("model_hyperparameters")
                 if hp:
                     if isinstance(hp, str):
@@ -1359,7 +1378,22 @@ class ConfigComposer:
                         hp["lr"] = float(hp["lr"])
                     if "weight_decay" in hp and isinstance(hp["weight_decay"], str):
                         hp["weight_decay"] = float(hp["weight_decay"])
-                    model_kwargs.update(hp)
+
+                    pt_model_uri = hp.get("pt_model_uri")
+                    pt_model_kwargs = {}
+                    for arch_key in ("d_feat", "hidden_size", "num_layers", "dropout"):
+                        if arch_key in hp:
+                            pt_model_kwargs[arch_key] = hp[arch_key]
+
+                    for key, value in hp.items():
+                        if key in {"pt_model_uri", "d_feat", "hidden_size", "num_layers", "dropout"}:
+                            continue
+                        model_kwargs[key] = value
+
+                    if pt_model_uri:
+                        model_kwargs["pt_model_uri"] = pt_model_uri
+                    if pt_model_kwargs:
+                        model_kwargs["pt_model_kwargs"] = pt_model_kwargs
 
                 # 检查是否提供了 pt_model_uri
                 if "pt_model_uri" not in model_kwargs:
@@ -1843,26 +1877,42 @@ class ConfigComposer:
         lines.append(f"        module_path: {model_module}")
         if model_kwargs:
             lines.append("        kwargs:")
+            pt_model_kwargs = None
+            if model_class == "GeneralPTNN":
+                pt_model_kwargs = model_kwargs.get("pt_model_kwargs")
             for k, v in model_kwargs.items():
+                if k == "pt_model_kwargs":
+                    continue
                 # pt_model_kwargs 使用Jinja2模板变量，与RDAgent一致
                 if k == "pt_model_uri":
                     lines.append(f"            {k}: {v}")
                 else:
                     lines.append(f"            {k}: {v}")
-            # 自定义模型需要 pt_model_kwargs（num_features 等）
-            if use_custom_model:
-                lines.append('            pt_model_kwargs: {')
-                lines.append('                "num_features": {{ num_features }}')
-                if model_type_tag == "TimeSeries":
-                    lines.append('                {% if num_timesteps %}, "num_timesteps": {{ num_timesteps }}{% endif %}')
-                lines.append('            }')
+            # 自定义模型和内置 PTNN 模型都需要 pt_model_kwargs
+            if model_class == "GeneralPTNN":
+                if pt_model_kwargs is None and use_custom_model:
+                    pt_model_kwargs = {"num_features": "{{ num_features }}"}
+                    if model_type_tag == "TimeSeries":
+                        pt_model_kwargs["num_timesteps"] = "{{ num_timesteps }}"
+                if pt_model_kwargs is not None:
+                    lines.append('            pt_model_kwargs: {')
+                    first_item = True
+                    for pt_key, pt_value in pt_model_kwargs.items():
+                        prefix = "                " if first_item else "                , "
+                        if isinstance(pt_value, str) and pt_value.startswith("{{"):
+                            rendered_value = pt_value
+                        elif isinstance(pt_value, str):
+                            rendered_value = f'"{pt_value}"'
+                        else:
+                            rendered_value = str(pt_value)
+                        lines.append(f"{prefix}\"{pt_key}\": {rendered_value}")
+                        first_item = False
+                    lines.append('            }')
 
         # 数据集配置
-        if use_custom_model:
-            # 自定义模型：dataset_cls 通过Jinja2模板变量控制（TSDatasetH/DatasetH）
-            # 与 RDAgent conf_sota_factors_model.yaml 完全一致
+        if model_class == "GeneralPTNN":
             lines.append("    dataset:")
-            lines.append('        class: {{ dataset_cls | default("DatasetH") }}')
+            lines.append(f'        class: {model_dataset_cls}')
             lines.append("        module_path: qlib.data.dataset")
         else:
             lines.append("    dataset:")
@@ -1882,8 +1932,8 @@ class ConfigComposer:
         lines.append(f"                train: [{data_split['train_start']}, {data_split['train_end']}]")
         lines.append(f"                valid: [{data_split['valid_start']}, {data_split['valid_end']}]")
         lines.append(f"                test: [{data_split['test_start']}, {data_split['test_end']}]")
-        if use_custom_model:
-            lines.append("            {% if step_len %}step_len: {{ step_len }}{% endif %}")
+        if model_class == "GeneralPTNN" and model_step_len:
+            lines.append(f"            step_len: {model_step_len}")
 
         # record
         lines.append("    record:")
@@ -1946,16 +1996,26 @@ class ConfigComposer:
             factor_path.write_text(code, encoding="utf-8")
             logger.info(f"写入因子文件: {factor_path}")
 
-    def _compose_prepare_factors(self, factors_info: List[Dict], factor_data_dir: Optional[str] = None) -> Optional[str]:
-        """生成 prepare_factors.py 预处理脚本。
+    def _compose_prepare_factors(
+        self,
+        factors_info: List[Dict],
+        factor_data_dir: Optional[str] = None,
+        data_split: Optional[Dict[str, str]] = None,
+    ) -> Optional[str]:
+        """生成 prepare_factors.py 预处理脚本（含因子值缓存集成）。
 
         与 RDAgent FactorFBWorkspace.execute() 完全一致的因子执行方式：
-        1. 从 RDAgent 数据目录链接所有数据文件到实验目录（daily_pv.h5, static_factors.parquet,
-           moneyflow.h5, daily_basic.h5, bak_basic.h5, cyq_perf.h5, README.md, schemas/ 等）
-        2. 每个因子作为独立脚本直接执行（python factor.py），因子代码自己读取数据
-        3. 每个因子输出 result.h5，与 RDAgent 因子执行方式完全一致
-        4. 合并所有因子结果为 combined_factors_df.parquet（NestedDataLoader StaticDataLoader 所需格式）
+        1. 从 RDAgent 数据目录链接所有数据文件到实验目录
+        2. 对每个因子先检查缓存 (source_hash + 日期覆盖) → 命中则读 parquet
+        3. 未命中则执行 python factor.py (timeout=1200s) → 成功后回写缓存
+        4. 合并所有因子结果为 combined_factors_df.parquet
         """
+        # 提取缓存窗口（用于全周期缓存命中判断）
+        train_start = "2018-08-01"
+        test_end = "2026-04-03"
+        if data_split:
+            train_start = data_split.get("train_start", train_start)
+            test_end = data_split.get("test_end", test_end)
         custom_factors = [f for f in factors_info if f.get("code_text")]
         if not custom_factors:
             return None
@@ -1984,14 +2044,114 @@ class ConfigComposer:
         lines.append("")
         lines.append(f"FACTOR_DATA_DIR = os.environ.get('RDAGENT_FACTOR_DATA_DIR', '{factor_data_dir or RDAGENT_FACTOR_DATA_WSL}')")
         lines.append("")
+        lines.append("# ── 因子值缓存 ──────────────────────────────────────────")
+        lines.append("import hashlib")
+        lines.append("import json as _json")
+        lines.append("RAW_FACTOR_CACHE_DIR = os.environ.get('FACTOR_CACHE_DIR', '')")
+        lines.append("if RAW_FACTOR_CACHE_DIR:")
+        lines.append("    _cache_base = RAW_FACTOR_CACHE_DIR.rstrip('/\\')")
+        lines.append("    if os.path.basename(_cache_base) == 'single':")
+        lines.append("        FACTOR_CACHE_SINGLE_DIR = _cache_base")
+        lines.append("        FACTOR_CACHE_META = os.path.join(os.path.dirname(_cache_base), '_meta.json')")
+        lines.append("    else:")
+        lines.append("        FACTOR_CACHE_SINGLE_DIR = os.path.join(_cache_base, 'single')")
+        lines.append("        FACTOR_CACHE_META = os.path.join(_cache_base, '_meta.json')")
+        lines.append("else:")
+        lines.append("    FACTOR_CACHE_SINGLE_DIR = ''")
+        lines.append("    FACTOR_CACHE_META = ''")
+        lines.append(f"TRAIN_START = '{train_start}'")
+        lines.append(f"TEST_END = '{test_end}'")
+        lines.append("")
+        lines.append("")
+        lines.append("def _try_cache_hit(factor_name, factor_code):")
+        lines.append("    \"\"\"尝试从缓存读取因子值。命中返回 DataFrame，否则返回 None。\"\"\"")
+        lines.append("    if not FACTOR_CACHE_SINGLE_DIR:")
+        lines.append("        return None")
+        lines.append("    cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet')")
+
+        lines.append("    if not os.path.exists(cache_path) or not FACTOR_CACHE_META or not os.path.exists(FACTOR_CACHE_META):")
+        lines.append("        return None")
+        lines.append("    code_hash = hashlib.sha256(factor_code.encode()).hexdigest()[:16]")
+        lines.append("    try:")
+        lines.append("        meta = _json.load(open(FACTOR_CACHE_META, 'r'))")
+        lines.append("    except Exception:")
+        lines.append("        return None")
+        lines.append("    entry = meta.get('factors', {}).get(factor_name, {})")
+        lines.append("    cached_hash = entry.get('source_hash_raw')")
+        lines.append("    if cached_hash != code_hash:")
+        lines.append("        logger.info(f'  {factor_name}: cache hash mismatch (cached={cached_hash}, current={code_hash})')")
+        lines.append("        return None")
+        lines.append("    cached_range = entry.get('date_range', '')")
+        lines.append("    if '~' not in cached_range:")
+        lines.append("        return None")
+        lines.append("    c_start, c_end = cached_range.split('~')")
+        lines.append("    # 允许时序因子 lookback 缺口：缓存起始日比 train_start 晚 60 日历天内视为正常")
+        lines.append("    _LOOKBACK_TOLERANCE_DAYS = 60")
+        lines.append("    _ts = _pd.Timestamp(TRAIN_START)")
+        lines.append("    _gap_ok = (_pd.Timestamp(c_start) - _ts).days <= _LOOKBACK_TOLERANCE_DAYS if c_start > TRAIN_START else True")
+        lines.append("    if (not _gap_ok) or c_end < TEST_END:")
+        lines.append("        logger.info(f'  {factor_name}: cache date insufficient ({cached_range} vs {TRAIN_START}~{TEST_END})')")
+        lines.append("        return None")
+        lines.append("    # 命中")
+        lines.append("    df = pd.read_parquet(cache_path)")
+        lines.append("    dates = df.index.get_level_values(0)")
+        lines.append("    df = df[(dates >= pd.Timestamp(TRAIN_START)) & (dates <= pd.Timestamp(TEST_END))]")
+        lines.append("    if 'value' in df.columns:")
+        lines.append("        df = df.rename(columns={'value': factor_name})")
+        lines.append("    logger.info(f'  {factor_name}: CACHE HIT ({len(df)} rows, {cached_range})')")
+        lines.append("    return df")
+        lines.append("")
+        lines.append("")
+        lines.append("def _write_cache(factor_name, factor_code, result_df):")
+        lines.append("    \"\"\"执行成功后回写因子值缓存。\"\"\"")
+        lines.append("    if not FACTOR_CACHE_SINGLE_DIR:")
+        lines.append("        return")
+        lines.append("    try:")
+        lines.append("        cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet')")
+
+        lines.append("        code_hash = hashlib.sha256(factor_code.encode()).hexdigest()[:16]")
+        lines.append("        save_df = result_df.copy()")
+        lines.append("        if len(save_df.columns) == 1:")
+        lines.append("            save_df = save_df.rename(columns={save_df.columns[0]: 'value'})")
+        lines.append("        save_df.to_parquet(cache_path, engine='pyarrow', compression='snappy')")
+        lines.append("        # 原子更新 _meta.json")
+        lines.append("        import tempfile as _tmpf")
+        lines.append("        meta = {}")
+        lines.append("        if os.path.exists(FACTOR_CACHE_META):")
+        lines.append("            try:")
+        lines.append("                meta = _json.load(open(FACTOR_CACHE_META, 'r'))")
+        lines.append("            except Exception:")
+        lines.append("                pass")
+        lines.append("        factors = meta.get('factors', {})")
+        lines.append("        dates = result_df.index.get_level_values(0)")
+        lines.append("        d_min = str(dates.min().date())")
+        lines.append("        d_max = str(dates.max().date())")
+        lines.append("        factors[factor_name] = {")
+        lines.append("            'computed_at': __import__('datetime').datetime.now().isoformat(),")
+        lines.append("            'rows': len(result_df),")
+        lines.append("            'date_range': f'{d_min}~{d_max}',")
+        lines.append("            'as_of_date': d_max,")
+        lines.append("            'source_hash_raw': code_hash,")
+        lines.append("        }")
+        lines.append("        meta['factors'] = factors")
+        lines.append("        tmp_fd, tmp_path = _tmpf.mkstemp(dir=os.path.dirname(FACTOR_CACHE_META), suffix='.json')")
+
+        lines.append("        with os.fdopen(tmp_fd, 'w') as f:")
+        lines.append("            _json.dump(meta, f, indent=2, ensure_ascii=False)")
+        lines.append("        os.replace(tmp_path, FACTOR_CACHE_META)")
+        lines.append("        logger.info(f'  {factor_name}: cache WRITTEN ({len(result_df)} rows, {d_min}~{d_max}, window={TRAIN_START}~{TEST_END})')")
+
+        lines.append("    except Exception as e:")
+        lines.append("        logger.warning(f'  {factor_name}: cache write failed: {e}')")
+        lines.append("")
+        lines.append("")
+        lines.append("ALLOWED_DATA_FILES = ('daily_pv.h5', 'daily_basic.h5', 'moneyflow.h5', 'bak_basic.h5', 'cyq_perf.h5', 'sector_data.h5', 'margin_detail.h5', 'static_factors.parquet')")
+        lines.append("")
         lines.append("")
         lines.append("def link_all_files_to_dir(src_dir, dst_dir):")
-        lines.append('    """与 RDAgent core/experiment.py link_all_files_in_folder_to_workspace 完全一致。')
-        lines.append('    将数据目录中所有文件链接到目标目录，确保因子代码可以读取所有数据。"""')
+        lines.append('    """仅链接 execution layer 允许的历史数据文件，避免混入实时数据。"""')
         lines.append("    src_dir = os.path.abspath(src_dir)")
-        lines.append("    for item in os.listdir(src_dir):")
-        lines.append("        if item in ('result.h5', 'execution.lock'):")
-        lines.append("            continue")
+        lines.append("    for item in ALLOWED_DATA_FILES:")
         lines.append("        src_path = os.path.join(src_dir, item)")
         lines.append("        dst_path = os.path.join(dst_dir, item)")
         lines.append("        if not os.path.isfile(src_path):")
@@ -2022,15 +2182,16 @@ class ConfigComposer:
         lines.append("")
         lines.append("")
         lines.append("def execute_factor(factor_name, factor_code, work_dir):")
-        lines.append('    """与 RDAgent FactorFBWorkspace.execute() 完全一致的因子执行方式。')
-        lines.append('    ')
-        lines.append('    每个因子在独立的临时目录中执行：')
-        lines.append('    1. 创建临时目录')
-        lines.append('    2. 链接所有数据文件')
-        lines.append('    3. 写入 factor.py（直接使用原始源码，不做任何修改）')
-        lines.append('    4. 执行 python factor.py')
-        lines.append('    5. 读取 result.h5')
+        lines.append('    """因子执行（含缓存读取/回写）。')
+        lines.append('    1. 检查缓存：source_hash 匹配 + 日期覆盖 → 读 parquet')
+        lines.append('    2. 未命中：执行 factor.py (timeout=1200s)')
+        lines.append('    3. 成功后回写缓存')
         lines.append('    """')
+        lines.append("    # ── 缓存检查 ──")
+        lines.append("    cached = _try_cache_hit(factor_name, factor_code)")
+        lines.append("    if cached is not None:")
+        lines.append("        return cached")
+        lines.append("")
         lines.append("    factor_dir = os.path.join(work_dir, f'_factor_{factor_name}')")
         lines.append("    os.makedirs(factor_dir, exist_ok=True)")
         lines.append("")
@@ -2043,13 +2204,14 @@ class ConfigComposer:
         lines.append("    with open(factor_py_path, 'w', encoding='utf-8') as f:")
         lines.append("        f.write(factor_code)")
         lines.append("")
-        lines.append("    # 执行因子代码")
+        lines.append("    # 执行因子代码 (超时 1800s, 适配720万行 × rolling.cov 等重型算子)")
+        lines.append("    _factor_timeout = int(os.environ.get('AISTOCK_FACTOR_TIMEOUT', '1800'))")
         lines.append("    try:")
         lines.append("        output = subprocess.check_output(")
         lines.append("            [sys.executable, 'factor.py'],")
         lines.append("            cwd=factor_dir,")
         lines.append("            stderr=subprocess.STDOUT,")
-        lines.append("            timeout=600,")
+        lines.append("            timeout=_factor_timeout,")
         lines.append("        )")
         lines.append("        logger.info(f'  {factor_name}: execution succeeded')")
         lines.append("    except subprocess.CalledProcessError as e:")
@@ -2057,7 +2219,7 @@ class ConfigComposer:
         lines.append("        logger.error(f'  {factor_name}: execution failed: {err_msg}')")
         lines.append("        return None")
         lines.append("    except subprocess.TimeoutExpired:")
-        lines.append("        logger.error(f'  {factor_name}: execution timeout (600s)')")
+        lines.append("        logger.error(f'  {factor_name}: execution timeout ({_factor_timeout}s)')")
         lines.append("        return None")
         lines.append("")
         lines.append("    # 读取结果")
@@ -2075,6 +2237,8 @@ class ConfigComposer:
         lines.append("        if isinstance(df, pd.Series):")
         lines.append("            df = df.to_frame(name=factor_name)")
         lines.append("        logger.info(f'  {factor_name}: {df.shape[0]} rows, {df.shape[1]} cols')")
+        lines.append("        # 回写缓存")
+        lines.append("        _write_cache(factor_name, factor_code, df)")
         lines.append("        return df")
         lines.append("    except Exception as e:")
         lines.append("        logger.error(f'  {factor_name}: failed to read result.h5: {e}')")
@@ -2240,15 +2404,26 @@ class ConfigComposer:
                        or r["source"] == factor_sources[r["factor_name"]]]
 
         # 对于 RDAgent 因子，从 API 获取原始源码
+        api_failures: list[str] = []
         for r in results:
             if r.get("source") == "rdagent_task_sync":
                 task_id = r.get("best_loop_task_run_id")
                 factor_name = r.get("factor_name")
                 if task_id and factor_name:
-                    source_code = self._fetch_factor_source_from_api(task_id, factor_name)
-                    if source_code:
-                        r["code_text"] = source_code
-                        logger.info(f"[QE] 从RDAgent API获取因子源码: {factor_name}, task={task_id}")
+                    try:
+                        source_code = self._fetch_factor_source_from_api(task_id, factor_name)
+                        if source_code:
+                            r["code_text"] = source_code
+                            logger.info(f"[QE] 从RDAgent API获取因子源码: {factor_name}, task={task_id}")
+                        else:
+                            api_failures.append(factor_name)
+                    except Exception as e:
+                        logger.warning(f"[QE] 获取因子源码失败 {factor_name}: {e}")
+                        api_failures.append(factor_name)
+        if api_failures:
+            logger.warning(
+                f"[QE] {len(api_failures)} 个RDAgent因子源码获取失败: {api_failures[:10]}"
+            )
 
         # 补充未在数据库中的因子
         found_names = {r["factor_name"] for r in results}
@@ -2284,31 +2459,81 @@ class ConfigComposer:
             raise RuntimeError(f"[QE] 获取因子源码异常: factor={factor_name}, task={task_id}, {e}") from e
 
     # Qlib 内置模型定义（不需要自定义代码，仅超参数）
+    #
+    # Multi-Alpha 架构新增说明:
+    #   - 每个模型可附带 default_hyperparameters（composer 兜底使用）
+    #   - default_dataset_type 暗示 Multi-Alpha 分组时的首选 dataset (TSDatasetH / DatasetH)
+    #   - 实际 dataset_cls 由 Multi-Alpha engine 在 Jinja 渲染阶段注入，此处仅作为元信息
     _BUILTIN_MODELS = {
-        "__builtin_LGBModel__": {"model_name": "LGBModel", "model_type": "LGB"},
-        "__builtin_XGBModel__": {"model_name": "XGBModel", "model_type": "XGB"},
-        "__builtin_CatBoostModel__": {"model_name": "CatBoostModel", "model_type": "CATBOOST"},
-        "__builtin_LinearModel__": {"model_name": "LinearModel", "model_type": "LINEAR"},
+        "__builtin_LGBModel__": {
+            "model_name": "LGBModel", "model_type": "LGB",
+            "default_dataset_type": "DatasetH",
+        },
+        "__builtin_XGBModel__": {
+            "model_name": "XGBModel", "model_type": "XGB",
+            "default_dataset_type": "DatasetH",
+        },
+        "__builtin_CatBoostModel__": {
+            "model_name": "CatBoostModel", "model_type": "CATBOOST",
+            "default_dataset_type": "DatasetH",
+        },
+        "__builtin_LinearModel__": {
+            "model_name": "LinearModel", "model_type": "LINEAR",
+            "default_dataset_type": "DatasetH",
+            "default_hyperparameters": {"estimator": "ridge", "alpha": 0.1},
+        },
         # 兼容旧数据中的小写 ID
-        "__builtin_lgbmodel__": {"model_name": "LGBModel", "model_type": "LGB"},
+        "__builtin_lgbmodel__": {
+            "model_name": "LGBModel", "model_type": "LGB",
+            "default_dataset_type": "DatasetH",
+        },
+        # ── Multi-Alpha 新增: 时序/非线性模型 ──────────────────────
+        "__builtin_ALSTM__": {
+            "model_name": "ALSTM", "model_type": "PTNN",
+            "default_dataset_type": "TSDatasetH",
+            "default_hyperparameters": {
+                "pt_model_uri": "qlib.contrib.model.pytorch_alstm_ts.ALSTMModel",
+                "d_feat": 20, "hidden_size": 64, "num_layers": 1,
+                "dropout": 0.0,
+            },
+            "default_training_hyperparameters": {
+                "n_epochs": 200, "lr": 3e-4,
+                "early_stop": 20, "batch_size": 4096,
+                "weight_decay": 1e-5,
+            },
+        },
+        "__builtin_GRU2__": {
+            "model_name": "GRU2", "model_type": "PTNN",
+            "default_dataset_type": "TSDatasetH",
+            "default_hyperparameters": {
+                "pt_model_uri": "qlib.contrib.model.pytorch_gru_ts.GRUModel",
+                "d_feat": 20, "hidden_size": 128, "num_layers": 2,
+                "dropout": 0.2,
+            },
+            "default_training_hyperparameters": {
+                "n_epochs": 200, "lr": 2e-4,
+                "early_stop": 20, "batch_size": 4096,
+                "weight_decay": 1e-4,
+            },
+        },
+        "__builtin_Ridge__": {
+            "model_name": "Ridge", "model_type": "LINEAR",
+            "default_dataset_type": "DatasetH",
+            "default_hyperparameters": {"estimator": "ridge", "alpha": 0.1},
+        },
     }
 
     def _get_model_info(self, model_id: str) -> Optional[Dict]:
-        """获取模型信息（含源代码）。"""
-        # 内置模型无需数据库查询
-        builtin = self._BUILTIN_MODELS.get(model_id)
-        if builtin:
-            return {
-                "model_id": model_id,
-                "model_name": builtin["model_name"],
-                "model_type": builtin["model_type"],
-                "model_hyperparameters": None,
-                "model_training_hyperparameters": None,
-                "ic": None,
-                "annualized_return": None,
-                "is_sota": False,
-                "code_text": None,
-            }
+        """获取模型信息（含源代码）。
+
+        Multi-Alpha 解析优先级:
+          1. aistock_model_catalog (用户可见/可管理)
+          2. _BUILTIN_MODELS fallback (系统内置兜底)
+
+        Catalog 中 model_hyperparameters 为空时，会自动从 _BUILTIN_MODELS 补齐 defaults。
+        """
+        # 1. 先查 catalog
+        catalog_row = None
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -2320,10 +2545,44 @@ class ConfigComposer:
                     WHERE model_id = %s
                 """, (model_id,))
                 row = cur.fetchone()
-                if not row:
-                    return None
-                cols = [desc[0] for desc in cur.description]
-                return dict(zip(cols, row))
+                if row:
+                    cols = [desc[0] for desc in cur.description]
+                    catalog_row = dict(zip(cols, row))
+
+        # 2. 如果 catalog 没有，尝试 builtin
+        if catalog_row is None:
+            builtin = self._BUILTIN_MODELS.get(model_id)
+            if not builtin:
+                return None
+            return {
+                "model_id": model_id,
+                "model_name": builtin["model_name"],
+                "model_type": builtin["model_type"],
+                "model_hyperparameters": builtin.get("default_hyperparameters"),
+                "model_training_hyperparameters": builtin.get("default_training_hyperparameters"),
+                "ic": None,
+                "annualized_return": None,
+                "is_sota": False,
+                "code_text": None,
+                "default_dataset_type": builtin.get("default_dataset_type"),
+            }
+
+        # 3. catalog 命中：补充 builtin default 作为 fallback（仅当对应字段为空）
+        # 通过 model_name 匹配最接近的 builtin
+        builtin_match = None
+        for bid, bmeta in self._BUILTIN_MODELS.items():
+            if bmeta["model_name"] == catalog_row.get("model_name"):
+                builtin_match = bmeta
+                break
+        if builtin_match:
+            if not catalog_row.get("model_hyperparameters") and builtin_match.get("default_hyperparameters"):
+                catalog_row["model_hyperparameters"] = builtin_match["default_hyperparameters"]
+            if not catalog_row.get("model_training_hyperparameters") and builtin_match.get("default_training_hyperparameters"):
+                catalog_row["model_training_hyperparameters"] = builtin_match["default_training_hyperparameters"]
+            if not catalog_row.get("model_type") and builtin_match.get("model_type"):
+                catalog_row["model_type"] = builtin_match["model_type"]
+            catalog_row["default_dataset_type"] = builtin_match.get("default_dataset_type")
+        return catalog_row
 
     def _get_strategy_info(self, strategy_id: str) -> Optional[Dict]:
         """获取策略信息（含源码和参数）。"""
@@ -2382,6 +2641,16 @@ class ConfigComposer:
             # num_features 在 prepare_factors.py 执行后才能确定
             # 供 conf.yaml 中的 Jinja2 模板变量引用
             env_lines.append("# num_features 将在 qrun 时由 conf.yaml Jinja2 模板自动计算")
+
+        # 因子值缓存目录（与 backfill_factor_cache.py 共享同一缓存路径）
+        # 环境变量 FACTOR_CACHE_DIR 优先；否则基于本机 AIstock 目录推导 WSL 路径
+        _fv_base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # backend/
+        _fv_dir = os.path.join(_fv_base, "rdagent_assets", "factor_values")
+        _fv_wsl = _fv_dir.replace("\\", "/").replace("F:", "/mnt/f").replace("f:", "/mnt/f")
+        env_lines.append(
+            f'export FACTOR_CACHE_DIR="${{FACTOR_CACHE_DIR:-{_fv_wsl}}}"'
+        )
+        env_lines.append('export FACTOR_CACHE_DATA_MODE="backtest_factor_data_dir"')
 
         env_block = "\n".join(env_lines)
 

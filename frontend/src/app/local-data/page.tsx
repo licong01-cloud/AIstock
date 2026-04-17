@@ -25,6 +25,7 @@ type LocalDataTab =
   | "stats"
   | "testing"
   | "schedules"
+  | "factor_metrics_schedules"
   | "logs";
 
 type DataSource = "TDX" | "Tushare" | "xtquant" | "News";
@@ -325,6 +326,7 @@ export default function LocalDataPage() {
     { key: "stats", label: "数据看板" },
     { key: "testing", label: "数据源测试" },
     { key: "schedules", label: "数据入库调度" },
+    { key: "factor_metrics_schedules", label: "因子指标调度" },
     { key: "logs", label: "运行日志" },
   ];
 
@@ -412,6 +414,7 @@ export default function LocalDataPage() {
         )}
         {activeTab === "testing" && <TestingTab />}
         {activeTab === "schedules" && <IngestionSchedulesTab />}
+        {activeTab === "factor_metrics_schedules" && <FactorMetricsSchedulesTab />}
         {activeTab === "logs" && <LogsTab />}
       </section>
     </main>
@@ -5039,6 +5042,185 @@ const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; 
   { dataset: "stk_limit", label: "每日涨跌停价格", source: "Tushare", defaultAt: "09:10" },
 ];
 
+/** 数据健康检查报告组件 — 在 _auto_retry_stale 调度卡片内展开 */
+function HealthCheckReport({ summary }: { summary: any }) {
+  if (!summary || typeof summary !== "object") return null;
+
+  const ds: any[] = Array.isArray(summary.datasets) ? summary.datasets : [];
+  const overall = summary.overall || "unknown";
+  const latestDay = summary.latest_trading_day || "-";
+  const retried: string[] = Array.isArray(summary.retried_datasets) ? summary.retried_datasets : [];
+  const errors: any[] = Array.isArray(summary.retry_errors) ? summary.retry_errors : [];
+  const checkTime = summary.check_time
+    ? new Date(summary.check_time).toLocaleString("zh-CN", { hour12: false })
+    : "-";
+
+  const overallColor =
+    overall === "ok" ? "#16a34a" : overall === "partial" ? "#d97706" : overall === "failed" ? "#dc2626" : "#6b7280";
+  const overallBg =
+    overall === "ok" ? "#dcfce7" : overall === "partial" ? "#fef3c7" : overall === "failed" ? "#fee2e2" : "#f3f4f6";
+  const overallText =
+    overall === "ok" ? "全部正常" : overall === "partial" ? "部分异常" : overall === "failed" ? "执行失败" : "未知状态";
+
+  const freshCount = ds.filter((d) => d?.is_fresh === true).length;
+  const staleCount = ds.filter((d) => d?.is_fresh === false).length;
+  const unknownCount = ds.length - freshCount - staleCount;
+
+  const thStyle: React.CSSProperties = {
+    padding: "4px 8px", fontSize: 11, textAlign: "left", fontWeight: 600,
+    borderBottom: "1px solid #e5e7eb", background: "#f9fafb", whiteSpace: "nowrap",
+  };
+  const tdStyle: React.CSSProperties = {
+    padding: "3px 8px", fontSize: 11, borderBottom: "1px solid #f3f4f6", whiteSpace: "nowrap",
+  };
+
+  const actionLabel = (a: string | undefined) => {
+    if (!a || a === "none") return { text: "-", color: "#9ca3af" };
+    if (a === "retry") return { text: "重试", color: "#d97706" };
+    if (a === "skip_no_schedule") return { text: "无调度", color: "#9ca3af" };
+    return { text: a, color: "#6b7280" };
+  };
+
+  const jobStatusLabel = (s: string | undefined) => {
+    if (!s) return { text: "-", color: "#6b7280" };
+    if (s === "success") return { text: "成功", color: "#16a34a" };
+    if (s === "failed") return { text: "失败", color: "#dc2626" };
+    if (s === "running") return { text: "运行中", color: "#2563eb" };
+    if (s === "no_job_today") return { text: "未执行", color: "#9ca3af" };
+    return { text: s, color: "#6b7280" };
+  };
+
+  if (ds.length === 0) {
+    return (
+      <div style={{ marginTop: 8, borderTop: "1px dashed #d1d5db", paddingTop: 8, fontSize: 12, color: "#6b7280" }}>
+        暂无检查报告数据
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 8, borderTop: "1px dashed #d1d5db", paddingTop: 8 }}>
+      {/* 摘要行 */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12, marginBottom: 6 }}>
+        <span style={{
+          padding: "1px 8px", borderRadius: 4, fontWeight: 600, fontSize: 11,
+          color: overallColor, background: overallBg,
+        }}>
+          {overallText}
+        </span>
+        <span style={{ color: "#6b7280" }}>
+          检查时间: {checkTime}
+        </span>
+        <span style={{ color: "#6b7280" }}>
+          最新交易日: {latestDay}
+        </span>
+        <span style={{ color: "#16a34a" }}>
+          新鲜: {freshCount}
+        </span>
+        <span style={{ color: staleCount > 0 ? "#dc2626" : "#6b7280" }}>
+          过期: {staleCount}
+        </span>
+        {unknownCount > 0 && (
+          <span style={{ color: "#9ca3af" }}>
+            未知: {unknownCount}
+          </span>
+        )}
+        {retried.length > 0 && (
+          <span style={{ color: "#d97706" }}>
+            已重试: {retried.length}
+          </span>
+        )}
+        {errors.length > 0 && (
+          <span style={{ color: "#dc2626" }}>
+            重试失败: {errors.length}
+          </span>
+        )}
+      </div>
+
+      {/* 可展开的数据集详情 */}
+      <details style={{ marginTop: 4 }}>
+        <summary style={{ cursor: "pointer", fontSize: 12, color: "#4b5563", marginBottom: 4 }}>
+          查看各数据集检查结果（{ds.length} 个）
+        </summary>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+            <thead>
+              <tr>
+                <th style={thStyle}>数据集</th>
+                <th style={thStyle}>数据最新日期</th>
+                <th style={thStyle}>新鲜度</th>
+                <th style={thStyle}>今日状态</th>
+                <th style={thStyle}>动作</th>
+                <th style={thStyle}>写入行数</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ds.map((d, idx) => {
+                if (!d || !d.dataset) return null;
+                const act = actionLabel(d.action);
+                const job = jobStatusLabel(d.today_job_status);
+                const isFresh = d.is_fresh === true;
+                const isStale = d.is_fresh === false;
+                const rowBg = isFresh
+                  ? undefined
+                  : d.action === "retry"
+                    ? "#fffbeb"
+                    : "#fef2f2";
+                return (
+                  <tr key={d.dataset} style={{ background: rowBg }}>
+                    <td style={tdStyle}>
+                      <span style={{ fontWeight: 500 }}>{d.dataset}</span>
+                    </td>
+                    <td style={tdStyle}>{d.data_max_date || "-"}</td>
+                    <td style={tdStyle}>
+                      <span style={{
+                        display: "inline-block", width: 8, height: 8, borderRadius: "50%",
+                        background: isFresh ? "#22c55e" : isStale ? "#ef4444" : "#d4d4d4", marginRight: 4,
+                      }} />
+                      {isFresh ? "新鲜" : isStale ? "过期" : "未知"}
+                    </td>
+                    <td style={{ ...tdStyle, color: job.color }}>{job.text}</td>
+                    <td style={{ ...tdStyle, color: act.color, fontWeight: d.action === "retry" ? 600 : 400 }}>
+                      {act.text}
+                      {d.retry_status && (
+                        <span style={{ marginLeft: 4, color: d.retry_status === "submitted" ? "#2563eb" : "#6b7280", fontWeight: 400 }}>
+                          {d.retry_status}
+                        </span>
+                      )}
+                    </td>
+                    <td style={tdStyle}>
+                      {d.inserted_rows != null ? Number(d.inserted_rows).toLocaleString() : "-"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {/* 重试详情 */}
+        {retried.length > 0 && (
+          <div style={{ marginTop: 8, fontSize: 11, color: "#6b7280" }}>
+            <span style={{ fontWeight: 600, color: "#d97706" }}>重试数据集:</span>{" "}
+            {retried.join(", ")}
+          </div>
+        )}
+        {errors.length > 0 && (
+          <div style={{ marginTop: 4, fontSize: 11 }}>
+            <span style={{ fontWeight: 600, color: "#dc2626" }}>重试错误:</span>
+            <ul style={{ margin: "2px 0", paddingLeft: 16 }}>
+              {errors.map((e, i) => (
+                <li key={`${e?.dataset || e?.name || ""}-${i}`} style={{ color: "#dc2626" }}>
+                  {e?.dataset || e?.name || "unknown"}: {e?.error || e?.message || JSON.stringify(e)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </details>
+    </div>
+  );
+}
+
 function IngestionSchedulesTab() {
   const [schedules, setSchedules] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -5684,11 +5866,15 @@ function IngestionSchedulesTab() {
                   ? `每日 ${atTime}`
                   : baseLabel;
 
+              const isHealthCheck = schedDataset === "_auto_retry_stale";
+              const displayName = isHealthCheck ? "数据健康检查" : schedDataset;
+              const displayMode = isHealthCheck ? "check_and_retry" : mode;
+
               return (
                 <div key={schedId} className={styles.cardSoft}>
                   <div className={styles.rowBetween} style={{ fontSize: 13 }}>
                     <div>
-                      {schedDataset} · {mode}
+                      {displayName} · {displayMode}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       {freqValue === "daily" && (() => {
@@ -5862,6 +6048,10 @@ function IngestionSchedulesTab() {
                       </button>
                     )}
                   </div>
+                  {/* 数据健康检查报告 */}
+                  {schedDataset === "_auto_retry_stale" && item.last_job_summary?.datasets && (
+                    <HealthCheckReport summary={item.last_job_summary} />
+                  )}
                 </div>
               );
             })}
@@ -6364,6 +6554,264 @@ function LogsTab() {
           onToggleItem={handleToggleLogItem}
         />
       </div>
+    </div>
+  );
+}
+
+
+// ================================================================
+// 因子指标调度 Tab
+// ================================================================
+
+const FM_SCHED_BASE = `${TDX_BASE}/api/v1/factor-metrics`;
+
+interface FmSchedule {
+  schedule_id: string;
+  dataset: string;
+  mode: string;
+  enabled: boolean;
+  frequency: string;
+  options: {
+    include_disabled?: boolean;
+    data_date?: string;
+    workers?: number;
+    one_shot?: boolean;
+    at?: string;
+    day_of_week?: string;
+  };
+  last_run_at?: string;
+  next_run_at?: string;
+  last_status?: string;
+  last_error?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+function FactorMetricsSchedulesTab() {
+  const [schedules, setSchedules] = useState<FmSchedule[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const [newFreq, setNewFreq] = useState("weekly");
+  const [newAt, setNewAt] = useState("18:30");
+  const [newDayOfWeek, setNewDayOfWeek] = useState("sunday");
+  const [newDataDate, setNewDataDate] = useState("");
+  const [newIncludeDisabled, setNewIncludeDisabled] = useState(false);
+  const [newOneShot, setNewOneShot] = useState(false);
+  const [newEnabled, setNewEnabled] = useState(true);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const fetchSchedules = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`${FM_SCHED_BASE}/schedules`);
+      const data = await res.json();
+      setSchedules(data.items || []);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchSchedules(); }, [fetchSchedules]);
+
+  const handleCreate = async () => {
+    try {
+      const res = await fetch(`${FM_SCHED_BASE}/schedules`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          frequency: newFreq, at: newAt, day_of_week: newDayOfWeek,
+          data_date: newDataDate || null, include_disabled: newIncludeDisabled,
+          one_shot: newOneShot, enabled: newEnabled,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(`创建失败: ${err.detail || JSON.stringify(err)}`);
+        return;
+      }
+      await fetchSchedules();
+    } catch (e: any) { alert(`创建失败: ${e.message}`); }
+  };
+
+  const handleToggle = async (id: string, enabled: boolean) => {
+    try {
+      await fetch(`${FM_SCHED_BASE}/schedules/${id}/toggle?enabled=${enabled}`, { method: "POST" });
+      await fetchSchedules();
+    } catch (e: any) { alert(`切换失败: ${e.message}`); }
+  };
+
+  const handleRunNow = async (id: string) => {
+    try {
+      const res = await fetch(`${FM_SCHED_BASE}/schedules/${id}/run`, { method: "POST" });
+      const data = await res.json();
+      alert(`已提交: job_id=${data.job_id}`);
+    } catch (e: any) { alert(`执行失败: ${e.message}`); }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await fetch(`${FM_SCHED_BASE}/schedules/${id}`, { method: "DELETE" });
+      setConfirmDeleteId(null);
+      await fetchSchedules();
+    } catch (e: any) { alert(`删除失败: ${e.message}`); }
+  };
+
+  const statusColor = (s?: string) => {
+    if (s === "success") return "#4caf50";
+    if (s === "failed") return "#f44336";
+    if (s === "running" || s === "queued") return "#ff9800";
+    return "#999";
+  };
+
+  const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+  const DAY_LABELS: Record<string, string> = {
+    monday: "周一", tuesday: "周二", wednesday: "周三", thursday: "周四",
+    friday: "周五", saturday: "周六", sunday: "周日",
+  };
+
+  return (
+    <div style={{ padding: 16 }}>
+      <h3 style={{ marginBottom: 12 }}>因子独立指标定时计算</h3>
+
+      {/* 创建表单 */}
+      <div className={styles.card} style={{ marginBottom: 16, padding: 16 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            任务类型
+            <select
+              value={newOneShot ? "one_shot" : "recurring"}
+              onChange={(e) => setNewOneShot(e.target.value === "one_shot")}
+              className={styles.select}
+            >
+              <option value="recurring">周期任务</option>
+              <option value="one_shot">单次任务</option>
+            </select>
+          </label>
+
+          {!newOneShot && (
+            <>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                频率
+                <select value={newFreq} onChange={(e) => setNewFreq(e.target.value)} className={styles.select}>
+                  <option value="weekly">每周</option>
+                  <option value="daily">每日</option>
+                  <option value="">手动</option>
+                </select>
+              </label>
+              {newFreq === "weekly" && (
+                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  周几
+                  <select value={newDayOfWeek} onChange={(e) => setNewDayOfWeek(e.target.value)} className={styles.select}>
+                    {DAYS.map((d) => (
+                      <option key={d} value={d}>{DAY_LABELS[d]}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                时间
+                <input type="time" value={newAt} onChange={(e) => setNewAt(e.target.value)} className={styles.input} />
+              </label>
+            </>
+          )}
+
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            快照日期
+            <input
+              type="text"
+              value={newDataDate}
+              onChange={(e) => setNewDataDate(e.target.value)}
+              placeholder="YYYYMMDD 留空用最新"
+              className={styles.input} style={{ width: 140  }}
+            />
+          </label>
+
+          <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <input type="checkbox" checked={newIncludeDisabled} onChange={(e) => setNewIncludeDisabled(e.target.checked)} />
+            包含禁用因子
+          </label>
+
+          <button onClick={handleCreate} className={styles.btn} style={{ padding: "6px 16px"  }}>
+            创建调度
+          </button>
+        </div>
+      </div>
+
+      {error && <div style={{ color: "red", marginBottom: 8 }}>错误: {error}</div>}
+
+      {/* 调度列表 */}
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr style={{ background: "#f5f5f5" }}>
+            <th className={styles.th}>类型</th>
+            <th className={styles.th}>范围</th>
+            <th className={styles.th}>频率</th>
+            <th className={styles.th}>快照</th>
+            <th className={styles.th}>上次运行</th>
+            <th className={styles.th}>状态</th>
+            <th className={styles.th}>下次运行</th>
+            <th className={styles.th}>启用</th>
+            <th className={styles.th}>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {schedules.length === 0 && !loading && (
+            <tr><td colSpan={9} style={{ textAlign: "center", padding: 24, color: "#999" }}>
+              暂无调度，请创建
+            </td></tr>
+          )}
+          {schedules.map((s) => {
+            const opts = s.options || {};
+            return (
+              <tr key={s.schedule_id} style={{ borderBottom: "1px solid #eee" }}>
+                <td className={styles.td}>{opts.one_shot ? "单次" : "周期"}</td>
+                <td className={styles.td}>{opts.include_disabled ? "全部(含禁用)" : "仅可用"}</td>
+                <td className={styles.td}>
+                  {s.frequency === "weekly"
+                    ? `每周${DAY_LABELS[opts.day_of_week || "sunday"] || ""} ${opts.at || ""}`
+                    : s.frequency === "daily"
+                    ? `每日 ${opts.at || ""}`
+                    : s.frequency || "手动"}
+                </td>
+                <td className={styles.td}>{opts.data_date || "最新"}</td>
+                <td className={styles.td}>{s.last_run_at ? new Date(s.last_run_at).toLocaleString("zh-CN") : "-"}</td>
+                <td className={styles.td} style={{ color: statusColor(s.last_status)  }}>
+                  {s.last_status || "-"}
+                </td>
+                <td className={styles.td}>{s.next_run_at ? new Date(s.next_run_at).toLocaleString("zh-CN") : "-"}</td>
+                <td className={styles.td}>
+                  <input
+                    type="checkbox"
+                    checked={s.enabled}
+                    onChange={(e) => handleToggle(s.schedule_id, e.target.checked)}
+                  />
+                </td>
+                <td className={styles.td}>
+                  <button onClick={() => handleRunNow(s.schedule_id)} className={styles.btn} style={{ marginRight: 6, fontSize: 12, padding: "2px 8px"  }}>
+                    立即运行
+                  </button>
+                  {confirmDeleteId === s.schedule_id ? (
+                    <>
+                      <button onClick={() => handleDelete(s.schedule_id)} className={styles.btn} style={{ color: "red", fontSize: 12, padding: "2px 8px"  }}>确认删除</button>
+                      <button onClick={() => setConfirmDeleteId(null)} className={styles.btn} style={{ fontSize: 12, padding: "2px 8px"  }}>取消</button>
+                    </>
+                  ) : (
+                    <button onClick={() => setConfirmDeleteId(s.schedule_id)} className={styles.btn} style={{ fontSize: 12, padding: "2px 8px"  }}>
+                      删除
+                    </button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      {loading && <div style={{ textAlign: "center", padding: 16, color: "#666" }}>加载中...</div>}
     </div>
   );
 }

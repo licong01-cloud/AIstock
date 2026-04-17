@@ -1,0 +1,10 @@
+S:
+  min_score: 90
+A:
+  min_score: 75
+B:
+  min_score: 60
+C:
+  min_score: 45
+D:
+  min_score: 0

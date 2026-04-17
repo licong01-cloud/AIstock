@@ -137,6 +137,9 @@ class EvolutionTaskCreateRequest(BaseModel):
     additional_factor_keys: Optional[List[str]] = Field(None, description="从因子库额外添加的因子key列表，格式 ['name||source', ...]，与来源默认因子合并")
     node_id: Optional[str] = Field(None, description="执行节点 ID，None=默认本地节点")
     label_type: Optional[str] = Field(None, description="训练标签类型: close(默认) / open(可执行价) / vwap(均价)")
+    # ── Multi-Alpha (Phase 3) ──────────────────────────────────────
+    alpha_mode: Optional[str] = Field(None, description="single (默认) / multi")
+    multi_alpha_config: Optional[Dict[str, Any]] = Field(None, description="Multi-Alpha 分组配置 JSON")
 
 @router.post("/tasks", summary="创建并启动新的自动演进任务")
 async def create_evolution_task(req: EvolutionTaskCreateRequest, background_tasks: BackgroundTasks):
@@ -1396,8 +1399,7 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
                         _json.dump({"factors": {}}, _mf)
                     _correlation_logs.append("[清空] _meta.json 已重置")
 
-                # 5. 清除内存缓存
-                from ..services.quantevolver.factor_value_loader import FactorValueLoader
+                # 5. 清除内存缓存（使用顶层 import，避免局部 import 导致 scope 错误）
                 FactorValueLoader.invalidate_single_cache()
                 FactorValueLoader.invalidate_merged_cache()
                 _correlation_logs.append("[清空] 内存缓存已清除")
@@ -1416,6 +1418,11 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
                     # 未指定日期：使用现有缓存日期（保证一致性）
                     effective_end_date = existing_as_of
                     _correlation_logs.append(f"[日期] 使用现有缓存日期: {effective_end_date}")
+
+                # 自动推导 data_date: 如果仍未指定，从缓存 meta 推导
+                if not data_date and effective_end_date:
+                    data_date = effective_end_date.replace("-", "")
+                    _correlation_logs.append(f"[日期] 自动推导 data_date={data_date} (from as_of_date)")
 
                 # 预热数据缓存（静态因子 ~300s + 行情 ~40s），
                 # 传入 effective_end_date 确保与因子计算使用相同日期
@@ -1463,6 +1470,7 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
                             return fname_, r, elapsed
 
                         max_w = 1  # 串行执行：每个 extend 峰值 ~210MB，并发会导致 OOM
+                        extend_results: list = []
                         with ThreadPoolExecutor(max_workers=max_w) as executor:
                             futures = {executor.submit(_extend_one, fn): fn for fn in extend_factors}
                             done_count = 0
@@ -1471,6 +1479,7 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
                                 try:
                                     fname, r, elapsed = future.result()
                                     with _extend_lock:
+                                        extend_results.append(r)
                                         if r and r.success:
                                             extend_ok += 1
                                         else:
@@ -1497,6 +1506,11 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
                         _correlation_logs.append(
                             f"阶段1a完成: 扩展 {extend_ok} 个, 失败 {extend_fail} 个"
                         )
+                        # 批量写入扩展阶段的 meta
+                        try:
+                            pipeline.flush_meta_batch(extend_results)
+                        except Exception as e:
+                            logger.warning(f"扩展阶段 meta 批量写入失败: {e}")
 
                 # Phase 1b: 生成新因子缓存
                 _correlation_logs.append(f"[阶段1b/3] 生成新因子缓存 (共 {len(factor_names)} 个)")
@@ -1517,6 +1531,7 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
                     return fname_, r, elapsed
 
                 max_w = min(4, len(factor_names))
+                all_results: list = []  # 收集所有 result，用于后续批量写 meta
                 with ThreadPoolExecutor(max_workers=max_w) as executor:
                     futures = {executor.submit(_compute_one, fn): fn for fn in factor_names}
                     done_count = 0
@@ -1525,6 +1540,7 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
                         try:
                             fname, result, elapsed = future.result()
                             with _gen_lock:
+                                all_results.append(result)
                                 if result and result.success:
                                     success_factors.append(fname)
                                     _correlation_logs.append(f"  [{done_count}/{len(factor_names)}] {fname} 缓存生成成功 ({elapsed}s)")
@@ -1538,6 +1554,14 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
                                 failed_factors.append((fn, str(e)))
                                 _correlation_logs.append(f"  [{done_count}/{len(factor_names)}] {fn} 缓存生成异常: {e}", "WARN")
                         _correlation_progress.advance(done=done_count)
+
+                # 主线程批量写入 _meta.json（避免并发竞态）
+                try:
+                    written = pipeline.flush_meta_batch(all_results)
+                    _correlation_logs.append(f"  _meta.json 批量写入: {written} 个因子")
+                except Exception as e:
+                    logger.warning(f"批量写入 _meta.json 失败: {e}")
+
                 phase1_elapsed = round(time.time() - phase1_t0, 1)
                 compute_factors = success_factors if mode == "full" else factor_names
                 _correlation_logs.append(f"阶段1b完成: 成功 {len(success_factors)}, 失败 {len(failed_factors)}, 耗时 {phase1_elapsed}s")
@@ -1698,6 +1722,7 @@ class CorrelationComputeRequest(BaseModel):
     force_recompute: bool = Field(False, description="强制重新计算，忽略缓存")
     db_threshold: float = Field(0, description="写入 DB 的相关性阈值 (threshold=0 全量存储)")
     mode: str = Field("cache_only", description="full=执行因子代码+计算矩阵, cache_only=仅用已有缓存计算矩阵")
+    include_disabled: bool = Field(False, description="为 True 时包含已禁用因子")
 
 
 @router.post("/correlations/compute", summary="触发因子相关性矩阵计算")
@@ -1716,8 +1741,9 @@ def compute_correlations(req: CorrelationComputeRequest):
         }
 
     # 确定因子列表
+    avail_filter = "" if req.include_disabled else "AND is_available = TRUE"
     if req.factor_names:
-        # 显式指定因子时，仍需校验 is_available 和 transformation_status
+        # 显式指定因子时，仍需校验 transformation_status
         ph = ",".join(["%s"] * len(req.factor_names))
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -1725,7 +1751,7 @@ def compute_correlations(req: CorrelationComputeRequest):
                     SELECT factor_name FROM aistock_factor_catalog
                     WHERE factor_name IN ({ph})
                       AND transformation_status = 'SUCCESS'
-                      AND is_available = TRUE
+                      {avail_filter}
                       AND qe_code_path IS NOT NULL
                     ORDER BY factor_name
                 """, req.factor_names)
@@ -1736,10 +1762,10 @@ def compute_correlations(req: CorrelationComputeRequest):
     else:
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(f"""
                     SELECT factor_name FROM aistock_factor_catalog
                     WHERE transformation_status = 'SUCCESS'
-                      AND is_available = TRUE
+                      {avail_filter}
                       AND qe_code_path IS NOT NULL
                     ORDER BY factor_name
                 """)
@@ -1820,11 +1846,13 @@ def compute_incremental_correlations(req: IncrementalComputeRequest):
 def compute_correlations_smart_incremental(
     as_of_date: Optional[str] = None,
     dry_run: bool = False,
+    include_disabled: bool = False,
 ):
     """自动检测未计算过相关性的因子，只对这些因子做增量计算。
 
     检测逻辑：查询 transformation_status='SUCCESS' AND is_available=TRUE
     且 correlation_computed_at IS NULL 的因子。
+    include_disabled=True 时也包含已禁用因子。
 
     dry_run=True 时仅返回待计算因子列表，不启动计算。
     """
@@ -1834,14 +1862,23 @@ def compute_correlations_smart_incremental(
     # 查询未计算过相关性的因子
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT factor_name FROM aistock_factor_catalog
-                WHERE transformation_status = 'SUCCESS'
-                  AND is_available = TRUE
-                  AND qe_code_path IS NOT NULL
-                  AND correlation_computed_at IS NULL
-                ORDER BY factor_name
-            """)
+            if include_disabled:
+                cur.execute("""
+                    SELECT factor_name FROM aistock_factor_catalog
+                    WHERE transformation_status = 'SUCCESS'
+                      AND qe_code_path IS NOT NULL
+                      AND correlation_computed_at IS NULL
+                    ORDER BY factor_name
+                """)
+            else:
+                cur.execute("""
+                    SELECT factor_name FROM aistock_factor_catalog
+                    WHERE transformation_status = 'SUCCESS'
+                      AND is_available = TRUE
+                      AND qe_code_path IS NOT NULL
+                      AND correlation_computed_at IS NULL
+                    ORDER BY factor_name
+                """)
             new_factors = [row[0] for row in cur.fetchall()]
 
     if not new_factors:
@@ -2007,11 +2044,13 @@ def get_correlation_logs(after_index: int = -1):
 def get_correlation_matrix(
     as_of_date: Optional[str] = None,
     threshold: float = 0.0,
+    include_disabled: bool = False,
 ):
     """获取完整因子相关性矩阵（用于前端热力图）。
 
     优先返回内存中的最新结果，否则从 HDF5 加载。
     threshold: 只在 high_corr_pairs 中返回 |corr| > threshold 的对。
+    include_disabled: 为 True 时不过滤禁用因子，并返回 disabled_factors 列表。
     """
     import numpy as np
 
@@ -2035,38 +2074,52 @@ def get_correlation_matrix(
             detail="无可用的相关性矩阵。请先调用 POST /correlations/compute 触发计算。",
         )
 
-    # 构建响应
-    matrix_list = []
-    for row in result.matrix:
-        matrix_list.append([
-            round(float(v), 6) if not np.isnan(v) else None
-            for v in row
-        ])
-
+    # 构建响应（先构建矩阵列表，后续过滤后可能被截断）
     pair_threshold = max(threshold, 0.5)
     high_pairs = result.get_high_corr_pairs(pair_threshold)
 
     # 过滤已删除/禁用的因子（HDF5 矩阵可能包含已删除因子的旧数据）
+    disabled_factors = []
+    # 拷贝 result，避免原地变异 _latest_result 影响后续请求
+    factor_names = list(result.factor_names)
+    matrix_copy = result.matrix.copy()
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT factor_name FROM aistock_factor_catalog
-                    WHERE is_available = TRUE
-                """)
-                available_factors = {row[0] for row in cur.fetchall()}
-        high_pairs = [
-            p for p in high_pairs
-            if p.get("factor_a") in available_factors and p.get("factor_b") in available_factors
-        ]
-        # 过滤矩阵行/列：只保留可用因子
-        if result.factor_names and available_factors:
-            keep_indices = [i for i, fn in enumerate(result.factor_names) if fn in available_factors]
-            if len(keep_indices) < len(result.factor_names):
-                result.factor_names = [result.factor_names[i] for i in keep_indices]
-                result.matrix = result.matrix[np.ix_(keep_indices, keep_indices)]
+                if include_disabled:
+                    # 不过滤矩阵，但收集禁用因子名称供前端标识
+                    cur.execute("""
+                        SELECT factor_name FROM aistock_factor_catalog
+                        WHERE is_available = FALSE
+                    """)
+                    disabled_factors = [row[0] for row in cur.fetchall()]
+                else:
+                    cur.execute("""
+                        SELECT factor_name FROM aistock_factor_catalog
+                        WHERE is_available = TRUE
+                    """)
+                    available_factors = {row[0] for row in cur.fetchall()}
+                    high_pairs = [
+                        p for p in high_pairs
+                        if p.get("factor_a") in available_factors and p.get("factor_b") in available_factors
+                    ]
+                    # 过滤矩阵行/列：只保留可用因子（操作拷贝，不污染 _latest_result）
+                    if factor_names and available_factors:
+                        keep_indices = [i for i, fn in enumerate(factor_names) if fn in available_factors]
+                        if len(keep_indices) < len(factor_names):
+                            factor_names = [factor_names[i] for i in keep_indices]
+                            matrix_copy = matrix_copy[np.ix_(keep_indices, keep_indices)]
     except Exception as e:
-        logger.warning(f"过滤已删除因子时出错: {e}")
+        logger.error(f"过滤已删除因子时出错: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"查询因子可用性失败: {e}")
+
+    # 从（可能已过滤的）矩阵拷贝构建序列化列表
+    matrix_list = []
+    for row in matrix_copy:
+        matrix_list.append([
+            round(float(v), 6) if not np.isnan(v) else None
+            for v in row
+        ])
 
     # 确保 metadata 中的 numpy 类型可序列化
     safe_metadata = {}
@@ -2082,14 +2135,15 @@ def get_correlation_matrix(
 
     return {
         "as_of_date": result.as_of_date,
-        "factor_names": result.factor_names,
-        "factor_count": len(result.factor_names),
+        "factor_names": factor_names,
+        "factor_count": len(factor_names),
         "matrix": matrix_list,
         "effective_window": int(result.effective_window),
         "computation_time_sec": float(result.computation_time_sec),
         "high_corr_pairs": high_pairs[:200],
         "high_corr_count": len(high_pairs),
         "metadata": safe_metadata,
+        "disabled_factors": disabled_factors,
     }
 
 
@@ -2325,11 +2379,13 @@ def get_related_factors(
     threshold: float = 0.5,
     limit: int = 200,
     include_metrics: bool = False,
+    include_disabled: bool = False,
 ):
     """查询某个因子的所有高相关因子（|corr| > threshold）。
 
     当 include_metrics=true 时，返回每个因子的指标（IC/Sharpe/年化/回撤）、source、is_available，
     以及基准因子自身的 base_metrics。用于因子去重批量管理。
+    include_disabled=True 时 JOIN 不过滤 is_available。
     """
     try:
         with get_conn() as conn:
@@ -2352,27 +2408,48 @@ def get_related_factors(
                 f_id = f_row[0]
 
                 if include_metrics:
-                    cur.execute("""
-                        SELECT
-                            CASE WHEN c.factor_a_id = %s THEN cat_b.factor_name
-                                 ELSE cat_a.factor_name END AS related_factor,
-                            c.correlation,
-                            c.method,
-                            c.computed_at,
-                            CASE WHEN c.factor_a_id = %s THEN cat_b.source
-                                 ELSE cat_a.source END AS factor_source,
-                            CASE WHEN c.factor_a_id = %s THEN cat_b.is_available
-                                 ELSE cat_a.is_available END AS factor_available
-                        FROM qe_factor_correlations c
-                        JOIN aistock_factor_catalog cat_a ON c.factor_a_id = cat_a.id
-                            AND cat_a.is_available = TRUE
-                        JOIN aistock_factor_catalog cat_b ON c.factor_b_id = cat_b.id
-                            AND cat_b.is_available = TRUE
-                        WHERE (c.factor_a_id = %s OR c.factor_b_id = %s)
-                          AND ABS(c.correlation) > %s
-                        ORDER BY ABS(c.correlation) DESC
-                        LIMIT %s
-                    """, (f_id, f_id, f_id, f_id, f_id, threshold, limit))
+                    if include_disabled:
+                        cur.execute("""
+                            SELECT
+                                CASE WHEN c.factor_a_id = %s THEN cat_b.factor_name
+                                     ELSE cat_a.factor_name END AS related_factor,
+                                c.correlation,
+                                c.method,
+                                c.computed_at,
+                                CASE WHEN c.factor_a_id = %s THEN cat_b.source
+                                     ELSE cat_a.source END AS factor_source,
+                                CASE WHEN c.factor_a_id = %s THEN cat_b.is_available
+                                     ELSE cat_a.is_available END AS factor_available
+                            FROM qe_factor_correlations c
+                            JOIN aistock_factor_catalog cat_a ON c.factor_a_id = cat_a.id
+                            JOIN aistock_factor_catalog cat_b ON c.factor_b_id = cat_b.id
+                            WHERE (c.factor_a_id = %s OR c.factor_b_id = %s)
+                              AND ABS(c.correlation) > %s
+                            ORDER BY ABS(c.correlation) DESC
+                            LIMIT %s
+                        """, (f_id, f_id, f_id, f_id, f_id, threshold, limit))
+                    else:
+                        cur.execute("""
+                            SELECT
+                                CASE WHEN c.factor_a_id = %s THEN cat_b.factor_name
+                                     ELSE cat_a.factor_name END AS related_factor,
+                                c.correlation,
+                                c.method,
+                                c.computed_at,
+                                CASE WHEN c.factor_a_id = %s THEN cat_b.source
+                                     ELSE cat_a.source END AS factor_source,
+                                CASE WHEN c.factor_a_id = %s THEN cat_b.is_available
+                                     ELSE cat_a.is_available END AS factor_available
+                            FROM qe_factor_correlations c
+                            JOIN aistock_factor_catalog cat_a ON c.factor_a_id = cat_a.id
+                                AND cat_a.is_available = TRUE
+                            JOIN aistock_factor_catalog cat_b ON c.factor_b_id = cat_b.id
+                                AND cat_b.is_available = TRUE
+                            WHERE (c.factor_a_id = %s OR c.factor_b_id = %s)
+                              AND ABS(c.correlation) > %s
+                            ORDER BY ABS(c.correlation) DESC
+                            LIMIT %s
+                        """, (f_id, f_id, f_id, f_id, f_id, threshold, limit))
 
                     related = []
                     factor_names_to_fetch = []
@@ -2441,23 +2518,40 @@ def get_related_factors(
                         "base_metrics": base_metrics,
                     }
                 else:
-                    cur.execute("""
-                        SELECT
-                            CASE WHEN c.factor_a_id = %s THEN cat_b.factor_name
-                                 ELSE cat_a.factor_name END AS related_factor,
-                            c.correlation,
-                            c.method,
-                            c.computed_at
-                        FROM qe_factor_correlations c
-                        JOIN aistock_factor_catalog cat_a ON c.factor_a_id = cat_a.id
-                            AND cat_a.is_available = TRUE
-                        JOIN aistock_factor_catalog cat_b ON c.factor_b_id = cat_b.id
-                            AND cat_b.is_available = TRUE
-                        WHERE (c.factor_a_id = %s OR c.factor_b_id = %s)
-                          AND ABS(c.correlation) > %s
-                        ORDER BY ABS(c.correlation) DESC
-                        LIMIT %s
-                    """, (f_id, f_id, f_id, threshold, limit))
+                    if include_disabled:
+                        cur.execute("""
+                            SELECT
+                                CASE WHEN c.factor_a_id = %s THEN cat_b.factor_name
+                                     ELSE cat_a.factor_name END AS related_factor,
+                                c.correlation,
+                                c.method,
+                                c.computed_at
+                            FROM qe_factor_correlations c
+                            JOIN aistock_factor_catalog cat_a ON c.factor_a_id = cat_a.id
+                            JOIN aistock_factor_catalog cat_b ON c.factor_b_id = cat_b.id
+                            WHERE (c.factor_a_id = %s OR c.factor_b_id = %s)
+                              AND ABS(c.correlation) > %s
+                            ORDER BY ABS(c.correlation) DESC
+                            LIMIT %s
+                        """, (f_id, f_id, f_id, threshold, limit))
+                    else:
+                        cur.execute("""
+                            SELECT
+                                CASE WHEN c.factor_a_id = %s THEN cat_b.factor_name
+                                     ELSE cat_a.factor_name END AS related_factor,
+                                c.correlation,
+                                c.method,
+                                c.computed_at
+                            FROM qe_factor_correlations c
+                            JOIN aistock_factor_catalog cat_a ON c.factor_a_id = cat_a.id
+                                AND cat_a.is_available = TRUE
+                            JOIN aistock_factor_catalog cat_b ON c.factor_b_id = cat_b.id
+                                AND cat_b.is_available = TRUE
+                            WHERE (c.factor_a_id = %s OR c.factor_b_id = %s)
+                              AND ABS(c.correlation) > %s
+                            ORDER BY ABS(c.correlation) DESC
+                            LIMIT %s
+                        """, (f_id, f_id, f_id, threshold, limit))
 
                     related = []
                     for row in cur.fetchall():
@@ -3019,3 +3113,174 @@ def get_system_logs(
     if level:
         lines = [l for l in lines if f" {level.upper()} " in l]
     return {"ok": True, "lines": [l.rstrip() for l in lines[-tail:]], "exists": True}
+
+
+# ================================================================
+# 因子独立指标定时计算调度
+# ================================================================
+
+class FactorMetricsScheduleRequest(BaseModel):
+    include_disabled: bool = Field(False, description="是否包含禁用因子")
+    frequency: str = Field("weekly", description="weekly | daily | manual")
+    at: Optional[str] = Field("18:30", description="每日运行时间 HH:MM")
+    day_of_week: Optional[str] = Field("sunday", description="周几运行（weekly 时有效）")
+    data_date: Optional[str] = Field(None, description="数据快照日期 YYYYMMDD，留空用最新")
+    workers: int = Field(4, description="并行度 1-8")
+    one_shot: bool = Field(False, description="单次任务（执行完自动禁用）")
+    enabled: bool = Field(True, description="是否启用")
+
+
+@router.get("/factor-metrics/schedules", summary="列出因子指标计算调度配置")
+def list_factor_metrics_schedules():
+    """列出所有 dataset LIKE 'factor_metrics_%' 的调度配置。"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT schedule_id, dataset, mode, enabled, frequency, options,
+                       last_run_at, next_run_at, last_status, last_error,
+                       created_at, updated_at
+                FROM market.ingestion_schedules
+                WHERE dataset LIKE 'factor_metrics_%%'
+                ORDER BY created_at DESC
+            """)
+            cols = [desc[0] for desc in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    for row in rows:
+        for k in ("schedule_id",):
+            if row.get(k):
+                row[k] = str(row[k])
+        for k in ("last_run_at", "next_run_at", "created_at", "updated_at"):
+            if row.get(k):
+                row[k] = row[k].isoformat()
+        if isinstance(row.get("options"), str):
+            row["options"] = json.loads(row["options"])
+    return {"items": rows}
+
+
+@router.post("/factor-metrics/schedules", summary="创建/更新因子指标计算调度")
+def upsert_factor_metrics_schedule(req: FactorMetricsScheduleRequest):
+    """创建或更新一个因子指标计算调度。"""
+    schedule_id = None
+    dataset = "factor_metrics_compute"
+    options = {
+        "include_disabled": req.include_disabled,
+        "data_date": req.data_date,
+        "workers": max(1, min(8, req.workers)),
+        "one_shot": req.one_shot,
+    }
+    if req.at:
+        options["at"] = req.at
+    if req.day_of_week and req.frequency == "weekly":
+        options["day_of_week"] = req.day_of_week
+
+    options_json = json.dumps(options, ensure_ascii=False, default=str)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT schedule_id FROM market.ingestion_schedules WHERE dataset=%s",
+                (dataset,),
+            )
+            row = cur.fetchone()
+            schedule_id = row[0] if row else uuid.uuid4()
+            cur.execute("""
+                INSERT INTO market.ingestion_schedules
+                    (schedule_id, dataset, mode, enabled, frequency, options, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
+                ON CONFLICT (schedule_id) DO UPDATE SET
+                    enabled = EXCLUDED.enabled,
+                    frequency = EXCLUDED.frequency,
+                    options = EXCLUDED.options,
+                    dataset = EXCLUDED.dataset,
+                    updated_at = NOW()
+            """, (str(schedule_id), dataset, "init", req.enabled, req.frequency, options_json))
+        conn.commit()
+
+    from ..services.quantevolver.factor_metrics_scheduler import factor_metrics_scheduler
+    factor_metrics_scheduler.refresh_schedules()
+
+    return {"schedule_id": str(schedule_id), "dataset": dataset,
+            "frequency": req.frequency, "enabled": req.enabled, "options": options}
+
+
+@router.post("/factor-metrics/schedules/{schedule_id}/toggle", summary="切换调度启用/禁用")
+def toggle_factor_metrics_schedule(schedule_id: str, enabled: bool = True):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE market.ingestion_schedules SET enabled=%s, updated_at=NOW() WHERE schedule_id=%s AND dataset LIKE 'factor_metrics_%%'",
+                (enabled, schedule_id),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail=f"因子指标调度 {schedule_id} 不存在")
+        conn.commit()
+    from ..services.quantevolver.factor_metrics_scheduler import factor_metrics_scheduler
+    factor_metrics_scheduler.refresh_schedules()
+    return {"schedule_id": schedule_id, "enabled": enabled}
+
+
+@router.post("/factor-metrics/schedules/{schedule_id}/run", summary="立即执行因子指标调度")
+def run_factor_metrics_schedule_now(schedule_id: str):
+    """手动触发一个因子指标调度。"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT dataset, options FROM market.ingestion_schedules WHERE schedule_id=%s AND dataset LIKE 'factor_metrics_%%'",
+                (schedule_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail=f"因子指标调度 {schedule_id} 不存在")
+            dataset, options = row
+            if isinstance(options, str):
+                options = json.loads(options)
+            elif options is None:
+                options = {}
+
+    from ..services.quantevolver.factor_metrics_scheduler import factor_metrics_scheduler
+    job_id = factor_metrics_scheduler.submit_job(schedule_id, dataset, options, triggered_by="manual")
+    return {"status": "accepted", "job_id": str(job_id), "schedule_id": schedule_id}
+
+
+@router.delete("/factor-metrics/schedules/{schedule_id}", summary="删除因子指标调度")
+def delete_factor_metrics_schedule(schedule_id: str):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM market.ingestion_schedules WHERE schedule_id=%s AND dataset LIKE 'factor_metrics_%%'",
+                (schedule_id,),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail=f"因子指标调度 {schedule_id} 不存在")
+        conn.commit()
+    from ..services.quantevolver.factor_metrics_scheduler import factor_metrics_scheduler
+    factor_metrics_scheduler.refresh_schedules()
+    return {"deleted": True, "schedule_id": schedule_id}
+
+
+@router.get("/factor-metrics/jobs", summary="查询因子指标计算任务历史")
+def list_factor_metrics_jobs(limit: int = 20):
+    """返回最近的因子指标计算任务记录。"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT job_id, job_type, status, created_at, started_at, finished_at, summary
+                FROM market.ingestion_jobs
+                WHERE job_type LIKE 'factor_metrics_%%'
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (limit,))
+            cols = [desc[0] for desc in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    for row in rows:
+        if row.get("job_id"):
+            row["job_id"] = str(row["job_id"])
+        for k in ("created_at", "started_at", "finished_at"):
+            if row.get(k):
+                row[k] = row[k].isoformat()
+        if isinstance(row.get("summary"), str):
+            row["summary"] = json.loads(row["summary"])
+    return {"items": rows}
+

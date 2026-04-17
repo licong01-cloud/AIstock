@@ -549,7 +549,6 @@ DDL_STATEMENTS: List[str] = [
 
     # 6) aistock_factor_catalog 扩展字段 — SOTA 因子入库所需
     "ALTER TABLE aistock_factor_catalog ADD COLUMN IF NOT EXISTS source_task_id TEXT;",
-    "ALTER TABLE aistock_factor_catalog ADD COLUMN IF NOT EXISTS source_code_relpath TEXT;",
     "ALTER TABLE aistock_factor_catalog ADD COLUMN IF NOT EXISTS source_code_origin TEXT;",
     "ALTER TABLE aistock_factor_catalog ADD COLUMN IF NOT EXISTS source_loop_tag TEXT;",
     "ALTER TABLE aistock_factor_catalog ADD COLUMN IF NOT EXISTS source_index INTEGER;",
@@ -567,7 +566,6 @@ DDL_STATEMENTS: List[str] = [
     "CREATE INDEX IF NOT EXISTS idx_factor_catalog_source_task ON aistock_factor_catalog(source_task_id);",
     "CREATE INDEX IF NOT EXISTS idx_factor_catalog_is_sota ON aistock_factor_catalog(is_sota_factor);",
     "COMMENT ON COLUMN aistock_factor_catalog.source_task_id IS '来源 Task ID（RD-Agent log 目录名）';",
-    "COMMENT ON COLUMN aistock_factor_catalog.source_code_relpath IS '因子代码在 AIstock 侧 task 目录下的相对路径';",
     "COMMENT ON COLUMN aistock_factor_catalog.source_code_origin IS 'RD-Agent 侧原始 asset key';",
     "COMMENT ON COLUMN aistock_factor_catalog.source_loop_tag IS '因子首次出现的 loop_id';",
     "COMMENT ON COLUMN aistock_factor_catalog.source_index IS '因子在 SOTA 列表中的序号';",

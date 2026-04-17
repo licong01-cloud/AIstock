@@ -36,10 +36,25 @@ import asyncio
 import json
 import logging
 import os
+import sys
+import tempfile
+import time
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+
+def _win_to_wsl(path: str) -> str:
+    """将 Windows 路径转为 WSL 路径：F:\\x\\y → /mnt/f/x/y。"""
+    p = str(path).replace("\\", "/")
+    if len(p) >= 2 and p[1] == ":":
+        drive = p[0].lower()
+        return f"/mnt/{drive}{p[2:]}"
+    return p
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query
+from pydantic import ConfigDict
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -121,7 +136,7 @@ class EvaluatePortfolioRequest(BaseModel):
 
 
 class GenerateConfigRequest(BaseModel):
-    factor_names: List[str]
+    factor_names: List[str] = Field(default_factory=list)
     factor_sources: Optional[Dict[str, str]] = None
     model_id: Optional[str] = None
     strategy_id: Optional[str] = None
@@ -135,6 +150,10 @@ class GenerateConfigRequest(BaseModel):
     hmm_signal_preset: Optional[str] = Field(None, description="HMM 信号系数档位: preset_A/preset_B")
     unfilled_handler: Optional[str] = Field(None, description="尾盘涨停未成交处理: TAIL_BOOST(加仓持仓股) / TAIL_SUBSTITUTE(替补买入)")
     unfilled_handler_params: Optional[Dict[str, Any]] = Field(None, description="尾盘处理参数，如 {backup_depth: 15, trigger_minute: 210}")
+    # ── Multi-Alpha (Phase 3) ──────────────────────────────────────
+    alpha_mode: Optional[str] = Field(None, description="single (默认) / multi")
+    multi_alpha_config: Optional[Dict[str, Any]] = Field(None, description="Multi-Alpha 分组配置 JSON")
+    parent_multi_alpha_id: Optional[str] = Field(None, description="源实验ID（演进血统追踪）")
 
 
 class CreateStrategyRequest(BaseModel):
@@ -164,6 +183,16 @@ class UpdateStrategyRequest(BaseModel):
 class AnalyzeStrategyRequest(BaseModel):
     strategy_id: str = Field(..., description="要分析的策略ID")
     source_code: Optional[str] = Field(None, description="可选：传入修改后的代码进行分析，不传则使用数据库中的代码")
+
+
+class FactorRatingRunRequest(BaseModel):
+    rule_version: Optional[str] = Field(None, description="评级规则版本，默认使用当前激活版本")
+    scope_type: str = Field(..., description="评级范围: selected/filter/all")
+    selected_factors: Optional[List[Dict[str, str]]] = Field(None, description="选中的因子列表，元素包含 factor_name/source")
+    filters: Optional[Dict[str, Any]] = Field(None, description="当前筛选条件")
+    triggered_from: str = Field("ui_toolbar", description="触发来源，正式评级只允许 ui_toolbar")
+
+    model_config = ConfigDict(extra="forbid")
 
 
 # ============================================================
@@ -265,10 +294,35 @@ def list_factors(
         elif category:
             cl_conditions.append("cl.category = %s")
             cl_params.append(category)
+        rating_join_sql = """
+            LEFT JOIN LATERAL (
+                SELECT official_grade, official_score, grade_reason_structured, rule_version,
+                       llm_audit_summary, llm_risk_notes
+                FROM qe_factor_official_ratings r
+                WHERE r.factor_catalog_id = c.id
+                  AND r.rule_version = (
+                      SELECT rule_version FROM qe_rating_rule_versions
+                      WHERE status = 'active'
+                      ORDER BY activated_at DESC NULLS LAST, created_at DESC
+                      LIMIT 1
+                  )
+                ORDER BY r.graded_at DESC
+                LIMIT 1
+            ) fr ON TRUE
+        """
+        rating_select_sql = """
+                           fr.official_grade AS official_grade,
+                           fr.official_score AS official_score,
+                           fr.grade_reason_structured AS official_grade_reason_structured,
+                           fr.rule_version AS official_rule_version,
+                           fr.llm_audit_summary AS official_llm_audit_summary,
+                           fr.llm_risk_notes AS official_llm_risk_notes
+        """
+
         if grade == "__empty__":
-            cl_conditions.append("cl.grade IS NULL")
+            cl_conditions.append("fr.official_grade IS NULL")
         elif grade:
-            cl_conditions.append("cl.grade = %s")
+            cl_conditions.append("fr.official_grade = %s")
             cl_params.append(grade)
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
@@ -289,7 +343,7 @@ def list_factors(
             "ind_annual_return": "m.top_excess_annual_return",
             "ind_icir": "m.icir",
             "has_ind_metrics": "m.ic_mean",
-            "grade": "cl.grade",
+            "grade": "fr.official_grade",
             "category": "cl.category",
             "factor_dimension": "cl.factor_dimension",
             "generated_at_utc": "c.generated_at_utc",
@@ -300,7 +354,7 @@ def list_factors(
         if sort_field and sort_field in SORT_FIELD_MAP:
             if sort_field == "grade":
                 # S>A>B>C>D 自定义排序
-                order_clause = f"CASE cl.grade WHEN 'S' THEN 5 WHEN 'A' THEN 4 WHEN 'B' THEN 3 WHEN 'C' THEN 2 WHEN 'D' THEN 1 ELSE 0 END {direction} NULLS LAST"
+                order_clause = f"CASE fr.official_grade WHEN 'S' THEN 5 WHEN 'A' THEN 4 WHEN 'B' THEN 3 WHEN 'C' THEN 2 WHEN 'D' THEN 1 ELSE 0 END {direction} NULLS LAST"
             else:
                 col = SORT_FIELD_MAP[sort_field]
                 order_clause = f"{col} {direction} NULLS LAST"
@@ -315,12 +369,17 @@ def list_factors(
                         f"""SELECT COUNT(*) FROM aistock_factor_catalog c
                             LEFT JOIN qe_factor_classification cl
                                 ON cl.factor_name = c.factor_name AND cl.factor_source = c.source
+                            {rating_join_sql}
                             WHERE {where_clause}{cl_where}""",
                         params + cl_params,
                     )
                 else:
                     cur.execute(
-                        f"SELECT COUNT(*) FROM aistock_factor_catalog c WHERE {where_clause}",
+                        f"""SELECT COUNT(*) FROM aistock_factor_catalog c
+                            LEFT JOIN qe_factor_classification cl
+                                ON cl.factor_name = c.factor_name AND cl.factor_source = c.source
+                            {rating_join_sql}
+                            WHERE {where_clause}""",
                         params,
                     )
                 total = cur.fetchone()[0]
@@ -335,9 +394,12 @@ def list_factors(
                            m.rank_ic_mean AS ind_rank_ic, m.icir AS ind_icir,
                            m.calculated_at AS ind_calculated_at,
                            m1m.rank_ic_mean AS ind_rank_ic_1m,
-                           cl.category, cl.grade, cl.grade_reason,
-                           cl.classification_reason, cl.factor_dimension,
-                           cl.description AS cl_description, cl.id AS classification_id
+                           cl.category, cl.classification_reason, cl.factor_dimension,
+                           cl.description AS cl_description, cl.id AS classification_id,
+                           {rating_select_sql},
+                           fr.llm_audit_summary AS official_llm_audit_summary,
+                           fr.llm_risk_notes AS official_llm_risk_notes,
+                           cl.grade AS legacy_grade, cl.grade_reason AS legacy_grade_reason
                     FROM aistock_factor_catalog c
                     LEFT JOIN LATERAL (
                         SELECT ic_mean, top_excess_sharpe, top_excess_annual_return,
@@ -356,6 +418,7 @@ def list_factors(
                     ) m1m ON TRUE
                     LEFT JOIN qe_factor_classification cl
                         ON cl.factor_name = c.factor_name AND cl.factor_source = c.source
+                    {rating_join_sql}
                     WHERE {where_clause}{cl_where}
                     ORDER BY {order_clause}
                     LIMIT %s OFFSET %s
@@ -366,9 +429,166 @@ def list_factors(
         # 保留 TASK 原始指标（ic/sharpe/annualized_return）和独立指标（ind_*）同时返回
         # 前端自行决定展示优先级，不在后端覆盖
 
+        # 合并因子值缓存信息（has_cache 判断和 hash 校验分离，互不影响）
+        try:
+            cache_meta = _load_cache_meta()
+            cache_factors = cache_meta.get("factors", {})
+            import hashlib as _hl
+
+            # 先标记 has_cache（不依赖 DB）
+            for row in rows:
+                fn = row.get("factor_name")
+                entry = cache_factors.get(fn)
+                if entry and FACTOR_CACHE_SINGLE_DIR.joinpath(f"{fn}.parquet").exists():
+                    row["has_cache"] = True
+                    row["cache_date_range"] = entry.get("date_range", "")
+                    pq = FACTOR_CACHE_SINGLE_DIR / f"{fn}.parquet"
+                    row["cache_size_mb"] = round(pq.stat().st_size / 1024 / 1024, 1) if pq.exists() else 0
+                else:
+                    row["has_cache"] = False
+                    row["cache_date_range"] = None
+                    row["cache_size_mb"] = None
+                    row["cache_hash_match"] = None
+
+            # hash 校验（依赖 DB code_text，失败不影响 has_cache）
+            try:
+                _factor_names = [r["factor_name"] for r in rows if r.get("has_cache")]
+                _code_hashes: dict[str, str] = {}
+                if _factor_names:
+                    _ph = ",".join(["%s"] * len(_factor_names))
+                    with get_conn() as _c:
+                        with _c.cursor() as _cur:
+                            _cur.execute(
+                                f"SELECT factor_name, code_text FROM aistock_factor_catalog "
+                                f"WHERE factor_name IN ({_ph})",
+                                _factor_names,
+                            )
+                            for _fn, _ct in _cur.fetchall():
+                                if _ct:
+                                    _code_hashes[_fn] = _hl.sha256(_ct.encode("utf-8")).hexdigest()[:16]
+                for row in rows:
+                    if not row.get("has_cache"):
+                        continue
+                    fn = row["factor_name"]
+                    entry = cache_factors.get(fn, {})
+                    cached_hash = entry.get("source_hash_raw") or entry.get("source_hash")
+                    current_hash = _code_hashes.get(fn)
+                    row["cache_hash_match"] = (cached_hash == current_hash) if current_hash else None
+            except Exception as e:
+                logger.warning(f"缓存 hash 校验失败（不影响 has_cache）: {e}")
+        except Exception as e:
+            logger.warning(f"合并缓存信息失败: {e}")
+
         return {"ok": True, "total": total, "items": rows}
     except Exception as e:
         logger.exception("获取因子列表失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/rating/rules")
+def list_rating_rules():
+    """获取可用评级规则版本列表。"""
+    try:
+        from ..services.quantevolver.factor_rating_service import factor_rating_service
+        return {"ok": True, **factor_rating_service.list_rule_versions()}
+    except Exception as e:
+        logger.exception("获取评级规则列表失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/rating/rules/{version}")
+def get_rating_rule(version: str):
+    """获取指定评级规则版本详情与说明。"""
+    try:
+        from ..services.quantevolver.factor_rating_service import factor_rating_service
+        return {"ok": True, **factor_rating_service.get_rule_detail(version)}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("获取评级规则详情失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/rating/rules/activate")
+def activate_rating_rule(version: str = Body(..., embed=True)):
+    """切换当前激活的评级规则版本。"""
+    try:
+        from ..services.quantevolver.factor_rating_service import factor_rating_service
+        return factor_rating_service.activate_rule_version(version)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("激活评级规则失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/rating/run")
+def run_factor_rating(req: FactorRatingRunRequest):
+    """执行正式因子评级。"""
+    try:
+        from ..services.quantevolver.factor_rating_service import factor_rating_service
+        rules = factor_rating_service.list_rule_versions()
+        rule_version = req.rule_version or rules.get("active_version") or rules.get("default_version")
+        if not rule_version:
+            raise HTTPException(status_code=400, detail="当前无可用评级规则版本")
+        scope_payload = {
+            "selected_factors": req.selected_factors or [],
+            "filters": req.filters or {},
+        }
+        return factor_rating_service.run_rating(
+            rule_version=rule_version,
+            scope_type=req.scope_type,
+            scope_payload=scope_payload,
+            triggered_from=req.triggered_from,
+        )
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("执行正式因子评级失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/rating/runs")
+def list_rating_runs(limit: int = Query(20, ge=1, le=100)):
+    """获取最近评级执行记录。"""
+    try:
+        from ..services.quantevolver.factor_rating_service import factor_rating_service
+        return {"ok": True, "items": factor_rating_service.list_runs(limit=limit)}
+    except Exception as e:
+        logger.exception("获取评级运行记录失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/rating/runs/{run_id}")
+def get_rating_run(run_id: str):
+    """获取单次评级执行记录。"""
+    try:
+        from ..services.quantevolver.factor_rating_service import factor_rating_service
+        item = factor_rating_service.get_run(run_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="评级运行记录不存在")
+        return {"ok": True, **item}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("获取评级运行详情失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/rating/results")
+def list_rating_results(
+    rule_version: Optional[str] = Query(None, description="指定规则版本，不传则使用当前激活版本"),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    """获取正式评级结果列表。"""
+    try:
+        from ..services.quantevolver.factor_rating_service import factor_rating_service
+        return {"ok": True, **factor_rating_service.list_results(rule_version=rule_version, limit=limit, offset=offset)}
+    except Exception as e:
+        logger.exception("获取正式评级结果失败")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -419,6 +639,13 @@ def delete_factor(
                     (factor_name, source),
                 )
                 deleted_counts["qe_factor_classification"] = cur.rowcount
+
+                # 4.1 qe_factor_official_ratings（正式评级）
+                cur.execute(
+                    "DELETE FROM qe_factor_official_ratings WHERE factor_catalog_id = %s",
+                    (catalog_id,),
+                )
+                deleted_counts["qe_factor_official_ratings"] = cur.rowcount
 
                 # 5. qe_factor_experiment_metrics
                 cur.execute(
@@ -530,6 +757,23 @@ def delete_factor(
                 )
                 FactorValueLoader.invalidate_merged_cache(pipeline_dir)
                 cleaned_files.append("_merged_panel.parquet")
+
+                # _meta.json 清理：移除已删除因子的条目
+                meta_path = os.path.join(pipeline_dir, "_meta.json")
+                if os.path.isfile(meta_path):
+                    try:
+                        import json as _json
+                        with open(meta_path, "r", encoding="utf-8") as _mf:
+                            _meta = _json.load(_mf)
+                        if factor_name in _meta.get("factors", {}):
+                            del _meta["factors"][factor_name]
+                            _meta["factor_count"] = len(_meta.get("factors", {}))
+                            with open(meta_path, "w", encoding="utf-8") as _mf:
+                                _json.dump(_meta, _mf, ensure_ascii=False, indent=2)
+                            cleaned_files.append("_meta.json")
+                    except Exception as e:
+                        logger.warning(f"清理 _meta.json 失败 (不影响删除结果): {e}")
+                _invalidate_cache_meta()
             except Exception as e:
                 logger.warning(f"清理因子缓存文件时出错 (不影响删除结果): {e}")
 
@@ -860,6 +1104,457 @@ def delete_model(model_id: str):
             conn.autocommit = old_autocommit
 
 
+# ── Multi-Alpha API Endpoints (Phase 3) ────────────────────────────────────
+
+
+@router.post("/multi-alpha/auto-select", summary="自动因子分组选择")
+def multi_alpha_auto_select(
+    min_grade: str = Query("B", description="最低评级: S/A/B/C"),
+    min_ic: float = Query(0.02, description="best_horizon_IC 最低阈值"),
+    max_factors_per_group: int = Query(15, description="每组最多因子数"),
+    max_intra_corr: float = Query(0.7, description="组内最大相关系数"),
+    meta_method: str = Query("ic_weighted", description="Meta-Model方法: ic_weighted/ols/stacking"),
+    execution_mode: str = Query("serial", description="执行模式: serial/local_parallel/distributed"),
+):
+    """自动生成 Multi-Alpha 分组配置。
+
+    基于因子库的评级、数据源分组和相关性，自动选择因子并分组。
+    返回可直接用于 GenerateConfigRequest.multi_alpha_config 的 JSON。
+    """
+    from ..services.quantevolver.multi_alpha_selector import MultiAlphaFactorSelector
+
+    try:
+        selector = MultiAlphaFactorSelector()
+        config = selector.auto_select(
+            min_grade=min_grade,
+            min_ic=min_ic,
+            max_factors_per_group=max_factors_per_group,
+            max_intra_corr=max_intra_corr,
+            meta_method=meta_method,
+            execution_mode=execution_mode,
+        )
+        preview = selector.preview(config)
+        return {
+            "ok": True,
+            "multi_alpha_config": config.model_dump(),
+            "preview": preview,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/multi-alpha/preview", summary="预览Multi-Alpha配置统计")
+def multi_alpha_preview(config: Dict[str, Any] = Body(...)):
+    """预览 Multi-Alpha 配置的统计信息（因子数/组数/计算资源分配）。"""
+    from ..services.quantevolver.multi_alpha_selector import MultiAlphaFactorSelector
+    from ..services.quantevolver.experiment_config import MultiAlphaConfig, AlphaGroup, MetaModelConfig
+
+    try:
+        groups = [AlphaGroup(**g) for g in config.get("alpha_groups", [])]
+        meta_raw = config.get("meta_model") or {}
+        meta = MetaModelConfig(**meta_raw) if isinstance(meta_raw, dict) else MetaModelConfig()
+        ma_config = MultiAlphaConfig(
+            alpha_groups=groups,
+            meta_model=meta,
+            execution_mode=config.get("execution_mode", "serial"),
+        )
+        selector = MultiAlphaFactorSelector()
+        return {"ok": True, "preview": selector.preview(ma_config)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/multi-alpha/group-templates", summary="获取预定义分组模板")
+def multi_alpha_group_templates():
+    """返回 Multi-Alpha 因子分组模板列表（data_source_group → model/dataset 推荐）。"""
+    from ..services.quantevolver.multi_alpha_selector import MultiAlphaFactorSelector
+
+    selector = MultiAlphaFactorSelector()
+    return {"ok": True, "templates": selector.get_group_templates()}
+
+
+@router.get("/multi-alpha/reusable-groups", summary="查询可复用的已完成Alpha组")
+def multi_alpha_reusable_groups(
+    group_name: Optional[str] = Query(None, description="按组名过滤"),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """查询已完成的 Multi-Alpha 组，用于模型复用/backtest-only 场景。"""
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                sql = """
+                    SELECT g.parent_experiment_id, g.group_name, g.model_id,
+                           g.group_ic, g.group_icir, g.group_sharpe,
+                           g.prediction_path, g.completed_at,
+                           g.factor_names, g.dataset_type
+                    FROM qe_multi_alpha_groups g
+                    WHERE g.status = 'completed'
+                      AND g.prediction_path IS NOT NULL
+                """
+                params: list = []
+                if group_name:
+                    sql += " AND g.group_name = %s"
+                    params.append(group_name)
+                sql += " ORDER BY g.completed_at DESC LIMIT %s"
+                params.append(limit)
+
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+                items = []
+                for r in rows:
+                    items.append({
+                        "experiment_id": r[0],
+                        "group_name": r[1],
+                        "model_id": r[2],
+                        "group_ic": r[3],
+                        "group_icir": r[4],
+                        "group_sharpe": r[5],
+                        "prediction_path": r[6],
+                        "completed_at": r[7].isoformat() if r[7] else None,
+                        "factor_names": r[8] if isinstance(r[8], list) else json.loads(r[8]) if r[8] else [],
+                        "dataset_type": r[9],
+                    })
+                return {"ok": True, "items": items}
+    except Exception as e:
+        logger.exception("查询可复用组失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/experiments/{experiment_id}/multi-alpha/results",
+            summary="获取Multi-Alpha实验结果")
+def get_multi_alpha_results(experiment_id: str):
+    """获取 Multi-Alpha 实验的各组结果和 Meta-Model 权重。"""
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # 各组结果
+                cur.execute("""
+                    SELECT group_name, factor_names, model_id, dataset_type,
+                           group_ic, group_icir, group_sharpe, meta_weight,
+                           assigned_node_id, status, error_message
+                    FROM qe_multi_alpha_groups
+                    WHERE parent_experiment_id = %s
+                    ORDER BY group_name
+                """, (experiment_id,))
+                cols = [d[0] for d in cur.description]
+                groups = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+                # Meta 权重历史
+                cur.execute("""
+                    SELECT as_of_date, method, weights, combined_ic
+                    FROM qe_meta_model_weights
+                    WHERE experiment_id = %s
+                    ORDER BY as_of_date DESC LIMIT 10
+                """, (experiment_id,))
+                meta_cols = [d[0] for d in cur.description]
+                meta_history = [dict(zip(meta_cols, r)) for r in cur.fetchall()]
+
+        if not groups:
+            raise HTTPException(status_code=404, detail=f"No multi-alpha groups for {experiment_id}")
+
+        return {
+            "ok": True,
+            "experiment_id": experiment_id,
+            "groups": groups,
+            "meta_weights_history": meta_history,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# Phase 3 v2.0: Multi-Alpha Diagnostics
+# ============================================================
+
+@router.get("/multi-alpha/{experiment_id}/diagnostics",
+            summary="Multi-Alpha 完整诊断报告")
+def multi_alpha_diagnostics(experiment_id: str):
+    """获取 Multi-Alpha 实验的完整诊断报告：组性能、相关性、瓶颈、建议。"""
+    try:
+        from ..services.quantevolver.multi_alpha_diagnostics import MultiAlphaDiagnostics
+        diag = MultiAlphaDiagnostics()
+        return diag.analyze(experiment_id)
+    except Exception as e:
+        logger.exception("Multi-Alpha 诊断失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/multi-alpha/{experiment_id}/group-correlations",
+            summary="Multi-Alpha 组间预测相关性")
+def multi_alpha_group_correlations(experiment_id: str):
+    """获取已缓存的组间预测相关性矩阵。"""
+    try:
+        from ..services.quantevolver.multi_alpha_diagnostics import MultiAlphaDiagnostics
+        diag = MultiAlphaDiagnostics()
+        return diag.compute_group_correlations(experiment_id)
+    except Exception as e:
+        logger.exception("获取组间相关性失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/multi-alpha/{experiment_id}/recommendations",
+            summary="Multi-Alpha 演进建议")
+def multi_alpha_recommendations(experiment_id: str):
+    """基于诊断结果生成优先级排序的演进建议。"""
+    try:
+        from ..services.quantevolver.multi_alpha_diagnostics import MultiAlphaDiagnostics
+        diag = MultiAlphaDiagnostics()
+        return diag.get_recommendations(experiment_id)
+    except Exception as e:
+        logger.exception("获取演进建议失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# Phase 3 v2.0: Multi-Alpha 补充端点 (批次 C)
+# ============================================================
+
+@router.get("/multi-alpha/classified-factors",
+            summary="查询已分类因子（按数据源组过滤）")
+def multi_alpha_classified_factors(
+    data_source_group: str = Query(..., description="数据源组: price_volume/money_flow/fundamental/valuation/chip/sector/cross_dataset"),
+    min_grade: str = Query("D", description="最低评级: S/A/B/C/D"),
+    exclude_names: str = Query("", description="排除的因子名（逗号分隔）"),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """查询指定 data_source_group 的已分类因子，按 IC 排序。
+
+    用于因子编辑器的候选因子列表。
+    """
+    grade_order = {"S": 0, "A": 1, "B": 2, "C": 3, "D": 4, "P": 5}
+    min_val = grade_order.get(min_grade, 4)
+    exclude_set = set(n.strip() for n in exclude_names.split(",") if n.strip())
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT fc.factor_name, fr.official_grade AS grade, fc.ic_value, fc.category,
+                           fc.data_source_group, fc.holding_period_class,
+                           fm.icir_annualized, fm.rank_ic_1d, fm.rank_ic_5d,
+                           fm.rank_ic_10d, fm.rank_ic_20d
+                    FROM qe_factor_classification fc
+                    LEFT JOIN LATERAL (
+                        SELECT icir_annualized, rank_ic_1d, rank_ic_5d,
+                               rank_ic_10d, rank_ic_20d
+                        FROM aistock_factor_metrics
+                        WHERE factor_name = fc.factor_name AND eval_window = 'full'
+                        ORDER BY calculated_at DESC LIMIT 1
+                    ) fm ON TRUE
+                    JOIN aistock_factor_catalog cat
+                        ON cat.factor_name = fc.factor_name AND cat.source = fc.factor_source
+                    LEFT JOIN LATERAL (
+                        SELECT official_grade FROM qe_factor_official_ratings r
+                        WHERE r.factor_catalog_id = cat.id
+                          AND r.rule_version = (
+                              SELECT rule_version FROM qe_rating_rule_versions
+                              WHERE status = 'active' ORDER BY activated_at DESC LIMIT 1
+                          )
+                        ORDER BY r.graded_at DESC LIMIT 1
+                    ) fr ON TRUE
+                    WHERE cat.is_available = TRUE
+                      AND fc.data_source_group = %s
+                    ORDER BY ABS(fc.ic_value) DESC NULLS LAST
+                """, (data_source_group,))
+                cols = [d[0] for d in cur.description]
+                rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+        # 过滤评级和排除名单
+        results = []
+        for f in rows:
+            if grade_order.get(f.get("grade"), 5) > min_val:
+                continue
+            if f["factor_name"] in exclude_set:
+                continue
+            results.append(f)
+            if len(results) >= limit:
+                break
+
+        return {"ok": True, "factors": results, "total": len(results)}
+    except Exception as e:
+        logger.exception("查询已分类因子失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/multi-alpha/validate-config",
+             summary="预验证 Multi-Alpha 配置")
+def multi_alpha_validate_config(config: dict = Body(...)):
+    """验证 MultiAlphaConfig 的合法性和质量。
+
+    返回 warnings/errors + 分类覆盖率统计。
+    """
+    warnings = []
+    errors = []
+
+    alpha_groups = config.get("alpha_groups", [])
+
+    # 基本校验
+    if len(alpha_groups) < 2:
+        errors.append({"level": "error", "message": f"至少需要 2 个组，当前 {len(alpha_groups)} 个"})
+
+    for g in alpha_groups:
+        g_name = g.get("group_name", "unknown")
+        factors = g.get("factor_names", [])
+        if len(factors) < 3:
+            warnings.append({
+                "level": "warn",
+                "message": f"{g_name} 组只有 {len(factors)} 个因子，低于推荐的 5 个"
+            })
+        if not g.get("model_id"):
+            errors.append({"level": "error", "message": f"{g_name} 组缺少 model_id"})
+
+    # 分类覆盖率
+    all_factor_names = []
+    for g in alpha_groups:
+        all_factor_names.extend(g.get("factor_names", []))
+
+    coverage = {"total_factors": len(all_factor_names), "has_grade": 0, "has_data_source_group": 0, "missing": []}
+    if all_factor_names:
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    placeholders = ",".join(["%s"] * len(all_factor_names))
+                    cur.execute(f"""
+                        SELECT factor_name, grade, data_source_group
+                        FROM qe_factor_classification
+                        WHERE factor_name IN ({placeholders})
+                    """, all_factor_names)
+                    classified = {r[0]: {"grade": r[1], "dsg": r[2]} for r in cur.fetchall()}
+
+            found_names = set(classified.keys())
+            coverage["has_grade"] = sum(1 for v in classified.values() if v["grade"])
+            coverage["has_data_source_group"] = sum(1 for v in classified.values() if v["dsg"])
+            coverage["missing"] = [n for n in all_factor_names if n not in found_names]
+        except Exception as e:
+            logger.warning(f"覆盖率检查失败: {e}")
+
+    return {
+        "valid": len(errors) == 0,
+        "warnings": warnings,
+        "errors": errors,
+        "classification_coverage": coverage,
+    }
+
+
+@router.get("/multi-alpha/classification-coverage",
+            summary="因子分类覆盖率统计")
+def multi_alpha_classification_coverage():
+    """统计各 data_source_group 的因子数量和平均 IC。"""
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # 总体统计
+                cur.execute("""
+                    SELECT COUNT(*) AS total,
+                           COUNT(CASE WHEN grade IS NOT NULL THEN 1 END) AS has_grade,
+                           COUNT(CASE WHEN data_source_group IS NOT NULL
+                                       AND data_source_group != 'unknown' THEN 1 END) AS has_dsg
+                    FROM qe_factor_classification fc
+                    JOIN aistock_factor_catalog cat
+                        ON cat.factor_name = fc.factor_name AND cat.source = fc.factor_source
+                    WHERE cat.is_available = TRUE
+                """)
+                total_row = cur.fetchone()
+                total_available = total_row[0]
+                has_grade = total_row[1]
+                has_dsg = total_row[2]
+
+                # 按组统计
+                cur.execute("""
+                    SELECT fc.data_source_group,
+                           COUNT(*) AS count,
+                           ROUND(AVG(ABS(fc.ic_value))::numeric, 4) AS avg_ic
+                    FROM qe_factor_classification fc
+                    JOIN aistock_factor_catalog cat
+                        ON cat.factor_name = fc.factor_name AND cat.source = fc.factor_source
+                    WHERE cat.is_available = TRUE
+                      AND fc.data_source_group IS NOT NULL
+                      AND fc.data_source_group != 'unknown'
+                    GROUP BY fc.data_source_group
+                    ORDER BY count DESC
+                """)
+                by_group = {}
+                for r in cur.fetchall():
+                    by_group[r[0]] = {"count": r[1], "avg_ic": float(r[2]) if r[2] else None}
+
+        return {
+            "total_available": total_available,
+            "fully_classified": has_dsg,
+            "coverage_pct": round(has_dsg / total_available * 100, 1) if total_available > 0 else 0,
+            "by_group": by_group,
+            "missing_grade": total_available - has_grade,
+            "missing_data_source_group": total_available - has_dsg,
+        }
+    except Exception as e:
+        logger.exception("分类覆盖率统计失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/multi-alpha/compatible-models",
+            summary="查询兼容模型列表")
+def multi_alpha_compatible_models(
+    dataset_type: str = Query(None, description="过滤 dataset_type: DatasetH/TSDatasetH"),
+):
+    """返回兼容的模型列表，含 builtin seed 模型和已导入模型。"""
+    try:
+        models = []
+
+        # Builtin seed models
+        _SEED_MODELS = [
+            {"model_id": "__seed_ALSTM_default_v1__", "model_type": "ALSTM", "dataset_type": "TSDatasetH", "compute_resource": "gpu", "description": "ALSTM 默认配置"},
+            {"model_id": "__seed_LGBModel_conservative_v1__", "model_type": "LGBModel", "dataset_type": "DatasetH", "compute_resource": "cpu", "description": "LGBModel 保守配置"},
+            {"model_id": "__seed_LGBModel_aggressive_v1__", "model_type": "LGBModel", "dataset_type": "DatasetH", "compute_resource": "cpu", "description": "LGBModel 激进配置"},
+            {"model_id": "__seed_Ridge_default_v1__", "model_type": "Ridge", "dataset_type": "DatasetH", "compute_resource": "cpu", "description": "Ridge 默认配置"},
+            {"model_id": "__seed_ALSTM_deep_v1__", "model_type": "ALSTM", "dataset_type": "TSDatasetH", "compute_resource": "gpu", "description": "ALSTM 深层配置"},
+            {"model_id": "__seed_GRU_light_v1__", "model_type": "GRU", "dataset_type": "TSDatasetH", "compute_resource": "gpu", "description": "GRU 轻量配置"},
+            {"model_id": "__seed_Transformer_v1__", "model_type": "Transformer", "dataset_type": "TSDatasetH", "compute_resource": "gpu", "description": "Transformer 配置"},
+        ]
+        for m in _SEED_MODELS:
+            if dataset_type and m["dataset_type"] != dataset_type:
+                continue
+            models.append(m)
+
+        # Catalog models
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                where = "WHERE is_available = TRUE"
+                params = []
+                if dataset_type:
+                    where += " AND model_type IN %s"
+                    # TSDatasetH → time-series models (ALSTM, GRU, Transformer)
+                    # DatasetH → tabular models (LGBModel, Ridge, etc)
+                    if dataset_type == "TSDatasetH":
+                        params.append(("ALSTM", "GRU", "Transformer", "LSTM"))
+                    else:
+                        params.append(("LGBModel", "Ridge", "CatBoost", "XGBoost", "LinearModel"))
+
+                cur.execute(f"""
+                    SELECT model_id, model_name, model_type, display_name, catalog_source
+                    FROM aistock_model_catalog
+                    {where}
+                    ORDER BY model_type, model_name
+                    LIMIT 100
+                """, params)
+                cols = [d[0] for d in cur.description]
+                for row in cur.fetchall():
+                    r = dict(zip(cols, row))
+                    models.append({
+                        "model_id": r["model_id"],
+                        "model_type": r.get("model_type"),
+                        "dataset_type": "TSDatasetH" if r.get("model_type") in ("ALSTM", "GRU", "Transformer", "LSTM") else "DatasetH",
+                        "compute_resource": "gpu" if r.get("model_type") in ("ALSTM", "GRU", "Transformer", "LSTM") else "cpu",
+                        "description": r.get("display_name") or r.get("model_name") or r["model_id"],
+                        "source": r.get("catalog_source"),
+                    })
+
+        return {"ok": True, "models": models, "total": len(models)}
+    except Exception as e:
+        logger.exception("查询兼容模型失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/strategies")
 def list_strategies(
     search: Optional[str] = Query(None),
@@ -1187,7 +1882,7 @@ async def analyze_strategy_code(req: AnalyzeStrategyRequest):
 
 @router.post("/factor-analyst/analyze")
 async def analyze_factor(req: AnalyzeFactorRequest):
-    """分析指定因子（分类+评级）。"""
+    """分析指定因子（分类+描述）。评级只读，由 FactorRatingService 统一管理。"""
     try:
         from ..services.quantevolver.factor_analyst import FactorAnalyst
         fa = FactorAnalyst()
@@ -1512,6 +2207,153 @@ def generate_config(req: GenerateConfigRequest):
 
 
         cc = ConfigComposer()
+
+        # ── Multi-Alpha 分支 ────────────────────────────────────────
+        if req.alpha_mode == "multi" and req.multi_alpha_config:
+            from ..services.quantevolver.experiment_config_builders import build_config_from_multi_alpha
+            from ..services.quantevolver.multi_alpha_engine import MultiAlphaEngine
+
+            # 构建 HMM 配置（传 HmmConfig 兼容的 dict 或 None）
+            hmm_cfg_dict = None
+            if custom_params.get("sector_hmm_model_path"):
+                hmm_cfg_dict = {
+                    "enable_sector_hmm": True,
+                    "hmm_model_version_id": custom_params.get("hmm_model_version_id", "from_compose"),
+                    "sector_hmm_model_path": custom_params["sector_hmm_model_path"],
+                    "hmm_signal_preset": custom_params.get("hmm_signal_preset"),
+                    "hmm_signal_presets": custom_params.get("hmm_signal_presets"),
+                }
+
+            # 构建 unfilled_handler_params（去掉 unfilled_ 前缀，匹配 ExperimentConfig 期望格式）
+            uf_params = None
+            if custom_params.get("unfilled_handler"):
+                uf_params = {}
+                if custom_params.get("unfilled_trigger_minute"):
+                    uf_params["trigger_minute"] = custom_params["unfilled_trigger_minute"]
+                if custom_params.get("unfilled_backup_depth"):
+                    uf_params["backup_depth"] = custom_params["unfilled_backup_depth"]
+
+            exp_cfg = build_config_from_multi_alpha(
+                multi_alpha_config=req.multi_alpha_config,
+                data_split=req.data_split,
+                strategy_id=req.strategy_id,
+                strategy_params={"topk": custom_params.get("topk"), "n_drop": custom_params.get("n_drop")} if custom_params else None,
+                label_type=custom_params.get("label_type"),
+                execution_algo=custom_params.get("execution_algo"),
+                execution_algo_params=custom_params.get("execution_algo_params"),
+                unfilled_handler=custom_params.get("unfilled_handler"),
+                unfilled_handler_params=uf_params,
+                stock_pool=custom_params.get("stock_pool"),
+                hmm_config=hmm_cfg_dict,
+                experiment_name=req.experiment_name,
+            )
+            # 查询可用节点（用于分布式规划 + 前端展示）
+            available_nodes = []
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT node_id, api_base_url, gpu_model, gpu_vram_mb, status
+                        FROM infra.compute_nodes
+                    """)
+                    _ncols = [d[0] for d in cur.description]
+                    available_nodes = [dict(zip(_ncols, r)) for r in cur.fetchall()]
+
+            engine = MultiAlphaEngine(
+                experiment_config=exp_cfg,
+                composer=cc,
+                available_nodes=available_nodes,
+            )
+            engine_result = engine.run()
+
+            if not engine_result.get("ok"):
+                raise HTTPException(status_code=500, detail="MultiAlphaEngine 执行失败")
+
+            parent_exp_id = engine_result.get("parent_experiment_id")
+
+            # 汇总所有组的因子名（用于实验记录的 factor_names 字段）
+            all_factor_names = []
+            for ag in exp_cfg.multi_alpha_config.alpha_groups:
+                all_factor_names.extend(ag.factor_names)
+
+            # 创建 parent 实验记录 + 设置 alpha_mode（INSERT 而非 UPDATE，因为之前从未创建）
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO qe_experiments
+                            (experiment_id, experiment_name, status,
+                             factor_names, model_id, strategy_id,
+                             data_split, custom_params,
+                             alpha_mode, multi_alpha_config,
+                             parent_multi_alpha_id, created_at)
+                        VALUES (%s, %s, 'created', %s, %s, %s, %s, %s,
+                                'multi', %s::jsonb, %s, NOW())
+                        ON CONFLICT (experiment_id) DO UPDATE SET
+                            alpha_mode = 'multi',
+                            multi_alpha_config = EXCLUDED.multi_alpha_config,
+                            parent_multi_alpha_id = EXCLUDED.parent_multi_alpha_id,
+                            factor_names = EXCLUDED.factor_names
+                    """, (
+                        parent_exp_id,
+                        parent_exp_id,
+                        json.dumps(all_factor_names),
+                        exp_cfg.multi_alpha_config.alpha_groups[0].model_id if exp_cfg.multi_alpha_config.alpha_groups else None,
+                        req.strategy_id,
+                        json.dumps(req.data_split) if req.data_split else None,
+                        json.dumps(custom_params) if custom_params else None,
+                        json.dumps(req.multi_alpha_config),
+                        req.parent_multi_alpha_id,
+                    ))
+                conn.commit()
+
+            # 生成前端需要的展示信息
+            group_configs = engine_result.get("group_configs", [])
+            execution_mode = engine_result.get("execution_mode", "serial")
+            node_groups: dict[str, list[str]] = {}
+            for gc in group_configs:
+                n_id = gc.get("node_id", "wsl2-5080")
+                node_groups.setdefault(n_id, []).append(gc["group_name"])
+
+            # 构建 WSL 命令预览（前端展示用）
+            wsl_lines = [
+                f"# Multi-Alpha 实验 ({len(group_configs)} 组, 模式: {execution_mode})"
+            ]
+            for n_id, g_names in node_groups.items():
+                wsl_lines.append(f"# 节点 {n_id}: {', '.join(g_names)}")
+            wsl_lines.append("")
+            for gc in sorted(group_configs, key=lambda g: g.get("order", 0)):
+                cmd = gc.get("wsl_command", "")
+                if cmd and not cmd.startswith("#"):
+                    wsl_lines.append(f"# [{gc.get('node_id', '?')}] {gc['group_name']}:")
+                    wsl_lines.append(f"cd group_{gc['group_name']} && {cmd} && cd ..")
+                elif gc.get("reuse_mode") in ("reuse_prediction", "reuse_model"):
+                    wsl_lines.append(f"# [{gc.get('node_id', '?')}] {gc['group_name']}: 复用 ({gc['reuse_mode']})")
+            wsl_lines.append("")
+            wsl_lines.append("# Meta-Model 合并:")
+            wsl_lines.append("python meta_model_runner.py")
+
+            # 构建返回结构（兼容前端 ConfigResult 类型）
+            result = {
+                "ok": True,
+                "experiment_id": parent_exp_id,
+                "experiment_dir": f"qe_workspace/{parent_exp_id}",
+                "wsl_command": "\n".join(wsl_lines),
+                # 多Alpha特有字段
+                "alpha_mode": "multi",
+                "execution_mode": execution_mode,
+                "total_groups": engine_result.get("total_groups"),
+                "meta_method": engine_result.get("meta_method"),
+                "group_configs": group_configs,
+                "node_distribution": node_groups,
+                "is_distributed": len(node_groups) > 1,
+            }
+
+            if req.dispatch_mode == "evolution":
+                result["evolution_pending"] = True
+                result["evolution_params"] = req.evolution_params or {}
+
+            return result
+
+        # ── Single-Alpha（原有逻辑）────────────────────────────────
         result = cc.compose_experiment(
             factor_names=req.factor_names,
             factor_sources=req.factor_sources,
@@ -1538,12 +2380,19 @@ def generate_config(req: GenerateConfigRequest):
 def list_experiments(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    alpha_mode: Optional[str] = Query(None, description="过滤 alpha_mode: single/multi"),
 ):
-    """获取实验列表。"""
+    """获取实验列表。支持按 alpha_mode 过滤。"""
     try:
         from ..services.quantevolver.config_composer import ConfigComposer
         cc = ConfigComposer()
         result = cc.list_experiments(limit=limit, offset=offset)
+        # alpha_mode 过滤（在应用层过滤，避免改动 ConfigComposer 内部查询）
+        if alpha_mode and result.get("ok") and result.get("items"):
+            result["items"] = [
+                exp for exp in result["items"]
+                if exp.get("alpha_mode", "single") == alpha_mode
+            ]
         return result
     except Exception as e:
         logger.exception("获取实验列表失败")
@@ -1572,7 +2421,8 @@ async def sync_experiment_results(experiment_id: str):
     """同步实验结果。
 
     通过 RDAgent API 获取回测指标并写入 DB。
-    禁止本地文件访问，所有数据通过 API 获取。
+    多Alpha实验走 MultiAlphaResultCollector 路径，
+    同时写入3张扩展表 + 统一分析层。
     """
     from ..services.quantevolver.config_composer import ConfigComposer
     from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
@@ -1582,6 +2432,17 @@ async def sync_experiment_results(experiment_id: str):
     if not exp_record:
         raise HTTPException(status_code=404, detail=f"实验 {experiment_id} 不存在")
 
+    # 多Alpha路径：调用 ResultCollector
+    if exp_record.get("alpha_mode") == "multi":
+        from ..services.quantevolver.multi_alpha_result_collector import MultiAlphaResultCollector
+        try:
+            collector = MultiAlphaResultCollector()
+            return await collector.collect_and_persist(experiment_id)
+        except Exception as e:
+            logger.exception(f"多Alpha结果同步失败: {experiment_id}")
+            raise HTTPException(status_code=500, detail=f"多Alpha结果同步失败: {e}")
+
+    # 单Alpha路径：原有逻辑不变
     qe_task_id = exp_record.get("qe_task_id") or exp_record.get("experiment_name")
     qe_loop_id = exp_record.get("qe_loop_id") or "Loop1"
     if not qe_task_id:
@@ -1646,6 +2507,477 @@ def trigger_experiment_selection(experiment_id: str, req: ExperimentSelectionReq
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception(f"实验选股失败: experiment_id={experiment_id}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# 因子值缓存管理 (Factor Value Cache)
+# ============================================================
+
+FACTOR_CACHE_SINGLE_DIR = Path("F:/Dev/AIstock/rdagent_assets/factor_values/single")
+FACTOR_CACHE_META_PATH = Path("F:/Dev/AIstock/rdagent_assets/factor_values/_meta.json")
+FACTOR_CODE_DIR = Path("F:/Dev/AIstock/rdagent_assets/qe_factors")
+BACKFILL_SCRIPT_WSL = "/mnt/f/Dev/AIstock/scripts/backfill_factor_cache.py"
+FACTOR_CACHE_TASK_DIR = Path("F:/Dev/AIstock/rdagent_assets/factor_values/_tasks")
+
+
+def _get_all_factors_with_code_text() -> list:
+    """从 DB 查询所有有 code_text 的因子（含 RDAgent API fallback）。
+
+    查询所有 is_available=true 的因子，不预过滤 code_text，
+    对 code_text 为 NULL 的 rdagent_task_sync 因子通过 API 补全。
+    """
+    from ..db.pg_pool import get_conn
+    from ..services.quantevolver.config_composer import ConfigComposer
+
+    cc = ConfigComposer()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT factor_name, source, code_text, best_loop_task_run_id
+                FROM aistock_factor_catalog
+                WHERE is_available = true
+                ORDER BY factor_name
+            """)
+            cols = [d[0] for d in cur.description]
+            results = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    # 已有 code_text 的直接保留
+    has_code = [r for r in results if r.get("code_text")]
+    # code_text 为 NULL 但有 RDAgent task_id 的因子，通过 API 获取
+    needs_api = [
+        r for r in results
+        if not r.get("code_text")
+        and r.get("source") == "rdagent_task_sync"
+        and r.get("best_loop_task_run_id")
+    ]
+    api_failures: list[str] = []
+    for r in needs_api:
+        try:
+            source_code = cc._fetch_factor_source_from_api(r["best_loop_task_run_id"], r["factor_name"])
+            if source_code:
+                r["code_text"] = source_code
+                has_code.append(r)
+            else:
+                api_failures.append(r["factor_name"])
+        except Exception as e:
+            logger.warning(f"获取因子源码失败 {r['factor_name']}: {e}")
+            api_failures.append(r["factor_name"])
+
+    if api_failures:
+        logger.warning(
+            f"[factor-cache] {len(api_failures)} 个因子 code_text 为空且 API 获取失败，跳过: "
+            f"{api_failures[:10]}"
+        )
+
+    return has_code
+
+# 当前运行中的后台任务
+_active_cache_tasks: Dict[str, Dict[str, Any]] = {}
+_cache_meta_ttl: Dict[str, Any] = {"loaded_at": 0, "meta": None}
+
+
+def _load_cache_meta(ttl_sec: int = 30) -> dict:
+    """读取 _meta.json（带 TTL 缓存，避免高频 IO）。"""
+    import time
+    now = time.time()
+    if now - _cache_meta_ttl.get("loaded_at", 0) < ttl_sec and _cache_meta_ttl.get("meta"):
+        return _cache_meta_ttl["meta"]
+    meta = {}
+    try:
+        if FACTOR_CACHE_META_PATH.exists():
+            meta = json.loads(FACTOR_CACHE_META_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        logger.error(f"_meta.json 已损坏（JSON 解析失败）: {e}，请检查文件 {FACTOR_CACHE_META_PATH}")
+        raise RuntimeError(f"_meta.json 已损坏: {e}") from e
+    _cache_meta_ttl["loaded_at"] = now
+    _cache_meta_ttl["meta"] = meta
+    return meta
+
+
+def _invalidate_cache_meta():
+    """使 meta 内存缓存失效。"""
+    _cache_meta_ttl["loaded_at"] = 0
+
+
+def _load_json_file(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning(f"读取 JSON 文件失败 {path}: {e}")
+    return None
+
+
+def _load_failed_tail(path: Path, limit: int = 20) -> List[Dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = [ln.strip() for ln in f.readlines() if ln.strip()]
+        return [json.loads(line) for line in lines[-limit:]]
+    except Exception as e:
+        logger.warning(f"读取失败日志失败 {path}: {e}")
+        return []
+
+
+@router.get("/factor-cache/stats", summary="因子值缓存统计")
+def factor_cache_stats():
+    """返回缓存总览：总缓存数、占用空间、覆盖率、日期范围分布。"""
+    try:
+        if not FACTOR_CACHE_SINGLE_DIR.exists():
+            return {
+                "ok": True, "total_cached": 0, "total_size_mb": 0,
+                "coverage_pct": 0, "date_range_dominant": "unknown",
+            }
+
+        cached_files = list(FACTOR_CACHE_SINGLE_DIR.glob("*.parquet"))
+        total_size = sum(f.stat().st_size for f in cached_files)
+
+        # 代码因子总数 + 可用/禁用因子名集合（从 DB 查询）
+        db_available_names: set = set()
+        db_disabled_names: set = set()
+        total_code_factors = 0
+        total_disabled_factors = 0
+        # code_text 哈希用于判断 hash 是否匹配
+        db_code_hashes: Dict[str, str] = {}
+        try:
+            import hashlib as _hl
+            from ..db.pg_pool import get_conn
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT factor_name, is_available, code_text
+                        FROM aistock_factor_catalog
+                        WHERE code_text IS NOT NULL
+                    """)
+                    for fn, avail, ct in cur.fetchall():
+                        if avail:
+                            db_available_names.add(fn)
+                            total_code_factors += 1
+                        else:
+                            db_disabled_names.add(fn)
+                            total_disabled_factors += 1
+                        if ct:
+                            db_code_hashes[fn] = _hl.sha256(ct.encode("utf-8")).hexdigest()[:16]
+        except Exception as e:
+            logger.error(f"查询因子总数失败: {e}")
+            raise HTTPException(status_code=500, detail=f"数据库查询失败: {e}")
+
+        # meta 分布
+        meta = _load_cache_meta()
+        factors_meta = meta.get("factors", {})
+        range_dist: Dict[str, int] = {}
+
+        # 细分缓存状态：cache_ok / cache_error / hash_mismatch / no_cache
+        cache_ok = 0
+        cache_error = 0
+        hash_mismatch = 0
+        disabled_cached = 0
+
+        for fn in db_available_names:
+            entry = factors_meta.get(fn, {})
+            cached_hash = entry.get("source_hash_raw") or entry.get("source_hash")
+            current_hash = db_code_hashes.get(fn)
+            meta_status = entry.get("status")
+            has_parquet = FACTOR_CACHE_SINGLE_DIR.joinpath(f"{fn}.parquet").exists()
+
+            if meta_status == "error":
+                # _meta.json 明确记录了失败
+                cache_error += 1
+            elif has_parquet:
+                if current_hash and cached_hash and cached_hash != current_hash:
+                    hash_mismatch += 1
+                else:
+                    cache_ok += 1
+                dr = entry.get("date_range", "unknown")
+                range_dist[dr] = range_dist.get(dr, 0) + 1
+            # else: no_cache, 不计入
+
+        # 禁用因子缓存统计
+        for fn in db_disabled_names:
+            if FACTOR_CACHE_SINGLE_DIR.joinpath(f"{fn}.parquet").exists():
+                disabled_cached += 1
+                entry = factors_meta.get(fn, {})
+                dr = entry.get("date_range", "unknown")
+                range_dist[dr] = range_dist.get(dr, 0) + 1
+
+        dominant_range = max(range_dist.items(), key=lambda x: x[1])[0] if range_dist else "unknown"
+
+        return {
+            "ok": True,
+            "total_cached": cache_ok + hash_mismatch,
+            "total_code_factors": total_code_factors,
+            "coverage_pct": round((cache_ok + hash_mismatch) / total_code_factors * 100, 1) if total_code_factors > 0 else 0,
+            "total_size_mb": round(total_size / 1024 / 1024, 1),
+            "date_range_dominant": dominant_range,
+            "date_range_distribution": dict(sorted(range_dist.items(), key=lambda x: -x[1])[:10]),
+            "hash_ok": cache_ok,
+            "hash_mismatch": hash_mismatch,
+            "cache_error": cache_error,
+            "no_cache": total_code_factors - cache_ok - hash_mismatch - cache_error,
+            "disabled_total": total_disabled_factors,
+            "disabled_cached": disabled_cached,
+            "last_backfill": meta.get("_last_backfill"),
+            "active_tasks": sum(1 for t in _active_cache_tasks.values() if t.get("status") == "running"),
+        }
+    except Exception as e:
+        logger.exception("获取缓存统计失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class FactorCacheComputeRequest(BaseModel):
+    factor_names: Optional[List[str]] = Field(None, description="因子名列表；空/None = 全部可用因子")
+    experiment_id: Optional[str] = Field(None, description="实验 ID；仅用于继承节点/数据目录配置，不限制缓存作用域")
+    start_date: Optional[str] = Field(None, description="起始日期；为空则使用 QE 默认 train_start")
+    end_date: Optional[str] = Field(None, description="结束日期；为空则使用 QE 默认 test_end")
+    workers: int = Field(4, description="并行度: 2/4/8/10")
+    timeout_per_factor: int = Field(1200, description="单因子超时秒数")
+    incremental: bool = Field(False, description="增量模式: 优先仅补齐缺失后段")
+    force: bool = Field(False, description="强制重算（忽略已覆盖的缓存）")
+    resume_task_id: Optional[str] = Field(None, description="从历史任务恢复未完成因子")
+    retry_failed_only: bool = Field(False, description="恢复历史任务时仅重试失败因子")
+    strict_backtest_data: bool = Field(True, description="严格使用 QE 默认历史 factor_data_dir 数据（用于全局因子值缓存）")
+
+
+@router.post("/factor-cache/compute", summary="触发因子值计算（WSL后台任务）")
+def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: BackgroundTasks):
+    """触发 WSL 端因子值计算。使用原始 code_text + subprocess（与回测 prepare_factors.py 一致）。"""
+    if req.workers < 1 or req.workers > 10:
+        raise HTTPException(400, "workers 必须为 1~10")
+
+    from ..services.quantevolver.config_composer import ConfigComposer, RDAGENT_DEFAULT_DATA_SPLIT
+
+    cc = ConfigComposer()
+    exp_record = None
+    node_id = None
+    factor_data_dir = None
+    base_split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
+    resolved_start = req.start_date or base_split.get("train_start")
+    resolved_end = req.end_date or base_split.get("test_end")
+
+    if req.experiment_id:
+        exp_record = cc._get_experiment_record(req.experiment_id)
+        if not exp_record:
+            raise HTTPException(404, f"实验 {req.experiment_id} 不存在")
+        data_split = exp_record.get("data_split")
+        if isinstance(data_split, str):
+            data_split = json.loads(data_split)
+        if data_split:
+            if not isinstance(data_split, dict):
+                raise HTTPException(400, f"实验 {req.experiment_id} 的 data_split 非法")
+            cc._validate_data_split(data_split)
+            base_split.update(data_split)
+        node_id = exp_record.get("node_id") or None
+
+    if req.start_date is None:
+        resolved_start = base_split.get("train_start")
+    if req.end_date is None:
+        resolved_end = base_split.get("test_end")
+
+    rdagent_cfg = cc._fetch_workspace_config(node_id)
+    factor_data_dir = rdagent_cfg.get("factor_data_dir")
+    if req.strict_backtest_data and not factor_data_dir:
+        raise HTTPException(400, "无法解析 QE 默认 factor_data_dir")
+
+    if not resolved_start or not resolved_end:
+        raise HTTPException(400, "无法解析缓存窗口")
+    if resolved_start > resolved_end:
+        raise HTTPException(400, f"缓存窗口非法: {resolved_start} > {resolved_end}")
+
+    # ── 从 DB 获取原始 code_text ──
+    if req.factor_names:
+        # 指定因子名 → 用 _get_factors_info (含 RDAgent API fallback)
+        factors_info = cc._get_factors_info(req.factor_names)
+    else:
+        # 全量 → 用 _get_all_factors_with_code_text (含 API fallback)
+        factors_info = _get_all_factors_with_code_text()
+
+    factors_code = {}
+    for f in factors_info:
+        ct = f.get("code_text")
+        if ct:
+            factors_code[f["factor_name"]] = ct
+    if not factors_code and not req.resume_task_id:
+        raise HTTPException(400, "未找到任何有 code_text 的因子")
+
+    # ── 写入 code manifest JSON 文件 ──
+    task_id = f"cache_{int(time.time() * 1000)}_{os.getpid()}"
+    manifest_path = FACTOR_CACHE_TASK_DIR / f"{task_id}_manifest.json"
+    FACTOR_CACHE_TASK_DIR.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(factors_code, ensure_ascii=False), encoding="utf-8"
+    )
+
+    result_path = Path(tempfile.gettempdir()) / f"{task_id}_result.json"
+    log_path = Path(tempfile.gettempdir()) / f"{task_id}.log"
+
+    factors_arg = ",".join(req.factor_names) if req.factor_names else ""
+    cmd_parts = [
+        "wsl", "bash", "-lc",
+        f"cd /mnt/f/Dev/AIstock && "
+        f"export TDX_DB_PASSWORD=\"${{TDX_DB_PASSWORD:-lc78080808}}\" && "
+        f"source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent-gpu && "
+        f"python {BACKFILL_SCRIPT_WSL} "
+        f"--task-id {task_id} "
+        f"--code-manifest {_win_to_wsl(str(manifest_path))} "
+        + (f"--experiment-id {req.experiment_id} " if req.experiment_id else "")
+        + (f"--window-train-start {resolved_start} --window-backtest-end {resolved_end} ")
+        + (f"--factor-data-dir {factor_data_dir} " if factor_data_dir else "")
+        + ("--strict-backtest-data " if req.strict_backtest_data else "")
+        + f"--workers {req.workers} --timeout {req.timeout_per_factor} "
+        + f"--json-output {_win_to_wsl(str(result_path))}"
+        + (f" --factors {factors_arg}" if factors_arg else "")
+        + (" --force" if req.force else "")
+        + (" --incremental" if req.incremental else "")
+        + (f" --resume-task-id {req.resume_task_id}" if req.resume_task_id else "")
+        + (" --retry-failed-only" if req.retry_failed_only else "")
+        + f" > {_win_to_wsl(str(log_path))} 2>&1"
+    ]
+
+    _active_cache_tasks[task_id] = {
+        "task_id": task_id,
+        "status": "running",
+        "started_at": datetime.now().isoformat(),
+        "workers": req.workers,
+        "factor_count": len(req.factor_names) if req.factor_names else "all",
+        "incremental": req.incremental,
+        "resume_task_id": req.resume_task_id,
+        "retry_failed_only": req.retry_failed_only,
+        "experiment_id": req.experiment_id,
+        "strict_backtest_data": req.strict_backtest_data,
+        "data_source_mode": "backtest_factor_data_dir" if req.strict_backtest_data else "unspecified",
+        "factor_data_dir": factor_data_dir,
+        "window_train_start": resolved_start,
+        "window_backtest_end": resolved_end,
+        "log_path": str(log_path),
+        "result_path": str(result_path),
+        "task_state_path": str(FACTOR_CACHE_TASK_DIR / f"{task_id}.json"),
+        "failed_log_path": str(FACTOR_CACHE_TASK_DIR / f"{task_id}.failed.ndjson"),
+        "start": resolved_start,
+        "end": resolved_end,
+    }
+
+    import subprocess
+    def _run():
+        try:
+            proc = subprocess.Popen(
+                cmd_parts, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                creationflags=0x08000000 if sys.platform == "win32" else 0,
+            )
+            _active_cache_tasks[task_id]["pid"] = proc.pid
+            proc.wait()
+            _active_cache_tasks[task_id]["returncode"] = proc.returncode
+            _active_cache_tasks[task_id]["status"] = "completed" if proc.returncode == 0 else "failed"
+            _active_cache_tasks[task_id]["finished_at"] = datetime.now().isoformat()
+            _invalidate_cache_meta()
+        except Exception as e:
+            _active_cache_tasks[task_id]["status"] = "error"
+            _active_cache_tasks[task_id]["error"] = str(e)
+            logger.exception(f"缓存计算任务失败 {task_id}")
+
+    background_tasks.add_task(_run)
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "status": "queued",
+        "experiment_id": req.experiment_id,
+        "window_train_start": resolved_start,
+        "window_backtest_end": resolved_end,
+        "factor_data_dir": factor_data_dir,
+    }
+
+
+@router.get("/factor-cache/compute-status/{task_id}", summary="查询计算任务状态")
+def factor_cache_compute_status(task_id: str):
+    """查询因子值计算任务状态 + 尾部日志。"""
+    task = _active_cache_tasks.get(task_id)
+    if not task:
+        raise HTTPException(404, f"任务 {task_id} 不存在")
+
+    log_path = Path(task.get("log_path", ""))
+    recent_log = ""
+    if log_path.exists():
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+                recent_log = "".join(lines[-50:])
+        except Exception as e:
+            logger.warning(f"读取任务日志失败 {log_path}: {e}")
+
+    result = None
+    result_path = Path(task.get("result_path", ""))
+    if task.get("status") in ("completed", "failed") and result_path.exists():
+        try:
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning(f"读取任务结果失败 {result_path}: {e}")
+
+    task_state = _load_json_file(Path(task.get("task_state_path", "")))
+    failed_tail = _load_failed_tail(Path(task.get("failed_log_path", "")), limit=10)
+
+    merged = dict(task)
+    for key in ("experiment_id", "factor_data_dir", "data_source_mode", "window_train_start", "window_backtest_end", "strict_backtest_data"):
+        if merged.get(key) is None and task_state and key in task_state:
+            merged[key] = task_state.get(key)
+        if merged.get(key) is None and result and key in result:
+            merged[key] = result.get(key)
+
+    return {**merged, "recent_log": recent_log, "result": result, "task_state": task_state, "failed_tail": failed_tail}
+
+
+@router.get("/factor-cache/active-tasks", summary="当前所有缓存任务")
+def factor_cache_active_tasks():
+    return {"ok": True, "tasks": list(_active_cache_tasks.values())}
+
+
+@router.delete("/factor-cache/all", summary="一键清空所有因子值缓存")
+def factor_cache_clear_all():
+    """删除 single/*.parquet + 重置 _meta.json。"""
+    try:
+        if not FACTOR_CACHE_SINGLE_DIR.exists():
+            return {"ok": True, "deleted": 0}
+        deleted = 0
+        for fpath in FACTOR_CACHE_SINGLE_DIR.glob("*.parquet"):
+            try:
+                fpath.unlink()
+                deleted += 1
+            except Exception as e:
+                logger.warning(f"删除 {fpath} 失败: {e}")
+        # 重置 meta
+        if FACTOR_CACHE_META_PATH.exists():
+            FACTOR_CACHE_META_PATH.write_text(
+                json.dumps({"factors": {}, "cleared_at": datetime.now().isoformat()}, indent=2),
+                encoding="utf-8",
+            )
+        _invalidate_cache_meta()
+        return {"ok": True, "deleted": deleted}
+    except Exception as e:
+        logger.exception("清空缓存失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/factor-cache/{factor_name}", summary="清除单个因子缓存")
+def factor_cache_clear_one(factor_name: str):
+    try:
+        parquet_path = FACTOR_CACHE_SINGLE_DIR / f"{factor_name}.parquet"
+        deleted = False
+        if parquet_path.exists():
+            parquet_path.unlink()
+            deleted = True
+
+        # 清理 meta 条目
+        meta = _load_cache_meta(ttl_sec=0)
+        if factor_name in meta.get("factors", {}):
+            meta["factors"].pop(factor_name, None)
+            FACTOR_CACHE_META_PATH.write_text(
+                json.dumps(meta, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _invalidate_cache_meta()
+        return {"ok": True, "deleted": deleted, "factor_name": factor_name}
+    except Exception as e:
+        logger.exception(f"清除缓存失败 {factor_name}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3136,6 +4468,72 @@ def get_evolution_context(experiment_id: str):
 
 
 
+async def _poll_multi_alpha_nodes(experiment_id: str, qe_task_id: str) -> str:
+    """聚合多Alpha实验所有节点的运行状态。
+
+    查询 qe_multi_alpha_groups 中各组的 assigned_node_id，
+    逐节点查询 RDAgent 状态。
+
+    Returns: "completed" / "running" / "failed"
+    - 全部 completed → "completed"
+    - 任一 failed → "failed"
+    - 否则 → "running"
+    """
+    from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
+
+    # 获取各组的节点分配
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT DISTINCT assigned_node_id
+                   FROM qe_multi_alpha_groups
+                   WHERE parent_experiment_id = %s AND assigned_node_id IS NOT NULL""",
+                (experiment_id,),
+            )
+            node_ids = [r[0] for r in cur.fetchall()]
+
+    if not node_ids:
+        # 没有节点信息（旧实验），按默认逻辑
+        try:
+            async with QEWorkspaceClient() as client:
+                live = await client.get_loop_status(qe_task_id, "Loop1")
+                return live.get("status", "running")
+        except Exception:
+            return "running"
+
+    statuses = []
+    for n_id in node_ids:
+        try:
+            client = QEWorkspaceClient.for_node(n_id)
+            async with client:
+                live = await client.get_loop_status(qe_task_id, "Loop1")
+                st = live.get("status", "running")
+                statuses.append(st)
+
+                # 同步更新对应组的状态
+                if st in ("completed", "failed"):
+                    with get_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """UPDATE qe_multi_alpha_groups
+                                   SET status = %s
+                                   WHERE parent_experiment_id = %s
+                                     AND assigned_node_id = %s
+                                     AND status = 'running'""",
+                                (st, experiment_id, n_id),
+                            )
+                        conn.commit()
+        except Exception as e:
+            logger.warning(f"节点 {n_id} 状态查询失败: {e}")
+            statuses.append("running")  # 查询失败视为 running
+
+    if any(s in ("failed", "error") for s in statuses):
+        return "failed"
+    if all(s == "completed" for s in statuses):
+        return "completed"
+    return "running"
+
+
 def _update_experiment_status(experiment_id: str, status: str):
     """安全更新实验状态。"""
     try:
@@ -3199,6 +4597,23 @@ async def run_experiment(experiment_id: str, engine_mode: str = "unified", node_
     """
     from ..services.quantevolver.config_composer import ConfigComposer
     from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
+
+    # 多Alpha实验：专属执行路径（各组独立提交到 RDAgent）
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT alpha_mode, multi_alpha_config, experiment_name FROM qe_experiments WHERE experiment_id = %s",
+                    (experiment_id,),
+                )
+                _row = cur.fetchone()
+        if _row and _row[0] == "multi":
+            return await _run_multi_alpha_experiment(experiment_id, node_id=node_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"多Alpha实验执行失败: {experiment_id}")
+        raise HTTPException(status_code=500, detail=f"多Alpha实验执行失败: {e}")
 
     if engine_mode == "unified":
         return await _run_experiment_unified(experiment_id, node_id=node_id)
@@ -3306,6 +4721,243 @@ async def run_experiment(experiment_id: str, engine_mode: str = "unified", node_
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
+    """多Alpha实验执行路径（支持分布式并行）。
+
+    执行策略:
+    - serial / local_parallel: 所有组提交到一个节点，作为单个 task，本地执行 meta_model_runner
+    - distributed: 按 assigned_node_id 把组拆分到多个节点并行执行，
+                   待所有节点完成后由 ResultCollector 收集跨节点预测并运行 meta 合并
+
+    qe_task_id = experiment_name (主task_id)
+    每个节点的任务使用同一个 qe_task_id，不同节点 loop_id 独立记录在 qe_multi_alpha_groups.assigned_node_id
+    """
+    from ..services.quantevolver.config_composer import ConfigComposer
+    from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
+
+    cc = ConfigComposer()
+    exp_record = cc._get_experiment_record(experiment_id)
+    if not exp_record:
+        raise HTTPException(status_code=404, detail=f"实验 {experiment_id} 不存在")
+    if exp_record.get("status") == "running":
+        raise HTTPException(status_code=409, detail="实验正在执行中，请勿重复提交")
+
+    experiment_name = exp_record.get("experiment_name") or f"qe_exp_{experiment_id}"
+
+    multi_alpha_config_raw = exp_record.get("multi_alpha_config")
+    if not multi_alpha_config_raw:
+        raise HTTPException(status_code=400, detail="实验缺少 multi_alpha_config，无法执行多Alpha实验")
+    if isinstance(multi_alpha_config_raw, str):
+        multi_alpha_config_raw = json.loads(multi_alpha_config_raw)
+
+    from ..services.quantevolver.experiment_config_builders import build_config_from_multi_alpha
+    from ..services.quantevolver.multi_alpha_engine import MultiAlphaEngine
+
+    data_split = exp_record.get("data_split")
+    if isinstance(data_split, str):
+        data_split = json.loads(data_split)
+    custom_params = exp_record.get("custom_params")
+    if isinstance(custom_params, str):
+        custom_params = json.loads(custom_params)
+    _cp = custom_params or {}
+
+    # 查询可用节点（用于分布式规划）
+    available_nodes = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT node_id, api_base_url, gpu_model, gpu_vram_mb, status, callback_url
+                FROM infra.compute_nodes
+            """)
+            cols = [d[0] for d in cur.description]
+            available_nodes = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    exp_cfg = build_config_from_multi_alpha(
+        multi_alpha_config=multi_alpha_config_raw,
+        data_split=data_split,
+        strategy_id=exp_record.get("strategy_id"),
+        strategy_params={"topk": _cp.get("topk"), "n_drop": _cp.get("n_drop")} if _cp else None,
+        execution_algo=_cp.get("execution_algo"),
+        execution_algo_params=_cp.get("execution_algo_params"),
+        experiment_name=experiment_name,
+        node_id=node_id,
+    )
+    engine = MultiAlphaEngine(
+        experiment_config=exp_cfg,
+        composer=cc,
+        available_nodes=available_nodes,
+    )
+    engine_result = engine.run()
+    if not engine_result.get("ok"):
+        raise HTTPException(status_code=500, detail="MultiAlphaEngine 执行失败")
+
+    all_experiment_files = engine_result.get("experiment_files", {})
+    group_configs = engine_result.get("group_configs", [])
+    execution_mode = engine_result.get("execution_mode", "serial")
+
+    qe_task_id = experiment_name
+
+    # ── 按 node_id 分组 ────────────────────────────────────────
+    node_groups: dict[str, list[dict]] = {}
+    for gc in group_configs:
+        n_id = gc.get("node_id") or node_id or "wsl2-5080"
+        node_groups.setdefault(n_id, []).append(gc)
+
+    is_distributed = len(node_groups) > 1
+
+    # 查询各节点 callback_url
+    node_callbacks = {n["node_id"]: n.get("callback_url") for n in available_nodes}
+
+    submitted_nodes: list[dict] = []
+
+    if is_distributed:
+        # ── 分布式：各节点独立提交 ────────────────────────────
+        logger.info(f"多Alpha分布式执行: {len(node_groups)} 节点, 共 {len(group_configs)} 组")
+
+        for n_id, groups in node_groups.items():
+            # 每个节点只拿到自己的组文件（避免传输冗余）
+            node_files = {}
+            for gc in groups:
+                prefix = f"group_{gc['group_name']}/"
+                for fname, content in all_experiment_files.items():
+                    if fname.startswith(prefix):
+                        node_files[fname] = content
+
+            # 按 order 排序各节点内组命令
+            node_cmds = []
+            for gc in sorted(groups, key=lambda g: g.get("order", 0)):
+                cmd = gc.get("wsl_command", "")
+                if cmd and not cmd.startswith("#"):
+                    node_cmds.append(
+                        f"echo '=== Running group: {gc['group_name']} on {n_id} ===' "
+                        f"&& cd group_{gc['group_name']} && {cmd} && cd .."
+                    )
+            node_command = " && ".join(node_cmds) if node_cmds else "echo 'No groups to run'"
+
+            node_config = {
+                "alpha_mode": "multi",
+                "node_id": n_id,
+                "group_names": [g["group_name"] for g in groups],
+                "is_distributed_node": True,
+            }
+
+            client = QEWorkspaceClient.for_node(n_id)
+            try:
+                async with client:
+                    node_loop_id = await client.create_and_run_loop(
+                        qe_task_id, 1, node_config, node_files, node_command,
+                        callback_url=node_callbacks.get(n_id),
+                    )
+                submitted_nodes.append({
+                    "node_id": n_id,
+                    "qe_loop_id": node_loop_id,
+                    "group_names": [g["group_name"] for g in groups],
+                })
+                logger.info(f"节点 {n_id}: 提交成功, loop_id={node_loop_id}, groups={[g['group_name'] for g in groups]}")
+            except Exception as e:
+                logger.error(f"节点 {n_id} 提交失败: {e}", exc_info=True)
+                # 记录失败但继续其他节点（分布式部分失败不应整体失败）
+                submitted_nodes.append({
+                    "node_id": n_id,
+                    "qe_loop_id": None,
+                    "group_names": [g["group_name"] for g in groups],
+                    "error": str(e),
+                })
+
+        # 主 loop_id 用第一个成功节点的（兼容单 loop_id 的查询逻辑）
+        primary_loop_id = next(
+            (n["qe_loop_id"] for n in submitted_nodes if n.get("qe_loop_id")),
+            "Loop1",
+        )
+
+        # 持久化各节点 loop_id 到 qe_multi_alpha_groups
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for sn in submitted_nodes:
+                    for g_name in sn["group_names"]:
+                        cur.execute(
+                            """UPDATE qe_multi_alpha_groups
+                               SET assigned_node_id = %s,
+                                   status = CASE WHEN %s IS NULL THEN 'failed' ELSE 'running' END,
+                                   error_message = %s
+                               WHERE parent_experiment_id = %s AND group_name = %s""",
+                            (sn["node_id"], sn.get("qe_loop_id"), sn.get("error"), experiment_id, g_name),
+                        )
+            conn.commit()
+
+    else:
+        # ── 单节点：所有组 + meta_model_runner 一起跑 ───────────
+        only_node_id = next(iter(node_groups.keys()))
+        logger.info(f"多Alpha单节点执行: node={only_node_id}, {len(group_configs)} 组, mode={execution_mode}")
+
+        group_cmds = []
+        for gc in sorted(group_configs, key=lambda g: g.get("order", 0)):
+            cmd = gc.get("wsl_command", "")
+            if cmd and not cmd.startswith("#"):
+                group_cmds.append(
+                    f"echo '=== Running group: {gc['group_name']} ===' "
+                    f"&& cd group_{gc['group_name']} && {cmd} && cd .."
+                )
+        # 单节点场景：meta_model_runner 在同一 workspace 运行
+        if group_cmds:
+            group_cmds.append("echo '=== Running meta_model_runner.py ===' && python meta_model_runner.py")
+        orchestration_command = " && ".join(group_cmds) if group_cmds else "python meta_model_runner.py"
+
+        config = {
+            "alpha_mode": "multi",
+            "group_configs": group_configs,
+            "meta_method": engine_result.get("meta_method"),
+            "total_groups": engine_result.get("total_groups"),
+        }
+
+        client = QEWorkspaceClient.for_node(only_node_id)
+        async with client:
+            primary_loop_id = await client.create_and_run_loop(
+                qe_task_id, 1, config, all_experiment_files, orchestration_command,
+                callback_url=node_callbacks.get(only_node_id),
+            )
+
+        submitted_nodes.append({
+            "node_id": only_node_id,
+            "qe_loop_id": primary_loop_id,
+            "group_names": [g["group_name"] for g in group_configs],
+        })
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE qe_multi_alpha_groups
+                       SET assigned_node_id = %s, status = 'running'
+                       WHERE parent_experiment_id = %s""",
+                    (only_node_id, experiment_id),
+                )
+            conn.commit()
+
+    # 更新 qe_experiments
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE qe_experiments
+                SET status = 'running',
+                    qe_task_id = %s,
+                    qe_loop_id = %s,
+                    started_at = NOW()
+                WHERE experiment_id = %s
+            """, (qe_task_id, primary_loop_id, experiment_id))
+        conn.commit()
+
+    return {
+        "ok": True,
+        "experiment_id": experiment_id,
+        "qe_task_id": qe_task_id,
+        "qe_loop_id": primary_loop_id,
+        "engine": "multi_alpha",
+        "is_distributed": is_distributed,
+        "nodes": submitted_nodes,
+        "total_groups": engine_result.get("total_groups"),
+    }
+
+
 async def _run_experiment_unified(experiment_id: str, node_id: str = None):
     """统一引擎路径：使用 ExperimentConfig + BacktestExecutor 执行单次实验（Path 1）。"""
     from ..services.quantevolver.config_composer import ConfigComposer
@@ -3383,7 +5035,7 @@ async def get_experiment_run_status(experiment_id: str):
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT status, qe_task_id, qe_loop_id, result_metrics FROM qe_experiments WHERE experiment_id = %s",
+                    "SELECT status, qe_task_id, qe_loop_id, result_metrics, alpha_mode FROM qe_experiments WHERE experiment_id = %s",
                     (experiment_id,),
                 )
                 row = cur.fetchone()
@@ -3392,39 +5044,66 @@ async def get_experiment_run_status(experiment_id: str):
                 cols = [desc[0] for desc in cur.description]
                 record = dict(zip(cols, row))
 
+        is_multi_alpha = record.get("alpha_mode") == "multi"
+
         result = {
             "experiment_id": experiment_id,
             "status": record["status"],
             "qe_task_id": record.get("qe_task_id"),
             "qe_loop_id": record.get("qe_loop_id"),
             "result_metrics": record.get("result_metrics"),
+            "alpha_mode": record.get("alpha_mode", "single"),
         }
 
-        # 如果有 loop_id 且状态为 running，实时查询并自动同步
-        if record.get("qe_loop_id") and record["status"] == "running":
-            async with QEWorkspaceClient() as client:
-                live_status = await client.get_loop_status(record["qe_task_id"], record["qe_loop_id"])
-                rd_status = live_status.get("status")
+        # 如果状态为 running，实时查询并自动同步
+        if record["status"] == "running":
+            if is_multi_alpha:
+                # ── 多Alpha: 聚合所有节点的状态 ────────────────
+                rd_status = await _poll_multi_alpha_nodes(
+                    experiment_id, record.get("qe_task_id")
+                )
                 result["live_status"] = rd_status
 
-                # 自动同步：RDAgent 已完成/失败/中断但 DB 仍为 running
                 if rd_status == "completed":
                     try:
-                        metrics = await client.get_loop_metrics(record["qe_task_id"], record["qe_loop_id"])
-                        _update_experiment_with_metrics(experiment_id, metrics)
+                        from ..services.quantevolver.multi_alpha_result_collector import MultiAlphaResultCollector
+                        collector = MultiAlphaResultCollector()
+                        collect_result = await collector.collect_and_persist(experiment_id)
                         result["status"] = "completed"
-                        result["result_metrics"] = {k: v for k, v in metrics.items() if k != "_raw_json"}
+                        result["result_metrics"] = collect_result.get("combined_metrics", {})
                     except Exception as me:
-                        logger.warning(f"Auto-sync metrics failed for {experiment_id}: {me}")
-                        _update_experiment_status(experiment_id, "completed")
-                        result["status"] = "completed"
-                elif rd_status in ("failed", "error"):
+                        logger.error(f"多Alpha结果收集失败: {experiment_id}: {me}", exc_info=True)
+                        _update_experiment_status(experiment_id, "failed")
+                        result["status"] = "failed"
+                        result["error"] = f"多Alpha结果收集失败: {me}"
+                elif rd_status == "failed":
                     _update_experiment_status(experiment_id, "failed")
                     result["status"] = "failed"
-                elif rd_status in ("interrupted", "not_found"):
-                    # interrupted: 进程已不存在; not_found: workspace 已丢失（如 /tmp 被清空）
-                    _update_experiment_status(experiment_id, "interrupted")
-                    result["status"] = "interrupted"
+                # running → 继续等待
+
+            elif record.get("qe_loop_id"):
+                # ── 单Alpha: 原有逻辑 ──────────────────────────
+                async with QEWorkspaceClient() as client:
+                    live_status = await client.get_loop_status(record["qe_task_id"], record["qe_loop_id"])
+                    rd_status = live_status.get("status")
+                    result["live_status"] = rd_status
+
+                    if rd_status == "completed":
+                        try:
+                            metrics = await client.get_loop_metrics(record["qe_task_id"], record["qe_loop_id"])
+                            _update_experiment_with_metrics(experiment_id, metrics)
+                            result["status"] = "completed"
+                            result["result_metrics"] = {k: v for k, v in metrics.items() if k != "_raw_json"}
+                        except Exception as me:
+                            logger.warning(f"Auto-sync metrics failed for {experiment_id}: {me}")
+                            _update_experiment_status(experiment_id, "completed")
+                            result["status"] = "completed"
+                    elif rd_status in ("failed", "error"):
+                        _update_experiment_status(experiment_id, "failed")
+                        result["status"] = "failed"
+                    elif rd_status in ("interrupted", "not_found"):
+                        _update_experiment_status(experiment_id, "interrupted")
+                        result["status"] = "interrupted"
 
         return result
     except HTTPException:

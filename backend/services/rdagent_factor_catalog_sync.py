@@ -414,7 +414,6 @@ def sync_factors_from_task(
             # 优先使用 aligned API 返回的每个因子独立的 source_code（每个因子有自己的完整代码文件）
             # 只有在 aligned API 没有返回 source_code 时才回退到共享 factor.py
             code_for_factor = ""
-            source_code_relpath = None
             source_code_origin = None
 
             aligned_info = aligned_factor_details.get(fname)
@@ -422,15 +421,13 @@ def sync_factors_from_task(
             # 优先：从 aligned API 获取该因子独立的 source_code
             if aligned_info and aligned_info.get("source_code"):
                 code_for_factor = aligned_info["source_code"]
-                source_code_relpath = f"aligned/{fname}.py"
                 source_code_origin = "aligned_api"
             else:
                 # 回退：从 factor_code_map（共享 factor.py / based_factor_*.py）获取
                 code_info = factor_code_map.get(fname)
                 if code_info:
-                    source_code_relpath = code_info.get("relpath")
                     source_code_origin = code_info.get("origin")
-                    code_for_factor = downloaded_codes.get(source_code_relpath, "")
+                    code_for_factor = downloaded_codes.get(code_info.get("relpath", ""), "")
 
             # 从文件系统读取完整因子源代码（权威数据源）
             # task_dir/factors/{fname}.py 是 task 同步时保存的原始完整源代码文件
@@ -526,7 +523,7 @@ def sync_factors_from_task(
                 INSERT INTO aistock_factor_catalog (
                     factor_name, source, catalog_version, generated_at_utc, catalog_source,
                     expression, is_sota_factor, first_sota_task_id,
-                    source_task_id, source_code_relpath, source_code_origin,
+                    source_task_id, source_code_origin,
                     source_loop_tag, source_index,
                     ic, annualized_return, max_drawdown, sharpe,
                     performance_metrics, best_performance_ann_ret, best_performance_sharpe,
@@ -535,7 +532,7 @@ def sync_factors_from_task(
                 VALUES (
                     %s, %s, %s, %s, %s,
                     %s, %s, %s,
-                    %s, %s, %s,
+                    %s, %s,
                     %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s,
@@ -546,7 +543,6 @@ def sync_factors_from_task(
                     generated_at_utc = EXCLUDED.generated_at_utc,
                     expression = COALESCE(EXCLUDED.expression, aistock_factor_catalog.expression),
                     source_task_id = EXCLUDED.source_task_id,
-                    source_code_relpath = EXCLUDED.source_code_relpath,
                     source_code_origin = EXCLUDED.source_code_origin,
                     source_loop_tag = EXCLUDED.source_loop_tag,
                     source_index = EXCLUDED.source_index,
@@ -572,7 +568,7 @@ def sync_factors_from_task(
                     cur.execute(sql, (
                         fname, "rdagent_task_sync", "task_sync_v1", now_utc, "rdagent_task_sync",
                         expression, True, task_id,
-                        task_id, source_code_relpath, source_code_origin,
+                        task_id, source_code_origin,
                         str(loop_id) if loop_id is not None else None, i,
                         ic_val, ann_ret, max_dd, info_ratio,
                         perf_metrics_json, ann_ret, info_ratio,
@@ -712,7 +708,7 @@ def sync_factors_from_loop(
                 INSERT INTO aistock_factor_catalog (
                     factor_name, source, catalog_version, generated_at_utc, catalog_source,
                     expression, is_sota_factor, first_sota_task_id,
-                    source_task_id, source_code_relpath, source_code_origin,
+                    source_task_id, source_code_origin,
                     source_loop_tag, source_index,
                     ic, annualized_return, max_drawdown, sharpe,
                     performance_metrics, best_performance_ann_ret, best_performance_sharpe,
@@ -721,7 +717,7 @@ def sync_factors_from_loop(
                 VALUES (
                     %s, %s, %s, %s, %s,
                     %s, %s, %s,
-                    %s, %s, %s,
+                    %s, %s,
                     %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s,
@@ -732,7 +728,6 @@ def sync_factors_from_loop(
                     generated_at_utc = EXCLUDED.generated_at_utc,
                     expression = COALESCE(EXCLUDED.expression, aistock_factor_catalog.expression),
                     source_task_id = EXCLUDED.source_task_id,
-                    source_code_relpath = EXCLUDED.source_code_relpath,
                     source_code_origin = EXCLUDED.source_code_origin,
                     source_loop_tag = EXCLUDED.source_loop_tag,
                     source_index = EXCLUDED.source_index,
@@ -756,7 +751,7 @@ def sync_factors_from_loop(
                     cur.execute(sql, (
                         fname, "rdagent_task_sync", "loop_sync_v1", now_utc, "rdagent_loop_manual_sync",
                         expression, True, task_id,
-                        task_id, f"factors/{fname}.py", "loop_manual_sync",
+                        task_id, "loop_manual_sync",
                         source_loop_tag, i,
                         ic_val, ann_ret, max_dd, info_ratio,
                         perf_metrics_json, ann_ret, info_ratio,

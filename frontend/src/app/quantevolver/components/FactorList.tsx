@@ -24,6 +24,12 @@ type Factor = {
   ind_annual_return?: number | null;
   ind_rank_ic?: number | null;
   ind_icir?: number | null;
+  official_grade?: string | null;
+  official_score?: number | null;
+  official_grade_reason_structured?: { summary?: string; failed_gates?: string[]; core_ic?: number; holding_period_class?: string } | null;
+  official_rule_version?: string | null;
+  official_llm_audit_summary?: string | null;
+  official_llm_risk_notes?: string[] | null;
 };
 
 export type MergedFactor = {
@@ -51,6 +57,16 @@ export type MergedFactor = {
   ind_calculated_at?: string | null;
   generated_at_utc?: string | null;
   decay_status?: "ok" | "warning" | "danger" | null;
+  official_score?: number | null;
+  official_rule_version?: string | null;
+  official_grade_reason_structured?: { summary?: string; failed_gates?: string[]; core_ic?: number; holding_period_class?: string } | null;
+  llm_audit_summary?: string | null;
+  llm_risk_notes?: string[] | null;
+  // 因子值缓存
+  has_cache?: boolean;
+  cache_date_range?: string | null;
+  cache_size_mb?: number | null;
+  cache_hash_match?: boolean | null;
 };
 
 const GRADE_COLORS: Record<string, string> = {
@@ -76,9 +92,11 @@ type FactorDetail = {
   source_loop_tag?: string;
   first_sota_task_id?: string;
   source_code_origin?: string;
-  source_code_relpath?: string;
+  asset_path?: string;
   description_cn?: string;
   performance_metrics?: Record<string, any>;
+  llm_audit_summary?: string | null;
+  llm_risk_notes?: string[] | null;
 };
 
 type ExpMetricRow = {
@@ -132,10 +150,16 @@ export default function FactorList({
   mode = "display",
   selectedFactors = new Set(),
   onFactorSelect,
+  cacheContext,
 }: {
   mode?: "display" | "selection";
   selectedFactors?: Set<string>;
   onFactorSelect?: (selected: Set<string>) => void;
+  cacheContext?: {
+    experimentId?: string | null;
+    trainStart?: string | null;
+    backtestEnd?: string | null;
+  };
 }) {
   const [factors, setFactors] = useState<Factor[]>([]);
   const [total, setTotal] = useState(0);
@@ -152,6 +176,14 @@ export default function FactorList({
   const [batchLoading, setBatchLoading] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; factor_name?: string } | null>(null);
   const [batchResult, setBatchResult] = useState<{ total?: number; analyzed?: number; errors?: string[] } | null>(null);
+  const [ratingRules, setRatingRules] = useState<Array<{ rule_version: string; version_name: string; status: string; description_md?: string }>>([]);
+  const [activeRatingVersion, setActiveRatingVersion] = useState<string>("");
+  const [selectedRatingVersion, setSelectedRatingVersion] = useState<string>("");
+  const [ratingRuleDetail, setRatingRuleDetail] = useState<any | null>(null);
+  const [ratingRunLoading, setRatingRunLoading] = useState(false);
+  const [ratingRunResult, setRatingRunResult] = useState<{ ok?: boolean; run_id?: string; total_factors?: number; success_count?: number; failed_count?: number; errors?: { factor_name: string; error: string }[] } | null>(null);
+  const [ratingRuns, setRatingRuns] = useState<any[]>([]);
+  const [ratingResultsPreview, setRatingResultsPreview] = useState<any[]>([]);
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(new Set());
   const [localSelectedFactors, setLocalSelectedFactors] = useState<Set<string>>(selectedFactors);
   const [factorDetails, setFactorDetails] = useState<Record<string, FactorDetail>>({});
@@ -172,6 +204,7 @@ export default function FactorList({
   const [taskComputing, setTaskComputing] = useState<Set<string>>(new Set());
   const [taskResults, setTaskResults] = useState<Record<string, { ok: boolean; msg: string }>>({});
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
+  const [ratingDetailExpanded, setRatingDetailExpanded] = useState(false);
   const [taskFactors, setTaskFactors] = useState<Record<string, any[]>>({});
   const [taskFactorsLoading, setTaskFactorsLoading] = useState<Set<string>>(new Set());
   const [taskAnalyzing, setTaskAnalyzing] = useState(false);
@@ -210,10 +243,176 @@ export default function FactorList({
   const [sortField, setSortField] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
+  // 因子值缓存管理
+  type CacheStats = {
+    total_cached: number; total_code_factors: number; coverage_pct: number;
+    total_size_mb: number; date_range_dominant: string; active_tasks: number;
+    last_backfill?: any;
+    hash_ok: number; hash_mismatch: number; cache_error: number; no_cache: number;
+    disabled_total: number; disabled_cached: number;
+  };
+  type CacheTask = {
+    task_id: string;
+    status: string;
+    started_at?: string;
+    finished_at?: string;
+    workers?: number;
+    factor_count?: number | string;
+    incremental?: boolean;
+    start?: string;
+    end?: string;
+    error?: string;
+    experiment_id?: string | null;
+    strict_backtest_data?: boolean;
+    data_source_mode?: string | null;
+    factor_data_dir?: string | null;
+    window_train_start?: string | null;
+    window_backtest_end?: string | null;
+  };
+  type CacheTaskDetail = CacheTask & {
+    recent_log?: string;
+    result?: any;
+    task_state?: any;
+    failed_tail?: any[];
+  };
+  const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
+  const [cacheWorkers, setCacheWorkers] = useState(4);
+  const [cacheBusy, setCacheBusy] = useState(false);
+  const [cacheStartDate, setCacheStartDate] = useState(cacheContext?.trainStart || "2018-08-01");
+  const [cacheEndDate, setCacheEndDate] = useState(cacheContext?.backtestEnd || "2026-04-03");
+  const [cacheIncremental, setCacheIncremental] = useState(false);
+  const [cacheTasks, setCacheTasks] = useState<CacheTask[]>([]);
+  const [cacheTaskLoading, setCacheTaskLoading] = useState(false);
+  const [selectedCacheTaskId, setSelectedCacheTaskId] = useState<string | null>(null);
+  const [selectedCacheTask, setSelectedCacheTask] = useState<CacheTaskDetail | null>(null);
+
+  const isSelection = mode === "selection";
+
+  const fetchCacheStats = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/quantevolver/factor-cache/stats`);
+      const d = await r.json();
+      if (d.ok) setCacheStats(d);
+    } catch {}
+  }, []);
+
+  const fetchCacheTasks = useCallback(async () => {
+    setCacheTaskLoading(true);
+    try {
+      const r = await fetch(`${API}/quantevolver/factor-cache/active-tasks`);
+      const d = await r.json();
+      if (d.ok) {
+        const tasks = [...(d.tasks || [])].sort((a: CacheTask, b: CacheTask) => (b.started_at || "").localeCompare(a.started_at || ""));
+        setCacheTasks(tasks);
+        if (!selectedCacheTaskId && tasks.length > 0) {
+          setSelectedCacheTaskId(tasks[0].task_id);
+        }
+      }
+    } catch {}
+    finally { setCacheTaskLoading(false); }
+  }, [selectedCacheTaskId]);
+
+  const fetchCacheTaskDetail = useCallback(async (taskId?: string | null) => {
+    if (!taskId) return;
+    try {
+      const r = await fetch(`${API}/quantevolver/factor-cache/compute-status/${encodeURIComponent(taskId)}`);
+      if (!r.ok) return;
+      const d = await r.json();
+      setSelectedCacheTask(d);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (!isSelection) {
+      fetchCacheStats();
+      fetchCacheTasks();
+    }
+  }, [isSelection, fetchCacheStats, fetchCacheTasks]);
+
+  useEffect(() => {
+    if (cacheContext?.trainStart) setCacheStartDate(cacheContext.trainStart);
+    if (cacheContext?.backtestEnd) setCacheEndDate(cacheContext.backtestEnd);
+  }, [cacheContext?.trainStart, cacheContext?.backtestEnd]);
+
+  useEffect(() => {
+    if (isSelection) return;
+    const hasRunning = cacheTasks.some(t => t.status === "running" || t.status === "queued");
+    if (!hasRunning) return;
+    const timer = setInterval(() => {
+      fetchCacheStats();
+      fetchCacheTasks();
+      if (selectedCacheTaskId) fetchCacheTaskDetail(selectedCacheTaskId);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [isSelection, cacheTasks, selectedCacheTaskId, fetchCacheStats, fetchCacheTasks, fetchCacheTaskDetail]);
+
+  const triggerCacheCompute = useCallback(async (
+    factorNames?: string[],
+    force = false,
+    options?: { resumeTaskId?: string; retryFailedOnly?: boolean }
+  ) => {
+    if (!cacheStartDate || !cacheEndDate) {
+      alert("请先选择开始/结束日期");
+      return;
+    }
+    if (cacheStartDate > cacheEndDate) {
+      alert("开始日期不能晚于结束日期");
+      return;
+    }
+    setCacheBusy(true);
+    try {
+      const body: any = {
+        workers: cacheWorkers,
+        timeout_per_factor: 1800,
+        force,
+        start_date: cacheStartDate,
+        end_date: cacheEndDate,
+        incremental: !force,
+        strict_backtest_data: true,
+      };
+      if (cacheContext?.experimentId) body.experiment_id = cacheContext.experimentId;
+      if (options?.resumeTaskId) body.resume_task_id = options.resumeTaskId;
+      if (options?.retryFailedOnly) body.retry_failed_only = true;
+      if (factorNames && factorNames.length > 0) body.factor_names = factorNames;
+      const r = await fetch(`${API}/quantevolver/factor-cache/compute`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (d.ok) {
+        setSelectedCacheTaskId(d.task_id);
+        await Promise.all([fetchCacheStats(), fetchCacheTasks(), fetchCacheTaskDetail(d.task_id)]);
+        alert(`计算任务已提交 (task_id: ${d.task_id})`);
+      }
+      else alert(d.detail || "提交失败");
+    } catch (e: any) { alert(e.message); } finally { setCacheBusy(false); }
+  }, [cacheWorkers, cacheStartDate, cacheEndDate, cacheContext?.experimentId, fetchCacheStats, fetchCacheTasks, fetchCacheTaskDetail]);
+
+  const clearAllCache = useCallback(async () => {
+    if (!confirm("确认清空所有因子值缓存？此操作不可恢复。")) return;
+    try {
+      const r = await fetch(`${API}/quantevolver/factor-cache/all`, { method: "DELETE" });
+      const d = await r.json();
+      alert(`已删除 ${d.deleted} 个缓存文件`);
+      fetchCacheStats();
+      window.location.reload();
+    } catch (e: any) { alert(e.message); }
+  }, [fetchCacheStats]);
+
+  const clearOneCache = useCallback(async (factorName: string) => {
+    if (!confirm(`确认删除因子 ${factorName} 的缓存？`)) return;
+    try {
+      const r = await fetch(`${API}/quantevolver/factor-cache/${encodeURIComponent(factorName)}`, { method: "DELETE" });
+      const d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d.detail || d.error || "删除失败");
+      await Promise.all([fetchCacheStats(), fetchCacheTasks()]);
+      window.location.reload();
+    } catch (e: any) {
+      alert(e.message || "删除失败");
+    }
+  }, [fetchCacheStats, fetchCacheTasks]);
+
   const actualSelectedFactors = mode === "selection" ? selectedFactors : localSelectedFactors;
 
   function toggleSelect(key: string) {
-    const next = new Set(actualSelectedFactors);
+    const next = new Set<string>(actualSelectedFactors);
     if (next.has(key)) next.delete(key); else next.add(key);
     
     if (mode === "selection" && onFactorSelect) {
@@ -409,12 +608,17 @@ export default function FactorList({
         is_available: f.is_available !== false,
         description_cn: f.description_cn,
         category: f.category,
-        grade: f.grade,
-        grade_reason: f.grade_reason,
+        grade: f.official_grade ?? f.grade,
+        grade_reason: f.official_grade_reason_structured?.summary ?? f.legacy_grade_reason ?? f.grade_reason,
         classification_reason: f.classification_reason,
         factor_dimension: f.factor_dimension,
         description: f.cl_description,
         classification_id: f.classification_id,
+        official_score: f.official_score ?? null,
+        official_rule_version: f.official_rule_version ?? null,
+        official_grade_reason_structured: f.official_grade_reason_structured ?? null,
+        llm_audit_summary: f.official_llm_audit_summary ?? null,
+        llm_risk_notes: f.official_llm_risk_notes ?? null,
         ind_ic: f.ind_ic ?? ind?.ic_mean ?? null,
         ind_rank_ic: f.ind_rank_ic ?? null,
         ind_sharpe: f.ind_sharpe ?? ind?.sharpe ?? null,
@@ -433,13 +637,38 @@ export default function FactorList({
           if (Math.abs(fullIC) > 0.01 && Math.abs(ic1m / fullIC) < 0.5) return "warning" as const;
           return "ok" as const;
         })(),
+        has_cache: f.has_cache ?? false,
+        cache_date_range: f.cache_date_range ?? null,
+        cache_size_mb: f.cache_size_mb ?? null,
+        cache_hash_match: f.cache_hash_match ?? null,
       };
     });
 
     let filtered = merged;
 
+    // 客户端排序：cache_status（后端无此字段，需前端排）
+    if (sortField === "cache_status") {
+      const cacheScore = (f: MergedFactor) => {
+        if (!f.has_cache) return 0;
+        if (f.cache_hash_match === false) return 1;
+        // partial range
+        const s = cacheContext?.trainStart;
+        const e = cacheContext?.backtestEnd;
+        if (s && e && f.cache_date_range?.includes("~")) {
+          const [cs, ce] = f.cache_date_range.split("~");
+          if (cs <= s && ce >= e) return 3; // full match
+          return 2; // partial
+        }
+        return 3; // has cache, no context to judge
+      };
+      filtered = [...merged].sort((a, b) => {
+        const sa = cacheScore(a), sb = cacheScore(b);
+        return sortOrder === "desc" ? sb - sa : sa - sb;
+      });
+    }
+
     return filtered;
-  }, [factors, indSummary, categoryFilter, gradeFilter]);
+  }, [factors, indSummary, categoryFilter, gradeFilter, sortField, sortOrder, cacheContext]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -449,8 +678,8 @@ export default function FactorList({
       if (sourceFilter) factorParams.set("source", sourceFilter);
       if (search) factorParams.set("search", search);
       if (!showAlpha) factorParams.set("exclude_source", "alpha158,alpha360");
-      if (sortField) factorParams.set("sort_field", sortField);
-      if (sortField) factorParams.set("sort_order", sortOrder);
+      if (sortField && sortField !== "cache_status") factorParams.set("sort_field", sortField);
+      if (sortField && sortField !== "cache_status") factorParams.set("sort_order", sortOrder);
       if (categoryFilter) factorParams.set("category", categoryFilter);
       if (gradeFilter) factorParams.set("grade", gradeFilter);
       if (availabilityFilter && availabilityFilter !== "all") factorParams.set("availability", availabilityFilter);
@@ -472,7 +701,51 @@ export default function FactorList({
     } catch {}
   }, []);
 
-  useEffect(() => { loadData(); loadIndSummary(); }, [loadData, loadIndSummary]);
+  const loadRatingRules = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/quantevolver/rating/rules`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.ok) return;
+      const rules = data.rules || [];
+      setRatingRules(rules);
+      const active = data.active_version || data.default_version || rules[0]?.rule_version || "";
+      setActiveRatingVersion(active);
+      setSelectedRatingVersion(prev => prev || active);
+    } catch {}
+  }, []);
+
+  const loadRatingRuleDetail = useCallback(async (version: string) => {
+    if (!version) { setRatingRuleDetail(null); return; }
+    try {
+      const res = await fetch(`${API}/quantevolver/rating/rules/${encodeURIComponent(version)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.ok) setRatingRuleDetail(data);
+    } catch {}
+  }, []);
+
+  const loadRatingRuns = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/quantevolver/rating/runs?limit=8`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.ok) setRatingRuns(data.items || []);
+    } catch {}
+  }, []);
+
+  const loadRatingResultsPreview = useCallback(async (version: string) => {
+    if (!version) { setRatingResultsPreview([]); return; }
+    try {
+      const res = await fetch(`${API}/quantevolver/rating/results?rule_version=${encodeURIComponent(version)}&limit=5&offset=0`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.ok) setRatingResultsPreview(data.items || []);
+    } catch {}
+  }, []);
+
+  useEffect(() => { loadData(); loadIndSummary(); loadRatingRules(); loadRatingRuns(); }, [loadData, loadIndSummary, loadRatingRules, loadRatingRuns]);
+  useEffect(() => { if (selectedRatingVersion) { loadRatingRuleDetail(selectedRatingVersion); loadRatingResultsPreview(selectedRatingVersion); } }, [selectedRatingVersion, loadRatingRuleDetail, loadRatingResultsPreview]);
 
   // 加载 source tasks 列表
   const loadSourceTasks = useCallback(async () => {
@@ -611,6 +884,39 @@ export default function FactorList({
     setLocalSelectedFactors(new Set());
   }
 
+  async function batchFetchMetrics() {
+    if (!activeSnapshot) {
+      alert("请先选择数据快照后再执行指标计算。");
+      return;
+    }
+    const selectedCount = actualSelectedFactors.size;
+    if (selectedCount === 0) {
+      alert("请先选择要计算指标的因子");
+      return;
+    }
+    const factorNames = Array.from(actualSelectedFactors).map(k => k.split("||")[0]);
+    if (!confirm(`确定要基于快照 ${activeSnapshot} 计算选中的 ${selectedCount} 个因子指标吗？`)) return;
+
+    setMetricsLoading(true);
+    setMetricsResult(null);
+    try {
+      const res = await fetch(`${API}/quantevolver/factors/batch-compute-metrics-unified`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ factor_names: factorNames, data_date: activeSnapshot }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+      setMetricsResult(data);
+      loadData();
+      loadIndSummary();
+    } catch (e: any) {
+      setMetricsResult({ ok: false, error: e?.message || "指标计算失败" });
+    }
+    setMetricsLoading(false);
+    setLocalSelectedFactors(new Set());
+  }
+
   useEffect(() => {
     setPage(1);
   }, [sourceFilter, search, categoryFilter, gradeFilter, showAlpha, sortField, sortOrder, availabilityFilter]);
@@ -679,41 +985,68 @@ export default function FactorList({
     window.removeEventListener('beforeunload', handleBeforeUnload);
   }
 
-  async function batchFetchMetrics() {
-    const selectedCount = actualSelectedFactors.size;
-    if (selectedCount === 0) { alert("请先选择要计算指标的因子"); return; }
-    if (!activeSnapshot) {
-      alert("请先选择数据快照。所有因子必须使用相同快照数据计算，确保横向可比。");
+  async function runOfficialRating(scopeType: "selected" | "filter" | "all") {
+    const ruleVersion = selectedRatingVersion || activeRatingVersion;
+    if (!ruleVersion) {
+      alert("请先选择评级规则版本");
       return;
     }
-    const factorNames = Array.from(actualSelectedFactors).map(k => k.split("||")[0]);
-    setMetricsLoading(true);
-    setMetricsResult(null);
+
+    const payload: any = {
+      rule_version: ruleVersion,
+      scope_type: scopeType,
+      triggered_from: "ui_toolbar",
+    };
+
+    if (scopeType === "selected") {
+      if (actualSelectedFactors.size === 0) {
+        alert("请先选择要评级的因子");
+        return;
+      }
+      payload.selected_factors = Array.from(actualSelectedFactors).map((key) => {
+        const [factor_name, source] = key.split("||");
+        return { factor_name, source };
+      });
+    } else if (scopeType === "filter") {
+      payload.filters = {
+        source: sourceFilter || undefined,
+        exclude_source: !showAlpha ? "alpha158,alpha360" : undefined,
+        search: search || undefined,
+        category: categoryFilter || undefined,
+        grade: gradeFilter || undefined,
+        availability: availabilityFilter || undefined,
+      };
+    }
+
+    const scopeLabel = scopeType === "selected"
+      ? `选中的 ${actualSelectedFactors.size} 个因子`
+      : scopeType === "filter"
+        ? "当前筛选结果"
+        : "全量因子";
+    if (!confirm(`将使用规则版本 ${ruleVersion} 对${scopeLabel}执行正式评级，确定继续？`)) return;
+
+    setRatingRunLoading(true);
+    setRatingRunResult(null);
     try {
-      const res = await fetch(`${API}/quantevolver/factors/batch-compute-metrics-unified`, {
+      const res = await fetch(`${API}/quantevolver/rating/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          factor_names: factorNames,
-          data_date: activeSnapshot,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
-      const isOk = data.success !== false;
-      const dbResult = data.db_result || {};
-      setMetricsResult({
-        ok: isOk,
-        total_metrics_inserted: dbResult.inserted || 0,
-        total_metrics_skipped: dbResult.skipped || 0,
-        fail_count: (dbResult.errors || []).length,
-        error: data.error,
-      });
-      if (isOk) { loadData(); loadIndSummary(); }
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.detail || data.error || "正式评级失败");
+      }
+      setRatingRunResult(data);
+      loadData();
+      loadRatingRules();
+      loadRatingRuns();
     } catch (e: any) {
-      setMetricsResult({ ok: false, error: e?.message || "计算失败" });
+      setRatingRunResult({ ok: false, errors: [{ factor_name: "system", error: e?.message || "正式评级失败" }] });
+      alert(`正式评级失败: ${e?.message || "未知错误"}`);
+    } finally {
+      setRatingRunLoading(false);
     }
-    setMetricsLoading(false);
-    setLocalSelectedFactors(new Set());
   }
 
   async function loadFactorIndependentMetrics(key: string, factorName: string) {
@@ -749,8 +1082,6 @@ export default function FactorList({
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  const isSelection = mode === "selection";
-
   const thStyle = { padding: "8px 10px", fontWeight: 600, color: "#4b5563", background: "#f9fafb", whiteSpace: "nowrap" as const, cursor: "pointer", userSelect: "none" as const };
   const tdStyle = { padding: "8px 10px" };
 
@@ -772,6 +1103,181 @@ export default function FactorList({
           </p>
         </section>
       )}
+
+          {!isSelection && (
+            <section style={{ background: "#fff", borderRadius: 12, padding: 16, marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+                <div style={{ minWidth: 320, flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#1f2937", marginBottom: 6 }}>因子评级管理</div>
+                  <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
+                    当前正式评级仅允许通过此工具栏触发，规则版本固定保存在 backend/rating_rules/factor 目录，正式评级输入统一从数据库读取。
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 11, color: "#6b7280" }}>当前激活版本</span>
+                  <span style={{ padding: "4px 8px", borderRadius: 999, background: "#ede9fe", color: "#6d28d9", fontSize: 11, fontWeight: 700 }}>
+                    {activeRatingVersion || "-"}
+                  </span>
+                  <select
+                    value={selectedRatingVersion}
+                    onChange={e => setSelectedRatingVersion(e.target.value)}
+                    style={{ padding: "6px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", minWidth: 240 }}
+                  >
+                    {ratingRules.map(rule => (
+                      <option key={rule.rule_version} value={rule.rule_version}>
+                        {rule.rule_version} · {rule.version_name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={async () => {
+                      if (!selectedRatingVersion) return;
+                      if (!confirm(`将把 ${selectedRatingVersion} 设为当前激活规则版本，确定继续？`)) return;
+                      try {
+                        const res = await fetch(`${API}/quantevolver/rating/rules/activate`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ version: selectedRatingVersion }),
+                        });
+                        const data = await res.json();
+                        if (!res.ok || data.ok === false) throw new Error(data.detail || data.error || "激活失败");
+                        loadRatingRules();
+                        loadRatingRuleDetail(selectedRatingVersion);
+                        loadData();
+                      } catch (e: any) {
+                        alert(`激活规则失败: ${e?.message || "未知错误"}`);
+                      }
+                    }}
+                    disabled={!selectedRatingVersion || selectedRatingVersion === activeRatingVersion}
+                    style={{ padding: "6px 12px", fontSize: 12, borderRadius: 6, border: "1px solid #7c3aed", background: "#fff", color: "#7c3aed", fontWeight: 600, cursor: !selectedRatingVersion || selectedRatingVersion === activeRatingVersion ? "not-allowed" : "pointer", opacity: !selectedRatingVersion || selectedRatingVersion === activeRatingVersion ? 0.5 : 1 }}
+                  >
+                    设为激活版本
+                  </button>
+                  <button
+                    onClick={() => runOfficialRating("selected")}
+                    disabled={ratingRunLoading || actualSelectedFactors.size === 0}
+                    style={{ padding: "6px 12px", fontSize: 12, borderRadius: 6, border: "none", background: "#2563eb", color: "#fff", fontWeight: 600, cursor: ratingRunLoading || actualSelectedFactors.size === 0 ? "not-allowed" : "pointer", opacity: ratingRunLoading || actualSelectedFactors.size === 0 ? 0.5 : 1 }}
+                  >
+                    {ratingRunLoading ? "执行中..." : `评级选中(${actualSelectedFactors.size})`}
+                  </button>
+                  <button
+                    onClick={() => runOfficialRating("filter")}
+                    disabled={ratingRunLoading}
+                    style={{ padding: "6px 12px", fontSize: 12, borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", fontWeight: 600, cursor: ratingRunLoading ? "not-allowed" : "pointer", opacity: ratingRunLoading ? 0.5 : 1 }}
+                  >
+                    当前筛选评级
+                  </button>
+                  <button
+                    onClick={() => runOfficialRating("all")}
+                    disabled={ratingRunLoading}
+                    style={{ padding: "6px 12px", fontSize: 12, borderRadius: 6, border: "1px solid #7c3aed", background: "#f5f3ff", color: "#7c3aed", fontWeight: 700, cursor: ratingRunLoading ? "not-allowed" : "pointer", opacity: ratingRunLoading ? 0.5 : 1 }}
+                  >
+                    全量评级
+                  </button>
+                  <button
+                    onClick={() => setRatingDetailExpanded(!ratingDetailExpanded)}
+                    style={{ padding: "6px 12px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", color: "#374151", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
+                  >
+                    {ratingDetailExpanded ? "收起详情" : "详情"}
+                    <span style={{ fontSize: 10, transition: "transform 0.2s", transform: ratingDetailExpanded ? "rotate(90deg)" : "rotate(0deg)", display: "inline-block" }}>▶</span>
+                  </button>
+                </div>
+              </div>
+
+              {ratingDetailExpanded && ratingRuleDetail && (
+                <div style={{ marginTop: 12, borderTop: "1px solid #eef2f7", paddingTop: 12, display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 16 }}>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>
+                      规则说明 · {ratingRuleDetail.rule_version}
+                    </div>
+                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "inherit", fontSize: 12, lineHeight: 1.65, color: "#4b5563", background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: 12, maxHeight: 240, overflowY: "auto" }}>
+                      {ratingRuleDetail.description_md || "暂无规则说明"}
+                    </pre>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>评分摘要</div>
+                    <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: 12, fontSize: 12, color: "#4b5563", lineHeight: 1.7 }}>
+                      {ratingRuleDetail.spec?.weights && (
+                        <div style={{ marginBottom: 8 }}>
+                          <strong style={{ color: "#111827" }}>维度权重</strong>
+                          {Object.entries(ratingRuleDetail.spec.weights).map(([k, v]) => (
+                            <div key={k}>{k}: {String(v)}</div>
+                          ))}
+                        </div>
+                      )}
+                      {ratingRuleDetail.grade_bands && (
+                        <div style={{ marginBottom: 8 }}>
+                          <strong style={{ color: "#111827" }}>等级门槛</strong>
+                          {Object.entries(ratingRuleDetail.grade_bands).map(([k, v]: any) => (
+                            <div key={k}>{k}: ≥ {v.min_score}</div>
+                          ))}
+                        </div>
+                      )}
+                      {ratingRuleDetail.spec?.hard_gates?.S && (
+                        <div>
+                          <strong style={{ color: "#111827" }}>S/A hard gates</strong>
+                          <div>S: core_ic≥{ratingRuleDetail.spec.hard_gates.S.min_core_ic}, coverage≥{ratingRuleDetail.spec.hard_gates.S.min_coverage}, turnover≤{ratingRuleDetail.spec.hard_gates.S.max_turnover}</div>
+                          <div>A: core_ic≥{ratingRuleDetail.spec.hard_gates.A.min_core_ic}, coverage≥{ratingRuleDetail.spec.hard_gates.A.min_coverage}, turnover≤{ratingRuleDetail.spec.hard_gates.A.max_turnover}</div>
+                        </div>
+                      )}
+                      {ratingResultsPreview.length > 0 && (
+                        <div style={{ marginTop: 8 }}>
+                          <strong style={{ color: "#111827" }}>最近结果预览</strong>
+                          {ratingResultsPreview.map((item) => (
+                            <div key={`${item.factor_name}-${item.source}`} style={{ marginTop: 4 }}>
+                              {item.factor_name} · {item.official_grade} · {item.official_score?.toFixed?.(1) ?? item.official_score}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {ratingDetailExpanded && (
+              <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>最近评级任务</div>
+                  {ratingRuns.length === 0 ? (
+                    <div style={{ fontSize: 12, color: "#94a3b8" }}>暂无评级任务</div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {ratingRuns.map((run) => (
+                        <div key={run.run_id} style={{ fontSize: 11, color: "#475569", border: "1px solid #e5e7eb", borderRadius: 6, background: "#fff", padding: "6px 8px" }}>
+                          <div style={{ fontWeight: 600 }}>{run.rule_version} · {run.scope_type}</div>
+                          <div>{run.run_id.slice(0, 8)} | {run.status}</div>
+                          {run.summary?.total_factors != null && (
+                            <div>total {run.summary.total_factors} / success {run.summary.success_count ?? 0} / failed {run.summary.failed_count ?? 0}</div>
+                          )}
+                          {run.summary?.errors?.length ? (
+                            <div style={{ marginTop: 4, color: "#b91c1c" }}>
+                              最近错误: {run.summary.errors[0].factor_name} - {run.summary.errors[0].error}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>本次执行结果</div>
+                  {!ratingRunResult ? (
+                    <div style={{ fontSize: 12, color: "#94a3b8" }}>尚未执行正式评级</div>
+                  ) : ratingRunResult.ok === false ? (
+                    <div style={{ fontSize: 12, color: "#b91c1c" }}>{ratingRunResult.errors?.[0]?.error || "正式评级失败"}</div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: "#374151", lineHeight: 1.7 }}>
+                      <div><strong>run_id:</strong> {ratingRunResult.run_id}</div>
+                      <div><strong>total:</strong> {ratingRunResult.total_factors}</div>
+                      <div><strong>success:</strong> {ratingRunResult.success_count} / <strong>failed:</strong> {ratingRunResult.failed_count}</div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              )}
+            </section>
+          )}
 
       {/* 数据快照管理 */}
       {!isSelection && (
@@ -925,6 +1431,168 @@ export default function FactorList({
         </section>
       )}
 
+      {/* 因子值缓存管理 */}
+      {!isSelection && (
+        <section style={{ background: "#fff", borderRadius: 12, padding: "10px 16px", marginBottom: 12, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 600, fontSize: 13, color: "#374151" }}>因子值缓存</span>
+            {cacheStats ? (
+              <>
+                <span style={{ fontSize: 12, color: "#6b7280" }}>
+                  启用 {cacheStats.hash_ok + cacheStats.hash_mismatch + (cacheStats.cache_error || 0)}/{cacheStats.total_code_factors}
+                  {" "}<span style={{ color: "#059669" }}>✓{cacheStats.hash_ok}</span>
+                  {(cacheStats.cache_error || 0) > 0 && <span style={{ color: "#dc2626" }}> ✗{cacheStats.cache_error}</span>}
+                  {cacheStats.hash_mismatch > 0 && <span style={{ color: "#f59e0b" }}> △{cacheStats.hash_mismatch}</span>}
+                  {cacheStats.no_cache > 0 && <span style={{ color: "#9ca3af" }}> —{cacheStats.no_cache}</span>}
+                  {" "}|{" "}
+                  {cacheStats.total_size_mb > 1024 ? `${(cacheStats.total_size_mb / 1024).toFixed(1)} GB` : `${cacheStats.total_size_mb} MB`} |
+                  {" "}{cacheStats.date_range_dominant}
+                </span>
+                {cacheStats.disabled_total > 0 && (
+                  <span style={{ fontSize: 11, color: "#9ca3af", background: "#f3f4f6", padding: "1px 6px", borderRadius: 4 }}>
+                    禁用 {cacheStats.disabled_cached}/{cacheStats.disabled_total}
+                  </span>
+                )}
+                <span style={{ fontSize: 11, color: "#9ca3af" }}>
+                  {cacheStats.active_tasks > 0 && `⏳ ${cacheStats.active_tasks} 个任务运行中`}
+                </span>
+              </>
+            ) : (
+              <span style={{ fontSize: 12, color: "#9ca3af" }}>加载中...</span>
+            )}
+            <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11, color: "#9ca3af" }}>区间:</span>
+              <input type="date" value={cacheStartDate} onChange={e => setCacheStartDate(e.target.value)} style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }} />
+              <span style={{ fontSize: 11, color: "#9ca3af" }}>~</span>
+              <input type="date" value={cacheEndDate} onChange={e => setCacheEndDate(e.target.value)} style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }} />
+              <span style={{ fontSize: 11, color: "#9ca3af" }}>并行:</span>
+              <select value={cacheWorkers} onChange={e => setCacheWorkers(Number(e.target.value))} style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }}>
+                {[1, 2, 4, 8].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <button onClick={() => triggerCacheCompute()} disabled={cacheBusy}
+                style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #059669", background: "#ecfdf5", color: "#059669", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
+                {cacheBusy ? "提交中..." : "仅补缺失"}
+              </button>
+              <button onClick={() => triggerCacheCompute(undefined, true)} disabled={cacheBusy}
+                style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #8b5cf6", background: "#f5f3ff", color: "#7c3aed", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
+                全量重算
+              </button>
+              {selectedCacheTaskId && (
+                <button onClick={() => triggerCacheCompute(undefined, false, { resumeTaskId: selectedCacheTaskId, retryFailedOnly: true })} disabled={cacheBusy}
+                  style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #b45309", background: "#fffbeb", color: "#b45309", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
+                  重试失败
+                </button>
+              )}
+              {actualSelectedFactors.size > 0 && (
+                <button onClick={() => triggerCacheCompute(Array.from(actualSelectedFactors).map(k => k.split("||")[0]))} disabled={cacheBusy}
+                  style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #0284c7", background: "#f0f9ff", color: "#0284c7", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
+                  计算选中 ({actualSelectedFactors.size})
+                </button>
+              )}
+              <button onClick={clearAllCache}
+                style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #dc2626", background: "#fef2f2", color: "#dc2626", fontWeight: 600, cursor: "pointer" }}>
+                一键清空
+              </button>
+              <button onClick={() => { fetchCacheStats(); fetchCacheTasks(); if (selectedCacheTaskId) fetchCacheTaskDetail(selectedCacheTaskId); }} style={{ padding: "4px 8px", fontSize: 10, borderRadius: 4, border: "1px solid #d1d5db", cursor: "pointer" }}>刷新</button>
+            </div>
+          </div>
+          {cacheTasks.length > 0 && (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #eef2f7" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#475569" }}>最近任务</span>
+                <span style={{ fontSize: 11, color: "#94a3b8" }}>{cacheTaskLoading ? "加载中..." : `${cacheTasks.length} 个任务`}</span>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {cacheTasks.slice(0, 8).map(task => (
+                  <button
+                    key={task.task_id}
+                    onClick={() => setSelectedCacheTaskId(task.task_id)}
+                    style={{
+                      padding: "4px 8px",
+                      fontSize: 10,
+                      borderRadius: 6,
+                      border: selectedCacheTaskId === task.task_id ? "1px solid #7c3aed" : "1px solid #d1d5db",
+                      background: selectedCacheTaskId === task.task_id ? "#f5f3ff" : "#fff",
+                      color: selectedCacheTaskId === task.task_id ? "#7c3aed" : "#475569",
+                      cursor: "pointer",
+                    }}
+                    title={task.task_id}
+                  >
+                    {task.task_id.slice(-8)} | {task.status}
+                  </button>
+                ))}
+              </div>
+              {selectedCacheTask && (
+                <div style={{ marginTop: 10, background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: 10 }}>
+                  <div style={{ fontSize: 12, color: "#475569", marginBottom: 6, lineHeight: 1.6 }}>
+                    任务 {selectedCacheTask.task_id} | 状态 {selectedCacheTask.status} | 区间 {selectedCacheTask.start} ~ {selectedCacheTask.end} | workers={selectedCacheTask.workers}
+                    {selectedCacheTask.incremental ? " | incremental" : ""}
+                    {selectedCacheTask.error ? ` | error: ${selectedCacheTask.error}` : ""}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#374151", marginBottom: 6, lineHeight: 1.6 }}>
+                    experiment={selectedCacheTask.experiment_id || cacheContext?.experimentId || "-"} |
+                    window={selectedCacheTask.window_train_start || selectedCacheTask.start || "-"} ~ {selectedCacheTask.window_backtest_end || selectedCacheTask.end || "-"} |
+                    source={selectedCacheTask.data_source_mode || "-"}
+                  </div>
+                  {selectedCacheTask.factor_data_dir && (
+                    <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6, wordBreak: "break-all" }}>
+                      factor_data_dir: {selectedCacheTask.factor_data_dir}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                    <button
+                      onClick={() => triggerCacheCompute(undefined, false, { resumeTaskId: selectedCacheTask.task_id })}
+                      disabled={cacheBusy}
+                      style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}
+                    >
+                      恢复未完成
+                    </button>
+                    <button
+                      onClick={() => triggerCacheCompute(undefined, false, { resumeTaskId: selectedCacheTask.task_id, retryFailedOnly: true })}
+                      disabled={cacheBusy}
+                      style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #b45309", background: "#fffbeb", color: "#b45309", cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}
+                    >
+                      仅重试失败
+                    </button>
+                  </div>
+                  {selectedCacheTask.task_state && (
+                    <div style={{ fontSize: 12, color: "#374151", marginBottom: 6 }}>
+                      checkpoint: 成功 {selectedCacheTask.task_state.success_factors?.length ?? 0} |
+                      失败 {selectedCacheTask.task_state.failed_factors?.length ?? 0} |
+                      跳过 {selectedCacheTask.task_state.skipped_factors?.length ?? 0}
+                    </div>
+                  )}
+                  {selectedCacheTask.result && (
+                    <div style={{ fontSize: 12, color: "#374151", marginBottom: 6 }}>
+                      result: success {selectedCacheTask.result.success ?? "-"} / failed {selectedCacheTask.result.failed ?? "-"} / skipped {selectedCacheTask.result.skipped ?? "-"} / total {selectedCacheTask.result.total ?? "-"}
+                    </div>
+                  )}
+                  {selectedCacheTask.failed_tail && selectedCacheTask.failed_tail.length > 0 && (
+                    <details style={{ marginBottom: 6 }}>
+                      <summary style={{ fontSize: 12, cursor: "pointer", color: "#b91c1c" }}>最近失败因子 ({selectedCacheTask.failed_tail.length})</summary>
+                      <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                        {selectedCacheTask.failed_tail.map((item: any, idx: number) => (
+                          <div key={`${item.factor_name || "failed"}-${idx}`} style={{ fontSize: 11, color: "#7f1d1d", background: "#fff", border: "1px solid #fecaca", borderRadius: 6, padding: "6px 8px" }}>
+                            <div style={{ fontWeight: 600 }}>{item.factor_name}</div>
+                            <div>{item.error_type || "Error"}: {item.error_short || item.error || "unknown error"}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                  {selectedCacheTask.recent_log && (
+                    <details>
+                      <summary style={{ fontSize: 12, cursor: "pointer", color: "#475569" }}>任务日志</summary>
+                      <pre style={{ marginTop: 6, background: "#0f172a", color: "#e2e8f0", padding: 10, borderRadius: 6, fontSize: 10, overflowX: "auto", whiteSpace: "pre-wrap" }}>{selectedCacheTask.recent_log}</pre>
+                    </details>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
       {/* 筛选栏 */}
       <section style={{ background: "#fff", borderRadius: 12, padding: 16, marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -1022,7 +1690,7 @@ export default function FactorList({
                   opacity: (batchLoading || actualSelectedFactors.size === 0) ? 0.5 : 1,
                 }}
               >
-                {batchLoading ? "分析中..." : `批量分析(${actualSelectedFactors.size})`}
+                {batchLoading ? "分析中..." : `批量分析说明(${actualSelectedFactors.size})`}
               </button>
 
               <button
@@ -1039,6 +1707,7 @@ export default function FactorList({
 
               <button
                 onClick={() => {
+                  if (!activeSnapshot) { alert("请先选择数据快照后再执行全流程处理。"); return; }
                   const names = Array.from(actualSelectedFactors).map(key => key.split("||")[0]);
                   setPipelineFactorNames(names);
                   setPipelineTaskIds([]);
@@ -1084,7 +1753,7 @@ export default function FactorList({
         {batchProgress && (
           <div style={{ marginTop: 8, padding: 10, borderRadius: 6, fontSize: 12, background: "#dbeafe", color: "#1e40af" }}>
             <div style={{ marginBottom: 4 }}>
-              <strong>批量分析进行中：</strong> {batchProgress.current} / {batchProgress.total}
+              <strong>批量分析说明进行中：</strong> {batchProgress.current} / {batchProgress.total}
               {batchProgress.factor_name && <span style={{ marginLeft: 8, color: "#3b82f6" }}>当前: {batchProgress.factor_name}</span>}
             </div>
             <div style={{ width: "100%", height: 8, background: "#e5e7eb", borderRadius: 4, overflow: "hidden" }}>
@@ -1100,7 +1769,7 @@ export default function FactorList({
             background: (batchResult.errors?.length || 0) > 0 ? "#fef3c7" : "#d1fae5",
             color: (batchResult.errors?.length || 0) > 0 ? "#92400e" : "#065f46",
           }}>
-            <strong>批量分析完成：</strong>
+            <strong>批量分析说明完成：</strong>
             共 {batchResult.total} 个因子，成功分析 {batchResult.analyzed} 个
             {(batchResult.errors?.length || 0) > 0 && (
               <span>，{batchResult.errors!.length} 个失败</span>
@@ -1168,6 +1837,7 @@ export default function FactorList({
               onClick={() => {
                 const tasks = Array.from(selectedTasks);
                 if (tasks.length === 0) return;
+                if (!activeSnapshot) { alert("请先选择数据快照后再执行全流程处理。"); return; }
                 setPipelineTaskIds(tasks);
                 setPipelineOpen(true);
               }}
@@ -1221,6 +1891,7 @@ export default function FactorList({
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
+                        if (!activeSnapshot) { alert("请先选择数据快照后再执行全流程处理。"); return; }
                         setPipelineTaskIds([t.task_id]);
                         setPipelineOpen(true);
                       }}
@@ -1374,6 +2045,7 @@ export default function FactorList({
                 <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("has_ind_metrics")}>独立指标{getSortIndicator("has_ind_metrics")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 50 }} onClick={() => handleSort("decay_status")}>衰变{getSortIndicator("decay_status")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("ind_calculated_at")}>指标计算{getSortIndicator("ind_calculated_at")}</th>
+                <th style={{ ...thStyle, cursor: "pointer", width: 110 }} onClick={() => handleSort("cache_status")}>因子值缓存{getSortIndicator("cache_status")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 80 }} onClick={() => handleSort("generated_at_utc")}>入库时间{getSortIndicator("generated_at_utc")}</th>
                 <th style={thStyle}>说明</th>
               </tr>
@@ -1455,6 +2127,11 @@ export default function FactorList({
                         ) : (
                           <span style={{ color: "#d1d5db", fontSize: 10 }}>-</span>
                         )}
+                        {f.official_score != null && (
+                          <div style={{ fontSize: 10, color: "#6b7280", marginTop: 4 }}>
+                            {f.official_score.toFixed(1)} {f.official_rule_version ? `· ${f.official_rule_version}` : ""}
+                          </div>
+                        )}
                       </td>
                       <td style={tdStyle}>
                         {f.is_available ? (
@@ -1510,6 +2187,47 @@ export default function FactorList({
                       <td style={{ ...tdStyle, fontSize: 10, color: f.ind_calculated_at ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }} title={f.ind_calculated_at || undefined}>
                         {f.ind_calculated_at ? f.ind_calculated_at.slice(0, 16).replace("T", " ") : "-"}
                       </td>
+                      <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
+                        {f.has_cache ? (
+                          f.cache_hash_match === false ? (
+                            <span title={`源码已变更，缓存失效\n${f.cache_date_range}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#fee2e2", color: "#dc2626" }}>✗ hash不匹配</span>
+                          ) : (
+                            <span title={`${f.cache_date_range} (${f.cache_size_mb} MB)`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: (() => {
+                              const s = cacheContext?.trainStart;
+                              const e = cacheContext?.backtestEnd;
+                              if (!s || !e || !f.cache_date_range?.includes("~")) return "#d1fae5";
+                              const [cs, ce] = f.cache_date_range.split("~");
+                              const startGapDays = cs > s ? Math.round((new Date(cs).getTime() - new Date(s).getTime()) / 86400000) : 0;
+                              const coverageOk = startGapDays <= 60 && ce >= e;
+                              return coverageOk ? "#d1fae5" : "#fef3c7";
+                            })(), color: (() => {
+                              const s = cacheContext?.trainStart;
+                              const e = cacheContext?.backtestEnd;
+                              if (!s || !e || !f.cache_date_range?.includes("~")) return "#059669";
+                              const [cs, ce] = f.cache_date_range.split("~");
+                              const startGapDays = cs > s ? Math.round((new Date(cs).getTime() - new Date(s).getTime()) / 86400000) : 0;
+                              const coverageOk = startGapDays <= 60 && ce >= e;
+                              return coverageOk ? "#059669" : "#d97706";
+                            })() }}>
+                              {(() => {
+                                const s = cacheContext?.trainStart;
+                                const e = cacheContext?.backtestEnd;
+                                if (!s || !e || !f.cache_date_range?.includes("~")) {
+                                  return `✓ ${f.cache_date_range?.split("~")[0]?.slice(0, 7) || "已缓存"}~${f.cache_date_range?.split("~")[1]?.slice(0, 7) || ""}`;
+                                }
+                                const [cs, ce] = f.cache_date_range.split("~");
+                                const startGapDays = cs > s ? Math.round((new Date(cs).getTime() - new Date(s).getTime()) / 86400000) : 0;
+                                const coverageOk = startGapDays <= 60 && ce >= e;
+                                return coverageOk
+                                  ? `✓ ${cs.slice(0, 7)}~${ce.slice(0, 7)}`
+                                  : `△ ${cs.slice(0, 7)}~${ce.slice(0, 7)}`;
+                              })()}
+                            </span>
+                          )
+                        ) : (
+                          <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, color: "#9ca3af", background: "#f3f4f6" }}>— 无缓存</span>
+                        )}
+                      </td>
                       <td style={{ ...tdStyle, fontSize: 10, color: "#94a3b8", whiteSpace: "nowrap" }}>{f.generated_at_utc ? f.generated_at_utc.slice(0, 10) : "-"}</td>
                       <td style={tdStyle}>
                         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -1529,6 +2247,18 @@ export default function FactorList({
                           </span>
                         ) : (
                           <span style={{ color: "#d1d5db", fontSize: 10 }}>-</span>
+                        )}
+                        {!isSelection && f.has_cache && (
+                          <span
+                            onClick={(e) => { e.stopPropagation(); clearOneCache(f.factor_name); }}
+                            title="删除该因子缓存"
+                            style={{
+                              color: "#b45309", cursor: "pointer", fontSize: 10,
+                              opacity: 0.7, userSelect: "none",
+                            }}
+                            onMouseEnter={e => (e.currentTarget.style.opacity = "1")}
+                            onMouseLeave={e => (e.currentTarget.style.opacity = "0.7")}
+                          >清缓存</span>
                         )}
                         {!isSelection && (
                           <span
@@ -1562,7 +2292,14 @@ export default function FactorList({
                               <div style={{ color: "#9ca3af", fontSize: 11, marginBottom: 8 }}>加载详情中...</div>
                             )}
 
-                            {/* 因子说明 */}
+                            {!f.description && f.llm_audit_summary && (
+                        <div>
+                          <strong style={{ color: isSelection ? "#1d4ed8" : "#7c3aed", fontSize: 11 }}>规则审阅摘要</strong>
+                          <div style={{ marginTop: 4 }}>{f.llm_audit_summary}</div>
+                        </div>
+                      )}
+
+                      {/* 因子说明 */}
                             {f.description && (
                               <div>
                                 <strong style={{ color: isSelection ? "#1d4ed8" : "#7c3aed", fontSize: 11 }}>因子说明</strong>
@@ -1601,6 +2338,25 @@ export default function FactorList({
                               <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e5e7eb" }}>
                                 <strong style={{ color: "#ea580c", fontSize: 11 }}>评级原因</strong>
                                 <div style={{ marginTop: 4 }}>{f.grade_reason}</div>
+                                {f.official_grade_reason_structured?.failed_gates?.length ? (
+                                  <div style={{ marginTop: 6, fontSize: 11, color: "#991b1b" }}>
+                                    未通过门槛: {f.official_grade_reason_structured.failed_gates.join(", ")}
+                                  </div>
+                                ) : null}
+                              </div>
+                            )}
+
+                            {detail?.llm_audit_summary && (
+                              <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e5e7eb" }}>
+                                <strong style={{ color: "#2563eb", fontSize: 11 }}>LLM审阅</strong>
+                                <div style={{ marginTop: 4 }}>{detail.llm_audit_summary}</div>
+                                {Array.isArray(detail.llm_risk_notes) && detail.llm_risk_notes.length > 0 && (
+                                  <ul style={{ marginTop: 6, paddingLeft: 18, color: "#4b5563" }}>
+                                    {detail.llm_risk_notes.map((note: string, idx: number) => (
+                                      <li key={`${rowKey}-audit-${idx}`}>{note}</li>
+                                    ))}
+                                  </ul>
+                                )}
                               </div>
                             )}
 
@@ -1626,11 +2382,11 @@ export default function FactorList({
                                     )}
                                     <span style={{ color: "#6b7280", whiteSpace: "nowrap" }}>代码来源:</span>
                                     <span>{detail?.source_code_origin || "-"}</span>
-                                    {detail?.source_code_relpath && (
+                                    {detail?.asset_path && (
                                       <>
                                         <span style={{ color: "#6b7280", whiteSpace: "nowrap" }}>代码路径:</span>
                                         <code style={{ background: "#f3f4f6", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>
-                                          {detail.source_code_relpath}
+                                          {detail.asset_path}
                                         </code>
                                       </>
                                     )}

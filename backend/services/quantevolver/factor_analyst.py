@@ -42,11 +42,11 @@ FACTOR_CATEGORIES = {
 
 # 因子评级定义
 FACTOR_GRADES = {
-    "S": "卓越 - IC>0.05且夏普>2.0",
-    "A": "优秀 - IC>0.03且夏普>1.5",
-    "B": "良好 - IC>0.02且夏普>1.0",
-    "C": "一般 - IC>0.01",
-    "D": "较差 - IC<=0.01或无数据",
+    "S": "卓越 - 统一规则引擎≥90分+hard gates通过",
+    "A": "优秀 - 统一规则引擎≥75分+hard gates通过",
+    "B": "良好 - 统一规则引擎≥60分",
+    "C": "一般 - 统一规则引擎≥45分",
+    "D": "较差 - 统一规则引擎<45分",
 }
 
 # IC半衰期分界点（天）— 基于2026-04-10 P0分析确认
@@ -74,6 +74,216 @@ def classify_holding_period(half_life) -> str:
         return "long"
     else:
         return "medium"
+
+
+# ── Multi-Alpha 架构：4个新分类维度 ──────────────────────────────────
+#
+# data_source_group: 因子主要依赖的数据源组，用于多Alpha分组建模
+# ts_info_density:   时序信息密度（决定用 TSDatasetH 还是 DatasetH）
+# update_freq:       因子更新频率（决定时序窗口有效性）
+# linearity:         因子-收益的线性关系强度（决定用 Ridge 还是 LGB）
+
+# 数据源字段映射（基于 static_factors.parquet 90字段 + price_volume 基础字段）
+_DATA_SOURCE_FIELD_MAP = {
+    "price_volume": {"open", "close", "high", "low", "volume", "amount", "vwap",
+                     "pre_close", "change", "pct_chg"},
+    "money_flow":   None,   # 动态: 前缀 mf_
+    "fundamental":  None,   # 动态: 前缀 bb_
+    "valuation":    {"db_pe", "db_pb", "db_ps", "db_ps_ttm", "db_pe_ttm",
+                     "db_dv_ratio", "db_dv_ttm", "db_total_mv", "db_circ_mv"},
+    "liquidity":    {"db_turnover_rate", "db_turnover_rate_f", "db_volume_ratio",
+                     "db_float_share", "db_free_share",
+                     "liquidity_turnover", "liquidity_vol_ratio",
+                     "size_log_mv"},
+    "chip":         None,   # 动态: 前缀 cp_
+    "sector":       None,   # 动态: 前缀 sw2_
+}
+
+# 数据源组前缀匹配（替代上面 None 的条目）
+_DATA_SOURCE_PREFIX_MAP = {
+    "mf_":  "money_flow",
+    "bb_":  "fundamental",
+    "cp_":  "chip",
+    "sw2_": "sector",
+}
+
+
+def _extract_fields_from_code(code_text: Optional[str],
+                              expression: Optional[str] = None) -> set:
+    """从因子代码/表达式中提取数据列字段名。
+
+    支持多种语法:
+      - Qlib 表达式: $close, $volume, $mf_main_net_amt
+      - Python 代码: df["close"], df['mf_main_net_amt']
+      - 预计算字段: value_pe_inv, liquidity_turnover, size_log_mv
+      - 反斜杠转义: value\\_pe\\_inv
+    """
+    import re
+    fields = set()
+    text = (code_text or "") + "\n" + (expression or "")
+    if not text.strip():
+        return fields
+
+    # 去除 Markdown 转义反斜杠 (value\_pe\_inv → value_pe_inv)
+    text_clean = text.replace("\\_", "_")
+
+    # Qlib $field 语法
+    for m in re.finditer(r'\$(\w+)', text_clean):
+        fields.add(m.group(1))
+
+    # df["field"] / df['field'] / data["field"] / any_df["field"]
+    for m in re.finditer(r'''(?:\w*_?df|data)\[["']([\w_]+)["']\]''', text_clean):
+        fields.add(m.group(1))
+
+    # 常见短别名: pv["close"], mf["mf_main_net_amt"], bb["bb_eps"], cp["cp_winner_rate"], sw2["sw2_pe"]
+    for m in re.finditer(r'''\b(?:pv|mf|bb|cp|sw2|db)\[["']([\w_]+)["']\]''', text_clean):
+        fields.add(m.group(1))
+
+    # 扫描已知前缀的字段引用（独立 word 边界）
+    # 这些前缀只出现在因子数据字段中，不会与普通代码冲突
+    known_prefixes = ("mf_", "bb_", "cp_", "sw2_", "db_", "value_", "liquidity_", "size_")
+    for prefix in known_prefixes:
+        for m in re.finditer(rf'\b({re.escape(prefix)}\w+)', text_clean):
+            fields.add(m.group(1))
+
+    return fields
+
+
+def classify_data_source(code_text: Optional[str] = None,
+                         expression: Optional[str] = None,
+                         factor_name: Optional[str] = None) -> str:
+    """根据因子代码/表达式中引用的字段，判定 data_source_group。
+
+    Returns:
+        "price_volume" | "money_flow" | "fundamental" | "valuation" |
+        "liquidity" | "chip" | "sector" | "cross_dataset" | "unknown"
+    """
+    fields = _extract_fields_from_code(code_text, expression)
+    if not fields and factor_name:
+        # 兜底: 从因子名提取前缀线索
+        name_lower = factor_name.lower()
+        for prefix, group in _DATA_SOURCE_PREFIX_MAP.items():
+            if prefix in name_lower:
+                return group
+
+    if not fields:
+        return "unknown"
+
+    # 匹配到哪些组
+    group_hits = set()
+    for field in fields:
+        # 精确集合匹配
+        for group, field_set in _DATA_SOURCE_FIELD_MAP.items():
+            if field_set is not None and field in field_set:
+                group_hits.add(group)
+        # 前缀匹配
+        for prefix, group in _DATA_SOURCE_PREFIX_MAP.items():
+            if field.startswith(prefix):
+                group_hits.add(group)
+
+    if len(group_hits) == 0:
+        return "unknown"
+    elif len(group_hits) == 1:
+        return group_hits.pop()
+    else:
+        # 使用 2+ 数据源 → cross_dataset
+        # 例外：price_volume 作为基础数据源不计入跨源（几乎所有因子都用到）
+        group_hits_excl_pv = group_hits - {"price_volume"}
+        if len(group_hits_excl_pv) == 1:
+            return group_hits_excl_pv.pop()
+        return "cross_dataset"
+
+
+def determine_update_freq(data_source_group: str) -> str:
+    """根据数据源组判定因子更新频率。
+
+    Returns: "daily" | "quarterly"
+    """
+    if data_source_group == "fundamental":
+        return "quarterly"
+    return "daily"
+
+
+def compute_ts_info_density(factor_values) -> Optional[str]:
+    """基于因子值的 autocorr 和 CV 判定时序信息密度。
+
+    Args:
+        factor_values: pd.Series with MultiIndex(datetime, instrument) 或 flat Series
+
+    Returns:
+        "high" | "medium" | "low" | None (数据不足时)
+
+    标准:
+        autocorr > 0.95          → low  (值变化极慢，历史无新信息)
+        autocorr < 0.7 且 CV>0.05 → high (变化剧烈，轨迹本身是信号)
+        其他                      → medium
+    """
+    try:
+        import pandas as pd
+        import math
+        if factor_values is None or len(factor_values) == 0:
+            return None
+
+        # 按股票分组算滞后1自相关，取平均
+        if isinstance(factor_values.index, pd.MultiIndex):
+            # 假设第二级是 instrument
+            try:
+                autocorrs = factor_values.groupby(level=-1).apply(
+                    lambda s: s.autocorr(lag=1) if len(s) > 5 else None
+                )
+                autocorrs = autocorrs.dropna()
+                if len(autocorrs) == 0:
+                    return None
+                daily_autocorr = float(autocorrs.mean())
+            except Exception:
+                return None
+        else:
+            if len(factor_values) < 5:
+                return None
+            ac = factor_values.autocorr(lag=1)
+            if ac is None or (isinstance(ac, float) and math.isnan(ac)):
+                return None
+            daily_autocorr = float(ac)
+
+        mean = float(factor_values.mean())
+        std = float(factor_values.std())
+        cv = std / (abs(mean) + 1e-8)
+
+        if math.isnan(daily_autocorr) or math.isinf(daily_autocorr):
+            return None
+
+        if daily_autocorr > 0.95:
+            return "low"
+        if daily_autocorr < 0.7 and cv > 0.05:
+            return "high"
+        return "medium"
+    except Exception as e:
+        logger.debug(f"compute_ts_info_density failed: {e}")
+        return None
+
+
+def compute_linearity(pearson_ic: Optional[float],
+                      spearman_ic: Optional[float]) -> Optional[str]:
+    """基于 |Spearman IC| / |Pearson IC| 比值判定因子-收益线性度。
+
+    Returns:
+        "linear"    — ratio < 1.3  (线性关系为主 → 推荐 Ridge)
+        "nonlinear" — ratio >= 1.3 (非线性关系 → 推荐 LGB/树模型)
+        None        — 指标缺失
+    """
+    if pearson_ic is None or spearman_ic is None:
+        return None
+    try:
+        p = abs(float(pearson_ic))
+        s = abs(float(spearman_ic))
+        if p < 1e-6:
+            # pearson 几乎为0但 spearman 有值 → 强非线性
+            return "nonlinear" if s >= 0.01 else None
+        ratio = s / p
+        return "linear" if ratio < 1.3 else "nonlinear"
+    except (TypeError, ValueError):
+        return None
+
 
 # 基于因子名称前缀的规则分类（不依赖LLM的快速分类）
 RULE_BASED_CLASSIFICATION = {
@@ -254,25 +464,32 @@ def _classify_by_rules(factor_name: str, code_text: Optional[str] = None,
     return (None, None)
 
 
-def _grade_by_metrics(ic: Optional[float], sharpe: Optional[float],
-                      ann_ret: Optional[float]) -> str:
-    """基于指标的因子评级。"""
-    if ic is None and sharpe is None:
-        return "D"
+def _get_official_grade(factor_name: str) -> Optional[str]:
+    """从 qe_factor_official_ratings 读取当前激活版本的正式评级。
 
-    ic_val = ic or 0.0
-    sharpe_val = sharpe or 0.0
-
-    if ic_val > 0.05 and sharpe_val > 2.0:
-        return "S"
-    elif ic_val > 0.03 and sharpe_val > 1.5:
-        return "A"
-    elif ic_val > 0.02 and sharpe_val > 1.0:
-        return "B"
-    elif ic_val > 0.01:
-        return "C"
-    else:
-        return "D"
+    正式评级仅由 FactorRatingService (UI 工具栏) 产出，
+    此处只读不改，无评级时返回 None。
+    """
+    from ...db.pg_pool import get_conn
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT r.official_grade
+                    FROM qe_factor_official_ratings r
+                    JOIN aistock_factor_catalog c ON c.id = r.factor_catalog_id
+                    WHERE c.factor_name = %s
+                      AND r.rule_version = (
+                          SELECT rule_version FROM qe_rating_rule_versions
+                          WHERE status = 'active' ORDER BY activated_at DESC LIMIT 1
+                      )
+                    ORDER BY r.graded_at DESC
+                    LIMIT 1
+                """, (factor_name,))
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception:
+        return None
 
 
 def _determine_factor_dimension(factor_name: str, category: str,
@@ -510,12 +727,15 @@ def _analyze_factor_v2(
     expression: Optional[str],
     code_text: Optional[str],
     metrics: Dict[str, Any],
-    rule_grade: str,
+    official_grade: Optional[str],
 ) -> Optional[Dict[str, Any]]:
-    """合并后的单次 LLM 调用：分类 + 评级审核 + 双描述生成。
+    """合并后的单次 LLM 调用：分类 + 评级解释 + 描述生成。
+
+    注意：official_grade 由 FactorRatingService 统一规则引擎给出，LLM 不得修改。
+    LLM 仅做分类、维度判断、描述生成和评级解释。
 
     Returns:
-        解析后的 JSON dict，包含 category, grade, grade_reason, dimension,
+        解析后的 JSON dict，包含 category, grade_reason, dimension,
         description, usage_guidance, risk_notes；失败返回 None。
     """
     llm = _get_llm_client()
@@ -546,7 +766,7 @@ def _analyze_factor_v2(
 
         metrics_block = f"""## 独立评测指标
 - IC均值: {_fmt(metrics.get('ic_mean'))} | Rank IC均值: {_fmt(metrics.get('rank_ic_mean'))}
-- ICIR: {_fmt(metrics.get('icir'))} | Rank ICIR: {_fmt(metrics.get('rank_icir'))}{multi_holding}
+- ICIR: {_fmt(metrics.get('icir'))} | Rank ICIR: {_fmt(metrics.get('rank_icir'))} | 年化ICIR: {_fmt(metrics.get('icir_annualized'))} | 年化Rank ICIR: {_fmt(metrics.get('rank_icir_annualized'))}{multi_holding}
 - IC正比例: {_fmt(metrics.get('ic_positive_ratio'))} | IC衰减半衰期: {metrics.get('ic_decay_half_life', 'N/A')}天
 - 多空超额Sharpe: {_fmt(metrics.get('top_excess_sharpe'))} | 多空超额年化: {_fmt(metrics.get('top_excess_annual_return'), True)}
 - 分组单调性: {_fmt(metrics.get('group_return_monotonicity'))} | 换手率: {_fmt(metrics.get('turnover'), True)}
@@ -564,14 +784,14 @@ def _analyze_factor_v2(
             for window_name in ['out_sample', 'recent_6m', 'recent_3m']:
                 if window_name in multi_window:
                     w = multi_window[window_name]
-                    window_lines.append(f"- {window_name}: IC={_fmt(w.get('ic_mean'))} ICIR={_fmt(w.get('icir'))} RankIC={_fmt(w.get('rank_ic_mean'))} RankICIR={_fmt(w.get('rank_icir'))}")
+                    window_lines.append(f"- {window_name}: IC={_fmt(w.get('ic_mean'))} ICIR={_fmt(w.get('icir'))} 年化ICIR={_fmt(w.get('icir_annualized'))} RankIC={_fmt(w.get('rank_ic_mean'))} RankICIR={_fmt(w.get('rank_icir'))}")
             if window_lines:
                 metrics_block += "\n\n## 多窗口稳定性\n" + "\n".join(window_lines)
 
-        rule_grade_line = f"\n## 规则预评级: {rule_grade}（仅基于 IC={_fmt(metrics.get('ic_mean'))} + Sharpe={_fmt(metrics.get('top_excess_sharpe'))}）"
+        official_grade_line = f"\n## 正式评级: {official_grade or '未评级'}（由统一规则引擎给出，你不能修改）"
     else:
-        metrics_block = "## 独立评测指标\n尚未计算独立指标，请仅根据因子代码和表达式进行分析分类。评级设为 P（待评估）。"
-        rule_grade_line = ""
+        metrics_block = "## 独立评测指标\n尚未计算独立指标，请仅根据因子代码和表达式进行分析分类。"
+        official_grade_line = f"\n## 正式评级: {official_grade or '未评级'}"
 
     user_prompt = f"""## 因子信息
 - 名称: {factor_name}
@@ -580,15 +800,18 @@ def _analyze_factor_v2(
 - 代码片段: {(code_text or '')[:1000]}
 
 {metrics_block}
-{rule_grade_line}
+{official_grade_line}
 
 请综合以上信息，输出 JSON。"""
 
     if prompt_data:
         system_prompt = prompt_data["system_prompt"]
+        # 安全兜底：即使 DB 级提示词包含旧版评级指令，也追加只读约束
+        grade_guard = f"\n\n【重要】该因子的正式评级为 **{official_grade or '未评级'}**，由统一规则引擎（FactorRatingService）给出。你不能修改评级，只能解释。不要输出 S/A/B/C/D 等级字母。"
+        system_prompt += grade_guard
     else:
         # 内置兜底 system prompt
-        system_prompt = _get_default_v2_system_prompt()
+        system_prompt = _get_default_v2_system_prompt(official_grade=official_grade)
 
     try:
         from .llm_client import get_llm_kwargs
@@ -611,9 +834,9 @@ def _analyze_factor_v2(
                 content = content[4:]
         result = json.loads(content)
 
-        # 校验必要字段
-        if "category" not in result or "grade" not in result:
-            logger.warning(f"LLM v2 输出缺少必要字段 ({factor_name}): {list(result.keys())}")
+        # 校验必要字段（LLM 不再输出 grade，只需 category）
+        if "category" not in result:
+            logger.warning(f"LLM v2 输出缺少分类字段 ({factor_name}): {list(result.keys())}")
             return None
 
         # 规范化
@@ -622,33 +845,38 @@ def _analyze_factor_v2(
             cat = "TECH"
         result["category"] = cat
 
-        grade = str(result["grade"]).upper()
-        if grade not in FACTOR_GRADES and grade != "P":
-            grade = rule_grade
-        result["grade"] = grade
-
         return result
     except Exception as e:
         logger.warning(f"LLM v2 分析失败 ({factor_name}): {e}")
         return None
 
 
-def _get_default_v2_system_prompt() -> str:
-    """内置的 factor_analyst/analyze_factor_v2 兜底 system prompt。"""
+def _get_default_v2_system_prompt(official_grade: Optional[str] = None) -> str:
+    """内置的 factor_analyst/analyze_factor_v2 兜底 system prompt。
+    
+    正式评级由 FactorRatingService 统一规则引擎给出，LLM 只做分类、描述和评级解释，
+    不得修改评级结果。
+    """
     categories_desc = "\n".join(f"- {k}: {v}" for k, v in FACTOR_CATEGORIES.items())
+    grade_instruction = f"该因子的正式评级为 **{official_grade}**（由统一规则引擎计算，你不能修改）。" if official_grade else "该因子尚未经过正式评级（需通过评级管理工具栏触发）。"
     return f"""你是一个专业的量化因子分析师。请根据提供的因子信息和独立评测指标，完成以下任务：
 
 1. **分类**：将因子归入以下 12 类之一：
 {categories_desc}
 
-2. **评级**：综合评估因子质量，给出 S/A/B/C/D 评级。
-   评级维度权重（8维度）：IC均值 20% + ICIR 15% + 多持有期IC一致性 15% + IC衰减 10% + 多窗口稳定性 15% + Sharpe 10% + 分组单调性 10% + 换手率 5%
-   - S: IC>0.05 且 ICIR>2.5，各维度均优秀
-   - A: IC>0.03 且 ICIR>1.5，多数维度良好
-   - B: IC>0.02 且 ICIR>1.0，整体可用
-   - C: IC>0.01，部分维度达标
-   - D: IC<=0.01 或多数维度不达标
-   你可以偏离规则预评级，但需给出理由。
+   **易混淆分类示例**：
+   - MOM vs TECH：基于价格变化率/收益率 → MOM；基于技术指标公式(RSI/MACD/布林带) → TECH
+   - STAT vs MOM：用统计算子(rank/zscore/percentile)包装动量信号 → MOM（看核心逻辑而非算子）
+   - VOL vs LIQ：波动率(std/atr/价格振幅) → VOL；换手率/成交量/流动性比率 → LIQ
+   - MF vs LIQ：资金流净额(mf_main_net/mf_elg_net) → MF；成交量比率/换手率 → LIQ
+
+2. **评级解释**（只读，禁止修改评级）：
+   {grade_instruction}
+   你需要做的是：
+   - 解释该评级是否合理，基于指标数据给出分析理由
+   - 指出该因子的主要优势和风险项
+   - 如有边界情况，给出人工复核建议
+   **绝对不要**输出自己的评级（S/A/B/C/D），grade_reason 仅用于解释，不用于覆盖正式评级。
 
 3. **维度判断**：判断因子是截面型(cross_sectional)还是时序型(time_series)。
 
@@ -666,23 +894,23 @@ def _get_default_v2_system_prompt() -> str:
 5. **使用指引**：给出组合使用建议。
 
 请严格输出以下 JSON 格式：
-{{
+{{{{
   "category": "12类代码之一",
   "category_reason": "分类理由",
-  "grade": "S/A/B/C/D",
-  "grade_reason": "评级理由",
+  "grade_reason": "对正式评级的解释说明（不输出评级字母）",
   "dimension": "cross_sectional 或 time_series",
   "description": "300-500字可读文本描述",
-  "usage_guidance": {{
+  "usage_guidance": {{{{
     "optimal_holding_period": "Nd 或 Nd-Md",
     "market_regime_fit": "适用市场环境",
     "complement_categories": ["互补类别代码"],
     "conflict_categories": ["冲突类别代码"],
     "combo_role": "核心因子/辅助因子/对冲因子",
     "suggested_weight_range": [min, max]
-  }},
+  }}}},
   "risk_notes": ["风险提示1", "风险提示2"]
-}}"""
+}}}}"""
+
 
 
 class FactorAnalyst:
@@ -694,10 +922,11 @@ class FactorAnalyst:
         factor_source: str,
         use_llm: bool = False,
     ) -> Dict[str, Any]:
-        """分析单个因子：分类 + 评级 + 描述。
+        """分析单个因子：分类 + 描述。评级只读，从正式评级表读取。
 
         use_llm=True 时走 v2 合并调用（单次 LLM），否则走规则。
-        无独立指标时仍调用 LLM 进行代码分析，由 LLM 决定评级。
+        正式评级由 FactorRatingService (UI 评级管理工具栏) 统一产出，
+        此方法只做分类和描述，不得修改评级。
         """
         factor_info = self._get_factor_info(factor_name, factor_source)
         if not factor_info:
@@ -716,7 +945,23 @@ class FactorAnalyst:
         ic = ind.get("ic_mean") or ic
         sharpe = ind.get("top_excess_sharpe") or sharpe
         ann_ret = ind.get("top_excess_annual_return") or ann_ret
-        rule_grade = _grade_by_metrics(ic, sharpe, ann_ret)
+        icir_ann = ind.get("icir_annualized")
+        _hp_class = classify_holding_period(ind.get("ic_decay_half_life"))
+
+        # ── 正式评级：只读，从 qe_factor_official_ratings 读取 ──
+        # 正式评级唯一入口是 FactorRatingService (UI 评级管理工具栏)
+        official_grade = _get_official_grade(factor_name)
+
+        # ── Multi-Alpha 架构: 4个新分类维度 ──────────────────────────
+        ds_group = classify_data_source(
+            code_text=code_text, expression=expression, factor_name=factor_name)
+        upd_freq = determine_update_freq(ds_group)
+        linearity = compute_linearity(
+            pearson_ic=ind.get("ic_mean"),
+            spearman_ic=ind.get("rank_ic_mean"),
+        )
+        # ts_info_density 需要因子值数据，这里暂留 None (后续批量计算)
+        ts_density = None
 
         # 获取多窗口稳定性指标
         multi_window = self._get_multi_window_metrics(factor_name)
@@ -727,7 +972,7 @@ class FactorAnalyst:
         factor_profile = None
         if use_llm:
             v2_result = _analyze_factor_v2(
-                factor_name, factor_source, expression, code_text, ind, rule_grade)
+                factor_name, factor_source, expression, code_text, ind, official_grade)
             if v2_result:
                 llm_category = v2_result["category"]
                 llm_dimension = v2_result.get("dimension", "time_series")
@@ -767,7 +1012,7 @@ class FactorAnalyst:
                 else:
                     factor_dimension = llm_dimension
 
-                grade = v2_result["grade"]
+                grade = official_grade or "N/A"
                 grade_reason = v2_result.get("grade_reason", "")
                 # 规范化维度值
                 if factor_dimension == "cross_section":
@@ -778,7 +1023,6 @@ class FactorAnalyst:
                 factor_profile = {
                     "category": category,
                     "category_reason": classification_reason,
-                    "grade": grade,
                     "grade_reason": grade_reason,
                     "dimension": factor_dimension,
                     "metrics_summary": _to_jsonable({k: v for k, v in ind.items() if v is not None}),
@@ -793,14 +1037,18 @@ class FactorAnalyst:
 
                 self._upsert_classification(
                     factor_name=factor_name, factor_source=factor_source,
-                    category=category, grade=grade,
+                    category=category,
                     grade_reason=grade_reason,
                     classification_reason=classification_reason,
                     ic_value=ic, sharpe_value=sharpe, ann_ret_value=ann_ret,
                     llm_analysis=classification_reason,
                     description=description, factor_dimension=factor_dimension,
                     factor_profile=factor_profile,
-                    holding_period_class=classify_holding_period(ind.get("ic_decay_half_life")),
+                    holding_period_class=_hp_class,
+                    data_source_group=ds_group,
+                    ts_info_density=ts_density,
+                    update_freq=upd_freq,
+                    linearity=linearity,
                 )
                 return {
                     "ok": True, "factor_name": factor_name,
@@ -825,8 +1073,8 @@ class FactorAnalyst:
         else:
             classification_reason = f"规则分类: {classification_reason}"
 
-        grade = rule_grade
-        grade_reason = f"[独立指标] IC={ic}, Sharpe={sharpe}, AnnRet={ann_ret}"
+        grade = official_grade or "N/A"
+        grade_reason = f"[正式评级] {official_grade or '未评级'} | 指标参考: IC={ic}, Sharpe={sharpe}, AnnRet={ann_ret}"
         factor_dimension = _determine_factor_dimension(
             factor_name, category, code_text=code_text, expression=expression)
         description = _generate_description_by_rules(
@@ -834,13 +1082,17 @@ class FactorAnalyst:
 
         self._upsert_classification(
             factor_name=factor_name, factor_source=factor_source,
-            category=category, grade=grade,
+            category=category,
             grade_reason=grade_reason,
             classification_reason=classification_reason,
             ic_value=ic, sharpe_value=sharpe, ann_ret_value=ann_ret,
             llm_analysis=None, description=description,
             factor_dimension=factor_dimension, factor_profile=None,
-            holding_period_class=classify_holding_period(ind.get("ic_decay_half_life")),
+            holding_period_class=_hp_class,
+            data_source_group=ds_group,
+            ts_info_density=ts_density,
+            update_freq=upd_freq,
+            linearity=linearity,
         )
 
         return {
@@ -1350,6 +1602,7 @@ class FactorAnalyst:
                     cur.execute("""
                         SELECT ic_mean, ic_std, rank_ic_mean, rank_ic_std,
                                icir, rank_icir, ic_positive_ratio,
+                               icir_annualized, rank_icir_annualized,
                                top_annual_return, top_excess_annual_return,
                                top_sharpe, top_max_drawdown,
                                top_excess_sharpe, benchmark_annual_return,
@@ -1405,7 +1658,8 @@ class FactorAnalyst:
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
-                        SELECT eval_window, ic_mean, icir, rank_ic_mean, rank_icir
+                        SELECT eval_window, ic_mean, icir, rank_ic_mean, rank_icir,
+                               icir_annualized, rank_icir_annualized
                         FROM aistock_factor_metrics
                         WHERE factor_name = %s
                           AND eval_window IN ('out_sample', 'recent_6m', 'recent_3m')
@@ -1468,16 +1722,18 @@ class FactorAnalyst:
 
                 cur.execute("""
                     INSERT INTO qe_factor_classification
-                        (factor_name, factor_source, category, grade,
+                        (factor_name, factor_source, category,
                          grade_reason, classification_reason,
                          ic_value, sharpe_value, ann_ret_value,
                          llm_analysis, description, factor_dimension,
                          factor_profile, holding_period_class,
+                         data_source_group, ts_info_density,
+                         update_freq, linearity,
                          analyzed_at, factor_catalog_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, NOW(), %s)
                     ON CONFLICT (factor_name, factor_source) DO UPDATE SET
                         category = EXCLUDED.category,
-                        grade = EXCLUDED.grade,
                         grade_reason = EXCLUDED.grade_reason,
                         classification_reason = EXCLUDED.classification_reason,
                         ic_value = EXCLUDED.ic_value,
@@ -1488,13 +1744,16 @@ class FactorAnalyst:
                         factor_dimension = EXCLUDED.factor_dimension,
                         factor_profile = COALESCE(EXCLUDED.factor_profile, qe_factor_classification.factor_profile),
                         holding_period_class = EXCLUDED.holding_period_class,
+                        data_source_group = EXCLUDED.data_source_group,
+                        ts_info_density = COALESCE(EXCLUDED.ts_info_density, qe_factor_classification.ts_info_density),
+                        update_freq = EXCLUDED.update_freq,
+                        linearity = COALESCE(EXCLUDED.linearity, qe_factor_classification.linearity),
                         factor_catalog_id = EXCLUDED.factor_catalog_id,
                         analyzed_at = NOW()
                 """, (
                     kwargs["factor_name"],
                     kwargs["factor_source"],
                     kwargs["category"],
-                    kwargs["grade"],
                     kwargs.get("grade_reason"),
                     kwargs.get("classification_reason"),
                     kwargs.get("ic_value"),
@@ -1505,6 +1764,10 @@ class FactorAnalyst:
                     kwargs.get("factor_dimension"),
                     profile_json,
                     kwargs.get("holding_period_class"),
+                    kwargs.get("data_source_group"),
+                    kwargs.get("ts_info_density"),
+                    kwargs.get("update_freq"),
+                    kwargs.get("linearity"),
                     factor_catalog_id,
                 ))
 

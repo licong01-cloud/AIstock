@@ -323,6 +323,8 @@ DDL: List[str] = [
         rank_ic_std              DOUBLE PRECISION,
         icir                     DOUBLE PRECISION,
         rank_icir                DOUBLE PRECISION,
+        icir_annualized          DOUBLE PRECISION,
+        rank_icir_annualized     DOUBLE PRECISION,
         ic_positive_ratio        DOUBLE PRECISION,
         top_annual_return        DOUBLE PRECISION,
         top_excess_annual_return DOUBLE PRECISION,

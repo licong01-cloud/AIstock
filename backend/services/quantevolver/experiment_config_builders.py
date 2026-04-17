@@ -28,7 +28,10 @@ import json
 import logging
 from typing import Any
 
-from .experiment_config import ExperimentConfig, HmmConfig
+from .experiment_config import (
+    ExperimentConfig, HmmConfig,
+    AlphaGroup, MetaModelConfig, MultiAlphaConfig,
+)
 
 logger = logging.getLogger("aistock.quantevolver.experiment_config_builders")
 
@@ -72,6 +75,31 @@ def _build_hmm_config(
         sector_hmm_model_path=sector_hmm_model_path,
         hmm_signal_preset=hmm_signal_preset,
         hmm_signal_presets=hmm_signal_presets,
+    )
+
+
+def _build_multi_alpha_config(raw: Any) -> MultiAlphaConfig | None:
+    """Parse multi_alpha_config from DB JSON field (may be dict, JSON str, or None).
+
+    Returns None if input is empty. Raises ValueError on invalid structure
+    (handled by MultiAlphaConfig pydantic validators).
+    """
+    if not raw:
+        return None
+    parsed = _parse_json_field(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            f"multi_alpha_config must be dict, got {type(parsed).__name__}"
+        )
+    # Build nested pydantic models from dict
+    groups = [AlphaGroup(**g) for g in parsed.get("alpha_groups", [])]
+    meta_raw = parsed.get("meta_model") or {}
+    meta = MetaModelConfig(**meta_raw) if isinstance(meta_raw, dict) else MetaModelConfig()
+    return MultiAlphaConfig(
+        alpha_groups=groups,
+        meta_model=meta,
+        execution_mode=parsed.get("execution_mode", "serial"),
+        auto_selected=bool(parsed.get("auto_selected", False)),
     )
 
 
@@ -124,6 +152,11 @@ def build_config_from_exp_record(
 
     strategy_params = _parse_json_field(exp_record.get("strategy_params") or {})
 
+    # ── Multi-Alpha (Phase 3) ────────────────────────────────────────────
+    # 从 DB 读取 alpha_mode 和 multi_alpha_config (新增列，老记录为 NULL/默认)
+    alpha_mode = exp_record.get("alpha_mode") or "single"
+    multi_alpha_cfg = _build_multi_alpha_config(exp_record.get("multi_alpha_config"))
+
     return ExperimentConfig(
         factor_names=factor_names,
         model_id=exp_record.get("model_id") or "",
@@ -135,6 +168,8 @@ def build_config_from_exp_record(
         strategy_params=strategy_params or None,
         extra_params=custom_params or None,
         experiment_name=experiment_name or exp_record.get("experiment_name"),
+        alpha_mode=alpha_mode,
+        multi_alpha_config=multi_alpha_cfg,
     )
 
 
@@ -168,6 +203,12 @@ def build_config_from_evolution_loop(
         task.get("unfilled_handler_params")
     )
 
+    # Multi-Alpha 透传 (Path 2)
+    alpha_mode = config.get("alpha_mode") or task.get("alpha_mode") or "single"
+    multi_alpha_cfg = _build_multi_alpha_config(
+        config.get("multi_alpha_config") or task.get("multi_alpha_config")
+    )
+
     return ExperimentConfig(
         factor_names=config.get("factor_list") or [],
         model_id=config.get("model_id") or "",
@@ -184,6 +225,8 @@ def build_config_from_evolution_loop(
         model_params_base=model_params_base or None,
         node_id=task.get("node_id"),
         experiment_name=experiment_name,
+        alpha_mode=alpha_mode,
+        multi_alpha_config=multi_alpha_cfg,
     )
 
 
@@ -228,6 +271,12 @@ def build_config_from_strategy_evo_loop(
         loop_config.get("unfilled_handler_params") or task.get("unfilled_handler_params")
     )
 
+    # Multi-Alpha 透传 (Path 3) — 策略演进不改因子/模型配置，原样保留
+    alpha_mode = base_config.get("alpha_mode") or loop_config.get("alpha_mode") or "single"
+    multi_alpha_cfg = _build_multi_alpha_config(
+        base_config.get("multi_alpha_config") or loop_config.get("multi_alpha_config")
+    )
+
     return ExperimentConfig(
         factor_names=base_config.get("factor_list") or [],
         model_id=base_config.get("model_id") or "",
@@ -245,6 +294,8 @@ def build_config_from_strategy_evo_loop(
         model_params_base=model_params_base or None,
         node_id=task.get("node_id"),
         experiment_name=experiment_name,
+        alpha_mode=alpha_mode,
+        multi_alpha_config=multi_alpha_cfg,
     )
 
 
@@ -299,6 +350,22 @@ def build_config_from_custom_evo_loop(
     model_source_task_id: str | None = loop_config.get("model_source_task_id")
     model_source_loop_index: int | None = loop_config.get("model_source_loop_index")
 
+    # Multi-Alpha 支持 (Path 4 — 统一引擎路径)
+    # strategy_evo_config.loops[i] 可嵌入 multi_alpha_config 字段
+    alpha_mode = loop_config.get("alpha_mode") or "single"
+    multi_alpha_cfg = _build_multi_alpha_config(loop_config.get("multi_alpha_config"))
+    # 如果 multi-alpha 模式，factor_names 由各组聚合（仅作展示用，实际由 engine 处理）
+    if alpha_mode == "multi" and multi_alpha_cfg:
+        _all_factor_names = []
+        _seen = set()
+        for g in multi_alpha_cfg.alpha_groups:
+            for fn in g.factor_names:
+                if fn not in _seen:
+                    _all_factor_names.append(fn)
+                    _seen.add(fn)
+        if _all_factor_names:
+            factor_names = _all_factor_names
+
     return ExperimentConfig(
         factor_names=factor_names,
         model_id=loop_config.get("model_id") or "",
@@ -318,6 +385,8 @@ def build_config_from_custom_evo_loop(
         model_source_loop_index=model_source_loop_index,
         node_id=task.get("node_id"),
         experiment_name=experiment_name,
+        alpha_mode=alpha_mode,
+        multi_alpha_config=multi_alpha_cfg,
     )
 
 
@@ -367,6 +436,10 @@ def build_config_from_retry_loop(
         task.get("unfilled_handler_params")
     )
 
+    # Multi-Alpha 透传 (Path 5 — 重试) — 从原始 snapshot 恢复
+    alpha_mode = config.get("alpha_mode") or "single"
+    multi_alpha_cfg = _build_multi_alpha_config(config.get("multi_alpha_config"))
+
     return ExperimentConfig(
         factor_names=config.get("factor_list") or [],
         model_id=config.get("model_id") or "",
@@ -383,4 +456,65 @@ def build_config_from_retry_loop(
         model_params_base=model_params_base or None,
         node_id=task.get("node_id"),
         experiment_name=experiment_name,
+        alpha_mode=alpha_mode,
+        multi_alpha_config=multi_alpha_cfg,
+    )
+
+
+# ── Path 6: Multi-Alpha dedicated builder (Phase 3) ─────────────────────
+
+def build_config_from_multi_alpha(
+    multi_alpha_config,
+    data_split=None,
+    strategy_id=None,
+    strategy_params=None,
+    stock_pool=None,
+    label_type=None,
+    sector_blacklist=None,
+    hmm_config=None,
+    execution_algo=None,
+    execution_algo_params=None,
+    unfilled_handler=None,
+    unfilled_handler_params=None,
+    node_id=None,
+    experiment_name=None,
+):
+    """Path 6 — 专门构建 Multi-Alpha 模式的 ExperimentConfig。
+
+    由 Multi-Alpha API endpoints 和 QE Multi-Alpha engine 使用。
+    factor_names 自动从各 AlphaGroup 聚合；model_id 由各组各自指定。
+    """
+    if isinstance(multi_alpha_config, dict):
+        multi_alpha_config = _build_multi_alpha_config(multi_alpha_config)
+    if multi_alpha_config is None:
+        raise ValueError("multi_alpha_config is required for Path 6")
+
+    all_factor_names = []
+    seen = set()
+    for g in multi_alpha_config.alpha_groups:
+        for fn in g.factor_names:
+            if fn not in seen:
+                all_factor_names.append(fn)
+                seen.add(fn)
+
+    placeholder_model_id = multi_alpha_config.alpha_groups[0].model_id
+
+    return ExperimentConfig(
+        factor_names=all_factor_names,
+        model_id=placeholder_model_id,
+        strategy_id=strategy_id,
+        data_split=data_split,
+        stock_pool=stock_pool,
+        label_type=label_type,
+        sector_blacklist=sector_blacklist,
+        hmm=hmm_config,
+        execution_algo=execution_algo,
+        execution_algo_params=execution_algo_params,
+        unfilled_handler=unfilled_handler,
+        unfilled_handler_params=unfilled_handler_params,
+        strategy_params=strategy_params,
+        node_id=node_id,
+        experiment_name=experiment_name,
+        alpha_mode="multi",
+        multi_alpha_config=multi_alpha_config,
     )

@@ -988,6 +988,14 @@ class AutoEvolutionScheduler:
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         logger.info(f"Submitting Loop {loop_index} for task {task_id}")
 
+        # ── Multi-Alpha 分流 (Phase 3) ──────────────────────────────
+        # 从任务记录或基础实验检查 alpha_mode
+        _alpha_mode = self._detect_alpha_mode(task)
+        if _alpha_mode == "multi":
+            return await self._submit_multi_alpha_loop(
+                task, task_id, loop_index, evolution_loop_db_id
+            )
+
         # 创建 LOOP 记录
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -1163,11 +1171,39 @@ class AutoEvolutionScheduler:
         # 检查任务类型：策略演进走简化流程
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT task_type FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                cur.execute("SELECT task_type, base_experiment_id FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                 task_row = cur.fetchone()
 
         if task_row and task_row.get("task_type") in ("strategy_evo", "custom_evo"):
             return await self.process_strategy_evo_completed_loop(task_id, loop_id_str)
+
+        # 检查是否为多Alpha实验：先收集组级结果再走后续流程
+        if task_row and task_row.get("base_experiment_id"):
+            _alpha_mode = self._detect_alpha_mode({"base_experiment_id": task_row["base_experiment_id"]})
+            if _alpha_mode == "multi":
+                from .multi_alpha_result_collector import MultiAlphaResultCollector
+                # experiment_id 格式: "{task_id}_L{loop_index}"
+                _parts = loop_id_str.rsplit("_Loop", 1)
+                if len(_parts) == 2:
+                    _exp_id = f"{_parts[0]}_L{_parts[1]}"
+                else:
+                    # 无法从 loop_id_str 推断，查询 DB
+                    with get_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "SELECT experiment_id FROM qe_evolution_loops WHERE loop_id = %s",
+                                (loop_id_str,),
+                            )
+                            _eid_row = cur.fetchone()
+                    _exp_id = _eid_row[0] if _eid_row and _eid_row[0] else loop_id_str
+
+                try:
+                    collector = MultiAlphaResultCollector()
+                    await collector.collect_and_persist(_exp_id)
+                    logger.info(f"多Alpha结果收集完成: {_exp_id}")
+                except Exception as e:
+                    # 不静默：记录 ERROR 级别，但不阻断演进流程（演进可能需要继续下一轮）
+                    logger.error(f"多Alpha结果收集失败: {_exp_id}: {e}", exc_info=True)
 
         # 提取 loop_index from loop_id_str (format: "{task_id}_Loop{N}")
         loop_suffix = loop_id_str.rsplit("_Loop", 1)
@@ -3836,3 +3872,145 @@ class AutoEvolutionScheduler:
                         )
                     conn.commit()
                 logger.info(f"自定义演进任务 {task_id} 最终状态: {final_status} (completed={completed_count}, failed={failed_count})")
+
+
+    # ── Multi-Alpha Phase 3: helper methods ──────────────────────────────
+
+    def _detect_alpha_mode(self, task: dict) -> str:
+        """Detect alpha_mode from task or base experiment records.
+
+        DB 错误不静默吞噬 — 记录日志并返回 single（安全降级，因为
+        单 Alpha 路径不会破坏数据，而错误检测为 multi 反而会导致
+        MultiAlphaEngine 因缺少 config 而崩溃）。
+        """
+        base_exp_id = task.get("base_experiment_id")
+        if base_exp_id:
+            try:
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT alpha_mode FROM qe_experiments WHERE experiment_id = %s",
+                            (base_exp_id,),
+                        )
+                        row = cur.fetchone()
+                        if row and row[0] and row[0] != "single":
+                            return row[0]
+            except Exception as e:
+                logger.error(
+                    "检测 alpha_mode 失败 (base_exp_id=%s): %s — 降级为 single",
+                    base_exp_id, e,
+                )
+        return "single"
+
+    async def _submit_multi_alpha_loop(
+        self,
+        task: dict,
+        task_id: str,
+        loop_index: int,
+        evolution_loop_db_id: str,
+    ):
+        """Submit a Multi-Alpha evolution loop.
+
+        Phase 3: generates sub-experiments for each alpha group, stores results.
+        Actual Qlib execution dispatch is handled by the existing node infrastructure.
+        """
+        logger.info(f"Multi-Alpha loop {loop_index} for task {task_id}")
+
+        # Create LOOP record
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO qe_evolution_loops "
+                    "(loop_id, task_id, loop_index, status) "
+                    "VALUES (%s, %s, %s, 'running') "
+                    "ON CONFLICT (loop_id) DO UPDATE SET status = 'running', updated_at = NOW()",
+                    (evolution_loop_db_id, task_id, loop_index),
+                )
+            conn.commit()
+
+        try:
+            base_exp_id = task.get("base_experiment_id")
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT multi_alpha_config, factor_names, model_id, strategy_id, "
+                        "data_split, custom_params, strategy_params "
+                        "FROM qe_experiments WHERE experiment_id = %s",
+                        (base_exp_id,),
+                    )
+                    exp_row = cur.fetchone()
+
+            if not exp_row or not exp_row[0]:
+                raise ValueError(f"Base experiment {base_exp_id} has no multi_alpha_config")
+
+            from .experiment_config_builders import build_config_from_multi_alpha
+
+            multi_alpha_raw = exp_row[0]
+            if isinstance(multi_alpha_raw, str):
+                multi_alpha_raw = json.loads(multi_alpha_raw)
+
+            data_split = exp_row[4]
+            if isinstance(data_split, str):
+                data_split = json.loads(data_split)
+            strat_params = exp_row[6]
+            if isinstance(strat_params, str):
+                strat_params = json.loads(strat_params)
+
+            cfg = build_config_from_multi_alpha(
+                multi_alpha_config=multi_alpha_raw,
+                data_split=data_split,
+                strategy_id=exp_row[3],
+                strategy_params=strat_params,
+                node_id=task.get("node_id"),
+                experiment_name=f"{task_id}_Loop{loop_index}",
+            )
+
+            from .multi_alpha_engine import MultiAlphaEngine
+
+            engine = MultiAlphaEngine(cfg)
+            result = engine.run()
+
+            config_json = {
+                "alpha_mode": "multi",
+                "multi_alpha_config": (
+                    cfg.multi_alpha_config.model_dump() if cfg.multi_alpha_config else None
+                ),
+                "group_configs": result.get("group_configs"),
+                "meta_method": result.get("meta_method"),
+            }
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE qe_evolution_loops "
+                        "SET status = 'completed', config_json = %s, updated_at = NOW() "
+                        "WHERE loop_id = %s",
+                        (json.dumps(config_json, default=str), evolution_loop_db_id),
+                    )
+                    cur.execute(
+                        "UPDATE qe_evolution_tasks "
+                        "SET current_loop = %s, updated_at = NOW() "
+                        "WHERE task_id = %s",
+                        (loop_index, task_id),
+                    )
+                conn.commit()
+
+            logger.info(
+                f"Multi-Alpha loop {loop_index} completed: "
+                f"{result['total_groups']} groups"
+            )
+            return evolution_loop_db_id
+
+        except Exception as e:
+            logger.error(
+                f"Multi-Alpha loop {loop_index} failed: {e}", exc_info=True
+            )
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE qe_evolution_loops "
+                        "SET status = 'failed', error_message = %s, updated_at = NOW() "
+                        "WHERE loop_id = %s",
+                        (str(e)[:2000], evolution_loop_db_id),
+                    )
+                conn.commit()
+            return None
