@@ -1,0 +1,16 @@
+[Unit]
+Description=Process Exporter for Prometheus
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/process-exporter \
+    --procfs=/proc \
+    --config.path=/mnt/f/Dev/AIstock/monitoring/process-exporter/config.yml \
+    --web.listen-address=:9258
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

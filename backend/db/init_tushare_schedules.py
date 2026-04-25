@@ -13,29 +13,40 @@ from .pg_pool import get_conn
 
 
 _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
-    # 盘前
-    {"dataset": "stk_limit",          "mode": "incremental", "frequency": "daily", "at": "09:10"},
+    # ── Phase 1 — 盘前 ──────────────────────────────────────────────
+    {"dataset": "stk_limit",             "mode": "incremental", "frequency": "daily", "at": "09:01"},
 
-    # Tushare 盘后数据（16:00-16:30 更新 +10min 缓冲）
-    {"dataset": "daily_basic",        "mode": "incremental", "frequency": "daily", "at": "16:40"},
-    {"dataset": "adj_factor",         "mode": "incremental", "frequency": "daily", "at": "16:43"},
-    {"dataset": "index_daily",        "mode": "incremental", "frequency": "daily", "at": "16:46"},
-    {"dataset": "sw_sector",          "mode": "incremental", "frequency": "daily", "at": "16:49"},
+    # ── Phase 2a — 周末补偿检查（每天10:00触发，仅周六实际执行）────
+    {"dataset": "_weekend_compensation", "mode": "check",       "frequency": "daily", "at": "10:00"},
 
-    # Tushare 较晚更新数据（16:30-17:00 更新 +10min 缓冲）
-    {"dataset": "margin_detail",      "mode": "incremental", "frequency": "daily", "at": "17:07"},
-    {"dataset": "moneyflow_ts",       "mode": "incremental", "frequency": "daily", "at": "17:10"},
-    {"dataset": "bak_basic",          "mode": "incremental", "frequency": "daily", "at": "17:13"},
+    # ── Phase 2 — TDX 数据（收盘后即可） ────────────────────────────
+    {"dataset": "kline_daily_raw",       "mode": "incremental", "frequency": "daily", "at": "16:10"},
+    {"dataset": "kline_minute_raw",      "mode": "incremental", "frequency": "daily", "at": "16:20"},
 
-    # 不定期数据集 → 17:30 之后
-    {"dataset": "stock_basic",        "mode": "init",        "frequency": "daily", "at": "17:30"},
-    {"dataset": "stock_st",           "mode": "incremental", "frequency": "daily", "at": "17:33"},
+    # ── Phase 3 — Tushare 早期数据（16:00-16:30 更新 +10min 缓冲） ──
+    {"dataset": "daily_basic",           "mode": "incremental", "frequency": "daily", "at": "16:40"},
+    {"dataset": "adj_factor",            "mode": "incremental", "frequency": "daily", "at": "16:45"},
+    {"dataset": "index_daily",           "mode": "incremental", "frequency": "daily", "at": "16:50"},
+    {"dataset": "stock_basic",           "mode": "init",        "frequency": "daily", "at": "16:55"},
+    {"dataset": "stock_st",              "mode": "incremental", "frequency": "daily", "at": "17:00"},
 
-    # 派生数据（等上游全部完成）
-    {"dataset": "sector_data",        "mode": "incremental", "frequency": "daily", "at": "17:50"},
+    # ── Phase 4 — Tushare 中期数据（16:30-17:00 更新 +10min 缓冲） ──
+    {"dataset": "sw_sector",             "mode": "incremental", "frequency": "daily", "at": "17:10"},
+    {"dataset": "stock_moneyflow_ts",    "mode": "incremental", "frequency": "daily", "at": "17:20"},
+    {"dataset": "bak_basic",             "mode": "incremental", "frequency": "daily", "at": "19:30"},
 
-    # 数据新鲜度检查
-    {"dataset": "_data_freshness_check", "mode": "check",    "frequency": "daily", "at": "18:00"},
+    # ── Phase 5 — 派生数据 + 筹码（等上游完成，≥30min 间隔） ────────
+    {"dataset": "sector_data",           "mode": "incremental", "frequency": "daily", "at": "18:00"},
+    {"dataset": "cyq_perf",              "mode": "incremental", "frequency": "daily", "at": "18:10"},
+
+    # ── Phase 6 — 数据新鲜度检查 ────────────────────────────────────
+    {"dataset": "_data_freshness_check", "mode": "incremental", "frequency": "daily", "at": "18:30"},
+
+    # ── Phase 7 — Tushare 延迟数据（融资融券通常 18:00+ 才可用） ────
+    {"dataset": "margin_detail",         "mode": "incremental", "frequency": "daily", "at": "19:00"},
+
+    # ── Phase 8 — 自动补齐（检查+重试所有 stale/failed） ────────────
+    {"dataset": "_auto_retry_stale",     "mode": "incremental", "frequency": "daily", "at": "23:00"},
 ]
 
 
@@ -48,7 +59,7 @@ def ensure_tushare_schedules() -> int:
     with get_conn() as conn:
         with conn.cursor() as cur:
             for entry in _DEFAULT_SCHEDULES:
-                sid = uuid.uuid4()
+                sid = str(uuid.uuid4())
                 options = json.dumps({"at": entry["at"]}, ensure_ascii=False)
                 cur.execute(
                     """

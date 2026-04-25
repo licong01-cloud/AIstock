@@ -130,6 +130,7 @@ def run_migration():
         ("infra", "compute_nodes", "qlib_rdagent_root", "TEXT"),
         ("infra", "compute_nodes", "callback_url", "TEXT"),
         ("infra", "compute_nodes", "ssh_user", "TEXT"),
+        ("infra", "compute_nodes", "factor_cache_dir", "TEXT"),
     ]
     alter_stmts.extend(node_path_stmts)
     for schema, table, col, col_type in alter_stmts:

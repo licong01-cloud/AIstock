@@ -208,6 +208,7 @@ class CorrelationEngine:
         save_hdf5: bool = True,
         on_progress: Optional[Callable[[int, int], None]] = None,
         stop_event: Optional[threading.Event] = None,
+        expected_as_of_date: Optional[str] = None,
     ) -> CorrelationResult:
         """计算截至 as_of_date 的完整 K×K 相关性矩阵。
 
@@ -218,6 +219,8 @@ class CorrelationEngine:
         save_hdf5 : 是否保存 HDF5 快照
         on_progress : 进度回调 (done, total)
         stop_event : 取消/超时事件
+        expected_as_of_date : 合并缓存 sidecar 期望的快照日期，single 模式下
+            传入后会触发 sidecar 校验，确保不读取跨快照混合数据。
 
         Returns
         -------
@@ -246,6 +249,7 @@ class CorrelationEngine:
             factor_names,
             start_date=window_dates[0],
             end_date=window_dates[-1],
+            expected_as_of_date=expected_as_of_date,
         )
 
         # 无条件同步 factor_names 与面板实际列顺序（修复列错位 bug）
@@ -258,21 +262,27 @@ class CorrelationEngine:
         factor_names = actual_factors
         K = len(factor_names)
 
-        # 剔除退化因子：要求每个因子在 ≥80% 的交易日有非 NaN 值
+        # 因子覆盖率记录 (不再硬过滤)
+        # 按机构做法: 逐日截面 Spearman + min_stocks + min_days 已能处理稀疏因子,
+        # 因子级覆盖率只作为信息记录, 不用于剔除.
+        # 估值类/分红类/行业类因子天然只在部分股票有值, 在日截面交集内仍可得到统计有效相关.
         total_rows = len(panel)
         if total_rows > 0:
             non_nan_ratio = panel.count() / total_rows
-            degenerate = non_nan_ratio[non_nan_ratio < 0.8].index.tolist()
-            if degenerate:
-                logger.warning(
-                    f"剔除 {len(degenerate)} 个退化因子 (NaN覆盖率>20%): "
-                    f"{degenerate[:10]}{'...' if len(degenerate) > 10 else ''}"
+            low_coverage = non_nan_ratio[non_nan_ratio < 0.8]
+            if len(low_coverage) > 0:
+                preview = low_coverage.sort_values().head(10).to_dict()
+                logger.info(
+                    f"低覆盖率因子 (<80%) 共 {len(low_coverage)} 个, 保留参与计算, "
+                    f"最低 10 个覆盖率: {preview}"
                 )
-                panel = panel.drop(columns=degenerate)
-                factor_names = [f for f in factor_names if f not in set(degenerate)]
-                K = len(factor_names)
-                if K < 2:
-                    raise ValueError(f"剔除退化因子后仅剩 {K} 个，无法计算相关性")
+            min_cov = non_nan_ratio.min() if len(non_nan_ratio) else 0
+            if min_cov == 0:
+                zero_cov = non_nan_ratio[non_nan_ratio == 0].index.tolist()
+                raise ValueError(
+                    f"{len(zero_cov)} 个因子在当前窗口内全为 NaN, 无法计算相关: "
+                    f"{zero_cov[:10]}{'...' if len(zero_cov) > 10 else ''}"
+                )
 
         # 逐日计算截面 Spearman 相关
         daily_corrs = []
@@ -459,6 +469,17 @@ class CorrelationEngine:
             reverse=True,
         )
         return os.path.join(self._hdf5_dir, files[0]) if files else None
+
+    def get_hdf5_by_date(self, as_of_date: str) -> Optional[str]:
+        """获取指定日期的 HDF5 文件路径。
+
+        Parameters
+        ----------
+        as_of_date : 截止日期 (YYYY-MM-DD 或 YYYYMMDD)
+        """
+        fname = f"corr_{as_of_date.replace('-', '')}.h5"
+        path = os.path.join(self._hdf5_dir, fname)
+        return path if os.path.isfile(path) else None
 
     # ── 内部计算方法 ──
 

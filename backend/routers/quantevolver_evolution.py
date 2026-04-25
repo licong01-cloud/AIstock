@@ -5,9 +5,11 @@ import time
 import uuid
 import asyncio
 import threading
+import traceback
 from datetime import datetime
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future, as_completed
-from typing import Dict, Any, List, Optional
+from typing import Callable, Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request, Query
 from fastapi.responses import StreamingResponse
@@ -19,6 +21,9 @@ from ..services.quantevolver.factor_value_loader import FactorValueLoader
 from ..services.quantevolver.correlation_engine import CorrelationEngine, CorrelationResult
 from ..db.pg_pool import get_conn
 from psycopg2.extras import RealDictCursor, execute_values
+
+from ..services.quantevolver.factor_eligibility_service import FactorEligibilityService
+from ..services.quantevolver.evaluation_universe_service import EvaluationUniverseService
 
 # RD-Agent QE workspace API base URL
 RDAGENT_QE_BASE = os.getenv("RDAGENT_RESULTS_API_BASE_URL", "http://127.0.0.1:9000").rstrip("/")
@@ -1179,6 +1184,16 @@ _latest_result: Optional[CorrelationResult] = None
 _compute_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="corr-compute")
 _stop_event = threading.Event()
 _compute_future: Optional[Future] = None
+_active_dispatch_task_id: Optional[str] = None
+_dispatch_service = None  # lazy init — 避免 WSL 脚本 import 时触发 aiofiles 依赖
+
+
+def _get_dispatch_service():
+    global _dispatch_service
+    if _dispatch_service is None:
+        from ..services.dispatch_service import DispatchService
+        _dispatch_service = DispatchService()
+    return _dispatch_service
 _MATRIX_TIMEOUT_SEC = 3600  # 60 分钟 (首次加载 448 因子 ~8min + GEMM ~1min; 后续有合并缓存 ~1min)
 
 
@@ -1205,6 +1220,12 @@ class _CorrelationLogBuffer:
             # 超过上限时截断前半部分
             if len(self._entries) > self.MAX_ENTRIES:
                 self._entries = self._entries[-self.MAX_ENTRIES:]
+        _emit_correlation_event({
+            "type": "log",
+            "level": level,
+            "msg": msg,
+            "entry": entry,
+        })
 
     def get_since(self, after_index: int = -1) -> list[dict]:
         """返回 index > after_index 的所有日志条目。"""
@@ -1220,6 +1241,21 @@ class _CorrelationLogBuffer:
 
 
 _correlation_logs = _CorrelationLogBuffer()
+_correlation_event_emitter: Optional[Callable[[Dict[str, Any]], None]] = None
+
+
+def set_correlation_event_emitter(emitter: Optional[Callable[[Dict[str, Any]], None]]) -> None:
+    global _correlation_event_emitter
+    _correlation_event_emitter = emitter
+
+
+def _emit_correlation_event(event: Dict[str, Any]) -> None:
+    if _correlation_event_emitter is None:
+        return
+    try:
+        _correlation_event_emitter(event)
+    except Exception as exc:
+        logger.warning(f"correlation event emit failed: {exc}")
 
 
 class _CorrelationProgress:
@@ -1242,11 +1278,27 @@ class _CorrelationProgress:
         }
         self._start_time = None
 
+    def _emit_snapshot(self) -> None:
+        _emit_correlation_event({
+            "type": "progress",
+            "data": dict(self._data),
+        })
+
     def snapshot(self) -> dict:
         with self._lock:
             if self._start_time and self._data["status"] == "computing":
                 self._data["elapsed_sec"] = round(time.time() - self._start_time, 1)
             return dict(self._data)
+
+    def sync_from_event(self, data: dict) -> None:
+        with self._lock:
+            self._data.update(data or {})
+            status = self._data.get("status")
+            elapsed = float(self._data.get("elapsed_sec") or 0)
+            if status == "computing":
+                self._start_time = time.time() - elapsed
+            else:
+                self._start_time = None
 
     def start(self, mode: str, total: int, job_id: str = None):
         with self._lock:
@@ -1257,6 +1309,7 @@ class _CorrelationProgress:
                 percent=0, started_at=datetime.now().isoformat(),
                 mode=mode, error=None, job_id=job_id,
             )
+        self._emit_snapshot()
 
     def advance(self, done=None, phase=None, phase_label=None, total=None):
         with self._lock:
@@ -1278,6 +1331,7 @@ class _CorrelationProgress:
                 self._data["percent"] = 60 + int(r * 30)
             elif p == "db_persist":
                 self._data["percent"] = 90 + int(r * 10)
+        self._emit_snapshot()
 
     def finish(self, status="success", error=None):
         with self._lock:
@@ -1286,45 +1340,137 @@ class _CorrelationProgress:
             self._data["error"] = error
             if self._start_time:
                 self._data["elapsed_sec"] = round(time.time() - self._start_time, 1)
+            self._start_time = None
+        self._emit_snapshot()
 
 
 _correlation_progress = _CorrelationProgress()
 
 # 缓存 status 端点的 DB 查询结果，计算中跳过 DB 直接返回缓存
-_status_db_cache: Dict[str, Any] = {"meta": None, "db_count": 0, "uncorrelated_count": 0}
+# counts_by_include_disabled: { False: {...}, True: {...} } — 按 include_disabled 查询口径分桶
+_status_db_cache: Dict[str, Any] = {
+    "meta": None,
+    "counts_by_include_disabled": {
+        False: {"db_count": 0, "uncorrelated_count": 0, "high_corr_count_07": 0, "high_corr_count_05": 0},
+        True: {"db_count": 0, "uncorrelated_count": 0, "high_corr_count_07": 0, "high_corr_count_05": 0},
+    },
+}
 
 
 def _update_job_status(job_id, status, error=None):
     """更新 ingestion_jobs 表状态。"""
     if not job_id:
         return
-    try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                if status == "running":
-                    cur.execute(
-                        "UPDATE market.ingestion_jobs SET status='running', started_at=NOW() WHERE job_id=%s",
-                        (str(job_id),),
-                    )
-                else:
-                    cur.execute(
-                        "UPDATE market.ingestion_jobs SET status=%s, finished_at=NOW() WHERE job_id=%s",
-                        (status, str(job_id)),
-                    )
-            conn.commit()
-    except Exception as e:
-        logger.warning(f"更新 job 状态失败: {e}")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if status == "running":
+                cur.execute(
+                    "UPDATE market.ingestion_jobs SET status='running', started_at=NOW() WHERE job_id=%s",
+                    (str(job_id),),
+                )
+            else:
+                cur.execute(
+                    "UPDATE market.ingestion_jobs SET status=%s, finished_at=NOW() WHERE job_id=%s",
+                    (status, str(job_id)),
+                )
+        conn.commit()
 
 
-def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = None, job_id: str = None, data_date: str = None):
+def _current_correlation_eligible_factor_ids(include_disabled: bool = False) -> List[int]:
+    rows = FactorEligibilityService().list_eligible_factors(include_disabled=include_disabled)
+    factor_ids = [int(row["id"]) for row in rows if row.get("id") is not None]
+    if not factor_ids:
+        raise RuntimeError("当前无符合相关性 official 准入规则的因子")
+    return factor_ids
+
+
+def _reconcile_correlation_state(reset_all: bool = False) -> Dict[str, int]:
+    """清理相关性历史脏状态，确保 DB 与当前 official 准入规则一致。"""
+    stats = {
+        "eligible_factors": 0,
+        "deleted_pairs": 0,
+        "reset_ineligible_catalog": 0,
+        "reset_orphan_catalog": 0,
+        "reset_all_catalog": 0,
+    }
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if reset_all:
+                # reset_all 不依赖准入规则, 清空全表状态
+                cur.execute(
+                    """
+                    UPDATE aistock_factor_catalog
+                    SET correlation_computed_at = NULL,
+                        correlation_pair_count = 0
+                    WHERE correlation_computed_at IS NOT NULL
+                       OR COALESCE(correlation_pair_count, 0) <> 0
+                    """
+                )
+                stats["reset_all_catalog"] = cur.rowcount
+            else:
+                # 增量收敛必须基于当前 eligible 集合
+                eligible_ids = _current_correlation_eligible_factor_ids()
+                stats["eligible_factors"] = len(eligible_ids)
+                cur.execute(
+                    """
+                    DELETE FROM qe_factor_correlations
+                    WHERE NOT (factor_a_id = ANY(%s) AND factor_b_id = ANY(%s))
+                    """,
+                    (eligible_ids, eligible_ids),
+                )
+                stats["deleted_pairs"] = cur.rowcount
+
+                cur.execute(
+                    """
+                    UPDATE aistock_factor_catalog
+                    SET correlation_computed_at = NULL,
+                        correlation_pair_count = 0
+                    WHERE (correlation_computed_at IS NOT NULL
+                           OR COALESCE(correlation_pair_count, 0) <> 0)
+                      AND NOT (id = ANY(%s))
+                    """,
+                    (eligible_ids,),
+                )
+                stats["reset_ineligible_catalog"] = cur.rowcount
+
+                cur.execute(
+                    """
+                    UPDATE aistock_factor_catalog c
+                    SET correlation_computed_at = NULL,
+                        correlation_pair_count = 0
+                    WHERE c.id = ANY(%s)
+                      AND c.correlation_computed_at IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM qe_factor_correlations q
+                          WHERE q.factor_a_id = c.id OR q.factor_b_id = c.id
+                      )
+                    """,
+                    (eligible_ids,),
+                )
+                stats["reset_orphan_catalog"] = cur.rowcount
+        conn.commit()
+
+    return stats
+
+
+def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, job_id: str = None, data_date: str = None, **_kwargs):
     """统一相关性计算入口 — 同步函数，在 ThreadPoolExecutor 中执行。
 
-    mode: "full" | "cache_only" | "smart_incremental" | "incremental"
+    每次计算前清空所有历史相关性数据，使用独立指标计算的 single/*.parquet 缓存全量重算。
     data_date: 快照日期 (YYYYMMDD)，指定后使用磁盘快照数据
     """
     # 自动推导 data_date: as_of_date (YYYY-MM-DD) → data_date (YYYYMMDD)
     if not data_date and as_of_date:
         data_date = as_of_date.replace("-", "")
+    official_instruments = None
+    if data_date:
+        official_instruments = EvaluationUniverseService().get_official_universe(
+            as_of_date=f"{data_date[:4]}-{data_date[4:6]}-{data_date[6:8]}"
+        )
+    elif as_of_date:
+        official_instruments = EvaluationUniverseService().get_official_universe(as_of_date=as_of_date)
 
     global _latest_result
     timeout_timer = None
@@ -1335,262 +1481,236 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
             # 超时保护延迟到阶段2矩阵计算前启动（阶段1缓存生成有自身per-factor超时）
 
             _correlation_logs.clear()
-            _correlation_progress.start(mode, len(factor_names), str(job_id) if job_id else None)
+            _correlation_progress.start("full", len(factor_names), str(job_id) if job_id else None)
             _update_job_status(job_id, "running")
-            _correlation_logs.append(f"启动相关性计算: mode={mode}, 因子数={len(factor_names)}, as_of_date={as_of_date or 'latest'}")
+            _correlation_logs.append(f"启动相关性计算: 因子数={len(factor_names)}, as_of_date={as_of_date or 'latest'}")
 
             # 汇总统计变量
             phase1_elapsed = 0.0
             phase2_elapsed = 0.0
             phase3_elapsed = 0.0
             success_factors = []
-            failed_factors: list[tuple[str, str]] = []  # [(factor_name, error_msg), ...]
 
-            # ═══ 全量模式：清空所有历史缓存和 DB 相关性数据 ═══
-            if mode == "full":
-                import glob as _glob
-                _correlation_logs.append("[清空] 全量模式: 清空所有历史相关性数据和因子缓存...")
+            # ═══ 先收敛历史脏状态，保证当前 official 准入规则和 DB 一致 ═══
+            reconcile_stats = _reconcile_correlation_state(reset_all=True)
+            _correlation_logs.append(
+                "[收敛] 清理历史相关性状态: "
+                f"eligible={reconcile_stats['eligible_factors']}, "
+                f"deleted_pairs={reconcile_stats['deleted_pairs']}, "
+                f"reset_ineligible={reconcile_stats['reset_ineligible_catalog']}, "
+                f"reset_orphan={reconcile_stats['reset_orphan_catalog']}, "
+                f"reset_all={reconcile_stats['reset_all_catalog']}"
+            )
 
-                # 1. TRUNCATE qe_factor_correlations
-                try:
-                    with get_conn() as _conn:
-                        with _conn.cursor() as _cur:
-                            _cur.execute("TRUNCATE TABLE qe_factor_correlations")
-                        _conn.commit()
-                    _correlation_logs.append("[清空] DB: qe_factor_correlations 已清空")
-                except Exception as e:
-                    _correlation_logs.append(f"[清空] DB 清空失败，终止计算: {e}", "ERROR")
-                    logger.error(f"全量模式 TRUNCATE 失败: {e}")
-                    _correlation_progress.finish("failed", f"DB 清空失败: {e}")
-                    _update_job_status(job_id, "failed")
-                    return
+            # ═══ 清空所有历史相关性数据（每次计算前必须清空）═══
+            import glob as _glob
+            _correlation_logs.append("[清空] 清空所有历史相关性数据...")
 
-                # 2. 删除 HDF5 相关性矩阵缓存
-                _hdf5_dir = os.path.join(
-                    os.path.dirname(__file__), "..", "..",
-                    "data", "correlation_matrices",
+            # 1. TRUNCATE qe_factor_correlations
+            try:
+                with get_conn() as _conn:
+                    with _conn.cursor() as _cur:
+                        _cur.execute("TRUNCATE TABLE qe_factor_correlations")
+                        _cur.execute(
+                            """
+                            UPDATE aistock_factor_catalog
+                            SET correlation_computed_at = NULL,
+                                correlation_pair_count = 0
+                            WHERE correlation_computed_at IS NOT NULL
+                               OR COALESCE(correlation_pair_count, 0) <> 0
+                            """
+                        )
+                    _conn.commit()
+                _correlation_logs.append("[清空] DB: qe_factor_correlations 与 catalog correlation 状态已清空")
+            except Exception as e:
+                _correlation_logs.append(f"[清空] DB 清空失败，终止计算: {e}", "ERROR")
+                logger.error(f"TRUNCATE 失败: {e}")
+                _correlation_progress.finish("failed", f"DB 清空失败: {e}")
+                _update_job_status(job_id, "failed")
+                return {
+                    "success": False,
+                    "status": "failed",
+                    "error": f"DB 清空失败: {e}",
+                }
+
+            # 2. 删除 HDF5 相关性矩阵缓存
+            _hdf5_dir = os.path.join(
+                os.path.dirname(__file__), "..", "..",
+                "data", "correlation_matrices",
+            )
+            _hdf5_dir = os.path.normpath(_hdf5_dir)
+            for _h5 in _glob.glob(os.path.join(_hdf5_dir, "corr_*.h5")):
+                os.remove(_h5)
+                _correlation_logs.append(f"[清空] 删除 HDF5: {os.path.basename(_h5)}")
+
+            # 3. 清除内存缓存
+            FactorValueLoader.invalidate_single_cache()
+            FactorValueLoader.invalidate_merged_cache()
+            _correlation_logs.append("[清空] 内存缓存已清除")
+
+            # Phase 1: 检查独立指标缓存完整性
+            # 相关性计算强依赖独立指标管线产出的 single/ 缓存，不再自行执行因子代码
+            from ..services.quantevolver.factor_value_pipeline import FactorValuePipeline
+            pipeline = FactorValuePipeline()
+
+            # ── Phase 0: meta 权威性自检 ──
+            # 在任何基于 _meta.json 的逻辑之前, 先确认 disk ↔ meta 双向一致、单一快照、字段完整
+            # 任一项不通过立即失败, 禁止基于不可信 meta 继续
+            integrity = pipeline.validate_meta_integrity()
+            if not integrity.get("ok"):
+                _error_msg = (
+                    f"meta 权威性自检未通过: "
+                    f"orphan_parquets={len(integrity.get('orphan_parquets') or [])}, "
+                    f"orphan_meta_entries={len(integrity.get('orphan_meta_entries') or [])}, "
+                    f"as_of_date_distribution={integrity.get('as_of_date_distribution')}, "
+                    f"incomplete_entries={len(integrity.get('incomplete_entries') or [])}, "
+                    f"top_level_aod_mismatch={integrity.get('top_level_aod_mismatch')}, "
+                    f"factor_count={integrity.get('factor_count')}, "
+                    f"error={integrity.get('error')}"
                 )
-                _hdf5_dir = os.path.normpath(_hdf5_dir)
-                for _h5 in _glob.glob(os.path.join(_hdf5_dir, "corr_*.h5")):
-                    os.remove(_h5)
-                    _correlation_logs.append(f"[清空] 删除 HDF5: {os.path.basename(_h5)}")
+                _correlation_logs.append(f"[Phase0 自检] {_error_msg}", "ERROR")
+                _correlation_progress.finish("failed", _error_msg)
+                _update_job_status(job_id, "failed")
+                return {
+                    "success": False,
+                    "status": "failed",
+                    "error": _error_msg,
+                    "integrity": integrity,
+                }
+            _correlation_logs.append(
+                f"[Phase0 自检] 通过: factor_count={integrity['factor_count']}, "
+                f"as_of_date={integrity['top_level_as_of_date']}"
+            )
 
-                # 3. 删除所有单因子 parquet 缓存
-                _single_dir = os.path.normpath(os.path.join(
-                    os.path.dirname(__file__), "..", "..",
-                    "rdagent_assets", "factor_values", "single",
-                ))
-                _removed_pq = 0
-                if os.path.isdir(_single_dir):
-                    for _f in os.listdir(_single_dir):
-                        if _f.endswith(".parquet"):
-                            os.remove(os.path.join(_single_dir, _f))
-                            _removed_pq += 1
-                _correlation_logs.append(f"[清空] 删除 {_removed_pq} 个单因子 parquet 缓存")
+            cached_singles = pipeline.get_cached_singles()
+            cached_names = {c["factor_name"] for c in cached_singles}
+            missing_factors = [f for f in factor_names if f not in cached_names]
 
-                # 4. 重置 _meta.json
-                _meta_path = os.path.normpath(os.path.join(
-                    os.path.dirname(__file__), "..", "..",
-                    "rdagent_assets", "factor_values", "_meta.json",
-                ))
-                if os.path.isfile(_meta_path):
-                    import json as _json
-                    with open(_meta_path, "w", encoding="utf-8") as _mf:
-                        _json.dump({"factors": {}}, _mf)
-                    _correlation_logs.append("[清空] _meta.json 已重置")
-
-                # 5. 清除内存缓存（使用顶层 import，避免局部 import 导致 scope 错误）
-                FactorValueLoader.invalidate_single_cache()
-                FactorValueLoader.invalidate_merged_cache()
-                _correlation_logs.append("[清空] 内存缓存已清除")
-
-            # Phase 1: 生成单因子缓存
-            if mode in ("full", "smart_incremental", "incremental"):
-                from ..services.quantevolver.factor_value_pipeline import FactorValuePipeline
-                pipeline = FactorValuePipeline()
-
-                # ── 日期策略（必须在预热之前确定，确保预热和因子计算使用同一日期） ──
-                cache_meta = pipeline._load_meta()
-                existing_as_of = cache_meta.get("as_of_date", "")
-                effective_end_date = as_of_date  # 用户指定的日期
-
-                if not effective_end_date and existing_as_of:
-                    # 未指定日期：使用现有缓存日期（保证一致性）
-                    effective_end_date = existing_as_of
-                    _correlation_logs.append(f"[日期] 使用现有缓存日期: {effective_end_date}")
-
-                # 自动推导 data_date: 如果仍未指定，从缓存 meta 推导
-                if not data_date and effective_end_date:
-                    data_date = effective_end_date.replace("-", "")
-                    _correlation_logs.append(f"[日期] 自动推导 data_date={data_date} (from as_of_date)")
-
-                # 预热数据缓存（静态因子 ~300s + 行情 ~40s），
-                # 传入 effective_end_date 确保与因子计算使用相同日期
-                _correlation_logs.append(f"[预热] 加载静态因子数据 + 行情数据到缓存 (end_date={effective_end_date or 'today'}, data_date={data_date or 'none'})...")
-                _correlation_progress.advance(phase="cache_gen", phase_label="预热数据缓存")
-                try:
-                    warmup_timings = pipeline.warm_caches(
-                        end_date=effective_end_date or None,
-                        data_date=data_date,
-                    )
-                    _correlation_logs.append(
-                        f"[预热完成] 静态因子={warmup_timings.get('static', 0)}s, "
-                        f"行情数据={warmup_timings.get('realtime', 0)}s"
-                    )
-                except Exception as e:
-                    logger.error(f"缓存预热失败: {e}", exc_info=True)
-                    _correlation_logs.append(f"[预热失败] {e}")
-                    raise RuntimeError(f"数据快照预热失败，中止计算: {e}") from e
-
-                # Phase 1a: 如果指定了新日期且比现有缓存新，增量扩展存量因子
-                if effective_end_date and effective_end_date > existing_as_of and mode in ("smart_incremental", "incremental"):
-                    cached_singles = pipeline.get_cached_singles()
-                    new_factor_set = set(factor_names)
-                    extend_factors = [c["factor_name"] for c in cached_singles
-                                      if c["factor_name"] not in new_factor_set]
-                    if extend_factors:
-                        _correlation_logs.append(
-                            f"[阶段1a/3] 增量扩展 {len(extend_factors)} 个存量因子缓存: "
-                            f"{existing_as_of} → {effective_end_date}"
-                        )
-                        _correlation_progress.advance(
-                            phase="cache_extend", phase_label="增量扩展存量缓存",
-                            done=0, total=len(extend_factors),
-                        )
-                        extend_ok = 0
-                        extend_fail = 0
-                        _extend_lock = threading.Lock()
-
-                        def _extend_one(fname_: str):
-                            t0 = time.time()
-                            r = pipeline.extend_single_factor_cache(
-                                fname_, new_end_date=effective_end_date, timeout=120,
-                            )
-                            elapsed = round(time.time() - t0, 1)
-                            return fname_, r, elapsed
-
-                        max_w = 1  # 串行执行：每个 extend 峰值 ~210MB，并发会导致 OOM
-                        extend_results: list = []
-                        with ThreadPoolExecutor(max_workers=max_w) as executor:
-                            futures = {executor.submit(_extend_one, fn): fn for fn in extend_factors}
-                            done_count = 0
-                            for future in as_completed(futures):
-                                done_count += 1
-                                try:
-                                    fname, r, elapsed = future.result()
-                                    with _extend_lock:
-                                        extend_results.append(r)
-                                        if r and r.success:
-                                            extend_ok += 1
-                                        else:
-                                            extend_fail += 1
-                                            err = getattr(r, 'error', '') if r else ''
-                                            if err:
-                                                _correlation_logs.append(
-                                                    f"  [{done_count}/{len(extend_factors)}] {fname} 扩展失败: {err} ({elapsed}s)", "WARN"
-                                                )
-                                except Exception as e:
-                                    fn = futures[future]
-                                    with _extend_lock:
-                                        extend_fail += 1
-                                        _correlation_logs.append(
-                                            f"  [{done_count}/{len(extend_factors)}] {fn} 扩展异常: {e}", "WARN"
-                                        )
-                                _correlation_progress.advance(done=done_count)
-                                # 每 50 个因子打印一次进度
-                                if done_count % 50 == 0 or done_count == len(extend_factors):
-                                    _correlation_logs.append(
-                                        f"  存量缓存扩展进度: {done_count}/{len(extend_factors)} "
-                                        f"(成功 {extend_ok}, 失败 {extend_fail})"
-                                    )
-                        _correlation_logs.append(
-                            f"阶段1a完成: 扩展 {extend_ok} 个, 失败 {extend_fail} 个"
-                        )
-                        # 批量写入扩展阶段的 meta
-                        try:
-                            pipeline.flush_meta_batch(extend_results)
-                        except Exception as e:
-                            logger.warning(f"扩展阶段 meta 批量写入失败: {e}")
-
-                # Phase 1b: 生成新因子缓存
-                _correlation_logs.append(f"[阶段1b/3] 生成新因子缓存 (共 {len(factor_names)} 个)")
-                _correlation_progress.advance(
-                    phase="cache_gen", phase_label="生成新因子缓存",
-                    done=0, total=len(factor_names),
+            # ── Bug D 修复: 缺少缓存的因子从计算集合排除, 而非整体失败 ──
+            # 需求: "如果因子没有基于这个集成数据时间段的因子值缓存, 则不参与因子相关性计算"
+            # 保护: 排除后若可计算因子 < 2 (矩阵退化), 才整体失败并给出明确原因
+            if missing_factors:
+                missing_sample = missing_factors[:10]
+                _correlation_logs.append(
+                    f"[缓存检查] 排除 {len(missing_factors)} 个无独立指标缓存的因子: "
+                    f"{missing_sample}"
+                    + (f"... 等 {len(missing_factors)} 个" if len(missing_factors) > 10 else ""),
+                    "WARN",
                 )
-                phase1_t0 = time.time()
-                _gen_lock = threading.Lock()
 
-                def _compute_one(fname_: str):
-                    t0 = time.time()
-                    logger.info(f"[{mode}] 生成 {fname_} 缓存")
-                    r = pipeline.compute_single_factor(
-                        fname_, end_date=effective_end_date or None,
-                    )
-                    elapsed = round(time.time() - t0, 1)
-                    return fname_, r, elapsed
+            compute_factors = [f for f in factor_names if f in cached_names]
 
-                max_w = min(4, len(factor_names))
-                all_results: list = []  # 收集所有 result，用于后续批量写 meta
-                with ThreadPoolExecutor(max_workers=max_w) as executor:
-                    futures = {executor.submit(_compute_one, fn): fn for fn in factor_names}
-                    done_count = 0
-                    for future in as_completed(futures):
-                        done_count += 1
-                        try:
-                            fname, result, elapsed = future.result()
-                            with _gen_lock:
-                                all_results.append(result)
-                                if result and result.success:
-                                    success_factors.append(fname)
-                                    _correlation_logs.append(f"  [{done_count}/{len(factor_names)}] {fname} 缓存生成成功 ({elapsed}s)")
-                                else:
-                                    err_msg = getattr(result, 'error', '未知错误') if result else '返回None'
-                                    failed_factors.append((fname, err_msg))
-                                    _correlation_logs.append(f"  [{done_count}/{len(factor_names)}] {fname} 缓存生成失败: {err_msg} ({elapsed}s)", "WARN")
-                        except Exception as e:
-                            fn = futures[future]
-                            with _gen_lock:
-                                failed_factors.append((fn, str(e)))
-                                _correlation_logs.append(f"  [{done_count}/{len(factor_names)}] {fn} 缓存生成异常: {e}", "WARN")
-                        _correlation_progress.advance(done=done_count)
+            if len(compute_factors) < 2:
+                _error_msg = (
+                    f"可计算因子不足 2 个 (总请求 {len(factor_names)}, "
+                    f"缺缓存 {len(missing_factors)}, 剩余 {len(compute_factors)}), "
+                    "无法构建相关性矩阵"
+                )
+                _correlation_logs.append(f"[缓存检查] {_error_msg}", "ERROR")
+                _correlation_progress.finish("failed", _error_msg)
+                _update_job_status(job_id, "failed")
+                return {
+                    "success": False,
+                    "status": "failed",
+                    "error": _error_msg,
+                    "missing_factors": missing_factors,
+                    "excluded_factors": missing_factors,
+                }
 
-                # 主线程批量写入 _meta.json（避免并发竞态）
-                try:
-                    written = pipeline.flush_meta_batch(all_results)
-                    _correlation_logs.append(f"  _meta.json 批量写入: {written} 个因子")
-                except Exception as e:
-                    logger.warning(f"批量写入 _meta.json 失败: {e}")
-
-                phase1_elapsed = round(time.time() - phase1_t0, 1)
-                compute_factors = success_factors if mode == "full" else factor_names
-                _correlation_logs.append(f"阶段1b完成: 成功 {len(success_factors)}, 失败 {len(failed_factors)}, 耗时 {phase1_elapsed}s")
-            else:
-                # cache_only: 直接用已有缓存
-                compute_factors = factor_names
-                _correlation_logs.append(f"[缓存模式] 跳过因子代码执行，直接使用已有 {len(factor_names)} 个缓存")
+            _correlation_logs.append(
+                f"[缓存检查] {len(compute_factors)}/{len(factor_names)} 个因子进入计算 "
+                f"(排除 {len(missing_factors)} 个无缓存因子)"
+            )
 
             if not compute_factors:
                 _correlation_logs.append("无可计算的因子，终止", "ERROR")
-                logger.error(f"[{mode}] 无可计算的因子")
+                logger.error("无可计算的因子")
                 _correlation_progress.finish("failed", "无可计算的因子")
                 _update_job_status(job_id, "failed")
-                return
+                return {
+                    "success": False,
+                    "status": "failed",
+                    "error": "无可计算的因子",
+                }
 
-            # ── Phase 1 → Phase 2 过渡：释放因子计算加载器，回收内存 ──
-            if mode in ("full", "smart_incremental", "incremental"):
-                try:
-                    pipeline.clear_snapshot()  # 清除 RealtimeFactorDataLoader._snapshot_df 类变量
-                    pipeline._loader_instance = None
-                    pipeline._static_loader_instance = None
-                    pipeline = None  # 置 None 而非 del，保证 finally 中可安全访问
-                    import gc
-                    gc.collect()
-                    _correlation_logs.append(
-                        f"已释放 Phase 1 数据加载器 (static_factors + realtime 快照)"
-                    )
-                except Exception as e:
-                    logger.warning(f"释放 Phase 1 加载器异常: {e}")
+            # ═══ Phase 1.5: 全量 as_of_date 一致性校验 ═══
+            _meta_path = os.path.join(pipeline._output_dir, "_meta.json")
+            if not os.path.isfile(_meta_path):
+                _error_msg = (
+                    f"_meta.json 不存在 ({_meta_path})，"
+                    "请先完成独立指标计算以生成因子元数据"
+                )
+                _correlation_logs.append(f"[一致性校验] {_error_msg}", "ERROR")
+                _correlation_progress.finish("failed", _error_msg)
+                _update_job_status(job_id, "failed")
+                return {
+                    "success": False,
+                    "status": "failed",
+                    "error": _error_msg,
+                }
+
+            import json as _json
+            with open(_meta_path, "r", encoding="utf-8") as _mf:
+                _meta_data = _json.load(_mf)
+            _factors_meta = _meta_data.get("factors", {})
+
+            # 检查每个因子是否都有 meta 记录
+            _missing_meta = [fn for fn in compute_factors if fn not in _factors_meta]
+            if _missing_meta:
+                _error_msg = (
+                    f"{len(_missing_meta)} 个因子缺少 _meta.json 记录，"
+                    f"请先完成独立指标计算: {_missing_meta[:10]}"
+                    + (f"... 等 {len(_missing_meta)} 个" if len(_missing_meta) > 10 else "")
+                )
+                _correlation_logs.append(f"[一致性校验] {_error_msg}", "ERROR")
+                _correlation_progress.finish("failed", _error_msg)
+                _update_job_status(job_id, "failed")
+                return {
+                    "success": False,
+                    "status": "failed",
+                    "error": _error_msg,
+                    "missing_meta_factors": _missing_meta,
+                }
+
+            # 全量校验 as_of_date 一致性
+            _as_of_dates: dict = {}
+            for _fn in compute_factors:
+                _aod = _factors_meta[_fn].get("as_of_date")
+                _as_of_dates.setdefault(_aod, []).append(_fn)
+
+            if len(_as_of_dates) > 1:
+                _detail = {k: len(v) for k, v in _as_of_dates.items()}
+                _error_msg = f"因子 as_of_date 不一致，无法计算相关性: {_detail}"
+                _correlation_logs.append(f"[一致性校验] {_error_msg}", "ERROR")
+                _correlation_progress.finish("failed", _error_msg)
+                _update_job_status(job_id, "failed")
+                return {
+                    "success": False,
+                    "status": "failed",
+                    "error": _error_msg,
+                    "as_of_date_distribution": _detail,
+                }
+            _aod_value = list(_as_of_dates.keys())[0] if _as_of_dates else "unknown"
+
+            # ── Bug E 修复: 调用方 as_of_date 必须与 meta 中实际值对齐 ──
+            # 若调用方显式指定 as_of_date, 它必须与 meta 中的实际值完全匹配, 否则拒绝计算
+            if as_of_date and _aod_value != "unknown" and as_of_date != _aod_value:
+                _error_msg = (
+                    f"调用方请求 as_of_date={as_of_date}, 但 meta 中实际快照为 {_aod_value}。"
+                    "拒绝跨快照计算，请先按请求日期重算独立指标, 或移除 as_of_date 参数使用当前快照。"
+                )
+                _correlation_logs.append(f"[一致性校验] {_error_msg}", "ERROR")
+                _correlation_progress.finish("failed", _error_msg)
+                _update_job_status(job_id, "failed")
+                return {
+                    "success": False,
+                    "status": "failed",
+                    "error": _error_msg,
+                    "requested_as_of_date": as_of_date,
+                    "meta_as_of_date": _aod_value,
+                }
+
+            _correlation_logs.append(f"[一致性校验] 通过: 全部 {len(compute_factors)} 个因子 as_of_date={_aod_value}")
 
             # Phase 2: 计算相关性
             _correlation_progress.advance(phase="matrix_compute", phase_label="计算相关性矩阵", done=0, total=1)
@@ -1603,18 +1723,14 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
             timeout_timer.daemon = True
             timeout_timer.start()
 
-            if mode in ("smart_incremental", "incremental"):
-                # 增量模式：使用所有已缓存因子计算完整矩阵（向量化 GEMM，比逐对快 20-40 倍）
-                matrix_factors = loader.get_available_factors()
-                new_set = set(compute_factors)
-                _correlation_logs.append(
-                    f"[阶段2/3] 向量化矩阵计算: {len(matrix_factors)} 个因子 "
-                    f"(含 {len(new_set)} 个新因子)"
-                )
-            else:
-                # full / cache_only: 使用指定因子列表
-                matrix_factors = compute_factors
-                _correlation_logs.append(f"[阶段2/3] 计算 {len(matrix_factors)} 因子的完整相关性矩阵")
+            # ── Bug A 修复: 使用已通过 Phase 1.5 校验的 compute_factors, 而非扫盘得到的全量 ──
+            # loader.get_available_factors() 会把 single/ 目录下所有文件拉进矩阵,
+            # 这些因子可能没有进入 meta 一致性校验 (理论上 Phase 0 已阻断, 双保险).
+            # 改用 compute_factors 保证 "参与矩阵计算的因子集 == 通过 as_of_date 校验的因子集".
+            matrix_factors = list(compute_factors)
+            _correlation_logs.append(
+                f"[阶段2/3] 向量化矩阵计算: {len(matrix_factors)} 个因子 (来自 Phase 1.5 校验后集合)"
+            )
 
             def _matrix_progress(done: int, total: int):
                 _correlation_progress.advance(done=done, total=total)
@@ -1625,6 +1741,7 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
                 save_hdf5=True,
                 on_progress=_matrix_progress,
                 stop_event=_stop_event,
+                expected_as_of_date=_aod_value,
             )
             _latest_result = result
             _correlation_progress.advance(done=1)
@@ -1655,27 +1772,60 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
             _update_job_status(job_id, "success")
             total_elapsed = _correlation_progress.snapshot().get("elapsed_sec", 0)
 
+            # ── 成功响应: 显式汇报成功/失败因子数 + 排除原因分类 ──
+            # 排除来源两类 (互斥):
+            # 1) missing_from_cache: Phase 1 缺独立指标缓存 (missing_factors)
+            # 2) degenerate_nan: Phase 2 engine 内部剔除 (NaN 覆盖率 > 20%)
+            #    通过 compute_factors (Phase 1 后) - result.factor_names (Phase 2 后) 反推
+            _requested_count = len(factor_names)
+            _success_factor_names = list(result.factor_names)
+            _success_count = len(_success_factor_names)
+            _degenerate_factors = sorted(set(compute_factors) - set(_success_factor_names))
+            _failed_count = len(missing_factors) + len(_degenerate_factors)
+            # 强断言: 请求总数 == 成功 + 失败, 任何偏差立即暴露流程缺陷
+            assert _requested_count == _success_count + _failed_count, (
+                f"因子计数不守恒: requested={_requested_count}, "
+                f"success={_success_count}, failed={_failed_count} "
+                f"(missing={len(missing_factors)}, degenerate={len(_degenerate_factors)})"
+            )
+
             # --- 完整汇总日志 ---
             _correlation_logs.append("=" * 50)
-            _correlation_logs.append(f"计算完成汇总 (mode={mode})")
-            _correlation_logs.append(f"  总因子数: {len(factor_names)}")
-            if mode in ("full", "smart_incremental", "incremental"):
-                _correlation_logs.append(f"  缓存成功: {len(success_factors)}")
-                _correlation_logs.append(f"  缓存失败: {len(failed_factors)}")
+            _correlation_logs.append(f"计算完成汇总")
+            _correlation_logs.append(f"  请求因子数: {_requested_count}")
+            _correlation_logs.append(f"  成功因子数: {_success_count}")
+            _correlation_logs.append(
+                f"  失败因子数: {_failed_count} "
+                f"(缺缓存 {len(missing_factors)}, 退化NaN {len(_degenerate_factors)})"
+            )
             _correlation_logs.append(f"  相关性记录: {len(records)} 对")
-            _correlation_logs.append(f"  阶段耗时: 缓存={phase1_elapsed}s | 矩阵={phase2_elapsed}s | 写DB={phase3_elapsed}s")
+            _correlation_logs.append(f"  阶段耗时: 矩阵={phase2_elapsed}s | 写DB={phase3_elapsed}s")
             _correlation_logs.append(f"  总耗时: {total_elapsed}s")
-            if failed_factors:
-                # 错误分类统计
-                timeout_errors = [(f, e) for f, e in failed_factors if "超时" in e or "timeout" in e.lower()]
-                code_errors = [(f, e) for f, e in failed_factors if f not in dict(timeout_errors)]
-                _correlation_logs.append(f"  错误分类: 超时 {len(timeout_errors)} 个, 代码/其他 {len(code_errors)} 个")
-                _correlation_logs.append(f"  失败因子清单:")
-                for fname, err in failed_factors:
-                    err_short = err[:80] + "..." if len(err) > 80 else err
-                    _correlation_logs.append(f"    - {fname}: {err_short}")
             _correlation_logs.append("=" * 50)
-            logger.info(f"相关性计算完成: mode={mode}, factors={len(factor_names)}, records={len(records)}, elapsed={total_elapsed}s")
+            logger.info(
+                f"相关性计算完成: requested={_requested_count}, "
+                f"success={_success_count}, failed={_failed_count}, "
+                f"records={len(records)}, elapsed={total_elapsed}s"
+            )
+            return {
+                "success": True,
+                "status": "success",
+                "requested_factor_count": _requested_count,
+                "success_factor_count": _success_count,
+                "failed_factor_count": _failed_count,
+                "excluded_factors": {
+                    "missing_from_cache": missing_factors,
+                    "degenerate_nan": _degenerate_factors,
+                },
+                "success_factors": _success_factor_names,
+                "record_count": len(records),
+                "calc_elapsed_sec": total_elapsed,
+                "phase1_elapsed_sec": phase1_elapsed,
+                "phase2_elapsed_sec": phase2_elapsed,
+                "phase3_elapsed_sec": phase3_elapsed,
+                "data_date": data_date,
+                "as_of_date": as_of_date,
+            }
 
         except Exception as e:
             was_cancelled = _stop_event.is_set()
@@ -1685,6 +1835,14 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
             _correlation_logs.append(f"计算{status}: {error_msg}", "WARN" if was_cancelled else "ERROR")
             _correlation_progress.finish(status, error_msg)
             _update_job_status(job_id, status)
+            return {
+                "success": False,
+                "status": status,
+                "error": error_msg,
+                "data_date": data_date,
+                "as_of_date": as_of_date,
+                "traceback": traceback.format_exc().splitlines()[-20:] if not was_cancelled else None,
+            }
         finally:
             if timeout_timer is not None:
                 timeout_timer.cancel()
@@ -1709,6 +1867,101 @@ def _run_correlation_compute(mode: str, factor_names: list, as_of_date: str = No
                 logger.warning(f"内存清理异常: {e}")
 
 
+def _env_truthy(key: str) -> bool:
+    value = (os.getenv(key) or "").strip().lower()
+    return value in {"1", "true", "yes", "y", "on"}
+
+
+def _run_correlation_compute_via_dispatch(
+    factor_names: list,
+    as_of_date: str = None,
+    job_id: str = None,
+    data_date: str = None,
+):
+    import asyncio
+    import time as _time
+
+    global _active_dispatch_task_id
+
+    payload = {
+        "factor_names": list(factor_names or []),
+        "as_of_date": as_of_date,
+        "job_id": str(job_id) if job_id else None,
+        "data_date": data_date,
+    }
+    with _computing_lock:
+        _correlation_logs.clear()
+        _correlation_progress.start("full", len(factor_names), str(job_id) if job_id else None)
+        _correlation_progress.advance(phase="cache_gen", phase_label="提交WSL节点任务", done=0, total=max(len(factor_names), 1))
+        _correlation_logs.append(
+            f"启动相关性计算(dispatch): 因子数={len(factor_names)}, as_of_date={as_of_date or 'latest'}"
+        )
+        _update_job_status(job_id, "running")
+        try:
+            created = asyncio.run(_get_dispatch_service().create_and_submit_task({
+                "task_name": f"correlation_full_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                "task_type": "correlation_compute",
+                "node_id": os.getenv("AISTOCK_DEFAULT_GPU_NODE_ID", "wsl2-5080"),
+                "payload": payload,
+            }))
+            task_id = created["task_id"]
+            _active_dispatch_task_id = task_id
+            deadline = _time.time() + _MATRIX_TIMEOUT_SEC
+            last_task = created
+            while _time.time() < deadline:
+                asyncio.run(_get_dispatch_service().sync_running_tasks())
+                last_task = _get_dispatch_service().get_task(task_id) or last_task
+                status = last_task.get("status")
+                if status in {"success", "failed", "canceled"}:
+                    break
+                _time.sleep(2)
+            else:
+                raise TimeoutError(f"correlation dispatch task timeout: {task_id}")
+
+            result_bundle = asyncio.run(_get_dispatch_service().get_task_results(task_id))
+            latest_result = result_bundle.get("latest_result") or {}
+            latest_result.setdefault("dispatch_task_id", task_id)
+            latest_result.setdefault("remote_task_id", last_task.get("remote_task_id"))
+            if last_task.get("status") == "success":
+                latest_result.setdefault("success", True)
+                latest_result.setdefault("status", "success")
+                _correlation_progress.finish("success")
+                _update_job_status(job_id, "success")
+                return latest_result
+
+            error_msg = latest_result.get("error") or last_task.get("error_message") or f"dispatch task failed: {last_task.get('status')}"
+            _correlation_logs.append(f"相关性 dispatch 失败: {error_msg}", "ERROR")
+            _correlation_progress.finish("failed", error_msg)
+            _update_job_status(job_id, "failed")
+            latest_result.setdefault("success", False)
+            latest_result.setdefault("status", "failed")
+            latest_result.setdefault("error", error_msg)
+            return latest_result
+        except Exception as exc:
+            logger.error(f"correlation dispatch failed: {exc}", exc_info=True)
+            _correlation_logs.append(f"dispatch 调度失败: {exc}", "ERROR")
+            _correlation_progress.finish("failed", str(exc))
+            _update_job_status(job_id, "failed")
+            return {
+                "success": False,
+                "status": "failed",
+                "error": str(exc),
+                "traceback": traceback.format_exc().splitlines()[-20:],
+            }
+        finally:
+            _active_dispatch_task_id = None
+            _stop_event.clear()
+
+
+def _run_correlation_compute(factor_names: list, as_of_date: str = None, job_id: str = None, data_date: str = None, **_kwargs):
+    return _run_correlation_compute_via_dispatch(
+        factor_names=factor_names,
+        as_of_date=as_of_date,
+        job_id=job_id,
+        data_date=data_date,
+    )
+
+
 def _get_loader(source: str = "auto") -> FactorValueLoader:
     global _correlation_loader
     if _correlation_loader is None or getattr(_correlation_loader, '_source', None) != source:
@@ -1718,10 +1971,10 @@ def _get_loader(source: str = "auto") -> FactorValueLoader:
 
 class CorrelationComputeRequest(BaseModel):
     as_of_date: Optional[str] = Field(None, description="截止日期 (YYYY-MM-DD)，默认数据最新日期")
+    data_date: Optional[str] = Field(None, description="快照日期 (YYYYMMDD)，为空时由 as_of_date 自动推导")
     factor_names: Optional[List[str]] = Field(None, description="指定因子列表，默认全部已改造因子")
     force_recompute: bool = Field(False, description="强制重新计算，忽略缓存")
     db_threshold: float = Field(0, description="写入 DB 的相关性阈值 (threshold=0 全量存储)")
-    mode: str = Field("cache_only", description="full=执行因子代码+计算矩阵, cache_only=仅用已有缓存计算矩阵")
     include_disabled: bool = Field(False, description="为 True 时包含已禁用因子")
 
 
@@ -1729,9 +1982,7 @@ class CorrelationComputeRequest(BaseModel):
 def compute_correlations(req: CorrelationComputeRequest):
     """触发因子相关性矩阵计算（后台线程池执行）。
 
-    mode:
-    - "full": 先执行因子代码生成单因子缓存，再计算矩阵
-    - "cache_only": 只用已有的 single/*.parquet 计算矩阵（快速）
+    每次计算前清空所有历史相关性数据，使用独立指标计算的 single/*.parquet 缓存全量重算。
     """
     if _computing_lock.locked() and not req.force_recompute:
         return {
@@ -1740,169 +1991,39 @@ def compute_correlations(req: CorrelationComputeRequest):
             "progress": _correlation_progress.snapshot(),
         }
 
+    eligibility_service = FactorEligibilityService()
+
     # 确定因子列表
-    avail_filter = "" if req.include_disabled else "AND is_available = TRUE"
     if req.factor_names:
-        # 显式指定因子时，仍需校验 transformation_status
-        ph = ",".join(["%s"] * len(req.factor_names))
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT factor_name FROM aistock_factor_catalog
-                    WHERE factor_name IN ({ph})
-                      AND transformation_status = 'SUCCESS'
-                      {avail_filter}
-                      AND qe_code_path IS NOT NULL
-                    ORDER BY factor_name
-                """, req.factor_names)
-                factor_names = [row[0] for row in cur.fetchall()]
+        factor_names = eligibility_service.get_eligible_factor_names(
+            factor_names=req.factor_names,
+            include_disabled=req.include_disabled,
+        )
         skipped = set(req.factor_names) - set(factor_names)
         if skipped:
             logger.warning(f"跳过不可用/未改造的因子: {skipped}")
     else:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT factor_name FROM aistock_factor_catalog
-                    WHERE transformation_status = 'SUCCESS'
-                      {avail_filter}
-                      AND qe_code_path IS NOT NULL
-                    ORDER BY factor_name
-                """)
-                factor_names = [row[0] for row in cur.fetchall()]
+        factor_names = eligibility_service.get_eligible_factor_names(
+            include_disabled=req.include_disabled,
+        )
 
     if not factor_names:
         return {"status": "error", "message": "无可计算的因子"}
 
     global _compute_future
-    _compute_future = _compute_executor.submit(_run_correlation_compute, req.mode, factor_names, req.as_of_date)
+    _compute_future = _compute_executor.submit(
+        _run_correlation_compute,
+        factor_names,
+        req.as_of_date,
+        None,
+        req.data_date,
+    )
 
     return {
         "status": "accepted",
-        "message": f"已提交 {len(factor_names)} 因子的相关性计算任务 (mode={req.mode})",
+        "message": f"已提交 {len(factor_names)} 因子的相关性计算任务",
         "factor_count": len(factor_names),
         "as_of_date": req.as_of_date or "latest",
-        "mode": req.mode,
-    }
-
-
-class IncrementalComputeRequest(BaseModel):
-    factor_names: List[str] = Field(..., description="新入库的因子名列表")
-    as_of_date: Optional[str] = Field(None, description="截止日期")
-
-
-@router.post("/correlations/compute-incremental", summary="增量相关性计算")
-def compute_incremental_correlations(req: IncrementalComputeRequest):
-    """增量计算指定因子与全部已缓存因子之间的相关性。
-
-    流程: 执行新因子代码 → 存单因子缓存 → 读已有缓存 → 逐对计算 → UPSERT DB
-    """
-    if _computing_lock.locked():
-        return {"status": "computing", "message": "正在计算中", "progress": _correlation_progress.snapshot()}
-
-    global _compute_future
-    _compute_future = _compute_executor.submit(_run_correlation_compute, "incremental", req.factor_names, req.as_of_date)
-
-
-
-@router.post("/correlations/compute-incremental", summary="增量相关性计算")
-def compute_incremental_correlations(req: IncrementalComputeRequest):
-    """增量计算指定因子与全部已缓存因子之间的相关性。
-
-    流程: 执行新因子代码 → 存单因子缓存 → 读已有缓存 → 逐对计算 → UPSERT DB
-    """
-    if _computing_lock.locked():
-        return {"status": "computing", "message": "正在计算中", "progress": _correlation_progress.snapshot()}
-
-    # 校验因子可用性，过滤禁用因子
-    ph = ",".join(["%s"] * len(req.factor_names))
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT factor_name FROM aistock_factor_catalog
-                WHERE factor_name IN ({ph})
-                  AND transformation_status = 'SUCCESS'
-                  AND is_available = TRUE
-                  AND qe_code_path IS NOT NULL
-            """, req.factor_names)
-            valid_names = [row[0] for row in cur.fetchall()]
-    skipped = set(req.factor_names) - set(valid_names)
-    if skipped:
-        logger.warning(f"增量计算跳过不可用/未改造的因子: {skipped}")
-    if not valid_names:
-        return {"status": "error", "message": "所有请求的因子均不可用或未改造"}
-
-    global _compute_future
-    _compute_future = _compute_executor.submit(_run_correlation_compute, "incremental", valid_names, req.as_of_date)
-
-    return {
-        "status": "accepted",
-        "message": f"已提交 {len(valid_names)} 个因子的增量相关性计算（跳过 {len(skipped)} 个不可用因子）",
-        "factor_names": valid_names,
-    }
-
-
-@router.post("/correlations/compute-smart-incremental", summary="智能增量相关性计算")
-def compute_correlations_smart_incremental(
-    as_of_date: Optional[str] = None,
-    dry_run: bool = False,
-    include_disabled: bool = False,
-):
-    """自动检测未计算过相关性的因子，只对这些因子做增量计算。
-
-    检测逻辑：查询 transformation_status='SUCCESS' AND is_available=TRUE
-    且 correlation_computed_at IS NULL 的因子。
-    include_disabled=True 时也包含已禁用因子。
-
-    dry_run=True 时仅返回待计算因子列表，不启动计算。
-    """
-    if not dry_run and _computing_lock.locked():
-        return {"status": "computing", "message": "正在计算中", "progress": _correlation_progress.snapshot()}
-
-    # 查询未计算过相关性的因子
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            if include_disabled:
-                cur.execute("""
-                    SELECT factor_name FROM aistock_factor_catalog
-                    WHERE transformation_status = 'SUCCESS'
-                      AND qe_code_path IS NOT NULL
-                      AND correlation_computed_at IS NULL
-                    ORDER BY factor_name
-                """)
-            else:
-                cur.execute("""
-                    SELECT factor_name FROM aistock_factor_catalog
-                    WHERE transformation_status = 'SUCCESS'
-                      AND is_available = TRUE
-                      AND qe_code_path IS NOT NULL
-                      AND correlation_computed_at IS NULL
-                    ORDER BY factor_name
-                """)
-            new_factors = [row[0] for row in cur.fetchall()]
-
-    if not new_factors:
-        return {
-            "status": "no_new_factors",
-            "message": "所有因子均已计算过相关性，无需增量计算",
-        }
-
-    if dry_run:
-        return {
-            "status": "preview",
-            "message": f"检测到 {len(new_factors)} 个未计算因子",
-            "new_factor_count": len(new_factors),
-            "new_factors": new_factors,
-        }
-
-    global _compute_future
-    _compute_future = _compute_executor.submit(_run_correlation_compute, "smart_incremental", new_factors, as_of_date)
-
-    return {
-        "status": "accepted",
-        "message": f"已检测到 {len(new_factors)} 个未计算因子，正在启动智能增量计算",
-        "new_factor_count": len(new_factors),
-        "new_factors": new_factors[:20],
     }
 
 
@@ -1915,6 +2036,13 @@ def cancel_correlation_compute():
     _stop_event.set()
     _correlation_logs.append("收到取消请求，正在中断计算...", "WARN")
 
+    global _active_dispatch_task_id
+    if _active_dispatch_task_id:
+        import asyncio
+        try:
+            asyncio.run(_get_dispatch_service().cancel_task(_active_dispatch_task_id))
+        except Exception as exc:
+            logger.warning(f"取消 dispatch 相关性任务失败: {exc}")
     if _compute_future is not None:
         _compute_future.cancel()
 
@@ -1957,18 +2085,210 @@ def get_cache_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/correlations/overview", summary="相关性页面总览（含快照列表和因子统计）")
+def get_correlation_overview(data_date: Optional[str] = None):
+    """返回相关性页面所需的总览数据：快照列表、因子统计（全部/启用/禁用）、缓存状态。
+
+    Parameters
+    ----------
+    data_date : 快照日期 (YYYYMMDD)，指定后按此快照统计已评估因子数
+    """
+    from ..services.quantevolver.data_snapshot_manager import DataSnapshotManager
+    from ..services.quantevolver.factor_value_pipeline import FactorValuePipeline
+
+    # 1. 快照列表
+    snap_mgr = DataSnapshotManager()
+    snapshots = snap_mgr.list_snapshots()
+
+    # 2. 确定 target snapshot_date: 指定 data_date → 转为 YYYY-MM-DD；否则取 metrics 表最新
+    target_snapshot_date = None
+    if data_date:
+        target_snapshot_date = f"{data_date[:4]}-{data_date[4:6]}-{data_date[6:8]}"
+
+    if not target_snapshot_date:
+        # 未指定 data_date 时不自动选择，返回所有可用快照供用户选择
+        target_snapshot_date = None
+
+    # 2b. 独立指标计算的快照日期列表（含因子数）— 供前端下拉选择
+    metric_snapshots = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT snapshot_date, COUNT(DISTINCT factor_name) AS factor_count
+                FROM aistock_factor_metrics
+                WHERE calc_engine = 'qe_eval_v2'
+                GROUP BY snapshot_date
+                ORDER BY snapshot_date DESC
+            """)
+            for row in cur.fetchall():
+                metric_snapshots.append({
+                    "snapshot_date": str(row[0]),
+                    "factor_count": row[1],
+                })
+
+    # 3. 因子统计 — 按 enabled/disabled 分组
+    factor_stats = {
+        "all": {"total": 0, "evaluated": 0, "correlation_cached": 0, "correlation_computed": 0},
+        "enabled": {"total": 0, "evaluated": 0, "correlation_cached": 0, "correlation_computed": 0},
+        "disabled": {"total": 0, "evaluated": 0, "correlation_cached": 0, "correlation_computed": 0},
+    }
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # 3a. 因子总数 (transformation_status=SUCCESS)
+            cur.execute("""
+                SELECT COALESCE(is_available, TRUE) AS is_avail, COUNT(*)
+                FROM aistock_factor_catalog
+                WHERE transformation_status = 'SUCCESS'
+                GROUP BY is_avail
+            """)
+            for row in cur.fetchall():
+                is_avail = row[0]
+                count = row[1]
+                factor_stats["all"]["total"] += count
+                if is_avail:
+                    factor_stats["enabled"]["total"] += count
+                else:
+                    factor_stats["disabled"]["total"] += count
+
+            # 3b. 已评估因子数 (按 snapshot_date 过滤)
+            if target_snapshot_date:
+                cur.execute(
+                    """
+                    SELECT m.factor_name, COALESCE(c.is_available, TRUE) AS is_avail
+                    FROM (
+                        SELECT DISTINCT factor_name
+                        FROM aistock_factor_metrics
+                        WHERE calc_engine = 'qe_eval_v2'
+                          AND snapshot_date = %s
+                    ) m
+                    JOIN aistock_factor_catalog c ON c.factor_name = m.factor_name
+                    """,
+                    (target_snapshot_date,),
+                )
+            else:
+                cur.execute("""
+                    SELECT m.factor_name, COALESCE(c.is_available, TRUE) AS is_avail
+                    FROM (
+                        SELECT DISTINCT factor_name
+                        FROM aistock_factor_metrics
+                        WHERE calc_engine = 'qe_eval_v2'
+                    ) m
+                    JOIN aistock_factor_catalog c ON c.factor_name = m.factor_name
+                """)
+            for row in cur.fetchall():
+                is_avail = row[1]
+                factor_stats["all"]["evaluated"] += 1
+                if is_avail:
+                    factor_stats["enabled"]["evaluated"] += 1
+                else:
+                    factor_stats["disabled"]["evaluated"] += 1
+
+    # 3c. 单因子 parquet 缓存数 (correlation_cached) — 按 enabled/disabled 分类
+    pipeline = FactorValuePipeline()
+    cached_singles = pipeline.get_cached_singles()
+    cached_names = {c["factor_name"] for c in cached_singles}
+    factor_stats["all"]["correlation_cached"] = len(cached_names)
+
+    if cached_names:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COALESCE(is_available, TRUE), COUNT(*)
+                    FROM aistock_factor_catalog
+                    WHERE factor_name = ANY(%s) AND transformation_status = 'SUCCESS'
+                    GROUP BY is_available
+                    """,
+                    (list(cached_names),),
+                )
+                for row in cur.fetchall():
+                    is_avail, count = row[0], row[1]
+                    if is_avail:
+                        factor_stats["enabled"]["correlation_cached"] = count
+                    else:
+                        factor_stats["disabled"]["correlation_cached"] = count
+
+    # 3d. 已完成相关性计算的因子数
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COALESCE(is_available, TRUE) AS is_avail, COUNT(*)
+                FROM aistock_factor_catalog
+                WHERE transformation_status = 'SUCCESS'
+                  AND correlation_computed_at IS NOT NULL
+                GROUP BY is_avail
+            """)
+            for row in cur.fetchall():
+                is_avail, count = row[0], row[1]
+                factor_stats["all"]["correlation_computed"] = factor_stats["all"].get("correlation_computed", 0) + count
+                if is_avail:
+                    factor_stats["enabled"]["correlation_computed"] = count
+                else:
+                    factor_stats["disabled"]["correlation_computed"] = count
+
+    # 4. single cache 基本信息
+    cs = pipeline.get_cache_status()
+    single_cache = {
+        "cached_count": cs.get("cached_count", 0),
+        "total_size_mb": cs.get("total_size_mb", 0),
+        "date_range": cs.get("date_range"),
+        "as_of_date": cs.get("as_of_date"),
+    }
+
+    # 5. 相关性元数据 (最新)
+    correlation_meta = None
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT as_of_date, num_factors, num_high_corr_pairs,
+                       avg_correlation, computation_time_sec, hdf5_path, created_at
+                FROM qe_correlation_metadata
+                ORDER BY created_at DESC LIMIT 1
+            """)
+            row = cur.fetchone()
+            if row:
+                correlation_meta = {
+                    "as_of_date": str(row[0]),
+                    "num_factors": row[1],
+                    "num_high_corr_pairs": row[2],
+                    "avg_correlation": row[3],
+                    "computation_time_sec": row[4],
+                    "hdf5_path": row[5],
+                    "created_at": row[6].isoformat() if row[6] else None,
+                }
+
+    return {
+        "snapshots": snapshots,
+        "metric_snapshots": metric_snapshots,
+        "current_snapshot": data_date or (snapshots[0]["data_date"] if snapshots else None),
+        "target_snapshot_date": target_snapshot_date,
+        "factor_stats": factor_stats,
+        "single_cache": single_cache,
+        "correlation_meta": correlation_meta,
+    }
+
+
 @router.get("/correlations/status", summary="查询相关性计算状态")
-def get_correlation_status():
+def get_correlation_status(include_disabled: bool = False):
     """查询最新的因子相关性计算状态和结果摘要。
 
     计算进行中时跳过 DB 查询（直接返回缓存值），避免与计算线程竞争连接池。
     仅 idle 状态才查 DB 刷新缓存。
+
+    include_disabled: True 时, db_correlation_count/uncorrelated_factor_count
+    按 "所有改造成功因子" 口径统计 (含禁用); False 时仅启用因子。
+    缓存按 include_disabled 分桶, 勾选切换时会回落到对应桶的旧值直到下一次刷新完成。
     """
     is_computing = _computing_lock.locked()
+    counts_bucket = _status_db_cache["counts_by_include_disabled"][include_disabled]
 
+    refresh_errors: List[str] = []
     if not is_computing:
-        # idle 状态: 查 DB 刷新缓存
-        meta = None
+        # idle 状态: 查 DB 刷新缓存；若刷新失败，保留旧缓存并显式返回错误，避免静默回退为 0
+        meta = _status_db_cache.get("meta")
+        db_count = counts_bucket["db_count"]
+        uncorrelated_count = counts_bucket["uncorrelated_count"]
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -1979,49 +2299,101 @@ def get_correlation_status():
                         ORDER BY created_at DESC LIMIT 1
                     """)
                     row = cur.fetchone()
-                    if row:
-                        meta = {
-                            "as_of_date": str(row[0]),
-                            "num_factors": row[1],
-                            "num_high_corr_pairs": row[2],
-                            "avg_correlation": row[3],
-                            "computation_time_sec": row[4],
-                            "hdf5_path": row[5],
-                            "created_at": row[6].isoformat() if row[6] else None,
-                        }
+                    meta = {
+                        "as_of_date": str(row[0]),
+                        "num_factors": row[1],
+                        "num_high_corr_pairs": row[2],
+                        "avg_correlation": row[3],
+                        "computation_time_sec": row[4],
+                        "hdf5_path": row[5],
+                        "created_at": row[6].isoformat() if row[6] else None,
+                    } if row else None
         except Exception as e:
-            logger.warning(f"读取相关性 job 元数据失败: {e}")
+            msg = f"读取相关性 job 元数据失败: {e}"
+            logger.error(msg)
+            refresh_errors.append(msg)
 
-        db_count = 0
-        uncorrelated_count = 0
         try:
+            eligible_ids = _current_correlation_eligible_factor_ids(include_disabled=include_disabled)
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT COUNT(*) FROM qe_factor_correlations")
+                    cur.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM qe_factor_correlations
+                        WHERE factor_a_id = ANY(%s)
+                          AND factor_b_id = ANY(%s)
+                        """,
+                        (eligible_ids, eligible_ids),
+                    )
                     db_count = cur.fetchone()[0]
-                    cur.execute("""
-                        SELECT COUNT(*) FROM aistock_factor_catalog
-                        WHERE transformation_status = 'SUCCESS'
-                          AND is_available = TRUE
-                          AND qe_code_path IS NOT NULL
-                          AND correlation_computed_at IS NULL
-                    """)
+                    cur.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM aistock_factor_catalog c
+                        WHERE c.id = ANY(%s)
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM qe_factor_correlations q
+                              WHERE q.factor_a_id = c.id OR q.factor_b_id = c.id
+                          )
+                        """,
+                        (eligible_ids,),
+                    )
                     uncorrelated_count = cur.fetchone()[0]
+                    # live 高相关计数 (|corr|>0.7 和 |corr|>0.5), 按 eligible 过滤
+                    cur.execute(
+                        """
+                        SELECT
+                            COUNT(*) FILTER (WHERE ABS(correlation) > 0.7) AS hc07,
+                            COUNT(*) FILTER (WHERE ABS(correlation) > 0.5) AS hc05
+                        FROM qe_factor_correlations
+                        WHERE factor_a_id = ANY(%s)
+                          AND factor_b_id = ANY(%s)
+                        """,
+                        (eligible_ids, eligible_ids),
+                    )
+                    hc_row = cur.fetchone()
+                    high_corr_count_07 = hc_row[0] if hc_row else 0
+                    high_corr_count_05 = hc_row[1] if hc_row else 0
         except Exception as e:
-            logger.warning(f"读取相关性统计计数失败: {e}")
+            msg = f"读取相关性统计计数失败: {e}"
+            logger.error(msg)
+            refresh_errors.append(msg)
 
-        _status_db_cache["meta"] = meta
-        _status_db_cache["db_count"] = db_count
-        _status_db_cache["uncorrelated_count"] = uncorrelated_count
+        if not refresh_errors:
+            _status_db_cache["meta"] = meta
+            counts_bucket["db_count"] = db_count
+            counts_bucket["uncorrelated_count"] = uncorrelated_count
+            counts_bucket["high_corr_count_07"] = high_corr_count_07
+            counts_bucket["high_corr_count_05"] = high_corr_count_05
     # else: computing 状态 — 跳过 DB 查询，使用缓存值
+
+    # 附加可用快照列表
+    available_snapshots = []
+    try:
+        from ..services.quantevolver.data_snapshot_manager import DataSnapshotManager
+        snap_mgr = DataSnapshotManager()
+        available_snapshots = snap_mgr.list_snapshots()
+    except Exception as e:
+        msg = f"获取快照列表失败: {e}"
+        logger.error(msg)
+        refresh_errors.append(msg)
 
     return {
         "status": "computing" if is_computing else "idle",
         "progress": _correlation_progress.snapshot(),
-        "db_correlation_count": _status_db_cache.get("db_count", 0),
-        "uncorrelated_factor_count": _status_db_cache.get("uncorrelated_count", 0),
+        "db_correlation_count": counts_bucket["db_count"],
+        "uncorrelated_factor_count": counts_bucket["uncorrelated_count"],
+        # live 实时高相关计数 (随禁用/删除同步, 无需重算相关性)
+        "live_high_corr_count_07": counts_bucket.get("high_corr_count_07", 0),
+        "live_high_corr_count_05": counts_bucket.get("high_corr_count_05", 0),
+        "include_disabled": include_disabled,
         "latest_computation": _status_db_cache.get("meta"),
         "in_memory_result": _latest_result is not None,
+        "active_dispatch_task_id": _active_dispatch_task_id,
+        "refresh_errors": refresh_errors,
+        "available_snapshots": available_snapshots,
     }
 
 
@@ -2049,6 +2421,7 @@ def get_correlation_matrix(
     """获取完整因子相关性矩阵（用于前端热力图）。
 
     优先返回内存中的最新结果，否则从 HDF5 加载。
+    as_of_date: 指定加载特定日期的矩阵（YYYY-MM-DD 或 YYYYMMDD）。
     threshold: 只在 high_corr_pairs 中返回 |corr| > threshold 的对。
     include_disabled: 为 True 时不过滤禁用因子，并返回 disabled_factors 列表。
     """
@@ -2056,17 +2429,27 @@ def get_correlation_matrix(
 
     result = _latest_result
 
-    # 尝试从 HDF5 加载
+    # 指定 as_of_date 时，从对应 HDF5 加载（不使用内存缓存）
+    if as_of_date:
+        loader = _get_loader()
+        engine = CorrelationEngine(loader)
+        hdf5_path = engine.get_hdf5_by_date(as_of_date)
+        if not hdf5_path:
+            raise HTTPException(
+                status_code=404,
+                detail=f"未找到 {as_of_date} 对应的相关性矩阵文件。请先用该日期触发计算。",
+            )
+        result = CorrelationResult.from_hdf5(hdf5_path)
+        logger.info(f"从 HDF5 加载指定日期矩阵: {hdf5_path}, {len(result.factor_names)} 因子")
+
+    # 未指定日期时，使用内存/最新 HDF5
     if result is None:
-        try:
-            loader = _get_loader()
-            engine = CorrelationEngine(loader)
-            hdf5_path = engine.get_latest_hdf5()
-            if hdf5_path and os.path.exists(hdf5_path):
-                result = CorrelationResult.from_hdf5(hdf5_path)
-                logger.info(f"从 HDF5 加载相关性矩阵: {hdf5_path}, {len(result.factor_names)} 因子")
-        except Exception as e:
-            logger.warning(f"HDF5 加载失败: {e}", exc_info=True)
+        loader = _get_loader()
+        engine = CorrelationEngine(loader)
+        hdf5_path = engine.get_latest_hdf5()
+        if hdf5_path and os.path.exists(hdf5_path):
+            result = CorrelationResult.from_hdf5(hdf5_path)
+            logger.info(f"从 HDF5 加载相关性矩阵: {hdf5_path}, {len(result.factor_names)} 因子")
 
     if result is None:
         raise HTTPException(
@@ -2184,8 +2567,7 @@ async def get_correlation_pair(
                     """, (a_id, b_id))
                     row = cur.fetchone()
     except Exception as e:
-        logger.warning(f"查询因子对相关性失败: {e}")
-        row = None
+        raise HTTPException(503, f"查询因子对相关性数据库失败: {e}")
 
     db_result = None
     if row:
@@ -2218,24 +2600,21 @@ async def get_correlation_pair(
             logger.warning("Daily correlation 计算失败: factor_a=%s, factor_b=%s, error=%s", factor_a, factor_b, e)
             daily_data = {"error": str(e)}
 
-    # 无 DB 记录且无 daily_data 时，使用缓存计算兜底
+    # 无 DB 记录且无 daily_data 时，使用缓存计算（仅在 DB 无记录时触发，非 DB 故障兜底）
     if not db_result and not daily_data:
-        try:
-            loader = _get_loader(source="single")
-            engine = CorrelationEngine(loader)
-            loop = asyncio.get_event_loop()
-            pair_result = await loop.run_in_executor(
-                None,
-                lambda: engine.compute_pairwise(fa, fb, as_of_date),
-            )
-            daily_data = {
-                "correlation_ewma": pair_result.correlation,
-                "effective_days": pair_result.effective_days,
-                "avg_stocks_per_day": pair_result.avg_stocks_per_day,
-                "daily_correlations": pair_result.daily_correlations[-60:],
-            }
-        except Exception as e:
-            logger.warning(f"构建缓存的快速相关性结果失败: {e}")
+        loader = _get_loader(source="single")
+        engine = CorrelationEngine(loader)
+        loop = asyncio.get_event_loop()
+        pair_result = await loop.run_in_executor(
+            None,
+            lambda: engine.compute_pairwise(fa, fb, as_of_date),
+        )
+        daily_data = {
+            "correlation_ewma": pair_result.correlation,
+            "effective_days": pair_result.effective_days,
+            "avg_stocks_per_day": pair_result.avg_stocks_per_day,
+            "daily_correlations": pair_result.daily_correlations[-60:],
+        }
 
     # 查询两个因子的完整指标（catalog + independent + classification + source_code）
     factor_metrics = {}
@@ -2301,7 +2680,7 @@ async def get_correlation_pair(
                         "source_code": source_code,
                     }
     except Exception as e:
-        logger.warning(f"查询因子指标失败: {e}")
+        raise HTTPException(503, f"查询因子指标数据库失败: {e}")
 
     return {
         "factor_a": fa,
@@ -2611,123 +2990,129 @@ def _persist_correlations_batch(records: List[Dict[str, Any]]) -> int:
     if not records:
         return 0
 
+    # 写库只做 catalog → id 映射, 不再按 is_available 过滤;
+    # 准入策略由调用方（compute_correlations）通过 include_disabled 决定, 此处只负责持久化.
+    catalog_rows = FactorEligibilityService().list_eligible_factors(include_disabled=True)
+    catalog_name_to_id = {
+        row["factor_name"]: int(row["id"])
+        for row in catalog_rows
+        if row.get("id") is not None
+    }
+    if not catalog_name_to_id:
+        raise RuntimeError("catalog 中无可用于写入相关性的因子 (transformation_status=SUCCESS 且 qe_code_path 存在)")
+
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # 预加载 factor_name -> catalog_id 映射
-            all_factors = set()
-            for r in records:
-                all_factors.add(r["factor_a"])
-                all_factors.add(r["factor_b"])
-            factor_list = list(all_factors)
-            ph = ",".join(["%s"] * len(factor_list))
-            cur.execute(f"""
-                SELECT DISTINCT ON (factor_name) factor_name, id
-                FROM aistock_factor_catalog
-                WHERE factor_name IN ({ph})
-                ORDER BY factor_name, id
-            """, factor_list)
-            catalog_map = {row[0]: row[1] for row in cur.fetchall()}
-
-            # 预处理: 构建去重的 (a_id, b_id) -> row 映射
+            # 预处理: 构建去重的 (a_id, b_id) -> row 映射.
+            # 如果某一侧因子在 catalog 里查不到 id (异常状态), 记 WARN 并 skip.
             seen = {}
+            skipped_unknown = 0
             for r in records:
-                fa_id = catalog_map.get(r["factor_a"])
-                fb_id = catalog_map.get(r["factor_b"])
+                fa_id = catalog_name_to_id.get(r["factor_a"])
+                fb_id = catalog_name_to_id.get(r["factor_b"])
                 if fa_id is None or fb_id is None:
+                    skipped_unknown += 1
+                    logger.warning(
+                        "相关性记录因子在 catalog 中未找到 id, skip: factor_a=%s factor_b=%s",
+                        r.get("factor_a"), r.get("factor_b"),
+                    )
                     continue
                 a_id, b_id = min(fa_id, fb_id), max(fa_id, fb_id)
-                # 从 data_period 解析 as_of_date
                 as_of_date = None
                 data_period = r.get("data_period", "")
                 if data_period and "as_of_" in data_period:
                     try:
                         as_of_date = data_period.split("as_of_")[1]
                     except (IndexError, ValueError):
-                        pass
+                        raise RuntimeError(f"无法从 data_period 解析 as_of_date: {data_period}")
+                if as_of_date is None:
+                    raise RuntimeError(f"相关性记录缺少 as_of_date: {r}")
                 seen[(a_id, b_id)] = (a_id, b_id, r["correlation"], r["method"], as_of_date, 252)
 
             values = list(seen.values())
-            if values:
-                execute_values(
-                    cur,
-                    """
-                    INSERT INTO qe_factor_correlations
-                        (factor_a_id, factor_b_id, correlation, method,
-                         as_of_date, data_window_days, computed_at)
-                    VALUES %s
-                    ON CONFLICT (factor_a_id, factor_b_id) DO UPDATE SET
-                        correlation = EXCLUDED.correlation,
-                        as_of_date = EXCLUDED.as_of_date,
-                        computed_at = NOW()
-                    """,
-                    values,
-                    template="(%s, %s, %s, %s, COALESCE(%s::DATE, CURRENT_DATE), %s, NOW())",
-                    page_size=2000,
+            if not values:
+                raise RuntimeError(
+                    f"相关性结果全部无法映射到 catalog id, 拒绝写入, skip={skipped_unknown} 条"
                 )
 
-            # 批量更新 catalog 的 correlation_computed_at 和 pair_count
-            # 只更新 records 中实际存在的因子（排除 parquet 生成失败但仍在 catalog_map 中的因子）
-            if seen:
-                actually_computed_ids = set()
-                for (a_id, b_id) in seen.keys():
-                    actually_computed_ids.add(a_id)
-                    actually_computed_ids.add(b_id)
-                computed_id_list = list(actually_computed_ids)
-            elif catalog_map:
-                computed_id_list = list(catalog_map.values())
-            else:
-                computed_id_list = []
-            if computed_id_list:
-                cur.execute("""
-                    UPDATE aistock_factor_catalog c SET
-                        correlation_computed_at = NOW(),
-                        correlation_pair_count = COALESCE(sub.cnt, 0)
-                    FROM (
-                        SELECT factor_id, COUNT(*) AS cnt FROM (
-                            SELECT factor_a_id AS factor_id FROM qe_factor_correlations
-                            WHERE factor_a_id = ANY(%s)
-                            UNION ALL
-                            SELECT factor_b_id AS factor_id FROM qe_factor_correlations
-                            WHERE factor_b_id = ANY(%s)
-                        ) t GROUP BY factor_id
-                    ) sub
-                    WHERE c.id = sub.factor_id
-                """, (computed_id_list, computed_id_list))
+            execute_values(
+                cur,
+                """
+                INSERT INTO qe_factor_correlations
+                    (factor_a_id, factor_b_id, correlation, method,
+                     as_of_date, data_window_days, computed_at)
+                VALUES %s
+                ON CONFLICT (factor_a_id, factor_b_id) DO UPDATE SET
+                    correlation = EXCLUDED.correlation,
+                    method = EXCLUDED.method,
+                    as_of_date = EXCLUDED.as_of_date,
+                    data_window_days = EXCLUDED.data_window_days,
+                    computed_at = NOW()
+                """,
+                values,
+                template="(%s, %s, %s, %s, %s::DATE, %s, NOW())",
+                page_size=2000,
+            )
+
+            computed_id_list = sorted({factor_id for pair in seen.keys() for factor_id in pair})
+            cur.execute(
+                """
+                UPDATE aistock_factor_catalog
+                SET correlation_computed_at = NULL,
+                    correlation_pair_count = 0
+                WHERE id = ANY(%s)
+                """,
+                (computed_id_list,),
+            )
+            cur.execute("""
+                UPDATE aistock_factor_catalog c SET
+                    correlation_computed_at = NOW(),
+                    correlation_pair_count = COALESCE(sub.cnt, 0)
+                FROM (
+                    SELECT factor_id, COUNT(*) AS cnt FROM (
+                        SELECT factor_a_id AS factor_id FROM qe_factor_correlations
+                        WHERE factor_a_id = ANY(%s)
+                        UNION ALL
+                        SELECT factor_b_id AS factor_id FROM qe_factor_correlations
+                        WHERE factor_b_id = ANY(%s)
+                    ) t GROUP BY factor_id
+                ) sub
+                WHERE c.id = sub.factor_id
+            """, (computed_id_list, computed_id_list))
 
         conn.commit()
 
     written = len(values)
-    logger.info(f"批量写入 {written} 条相关性记录（去重后）")
+    logger.info(
+        f"批量写入 {written} 条相关性记录（去重后），skip {skipped_unknown} 条因子在 catalog 中未找到 id"
+    )
     return written
 
 
 def _persist_correlation_metadata(result: CorrelationResult) -> None:
     """写入相关性计算元数据。"""
-    try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO qe_correlation_metadata
-                        (as_of_date, num_factors, num_high_corr_pairs,
-                         avg_correlation, computation_time_sec, hdf5_path)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (as_of_date) DO UPDATE SET
-                        num_factors = EXCLUDED.num_factors,
-                        num_high_corr_pairs = EXCLUDED.num_high_corr_pairs,
-                        avg_correlation = EXCLUDED.avg_correlation,
-                        computation_time_sec = EXCLUDED.computation_time_sec,
-                        hdf5_path = EXCLUDED.hdf5_path,
-                        created_at = NOW()
-                """, (
-                    result.as_of_date,
-                    len(result.factor_names),
-                    result.metadata.get("num_high_corr_07", 0),
-                    float(result.metadata.get("avg_correlation", 0)),
-                    result.computation_time_sec,
-                    result.metadata.get("hdf5_path"),
-                ))
-    except Exception as e:
-        logger.warning(f"写入相关性元数据失败: {e}")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO qe_correlation_metadata
+                    (as_of_date, num_factors, num_high_corr_pairs,
+                     avg_correlation, computation_time_sec, hdf5_path)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (as_of_date) DO UPDATE SET
+                    num_factors = EXCLUDED.num_factors,
+                    num_high_corr_pairs = EXCLUDED.num_high_corr_pairs,
+                    avg_correlation = EXCLUDED.avg_correlation,
+                    computation_time_sec = EXCLUDED.computation_time_sec,
+                    hdf5_path = EXCLUDED.hdf5_path,
+                    created_at = NOW()
+            """, (
+                result.as_of_date,
+                len(result.factor_names),
+                result.metadata.get("num_high_corr_07", 0),
+                float(result.metadata.get("avg_correlation", 0)),
+                result.computation_time_sec,
+                result.metadata.get("hdf5_path"),
+            ))
 
 
 # ── 相关性计算调度 API ────────────────────────────────────────
@@ -2735,7 +3120,7 @@ def _persist_correlation_metadata(result: CorrelationResult) -> None:
 class CorrelationScheduleRequest(BaseModel):
     dataset: str = Field(
         "correlation_full",
-        description="correlation_full | correlation_cache_only | correlation_smart_incremental",
+        description="correlation_full",
     )
     frequency: str = Field("weekly", description="weekly | daily | manual | 10s | 5m 等")
     enabled: bool = Field(True)
@@ -2893,6 +3278,7 @@ def list_correlation_jobs(limit: int = 20):
 
 _pipeline_instance = None
 _pipeline_computing = False
+_pipeline_last_error: Optional[str] = None
 
 
 def _get_pipeline():
@@ -2907,8 +3293,8 @@ def _get_pipeline():
 async def compute_factor_values(
     background_tasks: BackgroundTasks,
     factor_names: Optional[List[str]] = Query(None),
-    start_date: str = Query("2024-12-01"),
-    end_date: str = Query("2025-12-01"),
+    start_date: str = Query("2018-08-01"),
+    end_date: str = Query("2026-04-10"),
     max_workers: int = Query(1),
     timeout_per_factor: int = Query(600),
     data_date: Optional[str] = Query(None),
@@ -2928,24 +3314,25 @@ async def compute_factor_values(
     pipeline = _get_pipeline()
 
     async def _run():
-        global _pipeline_computing
+        global _pipeline_computing, _pipeline_last_error
         _pipeline_computing = True
+        _pipeline_last_error = None
         try:
             result = await asyncio.to_thread(
                 pipeline.compute_factor_values,
                 factor_names=factor_names,
-                start_date=start_date,
-                end_date=end_date,
                 max_workers=max_workers,
                 timeout_per_factor=timeout_per_factor,
                 data_date=data_date,
+                snapshot_start_date=start_date,
             )
             logger.info(
                 f"因子值计算完成: {result.success}/{result.total} 成功, "
                 f"耗时 {result.total_elapsed_sec}s"
             )
         except Exception as e:
-            logger.error(f"因子值计算异常: {e}")
+            _pipeline_last_error = f"因子值计算异常: {e}"
+            logger.error(_pipeline_last_error, exc_info=True)
         finally:
             _pipeline_computing = False
 
@@ -2969,6 +3356,7 @@ def factor_values_status():
     cached = pipeline.get_cached_parquets()
     return {
         "computing": _pipeline_computing,
+        "last_error": _pipeline_last_error,
         "cached_files": cached,
         "cache_count": len(cached),
     }
@@ -3055,6 +3443,61 @@ def list_snapshots():
     }
 
 
+_snapshot_creating = False
+_snapshot_last_error: Optional[str] = None
+
+
+@router.post("/factor-values/snapshots/create")
+async def create_snapshot_api(
+    background_tasks: BackgroundTasks,
+    data_date: str = Query(..., description="快照截止日期 (YYYYMMDD)"),
+    start_date: str = Query("2018-08-01", description="快照起始日期"),
+):
+    """创建基础数据快照（后台任务，不执行因子计算）。
+
+    快照包含 realtime_kline.parquet 和 static_factors.parquet，
+    后续因子计算直接读取快照，不再访问数据库。
+    """
+    global _snapshot_creating, _snapshot_last_error
+    from ..services.quantevolver.data_snapshot_manager import DataSnapshotManager
+    mgr = DataSnapshotManager()
+
+    if mgr.snapshot_exists(data_date):
+        raise HTTPException(409, f"快照 {data_date} 已存在，如需重建请先删除")
+
+    if _snapshot_creating:
+        raise HTTPException(409, "已有快照正在创建中，请等待完成")
+
+    _snapshot_creating = True
+    _snapshot_last_error = None
+
+    async def _run():
+        global _snapshot_creating, _snapshot_last_error
+        try:
+            mgr.create_snapshot(data_date, instruments=None, start_date=start_date)
+            logger.info(f"快照创建成功: {data_date}")
+        except Exception as e:
+            _snapshot_last_error = f"快照创建失败: {e}"
+            logger.error(_snapshot_last_error, exc_info=True)
+        finally:
+            _snapshot_creating = False
+
+    background_tasks.add_task(_run)
+    return {
+        "status": "started",
+        "message": f"快照 {data_date} 创建已启动（起始: {start_date}），8 年数据约需 10-15 分钟",
+    }
+
+
+@router.get("/factor-values/snapshots/status")
+def snapshot_create_status():
+    """查询快照创建状态。"""
+    return {
+        "creating": _snapshot_creating,
+        "last_error": _snapshot_last_error,
+    }
+
+
 @router.delete("/factor-values/snapshots/{data_date}")
 def delete_snapshot(data_date: str):
     """删除指定数据快照。
@@ -3065,6 +3508,8 @@ def delete_snapshot(data_date: str):
 
     if _pipeline_computing:
         raise HTTPException(409, "因子值计算正在进行中，不能删除快照")
+    if _snapshot_creating:
+        raise HTTPException(409, "快照正在创建中，不能删除")
 
     mgr = DataSnapshotManager()
     if not mgr.snapshot_exists(data_date):
@@ -3167,6 +3612,7 @@ def upsert_factor_metrics_schedule(req: FactorMetricsScheduleRequest):
         "include_disabled": req.include_disabled,
         "data_date": req.data_date,
         "workers": max(1, min(8, req.workers)),
+        "timeout_per_factor": 600,
         "one_shot": req.one_shot,
     }
     if req.at:

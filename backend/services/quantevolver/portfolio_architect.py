@@ -15,6 +15,7 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...db.pg_pool import get_conn
+from .factor_official_evaluation_service import CALC_ENGINE
 
 logger = logging.getLogger("aistock.quantevolver.portfolio_architect")
 
@@ -385,7 +386,7 @@ class PortfolioArchitect:
                                group_return_monotonicity, turnover,
                                ic_decay_half_life
                         FROM aistock_factor_metrics
-                        WHERE factor_name = c.factor_name AND eval_window = 'full'
+                        WHERE factor_name = c.factor_name AND eval_window = 'full' AND calc_engine = %s
                         ORDER BY calculated_at DESC
                         LIMIT 1
                     ) m ON TRUE
@@ -401,7 +402,7 @@ class PortfolioArchitect:
                         ORDER BY r.graded_at DESC LIMIT 1
                     ) fr ON TRUE
                     WHERE c.factor_name IN ({ph})
-                """, names_only)
+                """, [CALC_ENGINE, *names_only])
                 cols = [d[0] for d in cur.description]
                 rows = [dict(zip(cols, r)) for r in cur.fetchall()]
 
@@ -854,7 +855,7 @@ class PortfolioArchitect:
                                rank_ic_5d, rank_ic_10d, rank_ic_20d,
                                group_return_monotonicity
                         FROM aistock_factor_metrics
-                        WHERE factor_name = c.factor_name AND eval_window = 'full'
+                        WHERE factor_name = c.factor_name AND eval_window = 'full' AND calc_engine = %s
                         ORDER BY calculated_at DESC
                         LIMIT 1
                     ) m ON TRUE
@@ -865,7 +866,7 @@ class PortfolioArchitect:
                             WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
                         END ASC,
                         c.ic_value DESC NULLS LAST
-                """)
+                """, (CALC_ENGINE,))
                 cols = [desc[0] for desc in cur.description]
                 factors = [dict(zip(cols, row)) for row in cur.fetchall()]
 
@@ -922,7 +923,7 @@ class PortfolioArchitect:
                             SELECT ic_mean, icir, rank_ic_mean,
                                    top_excess_annual_return, ic_decay_half_life
                             FROM aistock_factor_metrics
-                            WHERE factor_name = c.factor_name AND eval_window = 'full'
+                            WHERE factor_name = c.factor_name AND eval_window = 'full' AND calc_engine = %s
                             ORDER BY calculated_at DESC
                             LIMIT 1
                         ) m ON TRUE
@@ -935,7 +936,7 @@ class PortfolioArchitect:
                     )
                     SELECT * FROM ranked WHERE rn <= %s
                     ORDER BY category, rn
-                """, (min_grade_val, min_ic, top_n_per_category))
+                """, (CALC_ENGINE, min_grade_val, min_ic, top_n_per_category))
                 cols = [desc[0] for desc in cur.description]
                 return [dict(zip(cols, row)) for row in cur.fetchall()]
 

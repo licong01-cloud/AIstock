@@ -88,12 +88,14 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
       if (abortRef.current) return;
       if (!res.ok) {
         console.error(`[QE] Enhanced metrics failed for experiment ${experimentId}: ${res.status} ${res.statusText}`);
+        setEnhancedMetrics({});
         return;
       }
       const data = await res.json();
-      if (!abortRef.current) setEnhancedMetrics(data);
+      if (!abortRef.current) setEnhancedMetrics(data && typeof data === "object" ? data : {});
     } catch (e) {
       console.error(`[QE] Enhanced metrics network error for experiment ${experimentId}:`, e);
+      if (!abortRef.current) setEnhancedMetrics({});
     }
   }, []);
 

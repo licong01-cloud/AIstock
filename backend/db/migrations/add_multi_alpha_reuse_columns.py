@@ -41,6 +41,7 @@ def run_migration():
             ("model_source_experiment_id", "TEXT", None),
             ("model_source_group_name", "TEXT", None),
             ("reuse_mode", "TEXT", "'retrain'"),
+            ("qe_loop_id", "TEXT", None),
         ]:
             cur.execute(
                 f"""

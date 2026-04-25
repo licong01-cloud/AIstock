@@ -1,0 +1,155 @@
+version: v2.0.0
+version_name: AIstock Multi-Alpha Production Grade v2 — Direction-Aware + Horizon-Argmax
+applicability: 日频、多Alpha、方向感知、硬去重联动、多horizon自适应
+base_version: v1.0.0
+
+# ── 权重（总分 100）──────────────────────────────────────────
+# 相对 v1 调整：multi_alpha_fitness 从"字段存在性"转为"聚类 + 方向 + 机制"实打实打分，权重上调 +5
+# stability 下调 -2（因为 oos_is_ratio 新增后 overfit 有独立门槛）
+# monotonicity_reliability 下调 -3（因为 direction 修正后 monotonicity 进入 economic_quality 路径打分）
+weights:
+  predictive_strength: 25          # (v1 同)
+  stability: 23                    # -2
+  economic_quality: 15             # (v1 同)
+  selection_stability_cost: 15     # (v1 同)
+  monotonicity_reliability: 7      # -3
+  multi_alpha_fitness: 15          # +5
+
+# ── 方向处理（v2 新增）─────────────────────────────────────
+# 所有评分读指标前先乘 direction，让反向因子享受与正向因子对称的评分曲线
+direction_handling:
+  source: qe_factor_classification.direction   # +1 / -1 / 0
+  fallback: sign(full.rank_ic_mean)            # 缺失时用全窗口 rank_ic_mean 的符号
+  apply_to:
+    - top_excess_annual_return
+    - group_return_monotonicity
+    - top_excess_sharpe
+    - rank_ic_mean
+    - ic_mean
+
+# ── Horizon argmax（v2 新增，替换 v1 的等权平均）─────────────
+# core_ic 改为取 max(abs(rank_ic_{1,5,10,20d})) 对应的那个 horizon
+# best_horizon 作为 classification 字段回写
+horizon_argmax:
+  candidates: [rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d]
+  select: max_abs
+  write_back_fields:                # 评级时同步写 classification 表
+    - best_horizon
+    - best_horizon_advantage        # max_abs - second_abs
+    - horizon_class                 # short/medium/long 推导自 best_horizon
+
+# ── 阈值（v1 为基础，新增 oos_is_ratio / best_horizon_advantage）
+thresholds:
+  core_ic:
+    weak: 0.01
+    excellent: 0.05
+  rank_ic_mean_abs:                 # v2 取 abs 后评分
+    weak: 0.01
+    excellent: 0.05
+  icir_annualized:
+    weak: 0.5
+    excellent: 2.0
+  rank_icir_annualized:
+    weak: 0.5
+    excellent: 2.0
+  ic_positive_ratio:
+    weak: 0.45
+    excellent: 0.60
+  top_excess_annual_return:         # v2 先乘 direction
+    weak: 0.00
+    excellent: 0.20
+  top_excess_sharpe:
+    weak: 0.50
+    excellent: 2.00
+  top_max_drawdown_abs:
+    excellent: 0.15
+    weak: 0.45
+  turnover:                         # v2 下沉到 horizon 分档 hard_gates
+    excellent: 0.03
+    weak: 0.20
+  ic_decay_half_life:
+    weak: 3
+    excellent: 15
+  group_return_monotonicity:        # v2 先乘 direction
+    weak: 0.10
+    excellent: 0.80
+  coverage:
+    weak: 0.50
+    excellent: 0.90
+  n_trading_days:
+    weak: 120
+    excellent: 500
+
+  # ── v2 新增 ────────────────────────────────────────────
+  ic_oos_is_ratio:                  # out_sample / in_sample 的 IC ratio
+    weak: 0.3
+    excellent: 0.8
+  ic_sign_consistency_12m:          # 近 12 月月度 IC 方向一致性
+    weak: 0.50
+    excellent: 0.80
+  best_horizon_advantage:           # horizon argmax 相对第二名的领先幅度
+    weak: 0.00
+    excellent: 0.02
+
+# ── Multi-Alpha Fitness 重设计（v2 修 Bug 3）────────────────
+# 总权重 15 分，分项打分实打实
+multi_alpha_fitness_v2:
+  cluster_role:                     # 4 分：聚类代表因子
+    representative: 4
+    synthesized: 3
+    anchor: 3
+    isolated: 2
+    member: 1
+    unknown: 0
+  signal_mechanism_defined:         # 3 分：signal_mechanism != unknown
+    max: 3
+  direction_defined:                # 3 分：direction ∈ {+1, -1}
+    max: 3
+  horizon_class_defined:            # 2 分：horizon_class != unknown
+    max: 2
+  data_source_defined:              # 2 分：data_source_group != unknown
+    max: 2
+  low_sector_exposure:              # 1 分：|sector_exposure_corr| < 0.5
+    max: 1
+
+# ── Hard Gates（v2 按 horizon 分档 + 新增 overfit gate）──────
+hard_gates:
+  # 全局近端失效阈值（v1 同）
+  recent_negative_threshold: -0.005
+
+  # v2 新增：过拟合硬门槛（所有等级）
+  overfit_gate:
+    min_ic_oos_is_ratio: 0.1        # < 0.1 强制降为 D
+    A_threshold: 0.3                # ≥ A 级需要 ≥ 0.3
+    S_threshold: 0.5                # S 级需要 ≥ 0.5
+
+  # v2 新增：硬去重抑制（is_dedup_primary=false 因子评级时标记，最高只能 C）
+  dedup_suppression:
+    enabled: true
+    field: aistock_factor_catalog.is_dedup_primary
+    non_primary_max_grade: C        # 追求最高收益 → 主动惩罚冗余
+
+  # S 级硬门槛
+  S:
+    min_core_ic: 0.05
+    min_monotonicity: 0.0           # v2 解读：direction × monotonicity > 0
+    min_excess_annual_return: 0.0   # v2 解读：direction × excess_ann > 0
+    min_coverage: 0.70
+    # v2 分档 turnover
+    max_turnover_by_horizon:
+      short: 0.20
+      medium: 0.10
+      long: 0.05
+    # v2 新增
+    min_ic_sign_consistency_12m: 0.70
+
+  # A 级硬门槛
+  A:
+    min_core_ic: 0.03
+    min_monotonicity: -0.10         # v2 解读同上
+    min_coverage: 0.60
+    max_turnover_by_horizon:
+      short: 0.30
+      medium: 0.15
+      long: 0.08
+    min_ic_sign_consistency_12m: 0.55

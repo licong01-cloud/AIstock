@@ -19,8 +19,9 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from ...db.pg_pool import get_conn
-from .factor_value_loader import FactorValueLoader
 from .correlation_engine import CorrelationEngine, CorrelationResult
+from .factor_official_evaluation_service import CALC_ENGINE
+from .factor_value_loader import FactorValueLoader
 
 logger = logging.getLogger("aistock.quantevolver.factor_analyst")
 
@@ -262,6 +263,50 @@ def compute_ts_info_density(factor_values) -> Optional[str]:
         return None
 
 
+def compute_cross_horizon_consistency(
+    multi_window: Optional[Dict[str, Dict[str, Any]]]
+) -> Optional[float]:
+    """跨窗口 IC 符号一致性。
+
+    输入: _get_multi_window_metrics 返回的 dict，形如:
+        {"out_sample": {"ic_mean": 0.03, ...},
+         "recent_6m":  {"ic_mean": 0.02, ...},
+         "recent_3m":  {"ic_mean": -0.01, ...}}
+
+    返回: |Σ sign(ic_mean)| / n_windows , 范围 [0, 1]
+        1.0 → 所有窗口同号（IC 方向稳定）
+        0.0 → 完全抵消
+        None → 数据不足（<2 个有效窗口）
+    """
+    if not multi_window:
+        return None
+    try:
+        import math
+        signs = []
+        for w, m in multi_window.items():
+            ic = m.get("ic_mean") if isinstance(m, dict) else None
+            if ic is None:
+                continue
+            try:
+                v = float(ic)
+            except (TypeError, ValueError):
+                continue
+            if math.isnan(v) or math.isinf(v):
+                continue
+            if v > 0:
+                signs.append(1)
+            elif v < 0:
+                signs.append(-1)
+            else:
+                signs.append(0)
+        if len(signs) < 2:
+            return None
+        return abs(sum(signs)) / len(signs)
+    except Exception as e:
+        logger.debug(f"compute_cross_horizon_consistency failed: {e}")
+        return None
+
+
 def compute_linearity(pearson_ic: Optional[float],
                       spearman_ic: Optional[float]) -> Optional[str]:
     """基于 |Spearman IC| / |Pearson IC| 比值判定因子-收益线性度。
@@ -360,6 +405,39 @@ def _classify_by_rules(factor_name: str, code_text: Optional[str] = None,
     if code_text:
         code_combined += code_text.lower()
 
+    # 名字关键词规则（提前定义用于冲突检测 + 后续兜底）
+    _NAME_KEYWORD_RULES = [
+        (["momentum", "mom_", "roc_", "return_", "trend"], "MOM", "名称含动量关键词"),
+        (["volatil", "vol_", "std_", "atr_", "variance", "swing"], "VOL", "名称含波动率关键词"),
+        (["liquid", "turnover", "vwap", "amihud", "illiquid"], "LIQ", "名称含流动性关键词"),
+        (["value", "valuation", "pe_", "pb_", "ps_", "pcf_", "dividend",
+          "earning", "book_", "ep_", "bp_", "pe_inv", "pe_dyn",
+          "pbinv", "peinv", "psinv", "_pe_", "_pb_", "_ps_"], "VAL", "名称含价值关键词"),
+        (["quality", "roe_", "roa_", "profit", "margin", "growth",
+          "leverage", "debt_", "asset_", "capex", "capital_exp"], "QUAL", "名称含质量关键词"),
+        (["corr_", "correlation", "beta_", "covar"], "CORR", "名称含相关性关键词"),
+        (["rsi_", "macd_", "bollinger", "kdj_", "cci_",
+          "obv_", "sar_", "williams", "stoch", "dmi_", "adx_"], "TECH", "名称含技术指标关键词"),
+        (["size_", "market_cap", "cap_", "ln_cap", "log_cap",
+          "total_mv", "circ_mv", "float_share", "free_share"], "SIZE", "名称含规模关键词"),
+        (["skew", "kurt", "zscore", "rank_", "quantile", "percentile",
+          "deviation", "residual"], "STAT", "名称含统计关键词"),
+        (["flow", "inflow", "outflow", "net_inflow", "moneyflow", "mf_",
+          "fund_flow", "capital_flow", "buy_sell"], "MF", "名称含资金流关键词"),
+        (["chip", "concentration", "cost_", "winner_rate", "cp_",
+          "cyq_", "avg_cost"], "CHIP", "名称含筹码关键词"),
+        (["sentiment", "composite", "combined", "enhanced"], "TECH", "名称含情绪/复合关键词"),
+    ]
+    # 计算名字命中的候选类别集合 N (用于冲突检测)
+    name_cat_set = set()
+    name_cat_matched = []  # [(category, keyword)]
+    for keywords, category, _ in _NAME_KEYWORD_RULES:
+        for kw in keywords:
+            if kw in name_lower:
+                name_cat_set.add(category)
+                name_cat_matched.append((category, kw))
+                break  # 每组规则命中一次即可
+
     # ── 1. 数据列扫描（最高优先级：直接看因子使用了什么数据源） ──
     if code_combined:
         _DATA_COL_RULES = [
@@ -374,22 +452,66 @@ def _classify_by_rules(factor_name: str, code_text: Optional[str] = None,
               "cp_cost_50pct", "cp_cost_85pct", "cp_cost_95pct",
               "cyq_perf", "winner_rate", "avg_cost", "cost_5pct", "cost_15pct",
               "cp_concentration"], "CHIP", "使用筹码分布数据列"),
-            # 基本面/价值因子：使用bb_*基本面数据列
+            # 估值因子：PE/PB/PS/股息率 → VAL
             (["bb_pe_ttm", "bb_pe_dyn", "bb_pb_mrq", "bb_ps_ttm", "bb_pcf_ocf",
-              "bb_total_mv", "bb_circ_mv", "bb_total_share", "bb_float_share",
-              "bb_free_share", "bb_dv_ttm", "bb_dv_ratio",
-              "pe_ttm", "pb_mrq", "ps_ttm", "pcf_ocf", "dividend_yield",
-              "total_mv", "circ_mv"], "VAL", "使用基本面/估值数据列"),
-            # 日频基本面：使用db_*每日基本面数据列
+              "bb_dv_ttm", "bb_dv_ratio",
+              "pe_ttm", "pb_mrq", "ps_ttm", "pcf_ocf", "dividend_yield"],
+             "VAL", "使用基本面/估值数据列(PE/PB/PS/股息率)"),
+            # 规模因子：总市值/流通市值/股本 → SIZE
+            (["bb_total_mv", "bb_circ_mv", "bb_total_share",
+              "bb_float_share", "bb_free_share",
+              "total_mv", "circ_mv", "total_share", "float_share", "free_share"],
+             "SIZE", "使用基本面/规模数据列(市值/股本)"),
+            # 基本面质量：盈利能力/利润率/ROE/ROA/周转率/偿债 → QUAL（质量因子）
+            (["bb_npr", "bb_roe", "bb_roa", "bb_roe_waa", "bb_roe_dt", "bb_roe_yearly",
+              "bb_grossprofit_margin", "bb_netprofit_margin", "bb_gross_margin",
+              "bb_opincome_of_ebt", "bb_profit_to_gr", "bb_op_to_ebt",
+              "bb_assets_turn", "bb_inv_turn", "bb_ar_turn", "bb_fa_turn",
+              "bb_debt_to_assets", "bb_current_ratio", "bb_quick_ratio", "bb_cash_ratio",
+              "bb_op_income_growth", "bb_netprofit_yoy", "bb_or_yoy", "bb_ebit_yoy",
+              "bb_ocf_to_profit", "bb_ocf_to_or", "bb_fcff", "bb_fcfe",
+              "npr", "roe", "roa", "gross_margin", "net_margin", "opincome_growth"],
+             "QUAL", "使用基本面质量/盈利能力数据列(ROE/ROA/利润率/周转率)"),
+            # 日频估值：PE/PB/PS/股息率 → VAL（价值因子）
+            (["db_pe", "db_pe_ttm", "db_pb", "db_ps", "db_ps_ttm",
+              "db_dv_ratio", "db_dv_ttm"],
+             "VAL", "使用日频估值数据列(PE/PB/PS/股息率)"),
+            # 日频规模：总市值/流通市值 → SIZE（规模因子）
+            (["db_total_mv", "db_circ_mv"],
+             "SIZE", "使用日频规模数据列(总市值/流通市值)"),
+            # 日频流动性：换手率/成交量比 → LIQ（流动性因子）
             (["db_turnover_rate", "db_turnover_rate_f", "db_volume_ratio",
-              "db_pe", "db_pe_ttm", "db_pb", "db_ps", "db_ps_ttm",
-              "db_dv_ratio", "db_dv_ttm", "db_total_mv", "db_circ_mv",
-              "turnover_rate", "volume_ratio"], "LIQ", "使用日频基本面/换手率数据列"),
+              "turnover_rate", "volume_ratio"],
+             "LIQ", "使用日频流动性数据列(换手率/成交量比)"),
         ]
+        # 扫描所有数据列规则，统计命中的不同类别
+        data_col_hits = []  # [(category, reason, keywords_matched)]
         for keywords, category, reason_hint in _DATA_COL_RULES:
             matched = [kw for kw in keywords if kw in code_combined]
             if matched:
-                return (category, f"数据列扫描：{reason_hint}({', '.join(matched[:3])})")
+                data_col_hits.append((category, reason_hint, matched))
+        if data_col_hits:
+            unique_cats = set(h[0] for h in data_col_hits)
+            if len(unique_cats) == 1:
+                cat, reason_hint, matched = data_col_hits[0]
+                # 冲突降级：名字关键词集 N 非空 且 N ∩ 数据列类别={cat} = ∅
+                # → 名字与数据列类别冲突，降级为复合因子交 LLM 决定
+                if name_cat_set and cat not in name_cat_set:
+                    name_cats_str = "/".join(sorted(name_cat_set))
+                    name_kws_str = ",".join(kw for _, kw in name_cat_matched[:3])
+                    return (cat, f"数据列扫描复合因子[名字vs数据列冲突:名字{name_cats_str}({name_kws_str}) vs 数据列{cat}({','.join(matched[:2])})]")
+                # 单一类别命中且无冲突 → 高置信度
+                return (cat, f"数据列扫描：{reason_hint}({', '.join(matched[:3])})")
+            else:
+                # 多类别命中 → 复合因子，由 LLM 决定主类（置信度降级）
+                cats_str = "/".join(sorted(unique_cats))
+                all_matched = []
+                for _, _, mm in data_col_hits:
+                    all_matched.extend(mm)
+                # 返回占比最高的类 + "复合因子"标记，让上层降低规则置信度
+                data_col_hits.sort(key=lambda x: -len(x[2]))
+                top_cat = data_col_hits[0][0]
+                return (top_cat, f"数据列扫描复合因子[多类别:{cats_str}]：主类{top_cat}，匹配字段{','.join(all_matched[:5])}")
 
     # ── 2. 计算逻辑扫描（看表达式/代码中的计算模式） ──
     if code_combined:
@@ -409,11 +531,11 @@ def _classify_by_rules(factor_name: str, code_text: Optional[str] = None,
             (["corr($close", "corr($volume", "corr(close", "corr(volume", "corr(", "correlation",
               "cov(", ".corr()", "np.corrcoef"], "CORR",
              "计算逻辑包含相关性/协方差"),
-            # 流动性因子：成交量相关计算
-            (["$volume", "mean($volume", "sum($volume", "$amount",
-              "df['volume']", "df[\"volume\"]", "df['amount']", "df[\"amount\"]",
-              "volume_ma", "vol_ma", "amount_ratio"], "LIQ",
-             "计算逻辑基于成交量/成交额"),
+            # 流动性因子：严格匹配换手率/流动性指标；不把单独引用 $volume/df["volume"] 当 LIQ
+            # (几乎所有价量因子都会读 volume，单独引用不构成 LIQ 证据)
+            (["turnover_ratio", "amihud", "illiquid", "liquidity_",
+              "vwap_ratio", "amount_ratio", "volume_ma/", "vol_ma/"], "LIQ",
+             "计算逻辑包含换手率/流动性指标"),
             # 技术指标：极值、分位数、RSI等
             (["idxmax(", "idxmin(", "max($high", "min($low",
               "max(high", "min(low", "df['high']", "df['low']",
@@ -431,26 +553,7 @@ def _classify_by_rules(factor_name: str, code_text: Optional[str] = None,
                 return (category, f"计算逻辑扫描：{reason_hint}")
 
     # ── 3. 因子名称关键词匹配（次优先级） ──
-    _NAME_KEYWORD_RULES = [
-        (["momentum", "mom_", "roc_", "return_", "trend"], "MOM", "名称含动量关键词"),
-        (["volatil", "vol_", "std_", "atr_", "variance", "swing"], "VOL", "名称含波动率关键词"),
-        (["liquid", "turnover", "vwap", "amihud", "illiquid"], "LIQ", "名称含流动性关键词"),
-        (["value", "valuation", "pe_", "pb_", "ps_", "pcf_", "dividend",
-          "earning", "book_", "ep_", "bp_", "pe_inv", "pe_dyn"], "VAL", "名称含价值关键词"),
-        (["quality", "roe_", "roa_", "profit", "margin", "growth",
-          "leverage", "debt_", "asset_"], "QUAL", "名称含质量关键词"),
-        (["corr_", "correlation", "beta_", "covar"], "CORR", "名称含相关性关键词"),
-        (["rsi_", "macd_", "bollinger", "kdj_", "cci_",
-          "obv_", "sar_", "williams", "stoch", "dmi_", "adx_"], "TECH", "名称含技术指标关键词"),
-        (["size_", "market_cap", "cap_", "ln_cap", "log_cap"], "SIZE", "名称含规模关键词"),
-        (["skew", "kurt", "zscore", "rank_", "quantile", "percentile",
-          "deviation", "residual"], "STAT", "名称含统计关键词"),
-        (["flow", "inflow", "outflow", "net_inflow", "moneyflow", "mf_",
-          "fund_flow", "capital_flow", "buy_sell"], "MF", "名称含资金流关键词"),
-        (["chip", "concentration", "cost_", "winner_rate", "cp_",
-          "cyq_", "avg_cost"], "CHIP", "名称含筹码关键词"),
-        (["sentiment", "composite", "combined", "enhanced"], "TECH", "名称含情绪/复合关键词"),
-    ]
+    # _NAME_KEYWORD_RULES 已在函数顶部定义，此处复用
     for keywords, category, reason_hint in _NAME_KEYWORD_RULES:
         for kw in keywords:
             if kw in name_lower:
@@ -839,11 +942,38 @@ def _analyze_factor_v2(
             logger.warning(f"LLM v2 输出缺少分类字段 ({factor_name}): {list(result.keys())}")
             return None
 
-        # 规范化
+        # 规范化 category
         cat = str(result["category"]).upper()
         if cat not in FACTOR_CATEGORIES:
             cat = "TECH"
         result["category"] = cat
+
+        # 规范化 direction (+1 / -1 / 0)
+        if "direction" in result:
+            try:
+                d = int(result["direction"])
+                result["direction"] = 1 if d > 0 else (-1 if d < 0 else 0)
+            except (TypeError, ValueError):
+                result["direction"] = None
+
+        # 规范化 signal_mechanism (lowercase + 白名单)
+        _VALID_MECHANISMS = {
+            "reversal", "momentum", "crowding", "liquidity_premium",
+            "value_premium", "quality", "microstructure",
+        }
+        if result.get("signal_mechanism"):
+            sm = str(result["signal_mechanism"]).strip().lower()
+            result["signal_mechanism"] = sm if sm in _VALID_MECHANISMS else None
+        else:
+            result["signal_mechanism"] = None
+
+        # 规范化 sector_exposure_corr ([0, 1])
+        if "sector_exposure_corr" in result:
+            try:
+                sc = float(result["sector_exposure_corr"])
+                result["sector_exposure_corr"] = max(0.0, min(1.0, abs(sc)))
+            except (TypeError, ValueError):
+                result["sector_exposure_corr"] = None
 
         return result
     except Exception as e:
@@ -893,6 +1023,27 @@ def _get_default_v2_system_prompt(official_grade: Optional[str] = None) -> str:
 
 5. **使用指引**：给出组合使用建议。
 
+6. **方向 / 机制 / 行业暴露**（评级引擎 v2.0 依赖此三项）：
+   - `direction`：因子经济方向。+1=高分预期高收益（正向）; -1=高分预期低收益（反向, 需在读取时取反）; 0=中性/不适用。
+     **判定优先级**：
+     (a) 因子名称/描述已带明确反向语义（如 neg_*, reverse_*, *_inverse, 小市值=SIZE反向）→ 直接给 -1
+     (b) IC 数据显示 rank_ic_mean 显著<0 且经济逻辑支持反向 → -1
+     (c) 经济逻辑为"数值越大越好"（ROE、动量、主力净流入）→ +1
+     (d) 无明确方向 → 0
+   - `signal_mechanism`：信号机制 7 类之一：
+     `reversal`（超跌反转/卖盘枯竭）、`momentum`（趋势延续/买盘增强）、
+     `crowding`（拥挤度/情绪过热反向套利）、`liquidity_premium`（低流动性风险溢价）、
+     `value_premium`（估值低→未来均值回归）、`quality`（盈利/现金流/财务质量）、
+     `microstructure`（日内/分钟级/订单簿微观结构）。
+     选择最契合核心逻辑的单一类别。
+   - `sector_exposure_corr`：与申万一级行业收益的 |corr| 估计，范围 [0,1]。
+     **估计依据**（无法精确则合理预估）：
+     - 纯价格/量/换手率技术因子 → 0.15~0.35（低）
+     - 基本面 ROE/营收增速等 → 0.35~0.60（中, 偏行业周期暴露）
+     - 规模/市值相关 → 0.50~0.75（高）
+     - 分钟/微观结构 → 0.10~0.25（低）
+     如完全不确定，填 0.4（中性估计）。
+
 请严格输出以下 JSON 格式：
 {{{{
   "category": "12类代码之一",
@@ -900,6 +1051,10 @@ def _get_default_v2_system_prompt(official_grade: Optional[str] = None) -> str:
   "grade_reason": "对正式评级的解释说明（不输出评级字母）",
   "dimension": "cross_sectional 或 time_series",
   "description": "300-500字可读文本描述",
+  "direction": 1,
+  "direction_reason": "方向判定理由（一句话）",
+  "signal_mechanism": "7类之一",
+  "sector_exposure_corr": 0.3,
   "usage_guidance": {{{{
     "optimal_holding_period": "Nd 或 Nd-Md",
     "market_regime_fit": "适用市场环境",
@@ -960,13 +1115,24 @@ class FactorAnalyst:
             pearson_ic=ind.get("ic_mean"),
             spearman_ic=ind.get("rank_ic_mean"),
         )
-        # ts_info_density 需要因子值数据，这里暂留 None (后续批量计算)
+        # ts_info_density: 从因子 parquet 缓存加载时序数据并计算
         ts_density = None
+        try:
+            loader = FactorValueLoader()
+            df_vals = loader.load_single_factor(factor_name)
+            if df_vals is not None and len(df_vals) > 0:
+                col = factor_name if factor_name in df_vals.columns else df_vals.columns[0]
+                ts_density = compute_ts_info_density(df_vals[col])
+        except Exception as e:
+            logger.debug(f"ts_info_density load failed for {factor_name}: {e}")
 
         # 获取多窗口稳定性指标
         multi_window = self._get_multi_window_metrics(factor_name)
         if multi_window:
             ind['multi_window'] = multi_window
+
+        # cross_horizon_consistency: 基于多窗口 IC 符号一致性
+        cross_horizon_consistency = compute_cross_horizon_consistency(multi_window)
 
         # ── v2 合并 LLM 调用 ──
         factor_profile = None
@@ -984,8 +1150,11 @@ class FactorAnalyst:
                 # 计算规则置信度（基于匹配强度）
                 rule_confidence = 0
                 if rule_category:
-                    # 数据列扫描（最高置信度=3）
-                    if "数据列扫描" in rule_reason:
+                    # 数据列扫描命中复合因子（多类别）→ 置信度降为 1，让 LLM 胜出
+                    if "数据列扫描复合因子" in rule_reason:
+                        rule_confidence = 1
+                    # 数据列扫描命中单一类别 → 最高置信度 3
+                    elif "数据列扫描" in rule_reason:
                         rule_confidence = 3
                     # 计算逻辑扫描（中等置信度=2）
                     elif "计算逻辑扫描" in rule_reason:
@@ -1028,6 +1197,10 @@ class FactorAnalyst:
                     "metrics_summary": _to_jsonable({k: v for k, v in ind.items() if v is not None}),
                     "usage_guidance": v2_result.get("usage_guidance", {}),
                     "risk_notes": v2_result.get("risk_notes", []),
+                    "direction": v2_result.get("direction"),
+                    "direction_reason": v2_result.get("direction_reason"),
+                    "signal_mechanism": v2_result.get("signal_mechanism"),
+                    "sector_exposure_corr": v2_result.get("sector_exposure_corr"),
                 }
 
                 # 聚合 L2 实验数据
@@ -1049,6 +1222,10 @@ class FactorAnalyst:
                     ts_info_density=ts_density,
                     update_freq=upd_freq,
                     linearity=linearity,
+                    direction=v2_result.get("direction"),
+                    signal_mechanism=v2_result.get("signal_mechanism"),
+                    sector_exposure_corr=v2_result.get("sector_exposure_corr"),
+                    cross_horizon_consistency=cross_horizon_consistency,
                 )
                 return {
                     "ok": True, "factor_name": factor_name,
@@ -1093,6 +1270,7 @@ class FactorAnalyst:
             ts_info_density=ts_density,
             update_freq=upd_freq,
             linearity=linearity,
+            cross_horizon_consistency=cross_horizon_consistency,
         )
 
         return {
@@ -1610,10 +1788,10 @@ class FactorAnalyst:
                                ic_decay_half_life, coverage, n_trading_days,
                                ic_csz_mean, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d
                         FROM aistock_factor_metrics
-                        WHERE factor_name = %s AND eval_window = 'full'
+                        WHERE factor_name = %s AND eval_window = 'full' AND calc_engine = %s
                         ORDER BY calculated_at DESC
                         LIMIT 1
-                    """, (factor_name,))
+                    """, (factor_name, CALC_ENGINE))
                     row = cur.fetchone()
                     if not row:
                         return None
@@ -1663,8 +1841,9 @@ class FactorAnalyst:
                         FROM aistock_factor_metrics
                         WHERE factor_name = %s
                           AND eval_window IN ('out_sample', 'recent_6m', 'recent_3m')
+                          AND calc_engine = %s
                         ORDER BY calculated_at DESC, eval_window
-                    """, (factor_name,))
+                    """, (factor_name, CALC_ENGINE))
                     rows = cur.fetchall()
                     if not rows:
                         return None
@@ -1694,6 +1873,121 @@ class FactorAnalyst:
                 else:
                     cur.execute("SELECT factor_name, source FROM aistock_factor_catalog")
                 return [{"factor_name": row[0], "source": row[1]} for row in cur.fetchall()]
+
+    def backfill_deterministic_v2(
+        self,
+        factor_name: str,
+        factor_source: Optional[str] = None,
+        skip_if_present: bool = True,
+    ) -> Dict[str, Any]:
+        """零 LLM 回填 ts_info_density + cross_horizon_consistency。
+
+        仅 UPDATE 已有 qe_factor_classification 记录, 不创建新行, 不调 LLM。
+        skip_if_present=True 时, 两个字段都已有值的因子直接跳过。
+        """
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if factor_source:
+                    cur.execute("""
+                        SELECT id, ts_info_density, cross_horizon_consistency
+                        FROM qe_factor_classification
+                        WHERE factor_name = %s AND factor_source = %s
+                    """, (factor_name, factor_source))
+                else:
+                    cur.execute("""
+                        SELECT id, ts_info_density, cross_horizon_consistency
+                        FROM qe_factor_classification
+                        WHERE factor_name = %s
+                        ORDER BY id LIMIT 1
+                    """, (factor_name,))
+                row = cur.fetchone()
+                if not row:
+                    return {"ok": False, "updated": False,
+                            "skipped_reason": "无分类记录(需先跑 analyze_single_factor)"}
+                row_id, existing_ts, existing_xhz = row
+
+        if skip_if_present and existing_ts is not None and existing_xhz is not None:
+            return {"ok": True, "updated": False,
+                    "ts_info_density": existing_ts,
+                    "cross_horizon_consistency": float(existing_xhz) if existing_xhz is not None else None,
+                    "skipped_reason": "两字段均已有值"}
+
+        ts_density = existing_ts
+        if ts_density is None or not skip_if_present:
+            try:
+                loader = FactorValueLoader()
+                df_vals = loader.load_single_factor(factor_name)
+                if df_vals is not None and len(df_vals) > 0:
+                    col = factor_name if factor_name in df_vals.columns else df_vals.columns[0]
+                    ts_density = compute_ts_info_density(df_vals[col])
+            except Exception as e:
+                logger.debug(f"ts_info_density load failed for {factor_name}: {e}")
+
+        xhz = float(existing_xhz) if existing_xhz is not None else None
+        if xhz is None or not skip_if_present:
+            multi_window = self._get_multi_window_metrics(factor_name)
+            xhz = compute_cross_horizon_consistency(multi_window)
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE qe_factor_classification
+                    SET ts_info_density = COALESCE(%s, ts_info_density),
+                        cross_horizon_consistency = COALESCE(%s, cross_horizon_consistency)
+                    WHERE id = %s
+                """, (ts_density, xhz, row_id))
+
+        return {
+            "ok": True, "updated": True,
+            "ts_info_density": ts_density,
+            "cross_horizon_consistency": xhz,
+            "skipped_reason": None,
+        }
+
+    def batch_backfill_deterministic_v2(
+        self,
+        source_filter: Optional[str] = None,
+        skip_if_present: bool = True,
+    ) -> Dict[str, Any]:
+        """批量零 LLM 回填 — 只遍历已有 qe_factor_classification 记录。"""
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if source_filter:
+                    cur.execute("""
+                        SELECT factor_name, factor_source
+                        FROM qe_factor_classification
+                        WHERE factor_source = %s
+                        ORDER BY id
+                    """, (source_filter,))
+                else:
+                    cur.execute("""
+                        SELECT factor_name, factor_source
+                        FROM qe_factor_classification
+                        ORDER BY id
+                    """)
+                factors = [{"factor_name": r[0], "factor_source": r[1]} for r in cur.fetchall()]
+
+        total = len(factors)
+        updated = 0
+        skipped = 0
+        errors: List[Dict[str, str]] = []
+        for f in factors:
+            try:
+                res = self.backfill_deterministic_v2(
+                    f["factor_name"], f["factor_source"], skip_if_present=skip_if_present)
+                if res.get("updated"):
+                    updated += 1
+                else:
+                    skipped += 1
+            except Exception as e:
+                errors.append({"factor_name": f["factor_name"], "error": str(e)})
+
+        return {
+            "ok": True, "total": total,
+            "updated": updated, "skipped": skipped,
+            "error_count": len(errors),
+            "errors": errors[:10],
+        }
 
     def _upsert_classification(self, **kwargs) -> None:
         """UPSERT因子分类结果。"""
@@ -1729,9 +2023,11 @@ class FactorAnalyst:
                          factor_profile, holding_period_class,
                          data_source_group, ts_info_density,
                          update_freq, linearity,
+                         direction, signal_mechanism, sector_exposure_corr,
+                         cross_horizon_consistency,
                          analyzed_at, factor_catalog_id)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, NOW(), %s)
+                            %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
                     ON CONFLICT (factor_name, factor_source) DO UPDATE SET
                         category = EXCLUDED.category,
                         grade_reason = EXCLUDED.grade_reason,
@@ -1748,6 +2044,10 @@ class FactorAnalyst:
                         ts_info_density = COALESCE(EXCLUDED.ts_info_density, qe_factor_classification.ts_info_density),
                         update_freq = EXCLUDED.update_freq,
                         linearity = COALESCE(EXCLUDED.linearity, qe_factor_classification.linearity),
+                        direction = COALESCE(EXCLUDED.direction, qe_factor_classification.direction),
+                        signal_mechanism = COALESCE(EXCLUDED.signal_mechanism, qe_factor_classification.signal_mechanism),
+                        sector_exposure_corr = COALESCE(EXCLUDED.sector_exposure_corr, qe_factor_classification.sector_exposure_corr),
+                        cross_horizon_consistency = COALESCE(EXCLUDED.cross_horizon_consistency, qe_factor_classification.cross_horizon_consistency),
                         factor_catalog_id = EXCLUDED.factor_catalog_id,
                         analyzed_at = NOW()
                 """, (
@@ -1768,6 +2068,10 @@ class FactorAnalyst:
                     kwargs.get("ts_info_density"),
                     kwargs.get("update_freq"),
                     kwargs.get("linearity"),
+                    kwargs.get("direction"),
+                    kwargs.get("signal_mechanism"),
+                    kwargs.get("sector_exposure_corr"),
+                    kwargs.get("cross_horizon_consistency"),
                     factor_catalog_id,
                 ))
 

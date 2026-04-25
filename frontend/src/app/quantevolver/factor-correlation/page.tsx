@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import ComputePanel, { ComputeStatus, ComputeScope } from "./components/ComputePanel";
+import ComputePanel, { ComputeStatus, ComputeScope, SnapshotInfo, FactorStats } from "./components/ComputePanel";
 import CorrelationHeatmap from "./components/CorrelationHeatmap";
 import HighCorrTable from "./components/HighCorrTable";
 import PairDetail, { PairData, RelatedFactor } from "./components/PairDetail";
@@ -28,9 +28,15 @@ export default function FactorCorrelationPage() {
   const [matrixData, setMatrixData] = useState<MatrixData | null>(null);
   const [loading, setLoading] = useState(true);
   const [computing, setComputing] = useState(false);
-  const [computeScope, setComputeScope] = useState<ComputeScope>("smart_incremental");
-  const [asOfDate, setAsOfDate] = useState("");
+  const [computeScope, setComputeScope] = useState<ComputeScope>("cache");
   const [includeDisabled, setIncludeDisabled] = useState(false);
+  const [snapshotDate, setSnapshotDate] = useState("");
+  const [overviewData, setOverviewData] = useState<{
+    snapshots: SnapshotInfo[];
+    factor_stats: FactorStats;
+    single_cache: { cached_count: number; total_size_mb: number; date_range: string | null; as_of_date: string | null };
+    correlation_meta: Record<string, any> | null;
+  } | null>(null);
   const [selectedPair, setSelectedPair] = useState<{ fa: string; fb: string }>({
     fa: "",
     fb: "",
@@ -44,10 +50,6 @@ export default function FactorCorrelationPage() {
   } | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [dedupBaseFactor, setDedupBaseFactor] = useState("");
-  const [smartPreview, setSmartPreview] = useState<{
-    factors: string[];
-    count: number;
-  } | null>(null);
 
   const showToast = (text: string, type: "success" | "error" = "success") => {
     setToastMsg({ text, type });
@@ -55,9 +57,11 @@ export default function FactorCorrelationPage() {
   };
 
   // ── 加载计算状态 ──
+  // include_disabled 透传, 让 uncorrelated_factor_count / db_correlation_count
+  // 按用户当前勾选的口径返回 (禁用因子切换时立即反映).
   const loadStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${BASE}/correlations/status`);
+      const res = await fetch(`${BASE}/correlations/status?include_disabled=${includeDisabled}`);
       if (res.ok) {
         const data = await res.json();
         setComputeStatus(data);
@@ -71,12 +75,39 @@ export default function FactorCorrelationPage() {
       console.error("加载状态失败", e);
     }
     return null;
+  }, [includeDisabled]);
+
+  // ── 加载总览数据（快照列表 + 因子统计） ──
+  const loadOverview = useCallback(async (targetDataDate?: string) => {
+    try {
+      const url = targetDataDate
+        ? `${BASE}/correlations/overview?data_date=${targetDataDate}`
+        : `${BASE}/correlations/overview`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setOverviewData(data);
+        return data;
+      }
+      // 非 ok 响应：清空数据，避免旧快照数据残留
+      setOverviewData(null);
+    } catch (e) {
+      console.error("加载总览数据失败", e);
+      setOverviewData(null);
+    }
+    return null;
   }, []);
 
   // ── 加载矩阵数据 ──
+  // HDF5 快照在 compute 时冻结，无法按 include_disabled 增量更新。
+  // 此处固定 include_disabled=true 拉取 HDF5 全量 + disabled_factors 列表，
+  // 子组件（HighCorrTable/FactorDedupPanel）自行按 includeDisabled 做客户端过滤/标识。
   const loadMatrix = useCallback(async () => {
     try {
-      const res = await fetch(`${BASE}/correlations/matrix?threshold=0&include_disabled=${includeDisabled}`);
+      const asOfParam = snapshotDate
+        ? `&as_of_date=${snapshotDate.slice(0, 4)}-${snapshotDate.slice(4, 6)}-${snapshotDate.slice(6, 8)}`
+        : "";
+      const res = await fetch(`${BASE}/correlations/matrix?threshold=0&include_disabled=true${asOfParam}`);
       if (res.ok) {
         const data = await res.json();
         setMatrixData(data);
@@ -87,11 +118,14 @@ export default function FactorCorrelationPage() {
         setMatrixData(null);
         return null;
       }
+      // 其他非 ok 响应：清空旧数据
+      setMatrixData(null);
     } catch (e) {
       console.error("加载矩阵失败", e);
+      setMatrixData(null);
     }
     return null;
-  }, [includeDisabled]);
+  }, [snapshotDate]);
 
   // ── 加载因子对详情 ──
   const loadPairDetail = useCallback(async (fa: string, fb: string) => {
@@ -128,70 +162,10 @@ export default function FactorCorrelationPage() {
   const handleCompute = useCallback(async () => {
     setComputing(true);
     try {
-      const body: Record<string, any> = { force_recompute: true };
+      const body: Record<string, any> = { force_recompute: true, include_disabled: includeDisabled };
 
-      if (asOfDate) {
-        body.as_of_date = asOfDate;
-      }
-
-      if (computeScope === "full") {
-        body.mode = "full";
-        body.include_disabled = includeDisabled;
-      } else if (computeScope === "cache") {
-        body.mode = "cache_only";
-        body.include_disabled = includeDisabled;
-      } else if (computeScope === "smart_incremental") {
-        // 智能增量: 先 dry_run 预览，再确认计算
-        const previewUrl = asOfDate
-          ? `${BASE}/correlations/compute-smart-incremental?dry_run=true&as_of_date=${asOfDate}&include_disabled=${includeDisabled}`
-          : `${BASE}/correlations/compute-smart-incremental?dry_run=true&include_disabled=${includeDisabled}`;
-        const res = await fetch(previewUrl, { method: "POST" });
-        if (!res.ok) {
-          showToast("查询新因子失败", "error");
-          setComputing(false);
-          return;
-        }
-        const result = await res.json();
-        if (result.status === "no_new_factors") {
-          showToast("所有因子均已计算过相关性，无需增量计算");
-          setComputing(false);
-          return;
-        }
-        // 显示预览弹窗，等待用户确认
-        setSmartPreview({ factors: result.new_factors, count: result.new_factor_count });
-        setComputing(false);
-        return;
-      } else if (computeScope === "incremental") {
-        // 增量模式: 使用不同的 API 端点
-        const res = await fetch(`${BASE}/correlations/compute-incremental`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            factor_names: [],  // TODO: 支持因子选择器
-            as_of_date: asOfDate || undefined,
-          }),
-        });
-        if (!res.ok) {
-          showToast("触发增量计算失败", "error");
-          setComputing(false);
-          return;
-        }
-        showToast("增量计算已启动...");
-        pollRef.current = setInterval(async () => {
-          const st = await loadStatus();
-          if (st && st.progress?.status !== "computing") {
-            clearInterval(pollRef.current!);
-            pollRef.current = null;
-            setComputing(false);
-            if (st.progress?.status === "failed") {
-              showToast(`增量计算失败: ${st.progress.error || "未知错误"}`, "error");
-            } else {
-              showToast("增量计算完成!");
-            }
-            await loadMatrix();
-          }
-        }, 2000);
-        return;
+      if (snapshotDate) {
+        body.data_date = snapshotDate;
       }
 
       const res = await fetch(`${BASE}/correlations/compute`, {
@@ -205,7 +179,7 @@ export default function FactorCorrelationPage() {
         return;
       }
       const result = await res.json();
-      showToast(`相关性计算已启动 (${result.factor_count ?? "?"} 因子, ${result.mode})...`);
+      showToast(`相关性计算已启动 (${result.factor_count ?? "?"} 因子)...`);
       // 轮询状态 (2秒间隔)
       pollRef.current = setInterval(async () => {
         const st = await loadStatus();
@@ -219,49 +193,14 @@ export default function FactorCorrelationPage() {
             showToast("计算完成!");
           }
           await loadMatrix();
+          await loadOverview();
         }
       }, 2000);
     } catch (e) {
       showToast("触发计算异常", "error");
       setComputing(false);
     }
-  }, [loadStatus, loadMatrix, computeScope, asOfDate, includeDisabled]);
-
-  // ── 智能增量: 用户确认后开始计算 ──
-  const handleSmartIncrementalConfirm = useCallback(async () => {
-    setSmartPreview(null);
-    setComputing(true);
-    try {
-      const url = asOfDate
-        ? `${BASE}/correlations/compute-smart-incremental?as_of_date=${asOfDate}&include_disabled=${includeDisabled}`
-        : `${BASE}/correlations/compute-smart-incremental?include_disabled=${includeDisabled}`;
-      const res = await fetch(url, { method: "POST" });
-      if (!res.ok) {
-        showToast("触发智能增量计算失败", "error");
-        setComputing(false);
-        return;
-      }
-      const result = await res.json();
-      showToast(`${result.new_factor_count ?? "?"} 个新因子，智能增量计算已启动...`);
-      pollRef.current = setInterval(async () => {
-        const st = await loadStatus();
-        if (st && st.progress?.status !== "computing") {
-          clearInterval(pollRef.current!);
-          pollRef.current = null;
-          setComputing(false);
-          if (st.progress?.status === "failed") {
-            showToast(`智能增量计算失败: ${st.progress.error || "未知错误"}`, "error");
-          } else {
-            showToast("智能增量计算完成!");
-          }
-          await loadMatrix();
-        }
-      }, 2000);
-    } catch (e) {
-      showToast("触发智能增量计算异常", "error");
-      setComputing(false);
-    }
-  }, [loadStatus, loadMatrix, asOfDate, includeDisabled]);
+  }, [loadStatus, loadMatrix, loadOverview, computeScope, includeDisabled, snapshotDate]);
 
   // ── 热力图点击 / 预警表点击 → 跳转因子对分析 ──
   const handleSelectPair = useCallback(
@@ -311,14 +250,18 @@ export default function FactorCorrelationPage() {
     setActiveTab("dedup");
   }, []);
 
-  // ── 切换"含禁用因子"时重新加载矩阵 ──
-  const prevIncludeDisabled = useRef(includeDisabled);
+  // ── 快照切换时清空旧数据并重新加载 ──
+  const prevSnapshotDate = useRef(snapshotDate);
   useEffect(() => {
-    if (prevIncludeDisabled.current !== includeDisabled) {
-      prevIncludeDisabled.current = includeDisabled;
+    if (prevSnapshotDate.current !== snapshotDate) {
+      prevSnapshotDate.current = snapshotDate;
+      // 先清空旧数据，避免新旧快照数据交叉显示
+      setMatrixData(null);
+      setOverviewData(null);
+      loadOverview(snapshotDate || undefined);
       loadMatrix();
     }
-  }, [includeDisabled, loadMatrix]);
+  }, [snapshotDate, loadOverview, loadMatrix]);
 
   // ── 初始加载（仅 mount 时执行一次）──
   const initRef = useRef(false);
@@ -327,7 +270,7 @@ export default function FactorCorrelationPage() {
     initRef.current = true;
     (async () => {
       setLoading(true);
-      const [st] = await Promise.all([loadStatus(), loadMatrix()]);
+      const [st] = await Promise.all([loadStatus(), loadMatrix(), loadOverview()]);
       setLoading(false);
       // 如果后端已在计算中，启动轮询
       if (st && st.progress?.status === "computing") {
@@ -339,6 +282,7 @@ export default function FactorCorrelationPage() {
             pollRef.current = null;
             setComputing(false);
             await loadMatrix();
+            await loadOverview();
           }
         }, 2000);
       }
@@ -348,6 +292,12 @@ export default function FactorCorrelationPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // includeDisabled 切换时刷新 status (后端按口径分桶返回 db_count/uncorrelated_count)
+  useEffect(() => {
+    if (!initRef.current) return;
+    loadStatus();
+  }, [includeDisabled, loadStatus]);
 
   const tabs: { key: Tab; label: string }[] = [
     { key: "heatmap", label: "相关性热力图" },
@@ -379,113 +329,19 @@ export default function FactorCorrelationPage() {
         </div>
       )}
 
-      {/* 智能增量预览弹窗 */}
-      {smartPreview && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 10000,
-            background: "rgba(0,0,0,0.5)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-          onClick={() => setSmartPreview(null)}
-        >
-          <div
-            style={{
-              background: "#fff",
-              borderRadius: 16,
-              padding: "24px 28px",
-              maxWidth: 520,
-              width: "90%",
-              maxHeight: "70vh",
-              display: "flex",
-              flexDirection: "column",
-              boxShadow: "0 8px 32px rgba(0,0,0,0.2)",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 700, color: "#111827" }}>
-              智能增量计算预览
-            </h3>
-            <p style={{ margin: "0 0 16px", fontSize: 13, color: "#6b7280" }}>
-              检测到 <strong style={{ color: "#7c3aed" }}>{smartPreview.count}</strong> 个新因子需要计算相关性。
-              将执行因子代码生成缓存，并与所有已有因子计算相关系数。
-            </p>
-            <div
-              style={{
-                flex: 1,
-                overflowY: "auto",
-                border: "1px solid #e5e7eb",
-                borderRadius: 8,
-                marginBottom: 16,
-              }}
-            >
-              <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
-                    <th style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, color: "#374151" }}>#</th>
-                    <th style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, color: "#374151" }}>因子名称</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {smartPreview.factors.map((f, i) => (
-                    <tr key={f} style={{ borderTop: "1px solid #f3f4f6" }}>
-                      <td style={{ padding: "6px 12px", color: "#9ca3af" }}>{i + 1}</td>
-                      <td style={{ padding: "6px 12px", fontFamily: "monospace", color: "#111827" }}>{f}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-              <button
-                onClick={() => setSmartPreview(null)}
-                style={{
-                  padding: "8px 20px",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  border: "1px solid #d1d5db",
-                  borderRadius: 8,
-                  background: "#fff",
-                  color: "#374151",
-                  cursor: "pointer",
-                }}
-              >
-                取消
-              </button>
-              <button
-                onClick={handleSmartIncrementalConfirm}
-                style={{
-                  padding: "8px 24px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  border: "none",
-                  borderRadius: 8,
-                  background: "#7c3aed",
-                  color: "#fff",
-                  cursor: "pointer",
-                }}
-              >
-                确认计算 ({smartPreview.count} 个因子)
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Banner + 计算状态 */}
       <ComputePanel
         status={computeStatus}
         computing={computing}
         scope={computeScope}
-        asOfDate={asOfDate}
         includeDisabled={includeDisabled}
+        snapshotDate={snapshotDate}
+        availableSnapshots={overviewData?.snapshots || []}
+        factorStats={overviewData?.factor_stats || null}
+        singleCache={overviewData?.single_cache || null}
         onScopeChange={setComputeScope}
-        onAsOfDateChange={setAsOfDate}
         onIncludeDisabledChange={setIncludeDisabled}
+        onSnapshotDateChange={setSnapshotDate}
         onCompute={handleCompute}
       />
 
@@ -558,6 +414,9 @@ export default function FactorCorrelationPage() {
                   pairs={matrixData.high_corr_pairs}
                   onSelectPair={(fa, fb) => handleSelectPair(fa, fb)}
                   onGoToDedup={handleGoToDedup}
+                  includeDisabled={includeDisabled}
+                  onIncludeDisabledChange={setIncludeDisabled}
+                  disabledFactors={matrixData.disabled_factors || []}
                 />
               ) : (
                 <div
@@ -592,6 +451,7 @@ export default function FactorCorrelationPage() {
             {activeTab === "dedup" && (
               <FactorDedupPanel
                 factorNames={matrixData?.factor_names ?? []}
+                disabledFactors={matrixData?.disabled_factors || []}
                 initialBaseFactor={dedupBaseFactor}
                 showToast={showToast}
                 onRefreshMatrix={loadMatrix}

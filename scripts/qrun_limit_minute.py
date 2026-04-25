@@ -5,6 +5,8 @@
    解决 benchmark=None 导致所有收益/风险指标 NaN 的问题
 2. --backtest-only: 跳过模型训练，从已有 mlruns 加载模型直接回测
    用于失败 Loop 恢复（训练已完成、回测失败）或策略对比分析
+3. --train-only: 只训练模型+生成 pred.pkl，跳过回测（PortAnaRecord）
+   用于多Alpha分布式架构：从节点只训练，主节点统一回测
 
 分钟线内存优化（121GB → 200MB/天）已移入 qlib 源码:
   - exchange.py: Exchange.get_quote_from_qlib() 批次加载 + ensure_data_for_day()
@@ -16,6 +18,7 @@
 用法：
   python qrun_limit_minute.py conf.yaml                  # 完整训练+回测
   python qrun_limit_minute.py conf.yaml --backtest-only   # 跳过训练，只回测
+  python qrun_limit_minute.py conf.yaml --train-only      # 只训练，跳过回测
 """
 import argparse
 import gc
@@ -171,6 +174,8 @@ def main():
     parser.add_argument("yaml_path", nargs="?", default="conf.yaml")
     parser.add_argument("--backtest-only", action="store_true",
                         help="跳过模型训练，从已有 mlruns 加载模型直接回测")
+    parser.add_argument("--train-only", action="store_true",
+                        help="只训练模型+生成 pred.pkl，跳过回测（多Alpha从节点模式）")
     args = parser.parse_args()
 
     # Jinja2 渲染 → YAML 解析
@@ -205,10 +210,47 @@ def main():
         # ── Backtest-only 模式：跳过训练，加载已有模型 ──
         print("[INFO] Backtest-only mode: skipping model training, loading existing model")
         _run_backtest_only(config, experiment_name)
+    elif args.train_only:
+        # ── Train-only 模式：训练+生成pred.pkl，跳过回测 ──
+        print("[INFO] Train-only mode: training model + generating predictions, skipping backtest")
+        _run_train_only(config, experiment_name)
     else:
         # ── 完整模式：训练 + 回测 ──
         recorder = task_train(config.get("task"), experiment_name=experiment_name)
         recorder.save_objects(config=config)
+
+
+def _run_train_only(config: dict, experiment_name: str):
+    """只训练模型 + 生成 pred.pkl，跳过回测（PortAnaRecord）。
+
+    用于多Alpha分布式架构：从节点只负责训练，主节点收集 pred.pkl 后统一回测。
+    保留 SignalRecord（生成 pred.pkl）和 SigAnaRecord（计算 IC 指标），
+    移除 PortAnaRecord（回测）以避免需要 v24 执行策略和分钟线数据。
+    """
+    import copy
+
+    task_config = copy.deepcopy(config.get("task"))
+
+    # 过滤 records：移除 PortAnaRecord（回测），保留 SignalRecord + SigAnaRecord
+    records = task_config.get("record", [])
+    if isinstance(records, dict):
+        records = [records]
+
+    filtered_records = []
+    for rec in records:
+        rec_class = rec.get("class", "")
+        # PortAnaRecord 是回测记录，train-only 模式下跳过
+        if "PortAna" in rec_class:
+            print(f"[INFO] Train-only: skipping {rec_class}")
+            continue
+        filtered_records.append(rec)
+
+    task_config["record"] = filtered_records
+
+    # 执行训练（task_train 内部会执行 filtered_records 中的 SignalRecord + SigAnaRecord）
+    recorder = task_train(task_config, experiment_name=experiment_name)
+    recorder.save_objects(config=config)
+    print("[INFO] Train-only completed: model trained, pred.pkl generated")
 
 
 def _run_backtest_only(config: dict, experiment_name: str):

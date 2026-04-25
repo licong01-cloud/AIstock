@@ -1,10 +1,11 @@
-"""因子独立指标定时计算调度器 — 复用 TDXScheduler 的调度模式。
+"""因子独立指标定时计算调度器。
 
-使用 `schedule` 库 + `ThreadPoolExecutor` + `_FutureTracker` + DB 持久化。
+使用 `schedule` 库 + 轻量监控线程 + DB 持久化。
 通过 `market.ingestion_schedules` 表存储调度配置（dataset LIKE 'factor_metrics_%'）。
 通过 `market.ingestion_jobs` 表记录任务历史。
 
-执行逻辑：调用 batch_compute_metrics_stream() 逐因子流式计算指标，自动入库。
+实际计算统一通过 dispatch -> WSL scheduler API 提交，
+本调度器只负责创建业务 job、提交远端任务、轮询 dispatch 状态并回写业务表。
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -22,8 +24,12 @@ import schedule
 
 from ...db.pg_pool import get_conn
 from ...ingestion.tdx_scheduler import _build_frequency_job, _FutureTracker
+from ..dispatch_service import DispatchService
 
 logger = logging.getLogger("aistock.factor_metrics_scheduler")
+
+_DEFAULT_DISPATCH_NODE_ID = os.getenv("AISTOCK_DEFAULT_GPU_NODE_ID", "wsl2-5080")
+_TERMINAL_DISPATCH_STATUSES = {"success", "failed", "canceled"}
 
 
 def _now() -> dt.datetime:
@@ -35,7 +41,7 @@ class FactorMetricsScheduler:
 
     def __init__(self) -> None:
         self._scheduler = schedule.Scheduler()
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fm-sched")
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="fm-sched")
         self._schedule_thread: Optional[threading.Thread] = None
         self._refresh_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -43,6 +49,7 @@ class FactorMetricsScheduler:
         self._lock = threading.RLock()
         self._jobs: Dict[str, schedule.Job] = {}
         self._job_snapshots: Dict[str, str] = {}
+        self._dispatch_service = DispatchService()
 
     # ── 生命周期 ──
 
@@ -126,7 +133,6 @@ class FactorMetricsScheduler:
                     self._jobs[schedule_id] = job
                     self._job_snapshots[schedule_id] = snapshot
                     logger.info(f"注册因子指标调度: {schedule_id} ({row.get('dataset')}, {row.get('frequency')})")
-            # 清除已删除的调度
             for schedule_id in list(self._jobs.keys()):
                 if schedule_id not in seen:
                     self._cancel_job(schedule_id)
@@ -165,123 +171,218 @@ class FactorMetricsScheduler:
         options: Dict[str, Any],
         triggered_by: str = "manual",
     ) -> uuid.UUID:
-        """创建 ingestion_jobs 记录并提交到线程池。"""
+        """创建 ingestion_jobs 记录并提交 dispatch 任务。"""
         job_id = uuid.uuid4()
+        node_id = str(options.get("node_id") or _DEFAULT_DISPATCH_NODE_ID)
+        max_workers = max(1, min(16, int(options.get("workers") or 4)))
+        timeout_per_factor = max(60, min(3600, int(options.get("timeout_per_factor") or 600)))
 
-        # 写 DB job 记录
-        summary = json.dumps({
-            "dataset": dataset, "triggered_by": triggered_by, "options": options,
-        }, ensure_ascii=False, default=str)
+        summary_payload = {
+            "dataset": dataset,
+            "triggered_by": triggered_by,
+            "schedule_id": str(schedule_id) if schedule_id else None,
+            "options": options,
+            "node_id": node_id,
+            "status_source": "dispatch",
+            "counters": self._build_counters("queued", 0),
+            "progress": 0,
+        }
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """INSERT INTO market.ingestion_jobs
                        (job_id, job_type, status, created_at, summary)
                        VALUES (%s, %s, 'queued', NOW(), %s)""",
-                    (str(job_id), dataset, summary),
+                    (str(job_id), dataset, json.dumps(summary_payload, ensure_ascii=False, default=str)),
                 )
             conn.commit()
 
-        # 提交到线程池
+        payload = {
+            "factor_names": None,
+            "data_date": options.get("data_date"),
+            "include_disabled": bool(options.get("include_disabled", False)),
+            "max_workers": max_workers,
+            "timeout_per_factor": timeout_per_factor,
+        }
+
+        try:
+            created = asyncio.run(self._dispatch_service.create_and_submit_task({
+                "task_name": f"official_evaluation_{payload.get('data_date') or 'latest'}_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                "task_type": "official_evaluation",
+                "node_id": node_id,
+                "payload": payload,
+            }))
+        except Exception as exc:
+            logger.error("提交 official evaluation dispatch 任务失败: %s", exc, exc_info=True)
+            self._update_job_status(str(job_id), "failed", {
+                "error": str(exc),
+                "node_id": node_id,
+                "counters": self._build_counters("failed", 0),
+                "progress": 0,
+            })
+            if schedule_id:
+                self._update_schedule_status(schedule_id, last_status="failed")
+            return job_id
+
+        dispatch_task_id = str(created["task_id"])
+        initial_status = str(created.get("status") or "queued")
+        local_status = self._map_dispatch_status(initial_status)
+        self._update_job_status(str(job_id), local_status, {
+            "dispatch_task_id": dispatch_task_id,
+            "remote_task_id": created.get("remote_task_id"),
+            "node_id": node_id,
+            "dispatch_status": initial_status,
+            "progress": 0,
+            "counters": self._build_counters(local_status, 0),
+        })
+
+        if local_status in {"failed", "canceled"}:
+            if schedule_id:
+                self._update_schedule_status(schedule_id, last_status=local_status)
+            return job_id
+
         key = f"factor_metrics:{schedule_id}" if schedule_id else f"factor_metrics-manual:{job_id}"
         future = self._executor.submit(
-            self._run_compute, str(job_id), schedule_id, dataset, options,
+            self._monitor_dispatch_task,
+            str(job_id),
+            schedule_id,
+            dispatch_task_id,
+            bool(options.get("one_shot")),
         )
         self._tracker.add(key, future)
         future.add_done_callback(lambda _: self._tracker.remove(key))
 
-        # 更新调度状态
         if schedule_id:
-            self._update_schedule_status(schedule_id, last_status="queued")
+            self._update_schedule_status(schedule_id, last_status=local_status)
 
-        logger.info(f"提交因子指标计算: job={job_id}, dataset={dataset}, triggered_by={triggered_by}")
+        logger.info(
+            "提交因子指标计算: job=%s, dispatch=%s, dataset=%s, node=%s",
+            job_id, dispatch_task_id, dataset, node_id,
+        )
         return job_id
 
-    def _run_compute(
+    def _monitor_dispatch_task(
         self,
         job_id: str,
         schedule_id: Optional[str],
-        dataset: str,
-        options: Dict[str, Any],
+        dispatch_task_id: str,
+        one_shot: bool,
     ) -> None:
-        """在线程池中执行因子指标计算。"""
-        include_disabled = options.get("include_disabled", False)
-        data_date = options.get("data_date")
-
-        # 更新 job 状态为 running
-        self._update_job_status(job_id, "running")
-
+        """轮询 dispatch 任务状态并回写 ingestion_jobs。"""
         try:
-            # 在新事件循环中运行 async generator
-            loop = asyncio.new_event_loop()
-            try:
-                completed = 0
-                failed = 0
-                total = 0
+            while not self._stop_event.is_set():
+                task = self._dispatch_service.get_task(dispatch_task_id)
+                if not task:
+                    raise RuntimeError(f"dispatch task 不存在: {dispatch_task_id}")
 
-                async def _run():
-                    nonlocal completed, failed, total
-                    from ..manual_factor_service import batch_compute_metrics_stream
+                dispatch_status = str(task.get("status") or "queued")
+                progress = self._coerce_progress(task.get("progress_pct"))
+                local_status = self._map_dispatch_status(dispatch_status)
 
-                    async for event in batch_compute_metrics_stream(
-                        factor_names=None,
-                        all_available=include_disabled,
-                        data_date=data_date,
-                    ):
-                        evt_type = event.get("type")
+                if dispatch_status not in _TERMINAL_DISPATCH_STATUSES:
+                    self._update_job_status(job_id, local_status, {
+                        "dispatch_task_id": dispatch_task_id,
+                        "remote_task_id": task.get("remote_task_id"),
+                        "node_id": task.get("node_id"),
+                        "dispatch_status": dispatch_status,
+                        "progress": progress,
+                        "message": task.get("log_tail"),
+                        "counters": self._build_counters(local_status, progress),
+                    })
+                    time.sleep(2)
+                    continue
 
-                        if evt_type == "stream_start":
-                            total = event.get("factor_count", 0)
-                            logger.info(f"因子指标计算开始: {total} 个因子, job={job_id}")
-
-                        elif evt_type == "factor_progress":
-                            completed = event.get("completed", completed)
-                            failed = event.get("failed", failed)
-                            fname = event.get("factor_name", "")
-                            status = event.get("status", "")
-                            if completed % 20 == 0 or completed == total:
-                                logger.info(
-                                    f"因子指标进度: {completed}/{total}, "
-                                    f"失败={failed}, 当前={fname}, job={job_id}"
-                                )
-                            # 更新 job 进度
-                            if total > 0:
-                                progress = int(completed / total * 100)
-                                self._update_job_progress(job_id, progress)
-
-                        elif evt_type == "stream_complete":
-                            completed = event.get("completed_count", completed)
-                            failed = event.get("failed_count", failed)
-                            duration = event.get("total_duration_sec", 0)
-                            logger.info(
-                                f"因子指标计算完成: {completed} 成功, {failed} 失败, "
-                                f"耗时 {duration:.0f}s, job={job_id}"
-                            )
-
-                        elif evt_type == "error":
-                            error = event.get("error", "未知错误")
-                            logger.error(f"因子指标计算错误: {error}, job={job_id}")
-
-                loop.run_until_complete(_run())
-            finally:
-                loop.close()
-
-            # 更新 job 最终状态
-            final_status = "success" if completed > 0 else "failed"
-            self._update_job_status(job_id, final_status,
-                                    summary={"completed": completed, "failed": failed, "total": total})
-            if schedule_id:
-                self._update_schedule_status(schedule_id, last_status=final_status)
-
-            # one_shot: 执行完后自动禁用
-            if options.get("one_shot") and schedule_id:
-                self._disable_schedule(schedule_id)
-
+                result_bundle = asyncio.run(self._dispatch_service.get_task_results(dispatch_task_id))
+                latest_result = result_bundle.get("latest_result") or {}
+                if dispatch_status == "success" and latest_result.get("success") is False:
+                    local_status = "failed"
+                final_summary = self._build_terminal_summary(task, latest_result, local_status)
+                self._update_job_status(job_id, local_status, final_summary)
+                if schedule_id:
+                    self._update_schedule_status(schedule_id, last_status=local_status)
+                if one_shot and schedule_id:
+                    self._disable_schedule(schedule_id)
+                return
         except Exception as exc:
-            logger.error(f"因子指标计算异常: {exc}, job={job_id}", exc_info=True)
-            self._update_job_status(job_id, "failed", summary={"error": str(exc)})
+            logger.error("监控因子指标 dispatch 任务失败 job=%s dispatch=%s: %s", job_id, dispatch_task_id, exc, exc_info=True)
+            self._update_job_status(job_id, "failed", {
+                "dispatch_task_id": dispatch_task_id,
+                "error": str(exc),
+                "counters": self._build_counters("failed", 0),
+                "progress": 0,
+            })
             if schedule_id:
                 self._update_schedule_status(schedule_id, last_status="failed")
+
+    @staticmethod
+    def _build_terminal_summary(
+        task: Dict[str, Any],
+        latest_result: Dict[str, Any],
+        local_status: str,
+    ) -> Dict[str, Any]:
+        progress = 100 if local_status == "success" else FactorMetricsScheduler._coerce_progress(task.get("progress_pct"))
+        eligible_factors = latest_result.get("eligible_factors") or []
+        db_result = latest_result.get("db_result") if isinstance(latest_result.get("db_result"), dict) else None
+        summary: Dict[str, Any] = {
+            "dispatch_task_id": task.get("task_id"),
+            "remote_task_id": task.get("remote_task_id"),
+            "node_id": task.get("node_id"),
+            "dispatch_status": task.get("status"),
+            "progress": progress,
+            "message": task.get("log_tail"),
+            "error": latest_result.get("error") or task.get("error_message"),
+            "eligible_factor_count": len(eligible_factors),
+            "calc_batch_id": latest_result.get("calc_batch_id"),
+            "snapshot_date": latest_result.get("snapshot_date"),
+            "pipeline_version": latest_result.get("pipeline_version"),
+            "code_source": latest_result.get("code_source"),
+            "counters": FactorMetricsScheduler._build_counters(local_status, progress),
+        }
+        if db_result is not None:
+            summary["db_result"] = db_result
+            try:
+                summary["inserted_rows"] = int(db_result.get("inserted") or 0)
+            except Exception:
+                pass
+        return summary
+
+    @staticmethod
+    def _coerce_progress(value: Any) -> int:
+        try:
+            return max(0, min(100, int(float(value or 0))))
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _build_counters(status: str, progress: int) -> Dict[str, int]:
+        base = {
+            "total": 1,
+            "done": 0,
+            "running": 0,
+            "pending": 0,
+            "failed": 0,
+            "success": 0,
+            "progress": max(0, min(100, int(progress))),
+        }
+        if status == "queued":
+            base["pending"] = 1
+        elif status == "running":
+            base["running"] = 1
+        elif status == "success":
+            base.update({"done": 1, "success": 1, "progress": 100})
+        elif status in {"failed", "canceled"}:
+            base.update({"done": 1, "failed": 1})
+        return base
+
+    @staticmethod
+    def _map_dispatch_status(status: str) -> str:
+        if status in {"pending", "queued"}:
+            return "queued"
+        if status in {"running", "paused"}:
+            return "running"
+        if status in {"success", "failed", "canceled"}:
+            return status
+        return "running"
 
     # ── 辅助方法 ──
 
@@ -290,9 +391,9 @@ class FactorMetricsScheduler:
         sets = ["status = %s"]
         vals: list = [status]
         if status == "running":
-            sets.append("started_at = NOW()")
-        elif status in ("success", "failed"):
-            sets.append("finished_at = NOW()")
+            sets.append("started_at = COALESCE(started_at, NOW())")
+        elif status in ("success", "failed", "canceled"):
+            sets.append("finished_at = COALESCE(finished_at, NOW())")
         if summary:
             sets.append("summary = COALESCE(summary, '{}'::jsonb) || %s::jsonb")
             vals.append(json.dumps(summary, ensure_ascii=False, default=str))
@@ -308,21 +409,6 @@ class FactorMetricsScheduler:
         except Exception as exc:
             logger.error(f"更新 job 状态失败 job={job_id} status={status}: {exc} — job 将卡在旧状态")
 
-    @staticmethod
-    def _update_job_progress(job_id: str, progress: int) -> None:
-        try:
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """INSERT INTO market.ingestion_job_tasks (job_id, status, progress)
-                           VALUES (%s, 'running', %s)
-                           ON CONFLICT (job_id) DO UPDATE SET progress = %s, status = 'running'""",
-                        (job_id, progress, progress),
-                    )
-                conn.commit()
-        except Exception as exc:
-            logger.warning(f"更新 job 进度失败 job={job_id}: {exc}")
-
     def _update_schedule_status(
         self,
         schedule_id: str,
@@ -333,7 +419,6 @@ class FactorMetricsScheduler:
         if last_status:
             sets.append("last_status=%s")
             values.append(last_status)
-        # next_run
         job = self._jobs.get(schedule_id)
         if job and hasattr(job, "next_run") and job.next_run:
             nr = job.next_run
@@ -378,5 +463,4 @@ class FactorMetricsScheduler:
             }
 
 
-# 模块级单例
 factor_metrics_scheduler = FactorMetricsScheduler()

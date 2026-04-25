@@ -149,24 +149,34 @@ def _infer_model_litellm_prefix(
     return default_prefix
 
 
-async def verify_model_api(full_model_id: str, api_key: str, api_base: Optional[str] = None) -> dict:
+async def verify_model_api(full_model_id: str, api_key: str, api_base: Optional[str] = None, model_type: str = "chat") -> dict:
     """验证模型API可用性"""
     try:
         import litellm
-        
-        # 测试调用，直接传递 api_key 和 api_base，避免依赖环境变量前缀猜测
-        kwargs = {
-            "model": full_model_id,
-            "messages": [{"role": "user", "content": "Test"}],
-            "max_tokens": 5,
-            "timeout": 30,
-            "api_key": api_key
-        }
-        if api_base:
-            kwargs["api_base"] = api_base
-            
-        response = await litellm.acompletion(**kwargs)
-        
+
+        if model_type == "embedding":
+            kwargs = {
+                "model": full_model_id,
+                "input": "test",
+                "timeout": 30,
+                "api_key": api_key,
+                "encoding_format": "float",
+            }
+            if api_base:
+                kwargs["api_base"] = api_base
+            response = await litellm.aembedding(**kwargs)
+        else:
+            kwargs = {
+                "model": full_model_id,
+                "messages": [{"role": "user", "content": "Test"}],
+                "max_tokens": 5,
+                "timeout": 30,
+                "api_key": api_key,
+            }
+            if api_base:
+                kwargs["api_base"] = api_base
+            response = await litellm.acompletion(**kwargs)
+
         return {
             "success": True,
             "message": "验证通过",
@@ -1099,12 +1109,26 @@ async def create_model(model: ModelCreate) -> dict[str, Any]:
                 if not verify_api_base:
                     verify_api_base = provider_api_config.get("api_base")
 
+            # 确保 full_model_id 包含 litellm provider 前缀
+            # litellm 要求 model 格式为 <provider>/<model_name>
+            full_model_id = model.full_model_id
+            if "/" not in full_model_id:
+                cursor.execute(
+                    "SELECT litellm_prefix FROM aistock_llm_providers WHERE id = %s",
+                    (model.provider_id,),
+                )
+                prefix_row = cursor.fetchone()
+                if prefix_row and prefix_row[0]:
+                    db_prefix = prefix_row[0].rstrip("/")
+                    full_model_id = f"{db_prefix}/{full_model_id}"
+
             if model.verify_on_add:
                 if verify_api_key:
                     verification_result = await verify_model_api(
-                        model.full_model_id,
+                        full_model_id,
                         verify_api_key,
                         verify_api_base,
+                        model.model_type,
                     )
                     is_verified = verification_result["success"]
                     verification_message = verification_result["message"]
@@ -1124,7 +1148,7 @@ async def create_model(model: ModelCreate) -> dict[str, Any]:
                 model.provider_id,
                 model.model_name,
                 model.display_name,
-                model.full_model_id,
+                full_model_id,
                 model.model_type,
                 model.model_category,
                 model.description,

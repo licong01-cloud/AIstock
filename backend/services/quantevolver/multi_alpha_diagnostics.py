@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from ...db.pg_pool import get_conn
@@ -68,12 +68,10 @@ class MultiAlphaDiagnostics:
 
     def analyze(self, experiment_id: str) -> dict[str, Any]:
         """Full diagnostic analysis for a Multi-Alpha experiment."""
-        groups = self._load_groups(experiment_id)
+        groups, meta_info, correlations = self._load_analysis_inputs(experiment_id)
         if not groups:
             return {"ok": False, "error": f"No groups found for experiment {experiment_id}"}
 
-        meta_info = self._load_meta_info(experiment_id)
-        correlations = self._load_correlations(experiment_id)
         bottlenecks = self.identify_bottlenecks(groups, correlations)
         recommendations = self._prioritize_recommendations(bottlenecks)
 
@@ -91,13 +89,12 @@ class MultiAlphaDiagnostics:
 
     def compute_group_correlations(self, experiment_id: str) -> dict[str, Any]:
         """Return cached group-pair correlations."""
-        correlations = self._load_correlations(experiment_id)
+        _, _, correlations = self._load_analysis_inputs(experiment_id)
         return {"ok": True, "experiment_id": experiment_id, "correlations": correlations}
 
     def get_recommendations(self, experiment_id: str) -> dict[str, Any]:
         """Return prioritized action recommendations."""
-        groups = self._load_groups(experiment_id)
-        correlations = self._load_correlations(experiment_id)
+        groups, _, correlations = self._load_analysis_inputs(experiment_id)
         bottlenecks = self.identify_bottlenecks(groups, correlations)
         recommendations = self._prioritize_recommendations(bottlenecks)
         return {
@@ -122,12 +119,15 @@ class MultiAlphaDiagnostics:
 
         # Rule 1: 无效组 (weight < 0.05 或 IC < 0.01)
         for g in completed_groups:
+            ic_text = f"{g.group_ic:.4f}" if g.group_ic is not None else "N/A"
             if g.meta_weight is not None and g.meta_weight < 0.05:
                 bottlenecks.append(Bottleneck(
                     rule_id="zero_weight",
                     severity="high",
-                    message=f"组 {g.group_name} 的 Meta 权重为 {g.meta_weight:.3f} (接近0)，"
-                            f"IC={g.group_ic:.4f if g.group_ic else 'N/A'}，对合成信号无贡献。",
+                    message=(
+                        f"组 {g.group_name} 的 Meta 权重为 {g.meta_weight:.3f} (接近0)，"
+                        f"IC={ic_text}，对合成信号无贡献。"
+                    ),
                     affected_groups=[g.group_name],
                     recommendation=f"建议删除 {g.group_name} 组，或尝试更换模型 (当前: {g.model_id})",
                     action_type="remove_group",
@@ -152,8 +152,10 @@ class MultiAlphaDiagnostics:
                     bottlenecks.append(Bottleneck(
                         rule_id="high_correlation",
                         severity="medium",
-                        message=f"组 {parts[0]} 和 {parts[1]} 的预测相关性为 {corr_val:.3f} (>0.7)，"
-                                f"信号高度重叠，造成冗余。",
+                        message=(
+                            f"组 {parts[0]} 和 {parts[1]} 的预测相关性为 {corr_val:.3f} (>0.7)，"
+                            f"信号高度重叠，造成冗余。"
+                        ),
                         affected_groups=list(parts),
                         recommendation=f"建议合并 {parts[0]} 和 {parts[1]}，或从其中一个移除高相关因子",
                         action_type="merge_groups",
@@ -182,8 +184,10 @@ class MultiAlphaDiagnostics:
                     bottlenecks.append(Bottleneck(
                         rule_id="icir_weight_mismatch",
                         severity="low",
-                        message=f"组 {name} ICIR={icir_val:.3f} (top-2) 但权重仅 {weight_val:.3f} (bottom-2)。"
-                                f"Meta-Model 可能欠拟合此组信号。",
+                        message=(
+                            f"组 {name} ICIR={icir_val:.3f} (top-2) 但权重仅 {weight_val:.3f} (bottom-2)。"
+                            f"Meta-Model 可能欠拟合此组信号。"
+                        ),
                         affected_groups=[name],
                         recommendation="尝试增加 Meta-Model 的 lookback_days 或切换到 OLS/Stacking 方法",
                         action_type="tune_meta",
@@ -196,39 +200,64 @@ class MultiAlphaDiagnostics:
                 bottlenecks.append(Bottleneck(
                     rule_id="weight_monopoly",
                     severity="medium",
-                    message=f"组 {g.group_name} 的 Meta 权重为 {g.meta_weight:.1%}，远超其他组。"
-                            f"多Alpha的分散化效果有限。",
+                    message=(
+                        f"组 {g.group_name} 的 Meta 权重为 {g.meta_weight:.1%}，远超其他组。"
+                        f"多Alpha的分散化效果有限。"
+                    ),
                     affected_groups=[g.group_name],
                     recommendation="建议增强其他组的因子或新增独立数据源的组",
                     action_type="add_factors",
                     action_params={"dominant_group": g.group_name},
                 ))
 
-        # Rule 5: IC 短长期衰减过快 (需要 factor_metrics 数据，简化检查)
-        # 暂不实现 — 需要 per-group multi-horizon IC 数据
-
         return bottlenecks
 
     # ── Private Helpers ────────────────────────────────────────────
+
+    def _load_analysis_inputs(
+        self,
+        experiment_id: str,
+    ) -> tuple[list[GroupMetrics], dict[str, Any], dict[str, float]]:
+        unified = self._load_unified_detail(experiment_id)
+        groups = self._merge_groups_with_unified(self._load_groups(experiment_id), unified)
+        if not groups:
+            groups = self._build_groups_from_unified(unified)
+
+        meta_info = self._load_meta_info(experiment_id)
+        if unified.get("meta_method") and not meta_info.get("method"):
+            meta_info["method"] = unified.get("meta_method")
+        if unified.get("execution_mode") and not meta_info.get("execution_mode"):
+            meta_info["execution_mode"] = unified.get("execution_mode")
+        if unified.get("combined_ic") is not None and meta_info.get("combined_ic") is None:
+            meta_info["combined_ic"] = unified.get("combined_ic")
+
+        correlations = self._load_correlations(experiment_id)
+        if not correlations:
+            correlations = unified.get("correlations") or {}
+
+        return groups, meta_info, correlations
 
     def _load_groups(self, experiment_id: str) -> list[GroupMetrics]:
         """Load group records from DB."""
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT group_name, factor_names, model_id, dataset_type,
                                compute_resource, group_ic, group_icir, group_sharpe,
                                meta_weight, status, assigned_node_id, prediction_path
                         FROM qe_multi_alpha_groups
                         WHERE parent_experiment_id = %s
                         ORDER BY group_name
-                    """, (experiment_id,))
+                        """,
+                        (experiment_id,),
+                    )
                     rows = cur.fetchall()
                     return [
                         GroupMetrics(
                             group_name=r[0],
-                            factor_names=r[1] if isinstance(r[1], list) else json.loads(r[1]) if r[1] else [],
+                            factor_names=self._parse_factor_names(r[1]),
                             model_id=r[2],
                             dataset_type=r[3] or "DatasetH",
                             compute_resource=r[4] or "cpu",
@@ -239,7 +268,7 @@ class MultiAlphaDiagnostics:
                             status=r[9] or "pending",
                             assigned_node_id=r[10],
                             prediction_path=r[11],
-                            factor_count=len(r[1] if isinstance(r[1], list) else json.loads(r[1]) if r[1] else []),
+                            factor_count=len(self._parse_factor_names(r[1])),
                         )
                         for r in rows
                     ]
@@ -253,7 +282,6 @@ class MultiAlphaDiagnostics:
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    # From experiment record
                     cur.execute(
                         "SELECT multi_alpha_config FROM qe_experiments WHERE experiment_id = %s",
                         (experiment_id,),
@@ -264,13 +292,15 @@ class MultiAlphaDiagnostics:
                         info["method"] = mac.get("meta_model", {}).get("method", "ic_weighted")
                         info["execution_mode"] = mac.get("execution_mode", "serial")
 
-                    # Latest meta weights
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT method, combined_ic
                         FROM qe_meta_model_weights
                         WHERE experiment_id = %s
                         ORDER BY as_of_date DESC LIMIT 1
-                    """, (experiment_id,))
+                        """,
+                        (experiment_id,),
+                    )
                     wrow = cur.fetchone()
                     if wrow:
                         info["method"] = wrow[0]
@@ -285,18 +315,138 @@ class MultiAlphaDiagnostics:
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT group_a, group_b, correlation
                         FROM qe_group_prediction_correlations
                         WHERE experiment_id = %s
-                    """, (experiment_id,))
+                        """,
+                        (experiment_id,),
+                    )
                     for r in cur.fetchall():
                         corrs[f"{r[0]}|{r[1]}"] = r[2]
         except Exception as e:
             logger.error(f"Failed to load correlations: {e}")
         return corrs
 
+    def _load_unified_detail(self, experiment_id: str) -> dict[str, Any]:
+        """Load multi_alpha_detail fallback from qe_experiments.result_metrics."""
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT status, result_metrics, multi_alpha_config FROM qe_experiments WHERE experiment_id = %s",
+                        (experiment_id,),
+                    )
+                    row = cur.fetchone()
+        except Exception as e:
+            logger.error(f"Failed to load unified detail for {experiment_id}: {e}")
+            return {}
+
+        if not row:
+            return {}
+
+        status, result_metrics_raw, multi_alpha_config_raw = row
+        result_metrics = self._parse_jsonish(result_metrics_raw) or {}
+        multi_alpha_config = self._parse_jsonish(multi_alpha_config_raw) or {}
+        detail = result_metrics.get("multi_alpha_detail") or {}
+        return {
+            "status": status,
+            "multi_detail": detail,
+            "meta_method": detail.get("meta_method") or multi_alpha_config.get("meta_model", {}).get("method"),
+            "execution_mode": multi_alpha_config.get("execution_mode"),
+            "combined_ic": detail.get("combined_ic") if detail else result_metrics.get("IC"),
+            "correlations": detail.get("group_correlations") or {},
+        }
+
+    def _build_groups_from_unified(self, unified: dict[str, Any]) -> list[GroupMetrics]:
+        detail = unified.get("multi_detail") or {}
+        status = unified.get("status") or "pending"
+        groups: list[GroupMetrics] = []
+        for group in detail.get("group_results") or []:
+            if not isinstance(group, dict) or not group.get("group_name"):
+                continue
+            factor_names = self._parse_factor_names(group.get("factor_names"))
+            factor_count = group.get("factor_count")
+            if factor_count is None:
+                factor_count = len(factor_names)
+            groups.append(
+                GroupMetrics(
+                    group_name=group["group_name"],
+                    factor_count=int(factor_count or 0),
+                    factor_names=factor_names,
+                    model_id=group.get("model_id") or "-",
+                    dataset_type=group.get("dataset_type") or "DatasetH",
+                    compute_resource=group.get("compute_resource") or "cpu",
+                    group_ic=group.get("ic"),
+                    group_icir=group.get("icir"),
+                    group_sharpe=group.get("sharpe"),
+                    meta_weight=group.get("meta_weight"),
+                    status=group.get("status") or ("completed" if status == "completed" else status),
+                    assigned_node_id=group.get("assigned_node_id"),
+                    prediction_path=group.get("prediction_path"),
+                )
+            )
+        return groups
+
+    def _merge_groups_with_unified(
+        self,
+        groups: list[GroupMetrics],
+        unified: dict[str, Any],
+    ) -> list[GroupMetrics]:
+        if not groups:
+            return []
+
+        detail = unified.get("multi_detail") or {}
+        detail_by_name = {
+            g.get("group_name"): g
+            for g in detail.get("group_results") or []
+            if isinstance(g, dict) and g.get("group_name")
+        }
+        exp_status = unified.get("status")
+
+        merged: list[GroupMetrics] = []
+        for group in groups:
+            detail_group = detail_by_name.get(group.group_name) or {}
+            if group.group_ic is None and detail_group.get("ic") is not None:
+                group.group_ic = detail_group.get("ic")
+            if group.group_icir is None and detail_group.get("icir") is not None:
+                group.group_icir = detail_group.get("icir")
+            if group.group_sharpe is None and detail_group.get("sharpe") is not None:
+                group.group_sharpe = detail_group.get("sharpe")
+            if group.meta_weight is None and detail_group.get("meta_weight") is not None:
+                group.meta_weight = detail_group.get("meta_weight")
+            if not group.model_id or group.model_id == "-":
+                group.model_id = detail_group.get("model_id") or group.model_id or "-"
+            if group.factor_count == 0 and detail_group.get("factor_count") is not None:
+                group.factor_count = int(detail_group.get("factor_count") or 0)
+            if exp_status == "completed" and group.status in {"pending", "running"}:
+                group.status = "completed"
+            merged.append(group)
+        return merged
+
     def _prioritize_recommendations(self, bottlenecks: list[Bottleneck]) -> list[Bottleneck]:
         """Sort bottlenecks by severity (high → medium → low)."""
         severity_order = {"high": 0, "medium": 1, "low": 2}
         return sorted(bottlenecks, key=lambda b: severity_order.get(b.severity, 3))
+
+    @staticmethod
+    def _parse_jsonish(value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return value
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception:
+                return None
+        return None
+
+    def _parse_factor_names(self, value: Any) -> list[str]:
+        parsed = self._parse_jsonish(value)
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(value, list):
+            return value
+        return []

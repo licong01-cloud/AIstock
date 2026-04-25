@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass, field, asdict
 from typing import Dict, Any, Optional, List
 
+from .factor_official_evaluation_service import CALC_ENGINE
 from .llm_client import get_llm_kwargs
 
 try:
@@ -501,9 +502,9 @@ class EvolutionFactorAgent:
                 cur.execute(f"""
                     SELECT DISTINCT ON (factor_name) factor_name, ic_mean
                     FROM aistock_factor_metrics
-                    WHERE factor_name IN ({ph}) AND eval_window = 'full'
+                    WHERE factor_name IN ({ph}) AND eval_window = 'full' AND calc_engine = %s
                     ORDER BY factor_name, calculated_at DESC
-                """, factor_names)
+                """, [*factor_names, CALC_ENGINE])
                 return {row[0]: float(row[1]) if row[1] is not None else 0.0
                         for row in cur.fetchall()}
 
@@ -849,11 +850,11 @@ class EvolutionFactorAgent:
                         LEFT JOIN LATERAL (
                             SELECT ic_mean, icir, rank_ic_mean
                             FROM aistock_factor_metrics
-                            WHERE factor_name = c.factor_name AND eval_window = 'full'
+                            WHERE factor_name = c.factor_name AND eval_window = 'full' AND calc_engine = %s
                             ORDER BY calculated_at DESC LIMIT 1
                         ) m ON TRUE
                         WHERE c.factor_name IN ({ph})
-                    """, all_factor_names)
+                    """, [CALC_ENGINE, *all_factor_names])
                     for row in cur.fetchall():
                         detail_map[row[0]] = {
                             "factor_name": row[0], "category": row[1], "grade": row[2],

@@ -1,7 +1,8 @@
 """单因子指标批量同步服务。
 
-从 RD-Agent 侧 API 获取 17 项单因子指标，写入 aistock_factor_metrics 表。
-支持按 task_id 批量计算并入库，用于同步完成后的统一批处理。
+从 RD-Agent 侧 API 获取 17 项单因子指标，并记录计算日志。
+注意：task/loop 回测阶段指标不再写入 aistock_factor_metrics，
+避免污染官方独立指标口径。
 
 数据来源：
 - GET /api/extractors/sota_factors/v2/{task_id}/factor_metrics
@@ -164,65 +165,15 @@ def _insert_metrics_batch(
     metrics_list: List[Dict[str, Any]],
     source_task_id: str,
 ) -> tuple[int, int]:
-    """将指标列表批量写入数据库。返回 (inserted, skipped)。"""
-    inserted = 0
-    skipped = 0
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            # 构建因子名映射（支持归一化匹配）
-            factor_names = list({m["factor_name"] for m in metrics_list})
-            catalog_map = _build_factor_catalog_map(cur, factor_names, source_task_id)
-
-            for m in metrics_list:
-                match = catalog_map.get(m["factor_name"])
-                if match is None:
-                    logger.warning(f"因子 {m['factor_name']} 未在 catalog 中找到，跳过指标写入")
-                    skipped += 1
-                    continue
-                catalog_name, fc_id = match
-                params = {
-                    "factor_name": catalog_name,
-                    "calculated_at": m["calculated_at"],
-                    "data_start": m["data_start"],
-                    "data_end": m["data_end"],
-                    "eval_window": m["eval_window"],
-                    "return_horizon": m.get("return_horizon", "T2T1"),
-                    "universe": m.get("universe", "all"),
-                    "ic_mean": m.get("ic_mean"),
-                    "ic_std": m.get("ic_std"),
-                    "rank_ic_mean": m.get("rank_ic_mean"),
-                    "rank_ic_std": m.get("rank_ic_std"),
-                    "icir": m.get("icir"),
-                    "rank_icir": m.get("rank_icir"),
-                    "ic_positive_ratio": m.get("ic_positive_ratio"),
-                    "top_annual_return": m.get("top_annual_return"),
-                    "top_excess_annual_return": m.get("top_excess_annual_return"),
-                    "top_sharpe": m.get("top_sharpe"),
-                    "top_max_drawdown": m.get("top_max_drawdown"),
-                    "top_excess_sharpe": m.get("top_excess_sharpe"),
-                    "benchmark_annual_return": m.get("benchmark_annual_return"),
-                    "group_return_monotonicity": m.get("group_return_monotonicity"),
-                    "turnover": m.get("turnover"),
-                    "ic_decay_half_life": m.get("ic_decay_half_life"),
-                    "ic_csz_mean": m.get("ic_csz_mean"),
-                    "rank_ic_1d": m.get("rank_ic_1d"),
-                    "rank_ic_5d": m.get("rank_ic_5d"),
-                    "rank_ic_10d": m.get("rank_ic_10d"),
-                    "rank_ic_20d": m.get("rank_ic_20d"),
-                    "coverage": m.get("coverage"),
-                    "n_trading_days": m.get("n_trading_days"),
-                    "source_task_id": source_task_id,
-                    "calc_batch_id": m.get("calc_batch_id"),
-                    "calc_engine": "rdagent",
-                    "factor_catalog_id": fc_id,
-                    "snapshot_date": m.get("snapshot_date") or m["data_end"],
-                }
-                cur.execute(_UPSERT_SQL, params)
-                if cur.rowcount > 0:
-                    inserted += 1
-                else:
-                    skipped += 1
-    return inserted, skipped
+    """Task/loop 阶段指标不再写入 aistock_factor_metrics。"""
+    skipped = len(metrics_list)
+    if skipped:
+        logger.info(
+            "[%s] 跳过 %s 条 task/loop factor metrics 写入；官方独立指标现仅允许 official evaluation writer 落表",
+            source_task_id,
+            skipped,
+        )
+    return 0, skipped
 
 
 _UPSERT_CALC_LOG_SQL = """

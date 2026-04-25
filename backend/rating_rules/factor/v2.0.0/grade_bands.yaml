@@ -1,0 +1,15 @@
+# v2.0 分档分数线基本沿用 v1，但 D 级以下不再有"兜底"，必须通过 overfit_gate
+S:
+  min_score: 90
+A:
+  min_score: 75
+B:
+  min_score: 60
+C:
+  min_score: 45
+D:
+  min_score: 0
+# v2 新增说明：
+#   - overfit_gate.min_ic_oos_is_ratio = 0.1 不满足时 → 强制 D 等级，忽略分数
+#   - dedup_suppression 命中时 → grade = min(computed_grade, 'C')
+#   - dedup_suppressed 单独记录于 grade_reason_structured.dedup_suppressed = true

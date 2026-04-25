@@ -76,7 +76,7 @@ function FactorDetailModal({ factorName, onClose }: { factorName: string; onClos
     setLoading(true);
     Promise.all([
       fetch(`${API}/rdagent/catalogs/factors/${encodeURIComponent(factorName)}`).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(`${API}/quantevolver/factors/${encodeURIComponent(factorName)}/independent-metrics`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API}/quantevolver/official-evaluation/factors/${encodeURIComponent(factorName)}`).then(r => r.ok ? r.json() : null).catch(() => null),
     ]).then(([detailRes, metricsRes]) => {
       // catalog API 直接返回 {...fields}（无 data wrapper）
       if (detailRes?.name) setDetail(detailRes);

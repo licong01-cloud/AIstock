@@ -52,6 +52,13 @@ QE_EXPERIMENTS_ROOT = Path(os.getenv(
     "f:/Dev/AIstock/rdagent_assets/qe_experiments"
 ))
 
+# ── AIstock 项目根目录 / 因子缓存目录 ──
+AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+FACTOR_CACHE_ROOT_WIN = Path(os.getenv(
+    "FACTOR_CACHE_ROOT_WIN",
+    str(AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values"),
+))
+
 # ── RDAgent 因子数据目录（与 FACTOR_CoSTEER_data_folder 保持一致，包含 sw2 行业数据） ──
 RDAGENT_FACTOR_DATA_WSL = os.getenv(
     "RDAGENT_FACTOR_DATA_WSL",
@@ -167,7 +174,7 @@ class ConfigComposer:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT workspace_base, factor_data_dir, qlib_data_path, "
-                    "       qlib_minute_path, qlib_rdagent_root "
+                    "       qlib_minute_path, qlib_rdagent_root, factor_cache_dir "
                     "FROM infra.compute_nodes WHERE node_id = %s",
                     (node_id,),
                 )
@@ -191,6 +198,7 @@ class ConfigComposer:
             "qlib_data_path": row[2],
             "qlib_minute_path": row[3],
             "qlib_rdagent_root": row[4],
+            "factor_cache_dir": row[5],
         }
 
     def _generate_unique_experiment_id(self) -> str:
@@ -506,11 +514,15 @@ class ConfigComposer:
         execution_algo_params: Optional[Dict[str, Any]] = None,
         strategy_params: Optional[Dict[str, Any]] = None,
         node_id: Optional[str] = None,
+        train_only: bool = False,
     ) -> Dict[str, Any]:
         """组装实验配置到内存字典，不写入磁盘。
 
         复用现有生成逻辑，但将所有文件内容收集到 Dict[str, str]，
         供演进循环通过 RDAgent loop API 的 experiment_files 参数直接传递。
+
+        Args:
+            train_only: True 时生成 --train-only 命令，跳过回测（多Alpha从节点模式）。
 
         Returns:
             {
@@ -716,6 +728,16 @@ class ConfigComposer:
 
         # ── 生成 WSL 命令 ──
         wsl_path = f"{workspace_wsl}/{experiment_name}"
+        factor_cache_dir = rdagent_cfg.get("factor_cache_dir")
+        _, auto_core_parts = self._build_auto_wsl_command_parts(
+            wsl_path,
+            has_custom_factors=has_custom_factors,
+            use_custom_model=bool(model_info and model_info.get("code_text")),
+            model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
+            backtest_freq=backtest_freq,
+            train_only=train_only,
+            factor_cache_dir=factor_cache_dir,
+        )
         wsl_command = self._generate_wsl_command(
             wsl_path,
             has_custom_factors=has_custom_factors,
@@ -723,6 +745,8 @@ class ConfigComposer:
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
             mode="auto",
             backtest_freq=backtest_freq,
+            train_only=train_only,
+            factor_cache_dir=factor_cache_dir,
         )
 
         # ── 保存 DB 记录（不写文件） ──
@@ -743,6 +767,8 @@ class ConfigComposer:
         return {
             "experiment_files": experiment_files,
             "wsl_command": wsl_command,
+            "wsl_command_core": " && ".join(auto_core_parts),
+            "wsl_workdir": wsl_path,
             "experiment_name": experiment_name,
             "experiment_id": experiment_id,
             "factor_count": len(factor_names),
@@ -1880,6 +1906,10 @@ class ConfigComposer:
             pt_model_kwargs = None
             if model_class == "GeneralPTNN":
                 pt_model_kwargs = model_kwargs.get("pt_model_kwargs")
+                if pt_model_kwargs is not None:
+                    pt_model_kwargs = dict(pt_model_kwargs)
+                    if model_dataset_cls == "TSDatasetH" and "d_feat" in pt_model_kwargs:
+                        pt_model_kwargs["d_feat"] = "{{ num_features }}"
             for k, v in model_kwargs.items():
                 if k == "pt_model_kwargs":
                     continue
@@ -2042,14 +2072,14 @@ class ConfigComposer:
         lines.append("logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')")
         lines.append("logger = logging.getLogger('prepare_factors')")
         lines.append("")
-        lines.append(f"FACTOR_DATA_DIR = os.environ.get('RDAGENT_FACTOR_DATA_DIR', '{factor_data_dir or RDAGENT_FACTOR_DATA_WSL}')")
+        lines.append(f"FACTOR_DATA_DIR = os.environ.get('RDAGENT_FACTOR_DATA_DIR', {repr(factor_data_dir or RDAGENT_FACTOR_DATA_WSL)})")
         lines.append("")
         lines.append("# ── 因子值缓存 ──────────────────────────────────────────")
         lines.append("import hashlib")
         lines.append("import json as _json")
         lines.append("RAW_FACTOR_CACHE_DIR = os.environ.get('FACTOR_CACHE_DIR', '')")
         lines.append("if RAW_FACTOR_CACHE_DIR:")
-        lines.append("    _cache_base = RAW_FACTOR_CACHE_DIR.rstrip('/\\')")
+        lines.append(r"    _cache_base = RAW_FACTOR_CACHE_DIR.rstrip('/\\')")
         lines.append("    if os.path.basename(_cache_base) == 'single':")
         lines.append("        FACTOR_CACHE_SINGLE_DIR = _cache_base")
         lines.append("        FACTOR_CACHE_META = os.path.join(os.path.dirname(_cache_base), '_meta.json')")
@@ -2087,8 +2117,8 @@ class ConfigComposer:
         lines.append("    c_start, c_end = cached_range.split('~')")
         lines.append("    # 允许时序因子 lookback 缺口：缓存起始日比 train_start 晚 60 日历天内视为正常")
         lines.append("    _LOOKBACK_TOLERANCE_DAYS = 60")
-        lines.append("    _ts = _pd.Timestamp(TRAIN_START)")
-        lines.append("    _gap_ok = (_pd.Timestamp(c_start) - _ts).days <= _LOOKBACK_TOLERANCE_DAYS if c_start > TRAIN_START else True")
+        lines.append("    _ts = pd.Timestamp(TRAIN_START)")
+        lines.append("    _gap_ok = (pd.Timestamp(c_start) - _ts).days <= _LOOKBACK_TOLERANCE_DAYS if c_start > TRAIN_START else True")
         lines.append("    if (not _gap_ok) or c_end < TEST_END:")
         lines.append("        logger.info(f'  {factor_name}: cache date insufficient ({cached_range} vs {TRAIN_START}~{TEST_END})')")
         lines.append("        return None")
@@ -2261,7 +2291,7 @@ class ConfigComposer:
         lines.append("    # 因子代码定义")
         lines.append("    factor_codes = {}")
         for fname in factor_names:
-            lines.append(f"    factor_codes['{fname}'] = open(os.path.join(script_dir, 'factors', '{fname}.py'), 'r', encoding='utf-8').read()")
+            lines.append(f"    factor_codes[{fname!r}] = open(os.path.join(script_dir, 'factors', {fname!r} + '.py'), 'r', encoding='utf-8').read()")
 
         lines.append("")
         lines.append("    # 逐个执行因子")
@@ -2608,85 +2638,125 @@ class ConfigComposer:
             path = f"/mnt/{drive}{path[2:]}"
         return path
 
-    def _generate_wsl_command(self, wsl_path: str,
-                              has_custom_factors: bool = False,
-                              use_custom_model: bool = False,
-                              model_type_tag: Optional[str] = None,
-                              mode: str = "manual",
-                              backtest_freq: str = "1min") -> str:
-        """生成WSL执行命令。
+    @staticmethod
+    def _build_conda_activate_chain(default_env: str = "rdagent-gpu") -> str:
+        """构造稳健的 conda 初始化命令。
+
+        兼容以下场景：
+        - QLIB_WSL_CONDA_SH 未设置
+        - QLIB_WSL_CONDA_SH 配成 ~/miniconda3/...（在引号内需手动展开）
+        - 节点 conda 安装路径与本机不同
+        """
+        return (
+            '_conda_sh="${QLIB_WSL_CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}" && '
+            'case "$_conda_sh" in "~/"*) _conda_sh="$HOME/${_conda_sh#~/}" ;; esac && '
+            'if [ ! -f "$_conda_sh" ]; then '
+            'for c in "$HOME/miniconda3/etc/profile.d/conda.sh" "$HOME/anaconda3/etc/profile.d/conda.sh" "/opt/conda/etc/profile.d/conda.sh"; do '
+            '[ -f "$c" ] && _conda_sh="$c" && break; '
+            'done; '
+            'fi && '
+            '[ -f "$_conda_sh" ] && . "$_conda_sh" && '
+            f'conda activate "${{QLIB_WSL_CONDA_ENV:-{default_env}}}"'
+        )
+
+    def _build_auto_wsl_command_parts(
+        self,
+        wsl_path: str,
+        has_custom_factors: bool = False,
+        use_custom_model: bool = False,
+        model_type_tag: Optional[str] = None,
+        backtest_freq: str = "1min",
+        train_only: bool = False,
+        factor_cache_dir: Optional[str] = None,
+    ) -> tuple[list[str], list[str]]:
+        """构造 auto 模式命令片段。
 
         Args:
-            mode: "manual" — 面向用户手动复制执行（含注释、conda activate）
-                  "auto"   — 面向子进程自动执行（纯净命令链，用 && 连接）
+            train_only: True 时生成 --train-only 命令，跳过回测（多Alpha从节点模式）。
+            factor_cache_dir: 节点配置的因子缓存目录（远端节点使用 rsync 同步的路径）。
         """
         env_lines = []
         if has_custom_factors or use_custom_model:
-            # 环境变量设置
             env_lines.append(f'export PYTHONPATH="{wsl_path}:${{QLIB_RDAGENT_ROOT_WSL:-.}}:$PYTHONPATH"')
-            
+
         if use_custom_model and model_type_tag:
-            # 与 RDAgent model_runner.py 一致的环境变量
             if model_type_tag == "TimeSeries":
                 env_lines.append("export dataset_cls=TSDatasetH")
                 env_lines.append("export step_len=20")
                 env_lines.append("export num_timesteps=20")
             else:
                 env_lines.append("export dataset_cls=DatasetH")
-        
+
         if use_custom_model and not has_custom_factors:
-            # Alpha158 经 FilterCol 过滤后实际只有 20 个特征（与 RDAgent conf_baseline 一致）
             env_lines.append("export num_features=20")
         elif has_custom_factors:
-            # num_features 在 prepare_factors.py 执行后才能确定
-            # 供 conf.yaml 中的 Jinja2 模板变量引用
             env_lines.append("# num_features 将在 qrun 时由 conf.yaml Jinja2 模板自动计算")
 
-        # 因子值缓存目录（与 backfill_factor_cache.py 共享同一缓存路径）
-        # 环境变量 FACTOR_CACHE_DIR 优先；否则基于本机 AIstock 目录推导 WSL 路径
-        _fv_base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # backend/
-        _fv_dir = os.path.join(_fv_base, "rdagent_assets", "factor_values")
-        _fv_wsl = _fv_dir.replace("\\", "/").replace("F:", "/mnt/f").replace("f:", "/mnt/f")
-        env_lines.append(
-            f'export FACTOR_CACHE_DIR="${{FACTOR_CACHE_DIR:-{_fv_wsl}}}"'
-        )
+        # 因子缓存目录：优先使用节点配置的路径（远端 rsync 同步目录），否则用本地默认
+        if factor_cache_dir:
+            # 远端节点：直接使用配置的绝对路径
+            env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_dir}"')
+        else:
+            # 本地节点：使用 Windows 路径转换后的 WSL 路径
+            factor_cache_wsl = self._windows_to_wsl_path(str(FACTOR_CACHE_ROOT_WIN))
+            env_lines.append(
+                f'export FACTOR_CACHE_DIR="${{FACTOR_CACHE_DIR:-{factor_cache_wsl}}}"'
+            )
         env_lines.append('export FACTOR_CACHE_DATA_MODE="backtest_factor_data_dir"')
 
-        env_block = "\n".join(env_lines)
-
-        # 数据文件链接命令（幂等）— 确保策略所需的 h5 文件始终可访问
-        # 使用 shell 变量 $RDAGENT_FACTOR_DATA_WSL（从执行节点 .env 继承到子进程环境）
-        _link_data_cmd = (
+        link_data_cmd = (
             '_FDD="${RDAGENT_FACTOR_DATA_WSL:-.}" && '
             'for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector_data.h5 static_factors.parquet; do '
             '[ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .; done; true'
         )
 
-        # 分钟线使用 qrun_limit_minute.py（含内存 patch + benchmark），日线使用 qrun_limit.py
         runner = "qrun_limit_minute.py" if backtest_freq != "day" else "qrun_limit.py"
 
-        # ── auto 模式：纯净命令链，供子进程直接执行 ──
-        if mode == "auto":
-            # 过滤掉注释行，只保留实际命令
-            env_cmds = [l for l in env_lines if l and not l.startswith("#")]
-            parts = [f"cd {wsl_path}"]
-            # conda activate — 确保远端节点子进程能找到 python 和依赖包
-            parts.append(
-                '. "${QLIB_WSL_CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}" && '
-                'conda activate "${QLIB_WSL_CONDA_ENV:-rdagent-gpu}"'
-            )
-            # 限制 glibc malloc arena 数量，防止内存碎片膨胀（默认 8×CPU 核数）
-            parts.append("export MALLOC_ARENA_MAX=4")
-            # 强制禁用 Python stdout 缓冲，确保训练日志实时输出到 pipe
-            parts.append("export PYTHONUNBUFFERED=1")
-            parts.extend(env_cmds)
-            parts.append(_link_data_cmd)
-            if has_custom_factors:
-                parts.append("python prepare_factors.py")
-                parts.append(". ./.factor_env")
-            parts.append(f"python {runner} conf.yaml")
-            parts.append("python read_exp_res.py")
-            return " && ".join(parts)
+        core_parts = [
+            self._build_conda_activate_chain(),
+            "export MALLOC_ARENA_MAX=4",
+            "export PYTHONUNBUFFERED=1",
+        ]
+        if train_only:
+            core_parts.append("export TRAIN_ONLY=1")
+        core_parts.extend([l for l in env_lines if l and not l.startswith("#")])
+        core_parts.append(link_data_cmd)
+        if has_custom_factors:
+            core_parts.append("python prepare_factors.py")
+            core_parts.append(". ./.factor_env")
+        runner_cmd = f"python {runner} conf.yaml"
+        if train_only:
+            runner_cmd += " --train-only"
+        core_parts.append(runner_cmd)
+        core_parts.append("python read_exp_res.py")
+        return env_lines, core_parts
+
+    def _generate_wsl_command(self, wsl_path: str,
+                              has_custom_factors: bool = False,
+                              use_custom_model: bool = False,
+                              model_type_tag: Optional[str] = None,
+                              mode: str = "manual",
+                              backtest_freq: str = "1min",
+                              train_only: bool = False,
+                              factor_cache_dir: Optional[str] = None) -> str:
+        """生成WSL执行命令。
+
+        Args:
+            mode: "manual" — 面向用户手动复制执行（含注释、conda activate）
+                  "auto"   — 面向子进程自动执行（纯净命令链，用 && 连接）
+            train_only: True 时生成 --train-only 命令（多Alpha从节点模式）
+            factor_cache_dir: 节点配置的因子缓存目录
+        """
+        env_lines, core_parts = self._build_auto_wsl_command_parts(
+            wsl_path,
+            has_custom_factors=has_custom_factors,
+            use_custom_model=use_custom_model,
+            model_type_tag=model_type_tag,
+            backtest_freq=backtest_freq,
+            train_only=train_only,
+            factor_cache_dir=factor_cache_dir,
+        )
+        env_block = "\n".join(env_lines)
 
         # 手动模式的数据链接步骤（可读格式）
         _link_data_manual = f"""# 链接策略所需数据文件到实验目录（幂等）
@@ -2695,7 +2765,15 @@ for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector
   [ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .
 done"""
 
+        # 分钟线使用 qrun_limit_minute.py（含内存 patch + benchmark），日线使用 qrun_limit.py
+        runner = "qrun_limit_minute.py" if backtest_freq != "day" else "qrun_limit.py"
+
+        # ── auto 模式：纯净命令链，供子进程直接执行 ──
+        if mode == "auto":
+            return " && ".join([f"cd {wsl_path}", *core_parts])
+
         # ── manual 模式：面向用户手动复制执行 ──
+        train_only_flag = " --train-only" if train_only else ""
         if has_custom_factors:
             return f"""# QuantEvolver 实验执行命令（含自定义因子预处理）
 # 请在WSL终端中执行以下命令：
@@ -2714,7 +2792,7 @@ python prepare_factors.py
 . .factor_env
 
 # 步骤3: 运行QLib回测
-python {runner} conf.yaml
+python {runner} conf.yaml{train_only_flag}
 
 # 步骤4: 读取结果
 python read_exp_res.py
@@ -2733,7 +2811,7 @@ conda activate rdagent-gpu
 {_link_data_manual}
 
 # 运行QLib回测
-python {runner} conf.yaml
+python {runner} conf.yaml{train_only_flag}
 
 # 读取结果
 python read_exp_res.py
@@ -2748,7 +2826,7 @@ conda activate rdagent-gpu
 
 {_link_data_manual}
 
-python {runner} conf.yaml
+python {runner} conf.yaml{train_only_flag}
 python read_exp_res.py
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
@@ -2981,8 +3059,7 @@ model_cls = {nn_class_name}
         _mp = _script_abs.replace("\\", "/")
         wsl_script = f"/mnt/{_mp[0].lower()}{_mp[2:]}" if len(_mp) >= 2 and _mp[1] == ":" else _mp
         wsl_cmd = (
-            '. "${QLIB_WSL_CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}" && '
-            "conda activate rdagent-gpu && "
+            f"{self._build_conda_activate_chain()} && "
             f"python {wsl_script} --output-path '{coeff_path}'"
         )
 

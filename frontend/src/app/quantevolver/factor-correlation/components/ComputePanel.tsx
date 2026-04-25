@@ -19,6 +19,10 @@ export interface ComputeStatus {
   progress: ProgressInfo;
   db_correlation_count: number;
   uncorrelated_factor_count: number;
+  // 实时计数 (反映当前 is_available 筛选状态 + qe_factor_correlations 剩余 pair)
+  // 与 latest_computation.num_high_corr_pairs (compute 时的冻结快照) 区分
+  live_high_corr_count_07?: number;
+  live_high_corr_count_05?: number;
   latest_computation: {
     as_of_date: string;
     num_factors: number;
@@ -29,18 +33,31 @@ export interface ComputeStatus {
     created_at: string;
   } | null;
   in_memory_result: boolean;
+  available_snapshots?: SnapshotInfo[];
 }
 
-export type ComputeScope = "full" | "cache" | "incremental" | "smart_incremental";
+export type ComputeScope = "cache";
 
-interface CacheStatus {
-  cached_count: number;
-  total_computable: number;
-  uncached_count: number;
-  total_size_mb: number;
-  as_of_date: string | null;
-  generated_at: string | null;
-  date_range: string | null;
+export interface SnapshotInfo {
+  data_date: string;
+  status: string;
+  disk_size_mb?: number;
+  start_date?: string;
+  end_date?: string;
+  instruments_count?: number;
+  created_at?: string;
+}
+
+export interface FactorStat {
+  total: number;
+  evaluated: number;
+  correlation_cached: number;
+}
+
+export interface FactorStats {
+  all: FactorStat;
+  enabled: FactorStat;
+  disabled: FactorStat;
 }
 
 interface ScheduleItem {
@@ -65,25 +82,23 @@ interface Props {
   status: ComputeStatus | null;
   computing: boolean;
   scope: ComputeScope;
-  asOfDate: string;
   includeDisabled: boolean;
+  snapshotDate: string;
+  availableSnapshots: SnapshotInfo[];
+  factorStats: FactorStats | null;
+  singleCache: { cached_count: number; total_size_mb: number; date_range: string | null; as_of_date: string | null } | null;
   onScopeChange: (s: ComputeScope) => void;
-  onAsOfDateChange: (d: string) => void;
   onIncludeDisabledChange: (v: boolean) => void;
+  onSnapshotDateChange: (d: string) => void;
   onCompute: () => void;
 }
 
 const SCOPE_OPTIONS: { value: ComputeScope; label: string; desc: string }[] = [
-  { value: "smart_incremental", label: "智能增量", desc: "自动检测新因子，仅对新因子计算相关性（推荐）" },
-  { value: "full", label: "全量计算", desc: "执行因子代码 + 计算矩阵（约1-2小时）" },
-  { value: "cache", label: "仅用缓存", desc: "用已有 parquet 缓存计算矩阵（几分钟）" },
-  { value: "incremental", label: "增量计算", desc: "选择特定因子计算" },
+  { value: "cache", label: "全量计算", desc: "清空历史数据，使用独立指标缓存全量重算相关性矩阵" },
 ];
 
 const DATASET_OPTIONS = [
   { value: "correlation_full", label: "全量计算" },
-  { value: "correlation_cache_only", label: "仅用缓存" },
-  { value: "correlation_smart_incremental", label: "智能增量" },
 ];
 
 const FREQ_OPTIONS = [
@@ -123,20 +138,32 @@ function formatElapsed(sec: number): string {
   return `${m}m${s}s`;
 }
 
+function formatSnapshotDate(dd: string): string {
+  if (dd.length === 8) return `${dd.slice(0, 4)}-${dd.slice(4, 6)}-${dd.slice(6, 8)}`;
+  return dd;
+}
+
+function formatSize(mb: number): string {
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  return `${mb.toFixed(0)} MB`;
+}
+
 export default function ComputePanel({
   status,
   computing,
   scope,
-  asOfDate,
   includeDisabled,
+  snapshotDate,
+  availableSnapshots,
+  factorStats,
+  singleCache,
   onScopeChange,
-  onAsOfDateChange,
   onIncludeDisabledChange,
+  onSnapshotDateChange,
   onCompute,
 }: Props) {
   const lc = status?.latest_computation;
   const progress = status?.progress;
-  const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
   const [schedules, setSchedules] = useState<ScheduleItem[]>([]);
   const [showSchedulePanel, setShowSchedulePanel] = useState(false);
   const [newDataset, setNewDataset] = useState("correlation_full");
@@ -148,13 +175,6 @@ export default function ComputePanel({
   const logCursorRef = useRef(-1);
   const logPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    fetch(`${BASE}/correlations/cache-status`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => d && setCacheStatus(d))
-      .catch(() => {});
-  }, [computing]);
 
   const loadSchedules = useCallback(() => {
     fetch(`${BASE}/correlations/schedules`)
@@ -182,10 +202,8 @@ export default function ComputePanel({
       if (entries.length > 0) {
         logCursorRef.current = entries[entries.length - 1].index;
         if (fullReload) {
-          // 全量替换，不追加
           setLogEntries(entries);
         } else {
-          // 增量追加，按 index 去重
           setLogEntries((prev) => {
             const existing = new Set(prev.map((e) => e.index));
             const fresh = entries.filter((e) => !existing.has(e.index));
@@ -202,9 +220,7 @@ export default function ComputePanel({
 
   useEffect(() => {
     if (showLogs) {
-      // 首次展开：全量加载累积日志
       fetchLogs(true);
-      // 开始增量轮询
       logPollRef.current = setInterval(() => fetchLogs(false), 2000);
     }
     return () => {
@@ -215,7 +231,6 @@ export default function ComputePanel({
     };
   }, [showLogs, fetchLogs]);
 
-  // 自动滚动到底部
   useEffect(() => {
     if (showLogs && logEndRef.current) {
       logEndRef.current.scrollIntoView({ behavior: "smooth" });
@@ -254,6 +269,9 @@ export default function ComputePanel({
 
   const isComputing = computing || progress?.status === "computing";
 
+  // ── 当前快照信息 ──
+  const activeSnapshot = availableSnapshots?.find((s) => s.data_date === snapshotDate);
+
   return (
     <div
       style={{
@@ -284,6 +302,26 @@ export default function ComputePanel({
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          {/* 快照选择 */}
+          <select
+            value={snapshotDate}
+            onChange={(e) => onSnapshotDateChange(e.target.value)}
+            disabled={isComputing}
+            title="数据快照（选择后将用于计算和统计）"
+            style={{ ...selectStyle, cursor: isComputing ? "not-allowed" : "pointer", minWidth: 180 }}
+          >
+            <option value="" style={{ color: "#374151" }}>
+              自动（最新快照）
+            </option>
+            {availableSnapshots?.map((s) => (
+              <option key={s.data_date} value={s.data_date} style={{ color: "#374151" }}>
+                {formatSnapshotDate(s.data_date)}
+                {s.instruments_count ? ` (${s.instruments_count}只)` : ""}
+                {s.disk_size_mb ? ` ${formatSize(s.disk_size_mb)}` : ""}
+                {s.status === "creating" ? " [创建中]" : ""}
+              </option>
+            ))}
+          </select>
           <select
             value={scope}
             onChange={(e) => onScopeChange(e.target.value as ComputeScope)}
@@ -297,19 +335,6 @@ export default function ComputePanel({
               </option>
             ))}
           </select>
-          <input
-            type="date"
-            value={asOfDate}
-            onChange={(e) => onAsOfDateChange(e.target.value)}
-            disabled={isComputing}
-            title="截止日期（留空使用数据最新日期）"
-            style={{
-              ...selectStyle,
-              cursor: isComputing ? "not-allowed" : "pointer",
-              width: 140,
-              colorScheme: "dark",
-            }}
-          />
           <label
             title="包含已禁用因子参与计算和展示"
             style={{
@@ -350,13 +375,7 @@ export default function ComputePanel({
           >
             {isComputing
               ? "计算中..."
-              : scope === "full"
-              ? "全量计算"
-              : scope === "cache"
-              ? "缓存计算"
-              : scope === "smart_incremental"
-              ? "智能增量"
-              : "增量计算"}
+              : "计算相关性"}
           </button>
           {isComputing && (
             <button
@@ -458,44 +477,78 @@ export default function ComputePanel({
         </div>
       )}
 
-      {/* 统计指标 */}
+      {/* ── 因子统计卡片组 ── */}
+      {factorStats && (
+        <div style={{ marginTop: 20 }}>
+          <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 8 }}>
+            {snapshotDate
+              ? `快照 ${formatSnapshotDate(snapshotDate)} 的因子统计`
+              : "因子统计（全部快照）"}
+            {activeSnapshot?.end_date && (
+              <span style={{ marginLeft: 8, opacity: 0.7 }}>
+                数据: {activeSnapshot.start_date?.slice(0, 10)} ~ {activeSnapshot.end_date?.slice(0, 10)}
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+            {includeDisabled ? (
+              <>
+                {/* 全部因子 */}
+                <StatCard
+                  label="全部因子"
+                  stats={factorStats.all}
+                  color="rgba(255,255,255,0.15)"
+                />
+                {/* 启用因子 */}
+                <StatCard
+                  label="启用因子"
+                  stats={factorStats.enabled}
+                  color="rgba(16,185,129,0.15)"
+                />
+                {/* 禁用因子 */}
+                <StatCard
+                  label="禁用因子"
+                  stats={factorStats.disabled}
+                  color="rgba(239,68,68,0.15)"
+                />
+              </>
+            ) : (
+              /* 不含禁用 → 只显示启用因子 */
+              <StatCard
+                label="启用因子"
+                stats={factorStats.enabled}
+                color="rgba(16,185,129,0.15)"
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 相关性计算元数据 + 缓存信息 */}
       <div
         style={{
           display: "flex",
           gap: 32,
-          marginTop: 20,
+          marginTop: factorStats ? 16 : 20,
           flexWrap: "wrap",
         }}
       >
-        {cacheStatus && (
-          <StatItem
-            label="因子缓存"
-            value={`${cacheStatus.cached_count}/${cacheStatus.total_computable}`}
-          />
-        )}
-        {cacheStatus && cacheStatus.total_size_mb > 0 && (
-          <StatItem
-            label="缓存大小"
-            value={`${cacheStatus.total_size_mb.toFixed(0)} MB`}
-          />
-        )}
-        {cacheStatus && cacheStatus.date_range && (
-          <StatItem
-            label="缓存时间段"
-            value={cacheStatus.date_range}
-          />
+        {singleCache && (
+          <>
+            <StatItem label="因子缓存文件" value={`${singleCache.cached_count} 个`} />
+            {singleCache.total_size_mb > 0 && (
+              <StatItem label="缓存大小" value={formatSize(singleCache.total_size_mb)} />
+            )}
+            {singleCache.date_range && (
+              <StatItem label="缓存时间段" value={singleCache.date_range} />
+            )}
+          </>
         )}
         {status && (
-          <StatItem
-            label="DB 记录对数"
-            value={String(status.db_correlation_count)}
-          />
+          <StatItem label="DB 记录对数" value={String(status.db_correlation_count)} />
         )}
         {status && status.uncorrelated_factor_count > 0 && (
-          <StatItem
-            label="待计算因子"
-            value={String(status.uncorrelated_factor_count)}
-          />
+          <StatItem label="待计算因子" value={String(status.uncorrelated_factor_count)} />
         )}
         {lc && (
           <>
@@ -503,25 +556,20 @@ export default function ComputePanel({
             <StatItem label="矩阵因子数" value={String(lc.num_factors)} />
             <StatItem
               label="高相关对 (|r|>0.7)"
-              value={String(lc.num_high_corr_pairs)}
+              value={String(
+                status?.live_high_corr_count_07 ?? lc.num_high_corr_pairs
+              )}
             />
-            <StatItem
-              label="计算耗时"
-              value={`${lc.computation_time_sec.toFixed(1)}s`}
-            />
+            <StatItem label="计算耗时" value={`${lc.computation_time_sec.toFixed(1)}s`} />
             <StatItem
               label="最后计算"
-              value={
-                lc.created_at
-                  ? new Date(lc.created_at).toLocaleDateString("zh-CN")
-                  : "-"
-              }
+              value={lc.created_at ? new Date(lc.created_at).toLocaleDateString("zh-CN") : "-"}
             />
           </>
         )}
       </div>
 
-      {!lc && !cacheStatus && (
+      {!lc && !factorStats && (
         <p style={{ marginTop: 16, fontSize: 13, opacity: 0.8 }}>
           暂无相关性计算数据，请选择范围后点击计算
         </p>
@@ -560,7 +608,6 @@ export default function ComputePanel({
             定时调度管理
           </div>
 
-          {/* 已有调度列表 */}
           {schedules.length > 0 && (
             <table style={{ width: "100%", fontSize: 12, marginBottom: 12, borderCollapse: "collapse" }}>
               <thead>
@@ -618,7 +665,6 @@ export default function ComputePanel({
             </div>
           )}
 
-          {/* 新建调度表单 */}
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <select
               value={newDataset}
@@ -750,6 +796,71 @@ export default function ComputePanel({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** 统计卡片：显示 total / evaluated / correlation_cached 三行 */
+function StatCard({
+  label,
+  stats,
+  color,
+}: {
+  label: string;
+  stats: FactorStat;
+  color: string;
+}) {
+  const pct = (n: number, d: number) => (d > 0 ? ((n / d) * 100).toFixed(1) : "0.0");
+  return (
+    <div
+      style={{
+        flex: "1 1 200px",
+        background: color,
+        borderRadius: 10,
+        padding: "12px 16px",
+        minWidth: 200,
+      }}
+    >
+      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, opacity: 0.95 }}>
+        {label} ({stats.total})
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <StatRow
+          label="独立指标"
+          current={stats.evaluated}
+          total={stats.total}
+          pct={pct(stats.evaluated, stats.total)}
+        />
+        <StatRow
+          label="相关性缓存"
+          current={stats.correlation_cached}
+          total={stats.total}
+          pct={pct(stats.correlation_cached, stats.total)}
+        />
+      </div>
+    </div>
+  );
+}
+
+function StatRow({ label, current, total, pct }: { label: string; current: number; total: number; pct: string }) {
+  const barPct = total > 0 ? (current / total) * 100 : 0;
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, opacity: 0.85 }}>
+        <span>{label}</span>
+        <span>{current}/{total} ({pct}%)</span>
+      </div>
+      <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 999, height: 4, marginTop: 3, overflow: "hidden" }}>
+        <div
+          style={{
+            width: `${barPct}%`,
+            height: 4,
+            background: "#fff",
+            borderRadius: 999,
+            transition: "width 0.3s ease",
+          }}
+        />
+      </div>
     </div>
   );
 }

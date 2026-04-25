@@ -54,6 +54,7 @@ export default function AddModelDialog({
   const [formData, setFormData] = useState({
     model_name: "",
     display_name: "",
+    full_model_id: "",
     model_type: "",
     model_category: "",
     description: "",
@@ -67,7 +68,7 @@ export default function AddModelDialog({
   const handleSuggestionSelect = (modelName: string) => {
     setSelectedSuggestion(modelName);
     if (!modelName) {
-      setFormData({ ...formData, model_name: "", display_name: "", model_type: "", model_category: "" });
+      setFormData({ ...formData, model_name: "", display_name: "", full_model_id: "", model_type: "", model_category: "" });
       return;
     }
     const m = suggestions.find((s) => s.model_name === modelName);
@@ -76,6 +77,7 @@ export default function AddModelDialog({
         ...formData,
         model_name: m.model_name,
         display_name: m.display_name,
+        full_model_id: litellmPrefix ? `${litellmPrefix}/${m.model_name}` : m.model_name,
         model_type: m.model_type,
         model_category: m.model_category,
       });
@@ -98,8 +100,8 @@ export default function AddModelDialog({
 
       const data = await response.json();
 
-      if (!response.ok || !data.ok) {
-        throw new Error(data.message || "Failed to add model");
+      if (!response.ok || !data.success) {
+        throw new Error(data.detail || data.message || "Failed to add model");
       }
 
       onSuccess();
@@ -107,6 +109,7 @@ export default function AddModelDialog({
       setFormData({
         model_name: "",
         display_name: "",
+        full_model_id: "",
         model_type: "",
         model_category: "",
         description: "",
@@ -168,9 +171,14 @@ export default function AddModelDialog({
                 id="model_name"
                 placeholder={`例如: ${placeholder}`}
                 value={formData.model_name}
-                onChange={(e) =>
-                  setFormData({ ...formData, model_name: e.target.value })
-                }
+                onChange={(e) => {
+                  const newName = e.target.value;
+                  setFormData({
+                    ...formData,
+                    model_name: newName,
+                    full_model_id: litellmPrefix ? `${litellmPrefix}/${newName}` : newName,
+                  });
+                }}
                 required
               />
             </div>
@@ -186,6 +194,21 @@ export default function AddModelDialog({
                 }
                 required
               />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="full_model_id">完整模型ID (LiteLLM)</Label>
+            <Input
+              id="full_model_id"
+              placeholder={litellmPrefix ? `${litellmPrefix}/${placeholder}` : placeholder}
+              value={formData.full_model_id}
+              onChange={(e) =>
+                setFormData({ ...formData, full_model_id: e.target.value })
+              }
+            />
+            <div className="text-xs text-gray-500">
+              自动构成为 {litellmPrefix ? `"${litellmPrefix}/" + 模型名称` : "模型名称"}，可手动修改
             </div>
           </div>
 

@@ -355,6 +355,26 @@ DDL: List[str] = [
     CREATE INDEX IF NOT EXISTS idx_factor_metrics_name
     ON aistock_factor_metrics (factor_name);
     """,
+    # ── 月频 IC 衰退趋势表 ──
+    """
+    CREATE TABLE IF NOT EXISTS aistock_factor_monthly_ic (
+        id              BIGSERIAL PRIMARY KEY,
+        factor_name     TEXT NOT NULL,
+        month_end       TEXT NOT NULL,
+        snapshot_date   DATE NOT NULL,
+        ic_mean         DOUBLE PRECISION,
+        rank_ic_mean    DOUBLE PRECISION,
+        ic_std          DOUBLE PRECISION,
+        ic_ewma_6m      DOUBLE PRECISION,
+        n_days          INTEGER,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (factor_name, month_end, snapshot_date)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_monthly_ic_factor
+    ON aistock_factor_monthly_ic(factor_name);
+    """,
     """
     CREATE INDEX IF NOT EXISTS idx_factor_metrics_task
     ON aistock_factor_metrics (source_task_id);

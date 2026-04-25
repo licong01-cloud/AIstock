@@ -1,0 +1,306 @@
+"""Runtime asset resolver for Strategy Package manifests.
+
+The resolver may copy external model assets into an AIstock-owned cache, but it
+never moves or mutates the original QE assets. Missing runtime assets are
+reported as explicit data errors so paper trading cannot start with a hidden
+fallback.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from backend.services.trading_core.errors import DataUnavailableError
+
+from .manifest import freeze_manifest
+from .models import StrategyPackageManifest
+
+
+DEFAULT_MODEL_CACHE_ROOT = Path("rdagent_assets") / "model_cache" / "execution"
+
+
+@dataclass(frozen=True)
+class ResolvedModelAsset:
+    """Resolved model file information."""
+
+    algo_code: str
+    original_path: str
+    resolved_path: Path
+    copied: bool
+
+
+class ModelAssetResolver:
+    """Resolve execution model files into AIstock-accessible local paths."""
+
+    def __init__(self, cache_root: Path | str | None = None) -> None:
+        root = cache_root or os.getenv("AISTOCK_MODEL_CACHE_DIR") or DEFAULT_MODEL_CACHE_ROOT
+        self.cache_root = Path(root)
+
+    def resolve_manifest_assets(
+        self,
+        manifest: StrategyPackageManifest,
+        *,
+        copy_missing: bool = True,
+    ) -> StrategyPackageManifest:
+        """Return a manifest whose execution assets are accessible locally.
+
+        The returned manifest is re-frozen because any rewritten runtime asset
+        path must be covered by the manifest hash.
+        """
+
+        algo_code = manifest.minute_execution_policy.algo_code.upper()
+        if algo_code != "V24_PLAN":
+            return manifest
+
+        resolved = self.resolve_v24_plan_model(manifest, copy_missing=copy_missing)
+        config = dict(manifest.minute_execution_policy.algo_config)
+        original_path = str(config.get("original_model_path") or resolved.original_path)
+        config["original_model_path"] = original_path
+        config["model_path"] = str(resolved.resolved_path)
+        config["model_asset_cache_status"] = "copied" if resolved.copied else "local"
+
+        updated_policy = manifest.minute_execution_policy.model_copy(
+            update={"algo_config": config}
+        )
+        updated = manifest.model_copy(
+            update={"minute_execution_policy": updated_policy, "manifest_sha256": None}
+        )
+        return freeze_manifest(updated)
+
+    def resolve_v24_plan_model(
+        self,
+        manifest: StrategyPackageManifest,
+        *,
+        copy_missing: bool = True,
+    ) -> ResolvedModelAsset:
+        config = manifest.minute_execution_policy.algo_config
+        original_path = str(
+            config.get("original_model_path") or config.get("model_path") or ""
+        ).strip()
+        if not original_path:
+            raise DataUnavailableError(
+                "V24_PLAN requires model_path before asset resolution",
+                context={"package_id": manifest.package_id},
+            )
+
+        local_path = Path(original_path)
+        if self._is_existing_file(local_path):
+            self._ensure_positive_file(local_path, original_path, manifest.package_id)
+            return ResolvedModelAsset(
+                algo_code="V24_PLAN",
+                original_path=original_path,
+                resolved_path=local_path,
+                copied=False,
+            )
+
+        destination = self._cache_destination("V24_PLAN", original_path)
+        if self._is_existing_file(destination):
+            self._validate_cached_asset(destination, original_path, manifest.package_id)
+            return ResolvedModelAsset(
+                algo_code="V24_PLAN",
+                original_path=original_path,
+                resolved_path=destination,
+                copied=True,
+            )
+
+        if not copy_missing:
+            raise DataUnavailableError(
+                "V24_PLAN model_path is not accessible and cache copy is disabled",
+                context={"package_id": manifest.package_id, "model_path": original_path},
+            )
+
+        source = self._find_existing_source(original_path)
+        if source is None:
+            raise DataUnavailableError(
+                "V24_PLAN model_path is not accessible from AIstock backend",
+                context={
+                    "package_id": manifest.package_id,
+                    "model_path": original_path,
+                    "cache_path": str(destination),
+                    "attempted_paths": [str(path) for path in self._candidate_paths(original_path)],
+                },
+            )
+
+        copied_path = self._copy_to_cache(
+            source=source,
+            destination=destination,
+            original_path=original_path,
+            package_id=manifest.package_id,
+        )
+        return ResolvedModelAsset(
+            algo_code="V24_PLAN",
+            original_path=original_path,
+            resolved_path=copied_path,
+            copied=True,
+        )
+
+    def _copy_to_cache(
+        self,
+        *,
+        source: Path,
+        destination: Path,
+        original_path: str,
+        package_id: str,
+    ) -> Path:
+        self._ensure_positive_file(source, original_path, package_id)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        self._ensure_positive_file(destination, original_path, package_id)
+        self._write_sidecar(
+            destination,
+            {
+                "algo_code": "V24_PLAN",
+                "original_path": original_path,
+                "resolved_source_path": str(source),
+                "cached_path": str(destination),
+                "source_size": source.stat().st_size,
+                "cached_size": destination.stat().st_size,
+                "copied_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        return destination
+
+    def _validate_cached_asset(
+        self,
+        destination: Path,
+        original_path: str,
+        package_id: str,
+    ) -> None:
+        self._ensure_positive_file(destination, original_path, package_id)
+        sidecar = self._sidecar_path(destination)
+        if not sidecar.exists():
+            raise DataUnavailableError(
+                "cached V24_PLAN model is missing sidecar metadata",
+                context={
+                    "package_id": package_id,
+                    "model_path": original_path,
+                    "cache_path": str(destination),
+                    "sidecar_path": str(sidecar),
+                },
+            )
+        try:
+            metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise DataUnavailableError(
+                "cached V24_PLAN model sidecar metadata is invalid",
+                context={
+                    "package_id": package_id,
+                    "model_path": original_path,
+                    "sidecar_path": str(sidecar),
+                },
+            ) from exc
+        if metadata.get("original_path") != original_path:
+            raise DataUnavailableError(
+                "cached V24_PLAN model sidecar does not match original path",
+                context={
+                    "package_id": package_id,
+                    "model_path": original_path,
+                    "cache_path": str(destination),
+                    "sidecar_original_path": metadata.get("original_path"),
+                },
+            )
+        cached_size = metadata.get("cached_size")
+        if cached_size is not None and int(cached_size) != destination.stat().st_size:
+            raise DataUnavailableError(
+                "cached V24_PLAN model size does not match sidecar metadata",
+                context={
+                    "package_id": package_id,
+                    "model_path": original_path,
+                    "cache_path": str(destination),
+                    "sidecar_cached_size": cached_size,
+                    "actual_cached_size": destination.stat().st_size,
+                },
+            )
+
+    def _ensure_positive_file(self, path: Path, original_path: str, package_id: str) -> None:
+        if not path.exists() or not path.is_file():
+            raise DataUnavailableError(
+                "V24_PLAN model asset is not a file",
+                context={
+                    "package_id": package_id,
+                    "model_path": original_path,
+                    "resolved_path": str(path),
+                },
+            )
+        if path.stat().st_size <= 0:
+            raise DataUnavailableError(
+                "V24_PLAN model asset is empty",
+                context={
+                    "package_id": package_id,
+                    "model_path": original_path,
+                    "resolved_path": str(path),
+                },
+            )
+
+    def _find_existing_source(self, original_path: str) -> Path | None:
+        for candidate in self._candidate_paths(original_path):
+            if self._is_existing_file(candidate):
+                return candidate
+        return None
+
+    @staticmethod
+    def _is_existing_file(path: Path) -> bool:
+        try:
+            return path.exists() and path.is_file()
+        except OSError:
+            return False
+
+    def _candidate_paths(self, original_path: str) -> list[Path]:
+        candidates: list[Path] = [Path(original_path)]
+
+        if os.name == "nt":
+            translated = self._translate_wsl_mount_path(original_path)
+            if translated is not None:
+                candidates.append(translated)
+
+            if original_path.startswith("/"):
+                distros = self._candidate_wsl_distros()
+                suffix = original_path.lstrip("/").replace("/", "\\")
+                for distro in distros:
+                    candidates.append(Path(f"\\\\wsl.localhost\\{distro}\\{suffix}"))
+                    candidates.append(Path(f"\\\\wsl$\\{distro}\\{suffix}"))
+
+        return list(dict.fromkeys(candidates))
+
+    @staticmethod
+    def _translate_wsl_mount_path(original_path: str) -> Path | None:
+        # /mnt/f/path/file.pt -> F:\path\file.pt
+        parts = original_path.replace("\\", "/").split("/")
+        if len(parts) >= 4 and parts[1] == "mnt" and len(parts[2]) == 1:
+            drive = parts[2].upper()
+            tail = "\\".join(parts[3:])
+            return Path(f"{drive}:\\{tail}")
+        return None
+
+    @staticmethod
+    def _candidate_wsl_distros() -> list[str]:
+        configured = os.getenv("AISTOCK_WSL_DISTRO")
+        defaults = ["Ubuntu", "Ubuntu-22.04", "Ubuntu-24.04", "Debian"]
+        ordered = [configured] if configured else []
+        ordered.extend(defaults)
+        return [item for item in dict.fromkeys(ordered) if item]
+
+    def _cache_destination(self, algo_code: str, original_path: str) -> Path:
+        digest = hashlib.sha256(original_path.encode("utf-8")).hexdigest()[:16]
+        suffix = Path(original_path).suffix or ".pt"
+        stem = Path(original_path).stem or "model"
+        safe_stem = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in stem)
+        return self.cache_root / algo_code / f"{safe_stem}_{digest}{suffix}"
+
+    @staticmethod
+    def _sidecar_path(destination: Path) -> Path:
+        return destination.with_suffix(destination.suffix + ".json")
+
+    def _write_sidecar(self, destination: Path, payload: dict[str, Any]) -> None:
+        sidecar = self._sidecar_path(destination)
+        sidecar.write_text(
+            json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2),
+            encoding="utf-8",
+        )

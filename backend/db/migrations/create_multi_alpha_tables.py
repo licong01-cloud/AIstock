@@ -106,6 +106,7 @@ def run_migration():
                 model_params JSONB,
                 compute_resource TEXT DEFAULT 'cpu',
                 assigned_node_id TEXT,
+                qe_loop_id TEXT,
                 prediction_path TEXT,
                 group_ic DOUBLE PRECISION,
                 group_icir DOUBLE PRECISION,

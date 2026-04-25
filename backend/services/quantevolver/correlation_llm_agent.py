@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 import litellm
 
 from ...db.pg_pool import get_conn
+from .factor_official_evaluation_service import CALC_ENGINE
 from .llm_client import get_llm_kwargs
 from .prompt_manager import PromptManager, safe_format
 
@@ -388,10 +389,10 @@ class CorrelationLLMAgent:
                            top_annual_return, top_excess_annual_return,
                            top_max_drawdown, ic_positive_ratio
                     FROM aistock_factor_metrics
-                    WHERE factor_name = %s AND eval_window = 'full'
+                    WHERE factor_name = %s AND eval_window = 'full' AND calc_engine = %s
                     ORDER BY calculated_at DESC LIMIT 1
                     """,
-                    (factor_name,),
+                    (factor_name, CALC_ENGINE),
                 )
                 mrow = cur.fetchone()
                 if mrow:

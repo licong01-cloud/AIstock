@@ -1,0 +1,64 @@
+groups:
+  - name: memory_alerts
+    rules:
+      # 可用内存 < 10GB 持续 1 分钟
+      - alert: MemoryLow
+        expr: node_memory_MemAvailable_bytes{node_id="wsl2-5080"} < 10 * 1024 * 1024 * 1024
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WSL 可用内存不足 10GB"
+          description: "当前可用内存 {{ $value | humanize1024 }}B"
+
+      # 可用内存 < 4GB 立即告警
+      - alert: MemoryCritical
+        expr: node_memory_MemAvailable_bytes{node_id="wsl2-5080"} < 4 * 1024 * 1024 * 1024
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "WSL 可用内存不足 4GB — 即将 OOM"
+          description: "当前可用内存 {{ $value | humanize1024 }}B"
+
+      # Swap 使用超过 50GB
+      - alert: SwapHigh
+        expr: (node_memory_SwapTotal_bytes{node_id="wsl2-5080"} - node_memory_SwapFree_bytes{node_id="wsl2-5080"}) > 50 * 1024 * 1024 * 1024
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WSL Swap 使用超过 50GB"
+          description: "当前 Swap 使用 {{ $value | humanize1024 }}B"
+
+  - name: process_alerts
+    rules:
+      # 单个进程 RSS > 20GB
+      - alert: ProcessMemoryHigh
+        expr: namedprocess_namegroup_memory_bytes{node_id="wsl2-5080", memtype="resident"} > 20 * 1024 * 1024 * 1024
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "进程 {{ $labels.groupname }} RSS 超过 20GB"
+          description: "当前 RSS {{ $value | humanize1024 }}B"
+
+      # 单个进程 RSS > 40GB — 即将导致 OOM
+      - alert: ProcessMemoryCritical
+        expr: namedprocess_namegroup_memory_bytes{node_id="wsl2-5080", memtype="resident"} > 40 * 1024 * 1024 * 1024
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "进程 {{ $labels.groupname }} RSS 超过 40GB — 即将 OOM"
+          description: "当前 RSS {{ $value | humanize1024 }}B"
+
+      # 内存 5 分钟内下降超过 30GB（快速泄漏检测）
+      - alert: MemoryRapidDrop
+        expr: (node_memory_MemAvailable_bytes{node_id="wsl2-5080"} offset 5m) - node_memory_MemAvailable_bytes{node_id="wsl2-5080"} > 30 * 1024 * 1024 * 1024
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: "WSL 内存 5 分钟内下降超过 30GB"
+          description: "可能存在内存泄漏或大任务并发"

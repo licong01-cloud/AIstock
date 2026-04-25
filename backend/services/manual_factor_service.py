@@ -568,94 +568,15 @@ class ManualFactorService:
         calc_batch_id: str,
         data_date: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """将指标写入 aistock_factor_metrics + 回填 catalog。
-
-        Parameters
-        ----------
-        data_date : 快照日期 (YYYYMMDD)，写入 snapshot_date 字段
-        """
-        inserted = 0
-        skipped = 0
-        errors = []
-
-        now_str = datetime.now(timezone.utc).isoformat()
-
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                for fname, windows in factors_metrics.items():
-                    # 查找 catalog_id
-                    cur.execute(
-                        "SELECT id FROM aistock_factor_catalog WHERE factor_name = %s LIMIT 1",
-                        (fname,),
-                    )
-                    row = cur.fetchone()
-                    catalog_id = row[0] if row else None
-
-                    for window_name, metrics in windows.items():
-                        try:
-                            params = {
-                                "factor_name": fname,
-                                "calculated_at": now_str,
-                                "data_start": metrics.get("data_start"),
-                                "data_end": metrics.get("data_end"),
-                                "eval_window": window_name,
-                                "return_horizon": "T2T1",
-                                "universe": "all",
-                                "ic_mean": metrics.get("ic_mean"),
-                                "ic_std": metrics.get("ic_std"),
-                                "rank_ic_mean": metrics.get("rank_ic_mean"),
-                                "rank_ic_std": metrics.get("rank_ic_std"),
-                                "icir": metrics.get("icir"),
-                                "rank_icir": metrics.get("rank_icir"),
-                                "ic_positive_ratio": metrics.get("ic_positive_ratio"),
-                                "top_annual_return": metrics.get("top_annual_return"),
-                                "top_excess_annual_return": metrics.get("top_excess_annual_return"),
-                                "top_sharpe": metrics.get("top_sharpe"),
-                                "top_max_drawdown": metrics.get("top_max_drawdown"),
-                                "top_excess_sharpe": metrics.get("top_excess_sharpe"),
-                                "benchmark_annual_return": metrics.get("benchmark_annual_return"),
-                                "group_return_monotonicity": metrics.get("group_return_monotonicity"),
-                                "turnover": metrics.get("turnover"),
-                                "ic_decay_half_life": metrics.get("ic_decay_half_life"),
-                                "ic_csz_mean": metrics.get("ic_csz_mean"),
-                                "rank_ic_1d": metrics.get("rank_ic_1d"),
-                                "rank_ic_5d": metrics.get("rank_ic_5d"),
-                                "rank_ic_10d": metrics.get("rank_ic_10d"),
-                                "rank_ic_20d": metrics.get("rank_ic_20d"),
-                                "coverage": metrics.get("coverage"),
-                                "n_trading_days": metrics.get("n_trading_days"),
-                                "source_task_id": None,
-                                "calc_batch_id": calc_batch_id,
-                                "calc_engine": "unified",
-                                "factor_catalog_id": catalog_id,
-                                "snapshot_date": data_date,
-                            }
-                            cur.execute(_UPSERT_METRICS_SQL, params)
-                            if cur.rowcount > 0:
-                                inserted += 1
-                            else:
-                                skipped += 1
-                        except Exception as e:
-                            errors.append(f"{fname}/{window_name}: {e}")
-                            logger.warning(f"写入指标失败 {fname}/{window_name}: {e}")
-
-                    # 回填 catalog 的 ic/sharpe/ann_ret（使用 full 窗口数据）
-                    full_m = windows.get("full", {})
-                    if full_m:
-                        cur.execute(
-                            "UPDATE aistock_factor_catalog SET "
-                            "ic = COALESCE(%s, ic), sharpe = COALESCE(%s, sharpe), "
-                            "annualized_return = COALESCE(%s, annualized_return) "
-                            "WHERE factor_name = %s",
-                            (
-                                full_m.get("ic_mean"),
-                                full_m.get("top_sharpe"),
-                                full_m.get("top_annual_return"),
-                                fname,
-                            ),
-                        )
-
-        return {"inserted": inserted, "skipped": skipped, "errors": errors}
+        """Legacy no-op：原始代码链不再写入 aistock_factor_metrics。"""
+        skipped = sum(len(windows or {}) for windows in factors_metrics.values())
+        if skipped:
+            logger.info(
+                "legacy manual factor metrics writer 跳过 %s 条写入；官方独立指标现仅允许 official evaluation writer 落表 calc_batch_id=%s",
+                skipped,
+                calc_batch_id,
+            )
+        return {"inserted": 0, "skipped": skipped, "errors": []}
 
 
 _UPSERT_METRICS_SQL = """
@@ -722,77 +643,15 @@ class _SingleFactorSaver:
         calc_batch_id: str,
         data_date: Optional[str] = None,
     ) -> Dict[str, Any]:
-        inserted = 0
-        errors: List[str] = []
-        now_str = datetime.now(timezone.utc).isoformat()
-
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT id FROM aistock_factor_catalog WHERE factor_name = %s LIMIT 1",
-                    (fname,),
-                )
-                row = cur.fetchone()
-                catalog_id = row[0] if row else None
-
-                for window_name, metrics in metrics_by_window.items():
-                    try:
-                        params = {
-                            "factor_name": fname,
-                            "calculated_at": now_str,
-                            "data_start": metrics.get("data_start"),
-                            "data_end": metrics.get("data_end"),
-                            "eval_window": window_name,
-                            "return_horizon": "T2T1",
-                            "universe": "all",
-                            "ic_mean": metrics.get("ic_mean"),
-                            "ic_std": metrics.get("ic_std"),
-                            "rank_ic_mean": metrics.get("rank_ic_mean"),
-                            "rank_ic_std": metrics.get("rank_ic_std"),
-                            "icir": metrics.get("icir"),
-                            "rank_icir": metrics.get("rank_icir"),
-                            "ic_positive_ratio": metrics.get("ic_positive_ratio"),
-                            "top_annual_return": metrics.get("top_annual_return"),
-                            "top_excess_annual_return": metrics.get("top_excess_annual_return"),
-                            "top_sharpe": metrics.get("top_sharpe"),
-                            "top_max_drawdown": metrics.get("top_max_drawdown"),
-                            "top_excess_sharpe": metrics.get("top_excess_sharpe"),
-                            "benchmark_annual_return": metrics.get("benchmark_annual_return"),
-                            "group_return_monotonicity": metrics.get("group_return_monotonicity"),
-                            "turnover": metrics.get("turnover"),
-                            "ic_decay_half_life": metrics.get("ic_decay_half_life"),
-                            "ic_csz_mean": metrics.get("ic_csz_mean"),
-                            "rank_ic_1d": metrics.get("rank_ic_1d"),
-                            "rank_ic_5d": metrics.get("rank_ic_5d"),
-                            "rank_ic_10d": metrics.get("rank_ic_10d"),
-                            "rank_ic_20d": metrics.get("rank_ic_20d"),
-                            "coverage": metrics.get("coverage"),
-                            "n_trading_days": metrics.get("n_trading_days"),
-                            "source_task_id": None,
-                            "calc_batch_id": calc_batch_id,
-                            "calc_engine": "unified_stream",
-                            "factor_catalog_id": catalog_id,
-                            "snapshot_date": data_date,
-                        }
-                        cur.execute(_UPSERT_METRICS_SQL, params)
-                        if cur.rowcount > 0:
-                            inserted += 1
-                    except Exception as e:
-                        logger.error(f"_SingleFactorSaver DB写入失败 {fname}/{window_name}: {e}")
-                        errors.append(f"{fname}/{window_name}: {e}")
-
-                full_m = metrics_by_window.get("full", {})
-                if full_m:
-                    cur.execute(
-                        "UPDATE aistock_factor_catalog SET "
-                        "ic = COALESCE(%s, ic), sharpe = COALESCE(%s, sharpe), "
-                        "annualized_return = COALESCE(%s, annualized_return) "
-                        "WHERE factor_name = %s",
-                        (full_m.get("ic_mean"), full_m.get("top_sharpe"),
-                         full_m.get("top_annual_return"), fname),
-                    )
-
-        return {"inserted": inserted, "errors": errors}
+        skipped = len(metrics_by_window or {})
+        if skipped:
+            logger.info(
+                "legacy single-factor stream writer 跳过 %s 条写入；官方独立指标现仅允许 official evaluation writer 落表 factor=%s calc_batch_id=%s",
+                skipped,
+                fname,
+                calc_batch_id,
+            )
+        return {"inserted": 0, "errors": []}
 
 
 async def batch_compute_metrics_stream(

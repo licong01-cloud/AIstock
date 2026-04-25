@@ -102,6 +102,7 @@ function recBadge(rec: string): { label: string; bg: string; color: string } {
 
 interface Props {
   factorNames: string[];
+  disabledFactors?: string[];
   initialBaseFactor?: string;
   showToast: (text: string, type: "success" | "error") => void;
   onRefreshMatrix?: () => void;
@@ -110,6 +111,7 @@ interface Props {
 
 export default function FactorDedupPanel({
   factorNames,
+  disabledFactors,
   initialBaseFactor,
   showToast,
   onRefreshMatrix,
@@ -145,6 +147,12 @@ export default function FactorDedupPanel({
   const [expandedAnalysis, setExpandedAnalysis] = useState<string | null>(null);
   // 批量分析的原始文本
   const [batchAnalysisText, setBatchAnalysisText] = useState<string | null>(null);
+
+  // 禁用因子集合（来自上游 HDF5 disabled_factors 列表）
+  const disabledSet = useMemo(
+    () => new Set(disabledFactors ?? []),
+    [disabledFactors]
+  );
 
   // ── 查询（使用参数传递因子名，避免 stale closure）──
   const doQuery = useCallback(async (factorToQuery: string, thresholdVal: number) => {
@@ -207,6 +215,18 @@ export default function FactorDedupPanel({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialBaseFactor, doQuery]);
+
+  // 切换 includeDisabled 时，如已查询过则自动以新参数重查
+  const prevIncludeDisabledRef = useRef(includeDisabled);
+  React.useEffect(() => {
+    if (prevIncludeDisabledRef.current !== includeDisabled) {
+      prevIncludeDisabledRef.current = includeDisabled;
+      if (baseFactor && queried) {
+        doQuery(baseFactor, threshold);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [includeDisabled]);
 
   // ── 构建包含基准因子的完整列表 ──
   const allRows = useMemo((): RelatedFactorWithMetrics[] => {
@@ -492,7 +512,7 @@ export default function FactorDedupPanel({
           <option value="">-- 选择因子 --</option>
           {factorNames.map((f) => (
             <option key={f} value={f}>
-              {f}
+              {f}{disabledSet.has(f) ? " [禁用]" : ""}
             </option>
           ))}
         </select>
@@ -816,7 +836,7 @@ export default function FactorDedupPanel({
                                     color: "#dc2626",
                                   }}
                                 >
-                                  不可用
+                                  禁用
                                 </span>
                               )}
                             </td>

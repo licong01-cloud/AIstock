@@ -122,6 +122,9 @@ export default function QuantEvolverDashboard() {
           <Link href="/quantevolver/factor-transformation">
             <button style={btnStyle("#f59e0b")}>⚡ 因子代码改造</button>
           </Link>
+          <Link href="/quantevolver/factor-deletion">
+            <button style={btnStyle("#ef4444")}>🗑️ 因子删除候选</button>
+          </Link>
         </div>
       </section>
 

@@ -39,7 +39,7 @@ export default function ICDecayTrendChart({ factorName, evalWindow = "full" }: I
     if (!factorName) return;
     setLoading(true);
     setError(null);
-    fetch(`${API}/quantevolver/factors/${encodeURIComponent(factorName)}/ic-decay-trend?eval_window=${evalWindow}`)
+    fetch(`${API}/quantevolver/official-evaluation/factors/${encodeURIComponent(factorName)}/ic-decay?eval_window=${evalWindow}`)
       .then(res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();

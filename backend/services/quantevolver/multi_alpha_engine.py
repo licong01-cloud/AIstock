@@ -93,77 +93,49 @@ class MultiAlphaEngine:
             group = assignment.group
             reuse_mode = group.reuse_mode or "retrain"
 
-            if reuse_mode == "reuse_prediction" and group.model_source_experiment_id:
-                # 复用已有预测：跳过训练和预测，直接引用源实验的 prediction_path
+            if reuse_mode == "reuse_prediction":
+                if not group.model_source_experiment_id:
+                    raise ValueError(
+                        f"Group {group.group_name}: reuse_prediction requires model_source_experiment_id"
+                    )
                 source_info = self._load_source_group(
                     group.model_source_experiment_id,
                     group.model_source_group_name or group.group_name,
                 )
-                if source_info and source_info.get("prediction_path"):
-                    reuse_summary.append(
-                        f"  {group.group_name}: reuse_prediction from "
-                        f"{group.model_source_experiment_id}/{source_info['group_name']}"
-                    )
-                    group_configs.append({
-                        "group_name": group.group_name,
-                        "node_id": assignment.node_id,
-                        "order": assignment.order,
-                        "factor_count": len(group.factor_names),
-                        "model_id": group.model_id,
-                        "wsl_command": f"# REUSED prediction from {group.model_source_experiment_id}",
-                        "reuse_mode": "reuse_prediction",
-                        "source_prediction_path": source_info["prediction_path"],
-                    })
-                    # Write a marker file instead of full experiment
-                    all_experiment_files[f"group_{group.group_name}/REUSE_PREDICTION.txt"] = (
-                        f"source_experiment_id: {group.model_source_experiment_id}\n"
-                        f"source_group_name: {source_info['group_name']}\n"
-                        f"prediction_path: {source_info['prediction_path']}\n"
-                    )
-                    continue
-                else:
-                    logger.warning(
+                if not source_info or not source_info.get("prediction_path"):
+                    raise ValueError(
                         f"Group {group.group_name}: reuse_prediction requested but "
-                        f"source not found, falling back to retrain"
+                        f"source {group.model_source_experiment_id}/{group.model_source_group_name or group.group_name} not found"
                     )
-
-            elif reuse_mode == "reuse_model" and group.model_source_experiment_id:
-                # 复用模型：跳过训练，只重新预测
-                # 注入 backtest_only 标记，让 composer 跳过训练
-                source_info = self._load_source_group(
-                    group.model_source_experiment_id,
-                    group.model_source_group_name or group.group_name,
+                reuse_summary.append(
+                    f"  {group.group_name}: reuse_prediction from "
+                    f"{group.model_source_experiment_id}/{source_info['group_name']}"
                 )
-                if source_info and source_info.get("prediction_path"):
-                    reuse_summary.append(
-                        f"  {group.group_name}: reuse_model from "
-                        f"{group.model_source_experiment_id}/{source_info['group_name']}"
-                    )
-                    # NOTE: reuse_model 目前降级为 reuse_prediction，
-                    # 因为 Qlib composer 尚不支持 "加载模型 pkl → 只预测" 模式。
-                    # 完整 reuse_model 需要 Qlib workflow 层支持 model_path 注入。
-                    group_configs.append({
-                        "group_name": group.group_name,
-                        "node_id": assignment.node_id,
-                        "order": assignment.order,
-                        "factor_count": len(group.factor_names),
-                        "model_id": group.model_id,
-                        "wsl_command": f"# REUSED model from {group.model_source_experiment_id}",
-                        "reuse_mode": "reuse_model",
-                        "source_prediction_path": source_info["prediction_path"],
-                    })
-                    all_experiment_files[f"group_{group.group_name}/REUSE_MODEL.txt"] = (
-                        f"source_experiment_id: {group.model_source_experiment_id}\n"
-                        f"source_group_name: {source_info['group_name']}\n"
-                        f"prediction_path: {source_info['prediction_path']}\n"
-                        f"note: reuse_model currently uses reuse_prediction (Qlib limitation)\n"
-                    )
-                    continue
-                else:
-                    logger.warning(
-                        f"Group {group.group_name}: reuse_model requested but "
-                        f"source not found, falling back to retrain"
-                    )
+                group_configs.append({
+                    "group_name": group.group_name,
+                    "node_id": assignment.node_id,
+                    "order": assignment.order,
+                    "factor_count": len(group.factor_names),
+                    "model_id": group.model_id,
+                    "wsl_command": f"# REUSED prediction from {group.model_source_experiment_id}",
+                    "reuse_mode": "reuse_prediction",
+                    "source_prediction_path": source_info["prediction_path"],
+                    "prediction_path": source_info["prediction_path"],
+                })
+                all_experiment_files[f"group_{group.group_name}/REUSE_PREDICTION.txt"] = (
+                    f"source_experiment_id: {group.model_source_experiment_id}\n"
+                    f"source_group_name: {source_info['group_name']}\n"
+                    f"prediction_path: {source_info['prediction_path']}\n"
+                )
+                continue
+
+            if reuse_mode == "reuse_model":
+                raise ValueError(
+                    f"Group {group.group_name}: reuse_model is not supported because model-only prediction reuse is not implemented"
+                )
+
+            if reuse_mode != "retrain":
+                raise ValueError(f"Group {group.group_name}: unsupported reuse_mode={reuse_mode}")
 
             # 正常训练（retrain）
             sub_files = self._compose_group_experiment(group, assignment.node_id)
@@ -179,6 +151,8 @@ class MultiAlphaEngine:
                 "factor_count": len(group.factor_names),
                 "model_id": group.model_id,
                 "wsl_command": sub_files.get("wsl_command", ""),
+                "wsl_command_core": sub_files.get("wsl_command_core", ""),
+                "wsl_workdir": sub_files.get("wsl_workdir", ""),
                 "reuse_mode": reuse_mode,
             })
 
@@ -193,6 +167,11 @@ class MultiAlphaEngine:
         all_experiment_files["multi_alpha_config.json"] = json.dumps(
             self.ma_config.model_dump(), indent=2, ensure_ascii=False, default=str
         )
+
+        # ── Step C2: 根目录回测依赖文件（统一回测用） ─────────────
+        # meta_model_runner.py 末尾调用 qrun_limit_minute.py --pred-backtest
+        # 需要在根目录有: qrun_limit_minute.py, read_exp_res.py, conf.yaml, 策略依赖
+        self._add_root_backtest_files(all_experiment_files, group_configs)
 
         # ── Step D: Store group assignments to DB ──────────────────
         parent_id = self.config.experiment_name or str(uuid.uuid4())[:12]
@@ -219,45 +198,150 @@ class MultiAlphaEngine:
         """Generate Qlib experiment files for a single AlphaGroup.
 
         Reuses the existing compose_experiment_in_memory() for each group.
+
+        多Alpha统一回测架构：
+        - 所有组（无论主节点/从节点）都使用 train_only=True
+        - 只训练模型 + 生成 pred.pkl，跳过回测
+        - 主节点收集所有 pred.pkl 后执行 meta_model_runner.py 合并
+        - 最后由主节点用 combined_prediction 做一次统一回测
         """
         if not self.composer:
-            # Without a composer, return placeholder
-            return {
-                "experiment_files": {
-                    "conf.yaml": f"# Placeholder for group {group.group_name}\n"
-                                 f"# model: {group.model_id}\n"
-                                 f"# factors: {group.factor_names}\n"
-                                 f"# dataset: {group.dataset_type}\n",
-                },
-                "wsl_command": f"# Run group {group.group_name}",
-            }
+            raise RuntimeError(
+                f"MultiAlphaEngine requires composer to build group {group.group_name}"
+            )
 
         # Build a single-alpha ExperimentConfig for this group
         custom_params = self.config.build_custom_params()
         if group.model_params:
             custom_params.update(group.model_params)
 
-        try:
-            result = self.composer.compose_experiment_in_memory(
-                factor_names=group.factor_names,
-                model_id=group.model_id,
-                strategy_id=self.config.strategy_id,
-                data_split=self.config.data_split,
-                custom_params=custom_params,
-                experiment_name=f"{self.config.experiment_name or 'malpha'}_{group.group_name}",
-                skip_db_save=True,
-                execution_algo=self.config.execution_algo,
-                execution_algo_params=self.config.execution_algo_params,
-                strategy_params=self.config.build_strategy_params(),
-                node_id=node_id,
+        # 多Alpha默认禁用Alpha158（除非实验配置中显式启用）
+        if "disable_alpha158" not in custom_params:
+            custom_params["disable_alpha158"] = True
+
+        # 统一回测模式：所有组 train_only=True，不传 execution_algo（从节点不需要v24）
+        result = self.composer.compose_experiment_in_memory(
+            factor_names=group.factor_names,
+            model_id=group.model_id,
+            strategy_id=self.config.strategy_id,
+            data_split=self.config.data_split,
+            custom_params=custom_params,
+            experiment_name=f"{self.config.experiment_name or 'malpha'}_{group.group_name}",
+            skip_db_save=True,
+            execution_algo=None,  # train-only 不需要执行策略
+            execution_algo_params=None,
+            strategy_params=self.config.build_strategy_params(),
+            node_id=node_id,
+            train_only=True,
+        )
+        return result
+
+    def _add_root_backtest_files(
+        self,
+        all_experiment_files: dict[str, str],
+        group_configs: list[dict],
+    ) -> None:
+        """将统一回测所需的文件添加到 Loop 根目录。
+
+        meta_model_runner.py 合并预测后调用:
+          python qrun_limit_minute.py conf.yaml --pred-backtest combined_prediction.pkl
+          python read_exp_res.py
+
+        需要在根目录有:
+        - qrun_limit_minute.py (回测脚本)
+        - read_exp_res.py (结果提取)
+        - conf.yaml (统一回测配置: qlib_init + port_analysis_config)
+        - 策略依赖文件 (custom_strategy.py, tail_twap_strategy.py 等)
+        - benchmark_sh000300.parquet (benchmark 数据)
+        """
+        # 从第一个 group 的文件中复制回测依赖到根目录
+        first_group = group_configs[0]["group_name"]
+        prefix = f"group_{first_group}/"
+
+        # 需要复制到根目录的文件列表（必须存在）
+        required_backtest_deps = [
+            "qrun_limit_minute.py",
+            "read_exp_res.py",
+            "custom_strategy.py",
+            "tail_twap_strategy.py",
+            "qe_custom_loaders.py",
+        ]
+        # 可选文件（有 fallback 机制）
+        optional_backtest_deps = [
+            "benchmark_sh000300.parquet",
+        ]
+
+        for fname in required_backtest_deps:
+            src_key = f"{prefix}{fname}"
+            if src_key not in all_experiment_files:
+                raise RuntimeError(
+                    f"统一回测依赖文件缺失: {src_key}。"
+                    f"compose_group_experiment 未生成此文件。"
+                )
+            all_experiment_files[fname] = all_experiment_files[src_key]
+
+        for fname in optional_backtest_deps:
+            src_key = f"{prefix}{fname}"
+            if src_key in all_experiment_files:
+                all_experiment_files[fname] = all_experiment_files[src_key]
+
+        # 生成统一回测专用 conf.yaml（不需要 model/dataset 训练配置）
+        unified_conf = self._generate_unified_backtest_conf(group_configs)
+        all_experiment_files["conf.yaml"] = unified_conf
+
+    def _generate_unified_backtest_conf(self, group_configs: list[dict]) -> str:
+        """生成统一回测用的 conf.yaml。
+
+        只需要:
+        - qlib_init (数据路径)
+        - port_analysis_config (策略/执行器/回测参数)
+        - task.dataset (SigAnaRecord 需要 label 计算 IC)
+        - task.record (SigAnaRecord + PortAnaRecord)
+
+        从第一个 group 的 conf.yaml 继承，移除 model 训练相关配置。
+        """
+        from ruamel.yaml import YAML
+
+        first_group = group_configs[0]["group_name"]
+        prefix = f"group_{first_group}/conf.yaml"
+
+        # 这个方法在 compose 阶段调用，此时 experiment_files 还没写入磁盘
+        # 需要从 composer 重新生成一份完整的回测配置
+        # 最简单的方案：用 composer 生成一份完整配置（train_only=False），
+        # 但这会包含 model 训练配置。更好的方案：直接从第一个 group 的 conf.yaml 修改。
+
+        # 从 composer 获取完整回测配置（不是 train_only）
+        custom_params = self.config.build_custom_params()
+        if "disable_alpha158" not in custom_params:
+            custom_params["disable_alpha158"] = True
+
+        # 获取第一个 group 的因子列表（用于 dataset 配置）
+        first_group_obj = next(
+            (g for g in self.ma_config.groups if g.group_name == first_group), None
+        )
+        factor_names = first_group_obj.factor_names if first_group_obj else []
+
+        # 生成完整配置（含回测），但不需要实际训练
+        result = self.composer.compose_experiment_in_memory(
+            factor_names=factor_names,
+            model_id=first_group_obj.model_id if first_group_obj else "LGBModel",
+            strategy_id=self.config.strategy_id,
+            data_split=self.config.data_split,
+            custom_params=custom_params,
+            experiment_name=f"{self.config.experiment_name or 'malpha'}_unified_backtest",
+            skip_db_save=True,
+            execution_algo=self.config.execution_algo,
+            execution_algo_params=self.config.execution_algo_params,
+            strategy_params=self.config.build_strategy_params(),
+            node_id=None,
+            train_only=False,  # 需要完整的 PortAnaRecord 配置
+        )
+        conf_yaml = result.get("experiment_files", {}).get("conf.yaml", "")
+        if not conf_yaml:
+            raise RuntimeError(
+                "统一回测 conf.yaml 生成失败: compose_experiment_in_memory 未返回 conf.yaml"
             )
-            return result
-        except Exception as e:
-            logger.error(f"Failed to compose group {group.group_name}: {e}")
-            return {
-                "experiment_files": {"error.txt": str(e)},
-                "wsl_command": f"# ERROR: {e}",
-            }
+        return conf_yaml
 
     def _generate_meta_runner_script(self, group_configs: list[dict]) -> str:
         """Generate the meta_model_runner.py script that combines group predictions."""
@@ -265,6 +349,9 @@ class MultiAlphaEngine:
         lookback = self.ma_config.meta_model.lookback_days
 
         group_names = [g["group_name"] for g in group_configs]
+        group_prediction_paths = {
+            g["group_name"]: g.get("prediction_path") for g in group_configs if g.get("prediction_path")
+        }
 
         script = f'''#!/usr/bin/env python
 # -*- coding: utf-8 -*-
@@ -288,30 +375,86 @@ import numpy as np
 import pandas as pd
 
 GROUP_NAMES = {group_names!r}
+GROUP_PREDICTION_PATHS = {group_prediction_paths!r}
 META_METHOD = "{method}"
 LOOKBACK = {lookback}
 
 
+def _resolve_prediction_path(path_value):
+    if not path_value:
+        raise RuntimeError("Missing prediction_path for reuse group")
+    p = Path(path_value)
+    if p.exists():
+        return p
+    normalized = str(path_value).replace("\\", "/")
+    marker = "/qe_workspace/"
+    marker_idx = normalized.find(marker)
+    if marker_idx >= 0:
+        relative = normalized[marker_idx + len(marker):].lstrip("/")
+        candidate = Path(relative)
+        if candidate.exists():
+            return candidate
+    raise RuntimeError(f"Prediction path does not exist: {{path_value}}")
+
+
 def load_predictions():
-    """Load prediction pkl from each group's experiment output."""
+    """Load prediction pkl from each group's experiment output.
+
+    Search order per group:
+    1. group_xxx/output/pred.pkl (full mode)
+    2. GROUP_PREDICTION_PATHS[g_name] (reuse mode)
+    3. group_xxx/mlruns/**/artifacts/pred.pkl (train-only mode)
+    """
+    import glob
     preds = {{}}
+    missing_groups = []
     for g_name in GROUP_NAMES:
         pred_path = Path(f"group_{{g_name}}/output/pred.pkl")
-        if not pred_path.exists():
-            print(f"WARNING: {{pred_path}} not found, skipping group {{g_name}}")
+        if pred_path.exists():
+            with open(pred_path, "rb") as f:
+                preds[g_name] = pickle.load(f)
+            print(f"Loaded {{g_name}} from {{pred_path}}: {{len(preds[g_name])}} rows")
             continue
-        with open(pred_path, "rb") as f:
-            preds[g_name] = pickle.load(f)
-        print(f"Loaded {{g_name}}: {{len(preds[g_name])}} rows")
+
+        # reuse 组：从 prediction_path 加载
+        reuse_path = GROUP_PREDICTION_PATHS.get(g_name)
+        if reuse_path:
+            pred_path = _resolve_prediction_path(reuse_path)
+            with open(pred_path, "rb") as f:
+                preds[g_name] = pickle.load(f)
+            print(f"Loaded {{g_name}} from {{pred_path}} (reuse): {{len(preds[g_name])}} rows")
+            continue
+
+        # train-only 模式：从 mlruns artifacts 查找
+        pattern = f"group_{{g_name}}/mlruns/**/artifacts/pred.pkl"
+        matches = glob.glob(pattern, recursive=True)
+        if matches:
+            pred_path = Path(matches[-1])  # 取最新的
+            with open(pred_path, "rb") as f:
+                preds[g_name] = pickle.load(f)
+            print(f"Loaded {{g_name}} from {{pred_path}} (mlruns): {{len(preds[g_name])}} rows")
+            continue
+
+        missing_groups.append(g_name)
+
+    if missing_groups:
+        raise RuntimeError(
+            f"Missing prediction files for groups: {{missing_groups}}. "
+            f"Checked: output/pred.pkl, GROUP_PREDICTION_PATHS, mlruns/**/artifacts/pred.pkl"
+        )
     return preds
 
 
 def load_label():
     """Load actual returns (label) for IC computation.
 
-    Tries the first group's label.pkl, then falls back to any group.
+    Search order:
+    1. group_xxx/output/label.pkl (full mode)
+    2. group_xxx/mlruns/**/artifacts/label.pkl (train-only mode)
     """
+    import glob
     for g_name in GROUP_NAMES:
+        # 优先检查 output 目录
         label_path = Path(f"group_{{g_name}}/output/label.pkl")
         if label_path.exists():
             with open(label_path, "rb") as f:
@@ -320,55 +463,75 @@ def load_label():
             if isinstance(label, pd.DataFrame):
                 return label.iloc[:, 0]
             return label
-    print("WARNING: No label.pkl found, IC computation will be skipped")
-    return None
+        # fallback: 从 mlruns artifacts 查找（train-only 模式）
+        pattern = f"group_{{g_name}}/mlruns/**/artifacts/label.pkl"
+        matches = glob.glob(pattern, recursive=True)
+        if matches:
+            label_path = Path(matches[-1])  # 取最新的
+            with open(label_path, "rb") as f:
+                label = pickle.load(f)
+            print(f"Loaded label from {{label_path}} ({{len(label)}} rows)")
+            if isinstance(label, pd.DataFrame):
+                return label.iloc[:, 0]
+            return label
+    raise RuntimeError(
+        "No label.pkl found for any group. "
+        "Checked: group_xxx/output/label.pkl and group_xxx/mlruns/**/artifacts/label.pkl"
+    )
 
 
 def combine(preds, actual_returns=None):
     """Combine predictions using IC-weighted/equal method (standalone, no external imports)."""
     group_names = list(preds.keys())
+    if len(group_names) < 2:
+        raise RuntimeError(f"Need at least 2 prediction groups, got {{len(group_names)}}")
 
-    if META_METHOD == "ic_weighted" and actual_returns is not None:
-        # IC-weighted: compute rolling Rank IC for each group
+    if META_METHOD == "ic_weighted":
+        if actual_returns is None:
+            raise RuntimeError("IC-weighted combination requires label data")
         weights = {{}}
         for g_name, g_pred in preds.items():
             pred_s = g_pred["score"] if isinstance(g_pred, pd.DataFrame) and "score" in g_pred.columns else (g_pred.iloc[:, 0] if isinstance(g_pred, pd.DataFrame) else g_pred)
             common = pred_s.index.intersection(actual_returns.index)
             if len(common) < 30:
-                weights[g_name] = 0.0
-                continue
+                raise RuntimeError(f"Group {{g_name}} has insufficient overlap with label: {{len(common)}}")
             dates = sorted(set(idx[0] if isinstance(idx, tuple) else idx for idx in common))
             if len(dates) > LOOKBACK:
                 cutoff = dates[-LOOKBACK]
                 common = [idx for idx in common if (idx[0] if isinstance(idx, tuple) else idx) >= cutoff]
             daily_ics = []
             for dt in sorted(set(idx[0] if isinstance(idx, tuple) else idx for idx in common)):
-                try:
-                    p_day = pred_s.xs(dt, level=0) if isinstance(pred_s.index, pd.MultiIndex) else pred_s
-                    r_day = actual_returns.xs(dt, level=0) if isinstance(actual_returns.index, pd.MultiIndex) else actual_returns
-                    if len(p_day) >= 10:
-                        ic = p_day.corr(r_day, method="spearman")
-                        if not np.isnan(ic):
-                            daily_ics.append(ic)
-                except Exception:
-                    continue
-            weights[g_name] = max(float(np.mean(daily_ics)), 0.0) if daily_ics else 0.0
+                if isinstance(pred_s.index, pd.MultiIndex):
+                    p_day = pred_s.xs(dt, level=0)
+                    r_day = actual_returns.xs(dt, level=0)
+                else:
+                    p_day = pred_s
+                    r_day = actual_returns
+                if len(p_day) < 10:
+                    raise RuntimeError(f"Group {{g_name}} has insufficient daily samples on {{dt}}")
+                ic = p_day.corr(r_day, method="spearman")
+                if np.isnan(ic):
+                    raise RuntimeError(f"Group {{g_name}} produced NaN IC on {{dt}}")
+                daily_ics.append(ic)
+            if not daily_ics:
+                raise RuntimeError(f"Group {{g_name}} produced no valid daily IC values")
+            mean_ic = float(np.mean(daily_ics))
+            if mean_ic <= 0:
+                raise RuntimeError(f"Group {{g_name}} produced non-positive IC mean: {{mean_ic}}")
+            weights[g_name] = mean_ic
         total = sum(weights.values())
-        if total > 0:
-            weights = {{k: v / total for k, v in weights.items()}}
-        else:
-            weights = {{g: 1.0 / len(group_names) for g in group_names}}
-    else:
-        # Equal weight (default / fallback)
+        if total <= 0:
+            raise RuntimeError(f"Invalid meta weights total: {{total}}")
+        weights = {{k: v / total for k, v in weights.items()}}
+    elif META_METHOD == "equal":
         weights = {{g: 1.0 / len(group_names) for g in group_names}}
+    else:
+        raise RuntimeError(f"Unsupported meta method: {{META_METHOD}}")
 
-    # Weighted sum
     combined = None
     for g_name, g_pred in preds.items():
         pred_s = g_pred["score"] if isinstance(g_pred, pd.DataFrame) and "score" in g_pred.columns else (g_pred.iloc[:, 0] if isinstance(g_pred, pd.DataFrame) else g_pred)
-        w = weights.get(g_name, 0.0)
-        if w == 0.0:
-            continue
+        w = weights[g_name]
         weighted = pred_s * w
         if combined is None:
             combined = weighted
@@ -376,8 +539,7 @@ def combine(preds, actual_returns=None):
             combined = combined.add(weighted, fill_value=0.0)
 
     if combined is None:
-        first = next(iter(preds.values()))
-        combined = first["score"] if isinstance(first, pd.DataFrame) and "score" in first.columns else (first.iloc[:, 0] if isinstance(first, pd.DataFrame) else first)
+        raise RuntimeError("Combined prediction is empty")
 
     if not isinstance(combined, pd.DataFrame):
         combined = combined.to_frame("score")
@@ -395,42 +557,41 @@ def compute_group_metrics(preds, label):
         else:
             pred_s = pred_df
 
-        gm = {{"ic": None, "icir": None, "sharpe": None}}
+        common_idx = pred_s.index.intersection(label.index)
+        if len(common_idx) < 50:
+            raise RuntimeError(f"Group {{g_name}} has insufficient samples for metrics: {{len(common_idx)}}")
+        p = pred_s.loc[common_idx]
+        r = label.loc[common_idx]
 
-        if label is not None:
-            common_idx = pred_s.index.intersection(label.index)
-            if len(common_idx) >= 50:
-                p = pred_s.loc[common_idx]
-                r = label.loc[common_idx]
+        daily_ics = []
+        dates = sorted(set(
+            idx[0] if isinstance(idx, tuple) else idx for idx in common_idx
+        ))
+        for dt in dates:
+            if isinstance(p.index, pd.MultiIndex):
+                p_day = p.xs(dt, level=0)
+                r_day = r.xs(dt, level=0)
+            else:
+                p_day = p
+                r_day = r
+            if len(p_day) < 10:
+                raise RuntimeError(f"Group {{g_name}} has insufficient daily samples on {{dt}}")
+            ic = p_day.corr(r_day, method="spearman")
+            if np.isnan(ic):
+                raise RuntimeError(f"Group {{g_name}} produced NaN IC on {{dt}}")
+            daily_ics.append(ic)
 
-                # Daily Rank IC
-                daily_ics = []
-                dates = sorted(set(
-                    idx[0] if isinstance(idx, tuple) else idx for idx in common_idx
-                ))
-                for dt in dates:
-                    try:
-                        if isinstance(p.index, pd.MultiIndex):
-                            p_day = p.xs(dt, level=0)
-                            r_day = r.xs(dt, level=0)
-                        else:
-                            p_day = p
-                            r_day = r
-                        if len(p_day) >= 10:
-                            ic = p_day.corr(r_day, method="spearman")
-                            if not np.isnan(ic):
-                                daily_ics.append(ic)
-                    except Exception:
-                        continue
-
-                if daily_ics:
-                    avg_ic = float(np.mean(daily_ics))
-                    std_ic = float(np.std(daily_ics))
-                    gm["ic"] = round(avg_ic, 6)
-                    gm["icir"] = round(avg_ic / std_ic, 4) if std_ic > 1e-8 else None
-                    # Sharpe 估算: ICIR * sqrt(252)
-                    if gm["icir"] is not None:
-                        gm["sharpe"] = round(gm["icir"] * np.sqrt(252) / np.sqrt(len(dates)), 4)
+        if not daily_ics:
+            raise RuntimeError(f"Group {{g_name}} produced no daily IC values")
+        avg_ic = float(np.mean(daily_ics))
+        std_ic = float(np.std(daily_ics))
+        gm = {{
+            "ic": round(avg_ic, 6),
+            "icir": round(avg_ic / std_ic, 4) if std_ic > 1e-8 else None,
+            "sharpe": round((avg_ic / std_ic) * np.sqrt(252) / np.sqrt(len(dates)), 4) if std_ic > 1e-8 else None,
+        }}
+        if gm["icir"] is None or gm["sharpe"] is None:
+            raise RuntimeError(f"Group {{g_name}} produced degenerate ICIR/Sharpe")
 
         results[g_name] = gm
         print(f"  {{g_name}}: IC={{gm['ic']}}, ICIR={{gm['icir']}}, Sharpe={{gm['sharpe']}}")
@@ -454,10 +615,12 @@ def compute_correlations(preds):
                 pred_b = pred_b["score"] if "score" in pred_b.columns else pred_b.iloc[:, 0]
 
             common = pred_a.index.intersection(pred_b.index)
-            if len(common) >= 30:
-                corr = pred_a.loc[common].corr(pred_b.loc[common], method="spearman")
-                if not np.isnan(corr):
-                    corrs[f"{{g_a}}|{{g_b}}"] = round(float(corr), 4)
+            if len(common) < 30:
+                raise RuntimeError(f"Insufficient overlap for correlation: {{g_a}} vs {{g_b}} => {{len(common)}}")
+            corr = pred_a.loc[common].corr(pred_b.loc[common], method="spearman")
+            if np.isnan(corr):
+                raise RuntimeError(f"NaN correlation for groups {{g_a}} and {{g_b}}")
+            corrs[f"{{g_a}}|{{g_b}}"] = round(float(corr), 4)
 
     return corrs
 
@@ -465,66 +628,56 @@ def compute_correlations(preds):
 def main():
     preds = load_predictions()
     if len(preds) < 2:
-        print("ERROR: Need at least 2 groups with predictions")
-        sys.exit(1)
+        raise RuntimeError(f"Need at least 2 groups with predictions, got {{len(preds)}}")
 
-    # Load label first for IC-weighted combination
     label = load_label()
 
-    # Combine
     combined, weights = combine(preds, label)
 
-    # Save combined prediction
     out_path = Path("combined_prediction.pkl")
     with open(out_path, "wb") as f:
         pickle.dump(combined, f)
     print(f"Combined prediction saved to {{out_path}} ({{len(combined)}} rows)")
 
-    # Save weights
     with open("meta_weights.json", "w") as f:
         json.dump(weights, f, indent=2)
 
-    # Compute per-group metrics
     print("\\nComputing per-group metrics...")
     group_metrics = compute_group_metrics(preds, label)
 
-    # Compute inter-group correlations
     print("\\nComputing inter-group correlations...")
     correlations = compute_correlations(preds)
     print(f"Correlations: {{correlations}}")
 
-    # Compute combined IC
-    combined_ic = None
-    if label is not None:
-        if isinstance(combined, pd.DataFrame):
-            combined_s = combined["score"] if "score" in combined.columns else combined.iloc[:, 0]
+    if isinstance(combined, pd.DataFrame):
+        combined_s = combined["score"] if "score" in combined.columns else combined.iloc[:, 0]
+    else:
+        combined_s = combined
+    common = combined_s.index.intersection(label.index)
+    if len(common) < 50:
+        raise RuntimeError(f"Combined prediction has insufficient label overlap: {{len(common)}}")
+    daily_ics = []
+    dates = sorted(set(
+        idx[0] if isinstance(idx, tuple) else idx for idx in common
+    ))
+    for dt in dates:
+        if isinstance(combined_s.index, pd.MultiIndex):
+            c_day = combined_s.xs(dt, level=0)
+            r_day = label.xs(dt, level=0)
         else:
-            combined_s = combined
-        common = combined_s.index.intersection(label.index)
-        if len(common) >= 50:
-            daily_ics = []
-            dates = sorted(set(
-                idx[0] if isinstance(idx, tuple) else idx for idx in common
-            ))
-            for dt in dates:
-                try:
-                    if isinstance(combined_s.index, pd.MultiIndex):
-                        c_day = combined_s.xs(dt, level=0)
-                        r_day = label.xs(dt, level=0)
-                    else:
-                        c_day = combined_s
-                        r_day = label
-                    if len(c_day) >= 10:
-                        ic = c_day.corr(r_day, method="spearman")
-                        if not np.isnan(ic):
-                            daily_ics.append(ic)
-                except Exception:
-                    continue
-            if daily_ics:
-                combined_ic = round(float(np.mean(daily_ics)), 6)
+            c_day = combined_s
+            r_day = label
+        if len(c_day) < 10:
+            raise RuntimeError(f"Combined prediction has insufficient daily samples on {{dt}}")
+        ic = c_day.corr(r_day, method="spearman")
+        if np.isnan(ic):
+            raise RuntimeError(f"Combined prediction produced NaN IC on {{dt}}")
+        daily_ics.append(ic)
+    if not daily_ics:
+        raise RuntimeError("Combined prediction produced no daily IC values")
+    combined_ic = round(float(np.mean(daily_ics)), 6)
     print(f"\\nCombined IC: {{combined_ic}}")
 
-    # Save comprehensive results for MultiAlphaResultCollector
     ma_results = {{
         "group_metrics": group_metrics,
         "meta_weights": weights,
@@ -537,6 +690,31 @@ def main():
     with open("multi_alpha_results.json", "w") as f:
         json.dump(ma_results, f, indent=2, default=str)
     print(f"\\nResults saved to multi_alpha_results.json")
+
+    # ── 统一回测：用 combined prediction 执行完整选股+分钟线回测 ──
+    print("\\n=== Running unified backtest on combined prediction ===")
+    import subprocess
+    bt_cmd = [sys.executable, "qrun_limit_minute.py", "conf.yaml",
+              "--pred-backtest", "combined_prediction.pkl"]
+    print(f"Command: {{' '.join(bt_cmd)}}")
+    bt_result = subprocess.run(bt_cmd)
+    if bt_result.returncode != 0:
+        raise RuntimeError(
+            f"Unified backtest FAILED (exit code {{bt_result.returncode}}). "
+            f"Cannot proceed without backtest results."
+        )
+    print("[OK] Unified backtest completed")
+
+    # 提取增强指标（read_exp_res.py 从 mlruns 提取完整回测指标）
+    print("\\n=== Extracting enhanced metrics ===")
+    res_cmd = [sys.executable, "read_exp_res.py"]
+    res_result = subprocess.run(res_cmd)
+    if res_result.returncode != 0:
+        raise RuntimeError(
+            f"read_exp_res.py FAILED (exit code {{res_result.returncode}}). "
+            f"Enhanced metrics extraction failed."
+        )
+    print("[DONE] Multi-alpha unified backtest pipeline completed")
 
 
 if __name__ == "__main__":
@@ -596,16 +774,17 @@ if __name__ == "__main__":
                         INSERT INTO qe_multi_alpha_groups
                             (parent_experiment_id, group_name, factor_names,
                              model_id, dataset_type, model_params,
-                             compute_resource, assigned_node_id, status,
+                             compute_resource, assigned_node_id, qe_loop_id, status,
                              model_source_experiment_id, model_source_group_name,
                              reuse_mode)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending',
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending',
                                 %s, %s, %s)
                         ON CONFLICT (parent_experiment_id, group_name)
                         DO UPDATE SET
                             factor_names = EXCLUDED.factor_names,
                             model_id = EXCLUDED.model_id,
                             assigned_node_id = EXCLUDED.assigned_node_id,
+                            qe_loop_id = EXCLUDED.qe_loop_id,
                             model_source_experiment_id = EXCLUDED.model_source_experiment_id,
                             model_source_group_name = EXCLUDED.model_source_group_name,
                             reuse_mode = EXCLUDED.reuse_mode,
@@ -619,6 +798,7 @@ if __name__ == "__main__":
                         json.dumps(g.model_params) if g.model_params else None,
                         g.compute_resource,
                         a.node_id,
+                        None,
                         g.model_source_experiment_id,
                         g.model_source_group_name,
                         g.reuse_mode or "retrain",

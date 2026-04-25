@@ -1,7 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+
+const API_BASE =
+  process.env.NEXT_PUBLIC_TDX_BACKEND_BASE || "http://127.0.0.1:8001";
 
 const NAV_GROUPS: {
   title: string;
@@ -99,6 +102,24 @@ const NAV_GROUPS: {
 export default function Sidebar() {
   // 管理每个一级目录的展开状态，默认全部折叠
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [alertCount, setAlertCount] = useState(0);
+
+  const fetchAlertCount = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/ingestion/alerts/unack-count`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setAlertCount((data.count as number) || 0);
+    } catch {
+      // silently ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAlertCount();
+    const timer = setInterval(fetchAlertCount, 60_000);
+    return () => clearInterval(timer);
+  }, [fetchAlertCount]);
 
   const toggleGroup = (title: string) => {
     setExpandedGroups((prev) => {
@@ -136,6 +157,22 @@ export default function Sidebar() {
                   {group.items.map((item) => (
                     <Link key={item.href} href={item.href} className="sidebar-link">
                       {item.label}
+                      {item.href === "/local-data" && alertCount > 0 && (
+                        <span
+                          style={{
+                            marginLeft: 8,
+                            background: "#ef4444",
+                            color: "#fff",
+                            borderRadius: 10,
+                            padding: "1px 7px",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            lineHeight: "18px",
+                          }}
+                        >
+                          {alertCount}
+                        </span>
+                      )}
                     </Link>
                   ))}
                 </div>

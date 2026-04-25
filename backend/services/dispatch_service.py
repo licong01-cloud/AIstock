@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import aiofiles
+import httpx
 
 from psycopg2.extras import RealDictCursor
 
@@ -41,6 +42,8 @@ _TASK_TYPE_COMMANDS = {
     "fin_quant": "fin_quant",
     "fin_factor_report": "fin_factor_report",
 }
+
+_CUSTOM_TASK_TYPES = {"correlation_compute", "official_evaluation"}
 
 
 class DispatchService:
@@ -335,6 +338,9 @@ class DispatchService:
         if task_type == "qe_evolution":
             return await self._create_qe_task(data, node)
 
+        if task_type in _CUSTOM_TASK_TYPES:
+            return await self._create_custom_task(data, node)
+
         # RDAgent 任务
         return await self._create_rdagent_task(data, node)
 
@@ -407,6 +413,71 @@ class DispatchService:
             self._start_collector(task_id, client, remote_task_id)
         except Exception as e:
             logger.error("提交任务到节点失败: %s", e)
+            self._update_task_fields(task_id, status="failed", error_message=str(e))
+            self._add_event(task_id, "submit_failed", {"error": str(e)})
+            task["status"] = "failed"
+            task["error_message"] = str(e)
+
+        return task
+
+    async def _create_custom_task(
+        self, data: Dict[str, Any], node: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        task_type = data["task_type"]
+        payload = data.get("payload") or {}
+        if not isinstance(payload, dict):
+            raise ValueError("custom task payload 必须为对象")
+
+        config = {
+            "task_type": task_type,
+            "payload": payload,
+        }
+        task = self._insert_task({
+            "task_name": data["task_name"],
+            "task_type": task_type,
+            "node_id": node["node_id"],
+            "config": config,
+            "env_overrides": data.get("custom_env", {}),
+            "total_loops": 1,
+            "time_limit": data.get("all_duration"),
+        })
+        task_id = task["task_id"]
+        self._add_event(task_id, "created", {"config": config})
+
+        scheduler_payload = {
+            "name": data["task_name"],
+            "task_type": task_type,
+            "payload": payload,
+            "loop_n": 1,
+            "all_duration": data.get("all_duration") or "24:00:00",
+            "env_overrides": data.get("custom_env", {}),
+        }
+
+        try:
+            client = ComputeNodeClient(node["api_base_url"])
+            resp = await client.create_task(scheduler_payload)
+            task_data = resp.get("task", resp)
+            remote_task_id = str(task_data.get("id") or task_data.get("name") or "")
+            if not remote_task_id:
+                raise ValueError("节点未返回有效的任务标识")
+            self._update_task_fields(
+                task_id,
+                status="running",
+                remote_task_id=remote_task_id,
+                started_at=datetime.now(timezone.utc).isoformat(),
+            )
+            self._add_event(task_id, "submitted", {"remote_task_id": remote_task_id})
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE infra.compute_nodes SET current_task_id = %s WHERE node_id = %s",
+                        (task_id, node["node_id"]),
+                    )
+            task["status"] = "running"
+            task["remote_task_id"] = remote_task_id
+            self._start_collector(task_id, client, remote_task_id)
+        except Exception as e:
+            logger.error("提交自定义任务到节点失败: %s", e)
             self._update_task_fields(task_id, status="failed", error_message=str(e))
             self._add_event(task_id, "submit_failed", {"error": str(e)})
             task["status"] = "failed"
@@ -623,10 +694,23 @@ class DispatchService:
 
     # ── 任务结果 ──
 
-    def get_task_results(self, task_id: str) -> Dict[str, Any]:
+    async def get_task_results(self, task_id: str) -> Dict[str, Any]:
         task = self.get_task(task_id)
         if not task:
             raise ValueError(f"任务不存在: {task_id}")
+
+        node_results: List[Dict[str, Any]] = []
+        if task.get("remote_task_id") and task.get("node_id"):
+            try:
+                client = self.get_node_client(task["node_id"])
+                async with httpx.AsyncClient(timeout=30.0, proxy=None) as c:
+                    resp = await c.get(f"{client.base_url}/scheduler/tasks/{task['remote_task_id']}/results")
+                    if resp.status_code < 400:
+                        node_results = resp.json().get("items", [])
+            except Exception as e:
+                logger.warning("读取节点任务结果失败 (task=%s): %s", task_id, e)
+
+        latest_result = node_results[-1] if node_results else None
         return {
             "task_id": task_id,
             "status": task["status"],
@@ -636,6 +720,8 @@ class DispatchService:
             "best_max_dd": task.get("best_max_dd"),
             "sota_factors": task.get("sota_factors", 0),
             "sota_models": task.get("sota_models", 0),
+            "node_results": node_results,
+            "latest_result": latest_result,
         }
 
     # ── 日志 ──

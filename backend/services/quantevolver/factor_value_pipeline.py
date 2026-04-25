@@ -18,11 +18,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import gc
 import os
 import threading
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -38,7 +38,7 @@ logger = logging.getLogger("aistock.quantevolver.factor_value_pipeline")
 _PROJECT_ROOT = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..")
 )
-_DEFAULT_OUTPUT_DIR = os.path.join(_PROJECT_ROOT, "rdagent_assets", "factor_values")
+_REALTIME_OUTPUT_DIR = os.path.join(_PROJECT_ROOT, "rdagent_assets", "factor_values_realtime")
 _QE_FACTORS_DIR = os.path.join(_PROJECT_ROOT, "rdagent_assets", "qe_factors")
 
 
@@ -81,7 +81,7 @@ class BatchComputeResult:
             "output_path": self.output_path,
             "merged_shape": self.merged_shape,
             "total_elapsed_sec": round(self.total_elapsed_sec, 1),
-            "factors": [
+            "factor_results": [
                 {
                     "name": r.factor_name,
                     "success": r.success,
@@ -98,6 +98,7 @@ class BatchComputeResult:
         return result
 
 
+
 class FactorValuePipeline:
     """批量执行已改造因子代码，计算因子值并存储。
 
@@ -108,7 +109,7 @@ class FactorValuePipeline:
     """
 
     def __init__(self, output_dir: Optional[str] = None):
-        self._output_dir = output_dir or _DEFAULT_OUTPUT_DIR
+        self._output_dir = output_dir or _REALTIME_OUTPUT_DIR
         self._loader_instance = None
         self._static_loader_instance = None
         self._init_lock = threading.Lock()
@@ -148,7 +149,7 @@ class FactorValuePipeline:
                 """
                 _TEMP_PARQUET = os.path.join(
                     os.path.dirname(__file__), "..", "..", "..",
-                    "rdagent_assets", "factor_values", "_static_factors_cache.parquet",
+                    "rdagent_assets", "factor_values_realtime", "_static_factors_cache.parquet",
                 )
                 _KEY_FILE = _TEMP_PARQUET + ".key.json"
                 _build_lock = threading.Lock()
@@ -157,20 +158,23 @@ class FactorValuePipeline:
                     self._cache_key = self._load_persisted_key()
 
                 def _load_persisted_key(self):
-                    """从磁盘加载持久化的 cache_key（服务重启后复用）。"""
-                    try:
-                        if os.path.isfile(self._KEY_FILE) and os.path.isfile(self._TEMP_PARQUET):
-                            with open(self._KEY_FILE, "r") as f:
-                                data = json.load(f)
-                            # 还原为 tuple key
-                            return (
-                                tuple(data["instruments"]),
-                                data["start_date"],
-                                data["end_date"],
-                            )
-                    except Exception:
-                        pass
-                    return None
+                    """从磁盘加载持久化的 cache_key（服务重启后复用）。
+
+                    - 文件不存在视为首次启动 (合法): 返回 None 让调用方走重建路径
+                    - 文件存在但损坏: 严禁静默, 必须抛出, 上游决定清理或停止
+                    """
+                    if not (
+                        os.path.isfile(self._KEY_FILE)
+                        and os.path.isfile(self._TEMP_PARQUET)
+                    ):
+                        return None
+                    with open(self._KEY_FILE, "r") as f:
+                        data = json.load(f)
+                    return (
+                        tuple(data["instruments"]),
+                        data["start_date"],
+                        data["end_date"],
+                    )
 
                 def _persist_key(self, key):
                     """将 cache_key 持久化到磁盘。"""
@@ -202,14 +206,13 @@ class FactorValuePipeline:
                         if columns:
                             available = [c for c in columns if c in result.columns]
                             if available:
-                                return result[available].copy()
-                            # 请求的列都不存在，返回空 DataFrame 而非全部列
+                                return result[available]
                             logger.warning(
                                 f"快照模式: 请求列 {columns} 均不在快照中 "
                                 f"(快照列: {list(result.columns[:5])}...共{len(result.columns)}列)"
                             )
-                            return result[[]].copy()
-                        return result.copy()
+                            return result[[]]
+                        return result
 
                     # ── 防护：如果快照曾被注入但被意外清除，不允许静默回退到 DB ──
                     if _pipeline_ref._snapshot_data_date is not None:
@@ -289,6 +292,7 @@ class FactorValuePipeline:
         self,
         data_date: str,
         instruments: Optional[List[str]] = None,
+        snapshot_start_date: Optional[str] = None,
     ) -> Dict[str, float]:
         """从磁盘快照预热数据缓存。首次自动创建快照。
 
@@ -304,12 +308,12 @@ class FactorValuePipeline:
         # 1. 快照不存在 → 创建（首次执行，从 DB 加载）
         if not mgr.snapshot_exists(data_date):
             if instruments is None:
-                from ...data_service.qe_data_service import get_instruments_universe
-                instruments = get_instruments_universe()
+                from .evaluation_universe_service import EvaluationUniverseService
+                instruments = EvaluationUniverseService().get_official_universe(as_of_date=data_date[:4] + "-" + data_date[4:6] + "-" + data_date[6:8])
 
             logger.info(f"[快照] 首次创建快照 {data_date}，从 DB 加载数据...")
             t0 = time.time()
-            mgr.create_snapshot(data_date, instruments)
+            mgr.create_snapshot(data_date, instruments, start_date=snapshot_start_date)
             timings["snapshot_create"] = round(time.time() - t0, 1)
             logger.info(f"[快照] 创建完成: {timings['snapshot_create']}s")
         else:
@@ -413,12 +417,12 @@ class FactorValuePipeline:
         self,
         factor_names: Optional[List[str]] = None,
         instruments: Optional[List[str]] = None,
-        start_date: str = "2024-12-01",
-        end_date: str = "2025-12-01",
         max_workers: int = 1,
         timeout_per_factor: int = 600,
         save_parquet: bool = True,
         data_date: Optional[str] = None,
+        snapshot_start_date: Optional[str] = None,
+        on_factor_success: Optional[callable] = None,
     ) -> BatchComputeResult:
         """批量执行因子代码，计算因子值（快照模式）。
 
@@ -436,18 +440,23 @@ class FactorValuePipeline:
         t0 = time.time()
         self._ensure_loaders()
 
-        from .data_snapshot_manager import _parse_data_date
-        end_date = _parse_data_date(data_date)
-        from datetime import timedelta as _td
-        ed = datetime.strptime(end_date, "%Y-%m-%d")
-        start_date = (ed - _td(days=730)).strftime("%Y-%m-%d")
+        # 从快照 meta 读取起止日期，确保所有因子使用快照确定的时间范围
+        from .data_snapshot_manager import DataSnapshotManager, _parse_data_date, DEFAULT_START_DATE
+        mgr = DataSnapshotManager()
+        if mgr.snapshot_exists(data_date):
+            snap_meta = mgr.load_meta(data_date)
+            start_date = snap_meta["start_date"]
+            end_date = snap_meta["end_date"]
+        else:
+            end_date = _parse_data_date(data_date)
+            start_date = DEFAULT_START_DATE
 
         if instruments is None:
-            from ...data_service.qe_data_service import get_instruments_universe
-            instruments = get_instruments_universe()
-            logger.info(f"使用全 A 股票池: {len(instruments)} 只")
+            from .evaluation_universe_service import EvaluationUniverseService
+            instruments = EvaluationUniverseService().get_official_universe(as_of_date=end_date)
+            logger.info(f"使用官方评估股票池: {len(instruments)} 只")
 
-        warmup_timings = self._warm_from_snapshot(data_date, instruments)
+        warmup_timings = self._warm_from_snapshot(data_date, instruments, snapshot_start_date=snapshot_start_date)
 
         try:
             return self._do_compute_factor_values(
@@ -460,6 +469,7 @@ class FactorValuePipeline:
                 save_parquet=save_parquet,
                 t0=t0,
                 warmup_timings=warmup_timings,
+                on_factor_success=on_factor_success,
             )
         finally:
             self.clear_snapshot()
@@ -469,6 +479,7 @@ class FactorValuePipeline:
         factor_names, instruments, start_date, end_date,
         max_workers, timeout_per_factor, save_parquet,
         t0, warmup_timings,
+        on_factor_success=None,
     ) -> BatchComputeResult:
         """compute_factor_values 的实际执行逻辑（分离出来以便 try/finally 清理快照）。"""
 
@@ -486,86 +497,140 @@ class FactorValuePipeline:
             f"max_workers={max_workers}"
         )
 
-        # 执行计算 — 流式合并，避免 all_dfs 累积所有 DataFrame
+        # 执行计算 — 串行 exec 沙箱模式
+        # 基础数据（static_factors + realtime_kline）只加载一次，所有因子共享
+        # 每个因子执行后立即写盘并释放 df，内存峰值固定不随因子数量增长
         all_results: List[FactorComputeResult] = []
-        merged_df: Optional[pd.DataFrame] = None
+        success_single_paths: List[str] = []  # 成功因子的 single/ 路径（用于最终合并）
 
-        def _accumulate(fname: str, df: pd.DataFrame):
-            """将单因子 df 流式合并到 merged_df，立即释放原始 df。"""
-            nonlocal merged_df
-            if merged_df is None:
-                merged_df = df
-            else:
-                merged_df = merged_df.join(df, how="outer")
+        # single/ 缓存目录 — 每个因子成功后同时写入，供相关性计算复用
+        single_dir = os.path.join(self._output_dir, "single")
+        os.makedirs(single_dir, exist_ok=True)
 
-        if max_workers <= 1:
-            # 串行执行
-            for info in factor_infos:
-                result, df = self._execute_single_factor(
-                    factor_name=info["factor_name"],
-                    code_path=info["abs_code_path"],
-                    instruments=instruments,
-                    start_date=start_date,
-                    end_date=end_date,
-                    timeout=timeout_per_factor,
-                )
-                all_results.append(result)
-                if df is not None:
-                    _accumulate(info["factor_name"], df)
-                    del df
+        # ── 策略 B: 开工前清理陈旧快照 ──
+        # 本次计算以 end_date 为权威 as_of_date, meta 中任何非该值的条目 (以及对应的 single parquet)
+        # 必须清除, 否则会导致相关性计算 Phase 1.5 因多快照失败.
+        # 保留增量能力: meta 中 as_of_date == end_date 的条目不动 (允许本批次只补算部分因子)
+        prune_stats = self._prune_stale_snapshot(expected_as_of_date=end_date)
+        if prune_stats["pruned_factors"]:
+            logger.warning(
+                f"[策略B] 开工前清理陈旧快照: "
+                f"expected_as_of_date={end_date}, "
+                f"pruned_factors={len(prune_stats['pruned_factors'])}, "
+                f"pruned_as_of_dates={prune_stats['pruned_as_of_dates']}, "
+                f"样例={prune_stats['pruned_factors'][:10]}"
+            )
         else:
-            # 并发执行
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {}
-                for info in factor_infos:
-                    fut = executor.submit(
-                        self._execute_single_factor,
+            logger.info(
+                f"[策略B] 开工前检查通过: meta 中不存在其他快照 (expected={end_date})"
+            )
+
+        for i, info in enumerate(factor_infos):
+            result, df = self._execute_single_factor(
+                factor_name=info["factor_name"],
+                code_path=info["abs_code_path"],
+                instruments=instruments,
+                start_date=start_date,
+                end_date=end_date,
+                timeout=timeout_per_factor,
+            )
+            all_results.append(result)
+            if df is not None:
+                # 立即写 single/{name}.parquet — 相关性计算直接复用
+                single_path = os.path.join(single_dir, f"{info['factor_name']}.parquet")
+                try:
+                    df.to_parquet(single_path)
+                    success_single_paths.append(single_path)
+                    # 构建 meta_entry — 供 _meta.json 记录因子元数据
+                    _dates = df.index.get_level_values(0)
+                    result.meta_entry = {
+                        "status": "ok",
+                        "computed_at": datetime.now().isoformat(),
+                        "rows": len(df),
+                        "date_range": f"{_dates.min().strftime('%Y-%m-%d')}~{_dates.max().strftime('%Y-%m-%d')}",
+                        "as_of_date": end_date,
+                        "data_source_mode": "snapshot",
+                    }
+                    result.meta_as_of_date = end_date
+                except Exception as e:
+                    logger.error(f"写入 single 缓存失败: {info['factor_name']}: {e}")
+                    # 标记为失败 — single/ 文件不存在会影响相关性计算
+                    # 清除残留的半写文件（如果存在），避免下次扫描到不完整文件
+                    if os.path.isfile(single_path):
+                        os.remove(single_path)
+                    result = FactorComputeResult(
                         factor_name=info["factor_name"],
-                        code_path=info["abs_code_path"],
-                        instruments=instruments,
-                        start_date=start_date,
-                        end_date=end_date,
-                        timeout=timeout_per_factor,
+                        success=False,
+                        error=f"因子计算成功但缓存写入失败: {e}",
+                        elapsed_sec=result.elapsed_sec,
                     )
-                    futures[fut] = info
+                    all_results[-1] = result  # 替换最后一条
+                    del df
+                    continue
 
-                for fut in as_completed(futures):
-                    info = futures[fut]
+                # ── 立即写 _meta.json 单条 ──
+                # 严格顺序: 先 parquet 落盘 (上一步已完成), 再 meta 落盘
+                # 任何失败立即删除 parquet, 保持 disk ↔ meta 强一致
+                try:
+                    self.flush_meta_single(
+                        factor_name=info["factor_name"],
+                        meta_entry=result.meta_entry,
+                        as_of_date=end_date,
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"_meta.json 单条写入失败: {info['factor_name']}: {e}", exc_info=True,
+                    )
+                    # 严格一致性: meta 失败 → 删除 parquet + 标记因子失败
+                    if os.path.isfile(single_path):
+                        os.remove(single_path)
+                    result = FactorComputeResult(
+                        factor_name=info["factor_name"],
+                        success=False,
+                        error=f"因子计算成功但 meta 写入失败(parquet 已回滚): {e}",
+                        elapsed_sec=result.elapsed_sec,
+                    )
+                    all_results[-1] = result
+                    del df
+                    continue
+
+                # 回调：立即计算指标 + 入库
+                if on_factor_success is not None:
                     try:
-                        result, df = fut.result()
-                    except Exception as e:
-                        result = FactorComputeResult(
-                            factor_name=info["factor_name"],
-                            success=False,
-                            error=f"ThreadPool error: {e}",
+                        on_factor_success(info["factor_name"], single_path, df)
+                    except Exception as cb_err:
+                        logger.error(
+                            f"因子回调失败: {info['factor_name']}: {cb_err}", exc_info=True,
                         )
-                        df = None
-                    all_results.append(result)
-                    if df is not None:
-                        _accumulate(info["factor_name"], df)
-                        del df
+                        # 回调失败必须显式传播到 result: 下游可识别此因子未完成独立指标入库
+                        # parquet 与 meta 保留(因子值缓存有效)，但因子整体标记为失败
+                        result.success = False
+                        result.error = f"指标入库失败: {cb_err}"
+                # 立即释放 df — 不在内存中累积
+                del df
+            # 每 10 个因子做一次 gc，避免中间数据累积
+            if (i + 1) % 10 == 0:
+                gc.collect()
 
-        # 合并结果
+        # 统计结果 — 不做合并，每个因子独立文件已在循环中写入 single/
         success_count = sum(1 for r in all_results if r.success)
         failed_count = len(all_results) - success_count
 
-        output_path = None
-        merged_shape = None
+        # ── 扫尾一致性校验 ──
+        # 循环内每因子已立即 flush_meta_single, 此处仅做双向一致性 reconcile:
+        # 1) disk 上有 parquet 但 meta 无条目 → 删除 parquet (孤儿)
+        # 2) meta 有条目但 disk 无 parquet → 移除 meta 条目 (孤儿)
+        # 任何不一致直接抛出，严禁静默吞错
+        reconcile_stats = self.reconcile_meta_and_single(expected_as_of_date=end_date)
+        logger.info(
+            f"_meta.json reconcile 完成: "
+            f"removed_orphan_parquets={reconcile_stats['removed_orphan_parquets']}, "
+            f"removed_orphan_meta={reconcile_stats['removed_orphan_meta']}, "
+            f"final_factor_count={reconcile_stats['final_factor_count']}"
+        )
 
-        if merged_df is not None and save_parquet:
-            try:
-                merged_df = merged_df.sort_index()
-                output_path = self._save_parquet(merged_df, end_date)
-                merged_shape = str(merged_df.shape)
-                logger.info(
-                    f"合并结果: {merged_df.shape}, 保存到 {output_path}"
-                )
-            except Exception as e:
-                logger.error(f"合并/保存 Parquet 失败: {e}")
-                raise RuntimeError(f"合并/保存 Parquet 失败: {e}") from e
-            finally:
-                del merged_df
-                import gc; gc.collect()
+        # output_path 指向 single/ 目录（而非合并文件）
+        output_path = single_dir if success_single_paths else None
 
         elapsed = time.time() - t0
         batch_result = BatchComputeResult(
@@ -575,7 +640,6 @@ class FactorValuePipeline:
             factor_results=all_results,
             output_path=output_path,
             total_elapsed_sec=round(elapsed, 1),
-            merged_shape=merged_shape,
             warmup_timings=warmup_timings or None,
         )
 
@@ -637,6 +701,8 @@ class FactorValuePipeline:
 
         return results
 
+    # ── 因子执行 ──
+
     def _execute_single_factor(
         self,
         factor_name: str,
@@ -646,12 +712,10 @@ class FactorValuePipeline:
         end_date: str,
         timeout: int = 600,
     ) -> tuple[FactorComputeResult, Optional[pd.DataFrame]]:
-        """执行单个因子代码并返回结果。
+        """在主进程中通过 exec 沙箱执行因子代码。
 
-        复用 factor_code_transformer.py 的执行模式:
-        - 注入 _REALTIME_LOADER, _STATIC_FACTORS_LOADER, pd, np
-        - 线程超时保护
-        - 结果验证（非空、非全 NaN）
+        数据通过 self._static_loader_instance 和 RealtimeFactorDataLoader 共享，
+        文件只加载一次，所有因子共享同一份内存数据。
 
         Returns: (FactorComputeResult, DataFrame or None)
         """
@@ -673,31 +737,27 @@ class FactorValuePipeline:
                 elapsed_sec=time.time() - t0,
             ), None
 
-        # 构建执行环境
-        # monkey-patch pd.read_parquet: 当路径为 static_factors.parquet 时
-        # 自动转发到 _STATIC_FACTORS_LOADER，确保使用快照数据 + 列裁剪
-        _original_read_parquet = pd.read_parquet
-        _static_loader = self._static_loader_instance
-        _snap_date = self._snapshot_data_date
-
-        def _patched_read_parquet(path_or_buf, **kwargs):
-            path_str = str(path_or_buf)
-            if "static_factors" in path_str and _static_loader is not None:
-                cols = kwargs.get("columns", None)
-                return _static_loader.load(
-                    instruments=instruments,
-                    start_date=start_date,
-                    end_date=end_date,
-                    columns=cols,
-                )
-            return _original_read_parquet(path_or_buf, **kwargs)
-
+        # 构建 exec 沙箱 — 因子代码只能访问 pd/np/loader，无法污染主进程
         import types
         _patched_pd = types.ModuleType("pandas")
         _patched_pd.__dict__.update(pd.__dict__)
+        # monkey-patch read_parquet 拦截静态因子路径
+        _original_read_parquet = pd.read_parquet
+        _snapshot_static_df = self._snapshot_static_df  # 快照模式下的内存数据
+
+        def _patched_read_parquet(path_or_buf, **kwargs):
+            path_str = str(path_or_buf)
+            if "static_factors" in path_str and _snapshot_static_df is not None:
+                cols = kwargs.get("columns", None)
+                if cols:
+                    available = [c for c in cols if c in _snapshot_static_df.columns]
+                    return _snapshot_static_df[available] if available else _snapshot_static_df[[]]
+                return _snapshot_static_df
+            return _original_read_parquet(path_or_buf, **kwargs)
+
         _patched_pd.read_parquet = _patched_read_parquet
 
-        exec_globals = {
+        sandbox = {
             "__name__": "__factor_pipeline__",
             "__builtins__": __builtins__,
             "pd": _patched_pd,
@@ -706,69 +766,82 @@ class FactorValuePipeline:
             "_STATIC_FACTORS_LOADER": self._static_loader_instance,
         }
 
-        # 使用线程 + 超时控制
-        container: Dict[str, Any] = {"result": None, "error": None, "error_type": None, "error_short": None, "traceback_full": None}
+        # 编译并执行因子代码
+        # 保存沙箱注入的 loader 引用 — 因子代码可能重新定义同名变量覆盖它们
+        _injected_realtime_loader = sandbox["_REALTIME_LOADER"]
+        _injected_static_loader = sandbox["_STATIC_FACTORS_LOADER"]
+        try:
+            compiled = compile(code, f"<factor_{factor_name}>", "exec")
+            exec(compiled, sandbox)
+            # 恢复沙箱注入的 loader（防止因子代码顶部 import 覆盖快照版本）
+            sandbox["_REALTIME_LOADER"] = _injected_realtime_loader
+            sandbox["_STATIC_FACTORS_LOADER"] = _injected_static_loader
+        except Exception as e:
+            elapsed = time.time() - t0
+            logger.warning(f"因子代码编译/定义失败: {factor_name}: {e}")
+            return FactorComputeResult(
+                factor_name=factor_name,
+                success=False,
+                error=f"代码编译/定义失败: {e}",
+                error_short=f"代码编译/定义失败: {e}",
+                error_type=type(e).__name__,
+                traceback_full=traceback.format_exc(),
+                elapsed_sec=elapsed,
+            ), None
 
-        def _run():
+        # 找到 calculate_xxx 函数
+        calc_funcs = [k for k in sandbox if k.startswith("calculate_")]
+        if not calc_funcs:
+            elapsed = time.time() - t0
+            return FactorComputeResult(
+                factor_name=factor_name,
+                success=False,
+                error="因子代码中未找到 calculate_* 函数",
+                elapsed_sec=elapsed,
+            ), None
+
+        # 执行因子计算（带超时保护，兼容主线程和子线程）
+        try:
+            _timed_out = False
+
+            def _timeout_flag():
+                nonlocal _timed_out
+                _timed_out = True
+
+            timer = threading.Timer(timeout, _timeout_flag)
+            timer.start()
             try:
-                compiled = compile(code, f"<factor_{factor_name}>", "exec")
-                exec(compiled, exec_globals)
-
-                # 查找 calculate_ 函数
-                calc_func_name = f"calculate_{factor_name}"
-                if calc_func_name not in exec_globals:
-                    calc_funcs = [
-                        k for k in exec_globals if k.startswith("calculate_")
-                    ]
-                    if not calc_funcs:
-                        container["error"] = (
-                            f"未找到 calculate_{factor_name} 函数"
-                        )
-                        return
-                    calc_func_name = calc_funcs[0]
-
-                container["result"] = exec_globals[calc_func_name](
-                    instruments=instruments,
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-            except Exception as e:
-                container["error_type"] = type(e).__name__
-                container["error_short"] = f"{type(e).__name__}: {e}"
-                container["traceback_full"] = traceback.format_exc()
-                container["error"] = container["traceback_full"]
-
-        thread = threading.Thread(target=_run, daemon=True)
-        thread.start()
-        thread.join(timeout=timeout)
+                result_df = sandbox[calc_funcs[0]](instruments, start_date, end_date)
+            finally:
+                timer.cancel()
+            if _timed_out:
+                raise TimeoutError(f"因子执行超时(>{timeout}s)")
+        except Exception as e:
+            elapsed = time.time() - t0
+            logger.warning(f"因子执行失败: {factor_name}: {e}")
+            return FactorComputeResult(
+                factor_name=factor_name,
+                success=False,
+                error=str(e),
+                error_short=str(e)[:200],
+                error_type=type(e).__name__,
+                traceback_full=traceback.format_exc(),
+                elapsed_sec=elapsed,
+            ), None
+        finally:
+            # 清理沙箱，释放因子中间变量
+            sandbox.clear()
+            del sandbox
 
         elapsed = time.time() - t0
 
-        if thread.is_alive():
-            logger.warning(f"因子执行超时(>{timeout}s): {factor_name}")
+        if result_df is None:
             return FactorComputeResult(
                 factor_name=factor_name,
                 success=False,
-                error=f"执行超时(>{timeout}s)",
-                error_short=f"执行超时(>{timeout}s)",
-                error_type="TimeoutError",
+                error="因子代码返回 None",
                 elapsed_sec=elapsed,
             ), None
-
-        if container["error"]:
-            short = container.get("error_short") or str(container["error"]).splitlines()[0][:500]
-            logger.warning(f"因子执行失败: {factor_name}: {short[:200]}")
-            return FactorComputeResult(
-                factor_name=factor_name,
-                success=False,
-                error=short,
-                error_short=short,
-                error_type=container.get("error_type"),
-                traceback_full=container.get("traceback_full"),
-                elapsed_sec=elapsed,
-            ), None
-
-        result_df = container["result"]
 
         # 验证结果
         validation = self._validate_result(result_df, factor_name)
@@ -780,9 +853,8 @@ class FactorValuePipeline:
                 elapsed_sec=elapsed,
             ), None
 
-        # 提取因子列（结果 DataFrame 可能包含因子名列）
+        # 提取因子列
         if isinstance(result_df, pd.DataFrame):
-            # 取第一列作为因子值
             factor_col = result_df.columns[0]
             series = result_df[factor_col]
         elif isinstance(result_df, pd.Series):
@@ -809,6 +881,9 @@ class FactorValuePipeline:
         nan_rate = float(df_out[factor_name].isna().mean())
         dates = df_out.index.get_level_values(0)
         date_range = f"{dates.min().strftime('%Y-%m-%d')}~{dates.max().strftime('%Y-%m-%d')}"
+
+        # 释放中间数据
+        del result_df
 
         logger.info(
             f"因子计算成功: {factor_name}, "
@@ -857,40 +932,6 @@ class FactorValuePipeline:
 
         return f"返回类型不支持: {type(result).__name__}"
 
-    def _merge_factor_dfs(
-        self,
-        factor_dfs: Dict[str, pd.DataFrame],
-    ) -> pd.DataFrame:
-        """合并多个因子 DataFrame 为统一面板。
-
-        输入: {factor_name: DataFrame(MultiIndex, 1列)}
-        输出: DataFrame(MultiIndex, N列)
-        """
-        if not factor_dfs:
-            return pd.DataFrame()
-
-        dfs = list(factor_dfs.values())
-        merged = dfs[0]
-        for df in dfs[1:]:
-            merged = merged.join(df, how="outer")
-
-        merged = merged.sort_index()
-        logger.info(f"因子合并完成: {merged.shape}")
-        return merged
-
-    def _save_parquet(
-        self,
-        df: pd.DataFrame,
-        end_date: str,
-    ) -> str:
-        """保存合并的因子值为 Parquet 文件。"""
-        os.makedirs(self._output_dir, exist_ok=True)
-        date_tag = end_date.replace("-", "")
-        filename = f"batch_{date_tag}.parquet"
-        path = os.path.join(self._output_dir, filename)
-        df.to_parquet(path, engine="pyarrow", compression="snappy")
-        logger.info(f"因子值 Parquet 已保存: {path}")
-        return path
 
     def get_cached_parquets(self) -> List[Dict[str, Any]]:
         """列出已缓存的因子值 Parquet 文件。"""
@@ -937,99 +978,25 @@ class FactorValuePipeline:
             return {"factors": {}}
 
     def _save_meta(self, meta: Dict[str, Any]) -> None:
+        """原子写入 _meta.json：tmp → fsync → os.replace。
+
+        保证任何崩溃时刻磁盘上只可能存在完整文件或旧文件，绝不会半截。
+        """
         meta["generated_at"] = datetime.now().isoformat()
         meta["factor_count"] = len(meta.get("factors", {}))
+        path = self._meta_path()
+        tmp_path = path + ".tmp"
         with self._meta_lock:
-            with open(self._meta_path(), "w", encoding="utf-8") as f:
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
 
     def _compute_source_hash_raw(self, code_path: str) -> str:
         with open(code_path, "r", encoding="utf-8") as f:
             raw = f.read()
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-
-    def compute_single_factor(
-        self,
-        factor_name: str,
-        instruments: Optional[List[str]] = None,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        timeout: int = 600,
-    ) -> FactorComputeResult:
-        """执行单个因子代码 → 存为 single/{factor_name}.parquet。
-
-        Parameters
-        ----------
-        factor_name : 因子名称
-        instruments : 股票池；None 则使用全 A 股
-        start_date : 起始日期；None 则使用 2 年前
-        end_date : 截止日期；None 则使用最新交易日
-
-        Returns
-        -------
-        FactorComputeResult
-        """
-        self._ensure_loaders()
-
-        # 默认日期范围
-        if end_date is None:
-            from datetime import date
-            end_date = date.today().strftime("%Y-%m-%d")
-        if start_date is None:
-            from datetime import date, timedelta
-            d = date.today() - timedelta(days=730)
-            start_date = d.strftime("%Y-%m-%d")
-
-        if instruments is None:
-            from ...data_service.qe_data_service import get_instruments_universe
-            instruments = get_instruments_universe(as_of_date=end_date)
-
-        # 解析因子代码路径
-        factor_infos = self._resolve_factors([factor_name])
-        if not factor_infos:
-            return FactorComputeResult(
-                factor_name=factor_name,
-                success=False,
-                error="未找到因子代码或代码文件不存在",
-                error_short="未找到因子代码或代码文件不存在",
-            )
-
-        info = factor_infos[0]
-        source_hash_raw = self._compute_source_hash_raw(info["abs_code_path"])
-        result, df = self._execute_single_factor(
-            factor_name=info["factor_name"],
-            code_path=info["abs_code_path"],
-            instruments=instruments,
-            start_date=start_date,
-            end_date=end_date,
-            timeout=timeout,
-        )
-
-        if not result.success or df is None:
-            return result
-
-        # 保存为单因子 parquet: single/{factor_name}.parquet
-        single_dir = self._single_dir()
-        out_path = os.path.join(single_dir, f"{factor_name}.parquet")
-        # 重命名列为 value
-        save_df = df.rename(columns={df.columns[0]: "value"})
-        save_df.to_parquet(out_path, engine="pyarrow", compression="snappy")
-        del save_df, df
-        import gc; gc.collect()
-
-        # 附带 meta 信息，由调用方批量写入（避免并发写 _meta.json 竞态）
-        result.meta_entry = {
-            "computed_at": datetime.now().isoformat(),
-            "rows": result.num_rows,
-            "date_range": result.date_range,
-            "as_of_date": end_date,
-            "elapsed_sec": round(result.elapsed_sec, 2),
-            "source_hash_raw": source_hash_raw,
-        }
-        result.meta_as_of_date = end_date
-
-        logger.info(f"单因子缓存已保存: {out_path} ({result.num_rows} 行)")
-        return result
 
     def flush_meta_batch(self, results: List[FactorComputeResult]) -> int:
         """批量写入多个因子的 meta 信息到 _meta.json（主线程调用，无竞态）。
@@ -1052,280 +1019,254 @@ class FactorValuePipeline:
             self._save_meta(meta)
         return count
 
-    def extend_single_factor_cache(
+    def flush_meta_single(
         self,
         factor_name: str,
-        new_end_date: str,
-        instruments: Optional[List[str]] = None,
-        buffer_days: int = 90,
-        timeout: int = 120,
-    ) -> FactorComputeResult:
-        """增量扩展单因子缓存到新的截止日期。
+        meta_entry: Dict[str, Any],
+        as_of_date: str,
+    ) -> None:
+        """单因子立即写入 _meta.json。
 
-        只计算现有缓存最后日期之后的新数据。为保证滚动窗口正确，
-        增量计算时向前多加载 buffer_days 天缓冲数据，但仅保留新日期的结果。
+        每完成一个因子计算后立即调用，保证：
+        1. 即便进程崩溃，已落盘的 single/*.parquet 在 meta 中必有对应条目；
+        2. 同一因子名覆盖旧条目，不产生重复；
+        3. 顶层 as_of_date 与本条目同步。
 
-        Parameters
-        ----------
-        factor_name : 因子名称
-        new_end_date : 目标截止日期 (YYYY-MM-DD)
-        instruments : 股票池；None 则使用全 A 股
-        buffer_days : 滚动窗口缓冲天数（保证 rolling(N) 等操作正确）
-        timeout : 因子执行超时秒数（增量计算应比全量快得多）
+        失败必须抛出异常，严禁静默吞错。
         """
-        self._ensure_loaders()
-
-        single_dir = self._single_dir()
-        parquet_path = os.path.join(single_dir, f"{factor_name}.parquet")
-
-        if not os.path.isfile(parquet_path):
-            # 无缓存，需要全量计算
-            return self.compute_single_factor(
-                factor_name, instruments=instruments,
-                end_date=new_end_date, timeout=timeout,
+        if not factor_name or not meta_entry or not as_of_date:
+            raise ValueError(
+                f"flush_meta_single 参数不完整: "
+                f"factor_name={factor_name!r}, "
+                f"meta_entry_keys={list(meta_entry.keys()) if meta_entry else None}, "
+                f"as_of_date={as_of_date!r}"
             )
+        meta = self._load_meta()
+        meta.setdefault("factors", {})[factor_name] = meta_entry
+        meta["as_of_date"] = as_of_date
+        self._save_meta(meta)
 
-        # 轻量日期检查：只读索引判断是否需要扩展（避免读完整文件）
-        idx_only = pd.read_parquet(parquet_path, columns=[])
-        last_cached_date = idx_only.index.get_level_values(0).max()
-        target_date = pd.Timestamp(new_end_date)
+    def _prune_stale_snapshot(self, expected_as_of_date: str) -> Dict[str, Any]:
+        """策略 B: 清理 meta 中非 expected_as_of_date 的条目 + 对应 single parquet。
 
-        if target_date <= last_cached_date:
-            return FactorComputeResult(
-                factor_name=factor_name, success=True,
-                num_rows=len(idx_only),
-                date_range=f"~{last_cached_date.strftime('%Y-%m-%d')} (已覆盖)",
-            )
-        del idx_only
-
-        if instruments is None:
-            from ...data_service.qe_data_service import get_instruments_universe
-            instruments = get_instruments_universe(as_of_date=new_end_date)
-        from datetime import timedelta
-        buffer_start = (last_cached_date - timedelta(days=buffer_days)).strftime("%Y-%m-%d")
-
-        factor_infos = self._resolve_factors([factor_name])
-        if not factor_infos:
-            return FactorComputeResult(
-                factor_name=factor_name, success=False,
-                error="未找到因子代码或代码文件不存在",
-                error_short="未找到因子代码或代码文件不存在",
-            )
-
-        t0 = time.time()
-        result, df_new = self._execute_single_factor(
-            factor_name=factor_infos[0]["factor_name"],
-            code_path=factor_infos[0]["abs_code_path"],
-            instruments=instruments,
-            start_date=buffer_start,
-            end_date=new_end_date,
-            timeout=timeout,
-        )
-
-        if not result.success or df_new is None:
-            return result
-
-        # 只取新日期的数据（last_cached_date 之后）
-        new_dates_mask = df_new.index.get_level_values(0) > last_cached_date
-        df_append = df_new.loc[new_dates_mask]
-
-        if df_append.empty:
-            return FactorComputeResult(
-                factor_name=factor_name, success=True,
-                num_rows=0,
-                date_range=f"~{last_cached_date.strftime('%Y-%m-%d')} (无新数据)",
-                elapsed_sec=round(time.time() - t0, 1),
-            )
-
-        # 需要合并时才读取完整缓存文件
-        existing_df = pd.read_parquet(parquet_path)
-        if "value" in existing_df.columns:
-            existing_df = existing_df.rename(columns={"value": factor_name})
-
-        # 合并：existing + new
-        merged = pd.concat([existing_df, df_append])
-        if not merged.index.is_monotonic_increasing:
-            merged = merged.sort_index()
-        merged = merged[~merged.index.duplicated(keep='last')]
-
-        # 保存
-        save_df = merged.rename(columns={merged.columns[0]: "value"})
-        save_df.to_parquet(parquet_path, engine="pyarrow", compression="snappy")
-        del save_df
-
-        # 更新 meta
-        all_dates = merged.index.get_level_values(0)
-        date_range = f"{all_dates.min().strftime('%Y-%m-%d')}~{all_dates.max().strftime('%Y-%m-%d')}"
-        num_rows = len(merged)
-        new_days = df_append.index.get_level_values(0).nunique()
-
-        # 释放大 DataFrame，防止增量循环中内存累积
-        del existing_df, df_new, df_append, merged
-        import gc; gc.collect()
-
-        elapsed = round(time.time() - t0, 1)
-        logger.info(
-            f"因子缓存增量扩展: {factor_name}, "
-            f"+{new_days} 天, 总 {num_rows} 行, 耗时 {elapsed}s"
-        )
-
-        source_hash_raw = self._compute_source_hash_raw(factor_infos[0]["abs_code_path"])
-        result = FactorComputeResult(
-            factor_name=factor_name, success=True,
-            num_rows=num_rows, date_range=date_range,
-            elapsed_sec=elapsed,
-        )
-        result.meta_entry = {
-            "computed_at": datetime.now().isoformat(),
-            "rows": num_rows,
-            "date_range": date_range,
-            "as_of_date": new_end_date,
-            "source_hash_raw": source_hash_raw,
-        }
-        result.meta_as_of_date = new_end_date
-        return result
-
-    def compute_all_singles(
-        self,
-        instruments: Optional[List[str]] = None,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        max_workers: int = 4,
-        timeout_per_factor: int = 600,
-        factor_names: Optional[List[str]] = None,
-        data_date: Optional[str] = None,
-    ) -> BatchComputeResult:
-        """遍历全部已改造因子 → 并发执行 → 各存独立 parquet（快照模式）。
-
-        Parameters
-        ----------
-        data_date : 快照日期 (YYYYMMDD)，必填。所有因子使用相同快照数据。
+        保留 as_of_date == expected_as_of_date 的条目不动，实现增量补算；
+        非 expected 的条目无条件清除，保证 single/ + meta 单一快照。
 
         Returns
         -------
-        BatchComputeResult
+        {
+            "expected_as_of_date": str,
+            "pruned_factors": [factor_name, ...],
+            "pruned_as_of_dates": {aod: count},
+        }
+
+        Raises
+        ------
+        FileNotFoundError : 需要删除的 parquet 不存在且 meta 条目存在（强一致性断言）
         """
-        if not data_date:
-            raise ValueError("data_date 参数必填，所有因子计算必须使用快照模式。")
+        if not expected_as_of_date:
+            raise ValueError("_prune_stale_snapshot 必须传入 expected_as_of_date")
 
-        t0 = time.time()
-        self._ensure_loaders()
+        single_dir = os.path.join(self._output_dir, "single")
+        meta = self._load_meta()
+        factors = meta.get("factors", {})
 
-        from .data_snapshot_manager import _parse_data_date
-        end_date = _parse_data_date(data_date)
-        from datetime import timedelta as _td
-        ed = datetime.strptime(end_date, "%Y-%m-%d")
-        start_date = (ed - _td(days=730)).strftime("%Y-%m-%d")
+        pruned_factors: List[str] = []
+        pruned_aods: Dict[str, int] = {}
 
-        if instruments is None:
-            from ...data_service.qe_data_service import get_instruments_universe
-            instruments = get_instruments_universe()
+        for fn in list(factors.keys()):
+            entry = factors[fn]
+            aod = entry.get("as_of_date")
+            if aod != expected_as_of_date:
+                # 删除对应 parquet (允许不存在, 此时视为 meta 孤儿)
+                pq_path = os.path.join(single_dir, f"{fn}.parquet")
+                if os.path.isfile(pq_path):
+                    os.remove(pq_path)
+                del factors[fn]
+                pruned_factors.append(fn)
+                pruned_aods[aod] = pruned_aods.get(aod, 0) + 1
 
-        warmup_timings = self._warm_from_snapshot(data_date, instruments)
+        if pruned_factors:
+            meta["factors"] = factors
+            # 顶层 as_of_date 回写为期望值 (本次计算后会变成该值, 先保证一致)
+            meta["as_of_date"] = expected_as_of_date
+            self._save_meta(meta)
 
-        try:
-            return self._do_compute_all_singles(
-                factor_names=factor_names,
-                instruments=instruments,
-                start_date=start_date,
-                end_date=end_date,
-                max_workers=max_workers,
-                timeout_per_factor=timeout_per_factor,
-                t0=t0,
-                warmup_timings=warmup_timings,
-            )
-        finally:
-            self.clear_snapshot()
+        return {
+            "expected_as_of_date": expected_as_of_date,
+            "pruned_factors": pruned_factors,
+            "pruned_as_of_dates": pruned_aods,
+        }
 
-    def _do_compute_all_singles(
+    def reconcile_meta_and_single(
         self,
-        factor_names, instruments, start_date, end_date,
-        max_workers, timeout_per_factor, t0, warmup_timings,
-    ) -> BatchComputeResult:
-        """compute_all_singles 的实际执行逻辑。"""
+        expected_as_of_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """双向对账 single/ ↔ _meta.json，保证强一致。
 
-        factor_infos = self._resolve_factors(factor_names)
-        if not factor_infos:
-            return BatchComputeResult(total=0, success=0, failed=0,
-                                     total_elapsed_sec=time.time() - t0)
+        1) disk 上有 parquet 但 meta 无条目 → 删除 parquet (孤儿文件)
+        2) meta 有条目但 disk 无 parquet → 移除 meta 条目 (孤儿 meta)
+        3) 如指定 expected_as_of_date, meta 内出现其他 as_of_date → 抛出异常
+           (此阶段不应再有陈旧条目, _prune_stale_snapshot 已处理; 若存在即逻辑缺陷)
 
-        logger.info(
-            f"开始全量单因子缓存生成: {len(factor_infos)} 因子, "
-            f"{len(instruments)} 只股票, {start_date}~{end_date}, "
-            f"max_workers={max_workers}"
-        )
-
-        all_results: List[FactorComputeResult] = []
-        single_dir = self._single_dir()
-
-        def _process_one(info: Dict[str, str]) -> FactorComputeResult:
-            fname = info["factor_name"]
-            result, df = self._execute_single_factor(
-                factor_name=fname,
-                code_path=info["abs_code_path"],
-                instruments=instruments,
-                start_date=start_date,
-                end_date=end_date,
-                timeout=timeout_per_factor,
+        任何 I/O 错误必须抛出, 严禁静默吞错.
+        """
+        single_dir = os.path.join(self._output_dir, "single")
+        if not os.path.isdir(single_dir):
+            raise FileNotFoundError(
+                f"single 缓存目录不存在: {single_dir}, 无法 reconcile"
             )
-            if result.success and df is not None:
-                out_path = os.path.join(single_dir, f"{fname}.parquet")
-                save_df = df.rename(columns={df.columns[0]: "value"})
-                save_df.to_parquet(out_path, engine="pyarrow", compression="snappy")
-                del save_df
-                result.meta_entry = {
-                    "computed_at": datetime.now().isoformat(),
-                    "rows": result.num_rows,
-                    "date_range": result.date_range,
-                    "as_of_date": end_date,
-                    "source_hash_raw": self._compute_source_hash_raw(info["abs_code_path"]),
-                }
-                result.meta_as_of_date = end_date
-            del df  # 立即释放因子 DataFrame
-            return result
 
-        if max_workers <= 1:
-            for info in factor_infos:
-                all_results.append(_process_one(info))
-        else:
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {
-                    executor.submit(_process_one, info): info
-                    for info in factor_infos
-                }
-                for fut in as_completed(futures):
-                    try:
-                        all_results.append(fut.result())
-                    except Exception as e:
-                        info = futures[fut]
-                        all_results.append(FactorComputeResult(
-                            factor_name=info["factor_name"],
-                            success=False,
-                            error=f"ThreadPool error: {e}",
-                            error_short=f"ThreadPool error: {e}",
-                            error_type=type(e).__name__,
-                            traceback_full=traceback.format_exc(),
-                        ))
+        meta = self._load_meta()
+        factors = meta.setdefault("factors", {})
 
-        # 批量写入 meta（主线程，无竞态）
-        self.flush_meta_batch(all_results)
+        disk_names = {
+            f[:-8] for f in os.listdir(single_dir)
+            if f.endswith(".parquet") and not f.startswith("_")
+        }
+        meta_names = set(factors.keys())
 
-        success_count = sum(1 for r in all_results if r.success)
-        elapsed = time.time() - t0
+        # 1) 孤儿 parquet: disk 有 meta 无
+        orphan_parquets = sorted(disk_names - meta_names)
+        for fn in orphan_parquets:
+            pq_path = os.path.join(single_dir, f"{fn}.parquet")
+            os.remove(pq_path)
 
-        logger.info(
-            f"全量单因子缓存完成: {success_count}/{len(all_results)} 成功, "
-            f"耗时 {elapsed:.1f}s"
+        # 2) 孤儿 meta: meta 有 disk 无
+        orphan_meta = sorted(meta_names - disk_names)
+        for fn in orphan_meta:
+            del factors[fn]
+
+        # 3) as_of_date 一致性检查
+        if expected_as_of_date is not None:
+            mismatched = {
+                fn: entry.get("as_of_date")
+                for fn, entry in factors.items()
+                if entry.get("as_of_date") != expected_as_of_date
+            }
+            if mismatched:
+                raise RuntimeError(
+                    f"reconcile 发现 as_of_date 不一致 "
+                    f"(expected={expected_as_of_date}): "
+                    f"count={len(mismatched)}, sample={list(mismatched.items())[:5]}"
+                )
+            # 顶层 as_of_date 同步为期望值
+            meta["as_of_date"] = expected_as_of_date
+
+        # 有写操作时持久化
+        if orphan_parquets or orphan_meta or expected_as_of_date:
+            self._save_meta(meta)
+
+        return {
+            "removed_orphan_parquets": orphan_parquets,
+            "removed_orphan_meta": orphan_meta,
+            "final_factor_count": len(factors),
+        }
+
+    def validate_meta_integrity(self) -> Dict[str, Any]:
+        """meta 权威性自检 — 供相关性计算 Phase 0 调用。
+
+        只读, 不修改磁盘。检查项：
+        - disk ↔ meta 双向一致 (orphan_parquets / orphan_meta_entries)
+        - meta 内所有因子 as_of_date 单值
+        - 顶层 as_of_date 与因子记录匹配
+        - 每条 meta 必含 computed_at / as_of_date / rows / date_range
+
+        Returns
+        -------
+        {
+            "ok": bool,
+            "orphan_parquets": [...],
+            "orphan_meta_entries": [...],
+            "as_of_date_distribution": {aod: [factors]},
+            "top_level_as_of_date": str | None,
+            "top_level_aod_mismatch": bool,
+            "incomplete_entries": [factor, ...],
+            "factor_count": int,
+            "meta_path": str,
+        }
+        """
+        single_dir = os.path.join(self._output_dir, "single")
+        meta_path = self._meta_path()
+
+        if not os.path.isfile(meta_path):
+            return {
+                "ok": False,
+                "error": f"_meta.json 不存在: {meta_path}",
+                "orphan_parquets": [],
+                "orphan_meta_entries": [],
+                "as_of_date_distribution": {},
+                "top_level_as_of_date": None,
+                "top_level_aod_mismatch": False,
+                "incomplete_entries": [],
+                "factor_count": 0,
+                "meta_path": meta_path,
+            }
+
+        if not os.path.isdir(single_dir):
+            return {
+                "ok": False,
+                "error": f"single 目录不存在: {single_dir}",
+                "orphan_parquets": [],
+                "orphan_meta_entries": [],
+                "as_of_date_distribution": {},
+                "top_level_as_of_date": None,
+                "top_level_aod_mismatch": False,
+                "incomplete_entries": [],
+                "factor_count": 0,
+                "meta_path": meta_path,
+            }
+
+        meta = self._load_meta()
+        factors = meta.get("factors", {})
+        top_aod = meta.get("as_of_date")
+
+        disk_names = {
+            f[:-8] for f in os.listdir(single_dir)
+            if f.endswith(".parquet") and not f.startswith("_")
+        }
+        meta_names = set(factors.keys())
+
+        orphan_parquets = sorted(disk_names - meta_names)
+        orphan_meta_entries = sorted(meta_names - disk_names)
+
+        aod_dist: Dict[str, List[str]] = {}
+        incomplete: List[str] = []
+        required_fields = ("computed_at", "as_of_date", "rows", "date_range")
+        for fn, entry in factors.items():
+            aod = entry.get("as_of_date")
+            aod_dist.setdefault(aod, []).append(fn)
+            if any(not entry.get(k) for k in required_fields):
+                incomplete.append(fn)
+
+        top_mismatch = False
+        if top_aod is not None and len(aod_dist) == 1:
+            only_aod = next(iter(aod_dist.keys()))
+            top_mismatch = (only_aod != top_aod)
+
+        ok = (
+            not orphan_parquets
+            and not orphan_meta_entries
+            and len(aod_dist) <= 1
+            and not incomplete
+            and not top_mismatch
+            and len(factors) > 0
         )
 
-        return BatchComputeResult(
-            total=len(all_results),
-            success=success_count,
-            failed=len(all_results) - success_count,
-            factor_results=all_results,
-            total_elapsed_sec=round(elapsed, 1),
-            warmup_timings=warmup_timings or None,
-        )
+        return {
+            "ok": ok,
+            "orphan_parquets": orphan_parquets,
+            "orphan_meta_entries": orphan_meta_entries,
+            "as_of_date_distribution": {k: len(v) for k, v in aod_dist.items()},
+            "as_of_date_factor_sample": {
+                k: v[:5] for k, v in aod_dist.items()
+            },
+            "top_level_as_of_date": top_aod,
+            "top_level_aod_mismatch": top_mismatch,
+            "incomplete_entries": incomplete,
+            "factor_count": len(factors),
+            "meta_path": meta_path,
+        }
 
     def get_cached_singles(self) -> List[Dict[str, Any]]:
         """返回已缓存的单因子列表及其元数据。"""
@@ -1338,7 +1279,7 @@ class FactorValuePipeline:
         results = []
 
         for f in sorted(os.listdir(single_dir)):
-            if not f.endswith(".parquet"):
+            if not f.endswith(".parquet") or f.startswith("_"):
                 continue
             factor_name = f[:-8]  # 去掉 .parquet
             fpath = os.path.join(single_dir, f)

@@ -75,7 +75,7 @@ class QEEvolutionConfig(BaseModel):
 
 class TaskCreateRequest(BaseModel):
     task_name: str
-    task_type: str  # fin_factor/fin_model/fin_quant/fin_factor_report/qe_evolution
+    task_type: str  # fin_factor/fin_model/fin_quant/fin_factor_report/qe_evolution/correlation_compute/official_evaluation
     node_id: str
     # RDAgent 参数
     evolving_n: int = 10
@@ -86,6 +86,8 @@ class TaskCreateRequest(BaseModel):
     app_tpl: str = "../app_tpl/all/v4/rdagent"
     # QE 参数
     qe_config: Optional[QEEvolutionConfig] = None
+    # custom task payload
+    payload: Optional[Dict[str, Any]] = None
     # 通用
     custom_env: Optional[Dict[str, str]] = None
 
@@ -259,7 +261,7 @@ async def delete_task(task_id: str):
 @router.get("/tasks/{task_id}/results")
 async def get_task_results(task_id: str):
     try:
-        return _svc.get_task_results(task_id)
+        return await _svc.get_task_results(task_id)
     except ValueError as e:
         raise HTTPException(404, str(e))
 

@@ -53,10 +53,7 @@ def plan_assignments(
         return _plan_local_parallel(groups, default_node_id)
     elif execution_mode == "distributed":
         return _plan_distributed(groups, available_nodes, default_node_id)
-    else:
-        logger.warning(f"Unknown execution_mode '{execution_mode}', falling back to serial")
-        return _plan_serial(groups, default_node_id)
-
+    raise ValueError(f"Unknown execution_mode: {execution_mode}")
 
 def _plan_serial(groups: list[AlphaGroup], node_id: str) -> list[GroupAssignment]:
     """All groups on single node, sequential. GPU groups first."""
@@ -100,28 +97,26 @@ def _plan_distributed(
 
     Strategy:
     - GPU groups → node with most VRAM (typically wsl2-5080 RTX 5080 16GB)
-    - CPU groups → split round-robin across all online nodes
+    - CPU groups → split round-robin across all non-offline nodes
     - Respect preferred_node_id when set
     """
     if not available_nodes:
-        # No node info → fall back to local_parallel
-        logger.info("No available_nodes provided, falling back to local_parallel")
-        return _plan_local_parallel(groups, default_node_id)
+        raise ValueError("Distributed execution requires available_nodes")
 
-    online_nodes = [n for n in available_nodes if n.get("status") == "online"]
-    if not online_nodes:
-        online_nodes = available_nodes  # use all if none are online
+    active_nodes = [n for n in available_nodes if n.get("status") != "offline"]
+    if not active_nodes:
+        raise ValueError("Distributed execution requires at least one non-offline node")
 
     # Sort by GPU VRAM desc for GPU assignment
     gpu_nodes = sorted(
-        [n for n in online_nodes if n.get("gpu_vram_mb", 0) > 0],
+        [n for n in active_nodes if n.get("gpu_vram_mb", 0) > 0],
         key=lambda n: n.get("gpu_vram_mb", 0),
         reverse=True,
     )
     primary_gpu_node = gpu_nodes[0]["node_id"] if gpu_nodes else default_node_id
 
     # CPU round-robin
-    cpu_node_ids = [n["node_id"] for n in online_nodes]
+    cpu_node_ids = [n["node_id"] for n in active_nodes]
     if not cpu_node_ids:
         cpu_node_ids = [default_node_id]
 

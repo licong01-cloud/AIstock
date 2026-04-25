@@ -360,10 +360,10 @@ async def main():
             abs_ics = [abs(x) for x in ics]
             report["ic_statistics"][window] = {
                 "count": len(ics),
-                "ic_mean": statistics.mean(ics) if ics else 0,
-                "ic_median": statistics.median(ics) if ics else 0,
-                "ic_p25": percentile(ics, 25),
-                "ic_p75": percentile(ics, 75),
+                "abs_ic_mean": statistics.mean(abs_ics) if ics else 0,
+                "abs_ic_median": statistics.median(abs_ics) if ics else 0,
+                "abs_ic_p25": percentile(abs_ics, 25),
+                "abs_ic_p75": percentile(abs_ics, 75),
                 "abs_ic_gt_002": sum(1 for x in abs_ics if x > 0.02),
                 "abs_ic_gt_003": sum(1 for x in abs_ics if x > 0.03),
             }
@@ -433,10 +433,10 @@ async def main():
         gt003 = sum(1 for x in abs_ics if x > 0.03)
         n = len(ics)
         print(f"  [{window}] (n={n})")
-        print(f"    IC 均值:  {statistics.mean(ics):+.4f}")
-        print(f"    IC 中位:  {statistics.median(ics):+.4f}")
-        print(f"    IC P25:   {percentile(ics, 25):+.4f}")
-        print(f"    IC P75:   {percentile(ics, 75):+.4f}")
+        print(f"    |IC| 均值:  {statistics.mean(abs_ics):.4f}")
+        print(f"    |IC| 中位:  {statistics.median(abs_ics):.4f}")
+        print(f"    |IC| P25:   {percentile(abs_ics, 25):.4f}")
+        print(f"    |IC| P75:   {percentile(abs_ics, 75):.4f}")
         print(f"    |IC|>0.02: {gt002} ({gt002*100//n}%)")
         print(f"    |IC|>0.03: {gt003} ({gt003*100//n}%)")
 

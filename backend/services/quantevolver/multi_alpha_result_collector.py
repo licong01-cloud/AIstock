@@ -48,9 +48,31 @@ class MultiAlphaResultCollector:
     async def collect_and_persist(self, parent_experiment_id: str) -> dict[str, Any]:
         """收集多Alpha实验结果并持久化到DB。
 
+        统一回测架构：
+        - 所有组（主节点+从节点）都只做 train-only（训练+生成pred.pkl）
+        - 本方法收集所有组的 pred.pkl → meta 合并 → 统一回测 → 持久化
+
         失败时抛出异常，不静默兜底。调用方负责处理。
         """
         logger.info(f"开始收集多Alpha结果: {parent_experiment_id}")
+
+        # ── Phase 0: 检查所有组是否完成 ──────────────────────────────
+        groups = self._get_group_records(parent_experiment_id)
+        if not groups:
+            raise ValueError(f"实验 {parent_experiment_id} 没有多Alpha组记录")
+
+        # 分布式模式下，需要等待所有组完成训练
+        pending_groups = [
+            g["group_name"] for g in groups
+            if g.get("status") not in ("completed", "failed")
+            and g.get("reuse_mode") not in ("reuse_prediction", "reuse_model")
+        ]
+        if pending_groups:
+            logger.info(
+                f"多Alpha实验 {parent_experiment_id} 尚有 {len(pending_groups)} 组未完成训练: "
+                f"{pending_groups}，跳过结果收集（等待所有组完成）"
+            )
+            return {"ok": False, "reason": "pending_groups", "pending": pending_groups}
 
         # ── Phase 1: 获取原始数据 ──────────────────────────────────
         exp_record = self._get_experiment_record(parent_experiment_id)
@@ -58,7 +80,7 @@ class MultiAlphaResultCollector:
             raise ValueError(f"实验 {parent_experiment_id} 不存在")
 
         qe_task_id = exp_record.get("qe_task_id")
-        qe_loop_id = exp_record.get("qe_loop_id") or "Loop1"
+        qe_loop_id = exp_record.get("qe_loop_id")
         multi_alpha_config = exp_record.get("multi_alpha_config") or {}
         if isinstance(multi_alpha_config, str):
             multi_alpha_config = json.loads(multi_alpha_config)
@@ -68,26 +90,35 @@ class MultiAlphaResultCollector:
                 f"实验 {parent_experiment_id} 缺少 qe_task_id，无法获取回测指标"
             )
 
-        # 获取各组配置
-        groups = self._get_group_records(parent_experiment_id)
-        if not groups:
-            raise ValueError(f"实验 {parent_experiment_id} 没有多Alpha组记录")
-
         # 检测是否为分布式执行（各组可能在不同节点）
         node_ids = set(g.get("assigned_node_id") for g in groups if g.get("assigned_node_id"))
         is_distributed = len(node_ids) > 1
+
+        if not is_distributed and not qe_loop_id:
+            raise ValueError(
+                f"实验 {parent_experiment_id} 缺少 qe_loop_id，无法获取回测指标"
+            )
 
         if is_distributed:
             # ── 分布式场景：跨节点收集预测 + 本地 meta 合并 ──────
             logger.info(f"分布式多Alpha结果收集: {len(node_ids)} 节点, {len(groups)} 组")
             ma_results = await self._collect_distributed(
-                qe_task_id, qe_loop_id, groups, multi_alpha_config
+                qe_task_id, groups, multi_alpha_config
             )
             # 分布式收集后直接拿到完整 ma_results
             combined_metrics = ma_results.pop("_combined_metrics", {})
         else:
             # ── 单节点场景：从 workspace 获取结果 ──────────────
-            combined_metrics = await self._fetch_combined_metrics(qe_task_id, qe_loop_id)
+            # get_loop_metrics 返回完整的 qlib_results_enhanced.json
+            # 它本身就是 enhanced_metrics，需要标记以便 _build_result_metrics 正确处理
+            raw_metrics = await self._fetch_combined_metrics(qe_task_id, qe_loop_id)
+            combined_metrics = {}
+            if raw_metrics:
+                # 提取 summary 中的标量指标到顶层
+                summary = raw_metrics.get("summary", {})
+                combined_metrics.update(summary)
+                # 保存完整的 enhanced_metrics（供统一分析层使用）
+                combined_metrics["_enhanced_metrics"] = raw_metrics
             ma_results = await self._fetch_multi_alpha_results_json(
                 qe_task_id, qe_loop_id
             )
@@ -102,37 +133,53 @@ class MultiAlphaResultCollector:
             meta_cfg = multi_alpha_config.get("meta_model", {})
             meta_method = meta_cfg.get("method", "ic_weighted")
 
-        if ma_results:
-            group_metrics = ma_results.get("group_metrics", {})
-            meta_weights = ma_results.get("meta_weights", {})
-            correlations = ma_results.get("correlations", {})
-            if ma_results.get("meta_method"):
-                meta_method = ma_results["meta_method"]
-            logger.info(
-                f"获取 {len(group_metrics)} 组指标, {len(correlations)} 组相关性"
+        if not ma_results:
+            raise RuntimeError(
+                f"multi_alpha_results.json 不可用: {parent_experiment_id}. "
+                f"meta_model_runner.py 未执行、执行失败或结果读取失败"
             )
-        else:
-            logger.error(
-                f"multi_alpha_results.json 不可用，降级为均匀权重: {parent_experiment_id}. "
-                f"可能原因: meta_model_runner.py 未执行或执行失败"
-            )
-            n_groups = len(groups)
-            for g in groups:
-                meta_weights[g["group_name"]] = 1.0 / n_groups
 
-        for g in groups:
-            if g["group_name"] not in meta_weights:
-                logger.error(f"组 {g['group_name']} 在 meta_weights 中缺失，设为 0")
-                meta_weights[g["group_name"]] = 0.0
+        group_metrics = ma_results.get("group_metrics", {})
+        meta_weights = ma_results.get("meta_weights", {})
+        correlations = ma_results.get("correlations", {})
+        if ma_results.get("meta_method"):
+            meta_method = ma_results["meta_method"]
+        logger.info(
+            f"获取 {len(group_metrics)} 组指标, {len(correlations)} 组相关性"
+        )
+
+        missing_weights = [g["group_name"] for g in groups if g["group_name"] not in meta_weights]
+        if missing_weights:
+            raise RuntimeError(f"meta_weights 缺失组: {missing_weights}")
+
+        if is_distributed:
+            # 用 group_metrics（来自 enhanced.json）回写 per-group 指标到 DB
+            self._update_distributed_group_records(
+                parent_experiment_id, groups, group_metrics, meta_weights
+            )
+            group_results = []
+            for g in groups:
+                g_name = g["group_name"]
+                factor_names = g.get("factor_names", [])
+                if isinstance(factor_names, str):
+                    factor_names = json.loads(factor_names)
+                gm = group_metrics.get(g_name, {})
+                group_results.append({
+                    "group_name": g_name,
+                    "ic": gm.get("IC") or gm.get("Rank IC") or g.get("group_ic"),
+                    "icir": gm.get("ICIR") or gm.get("Rank ICIR") or g.get("group_icir"),
+                    "sharpe": g.get("group_sharpe"),
+                    "meta_weight": float(meta_weights.get(g_name, 0)),
+                    "factor_count": len(factor_names),
+                    "model_id": g["model_id"],
+                })
+        else:
+            group_results = self._update_group_records(
+                parent_experiment_id, groups, group_metrics, meta_weights
+            )
 
         # ── Phase 3: 写入 3 张扩展表 ──────────────────────────────
         combined_ic = combined_metrics.get("IC")
-        if ma_results and ma_results.get("combined_ic") is not None:
-            combined_ic = ma_results["combined_ic"]
-
-        group_results = self._update_group_records(
-            parent_experiment_id, groups, group_metrics, meta_weights
-        )
 
         lookback_days = 60
         if multi_alpha_config:
@@ -211,7 +258,7 @@ class MultiAlphaResultCollector:
             with conn.cursor() as cur:
                 cur.execute(
                     """SELECT group_name, factor_names, model_id, dataset_type,
-                              assigned_node_id, prediction_path,
+                              assigned_node_id, qe_loop_id, prediction_path,
                               group_ic, group_icir, group_sharpe, meta_weight,
                               status, reuse_mode,
                               model_source_experiment_id, model_source_group_name
@@ -238,11 +285,6 @@ class MultiAlphaResultCollector:
                 raw = await client.get_workspace_file(
                     task_id, loop_id, "multi_alpha_results.json"
                 )
-                if raw is None:
-                    logger.warning(
-                        f"multi_alpha_results.json 不存在: task={task_id}, loop={loop_id}"
-                    )
-                    return None
                 parsed = json.loads(raw) if isinstance(raw, str) else raw
                 if not isinstance(parsed, dict):
                     raise ValueError(
@@ -256,34 +298,63 @@ class MultiAlphaResultCollector:
         except ValueError:
             raise
         except Exception as e:
-            # 网络/连接问题 → 降级（返回 None），但记录 WARNING
-            logger.warning(f"获取 multi_alpha_results.json 失败 (网络/连接): {e}")
-            return None
+            raise RuntimeError(
+                f"获取 multi_alpha_results.json 失败: task={task_id}, loop={loop_id}: {e}"
+            ) from e
+
+    async def _load_group_prediction(
+        self,
+        client: Any,
+        task_id: str,
+        loop_id: str,
+        group_name: str,
+        prediction_path: str | None = None,
+    ) -> Any | None:
+        """优先读取 workspace 内 group 输出；缺失时 fallback 到已记录的 prediction_path。"""
+        import pickle
+
+        pred_bytes = await client.download_group_predictions(task_id, loop_id, group_name)
+        if pred_bytes:
+            return pickle.loads(pred_bytes)
+
+        normalized = prediction_path.replace("\\", "/") if prediction_path else ""
+        marker = "/qe_workspace/"
+        marker_idx = normalized.find(marker)
+        if marker_idx < 0:
+            raise RuntimeError(
+                f"组 {group_name} 缺少可映射的 prediction_path: {prediction_path}"
+            )
+
+        workspace_rel = normalized[marker_idx + len(marker):].lstrip("/")
+        file_bytes = await client.download_workspace_file_bytes(
+            task_id, loop_id, workspace_rel
+        )
+        if not file_bytes:
+            raise RuntimeError(
+                f"组 {group_name} prediction_path 读取为空: {workspace_rel}"
+            )
+        return pickle.loads(file_bytes)
 
     # ── Distributed collection ─────────────────────────────────
 
     async def _collect_distributed(
         self,
         qe_task_id: str,
-        qe_loop_id: str,
         groups: list[dict],
         multi_alpha_config: dict,
     ) -> dict:
-        """跨节点收集预测 → 本地运行 MetaModelCombiner → 返回完整 ma_results。
+        """跨节点收集预测 + 增强指标 → MetaModelCombiner → 返回完整 ma_results。
 
-        每个节点运行了一部分组。此方法：
-        1. 从各节点下载 group pred.pkl
-        2. 用 MetaModelCombiner 计算 combined IC + 权重
-        3. 计算组间相关性
-        4. 返回与 multi_alpha_results.json 相同格式的 dict
+        统一回测架构：
+        - 所有节点只做 train-only（训练+生成pred.pkl）
+        - 本方法从各节点下载 pred.pkl + qlib_results_enhanced.json
+        - 用 enhanced.json 的 per-group IC/ICIR 作为权威指标
+        - 用 MetaModelCombiner 计算 combined prediction + 权重
+        - 计算组间预测相关性
+        - 用 per-group IC series 加权计算 combined IC/ICIR
         """
-        import pickle
-        import tempfile
-        from pathlib import Path
-
         import numpy as np
         import pandas as pd
-        from scipy.stats import spearmanr
 
         from .qe_workspace_client import QEWorkspaceClient
         from .meta_model import MetaModelCombiner
@@ -292,59 +363,139 @@ class MultiAlphaResultCollector:
         method = meta_cfg.get("method", "ic_weighted")
         lookback = meta_cfg.get("lookback_days", 60)
 
-        # 1. 从各节点下载 pred.pkl
+        # 1. 从各节点下载 pred.pkl + qlib_results_enhanced.json
         group_predictions: dict[str, pd.DataFrame] = {}
+        group_enhanced: dict[str, dict] = {}
+        label_df = None
+
         for g in groups:
             g_name = g["group_name"]
-            node_id = g.get("assigned_node_id")
-            if not node_id:
-                logger.warning(f"组 {g_name} 无 assigned_node_id，跳过")
+
+            # reuse 组直接从已有路径加载
+            if g.get("reuse_mode") in ("reuse_prediction", "reuse_model"):
+                pred_path = g.get("prediction_path")
+                if not pred_path:
+                    raise RuntimeError(f"组 {g_name} reuse 模式但缺少 prediction_path")
+                import pickle
+                from pathlib import Path
+                p = Path(pred_path)
+                if not p.exists():
+                    raise RuntimeError(f"组 {g_name} prediction_path 不存在: {pred_path}")
+                with open(p, "rb") as f:
+                    group_predictions[g_name] = pickle.load(f)
+                logger.info(f"复用组预测: {g_name} from {pred_path}")
                 continue
 
-            try:
-                client = QEWorkspaceClient.for_node(node_id)
-                async with client:
-                    pred_bytes = await client.download_group_predictions(
-                        qe_task_id, qe_loop_id, g_name
+            node_id = g.get("assigned_node_id")
+            node_loop_id = g.get("qe_loop_id")
+            if not node_id:
+                raise RuntimeError(f"组 {g_name} 缺少 assigned_node_id")
+            if not node_loop_id:
+                raise RuntimeError(f"组 {g_name} 缺少 qe_loop_id")
+
+            client = QEWorkspaceClient.for_node(node_id)
+            async with client:
+                pred_df = await self._load_group_prediction(
+                    client, qe_task_id, node_loop_id, g_name, g.get("prediction_path"),
+                )
+                group_predictions[g_name] = pred_df
+                logger.info(f"下载组预测: {g_name} from {node_id}/{node_loop_id}, {len(pred_df)} rows")
+
+                # 下载 qlib_results_enhanced.json（per-group IC/ICIR 权威来源）
+                enhanced = await self._try_load_group_enhanced(
+                    client, qe_task_id, node_loop_id, g_name
+                )
+                if enhanced:
+                    group_enhanced[g_name] = enhanced
+                    logger.info(f"下载增强指标: {g_name}, IC={enhanced.get('summary', {}).get('IC')}")
+                else:
+                    logger.warning(f"组 {g_name} 增强指标不可用，将影响 ic_weighted 权重计算")
+
+                # 尝试下载 label（只需要一次，从任意节点获取）
+                if label_df is None:
+                    label_df = await self._try_load_group_label(
+                        client, qe_task_id, node_loop_id, g_name
                     )
-                    if pred_bytes:
-                        pred_df = pickle.loads(pred_bytes)
-                        group_predictions[g_name] = pred_df
-                        logger.info(f"下载组预测: {g_name} from {node_id}, {len(pred_df)} rows")
-                    else:
-                        logger.warning(f"组 {g_name} (节点 {node_id}) pred.pkl 不存在")
-            except Exception as e:
-                logger.error(f"下载组 {g_name} 预测失败 (节点 {node_id}): {e}")
 
         if len(group_predictions) < 2:
-            logger.error(
-                f"分布式收集: 仅获取 {len(group_predictions)} 组预测，"
-                f"不足2组，无法运行 Meta 合并"
+            raise RuntimeError(
+                f"分布式收集失败: 仅获取 {len(group_predictions)} 组预测，不足2组"
             )
-            # 返回空结果 + 从主节点获取的 combined_metrics
-            combined_metrics = {}
-            try:
-                combined_metrics = await self._fetch_combined_metrics(qe_task_id, qe_loop_id)
-            except Exception:
-                pass
-            return {
-                "group_metrics": {},
-                "meta_weights": {g["group_name"]: 1.0 / len(groups) for g in groups},
-                "correlations": {},
-                "meta_method": method,
-                "_combined_metrics": combined_metrics,
-            }
 
         # 2. 运行 MetaModelCombiner
-        combiner = MetaModelCombiner(method=method, lookback_days=lookback)
-        combined_pred, weights = combiner.fit_and_combine(group_predictions)
+        if method == "ic_weighted" and label_df is not None:
+            combiner = MetaModelCombiner(method=method, lookback_days=lookback)
+            combined_pred, weights = combiner.fit_and_combine(
+                group_predictions, actual_returns=label_df
+            )
+        elif method == "ic_weighted" and group_enhanced:
+            # label 不可用但有 enhanced.json → 用 per-group IC 作为权重
+            # 验证所有非 reuse 组都有 enhanced 数据
+            missing_enhanced = [
+                g["group_name"] for g in groups
+                if g.get("reuse_mode") not in ("reuse_prediction", "reuse_model")
+                and g["group_name"] not in group_enhanced
+            ]
+            if missing_enhanced:
+                raise RuntimeError(
+                    f"分布式收集失败: ic_weighted 模式但以下组缺少 enhanced.json: "
+                    f"{missing_enhanced}。无法计算完整权重。"
+                )
+            logger.info("分布式收集: label 不可用，用 enhanced.json IC 计算权重")
+            ic_weights = {}
+            # 非 reuse 组：从 enhanced.json 获取 IC
+            for g_name, enh in group_enhanced.items():
+                g_ic = abs(enh.get("summary", {}).get("Rank IC", 0) or 0)
+                ic_weights[g_name] = g_ic
+            # reuse 组：从 DB 记录获取 IC
+            for g in groups:
+                g_name = g["group_name"]
+                if g.get("reuse_mode") in ("reuse_prediction", "reuse_model"):
+                    reuse_ic = abs(g.get("group_ic") or 0)
+                    if reuse_ic <= 1e-8:
+                        raise RuntimeError(
+                            f"分布式收集失败: reuse 组 {g_name} 缺少有效的 group_ic。"
+                            f"ic_weighted 模式需要所有组都有 IC 值。"
+                        )
+                    ic_weights[g_name] = reuse_ic
+            total_ic = sum(ic_weights.values())
+            if total_ic <= 1e-8:
+                raise RuntimeError(
+                    f"分布式收集失败: ic_weighted 模式但所有组的 Rank IC 为 0。"
+                    f"各组 IC: {ic_weights}。无法计算有效权重。"
+                )
+            weights = {k: round(v / total_ic, 4) for k, v in ic_weights.items()}
+            # 手动加权合并预测
+            combined_pred = self._weighted_combine_predictions(group_predictions, weights)
+        elif method == "equal":
+            combiner = MetaModelCombiner(method="equal", lookback_days=lookback)
+            combined_pred, weights = combiner.fit_and_combine(group_predictions)
+        else:
+            raise RuntimeError(
+                f"分布式收集失败: method={method} 但无法获取 label 且 enhanced.json 为空。"
+                f"ic_weighted 模式需要 label 或 enhanced.json 来计算权重。"
+                f"请检查各节点的训练是否正常完成并生成了 qlib_results_enhanced.json。"
+            )
+
+        if combined_pred is None or len(combined_pred) == 0:
+            raise RuntimeError("分布式 Meta 合并失败: combined prediction 为空")
+        if not weights:
+            raise RuntimeError("分布式 Meta 合并失败: meta_weights 为空")
         logger.info(f"分布式 Meta 合并完成: weights={weights}")
 
-        # 3. 计算组级 IC（需要 label，如果有的话）
+        # 3. 从 enhanced.json 提取 per-group IC/ICIR（权威来源）
         group_metrics = {}
-        for g_name, pred_df in group_predictions.items():
-            pred_s = pred_df["score"] if isinstance(pred_df, pd.DataFrame) and "score" in pred_df.columns else (pred_df.iloc[:, 0] if isinstance(pred_df, pd.DataFrame) else pred_df)
-            group_metrics[g_name] = {"ic": None, "icir": None, "sharpe": None}
+        for g_name, enh in group_enhanced.items():
+            summary = enh.get("summary", {})
+            group_metrics[g_name] = {
+                "IC": summary.get("IC"),
+                "ICIR": summary.get("ICIR"),
+                "Rank IC": summary.get("Rank IC"),
+                "Rank ICIR": summary.get("Rank ICIR"),
+            }
+        # fallback: 如果 enhanced 不可用但有 label，本地计算
+        if not group_metrics and label_df is not None:
+            group_metrics = self._compute_group_metrics_local(group_predictions, label_df)
 
         # 4. 计算组间相关性
         correlations = {}
@@ -358,31 +509,458 @@ class MultiAlphaResultCollector:
                 if isinstance(pb, pd.DataFrame):
                     pb = pb["score"] if "score" in pb.columns else pb.iloc[:, 0]
                 common = pa.index.intersection(pb.index)
-                if len(common) >= 30:
-                    corr = pa.loc[common].corr(pb.loc[common], method="spearman")
-                    if not np.isnan(corr):
-                        correlations[f"{names[i]}|{names[j]}"] = round(float(corr), 4)
+                if len(common) < 30:
+                    raise RuntimeError(
+                        f"分布式相关性计算失败: {names[i]} vs {names[j]} overlap={len(common)}"
+                    )
+                corr = pa.loc[common].corr(pb.loc[common], method="spearman")
+                if np.isnan(corr):
+                    raise RuntimeError(
+                        f"分布式相关性计算失败: {names[i]} vs {names[j]} produced NaN"
+                    )
+                correlations[f"{names[i]}|{names[j]}"] = round(float(corr), 4)
 
-        # 5. 计算 combined IC（从 combined_pred）
-        combined_ic = None  # 需要 label 才能算，暂不可用
+        if not correlations and len(names) >= 2:
+            raise RuntimeError("分布式相关性计算失败: correlations 为空")
 
-        # 6. 从主节点获取标准 Qlib 回测指标
-        combined_metrics = {}
-        try:
-            combined_metrics = await self._fetch_combined_metrics(qe_task_id, qe_loop_id)
-        except Exception as e:
-            logger.warning(f"分布式: 获取 combined metrics 失败: {e}")
-            # 分布式场景下可能主节点没有 combined 指标，这是正常的
+        # 5. 触发主节点执行统一回测（combined prediction → 选股+分钟线回测）
+        backtest_metrics = await self._trigger_unified_backtest(
+            qe_task_id, combined_pred, groups, multi_alpha_config
+        )
+        # backtest_metrics 包含完整的 enhanced_metrics（IC曲线、收益曲线、持仓等）
+        combined_metrics = backtest_metrics
 
         return {
             "group_metrics": group_metrics,
             "meta_weights": weights,
             "correlations": correlations,
-            "combined_ic": combined_ic,
+            "combined_ic": combined_metrics.get("IC") or combined_metrics.get("Rank IC"),
             "meta_method": method,
             "total_groups": len(group_predictions),
             "_combined_metrics": combined_metrics,
         }
+
+    async def _try_load_group_enhanced(
+        self,
+        client: Any,
+        task_id: str,
+        loop_id: str,
+        group_name: str,
+    ) -> dict | None:
+        """从节点 workspace 下载 qlib_results_enhanced.json。返回 None 表示不可用。"""
+        try:
+            raw = await client.get_workspace_file(
+                task_id, loop_id,
+                f"group_{group_name}/qlib_results_enhanced.json",
+            )
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(parsed, dict) and "summary" in parsed:
+                return parsed
+            logger.warning(f"enhanced.json 格式异常 ({group_name}): 缺少 summary")
+        except Exception as e:
+            logger.warning(f"下载 enhanced.json 失败 ({group_name}): {e}")
+        return None
+
+    def _weighted_combine_predictions(
+        self,
+        group_predictions: dict,
+        weights: dict[str, float],
+    ):
+        """用给定权重手动加权合并多组预测。"""
+        import pandas as pd
+
+        aligned = {}
+        common_idx = None
+        for g_name, pred in group_predictions.items():
+            s = pred["score"] if isinstance(pred, pd.DataFrame) and "score" in pred.columns else (pred.iloc[:, 0] if isinstance(pred, pd.DataFrame) else pred)
+            aligned[g_name] = s
+            common_idx = s.index if common_idx is None else common_idx.intersection(s.index)
+
+        if common_idx is None or len(common_idx) == 0:
+            raise RuntimeError("加权合并失败: 无公共索引")
+
+        combined = sum(aligned[g].loc[common_idx] * weights.get(g, 0) for g in aligned)
+        return pd.DataFrame({"score": combined}, index=common_idx)
+
+    def _compute_combined_ic_from_enhanced(
+        self,
+        group_enhanced: dict[str, dict],
+        weights: dict[str, float],
+        label_df,
+        combined_pred,
+    ) -> dict:
+        """从 enhanced.json 的 ic_series 加权计算 combined IC/ICIR。
+
+        优先用 label_df + combined_pred 直接计算（最准确）。
+        fallback: 用 per-group IC series 加权近似。
+        """
+        import numpy as np
+
+        # 方案 A: 有 label → 直接计算 combined prediction 的 IC
+        if label_df is not None and combined_pred is not None:
+            return self._compute_combined_ic_from_label(label_df, combined_pred)
+
+        # 方案 B: 用 enhanced.json 的 per-group ic_series 加权
+        if not group_enhanced:
+            logger.error("无法计算 combined IC: 无 label 且无 enhanced.json")
+            return {}
+
+        # 收集各组的 daily IC series
+        group_ic_series: dict[str, dict[str, float]] = {}
+        for g_name, enh in group_enhanced.items():
+            ic_diag = enh.get("ic_diagnostics", {})
+            ic_dates = ic_diag.get("ic_dates", [])
+            ic_values = ic_diag.get("ic_series", [])
+            if ic_dates and ic_values and len(ic_dates) == len(ic_values):
+                group_ic_series[g_name] = dict(zip(ic_dates, ic_values))
+
+        if not group_ic_series:
+            # fallback: 用 summary IC 的加权平均
+            logger.warning("enhanced.json 无 ic_series，用 summary IC 加权")
+            weighted_ic = 0.0
+            weighted_icir = 0.0
+            for g_name, enh in group_enhanced.items():
+                w = weights.get(g_name, 0)
+                summary = enh.get("summary", {})
+                weighted_ic += (summary.get("Rank IC") or 0) * w
+                weighted_icir += (summary.get("Rank ICIR") or 0) * w
+            return {
+                "Rank IC": round(weighted_ic, 6),
+                "Rank ICIR": round(weighted_icir, 4),
+                "IC": round(weighted_ic, 6),
+                "ICIR": round(weighted_icir, 4),
+                "source": "enhanced_summary_weighted",
+            }
+
+        # 加权合并 daily IC series
+        all_dates = sorted(set(d for s in group_ic_series.values() for d in s))
+        daily_combined_ics = []
+        for dt in all_dates:
+            weighted_ic = 0.0
+            total_w = 0.0
+            for g_name, series in group_ic_series.items():
+                if dt in series:
+                    w = weights.get(g_name, 0)
+                    weighted_ic += series[dt] * w
+                    total_w += w
+            if total_w > 1e-8:
+                daily_combined_ics.append(weighted_ic / total_w)
+
+        if not daily_combined_ics:
+            return {}
+
+        ic_mean = float(np.mean(daily_combined_ics))
+        ic_std = float(np.std(daily_combined_ics))
+        result = {
+            "Rank IC": round(ic_mean, 6),
+            "ic_days": len(daily_combined_ics),
+            "source": "enhanced_ic_series_weighted",
+        }
+        if ic_std > 1e-8:
+            result["Rank ICIR"] = round(ic_mean / ic_std, 4)
+        # 映射到标准 key
+        result["IC"] = result["Rank IC"]
+        result["ICIR"] = result.get("Rank ICIR", 0)
+        return result
+
+    def _compute_combined_ic_from_label(self, label_df, combined_pred) -> dict:
+        """用 label + combined prediction 直接计算 IC/ICIR。"""
+        import numpy as np
+        import pandas as pd
+
+        combined_s = combined_pred["score"] if isinstance(combined_pred, pd.DataFrame) and "score" in combined_pred.columns else (combined_pred.iloc[:, 0] if isinstance(combined_pred, pd.DataFrame) else combined_pred)
+        common = combined_s.index.intersection(label_df.index)
+        if len(common) < 50:
+            return {}
+
+        daily_ics = []
+        dates = sorted(set(idx[0] if isinstance(idx, tuple) else idx for idx in common))
+        for dt in dates:
+            if isinstance(combined_s.index, pd.MultiIndex):
+                c_day = combined_s.xs(dt, level=0)
+                r_day = label_df.xs(dt, level=0)
+            else:
+                c_day = combined_s
+                r_day = label_df
+            if len(c_day) >= 10:
+                ic = c_day.corr(r_day, method="spearman")
+                if not np.isnan(ic):
+                    daily_ics.append(ic)
+        if not daily_ics:
+            return {}
+
+        ic_mean = float(np.mean(daily_ics))
+        ic_std = float(np.std(daily_ics))
+        result = {"IC": round(ic_mean, 6), "Rank IC": round(ic_mean, 6), "ic_days": len(daily_ics)}
+        if ic_std > 1e-8:
+            result["ICIR"] = round(ic_mean / ic_std, 4)
+            result["Rank ICIR"] = result["ICIR"]
+        return result
+
+    async def _try_load_group_label(
+        self,
+        client: Any,
+        task_id: str,
+        loop_id: str,
+        group_name: str,
+    ) -> Any | None:
+        """尝试从节点 workspace 下载 label.pkl。返回 None 表示不可用。"""
+        import pickle
+        try:
+            label_bytes = await client.download_workspace_file_bytes(
+                task_id, loop_id, f"group_{group_name}/output/label.pkl"
+            )
+            if label_bytes:
+                import pandas as pd
+                label = pickle.loads(label_bytes)
+                if isinstance(label, pd.DataFrame):
+                    return label.iloc[:, 0]
+                return label
+        except Exception as e:
+            logger.warning(f"下载 label.pkl 失败 ({group_name}): {e}")
+        return None
+
+    def _compute_group_metrics_local(
+        self,
+        group_predictions: dict,
+        label: Any,
+    ) -> dict[str, dict]:
+        """本地计算 per-group IC/ICIR（不依赖节点回测结果）。"""
+        import numpy as np
+        import pandas as pd
+
+        results = {}
+        for g_name, pred_df in group_predictions.items():
+            if isinstance(pred_df, pd.DataFrame):
+                pred_s = pred_df["score"] if "score" in pred_df.columns else pred_df.iloc[:, 0]
+            else:
+                pred_s = pred_df
+
+            common_idx = pred_s.index.intersection(label.index)
+            if len(common_idx) < 50:
+                logger.warning(f"组 {g_name} 样本不足: {len(common_idx)}")
+                continue
+
+            p = pred_s.loc[common_idx]
+            r = label.loc[common_idx]
+
+            daily_ics = []
+            dates = sorted(set(idx[0] if isinstance(idx, tuple) else idx for idx in common_idx))
+            for dt in dates:
+                if isinstance(p.index, pd.MultiIndex):
+                    p_day = p.xs(dt, level=0)
+                    r_day = r.xs(dt, level=0)
+                else:
+                    p_day = p
+                    r_day = r
+                if len(p_day) >= 10:
+                    ic = p_day.corr(r_day, method="spearman")
+                    if not np.isnan(ic):
+                        daily_ics.append(ic)
+
+            if not daily_ics:
+                continue
+
+            avg_ic = float(np.mean(daily_ics))
+            std_ic = float(np.std(daily_ics))
+            results[g_name] = {
+                "ic": round(avg_ic, 6),
+                "icir": round(avg_ic / std_ic, 4) if std_ic > 1e-8 else None,
+                "sharpe": round((avg_ic / std_ic) * np.sqrt(252) / np.sqrt(len(dates)), 4) if std_ic > 1e-8 else None,
+            }
+
+        return results
+
+    async def _trigger_unified_backtest(
+        self,
+        qe_task_id: str,
+        combined_pred,
+        groups: list[dict],
+        multi_alpha_config: dict,
+    ) -> dict:
+        """在主节点触发统一回测 Loop，等待完成后返回完整回测指标。
+
+        流程：
+        1. 选择主节点（优先本地 wsl2-5080）
+        2. 序列化 combined_prediction.pkl
+        3. 准备回测依赖文件（conf.yaml + qrun_limit_minute.py + read_exp_res.py + 策略）
+        4. 通过 RDAgent API create_and_run_loop 触发 Loop2
+        5. 轮询等待完成
+        6. 下载 qlib_results_enhanced.json 返回完整指标
+
+        失败直接抛异常，不降级。
+        """
+        import asyncio
+        import base64
+        import pickle
+
+        from .qe_workspace_client import QEWorkspaceClient
+
+        # 1. 选择主节点（第一个节点或 wsl2-5080）
+        primary_node_id = None
+        for g in groups:
+            nid = g.get("assigned_node_id")
+            if nid:
+                if primary_node_id is None:
+                    primary_node_id = nid
+                # 优先选择本地节点
+                if "wsl2" in nid.lower() or "5080" in nid.lower():
+                    primary_node_id = nid
+                    break
+        if not primary_node_id:
+            raise RuntimeError("分布式统一回测失败: 无法确定主节点")
+
+        logger.info(f"分布式统一回测: 主节点={primary_node_id}, task={qe_task_id}")
+
+        # 2. 序列化 combined prediction
+        pred_bytes = pickle.dumps(combined_pred)
+        pred_b64 = base64.b64encode(pred_bytes).decode("ascii")
+
+        # 3. 准备回测依赖文件
+        # 从第一个 group 的 workspace 下载回测脚本和配置
+        first_group = groups[0]
+        first_node_id = first_group.get("assigned_node_id")
+        first_loop_id = first_group.get("qe_loop_id")
+        first_group_name = first_group["group_name"]
+
+        backtest_files = {
+            "combined_prediction.pkl": pred_b64,  # base64 encoded binary
+        }
+
+        # 下载回测依赖文件
+        deps_to_download = [
+            "qrun_limit_minute.py",
+            "read_exp_res.py",
+            "custom_strategy.py",
+            "tail_twap_strategy.py",
+            "qe_custom_loaders.py",
+        ]
+
+        client = QEWorkspaceClient.for_node(first_node_id)
+        async with client:
+            for dep_file in deps_to_download:
+                content = await client.get_workspace_file(
+                    qe_task_id, first_loop_id,
+                    f"group_{first_group_name}/{dep_file}",
+                )
+                if not content:
+                    raise RuntimeError(
+                        f"分布式统一回测失败: 回测依赖文件 {dep_file} 下载为空。"
+                        f"节点={first_node_id}, loop={first_loop_id}, group={first_group_name}"
+                    )
+                backtest_files[dep_file] = content
+
+            # 下载 conf.yaml（需要完整的 port_analysis_config）
+            conf_content = await client.get_workspace_file(
+                qe_task_id, first_loop_id,
+                f"group_{first_group_name}/conf.yaml",
+            )
+            if not conf_content:
+                raise RuntimeError(
+                    f"分布式统一回测失败: conf.yaml 下载为空。"
+                    f"节点={first_node_id}, loop={first_loop_id}, group={first_group_name}"
+                )
+            backtest_files["conf.yaml"] = conf_content
+
+            # 下载 benchmark 文件（可选 — load_benchmark_series 有 qlib 数据源 fallback）
+            try:
+                benchmark_content = await client.get_workspace_file(
+                    qe_task_id, first_loop_id,
+                    f"group_{first_group_name}/benchmark_sh000300.parquet",
+                )
+                if benchmark_content:
+                    backtest_files["benchmark_sh000300.parquet"] = benchmark_content
+            except Exception:
+                logger.info("benchmark_sh000300.parquet 不可用，回测将从 qlib 数据源计算 benchmark")
+
+        # 4. 触发主节点执行统一回测 Loop
+        wsl_command = (
+            "export MALLOC_ARENA_MAX=4 && "
+            "export PYTHONUNBUFFERED=1 && "
+            "python qrun_limit_minute.py conf.yaml --pred-backtest combined_prediction.pkl && "
+            "python read_exp_res.py"
+        )
+
+        backtest_config = {
+            "mode": "pred_backtest",
+            "source_task_id": qe_task_id,
+            "combined_groups": [g["group_name"] for g in groups],
+        }
+
+        primary_client = QEWorkspaceClient.for_node(primary_node_id)
+        async with primary_client:
+            loop_id = await primary_client.create_and_run_loop(
+                task_id=qe_task_id,
+                loop_index=2,  # Loop2 = 统一回测
+                config=backtest_config,
+                experiment_files=backtest_files,
+                wsl_command=wsl_command,
+            )
+            logger.info(f"分布式统一回测 Loop 已触发: loop_id={loop_id}")
+
+            # 5. 轮询等待完成（最长 30 分钟）
+            max_wait = 1800  # 30 minutes
+            poll_interval = 10  # 10 seconds
+            elapsed = 0
+
+            while elapsed < max_wait:
+                await asyncio.sleep(poll_interval)
+                elapsed += poll_interval
+
+                status_data = await primary_client.get_loop_status(qe_task_id, loop_id)
+                status = status_data.get("status", "")
+
+                if status == "completed":
+                    logger.info(f"分布式统一回测完成: {elapsed}s")
+                    break
+                elif status == "failed":
+                    error_msg = status_data.get("error", "unknown")
+                    raise RuntimeError(
+                        f"分布式统一回测失败: loop={loop_id}, error={error_msg}"
+                    )
+                elif status not in ("running", "pending"):
+                    raise RuntimeError(
+                        f"分布式统一回测异常状态: loop={loop_id}, status={status}"
+                    )
+            else:
+                raise RuntimeError(
+                    f"分布式统一回测超时: loop={loop_id}, elapsed={elapsed}s"
+                )
+
+            # 6. 获取回测指标
+            metrics = await primary_client.get_loop_metrics(qe_task_id, loop_id)
+
+        # 验证回测指标完整性
+        if not metrics:
+            raise RuntimeError(
+                f"分布式统一回测: get_loop_metrics 返回空数据"
+            )
+
+        # 提取标准指标
+        result = {}
+        summary = metrics.get("summary", metrics)
+        for key in ("IC", "ICIR", "Rank IC", "Rank ICIR",
+                    "annualized_return", "max_drawdown", "information_ratio",
+                    "sharpe", "calmar"):
+            if key in summary:
+                result[key] = summary[key]
+
+        # 验证回测核心指标存在（IC 来自 SigAnaRecord，annualized_return 来自 PortAnaRecord）
+        if "Rank IC" not in result and "IC" not in result:
+            raise RuntimeError(
+                f"分布式统一回测: 回测完成但缺少 IC 指标。"
+                f"get_loop_metrics 返回的 summary keys: {list(summary.keys())}"
+            )
+
+        # 保存完整的 enhanced_metrics（供统一分析层使用）
+        result["_enhanced_metrics"] = metrics
+
+        logger.info(
+            f"分布式统一回测指标: IC={result.get('IC')}, "
+            f"annualized_return={result.get('annualized_return')}, "
+            f"max_drawdown={result.get('max_drawdown')}"
+        )
+        return result
 
     # ── Phase 3 helpers ──────────────────────────────────────────
 
@@ -402,13 +980,19 @@ class MultiAlphaResultCollector:
             with conn.cursor() as cur:
                 for g in groups:
                     g_name = g["group_name"]
-                    gm = group_metrics.get(g_name, {})
+                    gm = group_metrics.get(g_name)
+                    if gm is None:
+                        raise RuntimeError(f"group_metrics 缺失组: {g_name}")
                     weight = meta_weights.get(g_name)
+                    if weight is None:
+                        raise RuntimeError(f"meta_weight 缺失组: {g_name}")
 
                     # 安全取值：支持 meta_model_runner.py 输出的两种键名格式
                     g_ic = gm.get("ic") if gm.get("ic") is not None else gm.get("IC")
                     g_icir = gm.get("icir") if gm.get("icir") is not None else gm.get("ICIR")
                     g_sharpe = gm.get("sharpe") if gm.get("sharpe") is not None else gm.get("information_ratio")
+                    if g_ic is None or g_icir is None or g_sharpe is None:
+                        raise RuntimeError(f"group_metrics 缺少关键指标: {g_name}")
 
                     cur.execute(
                         """UPDATE qe_multi_alpha_groups
@@ -444,6 +1028,41 @@ class MultiAlphaResultCollector:
         logger.info(f"更新 {len(results)} 组记录: {parent_experiment_id}")
         return results
 
+    def _update_distributed_group_records(
+        self,
+        parent_experiment_id: str,
+        groups: list[dict],
+        group_metrics: dict[str, dict],
+        meta_weights: dict[str, float],
+    ) -> None:
+        """分布式模式下回写 per-group IC/ICIR/weight 到 qe_multi_alpha_groups。
+
+        与 _update_group_records 不同：不要求 sharpe 必须存在（train-only 无回测）。
+        """
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for g in groups:
+                    g_name = g["group_name"]
+                    gm = group_metrics.get(g_name, {})
+                    weight = meta_weights.get(g_name)
+                    g_ic = gm.get("IC") or gm.get("Rank IC")
+                    g_icir = gm.get("ICIR") or gm.get("Rank ICIR")
+                    cur.execute(
+                        """UPDATE qe_multi_alpha_groups
+                           SET group_ic = %s, group_icir = %s,
+                               meta_weight = %s
+                           WHERE parent_experiment_id = %s AND group_name = %s""",
+                        (
+                            float(g_ic) if g_ic is not None else None,
+                            float(g_icir) if g_icir is not None else None,
+                            float(weight) if weight is not None else None,
+                            parent_experiment_id,
+                            g_name,
+                        ),
+                    )
+            conn.commit()
+        logger.info(f"分布式回写 {len(groups)} 组指标: {parent_experiment_id}")
+
     def _insert_meta_weights(
         self,
         experiment_id: str,
@@ -454,8 +1073,7 @@ class MultiAlphaResultCollector:
     ) -> None:
         """写入 qe_meta_model_weights 权重历史记录。"""
         if not weights:
-            logger.warning(f"meta_weights 为空，跳过写入: {experiment_id}")
-            return
+            raise RuntimeError(f"meta_weights 为空，无法写入: {experiment_id}")
 
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -485,15 +1103,14 @@ class MultiAlphaResultCollector:
     ) -> None:
         """写入 qe_group_prediction_correlations 组间相关性。"""
         if not correlations:
-            return
+            raise RuntimeError(f"correlations 为空，无法写入: {experiment_id}")
 
         with get_conn() as conn:
             with conn.cursor() as cur:
                 for pair_key, corr_val in correlations.items():
                     parts = pair_key.split("|")
                     if len(parts) != 2:
-                        logger.warning(f"相关性 key 格式错误，跳过: {pair_key}")
-                        continue
+                        raise ValueError(f"相关性 key 格式错误: {pair_key}")
                     group_a, group_b = parts
 
                     cur.execute(
@@ -517,10 +1134,26 @@ class MultiAlphaResultCollector:
         group_results: list[dict],
         correlations: dict[str, float],
     ) -> dict:
-        """构建 result_metrics JSON，兼容单Alpha格式 + multi_alpha_detail 嵌套。"""
-        result = {k: v for k, v in combined_metrics.items() if k != "_raw_json"}
+        """构建 result_metrics JSON，兼容单Alpha格式 + multi_alpha_detail 嵌套。
 
-        combined_ic = combined_metrics.get("IC")
+        如果 combined_metrics 包含 _enhanced_metrics（来自统一回测的完整
+        qlib_results_enhanced.json），将其作为 enhanced_metrics 嵌套写入，
+        使前端统一分析层 /enhanced-metrics 端点能正常返回所有诊断数据。
+        """
+        result = {}
+
+        # 提取统一回测的完整增强指标（如果有）
+        enhanced = combined_metrics.pop("_enhanced_metrics", None)
+        if enhanced and isinstance(enhanced, dict):
+            result["enhanced_metrics"] = enhanced
+
+        # 顶层放 combined_metrics 的标量指标
+        for k, v in combined_metrics.items():
+            if k.startswith("_"):
+                continue
+            result[k] = v
+
+        combined_ic = combined_metrics.get("IC") or combined_metrics.get("Rank IC")
         result["multi_alpha_detail"] = {
             "meta_method": meta_method,
             "meta_weights": meta_weights,

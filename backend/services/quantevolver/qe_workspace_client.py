@@ -103,8 +103,7 @@ class QEWorkspaceClient:
     async def get_loop_metrics(self, task_id: str, loop_id: str) -> Dict[str, Any]:
         """
         获取某个 LOOP 跑完后的各项指标（双参数：task_id + loop_id）。
-        容错：404 时重试一次（等待 5s，可能 read_exp_res.py 还未完成），
-        最终失败返回空 dict，不阻塞主流程。
+        404 时重试一次（等待 5s，可能 read_exp_res.py 还未完成），最终仍失败则抛异常。
         """
         url = f"{self.base_url}/tasks/{task_id}/loops/{self._to_rdagent_loop_id(task_id, loop_id)}/metrics"
         import asyncio
@@ -112,15 +111,17 @@ class QEWorkspaceClient:
             try:
                 response = await self.client.get(url)
                 response.raise_for_status()
-                return response.json()
+                payload = response.json()
+                if not isinstance(payload, dict) or not payload:
+                    raise RuntimeError(
+                        f"回测指标响应为空或格式错误: task={task_id} loop={loop_id} payload={payload}"
+                    )
+                return payload
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404 and attempt == 0:
                     logger.warning(f"Metrics not ready yet for {task_id}/{loop_id}, retrying in 5s...")
                     await asyncio.sleep(5)
                     continue
-                if e.response.status_code == 404:
-                    logger.warning(f"Metrics not found for {task_id}/{loop_id} after retry, returning empty")
-                    return {}
                 raise RuntimeError(f"Failed to get metrics for task {task_id} loop {loop_id}: {e}") from e
             except httpx.HTTPError as e:
                 raise RuntimeError(f"Failed to get metrics for task {task_id} loop {loop_id}: {e}") from e
@@ -133,8 +134,7 @@ class QEWorkspaceClient:
             response.raise_for_status()
             return response.json()
         except httpx.HTTPError as e:
-            logger.warning(f"Failed to kill loop {task_id}/{loop_id}: {e}")
-            return {"killed": False, "error": str(e)}
+            raise RuntimeError(f"Failed to kill loop {task_id}/{loop_id}: {e}") from e
 
     async def get_enhanced_metrics(self, task_id: str, loop_id: str) -> Dict[str, Any]:
         """
@@ -148,7 +148,12 @@ class QEWorkspaceClient:
             try:
                 response = await self.client.get(url)
                 response.raise_for_status()
-                return response.json()
+                payload = response.json()
+                if not isinstance(payload, dict) or not payload:
+                    raise RuntimeError(
+                        f"增强指标响应为空或格式错误: task={task_id} loop={loop_id} payload={payload}"
+                    )
+                return payload
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404 and attempt == 0:
                     logger.warning(f"Enhanced metrics not ready yet for {task_id}/{loop_id}, retrying in 5s...")
@@ -176,16 +181,15 @@ class QEWorkspaceClient:
     async def download_mlruns_params(self, task_id: str, loop_id: str) -> Optional[bytes]:
         """从节点下载指定 loop 的 mlruns params.pkl（tar.gz 打包，保留目录结构）。
 
-        Returns: tar.gz bytes, or None if not available.
+        Returns: tar.gz bytes.
         """
         url = f"{self.base_url}/tasks/{task_id}/loops/{self._to_rdagent_loop_id(task_id, loop_id)}/mlruns-params"
         try:
             response = await self.client.get(url, timeout=60.0)
             response.raise_for_status()
             return response.content
-        except Exception as e:
-            logger.warning(f"download_mlruns_params failed: {e}")
-            return None
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"download_mlruns_params failed for {task_id}/{loop_id}: {e}") from e
 
     async def download_loop_assets(self, task_id: str, loop_id: str, dest_dir: str) -> str:
         """
@@ -232,31 +236,32 @@ class QEWorkspaceClient:
 
     async def download_group_predictions(
         self, task_id: str, loop_id: str, group_name: str
-    ) -> Optional[bytes]:
-        """从节点下载指定组的 pred.pkl（用于多Alpha跨节点预测收集）。
-
-        Returns: pred.pkl bytes, 或 None 如果不存在。
-        """
+    ) -> bytes:
+        """从节点下载指定组的 pred.pkl（用于多Alpha跨节点预测收集）。"""
         rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
         url = f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}/groups/{group_name}/predictions"
         try:
             response = await self.client.get(url, timeout=60.0)
             response.raise_for_status()
             return response.content
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                logger.warning(f"Group predictions not found: {task_id}/{loop_id}/{group_name}")
-                return None
-            raise RuntimeError(f"下载组预测失败: {e}") from e
-        except Exception as e:
-            raise RuntimeError(f"下载组预测失败 (网络): {e}") from e
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"下载组预测失败: task={task_id} loop={loop_id} group={group_name}: {e}") from e
 
-    async def get_workspace_file(self, task_id: str, loop_id: str, file_path: str) -> Optional[str]:
-        """读取 workspace 中的指定文件内容。
+    async def download_workspace_file_bytes(
+        self, task_id: str, loop_id: str, file_path: str
+    ) -> bytes:
+        """下载 workspace 中的任意文件原始字节。"""
+        rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
+        url = f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}/files/{file_path}"
+        try:
+            response = await self.client.get(url, timeout=60.0)
+            response.raise_for_status()
+            return response.content
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"下载 workspace 文件失败: task={task_id} loop={loop_id} file={file_path}: {e}") from e
 
-        用于获取 multi_alpha_results.json 等多Alpha产出文件。
-        若端点不存在或文件不存在，返回 None（降级容错）。
-        """
+    async def get_workspace_file(self, task_id: str, loop_id: str, file_path: str) -> Dict[str, Any] | str:
+        """读取 workspace 中的指定文件内容。"""
         rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
         url = f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}/files/{file_path}"
         try:
@@ -264,17 +269,19 @@ class QEWorkspaceClient:
             response.raise_for_status()
             content_type = response.headers.get("content-type", "")
             if "json" in content_type:
-                return response.json()
+                payload = response.json()
+                if payload is None:
+                    raise RuntimeError(
+                        f"workspace 文件 JSON 为空: task={task_id} loop={loop_id} file={file_path}"
+                    )
+                return payload
+            if not response.text:
+                raise RuntimeError(
+                    f"workspace 文件内容为空: task={task_id} loop={loop_id} file={file_path}"
+                )
             return response.text
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code in (404, 501):
-                logger.debug(f"Workspace file not available: {task_id}/{loop_id}/{file_path}")
-                return None
-            logger.warning(f"Failed to get workspace file {file_path}: {e}")
-            return None
-        except Exception as e:
-            logger.debug(f"get_workspace_file failed (degraded): {e}")
-            return None
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"读取 workspace 文件失败: task={task_id} loop={loop_id} file={file_path}: {e}") from e
 
     async def cleanup_task_workspace(self, task_id: str) -> bool:
         """

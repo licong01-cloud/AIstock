@@ -43,6 +43,7 @@ from .routers import (
     quantevolver,
     quantevolver_evolution,
     strategies,
+    strategy_packages,
     rdagent,
     rdagent_catalog_admin,
     rdagent_llm_config,
@@ -409,6 +410,7 @@ def create_app() -> FastAPI:
     app.include_router(stocks.router, prefix="/api/v1")
     app.include_router(quantevolver.router, prefix="/api/v1")
     app.include_router(quantevolver_evolution.router, prefix="/api/v1")
+    app.include_router(strategy_packages.router, prefix="/api/v1")
     app.include_router(hmm_training.router, prefix="/api/v1")
     app.include_router(llm_config.router)
     app.include_router(paper_trading.router, prefix="/api/v1")

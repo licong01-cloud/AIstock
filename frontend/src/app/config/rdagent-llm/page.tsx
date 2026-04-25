@@ -1009,9 +1009,17 @@ export default function RDAgentLLMConfigPage() {
                       type="text"
                       required
                       value={modelForm.model_name}
-                      onChange={(e) =>
-                        setModelForm({ ...modelForm, model_name: e.target.value })
-                      }
+                      onChange={(e) => {
+                        const newName = e.target.value;
+                        const p = providers.find((p) => p.id === modelForm.provider_id);
+                        const preset = p ? LITELLM_PROVIDERS.find((pr) => pr.provider_name === p.provider_name) : undefined;
+                        const prefix = preset?.litellm_prefix || "";
+                        setModelForm({
+                          ...modelForm,
+                          model_name: newName,
+                          full_model_id: prefix ? `${prefix}/${newName}` : newName,
+                        });
+                      }}
                       placeholder={(() => {
                         const p = providers.find((p) => p.id === modelForm.provider_id);
                         const preset = p ? LITELLM_PROVIDERS.find((pr) => pr.provider_name === p.provider_name) : undefined;

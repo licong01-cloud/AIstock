@@ -209,7 +209,7 @@ def _serialize_ingestion_schedule(row: Dict[str, Any]) -> Dict[str, Any]:
     if job_summary_raw:
         job_summary = _json_load(job_summary_raw) if isinstance(job_summary_raw, str) else job_summary_raw
         if isinstance(job_summary, dict):
-            base["last_inserted_rows"] = job_summary.get("inserted_rows")
+            base["last_inserted_rows"] = job_summary.get("inserted_rows") or job_summary.get("rows")
             # 仅对数据检查类调度透传完整报告，避免其他调度传输大量无关数据
             if row.get("dataset") == "_auto_retry_stale":
                 base["last_job_summary"] = job_summary
@@ -494,7 +494,7 @@ def _job_status(job_id: uuid.UUID) -> Dict[str, Any]:
         )
 
     stats = summary.get("stats") or {}
-    inserted_rows = int(summary.get("inserted_rows") or stats.get("inserted_rows") or 0)
+    inserted_rows = int(summary.get("inserted_rows") or summary.get("rows") or stats.get("inserted_rows") or 0)
 
     # 优先合并脚本写入的 counters，以便展示更准确的统计
     counters_from_summary = summary.get("counters") or {}
@@ -2617,6 +2617,83 @@ def build_sector_data(
         return {"rows": rows, "start_date": start_date, "end_date": end_date}
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# 数据健康报警 API
+# ---------------------------------------------------------------------------
+
+
+@router.get("/ingestion/alerts/active")
+def get_active_alerts(
+    severity_min: str = Query("warning", description="Minimum severity: info|warning|error|critical"),
+    limit: int = Query(50, ge=1, le=500, description="Max alerts to return"),
+) -> Dict[str, Any]:
+    """获取未确认的活跃报警（severity >= severity_min）."""
+    sev_order = {"info": 0, "warning": 1, "error": 2, "critical": 3}
+    min_level = sev_order.get(severity_min, 1)
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT alert_id, created_at, severity, dataset, alert_type,
+                          title, message, details, acknowledged
+                   FROM market.data_alerts
+                   WHERE acknowledged = FALSE
+                     AND severity IN %s
+                   ORDER BY created_at DESC
+                   LIMIT %s""",
+                (tuple(s for s, l in sev_order.items() if l >= min_level), limit),
+            )
+            rows = cur.fetchall()
+            return {"alerts": [_serialize_alert(r) for r in rows], "count": len(rows)}
+
+
+@router.get("/ingestion/alerts/unack-count")
+def get_unack_alert_count() -> Dict[str, int]:
+    """获取未确认报警数量."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) FROM market.data_alerts
+                   WHERE acknowledged = FALSE AND severity IN ('warning','error','critical')"""
+            )
+            count = cur.fetchone()[0]
+            return {"count": count}
+
+
+@router.post("/ingestion/alerts/{alert_id}/acknowledge")
+def acknowledge_alert(alert_id: str) -> Dict[str, Any]:
+    """标记报警为已确认."""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
+            cur.execute(
+                """UPDATE market.data_alerts
+                   SET acknowledged = TRUE, ack_at = NOW()
+                   WHERE alert_id = %s
+                   RETURNING alert_id, acknowledged, ack_at""",
+                (alert_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found")
+            conn.commit()
+            return _serialize_alert(row)
+
+
+def _serialize_alert(row: Any) -> Dict[str, Any]:
+    return {
+        "alert_id": str(row.get("alert_id")),
+        "created_at": _isoformat(row.get("created_at")),
+        "severity": row.get("severity"),
+        "dataset": row.get("dataset"),
+        "alert_type": row.get("alert_type"),
+        "title": row.get("title"),
+        "message": row.get("message"),
+        "details": _json_load(row.get("details")),
+        "acknowledged": row.get("acknowledged"),
+        "ack_at": _isoformat(row.get("ack_at")),
+    }
 
 
 @router.post("/sector-data/export")

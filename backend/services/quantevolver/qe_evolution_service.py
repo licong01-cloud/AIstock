@@ -10,6 +10,7 @@ import aiofiles
 from psycopg2.extras import RealDictCursor
 from ...db.pg_pool import get_conn
 
+from .factor_official_evaluation_service import CALC_ENGINE
 from .qe_workspace_client import QEWorkspaceClient
 from .qe_evolution_agents import EvolutionAgents, EvolutionFactorAgent, EvolutionModelAgent, AnalystResult
 
@@ -1199,8 +1200,18 @@ class AutoEvolutionScheduler:
 
                 try:
                     collector = MultiAlphaResultCollector()
-                    await collector.collect_and_persist(_exp_id)
-                    logger.info(f"多Alpha结果收集完成: {_exp_id}")
+                    result = await collector.collect_and_persist(_exp_id)
+                    if result.get("ok"):
+                        logger.info(f"多Alpha结果收集完成: {_exp_id}")
+                    elif result.get("reason") == "pending_groups":
+                        # 还有组未完成训练，等待下一个组完成时再次触发
+                        logger.info(
+                            f"多Alpha结果收集跳过: {_exp_id}, "
+                            f"等待 {len(result.get('pending', []))} 组完成: "
+                            f"{result.get('pending')}"
+                        )
+                    else:
+                        logger.error(f"��Alpha结果收集返回异常: {_exp_id}: {result}")
                 except Exception as e:
                     # 不静默：记录 ERROR 级别，但不阻断演进流程（演进可能需要继续下一轮）
                     logger.error(f"多Alpha结果收集失败: {_exp_id}: {e}", exc_info=True)
@@ -2152,6 +2163,119 @@ class AutoEvolutionScheduler:
 
         return result
 
+    async def stop_multi_alpha_experiment(self, experiment_id: str) -> dict:
+        """停止多Alpha实验：终止所有节点正在执行的训练/回测。
+
+        遍历 qe_multi_alpha_groups 中所有 running 状态的组，
+        逐节点调用 kill_loop 终止进程，更新状态为 cancelled。
+        """
+        from .qe_workspace_client import QEWorkspaceClient
+
+        result = {
+            "experiment_id": experiment_id,
+            "groups_stopped": [],
+            "groups_failed": [],
+        }
+
+        # 1. 获取所有 running 状态的组
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """SELECT group_name, assigned_node_id, qe_loop_id
+                       FROM qe_multi_alpha_groups
+                       WHERE parent_experiment_id = %s
+                         AND status = 'running'""",
+                    (experiment_id,),
+                )
+                running_groups = cur.fetchall()
+
+        if not running_groups:
+            # 没有 running 的组，直接更新实验状态
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE qe_experiments SET status = 'cancelled', completed_at = NOW() "
+                        "WHERE experiment_id = %s",
+                        (experiment_id,),
+                    )
+                conn.commit()
+            result["message"] = "no running groups found, experiment marked cancelled"
+            return result
+
+        # 2. 获取实验的 qe_task_id（从 qe_experiments 表获取，组表不存此字段）
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT qe_task_id FROM qe_experiments WHERE experiment_id = %s",
+                    (experiment_id,),
+                )
+                row = cur.fetchone()
+        qe_task_id = row[0] if row else None
+        if not qe_task_id:
+            raise ValueError(f"实验 {experiment_id} 缺少 qe_task_id，无法终止节点进程")
+
+        # 3. 逐组终止
+        for g in running_groups:
+            g_name = g["group_name"]
+            node_id = g["assigned_node_id"]
+            loop_id = g["qe_loop_id"]
+
+            if not node_id or not loop_id:
+                result["groups_failed"].append({
+                    "group_name": g_name,
+                    "error": f"missing node_id/loop_id: {node_id}/{loop_id}",
+                })
+                continue
+
+            try:
+                client = QEWorkspaceClient.for_node(node_id)
+                async with client:
+                    kill_result = await client.kill_loop(qe_task_id, loop_id)
+                    kill_success = kill_result.get("killed", False)
+                    logger.info(f"Kill group {g_name} @ {node_id}: {kill_result}")
+                    result["groups_stopped"].append({
+                        "group_name": g_name,
+                        "node_id": node_id,
+                        "killed": kill_success,
+                    })
+            except Exception as e:
+                logger.error(f"Failed to kill group {g_name} @ {node_id}: {e}")
+                result["groups_failed"].append({
+                    "group_name": g_name,
+                    "node_id": node_id,
+                    "error": str(e),
+                })
+
+        # 4. 更新所有组状态为 cancelled
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE qe_multi_alpha_groups
+                       SET status = 'cancelled'
+                       WHERE parent_experiment_id = %s AND status = 'running'""",
+                    (experiment_id,),
+                )
+                # 更新实验状态
+                cur.execute(
+                    "UPDATE qe_experiments SET status = 'cancelled', completed_at = NOW() "
+                    "WHERE experiment_id = %s",
+                    (experiment_id,),
+                )
+            conn.commit()
+
+        # 如果所有组都 kill 失败，抛异常（不静默）
+        if result["groups_failed"] and not result["groups_stopped"]:
+            raise RuntimeError(
+                f"多Alpha实验 {experiment_id} 停止失败: 所有 {len(result['groups_failed'])} 组终止失败. "
+                f"详情: {result['groups_failed']}"
+            )
+
+        logger.info(
+            f"多Alpha实验 {experiment_id} 已停止: "
+            f"{len(result['groups_stopped'])} 组成功, {len(result['groups_failed'])} 组失败"
+        )
+        return result
+
     async def retry_loop(self, task_id: str, loop_index: int) -> Dict[str, Any]:
         """重试失败的 Loop：自动判断训练是否已完成，决定从训练或回测恢复.
 
@@ -2464,7 +2588,7 @@ class AutoEvolutionScheduler:
                                top_excess_sharpe, top_excess_annual_return,
                                top_max_drawdown
                         FROM aistock_factor_metrics
-                        WHERE factor_name = c.factor_name AND eval_window = 'full'
+                        WHERE factor_name = c.factor_name AND eval_window = 'full' AND calc_engine = %s
                         ORDER BY calculated_at DESC
                         LIMIT 1
                     ) m ON TRUE
@@ -2472,7 +2596,7 @@ class AutoEvolutionScheduler:
                       AND c.is_sota_factor = TRUE
                       AND c.is_available = TRUE
                     ORDER BY m.ic_mean DESC NULLS LAST, c.ic DESC NULLS LAST
-                """, (task_id,))
+                """, (CALC_ENGINE, task_id))
                 sota_factors = [dict(r) for r in cur.fetchall()]
 
                 # 获取 SOTA 模型

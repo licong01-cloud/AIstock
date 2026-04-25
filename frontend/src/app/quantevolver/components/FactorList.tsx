@@ -3,9 +3,57 @@
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import FullPipelineDialog from "./FullPipelineDialog";
 import ManualFactorDialog from "./ManualFactorDialog";
-import ICDecayTrendChart from "./charts/ICDecayTrendChart";
+import IcSeriesChart from "./charts/IcSeriesChart";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
+
+// ── 月频 IC 衰变趋势面板 ──
+function MonthlyIcPanel({ factorName, apiBase }: { factorName: string; apiBase: string }) {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!factorName) return;
+    setLoading(true);
+    setError(null);
+    fetch(`${apiBase}/quantevolver/official-evaluation/factors/${factorName}/monthly-ic`)
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(d => {
+        setData(d);
+        if (d.count === 0) setError(d.message || "无数据");
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [factorName, apiBase]);
+
+  if (loading) return <div style={{ padding: 12, fontSize: 12, color: "#6b7280" }}>加载月频IC数据...</div>;
+  if (error) return <div style={{ padding: 12, fontSize: 12, color: "#b45309" }}>{error}</div>;
+  if (!data || !data.series || data.series.length === 0) return null;
+
+  const months = data.series.map((s: any) => s.month_end);
+  const icMean = data.series.map((s: any) => s.ic_mean);
+  const rankIcMean = data.series.map((s: any) => s.rank_ic_mean);
+  const ewma6m = data.series.map((s: any) => s.ic_ewma_6m);
+
+  return (
+    <section style={{ background: "#fff", borderRadius: 12, padding: 16, marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+        IC 月度衰变趋势 — {factorName}
+        <span style={{ fontSize: 11, color: "#6b7280", marginLeft: 8 }}>({data.count} 个月)</span>
+      </div>
+      <IcSeriesChart
+        dates={months}
+        ic_series={icMean}
+        rank_ic_series={rankIcMean}
+        ic_rolling_30d_mean={ewma6m}
+      />
+    </section>
+  );
+}
 
 type Factor = {
   factor_name: string;
@@ -48,6 +96,27 @@ export type MergedFactor = {
   factor_dimension?: string;
   description?: string;
   classification_id?: number;
+  // v2 分类维度
+  ts_info_density?: string | null;
+  cross_horizon_consistency?: number | null;
+  direction?: number | null;
+  signal_mechanism?: string | null;
+  sector_exposure_corr?: number | null;
+  horizon_class?: string | null;
+  best_horizon?: number | null;
+  best_horizon_advantage?: number | null;
+  linearity?: string | null;
+  holding_period_class?: string | null;
+  data_source_group?: string | null;
+  update_freq?: string | null;
+  ic_sign_consistency_12m?: number | null;
+  ic_oos_is_ratio?: number | null;
+  monthly_ic_trend_slope?: number | null;
+  cluster_id?: number | null;
+  cluster_role?: string | null;
+  cluster_size?: number | null;
+  intra_cluster_max_corr?: number | null;
+  representative_score?: number | null;
   ind_ic?: number | null;
   ind_rank_ic?: number | null;
   ind_rank_ic_1m?: number | null;
@@ -184,15 +253,36 @@ export default function FactorList({
   const [ratingRunResult, setRatingRunResult] = useState<{ ok?: boolean; run_id?: string; total_factors?: number; success_count?: number; failed_count?: number; errors?: { factor_name: string; error: string }[] } | null>(null);
   const [ratingRuns, setRatingRuns] = useState<any[]>([]);
   const [ratingResultsPreview, setRatingResultsPreview] = useState<any[]>([]);
+  // 一键流水线模式配置
+  const [runMode, setRunMode] = useState<"rating_only" | "full_pipeline">("rating_only");
+  const [pipelineParallelism, setPipelineParallelism] = useState<number>(4);
+  const [pipelineEnableLlmAnalysis, setPipelineEnableLlmAnalysis] = useState<boolean>(true);
+  const [pipelineEnableLlmAudit, setPipelineEnableLlmAudit] = useState<boolean>(true);
+  const [pipelineProgress, setPipelineProgress] = useState<{ done: number; total: number; ok: number; failed: number } | null>(null);
+  const [pipelineLog, setPipelineLog] = useState<string[]>([]);
+  const [pipelineAbort, setPipelineAbort] = useState<AbortController | null>(null);
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(new Set());
   const [localSelectedFactors, setLocalSelectedFactors] = useState<Set<string>>(selectedFactors);
+  const [selectedFactor, setSelectedFactor] = useState<string | null>(null);
   const [factorDetails, setFactorDetails] = useState<Record<string, FactorDetail>>({});
   const [detailLoading, setDetailLoading] = useState<Set<string>>(new Set());
   const [codeExpanded, setCodeExpanded] = useState<Set<string>>(new Set());
   const [factorExpMetrics, setFactorExpMetrics] = useState<Record<string, FactorExpMetrics>>({});
   const [expMetricsLoading, setExpMetricsLoading] = useState<Set<string>>(new Set());
   const [metricsLoading, setMetricsLoading] = useState(false);
-  const [metricsResult, setMetricsResult] = useState<{ ok?: boolean; total_metrics_inserted?: number; total_metrics_skipped?: number; fail_count?: number; error?: string } | null>(null);
+  const [metricsResult, setMetricsResult] = useState<{
+    ok?: boolean;
+    success?: boolean;
+    total_metrics_inserted?: number;
+    total_metrics_skipped?: number;
+    fail_count?: number;
+    error?: string;
+    logs?: string[];
+    dispatch_status?: string;
+    details?: any[];
+    db_result?: { inserted?: number; skipped?: number; errors?: string[] };
+    pipeline_summary?: { factor_results?: { name?: string; error?: string }[] };
+  } | null>(null);
   const [factorIndMetrics, setFactorIndMetrics] = useState<Record<string, any[]>>({});
   const [indSummary, setIndSummary] = useState<Record<string, { ic_mean: number | null; sharpe: number | null; annual_return: number | null }>>({});
 
@@ -209,6 +299,23 @@ export default function FactorList({
   const [taskFactorsLoading, setTaskFactorsLoading] = useState<Set<string>>(new Set());
   const [taskAnalyzing, setTaskAnalyzing] = useState(false);
   const [taskAnalyzeResult, setTaskAnalyzeResult] = useState<{ ok?: boolean; total?: number; analyzed?: number; errors?: string[] } | null>(null);
+
+  // 因子清洗 (cleanup)
+  const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [cleanupLoading, setCleanupLoading] = useState(false);
+  const [cleanupExecuting, setCleanupExecuting] = useState(false);
+  const [cleanupRules, setCleanupRules] = useState<{ near_identical: boolean; pure_noise_v2: boolean; reverse_redundant: boolean }>({
+    near_identical: true,
+    pure_noise_v2: true,
+    reverse_redundant: true,
+  });
+  const [cleanupResult, setCleanupResult] = useState<{
+    summary: { total_enabled: number; total_candidates: number; after_cleanup: number; by_rule: Record<string, number>; thresholds: Record<string, number>; rules_applied: string[] };
+    candidates: any[];
+    reverse_pairs: any[];
+  } | null>(null);
+  const [cleanupSelected, setCleanupSelected] = useState<Set<number>>(new Set());
+  const [cleanupExecuteResult, setCleanupExecuteResult] = useState<{ ok: boolean; batch_id: string; disabled_count: number; by_reason: Record<string, number>; errors: string[]; rollback_sql: string } | null>(null);
 
   // 全流程批处理
   const [pipelineOpen, setPipelineOpen] = useState(false);
@@ -231,6 +338,7 @@ export default function FactorList({
   const [snapshotDeleting, setSnapshotDeleting] = useState<string | null>(null);
   const [activeSnapshot, setActiveSnapshot] = useState<string>("");
   const [newSnapshotDate, setNewSnapshotDate] = useState("");
+  const [snapshotStartDate, setSnapshotStartDate] = useState("2018-08-01");
   const [snapshotPanelOpen, setSnapshotPanelOpen] = useState(false);
   const [timeEstimate, setTimeEstimate] = useState<{
     has_history: boolean;
@@ -471,8 +579,8 @@ export default function FactorList({
     }
     setSnapshotCreating(true);
     try {
-      const params = new URLSearchParams({ data_date: newSnapshotDate });
-      const res = await fetch(`${API}/quantevolver/evolution/factor-values/compute?${params}`, {
+      const params = new URLSearchParams({ data_date: newSnapshotDate, start_date: snapshotStartDate });
+      const res = await fetch(`${API}/quantevolver/evolution/factor-values/snapshots/create?${params}`, {
         method: "POST",
       });
       if (!res.ok) {
@@ -484,12 +592,28 @@ export default function FactorList({
         throw new Error(msg);
       }
       setNewSnapshotDate("");
-      // 延迟刷新（后台创建需要时间）
-      setTimeout(() => loadSnapshots(), 3000);
-      alert(`快照 ${newSnapshotDate} 创建已启动，请稍后刷新查看`);
+      // 轮询快照创建状态
+      const poll = async () => {
+        while (true) {
+          await new Promise(r => setTimeout(r, 3000));
+          try {
+            const st = await fetch(`${API}/quantevolver/evolution/factor-values/snapshots/status`);
+            const data = await st.json();
+            if (!data.creating) {
+              await loadSnapshots();
+              if (data.last_error) {
+                alert(`快照创建失败: ${data.last_error}`);
+              } else {
+                alert("快照创建成功!");
+              }
+              return;
+            }
+          } catch { /* 网络抖动，继续轮询 */ }
+        }
+      };
+      poll().finally(() => setSnapshotCreating(false));
     } catch (e: any) {
       alert(`创建快照失败: ${e.message}`);
-    } finally {
       setSnapshotCreating(false);
     }
   }
@@ -614,6 +738,26 @@ export default function FactorList({
         factor_dimension: f.factor_dimension,
         description: f.cl_description,
         classification_id: f.classification_id,
+        ts_info_density: f.ts_info_density ?? null,
+        cross_horizon_consistency: f.cross_horizon_consistency ?? null,
+        direction: f.direction ?? null,
+        signal_mechanism: f.signal_mechanism ?? null,
+        sector_exposure_corr: f.sector_exposure_corr ?? null,
+        horizon_class: f.horizon_class ?? null,
+        best_horizon: f.best_horizon ?? null,
+        best_horizon_advantage: f.best_horizon_advantage ?? null,
+        linearity: f.linearity ?? null,
+        holding_period_class: f.holding_period_class ?? null,
+        data_source_group: f.data_source_group ?? null,
+        update_freq: f.update_freq ?? null,
+        ic_sign_consistency_12m: f.ic_sign_consistency_12m ?? null,
+        ic_oos_is_ratio: f.ic_oos_is_ratio ?? null,
+        monthly_ic_trend_slope: f.monthly_ic_trend_slope ?? null,
+        cluster_id: f.cluster_id ?? null,
+        cluster_role: f.cluster_role ?? null,
+        cluster_size: f.cluster_size ?? null,
+        intra_cluster_max_corr: f.intra_cluster_max_corr ?? null,
+        representative_score: f.representative_score ?? null,
         official_score: f.official_score ?? null,
         official_rule_version: f.official_rule_version ?? null,
         official_grade_reason_structured: f.official_grade_reason_structured ?? null,
@@ -696,8 +840,14 @@ export default function FactorList({
 
   const loadIndSummary = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/quantevolver/factors/independent-metrics-summary`);
-      if (res.ok) { const d = await res.json(); if (d.ok) setIndSummary(d.summary || {}); }
+      let res = await fetch(`${API}/quantevolver/official-evaluation/summary`);
+      if (res.status === 404) {
+        res = await fetch(`${API}/quantevolver/factors/independent-metrics-summary`);
+      }
+      if (res.ok) {
+        const d = await res.json();
+        if (d.ok) setIndSummary(d.summary || {});
+      }
     } catch {}
   }, []);
 
@@ -821,14 +971,26 @@ export default function FactorList({
           continue;
         }
         // 2. 用unified端点计算指标
-        const res = await fetch(`${API}/quantevolver/factors/batch-compute-metrics-unified`, {
+        let res = await fetch(`${API}/quantevolver/official-evaluation/compute`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             factor_names: factorNames,
             data_date: activeSnapshot,
+            include_disabled: true,
           }),
         });
+        if (res.status === 404) {
+          res = await fetch(`${API}/quantevolver/factors/batch-compute-metrics-unified`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              factor_names: factorNames,
+              data_date: activeSnapshot,
+              all_available: false,
+            }),
+          });
+        }
         const data = await res.json();
         const okCount = data.db_result?.inserted || 0;
         setTaskResults(prev => ({
@@ -900,21 +1062,40 @@ export default function FactorList({
     setMetricsLoading(true);
     setMetricsResult(null);
     try {
-      const res = await fetch(`${API}/quantevolver/factors/batch-compute-metrics-unified`, {
+      let res = await fetch(`${API}/quantevolver/official-evaluation/compute`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ factor_names: factorNames, data_date: activeSnapshot }),
+        body: JSON.stringify({ factor_names: factorNames, data_date: activeSnapshot, include_disabled: true }),
       });
+      if (res.status === 404) {
+        res = await fetch(`${API}/quantevolver/factors/batch-compute-metrics-unified`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ factor_names: factorNames, data_date: activeSnapshot, all_available: false }),
+        });
+      }
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
-      setMetricsResult(data);
-      loadData();
-      loadIndSummary();
+      if (!res.ok) {
+        setMetricsResult({
+          ...data,
+          ok: false,
+          success: false,
+          error: data.detail || data.error || `HTTP ${res.status}`,
+        });
+        return;
+      }
+      const ok = data.success === true;
+      setMetricsResult({ ...data, ok });
+      if (ok) {
+        loadData();
+        loadIndSummary();
+      }
     } catch (e: any) {
-      setMetricsResult({ ok: false, error: e?.message || "指标计算失败" });
+      setMetricsResult({ ok: false, success: false, error: e?.message || "指标计算失败" });
+    } finally {
+      setMetricsLoading(false);
+      setLocalSelectedFactors(new Set());
     }
-    setMetricsLoading(false);
-    setLocalSelectedFactors(new Set());
   }
 
   useEffect(() => {
@@ -992,23 +1173,20 @@ export default function FactorList({
       return;
     }
 
-    const payload: any = {
-      rule_version: ruleVersion,
-      scope_type: scopeType,
-      triggered_from: "ui_toolbar",
-    };
-
+    // 构造 selected_factors / filters
+    let selectedPayload: Array<{ factor_name: string; source: string }> | undefined;
+    let filtersPayload: Record<string, string | undefined> | undefined;
     if (scopeType === "selected") {
       if (actualSelectedFactors.size === 0) {
         alert("请先选择要评级的因子");
         return;
       }
-      payload.selected_factors = Array.from(actualSelectedFactors).map((key) => {
+      selectedPayload = Array.from(actualSelectedFactors).map((key) => {
         const [factor_name, source] = key.split("||");
         return { factor_name, source };
       });
     } else if (scopeType === "filter") {
-      payload.filters = {
+      filtersPayload = {
         source: sourceFilter || undefined,
         exclude_source: !showAlpha ? "alpha158,alpha360" : undefined,
         search: search || undefined,
@@ -1023,7 +1201,30 @@ export default function FactorList({
       : scopeType === "filter"
         ? "当前筛选结果"
         : "全量因子";
-    if (!confirm(`将使用规则版本 ${ruleVersion} 对${scopeLabel}执行正式评级，确定继续？`)) return;
+    const modeLabel = runMode === "full_pipeline" ? "一键全流程(分类+评级+LLM)" : "仅评级";
+    if (!confirm(`将使用规则 ${ruleVersion} / ${modeLabel} 对${scopeLabel}执行，确定继续？`)) return;
+
+    if (runMode === "full_pipeline") {
+      await runPipelineStream(scopeType, ruleVersion, selectedPayload, filtersPayload);
+    } else {
+      await runRatingOnly(scopeType, ruleVersion, selectedPayload, filtersPayload);
+    }
+  }
+
+  // 仅评级 —— 同步调用 /rating/run
+  async function runRatingOnly(
+    scopeType: "selected" | "filter" | "all",
+    ruleVersion: string,
+    selectedPayload: Array<{ factor_name: string; source: string }> | undefined,
+    filtersPayload: Record<string, string | undefined> | undefined,
+  ) {
+    const payload: any = {
+      rule_version: ruleVersion,
+      scope_type: scopeType,
+      triggered_from: "ui_toolbar",
+    };
+    if (selectedPayload) payload.selected_factors = selectedPayload;
+    if (filtersPayload) payload.filters = filtersPayload;
 
     setRatingRunLoading(true);
     setRatingRunResult(null);
@@ -1049,10 +1250,147 @@ export default function FactorList({
     }
   }
 
+  // 一键全流程 —— SSE 流式 /pipeline/full-stream
+  async function runPipelineStream(
+    scopeType: "selected" | "filter" | "all",
+    ruleVersion: string,
+    selectedPayload: Array<{ factor_name: string; source: string }> | undefined,
+    filtersPayload: Record<string, string | undefined> | undefined,
+  ) {
+    if (pipelineParallelism < 1 || pipelineParallelism > 16) {
+      alert(`并行度必须在 [1,16] 区间, 当前: ${pipelineParallelism}`);
+      return;
+    }
+
+    const body: any = {
+      scope_type: scopeType,
+      parallelism: pipelineParallelism,
+      enable_llm_analysis: pipelineEnableLlmAnalysis,
+      enable_llm_audit: pipelineEnableLlmAudit,
+      rule_version: ruleVersion,
+    };
+    if (selectedPayload) body.selected_factors = selectedPayload;
+    if (filtersPayload) {
+      // 后端 filters 只接受字符串, 过滤掉 undefined
+      const cleaned: Record<string, string> = {};
+      Object.entries(filtersPayload).forEach(([k, v]) => { if (v) cleaned[k] = v; });
+      body.filters = cleaned;
+    }
+
+    const ctrl = new AbortController();
+    setPipelineAbort(ctrl);
+    setRatingRunLoading(true);
+    setRatingRunResult(null);
+    setPipelineProgress(null);
+    setPipelineLog([`[${new Date().toLocaleTimeString()}] POST /pipeline/full-stream ${JSON.stringify(body)}`]);
+
+    const pushLog = (line: string) => {
+      setPipelineLog(prev => {
+        const next = [...prev, `[${new Date().toLocaleTimeString()}] ${line}`];
+        if (next.length > 1000) next.splice(0, next.length - 1000);
+        return next;
+      });
+    };
+
+    try {
+      const res = await fetch(`${API}/quantevolver/pipeline/full-stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+      if (!res.ok || !res.body) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buffer.indexOf("\n\n")) >= 0) {
+          const chunk = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          chunk.split(/\n/).forEach(line => {
+            if (!line.startsWith("data:")) return;
+            const raw = line.slice(5).trim();
+            if (!raw) return;
+            let ev: any;
+            try {
+              ev = JSON.parse(raw);
+            } catch (e) {
+              pushLog(`[parse-error] ${raw.slice(0, 200)}`);
+              return;
+            }
+            switch (ev.event) {
+              case "start":
+                pushLog(`[run] 开始 total=${ev.total} parallel=${ev.parallelism} rule=${ev.rule_version} run_id=${ev.run_id}`);
+                break;
+              case "progress":
+                setPipelineProgress({ done: ev.done, total: ev.total, ok: ev.ok, failed: ev.failed });
+                break;
+              case "factor_step":
+                if (ev.phase === "done") {
+                  const bits: string[] = [];
+                  if (ev.category) bits.push(`cat=${ev.category}`);
+                  if (ev.direction !== undefined && ev.direction !== null) bits.push(`dir=${ev.direction}`);
+                  if (ev.signal_mechanism) bits.push(`mech=${ev.signal_mechanism}`);
+                  if (ev.official_grade) bits.push(`grade=${ev.official_grade}`);
+                  if (ev.official_score !== undefined) bits.push(`score=${ev.official_score}`);
+                  pushLog(`[${ev.factor_name}/Step${ev.step}] ✅ ${bits.join(" ")}`);
+                } else if (ev.phase === "error") {
+                  pushLog(`[${ev.factor_name}/Step${ev.step}] ✗ ${ev.error}`);
+                }
+                break;
+              case "factor_done":
+                if (!ev.ok) {
+                  pushLog(`[${ev.factor_name}] ✗ ${ev.step_b_error || ev.step_a_error || "failed"}`);
+                }
+                break;
+              case "done":
+                pushLog(`[done] ok=${ev.ok} total=${ev.total_factors} success=${ev.success_count} failed=${ev.failed_count}`);
+                setRatingRunResult({
+                  ok: ev.ok,
+                  run_id: ev.run_id,
+                  total_factors: ev.total_factors,
+                  success_count: ev.success_count,
+                  failed_count: ev.failed_count,
+                });
+                break;
+              case "error":
+                pushLog(`[error] ${ev.error}`);
+                throw new Error(ev.error || "pipeline error");
+            }
+          });
+        }
+      }
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      if (msg !== "The user aborted a request.") {
+        setRatingRunResult({ ok: false, errors: [{ factor_name: "system", error: msg }] });
+        pushLog(`[fetch-error] ${msg}`);
+        alert(`一键流水线失败: ${msg}`);
+      } else {
+        pushLog(`[stop] 用户中止`);
+      }
+    } finally {
+      setRatingRunLoading(false);
+      setPipelineAbort(null);
+      loadData();
+      loadRatingRules();
+      loadRatingRuns();
+    }
+  }
+
   async function loadFactorIndependentMetrics(key: string, factorName: string) {
     if (factorIndMetrics[key]) return;
     try {
-      const res = await fetch(`${API}/quantevolver/factors/${encodeURIComponent(factorName)}/independent-metrics?limit=10`);
+      const res = await fetch(`${API}/quantevolver/official-evaluation/factors/${encodeURIComponent(factorName)}?limit=10`);
       if (res.ok) {
         const data = await res.json();
         if (data.ok) setFactorIndMetrics(prev => ({ ...prev, [key]: data.metrics || [] }));
@@ -1110,7 +1448,8 @@ export default function FactorList({
                 <div style={{ minWidth: 320, flex: 1 }}>
                   <div style={{ fontSize: 14, fontWeight: 700, color: "#1f2937", marginBottom: 6 }}>因子评级管理</div>
                   <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
-                    当前正式评级仅允许通过此工具栏触发，规则版本固定保存在 backend/rating_rules/factor 目录，正式评级输入统一从数据库读取。
+                    正式评级仅允许通过此工具栏触发。可选择模板(规则版本)，以及执行模式：<strong>仅评级</strong>（快速, 需先有分类）或
+                    <strong>一键全流程</strong>（Step A 分类+方向+机制+行业敞口 → Step B 打分+LLM审阅, 并行流式执行）。
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -1153,27 +1492,46 @@ export default function FactorList({
                   >
                     设为激活版本
                   </button>
+                  {/* 模式选择 */}
+                  <span style={{ fontSize: 11, color: "#6b7280", marginLeft: 8 }}>模式</span>
+                  <select
+                    value={runMode}
+                    onChange={e => setRunMode(e.target.value as "rating_only" | "full_pipeline")}
+                    disabled={ratingRunLoading}
+                    style={{ padding: "6px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", background: runMode === "full_pipeline" ? "#eff6ff" : "#fff", fontWeight: 600 }}
+                  >
+                    <option value="rating_only">仅评级</option>
+                    <option value="full_pipeline">一键全流程 (分类+评级+LLM)</option>
+                  </select>
                   <button
                     onClick={() => runOfficialRating("selected")}
                     disabled={ratingRunLoading || actualSelectedFactors.size === 0}
                     style={{ padding: "6px 12px", fontSize: 12, borderRadius: 6, border: "none", background: "#2563eb", color: "#fff", fontWeight: 600, cursor: ratingRunLoading || actualSelectedFactors.size === 0 ? "not-allowed" : "pointer", opacity: ratingRunLoading || actualSelectedFactors.size === 0 ? 0.5 : 1 }}
                   >
-                    {ratingRunLoading ? "执行中..." : `评级选中(${actualSelectedFactors.size})`}
+                    {ratingRunLoading ? "执行中..." : `${runMode === "full_pipeline" ? "🚀 流水线" : "评级"}选中(${actualSelectedFactors.size})`}
                   </button>
                   <button
                     onClick={() => runOfficialRating("filter")}
                     disabled={ratingRunLoading}
                     style={{ padding: "6px 12px", fontSize: 12, borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", fontWeight: 600, cursor: ratingRunLoading ? "not-allowed" : "pointer", opacity: ratingRunLoading ? 0.5 : 1 }}
                   >
-                    当前筛选评级
+                    {runMode === "full_pipeline" ? "🚀 筛选流水线" : "当前筛选评级"}
                   </button>
                   <button
                     onClick={() => runOfficialRating("all")}
                     disabled={ratingRunLoading}
                     style={{ padding: "6px 12px", fontSize: 12, borderRadius: 6, border: "1px solid #7c3aed", background: "#f5f3ff", color: "#7c3aed", fontWeight: 700, cursor: ratingRunLoading ? "not-allowed" : "pointer", opacity: ratingRunLoading ? 0.5 : 1 }}
                   >
-                    全量评级
+                    {runMode === "full_pipeline" ? "🚀 全量流水线" : "全量评级"}
                   </button>
+                  {ratingRunLoading && pipelineAbort && runMode === "full_pipeline" && (
+                    <button
+                      onClick={() => pipelineAbort.abort()}
+                      style={{ padding: "6px 12px", fontSize: 12, borderRadius: 6, border: "1px solid #dc2626", background: "#fff", color: "#dc2626", fontWeight: 600, cursor: "pointer" }}
+                    >
+                      ■ 停止接收
+                    </button>
+                  )}
                   <button
                     onClick={() => setRatingDetailExpanded(!ratingDetailExpanded)}
                     style={{ padding: "6px 12px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", color: "#374151", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
@@ -1181,8 +1539,91 @@ export default function FactorList({
                     {ratingDetailExpanded ? "收起详情" : "详情"}
                     <span style={{ fontSize: 10, transition: "transform 0.2s", transform: ratingDetailExpanded ? "rotate(90deg)" : "rotate(0deg)", display: "inline-block" }}>▶</span>
                   </button>
+                  <button
+                    onClick={() => {
+                      setCleanupOpen(true);
+                      setCleanupResult(null);
+                      setCleanupSelected(new Set());
+                      setCleanupExecuteResult(null);
+                    }}
+                    style={{ padding: "6px 12px", fontSize: 12, borderRadius: 6, border: "1px solid #ea580c", background: "#fff7ed", color: "#c2410c", fontWeight: 700, cursor: "pointer" }}
+                    title="基于 IC≈0 + corr=±1 + 簇内冗余 三规则的一键清洗"
+                  >
+                    🧹 因子清洗
+                  </button>
                 </div>
               </div>
+
+              {/* 一键全流程配置（仅 full_pipeline 模式显示） */}
+              {runMode === "full_pipeline" && (
+                <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "#f8fafc", border: "1px solid #e2e8f0", display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#475569" }}>🚀 流水线配置</span>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#334155" }}>
+                    并行度:
+                    <input
+                      type="range" min={1} max={8}
+                      value={pipelineParallelism}
+                      onChange={e => setPipelineParallelism(Number(e.target.value))}
+                      disabled={ratingRunLoading}
+                    />
+                    <span style={{ minWidth: 20, fontWeight: 700 }}>{pipelineParallelism}</span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#334155" }}>
+                    <input
+                      type="checkbox" checked={pipelineEnableLlmAnalysis}
+                      onChange={e => setPipelineEnableLlmAnalysis(e.target.checked)}
+                      disabled={ratingRunLoading}
+                    />
+                    Step A LLM 分类
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#334155" }}>
+                    <input
+                      type="checkbox" checked={pipelineEnableLlmAudit}
+                      onChange={e => setPipelineEnableLlmAudit(e.target.checked)}
+                      disabled={ratingRunLoading}
+                    />
+                    Step B LLM 审阅
+                  </label>
+                  <span style={{ fontSize: 11, color: "#64748b" }}>
+                    Step A 失败则跳过 Step B（评级依赖分类字段）
+                  </span>
+                </div>
+              )}
+
+              {/* 流水线进度 + 日志 */}
+              {(pipelineProgress || pipelineLog.length > 0) && (
+                <div style={{ marginTop: 10 }}>
+                  {pipelineProgress && (
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#334155", marginBottom: 4 }}>
+                        <span>
+                          {pipelineProgress.done}/{pipelineProgress.total}  ✅{pipelineProgress.ok}  ✗{pipelineProgress.failed}
+                        </span>
+                        <span>{pipelineProgress.total > 0 ? Math.round((pipelineProgress.done / pipelineProgress.total) * 100) : 0}%</span>
+                      </div>
+                      <div style={{ background: "#e2e8f0", height: 6, borderRadius: 3 }}>
+                        <div style={{
+                          background: "#2563eb", height: "100%",
+                          width: pipelineProgress.total > 0 ? `${(pipelineProgress.done / pipelineProgress.total) * 100}%` : "0%",
+                          borderRadius: 3, transition: "width 0.25s",
+                        }} />
+                      </div>
+                    </div>
+                  )}
+                  {pipelineLog.length > 0 && (
+                    <details style={{ marginTop: 8 }}>
+                      <summary style={{ fontSize: 12, color: "#475569", cursor: "pointer" }}>
+                        流式日志 ({pipelineLog.length} 行)
+                      </summary>
+                      <pre style={{
+                        background: "#0f172a", color: "#e2e8f0", padding: 10, borderRadius: 6,
+                        fontFamily: "ui-monospace, monospace", fontSize: 11,
+                        maxHeight: 240, overflow: "auto", whiteSpace: "pre-wrap", margin: "6px 0 0 0",
+                      }}>{pipelineLog.join("\n")}</pre>
+                    </details>
+                  )}
+                </div>
+              )}
 
               {ratingDetailExpanded && ratingRuleDetail && (
                 <div style={{ marginTop: 12, borderTop: "1px solid #eef2f7", paddingTop: 12, display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 16 }}>
@@ -1330,14 +1771,21 @@ export default function FactorList({
           {snapshotPanelOpen && (
             <div style={{ marginTop: 12, borderTop: "1px solid #e5e7eb", paddingTop: 12 }}>
               {/* 创建新快照 */}
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                <span style={{ fontSize: 12, color: "#6b7280" }}>新建快照:</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, color: "#6b7280" }}>起始日期:</span>
+                <input
+                  type="date"
+                  value={snapshotStartDate}
+                  onChange={e => setSnapshotStartDate(e.target.value)}
+                  style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", width: 140 }}
+                />
+                <span style={{ fontSize: 12, color: "#6b7280" }}>截止日期:</span>
                 <input
                   type="date"
                   value={newSnapshotDate ? `${newSnapshotDate.slice(0,4)}-${newSnapshotDate.slice(4,6)}-${newSnapshotDate.slice(6,8)}` : ""}
                   onChange={e => setNewSnapshotDate(e.target.value.replace(/-/g, ""))}
                   max={new Date().toISOString().split("T")[0]}
-                  style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", width: 160 }}
+                  style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", width: 140 }}
                 />
                 <button
                   onClick={createSnapshot}
@@ -1787,19 +2235,95 @@ export default function FactorList({
             {metricsResult.ok ? (
               <span>
                 <strong>指标获取完成：</strong>
-                新增 {metricsResult.total_metrics_inserted} 条，跳过 {metricsResult.total_metrics_skipped} 条（已存在）
-                {(metricsResult as any).fail_count > 0 && (
-                  <span style={{ color: "#b45309" }}>（{(metricsResult as any).fail_count} 个任务失败）</span>
+                新增 {metricsResult.total_metrics_inserted ?? metricsResult.db_result?.inserted ?? 0} 条，跳过 {metricsResult.total_metrics_skipped ?? metricsResult.db_result?.skipped ?? 0} 条（已存在）
+                {(metricsResult.fail_count ?? 0) > 0 && (
+                  <span style={{ color: "#b45309" }}>（{metricsResult.fail_count} 个任务失败）</span>
+                )}
+                {(metricsResult.db_result?.errors?.length ?? 0) > 0 && (
+                  <div style={{ marginTop: 6, color: "#b45309", fontSize: 11 }}>
+                    <strong>入库警告 ({metricsResult.db_result?.errors?.length ?? 0} 条):</strong>
+                    <div style={{ whiteSpace: "pre-wrap", maxHeight: 120, overflowY: "auto", marginTop: 4 }}>
+                      {metricsResult.db_result?.errors?.slice(0, 10).join("\n")}
+                      {(metricsResult.db_result?.errors?.length ?? 0) > 10 && `\n...还有 ${(metricsResult.db_result?.errors?.length ?? 0) - 10} 条`}
+                    </div>
+                  </div>
+                )}
+                {metricsResult.error && (
+                  <div style={{ marginTop: 6, color: "#b45309", fontSize: 11 }}>
+                    <strong>警告:</strong> {metricsResult.error}
+                  </div>
                 )}
               </span>
             ) : (
-              <span><strong>指标获取失败：</strong>{metricsResult.error || ((metricsResult as any).details?.filter((d: any) => !d.ok).map((d: any) => d.errors?.[0]).filter(Boolean).join("; ")) || "未知错误"}</span>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <span>
+                  <strong>指标获取失败：</strong>
+                  {metricsResult.error
+                    || metricsResult.details?.filter((d: any) => !d.ok).map((d: any) => d.errors?.[0]).filter(Boolean).join("; ")
+                    || metricsResult.db_result?.errors?.join("; ")
+                    || "未知错误"}
+                  {metricsResult.dispatch_status ? `（状态: ${metricsResult.dispatch_status}）` : ""}
+                </span>
+                {metricsResult.logs && metricsResult.logs.length > 0 && (
+                  <div style={{
+                    background: "#111827",
+                    color: "#e5e7eb",
+                    borderRadius: 6,
+                    padding: 10,
+                    fontFamily: "monospace",
+                    fontSize: 11,
+                    lineHeight: 1.6,
+                    whiteSpace: "pre-wrap",
+                    overflowX: "auto",
+                    maxHeight: 260,
+                  }}>
+                    <div style={{ color: "#fca5a5", fontWeight: 700, marginBottom: 6 }}>计算日志</div>
+                    {metricsResult.logs.join("\n")}
+                  </div>
+                )}
+                {metricsResult.pipeline_summary?.factor_results?.some((f: any) => f.error) && (
+                  <div style={{
+                    background: "#1e1b2e",
+                    color: "#e5e7eb",
+                    borderRadius: 6,
+                    padding: 10,
+                    fontFamily: "monospace",
+                    fontSize: 11,
+                    lineHeight: 1.6,
+                    whiteSpace: "pre-wrap",
+                    overflowX: "auto",
+                    maxHeight: 260,
+                  }}>
+                    <div style={{ color: "#fbbf24", fontWeight: 700, marginBottom: 6 }}>
+                      因子执行详情（{metricsResult.pipeline_summary.factor_results.filter((f: any) => f.error).length} 个失败）
+                    </div>
+                    {metricsResult.pipeline_summary.factor_results
+                      .filter((f: any) => f.error)
+                      .slice(0, 10)
+                      .map((f: any, i: number) => (
+                        <div key={i} style={{ marginBottom: 4 }}>
+                          <span style={{ color: "#f87171" }}>{f.name}</span>: {f.error}
+                        </div>
+                      ))}
+                    {metricsResult.pipeline_summary.factor_results.filter((f: any) => f.error).length > 10 && (
+                      <div style={{ color: "#9ca3af", marginTop: 4 }}>
+                        ...还有 {metricsResult.pipeline_summary.factor_results.filter((f: any) => f.error).length - 10} 个失败因子
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}
 
         {error && <div style={{ marginTop: 8, padding: 8, background: "#fee2e2", borderRadius: 6, fontSize: 12 }}>{error}</div>}
       </section>
+
+      {/* 月频 IC 衰变趋势图 */}
+      {selectedFactor && (
+        <MonthlyIcPanel factorName={selectedFactor} apiBase={API} />
+      )}
 
       {/* Task分组视图 */}
       {viewMode === "task" && (
@@ -1972,7 +2496,13 @@ export default function FactorList({
                                     f.windows.forEach(w => { winMap[w.eval_window] = w; });
                                     return (
                                       <tr key={f.factor_name} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                                        <td style={{ padding: "4px 8px", fontFamily: "monospace", fontWeight: 600, color: "#374151" }}>{f.factor_name}</td>
+                                        <td style={{ padding: "4px 8px", fontFamily: "monospace", fontWeight: 600, color: "#374151" }}>
+                                          <span
+                                            style={{ cursor: "pointer", textDecoration: selectedFactor === f.factor_name ? "underline" : "none" }}
+                                            onClick={() => setSelectedFactor(selectedFactor === f.factor_name ? null : f.factor_name)}
+                                            title="点击查看 IC 衰变趋势"
+                                          >{f.factor_name}</span>
+                                        </td>
                                         {winKeys.map(wk => {
                                           const w = winMap[wk];
                                           if (!w) return <td key={wk} style={{ padding: "4px 8px", textAlign: "center", color: "#d1d5db" }}>-</td>;
@@ -2282,7 +2812,7 @@ export default function FactorList({
 
                       return (
                       <tr style={{ borderBottom: "1px solid #f3f4f6" }}>
-                        <td colSpan={13} style={{ padding: "0 10px 10px 10px" }}>
+        <td colSpan={17} style={{ padding: "0 10px 10px 10px" }}>
                           <div style={{
                             background: isSelection ? "#eff6ff" : "#faf5ff", borderRadius: 8, padding: "10px 14px",
                             fontSize: 12, lineHeight: 1.7, color: "#374151",
@@ -2325,6 +2855,108 @@ export default function FactorList({
                               </div>
                             )}
 
+                            {/* v2 分类维度 (多Alpha + 周期 + 聚类) */}
+                            {(f.ts_info_density || f.cross_horizon_consistency != null ||
+                              f.direction != null || f.signal_mechanism || f.horizon_class ||
+                              f.linearity || f.data_source_group || f.cluster_id != null) && (
+                              <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e5e7eb" }}>
+                                <strong style={{ color: "#0891b2", fontSize: 11 }}>v2 分类维度</strong>
+                                <div style={{
+                                  marginTop: 4, display: "grid",
+                                  gridTemplateColumns: "auto 1fr auto 1fr",
+                                  gap: "3px 10px", fontSize: 11, color: "#4b5563",
+                                }}>
+                                  {f.ts_info_density && (<>
+                                    <span style={{ color: "#6b7280" }}>时序信息密度:</span>
+                                    <span style={{ fontWeight: 600, color:
+                                      f.ts_info_density === "high" ? "#059669" :
+                                      f.ts_info_density === "low" ? "#dc2626" : "#6b7280" }}>
+                                      {f.ts_info_density}
+                                    </span>
+                                  </>)}
+                                  {f.cross_horizon_consistency != null && (<>
+                                    <span style={{ color: "#6b7280" }}>跨窗口一致性:</span>
+                                    <span style={{ fontWeight: 600, color:
+                                      f.cross_horizon_consistency >= 0.67 ? "#059669" :
+                                      f.cross_horizon_consistency <= 0.33 ? "#dc2626" : "#f59e0b" }}>
+                                      {f.cross_horizon_consistency.toFixed(2)}
+                                    </span>
+                                  </>)}
+                                  {f.direction != null && (<>
+                                    <span style={{ color: "#6b7280" }}>方向:</span>
+                                    <span>
+                                      {f.direction === 1 ? "多头 (+1)" :
+                                       f.direction === -1 ? "空头 (-1)" : "双向 (0)"}
+                                    </span>
+                                  </>)}
+                                  {f.signal_mechanism && (<>
+                                    <span style={{ color: "#6b7280" }}>信号机制:</span>
+                                    <span>{f.signal_mechanism}</span>
+                                  </>)}
+                                  {f.horizon_class && (<>
+                                    <span style={{ color: "#6b7280" }}>持有周期:</span>
+                                    <span>
+                                      {f.horizon_class}
+                                      {f.best_horizon != null ? ` (最佳${f.best_horizon}天)` : ""}
+                                    </span>
+                                  </>)}
+                                  {f.best_horizon_advantage != null && (<>
+                                    <span style={{ color: "#6b7280" }}>最佳窗口优势:</span>
+                                    <span>{(f.best_horizon_advantage * 100).toFixed(1)}%</span>
+                                  </>)}
+                                  {f.linearity && (<>
+                                    <span style={{ color: "#6b7280" }}>线性度:</span>
+                                    <span>{f.linearity}</span>
+                                  </>)}
+                                  {f.data_source_group && (<>
+                                    <span style={{ color: "#6b7280" }}>数据源组:</span>
+                                    <span>{f.data_source_group}</span>
+                                  </>)}
+                                  {f.update_freq && (<>
+                                    <span style={{ color: "#6b7280" }}>更新频率:</span>
+                                    <span>{f.update_freq}</span>
+                                  </>)}
+                                  {f.holding_period_class && (<>
+                                    <span style={{ color: "#6b7280" }}>半衰期分类:</span>
+                                    <span>{f.holding_period_class}</span>
+                                  </>)}
+                                  {f.sector_exposure_corr != null && (<>
+                                    <span style={{ color: "#6b7280" }}>行业相关性:</span>
+                                    <span>{f.sector_exposure_corr.toFixed(2)}</span>
+                                  </>)}
+                                  {f.ic_sign_consistency_12m != null && (<>
+                                    <span style={{ color: "#6b7280" }}>12M IC 符号一致性:</span>
+                                    <span>{f.ic_sign_consistency_12m.toFixed(2)}</span>
+                                  </>)}
+                                  {f.ic_oos_is_ratio != null && (<>
+                                    <span style={{ color: "#6b7280" }}>OOS/IS IC:</span>
+                                    <span>{f.ic_oos_is_ratio.toFixed(2)}</span>
+                                  </>)}
+                                  {f.monthly_ic_trend_slope != null && (<>
+                                    <span style={{ color: "#6b7280" }}>月度IC趋势:</span>
+                                    <span style={{ color:
+                                      f.monthly_ic_trend_slope < -0.001 ? "#dc2626" :
+                                      f.monthly_ic_trend_slope > 0.001 ? "#059669" : "#6b7280" }}>
+                                      {f.monthly_ic_trend_slope.toFixed(4)}
+                                    </span>
+                                  </>)}
+                                  {f.cluster_id != null && (<>
+                                    <span style={{ color: "#6b7280" }}>聚类:</span>
+                                    <span>
+                                      #{f.cluster_id}
+                                      {f.cluster_role ? ` · ${f.cluster_role}` : ""}
+                                      {f.cluster_size != null ? ` · size=${f.cluster_size}` : ""}
+                                      {f.intra_cluster_max_corr != null ? ` · maxCorr=${f.intra_cluster_max_corr.toFixed(2)}` : ""}
+                                    </span>
+                                  </>)}
+                                  {f.representative_score != null && (<>
+                                    <span style={{ color: "#6b7280" }}>代表度:</span>
+                                    <span>{f.representative_score.toFixed(2)}</span>
+                                  </>)}
+                                </div>
+                              </div>
+                            )}
+
                             {/* 分类原因 */}
                             {f.classification_reason && (
                               <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e5e7eb" }}>
@@ -2338,11 +2970,33 @@ export default function FactorList({
                               <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e5e7eb" }}>
                                 <strong style={{ color: "#ea580c", fontSize: 11 }}>评级原因</strong>
                                 <div style={{ marginTop: 4 }}>{f.grade_reason}</div>
-                                {f.official_grade_reason_structured?.failed_gates?.length ? (
-                                  <div style={{ marginTop: 6, fontSize: 11, color: "#991b1b" }}>
-                                    未通过门槛: {f.official_grade_reason_structured.failed_gates.join(", ")}
-                                  </div>
-                                ) : null}
+                                {f.official_grade_reason_structured?.failed_gates?.length ? (() => {
+                                  const gates = f.official_grade_reason_structured.failed_gates;
+                                  const aFails = gates.filter((g: string) => g.startsWith("a_"));
+                                  const sFails = gates.filter((g: string) => g.startsWith("s_"));
+                                  const others = gates.filter((g: string) => !g.startsWith("a_") && !g.startsWith("s_"));
+                                  // 注意: a_*/s_* 都是等级门槛(封顶), 不直接导致 D 级;
+                                  // 真正强制 D 的是 hard_gate_flags.a_core_ic=false 或 overfit_force_d=true
+                                  return (
+                                    <>
+                                      {aFails.length > 0 && (
+                                        <div style={{ marginTop: 6, fontSize: 11, color: "#92400e" }}>
+                                          未达 A 级门槛 (封顶 B/C/D): {aFails.join(", ")}
+                                        </div>
+                                      )}
+                                      {sFails.length > 0 && (
+                                        <div style={{ marginTop: 6, fontSize: 11, color: "#6b7280" }}>
+                                          未达 S 级门槛 (封顶 A/B/C/D): {sFails.join(", ")}
+                                        </div>
+                                      )}
+                                      {others.length > 0 && (
+                                        <div style={{ marginTop: 6, fontSize: 11, color: "#991b1b" }}>
+                                          其他门槛: {others.join(", ")}
+                                        </div>
+                                      )}
+                                    </>
+                                  );
+                                })() : null}
                               </div>
                             )}
 
@@ -2589,11 +3243,11 @@ export default function FactorList({
                               if (!fname) return null;
                               return (
                                 <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e5e7eb" }}>
-                                  <strong style={{ color: "#6366f1", fontSize: 11 }}>IC 衰变趋势</strong>
+                                  <strong style={{ color: "#6366f1", fontSize: 11 }}>IC 月度衰变趋势</strong>
                                   <span style={{ fontSize: 10, color: "#9ca3af", marginLeft: 8 }}>
-                                    不同快照时间点的 IC/ICIR 变化
+                                    月频 IC 均值 + 6 个月 EWMA 趋势线
                                   </span>
-                                  <ICDecayTrendChart factorName={fname} evalWindow="full" />
+                                  <MonthlyIcPanel factorName={fname} apiBase={API} />
                                 </div>
                               );
                             })()}
@@ -2768,6 +3422,249 @@ export default function FactorList({
           loadIndSummary();
         }}
       />
+
+      {cleanupOpen && (
+        <div
+          onClick={() => !cleanupExecuting && setCleanupOpen(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: "#fff", borderRadius: 12, padding: 20, maxWidth: 1400, width: "100%", maxHeight: "92vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, borderBottom: "1px solid #e5e7eb", paddingBottom: 12 }}>
+              <h2 style={{ margin: 0, fontSize: 18, color: "#111827" }}>🧹 因子清洗</h2>
+              <button
+                onClick={() => !cleanupExecuting && setCleanupOpen(false)}
+                disabled={cleanupExecuting}
+                style={{ background: "transparent", border: "none", fontSize: 22, cursor: cleanupExecuting ? "not-allowed" : "pointer", color: "#6b7280" }}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* 步骤 1: 规则选择 + 执行 dry-run */}
+            {!cleanupResult && !cleanupExecuteResult && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ background: "#fff7ed", padding: 12, borderRadius: 8, fontSize: 12, color: "#9a3412", lineHeight: 1.7 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>清洗规则 (与 _factor_cleanup_noise_negcorr.py 一致)</div>
+                  <div>• <strong>near_identical</strong> — 簇内冗余: cluster_role='member' (complete-linkage 阈值 0.999)</div>
+                  <div>• <strong>pure_noise_v2</strong> — 纯噪声: grade=D + |ic|&lt;0.003 + |rank_ic|&lt;0.003 + pos∈[0.45,0.55] + |rank_icir|&lt;0.1</div>
+                  <div>• <strong>reverse_redundant</strong> — 反向重复: corr ≤ -0.999, 留正 IC / |IC| 大者</div>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {(["near_identical", "pure_noise_v2", "reverse_redundant"] as const).map(rule => (
+                    <label key={rule} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={cleanupRules[rule]}
+                        onChange={(e) => setCleanupRules(prev => ({ ...prev, [rule]: e.target.checked }))}
+                      />
+                      <code style={{ background: "#f3f4f6", padding: "2px 6px", borderRadius: 4 }}>{rule}</code>
+                    </label>
+                  ))}
+                </div>
+
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
+                  <button
+                    onClick={() => setCleanupOpen(false)}
+                    style={{ padding: "8px 16px", fontSize: 13, borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", color: "#374151", cursor: "pointer" }}
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const rules = Object.entries(cleanupRules).filter(([_, v]) => v).map(([k]) => k);
+                      if (rules.length === 0) { alert("至少选一条规则"); return; }
+                      setCleanupLoading(true);
+                      try {
+                        const res = await fetch(`${API}/quantevolver/factors/cleanup/preview`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ rules }),
+                        });
+                        const data = await res.json();
+                        if (!res.ok || !data.ok) throw new Error(data.detail || "预览失败");
+                        setCleanupResult({ summary: data.summary, candidates: data.candidates, reverse_pairs: data.reverse_pairs });
+                        setCleanupSelected(new Set(data.candidates.map((c: any) => c.id)));
+                      } catch (e: any) {
+                        alert(`预览失败: ${e?.message || "未知错误"}`);
+                      } finally {
+                        setCleanupLoading(false);
+                      }
+                    }}
+                    disabled={cleanupLoading}
+                    style={{ padding: "8px 16px", fontSize: 13, borderRadius: 6, border: "none", background: "#ea580c", color: "#fff", fontWeight: 700, cursor: cleanupLoading ? "wait" : "pointer", opacity: cleanupLoading ? 0.6 : 1 }}
+                  >
+                    {cleanupLoading ? "扫描中..." : "🔍 Dry-run 预览"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 步骤 2: 候选清单 */}
+            {cleanupResult && !cleanupExecuteResult && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12, overflow: "hidden", flex: 1 }}>
+                <div style={{ background: "#fef3c7", padding: 12, borderRadius: 8, fontSize: 12, color: "#92400e", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+                  <div><strong>启用因子</strong>: {cleanupResult.summary.total_enabled}</div>
+                  <div><strong>候选 disable</strong>: <span style={{ fontSize: 14, color: "#dc2626" }}>{cleanupResult.summary.total_candidates}</span></div>
+                  <div><strong>清洗后</strong>: {cleanupResult.summary.after_cleanup}</div>
+                  <div><strong>已勾选</strong>: {cleanupSelected.size}</div>
+                  {Object.entries(cleanupResult.summary.by_rule).map(([k, v]) => (
+                    <div key={k} style={{ fontSize: 11 }}>
+                      <code>{k}</code>: {v}
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ flex: 1, overflow: "auto", border: "1px solid #e5e7eb", borderRadius: 6 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead style={{ position: "sticky", top: 0, background: "#f9fafb", zIndex: 1 }}>
+                      <tr>
+                        <th style={{ padding: 6, textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
+                          <input
+                            type="checkbox"
+                            checked={cleanupSelected.size === cleanupResult.candidates.length}
+                            onChange={(e) => {
+                              if (e.target.checked) setCleanupSelected(new Set(cleanupResult.candidates.map(c => c.id)));
+                              else setCleanupSelected(new Set());
+                            }}
+                          />
+                        </th>
+                        <th style={{ padding: 6, textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>规则</th>
+                        <th style={{ padding: 6, textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>因子名</th>
+                        <th style={{ padding: 6, textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>来源</th>
+                        <th style={{ padding: 6, textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>评级</th>
+                        <th style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #e5e7eb" }}>ic</th>
+                        <th style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #e5e7eb" }}>rank_ic</th>
+                        <th style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #e5e7eb" }}>icir</th>
+                        <th style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #e5e7eb" }}>pos%</th>
+                        <th style={{ padding: 6, textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>cluster</th>
+                        <th style={{ padding: 6, textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>详情</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cleanupResult.candidates.map(c => {
+                        const checked = cleanupSelected.has(c.id);
+                        const ruleColor = c.cleanup_rule === "reverse_redundant" ? "#dc2626"
+                                        : c.cleanup_rule === "near_identical" ? "#7c3aed"
+                                        : "#ea580c";
+                        return (
+                          <tr key={c.id} style={{ background: checked ? "#fff" : "#f9fafb", opacity: checked ? 1 : 0.5 }}>
+                            <td style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => {
+                                  const next = new Set(cleanupSelected);
+                                  if (e.target.checked) next.add(c.id); else next.delete(c.id);
+                                  setCleanupSelected(next);
+                                }}
+                              />
+                            </td>
+                            <td style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}>
+                              <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: ruleColor, color: "#fff", fontWeight: 700 }}>
+                                {c.cleanup_rule}
+                              </span>
+                            </td>
+                            <td style={{ padding: 6, borderBottom: "1px solid #f3f4f6", fontFamily: "monospace" }}>{c.factor_name}</td>
+                            <td style={{ padding: 6, borderBottom: "1px solid #f3f4f6", color: "#6b7280" }}>{c.source}</td>
+                            <td style={{ padding: 6, borderBottom: "1px solid #f3f4f6" }}>{c.official_grade || "-"}</td>
+                            <td style={{ padding: 6, borderBottom: "1px solid #f3f4f6", textAlign: "right", fontFamily: "monospace" }}>{c.ind_ic !== null ? Number(c.ind_ic).toFixed(4) : "-"}</td>
+                            <td style={{ padding: 6, borderBottom: "1px solid #f3f4f6", textAlign: "right", fontFamily: "monospace" }}>{c.ind_rank_ic !== null ? Number(c.ind_rank_ic).toFixed(4) : "-"}</td>
+                            <td style={{ padding: 6, borderBottom: "1px solid #f3f4f6", textAlign: "right", fontFamily: "monospace" }}>{c.ind_icir !== null ? Number(c.ind_icir).toFixed(3) : "-"}</td>
+                            <td style={{ padding: 6, borderBottom: "1px solid #f3f4f6", textAlign: "right", fontFamily: "monospace" }}>{c.ic_positive_ratio !== null ? (Number(c.ic_positive_ratio) * 100).toFixed(1) : "-"}</td>
+                            <td style={{ padding: 6, borderBottom: "1px solid #f3f4f6", color: "#6b7280" }}>{c.cluster_id ? `#${c.cluster_id}/${c.cluster_role}` : "-"}</td>
+                            <td style={{ padding: 6, borderBottom: "1px solid #f3f4f6", color: "#6b7280", fontSize: 10 }}>{c.cleanup_detail}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 8, borderTop: "1px solid #e5e7eb" }}>
+                  <button
+                    onClick={() => { setCleanupResult(null); setCleanupSelected(new Set()); }}
+                    disabled={cleanupExecuting}
+                    style={{ padding: "8px 16px", fontSize: 13, borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", color: "#374151", cursor: cleanupExecuting ? "not-allowed" : "pointer" }}
+                  >
+                    ← 重新预览
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (cleanupSelected.size === 0) { alert("请勾选至少一个因子"); return; }
+                      if (!confirm(`将禁用 ${cleanupSelected.size} 个因子, 不可在此页面撤销 (需用 batch_id 回滚). 确认?`)) return;
+                      setCleanupExecuting(true);
+                      try {
+                        const ids = Array.from(cleanupSelected);
+                        const reasons: Record<string, string> = {};
+                        for (const c of cleanupResult.candidates) {
+                          if (cleanupSelected.has(c.id)) reasons[String(c.id)] = c.cleanup_reason;
+                        }
+                        const res = await fetch(`${API}/quantevolver/factors/cleanup/execute`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ factor_ids: ids, reasons }),
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || "执行失败");
+                        setCleanupExecuteResult(data);
+                        loadData();
+                      } catch (e: any) {
+                        alert(`执行失败: ${e?.message || "未知错误"}`);
+                      } finally {
+                        setCleanupExecuting(false);
+                      }
+                    }}
+                    disabled={cleanupExecuting || cleanupSelected.size === 0}
+                    style={{ padding: "8px 16px", fontSize: 13, borderRadius: 6, border: "none", background: "#dc2626", color: "#fff", fontWeight: 700, cursor: cleanupExecuting || cleanupSelected.size === 0 ? "not-allowed" : "pointer", opacity: cleanupExecuting || cleanupSelected.size === 0 ? 0.5 : 1 }}
+                  >
+                    {cleanupExecuting ? "执行中..." : `⚠ 正式禁用 (${cleanupSelected.size})`}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 步骤 3: 执行结果 */}
+            {cleanupExecuteResult && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ background: cleanupExecuteResult.ok ? "#dcfce7" : "#fee2e2", padding: 16, borderRadius: 8, fontSize: 13, color: cleanupExecuteResult.ok ? "#15803d" : "#b91c1c" }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
+                    {cleanupExecuteResult.ok ? "✓ 执行成功" : "✗ 执行失败"}
+                  </div>
+                  <div>批次 ID: <code>{cleanupExecuteResult.batch_id}</code></div>
+                  <div>已禁用: <strong>{cleanupExecuteResult.disabled_count}</strong> 个因子</div>
+                  <div style={{ marginTop: 6 }}>分布:</div>
+                  {Object.entries(cleanupExecuteResult.by_reason).map(([r, n]) => (
+                    <div key={r} style={{ marginLeft: 12 }}>• <code>{r}</code>: {n}</div>
+                  ))}
+                  {cleanupExecuteResult.errors.length > 0 && (
+                    <div style={{ marginTop: 8, color: "#b91c1c" }}>
+                      错误: {cleanupExecuteResult.errors.join("; ")}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ background: "#f3f4f6", padding: 12, borderRadius: 8, fontSize: 11, fontFamily: "monospace", color: "#374151" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>回滚 SQL (保留备用):</div>
+                  {cleanupExecuteResult.rollback_sql}
+                </div>
+
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                  <button
+                    onClick={() => { setCleanupOpen(false); setCleanupResult(null); setCleanupExecuteResult(null); setCleanupSelected(new Set()); }}
+                    style={{ padding: "8px 16px", fontSize: 13, borderRadius: 6, border: "none", background: "#2563eb", color: "#fff", fontWeight: 700, cursor: "pointer" }}
+                  >
+                    完成
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,14 +1,19 @@
-"""因子相关性计算调度器 — 复用 TDXScheduler 的调度模式。
+"""因子相关性计算调度器。
 
-使用 `schedule` 库 + `ThreadPoolExecutor` + `_FutureTracker` + DB 持久化。
+使用 `schedule` 库 + 轻量监控线程 + DB 持久化。
 通过 `market.ingestion_schedules` 表存储调度配置（dataset LIKE 'correlation_%'）。
 通过 `market.ingestion_jobs` 表记录任务历史。
+
+实际计算统一通过 dispatch -> WSL scheduler API 提交，
+本调度器只负责创建业务 job、提交远端任务、轮询 dispatch 状态并回写业务表。
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -19,8 +24,13 @@ import schedule
 
 from ...db.pg_pool import get_conn
 from ...ingestion.tdx_scheduler import _build_frequency_job, _FutureTracker
+from ..dispatch_service import DispatchService
+from .factor_eligibility_service import FactorEligibilityService
 
 logger = logging.getLogger("aistock.correlation_scheduler")
+
+_DEFAULT_DISPATCH_NODE_ID = os.getenv("AISTOCK_DEFAULT_GPU_NODE_ID", "wsl2-5080")
+_TERMINAL_DISPATCH_STATUSES = {"success", "failed", "canceled"}
 
 
 def _now() -> dt.datetime:
@@ -32,7 +42,7 @@ class CorrelationScheduler:
 
     def __init__(self) -> None:
         self._scheduler = schedule.Scheduler()
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="corr-sched")
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="corr-sched")
         self._schedule_thread: Optional[threading.Thread] = None
         self._refresh_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -40,6 +50,7 @@ class CorrelationScheduler:
         self._lock = threading.RLock()
         self._jobs: Dict[str, schedule.Job] = {}
         self._job_snapshots: Dict[str, str] = {}
+        self._dispatch_service = DispatchService()
 
     # ── 生命周期 ──
 
@@ -123,7 +134,6 @@ class CorrelationScheduler:
                     self._jobs[schedule_id] = job
                     self._job_snapshots[schedule_id] = snapshot
                     logger.info(f"注册相关性调度: {schedule_id} ({row.get('dataset')}, {row.get('frequency')})")
-            # 清除已删除的调度
             for schedule_id in list(self._jobs.keys()):
                 if schedule_id not in seen:
                     self._cancel_job(schedule_id)
@@ -151,8 +161,7 @@ class CorrelationScheduler:
         if self._tracker.is_running(key):
             logger.info(f"跳过调度 {schedule_id}: 上一次计算仍在运行")
             return
-        job_id = self.submit_job(schedule_id, dataset, options, triggered_by="schedule")
-        self._update_schedule_status(schedule_id, last_status="queued")
+        self.submit_job(schedule_id, dataset, options, triggered_by="schedule")
 
     # ── 提交任务 ──
 
@@ -163,108 +172,280 @@ class CorrelationScheduler:
         options: Dict[str, Any],
         triggered_by: str = "manual",
     ) -> uuid.UUID:
-        """创建 ingestion_jobs 记录并提交到线程池。"""
+        """创建 ingestion_jobs 记录并提交 dispatch 任务。"""
         job_id = uuid.uuid4()
+        factor_names = self._resolve_factor_names("full", options)
+        factor_count = len(factor_names)
+        node_id = str(options.get("node_id") or _DEFAULT_DISPATCH_NODE_ID)
 
-        # 写 DB job 记录
-        summary = json.dumps({
-            "dataset": dataset, "triggered_by": triggered_by, "options": options,
-        }, ensure_ascii=False, default=str)
+        summary_payload = {
+            "dataset": dataset,
+            "triggered_by": triggered_by,
+            "schedule_id": str(schedule_id) if schedule_id else None,
+            "options": options,
+            "node_id": node_id,
+            "requested_factor_count": len(options.get("factor_names") or factor_names),
+            "eligible_factor_count": factor_count,
+            "status_source": "dispatch",
+            "counters": self._build_counters("queued", 0),
+            "progress": 0,
+        }
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """INSERT INTO market.ingestion_jobs
                        (job_id, job_type, status, created_at, summary)
                        VALUES (%s, %s, 'queued', NOW(), %s)""",
-                    (str(job_id), dataset, summary),
+                    (str(job_id), dataset, json.dumps(summary_payload, ensure_ascii=False, default=str)),
                 )
             conn.commit()
 
-        # 确定计算模式和因子列表
-        mode = self._dataset_to_mode(dataset)
-        factor_names = self._resolve_factor_names(mode, options)
-
         if not factor_names:
-            logger.warning(f"调度 {schedule_id}: 无可计算的因子")
+            msg = f"调度 {schedule_id}: 无可计算的因子"
+            logger.warning(msg)
+            self._update_job_status(str(job_id), "failed", {"error": msg, "counters": self._build_counters("failed", 0), "progress": 0})
+            if schedule_id:
+                self._update_schedule_status(schedule_id, last_status="failed")
             return job_id
 
-        # 提交到线程池
+        payload = {
+            "factor_names": factor_names,
+            "as_of_date": options.get("as_of_date"),
+            "job_id": str(job_id),
+            "data_date": options.get("data_date"),
+        }
+
+        try:
+            created = asyncio.run(self._dispatch_service.create_and_submit_task({
+                "task_name": f"correlation_full_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                "task_type": "correlation_compute",
+                "node_id": node_id,
+                "payload": payload,
+            }))
+        except Exception as exc:
+            logger.error("提交相关性 dispatch 任务失败: %s", exc, exc_info=True)
+            self._update_job_status(str(job_id), "failed", {
+                "error": str(exc),
+                "node_id": node_id,
+                "counters": self._build_counters("failed", 0),
+                "progress": 0,
+            })
+            if schedule_id:
+                self._update_schedule_status(schedule_id, last_status="failed")
+            return job_id
+
+        dispatch_task_id = str(created["task_id"])
+        initial_status = str(created.get("status") or "queued")
+        local_status = self._map_dispatch_status(initial_status)
+        self._update_job_status(str(job_id), local_status, {
+            "dispatch_task_id": dispatch_task_id,
+            "remote_task_id": created.get("remote_task_id"),
+            "node_id": node_id,
+            "dispatch_status": initial_status,
+            "counters": self._build_counters(local_status, 0),
+            "progress": 0,
+            "eligible_factor_count": factor_count,
+        })
+
+        if local_status in {"failed", "canceled"}:
+            if schedule_id:
+                self._update_schedule_status(schedule_id, last_status=local_status)
+            return job_id
+
         key = f"correlation:{schedule_id}" if schedule_id else f"correlation-manual:{job_id}"
         future = self._executor.submit(
-            self._run_compute, job_id, mode, factor_names, options.get("as_of_date"),
+            self._monitor_dispatch_task,
+            str(job_id),
+            schedule_id,
+            dispatch_task_id,
+            factor_count,
         )
         self._tracker.add(key, future)
         future.add_done_callback(lambda _: self._tracker.remove(key))
 
-        logger.info(f"提交相关性计算: job={job_id}, mode={mode}, factors={len(factor_names)}")
+        if schedule_id:
+            self._update_schedule_status(schedule_id, last_status=local_status)
+
+        logger.info(
+            "提交相关性计算: job=%s, dispatch=%s, factors=%d, node=%s",
+            job_id, dispatch_task_id, factor_count, node_id,
+        )
         return job_id
 
-    def _run_compute(self, job_id: uuid.UUID, mode: str, factor_names: list, as_of_date: Optional[str]) -> None:
-        """在线程池中执行，委托给 quantevolver_evolution 的统一计算函数。"""
-        # 延迟导入避免循环依赖
-        from ...routers.quantevolver_evolution import _run_correlation_compute
-        _run_correlation_compute(mode, factor_names, as_of_date, str(job_id))
+    def _monitor_dispatch_task(
+        self,
+        job_id: str,
+        schedule_id: Optional[str],
+        dispatch_task_id: str,
+        factor_count: int,
+    ) -> None:
+        """轮询 dispatch 任务状态并回写 ingestion_jobs。"""
+        try:
+            while not self._stop_event.is_set():
+                task = self._dispatch_service.get_task(dispatch_task_id)
+                if not task:
+                    raise RuntimeError(f"dispatch task 不存在: {dispatch_task_id}")
+
+                dispatch_status = str(task.get("status") or "queued")
+                progress = self._coerce_progress(task.get("progress_pct"))
+                local_status = self._map_dispatch_status(dispatch_status)
+
+                if dispatch_status not in _TERMINAL_DISPATCH_STATUSES:
+                    self._update_job_status(job_id, local_status, {
+                        "dispatch_task_id": dispatch_task_id,
+                        "remote_task_id": task.get("remote_task_id"),
+                        "node_id": task.get("node_id"),
+                        "dispatch_status": dispatch_status,
+                        "progress": progress,
+                        "message": task.get("log_tail"),
+                        "eligible_factor_count": factor_count,
+                        "counters": self._build_counters(local_status, progress),
+                    })
+                    time.sleep(2)
+                    continue
+
+                result_bundle = asyncio.run(self._dispatch_service.get_task_results(dispatch_task_id))
+                latest_result = result_bundle.get("latest_result") or {}
+                if dispatch_status == "success" and latest_result.get("success") is False:
+                    local_status = "failed"
+                final_summary = self._build_terminal_summary(task, latest_result, factor_count, local_status)
+                self._update_job_status(job_id, local_status, final_summary)
+                if schedule_id:
+                    self._update_schedule_status(schedule_id, last_status=local_status)
+                return
+        except Exception as exc:
+            logger.error("监控相关性 dispatch 任务失败 job=%s dispatch=%s: %s", job_id, dispatch_task_id, exc, exc_info=True)
+            self._update_job_status(job_id, "failed", {
+                "dispatch_task_id": dispatch_task_id,
+                "error": str(exc),
+                "counters": self._build_counters("failed", 0),
+                "progress": 0,
+            })
+            if schedule_id:
+                self._update_schedule_status(schedule_id, last_status="failed")
+
+    @staticmethod
+    def _build_terminal_summary(
+        task: Dict[str, Any],
+        latest_result: Dict[str, Any],
+        factor_count: int,
+        local_status: str,
+    ) -> Dict[str, Any]:
+        progress = 100 if local_status == "success" else CorrelationScheduler._coerce_progress(task.get("progress_pct"))
+        summary: Dict[str, Any] = {
+            "dispatch_task_id": task.get("task_id"),
+            "remote_task_id": task.get("remote_task_id"),
+            "node_id": task.get("node_id"),
+            "dispatch_status": task.get("status"),
+            "progress": progress,
+            "message": task.get("log_tail"),
+            "error": latest_result.get("error") or task.get("error_message"),
+            "eligible_factor_count": factor_count,
+            "counters": CorrelationScheduler._build_counters(local_status, progress),
+        }
+        if latest_result.get("as_of_date"):
+            summary["as_of_date"] = latest_result.get("as_of_date")
+        if latest_result.get("data_date"):
+            summary["data_date"] = latest_result.get("data_date")
+        if latest_result.get("hdf5_path"):
+            summary["hdf5_path"] = latest_result.get("hdf5_path")
+        metadata = latest_result.get("metadata")
+        if isinstance(metadata, dict):
+            for key in ("avg_correlation", "num_high_corr_07", "hdf5_path"):
+                if key in metadata and key not in summary:
+                    summary[key] = metadata[key]
+        artifacts = latest_result.get("artifacts")
+        if isinstance(artifacts, dict):
+            summary["artifacts"] = artifacts
+        return summary
+
+    @staticmethod
+    def _coerce_progress(value: Any) -> int:
+        """将 dispatch 返回的 progress_pct 规整到 [0,100] 整数。
+
+        None → 0 (合法: 任务刚入队尚无进度); 非数值 → 抛出, 不允许静默掩盖
+        dispatch 返回的数据契约异常.
+        """
+        if value is None:
+            return 0
+        return max(0, min(100, int(float(value))))
+
+    @staticmethod
+    def _build_counters(status: str, progress: int) -> Dict[str, int]:
+        base = {
+            "total": 1,
+            "done": 0,
+            "running": 0,
+            "pending": 0,
+            "failed": 0,
+            "success": 0,
+            "progress": max(0, min(100, int(progress))),
+        }
+        if status == "queued":
+            base["pending"] = 1
+        elif status == "running":
+            base["running"] = 1
+        elif status == "success":
+            base.update({"done": 1, "success": 1, "progress": 100})
+        elif status in {"failed", "canceled"}:
+            base.update({"done": 1, "failed": 1})
+        return base
+
+    @staticmethod
+    def _map_dispatch_status(status: str) -> str:
+        if status in {"pending", "queued"}:
+            return "queued"
+        if status in {"running", "paused"}:
+            return "running"
+        if status in {"success", "failed", "canceled"}:
+            return status
+        return "running"
 
     # ── 辅助方法 ──
 
     @staticmethod
+    def _update_job_status(job_id: str, status: str, summary: Optional[dict] = None) -> None:
+        sets = ["status = %s"]
+        vals: list = [status]
+        if status == "running":
+            sets.append("started_at = COALESCE(started_at, NOW())")
+        elif status in ("success", "failed", "canceled"):
+            sets.append("finished_at = COALESCE(finished_at, NOW())")
+        if summary:
+            sets.append("summary = COALESCE(summary, '{}'::jsonb) || %s::jsonb")
+            vals.append(json.dumps(summary, ensure_ascii=False, default=str))
+        vals.append(job_id)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE market.ingestion_jobs SET {', '.join(sets)} WHERE job_id = %s",
+                    tuple(vals),
+                )
+            conn.commit()
+
+    @staticmethod
     def _dataset_to_mode(dataset: str) -> str:
-        mapping = {
-            "correlation_full": "full",
-            "correlation_cache_only": "cache_only",
-            "correlation_smart_incremental": "smart_incremental",
-            "correlation_incremental": "incremental",
-        }
-        return mapping.get(dataset, "cache_only")
+        # 所有模式统一为 full（每次清空后全量重算）
+        return "full"
 
     @staticmethod
     def _resolve_factor_names(mode: str, options: Dict[str, Any]) -> List[str]:
-        """根据模式和选项确定因子列表。"""
-        base_filter = (
-            "transformation_status = 'SUCCESS' "
-            "AND is_available = TRUE "
-            "AND qe_code_path IS NOT NULL"
-        )
+        """根据选项确定因子列表。"""
+        service = FactorEligibilityService()
 
-        # 如果选项中指定了因子列表，仍需校验可用性
         if options.get("factor_names"):
-            factor_names = options["factor_names"]
-            ph = ",".join(["%s"] * len(factor_names))
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(f"""
-                        SELECT factor_name FROM aistock_factor_catalog
-                        WHERE factor_name IN ({ph})
-                          AND {base_filter}
-                        ORDER BY factor_name
-                    """, factor_names)
-                    valid = [row[0] for row in cur.fetchall()]
-            skipped = set(factor_names) - set(valid)
+            factor_names = service.get_eligible_factor_names(
+                factor_names=options["factor_names"],
+                include_disabled=bool(options.get("include_disabled", False)),
+            )
+            skipped = set(options["factor_names"]) - set(factor_names)
             if skipped:
                 logger.warning(f"跳过不可用/未改造的调度因子: {skipped}")
-            return valid
+            return factor_names
 
-        # smart_incremental: 查询未计算过的因子
-        if mode == "smart_incremental":
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(f"""
-                        SELECT factor_name FROM aistock_factor_catalog
-                        WHERE {base_filter}
-                          AND correlation_computed_at IS NULL
-                        ORDER BY factor_name
-                    """)
-                    return [row[0] for row in cur.fetchall()]
-
-        # full / cache_only: 所有已改造因子
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT factor_name FROM aistock_factor_catalog
-                    WHERE {base_filter}
-                    ORDER BY factor_name
-                """)
-                return [row[0] for row in cur.fetchall()]
+        return service.get_eligible_factor_names(
+            include_disabled=bool(options.get("include_disabled", False)),
+        )
 
     def _update_schedule_status(
         self,
@@ -276,7 +457,6 @@ class CorrelationScheduler:
         if last_status:
             sets.append("last_status=%s")
             values.append(last_status)
-        # next_run
         job = self._jobs.get(schedule_id)
         if job and hasattr(job, "next_run") and job.next_run:
             nr = job.next_run
@@ -303,5 +483,4 @@ class CorrelationScheduler:
             }
 
 
-# 模块级单例
 correlation_scheduler = CorrelationScheduler()

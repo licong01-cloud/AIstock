@@ -1,15 +1,46 @@
 process_names:
-  # rdagent 主进程 (fin_quant / fin_factor)
+  # AIstock 后端 (uvicorn aistock)
+  - name: "aistock_backend"
+    cmdline:
+      - 'uvicorn\s+backend\.main'
+
+  # AIstock backfill 脚本
+  - name: "aistock_backfill"
+    cmdline:
+      - 'backfill_factor_cache'
+
+  # AIstock 因子计算子进程 (factor_value_pipeline 的 multiprocessing 子进程)
+  - name: "aistock_factor_worker"
+    cmdline:
+      - 'factor_pipeline_worker'
+      - 'from multiprocessing.*spawn_main'
+
+  # RDAgent results API server
+  - name: "rdagent_results_api"
+    cmdline:
+      - 'uvicorn\s+rdagent\.app\.results_api_server'
+
+  # RDAgent 主进程 (fin_quant / fin_factor)
   - name: "rdagent_{{.Matches.rdtype}}"
     cmdline:
       - 'rdagent.*\s+fin_(?P<rdtype>\w+)'
+
+  # RDAgent Python 任务
+  - name: "rdagent_python"
+    cmdline:
+      - 'python.*RD-Agent-main'
 
   # qlib qrun 训练子进程
   - name: "qlib_qrun"
     cmdline:
       - 'qrun'
 
-  # Python 通用 (捕获所有 python 进程作为兜底)
+  # PostgreSQL (Docker 内，通过 /proc 可见)
+  - name: "postgres"
+    cmdline:
+      - 'postgres'
+
+  # Python 通用 (兜底，捕获所有未匹配的 python 进程)
   - name: "{{.Comm}}"
     cmdline:
       - 'python'

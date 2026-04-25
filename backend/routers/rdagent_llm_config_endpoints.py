@@ -83,6 +83,20 @@ def _find_provider_api_config(cursor: Any, provider_id: int) -> dict[str, Any] |
     return None
 
 
+def _ensure_litellm_prefix(full_model_id: str, litellm_prefix: str | None = None, provider_name: str = "") -> str:
+    """确保 full_model_id 包含 litellm provider 前缀。
+
+    litellm 要求 model 格式为 <provider>/<model_name>。
+    如果 full_model_id 不含 '/'，自动从 litellm_prefix 或 provider_name 推断前缀。
+    """
+    if "/" in full_model_id:
+        return full_model_id
+    prefix = (litellm_prefix or provider_name or "").strip().rstrip("/")
+    if prefix:
+        return f"{prefix}/{full_model_id}"
+    return full_model_id
+
+
 async def comprehensive_model_verification(
     provider_name: str,
     model_name: str,
@@ -90,7 +104,9 @@ async def comprehensive_model_verification(
     api_key: str,
     api_base: str | None = None,
     run_health_check: bool = True,
-    run_litellm_test: bool = True
+    run_litellm_test: bool = True,
+    litellm_prefix: str | None = None,
+    model_type: str = "chat",
 ) -> dict:
     """综合模型验证：litellm + RDAgent健康检查"""
     results = {
@@ -99,30 +115,47 @@ async def comprehensive_model_verification(
         "rdagent_health_check": None,
         "errors": []
     }
-    
+
+    # 确保 litellm 可识别的 model ID
+    verified_model_id = _ensure_litellm_prefix(full_model_id, litellm_prefix, provider_name)
+
     # 1. LiteLLM验证
     if run_litellm_test:
         try:
             import litellm
-            
-            # 测试调用，直接传递 api_key 和 api_base 给 litellm，避免依赖环境变量前缀猜测
-            kwargs = {
-                "model": full_model_id,
-                "messages": [{"role": "user", "content": "Test"}],
-                "max_tokens": 5,
-                "timeout": 30,
-                "api_key": api_key
-            }
-            if api_base:
-                kwargs["api_base"] = api_base
-                
-            response = await litellm.acompletion(**kwargs)
-            
-            results["litellm_test"] = {
-                "success": True,
-                "message": "LiteLLM验证通过",
-                "response_model": response.model if hasattr(response, 'model') else full_model_id
-            }
+
+            if model_type == "embedding":
+                kwargs = {
+                    "model": verified_model_id,
+                    "input": "test",
+                    "timeout": 30,
+                    "api_key": api_key,
+                    "encoding_format": "float",
+                }
+                if api_base:
+                    kwargs["api_base"] = api_base
+                response = await litellm.aembedding(**kwargs)
+                results["litellm_test"] = {
+                    "success": True,
+                    "message": "LiteLLM验证通过",
+                    "response_model": response.model if hasattr(response, 'model') else full_model_id,
+                }
+            else:
+                kwargs = {
+                    "model": verified_model_id,
+                    "messages": [{"role": "user", "content": "Test"}],
+                    "max_tokens": 5,
+                    "timeout": 30,
+                    "api_key": api_key,
+                }
+                if api_base:
+                    kwargs["api_base"] = api_base
+                response = await litellm.acompletion(**kwargs)
+                results["litellm_test"] = {
+                    "success": True,
+                    "message": "LiteLLM验证通过",
+                    "response_model": response.model if hasattr(response, 'model') else full_model_id,
+                }
             
         except Exception as e:
             results["litellm_test"] = {
@@ -186,7 +219,7 @@ async def update_model_api_config(model_id: int, config: ModelAPIConfigUpdate) -
             
             # 1. 验证模型是否存在
             cursor.execute("""
-                SELECT m.id, m.full_model_id, m.model_name, p.provider_name, p.default_env_prefix
+                SELECT m.id, m.full_model_id, m.model_name, m.model_type, p.provider_name, p.default_env_prefix, p.litellm_prefix
                 FROM aistock_llm_models m
                 JOIN aistock_llm_providers p ON m.provider_id = p.id
                 WHERE m.id = %s
@@ -196,7 +229,7 @@ async def update_model_api_config(model_id: int, config: ModelAPIConfigUpdate) -
             if not row:
                 raise HTTPException(status_code=404, detail=f"模型ID {model_id} 不存在")
             
-            _, full_model_id, model_name, provider_name, env_prefix = row
+            _, full_model_id, model_name, model_type, provider_name, env_prefix, litellm_prefix = row
             
             # 2. 验证API配置（如果需要）
             if config.verify_before_save:
@@ -207,7 +240,9 @@ async def update_model_api_config(model_id: int, config: ModelAPIConfigUpdate) -
                     api_key=config.api_key,
                     api_base=config.api_base,
                     run_health_check=True,
-                    run_litellm_test=True
+                    run_litellm_test=True,
+                    litellm_prefix=litellm_prefix,
+                    model_type=model_type,
                 )
                 
                 if not verification_result["overall_success"]:
@@ -283,19 +318,19 @@ async def verify_model(request: ModelVerifyRequest) -> dict[str, Any]:
             
             # 获取模型信息
             cursor.execute("""
-                SELECT m.full_model_id, m.model_name, p.provider_name, p.id,
-                       ac.api_key, ac.api_base
+                SELECT m.full_model_id, m.model_name, m.model_type, p.provider_name, p.id,
+                       p.litellm_prefix, ac.api_key, ac.api_base
                 FROM aistock_llm_models m
                 JOIN aistock_llm_providers p ON m.provider_id = p.id
                 LEFT JOIN aistock_llm_api_configs ac ON m.api_config_id = ac.id
                 WHERE m.id = %s
             """, (request.model_id,))
-            
+
             row = cursor.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail=f"模型ID {request.model_id} 不存在")
-            
-            full_model_id, model_name, provider_name, provider_id, db_api_key, db_api_base = row
+
+            full_model_id, model_name, model_type, provider_name, provider_id, litellm_prefix, db_api_key, db_api_base = row
             
             # 使用提供的API配置或数据库中的配置
             api_key = request.api_key or db_api_key
@@ -321,7 +356,9 @@ async def verify_model(request: ModelVerifyRequest) -> dict[str, Any]:
             api_key=api_key,
             api_base=api_base,
             run_health_check=request.run_health_check,
-            run_litellm_test=request.run_litellm_test
+            run_litellm_test=request.run_litellm_test,
+            litellm_prefix=litellm_prefix,
+            model_type=model_type,
         )
         
         return {

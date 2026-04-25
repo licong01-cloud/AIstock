@@ -10,6 +10,7 @@ import yaml
 
 from ...db.pg_pool import get_conn
 from .factor_analyst import classify_holding_period
+from .factor_official_evaluation_service import CALC_ENGINE
 from .llm_client import get_llm_kwargs
 
 logger = logging.getLogger("aistock.quantevolver.factor_rating_service")
@@ -492,7 +493,15 @@ class FactorRatingService:
                 rows = cur.fetchall()
         return [{"id": row[0], "factor_name": row[1], "source": row[2]} for row in rows]
 
-    def _grade_factor(self, factor: Dict[str, Any], rule: Dict[str, Any]) -> Dict[str, Any]:
+    @staticmethod
+    def _is_v2_rule(rule_version: Optional[str]) -> bool:
+        if not rule_version:
+            return False
+        return str(rule_version).lower().startswith("v2")
+
+    def _grade_factor(self, factor: Dict[str, Any], rule: Dict[str, Any], *, enable_llm_audit: bool = True) -> Dict[str, Any]:
+        if self._is_v2_rule(rule.get("rule_version")):
+            return self._grade_factor_v2(factor, rule, enable_llm_audit=enable_llm_audit)
         factor_name = factor["factor_name"]
         factor_source = factor["source"]
         metrics_by_window = self._fetch_metrics_by_window(factor_name)
@@ -561,9 +570,10 @@ class FactorRatingService:
                     FROM aistock_factor_metrics
                     WHERE factor_name = %s
                       AND eval_window = ANY(%s)
+                      AND calc_engine = %s
                     ORDER BY eval_window, calculated_at DESC
                     """,
-                    (factor_name, windows),
+                    (factor_name, windows, CALC_ENGINE),
                 )
                 rows = cur.fetchall()
         result: Dict[str, Dict[str, Any]] = {}
@@ -700,20 +710,20 @@ class FactorRatingService:
     ) -> Dict[str, Any]:
         gates = spec.get("hard_gates", {})
         recent_neg_limit = float(gates.get("recent_negative_threshold", -0.005))
-        recent_6m_core = self._compute_core_ic(metrics_by_window.get("recent_6m") or {}, classify_holding_period((metrics_by_window.get("recent_6m") or {}).get("ic_decay_half_life")))
-        recent_3m_core = self._compute_core_ic(metrics_by_window.get("recent_3m") or {}, classify_holding_period((metrics_by_window.get("recent_3m") or {}).get("ic_decay_half_life")))
-        both_recent_negative = bool(
+        recent_6m_core = self._compute_signed_core_ic(metrics_by_window.get("recent_6m") or {}, classify_holding_period((metrics_by_window.get("recent_6m") or {}).get("ic_decay_half_life")))
+        recent_3m_core = self._compute_signed_core_ic(metrics_by_window.get("recent_3m") or {}, classify_holding_period((metrics_by_window.get("recent_3m") or {}).get("ic_decay_half_life")))
+        both_recent_signed_negative = bool(
             recent_6m_core is not None and recent_3m_core is not None and recent_6m_core < recent_neg_limit and recent_3m_core < recent_neg_limit
         )
         return {
             "s_core_ic": (core_ic or 0.0) >= float(gates["S"]["min_core_ic"]),
-            "s_recent_ok": not both_recent_negative,
+            "s_recent_ok": not both_recent_signed_negative,
             "s_monotonicity": (full_metrics.get("group_return_monotonicity") or -999.0) > float(gates["S"]["min_monotonicity"]),
             "s_excess_ann": (full_metrics.get("top_excess_annual_return") or -999.0) > float(gates["S"]["min_excess_annual_return"]),
             "s_coverage": (full_metrics.get("coverage") or 0.0) >= float(gates["S"]["min_coverage"]),
             "s_turnover": (full_metrics.get("turnover") or 999.0) <= float(gates["S"]["max_turnover"]),
             "a_core_ic": (core_ic or 0.0) >= float(gates["A"]["min_core_ic"]),
-            "a_recent_ok": not both_recent_negative,
+            "a_recent_ok": not both_recent_signed_negative,
             "a_monotonicity": (full_metrics.get("group_return_monotonicity") or -999.0) > float(gates["A"]["min_monotonicity"]),
             "a_coverage": (full_metrics.get("coverage") or 0.0) >= float(gates["A"]["min_coverage"]),
             "a_turnover": (full_metrics.get("turnover") or 999.0) <= float(gates["A"]["max_turnover"]),
@@ -870,6 +880,15 @@ class FactorRatingService:
             return None
         return max(values)
 
+    def _compute_signed_core_ic(self, metrics: Dict[str, Any], holding_period_class: str) -> Optional[float]:
+        """与 _compute_core_ic 逻辑相同，但返回带符号的 IC 值，供负值检测闸门使用。"""
+        if not metrics:
+            return None
+        ic_mean = metrics.get("ic_mean")
+        if ic_mean is None:
+            return None
+        return float(ic_mean)
+
     def _score_window_consistency(self, metrics_by_window: Dict[str, Dict[str, Any]], holding_period_class: str, max_points: float) -> float:
         full_core = self._compute_core_ic(metrics_by_window.get("full") or {}, holding_period_class)
         recent_6m_core = self._compute_core_ic(metrics_by_window.get("recent_6m") or {}, holding_period_class)
@@ -955,6 +974,686 @@ class FactorRatingService:
             raise ValueError(f"规则文件不存在: {path}")
         with path.open("r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
+
+    # ================================================================
+    # v2.0 评分引擎（方向感知 + horizon argmax + overfit gate + dedup 联动）
+    # ================================================================
+
+    def _grade_factor_v2(self, factor: Dict[str, Any], rule: Dict[str, Any], *, enable_llm_audit: bool = True) -> Dict[str, Any]:
+        factor_name = factor["factor_name"]
+        factor_source = factor["source"]
+        factor_catalog_id = factor["id"]
+
+        metrics_by_window = self._fetch_metrics_by_window(factor_name)
+        full_metrics = metrics_by_window.get("full") or {}
+        classification_meta = self._fetch_classification_meta_v2(factor_name, factor_source)
+        monthly_agg = self._fetch_monthly_ic_latest(factor_name)
+        is_dedup_primary = self._fetch_is_dedup_primary(factor_catalog_id)
+
+        spec = rule["spec"]
+
+        direction = self._resolve_direction(classification_meta, full_metrics)
+        best_horizon, _, best_horizon_advantage = self._compute_best_horizon(full_metrics)
+        horizon_class = self._derive_horizon_class(best_horizon)
+        core_ic = self._compute_core_ic_v2(full_metrics, best_horizon)
+
+        ic_sign_cons_12m = classification_meta.get("ic_sign_consistency_12m")
+        if ic_sign_cons_12m is None:
+            ic_sign_cons_12m = monthly_agg.get("sign_consistency_12m")
+        ic_oos_is_ratio = classification_meta.get("ic_oos_is_ratio")
+        if ic_oos_is_ratio is None:
+            ic_oos_is_ratio = monthly_agg.get("oos_is_ratio")
+
+        dimension_scores = {
+            "predictive_strength": self._score_predictive_strength_v2(
+                full_metrics, core_ic, best_horizon_advantage, spec
+            ),
+            "stability": self._score_stability_v2(
+                metrics_by_window, full_metrics, best_horizon, ic_sign_cons_12m, spec
+            ),
+            "economic_quality": self._score_economic_quality_v2(full_metrics, direction, spec),
+            "selection_stability_cost": self._score_selection_stability_cost_v2(
+                full_metrics, horizon_class, spec
+            ),
+            "monotonicity_reliability": self._score_monotonicity_reliability_v2(
+                full_metrics, direction, spec
+            ),
+            "multi_alpha_fitness": self._score_multi_alpha_fitness_v2(
+                classification_meta, direction, horizon_class, spec
+            ),
+        }
+        total_score = round(sum(dimension_scores.values()), 2)
+
+        hard_gates = self._evaluate_hard_gates_v2(
+            metrics_by_window,
+            full_metrics,
+            core_ic,
+            direction,
+            horizon_class,
+            ic_sign_cons_12m,
+            ic_oos_is_ratio,
+            is_dedup_primary,
+            spec,
+        )
+        grade = self._assign_grade_v2(total_score, hard_gates, rule["grade_bands"], spec)
+
+        try:
+            self._writeback_classification_v2(
+                factor_name,
+                factor_source,
+                {
+                    "direction": direction if direction in (-1, 0, 1) else None,
+                    "best_horizon": best_horizon,
+                    "best_horizon_advantage": best_horizon_advantage,
+                    "horizon_class": horizon_class if horizon_class != "unknown" else None,
+                },
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("v2 classification 回写失败 (%s): %s", factor_name, e)
+
+        summary_text = self._build_summary_text_v2(dimension_scores, hard_gates, total_score, grade)
+        if enable_llm_audit:
+            llm_review = self._run_llm_audit(
+                factor_name,
+                factor_source,
+                rule,
+                total_score,
+                grade,
+                dimension_scores,
+                hard_gates,
+                metrics_by_window,
+                classification_meta,
+            )
+        else:
+            llm_review = None
+
+        snapshot_date = full_metrics.get("snapshot_date") or full_metrics.get("data_end")
+        snapshot_date = str(snapshot_date) if snapshot_date is not None else None
+
+        return {
+            "official_score": total_score,
+            "official_grade": grade,
+            "dimension_scores": dimension_scores,
+            "hard_gate_flags": hard_gates,
+            "grade_reason_structured": {
+                "summary": summary_text,
+                "horizon_class": horizon_class,
+                "best_horizon": best_horizon,
+                "best_horizon_advantage": best_horizon_advantage,
+                "direction": direction,
+                "core_ic": core_ic,
+                "ic_sign_consistency_12m": ic_sign_cons_12m,
+                "ic_oos_is_ratio": ic_oos_is_ratio,
+                "is_dedup_primary": is_dedup_primary,
+                "dedup_suppressed": bool(hard_gates.get("dedup_suppressed")),
+                "overfit_force_d": bool(hard_gates.get("overfit_force_d")),
+                "failed_gates": [
+                    k for k, v in hard_gates.items()
+                    if v is False and k not in ("overfit_force_d", "dedup_suppressed")
+                ],
+            },
+            "metrics_snapshot": {
+                "full": full_metrics,
+                "out_sample": metrics_by_window.get("out_sample"),
+                "recent_6m": metrics_by_window.get("recent_6m"),
+                "recent_3m": metrics_by_window.get("recent_3m"),
+                "classification_meta": classification_meta,
+                "monthly_aggregates": monthly_agg,
+            },
+            "llm_audit_summary": llm_review.get("summary") if llm_review else None,
+            "llm_risk_notes": llm_review.get("risk_notes") if llm_review else None,
+            "snapshot_date": snapshot_date,
+        }
+
+    def _fetch_classification_meta_v2(self, factor_name: str, factor_source: str) -> Dict[str, Any]:
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT category, factor_dimension, holding_period_class,
+                               data_source_group, linearity, ts_info_density,
+                               direction, best_horizon, best_horizon_advantage,
+                               horizon_class, signal_mechanism, sector_exposure_corr,
+                               ic_sign_consistency_12m, ic_oos_is_ratio,
+                               monthly_ic_trend_slope, cross_horizon_consistency,
+                               cluster_id, cluster_role, cluster_size,
+                               intra_cluster_max_corr, representative_score
+                        FROM qe_factor_classification
+                        WHERE factor_name = %s AND factor_source = %s
+                        LIMIT 1
+                        """,
+                        (factor_name, factor_source),
+                    )
+                    row = cur.fetchone()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("classification_v2 读取失败 (%s): %s", factor_name, e)
+            row = None
+        if not row:
+            return {}
+        return {
+            "category": row[0],
+            "factor_dimension": row[1],
+            "holding_period_class": row[2],
+            "data_source_group": row[3],
+            "linearity": row[4],
+            "ts_info_density": row[5],
+            "direction": row[6],
+            "best_horizon": row[7],
+            "best_horizon_advantage": row[8],
+            "horizon_class": row[9],
+            "signal_mechanism": row[10],
+            "sector_exposure_corr": row[11],
+            "ic_sign_consistency_12m": row[12],
+            "ic_oos_is_ratio": row[13],
+            "monthly_ic_trend_slope": row[14],
+            "cross_horizon_consistency": row[15],
+            "cluster_id": row[16],
+            "cluster_role": row[17],
+            "cluster_size": row[18],
+            "intra_cluster_max_corr": row[19],
+            "representative_score": row[20],
+        }
+
+    def _fetch_monthly_ic_latest(self, factor_name: str) -> Dict[str, Any]:
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT sign_consistency_12m, trend_slope_12m, oos_is_ratio
+                        FROM aistock_factor_monthly_ic
+                        WHERE factor_name = %s
+                        ORDER BY month_end DESC
+                        LIMIT 1
+                        """,
+                        (factor_name,),
+                    )
+                    row = cur.fetchone()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("monthly_ic 读取失败 (%s): %s", factor_name, e)
+            row = None
+        if not row:
+            return {}
+        return {
+            "sign_consistency_12m": row[0],
+            "trend_slope_12m": row[1],
+            "oos_is_ratio": row[2],
+        }
+
+    def _fetch_is_dedup_primary(self, factor_catalog_id: int) -> bool:
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT is_dedup_primary FROM aistock_factor_catalog WHERE id = %s",
+                        (factor_catalog_id,),
+                    )
+                    row = cur.fetchone()
+        except Exception:
+            row = None
+        if row is None or row[0] is None:
+            return True
+        return bool(row[0])
+
+    @staticmethod
+    def _resolve_direction(classification_meta: Dict[str, Any], full_metrics: Dict[str, Any]) -> int:
+        d = classification_meta.get("direction")
+        if d is not None:
+            try:
+                d_int = int(d)
+                if d_int in (-1, 0, 1):
+                    return d_int
+            except Exception:
+                pass
+        ic = full_metrics.get("rank_ic_mean")
+        if ic is None:
+            return 0
+        try:
+            f = float(ic)
+            if f > 0:
+                return 1
+            if f < 0:
+                return -1
+            return 0
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _compute_best_horizon(metrics: Dict[str, Any]):
+        horizons = {
+            1: metrics.get("rank_ic_1d"),
+            5: metrics.get("rank_ic_5d"),
+            10: metrics.get("rank_ic_10d"),
+            20: metrics.get("rank_ic_20d"),
+        }
+        abs_map = {}
+        for h, v in horizons.items():
+            if v is None:
+                continue
+            try:
+                abs_map[h] = abs(float(v))
+            except Exception:
+                continue
+        if not abs_map:
+            return (None, None, None)
+        sorted_h = sorted(abs_map.items(), key=lambda x: x[1], reverse=True)
+        best_h, best_abs = sorted_h[0]
+        if len(sorted_h) > 1:
+            second_abs = sorted_h[1][1]
+            advantage = best_abs - second_abs
+        else:
+            second_abs = 0.0
+            advantage = best_abs
+        return (best_h, second_abs, advantage)
+
+    @staticmethod
+    def _derive_horizon_class(best_horizon: Optional[int]) -> str:
+        if best_horizon is None:
+            return "unknown"
+        if best_horizon <= 5:
+            return "short"
+        if best_horizon <= 10:
+            return "medium"
+        return "long"
+
+    def _compute_core_ic_v2(self, metrics: Dict[str, Any], best_horizon: Optional[int]) -> Optional[float]:
+        if not metrics:
+            return None
+        values: List[float] = []
+        if metrics.get("ic_mean") is not None:
+            try:
+                values.append(abs(float(metrics["ic_mean"])))
+            except Exception:
+                pass
+        if best_horizon is not None:
+            key = f"rank_ic_{int(best_horizon)}d"
+            v = metrics.get(key)
+            if v is not None:
+                try:
+                    values.append(abs(float(v)))
+                except Exception:
+                    pass
+        if not values:
+            return None
+        return max(values)
+
+    def _compute_signed_core_ic_v2(self, metrics: Dict[str, Any], best_horizon: Optional[int]) -> Optional[float]:
+        """与 _compute_core_ic_v2 逻辑相同，但返回带符号的 IC 值，供负值检测闸门使用。"""
+        if not metrics:
+            return None
+        ic_mean = metrics.get("ic_mean")
+        if ic_mean is None:
+            return None
+        return float(ic_mean)
+
+    def _score_predictive_strength_v2(
+        self,
+        full_metrics: Dict[str, Any],
+        core_ic: Optional[float],
+        best_horizon_advantage: Optional[float],
+        spec: Dict[str, Any],
+    ) -> float:
+        thresholds = spec["thresholds"]
+        score = 0.0
+        # core_ic (argmax-based): 15 分
+        score += self._score_higher_better(core_ic, thresholds["core_ic"], 15.0)
+        # rank_ic_mean (abs): 5 分
+        score += self._score_higher_better(
+            full_metrics.get("rank_ic_mean"), thresholds["rank_ic_mean_abs"], 5.0, absolute=True
+        )
+        # best_horizon_advantage: 5 分 (替换 v1 的 4-horizon 等权平均)
+        score += self._score_higher_better(
+            best_horizon_advantage, thresholds["best_horizon_advantage"], 5.0
+        )
+        return round(score, 2)
+
+    def _score_stability_v2(
+        self,
+        metrics_by_window: Dict[str, Dict[str, Any]],
+        full_metrics: Dict[str, Any],
+        best_horizon: Optional[int],
+        ic_sign_cons_12m: Optional[float],
+        spec: Dict[str, Any],
+    ) -> float:
+        # 权重 23 = 8 icir_ann + 5 rank_icir_ann + 4 ic_pos_ratio + 3 window_consistency + 3 sign_consistency
+        thresholds = spec["thresholds"]
+        score = 0.0
+        score += self._score_higher_better(
+            full_metrics.get("icir_annualized"), thresholds["icir_annualized"], 8.0, absolute=True
+        )
+        score += self._score_higher_better(
+            full_metrics.get("rank_icir_annualized"), thresholds["rank_icir_annualized"], 5.0, absolute=True
+        )
+        score += self._score_higher_better(
+            full_metrics.get("ic_positive_ratio"), thresholds["ic_positive_ratio"], 4.0
+        )
+        score += self._score_window_consistency_v2(metrics_by_window, best_horizon, 3.0)
+        score += self._score_higher_better(
+            ic_sign_cons_12m, thresholds["ic_sign_consistency_12m"], 3.0
+        )
+        return round(score, 2)
+
+    def _score_window_consistency_v2(
+        self,
+        metrics_by_window: Dict[str, Dict[str, Any]],
+        best_horizon: Optional[int],
+        max_points: float,
+    ) -> float:
+        full_v = self._compute_core_ic_v2(metrics_by_window.get("full") or {}, best_horizon)
+        recent_6m_v = self._compute_core_ic_v2(metrics_by_window.get("recent_6m") or {}, best_horizon)
+        recent_3m_v = self._compute_core_ic_v2(metrics_by_window.get("recent_3m") or {}, best_horizon)
+        values = [v for v in (full_v, recent_6m_v, recent_3m_v) if v is not None]
+        if len(values) <= 1:
+            return max_points * 0.5
+        avg = sum(values) / len(values)
+        if avg <= 0:
+            return 0.0
+        spread = max(values) - min(values)
+        ratio = max(0.0, 1.0 - (spread / (avg + 1e-8)))
+        return round(max_points * min(ratio, 1.0), 2)
+
+    def _score_economic_quality_v2(
+        self,
+        full_metrics: Dict[str, Any],
+        direction: int,
+        spec: Dict[str, Any],
+    ) -> float:
+        # 权重 15 = 7 excess_ann(direction-adj) + 5 excess_sharpe(abs) + 3 max_drawdown(lower better)
+        thresholds = spec["thresholds"]
+        score = 0.0
+        ea = full_metrics.get("top_excess_annual_return")
+        if ea is not None:
+            if direction != 0:
+                ea_adj = float(ea) * direction
+                score += self._score_higher_better(ea_adj, thresholds["top_excess_annual_return"], 7.0)
+            else:
+                # 方向未知 → 保守: 按 |ea| 的一半给分
+                score += self._score_higher_better(
+                    ea, thresholds["top_excess_annual_return"], 7.0, absolute=True
+                ) * 0.5
+        score += self._score_higher_better(
+            full_metrics.get("top_excess_sharpe"), thresholds["top_excess_sharpe"], 5.0, absolute=True
+        )
+        score += self._score_lower_better(
+            full_metrics.get("top_max_drawdown"), thresholds["top_max_drawdown_abs"], 3.0, absolute=True
+        )
+        return round(score, 2)
+
+    def _score_selection_stability_cost_v2(
+        self,
+        full_metrics: Dict[str, Any],
+        horizon_class: str,
+        spec: Dict[str, Any],
+    ) -> float:
+        # 权重 15 = 10 turnover + 5 ic_decay_half_life + horizon bonus
+        thresholds = spec["thresholds"]
+        score = 0.0
+        score += self._score_lower_better(full_metrics.get("turnover"), thresholds["turnover"], 10.0)
+        score += self._score_higher_better(
+            full_metrics.get("ic_decay_half_life"), thresholds["ic_decay_half_life"], 5.0
+        )
+        if horizon_class == "long":
+            score += 0.5
+        elif horizon_class == "medium":
+            score += 0.25
+        return round(min(score, 15.0), 2)
+
+    def _score_monotonicity_reliability_v2(
+        self,
+        full_metrics: Dict[str, Any],
+        direction: int,
+        spec: Dict[str, Any],
+    ) -> float:
+        # 权重 7 = 4 monotonicity(direction-adj) + 2 coverage + 1 n_trading_days
+        thresholds = spec["thresholds"]
+        score = 0.0
+        mono = full_metrics.get("group_return_monotonicity")
+        if mono is not None:
+            if direction != 0:
+                mono_adj = float(mono) * direction
+                score += self._score_higher_better(
+                    mono_adj, thresholds["group_return_monotonicity"], 4.0
+                )
+            else:
+                score += self._score_higher_better(
+                    mono, thresholds["group_return_monotonicity"], 4.0, absolute=True
+                ) * 0.5
+        score += self._score_higher_better(full_metrics.get("coverage"), thresholds["coverage"], 2.0)
+        score += self._score_higher_better(
+            full_metrics.get("n_trading_days"), thresholds["n_trading_days"], 1.0
+        )
+        return round(score, 2)
+
+    def _score_multi_alpha_fitness_v2(
+        self,
+        classification_meta: Dict[str, Any],
+        direction: int,
+        horizon_class: str,
+        spec: Dict[str, Any],
+    ) -> float:
+        # 权重 15 = cluster_role(4) + signal_mechanism(3) + direction(3) + horizon_class(2)
+        #          + data_source(2) + low_sector_exposure(1)
+        sub = (spec or {}).get("multi_alpha_fitness_v2", {}) or {}
+        score = 0.0
+
+        cluster_role = classification_meta.get("cluster_role")
+        cluster_scores = sub.get("cluster_role", {}) or {}
+        if cluster_role and cluster_role in cluster_scores:
+            try:
+                score += float(cluster_scores[cluster_role])
+            except Exception:
+                pass
+
+        sm = classification_meta.get("signal_mechanism")
+        if sm and str(sm) != "unknown":
+            score += float((sub.get("signal_mechanism_defined") or {}).get("max", 3))
+
+        if direction in (1, -1):
+            score += float((sub.get("direction_defined") or {}).get("max", 3))
+
+        if horizon_class and horizon_class != "unknown":
+            score += float((sub.get("horizon_class_defined") or {}).get("max", 2))
+
+        ds = classification_meta.get("data_source_group")
+        if ds and str(ds) != "unknown":
+            score += float((sub.get("data_source_defined") or {}).get("max", 2))
+
+        sec = classification_meta.get("sector_exposure_corr")
+        if sec is not None:
+            try:
+                if abs(float(sec)) < 0.5:
+                    score += float((sub.get("low_sector_exposure") or {}).get("max", 1))
+            except Exception:
+                pass
+
+        return round(min(score, 15.0), 2)
+
+    def _evaluate_hard_gates_v2(
+        self,
+        metrics_by_window: Dict[str, Dict[str, Any]],
+        full_metrics: Dict[str, Any],
+        core_ic: Optional[float],
+        direction: int,
+        horizon_class: str,
+        ic_sign_cons_12m: Optional[float],
+        ic_oos_is_ratio: Optional[float],
+        is_dedup_primary: bool,
+        spec: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        gates = spec.get("hard_gates", {}) or {}
+        recent_neg_limit = float(gates.get("recent_negative_threshold", -0.005))
+
+        recent_6m = metrics_by_window.get("recent_6m") or {}
+        recent_3m = metrics_by_window.get("recent_3m") or {}
+        bh_6m, _, _ = self._compute_best_horizon(recent_6m)
+        bh_3m, _, _ = self._compute_best_horizon(recent_3m)
+        recent_6m_core = self._compute_signed_core_ic_v2(recent_6m, bh_6m)
+        recent_3m_core = self._compute_signed_core_ic_v2(recent_3m, bh_3m)
+        both_recent_signed_negative = bool(
+            recent_6m_core is not None
+            and recent_3m_core is not None
+            and recent_6m_core < recent_neg_limit
+            and recent_3m_core < recent_neg_limit
+        )
+
+        mono = full_metrics.get("group_return_monotonicity")
+        try:
+            mono_adj = float(mono) * direction if (mono is not None and direction != 0) else (float(mono) if mono is not None else -999.0)
+        except Exception:
+            mono_adj = -999.0
+        ea = full_metrics.get("top_excess_annual_return")
+        try:
+            ea_adj = float(ea) * direction if (ea is not None and direction != 0) else (float(ea) if ea is not None else -999.0)
+        except Exception:
+            ea_adj = -999.0
+
+        s_cfg = gates.get("S", {}) or {}
+        a_cfg = gates.get("A", {}) or {}
+
+        turnover = full_metrics.get("turnover")
+        try:
+            turnover_val = float(turnover) if turnover is not None else 999.0
+        except Exception:
+            turnover_val = 999.0
+        hc = horizon_class if horizon_class in ("short", "medium", "long") else "medium"
+        s_to_map = s_cfg.get("max_turnover_by_horizon", {}) or {}
+        a_to_map = a_cfg.get("max_turnover_by_horizon", {}) or {}
+        s_to_limit = float(s_to_map.get(hc, 0.20))
+        a_to_limit = float(a_to_map.get(hc, 0.30))
+
+        og = gates.get("overfit_gate", {}) or {}
+        og_min = float(og.get("min_ic_oos_is_ratio", 0.1))
+        og_a = float(og.get("A_threshold", 0.3))
+        og_s = float(og.get("S_threshold", 0.5))
+        try:
+            oos_val = float(ic_oos_is_ratio) if ic_oos_is_ratio is not None else None
+        except Exception:
+            oos_val = None
+        overfit_force_d = bool(oos_val is not None and oos_val < og_min)
+        overfit_pass_a = bool(oos_val is None or oos_val >= og_a)
+        overfit_pass_s = bool(oos_val is None or oos_val >= og_s)
+
+        ded = gates.get("dedup_suppression", {}) or {}
+        ded_enabled = bool(ded.get("enabled", False))
+        dedup_suppressed = bool(ded_enabled and (is_dedup_primary is False))
+
+        s_sign_min = float(s_cfg.get("min_ic_sign_consistency_12m", 0.0))
+        a_sign_min = float(a_cfg.get("min_ic_sign_consistency_12m", 0.0))
+        try:
+            sign_val = float(ic_sign_cons_12m) if ic_sign_cons_12m is not None else None
+        except Exception:
+            sign_val = None
+
+        return {
+            "s_core_ic": (core_ic or 0.0) >= float(s_cfg.get("min_core_ic", 0.05)),
+            "s_recent_ok": not both_recent_signed_negative,
+            "s_monotonicity": mono_adj > float(s_cfg.get("min_monotonicity", 0.0)),
+            "s_excess_ann": ea_adj > float(s_cfg.get("min_excess_annual_return", 0.0)),
+            "s_coverage": (full_metrics.get("coverage") or 0.0) >= float(s_cfg.get("min_coverage", 0.70)),
+            "s_turnover": turnover_val <= s_to_limit,
+            "s_overfit": overfit_pass_s,
+            "s_sign_consistency": (sign_val is not None) and (sign_val >= s_sign_min),
+            "a_core_ic": (core_ic or 0.0) >= float(a_cfg.get("min_core_ic", 0.03)),
+            "a_recent_ok": not both_recent_signed_negative,
+            "a_monotonicity": mono_adj > float(a_cfg.get("min_monotonicity", -0.10)),
+            "a_coverage": (full_metrics.get("coverage") or 0.0) >= float(a_cfg.get("min_coverage", 0.60)),
+            "a_turnover": turnover_val <= a_to_limit,
+            "a_overfit": overfit_pass_a,
+            "a_sign_consistency": (sign_val is not None) and (sign_val >= a_sign_min),
+            "overfit_force_d": overfit_force_d,
+            "dedup_suppressed": dedup_suppressed,
+        }
+
+    def _assign_grade_v2(
+        self,
+        score: float,
+        hard_gates: Dict[str, Any],
+        grade_bands: Dict[str, Any],
+        spec: Dict[str, Any],
+    ) -> str:
+        if hard_gates.get("overfit_force_d"):
+            return "D"
+
+        s_req = (
+            "s_core_ic", "s_recent_ok", "s_monotonicity", "s_excess_ann",
+            "s_coverage", "s_turnover", "s_overfit", "s_sign_consistency",
+        )
+        a_req = (
+            "a_core_ic", "a_recent_ok", "a_monotonicity", "a_coverage",
+            "a_turnover", "a_overfit", "a_sign_consistency",
+        )
+
+        if score >= float(grade_bands["S"]["min_score"]) and all(hard_gates.get(k) for k in s_req):
+            grade = "S"
+        elif score >= float(grade_bands["A"]["min_score"]) and all(hard_gates.get(k) for k in a_req):
+            grade = "A"
+        elif score >= float(grade_bands["B"]["min_score"]):
+            grade = "B"
+        elif score >= float(grade_bands["C"]["min_score"]):
+            grade = "C"
+        else:
+            grade = "D"
+
+        if hard_gates.get("dedup_suppressed"):
+            ded = (spec.get("hard_gates", {}) or {}).get("dedup_suppression", {}) or {}
+            cap = str(ded.get("non_primary_max_grade", "C")).upper()
+            order = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1}
+            if order.get(grade, 0) > order.get(cap, 2):
+                grade = cap
+
+        return grade
+
+    def _writeback_classification_v2(
+        self,
+        factor_name: str,
+        factor_source: str,
+        fields: Dict[str, Any],
+    ) -> None:
+        non_null = {k: v for k, v in fields.items() if v is not None}
+        if not non_null:
+            return
+        cols = list(non_null.keys())
+        vals = [non_null[k] for k in cols]
+        set_clause = ", ".join([f"{c} = %s" for c in cols])
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    UPDATE qe_factor_classification
+                    SET {set_clause}
+                    WHERE factor_name = %s AND factor_source = %s
+                    """,
+                    (*vals, factor_name, factor_source),
+                )
+
+    def _build_summary_text_v2(
+        self,
+        dimension_scores: Dict[str, float],
+        hard_gates: Dict[str, Any],
+        total_score: float,
+        grade: str,
+    ) -> str:
+        parts = [
+            f"正式评级 {grade} / {total_score:.2f} 分 (v2)",
+            f"预测强度 {dimension_scores['predictive_strength']:.2f}/25",
+            f"稳定性 {dimension_scores['stability']:.2f}/23",
+            f"经济质量 {dimension_scores['economic_quality']:.2f}/15",
+            f"低换手与选股稳定性 {dimension_scores['selection_stability_cost']:.2f}/15",
+            f"单调性与可靠性 {dimension_scores['monotonicity_reliability']:.2f}/7",
+            f"Multi-Alpha 适配 {dimension_scores['multi_alpha_fitness']:.2f}/15",
+        ]
+        failed = [
+            k for k, v in hard_gates.items()
+            if v is False and k not in ("overfit_force_d", "dedup_suppressed")
+        ]
+        if failed:
+            parts.append("未通过硬门槛: " + ", ".join(failed))
+        if hard_gates.get("overfit_force_d"):
+            parts.append("过拟合强制 D")
+        if hard_gates.get("dedup_suppressed"):
+            parts.append("非主因子抑制")
+        return "；".join(parts)
 
 
 factor_rating_service = FactorRatingService()

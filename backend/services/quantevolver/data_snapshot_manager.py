@@ -33,7 +33,7 @@ _PROJECT_ROOT = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..")
 )
 _SNAPSHOT_BASE = os.path.join(
-    _PROJECT_ROOT, "rdagent_assets", "factor_values", "snapshots"
+    _PROJECT_ROOT, "rdagent_assets", "factor_values_realtime", "snapshots"
 )
 
 _REALTIME_FILE = "realtime_kline.parquet"
@@ -41,8 +41,8 @@ _STATIC_FILE = "static_factors.parquet"
 _META_FILE = "_snapshot_meta.json"
 _CREATING_SENTINEL = ".creating"
 
-# 默认回看天数（2 年）
-DEFAULT_LOOKBACK_DAYS = 730
+# 默认起始日期（覆盖完整模型训练期 + 样本外期）
+DEFAULT_START_DATE = "2018-08-01"
 
 
 def _validate_data_date(data_date: str) -> None:
@@ -129,8 +129,7 @@ class DataSnapshotManager:
         if end_date is None:
             end_date = _parse_data_date(data_date)
         if start_date is None:
-            ed = datetime.strptime(end_date, "%Y-%m-%d")
-            start_date = (ed - timedelta(days=DEFAULT_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+            start_date = DEFAULT_START_DATE
 
         snap_dir = self._snap_dir(data_date)
         sentinel = self._sentinel_path(data_date)
@@ -166,7 +165,7 @@ class DataSnapshotManager:
     def _do_create(
         self,
         data_date: str,
-        instruments: List[str],
+        instruments: Optional[List[str]],
         start_date: str,
         end_date: str,
     ) -> Dict[str, Any]:
@@ -176,9 +175,16 @@ class DataSnapshotManager:
 
         timings: Dict[str, float] = {}
 
+        # instruments=None 时获取全市场股票列表
+        if instruments is None:
+            from .evaluation_universe_service import EvaluationUniverseService
+            instruments = EvaluationUniverseService().get_official_universe(as_of_date=end_date)
+            logger.info(f"[快照 {data_date}] 使用官方评估股票池: {len(instruments)} 只")
+
         # 1. 加载行情数据
         logger.info(
-            f"[快照 {data_date}] 加载行情数据: {len(instruments)} 只股票, "
+            f"[快照 {data_date}] 加载行情数据: "
+            f"{'全市场' if instruments is None else f'{len(instruments)} 只股票'}, "
             f"{start_date} ~ {end_date}"
         )
         t0 = time.time()
@@ -191,9 +197,71 @@ class DataSnapshotManager:
             adjust="qfq",
         )
         timings["realtime"] = round(time.time() - t0, 1)
+        realtime_rows_raw = len(realtime_df)
+
+        # ── 过滤非交易日数据 ──
+        # 双重过滤确保数据准确：
+        # 1. trading_calendar 过滤（排除法定节假日、调休日）
+        # 2. 全市场无成交日兜底过滤（交易日历可能有误，如春节调休标记错误）
+        #
+        # 不处理个股停牌 — 个股 amount=0 是正常的停牌状态，保留为 NaN
+
+        # Step 1: 从 trading_calendar 获取交易日集合
+        trading_dates: Optional[set] = None
+        try:
+            from ...db.pg_pool import get_conn
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT cal_date FROM market.trading_calendar "
+                        "WHERE cal_date >= %s AND cal_date <= %s AND is_trading = true",
+                        (start_date, end_date),
+                    )
+                    rows = cur.fetchall()
+                    if not rows:
+                        raise RuntimeError(
+                            f"trading_calendar 在 {start_date}~{end_date} 范围内无交易日记录，"
+                            f"请检查 market.trading_calendar 表数据是否完整"
+                        )
+                    trading_dates = set(pd.Timestamp(r[0]) for r in rows)
+                    logger.info(f"[快照 {data_date}] 交易日历: {len(trading_dates)} 个交易日")
+        except Exception as e:
+            # 交易日历查询失败不能静默跳过 — 会导致非交易日数据污染快照
+            raise RuntimeError(f"交易日历查询失败，无法创建准确的快照: {e}") from e
+
+        # Step 2: 用交易日历过滤 realtime
+        dates_idx = realtime_df.index.get_level_values(0)
+        calendar_mask = dates_idx.isin(trading_dates)
+        removed_by_calendar = (~calendar_mask).sum()
+        if removed_by_calendar > 0:
+            non_trading_dates = sorted(set(dates_idx[~calendar_mask].unique()))
+            realtime_df = realtime_df.loc[calendar_mask]
+            logger.info(
+                f"[快照 {data_date}] 交易日历过滤: 移除 {removed_by_calendar} 行 "
+                f"({len(non_trading_dates)} 天非交易日)"
+            )
+
+        # Step 3: 全市场无成交日兜底过滤
+        # 如果某天 >95% 的股票 amount=0，视为非交易日（交易日历标记错误）
+        dates_idx = realtime_df.index.get_level_values(0)
+        daily_zero_rate = realtime_df.groupby(dates_idx)["amount"].apply(
+            lambda x: (x == 0).mean()
+        )
+        suspicious_days = daily_zero_rate[daily_zero_rate > 0.95].index
+        if len(suspicious_days) > 0:
+            mask = ~dates_idx.isin(suspicious_days)
+            removed_rows = (~mask).sum()
+            realtime_df = realtime_df.loc[mask]
+            logger.warning(
+                f"[快照 {data_date}] 全市场无成交日过滤: 移除 {len(suspicious_days)} 天 ({removed_rows} 行), "
+                f"日期: {[str(d.date()) for d in sorted(suspicious_days)]}"
+            )
+            # 同步从 trading_dates 中移除（确保 static 也过滤）
+            trading_dates -= set(suspicious_days)
+
         realtime_rows = len(realtime_df)
         logger.info(
-            f"[快照 {data_date}] 行情数据: {realtime_rows} 行, "
+            f"[快照 {data_date}] 行情数据: {realtime_rows} 行 (原始 {realtime_rows_raw}), "
             f"{realtime_df.memory_usage(deep=True).sum() / 1024**2:.0f} MB, "
             f"耗时 {timings['realtime']}s"
         )
@@ -211,10 +279,20 @@ class DataSnapshotManager:
         t0 = time.time()
         static_df = build_static_factors(instruments, start_date, end_date)
         timings["static"] = round(time.time() - t0, 1)
+        static_rows_raw = len(static_df)
+
+        # 对 static_factors 做同样的交易日过滤（和 realtime 保持完全一致）
+        s_dates = static_df.index.get_level_values(0)
+        s_mask = s_dates.isin(trading_dates)
+        removed_s = (~s_mask).sum()
+        if removed_s > 0:
+            static_df = static_df.loc[s_mask]
+            logger.info(f"[快照 {data_date}] 静态因子交易日过滤: 移除 {removed_s} 行")
+
         static_rows = len(static_df)
         static_cols = len(static_df.columns)
         logger.info(
-            f"[快照 {data_date}] 静态因子: {static_rows} 行 × {static_cols} 列, "
+            f"[快照 {data_date}] 静态因子: {static_rows} 行 (原始 {static_rows_raw}) × {static_cols} 列, "
             f"{static_df.memory_usage(deep=True).sum() / 1024**2:.0f} MB, "
             f"耗时 {timings['static']}s"
         )
@@ -233,10 +311,14 @@ class DataSnapshotManager:
             "start_date": start_date,
             "end_date": end_date,
             "instruments_count": len(instruments),
+            "trading_days": len(trading_dates),
             "created_at": datetime.now().isoformat(),
             "realtime_rows": realtime_rows,
+            "realtime_rows_raw": realtime_rows_raw,
             "static_rows": static_rows,
+            "static_rows_raw": static_rows_raw,
             "static_columns": static_cols,
+            "filtered_suspicious_days": [str(d.date()) for d in sorted(suspicious_days)] if len(suspicious_days) > 0 else [],
             "timings": timings,
         }
         with open(self._meta_path(data_date), "w", encoding="utf-8") as f:
@@ -342,3 +424,10 @@ class DataSnapshotManager:
             if raise_on_error:
                 raise
             return None
+
+    def load_meta(self, data_date: str) -> Dict[str, Any]:
+        """读取快照元数据（公共接口）。不存在则抛异常。"""
+        meta = self._load_meta(data_date, raise_on_error=True)
+        if meta is None:
+            raise FileNotFoundError(f"快照 {data_date} 元数据不存在")
+        return meta

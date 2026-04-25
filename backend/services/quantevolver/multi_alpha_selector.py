@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 from ...db.pg_pool import get_conn
 from .experiment_config import AlphaGroup, MetaModelConfig, MultiAlphaConfig
+from .factor_official_evaluation_service import CALC_ENGINE
 
 logger = logging.getLogger("aistock.quantevolver.multi_alpha_selector")
 
@@ -224,14 +225,14 @@ class MultiAlphaFactorSelector:
                         SELECT rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d,
                                icir_annualized, rank_icir_annualized
                         FROM aistock_factor_metrics
-                        WHERE factor_name = fc.factor_name AND eval_window = 'full'
+                        WHERE factor_name = fc.factor_name AND eval_window = 'full' AND calc_engine = %s
                         ORDER BY calculated_at DESC LIMIT 1
                     ) fm ON TRUE
                     WHERE cat.is_available = TRUE
                       AND fc.data_source_group IS NOT NULL
                       AND fc.data_source_group != 'unknown'
                     ORDER BY fr.official_grade, ABS(fc.ic_value) DESC NULLS LAST
-                """)
+                """, (CALC_ENGINE,))
                 cols = [d[0] for d in cur.description]
                 all_factors = [dict(zip(cols, r)) for r in cur.fetchall()]
 

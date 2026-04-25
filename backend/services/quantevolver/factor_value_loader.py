@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -35,7 +36,7 @@ _DEFAULT_PARQUET = os.path.join(
 _DEFAULT_PIPELINE_DIR = os.path.join(
     os.path.dirname(__file__),
     "..", "..", "..",
-    "rdagent_assets", "factor_values",
+    "rdagent_assets", "factor_values_realtime",
 )
 
 
@@ -69,12 +70,16 @@ class FactorValueLoader:
 
     @classmethod
     def invalidate_merged_cache(cls, pipeline_dir: Optional[str] = None) -> None:
-        """清除合并面板缓存文件。"""
+        """清除合并面板缓存文件及其 sidecar。"""
         d = os.path.normpath(pipeline_dir or _DEFAULT_PIPELINE_DIR)
         merged = os.path.join(d, "single", "_merged_panel.parquet")
+        sidecar = merged + ".meta.json"
         if os.path.isfile(merged):
             os.remove(merged)
             logger.info(f"已清除合并面板缓存: {merged}")
+        if os.path.isfile(sidecar):
+            os.remove(sidecar)
+            logger.info(f"已清除合并面板 sidecar: {sidecar}")
 
     def __init__(
         self,
@@ -101,6 +106,7 @@ class FactorValueLoader:
         factor_names: List[str],
         start_date: str,
         end_date: str,
+        expected_as_of_date: Optional[str] = None,
     ) -> pd.DataFrame:
         """返回指定因子在日期范围内的面板数据。
 
@@ -109,6 +115,8 @@ class FactorValueLoader:
         factor_names : 因子列名列表
         start_date : 起始日期 (YYYY-MM-DD)
         end_date : 结束日期 (YYYY-MM-DD)
+        expected_as_of_date : 期望的快照日期。single 模式下必须与合并缓存的
+            sidecar as_of_date 匹配, 不匹配则强制重建, 防止读到跨快照混合数据.
 
         Returns
         -------
@@ -116,7 +124,10 @@ class FactorValueLoader:
             MultiIndex (datetime, instrument)，列为 factor_names。
         """
         if self._source == "single":
-            return self._load_panel_from_singles(factor_names, start_date, end_date)
+            return self._load_panel_from_singles(
+                factor_names, start_date, end_date,
+                expected_as_of_date=expected_as_of_date,
+            )
 
         # auto / parquet 模式
         self._ensure_loaded()
@@ -142,6 +153,7 @@ class FactorValueLoader:
         self,
         factor_names: List[str],
         date: str,
+        expected_as_of_date: Optional[str] = None,
     ) -> pd.DataFrame:
         """获取某一天的截面数据。
 
@@ -151,7 +163,10 @@ class FactorValueLoader:
             Index = instrument，列 = factor_names
         """
         if self._source == "single":
-            panel = self._load_panel_from_singles(factor_names, date, date)
+            panel = self._load_panel_from_singles(
+                factor_names, date, date,
+                expected_as_of_date=expected_as_of_date,
+            )
             if panel.empty:
                 return pd.DataFrame(columns=factor_names)
             ts = pd.Timestamp(date)
@@ -246,28 +261,30 @@ class FactorValueLoader:
 
         try:
             df = pd.read_parquet(fpath)
-            # 单因子 parquet 的列是 "value"，重命名为因子名
-            if "value" in df.columns:
-                df = df.rename(columns={"value": factor_name})
-
-            # 3) 存入缓存（存完整 DataFrame，不含日期过滤）
-            with self._single_cache_lock:
-                self._single_cache[factor_name] = (df, now)
-
-            # 4) 按日期范围过滤后返回
-            if start_date or end_date:
-                dates = df.index.get_level_values(0)
-                mask = pd.Series(True, index=df.index)
-                if start_date:
-                    mask = mask & (dates >= pd.Timestamp(start_date))
-                if end_date:
-                    mask = mask & (dates <= pd.Timestamp(end_date))
-                df = df.loc[mask]
-
-            return df
         except Exception as e:
-            logger.warning(f"加载单因子 {factor_name} 失败: {e}")
-            return None
+            raise RuntimeError(
+                f"因子缓存文件损坏或不可读: {factor_name} ({fpath}): {e}"
+            ) from e
+
+        # 单因子 parquet 的列是 "value"，重命名为因子名
+        if "value" in df.columns:
+            df = df.rename(columns={"value": factor_name})
+
+        # 3) 存入缓存（存完整 DataFrame，不含日期过滤）
+        with self._single_cache_lock:
+            self._single_cache[factor_name] = (df, now)
+
+        # 4) 按日期范围过滤后返回
+        if start_date or end_date:
+            dates = df.index.get_level_values(0)
+            mask = pd.Series(True, index=df.index)
+            if start_date:
+                mask = mask & (dates >= pd.Timestamp(start_date))
+            if end_date:
+                mask = mask & (dates <= pd.Timestamp(end_date))
+            df = df.loc[mask]
+
+        return df
 
     @property
     def is_loaded(self) -> bool:
@@ -302,6 +319,7 @@ class FactorValueLoader:
         factor_names: List[str],
         start_date: str,
         end_date: str,
+        expected_as_of_date: Optional[str] = None,
     ) -> pd.DataFrame:
         """从 single/ 目录按需加载指定因子，合并为面板。
 
@@ -314,6 +332,11 @@ class FactorValueLoader:
         - float32 替代 float64，面板内存减半（秩相关不需要 float64 精度）
         - 流式批量填充：每批 16 因子加载→填充→释放，不累积全量 Series
         - 峰值内存 ≈ float32 面板本身（~3.4GB for 611因子），无 Series 堆积
+
+        as_of_date 校验 (Bug C 修复):
+        - 合并缓存旁侧存放 _merged_panel.meta.json, 内含生成时的 as_of_date
+        - 读取前必须与调用方 expected_as_of_date 匹配, 否则强制重建
+        - 缺失 sidecar 视为非法缓存, 强制重建
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -323,6 +346,7 @@ class FactorValueLoader:
         merged_path = os.path.join(self._single_dir, "_merged_panel.parquet")
         cached_panel = self._try_read_merged_cache(
             merged_path, factor_names, start_date, end_date,
+            expected_as_of_date=expected_as_of_date,
         )
         if cached_panel is not None:
             elapsed = round(_time.time() - t0, 1)
@@ -387,8 +411,9 @@ class FactorValueLoader:
                 else:
                     return fname, series.reindex(master_index).values.astype(np.float32)
             except Exception as e:
-                logger.warning(f"加载因子 {fname} 失败: {e}")
-                return fname, None
+                raise RuntimeError(
+                    f"因子缓存文件损坏或不可读: {fname} ({fpath}): {e}"
+                ) from e
 
         for batch_start in range(0, K, batch_size):
             batch_names = available_names[batch_start:batch_start + batch_size]
@@ -402,11 +427,7 @@ class FactorValueLoader:
                 with ThreadPoolExecutor(max_workers=min(max_workers, len(batch_names))) as executor:
                     futures = {executor.submit(_read_as_array, fn): fn for fn in batch_names}
                     for future in as_completed(futures):
-                        try:
-                            batch_results.append(future.result())
-                        except Exception as e:
-                            fn = futures[future]
-                            logger.warning(f"并行加载因子 {fn} 异常: {e}")
+                        batch_results.append(future.result())
 
             for fname, arr in batch_results:
                 if arr is not None:
@@ -432,19 +453,40 @@ class FactorValueLoader:
         logger.info(f"[内存] 面板: {mem_mb:.0f}MB (float32)")
 
         # ── 4. 保存合并缓存 ──
-        try:
-            if mem_mb > 3000:
-                logger.warning(f"合并面板过大 ({mem_mb:.0f}MB), 跳过缓存保存")
-            else:
-                merged.to_parquet(merged_path, engine="pyarrow")
-                file_mb = os.path.getsize(merged_path) / (1024 ** 2)
-                logger.info(
-                    f"已保存合并面板缓存: {len(merged.columns)} 因子, "
-                    f"{len(merged)} 行, 内存 {mem_mb:.0f}MB, "
-                    f"文件 {file_mb:.0f}MB"
-                )
-        except Exception as e:
-            logger.warning(f"保存合并面板缓存失败: {e}")
+        # 保存失败必须抛出, 严禁静默吞错 (缓存不存在会让下次运行反复重建, 掩盖底层故障)
+        if mem_mb > 3000:
+            logger.warning(f"合并面板过大 ({mem_mb:.0f}MB), 跳过缓存保存")
+        else:
+            # 原子写 parquet: 先写临时文件再 rename, 避免读到半截 parquet
+            tmp_merged = merged_path + ".tmp"
+            merged.to_parquet(tmp_merged, engine="pyarrow")
+            os.replace(tmp_merged, merged_path)
+
+            # ── sidecar: 记录本次合并所用快照 as_of_date (Bug C 修复) ──
+            # expected_as_of_date 可能为 None (未指定), 此时写入 None, 下次读取时
+            # 若调用方指定了 expected 则自动失效, 保证强一致.
+            sidecar_path = merged_path + ".meta.json"
+            sidecar_data = {
+                "as_of_date": expected_as_of_date,
+                "factor_count": len(merged.columns),
+                "factor_names": list(merged.columns),
+                "date_range": f"{merged.index.get_level_values(0).min().strftime('%Y-%m-%d')}~{merged.index.get_level_values(0).max().strftime('%Y-%m-%d')}",
+                "row_count": len(merged),
+                "generated_at": datetime.now().isoformat(),
+            }
+            tmp_sidecar = sidecar_path + ".tmp"
+            with open(tmp_sidecar, "w", encoding="utf-8") as _sf:
+                json.dump(sidecar_data, _sf, ensure_ascii=False, indent=2)
+                _sf.flush()
+                os.fsync(_sf.fileno())
+            os.replace(tmp_sidecar, sidecar_path)
+
+            file_mb = os.path.getsize(merged_path) / (1024 ** 2)
+            logger.info(
+                f"已保存合并面板缓存: {len(merged.columns)} 因子, "
+                f"{len(merged)} 行, 内存 {mem_mb:.0f}MB, "
+                f"文件 {file_mb:.0f}MB, sidecar.as_of_date={expected_as_of_date}"
+            )
 
         # 清理可能残留的 _single_cache
         if not bulk_mode and len(factor_names) > 20:
@@ -470,22 +512,25 @@ class FactorValueLoader:
 
         用于批量加载场景(>50因子)，避免 _single_cache 内存爆炸。
         每因子仅保留日期过滤后的数据(~5-8MB)，而非完整数据(~70MB)。
+
+        文件不存在返回 None (上游选择是否补算); 任何解析/IO 错误必须抛出.
         """
         fpath = os.path.join(self._single_dir, f"{factor_name}.parquet")
         if not os.path.isfile(fpath):
             return None
         try:
             df = pd.read_parquet(fpath)
-            if "value" in df.columns:
-                df = df.rename(columns={"value": factor_name})
-            # 立即按日期过滤，丢弃完整数据
-            sd, ed = pd.Timestamp(start_date), pd.Timestamp(end_date)
-            dates = df.index.get_level_values(0)
-            mask = (dates >= sd) & (dates <= ed)
-            return df.loc[mask]
         except Exception as e:
-            logger.warning(f"加载因子 {factor_name} 失败: {e}")
-            return None
+            raise RuntimeError(
+                f"因子缓存文件损坏或不可读: {factor_name} ({fpath}): {e}"
+            ) from e
+        if "value" in df.columns:
+            df = df.rename(columns={"value": factor_name})
+        # 立即按日期过滤，丢弃完整数据
+        sd, ed = pd.Timestamp(start_date), pd.Timestamp(end_date)
+        dates = df.index.get_level_values(0)
+        mask = (dates >= sd) & (dates <= ed)
+        return df.loc[mask]
 
     def _try_read_merged_cache(
         self,
@@ -493,44 +538,65 @@ class FactorValueLoader:
         factor_names: List[str],
         start_date: str,
         end_date: str,
+        expected_as_of_date: Optional[str] = None,
     ) -> Optional[pd.DataFrame]:
         """尝试从合并面板缓存加载。命中返回 DataFrame，否则 None。
 
         失效条件:
         - 缓存文件不存在
+        - sidecar (_merged_panel.meta.json) 不存在, 或 as_of_date 与 expected 不匹配
         - 任何请求因子的 single parquet 比缓存文件更新（因子被重新生成）
         - 缓存日期范围不包含请求范围
 
-        宽容策略:
-        - 部分因子不在缓存中是允许的（首次加载时可能有因子加载失败）
-        - 只读取缓存中存在的因子列，跳过不可用的因子
-        - 调用方 (compute_full_matrix) 会处理因子数量不一致的情况
+        错误处理:
+        - 文件不存在/sidecar 缺失 → 返回 None (正常触发重建)
+        - 文件损坏/IO 错误 → 删除损坏文件并抛出, 严禁静默吞错
         """
         if not os.path.isfile(merged_path):
             return None
 
-        try:
-            # 文件大小保护: 超过 1GB 的缓存文件跳过（解压后内存放大 5-8 倍）
-            file_size_mb = os.path.getsize(merged_path) / (1024 ** 2)
-            if file_size_mb > 1024:
-                logger.warning(
-                    f"合并缓存文件过大 ({file_size_mb:.0f}MB > 1024MB), "
-                    f"跳过读取以避免内存爆炸"
-                )
+        # ── as_of_date sidecar 校验 (Bug C 修复) ──
+        sidecar_path = merged_path + ".meta.json"
+        if not os.path.isfile(sidecar_path):
+            logger.info(
+                f"合并缓存缺少 sidecar ({sidecar_path}), 视为非法缓存, 删除并重建"
+            )
+            os.remove(merged_path)
+            return None
+
+        with open(sidecar_path, "r", encoding="utf-8") as _sf:
+            sidecar = json.load(_sf)
+        cache_aod = sidecar.get("as_of_date")
+        if expected_as_of_date is not None and cache_aod != expected_as_of_date:
+            logger.info(
+                f"合并缓存 as_of_date={cache_aod} 与期望 {expected_as_of_date} 不匹配, 删除并重建"
+            )
+            os.remove(merged_path)
+            os.remove(sidecar_path)
+            return None
+
+        # 文件大小保护: 超过 1GB 的缓存文件跳过（解压后内存放大 5-8 倍）
+        file_size_mb = os.path.getsize(merged_path) / (1024 ** 2)
+        if file_size_mb > 1024:
+            logger.warning(
+                f"合并缓存文件过大 ({file_size_mb:.0f}MB > 1024MB), "
+                f"跳过读取以避免内存爆炸"
+            )
+            return None
+
+        merged_mtime = os.path.getmtime(merged_path)
+
+        # 新鲜度检查: 有 single parquet 被更新 → 缓存失效
+        for fname in factor_names:
+            single_path = os.path.join(self._single_dir, f"{fname}.parquet")
+            if not os.path.isfile(single_path):
+                continue  # 因子无 parquet 文件，跳过（不影响缓存有效性）
+            if os.path.getmtime(single_path) > merged_mtime:
+                logger.info(f"因子 {fname} 已更新, 合并面板缓存失效")
                 return None
 
-            merged_mtime = os.path.getmtime(merged_path)
-
-            # 新鲜度检查: 有 single parquet 被更新 → 缓存失效
-            for fname in factor_names:
-                single_path = os.path.join(self._single_dir, f"{fname}.parquet")
-                if not os.path.isfile(single_path):
-                    continue  # 因子无 parquet 文件，跳过（不影响缓存有效性）
-                if os.path.getmtime(single_path) > merged_mtime:
-                    logger.info(f"因子 {fname} 已更新, 合并面板缓存失效")
-                    return None
-
-            # 列检查: 只读缓存中存在的因子列（宽容策略）
+        # 读取 + 范围/列检查: 任何读取错误必须抛出, 不再 return None
+        try:
             import pyarrow.parquet as pq
             schema = pq.read_schema(merged_path)
             cached_cols = set(schema.names)
@@ -549,29 +615,37 @@ class FactorValueLoader:
 
             # 列裁剪读取 (pyarrow column pruning, 只读需要的列)
             panel = pd.read_parquet(merged_path, columns=available)
-
-            # 日期范围检查
-            sd, ed = pd.Timestamp(start_date), pd.Timestamp(end_date)
-            dates = panel.index.get_level_values(0)
-            if dates.min() > sd or dates.max() < ed:
-                logger.info(
-                    f"合并缓存日期范围 "
-                    f"[{dates.min().date()}~{dates.max().date()}] "
-                    f"不包含请求范围 [{start_date}~{end_date}], 需重建"
-                )
-                return None
-
-            # 日期过滤
-            mask = (dates >= sd) & (dates <= ed)
-            panel = panel.loc[mask]
-
-            logger.info(
-                f"命中合并面板缓存: {len(factor_names)} 因子, {len(panel)} 行"
-            )
-            return panel
         except Exception as e:
-            logger.warning(f"读取合并面板缓存失败: {e}")
+            # 合并缓存损坏: 删除坏文件 + 抛出, 让调用方感知
+            logger.error(f"合并面板缓存损坏, 已删除: {merged_path}: {e}", exc_info=True)
+            if os.path.isfile(merged_path):
+                os.remove(merged_path)
+            if os.path.isfile(sidecar_path):
+                os.remove(sidecar_path)
+            raise RuntimeError(
+                f"合并面板缓存读取失败并已删除, 请重试: {e}"
+            ) from e
+
+        # 日期范围检查
+        sd, ed = pd.Timestamp(start_date), pd.Timestamp(end_date)
+        dates = panel.index.get_level_values(0)
+        if dates.min() > sd or dates.max() < ed:
+            logger.info(
+                f"合并缓存日期范围 "
+                f"[{dates.min().date()}~{dates.max().date()}] "
+                f"不包含请求范围 [{start_date}~{end_date}], 需重建"
+            )
             return None
+
+        # 日期过滤
+        mask = (dates >= sd) & (dates <= ed)
+        panel = panel.loc[mask]
+
+        logger.info(
+            f"命中合并面板缓存: {len(factor_names)} 因子, {len(panel)} 行, "
+            f"sidecar.as_of_date={cache_aod}"
+        )
+        return panel
 
     # ── auto/parquet 模式内部方法 ──
 

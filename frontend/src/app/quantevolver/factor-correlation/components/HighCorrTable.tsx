@@ -12,9 +12,12 @@ interface Props {
   pairs: HighCorrPair[];
   onSelectPair: (fa: string, fb: string) => void;
   onGoToDedup?: (factorName: string) => void;
+  includeDisabled: boolean;
+  onIncludeDisabledChange: (v: boolean) => void;
+  disabledFactors?: string[];
 }
 
-const THRESHOLD_OPTIONS = [0.5, 0.6, 0.7, 0.8, 0.9];
+const THRESHOLD_OPTIONS = [0.5, 0.6, 0.7, 0.8, 0.9, 0.99];
 const PAGE_SIZE = 20;
 
 type SortKey = "abs_corr" | "corr" | "factor_a" | "factor_b" | "pair_count";
@@ -35,11 +38,34 @@ function rowBg(corr: number): React.CSSProperties {
   return {};
 }
 
-export default function HighCorrTable({ pairs, onSelectPair, onGoToDedup }: Props) {
+export default function HighCorrTable({
+  pairs,
+  onSelectPair,
+  onGoToDedup,
+  includeDisabled,
+  onIncludeDisabledChange,
+  disabledFactors,
+}: Props) {
   const [threshold, setThreshold] = useState(0.5);
   const [currentPage, setCurrentPage] = useState(1);
   const [sortKey, setSortKey] = useState<SortKey>("abs_corr");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  const disabledSet = useMemo(
+    () => new Set(disabledFactors ?? []),
+    [disabledFactors]
+  );
+
+  // ── 按 includeDisabled 客户端过滤（HDF5 冻结，仅前端展示层控制） ──
+  const effectivePairs = useMemo(
+    () =>
+      includeDisabled
+        ? pairs
+        : pairs.filter(
+            (p) => !disabledSet.has(p.factor_a) && !disabledSet.has(p.factor_b)
+          ),
+    [pairs, includeDisabled, disabledSet]
+  );
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -59,17 +85,17 @@ export default function HighCorrTable({ pairs, onSelectPair, onGoToDedup }: Prop
   // 统计每个因子在当前阈值下参与的高相关对数量
   const pairCountMap = useMemo(() => {
     const map = new Map<string, number>();
-    for (const p of pairs) {
+    for (const p of effectivePairs) {
       if (Math.abs(p.correlation) >= threshold) {
         map.set(p.factor_a, (map.get(p.factor_a) ?? 0) + 1);
         map.set(p.factor_b, (map.get(p.factor_b) ?? 0) + 1);
       }
     }
     return map;
-  }, [pairs, threshold]);
+  }, [effectivePairs, threshold]);
 
   const filtered = useMemo(() => {
-    const result = pairs.filter((p) => Math.abs(p.correlation) >= threshold);
+    const result = effectivePairs.filter((p) => Math.abs(p.correlation) >= threshold);
 
     result.sort((a, b) => {
       let cmp = 0;
@@ -98,7 +124,7 @@ export default function HighCorrTable({ pairs, onSelectPair, onGoToDedup }: Prop
     });
 
     return result;
-  }, [pairs, threshold, sortKey, sortDir, pairCountMap]);
+  }, [effectivePairs, threshold, sortKey, sortDir, pairCountMap]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
@@ -149,10 +175,32 @@ export default function HighCorrTable({ pairs, onSelectPair, onGoToDedup }: Prop
         <span style={{ fontSize: 12, color: "#9ca3af", marginLeft: "auto" }}>
           共 {filtered.length} 对
           {" | "}
-          <span style={{ color: "#ef4444", fontWeight: 600 }}>{filtered.filter(p => Math.abs(p.correlation) >= 0.8).length}</span> 对 |corr|≥0.8
+          <span style={{ color: "#b91c1c", fontWeight: 600 }}>{filtered.filter(p => Math.abs(p.correlation) >= 0.99).length}</span> 对 ≥0.99
+          {" "}
+          <span style={{ color: "#ef4444", fontWeight: 600 }}>{filtered.filter(p => Math.abs(p.correlation) >= 0.8).length}</span> 对 ≥0.8
           {" "}
           <span style={{ color: "#f59e0b", fontWeight: 600 }}>{filtered.filter(p => Math.abs(p.correlation) >= 0.7 && Math.abs(p.correlation) < 0.8).length}</span> 对 ≥0.7
         </span>
+        <label
+          title="包含已禁用因子的相关性对"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 12,
+            color: "#374151",
+            cursor: "pointer",
+            marginLeft: 12,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={includeDisabled}
+            onChange={(e) => onIncludeDisabledChange(e.target.checked)}
+            style={{ cursor: "pointer" }}
+          />
+          含禁用因子
+        </label>
       </div>
 
       {/* 表格 */}
@@ -240,6 +288,7 @@ export default function HighCorrTable({ pairs, onSelectPair, onGoToDedup }: Prop
                     }}
                   >
                     {p.factor_a}
+                    {disabledSet.has(p.factor_a) && <DisabledBadge />}
                   </td>
                   <td
                     style={{
@@ -249,6 +298,7 @@ export default function HighCorrTable({ pairs, onSelectPair, onGoToDedup }: Prop
                     }}
                   >
                     {p.factor_b}
+                    {disabledSet.has(p.factor_b) && <DisabledBadge />}
                   </td>
                   <td
                     style={{
@@ -363,6 +413,27 @@ export default function HighCorrTable({ pairs, onSelectPair, onGoToDedup }: Prop
         </div>
       )}
     </div>
+  );
+}
+
+function DisabledBadge() {
+  return (
+    <span
+      title="该因子已禁用"
+      style={{
+        marginLeft: 6,
+        padding: "1px 6px",
+        fontSize: 10,
+        fontWeight: 600,
+        color: "#b91c1c",
+        background: "#fee2e2",
+        border: "1px solid #fecaca",
+        borderRadius: 4,
+        verticalAlign: "middle",
+      }}
+    >
+      禁用
+    </span>
   );
 }
 
