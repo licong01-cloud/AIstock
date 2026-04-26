@@ -205,6 +205,21 @@ $env:PYTHONDONTWRITEBYTECODE='1'
 - 使用测试专用 portfolio，避免影响既有账本。
 - 每发现一个 bug，修复后单独提交。
 
+已落地的专用命令：
+
+```powershell
+cd F:\Dev\AIstock\frontend
+$env:PAPER_V2_API_BASE='http://127.0.0.1:8011/api/v1'
+$env:PAPER_V2_FRONTEND_PORT='3011'
+npx playwright test --config=playwright.paper-v2.config.ts tests/paper-v2
+```
+
+说明：
+
+- Paper v2 E2E 使用 `frontend/playwright.paper-v2.config.ts`，避免覆盖其他模块正在使用的通用 Playwright 配置。
+- 临时前端通过 `PAPER_V2_API_PROXY_TARGET` 代理 `/api/v1/*` 到 8011，避免 3011 本地端口触发浏览器 CORS 预检失败。
+- 当前自动化已覆盖 StrategyPackage 展示、就绪 fail-fast、Selection Center fail-fast、多策略包研究边界、组合创建 fail-fast、模型/HMM 页面和 TDX 分钟线 HTTP 通道。
+
 ## 9. 明日盘中验证
 
 下一个交易日盘中执行：

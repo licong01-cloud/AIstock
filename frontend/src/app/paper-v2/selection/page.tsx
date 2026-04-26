@@ -38,6 +38,24 @@ export default function PaperV2SelectionPage() {
   const selectedPackages = useMemo(() => packages.filter((item) => selected[item.package_id]), [packages, selected]);
   const singlePackageMode = mode === "single_package";
 
+  function updateMode(nextMode: SelectionMode) {
+    setMode(nextMode);
+    if (nextMode !== "single_package") return;
+    setSelected((prev) => {
+      const firstSelected = packages.find((item) => prev[item.package_id]);
+      const keep = firstSelected?.package_id || packages[0]?.package_id;
+      return Object.fromEntries(packages.map((item) => [item.package_id, item.package_id === keep]));
+    });
+  }
+
+  function updatePackageSelection(packageId: string, checked: boolean) {
+    if (singlePackageMode && checked) {
+      setSelected(Object.fromEntries(packages.map((item) => [item.package_id, item.package_id === packageId])));
+      return;
+    }
+    setSelected((prev) => ({ ...prev, [packageId]: checked }));
+  }
+
   const loadPackages = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -140,7 +158,7 @@ export default function PaperV2SelectionPage() {
       <div className="pv2-grid pv2-grid-main">
         <SectionCard title="选股控制" eyebrow="策略包运行时" action={<button className="pv2-button" onClick={loadPackages} disabled={loading} type="button">刷新策略包</button>}>
           <div className="pv2-form-grid">
-            <div className="pv2-field"><label>模式</label><select className="pv2-select" value={mode} onChange={(event) => setMode(event.target.value as SelectionMode)}><option value="single_package">单策略包</option><option value="weighted_fusion">加权融合</option><option value="intersection">交集</option><option value="union">并集</option></select></div>
+            <div className="pv2-field"><label>模式</label><select className="pv2-select" value={mode} onChange={(event) => updateMode(event.target.value as SelectionMode)}><option value="single_package">单策略包</option><option value="weighted_fusion">加权融合</option><option value="intersection">交集</option><option value="union">并集</option></select></div>
             <div className="pv2-field"><label>交易日期</label><input className="pv2-input" type="date" value={tradeDate} onChange={(event) => setTradeDate(event.target.value)} /></div>
             <div className="pv2-field"><label>数据源</label><select className="pv2-select" value={dataSource} onChange={(event) => setDataSource(event.target.value as DataSource)}><option value="DB_HISTORICAL">DB_HISTORICAL</option><option value="TDX_REALTIME">TDX_REALTIME</option></select></div>
             <div className="pv2-field"><label>Top K</label><input className="pv2-input" type="number" min={1} max={500} value={topK} onChange={(event) => setTopK(Number(event.target.value))} /></div>
@@ -162,7 +180,7 @@ export default function PaperV2SelectionPage() {
             rows={packages}
             empty="暂无可选 StrategyPackage。请先启用策略包选股。"
             columns={[
-              { key: "pick", header: "选择", render: (row) => <input type="checkbox" checked={Boolean(selected[row.package_id])} onChange={(event) => setSelected((prev) => ({ ...prev, [row.package_id]: event.target.checked }))} /> },
+              { key: "pick", header: "选择", render: (row) => <input type="checkbox" checked={Boolean(selected[row.package_id])} onChange={(event) => updatePackageSelection(row.package_id, event.target.checked)} /> },
               { key: "name", header: "策略包", render: (row) => <><strong>{row.package_name}</strong><br /><span className="pv2-muted pv2-mono">{shortHash(row.package_id, 7)}</span></> },
               { key: "status", header: "状态", render: (row) => <StatusBadge status={row.package_status} /> },
               { key: "ic", header: "IC", render: (row) => formatPercent(row.metrics_summary?.ic) },
