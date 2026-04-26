@@ -22,6 +22,7 @@ type Experiment = {
   workspace_path?: string;
   wsl_command?: string;
   result_metrics?: any;
+  custom_params?: any;
   qe_task_id?: string;
   qe_loop_id?: string;
   loop_index?: number;
@@ -41,6 +42,26 @@ type Experiment = {
   created_at?: string;
   updated_at?: string;
 };
+
+function parseCustomParams(exp: Experiment): Record<string, any> {
+  const raw = exp.custom_params;
+  if (!raw) return {};
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof raw === "object" ? raw : {};
+}
+
+function getInheritedExecutionNodeId(exp: Experiment): string | undefined {
+  const params = parseCustomParams(exp);
+  const nodeId = params.execution_node_id;
+  return typeof nodeId === "string" && nodeId.trim() ? nodeId.trim() : undefined;
+}
 
 const KEY_METRICS = [
   { key: "IC", label: "IC", fmt: (v: number) => v.toFixed(4), good: (v: number) => v > 0.03 },
@@ -118,7 +139,6 @@ export default function ExperimentsPage() {
   const [actionId, setActionId] = useState<string | null>(null);
   const [actionType, setActionType] = useState<string>("");
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
-  const [engineMode, setEngineMode] = useState<"legacy" | "unified">("legacy");
 
   // 分页状态
   const [currentPage, setCurrentPage] = useState(1);
@@ -145,9 +165,30 @@ export default function ExperimentsPage() {
     try {
       const res = await fetch(`${API}/quantevolver/experiments?limit=${pageSize}&offset=${offset}`);
       const data = await res.json();
-      setExperiments(data.items || []);
+      const items = data.items || [];
+      setExperiments(items);
       setTotal(data.total || 0);
       if (page !== undefined) setCurrentPage(page);
+      const runningIds = items
+        .filter((exp: Experiment) => exp.status === "running")
+        .map((exp: Experiment) => exp.experiment_id)
+        .slice(0, 10);
+      if (runningIds.length > 0) {
+        void Promise.allSettled(
+          runningIds.map((id: string) =>
+            fetch(`${API}/quantevolver/experiments/${id}/run-status`)
+              .then((r) => r.ok ? r.json() : null)
+          )
+        ).then((results) => {
+          const changed = results.some((r) => (
+            r.status === "fulfilled"
+            && r.value
+            && r.value.status
+            && r.value.status !== "running"
+          ));
+          if (changed) loadExperiments(targetPage);
+        });
+      }
     } catch (e: any) {
       setError(e?.message || "加载失败");
     }
@@ -213,17 +254,19 @@ export default function ExperimentsPage() {
     setActionType("");
   }
 
-  async function runExperiment(expId: string) {
+  async function runExperiment(exp: Experiment) {
+    const expId = exp.experiment_id;
+    const inheritedNodeId = getInheritedExecutionNodeId(exp);
     setActionId(expId);
     setActionType("run");
     try {
       setLogsExpId(expId);
       setExpandedId(expId);
-      await sse.startRun(expId, engineMode);
-      showToast("实验已提交执行", true);
+      await sse.startRun(expId, inheritedNodeId);
+      showToast(inheritedNodeId ? `Submitted to ${inheritedNodeId}` : "Submitted run", true);
       loadExperiments();
     } catch (e: any) {
-      showToast("执行失败: " + (e?.message || ""), false);
+      showToast("Run failed: " + (e?.message || ""), false);
     }
     setActionId(null);
     setActionType("");
@@ -591,10 +634,14 @@ export default function ExperimentsPage() {
                       {canRun && (
                         <>
                           <div style={{ display: "flex", gap: 4 }}>
-                            <button onClick={() => setEngineMode("legacy")} style={{ padding: "3px 8px", fontSize: 10, cursor: "pointer", borderRadius: 4, border: engineMode === "legacy" ? "1.5px solid #64748b" : "1px solid #cbd5e1", background: engineMode === "legacy" ? "#f1f5f9" : "#fff", color: engineMode === "legacy" ? "#334155" : "#94a3b8", fontWeight: 600 }}>旧版</button>
-                            <button onClick={() => setEngineMode("unified")} style={{ padding: "3px 8px", fontSize: 10, cursor: "pointer", borderRadius: 4, border: engineMode === "unified" ? "1.5px solid #0ea5e9" : "1px solid #cbd5e1", background: engineMode === "unified" ? "#f0f9ff" : "#fff", color: engineMode === "unified" ? "#0284c7" : "#94a3b8", fontWeight: 600 }}>统一引擎</button>
+                            <span style={{ padding: "3px 8px", fontSize: 10, borderRadius: 4, border: "1.5px solid #0ea5e9", background: "#f0f9ff", color: "#0284c7", fontWeight: 600 }}>统一执行层</span>
                           </div>
-                          <button onClick={() => runExperiment(exp.experiment_id)}
+                          {getInheritedExecutionNodeId(exp) && (
+                            <span style={{ padding: "3px 8px", fontSize: 10, borderRadius: 4, border: "1px solid #0284c7", background: "#e0f2fe", color: "#0369a1", fontWeight: 600 }}>
+                              Node: {getInheritedExecutionNodeId(exp)}
+                            </span>
+                          )}
+                          <button onClick={() => runExperiment(exp)}
                             disabled={isActioning}
                             style={{
                               padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4,

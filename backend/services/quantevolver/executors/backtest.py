@@ -55,16 +55,21 @@ class BacktestExecutor(BaseExecutor):
             mode:   FULL_TRAIN 或 BACKTEST_ONLY
         """
         if mode == BacktestMode.BACKTEST_ONLY and not ctx.model_source:
-            # model_source is required for cross-node backtest-only (Path 3),
-            # but retry_loop already has the model in workspace — allow None.
-            logger.debug(
-                "BACKTEST_ONLY without model_source — assuming model already in workspace "
-                f"(task={ctx.task_id}, loop={ctx.loop_index})"
+            raise ValueError(
+                "BACKTEST_ONLY requires ctx.model_source; refusing to assume an "
+                f"implicit workspace model for task={ctx.task_id} loop={ctx.loop_index}"
             )
 
         # 1. 构建 custom_params（配置层唯一注入点）
         custom_params = config.build_custom_params()
         strategy_params = config.build_strategy_params()
+        if ctx.node_id:
+            from ..stock_pool_sync import sync_stock_pool_to_compute_node_by_id
+
+            sync_stock_pool_to_compute_node_by_id(
+                ctx.node_id,
+                custom_params.get("stock_pool"),
+            )
 
         # 2. 调用 ConfigComposer（已有统一层，不改）
         compose_res = self.composer.compose_experiment_in_memory(
@@ -88,6 +93,15 @@ class BacktestExecutor(BaseExecutor):
                 f"compose_experiment_in_memory returned empty wsl_command for "
                 f"task={ctx.task_id} loop={ctx.loop_index}"
             )
+
+        if ctx.extra_experiment_files:
+            duplicate_keys = set(experiment_files).intersection(ctx.extra_experiment_files)
+            if duplicate_keys:
+                raise ValueError(
+                    "extra_experiment_files would overwrite generated files: "
+                    f"{sorted(duplicate_keys)}"
+                )
+            experiment_files.update(ctx.extra_experiment_files)
 
         # 3. 注入 --backtest-only（Path 3 专用）
         if mode == BacktestMode.BACKTEST_ONLY:

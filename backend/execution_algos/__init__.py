@@ -11,3 +11,4 @@ from . import pov_algo  # noqa: F401
 from . import tail_boost_algo  # noqa: F401
 from . import tail_substitute_algo  # noqa: F401
 from . import v24_plan_algo  # noqa: F401
+from . import v25_two_stage_algo  # noqa: F401

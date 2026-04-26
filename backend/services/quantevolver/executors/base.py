@@ -17,6 +17,7 @@ class ExecutionContext(BaseModel):
     node_id: str | None = None
     callback_url: str | None = None
     model_source: dict[str, Any] | None = None  # backtest-only 模式下的模型来源
+    extra_experiment_files: dict[str, str] | None = None
 
 
 class ExecutionResult(BaseModel):

@@ -55,6 +55,7 @@ def test_config_composer_keeps_legacy_1d_close_formula():
         has_custom_factors=False,
         has_alpha158=False,
         backtest_freq="day",
+        execution_algo="CLOSE_PRICE",
     )
 
     assert 'label: ["Ref($close, -2) / Ref($close, -1) - 1"]' in yaml_text
@@ -70,9 +71,46 @@ def test_config_composer_uses_horizon_aware_formula():
         has_custom_factors=False,
         has_alpha158=False,
         backtest_freq="day",
+        execution_algo="CLOSE_PRICE",
     )
 
     assert 'label: ["Ref($vwap, -11) / Ref($vwap, -1) - 1"]' in yaml_text
+
+
+def test_config_composer_does_not_pass_blacklist_metadata_to_strategy():
+    yaml_text = ConfigComposer()._compose_conf_yaml(
+        factors_info=[],
+        model_info=None,
+        strategy_info={
+            "strategy_id": "score_weighted_topk_v2",
+            "source_code": "class ScoreWeightedTopkStrategyV2(object):\n    pass\n",
+            "portfolio_config": {
+                "class": "ScoreWeightedTopkStrategyV2",
+                "kwargs": {},
+            },
+        },
+        data_split=DATA_SPLIT,
+        custom_params={
+            "topk": 50,
+            "n_drop": 5,
+            "sector_blacklist": ["801125.SI"],
+            "sector_blacklist_enabled": True,
+            "sector_blacklist_snapshot": {
+                "items": [{"sw2_code": "801125.SI", "sw2_name": "White Liquor"}],
+            },
+            "blacklist_enabled": True,
+        },
+        has_custom_factors=False,
+        has_alpha158=False,
+        backtest_freq="day",
+        execution_algo="CLOSE_PRICE",
+    )
+
+    assert "ScoreWeightedTopkStrategyV2" in yaml_text
+    assert "sector_blacklist" not in yaml_text
+    assert "sector_blacklist_enabled" not in yaml_text
+    assert "sector_blacklist_snapshot" not in yaml_text
+    assert "blacklist_enabled" not in yaml_text
 
 
 def test_strategy_backtest_only_rejects_label_horizon_conflict():

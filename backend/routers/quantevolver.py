@@ -2635,6 +2635,8 @@ def generate_config(req: GenerateConfigRequest):
                 label_horizon=custom_params.get("label_horizon"),
                 execution_algo=custom_params.get("execution_algo"),
                 execution_algo_params=custom_params.get("execution_algo_params"),
+                filter_suspended_on_signal=custom_params.get("filter_suspended_on_signal"),
+                suspend_filter_strict=custom_params.get("suspend_filter_strict", True),
                 unfilled_handler=custom_params.get("unfilled_handler"),
                 unfilled_handler_params=uf_params,
                 stock_pool=custom_params.get("stock_pool"),
@@ -6484,6 +6486,30 @@ def list_execution_algorithms(
             items = [a for a in items if a.get("grade") == grade]
         if enabled_only:
             items = [a for a in items if a.get("is_enabled")]
+
+        from ..services.quantevolver.config_composer import (
+            ConfigComposer,
+            SUPPORTED_QE_EXECUTION_ALGOS,
+        )
+        qe_modules = {
+            "TWAP": "tail_twap_strategy.TailTWAPWithLimitStrategy",
+            "CLOSE_PRICE": "close_execution_strategy.CloseExecutionStrategy",
+            "V24_PLAN": "tail_twap_v24_strategy.TailTWAPWithV24PlanStrategy",
+            "V25_TWO_STAGE": "tail_twap_v25_strategy.TailTWAPWithV25TwoStageStrategy",
+        }
+        for item in items:
+            code = str(item.get("algo_code") or "").upper()
+            try:
+                normalized = ConfigComposer._normalize_execution_algo(code)
+                item["qe_supported"] = normalized in SUPPORTED_QE_EXECUTION_ALGOS
+                item["qe_effective_algo"] = normalized
+                item["qe_effective_module"] = qe_modules.get(normalized)
+                item["qe_support_message"] = "supported by QE/Qlib config composer"
+            except ValueError as exc:
+                item["qe_supported"] = False
+                item["qe_effective_algo"] = None
+                item["qe_effective_module"] = None
+                item["qe_support_message"] = str(exc)
 
         return {"ok": True, "total": len(items), "items": items}
     except Exception as e:

@@ -109,6 +109,21 @@ RDAGENT_DEFAULT_LGB_KWARGS = {
 }
 
 
+SUPPORTED_QE_EXECUTION_ALGOS = {
+    "TWAP",
+    "CLOSE_PRICE",
+    "V24_PLAN",
+    "V25_TWO_STAGE",
+}
+DEFAULT_QE_EXECUTION_ALGO = "TWAP"
+V25_DEFAULT_PARAMS = {
+    "early_model_path": "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt",
+    "late_model_path": "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt",
+    "device": "cuda",
+}
+SUSPEND_FILTER_FILE = "qe_suspend_filter.json"
+
+
 class ConfigComposer:
     """配置组装器。"""
 
@@ -225,6 +240,232 @@ class ConfigComposer:
                         return candidate
         raise RuntimeError(f"无法生成唯一实验ID: {base_id}")
 
+
+    @staticmethod
+    def _normalize_execution_algo(execution_algo: Optional[str]) -> str:
+        """Return the exact QE execution algo or raise; never silently fallback."""
+        raw = (execution_algo or DEFAULT_QE_EXECUTION_ALGO).strip().upper()
+        aliases = {"": DEFAULT_QE_EXECUTION_ALGO, "NONE": DEFAULT_QE_EXECUTION_ALGO, "DEFAULT": DEFAULT_QE_EXECUTION_ALGO}
+        raw = aliases.get(raw, raw)
+        if raw == "VWAP":
+            raise ValueError(
+                "execution_algo='VWAP' is not implemented in QE minute execution. "
+                "It is blocked instead of being silently mapped to TWAP."
+            )
+        if raw not in SUPPORTED_QE_EXECUTION_ALGOS:
+            raise ValueError(
+                f"execution_algo='{execution_algo}' is unsupported for QE; "
+                f"allowed={sorted(SUPPORTED_QE_EXECUTION_ALGOS)}"
+            )
+        return raw
+
+    @classmethod
+    def _resolve_backtest_freq(
+        cls,
+        execution_algo: Optional[str],
+        custom_params: Optional[Dict[str, Any]],
+    ) -> str:
+        """Resolve and validate the executor frequency for the requested algo.
+
+        ``backtest_freq`` is a derived compatibility flag.  The execution algo is
+        authoritative, and conflicting values fail fast instead of silently
+        running a different executor stack than the UI requested.
+        """
+        params = custom_params or {}
+        raw_freq = params.get("backtest_freq")
+        algo = cls._normalize_execution_algo(execution_algo)
+        if raw_freq in (None, ""):
+            return "day" if algo == "CLOSE_PRICE" else "1min"
+        freq = str(raw_freq).strip().lower()
+        if freq not in {"1min", "day"}:
+            raise ValueError("backtest_freq must be '1min' or 'day'")
+        expected = "day" if algo == "CLOSE_PRICE" else "1min"
+        if freq != expected:
+            raise ValueError(
+                f"execution_algo={execution_algo or DEFAULT_QE_EXECUTION_ALGO} requires "
+                f"backtest_freq={expected}, got {raw_freq!r}; refusing inconsistent config"
+            )
+        return freq
+
+    @staticmethod
+    def _yaml_scalar(value: Any) -> str:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if value is None:
+            return "null"
+        if isinstance(value, (int, float)):
+            return str(value)
+        text = str(value)
+        if text == "<PRED>":
+            return text
+        safe = re.match(r"^[A-Za-z0-9_./:+\\-]+$", text) is not None
+        return text if safe else json.dumps(text, ensure_ascii=False)
+
+    @classmethod
+    def _append_yaml_kwargs(cls, lines: List[str], kwargs: Dict[str, Any], indent: str) -> None:
+        for k, v in kwargs.items():
+            lines.append(f"{indent}{k}: {cls._yaml_scalar(v)}")
+
+    @classmethod
+    def _execution_algo_config(
+        cls,
+        execution_algo: Optional[str],
+        execution_algo_params: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        algo = cls._normalize_execution_algo(execution_algo)
+        params = dict(execution_algo_params or {})
+        if algo == "TWAP":
+            return {
+                "requested_algo": execution_algo or DEFAULT_QE_EXECUTION_ALGO,
+                "effective_algo": algo,
+                "class": "TailTWAPWithLimitStrategy",
+                "module_path": "tail_twap_strategy",
+                "kwargs": params,
+            }
+        if algo == "CLOSE_PRICE":
+            return {
+                "requested_algo": execution_algo,
+                "effective_algo": algo,
+                "class": "CloseExecutionStrategy",
+                "module_path": "close_execution_strategy",
+                "kwargs": params,
+            }
+        if algo == "V24_PLAN":
+            params.setdefault("model_path", "/home/lc999/data/rl_models/v24/v24_plan_net.pt")
+            return {
+                "requested_algo": execution_algo,
+                "effective_algo": algo,
+                "class": "TailTWAPWithV24PlanStrategy",
+                "module_path": "tail_twap_v24_strategy",
+                "kwargs": params,
+            }
+        if algo == "V25_TWO_STAGE":
+            for key, value in V25_DEFAULT_PARAMS.items():
+                params.setdefault(key, value)
+            return {
+                "requested_algo": execution_algo,
+                "effective_algo": algo,
+                "class": "TailTWAPWithV25TwoStageStrategy",
+                "module_path": "tail_twap_v25_strategy",
+                "kwargs": params,
+            }
+        raise AssertionError(f"unreachable execution algo: {algo}")
+
+    @staticmethod
+    def _is_suspend_filter_enabled(custom_params: Optional[Dict[str, Any]]) -> bool:
+        params = custom_params or {}
+        return bool(
+            params.get("filter_suspended_on_signal")
+            or params.get("exclude_suspended")
+            or params.get("filter_suspend_d")
+        )
+
+    @staticmethod
+    def _parse_date(value: str):
+        from datetime import date
+        return date.fromisoformat(str(value)[:10])
+
+    def _build_suspend_filter_artifact(
+        self,
+        data_split: Dict[str, str],
+        *,
+        strict_audit: bool = True,
+    ) -> str:
+        """Export suspend_d rows to a local JSON artifact for Qlib runtime."""
+        backtest_start = self._parse_date(data_split["test_start"])
+        backtest_end = self._parse_date(data_split["backtest_end"])
+        if backtest_end < backtest_start:
+            raise ValueError("backtest_end is earlier than test_start; cannot build suspend filter")
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT cal_date
+                    FROM market.trading_calendar
+                    WHERE is_trading = TRUE
+                      AND cal_date BETWEEN %s AND %s
+                    ORDER BY cal_date
+                    """,
+                    (backtest_start, backtest_end),
+                )
+                trade_dates = [row[0] for row in cur.fetchall()]
+                if not trade_dates:
+                    raise RuntimeError(
+                        f"No trading dates found for suspend filter: {backtest_start}..{backtest_end}"
+                    )
+
+                if strict_audit:
+                    cur.execute(
+                        """
+                        SELECT trade_date, status
+                        FROM market.dataset_date_refresh_audit
+                        WHERE dataset = 'suspend_d'
+                          AND trade_date = ANY(%s)
+                        """,
+                        (trade_dates,),
+                    )
+                    audit_rows = {row[0]: row[1] for row in cur.fetchall()}
+                    missing = [d.isoformat() for d in trade_dates if audit_rows.get(d) != "success"]
+                    if missing:
+                        raise RuntimeError(
+                            "suspend_d refresh audit is incomplete; "
+                            f"missing_or_failed_dates={missing[:20]} total={len(missing)}. "
+                            "Refresh/seed market.dataset_date_refresh_audit before enabling filter_suspended_on_signal."
+                        )
+
+                cur.execute(
+                    """
+                    SELECT trade_date, ts_code
+                    FROM market.suspend_d
+                    WHERE suspend_type = 'S'
+                      AND trade_date BETWEEN %s AND %s
+                    ORDER BY trade_date, ts_code
+                    """,
+                    (backtest_start, backtest_end),
+                )
+                suspended_by_date: Dict[str, List[str]] = {d.isoformat(): [] for d in trade_dates}
+                for trade_date, ts_code in cur.fetchall():
+                    key = trade_date.isoformat()
+                    if key in suspended_by_date:
+                        suspended_by_date[key].append(str(ts_code))
+
+        payload = {
+            "enabled": True,
+            "source": "market.suspend_d",
+            "audit_dataset": "suspend_d",
+            "strict_audit": strict_audit,
+            "start_date": backtest_start.isoformat(),
+            "end_date": backtest_end.isoformat(),
+            "trade_date_count": len(trade_dates),
+            "suspended_row_count": sum(len(v) for v in suspended_by_date.values()),
+            "suspended_by_date": suspended_by_date,
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+
+    def _get_strategy_class_name(self, strategy_info: Optional[Dict]) -> str:
+        if not strategy_info:
+            return "TopkDropoutStrategy"
+        pc = strategy_info.get("portfolio_config")
+        if isinstance(pc, str):
+            pc = json.loads(pc)
+        if isinstance(pc, dict) and pc.get("class"):
+            return str(pc["class"])
+        source_code = strategy_info.get("source_code") or ""
+        match = re.search(r"class\s+(\w+)\s*\(", source_code)
+        if match:
+            return match.group(1)
+        return strategy_info.get("strategy_name") or "TopkDropoutStrategy"
+
+    def _ensure_suspend_filter_supported(self, strategy_class: str) -> None:
+        supported = {"TopkDropoutStrategy", "ScoreWeightedTopkStrategy", "ScoreWeightedTopkStrategyV2"}
+        if strategy_class not in supported:
+            raise ValueError(
+                "filter_suspended_on_signal=True is not supported by strategy "
+                f"'{strategy_class}'. Supported strategies: {sorted(supported)}. "
+                "QE blocks this request instead of silently ignoring the UI configuration."
+            )
+
     def compose_experiment(
         self,
         factor_names: List[str],
@@ -318,8 +559,8 @@ class ConfigComposer:
             quick_train = custom_params.get("quick_train", False)
 
         # backtest_freq: "1min"（分钟线，默认）或 "day"（日线回退模式）
-        backtest_freq = (custom_params or {}).get("backtest_freq", "1min")
         execution_algo = (custom_params or {}).get("execution_algo")
+        backtest_freq = self._resolve_backtest_freq(execution_algo, custom_params)
         execution_algo_params = dict((custom_params or {}).get("execution_algo_params") or {})
 
         # 尾盘涨停未成交处理：从 custom_params 提取并注入到 execution_algo_params
@@ -364,6 +605,20 @@ class ConfigComposer:
                     f"支持的策略: {', '.join(sorted(_hmm_supported_classes))}"
                 )
 
+        suspend_filter_json: Optional[str] = None
+        if self._is_suspend_filter_enabled(custom_params):
+            if custom_params is None:
+                custom_params = {}
+            strategy_class_for_suspend = self._get_strategy_class_name(strategy_info)
+            self._ensure_suspend_filter_supported(strategy_class_for_suspend)
+            suspend_filter_json = self._build_suspend_filter_artifact(
+                data_split,
+                strict_audit=bool(custom_params.get("suspend_filter_strict", True)),
+            )
+            custom_params["filter_suspended_on_signal"] = True
+            custom_params["suspend_filter_file"] = SUSPEND_FILTER_FILE
+            custom_params.setdefault("suspend_filter_strict", True)
+
         # 生成conf.yaml
         conf_yaml = self._compose_conf_yaml(
             factors_info=factors_info,
@@ -398,6 +653,9 @@ class ConfigComposer:
             hmm_path = exp_dir / "hmm_sector_coefficients.json"
             hmm_path.write_text(hmm_json_content, encoding="utf-8")
 
+        if suspend_filter_json:
+            (exp_dir / SUSPEND_FILTER_FILE).write_text(suspend_filter_json, encoding="utf-8")
+
         # 写入因子原始代码到 factors/ 子目录（保持原始格式不变）
         if has_factor_files:
             self._write_factor_files(exp_dir, factors_info)
@@ -429,6 +687,10 @@ class ConfigComposer:
             v24_src = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
+            for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+                helper_src = scripts_dir / helper_name
+                if helper_src.exists():
+                    shutil.copy2(helper_src, exp_dir / helper_name)
             # benchmark parquet
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
@@ -437,6 +699,10 @@ class ConfigComposer:
                 ws_dir = QE_WORKSPACE_WIN / experiment_name
                 if ws_dir.exists():
                     shutil.copy2(bench_src, ws_dir / "benchmark_sh000300.parquet")
+        for helper_name in ("qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            helper_src = scripts_dir / helper_name
+            if helper_src.exists():
+                shutil.copy2(helper_src, exp_dir / helper_name)
         # 始终复制日线版作为 fallback
         qrun_limit_src = scripts_dir / "qrun_limit.py"
         if qrun_limit_src.exists():
@@ -579,7 +845,7 @@ class ConfigComposer:
             quick_train = custom_params.get("quick_train", False)
 
         # backtest_freq: "1min"（分钟线，默认）或 "day"（日线回退模式）
-        backtest_freq = (custom_params or {}).get("backtest_freq", "1min")
+        backtest_freq = self._resolve_backtest_freq(execution_algo, custom_params)
 
         # 尾盘涨停未成交处理：从 custom_params 提取并注入到 execution_algo_params
         # （这些参数是给 inner_strategy TailTWAPWithLimitStrategy 的）
@@ -647,6 +913,19 @@ class ConfigComposer:
                     f"请切换到支持 HMM 的策略或关闭 HMM。"
                 )
 
+        if self._is_suspend_filter_enabled(custom_params):
+            if custom_params is None:
+                custom_params = {}
+            strategy_class_for_suspend = self._get_strategy_class_name(strategy_info)
+            self._ensure_suspend_filter_supported(strategy_class_for_suspend)
+            experiment_files[SUSPEND_FILTER_FILE] = self._build_suspend_filter_artifact(
+                data_split,
+                strict_audit=bool(custom_params.get("suspend_filter_strict", True)),
+            )
+            custom_params["filter_suspended_on_signal"] = True
+            custom_params["suspend_filter_file"] = SUSPEND_FILTER_FILE
+            custom_params.setdefault("suspend_filter_strict", True)
+
         # 1) conf.yaml
         conf_yaml = self._compose_conf_yaml(
             factors_info=factors_info,
@@ -706,6 +985,10 @@ class ConfigComposer:
             v24_path = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_path.exists():
                 experiment_files["tail_twap_v24_strategy.py"] = v24_path.read_text(encoding="utf-8")
+            for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+                helper_path = scripts_dir / helper_name
+                if helper_path.exists():
+                    experiment_files[helper_name] = helper_path.read_text(encoding="utf-8")
             # benchmark parquet 是二进制文件，需要特殊处理
             bench_path = scripts_dir / "benchmark_sh000300.parquet"
             if bench_path.exists():
@@ -713,6 +996,10 @@ class ConfigComposer:
                 experiment_files["benchmark_sh000300.parquet.b64"] = base64.b64encode(
                     bench_path.read_bytes()
                 ).decode("ascii")
+        for helper_name in ("qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            helper_path = scripts_dir / helper_name
+            if helper_path.exists():
+                experiment_files[helper_name] = helper_path.read_text(encoding="utf-8")
 
         # 5) model.py（自定义模型）
         if model_info and model_info.get("code_text"):
@@ -816,7 +1103,7 @@ class ConfigComposer:
         factor_template_dir = _rdagent_root / "rdagent" / "scenarios" / "qlib" / "experiment" / "factor_template"
         # 只允许复制策略类文件，避免误复制 qrun_limit.py / read_exp_res.py 等运行时文件
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
-                                   "tail_twap_strategy", "tail_twap_v24_strategy"}
+                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "close_execution_strategy", "qe_suspend_filter", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
         deps_dict: Dict[str, str] = {}
 
         def _resolve_deps(code: str, collected: set) -> str:
@@ -974,7 +1261,7 @@ class ConfigComposer:
                            ic, icir, rank_ic, rank_icir,
                            annualized_return, max_drawdown, information_ratio,
                            annualized_return_no_cost, max_drawdown_no_cost, information_ratio_no_cost,
-                           created_at, updated_at,
+                           created_at, updated_at, custom_params,
                            alpha_mode, multi_alpha_config, parent_multi_alpha_id
                     FROM qe_experiments
                     ORDER BY created_at DESC
@@ -1093,7 +1380,29 @@ class ConfigComposer:
             quick_train = custom_params.get("quick_train", False)
 
         # backtest_freq: "1min"（分钟线，默认）或 "day"（日线回退模式）
-        backtest_freq = (custom_params or {}).get("backtest_freq", "1min")
+        execution_algo = (custom_params or {}).get("execution_algo")
+        backtest_freq = self._resolve_backtest_freq(execution_algo, custom_params)
+        execution_algo_params = dict((custom_params or {}).get("execution_algo_params") or {})
+        _cp = custom_params or {}
+        if _cp.get("unfilled_handler"):
+            execution_algo_params["unfilled_handler"] = _cp["unfilled_handler"]
+        if _cp.get("unfilled_trigger_minute"):
+            execution_algo_params["unfilled_trigger_minute"] = _cp["unfilled_trigger_minute"]
+        if _cp.get("unfilled_backup_depth"):
+            execution_algo_params["unfilled_backup_depth"] = _cp["unfilled_backup_depth"]
+        suspend_filter_json: Optional[str] = None
+        if self._is_suspend_filter_enabled(custom_params):
+            if custom_params is None:
+                custom_params = {}
+            strategy_class_for_suspend = self._get_strategy_class_name(strategy_info)
+            self._ensure_suspend_filter_supported(strategy_class_for_suspend)
+            suspend_filter_json = self._build_suspend_filter_artifact(
+                data_split,
+                strict_audit=bool(custom_params.get("suspend_filter_strict", True)),
+            )
+            custom_params["filter_suspended_on_signal"] = True
+            custom_params["suspend_filter_file"] = SUSPEND_FILTER_FILE
+            custom_params.setdefault("suspend_filter_strict", True)
 
         # 生成conf.yaml
         conf_yaml = self._compose_conf_yaml(
@@ -1108,6 +1417,8 @@ class ConfigComposer:
             disable_alpha158=disable_alpha158,
             quick_train=quick_train,
             backtest_freq=backtest_freq,
+            execution_algo=execution_algo,
+            execution_algo_params=execution_algo_params,
         )
 
         # 生成因子文件和预处理脚本
@@ -1121,6 +1432,8 @@ class ConfigComposer:
         # 保存文件
         conf_path = exp_dir / "conf.yaml"
         conf_path.write_text(conf_yaml, encoding="utf-8")
+        if suspend_filter_json:
+            (exp_dir / SUSPEND_FILTER_FILE).write_text(suspend_filter_json, encoding="utf-8")
 
         if has_factor_files:
             self._write_factor_files(exp_dir, factors_info)
@@ -1151,12 +1464,21 @@ class ConfigComposer:
             v24_src = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
+            for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+                helper_src = scripts_dir / helper_name
+                if helper_src.exists():
+                    shutil.copy2(helper_src, exp_dir / helper_name)
+            bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
                 # 同时复制到 qe_workspace（实际执行目录）
                 ws_dir = QE_WORKSPACE_WIN / experiment_name
                 if ws_dir.exists():
                     shutil.copy2(bench_src, ws_dir / "benchmark_sh000300.parquet")
+        for helper_name in ("qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            helper_src = scripts_dir / helper_name
+            if helper_src.exists():
+                shutil.copy2(helper_src, exp_dir / helper_name)
         qrun_limit_src = scripts_dir / "qrun_limit.py"
         if qrun_limit_src.exists():
             shutil.copy2(qrun_limit_src, exp_dir / "qrun_limit.py")
@@ -1538,6 +1860,18 @@ class ConfigComposer:
             "unfilled_backup_depth",   # 替补候选深度（已在上层提取到 inner_strategy.kwargs）
             "initial_cash",         # 初始资金（已在上层处理）
             "hmm_model_version_id", # HMM 版本 ID（已在上层处理为 hmm_coefficients_file）
+            # Industry blacklist metadata is persisted for UI/detail traceability.
+            # The executable restriction is represented by stock_pool, not by
+            # passing these metadata objects into the Qlib strategy constructor.
+            "sector_blacklist",
+            "sector_blacklist_enabled",
+            "sector_blacklist_snapshot",
+            "blacklist_enabled",
+            "filter_suspended_on_signal",
+            "exclude_suspended",
+            "filter_suspend_d",
+            "suspend_filter_file",
+            "suspend_filter_strict",
         } | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _LINEAR_HP_KEYS
 
         if custom_params:
@@ -1575,8 +1909,23 @@ class ConfigComposer:
                 logger.info(f"策略参数过滤: 移除非策略参数 {set(custom_params.keys()) - set(filtered_params.keys())}")
             strategy_kwargs.update(filtered_params)
 
-        # 确保 signal 始终为 <PRED>
         strategy_kwargs["signal"] = "<PRED>"
+
+        suspend_filter_enabled = self._is_suspend_filter_enabled(custom_params)
+        if suspend_filter_enabled:
+            self._ensure_suspend_filter_supported(strategy_class)
+            strategy_kwargs["filter_suspended_on_signal"] = True
+            strategy_kwargs["suspend_filter_file"] = (custom_params or {}).get("suspend_filter_file") or SUSPEND_FILTER_FILE
+            strategy_kwargs["suspend_filter_strict"] = bool((custom_params or {}).get("suspend_filter_strict", True))
+            if strategy_class == "TopkDropoutStrategy":
+                strategy_class = "SuspendFilterTopkDropoutStrategy"
+                strategy_module = "qe_suspend_filter_strategy"
+            elif strategy_class == "ScoreWeightedTopkStrategy":
+                strategy_class = "SuspendFilterScoreWeightedTopkStrategy"
+                strategy_module = "qe_suspend_filter_score_weighted_strategy"
+            elif strategy_class == "ScoreWeightedTopkStrategyV2":
+                strategy_class = "SuspendFilterScoreWeightedTopkStrategyV2"
+                strategy_module = "qe_suspend_filter_score_weighted_strategy"
 
         # 安全过滤：只保留策略支持的参数
         # 避免不支持的参数通过 **kwargs 传递到 BaseStrategy 导致 TypeError
@@ -1588,11 +1937,14 @@ class ConfigComposer:
         _UNFILLED_KEYS = {
             "unfilled_handler", "unfilled_trigger_minute", "unfilled_backup_depth",
         }
+        _SUSPEND_FILTER_KEYS = {
+            "filter_suspended_on_signal", "suspend_filter_file", "suspend_filter_strict",
+        }
         _TOPK_DROPOUT_ALLOWED_KEYS = {
             "signal", "topk", "n_drop", "method_sell", "method_buy",
             "hold_thresh", "only_tradable", "forbid_all_trade_at_limit",
             "risk_degree",
-        } | _UNFILLED_KEYS
+        } | _UNFILLED_KEYS | _SUSPEND_FILTER_KEYS
         # EnhancedTopkDropoutStrategy 支持的额外参数
         _ENHANCED_TOPK_ALLOWED_KEYS = _TOPK_DROPOUT_ALLOWED_KEYS | {
             "min_score", "max_position_ratio", "stop_loss", "max_market_cap",
@@ -1614,9 +1966,9 @@ class ConfigComposer:
             "threshold_method", "min_improvement", "adaptive_multiplier",
             "threshold_floor", "min_trade_price", "max_trade_price",
             "max_single_order_value", "lot_size",
-        } | _UNFILLED_KEYS | _HMM_KEYS
+        } | _UNFILLED_KEYS | _HMM_KEYS | _SUSPEND_FILTER_KEYS
 
-        if strategy_class == "TopkDropoutStrategy":
+        if strategy_class in {"TopkDropoutStrategy", "SuspendFilterTopkDropoutStrategy"}:
             _removed = {k for k in strategy_kwargs if k not in _TOPK_DROPOUT_ALLOWED_KEYS}
             if _removed:
                 raise ValueError(
@@ -1644,14 +1996,14 @@ class ConfigComposer:
                     f"策略 '{strategy_class}' 不支持参数: {sorted(_removed)}。"
                     f"允许的参数: {sorted(_RC_TOPK_ALLOWED_KEYS)}"
                 )
-        elif strategy_class == "ScoreWeightedTopkStrategy":
+        elif strategy_class in {"ScoreWeightedTopkStrategy", "SuspendFilterScoreWeightedTopkStrategy"}:
             _removed = {k for k in strategy_kwargs if k not in _SCORE_WEIGHTED_TOPK_ALLOWED_KEYS}
             if _removed:
                 raise ValueError(
                     f"策略 '{strategy_class}' 不支持参数: {sorted(_removed)}。"
                     f"允许的参数: {sorted(_SCORE_WEIGHTED_TOPK_ALLOWED_KEYS)}"
                 )
-        elif strategy_class == "ScoreWeightedTopkStrategyV2":
+        elif strategy_class in {"ScoreWeightedTopkStrategyV2", "SuspendFilterScoreWeightedTopkStrategyV2"}:
             # V2 与 V1 参数集相同，修复了补仓模式 Bug #1 和幽灵持仓 Bug #2
             _removed = {k for k in strategy_kwargs if k not in _SCORE_WEIGHTED_TOPK_ALLOWED_KEYS}
             if _removed:
@@ -1817,10 +2169,21 @@ class ConfigComposer:
         lines.append("    executor:")
         if backtest_freq == "day":
             # 日线模式：单层 SimulatorExecutor
+            algo_cfg = self._execution_algo_config(execution_algo, execution_algo_params)
+            if algo_cfg["effective_algo"] != "CLOSE_PRICE":
+                raise ValueError(
+                    "day backtest is only valid for execution_algo=CLOSE_PRICE; "
+                    f"got {algo_cfg['effective_algo']}"
+                )
             lines.append("        class: SimulatorExecutor")
             lines.append("        module_path: qlib.backtest.executor")
             lines.append("        kwargs:")
             lines.append("            time_per_step: day")
+            lines.append("            # qe_execution_trace:")
+            lines.append(f"            #   requested_algo: {algo_cfg['requested_algo']}")
+            lines.append(f"            #   effective_algo: {algo_cfg['effective_algo']}")
+            lines.append("            #   effective_class: SimulatorExecutor")
+            lines.append("            #   effective_module_path: qlib.backtest.executor")
             lines.append("            generate_portfolio_metrics: true")
         else:
             # 分钟线模式：NestedExecutor + 执行算法策略
@@ -1835,47 +2198,17 @@ class ConfigComposer:
             lines.append("                    time_per_step: 1min")
             lines.append("                    generate_portfolio_metrics: false")
             lines.append("            inner_strategy:")
-            _algo_upper = (execution_algo or "").upper()
-            if _algo_upper == "CLOSE_PRICE":
-                lines.append("                class: CloseExecutionStrategy")
-                lines.append("                module_path: close_execution_strategy")
-                if execution_algo_params:
-                    lines.append("                kwargs:")
-                    for k, v in execution_algo_params.items():
-                        if isinstance(v, bool):
-                            lines.append(f"                    {k}: {'true' if v else 'false'}")
-                        elif isinstance(v, str):
-                            lines.append(f"                    {k}: {v}")
-                        else:
-                            lines.append(f"                    {k}: {v}")
-            elif _algo_upper == "V24_PLAN":
-                # v24 方向感知执行计划 (继承 TailTWAPWithLimitStrategy)
-                lines.append("                class: TailTWAPWithV24PlanStrategy")
-                lines.append("                module_path: tail_twap_v24_strategy")
+            algo_cfg = self._execution_algo_config(execution_algo, execution_algo_params)
+            lines.append(f"                class: {algo_cfg['class']}")
+            lines.append(f"                module_path: {algo_cfg['module_path']}")
+            if algo_cfg.get("kwargs"):
                 lines.append("                kwargs:")
-                # model_path 默认值 (可被 execution_algo_params 覆盖)
-                _v24_params = dict(execution_algo_params or {})
-                _v24_params.setdefault("model_path", "/home/lc999/data/rl_models/v24/v24_plan_net.pt")
-                for k, v in _v24_params.items():
-                    if isinstance(v, bool):
-                        lines.append(f"                    {k}: {'true' if v else 'false'}")
-                    elif isinstance(v, str):
-                        lines.append(f"                    {k}: {v}")
-                    else:
-                        lines.append(f"                    {k}: {v}")
-            else:
-                # 默认：TailTWAPWithLimitStrategy
-                lines.append("                class: TailTWAPWithLimitStrategy")
-                lines.append("                module_path: tail_twap_strategy")
-                if execution_algo_params:
-                    lines.append("                kwargs:")
-                    for k, v in execution_algo_params.items():
-                        if isinstance(v, bool):
-                            lines.append(f"                    {k}: {'true' if v else 'false'}")
-                        elif isinstance(v, str):
-                            lines.append(f"                    {k}: {v}")
-                        else:
-                            lines.append(f"                    {k}: {v}")
+                self._append_yaml_kwargs(lines, algo_cfg["kwargs"], "                    ")
+            lines.append("            # qe_execution_trace:")
+            lines.append(f"            #   requested_algo: {algo_cfg['requested_algo']}")
+            lines.append(f"            #   effective_algo: {algo_cfg['effective_algo']}")
+            lines.append(f"            #   effective_class: {algo_cfg['class']}")
+            lines.append(f"            #   effective_module_path: {algo_cfg['module_path']}")
             lines.append("            generate_portfolio_metrics: true")
         lines.append("    strategy:")
         lines.append(f"        class: {strategy_class}")
@@ -3144,7 +3477,7 @@ model_cls = {nn_class_name}
         factor_template_dir = _rdagent_root / "rdagent" / "scenarios" / "qlib" / "experiment" / "factor_template"
         # 只允许复制策略类文件，避免误复制 qrun_limit.py / read_exp_res.py 等运行时文件
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
-                                   "tail_twap_strategy", "tail_twap_v24_strategy"}
+                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "close_execution_strategy", "qe_suspend_filter", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
 
         def _copy_deps_recursive(code: str, copied: set) -> str:
             """递归处理相对导入：转换为本地导入并复制依赖文件."""

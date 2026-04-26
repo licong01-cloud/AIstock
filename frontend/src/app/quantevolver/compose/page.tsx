@@ -213,8 +213,17 @@ export default function ComposePage() {
 
   /* ── 执行算法 ── */
   const [executionAlgoCatalog, setExecutionAlgoCatalog] = useState<any[]>([]);
+  const qeExecutionAlgoCatalog = useMemo(() => executionAlgoCatalog.filter((a: any) => a.qe_supported !== false), [executionAlgoCatalog]);
   const [executionAlgo, setExecutionAlgo] = useState<string>("");
   const [executionAlgoParams, setExecutionAlgoParams] = useState<Record<string, any>>({});
+  const selectedExecutionAlgoInfo = useMemo(
+    () => executionAlgo ? executionAlgoCatalog.find((a: any) => a.algo_code === executionAlgo) : null,
+    [executionAlgo, executionAlgoCatalog],
+  );
+  const [computeNodes, setComputeNodes] = useState<any[]>([]);
+  const [executionNodeId, setExecutionNodeId] = useState<string>("");
+  const [filterSuspendedOnSignal, setFilterSuspendedOnSignal] = useState(false);
+  const [suspendFilterStrict, setSuspendFilterStrict] = useState(true);
 
   /* ── 尾盘涨停未成交资金处理 ── */
   const [unfilledHandler, setUnfilledHandler] = useState<string>(""); // "" | "TAIL_BOOST" | "TAIL_SUBSTITUTE"
@@ -306,6 +315,10 @@ export default function ComposePage() {
       .then(r => r.json())
       .then(d => { if (d.ok) setExecutionAlgoCatalog(d.items || []); })
       .catch((e) => { console.error("加载执行算法目录失败", e); });
+    fetch(`${API}/dispatch/nodes`)
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d)) setComputeNodes(d); else if (d?.data) setComputeNodes(d.data); })
+      .catch((e) => { console.error("load QE execution nodes failed", e); });
   }, []);
 
   /* ── HMM 配置/快照加载 ── */
@@ -384,8 +397,17 @@ export default function ComposePage() {
         if ([1, 3, 5, 10].includes(Number(exp.custom_params.label_horizon || 1))) {
           setLabelHorizon(Number(exp.custom_params.label_horizon || 1) as 1 | 3 | 5 | 10);
         }
-        if (exp.custom_params.execution_algo) setExecutionAlgo(exp.custom_params.execution_algo);
+        if (exp.custom_params.execution_algo) {
+          setExecutionAlgo(exp.custom_params.execution_algo);
+          setBacktestFreq(exp.custom_params.execution_algo === "CLOSE_PRICE" ? "day" : "1min");
+        } else if (exp.custom_params.backtest_freq === "day") {
+          setExecutionAlgo("CLOSE_PRICE");
+          setExecutionAlgoParams({});
+          setBacktestFreq("day");
+        }
         if (exp.custom_params.execution_algo_params) setExecutionAlgoParams(exp.custom_params.execution_algo_params);
+        setFilterSuspendedOnSignal(!!(exp.custom_params.filter_suspended_on_signal || exp.custom_params.exclude_suspended));
+        setSuspendFilterStrict(exp.custom_params.suspend_filter_strict !== false);
       }
       setCurrentStep(1);
       setCorrAnalyzed(false);
@@ -527,6 +549,14 @@ export default function ComposePage() {
 
   /* ── 操作动作 ── */
   function validateRuntimeSelections() {
+    if (executionAlgo && executionAlgoCatalog.length > 0 && !selectedExecutionAlgoInfo) {
+      alert(`Execution algorithm ${executionAlgo} is not present in the backend catalog; refusing to submit inconsistent UI config.`);
+      return false;
+    }
+    if (executionAlgo && selectedExecutionAlgoInfo?.qe_supported === false) {
+      alert(`Execution algorithm ${executionAlgo} is not wired into QE/Qlib; refusing to silently fall back.`);
+      return false;
+    }
     if (blacklistEnabled && !stockPoolPath) {
       alert("行业黑名单已启用，但股票池尚未生成成功。请等待生成完成或手动刷新成功后再继续。");
       return false;
@@ -553,6 +583,7 @@ export default function ComposePage() {
       ...(labelHorizon !== 1 ? { label_horizon: labelHorizon } : {}),
       backtest_freq: backtestFreq,
       ...(executionAlgo ? { execution_algo: executionAlgo, execution_algo_params: executionAlgoParams } : {}),
+      ...(filterSuspendedOnSignal ? { filter_suspended_on_signal: true, suspend_filter_strict: suspendFilterStrict } : {}),
       ...(blacklistEnabled && stockPoolPath ? {
         stock_pool: stockPoolPath,
         sector_blacklist_enabled: true,
@@ -649,6 +680,54 @@ export default function ComposePage() {
     setCorrAnalyzed(false); setCorrPairs([]);
     return n;
   });
+
+  const removeSelectedFactorByName = useCallback((factorName: string) => {
+    const normalizedName = String(factorName || "").trim();
+    if (!normalizedName) return;
+
+    setSelectedFactors(prev => {
+      const next = new Set(Array.from(prev).filter(k => k.split("||")[0] !== normalizedName));
+      return next.size === prev.size ? prev : next;
+    });
+
+    if (selectedFactors.size <= 2) {
+      setCorrAnalyzed(false);
+      setCorrPairs([]);
+    } else {
+      setCorrPairs(prev => prev.filter(p => p.factor_a !== normalizedName && p.factor_b !== normalizedName));
+    }
+  }, [selectedFactors.size]);
+
+  const renderCorrelationFactorCell = (factorName: string, tone: "danger" | "warning") => (
+    <td style={{ padding: "3px 6px", fontFamily: "monospace", maxWidth: 170 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+        <span
+          title={factorName}
+          style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}
+        >
+          {factorName}
+        </span>
+        <button
+          type="button"
+          onClick={() => removeSelectedFactorByName(factorName)}
+          title={`从QE实验组合中移除 ${factorName}`}
+          style={{
+            border: tone === "danger" ? "1px solid #fca5a5" : "1px solid #fcd34d",
+            backgroundColor: tone === "danger" ? "#fee2e2" : "#fef3c7",
+            color: tone === "danger" ? "#b91c1c" : "#92400e",
+            borderRadius: 4,
+            padding: "1px 5px",
+            fontSize: 10,
+            fontWeight: 700,
+            cursor: "pointer",
+            flex: "0 0 auto",
+          }}
+        >
+          移除
+        </button>
+      </div>
+    </td>
+  );
 
   return (
     <div style={{
@@ -821,6 +900,7 @@ export default function ComposePage() {
             return (
               <button
                 key={stepNum}
+                data-testid={`qe-step-${stepNum}`}
                 onClick={() => setCurrentStep(stepNum)}
                 style={{
                   flex: 1,
@@ -1121,7 +1201,10 @@ export default function ComposePage() {
                     style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box", backgroundColor: "white" }}
                   >
                     <option value="">默认（TailTWAP 分钟线执行）</option>
-                    {executionAlgoCatalog.map((a: any) => (
+                    {executionAlgo && executionAlgoCatalog.find((a: any) => a.algo_code === executionAlgo)?.qe_supported === false && (
+                      <option value={executionAlgo} disabled>{executionAlgo}（QE 未接入，禁止执行）</option>
+                    )}
+                    {qeExecutionAlgoCatalog.map((a: any) => (
                       <option key={a.algo_code} value={a.algo_code}>{a.algo_name || a.algo_code}</option>
                     ))}
                   </select>
@@ -1432,8 +1515,8 @@ export default function ComposePage() {
                                   <tbody>
                                     {highPairs.sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation)).map((p, i) => (
                                       <tr key={i} style={{ backgroundColor: Math.abs(p.correlation) > 0.85 ? "#fecaca" : "#fed7aa", borderBottom: "1px solid #fde68a" }}>
-                                        <td style={{ padding: "3px 6px", fontFamily: "monospace" }}>{p.factor_a}</td>
-                                        <td style={{ padding: "3px 6px", fontFamily: "monospace" }}>{p.factor_b}</td>
+                                        {renderCorrelationFactorCell(p.factor_a, "danger")}
+                                        {renderCorrelationFactorCell(p.factor_b, "danger")}
                                         <td style={{ padding: "3px 6px", textAlign: "right", fontWeight: 600 }}>{p.correlation.toFixed(4)}</td>
                                       </tr>
                                     ))}
@@ -1448,8 +1531,8 @@ export default function ComposePage() {
                                   <tbody>
                                     {medPairs.sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation)).map((p, i) => (
                                       <tr key={i} style={{ backgroundColor: "#fef9c3", borderBottom: "1px solid #fde68a" }}>
-                                        <td style={{ padding: "3px 6px", fontFamily: "monospace" }}>{p.factor_a}</td>
-                                        <td style={{ padding: "3px 6px", fontFamily: "monospace" }}>{p.factor_b}</td>
+                                        {renderCorrelationFactorCell(p.factor_a, "warning")}
+                                        {renderCorrelationFactorCell(p.factor_b, "warning")}
                                         <td style={{ padding: "3px 6px", textAlign: "right", color: "#92400e" }}>{p.correlation.toFixed(4)}</td>
                                       </tr>
                                     ))}
@@ -1571,6 +1654,23 @@ export default function ComposePage() {
               onPoolPathChange={setStockPoolPath}
               onBlacklistSnapshotChange={setBlacklistSnapshot}
             />
+
+
+            <div style={{ marginBottom: "24px", padding: "16px 20px", backgroundColor: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "14px", color: "#475569", cursor: "pointer", fontWeight: 600 }}>
+                <input data-testid="qe-filter-suspended" type="checkbox" checked={filterSuspendedOnSignal} onChange={e => setFilterSuspendedOnSignal(e.target.checked)} style={{ width: "16px", height: "16px", accentColor: "#0f766e" }} />
+                启用 suspend_d 日频选股停牌过滤
+              </label>
+              <div style={{ fontSize: "12px", color: "#64748b", marginTop: "6px" }}>
+                生成每日选股信号时从本地 artifact 过滤 market.suspend_d 已停牌股票，Qlib 回测过程中不逐日访问数据库。
+              </div>
+              {filterSuspendedOnSignal && (
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "#475569", cursor: "pointer", marginTop: "10px" }}>
+                  <input data-testid="qe-suspend-filter-strict" type="checkbox" checked={suspendFilterStrict} onChange={e => setSuspendFilterStrict(e.target.checked)} style={{ width: "15px", height: "15px", accentColor: "#0f766e" }} />
+                  严格校验 suspend_d 每个回测交易日的刷新审计；缺失时直接失败
+                </label>
+              )}
+            </div>
 
             {/* ── HMM 行业板块轮动 ── */}
             <div style={{ marginBottom: "24px", padding: "16px 20px", backgroundColor: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
@@ -1731,8 +1831,20 @@ export default function ComposePage() {
                         <span style={{ fontSize: 11, color: "#94a3b8", marginRight: 2 }}>引擎:</span>
                         <span style={{ padding: "3px 8px", fontSize: 10, borderRadius: 4, border: "1.5px solid #0ea5e9", background: "#f0f9ff", color: "#0284c7", fontWeight: 600 }}>统一执行层</span>
                       </div>
+                      <select
+                        data-testid="qe-execution-node"
+                        value={executionNodeId}
+                        onChange={e => setExecutionNodeId(e.target.value)}
+                        disabled={sse.runStatus === "running" || sse.runStatus === "starting"}
+                        style={{ padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "12px", minWidth: 180 }}
+                      >
+                        <option value="">默认 WSL 节点</option>
+                        {computeNodes.map((n: any) => (
+                          <option key={n.node_id} value={n.node_id}>{n.display_name || n.node_id} ({n.status || "unknown"})</option>
+                        ))}
+                      </select>
                       <button
-                        onClick={() => { if (configResult.experiment_id) sse.startRun(configResult.experiment_id).catch((err) => { console.error("Failed to start experiment run:", err); alert("启动实验运行失败，请查看控制台日志"); }); }}
+                        onClick={() => { if (configResult.experiment_id) sse.startRun(configResult.experiment_id, executionNodeId || undefined).catch((err) => { console.error("Failed to start experiment run:", err); alert("启动实验运行失败，请查看控制台日志"); }); }}
                         data-testid="qe-run-backtest"
                         disabled={sse.runStatus === "running" || sse.runStatus === "starting"}
                         style={{

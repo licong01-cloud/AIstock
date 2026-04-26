@@ -156,6 +156,12 @@ def _label_horizon_from_model_params(config: dict[str, Any] | None) -> Any:
     return model_params.get("label_horizon")
 
 
+def _bool_from_config(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
 # ── Path 1: run_experiment (routers/quantevolver.py:3255) ─────────────────────
 
 def build_config_from_exp_record(
@@ -174,6 +180,11 @@ def build_config_from_exp_record(
 
     execution_algo: str | None = custom_params.pop("execution_algo", None)
     execution_algo_params: dict[str, Any] = custom_params.pop("execution_algo_params", None) or {}
+    filter_suspended_on_signal = _bool_from_config(
+        custom_params.pop("filter_suspended_on_signal", custom_params.pop("exclude_suspended", False))
+    )
+    suspend_filter_strict = _bool_from_config(custom_params.pop("suspend_filter_strict", True))
+    custom_params.pop("suspend_filter_file", None)
     label_type: str | None = custom_params.pop("label_type", None)
     label_horizon = _resolve_label_horizon(
         inherited=custom_params.pop("label_horizon", None),
@@ -213,6 +224,8 @@ def build_config_from_exp_record(
         hmm=hmm,
         execution_algo=execution_algo,
         execution_algo_params=execution_algo_params or None,
+        filter_suspended_on_signal=filter_suspended_on_signal,
+        suspend_filter_strict=suspend_filter_strict,
         strategy_params=strategy_params or None,
         extra_params=custom_params or None,
         experiment_name=experiment_name or exp_record.get("experiment_name"),
@@ -241,9 +254,28 @@ def build_config_from_evolution_loop(
     effective_strategy_params: dict[str, Any] = dict(
         _parse_json_field(task.get("strategy_params") or {})
     )
+    strategy_filter_suspended = effective_strategy_params.pop("filter_suspended_on_signal", None)
+    strategy_filter_suspended = effective_strategy_params.pop("exclude_suspended", strategy_filter_suspended)
+    strategy_suspend_filter_strict = effective_strategy_params.pop("suspend_filter_strict", None)
+    effective_strategy_params.pop("suspend_filter_file", None)
     effective_execution_algo: str | None = task.get("execution_algo")
     effective_execution_algo_params: dict[str, Any] = dict(
         _parse_json_field(task.get("execution_algo_params") or {})
+    )
+    filter_suspended_on_signal = _bool_from_config(
+        task.get("filter_suspended_on_signal")
+        or strategy_filter_suspended
+        or model_params_base.get("filter_suspended_on_signal")
+        or model_params_base.get("exclude_suspended")
+    )
+    suspend_filter_strict = _bool_from_config(
+        task.get("suspend_filter_strict")
+        if task.get("suspend_filter_strict") is not None
+        else (
+            strategy_suspend_filter_strict
+            if strategy_suspend_filter_strict is not None
+            else model_params_base.get("suspend_filter_strict", True)
+        )
     )
 
     unfilled_handler: str | None = task.get("unfilled_handler")
@@ -273,6 +305,8 @@ def build_config_from_evolution_loop(
         hmm=None,  # Path 2 does not inject HMM (known gap)
         execution_algo=effective_execution_algo,
         execution_algo_params=effective_execution_algo_params or None,
+        filter_suspended_on_signal=filter_suspended_on_signal,
+        suspend_filter_strict=suspend_filter_strict,
         unfilled_handler=unfilled_handler,
         unfilled_handler_params=unfilled_handler_params or None,
         strategy_params=effective_strategy_params or None,
@@ -321,6 +355,14 @@ def build_config_from_strategy_evo_loop(
     execution_algo_params: dict[str, Any] = dict(
         loop_config.get("execution_algo_params") or {}
     )
+    filter_suspended_on_signal = _bool_from_config(
+        loop_config.get("filter_suspended_on_signal")
+        or loop_config.get("exclude_suspended")
+        or task.get("filter_suspended_on_signal")
+    )
+    suspend_filter_strict = _bool_from_config(
+        loop_config.get("suspend_filter_strict", task.get("suspend_filter_strict", True))
+    )
 
     enable_sector_hmm: bool = bool(loop_config.get("enable_sector_hmm", False))
     hmm_model_version_id: str | None = loop_config.get("hmm_model_version_id")
@@ -359,6 +401,8 @@ def build_config_from_strategy_evo_loop(
         hmm=hmm,
         execution_algo=execution_algo,
         execution_algo_params=execution_algo_params or None,
+        filter_suspended_on_signal=filter_suspended_on_signal,
+        suspend_filter_strict=suspend_filter_strict,
         unfilled_handler=unfilled_handler,
         unfilled_handler_params=unfilled_handler_params or None,
         strategy_params=strategy_params or None,
@@ -395,6 +439,10 @@ def build_config_from_custom_evo_loop(
     execution_algo_params: dict[str, Any] = dict(
         _parse_json_field(loop_config.get("execution_algo_params") or {})
     )
+    filter_suspended_on_signal = _bool_from_config(
+        loop_config.get("filter_suspended_on_signal") or loop_config.get("exclude_suspended")
+    )
+    suspend_filter_strict = _bool_from_config(loop_config.get("suspend_filter_strict", True))
     data_split = loop_config.get("data_split")
     label_type: str | None = loop_config.get("label_type")
 
@@ -459,6 +507,8 @@ def build_config_from_custom_evo_loop(
         hmm=hmm,
         execution_algo=execution_algo,
         execution_algo_params=execution_algo_params or None,
+        filter_suspended_on_signal=filter_suspended_on_signal,
+        suspend_filter_strict=suspend_filter_strict,
         unfilled_handler=unfilled_handler,
         unfilled_handler_params=unfilled_handler_params or None,
         strategy_params=strategy_params or None,
@@ -518,9 +568,28 @@ def build_config_from_retry_loop(
     effective_strategy_params: dict[str, Any] = dict(
         _parse_json_field(task.get("strategy_params") or {})
     )
+    strategy_filter_suspended = effective_strategy_params.pop("filter_suspended_on_signal", None)
+    strategy_filter_suspended = effective_strategy_params.pop("exclude_suspended", strategy_filter_suspended)
+    strategy_suspend_filter_strict = effective_strategy_params.pop("suspend_filter_strict", None)
+    effective_strategy_params.pop("suspend_filter_file", None)
     effective_execution_algo: str | None = task.get("execution_algo")
     effective_execution_algo_params: dict[str, Any] = dict(
         _parse_json_field(task.get("execution_algo_params") or {})
+    )
+    filter_suspended_on_signal = _bool_from_config(
+        task.get("filter_suspended_on_signal")
+        or strategy_filter_suspended
+        or model_params_base.get("filter_suspended_on_signal")
+        or model_params_base.get("exclude_suspended")
+    )
+    suspend_filter_strict = _bool_from_config(
+        task.get("suspend_filter_strict")
+        if task.get("suspend_filter_strict") is not None
+        else (
+            strategy_suspend_filter_strict
+            if strategy_suspend_filter_strict is not None
+            else model_params_base.get("suspend_filter_strict", True)
+        )
     )
 
     # HMM: extract from model_params_base (where the original submission stored them)
@@ -555,6 +624,8 @@ def build_config_from_retry_loop(
         hmm=hmm,
         execution_algo=effective_execution_algo,
         execution_algo_params=effective_execution_algo_params or None,
+        filter_suspended_on_signal=filter_suspended_on_signal,
+        suspend_filter_strict=suspend_filter_strict,
         unfilled_handler=unfilled_handler,
         unfilled_handler_params=unfilled_handler_params or None,
         strategy_params=effective_strategy_params or None,
@@ -580,6 +651,8 @@ def build_config_from_multi_alpha(
     hmm_config=None,
     execution_algo=None,
     execution_algo_params=None,
+    filter_suspended_on_signal=False,
+    suspend_filter_strict=True,
     unfilled_handler=None,
     unfilled_handler_params=None,
     node_id=None,
@@ -617,6 +690,8 @@ def build_config_from_multi_alpha(
         hmm=hmm_config,
         execution_algo=execution_algo,
         execution_algo_params=execution_algo_params,
+        filter_suspended_on_signal=_bool_from_config(filter_suspended_on_signal),
+        suspend_filter_strict=_bool_from_config(suspend_filter_strict),
         unfilled_handler=unfilled_handler,
         unfilled_handler_params=unfilled_handler_params,
         strategy_params=strategy_params,

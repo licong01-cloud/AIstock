@@ -94,6 +94,8 @@ class ExperimentConfig(BaseModel):
     # ── Execution ─────────────────────────────────────────────────────────────
     execution_algo: str | None = None
     execution_algo_params: dict[str, Any] | None = None
+    filter_suspended_on_signal: bool = False
+    suspend_filter_strict: bool = True
 
     # ── Unfilled order handling ────────────────────────────────────────────────
     # Raw params dict: {"trigger_minute": int, "backup_depth": int}
@@ -186,7 +188,12 @@ class ExperimentConfig(BaseModel):
         if effective_label_horizon != DEFAULT_LABEL_HORIZON:
             params["label_horizon"] = effective_label_horizon
 
-        # 8. Unfilled handler - flatten params dict into top-level keys
+        # 8. suspend_d signal filter
+        if self.filter_suspended_on_signal:
+            params["filter_suspended_on_signal"] = True
+            params["suspend_filter_strict"] = self.suspend_filter_strict
+
+        # 9. Unfilled handler - flatten params dict into top-level keys
         if self.unfilled_handler:
             params["unfilled_handler"] = self.unfilled_handler
             uf_params = self.unfilled_handler_params or {}
@@ -195,7 +202,7 @@ class ExperimentConfig(BaseModel):
             if uf_params.get("backup_depth"):
                 params["unfilled_backup_depth"] = uf_params["backup_depth"]
 
-        # 9. Extra catch-all params
+        # 10. Extra catch-all params
         if self.extra_params:
             extra_params = dict(self.extra_params)
             if "label_horizon" in extra_params:
@@ -211,7 +218,7 @@ class ExperimentConfig(BaseModel):
                 extra_params.pop("label_horizon", None)
             params.update(extra_params)
 
-        # 10. initial_cash must NOT flow into custom_params
+        # 11. initial_cash must NOT flow into custom_params
         params.pop("initial_cash", None)
 
         return params

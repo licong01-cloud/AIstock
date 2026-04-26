@@ -311,6 +311,35 @@ async def _lifespan(app: FastAPI):
 
         scan_task = asyncio.create_task(_timer_scan_loop(shutdown_event))
 
+    # One-off QE experiment scanner. This covers single-alpha and Multi-Alpha
+    # experiments whose browser/SSE session or RD-Agent callback did not update DB.
+    qe_exp_scan_task = None
+    disable_qe_exp_scanner = (os.getenv("DISABLE_QE_EXPERIMENT_SCANNER") or "").strip().lower()
+    if disable_qe_exp_scanner not in {"1", "true", "yes", "y", "on"}:
+        async def _qe_experiment_scan_loop(stop_event: asyncio.Event):
+            from .services.quantevolver.qe_experiment_status_scanner import QEExperimentStatusScanner
+            scan_interval = int((os.getenv("QE_EXPERIMENT_SCAN_INTERVAL_SEC") or "30").strip() or "30")
+            batch_size = int((os.getenv("QE_EXPERIMENT_SCAN_BATCH_SIZE") or "50").strip() or "50")
+            scanner = QEExperimentStatusScanner(batch_size=batch_size)
+            while not stop_event.is_set():
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=scan_interval)
+                    break
+                except asyncio.TimeoutError:
+                    pass
+                try:
+                    stats = await scanner.scan_once()
+                    if stats.get("checked") or stats.get("synced_terminal") or stats.get("errors"):
+                        logging.getLogger("aistock.qe_experiment_scanner").info(
+                            "QE experiment scan stats: %s", stats
+                        )
+                except Exception as e:
+                    logging.getLogger("aistock.qe_experiment_scanner").warning(
+                        "QE experiment scan error: %s", e, exc_info=True
+                    )
+
+        qe_exp_scan_task = asyncio.create_task(_qe_experiment_scan_loop(shutdown_event))
+
     try:
         yield  # ── 应用运行中 ──
     except asyncio.CancelledError:
@@ -322,6 +351,12 @@ async def _lifespan(app: FastAPI):
             scan_task.cancel()
             try:
                 await scan_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if qe_exp_scan_task is not None:
+            qe_exp_scan_task.cancel()
+            try:
+                await qe_exp_scan_task
             except (asyncio.CancelledError, Exception):
                 pass
         # ── 先停所有后台线程（它们可能持有 DB 连接）──
@@ -377,9 +412,17 @@ def create_app() -> FastAPI:
     origins = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:3011",
+        "http://127.0.0.1:3011",
         "http://localhost:3012",
         "http://127.0.0.1:3012",
     ]
+    extra_origins = [
+        origin.strip()
+        for origin in os.getenv("AISTOCK_CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    origins.extend(origin for origin in extra_origins if origin not in origins)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,

@@ -100,6 +100,8 @@ export default function EvolutionDashboard() {
     hmm_signal_preset: "preset_A",
     node_id: "",
     label_horizon: 1 as 1 | 3 | 5 | 10,
+    filter_suspended_on_signal: false,
+    suspend_filter_strict: true,
   });
   const [isCreating, setIsCreating] = useState(false);
 
@@ -115,6 +117,39 @@ export default function EvolutionDashboard() {
   const [sotaPreview, setSotaPreview] = useState<any>(null);
   const [strategyCatalog, setStrategyCatalog] = useState<any[]>([]);
   const [executionAlgoCatalog, setExecutionAlgoCatalog] = useState<any[]>([]);
+  const qeExecutionAlgoCatalog = useMemo(() => executionAlgoCatalog.filter((a: any) => a.qe_supported !== false), [executionAlgoCatalog]);
+  const renderQeExecutionAlgoOptions = (currentValue: string | undefined, emptyLabel: string) => (
+    <>
+      <option value="">{emptyLabel}</option>
+      {currentValue && executionAlgoCatalog.find((a: any) => a.algo_code === currentValue)?.qe_supported === false && (
+        <option value={currentValue} disabled>{currentValue} (QE unsupported)</option>
+      )}
+      {qeExecutionAlgoCatalog.map((a: any) => (
+        <option key={a.algo_code} value={a.algo_code}>{a.algo_name || a.algo_code}</option>
+      ))}
+    </>
+  );
+  const ensureQeExecutionAlgoSupported = (algo: string | undefined, context: string) => {
+    if (!algo) return true;
+    const info = executionAlgoCatalog.find((a: any) => a.algo_code === algo);
+    if (executionAlgoCatalog.length > 0 && !info) {
+      alert(`${context}: execution algorithm ${algo} is not present in the backend catalog.`);
+      return false;
+    }
+    if (info?.qe_supported === false) {
+      alert(`${context}: execution algorithm ${algo} is not wired into QE/Qlib; refusing to silently fall back.`);
+      return false;
+    }
+    return true;
+  };
+  const stripRuntimeStrategyFlags = (params?: Record<string, any>) => {
+    const cleaned = { ...(params || {}) };
+    delete cleaned.filter_suspended_on_signal;
+    delete cleaned.exclude_suspended;
+    delete cleaned.suspend_filter_strict;
+    delete cleaned.suspend_filter_file;
+    return cleaned;
+  };
   const [computeNodes, setComputeNodes] = useState<any[]>([]);
 
   // 手动选择模型/因子相关状态
@@ -149,6 +184,8 @@ export default function EvolutionDashboard() {
     data_split: Record<string, string> | null;
     blacklist_enabled: boolean;
     stock_pool: string;
+    filter_suspended_on_signal: boolean;
+    suspend_filter_strict: boolean;
     collapsed: boolean;
     // backtest-only 模式
     backtest_only: boolean;
@@ -175,6 +212,8 @@ export default function EvolutionDashboard() {
     data_split: null,
     blacklist_enabled: false,
     stock_pool: "",
+    filter_suspended_on_signal: false,
+    suspend_filter_strict: true,
     collapsed: false,
     backtest_only: false,
     model_source_task_id: "",
@@ -219,7 +258,7 @@ export default function EvolutionDashboard() {
       ...first,
       label: `Loop ${prev.length + 1}`,
       factor_keys: new Set(first.factor_keys),
-      strategy_params: { ...first.strategy_params },
+      strategy_params: stripRuntimeStrategyFlags(first.strategy_params),
       execution_algo_params: { ...first.execution_algo_params },
       unfilled_handler_params: { ...first.unfilled_handler_params },
       data_split: first.data_split ? { ...first.data_split } : null,
@@ -373,6 +412,8 @@ export default function EvolutionDashboard() {
     execution_algo: "",
     execution_algo_params: {} as Record<string, any>,
     label_horizon: 1 as 1 | 3 | 5 | 10,
+    filter_suspended_on_signal: false,
+    suspend_filter_strict: true,
   });
 
   // 策略演进相关状态
@@ -514,7 +555,7 @@ export default function EvolutionDashboard() {
         fork_from_loop_index: -1,
         inherit_history: false,
         strategy_id: cloneFromTask.strategy_id || "",
-        strategy_params: cloneFromTask.strategy_params || {},
+        strategy_params: stripRuntimeStrategyFlags(cloneFromTask.strategy_params),
         execution_algo: (cloneFromTask as any).execution_algo || "",
         execution_algo_params: (cloneFromTask as any).execution_algo_params || {},
         unfilled_handler: (cloneFromTask as any).unfilled_handler || "",
@@ -526,6 +567,8 @@ export default function EvolutionDashboard() {
         label_horizon: ([1, 3, 5, 10].includes(Number((cloneFromTask as any).label_horizon || 1))
           ? Number((cloneFromTask as any).label_horizon || 1)
           : 1) as 1 | 3 | 5 | 10,
+        filter_suspended_on_signal: !!sp.filter_suspended_on_signal,
+        suspend_filter_strict: sp.suspend_filter_strict !== false,
       });
       if ((cloneFromTask as any).stock_pool) {
         setBlacklistEnabled(true);
@@ -821,6 +864,10 @@ export default function EvolutionDashboard() {
     }
     } // end of non-custom_evo validation
 
+    if (newTask.source_type !== "custom_evo" && !ensureQeExecutionAlgoSupported(newTask.execution_algo, "new task")) {
+      return;
+    }
+
     setIsCreating(true);
     try {
       // ── evolution_fork: 走独立的 fork API ──
@@ -839,6 +886,8 @@ export default function EvolutionDashboard() {
             strategy_params: Object.keys(newTask.strategy_params).length > 0 ? newTask.strategy_params : undefined,
             execution_algo: newTask.execution_algo || undefined,
             execution_algo_params: Object.keys(newTask.execution_algo_params).length > 0 ? newTask.execution_algo_params : undefined,
+            filter_suspended_on_signal: !!newTask.filter_suspended_on_signal,
+            suspend_filter_strict: newTask.suspend_filter_strict !== false,
             unfilled_handler: newTask.unfilled_handler || undefined,
             unfilled_handler_params:
               newTask.unfilled_handler && Object.keys(newTask.unfilled_handler_params || {}).length > 0
@@ -858,7 +907,7 @@ export default function EvolutionDashboard() {
         if (data.status === "success") {
           alert(`已从 Loop ${newTask.fork_from_loop_index} 创建新演进任务！`);
           setShowCreateTask(false);
-          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "", label_horizon: 1 });
+          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "", label_horizon: 1, filter_suspended_on_signal: false, suspend_filter_strict: true });
           setForkSourceLoops([]);
           setShowFactorLibrary(false);
           setAdditionalFactorKeys(new Set());
@@ -879,6 +928,7 @@ export default function EvolutionDashboard() {
           const loop = customEvoLoops[i];
           if (loop.factor_keys.size === 0) { alert(`Loop ${i + 1} 必须选择至少一个因子`); setIsCreating(false); return; }
           if (!loop.model_id) { alert(`Loop ${i + 1} 必须选择一个模型`); setIsCreating(false); return; }
+          if (!ensureQeExecutionAlgoSupported(loop.execution_algo, `custom loop ${i + 1}`)) { setIsCreating(false); return; }
         }
         const loopsPayload = customEvoLoops.map((loop, i) => ({
           label: loop.label || `Loop ${i + 1}`,
@@ -889,6 +939,8 @@ export default function EvolutionDashboard() {
           strategy_params: Object.keys(loop.strategy_params).length > 0 ? loop.strategy_params : undefined,
           execution_algo: loop.execution_algo || undefined,
           execution_algo_params: Object.keys(loop.execution_algo_params).length > 0 ? loop.execution_algo_params : undefined,
+          filter_suspended_on_signal: !!loop.filter_suspended_on_signal,
+          suspend_filter_strict: loop.suspend_filter_strict !== false,
           enable_sector_hmm: loop.enable_sector_hmm,
           hmm_model_version_id: loop.enable_sector_hmm ? (loop.hmm_model_version_id || undefined) : undefined,
           hmm_signal_preset: loop.enable_sector_hmm ? (loop.hmm_signal_preset || undefined) : undefined,
@@ -966,6 +1018,8 @@ export default function EvolutionDashboard() {
         strategy_params: Object.keys(newTask.strategy_params).length > 0 ? newTask.strategy_params : undefined,
         execution_algo: newTask.execution_algo || undefined,
         execution_algo_params: Object.keys(newTask.execution_algo_params).length > 0 ? newTask.execution_algo_params : undefined,
+        filter_suspended_on_signal: !!newTask.filter_suspended_on_signal,
+        suspend_filter_strict: newTask.suspend_filter_strict !== false,
         unfilled_handler: newTask.unfilled_handler || undefined,
         unfilled_handler_params:
           newTask.unfilled_handler && Object.keys(newTask.unfilled_handler_params || {}).length > 0
@@ -999,7 +1053,7 @@ export default function EvolutionDashboard() {
           // 有因子验证问题 — 弹出处理弹窗
           setFactorValidation({ taskId: data.task_id, validation: data.factor_validation });
           setShowCreateTask(false);
-          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "", label_horizon: 1 });
+          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "", label_horizon: 1, filter_suspended_on_signal: false, suspend_filter_strict: true });
           setSotaPreview(null);
           setDetectedTaskType("none");
           setSelectedFactorsForEvo(new Set());
@@ -1014,7 +1068,7 @@ export default function EvolutionDashboard() {
         } else {
           alert("演进任务创建成功并已在后台启动！");
           setShowCreateTask(false);
-          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "", label_horizon: 1 });
+          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "", label_horizon: 1, filter_suspended_on_signal: false, suspend_filter_strict: true });
           setSotaPreview(null);
           setDetectedTaskType("none");
           setSelectedFactorsForEvo(new Set());
@@ -1109,10 +1163,12 @@ export default function EvolutionDashboard() {
       evolution_mode: "auto",
       inherit_history: false,
       strategy_id: task?.strategy_id || "",
-      strategy_params: task?.strategy_params || {},
+      strategy_params: stripRuntimeStrategyFlags(task?.strategy_params),
       execution_algo: task?.execution_algo || "",
       execution_algo_params: task?.execution_algo_params || {},
       label_horizon: sourceHorizon,
+      filter_suspended_on_signal: !!task?.strategy_params?.filter_suspended_on_signal,
+      suspend_filter_strict: task?.strategy_params?.suspend_filter_strict !== false,
     });
     setShowForkDialog(loopIndex);
   };
@@ -1121,7 +1177,7 @@ export default function EvolutionDashboard() {
     setShowForkDialog(null);
     setIsForking(false);
     setForkType("evolution");
-    setForkForm({ task_name: "", max_loops: 10, evolution_guidance: "", evolution_mode: "auto", inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, label_horizon: 1 });
+    setForkForm({ task_name: "", max_loops: 10, evolution_guidance: "", evolution_mode: "auto", inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, label_horizon: 1, filter_suspended_on_signal: false, suspend_filter_strict: true });
     setStrategyEvoLoops([]);
     setStrategyEvoExecutionMode("serial");
   };
@@ -1141,6 +1197,8 @@ export default function EvolutionDashboard() {
       strategy_id: "",
       execution_algo: "",
       execution_algo_params: {},
+      filter_suspended_on_signal: false,
+      suspend_filter_strict: true,
       enable_sector_hmm: false,
       hmm_model_version_id: "",
       hmm_signal_preset: "",
@@ -1181,6 +1239,8 @@ export default function EvolutionDashboard() {
       strategy_id: config.strategy_id || "",
       execution_algo: config.execution_algo || "",
       execution_algo_params: {},
+      filter_suspended_on_signal: !!config.strategy_params?.filter_suspended_on_signal,
+      suspend_filter_strict: config.strategy_params?.suspend_filter_strict !== false,
       enable_sector_hmm: false,
       hmm_model_version_id: "",
       hmm_signal_preset: "",
@@ -1196,6 +1256,9 @@ export default function EvolutionDashboard() {
     if (strategyEvoLoops.length === 0) {
       alert("请至少配置一个策略回测 Loop");
       return;
+    }
+    for (let i = 0; i < strategyEvoLoops.length; i++) {
+      if (!ensureQeExecutionAlgoSupported(strategyEvoLoops[i]?.execution_algo, `strategy loop ${i + 1}`)) return;
     }
 
     setIsForking(true);
@@ -1237,6 +1300,7 @@ export default function EvolutionDashboard() {
       handleForkCancel();
       return;
     }
+    if (!ensureQeExecutionAlgoSupported(forkForm.execution_algo, "fork task")) return;
     setIsForking(true);
     try {
       const res = await fetch(`${API}/quantevolver/evolution/tasks/${activeTaskId}/fork`, {
@@ -1253,6 +1317,8 @@ export default function EvolutionDashboard() {
           strategy_params: Object.keys(forkForm.strategy_params).length > 0 ? forkForm.strategy_params : undefined,
           execution_algo: forkForm.execution_algo || undefined,
           execution_algo_params: Object.keys(forkForm.execution_algo_params).length > 0 ? forkForm.execution_algo_params : undefined,
+          filter_suspended_on_signal: !!forkForm.filter_suspended_on_signal,
+          suspend_filter_strict: forkForm.suspend_filter_strict !== false,
           label_horizon: forkForm.label_horizon,
         }),
       });
@@ -2491,10 +2557,7 @@ export default function EvolutionDashboard() {
                       }}
                       style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box", backgroundColor: "white" }}
                     >
-                      <option value="">默认（TWAP）</option>
-                      {executionAlgoCatalog.map(a => (
-                        <option key={a.algo_code} value={a.algo_code}>{a.algo_name || a.algo_code}</option>
-                      ))}
+                      {renderQeExecutionAlgoOptions(newTask.execution_algo, "默认（TWAP）")}
                     </select>
                   </div>
                 </div>
@@ -2589,6 +2652,27 @@ export default function EvolutionDashboard() {
                       TAIL_BOOST 按持仓市值比例加仓已有持仓 / TAIL_SUBSTITUTE 等额买入排名 topk 之后的候选股
                     </div>
                   </div>
+                )}
+              </div>
+
+              <div style={{ border: "1px solid #bae6fd", borderRadius: "8px", padding: "12px", backgroundColor: "#f0f9ff" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", fontWeight: 700, color: "#0369a1" }}>
+                  <input
+                    type="checkbox"
+                    checked={newTask.filter_suspended_on_signal}
+                    onChange={e => setNewTask(prev => ({ ...prev, filter_suspended_on_signal: e.target.checked }))}
+                  />
+                  启用 suspend_d 日频选股停牌过滤
+                </label>
+                {newTask.filter_suspended_on_signal && (
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "8px", fontSize: "12px", color: "#075985" }}>
+                    <input
+                      type="checkbox"
+                      checked={newTask.suspend_filter_strict}
+                      onChange={e => setNewTask(prev => ({ ...prev, suspend_filter_strict: e.target.checked }))}
+                    />
+                    严格要求 suspend_d 每个回测交易日审计成功
+                  </label>
                 )}
               </div>
 
@@ -2996,8 +3080,7 @@ export default function EvolutionDashboard() {
                             const info = executionAlgoCatalog.find((a: any) => a.algo_code === code);
                             updateCustomEvoLoop(loopIdx, { execution_algo: code, execution_algo_params: info?.default_config || {} });
                           }} style={{ width: "100%", padding: "5px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px" }}>
-                            <option value="">默认 TWAP</option>
-                            {executionAlgoCatalog.map(a => (<option key={a.algo_code} value={a.algo_code}>{a.algo_name || a.algo_code}</option>))}
+                            {renderQeExecutionAlgoOptions(loop.execution_algo, "默认 TWAP")}
                           </select>
                         </div>
                       </div>
@@ -3031,6 +3114,26 @@ export default function EvolutionDashboard() {
                           )}
                         </div>
                       )}
+                      <div style={{ marginTop: "8px", padding: "8px", borderRadius: "6px", backgroundColor: "#f0f9ff", border: "1px solid #bae6fd" }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#0369a1" }}>
+                          <input
+                            type="checkbox"
+                            checked={loop.filter_suspended_on_signal}
+                            onChange={e => updateCustomEvoLoop(loopIdx, { filter_suspended_on_signal: e.target.checked })}
+                          />
+                          suspend_d 停牌过滤
+                        </label>
+                        {loop.filter_suspended_on_signal && (
+                          <label style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "6px", fontSize: "11px", color: "#075985" }}>
+                            <input
+                              type="checkbox"
+                              checked={loop.suspend_filter_strict}
+                              onChange={e => updateCustomEvoLoop(loopIdx, { suspend_filter_strict: e.target.checked })}
+                            />
+                            严格审计
+                          </label>
+                        )}
+                      </div>
                       {/* 初始资金 */}
                       <div style={{ marginTop: "8px" }}>
                         <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>初始资金（元）</label>
@@ -3378,12 +3481,29 @@ export default function EvolutionDashboard() {
                         setForkForm(f => ({ ...f, execution_algo: algoCode, execution_algo_params: algoInfo?.default_config || {} }));
                       }}
                       style={{ width: "100%", padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box", backgroundColor: "white" }}>
-                      <option value="">继承源任务</option>
-                      {executionAlgoCatalog.map(a => (
-                        <option key={a.algo_code} value={a.algo_code}>{a.algo_name || a.algo_code}</option>
-                      ))}
+                      {renderQeExecutionAlgoOptions(forkForm.execution_algo, "继承源任务")}
                     </select>
                   </div>
+                </div>
+                <div style={{ padding: "8px 10px", borderRadius: "6px", backgroundColor: "#f0f9ff", border: "1px solid #bae6fd", marginBottom: "10px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#0369a1", fontWeight: 600 }}>
+                    <input
+                      type="checkbox"
+                      checked={forkForm.filter_suspended_on_signal}
+                      onChange={e => setForkForm(f => ({ ...f, filter_suspended_on_signal: e.target.checked }))}
+                    />
+                    启用 suspend_d 日频选股停牌过滤
+                  </label>
+                  {forkForm.filter_suspended_on_signal && (
+                    <label style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "6px", fontSize: "12px", color: "#075985" }}>
+                      <input
+                        type="checkbox"
+                        checked={forkForm.suspend_filter_strict}
+                        onChange={e => setForkForm(f => ({ ...f, suspend_filter_strict: e.target.checked }))}
+                      />
+                      严格要求 suspend_d 审计成功
+                    </label>
+                  )}
                 </div>
                 {/* 策略参数（含 initial_cash） */}
                 {!forkForm.strategy_id ? (
@@ -3617,10 +3737,7 @@ export default function EvolutionDashboard() {
                             onChange={e => updateStrategyEvoLoop(index, { execution_algo: e.target.value })}
                             style={{ width: "100%", padding: "4px 6px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px" }}
                           >
-                            <option value="">继承源任务</option>
-                            {executionAlgoCatalog.map(a => (
-                              <option key={a.algo_code} value={a.algo_code}>{a.algo_name || a.algo_code}</option>
-                            ))}
+                            {renderQeExecutionAlgoOptions(loop.execution_algo, "继承源任务")}
                           </select>
                         </div>
                         <div style={{ display: "flex", alignItems: "center", paddingTop: "16px" }}>
@@ -3635,6 +3752,27 @@ export default function EvolutionDashboard() {
                             启用 HMM 行业热度调整
                           </label>
                         </div>
+                      </div>
+
+                      <div style={{ padding: "8px", borderRadius: "6px", backgroundColor: "#f0f9ff", border: "1px solid #bae6fd", marginBottom: "8px" }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#0369a1" }}>
+                          <input
+                            type="checkbox"
+                            checked={loop.filter_suspended_on_signal || false}
+                            onChange={e => updateStrategyEvoLoop(index, { filter_suspended_on_signal: e.target.checked })}
+                          />
+                          suspend_d 停牌过滤
+                        </label>
+                        {loop.filter_suspended_on_signal && (
+                          <label style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "6px", fontSize: "11px", color: "#075985" }}>
+                            <input
+                              type="checkbox"
+                              checked={loop.suspend_filter_strict !== false}
+                              onChange={e => updateStrategyEvoLoop(index, { suspend_filter_strict: e.target.checked })}
+                            />
+                            严格审计
+                          </label>
+                        )}
                       </div>
 
                       {loop.enable_sector_hmm && (

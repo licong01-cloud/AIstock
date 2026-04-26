@@ -39,78 +39,62 @@ _PROJECT_ROOT = os.path.normpath(
 logger = logging.getLogger(__name__)
 
 
+def _merge_strategy_runtime_flags(
+    strategy_params: Optional[Dict[str, Any]],
+    filter_suspended_on_signal: bool,
+    suspend_filter_strict: bool = True,
+) -> Dict[str, Any]:
+    """Persist runtime signal-filter flags without requiring new task table columns."""
+    merged = dict(strategy_params or {})
+    _reject_nested_runtime_flags(merged, "strategy_params")
+    if filter_suspended_on_signal:
+        merged["filter_suspended_on_signal"] = True
+        merged["suspend_filter_strict"] = bool(suspend_filter_strict)
+    return merged
+
+
+def _reject_nested_runtime_flags(strategy_params: Optional[Dict[str, Any]], context: str) -> None:
+    """Runtime execution flags must live at the explicit config layer only."""
+    params = dict(strategy_params or {})
+    duplicate_keys = {
+        "filter_suspended_on_signal",
+        "exclude_suspended",
+        "suspend_filter_strict",
+        "suspend_filter_file",
+    }.intersection(params)
+    if duplicate_keys:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "suspend filter runtime flags must be sent via top-level request fields, "
+                f"not {context}: {sorted(duplicate_keys)}"
+            ),
+        )
+
+
+def _normalize_qe_execution_algo_for_request(execution_algo: Optional[str], context: str) -> Optional[str]:
+    """Normalize QE execution algo at API boundary; unsupported values fail loudly."""
+    if not execution_algo:
+        return None
+    try:
+        from ..services.quantevolver.config_composer import ConfigComposer
+        return ConfigComposer._normalize_execution_algo(execution_algo)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"{context}: {e}") from e
+
+
 def _sync_stock_pool_to_remote(stock_pool_path: str, node: dict):
-    """通过 WSL scp 同步 filtered_pool 股票池文件到远程节点的 qlib instruments 目录。
+    """Synchronize one filtered_pool file to a remote node, fail-fast on any problem."""
+    from ..services.quantevolver.stock_pool_sync import sync_stock_pool_to_remote_node
 
-    stock_pool_path: WSL/Linux 路径，如 /home/lc999/data/qlib_bin/instruments/filtered_pool_20260405.txt
-    node: infra.compute_nodes 行（dict）
-    """
-    import subprocess as _sp
-
-    node_host = node.get("api_base_url", "").replace("http://", "").rstrip("/").split(":")[0]
-    if not node_host:
-        return
-
-    ssh_user = node.get("ssh_user", "lc999")
-    ssh_target = f"{ssh_user}@{node_host}"
-    stock_pool_basename = os.path.basename(stock_pool_path)
-
-    # 推断远端 instruments 目录：从节点的 qlib_data_path 配置
-    remote_qlib_data = node.get("qlib_data_path") or ""
-    if not remote_qlib_data:
-        logger.warning(f"节点 {node.get('node_id')} 未配置 qlib_data_path，跳过股票池同步")
-        return
-    remote_instruments_dir = f"{remote_qlib_data}/instruments"
-
-    # 确保远端目录存在
-    _sp.run(["ssh", ssh_target, "mkdir", "-p", remote_instruments_dir], timeout=10, check=False)
-
-    # 通过 WSL scp 同步（因为源文件在 WSL 文件系统中）
-    result = _sp.run(
-        ["wsl", "-d", "Ubuntu", "--", "bash", "-c",
-         f"scp -o ConnectTimeout=10 '{stock_pool_path}' '{ssh_target}:{remote_instruments_dir}/'"],
-        timeout=30, check=False, capture_output=True,
-    )
-    if result.returncode == 0:
-        logger.info(f"同步股票池 {stock_pool_basename} → {ssh_target}:{remote_instruments_dir}/")
-    else:
-        stderr = result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
-        logger.warning(f"同步股票池失败: {stderr.strip()}")
+    return sync_stock_pool_to_remote_node(stock_pool_path, node)
 
 
 def _sync_all_filtered_pools_to_remote(node: dict):
-    """同步本机所有 filtered_pool_*.txt 文件到远程节点。
+    """Synchronize all local filtered_pool_*.txt files to a remote node, fail-fast."""
+    from ..services.quantevolver.stock_pool_sync import sync_all_filtered_pools_to_remote_node
 
-    用于节点首次配置或全量同步场景。
-    """
-    import subprocess as _sp
-
-    node_host = node.get("api_base_url", "").replace("http://", "").rstrip("/").split(":")[0]
-    if not node_host:
-        return
-    ssh_user = node.get("ssh_user", "lc999")
-    ssh_target = f"{ssh_user}@{node_host}"
-
-    remote_qlib_data = node.get("qlib_data_path") or ""
-    if not remote_qlib_data:
-        return
-    remote_instruments_dir = f"{remote_qlib_data}/instruments"
-
-    # 确保远端目录存在
-    _sp.run(["ssh", ssh_target, "mkdir", "-p", remote_instruments_dir], timeout=10, check=False)
-
-    # WSL 路径下查找本机的 filtered_pool 文件
-    local_instruments_dir = "/home/lc999/data/qlib_bin/instruments"
-    result = _sp.run(
-        ["wsl", "-d", "Ubuntu", "--", "bash", "-c",
-         f"scp -o ConnectTimeout=10 {local_instruments_dir}/filtered_pool_*.txt '{ssh_target}:{remote_instruments_dir}/'"],
-        timeout=60, check=False, capture_output=True,
-    )
-    if result.returncode == 0:
-        logger.info(f"全量同步 filtered_pool → {ssh_target}:{remote_instruments_dir}/")
-    else:
-        stderr = result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
-        logger.warning(f"全量同步 filtered_pool 失败: {stderr.strip()}")
+    return sync_all_filtered_pools_to_remote_node(node)
 
 router = APIRouter(
     prefix="/quantevolver/evolution",
@@ -136,6 +120,8 @@ class EvolutionTaskCreateRequest(BaseModel):
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数覆盖，如 {topk: 30, n_drop: 3}")
     execution_algo: Optional[str] = Field(None, description="日内执行算法code，如 TWAP/VWAP/CLOSE_PRICE")
     execution_algo_params: Optional[Dict[str, Any]] = Field(None, description="执行算法参数覆盖")
+    filter_suspended_on_signal: bool = Field(False, description="生成日频选股信号时使用 suspend_d 过滤已停牌股票")
+    suspend_filter_strict: bool = Field(True, description="启用停牌过滤时要求 suspend_d 每个回测交易日审计成功")
     unfilled_handler: Optional[str] = Field(None, description="尾盘涨停未成交处理: TAIL_BOOST(加仓持仓股) / TAIL_SUBSTITUTE(替补买入)")
     unfilled_handler_params: Optional[Dict[str, Any]] = Field(None, description="尾盘处理参数，如 {backup_depth: 15, trigger_minute: 210}")
     enable_sector_hmm: bool = Field(False, description="是否启用行业 HMM 热度调整")
@@ -290,12 +276,10 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
-        _VALID_EXECUTION_ALGOS = {"TWAP", "VWAP", "CLOSE_PRICE", "V24_PLAN"}
-        if req.execution_algo and req.execution_algo not in _VALID_EXECUTION_ALGOS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"execution_algo='{req.execution_algo}' 无效，允许值: {', '.join(sorted(_VALID_EXECUTION_ALGOS))}",
-            )
+        normalized_execution_algo = _normalize_qe_execution_algo_for_request(
+            req.execution_algo,
+            "execution_algo",
+        )
 
         if req.strategy_id:
             with get_conn() as conn:
@@ -336,8 +320,8 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
                 """, (req.evolution_guidance, req.source_type, req.source_task_id,
                       req.evolution_mode or "auto",
                       req.strategy_id,
-                      json.dumps(req.strategy_params) if req.strategy_params else None,
-                      req.execution_algo,
+                      json.dumps(_merge_strategy_runtime_flags(req.strategy_params, req.filter_suspended_on_signal, req.suspend_filter_strict)) if (req.strategy_params or req.filter_suspended_on_signal) else None,
+                      normalized_execution_algo,
                       json.dumps(req.execution_algo_params) if req.execution_algo_params else None,
                       req.unfilled_handler,
                       json.dumps(req.unfilled_handler_params) if req.unfilled_handler_params else None,
@@ -348,7 +332,11 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
 
         # --- 注入 HMM 模型路径到 strategy_params ---
         if req.enable_sector_hmm and hmm_model_path:
-            merged_params = dict(req.strategy_params) if req.strategy_params else {}
+            merged_params = _merge_strategy_runtime_flags(
+                req.strategy_params,
+                req.filter_suspended_on_signal,
+                req.suspend_filter_strict,
+            )
             merged_params["sector_hmm_model_path"] = hmm_model_path
             merged_params["enable_sector_hmm"] = True
             if req.hmm_signal_preset:
@@ -645,6 +633,8 @@ class EvolutionTaskForkRequest(BaseModel):
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="覆盖策略参数")
     execution_algo: Optional[str] = Field(None, description="覆盖执行算法code")
     execution_algo_params: Optional[Dict[str, Any]] = Field(None, description="覆盖执行算法参数")
+    filter_suspended_on_signal: bool = Field(False, description="生成日频选股信号时使用 suspend_d 过滤已停牌股票")
+    suspend_filter_strict: bool = Field(True, description="启用停牌过滤时要求 suspend_d 每个回测交易日审计成功")
     unfilled_handler: Optional[str] = Field(None, description="尾盘涨停处理: TAIL_BOOST / TAIL_SUBSTITUTE / 空=不使用")
     unfilled_handler_params: Optional[Dict[str, Any]] = Field(None, description="尾盘处理参数，如 {backup_depth: 15}")
     additional_factor_keys: Optional[List[str]] = Field(None, description="从因子库额外添加的因子key列表")
@@ -680,8 +670,16 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
             evolution_mode=req.evolution_mode or "auto",
             inherit_history=req.inherit_history,
             strategy_id=req.strategy_id,
-            strategy_params=req.strategy_params,
-            execution_algo=req.execution_algo,
+            strategy_params=(
+                _merge_strategy_runtime_flags(
+                    req.strategy_params,
+                    req.filter_suspended_on_signal,
+                    req.suspend_filter_strict,
+                )
+                if (req.strategy_params is not None or req.filter_suspended_on_signal)
+                else None
+            ),
+            execution_algo=_normalize_qe_execution_algo_for_request(req.execution_algo, "fork.execution_algo"),
             execution_algo_params=req.execution_algo_params,
             unfilled_handler=req.unfilled_handler,
             unfilled_handler_params=req.unfilled_handler_params,
@@ -740,6 +738,8 @@ class StrategyLoopConfig(BaseModel):
     strategy_id: Optional[str] = Field(None, description="交易策略ID，None=继承源Loop")
     execution_algo: Optional[str] = Field(None, description="日内执行算法code")
     execution_algo_params: Optional[Dict[str, Any]] = Field(None, description="执行算法参数")
+    filter_suspended_on_signal: bool = Field(False, description="生成日频选股信号时使用 suspend_d 过滤已停牌股票")
+    suspend_filter_strict: bool = Field(True, description="启用停牌过滤时要求 suspend_d 每个回测交易日审计成功")
     enable_sector_hmm: bool = Field(False, description="是否启用行业 HMM")
     hmm_model_version_id: Optional[str] = Field(None, description="HMM 模型快照 ID")
     hmm_signal_preset: Optional[str] = Field(None, description="HMM 信号系数档位: preset_A/preset_B")
@@ -772,7 +772,15 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
         loops_config = []
         for i, loop_cfg in enumerate(req.loops, start=1):
             cfg_dict = loop_cfg.dict()
+            _reject_nested_runtime_flags(
+                cfg_dict.get("strategy_params"),
+                f"strategy_loop[{i}].strategy_params",
+            )
             cfg_dict["loop_index"] = i
+            cfg_dict["execution_algo"] = _normalize_qe_execution_algo_for_request(
+                cfg_dict.get("execution_algo"),
+                f"strategy_loop[{i}].execution_algo",
+            )
             loops_config.append(cfg_dict)
 
         new_task_id = await scheduler.strategy_fork_task(
@@ -844,6 +852,8 @@ class CustomEvoLoopConfig(BaseModel):
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数: topk, n_drop, hold_thresh, risk_degree 等")
     execution_algo: Optional[str] = Field(None, description="日内执行算法code")
     execution_algo_params: Optional[Dict[str, Any]] = Field(None, description="执行算法参数")
+    filter_suspended_on_signal: bool = Field(False, description="生成日频选股信号时使用 suspend_d 过滤已停牌股票")
+    suspend_filter_strict: bool = Field(True, description="启用停牌过滤时要求 suspend_d 每个回测交易日审计成功")
     enable_sector_hmm: bool = Field(False, description="是否启用行业 HMM")
     hmm_model_version_id: Optional[str] = Field(None, description="HMM 模型快照 ID")
     hmm_signal_preset: Optional[str] = Field(None, description="HMM 信号系数档位: preset_A/preset_B")
@@ -934,7 +944,15 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
         loops_config = []
         for i, loop_cfg in enumerate(req.loops, start=1):
             cfg_dict = loop_cfg.dict()
+            _reject_nested_runtime_flags(
+                cfg_dict.get("strategy_params"),
+                f"custom_loop[{i}].strategy_params",
+            )
             cfg_dict["loop_index"] = i
+            cfg_dict["execution_algo"] = _normalize_qe_execution_algo_for_request(
+                cfg_dict.get("execution_algo"),
+                f"custom_loop[{i}].execution_algo",
+            )
             cfg_dict["label_horizon"] = normalize_label_horizon(loop_cfg.label_horizon)
             if loop_cfg.backtest_only and (i - 1) in loop_source_horizons:
                 cfg_dict["source_label_horizon"] = loop_source_horizons[i - 1]
@@ -947,6 +965,10 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             node = svc.get_node(req.node_id)
             if not node or node.get("status") == "offline":
                 raise HTTPException(status_code=400, detail=f"节点 {req.node_id} 不存在或离线")
+            for cfg_dict in loops_config:
+                stock_pool = cfg_dict.get("stock_pool")
+                if stock_pool and "filtered_pool" in stock_pool:
+                    _sync_stock_pool_to_remote(stock_pool, node)
 
         new_task_id = await scheduler.create_custom_evo_task(
             task_name=req.task_name,
