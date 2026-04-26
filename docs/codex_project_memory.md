@@ -118,7 +118,7 @@ Important directories:
 ## Package Selection Paper v2 Closure Update - 2026-04-26
 
 - Strategy Package API now exposes status events and a generic validated status transition endpoint, while retaining dedicated enable-selection, enable-paper, and retire endpoints. Manifest hash remains independent from mutable package status.
-- Selection Center now stores `package_ids` on `selection.run`, supports listing selection runs, and can create a Paper v2 portfolio from a successful single-package selection run. The created portfolio is linked back through `selection.paper_portfolio_link` with selection runtime config containing the exact aggregate `selection_scores` and source trace.
+- Selection Center now stores `package_ids` on `selection.run`, supports listing selection runs, and can create a Paper v2 portfolio from a successful single-package selection run. The created portfolio is linked back through `selection.paper_portfolio_link` with source trace only; Paper v2 must regenerate/load authoritative live selection artifacts per trading day and must not reuse raw `selection_scores` as signal input.
 - Multi-package selection-to-paper remains fail-fast with `UnsupportedFeatureError` until a combined StrategyPackage contract exists; union/intersection results are not silently converted into a single-package portfolio.
 - Paper v2 portfolio lifecycle now supports pause, resume, complete, and retire transitions. Day runs/readiness checks require the portfolio to be `READY`.
 - Paper v2 exposes a basic persisted-snapshot performance report endpoint at `/api/v1/paper-v2/portfolios/{portfolio_id}/performance-report`; it fails if no daily snapshot exists.
@@ -203,3 +203,31 @@ Important directories:
 - Paper v2 UI validation now passes with a temporary backend on 8011: StrategyPackage display/readiness fail-fast, Selection Center fail-fast for missing `selection_runtime`, multi-package research boundary, portfolio creation fail-fast for unavailable V24 runtime/model path, model/HMM page loading, structured negative API errors, and TDX minute HTTP endpoint smoke.
 - The first three QE experiment packages (`qe_20260416_002701`, `qe_20260413_084216`, `qe_20260416_082012`) can be created and enabled for selection, and their IC/RankIC/annual-return/max-drawdown summaries display in the UI.
 - Full value validation (successful selection, portfolio creation, 10-trading-day replay, ledger/performance profit/loss) remains blocked because these packages currently lack authoritative `selection_runtime` score artifacts and their paper execution policy references V24 assets/torch, which are intentionally not enabled or installed.
+
+## Selection Score Artifact Runtime Update - 2026-04-26
+
+- Added `strategy_pkg.selection_score_artifact` and StrategyPackage selection artifact service/repository so Selection Center can load persisted ranked model scores without depending on V24/V25 minute execution adapters or Torch.
+- Correction: QE backtest `pred.pkl` artifacts are not authoritative current selection data. They are diagnostic/backtest-only (`metadata.source_type=qe_mlruns_pred_pkl_v1`, `authority_scope=diagnostic_backtest_only`) and `StrategyPackageRuntime` rejects them for Selection Center/Paper v2.
+- Authoritative `/selection-artifacts/generate` now runs live/latest-data QE model inference: it reconstructs a temporary StrategyPackage inference workspace, recomputes factors from DB-backed current data, applies the saved QE LGB model in WSL/Qlib, persists `source_type=live_qe_model_inference_v1`, and records model/factor/runtime trace metadata.
+- Strategy Package API keeps `/selection-artifacts/generate-diagnostic-backtest` for explicit diagnostics from QE `pred.pkl`; this endpoint is intentionally separate and its output is not accepted by authoritative runtime.
+- `StrategyPackageRuntime` also rejects raw `runtime_config.selection_scores` and manifest embedded `strategy_config.selection_runtime.scores/scores_path`; unit tests seed authoritative artifacts instead of bypassing live/latest-data inference.
+- Strict StrategyPackage live inference now enables `AISTOCK_STRICT_INFERENCE=1` and fails rather than padding/truncating features, filling missing features with zero, using earlier factor dates, tolerating insufficient data windows, or accepting missing fundamental/moneyflow/sector DB data.
+- Verified successful DB_HISTORICAL live inference selection artifacts and single-package Selection Center runs for the first three QE packages on 2026-04-24: `qe_20260416_002701`, `qe_20260413_084216`, and `qe_20260416_082012`. Paper execution remains separately gated by execution-policy/runtime readiness.
+- V25 execution remains a separate minute-execution concern. The current V25 two-stage executor imports PyTorch directly, so Windows-side V25 execution requires Torch unless V25 is exported to a non-PyTorch inference format or executed out-of-process in the QE/WSL environment.
+- V25 execution remains a separate minute-execution concern. The current V25 two-stage executor imports PyTorch directly, so Windows-side V25 execution requires Torch unless V25 is exported to a non-PyTorch inference format or executed out-of-process in the QE/WSL environment.
+
+## QE Blacklist Metadata Parameter Filtering Update - 2026-04-26
+
+- Fixed QE config generation so industry blacklist display metadata (`sector_blacklist`, `sector_blacklist_enabled`, `sector_blacklist_snapshot`, `blacklist_enabled`) is filtered out before Qlib strategy kwargs are validated or serialized. The actual executable blacklist restriction continues to be represented by the generated `stock_pool`; snapshot fields remain persisted only for UI/detail traceability.
+- Added a unified-engine regression test covering `ScoreWeightedTopkStrategyV2` with blacklist metadata in `custom_params`, ensuring these fields do not enter generated strategy YAML and do not trigger unsupported-parameter failures.
+
+## QE Compose Correlation Removal UI Update - 2026-04-26
+
+- QE compose correlation analysis now lets users remove either factor directly from each high/medium-correlation pair row. The action updates the selected factor set and prunes correlation pairs immediately, so users no longer need to return to the factor-selection table to deselect redundant factors.
+
+## Paper v2 UI/Selection Portfolio Validation Update - 2026-04-27
+
+- Paper v2 frontend now has Chinese StrategyPackage source dropdowns, single-package selection with explicit live-inference artifact generation, HMM config/snapshot selectors, TopK 20 default/50 max, historical run detail display, multi-run aggregation, watchlist import, and single-package Paper v2 portfolio startup controls.
+- Added `/api/v1/paper-v2/trading-days/defaults` so non-trading/pre-open UI defaults use the latest data-ready trading day from `stk_limit` refresh audit instead of blindly using wall-clock today; this prevents weekend/pre-open defaults like 2026-04-27 when DB historical data is only ready through 2026-04-24.
+- Playwright Paper v2 E2E now validates the UI through temporary backend/frontend ports: QE package display, successful live-data selection for the first three packages, watchlist import with reference prices, historical multi-run union aggregation, portfolio creation fail-fast for unavailable V24/V25 execution assets, structured negative errors, and TDX minute endpoint reachability.
+- Paper portfolio replay remains blocked for the current QE packages because their minute execution policy references unavailable V24 assets; V25 adapter/QMT/Shadow/live trading were intentionally not implemented in this phase.
