@@ -4,47 +4,75 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
 import JsonPanel from "@/components/paper-v2/JsonPanel";
+import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
-import { paperV2Api, strategyPackageApi } from "@/lib/paper-v2/api";
+import { hmmTrainingApi, paperV2Api, strategyPackageApi } from "@/lib/paper-v2/api";
 import { formatCompact, shortHash, todayIso } from "@/lib/paper-v2/format";
-import type { DataSource, ExecutionPolicy, PaperPortfolio, StrategyPackage } from "@/lib/paper-v2/types";
+import type { DataSource, ExecutionPolicy, HmmConfig, HmmSnapshot, JsonObject, PaperPortfolio, ReplayResult, StrategyPackage } from "@/lib/paper-v2/types";
+
+function daysAgoIso(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10);
+}
 
 export default function PaperV2PortfoliosPage() {
   const [portfolios, setPortfolios] = useState<PaperPortfolio[]>([]);
   const [packages, setPackages] = useState<StrategyPackage[]>([]);
   const [policies, setPolicies] = useState<ExecutionPolicy[]>([]);
+  const [hmmConfigs, setHmmConfigs] = useState<HmmConfig[]>([]);
+  const [hmmSnapshots, setHmmSnapshots] = useState<HmmSnapshot[]>([]);
   const [packageId, setPackageId] = useState("");
   const [name, setName] = useState("模拟盘 v2 组合");
   const [initialCash, setInitialCash] = useState(1000000);
+  const [startMode, setStartMode] = useState<"replay" | "realtime">("replay");
   const [startDate, setStartDate] = useState(todayIso());
+  const [replayStart, setReplayStart] = useState(daysAgoIso(10));
+  const [replayEnd, setReplayEnd] = useState(todayIso());
   const [dataSource, setDataSource] = useState<DataSource>("DB_HISTORICAL");
   const [policyId, setPolicyId] = useState("");
+  const [topK, setTopK] = useState(20);
+  const [industryBlacklist, setIndustryBlacklist] = useState("");
+  const [excludeSuspended, setExcludeSuspended] = useState(true);
+  const [hmmEnabled, setHmmEnabled] = useState(false);
+  const [hmmConfigId, setHmmConfigId] = useState("");
+  const [hmmSnapshotId, setHmmSnapshotId] = useState("");
+  const [hmmPreset, setHmmPreset] = useState("preset_A");
   const [created, setCreated] = useState<PaperPortfolio | null>(null);
+  const [replayResult, setReplayResult] = useState<ReplayResult | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const selectedPackage = useMemo(() => packages.find((item) => item.package_id === packageId), [packages, packageId]);
+  const activePortfolios = useMemo(() => portfolios.filter((item) => ["READY", "RUNNING", "PAUSED", "FAILED"].includes(item.status)), [portfolios]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [portfolioRows, packageRows] = await Promise.all([
+      const [portfolioRows, packageRows, configRows] = await Promise.all([
         paperV2Api.listPortfolios(300),
         strategyPackageApi.list(undefined, 300),
+        hmmTrainingApi.configs(),
       ]);
       setPortfolios(portfolioRows);
       setPackages(packageRows);
+      setHmmConfigs(configRows);
       const initialPackage = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("package_id") : null;
-      if (!packageId) setPackageId(initialPackage || packageRows[0]?.package_id || "");
+      const nextPackageId = packageId || initialPackage || packageRows[0]?.package_id || "";
+      if (!packageId) setPackageId(nextPackageId);
+      const pkg = packageRows.find((item) => item.package_id === nextPackageId);
+      if (pkg && name === "模拟盘 v2 组合") setName(`${pkg.package_name}-模拟盘`);
+      if (!hmmConfigId && configRows[0]) setHmmConfigId(configRows[0].config_id);
     } catch (exc) {
       setError(exc);
     } finally {
       setLoading(false);
     }
-  }, [packageId]);
+  }, [hmmConfigId, name, packageId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -60,23 +88,76 @@ export default function PaperV2PortfoliosPage() {
     });
   }, [packageId]);
 
+  useEffect(() => {
+    if (!hmmConfigId) {
+      setHmmSnapshots([]);
+      setHmmSnapshotId("");
+      return;
+    }
+    let alive = true;
+    hmmTrainingApi.snapshots(hmmConfigId).then((rows) => {
+      if (!alive) return;
+      const ready = rows.filter((item) => ["completed", "ready", "success", "succeeded"].includes(String(item.status || "").toLowerCase()));
+      setHmmSnapshots(ready);
+      if (!ready.find((item) => item.snapshot_id === hmmSnapshotId)) setHmmSnapshotId(ready[0]?.snapshot_id || "");
+    }).catch((exc) => {
+      if (alive) setError(exc);
+    });
+    return () => { alive = false; };
+  }, [hmmConfigId, hmmSnapshotId]);
+
+  function runtimeConfig(): JsonObject {
+    const blacklist = industryBlacklist.split(",").map((item) => item.trim()).filter(Boolean);
+    return {
+      top_k: topK,
+      selection_artifact_config: { auto_generate: true, inference_backend: "wsl" },
+      runtime_profile: {
+        selection: { top_k: topK },
+        tradability: { exclude_suspended: excludeSuspended },
+        industry_blacklist: blacklist,
+        hmm: {
+          enabled: hmmEnabled,
+          model_snapshot_id: hmmEnabled ? hmmSnapshotId : null,
+          signal_preset: hmmEnabled ? hmmPreset : null,
+        },
+      },
+    };
+  }
+
   async function createPortfolio() {
     setError(null);
     setCreated(null);
+    setReplayResult(null);
+    setBusy(true);
     try {
       if (!packageId) throw new Error("请先选择 StrategyPackage。");
+      if (topK < 1 || topK > 50) throw new Error("TopK 必须在 1 到 50 之间。");
+      if (hmmEnabled && (!hmmConfigId || !hmmSnapshotId)) throw new Error("启用 HMM 时必须选择模型版本和已完成快照。");
+      if (startMode === "replay" && dataSource !== "DB_HISTORICAL") throw new Error("历史回放必须使用 DB_HISTORICAL 数据源。");
+      const portfolioStartDate = startMode === "replay" ? replayStart : startDate;
       const portfolio = await paperV2Api.createPortfolio({
         package_id: packageId,
         portfolio_name: name,
         initial_cash: initialCash,
-        start_date: startDate,
+        start_date: portfolioStartDate,
         data_source: dataSource,
         execution_policy: policyId ? { validated_execution_policy_id: policyId } : undefined,
       });
       setCreated(portfolio);
+      if (startMode === "replay") {
+        const result = await paperV2Api.replay(portfolio.portfolio_id, {
+          start_date: replayStart,
+          end_date: replayEnd,
+          runtime_config: runtimeConfig(),
+          rerun_policy: "reject_existing",
+        });
+        setReplayResult(result);
+      }
       await load();
     } catch (exc) {
       setError(exc);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -94,15 +175,33 @@ export default function PaperV2PortfoliosPage() {
     <main>
       <ErrorPanel error={error} title="组合操作失败" />
       <div className="pv2-grid pv2-grid-main">
-        <SectionCard title="创建模拟盘 v2 组合" eyebrow="冻结合约向导">
+        <SectionCard title="从单个策略包启动模拟盘" eyebrow="单包执行主链路" action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>StrategyPackage</label><select className="pv2-select" value={packageId} onChange={(event) => setPackageId(event.target.value)}>{packages.map((item) => <option value={item.package_id} key={item.package_id}>{item.package_name} / {item.package_status}</option>)}</select></div>
             <div className="pv2-field"><label>组合名称</label><input className="pv2-input" value={name} onChange={(event) => setName(event.target.value)} /></div>
             <div className="pv2-field"><label>初始资金</label><input className="pv2-input" type="number" min={1} value={initialCash} onChange={(event) => setInitialCash(Number(event.target.value))} /></div>
-            <div className="pv2-field"><label>开始日期</label><input className="pv2-input" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></div>
+            <div className="pv2-field"><label>启动模式</label><select className="pv2-select" value={startMode} onChange={(event) => setStartMode(event.target.value as "replay" | "realtime")}><option value="replay">历史分钟回放</option><option value="realtime">直接进入实时模拟盘</option></select></div>
             <div className="pv2-field"><label>数据源</label><select className="pv2-select" value={dataSource} onChange={(event) => setDataSource(event.target.value as DataSource)}><option value="DB_HISTORICAL">DB_HISTORICAL</option><option value="TDX_REALTIME">TDX_REALTIME</option></select></div>
-            <div className="pv2-field"><label>已验证执行策略</label><select className="pv2-select" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">Manifest 默认策略（校验通过时）</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code} / {item.paper_enabled ? "paper" : "disabled"}</option>)}</select></div>
+            <div className="pv2-field"><label>已验证执行策略</label><select className="pv2-select" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">Manifest 默认策略</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code} / {item.paper_enabled ? "可用于模拟盘" : "未启用"}</option>)}</select></div>
+            {startMode === "replay" ? <>
+              <div className="pv2-field"><label>回放开始日期</label><input className="pv2-input" type="date" value={replayStart} onChange={(event) => setReplayStart(event.target.value)} /></div>
+              <div className="pv2-field"><label>回放结束日期</label><input className="pv2-input" type="date" value={replayEnd} onChange={(event) => setReplayEnd(event.target.value)} /></div>
+            </> : <div className="pv2-field"><label>实时模拟开始日期</label><input className="pv2-input" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></div>}
           </div>
+
+          <div className="pv2-card" style={{ marginTop: 14 }}>
+            <div className="pv2-eyebrow">运行时选股配置（不写入策略包 Manifest）</div>
+            <div className="pv2-form-grid">
+              <div className="pv2-field"><label>TopK</label><input className="pv2-input" type="number" min={1} max={50} value={topK} onChange={(event) => setTopK(Number(event.target.value))} /></div>
+              <div className="pv2-field"><label>行业黑名单</label><input className="pv2-input" value={industryBlacklist} placeholder="银行, 房地产" onChange={(event) => setIndustryBlacklist(event.target.value)} /></div>
+              <div className="pv2-field"><label>停牌处理</label><label className="pv2-chip"><input type="checkbox" checked={excludeSuspended} onChange={(event) => setExcludeSuspended(event.target.checked)} /> 剔除并补位</label></div>
+              <div className="pv2-field"><label>HMM</label><label className="pv2-chip"><input type="checkbox" checked={hmmEnabled} onChange={(event) => setHmmEnabled(event.target.checked)} /> 启用 HMM</label></div>
+              <div className="pv2-field"><label>HMM 模型版本</label><select className="pv2-select" value={hmmConfigId} disabled={!hmmEnabled} onChange={(event) => setHmmConfigId(event.target.value)}><option value="">选择模型版本</option>{hmmConfigs.map((item) => <option value={item.config_id} key={item.config_id}>{item.display_name} / {item.model_type}</option>)}</select></div>
+              <div className="pv2-field"><label>HMM 快照</label><select className="pv2-select" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)}><option value="">选择已完成快照</option>{hmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{item.snapshot_id} / {item.trained_at}</option>)}</select></div>
+              <div className="pv2-field"><label>HMM Preset</label><select className="pv2-select" value={hmmPreset} disabled={!hmmEnabled} onChange={(event) => setHmmPreset(event.target.value)}><option value="preset_A">preset_A</option><option value="preset_B">preset_B</option></select></div>
+            </div>
+          </div>
+
           <div className="pv2-card" style={{ marginTop: 14 }}>
             <div className="pv2-eyebrow">创建前复核</div>
             <div className="pv2-chip-row">
@@ -110,23 +209,25 @@ export default function PaperV2PortfoliosPage() {
               <span className="pv2-chip">manifest: {shortHash(selectedPackage?.manifest_sha256)}</span>
               <span className="pv2-chip">data: {dataSource}</span>
               <span className="pv2-chip">cash: {formatCompact(initialCash)}</span>
+              <span className="pv2-chip">mode: {startMode === "replay" ? "历史回放" : "实时模拟"}</span>
             </div>
           </div>
-          <button className="pv2-button-primary" onClick={createPortfolio} type="button">创建冻结组合</button>
-          {created ? <JsonPanel value={{ created_portfolio_id: created.portfolio_id, package_id: created.package_id, manifest_sha256: created.manifest_sha256 }} /> : null}
+          <button className="pv2-button-primary" onClick={createPortfolio} disabled={busy} type="button">{busy ? "处理中..." : startMode === "replay" ? "创建并开始历史回放" : "创建实时模拟盘"}</button>
+          {created ? <JsonPanel value={{ created_portfolio_id: created.portfolio_id, package_id: created.package_id, manifest_sha256: created.manifest_sha256, replay_result: replayResult }} /> : null}
         </SectionCard>
 
-        <SectionCard title="组合生命周期规则" eyebrow="护栏">
+        <SectionCard title="组合生命周期规则" eyebrow="防止假成功">
           <ul>
-            <li>组合会冻结 package_id、manifest hash、初始资金、开始日期、数据源、费用、风控和执行策略。</li>
-            <li>单日运行要求组合处于 READY 状态，并应先通过就绪检查。</li>
-            <li>执行策略必须经过回测验证；不接受模拟盘独有的原始算法配置。</li>
-            <li>重置回放必须在运行控制台输入明确确认文本。</li>
+            <li>组合会冻结 package_id、manifest hash、初始资金、开始日期、数据源、费用、风控和已验证执行策略。</li>
+            <li>HMM、黑名单、TopK、停牌剔除是每日运行时配置，允许开盘前调整。</li>
+            <li>历史回放使用 Paper v2 主链路和分钟线撮合，不是 QE 回测兜底。</li>
+            <li>重置回放必须到运行控制台输入完整 portfolio_id 确认。</li>
           </ul>
+          <NoticePanel title="实时模拟说明" tone="info">非交易时段创建实时模拟盘只会生成 READY 组合；实际单日运行仍需交易日历、分钟线、涨跌停、停牌和权威选股 artifact 全部就绪。</NoticePanel>
         </SectionCard>
       </div>
 
-      <SectionCard title="模拟盘 v2 组合" eyebrow={loading ? "加载中" : `${portfolios.length} 个组合`} action={<button className="pv2-button" onClick={load} type="button">刷新</button>}>
+      <SectionCard title="当前正在运行或已创建的模拟盘" eyebrow={loading ? "加载中" : `${activePortfolios.length}/${portfolios.length} 个活跃组合`} action={<button className="pv2-button" onClick={load} type="button">刷新</button>}>
         <PaperTable
           rows={portfolios}
           empty="暂无模拟盘 v2 组合。"
@@ -137,7 +238,7 @@ export default function PaperV2PortfoliosPage() {
             { key: "cash", header: "初始资金", render: (row) => formatCompact(row.initial_cash) },
             { key: "source", header: "数据源", render: (row) => row.data_source },
             { key: "start", header: "开始", render: (row) => row.start_date },
-            { key: "actions", header: "操作", render: (row) => <div className="pv2-row-actions"><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio_id}/run-console`}>运行</Link><button className="pv2-link-button" onClick={() => lifecycle(row.portfolio_id, row.status === "PAUSED" ? "resume" : "pause")} type="button">{row.status === "PAUSED" ? "恢复" : "暂停"}</button><button className="pv2-link-button" onClick={() => lifecycle(row.portfolio_id, "retire")} type="button">退役</button></div> },
+            { key: "actions", header: "操作", render: (row) => <div className="pv2-row-actions"><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio_id}/run-console`}>运行控制台</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio_id}/ledger`}>账本</Link><button className="pv2-link-button" onClick={() => lifecycle(row.portfolio_id, row.status === "PAUSED" ? "resume" : "pause")} type="button">{row.status === "PAUSED" ? "恢复" : "暂停"}</button><button className="pv2-link-button" onClick={() => lifecycle(row.portfolio_id, "retire")} type="button">退役</button></div> },
           ]}
         />
       </SectionCard>

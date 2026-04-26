@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   Activation,
   DataSource,
   ExecutionPolicy,
@@ -8,9 +8,11 @@
   JsonObject,
   PaperPortfolio,
   PaperRun,
+  QEPackagingSource,
   ReadinessResult,
   ReplayResult,
   SelectablePackage,
+  SelectionWatchlistImportResult,
   SelectionMode,
   SelectionRun,
   StrategyPackage,
@@ -73,6 +75,11 @@ function body(payload: unknown): RequestInit {
 }
 
 export const strategyPackageApi = {
+  async qeSources(sourceKind = "all", limit = 200): Promise<QEPackagingSource[]> {
+    const qs = new URLSearchParams({ source_kind: sourceKind, limit: String(limit) });
+    const data = await apiFetch<{ sources: QEPackagingSource[] }>(`/strategy-packages/qe-sources?${qs.toString()}`);
+    return data.sources || [];
+  },
   async createFromQEExperiment(payload: { experiment_id: string; resolve_runtime_assets?: boolean }): Promise<StrategyPackage> {
     const data = await apiFetch<{ package: StrategyPackage }>("/strategy-packages/from-qe-experiment", body(payload));
     return data.package;
@@ -146,6 +153,10 @@ export const selectionCenterApi = {
     const data = await apiFetch<{ runs: SelectionRun[] }>(`/selection-center/runs?limit=${limit}`);
     return data.runs || [];
   },
+  async getRun(runId: string): Promise<SelectionRun> {
+    const data = await apiFetch<{ run: SelectionRun }>(`/selection-center/runs/${runId}`);
+    return data.run;
+  },
   async runSelection(payload: { package_ids: string[]; trade_date: string; data_source: string; mode: SelectionMode; runtime_config: JsonObject }): Promise<SelectionRun> {
     const data = await apiFetch<{ run: SelectionRun }>("/selection-center/runs", body(payload));
     return data.run;
@@ -157,6 +168,10 @@ export const selectionCenterApi = {
   async excludedResults(runId: string): Promise<Record<string, unknown[]>> {
     const data = await apiFetch<{ excluded_results: Record<string, unknown[]> }>(`/selection-center/runs/${runId}/excluded-results`);
     return data.excluded_results || {};
+  },
+  async addToWatchlist(runId: string, payload: JsonObject): Promise<SelectionWatchlistImportResult> {
+    const data = await apiFetch<{ result: SelectionWatchlistImportResult }>(`/selection-center/runs/${runId}/add-to-watchlist`, body(payload));
+    return data.result;
   },
   async createPaperPortfolio(runId: string, payload: JsonObject): Promise<{ portfolio: PaperPortfolio; link: JsonObject; paper_runtime_config: JsonObject }> {
     return apiFetch(`/selection-center/runs/${runId}/create-paper-portfolio`, body(payload));

@@ -1,4 +1,4 @@
-﻿export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = Record<string, unknown>;
 
 export type DataSource = "DB_HISTORICAL" | "TDX_REALTIME";
@@ -58,6 +58,20 @@ export type StrategyPackage = {
   manifest?: JsonObject;
 };
 
+export type QEPackagingSource = {
+  source_kind: "qe_experiment" | "qe_evolution_loop";
+  experiment_id: string;
+  experiment_name: string;
+  qe_task_id?: string | null;
+  qe_loop_id?: string | null;
+  loop_index?: number | null;
+  alpha_mode?: string | null;
+  display_name: string;
+  metrics_summary?: MetricsSummary;
+  created_at?: string | null;
+  completed_at?: string | null;
+};
+
 export type LatestSelectionRun = {
   run_id: string;
   mode: string;
@@ -107,6 +121,19 @@ export type SelectionRun = {
   manifest_sha256_by_package?: Record<string, string>;
   package_results?: Record<string, SelectionCandidate[]>;
   excluded_results?: Record<string, SelectionCandidate[]>;
+};
+
+export type SelectionWatchlistImportResult = {
+  run_id: string;
+  category_id: number;
+  entry_source: string;
+  entry_as_of: string;
+  requested_top_k: number;
+  imported_symbols: string[];
+  added?: number;
+  skipped?: number;
+  moved?: number;
+  item_ids_by_code?: Record<string, number>;
 };
 
 export type ExecutionPolicy = {
