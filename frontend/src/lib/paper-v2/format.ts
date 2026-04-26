@@ -1,0 +1,96 @@
+﻿export function formatNumber(value: unknown, digits = 2): string {
+  if (value === null || value === undefined || value === "") return "-";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  return n.toLocaleString("en-US", { maximumFractionDigits: digits, minimumFractionDigits: digits });
+}
+
+export function formatCompact(value: unknown, digits = 2): string {
+  if (value === null || value === undefined || value === "") return "-";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  return n.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: digits });
+}
+
+export function formatPercent(value: unknown, digits = 2): string {
+  if (value === null || value === undefined || value === "") return "-";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  return `${(n * 100).toFixed(digits)}%`;
+}
+
+export function shortHash(value: unknown, size = 8): string {
+  const text = String(value || "");
+  if (!text) return "-";
+  if (text.length <= size * 2 + 3) return text;
+  return `${text.slice(0, size)}...${text.slice(-size)}`;
+}
+
+export function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export function asText(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "-";
+  return String(value);
+}
+
+export function statusTone(status: unknown): "success" | "danger" | "warning" | "info" | "neutral" {
+  const s = String(status || "").toUpperCase();
+  if (["READY", "PASSED", "SUCCEEDED", "SUCCESS", "COMPLETED", "PAPER_ENABLED", "SELECTION_ENABLED", "ACTIVE", "CURRENT"].includes(s)) return "success";
+  if (["FAILED", "ERROR", "REJECTED", "PAPER_FAILED", "BLOCKED"].includes(s)) return "danger";
+  if (["STALE", "STALE_WARNING", "WARNING", "PENDING", "DRAFT", "RETRAINING", "RUNNING", "PAUSED"].includes(s)) return "warning";
+  if (["UNSUPPORTED", "NOT_RUN", "NO_DATA"].includes(s)) return "info";
+  return "neutral";
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  READY: "就绪",
+  PASSED: "已通过",
+  SUCCEEDED: "成功",
+  SUCCESS: "成功",
+  COMPLETED: "已完成",
+  PAPER_ENABLED: "已启用模拟盘",
+  SELECTION_ENABLED: "已启用选股",
+  ACTIVE: "生效中",
+  CURRENT: "当前",
+  FAILED: "失败",
+  ERROR: "错误",
+  REJECTED: "已拒绝",
+  PAPER_FAILED: "模拟盘失败",
+  BLOCKED: "已阻断",
+  STALE: "已过期",
+  STALE_WARNING: "过期提醒",
+  WARNING: "警告",
+  PENDING: "等待中",
+  DRAFT: "草稿",
+  RETRAINING: "重训练中",
+  RUNNING: "运行中",
+  PAUSED: "已暂停",
+  UNSUPPORTED: "不支持",
+  NOT_RUN: "未运行",
+  NO_DATA: "无数据",
+  DISABLED: "未启用",
+  UNKNOWN: "未知",
+  BUY: "买入",
+  SELL: "卖出",
+  EVENT: "事件",
+  EXCLUDED: "已剔除",
+  SINGLE_PACKAGE: "单策略包",
+  WEIGHTED_FUSION: "加权融合",
+  INTERSECTION: "交集",
+  UNION: "并集",
+};
+
+export function statusLabel(status: unknown): string {
+  const raw = String(status || "unknown");
+  const key = raw.toUpperCase();
+  return STATUS_LABELS[key] || raw;
+}
+
+export function dataSourceLabel(source: unknown): string {
+  const raw = String(source || "");
+  if (raw === "DB_HISTORICAL") return "历史分钟线库（DB_HISTORICAL）";
+  if (raw === "TDX_REALTIME") return "TDX 实时分钟线（TDX_REALTIME）";
+  return raw || "-";
+}

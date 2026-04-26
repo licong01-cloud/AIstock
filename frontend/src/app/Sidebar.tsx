@@ -88,6 +88,16 @@ const NAV_GROUPS: {
     ],
   },
   {
+    title: "🧪 Paper Trading v2",
+    items: [
+      { href: "/paper-v2", label: "📌 V2 总览" },
+      { href: "/paper-v2/packages", label: "📦 策略包中心" },
+      { href: "/paper-v2/selection", label: "🎯 统一选股中心" },
+      { href: "/paper-v2/portfolios", label: "💼 模拟盘组合" },
+      { href: "/paper-v2/model-hmm", label: "🧠 模型与 HMM" },
+    ],
+  },
+  {
     title: "📊 实盘演练",
     items: [
       { href: "/paper-trading/selection", label: "🔍 实盘选股" },
