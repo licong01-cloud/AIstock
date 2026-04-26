@@ -23,7 +23,12 @@ from backend.services.strategy_package.live_inference import (
 )
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services import watchlist_service
-from backend.services.trading_core.errors import StrategyPackageValidationError, TradingCoreError, UnsupportedFeatureError
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    StrategyPackageValidationError,
+    TradingCoreError,
+    UnsupportedFeatureError,
+)
 
 from .models import SelectionCandidate, SelectionMode, SelectionPaperPortfolioLink, SelectionRun, SelectionRunStatus
 from .repository import SelectionCenterRepository
@@ -242,7 +247,7 @@ class SelectionCenterService:
                     and metadata.get("authority_scope") == AUTHORITATIVE_SELECTION_SCOPE
                 ):
                     return
-            except TradingCoreError:
+            except DataUnavailableError:
                 pass
 
         self.selection_artifact_service.generate_from_live_inference(
@@ -626,10 +631,7 @@ class SelectionCenterService:
     def _watchlist_source_names(self, run: SelectionRun) -> list[str]:
         names: list[str] = []
         for package_id in run.package_ids:
-            try:
-                names.append(self.package_repository.get(package_id).package_name)
-            except TradingCoreError:
-                names.append(package_id)
+            names.append(self.package_repository.get(package_id).package_name)
         return names
 
     def _latest_run_by_package(self, *, limit: int) -> dict[str, SelectionRun]:

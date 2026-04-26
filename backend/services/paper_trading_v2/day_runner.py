@@ -442,7 +442,7 @@ class PaperTradingDayRunner:
                     and metadata.get("authority_scope") == AUTHORITATIVE_SELECTION_SCOPE
                 ):
                     return
-            except TradingCoreError:
+            except DataUnavailableError:
                 pass
         self.selection_artifact_service.generate_from_live_inference(
             package_id=manifest.package_id,
