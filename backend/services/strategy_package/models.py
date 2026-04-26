@@ -32,6 +32,11 @@ class PackageStatus(str, Enum):
     RETIRED = "RETIRED"
 
 
+class SelectionScoreArtifactStatus(str, Enum):
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
 class StrategyPackageSource(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -7,7 +7,7 @@ import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
-import { hmmTrainingApi, selectionCenterApi } from "@/lib/paper-v2/api";
+import { hmmTrainingApi, paperV2Api, selectionCenterApi } from "@/lib/paper-v2/api";
 import { formatPercent, shortHash, todayIso } from "@/lib/paper-v2/format";
 import type { DataSource, HmmConfig, HmmSnapshot, JsonObject, SelectablePackage, SelectionMode, SelectionRun, SelectionWatchlistImportResult } from "@/lib/paper-v2/types";
 
@@ -69,6 +69,17 @@ export default function PaperV2SelectionPage() {
   }, [hmmConfigId]);
 
   useEffect(() => { loadPackages(); }, [loadPackages]);
+
+  useEffect(() => {
+    let alive = true;
+    paperV2Api.tradingDayDefaults(10).then((defaults) => {
+      if (!alive) return;
+      setTradeDate((current) => (current === todayIso() ? defaults.latest_trading_day : current));
+    }).catch((exc) => {
+      if (alive) setError(exc);
+    });
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     if (!hmmConfigId) {

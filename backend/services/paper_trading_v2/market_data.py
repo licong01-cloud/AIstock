@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import Enum
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Protocol
 
 from backend.data_service.tdx_adapter import fetch_minute_kline_tdx
 from backend.db.pg_pool import get_conn
@@ -48,6 +48,68 @@ class MinuteExecutionMarketInput:
     market_context: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class DailySuspendStatus:
+    """Explicit daily suspension status loaded from the authoritative source."""
+
+    symbol: str
+    trade_date: date
+    is_suspended: bool
+    suspend_type: str | None = None
+    suspend_timing: str | None = None
+    source: str = "market.suspend_d"
+
+
+class SuspendStatusProvider(Protocol):
+    """Provider boundary for daily suspension status."""
+
+    def get_suspend_status(self, symbol: str, trade_date: date) -> DailySuspendStatus:
+        ...
+
+
+class DbSuspendStatusProvider:
+    """Read daily A-share suspension rows from ``market.suspend_d``."""
+
+    def __init__(self, conn_factory: ConnFactory | None = None) -> None:
+        self.conn_factory = conn_factory or get_conn
+
+    def get_suspend_status(self, symbol: str, trade_date: date) -> DailySuspendStatus:
+        try:
+            with self.conn_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT suspend_type, suspend_timing
+                        FROM market.suspend_d
+                        WHERE ts_code = %s
+                          AND trade_date = %s
+                          AND suspend_type = 'S'
+                        ORDER BY suspend_timing NULLS FIRST
+                        LIMIT 1
+                        """,
+                        (symbol, trade_date),
+                    )
+                    row = cur.fetchone()
+        except Exception as exc:
+            raise DataUnavailableError(
+                "suspend status query failed",
+                context={
+                    "symbol": symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "table": "market.suspend_d",
+                },
+            ) from exc
+        if row is None:
+            return DailySuspendStatus(symbol=symbol, trade_date=trade_date, is_suspended=False)
+        return DailySuspendStatus(
+            symbol=symbol,
+            trade_date=trade_date,
+            is_suspended=True,
+            suspend_type=str(row[0]) if row[0] is not None else "S",
+            suspend_timing=str(row[1]) if row[1] is not None else None,
+        )
+
+
 class PaperV2MinuteMarketDataProvider:
     """Build strict minute execution inputs from TDX or historical DB data."""
 
@@ -55,10 +117,12 @@ class PaperV2MinuteMarketDataProvider:
         self,
         *,
         limit_price_provider: StkLimitPriceProvider | None = None,
+        suspend_status_provider: SuspendStatusProvider | None = None,
         tdx_fetcher: TdxMinuteFetcher | None = None,
         conn_factory: ConnFactory | None = None,
     ) -> None:
         self.limit_price_provider = limit_price_provider or StkLimitPriceProvider()
+        self.suspend_status_provider = suspend_status_provider or DbSuspendStatusProvider(conn_factory=conn_factory)
         self.tdx_fetcher = tdx_fetcher or fetch_minute_kline_tdx
         self.conn_factory = conn_factory or get_conn
 
@@ -69,6 +133,7 @@ class PaperV2MinuteMarketDataProvider:
         trade_date: date,
         source: MinuteDataSource = MinuteDataSource.TDX_REALTIME,
         min_bars: int = 1,
+        require_suspend_status: bool = False,
     ) -> MinuteExecutionMarketInput:
         symbol = str(symbol or "").strip()
         if not symbol:
@@ -85,6 +150,14 @@ class PaperV2MinuteMarketDataProvider:
                 "pre_close is required for minute execution context",
                 context={"symbol": symbol, "trade_date": trade_date.isoformat()},
             )
+        suspend_status = None
+        if require_suspend_status:
+            if self.suspend_status_provider is None:
+                raise DataUnavailableError(
+                    "suspend status provider is required",
+                    context={"symbol": symbol, "trade_date": trade_date.isoformat()},
+                )
+            suspend_status = self.suspend_status_provider.get_suspend_status(symbol, trade_date)
 
         raw_bars = self._load_raw_bars(symbol, trade_date, source)
         minute_bars = self._build_minute_bars(
@@ -93,6 +166,8 @@ class PaperV2MinuteMarketDataProvider:
             raw_bars=raw_bars,
             limit_price=limit_price,
             source=source,
+            require_suspend_status=require_suspend_status,
+            suspend_status=suspend_status,
         )
         if len(minute_bars) < min_bars:
             raise DataUnavailableError(
@@ -112,6 +187,7 @@ class PaperV2MinuteMarketDataProvider:
             source=source,
             minute_bars=minute_bars,
             limit_price=limit_price,
+            suspend_status=suspend_status,
         )
         return MinuteExecutionMarketInput(
             symbol=symbol,
@@ -192,6 +268,8 @@ class PaperV2MinuteMarketDataProvider:
         raw_bars: list[dict[str, Any]],
         limit_price: DailyLimitPrice,
         source: MinuteDataSource,
+        require_suspend_status: bool = False,
+        suspend_status: DailySuspendStatus | None = None,
     ) -> list[MinuteBar]:
         minute_bars: list[MinuteBar] = []
         for raw in raw_bars:
@@ -221,6 +299,16 @@ class PaperV2MinuteMarketDataProvider:
                     close=self._positive_float(raw.get("close"), "close", symbol, bar_time),
                     volume=self._volume_hands_to_shares(raw.get("volume"), symbol, bar_time),
                     amount=self._optional_non_negative_float(raw.get("amount"), "amount", symbol, bar_time),
+                    is_suspended=(
+                        bool(suspend_status.is_suspended)
+                        if suspend_status is not None
+                        else self._parse_suspend_status(
+                            raw,
+                            symbol=symbol,
+                            bar_time=bar_time,
+                            require_suspend_status=require_suspend_status,
+                        )
+                    ),
                     limit_up=limit_price.up_limit,
                     limit_down=limit_price.down_limit,
                 )
@@ -248,6 +336,7 @@ class PaperV2MinuteMarketDataProvider:
         source: MinuteDataSource,
         minute_bars: list[MinuteBar],
         limit_price: DailyLimitPrice,
+        suspend_status: DailySuspendStatus | None = None,
     ) -> dict[str, Any]:
         # The V24 implementation currently consumes these legacy "full_day_*"
         # names. In realtime TDX mode they mean "observed bars so far"; callers
@@ -262,6 +351,16 @@ class PaperV2MinuteMarketDataProvider:
             "prev_close": limit_price.pre_close,
             "limit_up": limit_price.up_limit,
             "limit_down": limit_price.down_limit,
+            "suspend_status": (
+                None
+                if suspend_status is None
+                else {
+                    "is_suspended": suspend_status.is_suspended,
+                    "suspend_type": suspend_status.suspend_type,
+                    "suspend_timing": suspend_status.suspend_timing,
+                    "source": suspend_status.source,
+                }
+            ),
             "full_day_close": [bar.close for bar in minute_bars],
             "full_day_volume": [bar.volume for bar in minute_bars],
             "full_day_high": [bar.high for bar in minute_bars],
@@ -338,3 +437,89 @@ class PaperV2MinuteMarketDataProvider:
                 context={"symbol": symbol, "bar_time": bar_time.isoformat(), "value": value},
             )
         return int(round(volume_hand * MINUTE_VOLUME_HAND_SIZE))
+
+    @staticmethod
+    def _parse_suspend_status(
+        raw: dict[str, Any],
+        *,
+        symbol: str,
+        bar_time: datetime,
+        require_suspend_status: bool,
+    ) -> bool:
+        for key in ("is_suspended", "suspended", "suspend_status"):
+            if key in raw:
+                value = raw[key]
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, (int, float)):
+                    return bool(value)
+                normalized = str(value).strip().lower()
+                if normalized in {"1", "true", "yes", "y", "suspended"}:
+                    return True
+                if normalized in {"0", "false", "no", "n", "active", "trading"}:
+                    return False
+                raise DataUnavailableError(
+                    "minute bar suspend status is invalid",
+                    context={"symbol": symbol, "bar_time": bar_time.isoformat(), "value": value},
+                )
+        if require_suspend_status:
+            raise DataUnavailableError(
+                "minute bar suspend status is required",
+                context={"symbol": symbol, "bar_time": bar_time.isoformat()},
+            )
+        return False
+
+
+class TradeCalendarProvider:
+    """Read-only trading calendar validator for authoritative day runs."""
+
+    def __init__(self, conn_factory: ConnFactory | None = None) -> None:
+        self.conn_factory = conn_factory or get_conn
+
+    def ensure_trading_day(self, trade_date: date) -> None:
+        with self.conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT is_trading
+                    FROM market.trading_calendar
+                    WHERE cal_date = %s
+                    """,
+                    (trade_date,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise DataUnavailableError(
+                "trade calendar row is required for paper trading day",
+                context={"trade_date": trade_date.isoformat()},
+            )
+        if not bool(row[0]):
+            raise DataUnavailableError(
+                "trade_date is not a trading day",
+                context={"trade_date": trade_date.isoformat()},
+            )
+
+    def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
+        if start_date > end_date:
+            raise DataUnavailableError(
+                "start_date cannot be after end_date",
+                context={"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+            )
+        with self.conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT cal_date
+                    FROM market.trading_calendar
+                    WHERE cal_date >= %s AND cal_date <= %s AND is_trading = TRUE
+                    ORDER BY cal_date
+                    """,
+                    (start_date, end_date),
+                )
+                rows = cur.fetchall()
+        if not rows:
+            raise DataUnavailableError(
+                "trading calendar has no trading days in replay range",
+                context={"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+            )
+        return [row[0] for row in rows]

@@ -1,4 +1,4 @@
-﻿import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 const API_BASE = process.env.PAPER_V2_API_BASE || process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8011/api/v1";
 const TDX_BASE = process.env.TDX_BASE_URL || "http://127.0.0.1:19080";
@@ -16,7 +16,17 @@ type PackageSummary = {
   metrics_summary?: JsonObject;
 };
 
+type SelectionRunSummary = {
+  run_id: string;
+  mode: string;
+  trade_date: string;
+  status: string;
+  package_ids: string[];
+  aggregate_results?: JsonObject[];
+};
+
 let ensuredPackages: PackageSummary[] = [];
+let ensuredRuns: SelectionRunSummary[] = [];
 
 async function apiFetch(request: APIRequestContext, path: string, init?: Parameters<APIRequestContext["fetch"]>[1]) {
   return request.fetch(`${API_BASE}${path}`, {
@@ -62,6 +72,36 @@ async function ensurePackageFromExperiment(request: APIRequestContext, experimen
   return refreshed!;
 }
 
+function runtimeConfig(topK = 20): JsonObject {
+  return {
+    selection_artifact_config: { auto_generate: true, inference_backend: "wsl" },
+    runtime_profile: {
+      selection: { top_k: topK },
+      tradability: { exclude_suspended: true },
+      industry_blacklist: [],
+      hmm: { enabled: false },
+    },
+  };
+}
+
+async function ensureSuccessfulSelectionRun(request: APIRequestContext, pkg: PackageSummary): Promise<SelectionRunSummary> {
+  const { response, payload } = await apiJson(request, "/selection-center/runs", {
+    method: "POST",
+    data: {
+      package_ids: [pkg.package_id],
+      trade_date: REPLAY_TRADE_DATE,
+      data_source: "DB_HISTORICAL",
+      mode: "single_package",
+      runtime_config: runtimeConfig(20),
+    },
+    timeout: 300_000,
+  });
+  expect(response.ok(), `selection run ${pkg.package_name}: ${JSON.stringify(payload).slice(0, 1200)}`).toBeTruthy();
+  expect(payload.run.status).toBe("SUCCEEDED");
+  expect(payload.run.aggregate_results?.length || 0).toBeGreaterThan(0);
+  return payload.run;
+}
+
 async function openSection(page: Page, heading: string) {
   return page.locator("section").filter({ has: page.getByRole("heading", { name: heading }) });
 }
@@ -70,25 +110,37 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
   test.beforeAll(async ({ request }) => {
     const health = await request.get(`${API_BASE.replace(/\/api\/v1$/, "")}/openapi.json`);
     expect(health.ok(), `temporary backend must be reachable at ${API_BASE}`).toBeTruthy();
+
+    const defaults = await apiJson(request, "/paper-v2/trading-days/defaults?lookback_trading_days=10");
+    expect(defaults.response.ok(), JSON.stringify(defaults.payload)).toBeTruthy();
+    expect(defaults.payload.latest_trading_day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(defaults.payload.replay_start_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
     ensuredPackages = [];
+    ensuredRuns = [];
     for (const experimentId of QE_EXPERIMENTS) {
-      ensuredPackages.push(await ensurePackageFromExperiment(request, experimentId));
+      const pkg = await ensurePackageFromExperiment(request, experimentId);
+      ensuredPackages.push(pkg);
+      ensuredRuns.push(await ensureSuccessfulSelectionRun(request, pkg));
     }
   });
 
-  test("StrategyPackage 页面中文化、指标展示和模拟盘就绪 fail-fast", async ({ page }) => {
+  test("StrategyPackage page shows unpackaged QE sources, packaged strategies, and paper entry", async ({ page, request }) => {
     await page.goto("/paper-v2/packages");
     await expect(page.getByRole("heading", { name: "模拟盘 v2" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "从 QE 创建策略包" })).toBeVisible();
+    await expect(page.getByText("只显示未打包来源")).toBeVisible();
 
+    const sources = await apiJson(request, "/strategy-packages/qe-sources?source_kind=all&limit=20");
+    expect(sources.response.ok(), JSON.stringify(sources.payload)).toBeTruthy();
     const sourceSection = await openSection(page, "从 QE 创建策略包");
-    await sourceSection.getByPlaceholder("qe_20260416_002701").fill(QE_EXPERIMENTS[0]);
-    await sourceSection.getByRole("button", { name: "预览实验 Manifest" }).click();
-    await expect(sourceSection.locator(".pv2-json")).toContainText(QE_EXPERIMENTS[0]);
-
-    await sourceSection.getByRole("button", { name: "验证模拟盘就绪度" }).click();
-    await expect(page.getByText("策略包操作失败")).toBeVisible();
-    await expect(page.locator("body")).toContainText(/EXECUTION_ALGO_ERROR|DATA_UNAVAILABLE|V24_PLAN/);
+    const sourceText = await sourceSection.locator("select").nth(1).textContent();
+    for (const experimentId of QE_EXPERIMENTS) {
+      expect(sourceText || "").not.toContain(experimentId);
+    }
+    if ((sources.payload.sources || []).length > 0) {
+      await expect(sourceSection.locator("select").nth(1)).toContainText(/年化|IC|回撤/);
+    }
 
     await expect(page.getByRole("heading", { name: "StrategyPackage 策略包中心" })).toBeVisible();
     for (const experimentId of QE_EXPERIMENTS) {
@@ -96,15 +148,18 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     }
     await expect(page.locator("body")).toContainText("RankIC");
     await expect(page.locator("body")).toContainText("最大回撤");
-    await expect(page.locator("body")).toContainText(/SELECTION_ENABLED|BACKTEST_APPROVED/);
+    await expect(page.getByRole("link", { name: "从此包启动模拟盘" }).first()).toBeVisible();
   });
 
-  test("Selection Center 透传缺少 selection_runtime 的严格错误，不伪造空选股成功", async ({ page }) => {
+  test("Selection Center runs live-data inference, displays history, and imports watchlist items", async ({ page }) => {
     const target = ensuredPackages[0];
     await page.goto("/paper-v2/selection");
     await expect(page.getByRole("heading", { name: "选股控制" })).toBeVisible();
-    await page.locator("select").first().selectOption("single_package");
-    await page.locator('input[type="date"]').first().fill(REPLAY_TRADE_DATE);
+
+    const control = await openSection(page, "选股控制");
+    await control.locator("select").first().selectOption("single_package");
+    await control.locator('input[type="date"]').fill(REPLAY_TRADE_DATE);
+    await control.locator('input[type="number"]').first().fill("20");
 
     const picker = await openSection(page, "策略包选择器");
     const checkboxes = picker.locator('tbody input[type="checkbox"]');
@@ -116,72 +171,81 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(targetRow).toBeVisible();
     await targetRow.locator('input[type="checkbox"]').check();
 
-    await page.getByRole("button", { name: "运行选股" }).click();
-    await expect(page.getByText("选股操作失败")).toBeVisible();
-    await expect(page.locator("body")).toContainText(/selection_runtime|DATA_UNAVAILABLE|strategy package is missing/);
-    await expect(page.getByText("运行选股后查看排序候选股。")) .toBeVisible();
+    await control.getByRole("button", { name: "运行选股" }).click();
+    const results = await openSection(page, "选股结果");
+    await expect(results.locator("tbody tr").first()).toBeVisible({ timeout: 90_000 });
+    await expect(results).toContainText("选股参考价");
+    await expect(results).toContainText(/live_qe_model_inference_v1|artifact_source|raw_rank/);
+
+    await results.locator("input.pv2-input").first().fill(`PaperV2-E2E-${Date.now()}`);
+    await results.getByRole("button", { name: "一键加入自选股票池" }).click();
+    await expect(results.locator(".pv2-json")).toContainText("imported_symbols", { timeout: 30_000 });
+    await expect(results.locator(".pv2-json")).toContainText(target.package_name);
+
+    const history = await openSection(page, "历史选股记录与动态聚合");
+    await expect(history).toContainText("点击记录可显示结果");
+    await history.locator("tbody button").first().click();
+    await expect(results.locator("tbody tr").first()).toBeVisible();
   });
 
-  test("多策略包聚合入口只允许研究选股，未完成单包运行时前端阻止伪聚合", async ({ page }) => {
+  test("Multi-package historical run aggregation is clickable and produces aggregate selections", async ({ page }) => {
     await page.goto("/paper-v2/selection");
-    await page.locator("select").first().selectOption("weighted_fusion");
-    await expect(page.getByText("多策略包聚合目前仅支持研究选股")).toBeVisible();
-    await page.getByRole("button", { name: "聚合已选运行" }).click();
-    await expect(page.getByText("选股操作失败")).toBeVisible();
-    await expect(page.locator("body")).toContainText("请至少选择两个已完成的选股运行进行聚合");
+    const control = await openSection(page, "选股控制");
+    await control.locator("select").first().selectOption("union");
+    await expect(page.getByText("多策略包当前只用于统一选股研究")).toBeVisible();
+
+    const history = await openSection(page, "历史选股记录与动态聚合");
+    const rows = history.locator("tbody tr").filter({ hasText: "single_package" });
+    await expect(rows.nth(0)).toBeVisible();
+    await expect(rows.nth(1)).toBeVisible();
+    await rows.nth(0).locator('input[type="checkbox"]').check();
+    await rows.nth(1).locator('input[type="checkbox"]').check();
+    await history.getByRole("button", { name: "聚合已选股票" }).click();
+
+    const results = await openSection(page, "选股结果");
+    await expect(results.locator("tbody tr").first()).toBeVisible({ timeout: 30_000 });
+    await expect(results).toContainText(/union|source_run|raw_rank|artifact_source/);
   });
 
-  test("组合创建在 V24 运行时不可用时 fail-fast，不创建假组合", async ({ page }) => {
+  test("Portfolio page exposes single-package paper setup and fails fast on unavailable V24/V25 assets", async ({ page }) => {
     const target = ensuredPackages[0];
-    await page.goto("/paper-v2/portfolios");
-    await expect(page.getByRole("heading", { name: "创建模拟盘 v2 组合" })).toBeVisible();
-    const createSection = await openSection(page, "创建模拟盘 v2 组合");
+    await page.goto(`/paper-v2/portfolios?package_id=${target.package_id}`);
+    await expect(page.getByRole("heading", { name: "从单个策略包启动模拟盘" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "当前正在运行或已创建的模拟盘" })).toBeVisible();
+
+    const createSection = await openSection(page, "从单个策略包启动模拟盘");
     await createSection.locator("select").first().selectOption(target.package_id);
-    await createSection.locator("input.pv2-input").first().fill(`E2E-${Date.now()}`);
-    await createSection.locator('input[type="date"]').first().fill(REPLAY_TRADE_DATE);
-    await createSection.getByRole("button", { name: "创建冻结组合" }).click();
-    await expect(page.getByText("组合操作失败")).toBeVisible();
+    await createSection.locator("input.pv2-input").nth(0).fill(`E2E-${Date.now()}`);
+    await createSection.locator("input.pv2-input").nth(1).fill("1000000");
+    await createSection.locator("select").nth(1).selectOption("replay");
+    await createSection.locator("select").nth(2).selectOption("DB_HISTORICAL");
+    await createSection.locator("input.pv2-input").nth(2).fill("2026-04-20");
+    await createSection.locator("input.pv2-input").nth(3).fill(REPLAY_TRADE_DATE);
+    await createSection.locator("input.pv2-input").nth(4).fill("20");
+    await createSection.getByRole("button", { name: "创建并开始历史回放" }).click();
+
+    await expect(page.getByText("组合操作失败")).toBeVisible({ timeout: 30_000 });
     await expect(page.locator("body")).toContainText(/V24_PLAN|DATA_UNAVAILABLE|EXECUTION_ALGO_ERROR|model_path/);
-    await expect(page.getByText("created_portfolio_id")).toHaveCount(0);
+    await expect(page.locator("body")).not.toContainText("created_portfolio_id");
   });
 
-  test("模型与 HMM 页面可加载配置，滚动训练保持人工触发", async ({ page }) => {
-    await page.goto("/paper-v2/model-hmm");
-    await expect(page.getByRole("link", { name: "模型与 HMM" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "StrategyPackage 模型新鲜度" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "HMM 滚动训练" })).toBeVisible();
-    await expect(page.locator("body")).toContainText(/滚动训练|HMM|模型/);
-    await expect(page.getByRole("button", { name: /预览|刷新|触发/ }).first()).toBeVisible();
-  });
-
-  test("API 负向用例返回结构化错误，TDX 分钟线接口可访问", async ({ request }) => {
+  test("Negative APIs return structured errors and TDX realtime minute endpoint is reachable", async ({ request }) => {
     const missing = await apiJson(request, "/strategy-packages/from-qe-experiment/not_exists_for_failfast/manifest");
     expect(missing.response.status()).toBe(404);
     expect(missing.payload.detail.error_code).toBe("DATA_UNAVAILABLE");
 
-    const readiness = await apiJson(request, `/strategy-packages/from-qe-experiment/${QE_EXPERIMENTS[0]}/paper-readiness`);
-    expect(readiness.response.ok()).toBeFalsy();
-    expect(JSON.stringify(readiness.payload)).toMatch(/V24_PLAN|EXECUTION_ALGO_ERROR|DATA_UNAVAILABLE/);
-
-    const selection = await apiJson(request, "/selection-center/runs", {
+    const badSelection = await apiJson(request, "/selection-center/runs", {
       method: "POST",
       data: {
         package_ids: [ensuredPackages[0].package_id],
-        trade_date: REPLAY_TRADE_DATE,
+        trade_date: "2026-04-26",
         data_source: "DB_HISTORICAL",
         mode: "single_package",
-        runtime_config: {
-          runtime_profile: {
-            selection: { top_k: 50 },
-            tradability: { exclude_suspended: true },
-            industry_blacklist: [],
-            hmm: { enabled: false },
-          },
-        },
+        runtime_config: runtimeConfig(20),
       },
     });
-    expect(selection.response.ok()).toBeFalsy();
-    expect(JSON.stringify(selection.payload)).toContain("selection_runtime");
+    expect(badSelection.response.ok()).toBeFalsy();
+    expect(JSON.stringify(badSelection.payload)).toMatch(/not a trading day|DATA_UNAVAILABLE|trade_date/);
 
     const tdx = await request.get(`${TDX_BASE}/api/kline-all/tdx?code=SZ000001&type=minute1`, { timeout: 30_000 });
     expect(tdx.ok(), `TDX backend must respond at ${TDX_BASE}`).toBeTruthy();

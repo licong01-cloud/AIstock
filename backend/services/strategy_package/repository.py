@@ -1,0 +1,780 @@
+﻿"""Persistence for Strategy Package Center.
+
+The repository stores immutable frozen manifests plus a mutable package status
+column. QE source tables are read-only from this layer.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any, Callable, Iterator
+
+import psycopg2.extras
+from pydantic import BaseModel, ConfigDict, Field
+
+from backend.db.pg_pool import get_conn
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    InvalidStateTransitionError,
+    StrategyPackageValidationError,
+)
+
+from .execution_policy import ValidatedExecutionPolicy
+from .manifest import compute_manifest_sha256, freeze_manifest
+from .model_state import (
+    ModelRetrainJobStatus,
+    ModelStalenessStatus,
+    StrategyPackageModelRetrainJob,
+    StrategyPackageModelState,
+)
+from .models import PackageStatus, StrategyPackageManifest
+
+ConnFactory = Callable[[], Iterator[Any]]
+
+
+class StrategyPackageRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    package_id: str
+    package_name: str
+    package_version: str
+    source_type: str
+    source_id: str
+    loop_id: str | None = None
+    run_id: str | None = None
+    package_status: PackageStatus
+    manifest: StrategyPackageManifest
+    manifest_sha256: str
+    paper_portfolio_count: int = 0
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    def current_manifest(self) -> StrategyPackageManifest:
+        return self.manifest.model_copy(update={"package_status": self.package_status})
+
+
+class PackageStatusEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    package_id: str
+    from_status: PackageStatus | None = None
+    to_status: PackageStatus
+    reason: str | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class StrategyPackageRepository:
+    """PostgreSQL-backed repository for strategy packages."""
+
+    def __init__(self, conn_factory: ConnFactory | None = None) -> None:
+        self._conn_factory = conn_factory or get_conn
+
+    def save_manifest(self, manifest: StrategyPackageManifest) -> StrategyPackageRecord:
+        frozen = freeze_manifest(manifest)
+        if not frozen.manifest_sha256:
+            raise StrategyPackageValidationError(
+                "manifest_sha256 is required before persistence",
+                context={"package_id": frozen.package_id},
+            )
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT package_id, manifest_sha256, paper_portfolio_count
+                    FROM strategy_pkg.package
+                    WHERE package_id = %s
+                    """,
+                    (frozen.package_id,),
+                )
+                existing = cur.fetchone()
+                if existing:
+                    if existing["manifest_sha256"] != frozen.manifest_sha256:
+                        raise InvalidStateTransitionError(
+                            "package manifest cannot be silently replaced",
+                            context={
+                                "package_id": frozen.package_id,
+                                "existing_manifest_sha256": existing["manifest_sha256"],
+                                "new_manifest_sha256": frozen.manifest_sha256,
+                                "paper_portfolio_count": existing["paper_portfolio_count"],
+                            },
+                        )
+                    return self.get(frozen.package_id)
+
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.package (
+                        package_id, package_name, package_version, source_type,
+                        source_id, loop_id, run_id, package_status, manifest_json,
+                        manifest_sha256
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        frozen.package_id,
+                        frozen.package_name,
+                        frozen.package_version,
+                        frozen.source.source_type.value,
+                        frozen.source.source_id,
+                        frozen.source.loop_id,
+                        frozen.source.run_id,
+                        frozen.package_status.value,
+                        psycopg2.extras.Json(frozen.model_dump(mode="json")),
+                        frozen.manifest_sha256,
+                    ),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.package_status_event (
+                        package_id, from_status, to_status, reason, context
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        frozen.package_id,
+                        None,
+                        frozen.package_status.value,
+                        "package_created",
+                        psycopg2.extras.Json({"manifest_sha256": frozen.manifest_sha256}),
+                    ),
+                )
+        return self.get(frozen.package_id)
+
+    def get(self, package_id: str) -> StrategyPackageRecord:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT package_id, package_name, package_version, source_type,
+                           source_id, loop_id, run_id, package_status, manifest_json,
+                           manifest_sha256, paper_portfolio_count, created_at, updated_at
+                    FROM strategy_pkg.package
+                    WHERE package_id = %s
+                    """,
+                    (package_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError(
+                "strategy package does not exist",
+                context={"package_id": package_id},
+            )
+        return self._record_from_row(dict(row))
+
+    def list(self, *, status: PackageStatus | None = None, limit: int = 100) -> list[StrategyPackageRecord]:
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        params: list[Any] = []
+        where = ""
+        if status is not None:
+            where = "WHERE package_status = %s"
+            params.append(status.value)
+        params.append(limit)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT package_id, package_name, package_version, source_type,
+                           source_id, loop_id, run_id, package_status, manifest_json,
+                           manifest_sha256, paper_portfolio_count, created_at, updated_at
+                    FROM strategy_pkg.package
+                    {where}
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+        return [self._record_from_row(dict(row)) for row in rows]
+
+    def transition_status(
+        self,
+        *,
+        package_id: str,
+        to_status: PackageStatus,
+        allowed_from: set[PackageStatus],
+        reason: str,
+        context: dict[str, Any] | None = None,
+    ) -> StrategyPackageRecord:
+        record = self.get(package_id)
+        if record.package_status not in allowed_from:
+            raise InvalidStateTransitionError(
+                "invalid strategy package status transition",
+                context={
+                    "package_id": package_id,
+                    "from_status": record.package_status.value,
+                    "to_status": to_status.value,
+                    "allowed_from": sorted(item.value for item in allowed_from),
+                },
+            )
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.package
+                    SET package_status = %s, updated_at = NOW()
+                    WHERE package_id = %s AND package_status = %s
+                    """,
+                    (to_status.value, package_id, record.package_status.value),
+                )
+                if cur.rowcount != 1:
+                    raise InvalidStateTransitionError(
+                        "strategy package status transition lost compare-and-set race",
+                        context={"package_id": package_id},
+                    )
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.package_status_event (
+                        package_id, from_status, to_status, reason, context
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        package_id,
+                        record.package_status.value,
+                        to_status.value,
+                        reason,
+                        psycopg2.extras.Json(context or {}),
+                    ),
+                )
+        return self.get(package_id)
+
+    def mark_paper_portfolio_created(self, package_id: str, portfolio_id: str) -> StrategyPackageRecord:
+        record = self.get(package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.package
+                    SET paper_portfolio_count = paper_portfolio_count + 1,
+                        updated_at = NOW()
+                    WHERE package_id = %s
+                    """,
+                    (package_id,),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.package_status_event (
+                        package_id, from_status, to_status, reason, context
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        package_id,
+                        record.package_status.value,
+                        record.package_status.value,
+                        "paper_portfolio_created",
+                        psycopg2.extras.Json({"portfolio_id": portfolio_id}),
+                    ),
+                )
+        return self.get(package_id)
+
+    def list_status_events(self, package_id: str, *, limit: int = 200) -> list[PackageStatusEvent]:
+        self.get(package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT package_id, from_status, to_status, reason, context, created_at
+                    FROM strategy_pkg.package_status_event
+                    WHERE package_id = %s
+                    ORDER BY created_at ASC, event_id ASC
+                    LIMIT %s
+                    """,
+                    (package_id, limit),
+                )
+                rows = cur.fetchall()
+        return [
+            PackageStatusEvent(
+                package_id=row["package_id"],
+                from_status=PackageStatus(row["from_status"]) if row["from_status"] else None,
+                to_status=PackageStatus(row["to_status"]),
+                reason=row["reason"],
+                context=row["context"] or {},
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def save_execution_policy(self, policy: ValidatedExecutionPolicy) -> ValidatedExecutionPolicy:
+        self.get(policy.package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.validated_execution_policy (
+                        policy_id, package_id, manifest_sha256, policy_name, policy_json,
+                        policy_sha256, algo_code, algo_config, unfilled_handler,
+                        unfilled_handler_params, source_backtest_id, source_backtest_status,
+                        validation_status, paper_enabled, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (package_id, policy_sha256) DO NOTHING
+                    """,
+                    (
+                        policy.policy_id,
+                        policy.package_id,
+                        policy.manifest_sha256,
+                        policy.policy_name,
+                        psycopg2.extras.Json(policy.policy_json),
+                        policy.policy_sha256,
+                        policy.algo_code,
+                        psycopg2.extras.Json(policy.algo_config),
+                        policy.unfilled_handler,
+                        psycopg2.extras.Json(policy.unfilled_handler_params),
+                        policy.source_backtest_id,
+                        policy.source_backtest_status,
+                        policy.validation_status.value,
+                        policy.paper_enabled,
+                        policy.created_at,
+                        policy.updated_at,
+                    ),
+                )
+                if cur.rowcount == 0:
+                    cur.execute(
+                        """
+                        SELECT policy_id
+                        FROM strategy_pkg.validated_execution_policy
+                        WHERE package_id = %s AND policy_sha256 = %s
+                        """,
+                        (policy.package_id, policy.policy_sha256),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        policy = policy.model_copy(update={"policy_id": row[0]})
+        return self.get_execution_policy(policy.package_id, policy.policy_id)
+
+    def get_execution_policy(self, package_id: str, policy_id: str) -> ValidatedExecutionPolicy:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.validated_execution_policy
+                    WHERE package_id = %s AND policy_id = %s
+                    """,
+                    (package_id, policy_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError(
+                "validated execution policy does not exist",
+                context={"package_id": package_id, "policy_id": policy_id},
+            )
+        return self._execution_policy_from_row(dict(row))
+
+    def list_execution_policies(self, package_id: str) -> list[ValidatedExecutionPolicy]:
+        self.get(package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.validated_execution_policy
+                    WHERE package_id = %s
+                    ORDER BY created_at DESC, policy_id DESC
+                    """,
+                    (package_id,),
+                )
+                rows = cur.fetchall()
+        return [self._execution_policy_from_row(dict(row)) for row in rows]
+
+    def set_execution_policy_paper_enabled(
+        self,
+        *,
+        package_id: str,
+        policy_id: str,
+        paper_enabled: bool,
+    ) -> ValidatedExecutionPolicy:
+        self.get_execution_policy(package_id, policy_id)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.validated_execution_policy
+                    SET paper_enabled = %s, updated_at = NOW()
+                    WHERE package_id = %s AND policy_id = %s
+                    """,
+                    (paper_enabled, package_id, policy_id),
+                )
+        return self.get_execution_policy(package_id, policy_id)
+
+    def get_model_state(self, package_id: str) -> StrategyPackageModelState | None:
+        self.get(package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM strategy_pkg.model_state WHERE package_id = %s", (package_id,))
+                row = cur.fetchone()
+        return self._model_state_from_row(dict(row)) if row else None
+
+    def upsert_model_state(self, state: StrategyPackageModelState) -> StrategyPackageModelState:
+        self.get(state.package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.model_state (
+                        package_id, active_model_version_id, train_start_date, train_end_date,
+                        trained_at, last_retrain_job_id, last_retrained_at, stale_after_days,
+                        staleness_status, warning, last_checked_at, metadata, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (package_id) DO UPDATE SET
+                        active_model_version_id = EXCLUDED.active_model_version_id,
+                        train_start_date = EXCLUDED.train_start_date,
+                        train_end_date = EXCLUDED.train_end_date,
+                        trained_at = EXCLUDED.trained_at,
+                        last_retrain_job_id = EXCLUDED.last_retrain_job_id,
+                        last_retrained_at = EXCLUDED.last_retrained_at,
+                        stale_after_days = EXCLUDED.stale_after_days,
+                        staleness_status = EXCLUDED.staleness_status,
+                        warning = EXCLUDED.warning,
+                        last_checked_at = EXCLUDED.last_checked_at,
+                        metadata = EXCLUDED.metadata,
+                        updated_at = NOW()
+                    """,
+                    (
+                        state.package_id,
+                        state.active_model_version_id,
+                        state.train_start_date,
+                        state.train_end_date,
+                        state.trained_at,
+                        state.last_retrain_job_id,
+                        state.last_retrained_at,
+                        state.stale_after_days,
+                        state.staleness_status.value,
+                        state.warning,
+                        state.last_checked_at,
+                        psycopg2.extras.Json(state.metadata),
+                    ),
+                )
+        current = self.get_model_state(state.package_id)
+        if current is None:
+            raise StrategyPackageValidationError("failed to upsert strategy package model state")
+        return current
+
+    def save_model_retrain_job(self, job: StrategyPackageModelRetrainJob) -> StrategyPackageModelRetrainJob:
+        self.get(job.package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.model_retrain_job (
+                        job_id, package_id, job_type, requested_train_start_date,
+                        requested_train_end_date, stale_after_days, config, status,
+                        requires_manual_confirmation, confirmed, status_reason, error_json,
+                        created_at, updated_at, started_at, completed_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        job.job_id,
+                        job.package_id,
+                        job.job_type,
+                        job.requested_train_start_date,
+                        job.requested_train_end_date,
+                        job.stale_after_days,
+                        psycopg2.extras.Json(job.config),
+                        job.status.value,
+                        job.requires_manual_confirmation,
+                        job.confirmed,
+                        job.status_reason,
+                        psycopg2.extras.Json(job.error) if job.error else None,
+                        job.created_at,
+                        job.updated_at,
+                        job.started_at,
+                        job.completed_at,
+                    ),
+                )
+        return self.get_model_retrain_job(job.package_id, job.job_id)
+
+    def get_model_retrain_job(self, package_id: str, job_id: str) -> StrategyPackageModelRetrainJob:
+        self.get(package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.model_retrain_job
+                    WHERE package_id = %s AND job_id = %s
+                    """,
+                    (package_id, job_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError(
+                "model retrain job does not exist",
+                context={"package_id": package_id, "job_id": job_id},
+            )
+        return self._model_retrain_job_from_row(dict(row))
+
+    def list_model_retrain_jobs(self, package_id: str, *, limit: int = 100) -> list[StrategyPackageModelRetrainJob]:
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        self.get(package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.model_retrain_job
+                    WHERE package_id = %s
+                    ORDER BY created_at DESC, job_id DESC
+                    LIMIT %s
+                    """,
+                    (package_id, limit),
+                )
+                rows = cur.fetchall()
+        return [self._model_retrain_job_from_row(dict(row)) for row in rows]
+
+    def _record_from_row(self, row: dict[str, Any]) -> StrategyPackageRecord:
+        manifest_json = row["manifest_json"]
+        manifest = StrategyPackageManifest.model_validate(manifest_json)
+        record = StrategyPackageRecord(
+            package_id=row["package_id"],
+            package_name=row["package_name"],
+            package_version=row["package_version"],
+            source_type=row["source_type"],
+            source_id=row["source_id"],
+            loop_id=row.get("loop_id"),
+            run_id=row.get("run_id"),
+            package_status=PackageStatus(row["package_status"]),
+            manifest=manifest,
+            manifest_sha256=row["manifest_sha256"],
+            paper_portfolio_count=int(row.get("paper_portfolio_count") or 0),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        if record.manifest_sha256 != compute_manifest_sha256(record.current_manifest()):
+            raise StrategyPackageValidationError(
+                "stored manifest_sha256 does not match stored manifest",
+                context={"package_id": record.package_id},
+            )
+        return record
+
+    @staticmethod
+    def _execution_policy_from_row(row: dict[str, Any]) -> ValidatedExecutionPolicy:
+        return ValidatedExecutionPolicy(
+            policy_id=row["policy_id"],
+            package_id=row["package_id"],
+            manifest_sha256=row["manifest_sha256"],
+            policy_name=row["policy_name"],
+            policy_json=row["policy_json"] or {},
+            policy_sha256=row["policy_sha256"],
+            algo_code=row["algo_code"],
+            algo_config=row["algo_config"] or {},
+            unfilled_handler=row["unfilled_handler"],
+            unfilled_handler_params=row["unfilled_handler_params"] or {},
+            source_backtest_id=row["source_backtest_id"],
+            source_backtest_status=row["source_backtest_status"],
+            validation_status=row["validation_status"],
+            paper_enabled=bool(row["paper_enabled"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _model_state_from_row(row: dict[str, Any]) -> StrategyPackageModelState:
+        return StrategyPackageModelState(
+            package_id=row["package_id"],
+            active_model_version_id=row["active_model_version_id"],
+            train_start_date=row["train_start_date"],
+            train_end_date=row["train_end_date"],
+            trained_at=row["trained_at"],
+            last_retrain_job_id=row["last_retrain_job_id"],
+            last_retrained_at=row["last_retrained_at"],
+            stale_after_days=int(row["stale_after_days"]),
+            staleness_status=ModelStalenessStatus(row["staleness_status"]),
+            warning=row["warning"],
+            last_checked_at=row["last_checked_at"],
+            metadata=row["metadata"] or {},
+        )
+
+    @staticmethod
+    def _model_retrain_job_from_row(row: dict[str, Any]) -> StrategyPackageModelRetrainJob:
+        return StrategyPackageModelRetrainJob(
+            job_id=row["job_id"],
+            package_id=row["package_id"],
+            job_type=row["job_type"],
+            requested_train_start_date=row["requested_train_start_date"],
+            requested_train_end_date=row["requested_train_end_date"],
+            stale_after_days=int(row["stale_after_days"]),
+            config=row["config"] or {},
+            status=ModelRetrainJobStatus(row["status"]),
+            requires_manual_confirmation=bool(row["requires_manual_confirmation"]),
+            confirmed=bool(row["confirmed"]),
+            status_reason=row["status_reason"],
+            error=row["error_json"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+        )
+
+
+class InMemoryStrategyPackageRepository:
+    """Test repository with the same fail-fast semantics as PostgreSQL."""
+
+    def __init__(self) -> None:
+        self.records: dict[str, StrategyPackageRecord] = {}
+        self.events: list[PackageStatusEvent] = []
+        self.execution_policies: dict[str, ValidatedExecutionPolicy] = {}
+        self.model_states: dict[str, StrategyPackageModelState] = {}
+        self.model_retrain_jobs: dict[str, StrategyPackageModelRetrainJob] = {}
+
+    def save_manifest(self, manifest: StrategyPackageManifest) -> StrategyPackageRecord:
+        frozen = freeze_manifest(manifest)
+        existing = self.records.get(frozen.package_id)
+        if existing:
+            if existing.manifest_sha256 != frozen.manifest_sha256:
+                raise InvalidStateTransitionError(
+                    "package manifest cannot be silently replaced",
+                    context={"package_id": frozen.package_id},
+                )
+            return existing
+        now = datetime.now(UTC)
+        record = StrategyPackageRecord(
+            package_id=frozen.package_id,
+            package_name=frozen.package_name,
+            package_version=frozen.package_version,
+            source_type=frozen.source.source_type.value,
+            source_id=frozen.source.source_id,
+            loop_id=frozen.source.loop_id,
+            run_id=frozen.source.run_id,
+            package_status=frozen.package_status,
+            manifest=frozen,
+            manifest_sha256=frozen.manifest_sha256 or "",
+            created_at=now,
+            updated_at=now,
+        )
+        self.records[record.package_id] = record
+        self.events.append(
+            PackageStatusEvent(
+                package_id=record.package_id,
+                from_status=None,
+                to_status=record.package_status,
+                reason="package_created",
+                context={"manifest_sha256": record.manifest_sha256},
+            )
+        )
+        return record
+
+    def get(self, package_id: str) -> StrategyPackageRecord:
+        record = self.records.get(package_id)
+        if record is None:
+            raise DataUnavailableError("strategy package does not exist", context={"package_id": package_id})
+        return record
+
+    def list(self, *, status: PackageStatus | None = None, limit: int = 100) -> list[StrategyPackageRecord]:
+        records = list(self.records.values())
+        if status is not None:
+            records = [record for record in records if record.package_status == status]
+        return records[:limit]
+
+    def transition_status(
+        self,
+        *,
+        package_id: str,
+        to_status: PackageStatus,
+        allowed_from: set[PackageStatus],
+        reason: str,
+        context: dict[str, Any] | None = None,
+    ) -> StrategyPackageRecord:
+        record = self.get(package_id)
+        if record.package_status not in allowed_from:
+            raise InvalidStateTransitionError(
+                "invalid strategy package status transition",
+                context={"package_id": package_id, "from_status": record.package_status.value, "to_status": to_status.value},
+            )
+        updated = record.model_copy(update={"package_status": to_status, "updated_at": datetime.now(UTC)})
+        self.records[package_id] = updated
+        self.events.append(
+            PackageStatusEvent(
+                package_id=package_id,
+                from_status=record.package_status,
+                to_status=to_status,
+                reason=reason,
+                context=context or {},
+            )
+        )
+        return updated
+
+    def list_status_events(self, package_id: str, *, limit: int = 200) -> list[PackageStatusEvent]:
+        self.get(package_id)
+        return [event for event in self.events if event.package_id == package_id][:limit]
+
+    def mark_paper_portfolio_created(self, package_id: str, portfolio_id: str) -> StrategyPackageRecord:
+        record = self.get(package_id)
+        updated = record.model_copy(
+            update={
+                "paper_portfolio_count": record.paper_portfolio_count + 1,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        self.records[package_id] = updated
+        self.events.append(
+            PackageStatusEvent(
+                package_id=package_id,
+                from_status=record.package_status,
+                to_status=record.package_status,
+                reason="paper_portfolio_created",
+                context={"portfolio_id": portfolio_id},
+            )
+        )
+        return updated
+
+    def save_execution_policy(self, policy: ValidatedExecutionPolicy) -> ValidatedExecutionPolicy:
+        self.get(policy.package_id)
+        for existing in self.execution_policies.values():
+            if existing.package_id == policy.package_id and existing.policy_sha256 == policy.policy_sha256:
+                return existing
+        self.execution_policies[policy.policy_id] = policy
+        return policy
+
+    def get_execution_policy(self, package_id: str, policy_id: str) -> ValidatedExecutionPolicy:
+        policy = self.execution_policies.get(policy_id)
+        if policy is None or policy.package_id != package_id:
+            raise DataUnavailableError(
+                "validated execution policy does not exist",
+                context={"package_id": package_id, "policy_id": policy_id},
+            )
+        return policy
+
+    def list_execution_policies(self, package_id: str) -> list[ValidatedExecutionPolicy]:
+        self.get(package_id)
+        return [policy for policy in self.execution_policies.values() if policy.package_id == package_id]
+
+    def set_execution_policy_paper_enabled(
+        self,
+        *,
+        package_id: str,
+        policy_id: str,
+        paper_enabled: bool,
+    ) -> ValidatedExecutionPolicy:
+        policy = self.get_execution_policy(package_id, policy_id)
+        updated = policy.model_copy(update={"paper_enabled": paper_enabled, "updated_at": datetime.now(UTC)})
+        self.execution_policies[policy_id] = updated
+        return updated
+
+    def get_model_state(self, package_id: str) -> StrategyPackageModelState | None:
+        self.get(package_id)
+        return self.model_states.get(package_id)
+
+    def upsert_model_state(self, state: StrategyPackageModelState) -> StrategyPackageModelState:
+        self.get(state.package_id)
+        self.model_states[state.package_id] = state
+        return state
+
+    def save_model_retrain_job(self, job: StrategyPackageModelRetrainJob) -> StrategyPackageModelRetrainJob:
+        self.get(job.package_id)
+        self.model_retrain_jobs[job.job_id] = job
+        return job
+
+    def get_model_retrain_job(self, package_id: str, job_id: str) -> StrategyPackageModelRetrainJob:
+        self.get(package_id)
+        job = self.model_retrain_jobs.get(job_id)
+        if job is None or job.package_id != package_id:
+            raise DataUnavailableError(
+                "model retrain job does not exist",
+                context={"package_id": package_id, "job_id": job_id},
+            )
+        return job
+
+    def list_model_retrain_jobs(self, package_id: str, *, limit: int = 100) -> list[StrategyPackageModelRetrainJob]:
+        self.get(package_id)
+        rows = [job for job in self.model_retrain_jobs.values() if job.package_id == package_id]
+        rows.sort(key=lambda item: item.created_at, reverse=True)
+        return rows[:limit]

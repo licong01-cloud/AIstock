@@ -5,6 +5,8 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from backend.services.paper_trading_v2.market_data import (
+    DailySuspendStatus,
+    DbSuspendStatusProvider,
     MinuteDataSource,
     PaperV2MinuteMarketDataProvider,
 )
@@ -24,6 +26,51 @@ class FakeLimitProvider:
             up_limit=11.0,
             down_limit=9.0,
         )
+
+
+class FakeSuspendProvider:
+    def __init__(self, *, suspended: bool = False) -> None:
+        self.suspended = suspended
+
+    def get_suspend_status(self, symbol: str, trade_date: date) -> DailySuspendStatus:
+        return DailySuspendStatus(
+            symbol=symbol,
+            trade_date=trade_date,
+            is_suspended=self.suspended,
+            suspend_type="S" if self.suspended else None,
+        )
+
+
+class FakeCursor:
+    def __init__(self, row):
+        self.row = row
+        self.params = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def execute(self, _sql, params):
+        self.params = params
+
+    def fetchone(self):
+        return self.row
+
+
+class FakeConn:
+    def __init__(self, row):
+        self.cursor_obj = FakeCursor(row)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def cursor(self):
+        return self.cursor_obj
 
 
 def make_raw_bars(count: int = 31, *, trade_date: date = date(2024, 1, 2)) -> list[dict]:
@@ -61,6 +108,46 @@ def test_tdx_market_data_provider_builds_minute_input_with_observed_context() ->
     assert result.market_context["prev_close"] == 10.0
     assert result.market_context["observed_only"] is True
     assert len(result.market_context["full_day_close"]) == 31
+
+
+def test_market_data_provider_uses_explicit_suspend_provider_when_required() -> None:
+    provider = PaperV2MinuteMarketDataProvider(
+        limit_price_provider=FakeLimitProvider(),
+        suspend_status_provider=FakeSuspendProvider(suspended=True),
+        tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(31),
+    )
+
+    result = provider.load_symbol_input(
+        symbol="000001.SZ",
+        trade_date=date(2024, 1, 2),
+        source=MinuteDataSource.TDX_REALTIME,
+        min_bars=31,
+        require_suspend_status=True,
+    )
+
+    assert all(bar.is_suspended for bar in result.minute_bars)
+    assert result.market_context["suspend_status"]["is_suspended"] is True
+
+
+def test_db_suspend_status_provider_reads_suspend_d_rows() -> None:
+    provider = DbSuspendStatusProvider(
+        conn_factory=lambda: FakeConn(("S", "09:30-10:00")),
+    )
+
+    status = provider.get_suspend_status("000001.SZ", date(2024, 1, 2))
+
+    assert status.is_suspended is True
+    assert status.suspend_type == "S"
+    assert status.suspend_timing == "09:30-10:00"
+
+
+def test_db_suspend_status_provider_treats_no_suspend_row_as_active() -> None:
+    provider = DbSuspendStatusProvider(conn_factory=lambda: FakeConn(None))
+
+    status = provider.get_suspend_status("000001.SZ", date(2024, 1, 2))
+
+    assert status.is_suspended is False
+    assert status.suspend_type is None
 
 
 def test_tdx_market_data_provider_fails_when_31_bars_are_required_but_missing() -> None:

@@ -12,6 +12,9 @@ from .models import StrategyPackageManifest
 def _canonical_payload(manifest: StrategyPackageManifest) -> dict[str, Any]:
     payload = manifest.model_dump(mode="json")
     payload["manifest_sha256"] = None
+    # Package lifecycle status is stored separately and may transition after the
+    # runtime manifest is frozen for selection/paper trading.
+    payload["package_status"] = None
     return payload
 
 

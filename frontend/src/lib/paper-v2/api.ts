@@ -16,6 +16,7 @@ import type {
   SelectionMode,
   SelectionRun,
   StrategyPackage,
+  TradingDayDefaults,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
@@ -179,6 +180,10 @@ export const selectionCenterApi = {
 };
 
 export const paperV2Api = {
+  async tradingDayDefaults(lookbackTradingDays = 10): Promise<TradingDayDefaults> {
+    const data = await apiFetch<TradingDayDefaults>(`/paper-v2/trading-days/defaults?lookback_trading_days=${lookbackTradingDays}`);
+    return data;
+  },
   async listPortfolios(limit = 200): Promise<PaperPortfolio[]> {
     const data = await apiFetch<{ portfolios: PaperPortfolio[] }>(`/paper-v2/portfolios?limit=${limit}`);
     return data.portfolios || [];

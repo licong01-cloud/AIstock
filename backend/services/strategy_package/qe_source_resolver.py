@@ -122,6 +122,30 @@ class QEExperimentSourceResolver:
         frozen = freeze_manifest(manifest)
         return frozen
 
+    def build_from_evolution_loop(
+        self,
+        *,
+        qe_task_id: str,
+        qe_loop_id: str,
+        resolve_runtime_assets: bool = False,
+    ) -> StrategyPackageManifest:
+        """Build a package from one explicit QE evolution loop without writes."""
+
+        record = self._load_evolution_loop(qe_task_id=qe_task_id, qe_loop_id=qe_loop_id)
+        manifest = self._build_manifest(
+            record,
+            source_type=SourceType.QE_EVOLUTION_LOOP,
+            source_id=qe_task_id,
+            loop_id=qe_loop_id,
+            run_id=record.get("experiment_id"),
+        )
+        if resolve_runtime_assets:
+            manifest = self._model_asset_resolver.resolve_manifest_assets(
+                manifest,
+                copy_missing=True,
+            )
+        return freeze_manifest(manifest)
+
     def _load_experiment(self, experiment_id: str) -> dict[str, Any]:
         if not experiment_id or not experiment_id.strip():
             raise StrategyPackageValidationError("experiment_id is required")
@@ -147,7 +171,47 @@ class QEExperimentSourceResolver:
             )
         return dict(row)
 
-    def _build_manifest(self, record: dict[str, Any]) -> StrategyPackageManifest:
+    def _load_evolution_loop(self, *, qe_task_id: str, qe_loop_id: str) -> dict[str, Any]:
+        qe_task_id = str(qe_task_id or "").strip()
+        qe_loop_id = str(qe_loop_id or "").strip()
+        if not qe_task_id:
+            raise StrategyPackageValidationError("qe_task_id is required")
+        if not qe_loop_id:
+            raise StrategyPackageValidationError("qe_loop_id is required")
+
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT experiment_id, experiment_name, status, alpha_mode,
+                           qe_task_id, qe_loop_id, factor_names, model_id,
+                           strategy_id, data_split, custom_params, result_metrics,
+                           workspace_path, created_at, completed_at
+                    FROM qe_experiments
+                    WHERE qe_task_id = %s
+                      AND qe_loop_id = %s
+                    ORDER BY completed_at DESC NULLS LAST, created_at DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    (qe_task_id, qe_loop_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError(
+                "QE evolution loop does not exist",
+                context={"qe_task_id": qe_task_id, "qe_loop_id": qe_loop_id},
+            )
+        return dict(row)
+
+    def _build_manifest(
+        self,
+        record: dict[str, Any],
+        *,
+        source_type: SourceType = SourceType.QE_EXPERIMENT,
+        source_id: str | None = None,
+        loop_id: str | None = None,
+        run_id: str | None = None,
+    ) -> StrategyPackageManifest:
         experiment_id = str(record["experiment_id"])
         status = str(record.get("status") or "").lower()
         if status != "completed":
@@ -221,10 +285,10 @@ class QEExperimentSourceResolver:
         return StrategyPackageManifest(
             package_name=str(record.get("experiment_name") or experiment_id),
             source=StrategyPackageSource(
-                source_type=SourceType.QE_EXPERIMENT,
-                source_id=experiment_id,
-                loop_id=record.get("qe_loop_id"),
-                run_id=record.get("qe_task_id"),
+                source_type=source_type,
+                source_id=source_id or experiment_id,
+                loop_id=loop_id if loop_id is not None else record.get("qe_loop_id"),
+                run_id=run_id if run_id is not None else record.get("qe_task_id"),
                 created_at=record.get("created_at") or record.get("completed_at"),
             ),
             alpha_mode=alpha_mode,

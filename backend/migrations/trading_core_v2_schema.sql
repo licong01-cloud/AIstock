@@ -1,0 +1,396 @@
+﻿-- Trading Core v2 / Strategy Package / Selection Center / Paper v2 schema.
+-- Keep this migration explicit; business services must not run DDL implicitly.
+
+CREATE SCHEMA IF NOT EXISTS strategy_pkg;
+CREATE SCHEMA IF NOT EXISTS selection;
+CREATE SCHEMA IF NOT EXISTS paper_v2;
+CREATE SCHEMA IF NOT EXISTS trading_core;
+
+CREATE TABLE IF NOT EXISTS market.dataset_date_refresh_audit (
+    dataset TEXT NOT NULL,
+    trade_date DATE NOT NULL,
+    data_source TEXT NOT NULL,
+    job_id UUID,
+    status TEXT NOT NULL CHECK (status IN ('success', 'failed')),
+    row_count INTEGER NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+    refreshed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    error_message TEXT,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    PRIMARY KEY (dataset, trade_date, data_source)
+);
+
+CREATE TABLE IF NOT EXISTS strategy_pkg.package (
+    package_id TEXT PRIMARY KEY,
+    package_name TEXT NOT NULL,
+    package_version TEXT NOT NULL,
+    source_type TEXT NOT NULL CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop')),
+    source_id TEXT NOT NULL,
+    loop_id TEXT,
+    run_id TEXT,
+    package_status TEXT NOT NULL,
+    manifest_json JSONB NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    paper_portfolio_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS strategy_pkg.package_status_event (
+    event_id BIGSERIAL PRIMARY KEY,
+    package_id TEXT NOT NULL REFERENCES strategy_pkg.package(package_id),
+    from_status TEXT,
+    to_status TEXT NOT NULL,
+    reason TEXT,
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS strategy_pkg.package_asset (
+    asset_id BIGSERIAL PRIMARY KEY,
+    package_id TEXT NOT NULL REFERENCES strategy_pkg.package(package_id),
+    asset_type TEXT NOT NULL,
+    asset_ref TEXT NOT NULL,
+    asset_sha256 TEXT,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS strategy_pkg.selection_score_artifact (
+    artifact_id TEXT PRIMARY KEY,
+    package_id TEXT NOT NULL REFERENCES strategy_pkg.package(package_id),
+    manifest_sha256 TEXT NOT NULL,
+    trade_date DATE NOT NULL,
+    data_source TEXT NOT NULL,
+    runtime_config_hash TEXT NOT NULL,
+    scores_json JSONB NOT NULL,
+    artifact_sha256 TEXT NOT NULL,
+    score_count INTEGER NOT NULL CHECK (score_count >= 0),
+    universe_count INTEGER NOT NULL CHECK (universe_count >= 0),
+    top_score_symbol TEXT,
+    status TEXT NOT NULL CHECK (status IN ('SUCCEEDED', 'FAILED')),
+    error_json JSONB,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (package_id, manifest_sha256, trade_date, data_source, runtime_config_hash)
+);
+
+CREATE TABLE IF NOT EXISTS strategy_pkg.validated_execution_policy (
+    policy_id TEXT PRIMARY KEY,
+    package_id TEXT NOT NULL REFERENCES strategy_pkg.package(package_id),
+    manifest_sha256 TEXT NOT NULL,
+    policy_name TEXT NOT NULL,
+    policy_json JSONB NOT NULL,
+    policy_sha256 TEXT NOT NULL,
+    algo_code TEXT NOT NULL,
+    algo_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    unfilled_handler TEXT,
+    unfilled_handler_params JSONB NOT NULL DEFAULT '{}'::jsonb,
+    source_backtest_id TEXT NOT NULL,
+    source_backtest_status TEXT NOT NULL,
+    validation_status TEXT NOT NULL,
+    paper_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (package_id, policy_sha256)
+);
+
+CREATE TABLE IF NOT EXISTS strategy_pkg.model_state (
+    package_id TEXT PRIMARY KEY REFERENCES strategy_pkg.package(package_id),
+    active_model_version_id TEXT,
+    train_start_date DATE,
+    train_end_date DATE,
+    trained_at TIMESTAMPTZ,
+    last_retrain_job_id TEXT,
+    last_retrained_at TIMESTAMPTZ,
+    stale_after_days INTEGER NOT NULL DEFAULT 30,
+    staleness_status TEXT NOT NULL,
+    warning TEXT,
+    last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS strategy_pkg.model_retrain_job (
+    job_id TEXT PRIMARY KEY,
+    package_id TEXT NOT NULL REFERENCES strategy_pkg.package(package_id),
+    job_type TEXT NOT NULL,
+    requested_train_start_date DATE,
+    requested_train_end_date DATE NOT NULL,
+    stale_after_days INTEGER NOT NULL,
+    config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL,
+    requires_manual_confirmation BOOLEAN NOT NULL DEFAULT TRUE,
+    confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+    status_reason TEXT,
+    error_json JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS selection.run (
+    run_id TEXT PRIMARY KEY,
+    mode TEXT NOT NULL,
+    trade_date DATE NOT NULL,
+    data_source TEXT NOT NULL,
+    package_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    runtime_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL,
+    valid_no_candidate BOOLEAN NOT NULL DEFAULT FALSE,
+    no_candidate_reason TEXT,
+    error_json JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS selection.package_result (
+    result_id BIGSERIAL PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES selection.run(run_id),
+    package_id TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    score DOUBLE PRECISION NOT NULL,
+    rank INTEGER NOT NULL,
+    target_weight DOUBLE PRECISION,
+    target_quantity INTEGER,
+    reference_price DOUBLE PRECISION,
+    component_scores JSONB NOT NULL DEFAULT '{}'::jsonb,
+    reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(run_id, package_id, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS selection.aggregate_result (
+    aggregate_id BIGSERIAL PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES selection.run(run_id),
+    symbol TEXT NOT NULL,
+    score DOUBLE PRECISION NOT NULL,
+    rank INTEGER NOT NULL,
+    target_weight DOUBLE PRECISION,
+    target_quantity INTEGER,
+    reference_price DOUBLE PRECISION,
+    source_package_ids JSONB NOT NULL,
+    explanation JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(run_id, symbol)
+);
+
+ALTER TABLE selection.run
+    ADD COLUMN IF NOT EXISTS package_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+CREATE TABLE IF NOT EXISTS selection.excluded_result (
+    exclusion_id BIGSERIAL PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES selection.run(run_id),
+    package_id TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    score DOUBLE PRECISION NOT NULL,
+    raw_rank INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    source TEXT NOT NULL,
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(run_id, package_id, symbol, reason)
+);
+
+CREATE TABLE IF NOT EXISTS selection.paper_portfolio_link (
+    link_id BIGSERIAL PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES selection.run(run_id),
+    portfolio_id TEXT NOT NULL,
+    package_id TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    trade_date DATE NOT NULL,
+    data_source TEXT NOT NULL,
+    start_date DATE NOT NULL,
+    initial_cash NUMERIC(20, 6) NOT NULL CHECK (initial_cash > 0),
+    runtime_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(run_id, portfolio_id)
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.portfolio (
+    portfolio_id TEXT PRIMARY KEY,
+    portfolio_name TEXT NOT NULL,
+    package_id TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    frozen_manifest_json JSONB NOT NULL,
+    initial_cash NUMERIC(20, 6) NOT NULL CHECK (initial_cash > 0),
+    start_date DATE NOT NULL,
+    data_source TEXT NOT NULL CHECK (data_source IN ('TDX_REALTIME', 'DB_HISTORICAL')),
+    fee_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+    risk_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+    execution_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.execution_policy_activation (
+    activation_id TEXT PRIMARY KEY,
+    portfolio_id TEXT NOT NULL REFERENCES paper_v2.portfolio(portfolio_id),
+    trade_date DATE NOT NULL,
+    policy_id TEXT NOT NULL,
+    policy_sha256 TEXT NOT NULL,
+    policy_name TEXT,
+    policy_json JSONB NOT NULL,
+    status TEXT NOT NULL,
+    activated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    activated_by TEXT,
+    reason TEXT,
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    superseded_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.run (
+    run_id TEXT PRIMARY KEY,
+    portfolio_id TEXT NOT NULL REFERENCES paper_v2.portfolio(portfolio_id),
+    trade_date DATE NOT NULL,
+    status TEXT NOT NULL,
+    data_source TEXT NOT NULL,
+    runtime_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    error_json JSONB,
+    UNIQUE(portfolio_id, trade_date)
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.orders (
+    order_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES paper_v2.run(run_id),
+    portfolio_id TEXT NOT NULL,
+    package_id TEXT NOT NULL,
+    intent_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    order_type TEXT NOT NULL,
+    limit_price DOUBLE PRECISION,
+    status TEXT NOT NULL,
+    filled_quantity INTEGER NOT NULL,
+    avg_fill_price DOUBLE PRECISION,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.order_events (
+    event_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES paper_v2.run(run_id),
+    order_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_time TIMESTAMPTZ NOT NULL,
+    reason TEXT,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    fill_json JSONB
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.fills (
+    fill_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES paper_v2.run(run_id),
+    order_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    price DOUBLE PRECISION NOT NULL,
+    trade_time TIMESTAMPTZ NOT NULL,
+    bar_time TIMESTAMPTZ,
+    reason TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.cash_ledger (
+    cash_id BIGSERIAL PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES paper_v2.run(run_id),
+    portfolio_id TEXT NOT NULL,
+    fill_id TEXT,
+    trade_date DATE NOT NULL,
+    symbol TEXT,
+    side TEXT,
+    notional NUMERIC(20, 6) NOT NULL,
+    fee NUMERIC(20, 6) NOT NULL,
+    cash_delta NUMERIC(20, 6) NOT NULL,
+    cash_after NUMERIC(20, 6) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.positions (
+    position_id BIGSERIAL PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES paper_v2.run(run_id),
+    portfolio_id TEXT NOT NULL,
+    trade_date DATE NOT NULL,
+    symbol TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    available_quantity INTEGER NOT NULL,
+    avg_cost DOUBLE PRECISION NOT NULL,
+    market_price DOUBLE PRECISION NOT NULL,
+    market_value DOUBLE PRECISION NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    UNIQUE(run_id, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.daily_snapshots (
+    snapshot_id BIGSERIAL PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES paper_v2.run(run_id),
+    portfolio_id TEXT NOT NULL,
+    trade_date DATE NOT NULL,
+    cash DOUBLE PRECISION NOT NULL,
+    market_value DOUBLE PRECISION NOT NULL,
+    nav DOUBLE PRECISION NOT NULL,
+    position_count INTEGER NOT NULL,
+    snapshot_time TIMESTAMPTZ NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    UNIQUE(portfolio_id, trade_date)
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.run_events (
+    event_seq BIGSERIAL PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES paper_v2.run(run_id),
+    event_type TEXT NOT NULL,
+    message TEXT NOT NULL,
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.errors (
+    error_id BIGSERIAL PRIMARY KEY,
+    run_id TEXT,
+    portfolio_id TEXT,
+    error_code TEXT NOT NULL,
+    message TEXT NOT NULL,
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.reset_audit (
+    audit_id BIGSERIAL PRIMARY KEY,
+    portfolio_id TEXT NOT NULL REFERENCES paper_v2.portfolio(portfolio_id),
+    rerun_policy TEXT NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    confirm_text TEXT NOT NULL,
+    deleted_counts JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL,
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_pkg_source ON strategy_pkg.package(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_strategy_pkg_selection_artifact_package ON strategy_pkg.selection_score_artifact(package_id, manifest_sha256, trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_strategy_pkg_exec_policy_package ON strategy_pkg.validated_execution_policy(package_id, paper_enabled);
+CREATE INDEX IF NOT EXISTS idx_strategy_pkg_model_state_status ON strategy_pkg.model_state(staleness_status, train_end_date);
+CREATE INDEX IF NOT EXISTS idx_strategy_pkg_model_retrain_job_package ON strategy_pkg.model_retrain_job(package_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_selection_run_date ON selection.run(trade_date, status);
+CREATE INDEX IF NOT EXISTS idx_selection_pkg_result ON selection.package_result(package_id, manifest_sha256, symbol);
+CREATE INDEX IF NOT EXISTS idx_selection_excluded_run ON selection.excluded_result(run_id, package_id, raw_rank);
+CREATE INDEX IF NOT EXISTS idx_selection_paper_link_run ON selection.paper_portfolio_link(run_id, portfolio_id);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_portfolio_package ON paper_v2.portfolio(package_id, manifest_sha256);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_v2_exec_policy_activation_active ON paper_v2.execution_policy_activation(portfolio_id, trade_date) WHERE status = 'ACTIVE';
+CREATE INDEX IF NOT EXISTS idx_paper_v2_exec_policy_activation_portfolio ON paper_v2.execution_policy_activation(portfolio_id, trade_date DESC, activated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_run_portfolio_date ON paper_v2.run(portfolio_id, trade_date);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_fills_run ON paper_v2.fills(run_id);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_positions_portfolio_date ON paper_v2.positions(portfolio_id, trade_date);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_reset_audit_portfolio ON paper_v2.reset_audit(portfolio_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_strategy_pkg_source_version ON strategy_pkg.package(source_type, source_id, COALESCE(loop_id, ''), package_version);
+CREATE INDEX IF NOT EXISTS idx_dataset_refresh_audit_date ON market.dataset_date_refresh_audit(dataset, trade_date, status);

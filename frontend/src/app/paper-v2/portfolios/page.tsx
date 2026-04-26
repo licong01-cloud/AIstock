@@ -77,6 +77,21 @@ export default function PaperV2PortfoliosPage() {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
+    let alive = true;
+    const initialReplayStart = daysAgoIso(10);
+    const initialToday = todayIso();
+    paperV2Api.tradingDayDefaults(10).then((defaults) => {
+      if (!alive) return;
+      setStartDate((current) => (current === initialToday ? defaults.latest_trading_day : current));
+      setReplayStart((current) => (current === initialReplayStart ? defaults.replay_start_date : current));
+      setReplayEnd((current) => (current === initialToday ? defaults.replay_end_date : current));
+    }).catch((exc) => {
+      if (alive) setError(exc);
+    });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
     if (!packageId) return;
     strategyPackageApi.executionPolicies(packageId).then((rows) => {
       setPolicies(rows);

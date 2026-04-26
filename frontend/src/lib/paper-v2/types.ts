@@ -4,6 +4,18 @@ export type JsonObject = Record<string, unknown>;
 export type DataSource = "DB_HISTORICAL" | "TDX_REALTIME";
 export type SelectionMode = "single_package" | "intersection" | "union" | "weighted_fusion";
 
+export type TradingDayDefaults = {
+  as_of_date: string;
+  lookback_trading_days: number;
+  require_minute_data?: boolean;
+  data_ready_latest_date?: string | null;
+  latest_trading_day: string;
+  replay_start_date: string;
+  replay_end_date: string;
+  available_trading_day_count: number;
+  next_trading_day?: string | null;
+};
+
 export type BackendErrorDetail = {
   error_code?: string;
   message?: string;

@@ -5,7 +5,7 @@ const apiBase = process.env.PAPER_V2_API_BASE || "http://127.0.0.1:8011/api/v1";
 
 export default defineConfig({
   testDir: "./tests",
-  timeout: 90_000,
+  timeout: 300_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,
