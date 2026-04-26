@@ -1,6 +1,6 @@
-"use client";
+﻿"use client";
 
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import FullPipelineDialog from "./FullPipelineDialog";
 import ManualFactorDialog from "./ManualFactorDialog";
 import IcSeriesChart from "./charts/IcSeriesChart";
@@ -231,6 +231,7 @@ export default function FactorList({
   };
 }) {
   const [factors, setFactors] = useState<Factor[]>([]);
+  const loadDataRequestRef = useRef(0);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -814,13 +815,15 @@ export default function FactorList({
     return filtered;
   }, [factors, indSummary, categoryFilter, gradeFilter, sortField, sortOrder, cacheContext]);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (queryOverride?: string) => {
+    const requestId = ++loadDataRequestRef.current;
     setLoading(true);
     setError(null);
     try {
+      const effectiveSearch = typeof queryOverride === "string" ? queryOverride : search;
       const factorParams = new URLSearchParams({ limit: String(pageSize), offset: String((page - 1) * pageSize) });
       if (sourceFilter) factorParams.set("source", sourceFilter);
-      if (search) factorParams.set("search", search);
+      if (effectiveSearch) factorParams.set("search", effectiveSearch);
       if (!showAlpha) factorParams.set("exclude_source", "alpha158,alpha360");
       if (sortField && sortField !== "cache_status") factorParams.set("sort_field", sortField);
       if (sortField && sortField !== "cache_status") factorParams.set("sort_order", sortOrder);
@@ -830,12 +833,15 @@ export default function FactorList({
 
       const fRes = await fetch(`${API}/quantevolver/factors?${factorParams.toString()}`).then(r => r.json());
 
+      if (requestId !== loadDataRequestRef.current) return;
       setFactors(fRes.items || []);
       setTotal(fRes.total || 0);
     } catch (e: any) {
+      if (requestId !== loadDataRequestRef.current) return;
       setError(e?.message || "加载失败");
+    } finally {
+      if (requestId === loadDataRequestRef.current) setLoading(false);
     }
-    setLoading(false);
   }, [sourceFilter, search, page, pageSize, showAlpha, sortField, sortOrder, categoryFilter, gradeFilter, availabilityFilter]);
 
   const loadIndSummary = useCallback(async () => {
@@ -2058,10 +2064,11 @@ export default function FactorList({
           </select>
 
           <input
+            data-testid="qe-factor-search"
             placeholder="搜索因子名称..."
             value={search}
             onChange={e => setSearch(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && loadData()}
+            onKeyDown={e => { if (e.key === "Enter") void loadData(e.currentTarget.value); }}
             style={{ padding: "6px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", width: 200 }}
           />
 
@@ -2103,7 +2110,7 @@ export default function FactorList({
           </select>
 
           <button
-            onClick={loadData}
+            onClick={() => loadData()}
             disabled={loading}
             style={{ padding: "6px 12px", fontSize: 12, cursor: "pointer", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff" }}
           >
@@ -2591,6 +2598,7 @@ export default function FactorList({
                 return (
                   <React.Fragment key={rowKey}>
                     <tr
+                      data-testid={`qe-factor-row-${f.factor_name}`}
                       style={{
                         borderBottom: isExpanded ? "none" : "1px solid #f3f4f6",
                         background: !f.is_available ? "#f9fafb" : isSelected ? (isSelection ? "#eff6ff" : "#faf5ff") : undefined,
@@ -2603,6 +2611,7 @@ export default function FactorList({
                     >
                       <td style={{ ...tdStyle, width: 32 }}>
                         <input 
+                          data-testid={`qe-factor-checkbox-${f.factor_name}`}
                           type="checkbox" 
                           checked={isSelected} 
                           onChange={() => toggleSelect(selectKey)} 

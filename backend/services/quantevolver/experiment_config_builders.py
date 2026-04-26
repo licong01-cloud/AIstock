@@ -31,6 +31,7 @@ from typing import Any
 from .experiment_config import (
     ExperimentConfig, HmmConfig,
     AlphaGroup, MetaModelConfig, MultiAlphaConfig,
+    normalize_label_horizon,
 )
 
 logger = logging.getLogger("aistock.quantevolver.experiment_config_builders")
@@ -115,6 +116,46 @@ def _build_unfilled_handler_params(raw: Any) -> dict[str, Any]:
     return parsed
 
 
+def _resolve_label_horizon(
+    *,
+    authoritative: Any = None,
+    inherited: Any = None,
+    allow_authoritative_missing: bool = True,
+    context: str,
+) -> int:
+    """Resolve label_horizon with fail-fast conflict detection."""
+    auth_missing = authoritative is None or authoritative == ""
+    inh_missing = inherited is None or inherited == ""
+    if auth_missing and inh_missing:
+        return 1
+    if auth_missing:
+        if not allow_authoritative_missing:
+            raise ValueError(f"{context}: missing authoritative label_horizon")
+        return normalize_label_horizon(inherited, field_name=f"{context}.inherited_label_horizon")
+    auth = normalize_label_horizon(authoritative, field_name=f"{context}.label_horizon")
+    if not inh_missing:
+        inh = normalize_label_horizon(inherited, field_name=f"{context}.inherited_label_horizon")
+        if inh != auth:
+            raise ValueError(
+                f"{context}: label_horizon conflict authoritative={auth}, inherited={inh}"
+            )
+    return auth
+
+
+def _label_horizon_from_model_params(config: dict[str, Any] | None) -> Any:
+    if not isinstance(config, dict):
+        return None
+    model_params = config.get("model_params") or {}
+    if isinstance(model_params, str):
+        try:
+            model_params = json.loads(model_params)
+        except Exception:
+            return None
+    if not isinstance(model_params, dict):
+        return None
+    return model_params.get("label_horizon")
+
+
 # ── Path 1: run_experiment (routers/quantevolver.py:3255) ─────────────────────
 
 def build_config_from_exp_record(
@@ -133,6 +174,11 @@ def build_config_from_exp_record(
 
     execution_algo: str | None = custom_params.pop("execution_algo", None)
     execution_algo_params: dict[str, Any] = custom_params.pop("execution_algo_params", None) or {}
+    label_type: str | None = custom_params.pop("label_type", None)
+    label_horizon = _resolve_label_horizon(
+        inherited=custom_params.pop("label_horizon", None),
+        context="exp_record",
+    )
 
     # HMM keys live inside custom_params in Path 1
     enable_sector_hmm: bool = bool(custom_params.pop("enable_sector_hmm", False))
@@ -162,6 +208,8 @@ def build_config_from_exp_record(
         model_id=exp_record.get("model_id") or "",
         strategy_id=exp_record.get("strategy_id"),
         data_split=data_split,
+        label_type=label_type,
+        label_horizon=label_horizon,
         hmm=hmm,
         execution_algo=execution_algo,
         execution_algo_params=execution_algo_params or None,
@@ -202,6 +250,11 @@ def build_config_from_evolution_loop(
     unfilled_handler_params = _build_unfilled_handler_params(
         task.get("unfilled_handler_params")
     )
+    label_horizon = _resolve_label_horizon(
+        authoritative=task.get("label_horizon"),
+        inherited=model_params_base.get("label_horizon"),
+        context="evolution_loop",
+    )
 
     # Multi-Alpha 透传 (Path 2)
     alpha_mode = config.get("alpha_mode") or task.get("alpha_mode") or "single"
@@ -216,6 +269,7 @@ def build_config_from_evolution_loop(
         data_split=config.get("data_split"),
         stock_pool=task.get("stock_pool"),
         label_type=task.get("label_type"),
+        label_horizon=label_horizon,
         hmm=None,  # Path 2 does not inject HMM (known gap)
         execution_algo=effective_execution_algo,
         execution_algo_params=effective_execution_algo_params or None,
@@ -246,6 +300,22 @@ def build_config_from_strategy_evo_loop(
     """
     model_params_base: dict[str, Any] = dict(base_config.get("model_params") or {})
     strategy_params: dict[str, Any] = dict(loop_config.get("strategy_params") or {})
+    label_horizon = _resolve_label_horizon(
+        authoritative=task.get("label_horizon"),
+        inherited=model_params_base.get("label_horizon"),
+        context="strategy_evo_loop",
+    )
+    loop_horizon = loop_config.get("label_horizon")
+    if loop_horizon not in (None, ""):
+        loop_horizon = normalize_label_horizon(
+            loop_horizon,
+            field_name="strategy_evo_loop.loop_config.label_horizon",
+        )
+        if loop_horizon != label_horizon:
+            raise ValueError(
+                "strategy_evo_loop: backtest-only label_horizon cannot differ "
+                f"from source model horizon {label_horizon}"
+            )
 
     execution_algo: str | None = loop_config.get("execution_algo")
     execution_algo_params: dict[str, Any] = dict(
@@ -284,6 +354,7 @@ def build_config_from_strategy_evo_loop(
         data_split=base_config.get("data_split"),
         stock_pool=task.get("stock_pool"),
         label_type=task.get("label_type"),
+        label_horizon=label_horizon,
         sector_blacklist=sector_blacklist,
         hmm=hmm,
         execution_algo=execution_algo,
@@ -349,6 +420,16 @@ def build_config_from_custom_evo_loop(
     backtest_only: bool = bool(loop_config.get("backtest_only", False))
     model_source_task_id: str | None = loop_config.get("model_source_task_id")
     model_source_loop_index: int | None = loop_config.get("model_source_loop_index")
+    if backtest_only and "source_label_horizon" not in loop_config:
+        raise ValueError(
+            "custom_evo_loop: backtest-only requires source_label_horizon; "
+            "cannot prove training-label compatibility"
+        )
+    label_horizon = _resolve_label_horizon(
+        authoritative=loop_config.get("label_horizon"),
+        inherited=loop_config.get("source_label_horizon") if backtest_only else None,
+        context="custom_evo_loop",
+    )
 
     # Multi-Alpha 支持 (Path 4 — 统一引擎路径)
     # strategy_evo_config.loops[i] 可嵌入 multi_alpha_config 字段
@@ -373,6 +454,7 @@ def build_config_from_custom_evo_loop(
         data_split=data_split,
         stock_pool=stock_pool,
         label_type=label_type,
+        label_horizon=label_horizon,
         sector_blacklist=sector_blacklist,
         hmm=hmm,
         execution_algo=execution_algo,
@@ -409,6 +491,28 @@ def build_config_from_retry_loop(
     """
     # model_params is the original custom_params snapshot
     model_params_base: dict[str, Any] = dict(config.get("model_params") or {})
+    config_label_horizon = model_params_base.get("label_horizon")
+    if config_label_horizon not in (None, ""):
+        label_horizon = normalize_label_horizon(
+            config_label_horizon,
+            field_name="retry_loop.config.model_params.label_horizon",
+        )
+        task_horizon = task.get("label_horizon")
+        if task_horizon not in (None, "", 1):
+            inherited = normalize_label_horizon(
+                task_horizon,
+                field_name="retry_loop.task.label_horizon",
+            )
+            if inherited != label_horizon:
+                raise ValueError(
+                    f"retry_loop: task label_horizon={inherited} conflicts with "
+                    f"original loop label_horizon={label_horizon}"
+                )
+    else:
+        label_horizon = _resolve_label_horizon(
+            authoritative=task.get("label_horizon"),
+            context="retry_loop",
+        )
 
     # Task-level strategy params overlay
     effective_strategy_params: dict[str, Any] = dict(
@@ -447,6 +551,7 @@ def build_config_from_retry_loop(
         data_split=config.get("data_split"),
         stock_pool=task.get("stock_pool"),
         label_type=task.get("label_type"),
+        label_horizon=label_horizon,
         hmm=hmm,
         execution_algo=effective_execution_algo,
         execution_algo_params=effective_execution_algo_params or None,
@@ -470,6 +575,7 @@ def build_config_from_multi_alpha(
     strategy_params=None,
     stock_pool=None,
     label_type=None,
+    label_horizon=None,
     sector_blacklist=None,
     hmm_config=None,
     execution_algo=None,
@@ -506,6 +612,7 @@ def build_config_from_multi_alpha(
         data_split=data_split,
         stock_pool=stock_pool,
         label_type=label_type,
+        label_horizon=normalize_label_horizon(label_horizon),
         sector_blacklist=sector_blacklist,
         hmm=hmm_config,
         execution_algo=execution_algo,

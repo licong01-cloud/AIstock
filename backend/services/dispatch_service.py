@@ -535,6 +535,7 @@ class DispatchService:
                 allow_created=allow_created,
                 start_from_loop_zero=start_from_loop_zero,
                 node_id=node["node_id"],
+                label_horizon=config.get("label_horizon"),
             )
         except Exception as e:
             self._update_task_fields(task_id, status="failed", error_message=str(e))

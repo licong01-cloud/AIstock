@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
@@ -64,6 +64,7 @@ interface Task {
   unfilled_handler?: string;
   unfilled_handler_params?: Record<string, any>;
   label_type?: string;
+  label_horizon?: number;
   stock_pool?: string;
   factor_blacklist?: string[];
 }
@@ -98,6 +99,7 @@ export default function EvolutionDashboard() {
     hmm_model_version_id: "",
     hmm_signal_preset: "preset_A",
     node_id: "",
+    label_horizon: 1 as 1 | 3 | 5 | 10,
   });
   const [isCreating, setIsCreating] = useState(false);
 
@@ -143,6 +145,7 @@ export default function EvolutionDashboard() {
     unfilled_handler: string;
     unfilled_handler_params: Record<string, any>;
     label_type: string;
+    label_horizon: 1 | 3 | 5 | 10;
     data_split: Record<string, string> | null;
     blacklist_enabled: boolean;
     stock_pool: string;
@@ -168,6 +171,7 @@ export default function EvolutionDashboard() {
     unfilled_handler: "",
     unfilled_handler_params: {},
     label_type: "",
+    label_horizon: 1,
     data_split: null,
     blacklist_enabled: false,
     stock_pool: "",
@@ -182,7 +186,6 @@ export default function EvolutionDashboard() {
   const [customEvoParallelism, setCustomEvoParallelism] = useState<number>(2);
   const [customEvoNodeId, setCustomEvoNodeId] = useState<string>("");
   const [customEvoInitSource, setCustomEvoInitSource] = useState<"manual" | "qe_experiment" | "evolution_loop" | "rdagent_task">("manual");
-  const [customEvoEngineMode, setCustomEvoEngineMode] = useState<"legacy" | "unified">("unified");
   const [customEvoFirstLoopReady, setCustomEvoFirstLoopReady] = useState(false);
   // 自定义演进 — 从来源加载配置的辅助状态
   const [customEvoSourceExpId, setCustomEvoSourceExpId] = useState("");
@@ -277,11 +280,14 @@ export default function EvolutionDashboard() {
       // 记录 model_source 用于 backtest-only 模式
       const sourceTaskId = exp.qe_task_id || "";
       const sourceLoopIdx = exp.qe_loop_id ? parseInt((exp.qe_loop_id.match(/Loop(\d+)/) || [])[1] || "1") : 1;
+      const expParams = typeof exp.custom_params === "string" ? JSON.parse(exp.custom_params || "{}") : (exp.custom_params || {});
+      const expHorizon = ([1, 3, 5, 10].includes(Number(expParams.label_horizon || 1)) ? Number(expParams.label_horizon || 1) : 1) as 1 | 3 | 5 | 10;
       updateCustomEvoLoop(0, {
         factor_keys: factorKeys,
         model_id: exp.model_id || "",
         strategy_id: exp.strategy_id || "",
         strategy_params: {},
+        label_horizon: expHorizon,
         backtest_only: !!sourceTaskId,
         model_source_task_id: sourceTaskId,
         model_source_loop_index: sourceTaskId ? sourceLoopIdx : null,
@@ -302,6 +308,10 @@ export default function EvolutionDashboard() {
       const loop = loops.find((l: any) => l.loop_index === loopIndex);
       if (!loop || !loop.config_json) { alert(`Loop ${loopIndex} 没有配置数据`); return; }
       const config = typeof loop.config_json === "string" ? JSON.parse(loop.config_json) : loop.config_json;
+      const configParams = config.model_params || {};
+      const loopHorizon = ([1, 3, 5, 10].includes(Number(configParams.label_horizon || config.label_horizon || 1))
+        ? Number(configParams.label_horizon || config.label_horizon || 1)
+        : 1) as 1 | 3 | 5 | 10;
       const factorList: string[] = config.factor_list || config.factor_names || [];
       if (factorList.length === 0) { alert(`Loop ${loopIndex} 没有因子数据`); return; }
       // 因子列表可能是纯名称或 "name||source"
@@ -326,6 +336,7 @@ export default function EvolutionDashboard() {
         model_id: config.model_id || "",
         strategy_id: config.strategy_id || "",
         strategy_params: config.model_params || {},
+        label_horizon: loopHorizon,
         backtest_only: true,
         model_source_task_id: taskId,
         model_source_loop_index: loopIndex,
@@ -361,6 +372,7 @@ export default function EvolutionDashboard() {
     strategy_params: {} as Record<string, any>,
     execution_algo: "",
     execution_algo_params: {} as Record<string, any>,
+    label_horizon: 1 as 1 | 3 | 5 | 10,
   });
 
   // 策略演进相关状态
@@ -511,6 +523,9 @@ export default function EvolutionDashboard() {
         hmm_model_version_id: sp.hmm_model_version_id || "",
         hmm_signal_preset: sp.hmm_signal_preset || "preset_A",
         node_id: "",
+        label_horizon: ([1, 3, 5, 10].includes(Number((cloneFromTask as any).label_horizon || 1))
+          ? Number((cloneFromTask as any).label_horizon || 1)
+          : 1) as 1 | 3 | 5 | 10,
       });
       if ((cloneFromTask as any).stock_pool) {
         setBlacklistEnabled(true);
@@ -830,6 +845,7 @@ export default function EvolutionDashboard() {
                 ? newTask.unfilled_handler_params
                 : undefined,
             additional_factor_keys: additionalFactorKeys.size > 0 ? Array.from(additionalFactorKeys) : undefined,
+            label_horizon: newTask.label_horizon,
           }),
         });
         if (!res.ok) {
@@ -842,7 +858,7 @@ export default function EvolutionDashboard() {
         if (data.status === "success") {
           alert(`已从 Loop ${newTask.fork_from_loop_index} 创建新演进任务！`);
           setShowCreateTask(false);
-          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "" });
+          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "", label_horizon: 1 });
           setForkSourceLoops([]);
           setShowFactorLibrary(false);
           setAdditionalFactorKeys(new Set());
@@ -880,6 +896,7 @@ export default function EvolutionDashboard() {
           unfilled_handler_params: loop.unfilled_handler && Object.keys(loop.unfilled_handler_params).length > 0 ? loop.unfilled_handler_params : undefined,
           stock_pool: loop.stock_pool || undefined,
           label_type: loop.label_type || undefined,
+          label_horizon: loop.label_horizon,
           data_split: loop.data_split || undefined,
           backtest_only: loop.backtest_only,
           model_source_task_id: loop.backtest_only ? (loop.model_source_task_id || undefined) : undefined,
@@ -895,7 +912,7 @@ export default function EvolutionDashboard() {
             loops: loopsPayload,
             execution_mode: execMode,
             node_id: customEvoNodeId || undefined,
-            engine_mode: customEvoEngineMode,
+            engine_mode: "unified",
           }),
         });
         if (!res.ok) {
@@ -957,6 +974,7 @@ export default function EvolutionDashboard() {
         enable_sector_hmm: newTask.enable_sector_hmm || undefined,
         hmm_model_version_id: newTask.enable_sector_hmm ? (newTask.hmm_model_version_id || undefined) : undefined,
         hmm_signal_preset: newTask.enable_sector_hmm ? (newTask.hmm_signal_preset || undefined) : undefined,
+        label_horizon: newTask.label_horizon,
       };
       const res = await fetch(`${API}/quantevolver/evolution/tasks`, {
         method: "POST",
@@ -981,7 +999,7 @@ export default function EvolutionDashboard() {
           // 有因子验证问题 — 弹出处理弹窗
           setFactorValidation({ taskId: data.task_id, validation: data.factor_validation });
           setShowCreateTask(false);
-          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "" });
+          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "", label_horizon: 1 });
           setSotaPreview(null);
           setDetectedTaskType("none");
           setSelectedFactorsForEvo(new Set());
@@ -996,7 +1014,7 @@ export default function EvolutionDashboard() {
         } else {
           alert("演进任务创建成功并已在后台启动！");
           setShowCreateTask(false);
-          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "" });
+          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "", label_horizon: 1 });
           setSotaPreview(null);
           setDetectedTaskType("none");
           setSelectedFactorsForEvo(new Set());
@@ -1078,6 +1096,12 @@ export default function EvolutionDashboard() {
   const handleForkFromLoop = (loopIndex: number) => {
     if (!activeTaskId) return;
     const task = tasks.find(t => t.task_id === activeTaskId) as any;
+    const sourceLoop = loops.find(l => l.loop_index === loopIndex) as any;
+    const cfg = sourceLoop?.config_json || {};
+    const mp = cfg?.model_params || {};
+    const sourceHorizon = ([1, 3, 5, 10].includes(Number(mp.label_horizon || cfg.label_horizon || task?.label_horizon || 1))
+      ? Number(mp.label_horizon || cfg.label_horizon || task?.label_horizon || 1)
+      : 1) as 1 | 3 | 5 | 10;
     setForkForm({
       task_name: task ? `${task.task_name}_from_L${loopIndex}` : "",
       max_loops: 10,
@@ -1088,6 +1112,7 @@ export default function EvolutionDashboard() {
       strategy_params: task?.strategy_params || {},
       execution_algo: task?.execution_algo || "",
       execution_algo_params: task?.execution_algo_params || {},
+      label_horizon: sourceHorizon,
     });
     setShowForkDialog(loopIndex);
   };
@@ -1096,7 +1121,7 @@ export default function EvolutionDashboard() {
     setShowForkDialog(null);
     setIsForking(false);
     setForkType("evolution");
-    setForkForm({ task_name: "", max_loops: 10, evolution_guidance: "", evolution_mode: "auto", inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {} });
+    setForkForm({ task_name: "", max_loops: 10, evolution_guidance: "", evolution_mode: "auto", inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, label_horizon: 1 });
     setStrategyEvoLoops([]);
     setStrategyEvoExecutionMode("serial");
   };
@@ -1228,6 +1253,7 @@ export default function EvolutionDashboard() {
           strategy_params: Object.keys(forkForm.strategy_params).length > 0 ? forkForm.strategy_params : undefined,
           execution_algo: forkForm.execution_algo || undefined,
           execution_algo_params: Object.keys(forkForm.execution_algo_params).length > 0 ? forkForm.execution_algo_params : undefined,
+          label_horizon: forkForm.label_horizon,
         }),
       });
       const data = await res.json();
@@ -1605,6 +1631,7 @@ export default function EvolutionDashboard() {
                                   {CB("执行", eName, "#8b5cf6")}
                                   {mId && CB("模型", mId.length > 16 ? mId.slice(0, 16) + "..." : mId, "#059669")}
                                   {CB("标签", lblMap[(task as any).label_type || "close"] || (task as any).label_type || "收盘价", "#d97706")}
+                                  {CB("Horizon", `${(task as any).label_horizon || cfg?.label_horizon || cfg?.model_params?.label_horizon || 1}d`, "#0f766e")}
                                   {CB("演进", modeMap[(task as any).evolution_mode || "auto"] || (task as any).evolution_mode || "自动", "#6366f1")}
                                   {CB("HMM", hmmOn ? `启用 (${sp.hmm_signal_preset || "preset_A"})` : "未启用", hmmOn ? "#16a34a" : "#94a3b8")}
                                   {CB("行业黑名单", (task as any).stock_pool ? "已启用" : "未启用", (task as any).stock_pool ? "#16a34a" : "#94a3b8")}
@@ -2565,6 +2592,36 @@ export default function EvolutionDashboard() {
                 )}
               </div>
 
+              <div style={{ border: "1px solid #ccfbf1", borderRadius: "8px", padding: "12px", backgroundColor: "#f0fdfa" }}>
+                <div style={{ fontSize: "13px", fontWeight: 700, color: "#0f766e", marginBottom: "8px" }}>
+                  训练标签期限（Label Horizon）
+                </div>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                  {([1, 3, 5, 10] as const).map(h => (
+                    <button
+                      key={h}
+                      type="button"
+                      onClick={() => setNewTask(prev => ({ ...prev, label_horizon: h }))}
+                      style={{
+                        padding: "6px 14px",
+                        borderRadius: "6px",
+                        border: newTask.label_horizon === h ? "2px solid #0f766e" : "1px solid #99f6e4",
+                        backgroundColor: newTask.label_horizon === h ? "#ccfbf1" : "#ffffff",
+                        color: newTask.label_horizon === h ? "#0f766e" : "#64748b",
+                        fontSize: "13px",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {h}d
+                    </button>
+                  ))}
+                  <span style={{ fontSize: "12px", color: "#64748b" }}>
+                    自动演进创建后固定该期限，Agent 不允许静默修改。
+                  </span>
+                </div>
+              </div>
+
               {/* 初始资金 */}
               <div>
                 <label style={{ display: "block", fontSize: "13px", fontWeight: 600, color: "#475569", marginBottom: "6px" }}>
@@ -2885,6 +2942,39 @@ export default function EvolutionDashboard() {
                       </div>
                       <div style={{ maxHeight: "200px", overflow: "auto" }}>
                         <ModelList mode="selection" selectedModel={loop.model_id} onSelectModel={(modelId: string) => updateCustomEvoLoop(loopIdx, { model_id: modelId })} />
+                      </div>
+                    </div>
+
+                    <div style={{ border: "1px solid #ccfbf1", borderRadius: "8px", padding: "10px", backgroundColor: loop.backtest_only ? "#f8fafc" : "#f0fdfa" }}>
+                      <div style={{ fontSize: "12px", fontWeight: 700, color: "#0f766e", marginBottom: "6px" }}>
+                        训练标签期限（Label Horizon）
+                        {loop.backtest_only && <span style={{ color: "#64748b", fontWeight: 500 }}> - backtest-only 锁定源模型</span>}
+                      </div>
+                      <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+                        {([1, 3, 5, 10] as const).map(h => (
+                          <button
+                            key={h}
+                            type="button"
+                            disabled={loop.backtest_only}
+                            onClick={() => updateCustomEvoLoop(loopIdx, { label_horizon: h })}
+                            style={{
+                              padding: "5px 10px",
+                              borderRadius: "5px",
+                              border: loop.label_horizon === h ? "2px solid #0f766e" : "1px solid #99f6e4",
+                              backgroundColor: loop.label_horizon === h ? "#ccfbf1" : "#ffffff",
+                              color: loop.label_horizon === h ? "#0f766e" : "#64748b",
+                              fontSize: "12px",
+                              fontWeight: 700,
+                              cursor: loop.backtest_only ? "not-allowed" : "pointer",
+                              opacity: loop.backtest_only && loop.label_horizon !== h ? 0.45 : 1,
+                            }}
+                          >
+                            {h}d
+                          </button>
+                        ))}
+                        <span style={{ fontSize: "11px", color: "#64748b" }}>
+                          选择 5d/10d 时建议同步调整 hold_thresh，避免高 IC 无法转化为收益。
+                        </span>
                       </div>
                     </div>
 
@@ -3219,6 +3309,32 @@ export default function EvolutionDashboard() {
                   </select>
                 </div>
               </div>
+              <div style={{ padding: "10px 12px", borderRadius: "8px", border: "1px solid #ccfbf1", backgroundColor: "#f0fdfa" }}>
+                <div style={{ fontSize: "12px", fontWeight: 700, color: "#0f766e", marginBottom: "6px" }}>
+                  训练标签期限（普通 fork 会重训，可覆盖源 Loop）
+                </div>
+                <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                  {([1, 3, 5, 10] as const).map(h => (
+                    <button
+                      key={h}
+                      type="button"
+                      onClick={() => setForkForm(f => ({ ...f, label_horizon: h }))}
+                      style={{
+                        padding: "5px 10px",
+                        borderRadius: "5px",
+                        border: forkForm.label_horizon === h ? "2px solid #0f766e" : "1px solid #99f6e4",
+                        backgroundColor: forkForm.label_horizon === h ? "#ccfbf1" : "#ffffff",
+                        color: forkForm.label_horizon === h ? "#0f766e" : "#64748b",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {h}d
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div>
                 <label style={{ display: "block", fontSize: "13px", fontWeight: 600, color: "#475569", marginBottom: "4px" }}>
                   演进指引（可选）
@@ -3319,9 +3435,10 @@ export default function EvolutionDashboard() {
                     const sourceLoop = loops.find(l => l.loop_index === showForkDialog);
                     if (!sourceLoop) return null;
                     const config = sourceLoop.config_json || {};
+                    const sourceHorizon = config?.model_params?.label_horizon || config?.label_horizon || forkForm.label_horizon || 1;
                     return (
                       <div style={{ fontSize: "12px", color: "#475569" }}>
-                        模型 ID: {config.model_id || "N/A"} | 因子数: {config.factor_names?.length || 0}
+                        模型 ID: {config.model_id || "N/A"} | 因子数: {config.factor_names?.length || config.factor_list?.length || 0} | Label Horizon: {sourceHorizon}d（锁定）
                       </div>
                     );
                   })()}

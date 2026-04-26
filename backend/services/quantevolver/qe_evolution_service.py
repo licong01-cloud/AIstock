@@ -13,6 +13,8 @@ from ...db.pg_pool import get_conn
 from .factor_official_evaluation_service import CALC_ENGINE
 from .qe_workspace_client import QEWorkspaceClient
 from .qe_evolution_agents import EvolutionAgents, EvolutionFactorAgent, EvolutionModelAgent, AnalystResult
+from .callback_urls import build_aistock_callback_url
+from .experiment_config import DEFAULT_LABEL_HORIZON, normalize_label_horizon
 
 logger = logging.getLogger(__name__)
 
@@ -48,15 +50,31 @@ class AutoEvolutionScheduler:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
-                    SELECT cn.callback_url
+                    SELECT t.node_id, cn.callback_url
                     FROM qe_evolution_tasks t
                     LEFT JOIN infra.compute_nodes cn ON t.node_id = cn.node_id
                     WHERE t.task_id = %s
                 """, (task_id,))
                 row = cur.fetchone()
-        return row.get("callback_url") if row else None
+        return build_aistock_callback_url(
+            endpoint_path="/api/v1/quantevolver/evolution/webhook/loop-completed",
+            full_url_env="AISTOCK_QE_EVOLUTION_LOOP_CALLBACK_URL",
+            node_id=row.get("node_id") if row else None,
+            node_callback_url=row.get("callback_url") if row else None,
+        )
         
-    async def create_task(self, task_name: str, target_desc: str, max_loops: int, base_experiment_id: str, allow_created: bool = False, start_from_loop_zero: bool = False, node_id: Optional[str] = None, stock_pool: Optional[str] = None) -> str:
+    async def create_task(
+        self,
+        task_name: str,
+        target_desc: str,
+        max_loops: int,
+        base_experiment_id: str,
+        allow_created: bool = False,
+        start_from_loop_zero: bool = False,
+        node_id: Optional[str] = None,
+        stock_pool: Optional[str] = None,
+        label_horizon: Optional[int] = None,
+    ) -> str:
         """
         创建演进任务并写入数据库。
         支持三种场景：
@@ -79,6 +97,10 @@ class AutoEvolutionScheduler:
                     raise ValueError(f"基础实验尚未完成（当前状态: {row['status']}），无法开始演进")
 
         # 确定根实验ID（如果 base 是子 Loop，追溯到根）
+        effective_label_horizon = self._resolve_new_task_label_horizon(
+            base_experiment_id,
+            explicit_label_horizon=label_horizon,
+        )
         root_experiment_id = base_experiment_id
         # rdagent_task_sota: 从 0 开始，Loop1 为初始回测
         # qe_experiment: 从 1 开始，基础实验已完成相当于 Loop1
@@ -108,9 +130,14 @@ class AutoEvolutionScheduler:
                         UPDATE qe_evolution_tasks
                         SET task_name = %s, target_desc = %s, max_loops = %s,
                             current_loop = %s, status = 'pending',
-                            base_experiment_id = %s, node_id = COALESCE(%s, node_id), updated_at = NOW()
+                            base_experiment_id = %s, node_id = COALESCE(%s, node_id),
+                            label_horizon = %s, updated_at = NOW()
                         WHERE task_id = %s
-                    """, (task_name, target_desc, actual_start + max_loops, actual_start, base_experiment_id, node_id, task_id))
+                    """, (
+                        task_name, target_desc, actual_start + max_loops,
+                        actual_start, base_experiment_id, node_id,
+                        effective_label_horizon, task_id,
+                    ))
                 conn.commit()
             logger.info(f"Updated existing evolution task {task_id}: start_loop={actual_start}, max_loops={actual_start + max_loops}")
         else:
@@ -128,9 +155,14 @@ class AutoEvolutionScheduler:
                 with conn.cursor() as cur:
                     cur.execute("""
                         INSERT INTO qe_evolution_tasks
-                        (task_id, task_name, target_desc, max_loops, current_loop, status, base_experiment_id, node_id, stock_pool)
-                        VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s, %s)
-                    """, (task_id, task_name, target_desc, actual_start + max_loops, actual_start, base_experiment_id, node_id, stock_pool))
+                        (task_id, task_name, target_desc, max_loops, current_loop, status,
+                         base_experiment_id, node_id, stock_pool, label_horizon)
+                        VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s)
+                    """, (
+                        task_id, task_name, target_desc, actual_start + max_loops,
+                        actual_start, base_experiment_id, node_id, stock_pool,
+                        effective_label_horizon,
+                    ))
                 conn.commit()
             logger.info(f"Created evolution task {task_id}: start_loop={actual_start}, max_loops={actual_start + max_loops}")
             
@@ -146,6 +178,145 @@ class AutoEvolutionScheduler:
             if isinstance(parsed, dict):
                 return parsed
         raise ValueError(f"Invalid JSON field for {field_name}: {value}")
+
+    def _extract_label_horizon_from_params(self, params: Any, *, context: str) -> int:
+        parsed = self._parse_json_field(params, context) if params not in (None, "") else {}
+        return normalize_label_horizon(parsed.get("label_horizon"), field_name=f"{context}.label_horizon")
+
+    def _extract_label_horizon_from_config(self, config: Any, *, context: str) -> int:
+        cfg = self._parse_json_field(config, context) if config not in (None, "") else {}
+        top_level = cfg.get("label_horizon")
+        model_params = cfg.get("model_params") or cfg.get("custom_params") or {}
+        params = self._parse_json_field(
+            model_params,
+            f"{context}.model_params",
+        ) if model_params not in (None, "") else {}
+        param_value = params.get("label_horizon")
+        if top_level not in (None, ""):
+            top_horizon = normalize_label_horizon(
+                top_level,
+                field_name=f"{context}.label_horizon",
+            )
+            if param_value not in (None, ""):
+                param_horizon = normalize_label_horizon(
+                    param_value,
+                    field_name=f"{context}.model_params.label_horizon",
+                )
+                if param_horizon != top_horizon:
+                    raise ValueError(
+                        f"{context}: label_horizon={top_horizon} conflicts with "
+                        f"model_params.label_horizon={param_horizon}"
+                    )
+            return top_horizon
+        return normalize_label_horizon(
+            param_value,
+            field_name=f"{context}.model_params.label_horizon",
+        )
+
+    def _apply_label_horizon_to_model_params(self, params: Any, label_horizon: Any) -> Dict[str, Any]:
+        parsed = self._parse_json_field(params, "model_params") if params not in (None, "") else {}
+        effective = normalize_label_horizon(label_horizon)
+        existing = parsed.get("label_horizon")
+        if existing not in (None, ""):
+            existing_horizon = normalize_label_horizon(existing, field_name="model_params.label_horizon")
+            if existing_horizon != effective:
+                raise ValueError(
+                    f"model_params.label_horizon={existing_horizon} conflicts with task label_horizon={effective}"
+                )
+        if effective == DEFAULT_LABEL_HORIZON:
+            parsed.pop("label_horizon", None)
+        else:
+            parsed["label_horizon"] = effective
+        return parsed
+
+    def _resolve_new_task_label_horizon(
+        self,
+        base_experiment_id: str,
+        *,
+        explicit_label_horizon: Any = None,
+    ) -> int:
+        if explicit_label_horizon not in (None, ""):
+            return normalize_label_horizon(
+                explicit_label_horizon,
+                field_name="label_horizon",
+            )
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT custom_params FROM qe_experiments WHERE experiment_id = %s",
+                    (base_experiment_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise ValueError(f"base_experiment_id not found: {base_experiment_id}")
+        return self._extract_label_horizon_from_params(
+            row.get("custom_params"),
+            context=f"base_experiment[{base_experiment_id}].custom_params",
+        )
+
+    def _get_source_loop_label_horizon(self, task_id: str, loop_index: int) -> int:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT config_json FROM qe_evolution_loops WHERE task_id = %s AND loop_index = %s",
+                    (task_id, loop_index),
+                )
+                row = cur.fetchone()
+                if row and row.get("config_json"):
+                    cfg = self._parse_json_field(
+                        row.get("config_json"),
+                        f"source_loop[{task_id}/Loop{loop_index}].config_json",
+                    )
+                    model_params = cfg.get("model_params") or {}
+                    if isinstance(model_params, str):
+                        model_params = self._parse_json_field(
+                            model_params,
+                            f"source_loop[{task_id}/Loop{loop_index}].model_params",
+                        )
+                    if "label_horizon" in cfg or (
+                        isinstance(model_params, dict) and "label_horizon" in model_params
+                    ):
+                        return self._extract_label_horizon_from_config(
+                            cfg,
+                            context=f"source_loop[{task_id}/Loop{loop_index}].config_json",
+                        )
+
+                cur.execute(
+                    "SELECT label_horizon FROM qe_evolution_tasks WHERE task_id = %s",
+                    (task_id,),
+                )
+                task_row = cur.fetchone()
+                if task_row and task_row.get("label_horizon") not in (None, ""):
+                    return normalize_label_horizon(
+                        task_row.get("label_horizon"),
+                        field_name=f"source_task[{task_id}].label_horizon",
+                    )
+
+                cur.execute(
+                    """
+                    SELECT custom_params FROM qe_experiments
+                    WHERE qe_task_id = %s AND loop_index = %s
+                    ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    (task_id, loop_index),
+                )
+                exp_row = cur.fetchone()
+        if exp_row and exp_row.get("custom_params"):
+            return self._extract_label_horizon_from_params(
+                exp_row.get("custom_params"),
+                context=f"source_experiment[{task_id}/Loop{loop_index}].custom_params",
+            )
+        raise ValueError(f"source loop not found for label_horizon: {task_id}/Loop{loop_index}")
+
+    def _enforce_config_label_horizon(self, config: Dict[str, Any], label_horizon: Any, *, context: str) -> Dict[str, Any]:
+        effective = normalize_label_horizon(label_horizon, field_name=f"{context}.label_horizon")
+        next_config = dict(config or {})
+        next_config["model_params"] = self._apply_label_horizon_to_model_params(
+            next_config.get("model_params") or {},
+            effective,
+        )
+        return next_config
 
     def _load_base_config_from_experiment(self, base_experiment_id: str) -> Dict[str, Any]:
         """
@@ -1064,63 +1235,21 @@ class AutoEvolutionScheduler:
                     f"任务已暂停，请通过 /evolution/tasks/{task_id}/resolve-factors 修复。"
                 )
 
-            # 使用 ConfigComposer 在内存中生成实验文件
+            from .experiment_config_builders import build_config_from_evolution_loop
             from .config_composer import ConfigComposer
-            composer = ConfigComposer()
-            # 合并 stock_pool：task 级别的设置优先覆盖 model_params 中的值
-            loop_custom_params = dict(config.get("model_params") or {})
-            task_stock_pool = task.get("stock_pool")
-            if task_stock_pool:
-                loop_custom_params["stock_pool"] = task_stock_pool
-            task_label_type = task.get("label_type")
-            if task_label_type:
-                loop_custom_params["label_type"] = task_label_type
-            # task 级别的策略/执行算法覆盖（优先于 config 继承值）
-            effective_strategy_id = task.get("strategy_id") or config.get("strategy_id")
-            effective_strategy_params = task.get("strategy_params") or {}
-            if isinstance(effective_strategy_params, str):
-                effective_strategy_params = json.loads(effective_strategy_params)
-            effective_execution_algo = task.get("execution_algo")
-            effective_execution_algo_params = task.get("execution_algo_params") or {}
-            if isinstance(effective_execution_algo_params, str):
-                effective_execution_algo_params = json.loads(effective_execution_algo_params)
-            # 将策略参数覆盖合并到 custom_params（不影响模型超参）
-            if effective_strategy_params:
-                loop_custom_params.update(effective_strategy_params)
-            # initial_cash 从 strategy_params 单独提取，不混入 custom_params（避免被当作策略参数）
-            _sp = effective_strategy_params.copy() if effective_strategy_params else {}
+            from .executors.backtest import BacktestExecutor, BacktestMode
+            from .executors.base import ExecutionContext
 
-            # 注入尾盘未成交处理配置 → custom_params（config_composer 从 custom_params 提取）
-            _uf = task.get("unfilled_handler")
-            if _uf:
-                loop_custom_params["unfilled_handler"] = _uf
-                _uf_params = task.get("unfilled_handler_params") or {}
-                if isinstance(_uf_params, str):
-                    import json as _json
-                    _uf_params = _json.loads(_uf_params)
-                if _uf_params.get("trigger_minute"):
-                    loop_custom_params["unfilled_trigger_minute"] = _uf_params["trigger_minute"]
-                if _uf_params.get("backup_depth"):
-                    loop_custom_params["unfilled_backup_depth"] = _uf_params["backup_depth"]
-
-            loop_custom_params.pop("initial_cash", None)
-            compose_res = composer.compose_experiment_in_memory(
-                factor_names=config.get("factor_list", []),
-                model_id=config.get("model_id"),
-                strategy_id=effective_strategy_id,
-                data_split=config.get("data_split"),
-                custom_params=loop_custom_params,
-                experiment_name=f"{task_id}/{loop_id}",
-                skip_db_save=True,
-                execution_algo=effective_execution_algo,
-                execution_algo_params=effective_execution_algo_params,
-                strategy_params=_sp,
-                node_id=task.get("node_id"),
+            experiment_name = f"{task_id}/{loop_id}"
+            cfg = build_config_from_evolution_loop(
+                config,
+                task,
+                experiment_name=experiment_name,
             )
-            experiment_files = compose_res["experiment_files"]
-            wsl_command = compose_res.get("wsl_command", "")
+            config = dict(config)
+            config["model_params"] = cfg.build_custom_params()
 
-            # 保存本轮配置到 loop 记录
+            # Persist the loop config for reviewer output and the next evolution loop.
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
@@ -1129,13 +1258,16 @@ class AutoEvolutionScheduler:
                     """, (json.dumps(config), action_type, evolution_loop_db_id))
                 conn.commit()
 
-            # 调用节点执行（异步，不等待完成）
             client = self._get_workspace_client_for_task(task_id)
-            callback_url = self._get_callback_url_for_task(task_id)
-            await client.create_and_run_loop(
-                task_id, loop_index, config, experiment_files, wsl_command,
-                callback_url=callback_url,
+            executor = BacktestExecutor(ConfigComposer(), client)
+            ctx = ExecutionContext(
+                task_id=task_id,
+                loop_index=loop_index,
+                experiment_name=experiment_name,
+                node_id=task.get("node_id"),
+                callback_url=self._get_callback_url_for_task(task_id),
             )
+            await executor.submit(cfg, ctx, mode=BacktestMode.FULL_TRAIN)
         except Exception as e:
             import traceback
             tb_str = traceback.format_exc()
@@ -1489,6 +1621,11 @@ class AutoEvolutionScheduler:
             for key in ["model_id", "strategy_id", "data_split", "base_experiment_id"]:
                 if key not in next_config and key in config:
                     next_config[key] = config[key]
+            next_config = self._enforce_config_label_horizon(
+                next_config,
+                task.get("label_horizon"),
+                context=f"{task_id}/Loop{loop_index}.reviewer",
+            )
 
             agent_analysis = {
                 "analyst": analyst_result.to_dict(),
@@ -1883,6 +2020,7 @@ class AutoEvolutionScheduler:
         unfilled_handler: Optional[str] = None,
         unfilled_handler_params: Optional[Dict[str, Any]] = None,
         node_id: Optional[str] = None,
+        label_horizon: Optional[int] = None,
     ) -> str:
         """
         从指定 task 的某个已完成 loop 分叉出新的演进任务。
@@ -1931,6 +2069,23 @@ class AutoEvolutionScheduler:
         strategy_id = effective_strategy_id
         data_split = config.get("data_split", {})
         model_params = config.get("model_params", {})
+        source_label_horizon = self._extract_label_horizon_from_config(
+            config,
+            context=f"fork_source[{source_task_id}/Loop{from_loop_index}].config_json",
+        )
+        effective_label_horizon = normalize_label_horizon(
+            label_horizon if label_horizon not in (None, "") else source_label_horizon,
+            field_name="fork_task.label_horizon",
+        )
+        if label_horizon not in (None, ""):
+            # Full-train fork is allowed to change the training target; it will
+            # retrain instead of reusing the source model.
+            model_params = self._parse_json_field(model_params, "fork_task.model_params")
+            model_params.pop("label_horizon", None)
+        model_params = self._apply_label_horizon_to_model_params(
+            model_params,
+            effective_label_horizon,
+        )
 
         if not factor_list:
             raise ValueError(f"源 Loop {from_loop_index} 的因子列表为空，无法分叉")
@@ -1976,9 +2131,9 @@ class AutoEvolutionScheduler:
                      evolution_guidance, evolution_mode,
                      fork_from_task_id, fork_from_loop_index, inherit_history,
                      strategy_id, strategy_params, execution_algo, execution_algo_params,
-                     unfilled_handler, unfilled_handler_params)
+                     unfilled_handler, unfilled_handler_params, label_horizon)
                     VALUES (%s, %s, %s, %s, 0, 'pending', %s, %s, 'fork', %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s)
+                            %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     new_task_id, task_name, target_desc, max_loops,
                     base_exp_id, effective_node_id,
@@ -1990,6 +2145,7 @@ class AutoEvolutionScheduler:
                     json.dumps(effective_execution_algo_params) if effective_execution_algo_params else None,
                     effective_unfilled_handler,
                     json.dumps(effective_unfilled_handler_params) if effective_unfilled_handler_params else None,
+                    effective_label_horizon,
                 ))
             conn.commit()
 
@@ -2086,6 +2242,20 @@ class AutoEvolutionScheduler:
                     conn.commit()
                 result['status'] = new_task_status
                 logger.info(f"[get_task_detail] auto-synced task {task_id} -> {new_task_status}")
+
+        try:
+            from .blacklist_snapshot import enrich_blacklist_snapshot_for_display
+            for loop_data in result.get("loops", []):
+                config_json = loop_data.get("config_json")
+                if not isinstance(config_json, dict):
+                    continue
+                model_params = config_json.get("model_params")
+                if isinstance(model_params, dict):
+                    config_json["model_params"] = enrich_blacklist_snapshot_for_display(model_params)
+                else:
+                    config_json["model_params"] = enrich_blacklist_snapshot_for_display(config_json)
+        except Exception as e:
+            raise RuntimeError(f"演进 Loop 行业黑名单快照解析失败: {e}") from e
 
         return result
         
@@ -2374,6 +2544,10 @@ class AutoEvolutionScheduler:
                 experiment_name=f"{task_id}/{loop_id}",
                 node_id=task.get("node_id"),
                 callback_url=self._get_callback_url_for_task(task_id),
+                model_source={
+                    "source_task_id": task_id,
+                    "source_loop": f"Loop{loop_index}",
+                },
             )
             result = await executor.submit(cfg, ctx, mode=BacktestMode.BACKTEST_ONLY)
             logger.info(f"Retry in backtest-only mode via unified engine: {result.wsl_command}")
@@ -2824,6 +2998,27 @@ class AutoEvolutionScheduler:
         base_strategy_id = config.get("strategy_id")
         base_data_split = config.get("data_split", {})
         base_model_params = config.get("model_params", {})
+        source_label_horizon = self._extract_label_horizon_from_config(
+            config,
+            context=f"strategy_fork_source[{source_task_id}/Loop{from_loop_index}].config_json",
+        )
+        base_model_params = self._apply_label_horizon_to_model_params(
+            base_model_params,
+            source_label_horizon,
+        )
+        for idx, loop_cfg in enumerate(loops_config, start=1):
+            loop_horizon = loop_cfg.get("label_horizon")
+            if loop_horizon not in (None, ""):
+                requested_horizon = normalize_label_horizon(
+                    loop_horizon,
+                    field_name=f"strategy_fork.loops[{idx}].label_horizon",
+                )
+                if requested_horizon != source_label_horizon:
+                    raise ValueError(
+                        "strategy_fork is backtest-only and cannot change label_horizon: "
+                        f"loop {idx} requested {requested_horizon}, source is {source_label_horizon}"
+                    )
+            loop_cfg["source_label_horizon"] = source_label_horizon
 
         if not base_factor_list:
             raise ValueError(f"源 Loop {from_loop_index} 的因子列表为空，无法创建策略演进")
@@ -2879,9 +3074,9 @@ class AutoEvolutionScheduler:
                      base_experiment_id, node_id, source_type,
                      task_type, strategy_evo_config, strategy_evo_execution_mode,
                      model_source_task_id, model_source_loop_index,
-                     fork_from_task_id, fork_from_loop_index, inherit_history)
+                     fork_from_task_id, fork_from_loop_index, inherit_history, label_horizon)
                     VALUES (%s, %s, %s, %s, 0, 'pending', %s, %s, 'strategy_fork',
-                            'strategy_evo', %s, %s, %s, %s, %s, %s, %s)
+                            'strategy_evo', %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     new_task_id, task_name, target_desc, len(loops_config),
                     base_exp_id, effective_node_id,
@@ -2889,6 +3084,7 @@ class AutoEvolutionScheduler:
                     execution_mode,
                     source_task_id, from_loop_index,
                     source_task_id, from_loop_index, inherit_history,
+                    source_label_horizon,
                 ))
             conn.commit()
 
@@ -2995,76 +3191,24 @@ class AutoEvolutionScheduler:
                 """, (evolution_loop_db_id, task_id, loop_index))
             conn.commit()
 
-        # 使用 ConfigComposer 组装实验
+        # Unified execution layer: ExperimentConfig + BacktestExecutor.
         try:
+            from .experiment_config_builders import build_config_from_strategy_evo_loop
             from .config_composer import ConfigComposer
-            composer = ConfigComposer()
+            from .executors.backtest import BacktestExecutor, BacktestMode
+            from .executors.base import ExecutionContext
+            import base64
 
-            loop_custom_params = dict(base_config.get("model_params", {}))
-            task_stock_pool = task.get("stock_pool")
-
-            # 处理 HMM 和行业黑名单
-            if loop_config.get("enable_sector_hmm"):
-                loop_custom_params["enable_sector_hmm"] = True
-                hmm_model_version = loop_config.get("hmm_model_version_id")
-                hmm_preset = loop_config.get("hmm_signal_preset")
-                if not hmm_model_version:
-                    raise ValueError(
-                        "enable_sector_hmm=True 但 hmm_model_version_id 未配置。"
-                        "请在任务配置中指定 HMM 模型版本。"
-                    )
-                loop_custom_params["hmm_model_version_id"] = hmm_model_version
-                # 解析 snapshot_id → sector_hmm_model_path
-                from ..hmm_training_service import HMMTrainingService
-                _hmm_svc = HMMTrainingService()
-                _snapshot = _hmm_svc.get_snapshot(hmm_model_version)
-                if _snapshot is None:
-                    raise ValueError(f"HMM 快照 {hmm_model_version} 不存在")
-                loop_custom_params["sector_hmm_model_path"] = _snapshot["model_path"]
-                if hmm_preset:
-                    loop_custom_params["hmm_signal_preset"] = hmm_preset
-
-            sector_blacklist = loop_config.get("sector_blacklist", [])
-            if sector_blacklist:
-                # TODO: 生成过滤黑名单行业的 stock_pool 文件
-                loop_custom_params["sector_blacklist"] = sector_blacklist
-
-            if task_stock_pool:
-                loop_custom_params["stock_pool"] = task_stock_pool
-            task_label_type = task.get("label_type")
-            if task_label_type:
-                loop_custom_params["label_type"] = task_label_type
-
-            _sp = strategy_params.copy() if strategy_params else {}
-            # 注入尾盘未成交处理配置 → custom_params（优先 loop 级别，fallback 到 task 级别）
-            _uf = loop_config.get("unfilled_handler") or task.get("unfilled_handler")
-            if _uf:
-                loop_custom_params["unfilled_handler"] = _uf
-                _uf_params = loop_config.get("unfilled_handler_params") or task.get("unfilled_handler_params") or {}
-                if isinstance(_uf_params, str):
-                    import json as _json
-                    _uf_params = _json.loads(_uf_params)
-                if _uf_params.get("trigger_minute"):
-                    loop_custom_params["unfilled_trigger_minute"] = _uf_params["trigger_minute"]
-                if _uf_params.get("backup_depth"):
-                    loop_custom_params["unfilled_backup_depth"] = _uf_params["backup_depth"]
-            loop_custom_params.pop("initial_cash", None)
-
-            compose_res = composer.compose_experiment_in_memory(
-                factor_names=base_config.get("factor_list", []),
-                model_id=base_config.get("model_id"),
-                strategy_id=base_config.get("strategy_id"),
-                data_split=base_config.get("data_split"),
-                custom_params=loop_custom_params,
-                experiment_name=f"{task_id}/{loop_id}",
-                skip_db_save=True,
-                execution_algo=execution_algo,
-                execution_algo_params=execution_algo_params,
-                strategy_params=_sp,
-                node_id=task.get("node_id"),
+            experiment_name = f"{task_id}/{loop_id}"
+            cfg = build_config_from_strategy_evo_loop(
+                base_config,
+                loop_config,
+                task,
+                experiment_name=experiment_name,
             )
-            experiment_files = compose_res["experiment_files"]
-            wsl_command = compose_res.get("wsl_command", "")
+            base_config = dict(base_config)
+            base_config["model_params"] = cfg.build_custom_params()
+
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
@@ -3073,21 +3217,13 @@ class AutoEvolutionScheduler:
                     """, (json.dumps(base_config), evolution_loop_db_id))
                 conn.commit()
 
-            # 注入 --backtest-only 和 model_source
-            import re as _re
-            wsl_command = _re.sub(
-                r"(python\s+qrun_limit_minute\.py\s+\S+\.yaml)",
-                r"\1 --backtest-only",
-                wsl_command,
-            )
-
-            # 调用节点执行
             model_source = {
                 "source_task_id": source_task_id,
                 "source_loop": f"Loop{source_loop_idx}",
             }
+            extra_experiment_files = {}
 
-            # 跨节点检测：源 task 和目标 task 在不同节点时，同步 mlruns 中的 params.pkl
+            # Cross-node backtest-only must sync source model params or fail fast.
             target_node_id = task.get("node_id")
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -3096,30 +3232,39 @@ class AutoEvolutionScheduler:
             source_node_id = src_row[0] if src_row else None
 
             if (target_node_id or None) != (source_node_id or None):
-                # 跨节点：从源节点下载 params.pkl，通过 experiment_files 传给目标节点
-                logger.info(f"跨节点策略演进: 源={source_node_id or 'local'} → 目标={target_node_id or 'local'}，同步 mlruns")
-                try:
-                    source_client = self.workspace_client if not source_node_id else self._node_clients.get(source_node_id) or QEWorkspaceClient.for_node(source_node_id)
-                    mlruns_tar = await source_client.download_mlruns_params(source_task_id, f"Loop{source_loop_idx}")
-                    if mlruns_tar:
-                        import base64
-                        experiment_files["mlruns_params.tar.gz.b64"] = base64.b64encode(mlruns_tar).decode("ascii")
-                        model_source["cross_node"] = True
-                        logger.info(f"跨节点 mlruns 同步完成: {len(mlruns_tar)} bytes")
-                    else:
-                        logger.warning("跨节点 mlruns 下载返回空，回测可能失败")
-                except Exception as e:
-                    logger.error(f"跨节点 mlruns 同步失败: {e}，回测可能失败")
+                logger.info(
+                    f"cross-node strategy evolution: source={source_node_id or 'local'} -> target={target_node_id or 'local'}, syncing mlruns"
+                )
+                source_client = (
+                    self.workspace_client
+                    if not source_node_id
+                    else self._node_clients.get(source_node_id) or QEWorkspaceClient.for_node(source_node_id)
+                )
+                if source_node_id and source_node_id not in self._node_clients:
+                    self._node_clients[source_node_id] = source_client
+                mlruns_tar = await source_client.download_mlruns_params(source_task_id, f"Loop{source_loop_idx}")
+                if not mlruns_tar:
+                    raise RuntimeError(
+                        f"cross-node strategy evolution missing source model params: {source_task_id}/Loop{source_loop_idx}"
+                    )
+                extra_experiment_files["mlruns_params.tar.gz.b64"] = base64.b64encode(mlruns_tar).decode("ascii")
+                model_source["cross_node"] = True
+                logger.info(f"cross-node mlruns sync completed: {len(mlruns_tar)} bytes")
 
             client = self._get_workspace_client_for_task(task_id)
-            callback_url = self._get_callback_url_for_task(task_id)
-            await client.create_and_run_loop(
-                task_id, loop_index, base_config, experiment_files, wsl_command,
+            executor = BacktestExecutor(ConfigComposer(), client)
+            ctx = ExecutionContext(
+                task_id=task_id,
+                loop_index=loop_index,
+                experiment_name=experiment_name,
+                node_id=task.get("node_id"),
+                callback_url=self._get_callback_url_for_task(task_id),
                 model_source=model_source,
-                callback_url=callback_url,
+                extra_experiment_files=extra_experiment_files or None,
             )
+            await executor.submit(cfg, ctx, mode=BacktestMode.BACKTEST_ONLY)
 
-            logger.info(f"策略演进 Loop {loop_index} 已提交 (backtest-only)")
+            logger.info(f"[unified] strategy evolution Loop {loop_index} submitted (backtest-only)")
             return evolution_loop_db_id
 
         except Exception as e:
@@ -3455,7 +3600,7 @@ class AutoEvolutionScheduler:
         loops_config: List[Dict[str, Any]] = None,
         execution_mode: str = "serial",
         node_id: Optional[str] = None,
-        engine_mode: str = "legacy",
+        engine_mode: str = "unified",
     ) -> str:
         """
         创建自定义演进任务。每个 Loop 都可以完全自定义因子、模型、策略配置，
@@ -3463,6 +3608,37 @@ class AutoEvolutionScheduler:
         """
         if not loops_config or len(loops_config) == 0:
             raise ValueError("loops_config 不能为空，至少需要配置一个 Loop")
+        if (engine_mode or "unified") != "unified":
+            raise ValueError(
+                "QE legacy execution engine has been removed; only engine_mode='unified' is supported."
+            )
+        normalized_loops = []
+        for idx, loop_cfg in enumerate(loops_config, start=1):
+            cfg = dict(loop_cfg)
+            if cfg.get("backtest_only") and "source_label_horizon" not in cfg:
+                if not cfg.get("model_source_task_id") or cfg.get("model_source_loop_index") is None:
+                    raise ValueError(f"Loop {idx}: backtest-only requires model_source before label_horizon validation")
+                cfg["source_label_horizon"] = self._get_source_loop_label_horizon(
+                    cfg["model_source_task_id"],
+                    int(cfg["model_source_loop_index"]),
+                )
+            label_horizon = normalize_label_horizon(
+                cfg.get("label_horizon"),
+                field_name=f"custom_evo.loops[{idx}].label_horizon",
+            )
+            if cfg.get("backtest_only"):
+                source_horizon = normalize_label_horizon(
+                    cfg.get("source_label_horizon"),
+                    field_name=f"custom_evo.loops[{idx}].source_label_horizon",
+                )
+                if label_horizon != source_horizon:
+                    raise ValueError(
+                        f"Loop {idx}: backtest-only label_horizon={label_horizon} "
+                        f"does not match source model label_horizon={source_horizon}"
+                    )
+            cfg["label_horizon"] = label_horizon
+            normalized_loops.append(cfg)
+        loops_config = normalized_loops
 
         # 生成 task_id
         suffix = uuid.uuid4().hex[:4]
@@ -3472,6 +3648,12 @@ class AutoEvolutionScheduler:
         first_loop = loops_config[0]
         factor_names = [k.split("||")[0] for k in first_loop.get("factor_keys", [])]
         base_exp_id = f"{new_task_id}_base"
+        first_custom_params = dict(first_loop.get("strategy_params") or {})
+        if first_loop.get("label_type"):
+            first_custom_params["label_type"] = first_loop["label_type"]
+        first_label_horizon = normalize_label_horizon(first_loop.get("label_horizon"))
+        if first_label_horizon != DEFAULT_LABEL_HORIZON:
+            first_custom_params["label_horizon"] = first_label_horizon
 
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -3489,7 +3671,7 @@ class AutoEvolutionScheduler:
                     first_loop.get("model_id"),
                     first_loop.get("strategy_id"),
                     json.dumps(first_loop.get("data_split") or {}),
-                    json.dumps(first_loop.get("strategy_params") or {}),
+                    json.dumps(first_custom_params),
                 ))
 
                 # 创建自定义演进任务
@@ -3497,14 +3679,15 @@ class AutoEvolutionScheduler:
                     INSERT INTO qe_evolution_tasks
                     (task_id, task_name, target_desc, max_loops, current_loop, status,
                      base_experiment_id, node_id, source_type,
-                     task_type, strategy_evo_config, strategy_evo_execution_mode)
+                     task_type, strategy_evo_config, strategy_evo_execution_mode, label_horizon)
                     VALUES (%s, %s, %s, %s, 0, 'pending', %s, %s, 'custom',
-                            'custom_evo', %s, %s)
+                            'custom_evo', %s, %s, %s)
                 """, (
                     new_task_id, task_name, target_desc, len(loops_config),
                     base_exp_id, node_id,
                     json.dumps({"loops": loops_config, "engine_mode": engine_mode}),
                     execution_mode,
+                    first_label_horizon,
                 ))
             conn.commit()
 
@@ -3554,150 +3737,20 @@ class AutoEvolutionScheduler:
             logger.error(f"Loop {loop_index} 的配置未找到")
             raise ValueError(f"Loop configuration not found for loop_index={loop_index} in task {task_id}")
 
-        # engine_mode 分发：从 strategy_evo_config 读取
-        _engine_mode = custom_evo_config.get("engine_mode", "legacy")
-        if _engine_mode == "unified":
-            return await self._submit_custom_evo_loop_unified(task_id, loop_index, loop_config, task, force_full_train=force_full_train)
-        elif _engine_mode != "legacy":
-            logger.error(
-                f"Task {task_id} Loop {loop_index}: 未知 engine_mode={_engine_mode!r}，"
-                f"回退到 legacy 路径。请检查任务配置。"
+        # The legacy custom-evolution executor has been retired; only the unified path may run.
+        _engine_mode = custom_evo_config.get("engine_mode") or "unified"
+        if _engine_mode != "unified":
+            raise ValueError(
+                "QE legacy execution engine has been removed; "
+                "only engine_mode='unified' is supported."
             )
-
-        evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
-        loop_id = f"Loop{loop_index}"
-
-        # 创建 LOOP 记录
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO qe_evolution_loops
-                    (loop_id, task_id, loop_index, status, action_type)
-                    VALUES (%s, %s, %s, 'running', 'custom_config')
-                    ON CONFLICT (loop_id) DO UPDATE SET status = 'running', updated_at = NOW()
-                """, (evolution_loop_db_id, task_id, loop_index))
-            conn.commit()
-
-        try:
-            from .config_composer import ConfigComposer
-            composer = ConfigComposer()
-
-            # 从 loop_config 提取完整配置
-            factor_keys = loop_config.get("factor_keys", [])
-            factor_names = [k.split("||")[0] for k in factor_keys]
-            model_id = loop_config.get("model_id")
-            strategy_id = loop_config.get("strategy_id")
-            strategy_params = loop_config.get("strategy_params") or {}
-            execution_algo = loop_config.get("execution_algo")
-            execution_algo_params = loop_config.get("execution_algo_params") or {}
-            data_split = loop_config.get("data_split")
-            label_type = loop_config.get("label_type")
-
-            # 构建 custom_params
-            loop_custom_params = dict(strategy_params)
-
-            if loop_config.get("enable_sector_hmm"):
-                loop_custom_params["enable_sector_hmm"] = True
-                hmm_ver = loop_config.get("hmm_model_version_id")
-                if not hmm_ver:
-                    raise ValueError(f"Loop {loop_index}: enable_sector_hmm=True 但 hmm_model_version_id 未配置")
-                loop_custom_params["hmm_model_version_id"] = hmm_ver
-                # 解析 snapshot_id → sector_hmm_model_path
-                from ..hmm_training_service import HMMTrainingService
-                _hmm_svc = HMMTrainingService()
-                _snapshot = _hmm_svc.get_snapshot(hmm_ver)
-                if _snapshot is None:
-                    raise ValueError(f"Loop {loop_index}: HMM 快照 {hmm_ver} 不存在")
-                loop_custom_params["sector_hmm_model_path"] = _snapshot["model_path"]
-                hmm_preset = loop_config.get("hmm_signal_preset")
-                if hmm_preset:
-                    loop_custom_params["hmm_signal_preset"] = hmm_preset
-
-            if loop_config.get("sector_blacklist"):
-                loop_custom_params["sector_blacklist"] = loop_config["sector_blacklist"]
-
-            if loop_config.get("stock_pool"):
-                loop_custom_params["stock_pool"] = loop_config["stock_pool"]
-
-            if label_type:
-                loop_custom_params["label_type"] = label_type
-
-            # 尾盘处理
-            _uf = loop_config.get("unfilled_handler")
-            if _uf:
-                loop_custom_params["unfilled_handler"] = _uf
-                _uf_params = loop_config.get("unfilled_handler_params") or {}
-                if isinstance(_uf_params, str):
-                    _uf_params = json.loads(_uf_params)
-                if _uf_params.get("trigger_minute"):
-                    loop_custom_params["unfilled_trigger_minute"] = _uf_params["trigger_minute"]
-                if _uf_params.get("backup_depth"):
-                    loop_custom_params["unfilled_backup_depth"] = _uf_params["backup_depth"]
-
-            loop_custom_params.pop("initial_cash", None)
-            _sp = strategy_params.copy() if strategy_params else {}
-
-            # 构建 config 记录（用于 DB 存储）
-            config = {
-                "action_type": "custom_config",
-                "label": loop_config.get("label"),
-                "factor_list": factor_names,
-                "model_id": model_id,
-                "strategy_id": strategy_id,
-                "model_params": strategy_params,
-                "data_split": data_split or {},
-            }
-
-            compose_res = composer.compose_experiment_in_memory(
-                factor_names=factor_names,
-                model_id=model_id,
-                strategy_id=strategy_id,
-                data_split=data_split,
-                custom_params=loop_custom_params,
-                experiment_name=f"{task_id}/{loop_id}",
-                skip_db_save=True,
-                execution_algo=execution_algo,
-                execution_algo_params=execution_algo_params,
-                strategy_params=_sp,
-                node_id=task.get("node_id"),
-            )
-            experiment_files = compose_res["experiment_files"]
-            wsl_command = compose_res.get("wsl_command", "")
-
-            # 保存配置到 loop 记录
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        UPDATE qe_evolution_loops SET config_json = %s, updated_at = NOW()
-                        WHERE loop_id = %s
-                    """, (json.dumps(config), evolution_loop_db_id))
-                conn.commit()
-
-            # 提交到节点执行（完整训练+回测，不加 --backtest-only）
-            client = self._get_workspace_client_for_task(task_id)
-            callback_url = self._get_callback_url_for_task(task_id)
-            await client.create_and_run_loop(
-                task_id, loop_index, config, experiment_files, wsl_command,
-                callback_url=callback_url,
-            )
-
-            logger.info(f"自定义演进 Loop {loop_index} 已提交 (完整训练+回测)")
-            return evolution_loop_db_id
-
-        except Exception as e:
-            import traceback
-            tb_str = traceback.format_exc()
-            logger.error(f"自定义演进 Loop {loop_index} 提交失败: {e}\n{tb_str}")
-            try:
-                with get_conn() as conn:
-                    with conn.cursor() as cur:
-                        error_detail = json.dumps({"_error": str(e), "_traceback": tb_str}, ensure_ascii=False)
-                        cur.execute("UPDATE qe_evolution_loops SET status = 'failed', agent_analysis = %s, updated_at = NOW() WHERE loop_id = %s", (error_detail, evolution_loop_db_id))
-                        # 不标记整个 task 为 failed — 其他 loop 可能还在跑（并行模式）
-                    conn.commit()
-            except Exception as db_err:
-                logger.critical(f"自定义演进 Loop {loop_index} 失败标记失败: {db_err}")
-            return None
+        return await self._submit_custom_evo_loop_unified(
+            task_id,
+            loop_index,
+            loop_config,
+            task,
+            force_full_train=force_full_train,
+        )
 
     async def _submit_custom_evo_loop_unified(
         self,
@@ -3732,6 +3785,12 @@ class AutoEvolutionScheduler:
             conn.commit()
 
         try:
+            if loop_config.get("backtest_only") and "source_label_horizon" not in loop_config:
+                loop_config = dict(loop_config)
+                loop_config["source_label_horizon"] = self._get_source_loop_label_horizon(
+                    loop_config.get("model_source_task_id"),
+                    int(loop_config.get("model_source_loop_index")),
+                )
             # 1. 构建 ExperimentConfig（配置层）
             experiment_name = f"{task_id}/{loop_id}"
             cfg = build_config_from_custom_evo_loop(
@@ -3749,6 +3808,8 @@ class AutoEvolutionScheduler:
                 "strategy_id": cfg.strategy_id,
                 "model_params": cfg.build_custom_params(),
                 "data_split": cfg.data_split or {},
+                "label_type": cfg.label_type,
+                "label_horizon": cfg.label_horizon,
             }
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -3846,6 +3907,21 @@ class AutoEvolutionScheduler:
         if not loops_config:
             logger.error(f"自定义演进任务 {task_id} 没有 loops 配置")
             return
+        engine_mode = custom_evo_config.get("engine_mode") or "unified"
+        if engine_mode != "unified":
+            error_msg = (
+                "QE legacy execution engine has been removed; "
+                "only engine_mode='unified' is supported."
+            )
+            logger.error("自定义演进任务 %s 配置了已移除的 engine_mode=%r", task_id, engine_mode)
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE qe_evolution_tasks SET status = 'failed', updated_at = NOW() WHERE task_id = %s",
+                        (task_id,),
+                    )
+                conn.commit()
+            raise ValueError(error_msg)
 
         execution_mode_raw = task.get("strategy_evo_execution_mode", "serial")
         if execution_mode_raw.startswith("parallel"):

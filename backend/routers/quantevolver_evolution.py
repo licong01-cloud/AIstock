@@ -24,6 +24,8 @@ from psycopg2.extras import RealDictCursor, execute_values
 
 from ..services.quantevolver.factor_eligibility_service import FactorEligibilityService
 from ..services.quantevolver.evaluation_universe_service import EvaluationUniverseService
+from ..services.quantevolver.experiment_config import normalize_label_horizon
+from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
 
 # RD-Agent QE workspace API base URL
 RDAGENT_QE_BASE = os.getenv("RDAGENT_RESULTS_API_BASE_URL", "http://127.0.0.1:9000").rstrip("/")
@@ -142,6 +144,7 @@ class EvolutionTaskCreateRequest(BaseModel):
     additional_factor_keys: Optional[List[str]] = Field(None, description="从因子库额外添加的因子key列表，格式 ['name||source', ...]，与来源默认因子合并")
     node_id: Optional[str] = Field(None, description="执行节点 ID，None=默认本地节点")
     label_type: Optional[str] = Field(None, description="训练标签类型: close(默认) / open(可执行价) / vwap(均价)")
+    label_horizon: Optional[int] = Field(None, description="训练标签期限: 1/3/5/10d，默认继承源实验或 1d")
     # ── Multi-Alpha (Phase 3) ──────────────────────────────────────
     alpha_mode: Optional[str] = Field(None, description="single (默认) / multi")
     multi_alpha_config: Optional[Dict[str, Any]] = Field(None, description="Multi-Alpha 分组配置 JSON")
@@ -155,6 +158,11 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
     - rdagent_task_sota: 从 RDAgent task 的 SOTA 资产创建实验后演进
     """
     try:
+        try:
+            ensure_qe_label_horizon_schema()
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
         base_experiment_id = req.base_experiment_id
 
         if req.source_type == "rdagent_task_sota":
@@ -273,6 +281,14 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
                 status_code=400,
                 detail=f"label_type='{req.label_type}' 无效，允许值: {', '.join(sorted(_VALID_LABEL_TYPES))}",
             )
+        try:
+            req_label_horizon = (
+                normalize_label_horizon(req.label_horizon)
+                if req.label_horizon not in (None, "")
+                else None
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
         _VALID_EXECUTION_ALGOS = {"TWAP", "VWAP", "CLOSE_PRICE", "V24_PLAN"}
         if req.execution_algo and req.execution_algo not in _VALID_EXECUTION_ALGOS:
@@ -303,6 +319,7 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
             start_from_loop_zero=start_from_loop_zero,
             stock_pool=req.stock_pool,
             node_id=req.node_id,
+            label_horizon=req_label_horizon,
         )
 
         # 保存额外字段（含 evolution_mode）
@@ -314,7 +331,7 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
                         evolution_mode = %s, strategy_id = %s, strategy_params = %s,
                         execution_algo = %s, execution_algo_params = %s,
                         unfilled_handler = %s, unfilled_handler_params = %s,
-                        label_type = %s, updated_at = NOW()
+                        label_type = %s, label_horizon = COALESCE(%s, label_horizon), updated_at = NOW()
                     WHERE task_id = %s
                 """, (req.evolution_guidance, req.source_type, req.source_task_id,
                       req.evolution_mode or "auto",
@@ -325,6 +342,7 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
                       req.unfilled_handler,
                       json.dumps(req.unfilled_handler_params) if req.unfilled_handler_params else None,
                       req.label_type,
+                      req_label_horizon,
                       task_id))
             conn.commit()
 
@@ -585,6 +603,11 @@ async def retry_evolution_loop(task_id: str, loop_index: int, background_tasks: 
     适用场景：回测因策略 bug 失败，修复后重试无需等待 1 小时训练。
     """
     try:
+        try:
+            ensure_qe_label_horizon_schema()
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
         # 预检查：验证 loop 状态（快速返回错误，不进 background）
         from ..services.quantevolver.qe_evolution_service import get_conn
         from psycopg2.extras import RealDictCursor
@@ -626,6 +649,7 @@ class EvolutionTaskForkRequest(BaseModel):
     unfilled_handler_params: Optional[Dict[str, Any]] = Field(None, description="尾盘处理参数，如 {backup_depth: 15}")
     additional_factor_keys: Optional[List[str]] = Field(None, description="从因子库额外添加的因子key列表")
     node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
+    label_horizon: Optional[int] = Field(None, description="训练标签期限: 1/3/5/10d；全量重训 fork 可覆盖源 Loop")
 
 @router.post("/tasks/{task_id}/fork", summary="从指定 Loop 分叉出全新演进任务")
 async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, background_tasks: BackgroundTasks):
@@ -634,6 +658,19 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
     新 task 的 Loop 1 会用该配置做初始回测建立基线，后续 Loop 由 Agent 正常演进。
     """
     try:
+        try:
+            ensure_qe_label_horizon_schema()
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+        try:
+            req_label_horizon = (
+                normalize_label_horizon(req.label_horizon)
+                if req.label_horizon not in (None, "")
+                else None
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
         new_task_id = await scheduler.fork_task(
             source_task_id=task_id,
             from_loop_index=req.from_loop_index,
@@ -649,6 +686,7 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
             unfilled_handler=req.unfilled_handler,
             unfilled_handler_params=req.unfilled_handler_params,
             node_id=req.node_id,
+            label_horizon=req_label_horizon,
         )
 
         # 合并从因子库额外添加的因子
@@ -725,6 +763,11 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
     所有 Loop 使用 --backtest-only 模式，跳过模型训练。
     """
     try:
+        try:
+            ensure_qe_label_horizon_schema()
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
         # 为 loops 配置分配 loop_index
         loops_config = []
         for i, loop_cfg in enumerate(req.loops, start=1):
@@ -809,6 +852,7 @@ class CustomEvoLoopConfig(BaseModel):
     sector_blacklist: Optional[List[str]] = Field(None, description="行业黑名单")
     stock_pool: Optional[str] = Field(None, description="Qlib股票池文件WSL路径")
     label_type: Optional[str] = Field(None, description="训练标签类型: close/open/vwap")
+    label_horizon: Optional[int] = Field(None, description="训练标签期限: 1/3/5/10d")
     data_split: Optional[Dict[str, str]] = Field(None, description="数据划分覆盖，None=使用系统默认")
     # backtest-only 模式（复用已训练模型，仅回测）
     backtest_only: bool = Field(False, description="是否跳过训练仅回测（需提供 model_source，且因子不可变更）")
@@ -821,7 +865,7 @@ class CustomEvolutionCreateRequest(BaseModel):
     loops: List[CustomEvoLoopConfig] = Field(..., description="Loop 配置列表，至少1个", min_length=1)
     execution_mode: str = Field("serial", description="执行方式: serial / parallel_N (N=2,4,6,8)")
     node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
-    engine_mode: str = Field("unified", description="引擎模式: legacy=旧路径, unified=统一引擎")
+    engine_mode: str = Field("unified", description="引擎模式: only unified is supported")
 
 @router.post("/custom-tasks", summary="创建自定义演进任务（每个 Loop 完全自定义因子+模型+策略）")
 async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, background_tasks: BackgroundTasks):
@@ -830,8 +874,24 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
     执行完整的训练+回测流程（非 backtest-only）。
     """
     try:
+        try:
+            ensure_qe_label_horizon_schema()
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+        if (req.engine_mode or "unified") != "unified":
+            raise HTTPException(
+                status_code=400,
+                detail="QE legacy execution engine has been removed; only engine_mode='unified' is supported.",
+            )
+
         # 验证 loops 配置
+        loop_source_horizons: Dict[int, int] = {}
         for i, loop_cfg in enumerate(req.loops):
+            try:
+                loop_label_horizon = normalize_label_horizon(loop_cfg.label_horizon)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Loop {i+1}: {e}") from e
             if not loop_cfg.factor_keys or len(loop_cfg.factor_keys) == 0:
                 raise HTTPException(status_code=400, detail=f"Loop {i+1} 必须选择至少一个因子")
             if not loop_cfg.model_id:
@@ -843,6 +903,20 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             if loop_cfg.backtest_only:
                 if not loop_cfg.model_source_task_id or loop_cfg.model_source_loop_index is None:
                     raise HTTPException(status_code=400, detail=f"Loop {i+1} 启用 backtest-only 但未指定 model_source")
+                try:
+                    source_label_horizon = scheduler._get_source_loop_label_horizon(
+                        loop_cfg.model_source_task_id,
+                        loop_cfg.model_source_loop_index,
+                    )
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=f"Loop {i+1}: {e}") from e
+                loop_source_horizons[i] = source_label_horizon
+                if loop_label_horizon != source_label_horizon:
+                    raise HTTPException(status_code=400, detail=(
+                        f"Loop {i+1} 启用 backtest-only，但 label_horizon={loop_label_horizon} "
+                        f"与源模型 label_horizon={source_label_horizon} 不一致。"
+                        "backtest-only 禁止修改训练标签期限，请关闭 backtest-only 后重训。"
+                    ))
                 source_factors = _get_source_loop_factors(loop_cfg.model_source_task_id, loop_cfg.model_source_loop_index)
                 if source_factors is None:
                     raise HTTPException(status_code=400, detail=(
@@ -861,6 +935,9 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
         for i, loop_cfg in enumerate(req.loops, start=1):
             cfg_dict = loop_cfg.dict()
             cfg_dict["loop_index"] = i
+            cfg_dict["label_horizon"] = normalize_label_horizon(loop_cfg.label_horizon)
+            if loop_cfg.backtest_only and (i - 1) in loop_source_horizons:
+                cfg_dict["source_label_horizon"] = loop_source_horizons[i - 1]
             loops_config.append(cfg_dict)
 
         # 节点可用性校验
@@ -877,7 +954,7 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             loops_config=loops_config,
             execution_mode=req.execution_mode or "serial",
             node_id=req.node_id,
-            engine_mode=req.engine_mode or "legacy",
+            engine_mode="unified",
         )
 
         return {

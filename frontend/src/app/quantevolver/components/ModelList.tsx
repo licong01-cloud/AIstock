@@ -1,6 +1,6 @@
-"use client";
+﻿"use client";
 
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 
@@ -153,6 +153,7 @@ export default function ModelList({
   onSelectModel?: (modelId: string) => void;
 }) {
   const [models, setModels] = useState<Model[]>([]);
+  const loadModelsRequestRef = useRef(0);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -185,15 +186,17 @@ export default function ModelList({
 
   const isSelectionMode = mode === "selection";
 
-  const loadModels = useCallback(async () => {
+  const loadModels = useCallback(async (queryOverride?: string) => {
+    const requestId = ++loadModelsRequestRef.current;
     setLoading(true);
     setError(null);
     try {
+      const effectiveSearch = typeof queryOverride === "string" ? queryOverride : search;
       const params = new URLSearchParams({
         limit: String(pageSize),
         offset: String((page - 1) * pageSize),
       });
-      if (search) params.set("search", search);
+      if (effectiveSearch) params.set("search", effectiveSearch);
       if (modelTypeFilter) params.set("model_type", modelTypeFilter);
       if (gradeFilter) params.set("grade", gradeFilter);
       if (sotaOnly) params.set("sota_only", "true");
@@ -203,12 +206,15 @@ export default function ModelList({
       }
       const res = await fetch(`${API}/quantevolver/models?${params.toString()}`);
       const data = await res.json();
+      if (requestId !== loadModelsRequestRef.current) return;
       setModels(data.items || []);
       setTotal(data.total || 0);
     } catch (e: any) {
+      if (requestId !== loadModelsRequestRef.current) return;
       setError(e?.message || "加载失败");
+    } finally {
+      if (requestId === loadModelsRequestRef.current) setLoading(false);
     }
-    setLoading(false);
   }, [search, modelTypeFilter, gradeFilter, sotaOnly, page, pageSize, sortField, sortOrder]);
 
   useEffect(() => { loadModels(); }, [loadModels]);
@@ -364,10 +370,11 @@ export default function ModelList({
       <section style={{ background: "#fff", borderRadius: 12, padding: 16, marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <input
+            data-testid="qe-model-search"
             placeholder="搜索模型名称/类型..."
             value={search}
             onChange={e => setSearch(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && loadModels()}
+            onKeyDown={e => { if (e.key === "Enter") void loadModels(e.currentTarget.value); }}
             style={{ padding: "6px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", width: 200 }}
           />
 
@@ -400,7 +407,7 @@ export default function ModelList({
             仅SOTA
           </label>
 
-          <button onClick={loadModels} disabled={loading}
+          <button onClick={() => loadModels()} disabled={loading}
             style={{ padding: "6px 12px", fontSize: 12, cursor: "pointer", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff" }}>
             {loading ? "加载中..." : "刷新"}
           </button>
@@ -520,6 +527,7 @@ export default function ModelList({
                   <React.Fragment key={m.model_id}>
                     {/* 主行 */}
                     <tr
+                      data-testid={`qe-model-row-${m.model_id}`}
                       style={{
                         borderBottom: isExpanded ? "none" : "1px solid #f3f4f6",
                         background: isSelected ? "#eff6ff" : "transparent",
@@ -536,6 +544,7 @@ export default function ModelList({
                       <td style={tdStyle}>
                         {isSelectionMode ? (
                           <input
+                            data-testid={`qe-model-radio-${m.model_id}`}
                             type="radio"
                             checked={selectedModel === m.model_id}
                             onChange={() => onSelectModel && onSelectModel(m.model_id)}

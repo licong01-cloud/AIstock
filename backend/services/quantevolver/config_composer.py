@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ...db.pg_pool import get_conn
+from .experiment_config import normalize_label_horizon
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
 
@@ -995,7 +996,16 @@ class ConfigComposer:
                 if not row:
                     return {"ok": False, "error": "实验不存在"}
                 cols = [desc[0] for desc in cur.description]
-                return {"ok": True, "experiment": dict(zip(cols, row))}
+                experiment = dict(zip(cols, row))
+                try:
+                    from .blacklist_snapshot import enrich_blacklist_snapshot_for_display
+                    custom_params = experiment.get("custom_params")
+                    if isinstance(custom_params, str):
+                        custom_params = json.loads(custom_params)
+                    experiment["custom_params"] = enrich_blacklist_snapshot_for_display(custom_params)
+                except Exception as e:
+                    raise RuntimeError(f"行业黑名单快照解析失败: {e}") from e
+                return {"ok": True, "experiment": experiment}
 
     def regenerate_experiment(self, experiment_id: str) -> Dict[str, Any]:
         """重新生成实验脚本（复用同一实验ID和名称）。
@@ -1518,6 +1528,7 @@ class ConfigComposer:
             "model_type", "dataset_cls", "step_len", "num_timesteps", "num_features",
             "quick_train",  # 快速训练模式：控制模型训练参数
             "label_type",   # 训练标签类型：close/open/vwap
+            "label_horizon",  # Training label horizon: 1/3/5/10d
             "stock_pool",   # 股票池文件路径
             "backtest_freq",        # 回测频率（已在上层提取）
             "execution_algo",       # 执行算法（已在上层提取到 inner_strategy）
@@ -1674,23 +1685,25 @@ class ConfigComposer:
         lines.append("    expression_cache: null")
         lines.append("")
         stock_pool = (custom_params or {}).get("stock_pool", "all")
-        # 训练标签选择（custom_params.label_type 可选覆盖）
-        # close: Ref($close,-2)/Ref($close,-1)-1  — 传统 close-to-close（默认）
-        # open:  Ref($open,-2)/Ref($open,-1)-1    — open-to-open（更贴近可执行价）
-        # vwap:  Ref($vwap,-2)/Ref($vwap,-1)-1    — vwap-to-vwap
-        _LABEL_FORMULAS = {
-            "close": "Ref($close, -2) / Ref($close, -1) - 1",
-            "open":  "Ref($open, -2) / Ref($open, -1) - 1",
-            "vwap":  "Ref($vwap, -2) / Ref($vwap, -1) - 1",
+        # Training label selection. label_type controls price basis; label_horizon controls horizon.
+        _LABEL_FIELDS = {
+            "close": "$close",
+            "open": "$open",
+            "vwap": "$vwap",
         }
         _label_type = (custom_params or {}).get("label_type", "close")
-        if _label_type not in _LABEL_FORMULAS:
+        if _label_type not in _LABEL_FIELDS:
             raise ValueError(
-                f"label_type='{_label_type}' invalid, must be one of {list(_LABEL_FORMULAS.keys())}"
+                f"label_type='{_label_type}' invalid, must be one of {list(_LABEL_FIELDS.keys())}"
             )
-        _label_formula = _LABEL_FORMULAS[_label_type]
-        if _label_type != "close":
-            logger.info(f"使用非默认训练标签: label_type={_label_type}, formula={_label_formula}")
+        _label_horizon = normalize_label_horizon((custom_params or {}).get("label_horizon"))
+        _label_field = _LABEL_FIELDS[_label_type]
+        _label_formula = f"Ref({_label_field}, -{_label_horizon + 1}) / Ref({_label_field}, -1) - 1"
+        if _label_type != "close" or _label_horizon != 1:
+            logger.info(
+                "Using non-default training label: "
+                f"label_type={_label_type}, label_horizon={_label_horizon}, formula={_label_formula}"
+            )
         lines.append(f"market: &market {stock_pool}")
         lines.append("benchmark: &benchmark 000300.SH")
         lines.append("")

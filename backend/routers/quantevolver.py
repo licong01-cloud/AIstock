@@ -61,23 +61,54 @@ def _build_multi_alpha_group_command(gc: dict[str, Any], node_label: str | None 
         # 用 subshell 隔离 cd，避免多分组串联时路径污染
         return f"{prefix} && (cd group_{group_name} && {core_cmd})"
 
-    legacy_cmd = gc.get("wsl_command", "")
-    if legacy_cmd and not legacy_cmd.startswith("#"):
-        logger.warning("Multi-alpha group %s missing wsl_command_core; fallback to legacy wsl_command", group_name)
-        return f"{prefix} && ({legacy_cmd})"
-    raise ValueError(f"Multi-alpha group {group_name} has no executable command")
+    raise ValueError(
+        f"Multi-alpha group {group_name} has no unified executable command "
+        "(missing wsl_command_core)"
+    )
 
 
-from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query, Request
 from pydantic import ConfigDict
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..db.pg_pool import get_conn
+from ..services.quantevolver.callback_urls import build_aistock_callback_url
+from ..services.quantevolver.experiment_config import normalize_label_horizon
+from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
 
 logger = logging.getLogger("aistock.routers.quantevolver")
 
 router = APIRouter(prefix="/quantevolver", tags=["QuantEvolver"])
+
+
+def _multi_alpha_distributed_enabled() -> bool:
+    """Return whether experimental distributed Multi-Alpha execution is enabled."""
+    return os.getenv("AISTOCK_MULTI_ALPHA_DISTRIBUTED_ENABLED", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _assert_multi_alpha_execution_mode_supported(config: Any) -> None:
+    """Fail loudly when a Multi-Alpha mode is not supported by the current rollout."""
+    mode = "serial"
+    if isinstance(config, dict):
+        mode = str(config.get("execution_mode") or "serial")
+    else:
+        mode = str(getattr(config, "execution_mode", "serial") or "serial")
+
+    if mode == "distributed" and not _multi_alpha_distributed_enabled():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Multi-Alpha distributed execution is disabled in the current rollout. "
+                "Use execution_mode='serial' for WSL single-node validation, or enable "
+                "AISTOCK_MULTI_ALPHA_DISTRIBUTED_ENABLED=1 after Phase 3 is implemented."
+            ),
+        )
 
 
 # ============================================================
@@ -1374,6 +1405,8 @@ def multi_alpha_auto_select(
     """
     from ..services.quantevolver.multi_alpha_selector import MultiAlphaFactorSelector
 
+    _assert_multi_alpha_execution_mode_supported({"execution_mode": execution_mode})
+
     try:
         selector = MultiAlphaFactorSelector()
         config = selector.auto_select(
@@ -1521,6 +1554,9 @@ def get_multi_alpha_results(experiment_id: str):
         else:
             result_metrics = {}
 
+        lifecycle = result_metrics.get("multi_alpha_lifecycle") if isinstance(result_metrics, dict) else None
+        if not isinstance(lifecycle, dict):
+            lifecycle = {}
         multi_detail = result_metrics.get("multi_alpha_detail") or {}
         detail_groups = multi_detail.get("group_results") or []
         detail_by_name = {
@@ -1574,11 +1610,27 @@ def get_multi_alpha_results(experiment_id: str):
         if not groups:
             raise HTTPException(status_code=404, detail=f"No multi-alpha groups for {experiment_id}")
 
+        ready = exp_status == "completed" and bool(meta_history) and bool(multi_detail)
+        if exp_status == "completed" and not ready:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Multi-alpha results are not artifact-ready for {experiment_id}: "
+                    "missing persisted meta weights or multi_alpha_detail"
+                ),
+            )
+
         return {
             "ok": True,
             "experiment_id": experiment_id,
+            "experiment_status": exp_status,
+            "ready": ready,
+            "stage": lifecycle.get("stage") or ("completed" if ready else exp_status),
+            "artifact_status": lifecycle.get("artifact_status") or ("ready" if ready else "pending"),
+            "artifact_errors": lifecycle.get("errors", []),
             "groups": groups,
             "meta_weights_history": meta_history,
+            "multi_alpha_analysis": result_metrics.get("multi_alpha_analysis") if isinstance(result_metrics, dict) else None,
         }
     except HTTPException:
         raise
@@ -2462,7 +2514,24 @@ def generate_config(req: GenerateConfigRequest):
 
         # --- HMM 模型验证与路径注入（对齐自动演进逻辑）---
         custom_params = dict(req.custom_params or {})
+        try:
+            from ..services.quantevolver.blacklist_snapshot import attach_persistent_blacklist_snapshot
+            custom_params = attach_persistent_blacklist_snapshot(custom_params)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
+        try:
+            label_horizon = normalize_label_horizon(custom_params.get("label_horizon"))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if label_horizon == 1:
+            custom_params.pop("label_horizon", None)
+        else:
+            try:
+                ensure_qe_label_horizon_schema()
+            except RuntimeError as e:
+                raise HTTPException(status_code=500, detail=str(e)) from e
+            custom_params["label_horizon"] = label_horizon
         # --- 尾盘涨停未成交处理注入（对齐演进任务逻辑）---
         _VALID_UNFILLED_HANDLERS = {"TAIL_BOOST", "TAIL_SUBSTITUTE"}
         if req.unfilled_handler:
@@ -2535,6 +2604,8 @@ def generate_config(req: GenerateConfigRequest):
             from ..services.quantevolver.experiment_config_builders import build_config_from_multi_alpha
             from ..services.quantevolver.multi_alpha_engine import MultiAlphaEngine
 
+            _assert_multi_alpha_execution_mode_supported(req.multi_alpha_config)
+
             # 构建 HMM 配置（传 HmmConfig 兼容的 dict 或 None）
             hmm_cfg_dict = None
             if custom_params.get("sector_hmm_model_path"):
@@ -2561,6 +2632,7 @@ def generate_config(req: GenerateConfigRequest):
                 strategy_id=req.strategy_id,
                 strategy_params={"topk": custom_params.get("topk"), "n_drop": custom_params.get("n_drop")} if custom_params else None,
                 label_type=custom_params.get("label_type"),
+                label_horizon=custom_params.get("label_horizon"),
                 execution_algo=custom_params.get("execution_algo"),
                 execution_algo_params=custom_params.get("execution_algo_params"),
                 unfilled_handler=custom_params.get("unfilled_handler"),
@@ -2692,6 +2764,8 @@ def generate_config(req: GenerateConfigRequest):
             result["evolution_params"] = req.evolution_params or {}
 
         return result
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -5053,6 +5127,87 @@ async def _poll_multi_alpha_nodes(experiment_id: str, qe_task_id: str) -> str:
     return "running"
 
 
+def _load_multi_alpha_status_payload(experiment_id: str, experiment_status: str) -> dict:
+    """Build a UI-friendly multi-alpha lifecycle snapshot from persisted group rows."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT group_name, status, assigned_node_id, qe_loop_id, error_message
+                   FROM qe_multi_alpha_groups
+                   WHERE parent_experiment_id = %s
+                   ORDER BY group_name""",
+                (experiment_id,),
+            )
+            cols = [d[0] for d in cur.description]
+            groups = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    counts: dict[str, int] = {}
+    for group in groups:
+        status = group.get("status") or "pending"
+        counts[status] = counts.get(status, 0) + 1
+
+    total = len(groups)
+    completed = counts.get("completed", 0)
+    failed = counts.get("failed", 0)
+    running = counts.get("running", 0)
+
+    if experiment_status == "completed":
+        stage = "completed"
+        artifact_status = "ready"
+    elif experiment_status == "failed":
+        has_artifact_error = any(g.get("error_message") for g in groups)
+        stage = "failed_artifact" if has_artifact_error else "failed"
+        artifact_status = "failed"
+    elif failed:
+        stage = "group_failed"
+        artifact_status = "not_started"
+    elif running:
+        stage = "group_training"
+        artifact_status = "not_started"
+    elif total > 0 and completed == total:
+        stage = "result_collection"
+        artifact_status = "validating"
+    elif total > 0:
+        stage = "pending_groups"
+        artifact_status = "not_started"
+    else:
+        stage = "pending_setup"
+        artifact_status = "not_started"
+
+    return {
+        "stage": stage,
+        "artifact_status": artifact_status,
+        "total_groups": total,
+        "completed_groups": completed,
+        "failed_groups": failed,
+        "running_groups": running,
+        "group_status_counts": counts,
+        "groups": groups,
+    }
+
+
+def _mark_multi_alpha_artifact_failure(experiment_id: str, error_message: str) -> None:
+    """Persist a top-level artifact validation failure without faking metrics."""
+    lifecycle = {
+        "multi_alpha_lifecycle": {
+            "stage": "failed_artifact",
+            "artifact_status": "failed",
+            "errors": [error_message],
+        }
+    }
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE qe_experiments
+                   SET status = 'failed',
+                       result_metrics = COALESCE(result_metrics, '{}'::jsonb) || %s::jsonb,
+                       completed_at = NOW()
+                   WHERE experiment_id = %s""",
+                (json.dumps(lifecycle, ensure_ascii=False), experiment_id),
+            )
+        conn.commit()
+
+
 def _update_experiment_status(experiment_id: str, status: str):
     """安全更新实验状态。"""
     with get_conn() as conn:
@@ -5101,15 +5256,153 @@ def _update_experiment_with_metrics(experiment_id: str, metrics: dict):
         conn.commit()
 
 
+def _candidate_enhanced_metric_files(
+    *,
+    qe_task_id: str | None,
+    qe_loop_id: str | None,
+    workspace_path: str | None = None,
+) -> list[Path]:
+    """Return local qlib_results_enhanced.json candidates in authoritative order."""
+    candidates: list[Path] = []
+    if workspace_path:
+        ws = _wsl_to_win_path(str(workspace_path)) or Path(str(workspace_path))
+        candidates.extend([
+            ws / "qlib_results_enhanced.json",
+            ws / str(qe_loop_id or "Loop1") / "qlib_results_enhanced.json",
+        ])
+    if qe_task_id:
+        try:
+            from ..services.quantevolver.config_composer import QE_WORKSPACE_WIN
+            task_root = QE_WORKSPACE_WIN / str(qe_task_id)
+            candidates.extend([
+                task_root / "qlib_results_enhanced.json",
+                task_root / str(qe_loop_id or "Loop1") / "qlib_results_enhanced.json",
+            ])
+        except Exception:
+            pass
+
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        key = str(candidate)
+        if key not in seen:
+            unique.append(candidate)
+            seen.add(key)
+    return unique
+
+
+def _load_local_enhanced_metrics_payload(
+    *,
+    qe_task_id: str | None,
+    qe_loop_id: str | None,
+    workspace_path: str | None = None,
+) -> dict:
+    """Load local enhanced metrics if the artifact exists.
+
+    This is not a fallback success path: the function only returns when the
+    actual artifact exists and parses as a JSON object. Missing or malformed
+    artifacts are surfaced to the caller.
+    """
+    parse_errors: list[str] = []
+    for candidate in _candidate_enhanced_metric_files(
+        qe_task_id=qe_task_id,
+        qe_loop_id=qe_loop_id,
+        workspace_path=workspace_path,
+    ):
+        if not candidate.exists():
+            continue
+        try:
+            with candidate.open("r", encoding="utf-8") as f:
+                payload = json.load(f)
+            if not isinstance(payload, dict) or not payload:
+                raise RuntimeError(f"enhanced metrics JSON is empty or invalid: {candidate}")
+            return payload
+        except Exception as exc:
+            parse_errors.append(f"{candidate}: {exc}")
+    if parse_errors:
+        raise RuntimeError("; ".join(parse_errors))
+    return {}
+
+
+def _wsl_to_win_path(path: str | None) -> Path | None:
+    if not path:
+        return None
+    raw = str(path).replace("\\", "/")
+    if raw.startswith("/mnt/") and len(raw) > 6:
+        drive = raw[5].upper()
+        return Path(f"{drive}:/{raw[7:]}")
+    return Path(raw)
+
+
+def _candidate_run_log_files(
+    *,
+    qe_task_id: str | None,
+    qe_loop_id: str | None,
+    workspace_path: str | None = None,
+) -> list[Path]:
+    candidates: list[Path] = []
+    loop_id = str(qe_loop_id or "Loop1")
+    ws = _wsl_to_win_path(workspace_path)
+    if ws:
+        candidates.extend([ws / loop_id / "run.log", ws / "run.log"])
+    if qe_task_id:
+        try:
+            from ..services.quantevolver.config_composer import QE_WORKSPACE_WIN
+            task_root = QE_WORKSPACE_WIN / str(qe_task_id)
+            candidates.extend([task_root / loop_id / "run.log", task_root / "run.log"])
+        except Exception:
+            pass
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        key = str(candidate)
+        if key not in seen:
+            unique.append(candidate)
+            seen.add(key)
+    return unique
+
+
+def _load_experiment_terminal_status(experiment_id: str) -> str | None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT status FROM qe_experiments WHERE experiment_id = %s",
+                (experiment_id,),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+
+
+
+def _resolve_qe_experiment_callback_url(
+    node_id: str | None = None,
+    node_callback_url: str | None = None,
+) -> str:
+    """Return the concrete webhook endpoint used by one-off QE experiments."""
+    return build_aistock_callback_url(
+        endpoint_path="/api/v1/quantevolver/webhook/loop-completed",
+        full_url_env="AISTOCK_QE_LOOP_CALLBACK_URL",
+        node_id=node_id,
+        node_callback_url=node_callback_url,
+    )
+
+
 @router.post("/experiments/{experiment_id}/run")
-async def run_experiment(experiment_id: str, engine_mode: str = "unified", node_id: str = None):
+async def run_experiment(experiment_id: str, engine_mode: Optional[str] = "unified", node_id: str = None):
     """一键执行单次实验：读取配置 → compose_in_memory → 提交 RDAgent。
 
     实验状态由前端通过 get_experiment_run_status 按需查询并自动同步，
     不再使用后台轮询（避免阻塞 uvicorn reload）。
     """
-    from ..services.quantevolver.config_composer import ConfigComposer
-    from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
+    if (engine_mode or "unified") != "unified":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "QE legacy execution engine has been removed. "
+                "Only engine_mode='unified' is supported."
+            ),
+        )
+
 
     # 多Alpha实验：专属执行路径（各组独立提交到 RDAgent）
     try:
@@ -5128,110 +5421,7 @@ async def run_experiment(experiment_id: str, engine_mode: str = "unified", node_
         logger.exception(f"多Alpha实验执行失败: {experiment_id}")
         raise HTTPException(status_code=500, detail=f"多Alpha实验执行失败: {e}")
 
-    if engine_mode == "unified":
-        return await _run_experiment_unified(experiment_id, node_id=node_id)
-
-    try:
-        # 1) 从 DB 读取实验记录
-        cc = ConfigComposer()
-        exp_record = cc._get_experiment_record(experiment_id)
-        if not exp_record:
-            raise HTTPException(status_code=404, detail=f"实验 {experiment_id} 不存在")
-
-        if exp_record.get("status") == "running":
-            raise HTTPException(status_code=409, detail="实验正在执行中，请勿重复提交")
-
-        # 2) 组装实验文件（内存）
-        factor_names_raw = exp_record.get("factor_names") or []
-        if isinstance(factor_names_raw, str):
-            factor_names_raw = json.loads(factor_names_raw)
-
-        data_split = exp_record.get("data_split")
-        if isinstance(data_split, str):
-            data_split = json.loads(data_split)
-
-        custom_params = exp_record.get("custom_params")
-        if isinstance(custom_params, str):
-            custom_params = json.loads(custom_params)
-
-        experiment_name = exp_record.get("experiment_name") or f"qe_exp_{experiment_id}"
-
-        # 从 custom_params 提取 execution_algo / strategy_params（与 evolution service 对齐）
-        _cp = custom_params or {}
-        execution_algo = _cp.get("execution_algo")
-        execution_algo_params = dict(_cp.get("execution_algo_params") or {})
-
-        # strategy_params: 从 custom_params 中提取策略相关参数（HMM 等）
-        # compose_experiment_in_memory 需要 strategy_params 来触发 HMM 预计算
-        strategy_params = {}
-        for _hmm_key in ("enable_sector_hmm", "sector_hmm_model_path",
-                         "hmm_signal_preset", "hmm_signal_presets"):
-            if _hmm_key in _cp:
-                strategy_params[_hmm_key] = _cp[_hmm_key]
-
-        compose_res = cc.compose_experiment_in_memory(
-            factor_names=factor_names_raw,
-            model_id=exp_record.get("model_id"),
-            strategy_id=exp_record.get("strategy_id"),
-            data_split=data_split,
-            custom_params=custom_params,
-            experiment_name=experiment_name,
-            skip_db_save=True,  # 已有 DB 记录，不重复写入
-            execution_algo=execution_algo,
-            execution_algo_params=execution_algo_params,
-            strategy_params=strategy_params if strategy_params else None,
-            node_id=node_id,
-        )
-        experiment_files = compose_res["experiment_files"]
-        wsl_command = compose_res.get("wsl_command", "")
-        if not wsl_command:
-            raise ValueError(
-                f"compose_experiment_in_memory returned empty wsl_command for experiment={experiment_id}"
-            )
-
-        # 3) task_id = experiment_name（已与 experiment_id 统一），修复原 f"{name}_{id}" 拼接导致的 404
-        qe_task_id = experiment_name  # experiment_name = experiment_id（已统一）
-        loop_index = 1
-        qe_loop_id = f"Loop{loop_index}"
-        config = {
-            "factor_list": factor_names_raw,
-            "model_id": exp_record.get("model_id"),
-            "strategy_id": exp_record.get("strategy_id"),
-            "data_split": data_split,
-            "model_params": custom_params,
-        }
-
-        # 4) 提交到 RDAgent 执行
-        client = QEWorkspaceClient.for_node(node_id) if node_id else QEWorkspaceClient()
-        async with client:
-            qe_loop_id = await client.create_and_run_loop(
-                qe_task_id, loop_index, config, experiment_files, wsl_command
-            )
-
-        # 5) 更新 DB：状态 + qe_task_id / qe_loop_id
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE qe_experiments
-                    SET status = 'running',
-                        qe_task_id = %s,
-                        qe_loop_id = %s,
-                        started_at = NOW()
-                    WHERE experiment_id = %s
-                """, (qe_task_id, qe_loop_id, experiment_id))
-            conn.commit()
-
-        return {
-            "ok": True,
-            "experiment_id": experiment_id,
-            "qe_task_id": qe_task_id,
-            "qe_loop_id": qe_loop_id,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"执行实验失败: {experiment_id}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return await _run_experiment_unified(experiment_id, node_id=node_id)
 
 
 async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
@@ -5262,6 +5452,7 @@ async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
         raise HTTPException(status_code=400, detail="实验缺少 multi_alpha_config，无法执行多Alpha实验")
     if isinstance(multi_alpha_config_raw, str):
         multi_alpha_config_raw = json.loads(multi_alpha_config_raw)
+    _assert_multi_alpha_execution_mode_supported(multi_alpha_config_raw)
 
     from ..services.quantevolver.experiment_config_builders import build_config_from_multi_alpha
     from ..services.quantevolver.multi_alpha_engine import MultiAlphaEngine
@@ -5273,6 +5464,22 @@ async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
     if isinstance(custom_params, str):
         custom_params = json.loads(custom_params)
     _cp = custom_params or {}
+    hmm_cfg_dict = None
+    if _cp.get("sector_hmm_model_path"):
+        hmm_cfg_dict = {
+            "enable_sector_hmm": True,
+            "hmm_model_version_id": _cp.get("hmm_model_version_id", "from_persisted_experiment"),
+            "sector_hmm_model_path": _cp["sector_hmm_model_path"],
+            "hmm_signal_preset": _cp.get("hmm_signal_preset"),
+            "hmm_signal_presets": _cp.get("hmm_signal_presets"),
+        }
+    uf_params = None
+    if _cp.get("unfilled_handler"):
+        uf_params = {}
+        if _cp.get("unfilled_trigger_minute"):
+            uf_params["trigger_minute"] = _cp["unfilled_trigger_minute"]
+        if _cp.get("unfilled_backup_depth"):
+            uf_params["backup_depth"] = _cp["unfilled_backup_depth"]
 
     # 查询可用节点（用于分布式规划）
     available_nodes = []
@@ -5290,8 +5497,14 @@ async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
         data_split=data_split,
         strategy_id=exp_record.get("strategy_id"),
         strategy_params={"topk": _cp.get("topk"), "n_drop": _cp.get("n_drop")} if _cp else None,
+        label_type=_cp.get("label_type"),
+        label_horizon=_cp.get("label_horizon"),
         execution_algo=_cp.get("execution_algo"),
         execution_algo_params=_cp.get("execution_algo_params"),
+        unfilled_handler=_cp.get("unfilled_handler"),
+        unfilled_handler_params=uf_params,
+        stock_pool=_cp.get("stock_pool"),
+        hmm_config=hmm_cfg_dict,
         experiment_name=experiment_name,
         node_id=node_id,
     )
@@ -5318,8 +5531,14 @@ async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
 
     is_distributed = len(node_groups) > 1
 
-    # 查询各节点 callback_url
-    node_callbacks = {n["node_id"]: n.get("callback_url") for n in available_nodes}
+    # 查询各节点 callback_url。compute_nodes.callback_url 可能只是 base URL，
+    # 提交给 RD-Agent 前必须展开成当前 QE 实验 webhook 的完整路径。
+    node_callbacks = {
+        n["node_id"]: _resolve_qe_experiment_callback_url(
+            n.get("node_id"), n.get("callback_url")
+        )
+        for n in available_nodes
+    }
 
     submitted_nodes: list[dict] = []
 
@@ -5364,7 +5583,7 @@ async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
                 async with client:
                     node_loop_id = await client.create_and_run_loop(
                         qe_task_id, 1, node_config, node_files, node_command,
-                        callback_url=node_callbacks.get(n_id),
+                        callback_url=node_callbacks.get(n_id) or _resolve_qe_experiment_callback_url(n_id),
                     )
             except Exception as e:
                 raise RuntimeError(f"节点 {n_id} 提交失败: {e}") from e
@@ -5432,7 +5651,7 @@ async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
         async with client:
             primary_loop_id = await client.create_and_run_loop(
                 qe_task_id, 1, config, all_experiment_files, orchestration_command,
-                callback_url=node_callbacks.get(only_node_id),
+                callback_url=node_callbacks.get(only_node_id) or _resolve_qe_experiment_callback_url(only_node_id),
             )
 
         submitted_nodes.append({
@@ -5497,13 +5716,15 @@ async def _run_experiment_unified(experiment_id: str, node_id: str = None):
 
         # 查询远端节点 callback_url
         callback_url = None
+        node_callback_base = None
         if node_id:
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT callback_url FROM infra.compute_nodes WHERE node_id = %s", (node_id,))
                     row = cur.fetchone()
                     if row:
-                        callback_url = row[0]
+                        node_callback_base = row[0]
+        callback_url = _resolve_qe_experiment_callback_url(node_id, node_callback_base)
 
         ctx = ExecutionContext(
             task_id=experiment_name,
@@ -5525,9 +5746,13 @@ async def _run_experiment_unified(experiment_id: str, node_id: str = None):
                     SET status = 'running',
                         qe_task_id = %s,
                         qe_loop_id = %s,
+                        custom_params = CASE
+                            WHEN %s::text IS NULL THEN custom_params
+                            ELSE COALESCE(custom_params, '{}'::jsonb) || jsonb_build_object('execution_node_id', %s::text)
+                        END,
                         started_at = NOW()
                     WHERE experiment_id = %s
-                """, (experiment_name, result.job_id, experiment_id))
+                """, (experiment_name, result.job_id, node_id, node_id, experiment_id))
             conn.commit()
 
         return {
@@ -5544,6 +5769,114 @@ async def _run_experiment_unified(experiment_id: str, node_id: str = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+
+class QELoopCompletedPayload(BaseModel):
+    task_id: str
+    loop_id: str
+    status: str = "completed"
+
+
+def _callback_loop_candidates(task_id: str, loop_id: str) -> list[str]:
+    candidates = {str(loop_id or "").strip()}
+    prefix = f"{task_id}_"
+    if loop_id and str(loop_id).startswith(prefix):
+        candidates.add(str(loop_id)[len(prefix):])
+    return [c for c in candidates if c]
+
+
+def _find_experiments_for_loop_callback(task_id: str, loop_id: str) -> list[str]:
+    loop_ids = _callback_loop_candidates(task_id, loop_id)
+    if not task_id or not loop_ids:
+        return []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT experiment_id
+                FROM qe_experiments
+                WHERE status = 'running'
+                  AND qe_task_id = %s
+                  AND qe_loop_id = ANY(%s)
+                """,
+                (task_id, loop_ids),
+            )
+            direct = [row[0] for row in cur.fetchall()]
+            cur.execute(
+                """
+                SELECT DISTINCT e.experiment_id
+                FROM qe_experiments e
+                JOIN qe_multi_alpha_groups g
+                  ON g.parent_experiment_id = e.experiment_id
+                WHERE e.status = 'running'
+                  AND e.qe_task_id = %s
+                  AND g.qe_loop_id = ANY(%s)
+                """,
+                (task_id, loop_ids),
+            )
+            via_groups = [row[0] for row in cur.fetchall()]
+    seen = set()
+    result = []
+    for exp_id in direct + via_groups:
+        if exp_id not in seen:
+            result.append(exp_id)
+            seen.add(exp_id)
+    return result
+
+
+@router.post("/webhook/loop-completed", summary="QE loop ???????/?Alpha???")
+async def on_qe_loop_completed_webhook(request: Request, payload: QELoopCompletedPayload):
+    """Receive RD-Agent loop completion and trigger the same status sync as run-status."""
+    secret = os.getenv("QE_WEBHOOK_SECRET", "")
+    if secret:
+        provided_secret = request.headers.get("X-Webhook-Secret", "")
+        if provided_secret != secret:
+            raise HTTPException(status_code=403, detail="Invalid webhook secret")
+
+    experiment_ids = _find_experiments_for_loop_callback(payload.task_id, payload.loop_id)
+    if not experiment_ids:
+        logger.warning(
+            "QE loop callback did not match running experiment: task=%s loop=%s status=%s",
+            payload.task_id,
+            payload.loop_id,
+            payload.status,
+        )
+        return {
+            "status": "ignored",
+            "task_id": payload.task_id,
+            "loop_id": payload.loop_id,
+            "matched": 0,
+        }
+
+    async def _process():
+        for exp_id in experiment_ids:
+            try:
+                await get_experiment_run_status(exp_id)
+            except Exception as exc:
+                logger.error(
+                    "QE loop callback status sync failed: experiment=%s task=%s loop=%s error=%s",
+                    exp_id,
+                    payload.task_id,
+                    payload.loop_id,
+                    exc,
+                    exc_info=True,
+                )
+
+    task = asyncio.create_task(_process())
+    task.add_done_callback(
+        lambda t: logger.error("QE callback task error: %s", t.exception(), exc_info=True)
+        if t.exception()
+        else None
+    )
+    return {
+        "status": "accepted",
+        "task_id": payload.task_id,
+        "loop_id": payload.loop_id,
+        "matched": len(experiment_ids),
+        "experiment_ids": experiment_ids,
+    }
+
+
 @router.get("/experiments/{experiment_id}/run-status")
 async def get_experiment_run_status(experiment_id: str):
     """查询实验执行状态。如果有 qe_loop_id 则实时查询 RDAgent 侧。"""
@@ -5553,7 +5886,11 @@ async def get_experiment_run_status(experiment_id: str):
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT status, qe_task_id, qe_loop_id, result_metrics, alpha_mode FROM qe_experiments WHERE experiment_id = %s",
+                    """
+                    SELECT status, qe_task_id, qe_loop_id, result_metrics, alpha_mode, custom_params
+                    FROM qe_experiments
+                    WHERE experiment_id = %s
+                    """,
                     (experiment_id,),
                 )
                 row = cur.fetchone()
@@ -5573,6 +5910,27 @@ async def get_experiment_run_status(experiment_id: str):
             "alpha_mode": record.get("alpha_mode", "single"),
         }
 
+        if is_multi_alpha:
+            multi_alpha_status = _load_multi_alpha_status_payload(
+                experiment_id, record["status"]
+            )
+            lifecycle_source = record.get("result_metrics") or {}
+            if isinstance(lifecycle_source, str):
+                try:
+                    lifecycle_source = json.loads(lifecycle_source)
+                except Exception:
+                    lifecycle_source = {}
+            lifecycle = lifecycle_source.get("multi_alpha_lifecycle") if isinstance(lifecycle_source, dict) else None
+            if isinstance(lifecycle, dict):
+                multi_alpha_status["stage"] = lifecycle.get("stage", multi_alpha_status["stage"])
+                multi_alpha_status["artifact_status"] = lifecycle.get(
+                    "artifact_status", multi_alpha_status["artifact_status"]
+                )
+                multi_alpha_status["artifact_errors"] = lifecycle.get("errors", [])
+            result["multi_alpha"] = multi_alpha_status
+            result["multi_alpha_stage"] = multi_alpha_status["stage"]
+            result["artifact_status"] = multi_alpha_status["artifact_status"]
+
         # 如果状态为 running，实时查询并自动同步
         if record["status"] == "running":
             if not record.get("qe_task_id"):
@@ -5587,17 +5945,37 @@ async def get_experiment_run_status(experiment_id: str):
                 result["live_status"] = rd_status
 
                 if rd_status == "completed":
+                    result["multi_alpha_stage"] = "artifact_validation"
+                    result["artifact_status"] = "validating"
+                    if "multi_alpha" in result:
+                        result["multi_alpha"]["stage"] = "artifact_validation"
+                        result["multi_alpha"]["artifact_status"] = "validating"
                     try:
                         from ..services.quantevolver.multi_alpha_result_collector import MultiAlphaResultCollector
                         collector = MultiAlphaResultCollector()
                         collect_result = await collector.collect_and_persist(experiment_id)
                         result["status"] = "completed"
-                        result["result_metrics"] = collect_result.get("combined_metrics", {})
+                        result["result_metrics"] = collect_result.get("result_metrics") or collect_result.get("combined_metrics", {})
+                        result["multi_alpha_stage"] = "completed"
+                        result["artifact_status"] = "ready"
+                        fresh_multi_alpha_status = _load_multi_alpha_status_payload(
+                            experiment_id, "completed"
+                        )
+                        fresh_multi_alpha_status["stage"] = "completed"
+                        fresh_multi_alpha_status["artifact_status"] = "ready"
+                        result["multi_alpha"] = fresh_multi_alpha_status
                     except Exception as me:
-                        logger.error(f"多Alpha结果收集失败: {experiment_id}: {me}", exc_info=True)
-                        _update_experiment_status(experiment_id, "failed")
+                        error_msg = f"Multi-Alpha result collection failed: {me}"
+                        logger.error(f"Multi-Alpha result collection failed: {experiment_id}: {me}", exc_info=True)
+                        _mark_multi_alpha_artifact_failure(experiment_id, error_msg)
                         result["status"] = "failed"
-                        result["error"] = f"多Alpha结果收集失败: {me}"
+                        result["error"] = error_msg
+                        result["multi_alpha_stage"] = "failed_artifact"
+                        result["artifact_status"] = "failed"
+                        if "multi_alpha" in result:
+                            result["multi_alpha"]["stage"] = "failed_artifact"
+                            result["multi_alpha"]["artifact_status"] = "failed"
+                            result["multi_alpha"]["artifact_errors"] = [error_msg]
                 elif rd_status == "failed":
                     _update_experiment_status(experiment_id, "failed")
                     result["status"] = "failed"
@@ -5605,7 +5983,17 @@ async def get_experiment_run_status(experiment_id: str):
 
             elif record.get("qe_loop_id"):
                 # ── 单Alpha: 原有逻辑 ──────────────────────────
-                async with QEWorkspaceClient() as client:
+                custom_params = record.get("custom_params") or {}
+                if isinstance(custom_params, str):
+                    try:
+                        custom_params = json.loads(custom_params)
+                    except Exception:
+                        custom_params = {}
+                node_id = None
+                if isinstance(custom_params, dict):
+                    node_id = custom_params.get("execution_node_id") or custom_params.get("node_id")
+                client_cm = QEWorkspaceClient.for_node(node_id) if node_id else QEWorkspaceClient()
+                async with client_cm as client:
                     live_status = await client.get_loop_status(record["qe_task_id"], record["qe_loop_id"])
                     rd_status = live_status.get("status")
                     if not rd_status:
@@ -5640,31 +6028,43 @@ async def get_experiment_run_status(experiment_id: str):
 
 @router.get("/experiments/{experiment_id}/logs")
 async def stream_experiment_logs(experiment_id: str):
-    """SSE 实时日志流，转发 RDAgent 侧的任务日志。"""
+    """Stream experiment logs and append the authoritative AIstock terminal status."""
     from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
 
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT qe_task_id FROM qe_experiments WHERE experiment_id = %s",
+                    """
+                    SELECT qe_task_id, qe_loop_id, status, workspace_path, custom_params
+                    FROM qe_experiments
+                    WHERE experiment_id = %s
+                    """,
                     (experiment_id,),
                 )
                 row = cur.fetchone()
                 if not row:
-                    raise HTTPException(status_code=404, detail="实验不存在")
-                qe_task_id = row[0]
+                    raise HTTPException(status_code=404, detail="?????")
+                qe_task_id, qe_loop_id, db_status, workspace_path, custom_params = row
 
         if not qe_task_id:
-            raise HTTPException(status_code=400, detail="实验尚未执行，无日志可查")
+            raise HTTPException(status_code=400, detail="?????????????")
 
-        client = QEWorkspaceClient()
+        node_id = None
+        if isinstance(custom_params, str):
+            try:
+                custom_params = json.loads(custom_params)
+            except Exception:
+                custom_params = {}
+        if isinstance(custom_params, dict):
+            node_id = custom_params.get("execution_node_id") or custom_params.get("node_id")
+        client = QEWorkspaceClient.for_node(node_id) if node_id else QEWorkspaceClient()
 
         async def event_generator():
+            streamed_any = False
             try:
                 async for line in client.stream_task_logs(qe_task_id):
-                    # RDAgent 返回 SSE 格式: data: {"status":"running","logs":["line1","line2",...]}
-                    # 需要解析 JSON，逐行转发给前端
+                    streamed_any = True
                     raw = line
                     if raw.startswith("data:"):
                         raw = raw[5:].strip()
@@ -5677,13 +6077,34 @@ async def stream_experiment_logs(experiment_id: str):
                                 continue
                         except (json.JSONDecodeError, TypeError):
                             pass
-                        # 非 JSON 格式，按纯文本逐行发送
                         for sub in raw.split("\n"):
                             yield f"data: {sub}\n\n"
             except Exception as e:
-                yield f"data: [ERROR] 日志流断开: {e}\n\n"
+                local_logs = [
+                    path
+                    for path in _candidate_run_log_files(
+                        qe_task_id=qe_task_id,
+                        qe_loop_id=qe_loop_id,
+                        workspace_path=workspace_path,
+                    )
+                    if path.exists()
+                ]
+                if local_logs and not streamed_any:
+                    yield f"data: [WARN] RD-Agent log stream unavailable, reading local run.log: {e}\n\n"
+                    try:
+                        for log_line in local_logs[0].read_text(encoding="utf-8", errors="replace").splitlines():
+                            yield f"data: {log_line}\n\n"
+                    except Exception as local_err:
+                        yield f"data: [ERROR] local run.log read failed: {local_err}\n\n"
+                else:
+                    yield f"data: [ERROR] log stream disconnected: {e}\n\n"
             finally:
-                await client.close()
+                try:
+                    final_status = _load_experiment_terminal_status(experiment_id) or db_status
+                    if final_status in {"completed", "failed", "interrupted", "timeout"}:
+                        yield f"data: [System] AIstock authoritative final status: {final_status}\n\n"
+                finally:
+                    await client.close()
 
         return StreamingResponse(
             event_generator(),
@@ -5696,7 +6117,7 @@ async def stream_experiment_logs(experiment_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"获取日志流失败: {experiment_id}")
+        logger.exception(f"???????: {experiment_id}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -5712,6 +6133,16 @@ async def get_experiment_enhanced_metrics(experiment_id: str):
             return {}
 
         flat: dict[str, Any] = {}
+        top_level_series_keys = [
+            "dates", "return_dates", "ic_series", "rank_ic_series",
+            "ic_rolling_30d_mean", "ic_rolling_30d_std", "ic_positive_ratio",
+            "cumulative_excess_no_cost", "cumulative_excess_with_cost",
+            "cumulative_benchmark", "drawdown_series", "train_loss_curve",
+            "val_loss_curve", "best_epoch", "overfit_ratio", "convergence_ratio",
+        ]
+        for key in top_level_series_keys:
+            if data.get(key) not in (None, [], {}):
+                flat[key] = data[key]
         if "ic_diagnostics" in data:
             ic = data["ic_diagnostics"] or {}
             flat["dates"] = ic.get("ic_dates") or ic.get("dates", [])
@@ -5746,6 +6177,7 @@ async def get_experiment_enhanced_metrics(experiment_id: str):
             "all_stocks", "stock_pnl_summary", "limit_analysis",
             "factor_analysis", "feature_importance",
             "absolute_returns",
+            "multi_alpha_detail", "multi_alpha_analysis",
         ]
         for passthrough_key in passthrough_keys:
             if passthrough_key not in data:
@@ -5776,6 +6208,10 @@ async def get_experiment_enhanced_metrics(experiment_id: str):
         nested = result_metrics.get("enhanced_metrics")
         flat = _flatten_enhanced_payload(nested if isinstance(nested, dict) else None)
         if flat:
+            for key in ("multi_alpha_detail", "multi_alpha_analysis"):
+                val = result_metrics.get(key)
+                if val not in (None, [], {}):
+                    flat[key] = val
             return flat
 
         flat_keys = [
@@ -5787,25 +6223,52 @@ async def get_experiment_enhanced_metrics(experiment_id: str):
             "top_stocks", "bottom_stocks", "all_stocks", "stock_trades",
             "trade_diagnostics", "prediction_diagnostics", "factor_analysis",
             "feature_importance", "absolute_returns", "summary",
+            "multi_alpha_detail", "multi_alpha_analysis",
         ]
         cached = {k: result_metrics.get(k) for k in flat_keys if k in result_metrics}
         return {k: v for k, v in cached.items() if v not in (None, [], {})}
+
+    def _has_enhanced_detail(flat: dict) -> bool:
+        detail_keys = [
+            "dates", "return_dates", "ic_series", "rank_ic_series",
+            "cumulative_excess_no_cost", "cumulative_excess_with_cost",
+            "drawdown_series", "top_stocks", "bottom_stocks", "all_stocks",
+            "stock_trades", "trade_diagnostics", "prediction_diagnostics",
+            "factor_analysis", "feature_importance", "absolute_returns",
+            "multi_alpha_detail", "multi_alpha_analysis",
+        ]
+        return any(flat.get(k) not in (None, [], {}) for k in detail_keys)
 
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT qe_loop_id, qe_task_id, result_metrics FROM qe_experiments WHERE experiment_id = %s",
+                    "SELECT qe_loop_id, qe_task_id, result_metrics, workspace_path FROM qe_experiments WHERE experiment_id = %s",
                     (experiment_id,),
                 )
                 row = cur.fetchone()
                 if not row:
                     raise HTTPException(status_code=404, detail="实验不存在")
-                qe_loop_id, qe_task_id, result_metrics_raw = row
+                if len(row) >= 4:
+                    qe_loop_id, qe_task_id, result_metrics_raw, workspace_path = row[:4]
+                else:
+                    qe_loop_id, qe_task_id, result_metrics_raw = row
+                    workspace_path = None
 
         cached_flat = _extract_cached_enhanced(result_metrics_raw)
-        if cached_flat:
+        if _has_enhanced_detail(cached_flat):
             return cached_flat
+
+        local_payload = _load_local_enhanced_metrics_payload(
+            qe_task_id=qe_task_id,
+            qe_loop_id=qe_loop_id,
+            workspace_path=workspace_path,
+        )
+        local_flat = _flatten_enhanced_payload(local_payload)
+        if local_flat:
+            if cached_flat.get("summary") and not local_flat.get("summary"):
+                local_flat["summary"] = cached_flat["summary"]
+            return local_flat
 
         if not qe_loop_id:
             raise HTTPException(status_code=404, detail="增强指标不可用")
@@ -6263,7 +6726,17 @@ def generate_stock_pool(date: Optional[str] = None):
                 m = re.search(r'过滤后:\s*(\d+)\s*只', line)
                 if m:
                     stock_count = int(m.group(1))
-        return {"ok": True, "date": target_date, "wsl_path": wsl_path, "stock_count": stock_count}
+        if not wsl_path:
+            raise HTTPException(status_code=500, detail="股票池脚本执行完成但未返回 [WSL PATH]")
+        from ..services.quantevolver.blacklist_snapshot import get_effective_blacklist_snapshot
+        blacklist_snapshot = get_effective_blacklist_snapshot(target_date)
+        return {
+            "ok": True,
+            "date": target_date,
+            "wsl_path": wsl_path,
+            "stock_count": stock_count,
+            "blacklist_snapshot": blacklist_snapshot,
+        }
     except HTTPException:
         raise
     except Exception as e:

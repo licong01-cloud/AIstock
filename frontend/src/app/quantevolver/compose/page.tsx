@@ -19,6 +19,8 @@ const LossCurveChart = dynamic(() => import("../components/charts/LossCurveChart
 const ReturnCurveChart = dynamic(() => import("../components/charts/ReturnCurveChart"), { ssr: false });
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
+const MULTI_ALPHA_DISTRIBUTED_ENABLED =
+  process.env.NEXT_PUBLIC_MULTI_ALPHA_DISTRIBUTED_ENABLED === "1";
 
 const DATA_SOURCE_MAP: Record<string, string> = {
   daily_pv: "日线行情", daily_basic: "每日基本面", moneyflow: "个股资金流向", cyq_perf: "筹码分布", bak_basic: "股票历史信息", multi: "多数据源",
@@ -165,11 +167,14 @@ export default function ComposePage() {
   /* ── 配置参数 ── */
   const [topk, setTopk] = useState(50);
   const [nDrop, setNDrop] = useState(5);
+  const [holdThresh, setHoldThresh] = useState(1);
   const [disableAlphaBaseline, setDisableAlphaBaseline] = useState(false);
   const [quickTrain, setQuickTrain] = useState(false);
   const [labelType, setLabelType] = useState<"close" | "open" | "vwap">("close");
+  const [labelHorizon, setLabelHorizon] = useState<1 | 3 | 5 | 10>(1);
   const [blacklistEnabled, setBlacklistEnabled] = useState(false);
   const [stockPoolPath, setStockPoolPath] = useState<string | null>(null);
+  const [blacklistSnapshot, setBlacklistSnapshot] = useState<any | null>(null);
   const [dataSplit, setDataSplit] = useState({
     train_start: "2018-08-01", train_end: "2022-12-31",
     valid_start: "2023-01-01", valid_end: "2024-06-30",
@@ -239,7 +244,6 @@ export default function ComposePage() {
   const [evalResult, setEvalResult] = useState<EvalResult | null>(null);
   const [configResult, setConfigResult] = useState<ConfigResult | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [engineMode, setEngineMode] = useState<"legacy" | "unified">("legacy");
   const [logsVisible, setLogsVisible] = useState(false); // 日志面板默认关闭
 
   /* ── 单次实验执行（共享 Hook） ── */
@@ -376,6 +380,10 @@ export default function ComposePage() {
       if (exp.custom_params) {
         if (exp.custom_params.topk) setTopk(exp.custom_params.topk);
         if (exp.custom_params.n_drop) setNDrop(exp.custom_params.n_drop);
+        if (exp.custom_params.hold_thresh) setHoldThresh(exp.custom_params.hold_thresh);
+        if ([1, 3, 5, 10].includes(Number(exp.custom_params.label_horizon || 1))) {
+          setLabelHorizon(Number(exp.custom_params.label_horizon || 1) as 1 | 3 | 5 | 10);
+        }
         if (exp.custom_params.execution_algo) setExecutionAlgo(exp.custom_params.execution_algo);
         if (exp.custom_params.execution_algo_params) setExecutionAlgoParams(exp.custom_params.execution_algo_params);
       }
@@ -518,9 +526,54 @@ export default function ComposePage() {
   }, [selectedFactors, classificationMap, factors]);
 
   /* ── 操作动作 ── */
+  function validateRuntimeSelections() {
+    if (blacklistEnabled && !stockPoolPath) {
+      alert("行业黑名单已启用，但股票池尚未生成成功。请等待生成完成或手动刷新成功后再继续。");
+      return false;
+    }
+    if (blacklistEnabled && !blacklistSnapshot) {
+      alert("行业黑名单已启用，但黑名单快照尚未生成。请手动刷新股票池成功后再继续。");
+      return false;
+    }
+    if (enableSectorHmm && !hmmModelVersionId) {
+      alert("行业 HMM 已启用，但尚未选择已完成的 HMM 快照。请选择快照后再继续。");
+      return false;
+    }
+    return true;
+  }
+
+  function buildRuntimeCustomParams() {
+    return {
+      topk,
+      n_drop: nDrop,
+      hold_thresh: holdThresh,
+      disable_alpha158: disableAlphaBaseline,
+      quick_train: quickTrain,
+      label_type: labelType,
+      ...(labelHorizon !== 1 ? { label_horizon: labelHorizon } : {}),
+      backtest_freq: backtestFreq,
+      ...(executionAlgo ? { execution_algo: executionAlgo, execution_algo_params: executionAlgoParams } : {}),
+      ...(blacklistEnabled && stockPoolPath ? {
+        stock_pool: stockPoolPath,
+        sector_blacklist_enabled: true,
+        sector_blacklist_snapshot: blacklistSnapshot,
+      } : {}),
+      ...(enableSectorHmm && hmmModelVersionId ? { enable_sector_hmm: true, hmm_model_version_id: hmmModelVersionId, hmm_signal_preset: hmmSignalPreset } : {}),
+    };
+  }
+
+  function buildUnfilledHandlerPayload() {
+    if (executionAlgo === "CLOSE_PRICE" || !unfilledHandler) return {};
+    return {
+      unfilled_handler: unfilledHandler,
+      unfilled_handler_params: unfilledHandler === "TAIL_SUBSTITUTE" ? { backup_depth: unfilledBackupDepth } : {},
+    };
+  }
+
   async function evaluateCombination() {
     if (alphaMode === "single" && selectedFactors.size === 0) { alert("请先选择因子"); return; }
     if (alphaMode === "multi" && !multiAlphaConfig) { alert("请先生成多Alpha分组配置"); return; }
+    if (!validateRuntimeSelections()) return;
     setActionLoading("evaluate");
     try {
       // Multi-Alpha: 聚合各组因子
@@ -534,7 +587,7 @@ export default function ComposePage() {
           factor_names: factorNames,
           model_id: alphaMode === "single" ? (selectedModel || undefined) : multiAlphaConfig?.alpha_groups[0]?.model_id,
           strategy_id: selectedStrategy || undefined,
-          custom_params: { topk, n_drop: nDrop, disable_alpha158: disableAlphaBaseline, quick_train: quickTrain, label_type: labelType, ...(blacklistEnabled && stockPoolPath ? { stock_pool: stockPoolPath } : {}) },
+          custom_params: buildRuntimeCustomParams(),
           ...(alphaMode === "multi" && multiAlphaConfig ? { alpha_mode: "multi", multi_alpha_config: multiAlphaConfig } : {}),
         }),
       });
@@ -548,6 +601,11 @@ export default function ComposePage() {
   async function generateConfig() {
     if (alphaMode === "single" && selectedFactors.size === 0) { alert("请先选择因子"); return; }
     if (alphaMode === "multi" && !multiAlphaConfig) { alert("请先生成多Alpha分组配置"); return; }
+    if (!validateRuntimeSelections()) return;
+    if (alphaMode === "multi" && multiAlphaConfig?.execution_mode === "distributed" && !MULTI_ALPHA_DISTRIBUTED_ENABLED) {
+      alert("分布式 Multi-Alpha 尚未启用；当前阶段必须使用 WSL 单节点串行模式完成验证。");
+      return;
+    }
     setActionLoading("generate");
     // 重置上一次的执行状态
     sse.reset();
@@ -563,17 +621,8 @@ export default function ComposePage() {
           factor_names: factorNames,
           model_id: alphaMode === "single" ? (selectedModel || undefined) : multiAlphaConfig?.alpha_groups[0]?.model_id,
           strategy_id: selectedStrategy || undefined,
-          data_split: dataSplit, custom_params: {
-            topk, n_drop: nDrop, disable_alpha158: disableAlphaBaseline, quick_train: quickTrain, label_type: labelType,
-            backtest_freq: backtestFreq,
-            ...(executionAlgo ? { execution_algo: executionAlgo, execution_algo_params: executionAlgoParams } : {}),
-            ...(blacklistEnabled && stockPoolPath ? { stock_pool: stockPoolPath } : {}),
-            ...(enableSectorHmm && hmmModelVersionId ? { enable_sector_hmm: true, hmm_model_version_id: hmmModelVersionId, hmm_signal_preset: hmmSignalPreset } : {}),
-          },
-          ...(unfilledHandler ? {
-            unfilled_handler: unfilledHandler,
-            unfilled_handler_params: unfilledHandler === "TAIL_SUBSTITUTE" ? { backup_depth: unfilledBackupDepth } : {},
-          } : {}),
+          data_split: dataSplit, custom_params: buildRuntimeCustomParams(),
+          ...buildUnfilledHandlerPayload(),
           dispatch_mode: dispatchMode,
           evolution_params: dispatchMode === "evolution" ? { loops: evolutionLoops, objective: evolutionObjective } : undefined,
           // Multi-Alpha 字段
@@ -871,6 +920,7 @@ export default function ComposePage() {
 
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "24px" }}>
               <button
+                data-testid="qe-step-next-factors"
                 onClick={() => setCurrentStep(2)}
                 disabled={alphaMode === "single" ? selectedFactors.size === 0 : !multiAlphaConfig}
                 style={{
@@ -945,7 +995,7 @@ export default function ComposePage() {
 
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: "24px" }}>
               <button onClick={() => setCurrentStep(1)} style={btnSecondary}>上一步</button>
-              <button onClick={() => setCurrentStep(3)} style={{ ...btnPrimary, padding: "10px 28px", fontSize: "14px" }}>下一步：选择策略</button>
+              <button data-testid="qe-step-next-model" onClick={() => setCurrentStep(3)} style={{ ...btnPrimary, padding: "10px 28px", fontSize: "14px" }}>下一步：选择策略</button>
             </div>
           </div>
         )}
@@ -1028,16 +1078,25 @@ export default function ComposePage() {
 
             <div style={{ backgroundColor: "#f8fafc", borderRadius: "8px", padding: "20px", border: "1px solid #e2e8f0", marginBottom: "24px" }}>
               <h3 style={{ margin: "0 0 16px", fontSize: "13px", fontWeight: 700, color: "#1e293b" }}>策略核心参数调整</h3>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", maxWidth: "400px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "20px", maxWidth: "620px" }}>
                 <div>
                   <label style={labelStyle}>Top K (持仓数量)</label>
-                  <input type="number" value={topk} onChange={e => setTopk(Number(e.target.value))} style={inputStyle} />
+                  <input data-testid="qe-topk" type="number" value={topk} onChange={e => setTopk(Number(e.target.value))} style={inputStyle} />
                 </div>
                 <div>
                   <label style={labelStyle}>N Drop (每日替换)</label>
-                  <input type="number" value={nDrop} onChange={e => setNDrop(Number(e.target.value))} style={inputStyle} />
+                  <input data-testid="qe-n-drop" type="number" value={nDrop} onChange={e => setNDrop(Number(e.target.value))} style={inputStyle} />
+                </div>
+                <div>
+                  <label style={labelStyle}>Hold Thresh (最短持仓天数)</label>
+                  <input data-testid="qe-hold-thresh" type="number" min={1} max={30} value={holdThresh} onChange={e => setHoldThresh(Math.max(1, Number(e.target.value) || 1))} style={inputStyle} />
                 </div>
               </div>
+              {labelHorizon !== holdThresh && (
+                <div style={{ marginTop: "8px", fontSize: "12px", color: "#b45309" }}>
+                  训练标签期限为 {labelHorizon}d，最短持仓为 {holdThresh}d；二者不一致可能影响 IC 到收益的转换，请确认这是有意设置。
+                </div>
+              )}
             </div>
 
             {/* ── 执行算法选择 ── */}
@@ -1130,7 +1189,7 @@ export default function ComposePage() {
 
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: "24px" }}>
               <button onClick={() => setCurrentStep(2)} style={btnSecondary}>上一步</button>
-              <button onClick={() => setCurrentStep(4)} style={{ ...btnPrimary, padding: "10px 28px", fontSize: "14px" }}>下一步：组合配置与评估</button>
+              <button data-testid="qe-step-next-strategy" onClick={() => setCurrentStep(4)} style={{ ...btnPrimary, padding: "10px 28px", fontSize: "14px" }}>下一步：组合配置与评估</button>
             </div>
           </div>
         )}
@@ -1183,7 +1242,7 @@ export default function ComposePage() {
                         {(() => {
                           if (!selectedStrategy) return "未选择";
                           const s = strategies.find(s => s.strategy_id === selectedStrategy);
-                          return `${s?.display_name || selectedStrategy} (TopK=${topk}, n_drop=${nDrop})`;
+                          return `${s?.display_name || selectedStrategy} (TopK=${topk}, n_drop=${nDrop}, hold=${holdThresh}d, label=${labelHorizon}d)`;
                         })()}
                       </span>
                     </div>
@@ -1229,7 +1288,7 @@ export default function ComposePage() {
                         {(() => {
                           if (!selectedStrategy) return "未选择";
                           const s = strategies.find(s => s.strategy_id === selectedStrategy);
-                          return `${s?.display_name || selectedStrategy} (TopK=${topk}, n_drop=${nDrop})`;
+                          return `${s?.display_name || selectedStrategy} (TopK=${topk}, n_drop=${nDrop}, hold=${holdThresh}d, label=${labelHorizon}d)`;
                         })()}
                       </span>
                     </div>
@@ -1413,7 +1472,7 @@ export default function ComposePage() {
 
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: "24px", paddingTop: "20px", borderTop: "1px solid #f1f5f9" }}>
               <button onClick={() => setCurrentStep(3)} style={btnSecondary}>上一步</button>
-              <button onClick={() => setCurrentStep(5)} style={{ ...btnPrimary, padding: "10px 28px", fontSize: "14px" }}>确认配置并进入下一步</button>
+              <button data-testid="qe-step-next-review" onClick={() => setCurrentStep(5)} style={{ ...btnPrimary, padding: "10px 28px", fontSize: "14px" }}>确认配置并进入下一步</button>
             </div>
           </div>
         )}
@@ -1430,9 +1489,9 @@ export default function ComposePage() {
                   <div key={seg.label}>
                     <label style={labelStyle}>{seg.label}</label>
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <input type="date" value={(dataSplit as any)[seg.sk]} onChange={e => setDataSplit(p => ({ ...p, [seg.sk]: e.target.value }))} style={{ ...inputStyle, padding: "6px 8px", fontSize: "12px" }} />
+                      <input data-testid={`qe-date-${seg.sk}`} type="date" value={(dataSplit as any)[seg.sk]} onChange={e => setDataSplit(p => ({ ...p, [seg.sk]: e.target.value }))} style={{ ...inputStyle, padding: "6px 8px", fontSize: "12px" }} />
                       <span style={{ color: "#94a3b8" }}>-</span>
-                      <input type="date" value={(dataSplit as any)[seg.ek]} onChange={e => setDataSplit(p => ({ ...p, [seg.ek]: e.target.value }))} style={{ ...inputStyle, padding: "6px 8px", fontSize: "12px" }} />
+                      <input data-testid={`qe-date-${seg.ek}`} type="date" value={(dataSplit as any)[seg.ek]} onChange={e => setDataSplit(p => ({ ...p, [seg.ek]: e.target.value }))} style={{ ...inputStyle, padding: "6px 8px", fontSize: "12px" }} />
                     </div>
                   </div>
                 ))}
@@ -1443,7 +1502,7 @@ export default function ComposePage() {
                   禁用 Alpha158 基线因子
                 </label>
                 <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "14px", color: "#475569", cursor: "pointer" }}>
-                  <input type="checkbox" checked={quickTrain} onChange={e => setQuickTrain(e.target.checked)} style={{ width: "16px", height: "16px", accentColor: "#2563eb" }} />
+                  <input data-testid="qe-quick-train" type="checkbox" checked={quickTrain} onChange={e => setQuickTrain(e.target.checked)} style={{ width: "16px", height: "16px", accentColor: "#2563eb" }} />
                   启用快速训练模式 <span style={{ fontSize: "12px", color: "#d97706", marginLeft: "4px" }}>(训练时间缩短至20%)</span>
                 </label>
               </div>
@@ -1470,12 +1529,47 @@ export default function ComposePage() {
                   </label>
                 ))}
               </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginTop: "12px", flexWrap: "wrap" }}>
+                <span style={{ fontSize: "14px", color: "#475569", fontWeight: 600, whiteSpace: "nowrap" }}>Label Horizon</span>
+                {([1, 3, 5, 10] as const).map(h => (
+                  <button
+                    data-testid={`qe-label-horizon-${h}`}
+                    key={h}
+                    type="button"
+                    onClick={() => setLabelHorizon(h)}
+                    style={{
+                      padding: "6px 14px",
+                      borderRadius: "6px",
+                      border: labelHorizon === h ? "2px solid #0f766e" : "2px solid #e2e8f0",
+                      backgroundColor: labelHorizon === h ? "#ccfbf1" : "#ffffff",
+                      color: labelHorizon === h ? "#0f766e" : "#64748b",
+                      fontSize: "13px",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {h}d
+                  </button>
+                ))}
+                <button
+                  data-testid="qe-sync-hold-thresh"
+                  type="button"
+                  onClick={() => setHoldThresh(labelHorizon)}
+                  style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #14b8a6", background: "#f0fdfa", color: "#0f766e", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}
+                >
+                  同步最短持仓={labelHorizon}d
+                </button>
+                <span style={{ fontSize: "12px", color: "#64748b" }}>
+                  公式：T 日特征预测 T+1 到 T+{labelHorizon + 1} forward return；1d 保持旧逻辑。
+                </span>
+              </div>
             </div>
 
             <SectorBlacklistPanel
               enabled={blacklistEnabled}
               onEnabledChange={setBlacklistEnabled}
               onPoolPathChange={setStockPoolPath}
+              onBlacklistSnapshotChange={setBlacklistSnapshot}
             />
 
             {/* ── HMM 行业板块轮动 ── */}
@@ -1635,11 +1729,11 @@ export default function ComposePage() {
                     <>
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                         <span style={{ fontSize: 11, color: "#94a3b8", marginRight: 2 }}>引擎:</span>
-                        <button onClick={() => setEngineMode("legacy")} style={{ padding: "3px 8px", fontSize: 10, cursor: "pointer", borderRadius: 4, border: engineMode === "legacy" ? "1.5px solid #64748b" : "1px solid #cbd5e1", background: engineMode === "legacy" ? "#f1f5f9" : "#fff", color: engineMode === "legacy" ? "#334155" : "#94a3b8", fontWeight: 600 }}>旧版</button>
-                        <button onClick={() => setEngineMode("unified")} style={{ padding: "3px 8px", fontSize: 10, cursor: "pointer", borderRadius: 4, border: engineMode === "unified" ? "1.5px solid #0ea5e9" : "1px solid #cbd5e1", background: engineMode === "unified" ? "#f0f9ff" : "#fff", color: engineMode === "unified" ? "#0284c7" : "#94a3b8", fontWeight: 600 }}>统一引擎</button>
+                        <span style={{ padding: "3px 8px", fontSize: 10, borderRadius: 4, border: "1.5px solid #0ea5e9", background: "#f0f9ff", color: "#0284c7", fontWeight: 600 }}>统一执行层</span>
                       </div>
                       <button
-                        onClick={() => { if (configResult.experiment_id) sse.startRun(configResult.experiment_id, engineMode).catch((err) => { console.error("Failed to start experiment run:", err); alert("启动实验运行失败，请查看控制台日志"); }); }}
+                        onClick={() => { if (configResult.experiment_id) sse.startRun(configResult.experiment_id).catch((err) => { console.error("Failed to start experiment run:", err); alert("启动实验运行失败，请查看控制台日志"); }); }}
+                        data-testid="qe-run-backtest"
                         disabled={sse.runStatus === "running" || sse.runStatus === "starting"}
                         style={{
                           ...btnPrimary,
@@ -1823,7 +1917,7 @@ export default function ComposePage() {
 
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: "24px", paddingTop: "20px", borderTop: "1px solid #f1f5f9" }}>
               <button onClick={() => setCurrentStep(4)} style={btnSecondary}>上一步</button>
-              <button onClick={generateConfig} disabled={actionLoading === "generate" || (alphaMode === "single" ? selectedFactors.size === 0 : !multiAlphaConfig)}
+              <button data-testid="qe-generate-config" onClick={generateConfig} disabled={actionLoading === "generate" || (alphaMode === "single" ? selectedFactors.size === 0 : !multiAlphaConfig)}
                 style={{
                   ...btnPrimary,
                   padding: "12px 32px",

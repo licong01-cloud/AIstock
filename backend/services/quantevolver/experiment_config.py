@@ -10,6 +10,31 @@ from typing import Any
 
 from pydantic import BaseModel, model_validator
 
+ALLOWED_LABEL_HORIZONS = {1, 3, 5, 10}
+DEFAULT_LABEL_HORIZON = 1
+
+
+def normalize_label_horizon(value: Any, *, field_name: str = "label_horizon") -> int:
+    """Return a validated label horizon.
+
+    Missing values are the legacy 1d mode. Explicit invalid values fail fast;
+    this prevents accidental fallback to 1d for non-legacy requests.
+    """
+    if value is None or value == "":
+        return DEFAULT_LABEL_HORIZON
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field_name} must be an integer in {sorted(ALLOWED_LABEL_HORIZONS)}")
+    if value not in ALLOWED_LABEL_HORIZONS:
+        raise ValueError(f"{field_name}={value!r} invalid, must be one of {sorted(ALLOWED_LABEL_HORIZONS)}")
+    return value
+
+
+def extract_label_horizon(raw: Any, *, field_name: str = "label_horizon") -> int:
+    """Extract label_horizon from a dict-like object or raw value."""
+    if isinstance(raw, dict):
+        return normalize_label_horizon(raw.get("label_horizon"), field_name=field_name)
+    return normalize_label_horizon(raw, field_name=field_name)
+
 
 class HmmConfig(BaseModel):
     """HMM sector filter configuration.
@@ -59,6 +84,7 @@ class ExperimentConfig(BaseModel):
 
     # ── Stock universe ─────────────────────────────────────────────────────────
     label_type: str | None = None
+    label_horizon: int | None = None
     stock_pool: str | None = None
     sector_blacklist: list[str] | None = None
 
@@ -109,6 +135,7 @@ class ExperimentConfig(BaseModel):
             raise ValueError("factor_names cannot be empty in single-alpha mode")
         if self.alpha_mode == "multi" and not self.multi_alpha_config:
             raise ValueError("multi_alpha_config required when alpha_mode='multi'")
+        self.label_horizon = normalize_label_horizon(self.label_horizon)
         return self
 
     def build_custom_params(self) -> dict[str, Any]:
@@ -154,7 +181,12 @@ class ExperimentConfig(BaseModel):
         if self.label_type:
             params["label_type"] = self.label_type
 
-        # 7. Unfilled handler — flatten params dict into top-level keys
+        # 7. Label horizon; omit legacy 1d to preserve old custom_params shape.
+        effective_label_horizon = normalize_label_horizon(self.label_horizon)
+        if effective_label_horizon != DEFAULT_LABEL_HORIZON:
+            params["label_horizon"] = effective_label_horizon
+
+        # 8. Unfilled handler - flatten params dict into top-level keys
         if self.unfilled_handler:
             params["unfilled_handler"] = self.unfilled_handler
             uf_params = self.unfilled_handler_params or {}
@@ -163,11 +195,23 @@ class ExperimentConfig(BaseModel):
             if uf_params.get("backup_depth"):
                 params["unfilled_backup_depth"] = uf_params["backup_depth"]
 
-        # 8. Extra catch-all params
+        # 9. Extra catch-all params
         if self.extra_params:
-            params.update(self.extra_params)
+            extra_params = dict(self.extra_params)
+            if "label_horizon" in extra_params:
+                extra_horizon = normalize_label_horizon(
+                    extra_params["label_horizon"],
+                    field_name="extra_params.label_horizon",
+                )
+                if extra_horizon != effective_label_horizon:
+                    raise ValueError(
+                        "extra_params.label_horizon conflicts with ExperimentConfig.label_horizon"
+                    )
+                # Keep label_horizon controlled by the unified field above.
+                extra_params.pop("label_horizon", None)
+            params.update(extra_params)
 
-        # 9. initial_cash must NOT flow into custom_params
+        # 10. initial_cash must NOT flow into custom_params
         params.pop("initial_cash", None)
 
         return params

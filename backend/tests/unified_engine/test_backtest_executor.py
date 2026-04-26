@@ -63,6 +63,7 @@ def make_ctx(
     node_id: str | None = None,
     callback_url: str | None = None,
     model_source: dict | None = None,
+    extra_experiment_files: dict | None = None,
 ) -> ExecutionContext:
     return ExecutionContext(
         task_id=task_id,
@@ -71,6 +72,7 @@ def make_ctx(
         node_id=node_id,
         callback_url=callback_url,
         model_source=model_source,
+        extra_experiment_files=extra_experiment_files,
     )
 
 
@@ -144,6 +146,31 @@ class TestBacktestExecutorBasic:
         ctx = make_ctx()
 
         with pytest.raises(ValueError, match="empty wsl_command"):
+            asyncio.get_event_loop().run_until_complete(executor.submit(cfg, ctx))
+
+    def test_extra_experiment_files_are_merged(self):
+        composer = make_mock_composer()
+        client = make_mock_client()
+        executor = BacktestExecutor(composer, client)
+        cfg = ExperimentConfig(factor_names=["f1"], model_id="lgbm")
+        ctx = make_ctx(
+            extra_experiment_files={"mlruns_params.tar.gz.b64": "encoded"}
+        )
+
+        result = asyncio.get_event_loop().run_until_complete(executor.submit(cfg, ctx))
+
+        assert result.experiment_files["mlruns_params.tar.gz.b64"] == "encoded"
+        args, _ = client.create_and_run_loop.call_args
+        assert args[3]["mlruns_params.tar.gz.b64"] == "encoded"
+
+    def test_extra_experiment_files_do_not_overwrite_generated_files(self):
+        composer = make_mock_composer()
+        client = make_mock_client()
+        executor = BacktestExecutor(composer, client)
+        cfg = ExperimentConfig(factor_names=["f1"], model_id="lgbm")
+        ctx = make_ctx(extra_experiment_files={"conf.yaml": "overwrite"})
+
+        with pytest.raises(ValueError, match="overwrite generated files"):
             asyncio.get_event_loop().run_until_complete(executor.submit(cfg, ctx))
 
 

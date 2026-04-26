@@ -595,8 +595,10 @@ def init_database():
                         status TEXT DEFAULT 'pending',
                         base_experiment_id TEXT REFERENCES qe_experiments(experiment_id),
                         node_id TEXT,
+                        label_horizon INTEGER NOT NULL DEFAULT 1,
                         created_at TIMESTAMPTZ DEFAULT NOW(),
-                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                        updated_at TIMESTAMPTZ DEFAULT NOW(),
+                        CONSTRAINT ck_qe_evolution_tasks_label_horizon CHECK (label_horizon IN (1, 3, 5, 10))
                     );
                 """,
                 "qe_evolution_loops": """
@@ -846,6 +848,7 @@ def init_database():
                 ("fork_from_task_id", "TEXT"),
                 ("fork_from_loop_index", "INTEGER"),
                 ("inherit_history", "BOOLEAN DEFAULT FALSE"),
+                ("label_horizon", "INTEGER NOT NULL DEFAULT 1"),
             ]
             for col_name, col_type in evo_task_migrations:
                 cur.execute(
@@ -856,6 +859,17 @@ def init_database():
                 if not cur.fetchone():
                     print(f"Adding column '{col_name}' to qe_evolution_tasks...")
                     cur.execute(f"ALTER TABLE qe_evolution_tasks ADD COLUMN {col_name} {col_type};")
+            cur.execute("""
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'ck_qe_evolution_tasks_label_horizon'
+            """)
+            if not cur.fetchone():
+                cur.execute("""
+                    ALTER TABLE qe_evolution_tasks
+                    ADD CONSTRAINT ck_qe_evolution_tasks_label_horizon
+                    CHECK (label_horizon IN (1, 3, 5, 10))
+                """)
 
             # ============================================================
             # qe_evolution_tasks 新增列迁移（Phase: 策略演进）
