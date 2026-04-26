@@ -1,18 +1,84 @@
-"""Strategy Package Center API v1."""
+﻿"""Strategy Package Center API v1."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from datetime import date
+from typing import Any
 
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+from backend.db.pg_pool import get_conn
+from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
+from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.qe_source_resolver import QEExperimentSourceResolver
+from backend.services.strategy_package.repository import StrategyPackageRecord
+from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactService
+from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import (
     DataUnavailableError,
+    StrategyPackageValidationError,
     TradingCoreError,
     UnsupportedFeatureError,
 )
 
 router = APIRouter(prefix="/strategy-packages", tags=["strategy-packages"])
+
+
+class CreateFromQEExperimentRequest(BaseModel):
+    experiment_id: str = Field(min_length=1)
+    resolve_runtime_assets: bool = False
+
+
+class CreateFromQEEvolutionLoopRequest(BaseModel):
+    qe_task_id: str = Field(min_length=1)
+    qe_loop_id: str = Field(min_length=1)
+    resolve_runtime_assets: bool = False
+
+
+class TransitionStatusRequest(BaseModel):
+    reason: str | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class TransitionPackageStatusRequest(BaseModel):
+    to_status: PackageStatus
+    reason: str | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreateExecutionPolicyRequest(BaseModel):
+    policy_name: str = Field(min_length=1)
+    policy_json: dict[str, Any] = Field(default_factory=dict)
+    source_backtest_id: str = Field(min_length=1)
+    source_backtest_status: str = Field(min_length=1)
+    paper_enabled: bool = False
+
+
+class ModelRetrainPreviewRequest(BaseModel):
+    as_of_date: date | None = None
+    lookback_days: int = Field(default=756, gt=0)
+
+
+class ModelRetrainStartRequest(BaseModel):
+    as_of_date: date | None = None
+    lookback_days: int = Field(default=756, gt=0)
+    job_type: str = Field(default="rolling_retrain", min_length=1)
+    config: dict[str, Any] = Field(default_factory=dict)
+    confirm_retrain: bool = False
+    confirm_text: str | None = None
+
+
+class GenerateSelectionArtifactsRequest(BaseModel):
+    trade_date: date | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    data_source: str = "DB_HISTORICAL"
+    runtime_config: dict[str, Any] = Field(default_factory=dict)
+    source_path: str | None = None
+    include_reference_price: bool = True
+    cutoff_date: date | None = None
 
 
 def _raise_http(exc: TradingCoreError) -> None:
@@ -24,8 +90,383 @@ def _raise_http(exc: TradingCoreError) -> None:
     raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
 
 
+def _record_payload(record: StrategyPackageRecord) -> dict[str, Any]:
+    return {
+        "package_id": record.package_id,
+        "package_name": record.package_name,
+        "package_version": record.package_version,
+        "source_type": record.source_type,
+        "source_id": record.source_id,
+        "loop_id": record.loop_id,
+        "run_id": record.run_id,
+        "package_status": record.package_status.value,
+        "manifest_sha256": record.manifest_sha256,
+        "paper_portfolio_count": record.paper_portfolio_count,
+        "created_at": record.created_at.isoformat(),
+        "updated_at": record.updated_at.isoformat(),
+        "metrics_summary": metrics_summary_from_record(record).model_dump(mode="json"),
+        "manifest": record.current_manifest().model_dump(mode="json"),
+    }
+
+
+def _execution_policy_payload(policy) -> dict[str, Any]:
+    return policy.model_dump(mode="json")
+
+
+def _selection_artifact_payload(artifact) -> dict[str, Any]:
+    payload = artifact.model_dump(mode="json")
+    payload.pop("scores_json", None)
+    payload["score_preview"] = artifact.scores_json[:10]
+    return payload
+
+
+def _trading_dates_between(start_date: date, end_date: date) -> list[date]:
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT cal_date
+                    FROM market.trading_calendar
+                    WHERE cal_date BETWEEN %s AND %s
+                      AND is_trading = TRUE
+                    ORDER BY cal_date
+                    """,
+                    (start_date, end_date),
+                )
+                rows = cur.fetchall()
+    except Exception as exc:
+        raise DataUnavailableError(
+            "trading calendar query failed for selection artifact generation",
+            context={"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+        ) from exc
+    dates = [row[0] for row in rows]
+    if not dates:
+        raise DataUnavailableError(
+            "no trading dates found for selection artifact generation range",
+            context={"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+        )
+    return dates
+
+
+@router.post("/from-qe-experiment")
+def create_package_from_qe_experiment(req: CreateFromQEExperimentRequest) -> dict[str, Any]:
+    try:
+        record = StrategyPackageService().create_from_qe_experiment(
+            req.experiment_id,
+            resolve_runtime_assets=req.resolve_runtime_assets,
+        )
+        return {"ok": True, "package": _record_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/from-qe-evolution-loop")
+def create_package_from_qe_evolution_loop(req: CreateFromQEEvolutionLoopRequest) -> dict[str, Any]:
+    try:
+        record = StrategyPackageService().create_from_qe_evolution_loop(
+            qe_task_id=req.qe_task_id,
+            qe_loop_id=req.qe_loop_id,
+            resolve_runtime_assets=req.resolve_runtime_assets,
+        )
+        return {"ok": True, "package": _record_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("")
+def list_strategy_packages(status: PackageStatus | None = None, limit: int = 100) -> dict[str, Any]:
+    try:
+        records = StrategyPackageService().list_packages(status=status, limit=limit)
+        return {"ok": True, "packages": [_record_payload(record) for record in records]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/qe-sources")
+def list_qe_strategy_package_sources(source_kind: str = "all", limit: int = 200) -> dict[str, Any]:
+    try:
+        sources = StrategyPackageService().list_qe_packaging_sources(
+            source_kind=source_kind,
+            limit=limit,
+        )
+        return {"ok": True, "sources": sources}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}")
+def get_strategy_package(package_id: str) -> dict[str, Any]:
+    try:
+        record = StrategyPackageService().get_package(package_id)
+        return {"ok": True, "package": _record_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/status-events")
+def list_strategy_package_status_events(package_id: str, limit: int = 200) -> dict[str, Any]:
+    try:
+        events = StrategyPackageService().list_status_events(package_id, limit=limit)
+        return {"ok": True, "package_id": package_id, "events": [event.model_dump(mode="json") for event in events]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/metrics-summary")
+def get_strategy_package_metrics_summary(package_id: str) -> dict[str, Any]:
+    try:
+        summary = StrategyPackageService().get_metrics_summary(package_id)
+        return {"ok": True, "package_id": package_id, "metrics_summary": summary.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/selection-artifacts/generate")
+def generate_strategy_package_selection_artifacts(
+    package_id: str,
+    req: GenerateSelectionArtifactsRequest,
+) -> dict[str, Any]:
+    try:
+        if req.trade_date is not None:
+            trade_dates = [req.trade_date]
+        else:
+            if req.start_date is None or req.end_date is None:
+                raise StrategyPackageValidationError(
+                    "selection artifact generation requires trade_date or start_date/end_date"
+                )
+            if req.end_date < req.start_date:
+                raise StrategyPackageValidationError("end_date must be >= start_date")
+            day_count = (req.end_date - req.start_date).days + 1
+            if day_count > 370:
+                raise StrategyPackageValidationError(
+                    "selection artifact generation date range is too large",
+                    context={"day_count": day_count, "max_day_count": 370},
+                )
+            trade_dates = _trading_dates_between(req.start_date, req.end_date)
+        if req.source_path:
+            raise StrategyPackageValidationError(
+                "authoritative selection artifact generation does not accept source_path; use generate-diagnostic-backtest explicitly"
+            )
+        artifacts = StrategyPackageSelectionArtifactService().generate_from_live_inference_dates(
+            package_id=package_id,
+            trade_dates=trade_dates,
+            data_source=req.data_source,
+            runtime_config=req.runtime_config,
+            include_reference_price=req.include_reference_price,
+            cutoff_date=req.cutoff_date,
+        )
+        return {
+            "ok": True,
+            "package_id": package_id,
+            "artifacts": [_selection_artifact_payload(artifact) for artifact in artifacts],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/selection-artifacts/generate-diagnostic-backtest")
+def generate_strategy_package_diagnostic_backtest_selection_artifacts(
+    package_id: str,
+    req: GenerateSelectionArtifactsRequest,
+) -> dict[str, Any]:
+    """Generate diagnostic-only artifacts from QE backtest pred.pkl.
+
+    These artifacts are not accepted by authoritative Selection Center/Paper v2
+    runtime and must not be used as current simulated/live selection.
+    """
+
+    try:
+        if req.trade_date is not None:
+            trade_dates = [req.trade_date]
+        else:
+            if req.start_date is None or req.end_date is None:
+                raise StrategyPackageValidationError(
+                    "diagnostic selection artifact generation requires trade_date or start_date/end_date"
+                )
+            if req.end_date < req.start_date:
+                raise StrategyPackageValidationError("end_date must be >= start_date")
+            day_count = (req.end_date - req.start_date).days + 1
+            if day_count > 370:
+                raise StrategyPackageValidationError(
+                    "diagnostic selection artifact generation date range is too large",
+                    context={"day_count": day_count, "max_day_count": 370},
+                )
+            trade_dates = _trading_dates_between(req.start_date, req.end_date)
+        artifacts = StrategyPackageSelectionArtifactService().generate_from_qe_prediction_dates(
+            package_id=package_id,
+            trade_dates=trade_dates,
+            data_source=req.data_source,
+            runtime_config=req.runtime_config,
+            source_path=req.source_path,
+            include_reference_price=req.include_reference_price,
+        )
+        return {
+            "ok": True,
+            "package_id": package_id,
+            "diagnostic_only": True,
+            "artifacts": [_selection_artifact_payload(artifact) for artifact in artifacts],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/selection-artifacts")
+def list_strategy_package_selection_artifacts(package_id: str, limit: int = 100) -> dict[str, Any]:
+    try:
+        artifacts = StrategyPackageSelectionArtifactService().list_artifacts(package_id, limit=limit)
+        return {
+            "ok": True,
+            "package_id": package_id,
+            "artifacts": [_selection_artifact_payload(artifact) for artifact in artifacts],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/execution-policies")
+def create_strategy_package_execution_policy(package_id: str, req: CreateExecutionPolicyRequest) -> dict[str, Any]:
+    try:
+        policy = StrategyPackageService().create_execution_policy(
+            package_id=package_id,
+            policy_name=req.policy_name,
+            policy_json=req.policy_json,
+            source_backtest_id=req.source_backtest_id,
+            source_backtest_status=req.source_backtest_status,
+            paper_enabled=req.paper_enabled,
+        )
+        return {"ok": True, "execution_policy": _execution_policy_payload(policy)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/execution-policies")
+def list_strategy_package_execution_policies(package_id: str) -> dict[str, Any]:
+    try:
+        policies = StrategyPackageService().list_execution_policies(package_id)
+        return {"ok": True, "package_id": package_id, "execution_policies": [_execution_policy_payload(policy) for policy in policies]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/execution-policies/{policy_id}/enable-paper")
+def enable_strategy_package_execution_policy_for_paper(package_id: str, policy_id: str) -> dict[str, Any]:
+    try:
+        policy = StrategyPackageService().enable_execution_policy_for_paper(package_id, policy_id)
+        return {"ok": True, "execution_policy": _execution_policy_payload(policy)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/execution-policies/{policy_id}/disable-paper")
+def disable_strategy_package_execution_policy_for_paper(package_id: str, policy_id: str) -> dict[str, Any]:
+    try:
+        policy = StrategyPackageService().disable_execution_policy_for_paper(package_id, policy_id)
+        return {"ok": True, "execution_policy": _execution_policy_payload(policy)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/model-state")
+def get_strategy_package_model_state(package_id: str, as_of_date: date | None = None) -> dict[str, Any]:
+    try:
+        state = StrategyPackageService().get_model_state(package_id, as_of_date=as_of_date)
+        return {"ok": True, "model_state": state.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/model-retrain/preview")
+def preview_strategy_package_model_retrain(package_id: str, req: ModelRetrainPreviewRequest) -> dict[str, Any]:
+    try:
+        preview = StrategyPackageService().preview_model_retrain(
+            package_id,
+            as_of_date=req.as_of_date,
+            lookback_days=req.lookback_days,
+        )
+        return {"ok": True, "preview": preview.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/model-retrain/start")
+def start_strategy_package_model_retrain(package_id: str, req: ModelRetrainStartRequest) -> dict[str, Any]:
+    try:
+        job = StrategyPackageService().start_model_retrain(
+            package_id,
+            as_of_date=req.as_of_date,
+            lookback_days=req.lookback_days,
+            job_type=req.job_type,
+            config=req.config,
+            confirm_retrain=req.confirm_retrain,
+            confirm_text=req.confirm_text,
+        )
+        return {"ok": True, "job": job.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/model-retrain/jobs")
+def list_strategy_package_model_retrain_jobs(package_id: str, limit: int = 100) -> dict[str, Any]:
+    try:
+        jobs = StrategyPackageService().list_model_retrain_jobs(package_id, limit=limit)
+        return {"ok": True, "package_id": package_id, "jobs": [job.model_dump(mode="json") for job in jobs]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/validate")
+def validate_strategy_package(package_id: str) -> dict[str, Any]:
+    try:
+        manifest = StrategyPackageService().validate_readiness(package_id)
+        return {"ok": True, "manifest": manifest.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/transition-status")
+def transition_strategy_package_status(package_id: str, req: TransitionPackageStatusRequest) -> dict[str, Any]:
+    try:
+        record = StrategyPackageService().transition_status(
+            package_id=package_id,
+            to_status=req.to_status,
+            reason=req.reason or f"transition_to_{req.to_status.value.lower()}",
+            context=req.context,
+        )
+        return {"ok": True, "package": _record_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/enable-selection")
+def enable_strategy_package_selection(package_id: str) -> dict[str, Any]:
+    try:
+        record = StrategyPackageService().enable_selection(package_id)
+        return {"ok": True, "package": _record_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/enable-paper")
+def enable_strategy_package_paper(package_id: str) -> dict[str, Any]:
+    try:
+        record = StrategyPackageService().enable_paper(package_id)
+        return {"ok": True, "package": _record_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/retire")
+def retire_strategy_package(package_id: str, req: TransitionStatusRequest | None = None) -> dict[str, Any]:
+    try:
+        record = StrategyPackageService().retire(package_id, reason=(req.reason if req else None) or "retire_package")
+        return {"ok": True, "package": _record_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.get("/from-qe-experiment/{experiment_id}/manifest")
-def build_manifest_from_qe_experiment(experiment_id: str) -> dict:
+def build_manifest_from_qe_experiment(experiment_id: str) -> dict[str, Any]:
     """Build a read-only StrategyPackage manifest from a completed QE experiment."""
 
     try:
@@ -37,7 +478,7 @@ def build_manifest_from_qe_experiment(experiment_id: str) -> dict:
 
 
 @router.get("/from-qe-experiment/{experiment_id}/paper-readiness")
-def validate_qe_experiment_paper_readiness(experiment_id: str) -> dict:
+def validate_qe_experiment_paper_readiness(experiment_id: str) -> dict[str, Any]:
     """Validate whether the package is ready for minute-line paper trading."""
 
     try:
