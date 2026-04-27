@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Any, Literal
@@ -86,6 +88,115 @@ class PaperExecutionPolicyActivation(BaseModel):
     reason: str | None = None
     context: dict[str, Any] = Field(default_factory=dict)
     superseded_at: datetime | None = None
+
+
+class RuntimeProfileStatus(str, Enum):
+    DRAFT = "DRAFT"
+    ACTIVE = "ACTIVE"
+    RETIRED = "RETIRED"
+
+
+class RuntimeProfileValidationStatus(str, Enum):
+    VALIDATED = "VALIDATED"
+    INVALID = "INVALID"
+
+
+class RuntimeConfigActivationStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    SUPERSEDED = "SUPERSEDED"
+    CANCELLED = "CANCELLED"
+
+
+class ConfigChangeType(str, Enum):
+    CREATE = "CREATE"
+    UPDATE = "UPDATE"
+    ACTIVATE = "ACTIVATE"
+    SUPERSEDE = "SUPERSEDE"
+    RESET = "RESET"
+    RETIRE = "RETIRE"
+
+
+def compute_runtime_config_sha256(config_json: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        config_json,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+class PaperRuntimeProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile_id: str = Field(default_factory=lambda: f"rprof_{uuid4().hex}")
+    portfolio_id: str
+    package_id: str
+    profile_name: str
+    status: RuntimeProfileStatus = RuntimeProfileStatus.ACTIVE
+    current_version_id: str | None = None
+    created_by: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class PaperRuntimeProfileVersion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile_version_id: str = Field(default_factory=lambda: f"rpver_{uuid4().hex}")
+    profile_id: str
+    version_no: int = Field(ge=1)
+    config_json: dict[str, Any]
+    config_sha256: str | None = None
+    validation_status: RuntimeProfileValidationStatus = RuntimeProfileValidationStatus.VALIDATED
+    validation_errors: list[dict[str, Any]] = Field(default_factory=list)
+    created_by: str | None = None
+    reason: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    supersedes_version_id: str | None = None
+
+    @model_validator(mode="after")
+    def _hash_matches_config(self) -> "PaperRuntimeProfileVersion":
+        digest = compute_runtime_config_sha256(self.config_json)
+        if self.config_sha256 is not None and self.config_sha256 != digest:
+            raise ValueError("config_sha256 does not match config_json")
+        object.__setattr__(self, "config_sha256", digest)
+        return self
+
+
+class PaperRuntimeConfigActivation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    activation_id: str = Field(default_factory=lambda: f"rcact_{uuid4().hex}")
+    portfolio_id: str
+    trade_date: date
+    profile_version_id: str
+    status: RuntimeConfigActivationStatus = RuntimeConfigActivationStatus.ACTIVE
+    activated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    activated_by: str | None = None
+    reason: str | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
+    superseded_at: datetime | None = None
+
+
+class PaperConfigChangeAudit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    audit_id: int | None = None
+    portfolio_id: str | None = None
+    package_id: str | None = None
+    object_type: str
+    object_id: str
+    change_type: ConfigChangeType
+    before_json: dict[str, Any] | None = None
+    after_json: dict[str, Any] | None = None
+    before_sha256: str | None = None
+    after_sha256: str | None = None
+    reason: str | None = None
+    created_by: str | None = None
+    request_id: str | None = None
+    code_version: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class PaperDayRunResult(BaseModel):
