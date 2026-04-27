@@ -278,6 +278,12 @@ Important directories:
 - Do not include unrelated pre-existing dirty worktree files in a commit. Stage only the files modified for the current task unless the user explicitly asks to commit all workspace changes.
 - If a follow-up memory/process note is added because of a user instruction, commit and push that note as well.
 
+## Codex Skill Notes - 2026-04-27
+
+- Created local Codex skill `develop-minute-execution-algo` at `C:\Users\lc999\.codex\skills\develop-minute-execution-algo` so future intraday minute execution algorithms follow the V25-derived standard contract.
+- The skill requires asset/program separation, core/adapter layering, explicit historical/realtime capabilities, market-state vs data-error taxonomy, no silent fallback, QE/Paper v2 consistency, and targeted tests before reporting completion.
+- Use this skill for future V24/V25/V26-style execution strategy work, QE Qlib minute execution helpers, Paper Trading v2 execution adapters, and any suspend/limit/pre_close/minute-bar execution-policy wiring.
+
 
 ## Minute Execution Standard / V25 Core Update - 2026-04-27
 
