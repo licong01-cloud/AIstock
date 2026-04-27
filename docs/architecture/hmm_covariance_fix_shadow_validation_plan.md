@@ -33,7 +33,7 @@ Required behavior:
 
 After the code fix, create a new shadow candidate only if training is requested:
 
-- Example display name: `L2_3状态_diag_7维_w5_zscore_covfix_shadow`
+- Example display name: `L2_3state_diag_7dim_w5_zscore_covfix_shadow`
 - New `config_id`, `snapshot_id`, model path, coefficient paths.
 - Preserve current QE HMM as the control in all reports.
 
@@ -66,3 +66,65 @@ candidate is evaluated.
 
 No candidate becomes the QE default automatically. Promotion requires explicit
 manual confirmation with artifact hashes and rollback instructions.
+
+## Execution Record - 2026-04-27
+
+Program fix source:
+
+- RD-Agent commit: `032f03a9 Fix HMM covariance clipping persistence`.
+- AIstock training path: manual shadow config/snapshot; current QE HMM assets
+  were not overwritten.
+
+Shadow HMM candidate:
+
+- Config ID: `be681443-fe5d-4641-b55f-5f889e6af8e1`.
+- Display name: `L2_3state_diag_7dim_w5_zscore_covfix_shadow_20260427`.
+- Snapshot ID: `4c9b5f7b-8e59-44a6-b580-e7186b9283df`.
+- Model path:
+  `backend/data/hmm_models/be681443-fe5d-4641-b55f-5f889e6af8e1/2026-04-27/models.json`.
+- Model SHA256:
+  `2F0BE916C71B24035D32CF781C2E5DF77E164E825FCABD5F89DBF5CAFEFEBE62`.
+- QE coefficient path:
+  `backend/data/hmm_models/be681443-fe5d-4641-b55f-5f889e6af8e1/2026-04-27/coefficients_preset_A_2024-07-01_2026-03-03.json`.
+- QE coefficient SHA256:
+  `EBAA773D5D641A06D81F7BBE59E79EF55C3DBE2FDB4A72358C88274D87C976A0`.
+
+Covariance validation:
+
+| Model | Snapshot | Max diag covariance | Min diag covariance | Out-of-bound sectors |
+| --- | --- | ---: | ---: | ---: |
+| Earliest QE HMM, w3 raw | `252fdd35-aae3-445a-baf4-7e46b1b93aff` | 1000.000475 | 0.0000166 | 131 |
+| Existing w5 zscore before persistence fix | `052274d0-f5c7-4713-ab7e-636790baafc5` | 47.348198 | 0.0000144 | 119 |
+| New covfix shadow, w5 zscore | `4c9b5f7b-8e59-44a6-b580-e7186b9283df` | 10.000000 | 0.001000 | 0 |
+
+The new shadow model recorded `covariance_fixed=true` for 119 sectors and a
+total persisted anomaly count of 240. This confirms the clipping fix is now
+actually written into the saved `models.json`.
+
+QE comparison:
+
+- Template settings: 50 factors from `qe_20260426_142629`,
+  `__seed_LGBModel_golden_v1__`, `score_weighted_topk_v2`, `V25_TWO_STAGE`,
+  `filtered_pool_20260426`, label horizon 1, test window
+  `2024-07-01` to `2026-03-03`.
+- Fresh old-HMM experiment: `qe_20260427_150123`.
+- Fresh covfix-shadow experiment: `qe_20260427_150126`.
+- The two fresh experiments used identical factor list, data split, model,
+  strategy, stock pool, execution algorithm, and custom params except
+  `hmm_model_version_id` and resolved `sector_hmm_model_path`.
+
+| Experiment | HMM snapshot | Annualized return | IR/Sharpe | Max drawdown | Final NAV |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Fresh old w3 raw | `252fdd35-aae3-445a-baf4-7e46b1b93aff` | 13.2094% | 0.6631 | -14.0591% | 1.611595 |
+| Fresh new w5 covfix | `4c9b5f7b-8e59-44a6-b580-e7186b9283df` | 8.2246% | 0.4195 | -22.6149% | 1.484705 |
+
+Decision:
+
+- The new covfix shadow snapshot is technically usable by QE; the fresh QE
+  experiment successfully completed with it.
+- It should not be promoted to the QE default because it underperformed the
+  earliest w3 raw HMM in the controlled 1-day comparison.
+- The likely next isolation test is a `w3_raw_covfix_shadow` retrain, so the
+  covariance fix is compared under the same HMM hyper-parameters as the
+  currently successful QE HMM instead of changing rolling window and zscore at
+  the same time.
