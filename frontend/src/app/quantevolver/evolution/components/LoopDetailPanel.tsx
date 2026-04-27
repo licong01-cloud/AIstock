@@ -10,11 +10,11 @@ import LoopMetricsComparison from "./LoopMetricsComparison";
 import { AllStocksTable } from "../../components/AllStocksTable";
 import { FactorAnalysisPanel } from "../../components/FactorAnalysisPanel";
 import { StrategyConfigCard } from "../../components/StrategyConfigCard";
+import EvolutionTrajectory from "../../components/EvolutionTrajectory";
 
 const IcSeriesChart = dynamic(() => import("../../components/charts/IcSeriesChart"), { ssr: false });
 const LossCurveChart = dynamic(() => import("../../components/charts/LossCurveChart"), { ssr: false });
 const ReturnCurveChart = dynamic(() => import("../../components/charts/ReturnCurveChart"), { ssr: false });
-const EvolutionTrajectory = dynamic(() => import("../../components/EvolutionTrajectory"), { ssr: false });
 
 export function getTaskStatusInfo(status: string): { color: string; bgColor: string; label: string } {
   switch (status) {
