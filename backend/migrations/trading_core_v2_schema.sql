@@ -243,6 +243,65 @@ CREATE TABLE IF NOT EXISTS paper_v2.execution_policy_activation (
     superseded_at TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS paper_v2.runtime_profile (
+    profile_id TEXT PRIMARY KEY,
+    portfolio_id TEXT NOT NULL REFERENCES paper_v2.portfolio(portfolio_id),
+    package_id TEXT NOT NULL,
+    profile_name TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('DRAFT', 'ACTIVE', 'RETIRED')),
+    current_version_id TEXT,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.runtime_profile_version (
+    profile_version_id TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL REFERENCES paper_v2.runtime_profile(profile_id),
+    version_no INTEGER NOT NULL CHECK (version_no >= 1),
+    config_json JSONB NOT NULL,
+    config_sha256 TEXT NOT NULL,
+    validation_status TEXT NOT NULL CHECK (validation_status IN ('VALIDATED', 'INVALID')),
+    validation_errors JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_by TEXT,
+    reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    supersedes_version_id TEXT,
+    UNIQUE(profile_id, version_no),
+    UNIQUE(profile_id, config_sha256)
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.runtime_config_activation (
+    activation_id TEXT PRIMARY KEY,
+    portfolio_id TEXT NOT NULL REFERENCES paper_v2.portfolio(portfolio_id),
+    trade_date DATE NOT NULL,
+    profile_version_id TEXT NOT NULL REFERENCES paper_v2.runtime_profile_version(profile_version_id),
+    status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'SUPERSEDED', 'CANCELLED')),
+    activated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    activated_by TEXT,
+    reason TEXT,
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    superseded_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.config_change_audit (
+    audit_id BIGSERIAL PRIMARY KEY,
+    portfolio_id TEXT,
+    package_id TEXT,
+    object_type TEXT NOT NULL,
+    object_id TEXT NOT NULL,
+    change_type TEXT NOT NULL,
+    before_json JSONB,
+    after_json JSONB,
+    before_sha256 TEXT,
+    after_sha256 TEXT,
+    reason TEXT,
+    created_by TEXT,
+    request_id TEXT,
+    code_version TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS paper_v2.run (
     run_id TEXT PRIMARY KEY,
     portfolio_id TEXT NOT NULL REFERENCES paper_v2.portfolio(portfolio_id),
@@ -471,6 +530,11 @@ CREATE INDEX IF NOT EXISTS idx_selection_paper_link_run ON selection.paper_portf
 CREATE INDEX IF NOT EXISTS idx_paper_v2_portfolio_package ON paper_v2.portfolio(package_id, manifest_sha256);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_v2_exec_policy_activation_active ON paper_v2.execution_policy_activation(portfolio_id, trade_date) WHERE status = 'ACTIVE';
 CREATE INDEX IF NOT EXISTS idx_paper_v2_exec_policy_activation_portfolio ON paper_v2.execution_policy_activation(portfolio_id, trade_date DESC, activated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_runtime_profile_portfolio ON paper_v2.runtime_profile(portfolio_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_runtime_profile_version_profile ON paper_v2.runtime_profile_version(profile_id, version_no DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_v2_runtime_config_activation_active ON paper_v2.runtime_config_activation(portfolio_id, trade_date) WHERE status = 'ACTIVE';
+CREATE INDEX IF NOT EXISTS idx_paper_v2_runtime_config_activation_portfolio ON paper_v2.runtime_config_activation(portfolio_id, trade_date DESC, activated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_config_change_audit_portfolio ON paper_v2.config_change_audit(portfolio_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_run_portfolio_date ON paper_v2.run(portfolio_id, trade_date);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_trade_session_portfolio ON paper_v2.trade_session(portfolio_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_session_day_session ON paper_v2.session_day(session_id, trade_date);
