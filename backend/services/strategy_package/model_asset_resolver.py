@@ -336,13 +336,6 @@ class ModelAssetResolver:
             if translated is not None:
                 candidates.append(translated)
 
-            if original_path.startswith("/"):
-                distros = self._candidate_wsl_distros()
-                suffix = original_path.lstrip("/").replace("/", "\\")
-                for distro in distros:
-                    candidates.append(Path(f"\\\\wsl.localhost\\{distro}\\{suffix}"))
-                    candidates.append(Path(f"\\\\wsl$\\{distro}\\{suffix}"))
-
         return list(dict.fromkeys(candidates))
 
     @staticmethod
@@ -354,14 +347,6 @@ class ModelAssetResolver:
             tail = "\\".join(parts[3:])
             return Path(f"{drive}:\\{tail}")
         return None
-
-    @staticmethod
-    def _candidate_wsl_distros() -> list[str]:
-        configured = os.getenv("AISTOCK_WSL_DISTRO")
-        defaults = ["Ubuntu", "Ubuntu-22.04", "Ubuntu-24.04", "Debian"]
-        ordered = [configured] if configured else []
-        ordered.extend(defaults)
-        return [item for item in dict.fromkeys(ordered) if item]
 
     def _cache_destination(self, algo_code: str, original_path: str) -> Path:
         digest = hashlib.sha256(original_path.encode("utf-8")).hexdigest()[:16]
