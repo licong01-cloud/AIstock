@@ -272,19 +272,15 @@ class ManualFactorService:
         sql = """
             INSERT INTO aistock_factor_catalog (
                 factor_name, source, catalog_version, generated_at_utc, catalog_source,
-                expression, code_text, asset_path,
-                ic, sharpe, annualized_return
+                expression, code_text, asset_path
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (factor_name, source) DO UPDATE SET
                 catalog_version = EXCLUDED.catalog_version,
                 generated_at_utc = EXCLUDED.generated_at_utc,
                 expression = COALESCE(EXCLUDED.expression, aistock_factor_catalog.expression),
                 code_text = EXCLUDED.code_text,
-                asset_path = EXCLUDED.asset_path,
-                ic = COALESCE(EXCLUDED.ic, aistock_factor_catalog.ic),
-                sharpe = COALESCE(EXCLUDED.sharpe, aistock_factor_catalog.sharpe),
-                annualized_return = COALESCE(EXCLUDED.annualized_return, aistock_factor_catalog.annualized_return)
+                asset_path = EXCLUDED.asset_path
             RETURNING id
         """
         with get_conn() as conn:
@@ -292,7 +288,6 @@ class ManualFactorService:
                 cur.execute(sql, (
                     factor_name, "manual", "manual_v1", now_utc, "manual",
                     expression, code_text, asset_path_value,
-                    ic, sharpe, annualized_return,
                 ))
                 row = cur.fetchone()
                 catalog_id = row[0] if row else None
@@ -537,18 +532,8 @@ class ManualFactorService:
         if metrics_result.get("success"):
             fm = metrics_result.get("factors", {}).get(factor_name, {})
             full_metrics = fm.get("full", {})
-            ic = full_metrics.get("ic_mean")
-            sharpe = full_metrics.get("top_sharpe")
-            ann_ret = full_metrics.get("top_annual_return")
-            if ic is not None or sharpe is not None:
-                with get_conn() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "UPDATE aistock_factor_catalog SET ic=%s, sharpe=%s, annualized_return=%s "
-                            "WHERE factor_name=%s AND source='manual'",
-                            (ic, sharpe, ann_ret, factor_name),
-                        )
-                # 用真实指标重新 LLM 分类（评级不变，只更新分类和描述）
+            if full_metrics:
+                # 用计算结果重新 LLM 分类；独立指标只允许官方评估写入 aistock_factor_metrics。
                 try:
                     from .quantevolver.factor_analyst import FactorAnalyst
                     analyst = FactorAnalyst()
