@@ -16,6 +16,9 @@ import type {
   QEPackagingSource,
   ReadinessResult,
   ReplayResult,
+  RuntimeConfigActivation,
+  RuntimeProfile,
+  RuntimeProfileVersion,
   SelectablePackage,
   SelectionWatchlistImportResult,
   SelectionMode,
@@ -268,6 +271,33 @@ export const paperV2Api = {
   async activations(portfolioId: string): Promise<Activation[]> {
     const data = await apiFetch<{ activations: Activation[] }>(`/paper-v2/portfolios/${portfolioId}/execution-policy-activations`);
     return data.activations || [];
+  },
+  async createRuntimeProfile(portfolioId: string, payload: { profile_name: string; config_json: JsonObject; created_by?: string | null; reason?: string | null }): Promise<{ profile: RuntimeProfile; version: RuntimeProfileVersion }> {
+    return apiFetch(`/paper-v2/portfolios/${portfolioId}/runtime-profiles`, body(payload));
+  },
+  async runtimeProfiles(portfolioId: string): Promise<RuntimeProfile[]> {
+    const data = await apiFetch<{ profiles: RuntimeProfile[] }>(`/paper-v2/portfolios/${portfolioId}/runtime-profiles`);
+    return data.profiles || [];
+  },
+  async createRuntimeProfileVersion(portfolioId: string, profileId: string, payload: { config_json: JsonObject; created_by?: string | null; reason?: string | null }): Promise<RuntimeProfileVersion> {
+    const data = await apiFetch<{ version: RuntimeProfileVersion }>(`/paper-v2/portfolios/${portfolioId}/runtime-profiles/${profileId}/versions`, body(payload));
+    return data.version;
+  },
+  async runtimeProfileVersions(portfolioId: string, profileId: string): Promise<RuntimeProfileVersion[]> {
+    const data = await apiFetch<{ versions: RuntimeProfileVersion[] }>(`/paper-v2/portfolios/${portfolioId}/runtime-profiles/${profileId}/versions`);
+    return data.versions || [];
+  },
+  async activateRuntimeConfig(portfolioId: string, payload: { trade_date: string; profile_version_id: string; activated_by?: string | null; reason?: string | null; replace_existing?: boolean }): Promise<RuntimeConfigActivation> {
+    const data = await apiFetch<{ activation: RuntimeConfigActivation }>(`/paper-v2/portfolios/${portfolioId}/runtime-config-activations`, body(payload));
+    return data.activation;
+  },
+  async runtimeConfigActivations(portfolioId: string): Promise<RuntimeConfigActivation[]> {
+    const data = await apiFetch<{ activations: RuntimeConfigActivation[] }>(`/paper-v2/portfolios/${portfolioId}/runtime-config-activations`);
+    return data.activations || [];
+  },
+  async configChangeAudit(portfolioId: string): Promise<JsonObject[]> {
+    const data = await apiFetch<{ audit: JsonObject[] }>(`/paper-v2/portfolios/${portfolioId}/config-change-audit`);
+    return data.audit || [];
   },
   async orders(portfolioId: string): Promise<JsonObject[]> {
     const data = await apiFetch<{ orders: JsonObject[] }>(`/paper-v2/portfolios/${portfolioId}/orders`);
