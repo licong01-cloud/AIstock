@@ -101,6 +101,11 @@ router = APIRouter(
     tags=["quantevolver_evolution"],
 )
 
+factor_metrics_router = APIRouter(
+    prefix="/factor-metrics",
+    tags=["factor_metrics"],
+)
+
 scheduler = AutoEvolutionScheduler()
 
 class EvolutionTaskCreateRequest(BaseModel):
@@ -3686,6 +3691,8 @@ def get_system_logs(
 # ================================================================
 
 class FactorMetricsScheduleRequest(BaseModel):
+    schedule_id: Optional[str] = Field(None, description="Optional schedule UUID; omitted keeps the default singleton schedule")
+    factor_names: Optional[List[str]] = Field(None, description="Optional factor whitelist; omitted computes all eligible factors")
     include_disabled: bool = Field(False, description="是否包含禁用因子")
     frequency: str = Field("weekly", description="weekly | daily | manual")
     at: Optional[str] = Field("18:30", description="每日运行时间 HH:MM")
@@ -3696,6 +3703,7 @@ class FactorMetricsScheduleRequest(BaseModel):
     enabled: bool = Field(True, description="是否启用")
 
 
+@factor_metrics_router.get("/schedules", summary="List factor metrics schedules")
 @router.get("/factor-metrics/schedules", summary="列出因子指标计算调度配置")
 def list_factor_metrics_schedules():
     """列出所有 dataset LIKE 'factor_metrics_%' 的调度配置。"""
@@ -3724,11 +3732,23 @@ def list_factor_metrics_schedules():
     return {"items": rows}
 
 
+@factor_metrics_router.post("/schedules", summary="Create or update factor metrics schedule")
 @router.post("/factor-metrics/schedules", summary="创建/更新因子指标计算调度")
 def upsert_factor_metrics_schedule(req: FactorMetricsScheduleRequest):
     """创建或更新一个因子指标计算调度。"""
     schedule_id = None
     dataset = "factor_metrics_compute"
+    factor_names = None
+    if req.factor_names:
+        factor_names = [str(name).strip() for name in req.factor_names if str(name).strip()]
+        if not factor_names:
+            factor_names = None
+    requested_schedule_id = None
+    if req.schedule_id:
+        try:
+            requested_schedule_id = uuid.UUID(str(req.schedule_id))
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"schedule_id is not a valid UUID: {req.schedule_id}")
     options = {
         "include_disabled": req.include_disabled,
         "data_date": req.data_date,
@@ -3736,6 +3756,8 @@ def upsert_factor_metrics_schedule(req: FactorMetricsScheduleRequest):
         "timeout_per_factor": 600,
         "one_shot": req.one_shot,
     }
+    if factor_names:
+        options["factor_names"] = factor_names
     if req.at:
         options["at"] = req.at
     if req.day_of_week and req.frequency == "weekly":
@@ -3745,12 +3767,15 @@ def upsert_factor_metrics_schedule(req: FactorMetricsScheduleRequest):
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT schedule_id FROM market.ingestion_schedules WHERE dataset=%s",
-                (dataset,),
-            )
-            row = cur.fetchone()
-            schedule_id = row[0] if row else uuid.uuid4()
+            if requested_schedule_id is not None:
+                schedule_id = requested_schedule_id
+            else:
+                cur.execute(
+                    "SELECT schedule_id FROM market.ingestion_schedules WHERE dataset=%s",
+                    (dataset,),
+                )
+                row = cur.fetchone()
+                schedule_id = row[0] if row else uuid.uuid4()
             cur.execute("""
                 INSERT INTO market.ingestion_schedules
                     (schedule_id, dataset, mode, enabled, frequency, options, created_at, updated_at)
@@ -3771,6 +3796,7 @@ def upsert_factor_metrics_schedule(req: FactorMetricsScheduleRequest):
             "frequency": req.frequency, "enabled": req.enabled, "options": options}
 
 
+@factor_metrics_router.post("/schedules/{schedule_id}/toggle", summary="Toggle factor metrics schedule")
 @router.post("/factor-metrics/schedules/{schedule_id}/toggle", summary="切换调度启用/禁用")
 def toggle_factor_metrics_schedule(schedule_id: str, enabled: bool = True):
     with get_conn() as conn:
@@ -3787,6 +3813,7 @@ def toggle_factor_metrics_schedule(schedule_id: str, enabled: bool = True):
     return {"schedule_id": schedule_id, "enabled": enabled}
 
 
+@factor_metrics_router.post("/schedules/{schedule_id}/run", summary="Run factor metrics schedule now")
 @router.post("/factor-metrics/schedules/{schedule_id}/run", summary="立即执行因子指标调度")
 def run_factor_metrics_schedule_now(schedule_id: str):
     """手动触发一个因子指标调度。"""
@@ -3810,6 +3837,7 @@ def run_factor_metrics_schedule_now(schedule_id: str):
     return {"status": "accepted", "job_id": str(job_id), "schedule_id": schedule_id}
 
 
+@factor_metrics_router.delete("/schedules/{schedule_id}", summary="Delete factor metrics schedule")
 @router.delete("/factor-metrics/schedules/{schedule_id}", summary="删除因子指标调度")
 def delete_factor_metrics_schedule(schedule_id: str):
     with get_conn() as conn:
@@ -3826,6 +3854,7 @@ def delete_factor_metrics_schedule(schedule_id: str):
     return {"deleted": True, "schedule_id": schedule_id}
 
 
+@factor_metrics_router.get("/jobs", summary="List factor metrics jobs")
 @router.get("/factor-metrics/jobs", summary="查询因子指标计算任务历史")
 def list_factor_metrics_jobs(limit: int = 20):
     """返回最近的因子指标计算任务记录。"""
@@ -3834,7 +3863,8 @@ def list_factor_metrics_jobs(limit: int = 20):
             cur.execute("""
                 SELECT job_id, job_type, status, created_at, started_at, finished_at, summary
                 FROM market.ingestion_jobs
-                WHERE job_type LIKE 'factor_metrics_%%'
+                WHERE (summary->>'dataset') LIKE 'factor_metrics_%%'
+                   OR job_type LIKE 'factor_metrics_%%'
                 ORDER BY created_at DESC
                 LIMIT %s
             """, (limit,))

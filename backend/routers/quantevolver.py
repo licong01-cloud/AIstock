@@ -479,12 +479,19 @@ def list_factors(
                            cl.category, cl.classification_reason, cl.factor_dimension,
                            cl.description AS cl_description, cl.id AS classification_id,
                            cl.ts_info_density, cl.cross_horizon_consistency,
-                           cl.direction, cl.signal_mechanism, cl.sector_exposure_corr,
-                           cl.horizon_class, cl.best_horizon, cl.best_horizon_advantage,
+                           m.direction, cl.signal_mechanism, cl.sector_exposure_corr,
+                           CASE
+                               WHEN m.best_horizon IS NULL THEN NULL
+                               WHEN m.best_horizon <= 5 THEN 'short'
+                               WHEN m.best_horizon <= 10 THEN 'medium'
+                               ELSE 'long'
+                           END AS horizon_class,
+                           m.best_horizon, m.best_horizon_advantage,
                            cl.linearity, cl.holding_period_class, cl.data_source_group,
                            cl.update_freq,
-                           cl.ic_sign_consistency_12m, cl.ic_oos_is_ratio,
-                           cl.monthly_ic_trend_slope,
+                           mic.sign_consistency_12m AS ic_sign_consistency_12m,
+                           mic.oos_is_ratio AS ic_oos_is_ratio,
+                           mic.trend_slope_12m AS monthly_ic_trend_slope,
                            cl.cluster_id, cl.cluster_role, cl.cluster_size,
                            cl.intra_cluster_max_corr, cl.representative_score,
                            {rating_select_sql},
@@ -495,9 +502,11 @@ def list_factors(
                     LEFT JOIN LATERAL (
                         SELECT ic_mean, top_excess_sharpe, top_excess_annual_return,
                                rank_ic_mean, icir, calculated_at,
-                               rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d
+                               rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d,
+                               direction, best_horizon, best_horizon_advantage
                         FROM aistock_factor_metrics
                         WHERE factor_name = c.factor_name AND eval_window = 'full'
+                          AND calc_engine = 'qe_eval_v2'
                         ORDER BY calculated_at DESC
                         LIMIT 1
                     ) m ON TRUE
@@ -505,9 +514,17 @@ def list_factors(
                         SELECT rank_ic_mean
                         FROM aistock_factor_metrics
                         WHERE factor_name = c.factor_name AND eval_window = 'recent_1m'
+                          AND calc_engine = 'qe_eval_v2'
                         ORDER BY calculated_at DESC
                         LIMIT 1
                     ) m1m ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT sign_consistency_12m, trend_slope_12m, oos_is_ratio
+                        FROM aistock_factor_monthly_ic
+                        WHERE factor_name = c.factor_name
+                        ORDER BY month_end DESC
+                        LIMIT 1
+                    ) mic ON TRUE
                     LEFT JOIN qe_factor_classification cl
                         ON cl.factor_name = c.factor_name AND cl.factor_source = c.source
                     {rating_join_sql}
@@ -1741,16 +1758,17 @@ def multi_alpha_classified_factors(
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT fc.factor_name, fr.official_grade AS grade, fc.ic_value, fc.category,
+                    SELECT fc.factor_name, fr.official_grade AS grade, fm.ic_mean AS ic_value, fc.category,
                            fc.data_source_group, fc.holding_period_class,
                            fm.icir_annualized, fm.rank_ic_1d, fm.rank_ic_5d,
                            fm.rank_ic_10d, fm.rank_ic_20d
                     FROM qe_factor_classification fc
                     LEFT JOIN LATERAL (
-                        SELECT icir_annualized, rank_ic_1d, rank_ic_5d,
+                        SELECT ic_mean, icir_annualized, rank_ic_1d, rank_ic_5d,
                                rank_ic_10d, rank_ic_20d
                         FROM aistock_factor_metrics
                         WHERE factor_name = fc.factor_name AND eval_window = 'full'
+                          AND calc_engine = 'qe_eval_v2'
                         ORDER BY calculated_at DESC LIMIT 1
                     ) fm ON TRUE
                     JOIN aistock_factor_catalog cat
@@ -1766,7 +1784,7 @@ def multi_alpha_classified_factors(
                     ) fr ON TRUE
                     WHERE cat.is_available = TRUE
                       AND fc.data_source_group = %s
-                    ORDER BY ABS(fc.ic_value) DESC NULLS LAST
+                    ORDER BY ABS(fm.ic_mean) DESC NULLS LAST
                 """, (data_source_group,))
                 cols = [d[0] for d in cur.description]
                 rows = [dict(zip(cols, r)) for r in cur.fetchall()]
@@ -1875,10 +1893,19 @@ def multi_alpha_classification_coverage():
                 cur.execute("""
                     SELECT fc.data_source_group,
                            COUNT(*) AS count,
-                           ROUND(AVG(ABS(fc.ic_value))::numeric, 4) AS avg_ic
+                           ROUND(AVG(ABS(fm.ic_mean))::numeric, 4) AS avg_ic
                     FROM qe_factor_classification fc
                     JOIN aistock_factor_catalog cat
                         ON cat.factor_name = fc.factor_name AND cat.source = fc.factor_source
+                    LEFT JOIN LATERAL (
+                        SELECT ic_mean
+                        FROM aistock_factor_metrics
+                        WHERE factor_name = fc.factor_name
+                          AND eval_window = 'full'
+                          AND calc_engine = 'qe_eval_v2'
+                        ORDER BY calculated_at DESC
+                        LIMIT 1
+                    ) fm ON TRUE
                     WHERE cat.is_available = TRUE
                       AND fc.data_source_group IS NOT NULL
                       AND fc.data_source_group != 'unknown'

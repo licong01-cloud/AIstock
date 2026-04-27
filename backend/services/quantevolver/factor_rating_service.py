@@ -566,6 +566,7 @@ class FactorRatingService:
                            top_max_drawdown, top_excess_sharpe, benchmark_annual_return,
                            group_return_monotonicity, turnover, ic_decay_half_life,
                            coverage, n_trading_days, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d,
+                           direction, best_horizon, best_horizon_advantage,
                            data_start, data_end, snapshot_date, calculated_at
                     FROM aistock_factor_metrics
                     WHERE factor_name = %s
@@ -601,10 +602,13 @@ class FactorRatingService:
                 "rank_ic_5d": row[20],
                 "rank_ic_10d": row[21],
                 "rank_ic_20d": row[22],
-                "data_start": row[23],
-                "data_end": row[24],
-                "snapshot_date": row[25],
-                "calculated_at": row[26],
+                "direction": row[23],
+                "best_horizon": row[24],
+                "best_horizon_advantage": row[25],
+                "data_start": row[26],
+                "data_end": row[27],
+                "snapshot_date": row[28],
+                "calculated_at": row[29],
             }
         return result
 
@@ -997,12 +1001,8 @@ class FactorRatingService:
         horizon_class = self._derive_horizon_class(best_horizon)
         core_ic = self._compute_core_ic_v2(full_metrics, best_horizon)
 
-        ic_sign_cons_12m = classification_meta.get("ic_sign_consistency_12m")
-        if ic_sign_cons_12m is None:
-            ic_sign_cons_12m = monthly_agg.get("sign_consistency_12m")
-        ic_oos_is_ratio = classification_meta.get("ic_oos_is_ratio")
-        if ic_oos_is_ratio is None:
-            ic_oos_is_ratio = monthly_agg.get("oos_is_ratio")
+        ic_sign_cons_12m = monthly_agg.get("sign_consistency_12m")
+        ic_oos_is_ratio = monthly_agg.get("oos_is_ratio")
 
         dimension_scores = {
             "predictive_strength": self._score_predictive_strength_v2(
@@ -1036,20 +1036,6 @@ class FactorRatingService:
             spec,
         )
         grade = self._assign_grade_v2(total_score, hard_gates, rule["grade_bands"], spec)
-
-        try:
-            self._writeback_classification_v2(
-                factor_name,
-                factor_source,
-                {
-                    "direction": direction if direction in (-1, 0, 1) else None,
-                    "best_horizon": best_horizon,
-                    "best_horizon_advantage": best_horizon_advantage,
-                    "horizon_class": horizon_class if horizon_class != "unknown" else None,
-                },
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.warning("v2 classification 回写失败 (%s): %s", factor_name, e)
 
         summary_text = self._build_summary_text_v2(dimension_scores, hard_gates, total_score, grade)
         if enable_llm_audit:
@@ -1113,10 +1099,8 @@ class FactorRatingService:
                         """
                         SELECT category, factor_dimension, holding_period_class,
                                data_source_group, linearity, ts_info_density,
-                               direction, best_horizon, best_horizon_advantage,
-                               horizon_class, signal_mechanism, sector_exposure_corr,
-                               ic_sign_consistency_12m, ic_oos_is_ratio,
-                               monthly_ic_trend_slope, cross_horizon_consistency,
+                               signal_mechanism, sector_exposure_corr,
+                               cross_horizon_consistency,
                                cluster_id, cluster_role, cluster_size,
                                intra_cluster_max_corr, representative_score
                         FROM qe_factor_classification
@@ -1138,21 +1122,14 @@ class FactorRatingService:
             "data_source_group": row[3],
             "linearity": row[4],
             "ts_info_density": row[5],
-            "direction": row[6],
-            "best_horizon": row[7],
-            "best_horizon_advantage": row[8],
-            "horizon_class": row[9],
-            "signal_mechanism": row[10],
-            "sector_exposure_corr": row[11],
-            "ic_sign_consistency_12m": row[12],
-            "ic_oos_is_ratio": row[13],
-            "monthly_ic_trend_slope": row[14],
-            "cross_horizon_consistency": row[15],
-            "cluster_id": row[16],
-            "cluster_role": row[17],
-            "cluster_size": row[18],
-            "intra_cluster_max_corr": row[19],
-            "representative_score": row[20],
+            "signal_mechanism": row[6],
+            "sector_exposure_corr": row[7],
+            "cross_horizon_consistency": row[8],
+            "cluster_id": row[9],
+            "cluster_role": row[10],
+            "cluster_size": row[11],
+            "intra_cluster_max_corr": row[12],
+            "representative_score": row[13],
         }
 
     def _fetch_monthly_ic_latest(self, factor_name: str) -> Dict[str, Any]:
@@ -1198,26 +1175,40 @@ class FactorRatingService:
 
     @staticmethod
     def _resolve_direction(classification_meta: Dict[str, Any], full_metrics: Dict[str, Any]) -> int:
-        d = classification_meta.get("direction")
-        if d is not None:
+        for key in ("direction",):
+            d = full_metrics.get(key)
+            if d is None:
+                continue
             try:
                 d_int = int(d)
                 if d_int in (-1, 0, 1):
                     return d_int
             except Exception:
                 pass
-        ic = full_metrics.get("rank_ic_mean")
-        if ic is None:
-            return 0
-        try:
-            f = float(ic)
-            if f > 0:
-                return 1
-            if f < 0:
-                return -1
-            return 0
-        except Exception:
-            return 0
+        keys: List[str] = []
+        best_horizon = full_metrics.get("best_horizon")
+        if best_horizon is not None:
+            try:
+                best_horizon_int = int(best_horizon)
+                if best_horizon_int in (1, 5, 10, 20):
+                    keys.append(f"rank_ic_{best_horizon_int}d")
+            except Exception:
+                pass
+        keys.extend(["rank_ic_mean", "ic_mean"])
+        for key in keys:
+            ic = full_metrics.get(key)
+            if ic is None:
+                continue
+            try:
+                f = float(ic)
+                if f > 0:
+                    return 1
+                if f < 0:
+                    return -1
+                return 0
+            except Exception:
+                continue
+        return 0
 
     @staticmethod
     def _compute_best_horizon(metrics: Dict[str, Any]):

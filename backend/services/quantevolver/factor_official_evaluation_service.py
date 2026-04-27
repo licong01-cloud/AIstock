@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import gc
 import logging
+import math
 import os
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+from statistics import median
 from typing import Any, Dict, List, Optional
 
 from ...db.pg_pool import get_conn
@@ -34,6 +36,8 @@ INSERT INTO aistock_factor_metrics (
     top_max_drawdown, top_excess_sharpe, benchmark_annual_return,
     group_return_monotonicity, turnover, ic_decay_half_life,
     ic_csz_mean, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d,
+    icir_annualized, rank_icir_annualized,
+    direction, best_horizon, best_horizon_advantage,
     coverage, n_trading_days, source_task_id, calc_batch_id, calc_engine,
     factor_catalog_id, snapshot_date
 ) VALUES (
@@ -44,6 +48,8 @@ INSERT INTO aistock_factor_metrics (
     %(top_max_drawdown)s, %(top_excess_sharpe)s, %(benchmark_annual_return)s,
     %(group_return_monotonicity)s, %(turnover)s, %(ic_decay_half_life)s,
     %(ic_csz_mean)s, %(rank_ic_1d)s, %(rank_ic_5d)s, %(rank_ic_10d)s, %(rank_ic_20d)s,
+    %(icir_annualized)s, %(rank_icir_annualized)s,
+    %(direction)s, %(best_horizon)s, %(best_horizon_advantage)s,
     %(coverage)s, %(n_trading_days)s, %(source_task_id)s, %(calc_batch_id)s, %(calc_engine)s,
     %(factor_catalog_id)s, %(snapshot_date)s
 )
@@ -71,6 +77,11 @@ DO UPDATE SET
     rank_ic_5d = EXCLUDED.rank_ic_5d,
     rank_ic_10d = EXCLUDED.rank_ic_10d,
     rank_ic_20d = EXCLUDED.rank_ic_20d,
+    icir_annualized = EXCLUDED.icir_annualized,
+    rank_icir_annualized = EXCLUDED.rank_icir_annualized,
+    direction = EXCLUDED.direction,
+    best_horizon = EXCLUDED.best_horizon,
+    best_horizon_advantage = EXCLUDED.best_horizon_advantage,
     coverage = EXCLUDED.coverage,
     n_trading_days = EXCLUDED.n_trading_days,
     source_task_id = EXCLUDED.source_task_id,
@@ -78,6 +89,180 @@ DO UPDATE SET
     calc_engine = EXCLUDED.calc_engine,
     factor_catalog_id = EXCLUDED.factor_catalog_id
 """
+
+
+_TRADING_DAYS_PER_YEAR = 252.0
+_HORIZON_RANK_IC_KEYS = (
+    (1, "rank_ic_1d"),
+    (5, "rank_ic_5d"),
+    (10, "rank_ic_10d"),
+    (20, "rank_ic_20d"),
+)
+
+
+def _as_finite_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _coerce_direction(value: Any) -> Optional[int]:
+    try:
+        direction = int(value)
+    except (TypeError, ValueError):
+        return None
+    return direction if direction in (-1, 0, 1) else None
+
+
+def _coerce_horizon(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text.endswith("d"):
+        text = text[:-1]
+    try:
+        horizon = int(text)
+    except (TypeError, ValueError):
+        return None
+    return horizon if horizon in {1, 5, 10, 20} else None
+
+
+def _annualize_daily_icir(value: Any) -> Optional[float]:
+    number = _as_finite_float(value)
+    if number is None:
+        return None
+    return number * math.sqrt(_TRADING_DAYS_PER_YEAR)
+
+
+def _derive_best_horizon(metrics: Dict[str, Any]) -> tuple[Optional[int], Optional[float]]:
+    candidates: list[tuple[int, float]] = []
+    for horizon, key in _HORIZON_RANK_IC_KEYS:
+        value = _as_finite_float(metrics.get(key))
+        if value is not None:
+            candidates.append((horizon, abs(value)))
+    if not candidates:
+        return None, None
+    candidates.sort(key=lambda item: item[1], reverse=True)
+    best_horizon, best_abs = candidates[0]
+    second_abs = candidates[1][1] if len(candidates) > 1 else 0.0
+    return best_horizon, best_abs - second_abs
+
+
+def _derive_direction(metrics: Dict[str, Any], best_horizon: Optional[int]) -> int:
+    existing = _coerce_direction(metrics.get("direction"))
+    if existing is not None:
+        return existing
+
+    keys: list[str] = []
+    if best_horizon is not None:
+        keys.append(f"rank_ic_{best_horizon}d")
+    keys.extend(["rank_ic_mean", "ic_mean"])
+    for key in keys:
+        value = _as_finite_float(metrics.get(key))
+        if value is None:
+            continue
+        if value > 0:
+            return 1
+        if value < 0:
+            return -1
+        return 0
+    return 0
+
+
+def _metric_enrichment(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    derived_horizon, derived_advantage = _derive_best_horizon(metrics)
+    best_horizon = _coerce_horizon(metrics.get("best_horizon")) or derived_horizon
+    best_horizon_advantage = _as_finite_float(metrics.get("best_horizon_advantage"))
+    if best_horizon_advantage is None:
+        best_horizon_advantage = derived_advantage
+
+    return {
+        "icir_annualized": (
+            _as_finite_float(metrics.get("icir_annualized"))
+            if metrics.get("icir_annualized") is not None
+            else _annualize_daily_icir(metrics.get("icir"))
+        ),
+        "rank_icir_annualized": (
+            _as_finite_float(metrics.get("rank_icir_annualized"))
+            if metrics.get("rank_icir_annualized") is not None
+            else _annualize_daily_icir(metrics.get("rank_icir"))
+        ),
+        "direction": _derive_direction(metrics, best_horizon),
+        "best_horizon": best_horizon,
+        "best_horizon_advantage": best_horizon_advantage,
+    }
+
+
+def _sign(value: float) -> int:
+    if value > 0:
+        return 1
+    if value < 0:
+        return -1
+    return 0
+
+
+def _monthly_sign_consistency(values: list[float]) -> Optional[float]:
+    if len(values) != 12:
+        return None
+    mean_value = sum(values) / len(values)
+    if mean_value == 0.0:
+        return None
+    ref_sign = _sign(mean_value)
+    return sum(1 for value in values if _sign(value) == ref_sign) / len(values)
+
+
+def _monthly_trend_slope(values: list[float]) -> Optional[float]:
+    if len(values) != 12:
+        return None
+    slopes: list[float] = []
+    for i in range(len(values) - 1):
+        for j in range(i + 1, len(values)):
+            slopes.append((values[j] - values[i]) / (j - i))
+    return float(median(slopes)) if slopes else None
+
+
+def _monthly_oos_ratio(values: list[float]) -> Optional[float]:
+    if len(values) != 12:
+        return None
+    prior = sum(values[:6]) / 6.0
+    if prior == 0.0:
+        return None
+    recent = sum(values[6:]) / 6.0
+    return recent / prior
+
+
+def _prepare_monthly_ic_rows(monthly_series: list) -> list[Dict[str, Any]]:
+    rows: list[Dict[str, Any]] = []
+    for rec in monthly_series:
+        if not isinstance(rec, dict):
+            continue
+        month = rec.get("month")
+        if not month:
+            continue
+        row = dict(rec)
+        row["month"] = str(month)
+        rows.append(row)
+
+    rows.sort(key=lambda item: item["month"])
+    ic_values = [_as_finite_float(row.get("ic_mean")) for row in rows]
+    for idx, row in enumerate(rows):
+        window = ic_values[idx - 11 : idx + 1] if idx >= 11 else []
+        values = [value for value in window if value is not None]
+        if len(values) != 12:
+            row["sign_consistency_12m"] = None
+            row["trend_slope_12m"] = None
+            row["oos_is_ratio"] = None
+            continue
+        row["sign_consistency_12m"] = _monthly_sign_consistency(values)
+        row["trend_slope_12m"] = _monthly_trend_slope(values)
+        row["oos_is_ratio"] = _monthly_oos_ratio(values)
+    return rows
 
 
 class FactorOfficialEvaluationService:
@@ -434,6 +619,8 @@ class FactorOfficialEvaluationService:
                            top_max_drawdown, top_excess_sharpe, benchmark_annual_return,
                            group_return_monotonicity, turnover, ic_decay_half_life,
                            ic_csz_mean, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d,
+                           icir_annualized, rank_icir_annualized,
+                           direction, best_horizon, best_horizon_advantage,
                            coverage, n_trading_days, source_task_id, calc_engine,
                            snapshot_date, calc_batch_id
                     FROM aistock_factor_metrics
@@ -459,7 +646,9 @@ class FactorOfficialEvaluationService:
                     """
                     SELECT DISTINCT ON (factor_name)
                         factor_name, ic_mean, top_excess_sharpe, top_excess_annual_return,
-                        rank_ic_mean, icir, calculated_at, snapshot_date, calc_batch_id
+                        rank_ic_mean, icir, icir_annualized, rank_icir_annualized,
+                        direction, best_horizon, best_horizon_advantage,
+                        calculated_at, snapshot_date, calc_batch_id
                     FROM aistock_factor_metrics
                     WHERE eval_window = 'full'
                       AND calc_engine = %s
@@ -477,9 +666,14 @@ class FactorOfficialEvaluationService:
                 "annual_return": row[3],
                 "rank_ic_mean": row[4],
                 "icir": row[5],
-                "calculated_at": str(row[6]) if row[6] is not None else None,
-                "snapshot_date": str(row[7]) if row[7] is not None else None,
-                "calc_batch_id": row[8],
+                "icir_annualized": row[6],
+                "rank_icir_annualized": row[7],
+                "direction": row[8],
+                "best_horizon": row[9],
+                "best_horizon_advantage": row[10],
+                "calculated_at": str(row[11]) if row[11] is not None else None,
+                "snapshot_date": str(row[12]) if row[12] is not None else None,
+                "calc_batch_id": row[13],
             }
         return {"ok": True, "summary": summary, "total": len(summary), "calc_engine": CALC_ENGINE}
 
@@ -509,6 +703,7 @@ class FactorOfficialEvaluationService:
         if not monthly_series:
             return 0
         inserted = 0
+        monthly_rows = _prepare_monthly_ic_rows(monthly_series)
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -516,26 +711,34 @@ class FactorOfficialEvaluationService:
                     (factor_name,),
                 )
                 deleted = cur.rowcount
-                for rec in monthly_series:
+                for rec in monthly_rows:
                     month = rec.get("month")
                     if not month:
                         continue
                     cur.execute("""
                         INSERT INTO aistock_factor_monthly_ic
-                            (factor_name, month_end, snapshot_date, ic_mean, rank_ic_mean, ic_std, ic_ewma_6m, n_days)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            (factor_name, month_end, snapshot_date,
+                             ic_mean, rank_ic_mean, ic_std, ic_ewma_6m, n_days,
+                             sign_consistency_12m, trend_slope_12m, oos_is_ratio)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (factor_name, month_end, snapshot_date) DO UPDATE SET
                             ic_mean = EXCLUDED.ic_mean,
                             rank_ic_mean = EXCLUDED.rank_ic_mean,
                             ic_std = EXCLUDED.ic_std,
                             ic_ewma_6m = EXCLUDED.ic_ewma_6m,
                             n_days = EXCLUDED.n_days,
+                            sign_consistency_12m = EXCLUDED.sign_consistency_12m,
+                            trend_slope_12m = EXCLUDED.trend_slope_12m,
+                            oos_is_ratio = EXCLUDED.oos_is_ratio,
                             created_at = NOW()
                     """, (
                         factor_name, month, snapshot_date,
                         rec.get("ic_mean"), rec.get("rank_ic_mean"),
                         rec.get("ic_std"), rec.get("ic_ewma_6m"),
                         rec.get("n_days"),
+                        rec.get("sign_consistency_12m"),
+                        rec.get("trend_slope_12m"),
+                        rec.get("oos_is_ratio"),
                     ))
                     inserted += 1
                 conn.commit()
@@ -575,6 +778,14 @@ class FactorOfficialEvaluationService:
                     )
 
                 grouped_full_metrics: Dict[str, Dict[str, Any]] = {}
+                factor_level_enrichment: Dict[str, Dict[str, Any]] = {}
+                for metric_rec in engine_data.get("metrics", []):
+                    if (
+                        isinstance(metric_rec, dict)
+                        and metric_rec.get("factor_name")
+                        and metric_rec.get("eval_window") == "full"
+                    ):
+                        factor_level_enrichment[metric_rec["factor_name"]] = _metric_enrichment(metric_rec)
                 for rec in engine_data.get("metrics", []):
                     if not isinstance(rec, dict):
                         errors.append(f"metrics 记录格式错误: 期望 dict, 实际 {type(rec).__name__}: {str(rec)[:100]}")
@@ -591,6 +802,11 @@ class FactorOfficialEvaluationService:
                         skipped += 1
                         continue
 
+                    enrichment = _metric_enrichment(rec)
+                    factor_enrichment = factor_level_enrichment.get(factor_name) or {}
+                    for key in ("direction", "best_horizon", "best_horizon_advantage"):
+                        if factor_enrichment.get(key) is not None:
+                            enrichment[key] = factor_enrichment[key]
                     params = {
                         "factor_name": factor_name,
                         "calculated_at": calculated_at,
@@ -620,6 +836,11 @@ class FactorOfficialEvaluationService:
                         "rank_ic_5d": rec.get("rank_ic_5d"),
                         "rank_ic_10d": rec.get("rank_ic_10d"),
                         "rank_ic_20d": rec.get("rank_ic_20d"),
+                        "icir_annualized": enrichment["icir_annualized"],
+                        "rank_icir_annualized": enrichment["rank_icir_annualized"],
+                        "direction": enrichment["direction"],
+                        "best_horizon": enrichment["best_horizon"],
+                        "best_horizon_advantage": enrichment["best_horizon_advantage"],
                         "coverage": rec.get("coverage"),
                         "n_trading_days": rec.get("n_trading_days"),
                         "source_task_id": None,

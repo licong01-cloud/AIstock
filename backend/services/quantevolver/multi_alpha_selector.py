@@ -205,7 +205,7 @@ class MultiAlphaFactorSelector:
                 cur.execute("""
                     SELECT fc.factor_name, fc.factor_source, fc.category,
                            fr.official_grade AS grade,
-                           fc.ic_value, fc.data_source_group, fc.holding_period_class,
+                           fm.ic_mean AS ic_value, fc.data_source_group, fc.holding_period_class,
                            fc.ts_info_density, fc.linearity,
                            fm.rank_ic_1d, fm.rank_ic_5d, fm.rank_ic_10d, fm.rank_ic_20d,
                            fm.icir_annualized, fm.rank_icir_annualized
@@ -222,7 +222,7 @@ class MultiAlphaFactorSelector:
                         ORDER BY r.graded_at DESC LIMIT 1
                     ) fr ON TRUE
                     LEFT JOIN LATERAL (
-                        SELECT rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d,
+                        SELECT ic_mean, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d,
                                icir_annualized, rank_icir_annualized
                         FROM aistock_factor_metrics
                         WHERE factor_name = fc.factor_name AND eval_window = 'full' AND calc_engine = %s
@@ -231,7 +231,7 @@ class MultiAlphaFactorSelector:
                     WHERE cat.is_available = TRUE
                       AND fc.data_source_group IS NOT NULL
                       AND fc.data_source_group != 'unknown'
-                    ORDER BY fr.official_grade, ABS(fc.ic_value) DESC NULLS LAST
+                    ORDER BY fr.official_grade, ABS(fm.ic_mean) DESC NULLS LAST
                 """, (CALC_ENGINE,))
                 cols = [d[0] for d in cur.description]
                 all_factors = [dict(zip(cols, r)) for r in cur.fetchall()]

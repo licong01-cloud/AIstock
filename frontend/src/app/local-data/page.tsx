@@ -386,6 +386,7 @@ export default function LocalDataPage() {
               key={tab.key}
               type="button"
               onClick={() => setActiveTab(tab.key)}
+              data-testid={`local-data-tab-${tab.key}`}
               className={classNames(
                 styles.tabBtn,
                 activeTab === tab.key && styles.tabBtnActive,
@@ -6572,6 +6573,7 @@ interface FmSchedule {
   enabled: boolean;
   frequency: string;
   options: {
+    factor_names?: string[];
     include_disabled?: boolean;
     data_date?: string;
     workers?: number;
@@ -6587,6 +6589,14 @@ interface FmSchedule {
   updated_at?: string;
 }
 
+function parseFactorNamesInput(value: string): string[] | undefined {
+  const names = value
+    .split(/[\n,，;；\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return names.length ? Array.from(new Set(names)) : undefined;
+}
+
 function FactorMetricsSchedulesTab() {
   const [schedules, setSchedules] = useState<FmSchedule[]>([]);
   const [loading, setLoading] = useState(false);
@@ -6596,6 +6606,8 @@ function FactorMetricsSchedulesTab() {
   const [newAt, setNewAt] = useState("18:30");
   const [newDayOfWeek, setNewDayOfWeek] = useState("sunday");
   const [newDataDate, setNewDataDate] = useState("");
+  const [newFactorNames, setNewFactorNames] = useState("");
+  const [newWorkers, setNewWorkers] = useState(2);
   const [newIncludeDisabled, setNewIncludeDisabled] = useState(false);
   const [newOneShot, setNewOneShot] = useState(false);
   const [newEnabled, setNewEnabled] = useState(true);
@@ -6625,6 +6637,8 @@ function FactorMetricsSchedulesTab() {
         body: JSON.stringify({
           frequency: newFreq, at: newAt, day_of_week: newDayOfWeek,
           data_date: newDataDate || null, include_disabled: newIncludeDisabled,
+          factor_names: parseFactorNamesInput(newFactorNames),
+          workers: Math.max(1, Math.min(8, Number(newWorkers) || 1)),
           one_shot: newOneShot, enabled: newEnabled,
         }),
       });
@@ -6685,6 +6699,7 @@ function FactorMetricsSchedulesTab() {
             <select
               value={newOneShot ? "one_shot" : "recurring"}
               onChange={(e) => setNewOneShot(e.target.value === "one_shot")}
+              data-testid="factor-metrics-task-type"
               className={styles.select}
             >
               <option value="recurring">周期任务</option>
@@ -6726,16 +6741,48 @@ function FactorMetricsSchedulesTab() {
               value={newDataDate}
               onChange={(e) => setNewDataDate(e.target.value)}
               placeholder="YYYYMMDD 留空用最新"
+              data-testid="factor-metrics-data-date"
               className={styles.input} style={{ width: 140  }}
             />
           </label>
 
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            指定因子（可选）
+            <textarea
+              value={newFactorNames}
+              onChange={(e) => setNewFactorNames(e.target.value)}
+              placeholder="留空=全部；支持逗号/空格/换行分隔"
+              data-testid="factor-metrics-factor-names"
+              className={styles.input}
+              style={{ width: 280, minHeight: 56, resize: "vertical" }}
+            />
+          </label>
+
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            并行度
+            <input
+              type="number"
+              min={1}
+              max={8}
+              value={newWorkers}
+              onChange={(e) => setNewWorkers(Number(e.target.value))}
+              data-testid="factor-metrics-workers"
+              className={styles.input}
+              style={{ width: 80 }}
+            />
+          </label>
+
           <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <input type="checkbox" checked={newIncludeDisabled} onChange={(e) => setNewIncludeDisabled(e.target.checked)} />
+            <input type="checkbox" checked={newIncludeDisabled} onChange={(e) => setNewIncludeDisabled(e.target.checked)} data-testid="factor-metrics-include-disabled" />
             包含禁用因子
           </label>
 
-          <button onClick={handleCreate} className={styles.btn} style={{ padding: "6px 16px"  }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <input type="checkbox" checked={newEnabled} onChange={(e) => setNewEnabled(e.target.checked)} data-testid="factor-metrics-enabled" />
+            创建后启用
+          </label>
+
+          <button onClick={handleCreate} data-testid="factor-metrics-create" className={styles.btn} style={{ padding: "6px 16px"  }}>
             创建调度
           </button>
         </div>
@@ -6749,6 +6796,8 @@ function FactorMetricsSchedulesTab() {
           <tr style={{ background: "#f5f5f5" }}>
             <th className={styles.th}>类型</th>
             <th className={styles.th}>范围</th>
+            <th className={styles.th}>因子</th>
+            <th className={styles.th}>并行度</th>
             <th className={styles.th}>频率</th>
             <th className={styles.th}>快照</th>
             <th className={styles.th}>上次运行</th>
@@ -6760,16 +6809,21 @@ function FactorMetricsSchedulesTab() {
         </thead>
         <tbody>
           {schedules.length === 0 && !loading && (
-            <tr><td colSpan={9} style={{ textAlign: "center", padding: 24, color: "#999" }}>
+            <tr><td colSpan={11} style={{ textAlign: "center", padding: 24, color: "#999" }}>
               暂无调度，请创建
             </td></tr>
           )}
           {schedules.map((s) => {
             const opts = s.options || {};
+            const factorNames = Array.isArray(opts.factor_names) ? opts.factor_names : [];
             return (
               <tr key={s.schedule_id} style={{ borderBottom: "1px solid #eee" }}>
                 <td className={styles.td}>{opts.one_shot ? "单次" : "周期"}</td>
                 <td className={styles.td}>{opts.include_disabled ? "全部(含禁用)" : "仅可用"}</td>
+                <td className={styles.td} style={{ maxWidth: 260, wordBreak: "break-all" }}>
+                  {factorNames.length ? factorNames.join(", ") : "全部可计算因子"}
+                </td>
+                <td className={styles.td}>{opts.workers || "-"}</td>
                 <td className={styles.td}>
                   {s.frequency === "weekly"
                     ? `每周${DAY_LABELS[opts.day_of_week || "sunday"] || ""} ${opts.at || ""}`
@@ -6791,7 +6845,7 @@ function FactorMetricsSchedulesTab() {
                   />
                 </td>
                 <td className={styles.td}>
-                  <button onClick={() => handleRunNow(s.schedule_id)} className={styles.btn} style={{ marginRight: 6, fontSize: 12, padding: "2px 8px"  }}>
+                  <button onClick={() => handleRunNow(s.schedule_id)} data-testid={`factor-metrics-run-${s.schedule_id}`} className={styles.btn} style={{ marginRight: 6, fontSize: 12, padding: "2px 8px"  }}>
                     立即运行
                   </button>
                   {confirmDeleteId === s.schedule_id ? (

@@ -177,8 +177,10 @@ class FactorMetricsScheduler:
         max_workers = max(1, min(16, int(options.get("workers") or 4)))
         timeout_per_factor = max(60, min(3600, int(options.get("timeout_per_factor") or 600)))
 
+        job_type = "init"
         summary_payload = {
             "dataset": dataset,
+            "job_type": job_type,
             "triggered_by": triggered_by,
             "schedule_id": str(schedule_id) if schedule_id else None,
             "options": options,
@@ -193,12 +195,19 @@ class FactorMetricsScheduler:
                     """INSERT INTO market.ingestion_jobs
                        (job_id, job_type, status, created_at, summary)
                        VALUES (%s, %s, 'queued', NOW(), %s)""",
-                    (str(job_id), dataset, json.dumps(summary_payload, ensure_ascii=False, default=str)),
+                    (str(job_id), job_type, json.dumps(summary_payload, ensure_ascii=False, default=str)),
                 )
             conn.commit()
 
+        raw_factor_names = options.get("factor_names")
+        factor_names = None
+        if isinstance(raw_factor_names, str):
+            factor_names = [name.strip() for name in raw_factor_names.split(",") if name.strip()] or None
+        elif isinstance(raw_factor_names, list):
+            factor_names = [str(name).strip() for name in raw_factor_names if str(name).strip()] or None
+
         payload = {
-            "factor_names": None,
+            "factor_names": factor_names,
             "data_date": options.get("data_date"),
             "include_disabled": bool(options.get("include_disabled", False)),
             "max_workers": max_workers,
