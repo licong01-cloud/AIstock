@@ -644,29 +644,9 @@ export default function EvolutionDashboard() {
       function createSSE(taskId: string) {
         const sse = new EventSource(`${API}/quantevolver/evolution/tasks/${taskId}/logs`);
         sse.onmessage = (event) => {
+          reconnectCount = 0; // 收到消息重置重连计数
           try {
             const data = JSON.parse(event.data);
-            const terminalLogEvent =
-              data.status === "deleted" ||
-              data.status === "missing" ||
-              data.event === "task_deleted" ||
-              data.event === "task_log_workspace_missing";
-
-            if (terminalLogEvent) {
-              const logLines = data.logs ? (Array.isArray(data.logs) ? data.logs : [String(data.logs)]) : [];
-              appendLogs(logLines.length ? logLines : ["[System] 日志流已关闭"]);
-              sse.close();
-              if (eventSourceRef.current === sse) eventSourceRef.current = null;
-              if (activeTaskIdRef.current === boundTaskId) {
-                activeTaskIdRef.current = null;
-                setActiveTaskId(null);
-                setLoops([]);
-                fetchTasks();
-              }
-              return;
-            }
-
-            reconnectCount = 0; // 收到有效消息才重置重连计数
 
             // 处理日志消息
             if (data.logs) {
@@ -698,23 +678,8 @@ export default function EvolutionDashboard() {
           }
         };
 
-        sse.onerror = async () => {
+        sse.onerror = () => {
           sse.close();
-          if (activeTaskIdRef.current !== boundTaskId) return;
-          try {
-            const taskRes = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}`);
-            if (taskRes.status === 404 || taskRes.status === 204) {
-              appendLogs([`[System] 任务 ${taskId} 已不存在，停止日志流重连`]);
-              if (eventSourceRef.current === sse) eventSourceRef.current = null;
-              activeTaskIdRef.current = null;
-              setActiveTaskId(null);
-              setLoops([]);
-              fetchTasks();
-              return;
-            }
-          } catch {
-            // Network errors still use the bounded reconnect path below.
-          }
           if (reconnectCount < MAX_RECONNECT && activeTaskIdRef.current === boundTaskId) {
             reconnectCount++;
             setTimeout(() => {
@@ -1502,13 +1467,6 @@ export default function EvolutionDashboard() {
     e.stopPropagation();
     if (!confirm(`确定要删除演进任务「${taskName}」吗？\n\n将同时删除所有关联的 Loop 记录、SOTA 注册、子实验和因子/模型指标。\n此操作不可撤销！`)) return;
     try {
-      if (activeTaskId === taskId) {
-        activeTaskIdRef.current = null; // 阻止旧 SSE onerror 继续重连
-        if (eventSourceRef.current) {
-          eventSourceRef.current.close();
-          eventSourceRef.current = null;
-        }
-      }
       const res = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}`, { method: "DELETE" });
       const data = await res.json();
       if (data.status === "success") {

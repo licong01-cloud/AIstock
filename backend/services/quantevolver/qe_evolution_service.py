@@ -3,7 +3,6 @@ import logging
 import os
 import asyncio
 import uuid
-import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -32,25 +31,6 @@ class AutoEvolutionScheduler:
         self.factor_agent = EvolutionFactorAgent(agents=self.agents)
         self.model_agent = EvolutionModelAgent(agents=self.agents)
         self._node_clients: Dict[str, QEWorkspaceClient] = {}
-        self._log_stream_lock = threading.RLock()
-        self._active_log_stream_counts: Dict[str, int] = {}
-        self._log_stream_stop_requested: set[str] = set()
-
-    def _ensure_log_stream_state(self) -> None:
-        """Initialize log-stream bookkeeping for tests that construct via __new__."""
-        if not hasattr(self, "_log_stream_lock"):
-            self._log_stream_lock = threading.RLock()
-        if not hasattr(self, "_active_log_stream_counts"):
-            self._active_log_stream_counts = {}
-        if not hasattr(self, "_log_stream_stop_requested"):
-            self._log_stream_stop_requested = set()
-
-    def _get_workspace_client_for_node_id(self, node_id: Optional[str]) -> QEWorkspaceClient:
-        if node_id:
-            if node_id not in self._node_clients:
-                self._node_clients[node_id] = QEWorkspaceClient.for_node(node_id)
-            return self._node_clients[node_id]
-        return self.workspace_client
 
     def _get_workspace_client_for_task(self, task_id: str) -> QEWorkspaceClient:
         """根据 task 的 node_id 返回对应节点的 workspace 客户端。无 node_id 时返回默认客户端。"""
@@ -58,7 +38,12 @@ class AutoEvolutionScheduler:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("SELECT node_id FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                 row = cur.fetchone()
-        return self._get_workspace_client_for_node_id(row.get("node_id") if row else None)
+        if row and row.get("node_id"):
+            node_id = row["node_id"]
+            if node_id not in self._node_clients:
+                self._node_clients[node_id] = QEWorkspaceClient.for_node(node_id)
+            return self._node_clients[node_id]
+        return self.workspace_client
 
     def _get_task_status(self, task_id: str) -> Optional[str]:
         """Read latest task status so background submit loops can stop cleanly."""
@@ -67,44 +52,6 @@ class AutoEvolutionScheduler:
                 cur.execute("SELECT status FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                 row = cur.fetchone()
         return row[0] if row else None
-
-    def task_exists(self, task_id: str) -> bool:
-        return self._get_task_status(task_id) is not None
-
-    def _request_stop_log_streams(self, task_id: str) -> None:
-        self._ensure_log_stream_state()
-        with self._log_stream_lock:
-            self._log_stream_stop_requested.add(task_id)
-
-    def _is_log_stream_stop_requested(self, task_id: str) -> bool:
-        self._ensure_log_stream_state()
-        with self._log_stream_lock:
-            return task_id in self._log_stream_stop_requested
-
-    def _register_log_stream(self, task_id: str) -> None:
-        self._ensure_log_stream_state()
-        with self._log_stream_lock:
-            self._active_log_stream_counts[task_id] = self._active_log_stream_counts.get(task_id, 0) + 1
-
-    def _unregister_log_stream(self, task_id: str) -> None:
-        self._ensure_log_stream_state()
-        with self._log_stream_lock:
-            count = self._active_log_stream_counts.get(task_id, 0) - 1
-            if count > 0:
-                self._active_log_stream_counts[task_id] = count
-            else:
-                self._active_log_stream_counts.pop(task_id, None)
-
-    def _active_log_stream_count(self, task_id: str) -> int:
-        self._ensure_log_stream_state()
-        with self._log_stream_lock:
-            return self._active_log_stream_counts.get(task_id, 0)
-
-    async def _wait_for_log_streams_closed(self, task_id: str, timeout_seconds: float = 2.0) -> int:
-        deadline = asyncio.get_running_loop().time() + timeout_seconds
-        while self._active_log_stream_count(task_id) > 0 and asyncio.get_running_loop().time() < deadline:
-            await asyncio.sleep(0.1)
-        return self._active_log_stream_count(task_id)
 
     def _get_callback_url_for_task(self, task_id: str) -> Optional[str]:
         """查询任务关联节点的 callback_url，用于 Loop 完成后主动回调。"""
@@ -2695,18 +2642,15 @@ class AutoEvolutionScheduler:
               子实验(qe_experiments)、因子实验指标(qe_factor_experiment_metrics)。
         运行中的任务不允许删除。
         """
-        task_node_id: Optional[str] = None
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 # 1. 验证任务存在且非运行中
-                cur.execute("SELECT task_id, task_name, status, node_id FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                cur.execute("SELECT task_id, task_name, status FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                 task = cur.fetchone()
                 if not task:
                     raise ValueError(f"任务不存在: {task_id}")
                 if task["status"] == "running":
                     raise ValueError("运行中的任务不允许删除，请先停止任务")
-                task_node_id = task.get("node_id")
-                self._request_stop_log_streams(task_id)
 
                 # 1b. 检查是否有 fork task 依赖此 task 的演进历史
                 cur.execute(
@@ -2760,47 +2704,26 @@ class AutoEvolutionScheduler:
 
         # 5b. 清理远端 WSL workspace（如果任务在远端节点执行）
         try:
-            client = self._get_workspace_client_for_node_id(task_node_id)
+            client = self._get_workspace_client_for_task(task_id)
             await client.cleanup_task_workspace(task_id)
             logger.info(f"已清理远端 workspace: {task_id}")
         except Exception as e:
             logger.warning(f"远端 workspace 清理失败（非致命）: {task_id}: {e}")
 
-        remaining_streams = await self._wait_for_log_streams_closed(task_id, timeout_seconds=2.0)
-        if remaining_streams:
-            logger.warning(
-                "Proceeding with delete while %s log stream(s) are still closing for task %s",
-                remaining_streams,
-                task_id,
-            )
-
         # 6. 清理文件系统上的实验目录
         import shutil
         from .config_composer import QE_WORKSPACE_WIN, QE_EXPERIMENTS_ROOT
 
-        async def _remove_tree_with_log_stream_retry(dir_path: Path) -> bool:
-            for attempt in range(3):
-                try:
-                    shutil.rmtree(dir_path, ignore_errors=False)
-                    return True
-                except PermissionError:
-                    if attempt == 2:
-                        raise
-                    self._request_stop_log_streams(task_id)
-                    await self._wait_for_log_streams_closed(task_id, timeout_seconds=2.0)
-                    await asyncio.sleep(0.2)
-            return False
-
         cleaned_dirs = []
         for dir_path in [
-            QE_WORKSPACE_WIN / task_id,       # WSL backtest workspace
-            QE_EXPERIMENTS_ROOT / task_id,    # AIstock-side experiment copy
-            Path(SOTA_ASSETS_DIR) / task_id,  # SOTA assets + log stream cache
+            QE_WORKSPACE_WIN / task_id,       # WSL 回测 workspace
+            QE_EXPERIMENTS_ROOT / task_id,     # AIstock 侧实验副本
+            Path(SOTA_ASSETS_DIR) / task_id,   # SOTA 资产 + 日志
         ]:
             if dir_path.exists() and dir_path.is_dir():
-                if await _remove_tree_with_log_stream_retry(dir_path):
-                    cleaned_dirs.append(str(dir_path))
-                    logger.info(f"Cleaned experiment directory: {dir_path}")
+                shutil.rmtree(dir_path, ignore_errors=False)
+                cleaned_dirs.append(str(dir_path))
+                logger.info(f"已清理实验目录: {dir_path}")
 
         # 6b. 清理 Optuna study 文件
         try:
@@ -2823,92 +2746,28 @@ class AutoEvolutionScheduler:
         }
         
     async def stream_task_logs(self, task_id: str):
-        """Forward RDAgent SSE logs without keeping the local log file locked."""
-        if self._is_log_stream_stop_requested(task_id) or not self.task_exists(task_id):
-            payload = {
-                "status": "deleted",
-                "event": "task_deleted",
-                "logs": [f"Task {task_id} no longer exists; log stream closed."],
-            }
-            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            return
-
-        self._register_log_stream(task_id)
+        """
+        转发 RDAgent SSE 日志流，同时写入 log 文件（SOTA_ASSETS_DIR/{task_id}/logs/evolution.log）
+        """
+        import aiofiles
         log_dir = os.path.join(SOTA_ASSETS_DIR, task_id, "logs")
+        os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, "evolution.log")
         client = self._get_workspace_client_for_task(task_id)
-
-        async def append_local_log(text: str) -> None:
-            os.makedirs(log_dir, exist_ok=True)
-            async with aiofiles.open(log_path, "a", encoding="utf-8") as log_file:
-                await log_file.write(text)
-
-        def as_sse(raw_line: str) -> str:
-            if raw_line.startswith("data:"):
-                return f"{raw_line}\n\n"
-            return f"data: {raw_line}\n\n"
-
-        def parse_payload(text: str) -> Optional[Dict[str, Any]]:
-            try:
-                payload = json.loads(text)
-            except Exception:
-                return None
-            return payload if isinstance(payload, dict) else None
-
-        def is_workspace_waiting(payload: Optional[Dict[str, Any]]) -> bool:
-            if not payload or payload.get("status") != "waiting":
-                return False
-            logs = payload.get("logs") or []
-            if not isinstance(logs, list):
-                logs = [logs]
-            return any("Task directory not found yet" in str(item) for item in logs)
-
-        try:
+        async with aiofiles.open(log_path, "a", encoding="utf-8") as log_file:
             session_header = f"\n{'='*60}\n[Session Start] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{'='*60}\n"
-            await append_local_log(session_header)
-
+            await log_file.write(session_header)
             async for line in client.stream_task_logs(task_id):
+                # 提取日志文本写入文件
                 text = line[len("data:"):].strip() if line.startswith("data:") else line
-                payload = parse_payload(text) if text else None
-
-                if self._is_log_stream_stop_requested(task_id):
-                    closed = {
-                        "status": "deleted",
-                        "event": "task_deleted",
-                        "logs": [f"Task {task_id} is being deleted; log stream closed."],
-                    }
-                    yield f"data: {json.dumps(closed, ensure_ascii=False)}\n\n"
-                    return
-
-                if is_workspace_waiting(payload):
-                    current_status = self._get_task_status(task_id)
-                    if current_status is None:
-                        deleted = {
-                            "status": "deleted",
-                            "event": "task_deleted",
-                            "logs": [f"Task {task_id} no longer exists; log stream closed."],
-                        }
-                        yield f"data: {json.dumps(deleted, ensure_ascii=False)}\n\n"
-                        return
-                    if current_status in {"completed", "failed", "cancelled", "paused"}:
-                        missing = {
-                            "status": "missing",
-                            "event": "task_log_workspace_missing",
-                            "logs": [
-                                f"Task {task_id} is {current_status}, but its RDAgent workspace is missing; log stream closed."
-                            ],
-                        }
-                        yield f"data: {json.dumps(missing, ensure_ascii=False)}\n\n"
-                        return
-                    # Transient pre-start wait: show it in UI but do not persist one line per second.
-                    yield as_sse(line)
-                    continue
-
                 if text:
-                    await append_local_log(text + "\n")
-                yield as_sse(line)
-        finally:
-            self._unregister_log_stream(task_id)
+                    await log_file.write(text + "\n")
+                    await log_file.flush()
+                # 若上游已是 SSE data 行则直接透传，否则包装为 SSE
+                if line.startswith("data:"):
+                    yield f"{line}\n\n"
+                else:
+                    yield f"data: {line}\n\n"
 
     async def get_sota_registry(self) -> List[Dict[str, Any]]:
         with get_conn() as conn:
