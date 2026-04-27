@@ -1191,15 +1191,24 @@ class AutoEvolutionScheduler:
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
-                        SELECT category, grade,
+                        SELECT c.category, c.grade,
                                COUNT(*) as cnt,
-                               AVG(ic_value) as avg_ic,
-                               AVG(sharpe_value) as avg_sharpe
-                        FROM qe_factor_classification
-                        WHERE grade IS NOT NULL
-                        GROUP BY category, grade
-                        ORDER BY category, grade
-                    """)
+                               AVG(m.ic_mean) as avg_ic,
+                               AVG(m.top_excess_sharpe) as avg_sharpe
+                        FROM qe_factor_classification c
+                        LEFT JOIN LATERAL (
+                            SELECT ic_mean, top_excess_sharpe
+                            FROM aistock_factor_metrics
+                            WHERE factor_name = c.factor_name
+                              AND eval_window = 'full'
+                              AND calc_engine = %s
+                            ORDER BY calculated_at DESC
+                            LIMIT 1
+                        ) m ON TRUE
+                        WHERE c.grade IS NOT NULL
+                        GROUP BY c.category, c.grade
+                        ORDER BY c.category, c.grade
+                    """, (CALC_ENGINE,))
                     rows = cur.fetchall()
 
             summary: Dict[str, Any] = {}
@@ -3015,8 +3024,8 @@ class AutoEvolutionScheduler:
                 # 获取 SOTA 因子（排除已删除/不可用）+ LEFT JOIN 独立指标
                 cur.execute("""
                     SELECT c.factor_name, c.source,
-                           c.ic AS task_ic, c.annualized_return AS task_ann_ret,
-                           c.max_drawdown AS task_drawdown,
+                           m.ic_mean AS task_ic, m.top_excess_annual_return AS task_ann_ret,
+                           m.top_max_drawdown AS task_drawdown,
                            m.ic_mean, m.rank_ic_mean, m.icir,
                            m.top_excess_sharpe, m.top_excess_annual_return,
                            m.top_max_drawdown,
@@ -3034,7 +3043,7 @@ class AutoEvolutionScheduler:
                     WHERE c.source_task_id = %s
                       AND c.is_sota_factor = TRUE
                       AND c.is_available = TRUE
-                    ORDER BY m.ic_mean DESC NULLS LAST, c.ic DESC NULLS LAST
+                    ORDER BY m.ic_mean DESC NULLS LAST
                 """, (CALC_ENGINE, task_id))
                 sota_factors = [dict(r) for r in cur.fetchall()]
 
@@ -3052,12 +3061,22 @@ class AutoEvolutionScheduler:
                 alpha_factors = []
                 if include_alpha_baseline:
                     cur.execute("""
-                        SELECT factor_name, source, ic
-                        FROM aistock_factor_catalog
-                        WHERE source IN ('alpha158', 'alpha360')
-                        ORDER BY ic DESC NULLS LAST
+                        SELECT c.factor_name, c.source, m.ic_mean AS ic
+                        FROM aistock_factor_catalog c
+                        JOIN LATERAL (
+                            SELECT ic_mean
+                            FROM aistock_factor_metrics
+                            WHERE factor_name = c.factor_name
+                              AND eval_window = 'full'
+                              AND calc_engine = %s
+                            ORDER BY calculated_at DESC
+                            LIMIT 1
+                        ) m ON TRUE
+                        WHERE c.source IN ('alpha158', 'alpha360')
+                          AND c.is_available = TRUE
+                        ORDER BY m.ic_mean DESC NULLS LAST
                         LIMIT 50
-                    """)
+                    """, (CALC_ENGINE,))
                     alpha_factors = [dict(r) for r in cur.fetchall()]
 
                 # 统计该 task 的全部因子数（含非 SOTA），用于判断是否有演进因子
@@ -3149,17 +3168,27 @@ class AutoEvolutionScheduler:
                            MIN(worst_max_drawdown) AS worst_max_drawdown,
                            COALESCE(SUM(total_loops), 0)::int AS total_loops
                     FROM (
-                        SELECT source_task_id AS task_id,
+                        SELECT c.source_task_id AS task_id,
                                COUNT(*) FILTER (WHERE is_sota_factor = TRUE) AS sota_factor_count,
                                0 AS sota_model_count,
-                               MAX(ic) AS best_ic,
-                               MAX(sharpe) AS best_sharpe,
-                               MAX(annualized_return) AS best_annualized_return,
-                               MIN(max_drawdown) AS worst_max_drawdown,
+                               MAX(m.ic_mean) AS best_ic,
+                               MAX(m.top_excess_sharpe) AS best_sharpe,
+                               MAX(m.top_excess_annual_return) AS best_annualized_return,
+                               MIN(m.top_max_drawdown) AS worst_max_drawdown,
                                0 AS total_loops
-                        FROM aistock_factor_catalog
-                        WHERE source_task_id IS NOT NULL AND source_task_id != ''
-                        GROUP BY source_task_id
+                        FROM aistock_factor_catalog c
+                        LEFT JOIN LATERAL (
+                            SELECT ic_mean, top_excess_sharpe,
+                                   top_excess_annual_return, top_max_drawdown
+                            FROM aistock_factor_metrics
+                            WHERE factor_name = c.factor_name
+                              AND eval_window = 'full'
+                              AND calc_engine = %s
+                            ORDER BY calculated_at DESC
+                            LIMIT 1
+                        ) m ON TRUE
+                        WHERE c.source_task_id IS NOT NULL AND c.source_task_id != ''
+                        GROUP BY c.source_task_id
                         UNION ALL
                         SELECT task_run_id AS task_id,
                                0 AS sota_factor_count,
@@ -3177,7 +3206,7 @@ class AutoEvolutionScheduler:
                     HAVING COALESCE(SUM(sota_factor_count), 0) > 0
                         OR COALESCE(SUM(sota_model_count), 0) > 0
                     ORDER BY best_ic DESC NULLS LAST
-                """)
+                """, (CALC_ENGINE,))
                 tasks = [dict(r) for r in cur.fetchall()]
                 for t in tasks:
                     t["has_sota"] = t["sota_model_count"] > 0 or t["sota_factor_count"] > 0
