@@ -272,6 +272,13 @@ Important directories:
 - Use development frontend ports `3011` or `3012` for UI validation. Before starting a dev frontend, check whether the target port is already occupied.
 - After code changes are complete, notify the user that production services may need a user-managed restart; do not restart production services directly.
 
+## Backend Runtime Logs - 2026-04-27
+
+- `backend/main.py` installs rotating FastAPI/Python file logging under `backend/logs/`: `aistock.log` receives INFO+ root/application logs and `errors.log` receives ERROR+ logs; `/api/v1/quantevolver/evolution/system/logs` tails these files for UI/API diagnostics.
+- Use `backend/logs/aistock.log` and `backend/logs/errors.log` first when diagnosing AIstock FastAPI backend runtime issues, scheduler startup, QE router/service errors, ingestion warnings, and propagated `aistock.*` logger output.
+- `backend/logs/` is not the complete log universe for AIstock: TDX Go, Next.js, RD-Agent workspaces, dispatch task logs, QE workspace `run.log`, Qlib subprocess output, and remote compute nodes can have separate logs/artifacts. Check those source-specific logs when backend logs do not contain the failure.
+- `backend/logs/` is ignored by Git and should stay local runtime state only; old rotated logs can be deleted when they grow large, while active current logs should not be removed from a running backend process.
+
 ## Asset / Program Framework Separation Rule - 2026-04-27
 
 - Program framework changes and persisted/trained asset changes must be treated as separate change classes. During framework development, Codex must not silently modify saved assets.

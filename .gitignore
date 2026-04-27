@@ -14,6 +14,7 @@ node_modules/
 
 # Logs
 *.log
+backend/logs/
 
 # Local data
 data/
