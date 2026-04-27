@@ -25,6 +25,18 @@ _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 _DEFAULT_LOCAL_QLIB_DATA_PATH = "/home/lc999/data/qlib_bin"
 
 
+def _wsl_distro() -> str:
+    distro = os.getenv("AISTOCK_WSL_DISTRO") or os.getenv("QLIB_WSL_DISTRO") or ""
+    distro = distro.strip()
+    if not distro:
+        raise RuntimeError("AISTOCK_WSL_DISTRO or QLIB_WSL_DISTRO is required for stock_pool WSL access")
+    return distro
+
+
+def _wsl_bash_command(script: str) -> list[str]:
+    return ["wsl", "-d", _wsl_distro(), "--", "bash", "-lc", script]
+
+
 def is_filtered_stock_pool(stock_pool_path: str | None) -> bool:
     return bool(stock_pool_path and "filtered_pool" in str(stock_pool_path))
 
@@ -60,15 +72,7 @@ def _run_checked(cmd: list[str], *, timeout: int, error_prefix: str) -> subproce
 
 def _assert_wsl_file_exists(stock_pool_path: str) -> None:
     _run_checked(
-        [
-            "wsl",
-            "-d",
-            "Ubuntu",
-            "--",
-            "bash",
-            "-lc",
-            f"test -f {shlex.quote(stock_pool_path)}",
-        ],
+        _wsl_bash_command(f"test -f {shlex.quote(stock_pool_path)}"),
         timeout=10,
         error_prefix=f"stock_pool file does not exist in WSL: {stock_pool_path}",
     )
@@ -76,15 +80,7 @@ def _assert_wsl_file_exists(stock_pool_path: str) -> None:
 
 def _wsl_sha256(stock_pool_path: str) -> str:
     result = _run_checked(
-        [
-            "wsl",
-            "-d",
-            "Ubuntu",
-            "--",
-            "bash",
-            "-lc",
-            f"sha256sum {shlex.quote(stock_pool_path)} | awk '{{print $1}}'",
-        ],
+        _wsl_bash_command(f"sha256sum {shlex.quote(stock_pool_path)} | awk '{{print $1}}'"),
         timeout=10,
         error_prefix=f"failed to checksum WSL stock_pool file: {stock_pool_path}",
     )
@@ -131,19 +127,11 @@ def sync_stock_pool_to_remote_node(stock_pool_path: str, node: dict[str, Any]) -
     )
 
     _run_checked(
-        [
-            "wsl",
-            "-d",
-            "Ubuntu",
-            "--",
-            "bash",
-            "-lc",
-            (
-                "scp -o ConnectTimeout=10 "
-                f"{shlex.quote(local_stock_pool_path)} "
-                f"{shlex.quote(f'{ssh_target}:{remote_instruments_dir}/')}"
-            ),
-        ],
+        _wsl_bash_command(
+            "scp -o ConnectTimeout=10 "
+            f"{shlex.quote(local_stock_pool_path)} "
+            f"{shlex.quote(f'{ssh_target}:{remote_instruments_dir}/')}"
+        ),
         timeout=30,
         error_prefix=f"failed to sync stock_pool {local_stock_pool_path} -> {ssh_target}:{remote_instruments_dir}/",
     )
@@ -190,7 +178,7 @@ def sync_all_filtered_pools_to_remote_node(node: dict[str, Any]) -> dict[str, st
     ssh_user = node.get("ssh_user") or "lc999"
     ssh_target = f"{ssh_user}@{host}"
     remote_instruments_dir = f"{remote_qlib_data.rstrip('/')}/instruments"
-    local_instruments_dir = "/home/lc999/data/qlib_bin/instruments"
+    local_instruments_dir = f"{os.getenv('QLIB_DATA_PATH_WSL', _DEFAULT_LOCAL_QLIB_DATA_PATH).rstrip('/')}/instruments"
 
     _run_checked(
         ["ssh", ssh_target, "mkdir", "-p", remote_instruments_dir],
@@ -198,19 +186,11 @@ def sync_all_filtered_pools_to_remote_node(node: dict[str, Any]) -> dict[str, st
         error_prefix=f"failed to create remote instruments dir {ssh_target}:{remote_instruments_dir}",
     )
     _run_checked(
-        [
-            "wsl",
-            "-d",
-            "Ubuntu",
-            "--",
-            "bash",
-            "-lc",
-            (
-                "scp -o ConnectTimeout=10 "
-                f"{shlex.quote(local_instruments_dir)}/filtered_pool_*.txt "
-                f"{shlex.quote(f'{ssh_target}:{remote_instruments_dir}/')}"
-            ),
-        ],
+        _wsl_bash_command(
+            "scp -o ConnectTimeout=10 "
+            f"{shlex.quote(local_instruments_dir)}/filtered_pool_*.txt "
+            f"{shlex.quote(f'{ssh_target}:{remote_instruments_dir}/')}"
+        ),
         timeout=60,
         error_prefix=f"failed to sync filtered_pool files -> {ssh_target}:{remote_instruments_dir}/",
     )

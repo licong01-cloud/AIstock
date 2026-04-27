@@ -231,6 +231,7 @@ def test_remote_stock_pool_sync_local_node_checks_file_and_checksum(monkeypatch)
         calls.append(cmd)
         return Result()
 
+    monkeypatch.setenv("AISTOCK_WSL_DISTRO", "Ubuntu-Test")
     monkeypatch.setattr("backend.services.quantevolver.stock_pool_sync.subprocess.run", fake_run)
     result = sync_stock_pool_to_remote_node(
         "/home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt",
@@ -241,6 +242,8 @@ def test_remote_stock_pool_sync_local_node_checks_file_and_checksum(monkeypatch)
     assert result["reason"] == "local_node"
     assert result["sha256"] == "abc123"
     assert any("test -f" in part for cmd in calls for part in cmd)
+    assert all("Ubuntu" not in cmd for call in calls for cmd in call if cmd != "Ubuntu-Test")
+    assert any("Ubuntu-Test" in cmd for call in calls for cmd in call)
 
 
 def test_remote_stock_pool_sync_resolves_instrument_name(monkeypatch):
@@ -255,6 +258,7 @@ def test_remote_stock_pool_sync_resolves_instrument_name(monkeypatch):
         calls.append(cmd)
         return Result()
 
+    monkeypatch.setenv("AISTOCK_WSL_DISTRO", "Ubuntu-Test")
     monkeypatch.setenv("QLIB_DATA_PATH_WSL", "/home/lc999/data/qlib_bin")
     monkeypatch.setattr("backend.services.quantevolver.stock_pool_sync.subprocess.run", fake_run)
     result = sync_stock_pool_to_remote_node(
@@ -265,3 +269,14 @@ def test_remote_stock_pool_sync_resolves_instrument_name(monkeypatch):
     assert result["status"] == "skipped"
     assert result["local_path"] == "/home/lc999/data/qlib_bin/instruments/filtered_pool_20260426.txt"
     assert any("filtered_pool_20260426.txt" in part for cmd in calls for part in cmd)
+
+
+def test_remote_stock_pool_sync_requires_explicit_wsl_distro(monkeypatch):
+    monkeypatch.delenv("AISTOCK_WSL_DISTRO", raising=False)
+    monkeypatch.delenv("QLIB_WSL_DISTRO", raising=False)
+
+    with pytest.raises(RuntimeError, match="AISTOCK_WSL_DISTRO"):
+        sync_stock_pool_to_remote_node(
+            "/home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt",
+            {"node_id": "wsl2-5080", "api_base_url": "http://127.0.0.1:9000"},
+        )

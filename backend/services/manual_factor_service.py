@@ -105,6 +105,19 @@ def _win_to_wsl(win_path: str) -> str:
     return p
 
 
+def _build_wsl_copy_file_script(wsl_source_path: str, windows_target_path: Path) -> str:
+    """Build a WSL-side copy script that writes into a Windows temp path."""
+
+    wsl_target_path = _win_to_wsl(str(windows_target_path))
+    wsl_target_dir = _win_to_wsl(str(windows_target_path.parent))
+    return (
+        "set -e\n"
+        f"if [ ! -f {shlex.quote(wsl_source_path)} ]; then exit 64; fi\n"
+        f"mkdir -p {shlex.quote(wsl_target_dir)}\n"
+        f"cp {shlex.quote(wsl_source_path)} {shlex.quote(wsl_target_path)}\n"
+    )
+
+
 class ManualFactorService:
     """手工因子入库 + 统一独立指标计算。"""
 
@@ -167,19 +180,38 @@ class ManualFactorService:
                 err = stderr.decode("utf-8", errors="replace")[-500:]
                 return {"success": False, "message": f"执行失败: {err}", "duration_sec": round(duration, 2)}
 
-            # 通过 WSL 读取 result.h5（文件在 WSL 原生 fs 中）
-            # 使用 \\wsl$ 路径从 Windows 侧访问
             wsl_result_h5 = f"{wsl_factor_dir}/result.h5"
-            win_result_h5 = Path(f"\\\\wsl$\\Ubuntu{wsl_result_h5}")
+            with tempfile.TemporaryDirectory(prefix="aistock_factor_result_") as result_dir:
+                win_result_h5 = Path(result_dir) / "result.h5"
+                copy_script = _build_wsl_copy_file_script(wsl_result_h5, win_result_h5)
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".sh", delete=False, encoding="utf-8", newline="\n"
+                ) as tmp_copy:
+                    tmp_copy.write(copy_script)
+                    tmp_copy_path = tmp_copy.name
+                try:
+                    proc_copy = await asyncio.create_subprocess_exec(
+                        "wsl", "bash", _win_to_wsl(tmp_copy_path),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    copy_stdout, copy_stderr = await asyncio.wait_for(proc_copy.communicate(), timeout=30)
+                finally:
+                    os.unlink(tmp_copy_path)
 
-            if not win_result_h5.exists():
-                return {"success": False, "message": "执行完成但未生成 result.h5", "duration_sec": round(duration, 2)}
+                if proc_copy.returncode == 64:
+                    return {"success": False, "message": "执行完成但未生成 result.h5", "duration_sec": round(duration, 2)}
+                if proc_copy.returncode != 0:
+                    detail = (copy_stderr or copy_stdout).decode("utf-8", errors="replace")[-500:]
+                    return {"success": False, "message": f"复制 result.h5 失败: {detail}", "duration_sec": round(duration, 2)}
+                if not win_result_h5.exists():
+                    return {"success": False, "message": "result.h5 未复制到 Windows 临时目录", "duration_sec": round(duration, 2)}
 
-            import pandas as pd
-            try:
-                df = pd.read_hdf(str(win_result_h5))
-            except Exception as e:
-                return {"success": False, "message": f"无法读取 result.h5: {e}", "duration_sec": round(duration, 2)}
+                import pandas as pd
+                try:
+                    df = pd.read_hdf(str(win_result_h5))
+                except Exception as e:
+                    return {"success": False, "message": f"无法读取 result.h5: {e}", "duration_sec": round(duration, 2)}
 
             if not isinstance(df.index, pd.MultiIndex) or df.index.nlevels != 2:
                 return {"success": False, "message": "result.h5 缺少 MultiIndex(datetime, instrument)", "duration_sec": round(duration, 2)}
