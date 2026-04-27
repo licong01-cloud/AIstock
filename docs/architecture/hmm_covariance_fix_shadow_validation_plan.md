@@ -128,3 +128,62 @@ Decision:
   covariance fix is compared under the same HMM hyper-parameters as the
   currently successful QE HMM instead of changing rolling window and zscore at
   the same time.
+
+## Three-Version Comparison Set - 2026-04-27
+
+The same-parameter w3/raw covariance-fixed candidate has now been trained.
+The HMM Training Center and Paper v2 UI should show only these three active
+HMM versions for the immediate comparison:
+
+| Role | Config display name | Config ID | Snapshot display name | Snapshot ID |
+| --- | --- | --- | --- | --- |
+| Original baseline | `HMM_BASELINE_ORIGINAL_w3_raw_unfixed__n3_diag_rw3_nozscore` | `564b407f-1541-4b18-a087-2a45cfbca9d9` | `SNAPSHOT_BASELINE_original_w3_raw_unfixed_cov__train2022-01_2024-06__val2024-07_2025-03` | `252fdd35-aae3-445a-baf4-7e46b1b93aff` |
+| Same-parameter covfix candidate | `HMM_COVFIX_w3_raw_same_params__n3_diag_rw3_nozscore` | `b99c907b-873a-4173-a4ee-5eab266f8c49` | `SNAPSHOT_COVFIX_w3_raw_same_params__train2022-01_2024-06__val2024-07_2025-03` | `bbec3863-fb67-445f-938e-66f092d18696` |
+| w5/zscore covfix candidate | `HMM_COVFIX_w5_zscore_candidate__n3_diag_rw5_zscore` | `be681443-fe5d-4641-b55f-5f889e6af8e1` | `SNAPSHOT_COVFIX_w5_zscore_candidate__train2023-01_2026-01__val2026-01_2026-04` | `4c9b5f7b-8e59-44a6-b580-e7186b9283df` |
+
+Removed from the active DB/API set:
+
+- Pre-fix w5/zscore config `b2d5bcc6-8463-4156-bf1a-e1392a00279a`.
+- Pre-fix w5/zscore snapshot `052274d0-f5c7-4713-ab7e-636790baafc5`.
+- No QE, Selection Center, or Paper v2 runtime reference was found before
+  removal. The obsolete model directory under `backend/data/hmm_models` was
+  removed because HMM model assets are ignored runtime artifacts.
+
+Same-parameter w3/raw covfix training record:
+
+- Config ID: `b99c907b-873a-4173-a4ee-5eab266f8c49`.
+- Snapshot ID: `bbec3863-fb67-445f-938e-66f092d18696`.
+- Model path:
+  `backend/data/hmm_models/b99c907b-873a-4173-a4ee-5eab266f8c49/2026-04-27/models.json`.
+- Model SHA256:
+  `1B2179F3267C441C99FCDF7B514272991007F28E196E8B835B2F00C67644BF63`.
+- Hyperparameters match the original baseline on the key HMM settings:
+  `n_states=3`, `covariance_type=diag`, `rolling_window=3`, `zscore=false`,
+  `use_limit_down=false`, `sector_level=L2`, `min_trading_days=120`.
+- Training/validation windows match the original baseline metrics:
+  train `2022-01-01` to `2024-06-30`; validation `2024-07-01` to
+  `2025-03-31`.
+- Coefficients were generated for `preset_A` and `preset_B` over
+  `2024-07-01` to `2026-03-03`.
+- `preset_A` coefficient SHA256:
+  `BDFFEB28E9B4F8528F366F5CD38E4EB4F66C1EDC948FD40152514A392D719774`.
+- `preset_B` coefficient SHA256:
+  `8A48F7E46FE7672A1A3C94F2EF1D559174CE9F1EB729361E023C3BC7079698EC`.
+
+Updated covariance validation:
+
+| Model | Snapshot | Max diag covariance | Min diag covariance | Out-of-bound sectors | Fixed sectors |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Original baseline w3/raw, intentionally retained | `252fdd35-aae3-445a-baf4-7e46b1b93aff` | 1000.000475 | 0.0000166 | 131 | 0 |
+| New same-parameter w3/raw covfix | `bbec3863-fb67-445f-938e-66f092d18696` | 10.000000 | 0.001000 | 0 | 131 |
+| New w5/zscore covfix | `4c9b5f7b-8e59-44a6-b580-e7186b9283df` | 10.000000 | 0.001000 | 0 | 119 |
+
+UI/API note:
+
+- `model_train_snapshots` has no dedicated display-name column, so each
+  snapshot label is stored in `metrics_json.snapshot_display_name` and exposed
+  by the HMM training API as `display_name`.
+- Paper v2 HMM selectors and the HMM maintenance page render this readable
+  snapshot label instead of raw UUID/date pairs.
+- The original baseline remains explicitly named as `unfixed` so it can be
+  selected only as a controlled baseline, not mistaken for a repaired model.

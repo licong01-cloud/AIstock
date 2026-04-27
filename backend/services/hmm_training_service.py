@@ -124,6 +124,38 @@ class HMMTrainingService:
                 rows = cur.fetchall()
         return [dict(r) for r in rows]
 
+    @staticmethod
+    def _snapshot_display_name(row: Dict[str, Any]) -> str:
+        metrics = row.get("metrics_json") or {}
+        if isinstance(metrics, str):
+            try:
+                metrics = json.loads(metrics)
+            except json.JSONDecodeError:
+                metrics = {}
+        if isinstance(metrics, dict):
+            for key in ("snapshot_display_name", "display_name"):
+                value = metrics.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+
+        config_name = str(row.get("config_display_name") or row.get("config_id") or "").strip()
+        trained_at = row.get("trained_at")
+        if isinstance(trained_at, datetime):
+            trained_date = trained_at.date().isoformat()
+        elif hasattr(trained_at, "isoformat"):
+            trained_date = trained_at.isoformat()
+        else:
+            trained_date = str(trained_at or "")[:10]
+        if config_name and trained_date:
+            return f"{config_name}__snapshot_{trained_date}"
+        return str(row.get("snapshot_id") or "").strip()
+
+    @classmethod
+    def _attach_snapshot_display_name(cls, row: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(row)
+        out["display_name"] = cls._snapshot_display_name(out)
+        return out
+
     def delete_config(self, config_id: str) -> None:
         """删除超参版本。有关联快照时拒绝（抛出 ValueError）。"""
         with get_conn() as conn:
@@ -335,31 +367,35 @@ class HMMTrainingService:
     def list_snapshots(self, config_id: str) -> List[Dict[str, Any]]:
         """列出某配置的所有快照，按 trained_at 降序。"""
         sql = """
-            SELECT snapshot_id, config_id, trained_at, model_path,
-                   sector_count, status, metrics_json
-            FROM model_train_snapshots
-            WHERE config_id = %s
-            ORDER BY trained_at DESC
+            SELECT s.snapshot_id, s.config_id, s.trained_at, s.model_path,
+                   s.sector_count, s.status, s.metrics_json,
+                   c.display_name AS config_display_name
+            FROM model_train_snapshots s
+            JOIN model_train_configs c ON c.config_id = s.config_id
+            WHERE s.config_id = %s
+            ORDER BY s.trained_at DESC
         """
         with get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(sql, (config_id,))
                 rows = cur.fetchall()
-        return [dict(r) for r in rows]
+        return [self._attach_snapshot_display_name(dict(r)) for r in rows]
 
     def get_snapshot(self, snapshot_id: str) -> Optional[Dict[str, Any]]:
         """获取快照详情，含 metrics_json。"""
         sql = """
-            SELECT snapshot_id, config_id, trained_at, model_path,
-                   sector_count, status, metrics_json
-            FROM model_train_snapshots
-            WHERE snapshot_id = %s
+            SELECT s.snapshot_id, s.config_id, s.trained_at, s.model_path,
+                   s.sector_count, s.status, s.metrics_json,
+                   c.display_name AS config_display_name
+            FROM model_train_snapshots s
+            JOIN model_train_configs c ON c.config_id = s.config_id
+            WHERE s.snapshot_id = %s
         """
         with get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(sql, (snapshot_id,))
                 row = cur.fetchone()
-        return dict(row) if row else None
+        return self._attach_snapshot_display_name(dict(row)) if row else None
 
     def delete_snapshot(self, snapshot_id: str) -> Dict[str, Any]:
         """删除快照：DB 记录 + 模型文件 + 空目录。

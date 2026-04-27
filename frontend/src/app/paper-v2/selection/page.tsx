@@ -8,7 +8,7 @@ import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { hmmTrainingApi, paperV2Api, selectionCenterApi } from "@/lib/paper-v2/api";
-import { formatPercent, shortHash, todayIso } from "@/lib/paper-v2/format";
+import { formatPercent, hmmSnapshotLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
 import type { DataSource, HmmConfig, HmmSnapshot, JsonObject, SelectablePackage, SelectionMode, SelectionRun, SelectionWatchlistImportResult } from "@/lib/paper-v2/types";
 
 function runLabel(run: SelectionRun): string {
@@ -245,7 +245,7 @@ export default function PaperV2SelectionPage() {
               </select>
               <select className="pv2-select" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)} style={{ maxWidth: 280 }}>
                 <option value="">选择已完成快照</option>
-                {hmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{item.snapshot_id} / {item.trained_at}</option>)}
+                {hmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{hmmSnapshotLabel(item)}</option>)}
               </select>
               <select className="pv2-select" value={hmmPreset} disabled={!hmmEnabled} onChange={(event) => setHmmPreset(event.target.value)} style={{ maxWidth: 150 }}>
                 <option value="preset_A">preset_A</option>

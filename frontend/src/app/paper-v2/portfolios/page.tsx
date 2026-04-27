@@ -9,7 +9,7 @@ import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { hmmTrainingApi, paperV2Api, strategyPackageApi } from "@/lib/paper-v2/api";
-import { formatCompact, shortHash, todayIso } from "@/lib/paper-v2/format";
+import { formatCompact, hmmSnapshotLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
 import type { DataSource, ExecutionPolicy, HmmConfig, HmmSnapshot, JsonObject, PaperPortfolio, PaperSessionProgress, StrategyPackage } from "@/lib/paper-v2/types";
 
 function daysAgoIso(days: number): string {
@@ -234,7 +234,7 @@ export default function PaperV2PortfoliosPage() {
               <div className="pv2-field"><label>停牌处理</label><label className="pv2-chip"><input type="checkbox" checked={excludeSuspended} onChange={(event) => setExcludeSuspended(event.target.checked)} /> 剔除并补位</label></div>
               <div className="pv2-field"><label>HMM</label><label className="pv2-chip"><input type="checkbox" checked={hmmEnabled} onChange={(event) => setHmmEnabled(event.target.checked)} /> 启用 HMM</label></div>
               <div className="pv2-field"><label>HMM 模型版本</label><select className="pv2-select" value={hmmConfigId} disabled={!hmmEnabled} onChange={(event) => setHmmConfigId(event.target.value)}><option value="">选择模型版本</option>{hmmConfigs.map((item) => <option value={item.config_id} key={item.config_id}>{item.display_name} / {item.model_type}</option>)}</select></div>
-              <div className="pv2-field"><label>HMM 快照</label><select className="pv2-select" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)}><option value="">选择已完成快照</option>{hmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{item.snapshot_id} / {item.trained_at}</option>)}</select></div>
+              <div className="pv2-field"><label>HMM 快照</label><select className="pv2-select" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)}><option value="">选择已完成快照</option>{hmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{hmmSnapshotLabel(item)}</option>)}</select></div>
               <div className="pv2-field"><label>HMM Preset</label><select className="pv2-select" value={hmmPreset} disabled={!hmmEnabled} onChange={(event) => setHmmPreset(event.target.value)}><option value="preset_A">preset_A</option><option value="preset_B">preset_B</option></select></div>
             </div>
           </div>

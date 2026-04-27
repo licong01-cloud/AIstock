@@ -319,6 +319,8 @@ export type HmmJob = {
 export type HmmSnapshot = {
   snapshot_id: string;
   config_id: string;
+  display_name?: string | null;
+  config_display_name?: string | null;
   trained_at: string;
   model_path: string;
   sector_count: number;

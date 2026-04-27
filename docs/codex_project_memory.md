@@ -218,6 +218,12 @@ Important directories:
 - Correction: QE backtest `pred.pkl` artifacts are not authoritative current selection data. They are diagnostic/backtest-only (`metadata.source_type=qe_mlruns_pred_pkl_v1`, `authority_scope=diagnostic_backtest_only`) and `StrategyPackageRuntime` rejects them for Selection Center/Paper v2.
 - Authoritative `/selection-artifacts/generate` now runs live/latest-data QE model inference: it reconstructs a temporary StrategyPackage inference workspace, recomputes factors from DB-backed current data, applies the saved QE LGB model in WSL/Qlib, persists `source_type=live_qe_model_inference_v1`, and records model/factor/runtime trace metadata.
 - Strategy Package API keeps `/selection-artifacts/generate-diagnostic-backtest` for explicit diagnostics from QE `pred.pkl`; this endpoint is intentionally separate and its output is not accepted by authoritative runtime.
+
+## HMM Three-Version Comparison Update - 2026-04-27
+
+- The active HMM comparison set is intentionally limited to three DB-visible versions: original baseline `HMM_BASELINE_ORIGINAL_w3_raw_unfixed__n3_diag_rw3_nozscore`, same-parameter repaired `HMM_COVFIX_w3_raw_same_params__n3_diag_rw3_nozscore`, and repaired w5/zscore `HMM_COVFIX_w5_zscore_candidate__n3_diag_rw5_zscore`.
+- The obsolete pre-fix w5/zscore config/snapshot was removed after confirming no QE, Selection Center, or Paper v2 runtime references. HMM runtime assets under `backend/data/hmm_models` remain ignored by Git.
+- HMM snapshot display labels are stored in `model_train_snapshots.metrics_json.snapshot_display_name` and exposed by `/api/v1/hmm-training` as `display_name`; Paper v2 selectors render the readable label instead of UUID/date pairs.
 - `StrategyPackageRuntime` also rejects raw `runtime_config.selection_scores` and manifest embedded `strategy_config.selection_runtime.scores/scores_path`; unit tests seed authoritative artifacts instead of bypassing live/latest-data inference.
 - Strict StrategyPackage live inference now enables `AISTOCK_STRICT_INFERENCE=1` and fails rather than padding/truncating features, filling missing features with zero, using earlier factor dates, tolerating insufficient data windows, or accepting missing fundamental/moneyflow/sector DB data.
 - Verified successful DB_HISTORICAL live inference selection artifacts and single-package Selection Center runs for the first three QE packages on 2026-04-24: `qe_20260416_002701`, `qe_20260413_084216`, and `qe_20260416_082012`. Paper execution remains separately gated by execution-policy/runtime readiness.

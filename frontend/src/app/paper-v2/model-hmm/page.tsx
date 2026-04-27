@@ -10,7 +10,7 @@ import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { hmmTrainingApi, strategyPackageApi } from "@/lib/paper-v2/api";
-import { shortHash, todayIso } from "@/lib/paper-v2/format";
+import { hmmSnapshotLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
 import type { HmmConfig, HmmJob, HmmSnapshot, JsonObject, StrategyPackage } from "@/lib/paper-v2/types";
 
 export default function PaperV2ModelHmmPage() {
@@ -36,6 +36,7 @@ export default function PaperV2ModelHmmPage() {
 
   const selectedPackage = useMemo(() => packages.find((item) => item.package_id === packageId), [packages, packageId]);
   const selectedConfig = useMemo(() => configs.find((item) => item.config_id === configId), [configs, configId]);
+  const snapshotLabelById = useMemo(() => new Map(snapshots.map((item) => [item.snapshot_id, hmmSnapshotLabel(item)])), [snapshots]);
 
   const loadPackages = useCallback(async () => {
     setError(null);
@@ -238,7 +239,7 @@ export default function PaperV2ModelHmmPage() {
             columns={[
               { key: "job", header: "任务", render: (row) => <span className="pv2-mono">{shortHash(row.job_id)}</span> },
               { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
-              { key: "snapshot", header: "快照", render: (row) => shortHash(row.snapshot_id) },
+              { key: "snapshot", header: "快照", render: (row) => row.snapshot_id ? <span title={row.snapshot_id}>{snapshotLabelById.get(row.snapshot_id) || shortHash(row.snapshot_id)}</span> : "-" },
               { key: "started", header: "开始时间", render: (row) => row.started_at || "-" },
               { key: "error", header: "错误", render: (row) => row.error_message || "-" },
             ]}
@@ -251,7 +252,8 @@ export default function PaperV2ModelHmmPage() {
           rows={snapshots}
           empty="暂无 HMM 快照。启用 HMM 的选股运行会在缺少已完成快照和系数产物时 fail-fast。"
           columns={[
-            { key: "snapshot", header: "快照", render: (row) => <span className="pv2-mono">{shortHash(row.snapshot_id)}</span> },
+            { key: "snapshot", header: "快照版本", render: (row) => <span title={row.snapshot_id}>{hmmSnapshotLabel(row)}</span> },
+            { key: "id", header: "ID", render: (row) => <span className="pv2-mono">{shortHash(row.snapshot_id)}</span> },
             { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
             { key: "trained", header: "训练时间", render: (row) => row.trained_at },
             { key: "sectors", header: "行业数", render: (row) => row.sector_count },

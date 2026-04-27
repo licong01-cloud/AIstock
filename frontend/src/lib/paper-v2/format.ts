@@ -26,6 +26,22 @@ export function shortHash(value: unknown, size = 8): string {
   return `${text.slice(0, size)}...${text.slice(-size)}`;
 }
 
+export function hmmSnapshotLabel(snapshot: {
+  display_name?: string | null;
+  snapshot_id?: string | null;
+  trained_at?: string | null;
+  metrics_json?: Record<string, unknown> | null;
+}): string {
+  const explicit = String(snapshot.display_name || "").trim();
+  if (explicit) return explicit;
+  const metrics = snapshot.metrics_json && typeof snapshot.metrics_json === "object" ? snapshot.metrics_json : null;
+  const metricsLabel = String(metrics?.snapshot_display_name || metrics?.display_name || "").trim();
+  if (metricsLabel) return metricsLabel;
+  const trainedDate = String(snapshot.trained_at || "").slice(0, 10);
+  const id = shortHash(snapshot.snapshot_id);
+  return trainedDate ? `${id} / ${trainedDate}` : id;
+}
+
 export function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }

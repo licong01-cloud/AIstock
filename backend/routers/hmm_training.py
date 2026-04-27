@@ -52,6 +52,8 @@ class ConfigResponse(BaseModel):
 class SnapshotResponse(BaseModel):
     snapshot_id: str
     config_id: str
+    display_name: Optional[str] = None
+    config_display_name: Optional[str] = None
     trained_at: str
     model_path: str
     sector_count: int = 0
