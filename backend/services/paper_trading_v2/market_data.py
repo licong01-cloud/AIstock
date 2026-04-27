@@ -15,6 +15,7 @@ from typing import Any, Callable, Iterator, Protocol
 
 from backend.data_service.tdx_adapter import fetch_minute_kline_tdx
 from backend.db.pg_pool import get_conn
+from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.trading_core.limit_price_provider import (
     DailyLimitPrice,
@@ -61,10 +62,28 @@ class DailySuspendStatus:
     source: str = "market.suspend_d"
 
 
+@dataclass(frozen=True)
+class PreviousClose:
+    """Authoritative previous close resolved from audited daily kline data."""
+
+    symbol: str
+    trade_date: date
+    previous_trade_date: date
+    pre_close: float
+    source: str = "market.kline_daily_raw.previous_trading_day_close"
+
+
 class SuspendStatusProvider(Protocol):
     """Provider boundary for daily suspension status."""
 
     def get_suspend_status(self, symbol: str, trade_date: date) -> DailySuspendStatus:
+        ...
+
+
+class PreviousCloseProvider(Protocol):
+    """Provider boundary for explicit previous close lookup."""
+
+    def get_previous_close(self, symbol: str, trade_date: date) -> PreviousClose:
         ...
 
 
@@ -111,6 +130,101 @@ class DbSuspendStatusProvider:
         )
 
 
+class DbPreviousCloseProvider:
+    """Resolve pre_close from audited previous trading-day daily kline rows."""
+
+    def __init__(
+        self,
+        *,
+        conn_factory: ConnFactory | None = None,
+        refresh_audit: DataRefreshAuditRepository | Any | None = None,
+    ) -> None:
+        self.conn_factory = conn_factory or get_conn
+        self.refresh_audit = refresh_audit or DataRefreshAuditRepository(conn_factory=self.conn_factory)
+
+    def get_previous_close(self, symbol: str, trade_date: date) -> PreviousClose:
+        normalized_symbol = str(symbol or "").strip()
+        if not normalized_symbol:
+            raise DataUnavailableError("symbol is required for previous close lookup")
+        previous_trade_date = self._previous_trading_day(trade_date)
+        self.refresh_audit.require_success(dataset="kline_daily_raw", trade_date=previous_trade_date)
+        row = self._query_previous_close(normalized_symbol, previous_trade_date)
+        if row is None:
+            raise DataUnavailableError(
+                "previous close row is missing in market.kline_daily_raw",
+                context={
+                    "symbol": normalized_symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "previous_trade_date": previous_trade_date.isoformat(),
+                    "table": "market.kline_daily_raw",
+                },
+            )
+        pre_close = PaperV2MinuteMarketDataProvider._positive_price_from_li(
+            row[0],
+            "close_li",
+            normalized_symbol,
+            previous_trade_date,
+        )
+        return PreviousClose(
+            symbol=normalized_symbol,
+            trade_date=trade_date,
+            previous_trade_date=previous_trade_date,
+            pre_close=pre_close,
+        )
+
+    def _previous_trading_day(self, trade_date: date) -> date:
+        try:
+            with self.conn_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT max(cal_date)
+                        FROM market.trading_calendar
+                        WHERE cal_date < %s
+                          AND is_trading = TRUE
+                        """,
+                        (trade_date,),
+                    )
+                    row = cur.fetchone()
+        except Exception as exc:
+            raise DataUnavailableError(
+                "previous close trading calendar query failed",
+                context={"trade_date": trade_date.isoformat()},
+            ) from exc
+        if row is None or row[0] is None:
+            raise DataUnavailableError(
+                "previous trading day is missing for pre_close lookup",
+                context={"trade_date": trade_date.isoformat()},
+            )
+        return row[0]
+
+    def _query_previous_close(self, symbol: str, previous_trade_date: date) -> tuple[Any, ...] | None:
+        try:
+            with self.conn_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT close_li
+                        FROM market.kline_daily_raw
+                        WHERE ts_code = %s
+                          AND trade_date = %s
+                        ORDER BY CASE WHEN adjust_type = 'none' THEN 0 ELSE 1 END
+                        LIMIT 1
+                        """,
+                        (symbol, previous_trade_date),
+                    )
+                    return cur.fetchone()
+        except Exception as exc:
+            raise DataUnavailableError(
+                "previous close kline query failed",
+                context={
+                    "symbol": symbol,
+                    "previous_trade_date": previous_trade_date.isoformat(),
+                    "table": "market.kline_daily_raw",
+                },
+            ) from exc
+
+
 class PaperV2MinuteMarketDataProvider:
     """Build strict minute execution inputs from TDX or historical DB data."""
 
@@ -119,15 +233,17 @@ class PaperV2MinuteMarketDataProvider:
         *,
         limit_price_provider: StkLimitPriceProvider | None = None,
         suspend_status_provider: SuspendStatusProvider | None = None,
+        previous_close_provider: PreviousCloseProvider | None = None,
         day_feature_provider: V25DayFeatureProvider | None = None,
         tdx_fetcher: TdxMinuteFetcher | None = None,
         conn_factory: ConnFactory | None = None,
     ) -> None:
-        self.limit_price_provider = limit_price_provider or StkLimitPriceProvider()
-        self.suspend_status_provider = suspend_status_provider or DbSuspendStatusProvider(conn_factory=conn_factory)
-        self.day_feature_provider = day_feature_provider or DbV25DayFeatureProvider(conn_factory=conn_factory)
-        self.tdx_fetcher = tdx_fetcher or fetch_minute_kline_tdx
         self.conn_factory = conn_factory or get_conn
+        self.limit_price_provider = limit_price_provider or StkLimitPriceProvider()
+        self.suspend_status_provider = suspend_status_provider or DbSuspendStatusProvider(conn_factory=self.conn_factory)
+        self.previous_close_provider = previous_close_provider or DbPreviousCloseProvider(conn_factory=self.conn_factory)
+        self.day_feature_provider = day_feature_provider or DbV25DayFeatureProvider(conn_factory=self.conn_factory)
+        self.tdx_fetcher = tdx_fetcher or fetch_minute_kline_tdx
 
     def load_symbol_input(
         self,
@@ -148,12 +264,7 @@ class PaperV2MinuteMarketDataProvider:
                 context={"symbol": symbol, "trade_date": trade_date.isoformat(), "min_bars": min_bars},
             )
 
-        limit_price = self.limit_price_provider.get_limit_price(symbol, trade_date)
-        if limit_price.pre_close is None or limit_price.pre_close <= 0:
-            raise DataUnavailableError(
-                "pre_close is required for minute execution context",
-                context={"symbol": symbol, "trade_date": trade_date.isoformat()},
-            )
+        limit_price, pre_close_source = self._limit_price_with_required_pre_close(symbol, trade_date)
         suspend_status = None
         if require_suspend_status:
             if self.suspend_status_provider is None:
@@ -192,6 +303,7 @@ class PaperV2MinuteMarketDataProvider:
             source=source,
             minute_bars=minute_bars,
             limit_price=limit_price,
+            pre_close_source=pre_close_source,
             suspend_status=suspend_status,
             day_features=day_features,
         )
@@ -259,12 +371,7 @@ class PaperV2MinuteMarketDataProvider:
                 context={"symbol": symbol, "trade_date": trade_date.isoformat(), "until_time": until_time.isoformat()},
             )
 
-        limit_price = self.limit_price_provider.get_limit_price(symbol, trade_date)
-        if limit_price.pre_close is None or limit_price.pre_close <= 0:
-            raise DataUnavailableError(
-                "pre_close is required for observed intraday minute context",
-                context={"symbol": symbol, "trade_date": trade_date.isoformat()},
-            )
+        limit_price, pre_close_source = self._limit_price_with_required_pre_close(symbol, trade_date)
         suspend_status = None
         if require_suspend_status:
             if self.suspend_status_provider is None:
@@ -293,6 +400,7 @@ class PaperV2MinuteMarketDataProvider:
             source=source,
             minute_bars=observed,
             limit_price=limit_price,
+            pre_close_source=pre_close_source,
             suspend_status=suspend_status,
             day_features=day_features,
         )
@@ -528,6 +636,7 @@ class PaperV2MinuteMarketDataProvider:
         source: MinuteDataSource,
         minute_bars: list[MinuteBar],
         limit_price: DailyLimitPrice,
+        pre_close_source: str,
         suspend_status: DailySuspendStatus | None = None,
         day_features: V25DayFeatures | None = None,
     ) -> dict[str, Any]:
@@ -542,6 +651,7 @@ class PaperV2MinuteMarketDataProvider:
             "observed_bar_count": len(minute_bars),
             "observed_only": source == MinuteDataSource.TDX_REALTIME,
             "prev_close": limit_price.pre_close,
+            "prev_close_source": pre_close_source,
             "limit_up": limit_price.up_limit,
             "limit_down": limit_price.down_limit,
             "suspend_status": (
@@ -563,6 +673,38 @@ class PaperV2MinuteMarketDataProvider:
         if day_features is not None:
             context.update(day_features.market_context_payload())
         return context
+
+    def _limit_price_with_required_pre_close(self, symbol: str, trade_date: date) -> tuple[DailyLimitPrice, str]:
+        limit_price = self.limit_price_provider.get_limit_price(symbol, trade_date)
+        if limit_price.pre_close is not None and float(limit_price.pre_close) > 0:
+            return limit_price, "market.stk_limit.pre_close"
+        if self.previous_close_provider is None:
+            raise DataUnavailableError(
+                "pre_close is required for minute execution context",
+                context={"symbol": symbol, "trade_date": trade_date.isoformat(), "source": "market.stk_limit.pre_close"},
+            )
+        previous_close = self.previous_close_provider.get_previous_close(symbol, trade_date)
+        if previous_close.pre_close <= 0:
+            raise DataUnavailableError(
+                "previous close provider returned invalid pre_close",
+                context={
+                    "symbol": symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "previous_trade_date": previous_close.previous_trade_date.isoformat(),
+                    "pre_close": previous_close.pre_close,
+                    "source": previous_close.source,
+                },
+            )
+        return (
+            DailyLimitPrice(
+                symbol=limit_price.symbol,
+                trade_date=limit_price.trade_date,
+                pre_close=previous_close.pre_close,
+                up_limit=limit_price.up_limit,
+                down_limit=limit_price.down_limit,
+            ),
+            previous_close.source,
+        )
 
     def _load_day_features(self, *, symbol: str, trade_date: date, required: bool) -> V25DayFeatures | None:
         if not required:

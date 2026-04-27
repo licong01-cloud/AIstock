@@ -9,6 +9,7 @@ from backend.services.paper_trading_v2.market_data import (
     DbSuspendStatusProvider,
     MinuteDataSource,
     PaperV2MinuteMarketDataProvider,
+    PreviousClose,
 )
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
@@ -38,6 +39,22 @@ class FakeSuspendProvider:
             trade_date=trade_date,
             is_suspended=self.suspended,
             suspend_type="S" if self.suspended else None,
+        )
+
+
+class FakePreviousCloseProvider:
+    def __init__(self, *, pre_close: float | None = 10.0) -> None:
+        self.pre_close = pre_close
+
+    def get_previous_close(self, symbol: str, trade_date: date) -> PreviousClose:
+        if self.pre_close is None:
+            raise DataUnavailableError("pre_close is required for minute execution context")
+        return PreviousClose(
+            symbol=symbol,
+            trade_date=trade_date,
+            previous_trade_date=trade_date - timedelta(days=1),
+            pre_close=self.pre_close,
+            source="test.previous_close_provider",
         )
 
 
@@ -168,6 +185,7 @@ def test_tdx_market_data_provider_fails_when_31_bars_are_required_but_missing() 
 def test_tdx_market_data_provider_fails_when_prev_close_is_missing() -> None:
     provider = PaperV2MinuteMarketDataProvider(
         limit_price_provider=FakeLimitProvider(pre_close=None),
+        previous_close_provider=FakePreviousCloseProvider(pre_close=None),
         tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(31),
     )
 
@@ -178,6 +196,25 @@ def test_tdx_market_data_provider_fails_when_prev_close_is_missing() -> None:
             source=MinuteDataSource.TDX_REALTIME,
             min_bars=31,
         )
+
+
+def test_market_data_provider_uses_explicit_previous_close_provider_when_stk_limit_lacks_pre_close() -> None:
+    provider = PaperV2MinuteMarketDataProvider(
+        limit_price_provider=FakeLimitProvider(pre_close=None),
+        previous_close_provider=FakePreviousCloseProvider(pre_close=9.8),
+        tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(31),
+    )
+
+    result = provider.load_symbol_input(
+        symbol="000001.SZ",
+        trade_date=date(2024, 1, 2),
+        source=MinuteDataSource.TDX_REALTIME,
+        min_bars=31,
+    )
+
+    assert result.market_context["prev_close"] == 9.8
+    assert result.market_context["prev_close_source"] == "test.previous_close_provider"
+    assert all(bar.limit_up == 11.0 and bar.limit_down == 9.0 for bar in result.minute_bars)
 
 
 def test_tdx_market_data_provider_fails_on_invalid_bar_price() -> None:
