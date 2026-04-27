@@ -736,9 +736,6 @@ export default function FactorList({
       return {
         factor_name: f.factor_name,
         source: f.source,
-        ic: f.ic,
-        sharpe: f.sharpe,
-        annualized_return: f.annualized_return,
         is_sota_factor: f.is_sota_factor,
         is_available: f.is_available !== false,
         description_cn: f.description_cn,
@@ -2464,9 +2461,9 @@ export default function FactorList({
                               <tr style={{ borderBottom: "1px solid #e5e7eb", textAlign: "left" }}>
                                 <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>因子名称</th>
                                 <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>类型</th>
-                                <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>IC</th>
-                                <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>Sharpe</th>
-                                <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>年化</th>
+                                <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>独立IC</th>
+                                <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>独立Sharpe</th>
+                                <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>独立年化</th>
                                 <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>SOTA</th>
                                 <th style={{ padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>描述</th>
                               </tr>
@@ -2476,9 +2473,9 @@ export default function FactorList({
                                 <tr key={fac.name} style={{ borderBottom: "1px solid #f3f4f6" }}>
                                   <td style={{ padding: "4px 8px", fontFamily: "monospace", fontWeight: 600, color: "#374151" }}>{fac.name}</td>
                                   <td style={{ padding: "4px 8px", color: "#6b7280" }}>{fac.factor_type || "-"}</td>
-                                  <td style={{ padding: "4px 8px", color: "#374151" }}>{fac.ic != null ? fac.ic.toFixed(4) : "-"}</td>
-                                  <td style={{ padding: "4px 8px", color: "#374151" }}>{fac.sharpe != null ? fac.sharpe.toFixed(3) : "-"}</td>
-                                  <td style={{ padding: "4px 8px", color: "#374151" }}>{fac.annualized_return != null ? (fac.annualized_return * 100).toFixed(2) + "%" : "-"}</td>
+                                  <td style={{ padding: "4px 8px", color: "#374151" }}>{fac.ind_ic != null ? fac.ind_ic.toFixed(4) : "-"}</td>
+                                  <td style={{ padding: "4px 8px", color: "#374151" }}>{fac.ind_sharpe != null ? fac.ind_sharpe.toFixed(3) : "-"}</td>
+                                  <td style={{ padding: "4px 8px", color: "#374151" }}>{fac.ind_annual_return != null ? (fac.ind_annual_return * 100).toFixed(2) + "%" : "-"}</td>
                                   <td style={{ padding: "4px 8px" }}>{fac.is_sota_factor ? "✓" : ""}</td>
                                   <td style={{ padding: "4px 8px", color: "#6b7280", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fac.description_cn || "-"}</td>
                                 </tr>
@@ -3158,18 +3155,6 @@ export default function FactorList({
                                     {detail.code_text}
                                   </pre>
                                 )}
-                              </div>
-                            )}
-
-                            {/* TASK组合指标(参考) */}
-                            {(f.ic != null || f.sharpe != null || f.annualized_return != null) && (
-                              <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e5e7eb" }}>
-                                <strong style={{ color: "#9ca3af", fontSize: 11 }}>TASK组合指标(参考)</strong>
-                                <div style={{ display: "flex", gap: 12, marginTop: 4, fontSize: 11, color: "#6b7280" }}>
-                                  <span>IC: <strong>{f.ic != null ? f.ic.toFixed(4) : "-"}</strong></span>
-                                  <span>Sharpe: <strong>{f.sharpe != null ? f.sharpe.toFixed(3) : "-"}</strong></span>
-                                  <span>年化: <strong>{f.annualized_return != null ? (f.annualized_return * 100).toFixed(1) + "%" : "-"}</strong></span>
-                                </div>
                               </div>
                             )}
 
