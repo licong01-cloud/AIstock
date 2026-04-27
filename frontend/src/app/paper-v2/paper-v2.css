@@ -112,6 +112,7 @@
 .pv2-table th { text-align: left; padding: 11px 12px; background: #ede5d8; color: #4d463e; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
 .pv2-table td { padding: 11px 12px; border-top: 1px solid #eee6d9; vertical-align: top; }
 .pv2-table tr:hover td { background: #fbf6ed; }
+.pv2-table button { cursor: pointer; }
 .pv2-empty-cell { text-align: center; color: var(--pv2-muted); padding: 28px !important; }
 
 .pv2-badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 9px; font-size: 11px; font-weight: 900; letter-spacing: 0.03em; white-space: nowrap; }
@@ -135,6 +136,27 @@
 .pv2-notice-success { border-left: 5px solid var(--pv2-green); background: #f0fdf4; }
 
 .pv2-row-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.pv2-order-trace-button {
+  border: 1px solid rgba(15, 118, 110, 0.25);
+  border-radius: 999px;
+  background: #ccfbf1;
+  color: #115e59;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 7px 11px;
+  white-space: nowrap;
+}
+.pv2-order-trace-button:hover { background: #99f6e4; transform: translateY(-1px); }
+.pv2-trace-panel {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid rgba(15, 118, 110, 0.28);
+  border-left: 5px solid var(--pv2-teal);
+  border-radius: 18px;
+  background: linear-gradient(135deg, #f0fdfa, #fffdf8);
+}
+.pv2-trace-panel h3 { margin: 4px 0 0; font-size: 18px; letter-spacing: -0.02em; }
 .pv2-chip-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .pv2-chip { border-radius: 999px; padding: 5px 9px; background: #ede5d8; color: #575047; font-size: 12px; font-weight: 800; }
 .pv2-muted { color: var(--pv2-muted); }

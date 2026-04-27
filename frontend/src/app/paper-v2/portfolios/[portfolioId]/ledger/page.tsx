@@ -10,7 +10,7 @@ import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { paperV2Api } from "@/lib/paper-v2/api";
-import { formatNumber, shortHash } from "@/lib/paper-v2/format";
+import { formatNumber, shortHash, statusLabel } from "@/lib/paper-v2/format";
 import type { JsonObject, PaperPortfolio } from "@/lib/paper-v2/types";
 
 function text(row: JsonObject, key: string): string {
@@ -23,6 +23,36 @@ function compactJson(row: JsonObject, key: string): string {
   const value = row[key];
   if (!value || typeof value !== "object") return "-";
   return Object.keys(value as Record<string, unknown>).join(", ") || "{}";
+}
+
+function OrderTraceDetail({ row, onClose }: { row: JsonObject; onClose: () => void }) {
+  return (
+    <div className="pv2-trace-panel" id="ledger-order-trace-detail" data-testid="ledger-order-trace-detail">
+      <div className="pv2-card-head">
+        <div>
+          <div className="pv2-eyebrow">ORDER TRACE</div>
+          <h3>订单追踪详情</h3>
+          <p className="pv2-help">
+            这里展示的是后端持久化的订单原始审计数据，用于核对策略来源、订单状态、成交数量和执行上下文；不是“失败”标记。
+          </p>
+        </div>
+        <button className="pv2-button-ghost" data-testid="ledger-trace-close" onClick={onClose} type="button">
+          关闭
+        </button>
+      </div>
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="股票" value={text(row, "symbol")} />
+        <MetricCard label="方向" value={statusLabel(text(row, "side"))} />
+        <MetricCard
+          label="状态"
+          value={statusLabel(text(row, "status"))}
+          tone={String(row.status || "").toUpperCase() === "FILLED" ? "success" : "warning"}
+        />
+        <MetricCard label="成交数量" value={formatNumber(row.filled_quantity, 0)} />
+      </div>
+      <JsonPanel value={row} />
+    </div>
+  );
 }
 
 export default function PaperV2LedgerPage() {
@@ -87,7 +117,14 @@ export default function PaperV2LedgerPage() {
         <MetricCard label="快照" value={snapshots.length} tone={snapshots.length ? "success" : "warning"} />
       </div>
 
-      <SectionCard title="订单" eyebrow={loading ? "加载中" : `portfolio ${shortHash(portfolioId)}`} action={<button className="pv2-button" onClick={load} type="button">刷新</button>}>
+      <SectionCard
+        title="订单"
+        eyebrow={loading ? "加载中" : `portfolio ${shortHash(portfolioId)}`}
+        action={<button className="pv2-button" data-testid="ledger-refresh" onClick={load} type="button">刷新</button>}
+      >
+        <div className="pv2-help" style={{ marginBottom: 10 }}>
+          订单状态会按业务含义中文展示：FILLED 表示“已全部成交”，不是失败；最后一列是审计追踪入口，点击“查看追踪”会在订单表下方展开该订单的策略来源、成交数量和执行上下文。
+        </div>
         <PaperTable
           rows={orders}
           empty="暂无订单。请先执行就绪检查和单日运行。"
@@ -99,9 +136,26 @@ export default function PaperV2LedgerPage() {
             { key: "filled", header: "已成交", render: (row) => formatNumber(row.filled_quantity, 0) },
             { key: "price", header: "均价", render: (row) => formatNumber(row.avg_fill_price, 4) },
             { key: "status", header: "状态", render: (row) => <StatusBadge status={text(row, "status")} /> },
-            { key: "trace", header: "追踪", render: (row) => <button className="pv2-link-button" type="button" onClick={() => setSelectedRow(row)}>JSON</button> },
+            {
+              key: "trace",
+              header: "订单追踪",
+              render: (row, index) => (
+                <button
+                  aria-controls="ledger-order-trace-detail"
+                  aria-expanded={selectedRow === row}
+                  className="pv2-order-trace-button"
+                  data-testid={`ledger-order-trace-${index}`}
+                  title="查看该订单的后端原始审计数据与执行上下文"
+                  type="button"
+                  onClick={() => setSelectedRow(row)}
+                >
+                  {selectedRow === row ? "已打开" : "查看追踪"}
+                </button>
+              ),
+            },
           ]}
         />
+        {selectedRow ? <OrderTraceDetail row={selectedRow} onClose={() => setSelectedRow(null)} /> : null}
       </SectionCard>
 
       <div className="pv2-grid pv2-grid-2">
@@ -196,11 +250,6 @@ export default function PaperV2LedgerPage() {
         </SectionCard>
       </div>
 
-      {selectedRow ? (
-        <SectionCard title="所选记录 JSON" eyebrow="追踪详情" action={<button className="pv2-button-ghost" onClick={() => setSelectedRow(null)} type="button">关闭</button>}>
-          <JsonPanel value={selectedRow} />
-        </SectionCard>
-      ) : null}
     </main>
   );
 }
