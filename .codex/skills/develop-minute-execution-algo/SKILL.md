@@ -1,6 +1,6 @@
 ---
 name: develop-minute-execution-algo
-description: Develop or modify AIstock intraday minute execution strategies, including V24/V25/V26-style algorithms, QE Qlib backtest helpers, Paper Trading v2 historical replay or realtime adapters, execution policy config, market-state handling, and fail-fast validation. Use when implementing minute execution algorithms, changing V25/V24 behavior, wiring suspend_d/limit/pre_close/minute-bar requirements, or validating that QE and Paper v2 use the same execution semantics without silent fallback.
+description: "Develop or modify AIstock intraday minute execution strategies for QE Qlib backtests, Paper Trading v2 adapters, V24/V25/V26-style algorithms, market-state handling, suspend_d/limit/pre_close/minute-bar wiring, and fail-fast validation without silent fallback."
 ---
 
 # Develop Minute Execution Algo
