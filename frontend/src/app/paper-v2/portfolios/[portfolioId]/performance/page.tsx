@@ -145,7 +145,7 @@ export default function PaperV2PerformancePage() {
       </div>
 
       {report ? (
-        <SectionCard title="原始报告 JSON" eyebrow="调试追踪">
+        <SectionCard title="原始报告 ??" eyebrow="调试追踪">
           <JsonPanel value={report} />
         </SectionCard>
       ) : null}

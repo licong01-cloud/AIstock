@@ -126,7 +126,15 @@
 .pv2-error-kicker { color: var(--pv2-red); font-weight: 900; font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; }
 .pv2-error-main { margin-top: 6px; }
 .pv2-error-meta, .pv2-help { color: var(--pv2-muted); font-size: 12px; margin-top: 4px; }
-.pv2-json { margin: 12px 0 0; max-height: 360px; overflow: auto; background: #171412; color: #f8f3e9; border-radius: 14px; padding: 14px; font-size: 12px; line-height: 1.45; }
+.pv2-readable-panel { margin-top: 12px; border: 1px solid var(--pv2-line); border-radius: 16px; background: #fffaf1; overflow: hidden; }
+.pv2-readable-table { display: grid; gap: 0; }
+.pv2-readable-row { display: grid; grid-template-columns: minmax(130px, 0.34fr) minmax(0, 1fr); border-top: 1px solid #eee6d9; }
+.pv2-readable-row:first-child { border-top: 0; }
+.pv2-readable-key { padding: 10px 12px; background: #f1e8d9; color: #5f574d; font-size: 12px; font-weight: 900; }
+.pv2-readable-value { padding: 10px 12px; min-width: 0; overflow-wrap: anywhere; }
+.pv2-readable-list { display: grid; gap: 8px; }
+.pv2-readable-item { border: 1px solid #eee6d9; border-radius: 12px; background: #fffdf8; padding: 8px 10px; }
+.pv2-readable-item summary { cursor: pointer; color: var(--pv2-teal-dark); font-weight: 900; }
 
 .pv2-notice { border-radius: 20px; padding: 15px; border: 1px solid var(--pv2-line); margin-bottom: 16px; background: rgba(255,253,248,0.9); }
 .pv2-notice-title { font-weight: 900; font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 6px; }

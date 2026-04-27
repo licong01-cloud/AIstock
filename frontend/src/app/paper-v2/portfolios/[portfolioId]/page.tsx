@@ -11,12 +11,25 @@ import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { paperV2Api } from "@/lib/paper-v2/api";
-import { formatCompact, shortHash } from "@/lib/paper-v2/format";
+import { formatCompact, formatNumber, formatPercent, shortHash } from "@/lib/paper-v2/format";
 import type { Activation, JsonObject, PaperPortfolio, PaperRun } from "@/lib/paper-v2/types";
 
 function asDate(value: unknown): string {
   if (!value) return "-";
   return String(value).slice(0, 19).replace("T", " ");
+}
+
+function num(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function packageName(portfolio: PaperPortfolio): string {
+  return String(portfolio.frozen_manifest?.package_name || portfolio.package_id || "-");
+}
+
+function packageSource(portfolio: PaperPortfolio): string {
+  return String(portfolio.frozen_manifest?.source_id || portfolio.frozen_manifest?.run_id || portfolio.package_id || "-");
 }
 
 export default function PaperV2PortfolioDetailPage() {
@@ -26,6 +39,10 @@ export default function PaperV2PortfolioDetailPage() {
   const [runs, setRuns] = useState<PaperRun[]>([]);
   const [errors, setErrors] = useState<JsonObject[]>([]);
   const [snapshots, setSnapshots] = useState<JsonObject[]>([]);
+  const [orders, setOrders] = useState<JsonObject[]>([]);
+  const [fills, setFills] = useState<JsonObject[]>([]);
+  const [positions, setPositions] = useState<JsonObject[]>([]);
+  const [performance, setPerformance] = useState<JsonObject | null>(null);
   const [activations, setActivations] = useState<Activation[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -34,18 +51,29 @@ export default function PaperV2PortfolioDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const [portfolioRow, runRows, errorRows, snapshotRows, activationRows] = await Promise.all([
+      const [portfolioRow, runRows, errorRows, snapshotRows, activationRows, orderRows, fillRows, positionRows] = await Promise.all([
         paperV2Api.getPortfolio(portfolioId),
         paperV2Api.runs(portfolioId),
         paperV2Api.errors(portfolioId),
         paperV2Api.snapshots(portfolioId),
         paperV2Api.activations(portfolioId),
+        paperV2Api.orders(portfolioId),
+        paperV2Api.fills(portfolioId),
+        paperV2Api.positions(portfolioId),
       ]);
       setPortfolio(portfolioRow);
       setRuns(runRows);
       setErrors(errorRows);
       setSnapshots(snapshotRows);
       setActivations(activationRows);
+      setOrders(orderRows);
+      setFills(fillRows);
+      setPositions(positionRows);
+      try {
+        setPerformance(await paperV2Api.performance(portfolioId));
+      } catch {
+        setPerformance(null);
+      }
     } catch (exc) {
       setError(exc);
     } finally {
@@ -67,6 +95,19 @@ export default function PaperV2PortfolioDetailPage() {
 
   const latestSnapshot = snapshots[0];
   const latestRun = runs[0];
+  const latestPositionDate = String(positions[0]?.trade_date || "");
+  const currentPositions = latestPositionDate ? positions.filter((item) => String(item.trade_date || "") === latestPositionDate) : [];
+  const currentNav = num(latestSnapshot?.nav || portfolio?.initial_cash);
+  const initialCash = num(portfolio?.initial_cash);
+  const cumulativeReturn = initialCash ? currentNav / initialCash - 1 : null;
+  const navBars = [...snapshots].reverse().map((item) => {
+    const nav = num(item.nav);
+    const values = snapshots.map((row) => num(row.nav)).filter((value) => value > 0);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const pct = max > min ? ((nav - min) / (max - min)) * 100 : 50;
+    return { trade_date: String(item.trade_date || "-"), nav, pct: Math.max(8, pct) };
+  });
 
   return (
     <main>
@@ -83,9 +124,52 @@ export default function PaperV2PortfolioDetailPage() {
           <div className="pv2-grid pv2-grid-4">
             <MetricCard label="状态" value={portfolio.status} tone={portfolio.status === "READY" ? "success" : "warning"} />
             <MetricCard label="初始资金" value={formatCompact(portfolio.initial_cash)} />
-            <MetricCard label="运行次数" value={runs.length} hint={latestRun ? `最近 ${latestRun.trade_date}` : "尚未运行"} tone="info" />
+            <MetricCard label="所属策略包" value={packageName(portfolio)} hint={packageSource(portfolio)} tone="info" />
             <MetricCard label="错误" value={errors.length} tone={errors.length ? "danger" : "success"} />
           </div>
+
+          <SectionCard title="启动以来核心统计" eyebrow="资金 / 持仓 / 交易 / 收益">
+            <div className="pv2-grid pv2-grid-4">
+              <MetricCard label="当前净值" value={formatNumber(currentNav, 2)} hint={latestSnapshot ? String(latestSnapshot.trade_date || "") : "尚无快照"} tone="success" />
+              <MetricCard label="累计收益率" value={formatPercent(cumulativeReturn)} tone={(cumulativeReturn || 0) >= 0 ? "success" : "danger"} />
+              <MetricCard label="当前现金" value={formatNumber(latestSnapshot?.cash, 2)} hint={`市值 ${formatNumber(latestSnapshot?.market_value, 2)}`} />
+              <MetricCard label="交易记录" value={`${orders.length}/${fills.length}`} hint="订单/成交" tone="info" />
+            </div>
+            <div className="pv2-card" style={{ marginTop: 14 }}>
+              <div className="pv2-eyebrow">净值曲线</div>
+              <div className="pv2-sparkline">
+                {navBars.map((item, index) => <div className="pv2-spark-bar" key={`${item.trade_date}-${index}`} style={{ height: `${item.pct}%` }} title={`${item.trade_date}: ${formatNumber(item.nav, 2)}`} />)}
+              </div>
+            </div>
+            <div className="pv2-grid pv2-grid-2" style={{ marginTop: 14 }}>
+              <PaperTable
+                rows={currentPositions.slice(0, 10)}
+                empty="暂无当前持仓。"
+                columns={[
+                  { key: "symbol", header: "股票", render: (row) => String(row.symbol || "-") },
+                  { key: "qty", header: "数量", render: (row) => formatNumber(row.quantity, 0) },
+                  { key: "cost", header: "成本", render: (row) => formatNumber(row.avg_cost, 4) },
+                  { key: "value", header: "市值", render: (row) => formatNumber(row.market_value, 2) },
+                ]}
+              />
+              <PaperTable
+                rows={fills.slice(0, 10)}
+                empty="暂无成交记录。"
+                columns={[
+                  { key: "time", header: "时间", render: (row) => String(row.trade_time || row.created_at || "-").slice(0, 19).replace("T", " ") },
+                  { key: "symbol", header: "股票", render: (row) => String(row.symbol || "-") },
+                  { key: "side", header: "方向", render: (row) => <StatusBadge status={String(row.side || "-")} /> },
+                  { key: "price", header: "价格", render: (row) => formatNumber(row.price, 4) },
+                ]}
+              />
+            </div>
+            <div className="pv2-row-actions" style={{ marginTop: 14 }}>
+              <Link className="pv2-button" href={`/paper-v2/portfolios/${portfolioId}/ledger`}>查看完整交易账本</Link>
+              <Link className="pv2-button" href={`/paper-v2/portfolios/${portfolioId}/performance`}>查看收益分析</Link>
+              <Link className="pv2-button" href={`/paper-v2/portfolios/${portfolioId}/run-console`}>打开运行控制台</Link>
+            </div>
+            {performance ? <JsonPanel value={{ summary: performance }} /> : null}
+          </SectionCard>
 
           <SectionCard
             title={portfolio.portfolio_name}
@@ -102,6 +186,7 @@ export default function PaperV2PortfolioDetailPage() {
           >
             <div className="pv2-chip-row">
               <span className="pv2-chip">portfolio_id: {shortHash(portfolio.portfolio_id)}</span>
+              <span className="pv2-chip">策略包: {packageName(portfolio)}</span>
               <span className="pv2-chip">package_id: {shortHash(portfolio.package_id)}</span>
               <span className="pv2-chip">manifest: {shortHash(portfolio.manifest_sha256)}</span>
               <span className="pv2-chip">data: {portfolio.data_source}</span>

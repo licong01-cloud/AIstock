@@ -100,6 +100,8 @@ export default function PaperV2LedgerPage() {
   }, [portfolioId]);
 
   useEffect(() => { load(); }, [load]);
+  const packageName = String(portfolio?.frozen_manifest?.package_name || portfolio?.package_id || "-");
+  const packageLineage = String(portfolio?.frozen_manifest?.source_id || portfolio?.frozen_manifest?.run_id || portfolio?.package_id || "-");
 
   return (
     <main>
@@ -114,8 +116,19 @@ export default function PaperV2LedgerPage() {
         <MetricCard label="订单" value={orders.length} hint={portfolio?.portfolio_name} />
         <MetricCard label="成交" value={fills.length} />
         <MetricCard label="现金流水" value={cash.length} tone="info" />
-        <MetricCard label="快照" value={snapshots.length} tone={snapshots.length ? "success" : "warning"} />
+        <MetricCard label="所属策略包" value={packageName} hint={packageLineage} tone="info" />
       </div>
+
+      <SectionCard title="交易历史上下文" eyebrow="先确认策略包，再查看订单">
+        <div className="pv2-readable-panel">
+          <div className="pv2-readable-table">
+            <div className="pv2-readable-row"><div className="pv2-readable-key">模拟盘</div><div className="pv2-readable-value">{portfolio?.portfolio_name || "-"}</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">执行策略包</div><div className="pv2-readable-value">{packageName}</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">策略包来源</div><div className="pv2-readable-value">{packageLineage}</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">数据源</div><div className="pv2-readable-value">{portfolio?.data_source || "-"}</div></div>
+          </div>
+        </div>
+      </SectionCard>
 
       <SectionCard
         title="订单"
@@ -131,6 +144,7 @@ export default function PaperV2LedgerPage() {
           columns={[
             { key: "date", header: "创建时间", render: (row) => text(row, "created_at").slice(0, 19).replace("T", " ") },
             { key: "symbol", header: "股票代码", render: (row) => text(row, "symbol") },
+            { key: "package", header: "执行策略包", render: (row) => row.package_id === portfolio?.package_id ? packageName : shortHash(row.package_id) },
             { key: "side", header: "方向", render: (row) => <StatusBadge status={text(row, "side")} /> },
             { key: "qty", header: "数量", render: (row) => formatNumber(row.quantity, 0) },
             { key: "filled", header: "已成交", render: (row) => formatNumber(row.filled_quantity, 0) },

@@ -30,29 +30,11 @@ import type {
   RuntimeProfileVersion,
 } from "@/lib/paper-v2/types";
 
-const DEFAULT_RUNTIME = {
-  paper_v2_session: { signal_data_source: "DB_HISTORICAL" },
-  runtime_profile: {
-    selection: { top_k: 20 },
-    tradability: { exclude_suspended: true },
-    industry_blacklist: [],
-    hmm: { enabled: false, model_snapshot_id: null, signal_preset: null },
-  },
-};
-
-function parseRuntime(text: string): JsonObject {
-  const parsed = JSON.parse(text) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("运行配置必须是 JSON 对象。");
-  }
-  return parsed as JsonObject;
-}
-
-function parseRuntimeProfileText(text: string): JsonObject {
-  const payload = { ...parseRuntime(text) };
-  delete payload.paper_v2_session;
-  delete payload.paper_v2_replay;
-  return payload;
+function splitList(text: string): string[] {
+  return text
+    .split(/[\n,，]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function asDate(value: unknown): string {
@@ -88,7 +70,13 @@ export default function PaperV2RunConsolePage() {
   const [runtimeActivationReason, setRuntimeActivationReason] = useState("开盘前调整运行配置");
   const [replaceRuntimeActivation, setReplaceRuntimeActivation] = useState(false);
   const [tradeDate, setTradeDate] = useState(todayIso());
-  const [runtimeText, setRuntimeText] = useState(JSON.stringify(DEFAULT_RUNTIME, null, 2));
+  const [runtimeTopK, setRuntimeTopK] = useState(20);
+  const [runtimeExcludeSuspended, setRuntimeExcludeSuspended] = useState(true);
+  const [runtimeIndustryBlacklist, setRuntimeIndustryBlacklist] = useState("");
+  const [runtimeHmmEnabled, setRuntimeHmmEnabled] = useState(false);
+  const [runtimeHmmSnapshotId, setRuntimeHmmSnapshotId] = useState("");
+  const [runtimeHmmPreset, setRuntimeHmmPreset] = useState("preset_A");
+  const [runtimeHmmCoefficientsPath, setRuntimeHmmCoefficientsPath] = useState("");
   const [readiness, setReadiness] = useState<ReadinessResult | null>(null);
   const [runResult, setRunResult] = useState<JsonObject | null>(null);
   const [replayResult, setReplayResult] = useState<ReplayResult | null>(null);
@@ -115,6 +103,30 @@ export default function PaperV2RunConsolePage() {
   const replayBlocked = Boolean(replayCapability && !replayCapability.can_start);
   const liveBlocked = Boolean(liveCapability && !liveCapability.can_start);
   const catchupBlocked = Boolean(catchupCapability && !catchupCapability.can_start);
+  const runtimeConfig = useMemo<JsonObject>(() => {
+    const safeTopK = Number.isFinite(runtimeTopK) ? Math.min(50, Math.max(1, Math.trunc(runtimeTopK))) : 20;
+    const hmm: JsonObject = {
+      enabled: runtimeHmmEnabled,
+      model_snapshot_id: runtimeHmmEnabled ? runtimeHmmSnapshotId || null : null,
+      signal_preset: runtimeHmmEnabled ? runtimeHmmPreset || null : null,
+    };
+    if (runtimeHmmEnabled && runtimeHmmCoefficientsPath.trim()) {
+      hmm.coefficients_path = runtimeHmmCoefficientsPath.trim();
+    }
+    return {
+      paper_v2_session: { signal_data_source: "DB_HISTORICAL" },
+      runtime_profile: {
+        selection: { top_k: safeTopK },
+        tradability: { exclude_suspended: runtimeExcludeSuspended },
+        industry_blacklist: splitList(runtimeIndustryBlacklist),
+        hmm,
+      },
+    };
+  }, [runtimeExcludeSuspended, runtimeHmmCoefficientsPath, runtimeHmmEnabled, runtimeHmmPreset, runtimeHmmSnapshotId, runtimeIndustryBlacklist, runtimeTopK]);
+  const runtimeProfileConfig = useMemo<JsonObject>(() => {
+    const { paper_v2_session: _session, paper_v2_replay: _replay, ...profile } = runtimeConfig;
+    return profile;
+  }, [runtimeConfig]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -135,7 +147,7 @@ export default function PaperV2RunConsolePage() {
       ] = await Promise.all([
         paperV2Api.getPortfolio(portfolioId),
         paperV2Api.runs(portfolioId),
-        paperV2Api.sessions(portfolioId),
+        paperV2Api.listSessions(portfolioId),
         paperV2Api.schedulerStatus(),
         paperV2Api.runEvents(portfolioId),
         paperV2Api.errors(portfolioId),
@@ -192,14 +204,14 @@ export default function PaperV2RunConsolePage() {
   useEffect(() => {
     setReadiness(null);
     setRunResult(null);
-  }, [tradeDate, runtimeText]);
+  }, [tradeDate, runtimeConfig]);
 
   async function runReadiness() {
     setBusy(true);
     setError(null);
     setReadiness(null);
     try {
-      const result = await paperV2Api.readiness(portfolioId, { trade_date: tradeDate, runtime_config: parseRuntime(runtimeText) });
+      const result = await paperV2Api.readiness(portfolioId, { trade_date: tradeDate, runtime_config: runtimeConfig });
       setReadiness(result);
     } catch (exc) {
       setError(exc);
@@ -213,7 +225,7 @@ export default function PaperV2RunConsolePage() {
     setError(null);
     setRunResult(null);
     try {
-      const result = await paperV2Api.runDay(portfolioId, { trade_date: tradeDate, runtime_config: parseRuntime(runtimeText) });
+      const result = await paperV2Api.runDay(portfolioId, { trade_date: tradeDate, runtime_config: runtimeConfig });
       setRunResult(result);
       await load();
     } catch (exc) {
@@ -235,7 +247,7 @@ export default function PaperV2RunConsolePage() {
         end_date: replayEnd,
         historical_data_source: "DB_HISTORICAL",
         live_data_source: autoSwitchToLive ? "TDX_REALTIME" : null,
-        runtime_config: parseRuntime(runtimeText),
+        runtime_config: runtimeConfig,
         rerun_policy: rerunPolicy,
         auto_switch_to_live: autoSwitchToLive,
         confirm_reset: rerunPolicy === "reset_portfolio",
@@ -260,7 +272,7 @@ export default function PaperV2RunConsolePage() {
         mode: "LIVE_ONLY",
         start_date: liveStartDate,
         live_data_source: "TDX_REALTIME",
-        runtime_config: parseRuntime(runtimeText),
+        runtime_config: runtimeConfig,
         rerun_policy: "reject_existing",
         created_by: "paper_v2_ui",
       });
@@ -343,7 +355,7 @@ export default function PaperV2RunConsolePage() {
     try {
       const saved = await paperV2Api.createRuntimeProfile(portfolioId, {
         profile_name: runtimeProfileName,
-        config_json: parseRuntimeProfileText(runtimeText),
+        config_json: runtimeProfileConfig,
         created_by: "paper_v2_ui",
         reason: runtimeActivationReason,
       });
@@ -363,7 +375,7 @@ export default function PaperV2RunConsolePage() {
     try {
       if (!runtimeProfileId) throw new Error("请先选择运行配置 Profile。");
       const version = await paperV2Api.createRuntimeProfileVersion(portfolioId, runtimeProfileId, {
-        config_json: parseRuntimeProfileText(runtimeText),
+        config_json: runtimeProfileConfig,
         created_by: "paper_v2_ui",
         reason: runtimeActivationReason,
       });
@@ -419,9 +431,48 @@ export default function PaperV2RunConsolePage() {
             <div className="pv2-field"><label>数据源</label><input className="pv2-input" value={portfolio?.data_source || "-"} readOnly /></div>
             <div className="pv2-field"><label>组合状态</label><input className="pv2-input" value={portfolio?.status || "-"} readOnly /></div>
           </div>
-          <div className="pv2-field" style={{ marginTop: 12 }}>
-            <label>运行配置 JSON</label>
-            <textarea className="pv2-textarea" data-testid="console-runtime-json" value={runtimeText} onChange={(event) => setRuntimeText(event.target.value)} />
+          <div className="pv2-card" style={{ marginTop: 12 }}>
+            <div className="pv2-eyebrow">运行配置</div>
+            <div className="pv2-form-grid">
+              <div className="pv2-field">
+                <label>选股数量 TopK</label>
+                <input className="pv2-input" data-testid="console-runtime-top-k" min={1} max={50} type="number" value={runtimeTopK} onChange={(event) => setRuntimeTopK(Number(event.target.value))} />
+              </div>
+              <div className="pv2-field">
+                <label>已确认停牌股票</label>
+                <label className="pv2-chip"><input data-testid="console-runtime-exclude-suspended" type="checkbox" checked={runtimeExcludeSuspended} onChange={(event) => setRuntimeExcludeSuspended(event.target.checked)} /> 选股与交易前剔除</label>
+              </div>
+              <div className="pv2-field">
+                <label>信号数据源</label>
+                <input className="pv2-input" value="DB_HISTORICAL" readOnly />
+              </div>
+            </div>
+            <div className="pv2-field" style={{ marginTop: 12 }}>
+              <label>行业黑名单（按行或逗号分隔）</label>
+              <textarea className="pv2-textarea" data-testid="console-runtime-industry-blacklist" value={runtimeIndustryBlacklist} onChange={(event) => setRuntimeIndustryBlacklist(event.target.value)} placeholder={"示例：银行\n房地产"} />
+            </div>
+            <div className="pv2-form-grid" style={{ marginTop: 12 }}>
+              <div className="pv2-field">
+                <label>HMM 调整</label>
+                <label className="pv2-chip"><input data-testid="console-runtime-hmm-enabled" type="checkbox" checked={runtimeHmmEnabled} onChange={(event) => setRuntimeHmmEnabled(event.target.checked)} /> 启用 HMM</label>
+              </div>
+              <div className="pv2-field">
+                <label>HMM 快照 ID</label>
+                <input className="pv2-input" data-testid="console-runtime-hmm-snapshot" disabled={!runtimeHmmEnabled} value={runtimeHmmSnapshotId} onChange={(event) => setRuntimeHmmSnapshotId(event.target.value)} placeholder="选择或粘贴已完成快照 ID" />
+              </div>
+              <div className="pv2-field">
+                <label>HMM 信号预设</label>
+                <select className="pv2-select" data-testid="console-runtime-hmm-preset" disabled={!runtimeHmmEnabled} value={runtimeHmmPreset} onChange={(event) => setRuntimeHmmPreset(event.target.value)}>
+                  <option value="preset_A">preset_A</option>
+                  <option value="preset_B">preset_B</option>
+                </select>
+              </div>
+            </div>
+            <div className="pv2-field" style={{ marginTop: 12 }}>
+              <label>HMM 系数文件路径（可选，必须来自已审计快照）</label>
+              <input className="pv2-input" data-testid="console-runtime-hmm-coefficients" disabled={!runtimeHmmEnabled} value={runtimeHmmCoefficientsPath} onChange={(event) => setRuntimeHmmCoefficientsPath(event.target.value)} placeholder="不填写时由后端按快照和交易日严格校验" />
+            </div>
+            <JsonPanel value={runtimeConfig} />
           </div>
           <div className="pv2-row-actions" style={{ marginTop: 12 }}>
             <button className="pv2-button" data-testid="console-readiness" disabled={busy} onClick={runReadiness} type="button">{busy ? "处理中..." : "执行就绪检查"}</button>

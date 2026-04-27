@@ -184,7 +184,7 @@ export default function PaperV2PackagesPage() {
         <SectionCard title="策略包晋级规则" eyebrow="冻结 Manifest">
           <ul>
             <li>只允许 QE 单次实验或 QE 演进 Loop 创建 StrategyPackage。</li>
-            <li>manifest JSON 与 manifest_sha256 创建后冻结；状态流转不进入 hash。</li>
+            <li>manifest ?? 与 manifest_sha256 创建后冻结；状态流转不进入 hash。</li>
             <li>HMM、行业黑名单、TopK、停牌剔除是运行时配置，不锁定在策略包中。</li>
             <li>启用模拟盘会校验分钟线执行策略，不能使用未回测验证的模拟盘独有配置。</li>
           </ul>
