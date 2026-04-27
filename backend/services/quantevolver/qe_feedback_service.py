@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ...db.pg_pool import get_conn
+from .factor_official_evaluation_service import CALC_ENGINE
 from .qe_evolution_models import (
     QETrace,
     QELoopRecord,
@@ -506,13 +507,25 @@ class QEFeedbackService:
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
-                        SELECT factor_name, description_cn, factor_type,
-                               ic, annualized_return, sharpe
-                        FROM aistock_factor_catalog
-                        WHERE ic IS NOT NULL AND ic >= %s
-                        ORDER BY ic DESC
+                        SELECT c.factor_name, c.description_cn, c.factor_type,
+                               m.ic_mean AS ic,
+                               m.top_excess_annual_return AS annualized_return,
+                               m.top_excess_sharpe AS sharpe
+                        FROM aistock_factor_catalog c
+                        JOIN LATERAL (
+                            SELECT ic_mean, top_excess_annual_return, top_excess_sharpe
+                            FROM aistock_factor_metrics
+                            WHERE factor_name = c.factor_name
+                              AND eval_window = 'full'
+                              AND calc_engine = %s
+                            ORDER BY calculated_at DESC
+                            LIMIT 1
+                        ) m ON TRUE
+                        WHERE m.ic_mean >= %s
+                          AND c.is_available = TRUE
+                        ORDER BY m.ic_mean DESC
                         LIMIT %s
-                    """, (min_ic, limit))
+                    """, (CALC_ENGINE, min_ic, limit))
                     rows = cur.fetchall()
                     return [
                         {
