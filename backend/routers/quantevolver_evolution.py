@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, Future, as_completed
 from typing import Callable, Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 import httpx
 
 # 导入未来的 EvolutionService (目前可能为空实现)
@@ -1007,6 +1007,9 @@ def stream_task_logs(task_id: str):
     底层会调用 RDAgent 的日志 API 进行转发
     """
     try:
+        if not scheduler.task_exists(task_id):
+            logger.info("Log stream requested for deleted/nonexistent task %s; returning 204", task_id)
+            return Response(status_code=204)
         return StreamingResponse(
             scheduler.stream_task_logs(task_id),
             media_type="text/event-stream",

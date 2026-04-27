@@ -301,7 +301,55 @@ V25 需要 `market_context.day_features`。下一阶段必须实现或核对 `V2
 - 特征字段、顺序、归一化、缺失处理必须与 V25 训练/回测合约一致；
 - 缺特征必须 fail-fast，禁止 `allow_default_day_features` 进入权威 Paper v2 流程。
 
-### 6.3 资产与策略一致性
+本阶段的落地边界：`V25DayFeatureProvider` 是 Paper v2 框架的数据上下文提供器，不修改 V25 策略本体、不修改 QE/RDAgent 回测资产、不修改模型权重。提供器必须只读读取 DB 中已经审计的数据，并写入 `market_context`：
+
+```text
+day_features: length=10 finite float array
+day_features_schema_version: paper_v2_v25_day_features_v1
+day_features_source: db_pit_previous_trading_day
+day_features_trade_date: <feature_date, strictly before trade_date>
+day_features_fields: ordered field names
+day_features_audit: dataset refresh audit summary
+```
+
+特征生成原则：
+
+1. `feature_date` 必须来自 `market.trading_calendar` 中严格小于 `trade_date` 的最近交易日；缺交易日历直接失败。
+2. 每个输入数据集必须在 `market.dataset_date_refresh_audit` 中存在对应 `feature_date` 的 `success` 审计记录；缺审计或失败审计直接失败。
+3. 使用的数据必须是 `feature_date` 当日及更早的 PIT 数据；不得读取 `trade_date` 当日尚未完成的未来分钟线。
+4. 字段缺失、非有限值、除数为零、指数/行业/资金流缺行均直接失败；禁止零填充或中性填充。
+5. `require_day_features=false` 时非 V25 路径不强制读取 day_features；`V25_TWO_STAGE` readiness、run-day、live tick 必须显式传入 `require_day_features=true`。
+
+首版 10 维字段采用稳定、可审计的 PIT 日频上下文：
+
+| 序号 | 字段 | 来源 | 失败条件 |
+| --- | --- | --- | --- |
+| 1 | `stock_ret_1d` | `market.kline_daily_raw` 最近两交易日收盘 | 缺任一收盘或前收盘 <= 0 |
+| 2 | `stock_intraday_ret` | `market.kline_daily_raw` | 缺 open/close 或 open <= 0 |
+| 3 | `stock_hl_range` | `market.kline_daily_raw` | 缺 high/low 或 low <= 0 |
+| 4 | `stock_volume_log1p` | `market.kline_daily_raw.volume_hand` | 缺成交量或负数 |
+| 5 | `turnover_rate` | `market.daily_basic.turnover_rate` | 缺值或非有限 |
+| 6 | `volume_ratio` | `market.daily_basic.volume_ratio` | 缺值或非有限 |
+| 7 | `pb_log1p` | `market.daily_basic.pb` | 缺值或 pb <= -1 |
+| 8 | `market_ret_1d` | `market.index_daily` benchmark pct_chg | 缺指数行或 pct_chg 非有限 |
+| 9 | `sector_pct_change` | `market.sector_data.sw2_pct_change` | 缺行业映射/行业日数据 |
+| 10 | `moneyflow_net_ratio` | `market.moneyflow_ts.net_mf_amount / kline amount` | 缺资金流或成交额 <= 0 |
+
+如果后续 QE/V25 训练合约确认了不同字段或归一化，应作为新的 schema version 增量接入；不得静默改变 `paper_v2_v25_day_features_v1` 的字段顺序。
+
+### 6.3 WSL UNC 与资产访问隔离
+
+禁止后端运行时从 Windows 侧直接拼接或访问 `\\wsl$`、`\\wsl.localhost` 等 WSL UNC 路径。原因：distro 名称、权限、WSL 服务状态会让 Paper v2/StrategyPackage 模型资产解析、手工因子验证、股票池生成出现不可预测失败。
+
+强制规则：
+
+- Windows 后端只能访问 Windows 文件系统内的显式缓存/导入目录，或通过 `wsl` 子进程让 WSL 主动把结果写入 Windows 临时输出目录。
+- StrategyPackage 模型资产解析只能解析本地 Windows 路径、`/mnt/<drive>/...` 对应的 Windows 挂载路径，或已经显式导入到缓存的文件；不得尝试 `\\wsl$` 候选路径。
+- 手工因子验证等必须读取 WSL 产物时，流程应为：Windows 创建临时目录 -> 转换为 `/mnt/<drive>/...` -> WSL `cp` 结果到该目录 -> Windows 读取临时目录。
+- 股票池同步可通过 `wsl -d <distro> -- bash -lc` 在 WSL 内检查/校验文件，但不得让 Windows 后端用 UNC 读取 WSL 文件。
+- 静态扫描必须覆盖 `\\wsl`、`wsl.localhost`、`wsl$`，运行时代码命中即视为阻断项。
+
+### 6.4 资产与策略一致性
 
 V25 逻辑版本应只有一份，物理存储可以有多个位置：
 
