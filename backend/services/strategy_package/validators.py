@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from backend.execution_algos import ALGO_REGISTRY, get_algo
 
+from backend.services.trading_core.execution_algo_capabilities import (
+    normalize_execution_algo_code,
+    validate_runtime_asset_paths,
+)
 from backend.services.trading_core.errors import (
-    DataUnavailableError,
     ExecutionAlgoError,
     StrategyPackageValidationError,
     UnsupportedFeatureError,
 )
 
+from .execution_policy import normalize_execution_policy_json
 from .manifest import compute_manifest_sha256
 from .models import PackageStatus, StrategyPackageManifest
 
@@ -53,39 +55,45 @@ class StrategyPackageValidator:
                     "package_status": manifest.package_status.value,
                 },
             )
-        algo_code = manifest.minute_execution_policy.algo_code
+        self.validate_execution_policy_for_paper(
+            package_id=manifest.package_id,
+            policy_json=manifest.minute_execution_policy.model_dump(mode="json"),
+        )
+
+    def validate_execution_policy_for_paper(
+        self,
+        *,
+        package_id: str,
+        policy_json: dict,
+        instantiate_runtime: bool = True,
+    ) -> None:
+        normalized_policy = normalize_execution_policy_json(policy_json)
+        algo_code = normalize_execution_algo_code(normalized_policy.get("algo_code"))
         if algo_code not in ALGO_REGISTRY:
             raise UnsupportedFeatureError(
                 "minute execution algorithm is not registered",
                 context={
-                    "package_id": manifest.package_id,
+                    "package_id": package_id,
                     "algo_code": algo_code,
                     "registered_algos": sorted(ALGO_REGISTRY),
                 },
             )
-        if algo_code == "V24_PLAN":
-            self._validate_v24_plan(manifest)
-
-    def _validate_v24_plan(self, manifest: StrategyPackageManifest) -> None:
-        model_path = str(manifest.minute_execution_policy.algo_config.get("model_path") or "").strip()
-        if not model_path:
-            raise DataUnavailableError(
-                "V24_PLAN requires model_path",
-                context={"package_id": manifest.package_id},
-            )
-        if not Path(model_path).exists():
-            raise DataUnavailableError(
-                "V24_PLAN model_path is not accessible from AIstock backend",
-                context={"package_id": manifest.package_id, "model_path": model_path},
-            )
+        asset_paths = validate_runtime_asset_paths(
+            algo_code=algo_code,
+            algo_config=dict(normalized_policy.get("algo_config") or {}),
+            package_id=package_id,
+        )
+        if not instantiate_runtime:
+            return
         try:
-            get_algo("V24_PLAN", config=manifest.minute_execution_policy.algo_config)
+            get_algo(algo_code, config=normalized_policy.get("algo_config") or {})
         except Exception as exc:
             raise ExecutionAlgoError(
-                "V24_PLAN runtime is not available for paper trading",
+                f"{algo_code} runtime is not available for paper trading",
                 context={
-                    "package_id": manifest.package_id,
-                    "model_path": model_path,
-                    "reason": str(exc),
+                    "package_id": package_id,
+                    "algo_code": algo_code,
+                    "runtime_asset_paths": {key: str(path) for key, path in asset_paths.items()},
+                    "reason": f"{type(exc).__name__}: {exc}",
                 },
             ) from exc

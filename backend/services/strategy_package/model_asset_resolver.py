@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from backend.services.trading_core.execution_algo_capabilities import required_runtime_asset_keys
 from backend.services.trading_core.errors import DataUnavailableError
 
 from .manifest import freeze_manifest
@@ -31,6 +32,7 @@ class ResolvedModelAsset:
     """Resolved model file information."""
 
     algo_code: str
+    config_key: str
     original_path: str
     resolved_path: Path
     copied: bool
@@ -56,15 +58,30 @@ class ModelAssetResolver:
         """
 
         algo_code = manifest.minute_execution_policy.algo_code.upper()
-        if algo_code != "V24_PLAN":
+        asset_keys = required_runtime_asset_keys(algo_code)
+        if not asset_keys:
             return manifest
 
-        resolved = self.resolve_v24_plan_model(manifest, copy_missing=copy_missing)
         config = dict(manifest.minute_execution_policy.algo_config)
-        original_path = str(config.get("original_model_path") or resolved.original_path)
-        config["original_model_path"] = original_path
-        config["model_path"] = str(resolved.resolved_path)
-        config["model_asset_cache_status"] = "copied" if resolved.copied else "local"
+        cache_status: dict[str, str] = {}
+        original_paths: dict[str, str] = {}
+        for key in asset_keys:
+            resolved = self.resolve_runtime_asset(
+                manifest=manifest,
+                config_key=key,
+                copy_missing=copy_missing,
+            )
+            original_key = f"original_{key}"
+            original_path = str(config.get(original_key) or resolved.original_path)
+            config[original_key] = original_path
+            config[key] = str(resolved.resolved_path)
+            cache_status[key] = "copied" if resolved.copied else "local"
+            original_paths[key] = original_path
+
+        if len(asset_keys) == 1 and asset_keys[0] == "model_path":
+            config["original_model_path"] = original_paths["model_path"]
+            config["model_asset_cache_status"] = cache_status["model_path"]
+        config["runtime_asset_cache_status"] = cache_status
 
         updated_policy = manifest.minute_execution_policy.model_copy(
             update={"algo_config": config}
@@ -80,31 +97,54 @@ class ModelAssetResolver:
         *,
         copy_missing: bool = True,
     ) -> ResolvedModelAsset:
+        return self.resolve_runtime_asset(
+            manifest=manifest,
+            config_key="model_path",
+            copy_missing=copy_missing,
+        )
+
+    def resolve_runtime_asset(
+        self,
+        *,
+        manifest: StrategyPackageManifest,
+        config_key: str,
+        copy_missing: bool = True,
+    ) -> ResolvedModelAsset:
+        algo_code = manifest.minute_execution_policy.algo_code.upper()
         config = manifest.minute_execution_policy.algo_config
         original_path = str(
-            config.get("original_model_path") or config.get("model_path") or ""
+            config.get(f"original_{config_key}")
+            or (config.get("original_model_path") if config_key == "model_path" else None)
+            or config.get(config_key)
+            or ""
         ).strip()
         if not original_path:
             raise DataUnavailableError(
-                "V24_PLAN requires model_path before asset resolution",
-                context={"package_id": manifest.package_id},
+                f"{algo_code} requires {config_key} before asset resolution",
+                context={
+                    "package_id": manifest.package_id,
+                    "algo_code": algo_code,
+                    "config_key": config_key,
+                },
             )
 
         local_path = Path(original_path)
         if self._is_existing_file(local_path):
             self._ensure_positive_file(local_path, original_path, manifest.package_id)
             return ResolvedModelAsset(
-                algo_code="V24_PLAN",
+                algo_code=algo_code,
+                config_key=config_key,
                 original_path=original_path,
                 resolved_path=local_path,
                 copied=False,
             )
 
-        destination = self._cache_destination("V24_PLAN", original_path)
+        destination = self._cache_destination(algo_code, original_path)
         if self._is_existing_file(destination):
-            self._validate_cached_asset(destination, original_path, manifest.package_id)
+            self._validate_cached_asset(destination, original_path, manifest.package_id, algo_code=algo_code, config_key=config_key)
             return ResolvedModelAsset(
-                algo_code="V24_PLAN",
+                algo_code=algo_code,
+                config_key=config_key,
                 original_path=original_path,
                 resolved_path=destination,
                 copied=True,
@@ -112,17 +152,24 @@ class ModelAssetResolver:
 
         if not copy_missing:
             raise DataUnavailableError(
-                "V24_PLAN model_path is not accessible and cache copy is disabled",
-                context={"package_id": manifest.package_id, "model_path": original_path},
+                f"{algo_code} {config_key} is not accessible and cache copy is disabled",
+                context={
+                    "package_id": manifest.package_id,
+                    "algo_code": algo_code,
+                    "config_key": config_key,
+                    "asset_path": original_path,
+                },
             )
 
         source = self._find_existing_source(original_path)
         if source is None:
             raise DataUnavailableError(
-                "V24_PLAN model_path is not accessible from AIstock backend",
+                f"{algo_code} {config_key} is not accessible from AIstock backend",
                 context={
                     "package_id": manifest.package_id,
-                    "model_path": original_path,
+                    "algo_code": algo_code,
+                    "config_key": config_key,
+                    "asset_path": original_path,
                     "cache_path": str(destination),
                     "attempted_paths": [str(path) for path in self._candidate_paths(original_path)],
                 },
@@ -133,9 +180,12 @@ class ModelAssetResolver:
             destination=destination,
             original_path=original_path,
             package_id=manifest.package_id,
+            algo_code=algo_code,
+            config_key=config_key,
         )
         return ResolvedModelAsset(
-            algo_code="V24_PLAN",
+            algo_code=algo_code,
+            config_key=config_key,
             original_path=original_path,
             resolved_path=copied_path,
             copied=True,
@@ -148,6 +198,8 @@ class ModelAssetResolver:
         destination: Path,
         original_path: str,
         package_id: str,
+        algo_code: str,
+        config_key: str,
     ) -> Path:
         self._ensure_positive_file(source, original_path, package_id)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -156,7 +208,8 @@ class ModelAssetResolver:
         self._write_sidecar(
             destination,
             {
-                "algo_code": "V24_PLAN",
+                "algo_code": algo_code,
+                "config_key": config_key,
                 "original_path": original_path,
                 "resolved_source_path": str(source),
                 "cached_path": str(destination),
@@ -172,15 +225,20 @@ class ModelAssetResolver:
         destination: Path,
         original_path: str,
         package_id: str,
+        *,
+        algo_code: str,
+        config_key: str,
     ) -> None:
         self._ensure_positive_file(destination, original_path, package_id)
         sidecar = self._sidecar_path(destination)
         if not sidecar.exists():
             raise DataUnavailableError(
-                "cached V24_PLAN model is missing sidecar metadata",
+                "cached execution model is missing sidecar metadata",
                 context={
                     "package_id": package_id,
-                    "model_path": original_path,
+                    "algo_code": algo_code,
+                    "config_key": config_key,
+                    "asset_path": original_path,
                     "cache_path": str(destination),
                     "sidecar_path": str(sidecar),
                 },
@@ -189,30 +247,48 @@ class ModelAssetResolver:
             metadata = json.loads(sidecar.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             raise DataUnavailableError(
-                "cached V24_PLAN model sidecar metadata is invalid",
+                "cached execution model sidecar metadata is invalid",
                 context={
                     "package_id": package_id,
-                    "model_path": original_path,
+                    "algo_code": algo_code,
+                    "config_key": config_key,
+                    "asset_path": original_path,
                     "sidecar_path": str(sidecar),
                 },
             ) from exc
         if metadata.get("original_path") != original_path:
             raise DataUnavailableError(
-                "cached V24_PLAN model sidecar does not match original path",
+                "cached execution model sidecar does not match original path",
                 context={
                     "package_id": package_id,
-                    "model_path": original_path,
+                    "algo_code": algo_code,
+                    "config_key": config_key,
+                    "asset_path": original_path,
                     "cache_path": str(destination),
                     "sidecar_original_path": metadata.get("original_path"),
+                },
+            )
+        if metadata.get("algo_code") != algo_code:
+            raise DataUnavailableError(
+                "cached execution model sidecar does not match algorithm",
+                context={
+                    "package_id": package_id,
+                    "algo_code": algo_code,
+                    "config_key": config_key,
+                    "asset_path": original_path,
+                    "cache_path": str(destination),
+                    "sidecar_algo_code": metadata.get("algo_code"),
                 },
             )
         cached_size = metadata.get("cached_size")
         if cached_size is not None and int(cached_size) != destination.stat().st_size:
             raise DataUnavailableError(
-                "cached V24_PLAN model size does not match sidecar metadata",
+                "cached execution model size does not match sidecar metadata",
                 context={
                     "package_id": package_id,
-                    "model_path": original_path,
+                    "algo_code": algo_code,
+                    "config_key": config_key,
+                    "asset_path": original_path,
                     "cache_path": str(destination),
                     "sidecar_cached_size": cached_size,
                     "actual_cached_size": destination.stat().st_size,
@@ -222,19 +298,19 @@ class ModelAssetResolver:
     def _ensure_positive_file(self, path: Path, original_path: str, package_id: str) -> None:
         if not path.exists() or not path.is_file():
             raise DataUnavailableError(
-                "V24_PLAN model asset is not a file",
+                "execution model asset is not a file",
                 context={
                     "package_id": package_id,
-                    "model_path": original_path,
+                    "asset_path": original_path,
                     "resolved_path": str(path),
                 },
             )
         if path.stat().st_size <= 0:
             raise DataUnavailableError(
-                "V24_PLAN model asset is empty",
+                "execution model asset is empty",
                 context={
                     "package_id": package_id,
-                    "model_path": original_path,
+                    "asset_path": original_path,
                     "resolved_path": str(path),
                 },
             )

@@ -22,6 +22,7 @@ from backend.services.trading_core.errors import (
     DataUnavailableError,
     StrategyPackageValidationError,
 )
+from backend.services.trading_core.execution_algo_capabilities import required_minute_bars_for_policy
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
 from backend.services.trading_core.models import (
@@ -292,28 +293,7 @@ class PaperTradingV2Runner:
 
     @staticmethod
     def _required_minute_bars_for_manifest(manifest: StrategyPackageManifest) -> int:
-        config = manifest.minute_execution_policy.algo_config
-        configured = config.get("min_observed_bars") or config.get("min_required_bars")
-        if configured is not None:
-            try:
-                value = int(configured)
-            except (TypeError, ValueError) as exc:
-                raise StrategyPackageValidationError(
-                    "minute execution min_required_bars must be an integer",
-                    context={
-                        "package_id": manifest.package_id,
-                        "min_required_bars": configured,
-                    },
-                ) from exc
-            if value <= 0:
-                raise StrategyPackageValidationError(
-                    "minute execution min_required_bars must be positive",
-                    context={
-                        "package_id": manifest.package_id,
-                        "min_required_bars": configured,
-                    },
-                )
-            return value
-        if manifest.minute_execution_policy.algo_code == "V24_PLAN":
-            return 31
-        return 1
+        return required_minute_bars_for_policy(
+            manifest.minute_execution_policy.model_dump(mode="json"),
+            package_id=manifest.package_id,
+        )

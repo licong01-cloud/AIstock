@@ -87,11 +87,6 @@ def ensure_policy_can_enter_paper(policy: "ValidatedExecutionPolicy") -> None:
             "execution policy source backtest did not succeed",
             context={"policy_id": policy.policy_id, "source_backtest_status": policy.source_backtest_status},
         )
-    if policy.algo_code == "V25_PLAN":
-        raise UnsupportedFeatureError(
-            "V25 execution adapter is not implemented for Paper Trading v2",
-            context={"policy_id": policy.policy_id, "algo_code": policy.algo_code},
-        )
     if policy.algo_code not in ALGO_REGISTRY:
         raise UnsupportedFeatureError(
             "minute execution algorithm is not registered",

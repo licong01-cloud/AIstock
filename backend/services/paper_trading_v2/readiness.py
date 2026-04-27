@@ -93,6 +93,10 @@ class PaperTradingReadinessService:
         execution_policy_json = execution_policy_context["policy_json"]
         config["validated_execution_policy"] = execution_policy_context
         self.validator.validate_for_paper_trading(manifest)
+        self.validator.validate_execution_policy_for_paper(
+            package_id=manifest.package_id,
+            policy_json=execution_policy_json,
+        )
         checks.append(PaperReadinessCheck(check_name="strategy_package_manifest", context={"package_id": manifest.package_id}))
 
         self.calendar_provider.ensure_trading_day(trade_date)

@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from backend.execution_algos import ALGO_REGISTRY, get_algo
-from backend.execution_algos.v24_plan_algo import V24PlanUnavailableError
 
 from .errors import ExecutionAlgoError, UnsupportedFeatureError
 from .models import MinuteBar, Order, StepFill
@@ -75,15 +74,10 @@ class ExecutionAlgoAdapter:
             )
         try:
             return get_algo(algo_code, config=config)
-        except V24PlanUnavailableError as exc:
-            raise ExecutionAlgoError(
-                "V24_PLAN is unavailable for authoritative minute execution",
-                context={"algo_code": algo_code, "reason": str(exc)},
-            ) from exc
         except Exception as exc:
             raise ExecutionAlgoError(
-                "failed to initialize execution algorithm",
-                context={"algo_code": algo_code},
+                f"{algo_code} is unavailable for authoritative minute execution",
+                context={"algo_code": algo_code, "reason": f"{type(exc).__name__}: {exc}"},
             ) from exc
 
     @staticmethod

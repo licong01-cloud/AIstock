@@ -20,6 +20,7 @@ from backend.services.strategy_package.live_inference import (
 )
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError, TradingCoreError
+from backend.services.trading_core.execution_algo_capabilities import required_minute_bars_for_policy
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
 from backend.services.trading_core.models import PositionLot, RunStatus
@@ -111,6 +112,10 @@ class PaperTradingDayRunner:
         self._reject_raw_execution_overrides(config)
         execution_policy_context = self._execution_policy_context_for_date(portfolio, trade_date)
         execution_policy_json = execution_policy_context["policy_json"]
+        self.validator.validate_execution_policy_for_paper(
+            package_id=manifest.package_id,
+            policy_json=execution_policy_json,
+        )
         execution_algo_config = dict(execution_policy_json.get("algo_config") or {})
         config["validated_execution_policy"] = execution_policy_context
         run = PaperRun(
@@ -502,19 +507,7 @@ class PaperTradingDayRunner:
 
     @staticmethod
     def _required_minute_bars_for_policy(policy_json: dict[str, Any], *, package_id: str) -> int:
-        config = policy_json.get("algo_config") or {}
-        configured = config.get("min_observed_bars") or config.get("min_required_bars")
-        if configured is not None:
-            value = int(configured)
-            if value <= 0:
-                raise StrategyPackageValidationError(
-                    "minute execution min_required_bars must be positive",
-                    context={"package_id": package_id, "min_required_bars": configured},
-                )
-            return value
-        if str(policy_json.get("algo_code") or "").upper() == "V24_PLAN":
-            return 31
-        return 1
+        return required_minute_bars_for_policy(policy_json, package_id=package_id)
 
     @staticmethod
     def _reject_raw_execution_overrides(runtime_config: dict[str, Any]) -> None:

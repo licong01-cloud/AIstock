@@ -8,7 +8,7 @@ from backend.services.strategy_package.model_state import ModelRetrainJobStatus,
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.service import StrategyPackageService
-from backend.services.trading_core.errors import InvalidStateTransitionError, StrategyPackageValidationError, UnsupportedFeatureError
+from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError, UnsupportedFeatureError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 import pytest
@@ -84,17 +84,38 @@ def test_strategy_package_execution_policy_rejects_unknown_fields() -> None:
         )
 
 
-def test_strategy_package_execution_policy_blocks_v25_until_adapter_exists() -> None:
+def test_strategy_package_execution_policy_accepts_registered_v25_contract_without_paper_runtime() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(make_manifest())
     repo.save_manifest(manifest)
     service = StrategyPackageService(repository=repo)
 
-    with pytest.raises(UnsupportedFeatureError, match="V25"):
+    policy = service.create_execution_policy(
+        package_id=manifest.package_id,
+        policy_name="qe v25 two stage",
+        policy_json={"algo_code": "V25_TWO_STAGE", "algo_config": {"early_model_path": "missing_early.pt", "late_model_path": "missing_late.pt"}},
+        source_backtest_id="bt_1",
+        source_backtest_status="COMPLETED",
+        paper_enabled=False,
+    )
+
+    assert policy.algo_code == "V25_TWO_STAGE"
+
+    with pytest.raises(DataUnavailableError, match="early_model_path"):
+        service.enable_execution_policy_for_paper(manifest.package_id, policy.policy_id)
+
+
+def test_strategy_package_execution_policy_rejects_unregistered_algo_for_paper() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(make_manifest())
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+
+    with pytest.raises(UnsupportedFeatureError, match="not registered"):
         service.create_execution_policy(
             package_id=manifest.package_id,
-            policy_name="future v25",
-            policy_json={"algo_code": "V25_PLAN", "algo_config": {}},
+            policy_name="unknown",
+            policy_json={"algo_code": "NOT_A_QE_ALGO", "algo_config": {}},
             source_backtest_id="bt_1",
             source_backtest_status="COMPLETED",
             paper_enabled=True,

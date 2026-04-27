@@ -229,6 +229,11 @@ class PaperTradingV2PortfolioService:
                         },
                     )
                 ensure_policy_can_enter_paper(policy)
+                self.validator.validate_execution_policy_for_paper(
+                    package_id=portfolio.package_id,
+                    policy_json=policy.policy_json,
+                    instantiate_runtime=False,
+                )
                 if not policy.paper_enabled:
                     raise StrategyPackageValidationError(
                         "validated execution policy is not enabled for paper trading",
@@ -310,6 +315,10 @@ class PaperTradingV2PortfolioService:
                 context={"portfolio_id": portfolio_id, "policy_id": policy.policy_id},
             )
         ensure_policy_can_enter_paper(policy)
+        self.validator.validate_execution_policy_for_paper(
+            package_id=portfolio.package_id,
+            policy_json=policy.policy_json,
+        )
         activation = PaperExecutionPolicyActivation(
             portfolio_id=portfolio_id,
             trade_date=trade_date,
@@ -393,6 +402,10 @@ class PaperTradingV2PortfolioService:
                 context={"package_id": package_id, "policy_id": policy.policy_id},
             )
         ensure_policy_can_enter_paper(policy)
+        self.validator.validate_execution_policy_for_paper(
+            package_id=package_id,
+            policy_json=policy.policy_json,
+        )
         return policy
 
     def _ensure_default_manifest_execution_policy(

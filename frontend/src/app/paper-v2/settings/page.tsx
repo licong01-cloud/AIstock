@@ -28,7 +28,7 @@ export default function PaperV2SettingsPage() {
             <li>不提供日频模拟盘兜底。</li>
             <li>不提供模拟盘独有的原始分钟算法配置。</li>
             <li>在组合策略包或 SelectionBundle 合约出现前，不支持多策略包聚合选股直接创建执行组合。</li>
-            <li>本 UI 不提供 V25 adapter、QMT、Shadow 或实盘交易控制。</li>
+            <li>V25_TWO_STAGE 可作为已验证分钟执行策略接入；本 UI 不提供 QMT、Shadow 或实盘交易控制。</li>
             <li>缺数据、运行时产物、pre_close、涨跌停、交易日历、停牌或分钟线时，禁止返回静默空成功。</li>
           </ul>
         </SectionCard>

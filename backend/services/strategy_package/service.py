@@ -377,6 +377,10 @@ class StrategyPackageService:
         )
         if paper_enabled:
             ensure_policy_can_enter_paper(policy)
+            self.validator.validate_execution_policy_for_paper(
+                package_id=package_id,
+                policy_json=policy.policy_json,
+            )
         return self.repository.save_execution_policy(policy)
 
     def list_execution_policies(self, package_id: str) -> list[ValidatedExecutionPolicy]:
@@ -388,6 +392,10 @@ class StrategyPackageService:
     def enable_execution_policy_for_paper(self, package_id: str, policy_id: str) -> ValidatedExecutionPolicy:
         policy = self.repository.get_execution_policy(package_id, policy_id)
         ensure_policy_can_enter_paper(policy)
+        self.validator.validate_execution_policy_for_paper(
+            package_id=package_id,
+            policy_json=policy.policy_json,
+        )
         return self.repository.set_execution_policy_paper_enabled(
             package_id=package_id,
             policy_id=policy_id,

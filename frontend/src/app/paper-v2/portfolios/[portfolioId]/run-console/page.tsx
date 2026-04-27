@@ -84,7 +84,7 @@ export default function PaperV2RunConsolePage() {
       setActivations(activationRows);
       if (!policyId) {
         const defaultPolicy = policyRows.find((item) => item.is_portfolio_default) || policyRows.find((item) => item.paper_enabled);
-        setPolicyId(defaultPolicy?.policy_id || policyRows[0]?.policy_id || "");
+        setPolicyId(defaultPolicy?.policy_id || "");
       }
     } catch (exc) {
       setError(exc);
@@ -211,7 +211,7 @@ export default function PaperV2RunConsolePage() {
         <SectionCard title="执行策略激活" eyebrow="仅限已验证策略">
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>交易日期</label><input className="pv2-input" type="date" value={activationDate} onChange={(event) => setActivationDate(event.target.value)} /></div>
-            <div className="pv2-field"><label>策略</label><select className="pv2-select" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">选择策略</option>{policies.map((policy) => <option value={policy.policy_id} key={policy.policy_id}>{policy.policy_name || policy.policy_id} / {policy.algo_code || "-"} / {policy.paper_enabled ? "paper" : "disabled"}</option>)}</select></div>
+            <div className="pv2-field"><label>策略</label><select className="pv2-select" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">选择已启用策略</option>{policies.map((policy) => <option value={policy.policy_id} key={policy.policy_id}>{policy.policy_name || policy.policy_id} / {policy.algo_code || "-"} / {policy.paper_enabled ? "可用于模拟盘" : "未启用"}</option>)}</select></div>
             <div className="pv2-field"><label>替换已有记录</label><label className="pv2-chip"><input type="checkbox" checked={replaceExisting} onChange={(event) => setReplaceExisting(event.target.checked)} /> 替换同日期记录</label></div>
           </div>
           <div className="pv2-field" style={{ marginTop: 12 }}><label>原因</label><input className="pv2-input" value={activationReason} onChange={(event) => setActivationReason(event.target.value)} /></div>

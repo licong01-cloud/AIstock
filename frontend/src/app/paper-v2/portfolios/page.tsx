@@ -96,7 +96,7 @@ export default function PaperV2PortfoliosPage() {
     strategyPackageApi.executionPolicies(packageId).then((rows) => {
       setPolicies(rows);
       const paperReady = rows.find((item) => item.paper_enabled);
-      setPolicyId(paperReady?.policy_id || rows[0]?.policy_id || "");
+      setPolicyId(paperReady?.policy_id || "");
     }).catch((exc) => {
       setPolicies([]);
       setError(exc);
@@ -197,7 +197,7 @@ export default function PaperV2PortfoliosPage() {
             <div className="pv2-field"><label>初始资金</label><input className="pv2-input" type="number" min={1} value={initialCash} onChange={(event) => setInitialCash(Number(event.target.value))} /></div>
             <div className="pv2-field"><label>启动模式</label><select className="pv2-select" value={startMode} onChange={(event) => setStartMode(event.target.value as "replay" | "realtime")}><option value="replay">历史分钟回放</option><option value="realtime">直接进入实时模拟盘</option></select></div>
             <div className="pv2-field"><label>数据源</label><select className="pv2-select" value={dataSource} onChange={(event) => setDataSource(event.target.value as DataSource)}><option value="DB_HISTORICAL">DB_HISTORICAL</option><option value="TDX_REALTIME">TDX_REALTIME</option></select></div>
-            <div className="pv2-field"><label>已验证执行策略</label><select className="pv2-select" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">Manifest 默认策略</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code} / {item.paper_enabled ? "可用于模拟盘" : "未启用"}</option>)}</select></div>
+            <div className="pv2-field"><label>已验证执行策略</label><select className="pv2-select" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">Manifest 默认策略（后端会导入并校验）</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code} / {item.paper_enabled ? "可用于模拟盘" : "未启用"}</option>)}</select></div>
             {startMode === "replay" ? <>
               <div className="pv2-field"><label>回放开始日期</label><input className="pv2-input" type="date" value={replayStart} onChange={(event) => setReplayStart(event.target.value)} /></div>
               <div className="pv2-field"><label>回放结束日期</label><input className="pv2-input" type="date" value={replayEnd} onChange={(event) => setReplayEnd(event.target.value)} /></div>

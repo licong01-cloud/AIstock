@@ -88,7 +88,7 @@ Important directories:
 - The existing AGENTS.md in the project root may belong to another programming tool. Avoid editing it.
 - If Codex is launched from F:\Dev\AIstock, this AGENTS.override.md file should be read as the Codex-specific project instruction file.
 - If Codex is launched from another directory, use --add-dir F:\Dev\AIstock for write access, but project instructions may not be loaded automatically unless the project directory is the working directory.
-- Trading Core v2 / Paper Trading v2 restart-safe continuation plan is recorded in `docs/architecture/paper_trading_v2_remaining_execution_plan.md`. Before continuing this work after a restart, read that document. Do not install Torch yet; V24 is deprecated and V25 execution strategy is still under development.
+- Trading Core v2 / Paper Trading v2 restart-safe continuation plan is recorded in `docs/architecture/paper_trading_v2_remaining_execution_plan.md`. Before continuing this work after a restart, read that document. The older "do not install Torch / V25 under development" note has been superseded for this workstation by the 2026-04-27 local PyTorch verification below; still do not install or change runtime dependencies without user direction.
 
 ## Trading Core v2 / Paper Trading v2 Update - 2026-04-25
 
@@ -238,3 +238,4 @@ Important directories:
 - RTX 5080 requires a PyTorch build with CUDA 12.8 or newer for GPU execution; CUDA 12.6/12.4-era PyTorch wheels are not suitable for authoritative V25 GPU validation.
 - Preferred local installation target for Paper Trading v2 V25 Windows backend execution is PyTorch CUDA 12.8 (`cu128`) in the same Python environment used by `backend.main`.
 - After installing torch, verify with `python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO_CUDA')"` before running Paper v2 V25 replay.
+- Verified user AIstock conda environment on 2026-04-27: `torch 2.11.0+cu128`, CUDA runtime `12.8`, `torch.cuda.is_available() == True`, device `NVIDIA GeForce RTX 5080`.

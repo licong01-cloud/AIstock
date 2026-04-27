@@ -24,7 +24,7 @@ export default function PaperV2PackagesPage() {
   const [selectedId, setSelectedId] = useState("");
   const [sourceKind, setSourceKind] = useState<"all" | "qe_experiment" | "qe_evolution_loop">("all");
   const [sourceKey, setSourceKey] = useState("");
-  const [resolveRuntimeAssets, setResolveRuntimeAssets] = useState(false);
+  const [resolveRuntimeAssets, setResolveRuntimeAssets] = useState(true);
   const [policies, setPolicies] = useState<ExecutionPolicy[]>([]);
   const [events, setEvents] = useState<JsonObject[]>([]);
   const [modelState, setModelState] = useState<JsonObject | null>(null);
@@ -170,7 +170,7 @@ export default function PaperV2PackagesPage() {
           </div>
           <label className="pv2-chip" style={{ marginTop: 12 }}>
             <input type="checkbox" checked={resolveRuntimeAssets} onChange={(event) => setResolveRuntimeAssets(event.target.checked)} />
-            创建时解析并复制运行时资产
+            创建时解析并复制运行时资产（V24/V25 等模型型执行策略需要）
           </label>
           <div className="pv2-row-actions" style={{ marginTop: 12 }}>
             <button className="pv2-button" onClick={() => sourceAction("preview")} disabled={busy || !selectedSource} type="button">预览 Manifest</button>
