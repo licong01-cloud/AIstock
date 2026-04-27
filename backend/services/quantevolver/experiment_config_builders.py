@@ -539,9 +539,15 @@ def build_config_from_retry_loop(
     including HMM settings if any.  Task-level overrides (stock_pool, label_type,
     strategy_params, unfilled_handler, execution_algo) are merged on top.
     """
+    def _snapshot_or_task(key: str, default: Any = None) -> Any:
+        """Prefer loop snapshot values so retry preserves per-loop UI config."""
+        if key in config and config.get(key) is not None:
+            return config.get(key)
+        return task.get(key, default)
+
     # model_params is the original custom_params snapshot
     model_params_base: dict[str, Any] = dict(config.get("model_params") or {})
-    config_label_horizon = model_params_base.get("label_horizon")
+    config_label_horizon = model_params_base.get("label_horizon") or config.get("label_horizon")
     if config_label_horizon not in (None, ""):
         label_horizon = normalize_label_horizon(
             config_label_horizon,
@@ -564,33 +570,36 @@ def build_config_from_retry_loop(
             context="retry_loop",
         )
 
-    # Task-level strategy params overlay
+    # Retry must preserve the loop snapshot.  Custom-evo tasks can compare
+    # V24/V25 or different holding periods in sibling loops, so task-level
+    # values are only a fallback for older snapshots.
     effective_strategy_params: dict[str, Any] = dict(
-        _parse_json_field(task.get("strategy_params") or {})
+        _parse_json_field(_snapshot_or_task("strategy_params") or {})
     )
     strategy_filter_suspended = effective_strategy_params.pop("filter_suspended_on_signal", None)
     strategy_filter_suspended = effective_strategy_params.pop("exclude_suspended", strategy_filter_suspended)
     strategy_suspend_filter_strict = effective_strategy_params.pop("suspend_filter_strict", None)
     effective_strategy_params.pop("suspend_filter_file", None)
-    effective_execution_algo: str | None = task.get("execution_algo")
+    effective_execution_algo: str | None = _snapshot_or_task("execution_algo")
     effective_execution_algo_params: dict[str, Any] = dict(
-        _parse_json_field(task.get("execution_algo_params") or {})
+        _parse_json_field(_snapshot_or_task("execution_algo_params") or {})
     )
     filter_suspended_on_signal = _bool_from_config(
-        task.get("filter_suspended_on_signal")
+        config.get("filter_suspended_on_signal")
+        or task.get("filter_suspended_on_signal")
         or strategy_filter_suspended
         or model_params_base.get("filter_suspended_on_signal")
         or model_params_base.get("exclude_suspended")
     )
-    suspend_filter_strict = _bool_from_config(
-        task.get("suspend_filter_strict")
-        if task.get("suspend_filter_strict") is not None
-        else (
-            strategy_suspend_filter_strict
-            if strategy_suspend_filter_strict is not None
-            else model_params_base.get("suspend_filter_strict", True)
-        )
-    )
+    if config.get("suspend_filter_strict") is not None:
+        suspend_filter_strict_source = config.get("suspend_filter_strict")
+    elif task.get("suspend_filter_strict") is not None:
+        suspend_filter_strict_source = task.get("suspend_filter_strict")
+    elif strategy_suspend_filter_strict is not None:
+        suspend_filter_strict_source = strategy_suspend_filter_strict
+    else:
+        suspend_filter_strict_source = model_params_base.get("suspend_filter_strict", True)
+    suspend_filter_strict = _bool_from_config(suspend_filter_strict_source)
 
     # HMM: extract from model_params_base (where the original submission stored them)
     enable_sector_hmm: bool = bool(model_params_base.pop("enable_sector_hmm", False))
@@ -604,9 +613,9 @@ def build_config_from_retry_loop(
         hmm_signal_preset=hmm_signal_preset,
     )
 
-    unfilled_handler: str | None = task.get("unfilled_handler")
+    unfilled_handler: str | None = _snapshot_or_task("unfilled_handler")
     unfilled_handler_params = _build_unfilled_handler_params(
-        task.get("unfilled_handler_params")
+        _snapshot_or_task("unfilled_handler_params")
     )
 
     # Multi-Alpha 透传 (Path 5 — 重试) — 从原始 snapshot 恢复
@@ -616,10 +625,10 @@ def build_config_from_retry_loop(
     return ExperimentConfig(
         factor_names=config.get("factor_list") or [],
         model_id=config.get("model_id") or "",
-        strategy_id=task.get("strategy_id") or config.get("strategy_id"),
+        strategy_id=config.get("strategy_id") or task.get("strategy_id"),
         data_split=config.get("data_split"),
-        stock_pool=task.get("stock_pool"),
-        label_type=task.get("label_type"),
+        stock_pool=_snapshot_or_task("stock_pool"),
+        label_type=_snapshot_or_task("label_type"),
         label_horizon=label_horizon,
         hmm=hmm,
         execution_algo=effective_execution_algo,

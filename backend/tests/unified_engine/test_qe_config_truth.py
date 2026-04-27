@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from backend.routers.quantevolver_evolution import _merge_strategy_runtime_flags, _reject_nested_runtime_flags
 from backend.execution_algos.v25_two_stage_algo import V25TwoStageAlgo, V25TwoStageUnavailableError
 from backend.services.quantevolver.config_composer import ConfigComposer
+from backend.services.quantevolver.experiment_config_builders import build_config_from_retry_loop
 from backend.services.quantevolver.stock_pool_sync import sync_stock_pool_to_remote_node
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -78,6 +79,42 @@ def test_backtest_freq_must_match_execution_algo():
         ConfigComposer._resolve_backtest_freq("CLOSE_PRICE", {"backtest_freq": "1min"})
     with pytest.raises(ValueError, match="requires backtest_freq=1min"):
         ConfigComposer._resolve_backtest_freq(None, {"backtest_freq": "day"})
+
+
+def test_retry_loop_preserves_loop_specific_execution_and_hold_config():
+    cfg = build_config_from_retry_loop(
+        {
+            "factor_list": ["f1"],
+            "model_id": "lgbm",
+            "strategy_id": "score_weighted_topk_v2",
+            "strategy_params": {"hold_thresh": 5},
+            "execution_algo": "V25_TWO_STAGE",
+            "execution_algo_params": {"device": "cpu"},
+            "stock_pool": "filtered_pool_20260426",
+            "label_type": "raw_return",
+            "label_horizon": 5,
+            "model_params": {"label_horizon": 5},
+            "data_split": DATA_SPLIT,
+        },
+        {
+            "strategy_id": "task_default_strategy",
+            "strategy_params": {"hold_thresh": 2},
+            "execution_algo": "TWAP",
+            "execution_algo_params": {"unexpected": True},
+            "stock_pool": "all",
+            "label_type": "task_default_label",
+            "label_horizon": 1,
+        },
+        experiment_name="retry-test",
+    )
+
+    assert cfg.execution_algo == "V25_TWO_STAGE"
+    assert cfg.execution_algo_params == {"device": "cpu"}
+    assert cfg.strategy_id == "score_weighted_topk_v2"
+    assert cfg.strategy_params == {"hold_thresh": 5}
+    assert cfg.stock_pool == "filtered_pool_20260426"
+    assert cfg.label_type == "raw_return"
+    assert cfg.label_horizon == 5
 
 
 def test_suspend_filter_wraps_topk_strategy():
