@@ -8,6 +8,7 @@ created.
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, date, datetime
 from typing import Any, Literal
 
@@ -17,6 +18,7 @@ from backend.services.trading_core.errors import (
     InvalidStateTransitionError,
     SessionAlreadyRunningError,
     SessionConfigError,
+    SessionLockTimeoutError,
     SessionSourceUnsupportedError,
     TradingCoreError,
     UnsupportedFeatureError,
@@ -36,6 +38,7 @@ from .models import (
     PaperTradingSession,
     PortfolioStatus,
 )
+from .live_session import PaperTradingLiveMinuteExecutor
 from .replay import PaperTradingHistoricalReplay
 from .repository import PaperTradingV2Repository
 
@@ -56,6 +59,27 @@ PAUSED_RESUMABLE_STATUSES = {
     PaperSessionStatus.LIVE_WAITING_FOR_BAR,
     PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
 }
+TICKABLE_SESSION_STATUSES = {
+    PaperSessionStatus.CREATED,
+    PaperSessionStatus.PREFLIGHTING,
+    PaperSessionStatus.REPLAYING,
+    PaperSessionStatus.CATCHING_UP,
+    PaperSessionStatus.SWITCHING_TO_LIVE,
+    PaperSessionStatus.LIVE_RUNNING,
+    PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+    PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
+}
+_SESSION_TICK_LOCKS: dict[str, threading.Lock] = {}
+_SESSION_TICK_LOCKS_GUARD = threading.RLock()
+
+
+def _session_tick_lock(session_id: str) -> threading.Lock:
+    with _SESSION_TICK_LOCKS_GUARD:
+        lock = _SESSION_TICK_LOCKS.get(session_id)
+        if lock is None:
+            lock = threading.Lock()
+            _SESSION_TICK_LOCKS[session_id] = lock
+        return lock
 
 
 class PaperTradingSessionService:
@@ -79,6 +103,7 @@ class PaperTradingSessionService:
         live_data_source: MinuteDataSource | str | None = None,
         runtime_config: dict[str, Any] | None = None,
         rerun_policy: Literal["reject_existing", "reset_portfolio"] = "reject_existing",
+        auto_switch_to_live: bool = False,
         confirm_reset: bool = False,
         confirm_text: str | None = None,
         created_by: str | None = None,
@@ -104,6 +129,15 @@ class PaperTradingSessionService:
         session_mode = self._parse_mode(mode)
         historical_source = self._parse_source(historical_data_source, field_name="historical_data_source")
         live_source = self._parse_source(live_data_source, field_name="live_data_source")
+        if auto_switch_to_live:
+            if session_mode != PaperSessionMode.REPLAY_ONLY:
+                raise SessionConfigError(
+                    "auto_switch_to_live can only be used with REPLAY_ONLY requests",
+                    context={"portfolio_id": portfolio_id, "mode": session_mode.value},
+                )
+            session_mode = PaperSessionMode.CATCHUP_THEN_LIVE
+            if live_source is None:
+                live_source = MinuteDataSource.TDX_REALTIME
         self._validate_dates(
             mode=session_mode,
             portfolio_start_date=portfolio.start_date,
@@ -139,20 +173,12 @@ class PaperTradingSessionService:
             mode="HISTORICAL" if session_mode == PaperSessionMode.REPLAY_ONLY else session_mode.value,
             package_id=portfolio.package_id,
         )
-        if session_mode in {PaperSessionMode.LIVE_ONLY, PaperSessionMode.CATCHUP_THEN_LIVE}:
-            raise UnsupportedFeatureError(
-                "Paper v2 real-time incremental session execution is not implemented yet",
-                context={
-                    "portfolio_id": portfolio_id,
-                    "mode": session_mode.value,
-                    "reason": "live execution must not be simulated by a closed-day run or any fallback",
-                },
-            )
-
         config["paper_v2_session"] = {
             "rerun_policy": rerun_policy,
+            "auto_switch_to_live": auto_switch_to_live,
             "confirm_reset": confirm_reset,
             "confirm_text": confirm_text,
+            **dict(config.get("paper_v2_session") or {}),
         }
         session = PaperTradingSession(
             portfolio_id=portfolio_id,
@@ -227,12 +253,7 @@ class PaperTradingSessionService:
                         mode=mode.value,
                         package_id=portfolio.package_id,
                     )
-                    mode_payload["errors"].append(
-                        {
-                            "error_code": "UNSUPPORTED_FEATURE",
-                            "message": "Paper v2 live incremental executor is not implemented yet",
-                        }
-                    )
+                    mode_payload["can_start"] = True
                 elif mode == PaperSessionMode.CATCHUP_THEN_LIVE:
                     self._validate_sources(
                         mode=mode,
@@ -240,6 +261,12 @@ class PaperTradingSessionService:
                         historical_data_source=MinuteDataSource.DB_HISTORICAL,
                         live_data_source=MinuteDataSource.TDX_REALTIME,
                     )
+                    require_execution_algo_supports_mode(
+                        policy_json,
+                        mode=mode.value,
+                        package_id=portfolio.package_id,
+                    )
+                    mode_payload["can_start"] = True
             except TradingCoreError as exc:
                 mode_payload["errors"].append(exc.to_dict())
             capabilities["modes"][mode.value] = mode_payload
@@ -410,10 +437,7 @@ class PaperTradingSessionService:
                     context={"live_data_source": live_data_source.value},
                 )
             if portfolio_data_source != live_data_source:
-                raise SessionConfigError(
-                    "current live runner requires portfolio data_source to match live_data_source",
-                    context={"portfolio_data_source": portfolio_data_source.value, "live_data_source": live_data_source.value},
-                )
+                return
         elif mode == PaperSessionMode.CATCHUP_THEN_LIVE:
             if historical_data_source is None or live_data_source is None:
                 raise SessionConfigError("CATCHUP_THEN_LIVE session requires both historical_data_source and live_data_source")
@@ -427,14 +451,14 @@ class PaperTradingSessionService:
                     "catch-up live source is not implemented",
                     context={"live_data_source": live_data_source.value},
                 )
-            raise UnsupportedFeatureError(
-                "CATCHUP_THEN_LIVE requires source-role split and incremental live executor implementation",
-                context={
-                    "historical_data_source": historical_data_source.value,
-                    "live_data_source": live_data_source.value,
-                    "reason": "no silent DB/TDX fallback or partial live success is allowed",
-                },
-            )
+            if portfolio_data_source != historical_data_source:
+                raise SessionConfigError(
+                    "CATCHUP_THEN_LIVE historical replay currently requires portfolio data_source to match historical_data_source",
+                    context={
+                        "portfolio_data_source": portfolio_data_source.value,
+                        "historical_data_source": historical_data_source.value,
+                    },
+                )
 
     @staticmethod
     def _reject_raw_execution_overrides(runtime_config: dict[str, Any]) -> None:
@@ -476,33 +500,61 @@ class PaperTradingSessionRunner:
         *,
         repository: PaperTradingV2Repository | Any | None = None,
         replay_service: PaperTradingHistoricalReplay | None = None,
+        live_executor: PaperTradingLiveMinuteExecutor | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.replay_service = replay_service or PaperTradingHistoricalReplay(repository=self.repository)
+        self.live_executor = live_executor or PaperTradingLiveMinuteExecutor(repository=self.repository)
 
     def tick(self, session_id: str, *, as_of_time: datetime | None = None) -> PaperSessionProgress:
-        session = self.repository.get_session(session_id)
-        if session.status == PaperSessionStatus.PAUSED:
-            self.repository.save_session_event(
-                session_id=session_id,
-                event_type="SESSION_TICK_SKIPPED",
-                message="paper v2 session tick skipped because session is paused",
+        lock = _session_tick_lock(session_id)
+        if not lock.acquire(blocking=False):
+            exc = SessionLockTimeoutError(
+                "paper v2 session is already being processed by another tick",
+                context={"session_id": session_id},
             )
-            return PaperTradingSessionService(repository=self.repository).progress(session_id)
-        if session.status in TERMINAL_SESSION_STATUSES:
-            return PaperTradingSessionService(repository=self.repository).progress(session_id)
-        if session.mode != PaperSessionMode.REPLAY_ONLY:
-            error = UnsupportedFeatureError(
-                "Paper v2 real-time incremental session tick is not implemented",
-                context={
-                    "session_id": session_id,
-                    "mode": session.mode.value,
-                    "reason": "live sessions must process observed minute bars with persisted execution state; no closed-day fallback is allowed",
-                },
-            )
-            self._mark_failed(session, error)
-            raise error
-        return self._run_replay_only(session, as_of_time=as_of_time)
+            try:
+                session = self.repository.get_session(session_id)
+                self.repository.save_session_event(
+                    session_id=session_id,
+                    event_type="SESSION_LOCK_TIMEOUT",
+                    message=exc.message,
+                    context=exc.context,
+                )
+            except TradingCoreError:
+                raise exc
+            raise exc
+        try:
+            session = self.repository.get_session(session_id)
+            if session.status == PaperSessionStatus.PAUSED:
+                self.repository.save_session_event(
+                    session_id=session_id,
+                    event_type="SESSION_TICK_SKIPPED",
+                    message="paper v2 session tick skipped because session is paused",
+                )
+                return PaperTradingSessionService(repository=self.repository).progress(session_id)
+            if session.status in TERMINAL_SESSION_STATUSES:
+                return PaperTradingSessionService(repository=self.repository).progress(session_id)
+            if session.mode != PaperSessionMode.REPLAY_ONLY:
+                try:
+                    return self.live_executor.tick(session, as_of_time=as_of_time)
+                except TradingCoreError as exc:
+                    self._mark_failed(session, exc)
+                    raise
+                except Exception as exc:
+                    wrapped = TradingCoreError(
+                        "paper v2 live session tick failed",
+                        context={
+                            "session_id": session.session_id,
+                            "portfolio_id": session.portfolio_id,
+                            "reason": f"{type(exc).__name__}: {exc}",
+                        },
+                    )
+                    self._mark_failed(session, wrapped)
+                    raise wrapped from exc
+            return self._run_replay_only(session, as_of_time=as_of_time)
+        finally:
+            lock.release()
 
     def _run_replay_only(self, session: PaperTradingSession, *, as_of_time: datetime | None) -> PaperSessionProgress:
         if session.end_date is None or session.historical_data_source is None:

@@ -36,18 +36,18 @@ def test_capabilities_split_historical_and_live_requirements() -> None:
     assert v25.historical_min_required_bars == 240
     assert v25.plan_horizon_bars == 240
     assert v25.live_min_start_bars == 1
-    assert v25.live_supported is False
+    assert v25.live_supported is True
+    assert v25.live_step_mode == "persisted_plan"
 
 
-def test_realtime_v25_is_rejected_without_fallback() -> None:
-    with pytest.raises(AlgoRealtimeUnsupportedError, match="real-time safe") as exc_info:
-        require_execution_algo_supports_mode(
-            {"algo_code": "V25_TWO_STAGE", "algo_config": {}},
-            mode="LIVE_ONLY",
-            package_id="pkg",
-        )
-    assert exc_info.value.context["algo_code"] == "V25_TWO_STAGE"
-    assert "fallback" in exc_info.value.context["reason"]
+def test_realtime_v25_is_declared_streaming_without_fallback() -> None:
+    capability = require_execution_algo_supports_mode(
+        {"algo_code": "V25_TWO_STAGE", "algo_config": {}},
+        mode="LIVE_ONLY",
+        package_id="pkg",
+    )
+    assert capability.algo_code == "V25_TWO_STAGE"
+    assert capability.live_step_mode == "persisted_plan"
 
 
 def test_unknown_algorithm_is_not_declared_live_safe_by_default() -> None:

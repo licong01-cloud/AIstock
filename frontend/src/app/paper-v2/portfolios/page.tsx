@@ -10,7 +10,7 @@ import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { hmmTrainingApi, paperV2Api, strategyPackageApi } from "@/lib/paper-v2/api";
 import { formatCompact, shortHash, todayIso } from "@/lib/paper-v2/format";
-import type { DataSource, ExecutionPolicy, HmmConfig, HmmSnapshot, JsonObject, PaperPortfolio, ReplayResult, StrategyPackage } from "@/lib/paper-v2/types";
+import type { DataSource, ExecutionPolicy, HmmConfig, HmmSnapshot, JsonObject, PaperPortfolio, PaperSessionProgress, StrategyPackage } from "@/lib/paper-v2/types";
 
 function daysAgoIso(days: number): string {
   const d = new Date();
@@ -31,6 +31,7 @@ export default function PaperV2PortfoliosPage() {
   const [startDate, setStartDate] = useState(todayIso());
   const [replayStart, setReplayStart] = useState(daysAgoIso(10));
   const [replayEnd, setReplayEnd] = useState(todayIso());
+  const [autoSwitchToLive, setAutoSwitchToLive] = useState(false);
   const [dataSource, setDataSource] = useState<DataSource>("DB_HISTORICAL");
   const [policyId, setPolicyId] = useState("");
   const [topK, setTopK] = useState(20);
@@ -41,7 +42,7 @@ export default function PaperV2PortfoliosPage() {
   const [hmmSnapshotId, setHmmSnapshotId] = useState("");
   const [hmmPreset, setHmmPreset] = useState("preset_A");
   const [created, setCreated] = useState<PaperPortfolio | null>(null);
-  const [replayResult, setReplayResult] = useState<ReplayResult | null>(null);
+  const [sessionProgress, setSessionProgress] = useState<PaperSessionProgress | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -75,6 +76,10 @@ export default function PaperV2PortfoliosPage() {
   }, [hmmConfigId, name, packageId]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    setDataSource(startMode === "realtime" ? "TDX_REALTIME" : "DB_HISTORICAL");
+  }, [startMode]);
 
   useEffect(() => {
     let alive = true;
@@ -126,6 +131,7 @@ export default function PaperV2PortfoliosPage() {
     return {
       top_k: topK,
       selection_artifact_config: { auto_generate: true, inference_backend: "wsl" },
+      paper_v2_session: { signal_data_source: "DB_HISTORICAL" },
       runtime_profile: {
         selection: { top_k: topK },
         tradability: { exclude_suspended: excludeSuspended },
@@ -142,7 +148,7 @@ export default function PaperV2PortfoliosPage() {
   async function createPortfolio() {
     setError(null);
     setCreated(null);
-    setReplayResult(null);
+    setSessionProgress(null);
     setBusy(true);
     try {
       if (!packageId) throw new Error("请先选择 StrategyPackage。");
@@ -160,13 +166,28 @@ export default function PaperV2PortfoliosPage() {
       });
       setCreated(portfolio);
       if (startMode === "replay") {
-        const result = await paperV2Api.replay(portfolio.portfolio_id, {
+        const session = await paperV2Api.createSession(portfolio.portfolio_id, {
+          mode: "REPLAY_ONLY",
           start_date: replayStart,
           end_date: replayEnd,
+          historical_data_source: "DB_HISTORICAL",
+          live_data_source: autoSwitchToLive ? "TDX_REALTIME" : null,
           runtime_config: runtimeConfig(),
           rerun_policy: "reject_existing",
+          auto_switch_to_live: autoSwitchToLive,
+          created_by: "paper_v2_ui",
         });
-        setReplayResult(result);
+        setSessionProgress(await paperV2Api.tickSession(session.session_id));
+      } else {
+        const session = await paperV2Api.createSession(portfolio.portfolio_id, {
+          mode: "LIVE_ONLY",
+          start_date: startDate,
+          live_data_source: "TDX_REALTIME",
+          runtime_config: runtimeConfig(),
+          rerun_policy: "reject_existing",
+          created_by: "paper_v2_ui",
+        });
+        setSessionProgress(await paperV2Api.tickSession(session.session_id));
       }
       await load();
     } catch (exc) {
@@ -196,11 +217,12 @@ export default function PaperV2PortfoliosPage() {
             <div className="pv2-field"><label>组合名称</label><input className="pv2-input" value={name} onChange={(event) => setName(event.target.value)} /></div>
             <div className="pv2-field"><label>初始资金</label><input className="pv2-input" type="number" min={1} value={initialCash} onChange={(event) => setInitialCash(Number(event.target.value))} /></div>
             <div className="pv2-field"><label>启动模式</label><select className="pv2-select" value={startMode} onChange={(event) => setStartMode(event.target.value as "replay" | "realtime")}><option value="replay">历史分钟回放</option><option value="realtime">直接进入实时模拟盘</option></select></div>
-            <div className="pv2-field"><label>数据源</label><select className="pv2-select" value={dataSource} onChange={(event) => setDataSource(event.target.value as DataSource)}><option value="DB_HISTORICAL">DB_HISTORICAL</option><option value="TDX_REALTIME">TDX_REALTIME</option></select></div>
+            <div className="pv2-field"><label>数据源</label><input className="pv2-input" value={dataSource} readOnly /></div>
             <div className="pv2-field"><label>已验证执行策略</label><select className="pv2-select" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">Manifest 默认策略（后端会导入并校验）</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code} / {item.paper_enabled ? "可用于模拟盘" : "未启用"}</option>)}</select></div>
             {startMode === "replay" ? <>
               <div className="pv2-field"><label>回放开始日期</label><input className="pv2-input" type="date" value={replayStart} onChange={(event) => setReplayStart(event.target.value)} /></div>
               <div className="pv2-field"><label>回放结束日期</label><input className="pv2-input" type="date" value={replayEnd} onChange={(event) => setReplayEnd(event.target.value)} /></div>
+              <div className="pv2-field"><label>追赶后切换实时</label><label className="pv2-chip"><input type="checkbox" checked={autoSwitchToLive} onChange={(event) => setAutoSwitchToLive(event.target.checked)} /> 回放追赶完成后自动进入 TDX 实时模拟</label></div>
             </> : <div className="pv2-field"><label>实时模拟开始日期</label><input className="pv2-input" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></div>}
           </div>
 
@@ -225,10 +247,11 @@ export default function PaperV2PortfoliosPage() {
               <span className="pv2-chip">data: {dataSource}</span>
               <span className="pv2-chip">cash: {formatCompact(initialCash)}</span>
               <span className="pv2-chip">mode: {startMode === "replay" ? "历史回放" : "实时模拟"}</span>
+              {startMode === "replay" ? <span className="pv2-chip">追赶切实时: {autoSwitchToLive ? "TDX_REALTIME" : "关闭"}</span> : null}
             </div>
           </div>
-          <button className="pv2-button-primary" onClick={createPortfolio} disabled={busy} type="button">{busy ? "处理中..." : startMode === "replay" ? "创建并开始历史回放" : "创建实时模拟盘"}</button>
-          {created ? <JsonPanel value={{ created_portfolio_id: created.portfolio_id, package_id: created.package_id, manifest_sha256: created.manifest_sha256, replay_result: replayResult }} /> : null}
+          <button className="pv2-button-primary" onClick={createPortfolio} disabled={busy} type="button">{busy ? "处理中..." : startMode === "replay" ? (autoSwitchToLive ? "创建组合并回放追赶到实时" : "创建组合并开始历史回放") : "创建实时模拟盘"}</button>
+          {created ? <JsonPanel value={{ created_portfolio_id: created.portfolio_id, package_id: created.package_id, manifest_sha256: created.manifest_sha256, session_progress: sessionProgress }} /> : null}
         </SectionCard>
 
         <SectionCard title="组合生命周期规则" eyebrow="防止假成功">

@@ -261,6 +261,13 @@ async def _lifespan(app: FastAPI):
         from .services.paper_trading.scheduler import paper_trading_scheduler
         paper_trading_scheduler.start()
 
+    # Paper Trading v2 session scheduler is opt-in so development ports do not
+    # accidentally advance durable v2 sessions while production 8001 is running.
+    enable_pt_v2 = (os.getenv("ENABLE_PAPER_TRADING_V2_SCHEDULER") or "").strip().lower()
+    if enable_pt_v2 in {"1", "true", "yes", "y", "on"}:
+        from .services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
+        paper_trading_v2_scheduler.start()
+
     # 相关性计算调度器 — 默认禁用，仅在显式开启时启动
     # 不允许后台自动计算，必须由用户在页面主动触发
     enable_corr_scheduler = (os.getenv("ENABLE_CORRELATION_SCHEDULER") or "").strip().lower()
@@ -391,6 +398,11 @@ async def _lifespan(app: FastAPI):
         try:
             from .services.paper_trading.scheduler import paper_trading_scheduler
             paper_trading_scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        try:
+            from .services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
+            paper_trading_v2_scheduler.shutdown(wait=False)
         except Exception:
             pass
         # ── 后台线程已停，再关闭 DB 连接池和外部连接 ──

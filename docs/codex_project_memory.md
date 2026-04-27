@@ -166,6 +166,14 @@ Important directories:
 - Rolling preview uses the common latest completed date across `market.sector_data`, `market.sw_daily`, and `market.index_daily` (`000300.SH`), then derives trading-day-aware `train_start`, `train_end`, `val_start`, `val_end`, `coefficient_start`, and `coefficient_end`.
 - `scripts/hmm_train_script.py` now passes rolling split dates into RD-Agent `HMMTrainConfig`. HMM coefficient precompute is mandatory before a snapshot is marked completed; precompute failure fails the job and avoids inserting a ready snapshot.
 
+## Paper Trading v2 Realtime/Replay Session Update - 2026-04-27
+
+- Trading Core v2 schema initialization is applied through `backend/db/init_trading_core_v2_schema.py`; business services still do not run DDL implicitly.
+- Paper v2 now has durable trade sessions for `REPLAY_ONLY`, `LIVE_ONLY`, and `CATCHUP_THEN_LIVE`, including an `auto_switch_to_live` option that normalizes replay requests to catch-up-then-live with explicit `DB_HISTORICAL` and `TDX_REALTIME` source roles.
+- Live sessions process observed TDX minute bars incrementally with persisted `order_execution_state`, intraday snapshots, idempotent fill/event IDs, and session locks. A tick with no new bar records `LIVE_WAITING_FOR_BAR`, not success.
+- `V25_TWO_STAGE` is declared live-capable only through the explicit streaming adapter: historical replay still requires 240 bars, while live mode may start with one observed bar and must persist the generated 240-step plan. Missing Torch/model/context still fails fast; no TWAP/daily fallback is allowed.
+- Paper v2 has an opt-in session scheduler exposed under `/api/v1/paper-v2/session-scheduler/*`. It is not auto-started on development ports unless explicitly enabled, to avoid a temporary 8011/8012 backend advancing durable sessions visible on production 8001.
+
 ## QE Status Sync / Enhanced Metrics Update - 2026-04-26
 
 - One-off QE experiments now have a backend reconciliation scanner (`QEExperimentStatusScanner`) started by `backend/main.py`; it scans running `qe_experiments` and reuses run-status synchronization so single-alpha and Multi-Alpha rows converge without relying on an open UI/SSE session.

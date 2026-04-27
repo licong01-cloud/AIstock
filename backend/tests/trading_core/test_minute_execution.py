@@ -8,6 +8,7 @@ from backend.services.trading_core.errors import DataUnavailableError, Execution
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
 from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, OrderStatus
 from backend.services.trading_core.oms import OMS
+from backend.services.paper_trading_v2.models import OrderExecutionState
 
 
 def make_order(quantity: int = 600):
@@ -107,3 +108,44 @@ def test_minute_execution_fails_when_participation_rate_exceeded() -> None:
             algo_code="CLOSE_PRICE",
             algo_config={"max_participation_rate": 0.1},
         )
+
+
+def test_incremental_minute_execution_advances_cursor_without_duplicate_fills() -> None:
+    engine = MinuteExecutionEngine()
+    order = make_order(quantity=600)
+    state = OrderExecutionState(
+        session_id="psess_1",
+        run_id="prun_1",
+        order_id=order.order_id,
+        symbol=order.symbol,
+        trade_date=date(2024, 1, 2),
+        algo_code="TWAP",
+        filled_quantity=0,
+        remaining_quantity=order.quantity,
+        status=order.status.value,
+    )
+
+    updated_order, updated_state, fills, events = engine.execute_order_incremental(
+        order=order,
+        execution_state=state,
+        new_bars=make_bars(1),
+        algo_code="TWAP",
+        algo_config={"split_count": 3},
+    )
+
+    assert updated_order.status == OrderStatus.PARTIALLY_FILLED
+    assert updated_state.last_processed_bar_time == make_bars(1)[0].bar_time
+    assert sum(fill.quantity for fill in fills) == 200
+    assert len(events) == 1
+
+    replayed_order, replayed_state, replayed_fills, replayed_events = engine.execute_order_incremental(
+        order=updated_order,
+        execution_state=updated_state,
+        new_bars=[],
+        algo_code="TWAP",
+        algo_config={"split_count": 3},
+    )
+    assert replayed_order == updated_order
+    assert replayed_state == updated_state
+    assert replayed_fills == []
+    assert replayed_events == []

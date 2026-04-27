@@ -160,12 +160,17 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
         low_arr = self._require_array(market_context, "full_day_low")
         if not (len(close_arr) == len(vol_arr) == len(high_arr) == len(low_arr)):
             raise V25TwoStageUnavailableError("V25_TWO_STAGE full-day arrays must have equal length")
-        if len(close_arr) < TOTAL_LEN:
+        realtime_streaming = bool(market_context.get("v25_realtime_streaming") or market_context.get("observed_only"))
+        if len(close_arr) < TOTAL_LEN and not realtime_streaming:
             raise V25TwoStageUnavailableError("V25_TWO_STAGE requires at least 240 minute bars")
 
         prev_close = self._require_positive(market_context, "prev_close")
         cur_price = float(bar_data.get("close") or 0)
-        open_price = float(bar_data.get("open") or close_arr[0])
+        open_arr = market_context.get("full_day_open")
+        if open_arr is not None:
+            open_price = float(self._require_array(market_context, "full_day_open")[0])
+        else:
+            open_price = float(bar_data.get("open") or close_arr[0])
         if cur_price <= 0 or open_price <= 0:
             raise V25TwoStageUnavailableError("V25_TWO_STAGE requires positive open/close prices")
 
@@ -194,7 +199,10 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
         cur_step = int(state.step)
         if cur_step < 0:
             raise V25TwoStageUnavailableError("V25_TWO_STAGE state.step cannot be negative")
-        if cur_step >= min(len(close_arr), TOTAL_LEN) - 1:
+        horizon = TOTAL_LEN if realtime_streaming else min(len(close_arr), TOTAL_LEN)
+        if horizon <= 0:
+            raise V25TwoStageUnavailableError("V25_TWO_STAGE execution horizon is invalid")
+        if cur_step >= horizon - 1:
             step_qty = remaining
         else:
             remaining_weight = float(self._plan[cur_step:].sum())
@@ -217,7 +225,7 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
             side=state.side,
             quantity=step_qty,
             price=cur_price,
-            reason=f"V25_TWO_STAGE step {state.step}/{min(len(close_arr), TOTAL_LEN)}",
+            reason=f"V25_TWO_STAGE step {state.step}/{horizon}",
         )
 
     def _generate_plan(

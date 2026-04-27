@@ -542,6 +542,7 @@ class PaperV2MinuteMarketDataProvider:
                     "source": suspend_status.source,
                 }
             ),
+            "full_day_open": [bar.open for bar in minute_bars],
             "full_day_close": [bar.close for bar in minute_bars],
             "full_day_volume": [bar.volume for bar in minute_bars],
             "full_day_high": [bar.high for bar in minute_bars],

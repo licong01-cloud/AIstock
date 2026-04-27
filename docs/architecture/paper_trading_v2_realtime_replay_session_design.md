@@ -298,7 +298,7 @@ Suggested initial capability table:
 | `VWAP` | complete historical interval or streaming estimator | first executable bar and streaming volume model | supported only if adapter proves no future volume lookahead |
 | `POV` | completed interval volume | first executable bar and current bar volume | supported if adapter uses observed volume only |
 | `V24_PLAN` | existing adapter requirement | adapter-specific | live only if explicitly declared real-time safe |
-| `V25_TWO_STAGE` | 240 bars or full historical day | 1 observed executable bar if real-time adapter exists | unsupported in live until adapter proves no future-bar use |
+| `V25_TWO_STAGE` | 240 bars or full historical day | 1 observed executable bar, persisted 240-step plan, and reachable Torch/model assets | supported by the streaming adapter; no fallback to TWAP/daily is allowed |
 
 If an algorithm is configured in a validated execution policy but does not support the selected run mode, the session must fail with `ALGO_MODE_UNSUPPORTED`.
 
@@ -1133,10 +1133,31 @@ business capability that is not actually implemented:
 
 ### 26.3 V25 Boundary For This Implementation Stage
 
-V25 historical replay can remain supported through full-day historical bars and
-the existing Torch-backed adapter. V25 real-time live execution remains
-unsupported until a real-time-safe adapter is implemented and tested.
+V25 historical replay remains strict: it requires the full 240-bar historical
+day, validated model asset paths, Torch availability, and complete market
+context.
 
-This is not a fallback and not a downgrade. A live request using V25 must fail
-with `ALGO_REALTIME_UNSUPPORTED` until the adapter consumes only observed bars
-and persisted algorithm state.
+V25 real-time Paper v2 execution is now supported only through the explicit
+streaming adapter contract:
+
+- the first live tick may run with one observed executable minute bar;
+- the adapter must create a full 240-step plan from pre-open/open information
+  and persist it in `paper_v2.order_execution_state.plan`;
+- later ticks must resume from persisted `algo_state`, `plan`, and
+  `last_processed_bar_time`;
+- missing Torch, missing model files, invalid market context, or invalid plan
+  remains a hard failure;
+- no request may fall back to TWAP, VWAP, close-price, daily bars, default
+  prices, or fake success.
+
+### 26.4 Scheduler Boundary
+
+Paper v2 has an opt-in background session scheduler. It calls the same durable
+`/paper-v2/sessions/{session_id}/tick` path used by the UI, so scheduler and
+manual ticks share the same fail-fast validation, idempotency keys, and session
+locks.
+
+Development services must keep the scheduler disabled unless explicitly tested
+through `/paper-v2/session-scheduler/start` or `ENABLE_PAPER_TRADING_V2_SCHEDULER=1`.
+This prevents a temporary 8011/8012 backend from advancing the same durable
+sessions that production 8001 may be showing.

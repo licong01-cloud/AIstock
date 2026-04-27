@@ -251,6 +251,26 @@ class PaperTradingV2Repository:
         )
         return [self._session_from_row(row) for row in rows]
 
+    def list_tickable_sessions(
+        self,
+        *,
+        statuses: set[PaperSessionStatus],
+        limit: int = 100,
+    ) -> list[PaperTradingSession]:
+        if not statuses:
+            return []
+        rows = self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.trade_session
+            WHERE status = ANY(%s)
+            ORDER BY updated_at ASC, created_at ASC
+            LIMIT %s
+            """,
+            ([item.value for item in statuses], limit),
+        )
+        return [self._session_from_row(row) for row in rows]
+
     def update_session_status(
         self,
         session_id: str,
@@ -425,6 +445,28 @@ class PaperTradingV2Repository:
                 )
         return state
 
+    def list_order_execution_states(
+        self,
+        *,
+        session_id: str,
+        run_id: str | None = None,
+    ) -> list[OrderExecutionState]:
+        params: list[Any] = [session_id]
+        run_filter = ""
+        if run_id is not None:
+            run_filter = " AND run_id = %s"
+            params.append(run_id)
+        rows = self._fetch_rows(
+            f"""
+            SELECT *
+            FROM paper_v2.order_execution_state
+            WHERE session_id = %s{run_filter}
+            ORDER BY created_at ASC, order_id ASC
+            """,
+            tuple(params),
+        )
+        return [self._order_execution_state_from_row(row) for row in rows]
+
     def save_intraday_snapshot(self, snapshot: IntradaySnapshot) -> IntradaySnapshot:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -452,6 +494,23 @@ class PaperTradingV2Repository:
                     ),
                 )
         return snapshot
+
+    def list_intraday_snapshots(
+        self,
+        *,
+        session_id: str,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        return self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.intraday_snapshots
+            WHERE session_id = %s
+            ORDER BY snapshot_time DESC
+            LIMIT %s
+            """,
+            (session_id, limit),
+        )
 
     def save_execution_policy_activation(
         self,
@@ -616,6 +675,27 @@ class PaperTradingV2Repository:
                     ),
                 )
 
+    def get_order(self, order_id: str) -> Order:
+        rows = self._fetch_rows(
+            "SELECT * FROM paper_v2.orders WHERE order_id = %s",
+            (order_id,),
+        )
+        if not rows:
+            raise DataUnavailableError("paper v2 order does not exist", context={"order_id": order_id})
+        return self._order_from_row(rows[0])
+
+    def list_orders_for_run(self, run_id: str) -> list[Order]:
+        rows = self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.orders
+            WHERE run_id = %s
+            ORDER BY created_at ASC, order_id ASC
+            """,
+            (run_id,),
+        )
+        return [self._order_from_row(row) for row in rows]
+
     def save_fill(self, run_id: str, fill: Fill) -> None:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -625,6 +705,7 @@ class PaperTradingV2Repository:
                         fill_id, run_id, order_id, symbol, side, quantity, price,
                         trade_time, bar_time, reason, metadata
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(fill_id) DO NOTHING
                     """,
                     (
                         fill.fill_id,
@@ -641,6 +722,17 @@ class PaperTradingV2Repository:
                     ),
                 )
 
+    def list_fills_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        return self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.fills
+            WHERE run_id = %s
+            ORDER BY trade_time ASC, fill_id ASC
+            """,
+            (run_id,),
+        )
+
     def save_order_event(self, run_id: str, event: OrderEvent) -> None:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -650,6 +742,7 @@ class PaperTradingV2Repository:
                         event_id, run_id, order_id, event_type, event_time,
                         reason, metadata, fill_json
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(event_id) DO NOTHING
                     """,
                     (
                         event.event_id,
@@ -690,6 +783,7 @@ class PaperTradingV2Repository:
     def save_positions(self, *, run_id: str, trade_date: date, positions: list[PositionLot], prices: dict[str, float]) -> None:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
+                cur.execute("DELETE FROM paper_v2.positions WHERE run_id = %s", (run_id,))
                 for position in positions:
                     price = prices[position.symbol]
                     cur.execute(
@@ -791,6 +885,9 @@ class PaperTradingV2Repository:
                 cur.execute(f"SELECT run_id FROM paper_v2.run WHERE portfolio_id = %s{date_filter}", tuple(params))
                 run_ids = [row[0] for row in cur.fetchall()]
                 counts = {
+                    "order_execution_state": 0,
+                    "intraday_snapshots": 0,
+                    "session_day_run_links": 0,
                     "order_events": 0,
                     "fills": 0,
                     "cash_ledger": 0,
@@ -803,6 +900,12 @@ class PaperTradingV2Repository:
                 }
                 if not run_ids:
                     return counts
+                cur.execute("DELETE FROM paper_v2.order_execution_state WHERE run_id = ANY(%s)", (run_ids,))
+                counts["order_execution_state"] = cur.rowcount
+                cur.execute("DELETE FROM paper_v2.intraday_snapshots WHERE run_id = ANY(%s)", (run_ids,))
+                counts["intraday_snapshots"] = cur.rowcount
+                cur.execute("UPDATE paper_v2.session_day SET run_id = NULL, updated_at = NOW() WHERE run_id = ANY(%s)", (run_ids,))
+                counts["session_day_run_links"] = cur.rowcount
                 for table in ("order_events", "fills", "cash_ledger", "positions", "daily_snapshots", "run_events"):
                     cur.execute(f"DELETE FROM paper_v2.{table} WHERE run_id = ANY(%s)", (run_ids,))
                     counts[table] = cur.rowcount
@@ -917,6 +1020,21 @@ class PaperTradingV2Repository:
             with conn.cursor() as cur:
                 cur.execute(
                     """
+                    SELECT c.cash_after
+                    FROM paper_v2.cash_ledger c
+                    JOIN paper_v2.run r ON r.run_id = c.run_id
+                    WHERE c.portfolio_id = %s
+                      AND c.trade_date <= %s
+                    ORDER BY c.trade_date DESC, c.created_at DESC, c.cash_id DESC
+                    LIMIT 1
+                    """,
+                    (portfolio.portfolio_id, before_or_on),
+                )
+                row = cur.fetchone()
+                if row:
+                    return float(row[0])
+                cur.execute(
+                    """
                     SELECT cash FROM paper_v2.daily_snapshots
                     WHERE portfolio_id = %s AND trade_date <= %s
                     ORDER BY trade_date DESC LIMIT 1
@@ -1025,6 +1143,47 @@ class PaperTradingV2Repository:
             updated_at=row["updated_at"],
         )
 
+    @staticmethod
+    def _order_execution_state_from_row(row: dict[str, Any]) -> OrderExecutionState:
+        return OrderExecutionState(
+            execution_state_id=row["execution_state_id"],
+            session_id=row["session_id"],
+            run_id=row["run_id"],
+            order_id=row["order_id"],
+            symbol=row["symbol"],
+            trade_date=row["trade_date"],
+            algo_code=row["algo_code"],
+            algo_state=row["algo_state_json"] or {},
+            plan=row["plan_json"],
+            plan_sha256=row["plan_sha256"],
+            last_processed_bar_time=row["last_processed_bar_time"],
+            filled_quantity=int(row["filled_quantity"]),
+            remaining_quantity=int(row["remaining_quantity"]),
+            status=row["status"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _order_from_row(row: dict[str, Any]) -> Order:
+        return Order(
+            order_id=row["order_id"],
+            intent_id=row["intent_id"],
+            package_id=row["package_id"],
+            portfolio_id=row["portfolio_id"],
+            symbol=row["symbol"],
+            side=row["side"],
+            quantity=int(row["quantity"]),
+            order_type=row["order_type"],
+            limit_price=float(row["limit_price"]) if row.get("limit_price") is not None else None,
+            status=row["status"],
+            filled_quantity=int(row["filled_quantity"] or 0),
+            avg_fill_price=float(row["avg_fill_price"]) if row.get("avg_fill_price") is not None else None,
+            metadata=row.get("metadata") or {},
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
     def _fetch_rows(self, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -1113,6 +1272,16 @@ class InMemoryPaperTradingV2Repository:
             if session.status not in terminal
         ]
 
+    def list_tickable_sessions(
+        self,
+        *,
+        statuses: set[PaperSessionStatus],
+        limit: int = 100,
+    ) -> list[PaperTradingSession]:
+        rows = [session for session in self.sessions.values() if session.status in statuses]
+        rows.sort(key=lambda item: (item.updated_at, item.created_at))
+        return rows[:limit]
+
     def update_session_status(
         self,
         session_id: str,
@@ -1174,10 +1343,38 @@ class InMemoryPaperTradingV2Repository:
         self.order_execution_states[state.order_id] = state
         return state
 
+    def list_order_execution_states(
+        self,
+        *,
+        session_id: str,
+        run_id: str | None = None,
+    ) -> list[OrderExecutionState]:
+        rows = [
+            state
+            for state in self.order_execution_states.values()
+            if state.session_id == session_id and (run_id is None or state.run_id == run_id)
+        ]
+        rows.sort(key=lambda item: (item.created_at, item.order_id))
+        return rows
+
     def save_intraday_snapshot(self, snapshot: IntradaySnapshot) -> IntradaySnapshot:
         key = (snapshot.run_id, snapshot.snapshot_time)
         self.intraday_snapshots.setdefault(key, snapshot)
         return self.intraday_snapshots[key]
+
+    def list_intraday_snapshots(
+        self,
+        *,
+        session_id: str,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        rows = [
+            snapshot.model_dump(mode="json")
+            for snapshot in self.intraday_snapshots.values()
+            if snapshot.session_id == session_id
+        ]
+        rows.sort(key=lambda item: item["snapshot_time"], reverse=True)
+        return rows[:limit]
 
     def save_execution_policy_activation(
         self,
@@ -1261,11 +1458,28 @@ class InMemoryPaperTradingV2Repository:
         existing.append(order)
         self.orders[run_id] = existing
 
+    def get_order(self, order_id: str) -> Order:
+        for orders in self.orders.values():
+            for order in orders:
+                if order.order_id == order_id:
+                    return order
+        raise DataUnavailableError("paper v2 order does not exist", context={"order_id": order_id})
+
+    def list_orders_for_run(self, run_id: str) -> list[Order]:
+        return list(self.orders.get(run_id, []))
+
     def save_fill(self, run_id: str, fill: Fill) -> None:
-        self.fills.setdefault(run_id, []).append(fill)
+        existing = self.fills.setdefault(run_id, [])
+        if not any(item.fill_id == fill.fill_id for item in existing):
+            existing.append(fill)
+
+    def list_fills_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        return [fill.model_dump(mode="json") for fill in self.fills.get(run_id, [])]
 
     def save_order_event(self, run_id: str, event: OrderEvent) -> None:
-        self.events.setdefault(run_id, []).append(event)
+        existing = self.events.setdefault(run_id, [])
+        if not any(item.event_id == event.event_id for item in existing):
+            existing.append(event)
 
     def save_cash_entry(self, run_id: str, entry: CashLedgerEntry) -> None:
         self.cash_entries.setdefault(run_id, []).append(entry)
@@ -1313,6 +1527,9 @@ class InMemoryPaperTradingV2Repository:
             and (end_date is None or run.trade_date <= end_date)
         ]
         counts = {
+            "order_execution_state": 0,
+            "intraday_snapshots": 0,
+            "session_day_run_links": 0,
             "order_events": 0,
             "fills": 0,
             "cash_ledger": 0,
@@ -1324,6 +1541,18 @@ class InMemoryPaperTradingV2Repository:
             "run": 0,
         }
         for run_id in run_ids:
+            removed_states = [key for key, state in self.order_execution_states.items() if state.run_id == run_id]
+            for key in removed_states:
+                self.order_execution_states.pop(key, None)
+            counts["order_execution_state"] += len(removed_states)
+            removed_snaps = [key for key, snap in self.intraday_snapshots.items() if snap.run_id == run_id]
+            for key in removed_snaps:
+                self.intraday_snapshots.pop(key, None)
+            counts["intraday_snapshots"] += len(removed_snaps)
+            for key, day in list(self.session_days.items()):
+                if day.run_id == run_id:
+                    self.session_days[key] = day.model_copy(update={"run_id": None, "updated_at": datetime.now(UTC)})
+                    counts["session_day_run_links"] += 1
             counts["orders"] += len(self.orders.pop(run_id, []))
             counts["fills"] += len(self.fills.pop(run_id, []))
             counts["order_events"] += len(self.events.pop(run_id, []))
@@ -1387,6 +1616,19 @@ class InMemoryPaperTradingV2Repository:
         return by_symbol
 
     def load_latest_cash(self, portfolio: PaperPortfolio, before_or_on: date) -> float:
+        latest_cash_entry: tuple[date, datetime, float] | None = None
+        for run_id, entries in self.cash_entries.items():
+            run = self.runs.get(run_id)
+            if not run or run.portfolio_id != portfolio.portfolio_id:
+                continue
+            for entry in entries:
+                if entry.trade_date > before_or_on:
+                    continue
+                created_at = datetime.now(UTC)
+                if latest_cash_entry is None or (entry.trade_date, created_at) >= (latest_cash_entry[0], latest_cash_entry[1]):
+                    latest_cash_entry = (entry.trade_date, created_at, entry.cash_after)
+        if latest_cash_entry is not None:
+            return latest_cash_entry[2]
         latest: tuple[date, AccountSnapshot] | None = None
         for run_id, snapshot in self.snapshots.items():
             run = self.runs.get(run_id)

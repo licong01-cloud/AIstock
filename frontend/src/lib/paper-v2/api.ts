@@ -8,6 +8,11 @@ import type {
   JsonObject,
   PaperPortfolio,
   PaperRun,
+  PaperSchedulerRunResult,
+  PaperSchedulerStatus,
+  PaperSession,
+  PaperSessionCapabilities,
+  PaperSessionProgress,
   QEPackagingSource,
   ReadinessResult,
   ReplayResult,
@@ -210,6 +215,46 @@ export const paperV2Api = {
   },
   async replay(portfolioId: string, payload: JsonObject): Promise<ReplayResult> {
     const data = await apiFetch<{ result: ReplayResult }>(`/paper-v2/portfolios/${portfolioId}/replay`, body(payload));
+    return data.result;
+  },
+  async sessionCapabilities(portfolioId: string): Promise<PaperSessionCapabilities> {
+    const data = await apiFetch<{ capabilities: PaperSessionCapabilities }>(`/paper-v2/portfolios/${portfolioId}/session-capabilities`);
+    return data.capabilities;
+  },
+  async createSession(portfolioId: string, payload: JsonObject): Promise<PaperSession> {
+    const data = await apiFetch<{ session: PaperSession }>(`/paper-v2/portfolios/${portfolioId}/sessions`, body(payload));
+    return data.session;
+  },
+  async sessions(portfolioId: string): Promise<PaperSession[]> {
+    const data = await apiFetch<{ sessions: PaperSession[] }>(`/paper-v2/portfolios/${portfolioId}/sessions`);
+    return data.sessions || [];
+  },
+  async sessionProgress(sessionId: string): Promise<PaperSessionProgress> {
+    const data = await apiFetch<{ progress: PaperSessionProgress }>(`/paper-v2/sessions/${sessionId}/progress`);
+    return data.progress;
+  },
+  async tickSession(sessionId: string, payload: JsonObject = {}): Promise<PaperSessionProgress> {
+    const data = await apiFetch<{ progress: PaperSessionProgress }>(`/paper-v2/sessions/${sessionId}/tick`, body(payload));
+    return data.progress;
+  },
+  async sessionLifecycle(sessionId: string, action: "pause" | "resume" | "stop"): Promise<PaperSession> {
+    const data = await apiFetch<{ session: PaperSession }>(`/paper-v2/sessions/${sessionId}/${action}`, { method: "POST" });
+    return data.session;
+  },
+  async schedulerStatus(): Promise<PaperSchedulerStatus> {
+    const data = await apiFetch<{ scheduler: PaperSchedulerStatus }>("/paper-v2/session-scheduler/status");
+    return data.scheduler;
+  },
+  async startScheduler(payload: { interval_seconds?: number | null } = {}): Promise<PaperSchedulerStatus> {
+    const data = await apiFetch<{ scheduler: PaperSchedulerStatus }>("/paper-v2/session-scheduler/start", body(payload));
+    return data.scheduler;
+  },
+  async stopScheduler(): Promise<PaperSchedulerStatus> {
+    const data = await apiFetch<{ scheduler: PaperSchedulerStatus }>("/paper-v2/session-scheduler/stop", { method: "POST" });
+    return data.scheduler;
+  },
+  async runSchedulerOnce(payload: { limit?: number; as_of_time?: string | null } = {}): Promise<PaperSchedulerRunResult> {
+    const data = await apiFetch<{ result: PaperSchedulerRunResult }>("/paper-v2/session-scheduler/run-once", body(payload));
     return data.result;
   },
   async executionPolicies(portfolioId: string): Promise<ExecutionPolicy[]> {

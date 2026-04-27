@@ -63,6 +63,10 @@ class SessionAlreadyRunningError(InvalidStateTransitionError):
     error_code = "SESSION_ALREADY_RUNNING"
 
 
+class SessionLockTimeoutError(InvalidStateTransitionError):
+    error_code = "SESSION_LOCK_TIMEOUT"
+
+
 class AlgoModeUnsupportedError(UnsupportedFeatureError):
     error_code = "ALGO_MODE_UNSUPPORTED"
 

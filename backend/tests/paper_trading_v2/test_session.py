@@ -8,16 +8,18 @@ from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.paper_trading_v2.models import (
     PaperReplayDayResult,
     PaperReplayResult,
+    PaperSessionProgress,
     PaperSessionMode,
     PaperSessionStatus,
 )
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
+from backend.services.paper_trading_v2.scheduler import PaperTradingV2SessionScheduler
 from backend.services.paper_trading_v2.session import PaperTradingSessionRunner, PaperTradingSessionService
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
-from backend.services.trading_core.errors import SessionAlreadyRunningError, SessionConfigError, SessionSourceUnsupportedError, UnsupportedFeatureError
+from backend.services.trading_core.errors import SessionAlreadyRunningError, SessionConfigError, SessionSourceUnsupportedError
 from backend.services.trading_core.models import RunStatus
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
@@ -78,6 +80,20 @@ class FakeReplayService:
                 ),
             ],
         )
+
+
+class FakeLiveExecutor:
+    def __init__(self, repo: InMemoryPaperTradingV2Repository) -> None:
+        self.repo = repo
+        self.calls: list[dict] = []
+
+    def tick(self, session, *, as_of_time=None):
+        self.calls.append({"session_id": session.session_id, "mode": session.mode.value, "as_of_time": as_of_time})
+        updated = self.repo.update_session_status(
+            session.session_id,
+            status=PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+        )
+        return PaperSessionProgress(session=updated, day_count=0, events=self.repo.list_session_events(session.session_id))
 
 
 def test_replay_only_session_create_tick_and_progress() -> None:
@@ -156,30 +172,54 @@ def test_session_rejects_second_active_session() -> None:
         )
 
 
-def test_live_session_fails_fast_until_incremental_executor_exists() -> None:
+def test_live_session_create_and_tick_uses_incremental_executor() -> None:
     _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
 
-    with pytest.raises(UnsupportedFeatureError, match="real-time incremental"):
-        PaperTradingSessionService(repository=paper_repo).create_session(
-            portfolio_id=portfolio.portfolio_id,
-            mode=PaperSessionMode.LIVE_ONLY,
-            start_date=date(2024, 1, 2),
-            live_data_source=MinuteDataSource.TDX_REALTIME,
-        )
-    assert paper_repo.sessions == {}
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    fake_live = FakeLiveExecutor(paper_repo)
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=fake_live).tick(session.session_id)
+
+    assert progress.session.status == PaperSessionStatus.LIVE_WAITING_FOR_BAR
+    assert fake_live.calls[0]["mode"] == "LIVE_ONLY"
 
 
-def test_catchup_session_fails_fast_without_source_role_split() -> None:
+def test_catchup_session_can_be_created_with_explicit_sources() -> None:
     _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
 
-    with pytest.raises(UnsupportedFeatureError, match="CATCHUP_THEN_LIVE"):
-        PaperTradingSessionService(repository=paper_repo).create_session(
-            portfolio_id=portfolio.portfolio_id,
-            mode=PaperSessionMode.CATCHUP_THEN_LIVE,
-            start_date=date(2024, 1, 2),
-            historical_data_source=MinuteDataSource.DB_HISTORICAL,
-            live_data_source=MinuteDataSource.TDX_REALTIME,
-        )
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.CATCHUP_THEN_LIVE,
+        start_date=date(2024, 1, 2),
+        historical_data_source=MinuteDataSource.DB_HISTORICAL,
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+    )
+
+    assert session.mode == PaperSessionMode.CATCHUP_THEN_LIVE
+    assert session.historical_data_source == MinuteDataSource.DB_HISTORICAL
+    assert session.live_data_source == MinuteDataSource.TDX_REALTIME
+
+
+def test_replay_auto_switch_normalizes_to_catchup_session() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
+
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.REPLAY_ONLY,
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        historical_data_source=MinuteDataSource.DB_HISTORICAL,
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        auto_switch_to_live=True,
+    )
+
+    assert session.mode == PaperSessionMode.CATCHUP_THEN_LIVE
+    assert session.runtime_config["paper_v2_session"]["auto_switch_to_live"] is True
 
 
 def test_session_capabilities_expose_only_real_startable_modes() -> None:
@@ -188,7 +228,28 @@ def test_session_capabilities_expose_only_real_startable_modes() -> None:
     capabilities = PaperTradingSessionService(repository=paper_repo).session_capabilities(portfolio.portfolio_id)
 
     assert capabilities["modes"]["REPLAY_ONLY"]["can_start"] is True
-    assert capabilities["modes"]["LIVE_ONLY"]["can_start"] is False
-    assert capabilities["modes"]["LIVE_ONLY"]["errors"]
-    assert capabilities["modes"]["CATCHUP_THEN_LIVE"]["can_start"] is False
-    assert capabilities["modes"]["CATCHUP_THEN_LIVE"]["errors"]
+    assert capabilities["modes"]["LIVE_ONLY"]["can_start"] is True
+    assert capabilities["modes"]["CATCHUP_THEN_LIVE"]["can_start"] is True
+
+
+def test_v2_scheduler_ticks_created_sessions_without_fake_success() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    fake_live = FakeLiveExecutor(paper_repo)
+    scheduler = PaperTradingV2SessionScheduler(
+        repository=paper_repo,
+        runner=PaperTradingSessionRunner(repository=paper_repo, live_executor=fake_live),
+    )
+
+    result = scheduler.run_once(limit=10)
+
+    assert result["errors"] == []
+    assert result["processed"][0]["session_id"] == session.session_id
+    assert result["processed"][0]["status"] == PaperSessionStatus.LIVE_WAITING_FOR_BAR.value
+    assert fake_live.calls[0]["session_id"] == session.session_id

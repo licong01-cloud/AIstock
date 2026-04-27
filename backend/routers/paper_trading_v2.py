@@ -69,9 +69,23 @@ class CreateSessionRequest(BaseModel):
     live_data_source: MinuteDataSource | None = None
     runtime_config: dict[str, Any] = Field(default_factory=dict)
     rerun_policy: Literal["reject_existing", "reset_portfolio"] = "reject_existing"
+    auto_switch_to_live: bool = False
     confirm_reset: bool = False
     confirm_text: str | None = None
     created_by: str | None = None
+
+
+class TickSessionRequest(BaseModel):
+    as_of_time: dt.datetime | None = None
+
+
+class SchedulerStartRequest(BaseModel):
+    interval_seconds: int | None = Field(default=None, ge=1, le=3600)
+
+
+class SchedulerRunOnceRequest(BaseModel):
+    limit: int = Field(default=50, ge=1, le=500)
+    as_of_time: dt.datetime | None = None
 
 
 def _raise_http(exc: TradingCoreError) -> None:
@@ -335,6 +349,7 @@ def create_portfolio_session(portfolio_id: str, req: CreateSessionRequest) -> di
             live_data_source=req.live_data_source,
             runtime_config=req.runtime_config,
             rerun_policy=req.rerun_policy,
+            auto_switch_to_live=req.auto_switch_to_live,
             confirm_reset=req.confirm_reset,
             confirm_text=req.confirm_text,
             created_by=req.created_by,
@@ -380,9 +395,9 @@ def get_trade_session_progress(session_id: str, event_limit: int = 100) -> dict[
 
 
 @router.post("/sessions/{session_id}/tick")
-def tick_trade_session(session_id: str) -> dict[str, Any]:
+def tick_trade_session(session_id: str, req: TickSessionRequest | None = None) -> dict[str, Any]:
     try:
-        progress = PaperTradingSessionRunner().tick(session_id)
+        progress = PaperTradingSessionRunner().tick(session_id, as_of_time=req.as_of_time if req else None)
         return {"ok": True, "progress": progress.model_dump(mode="json")}
     except TradingCoreError as exc:
         _raise_http(exc)
@@ -413,6 +428,34 @@ def stop_trade_session(session_id: str) -> dict[str, Any]:
         return {"ok": True, "session": session.model_dump(mode="json")}
     except TradingCoreError as exc:
         _raise_http(exc)
+
+
+@router.get("/session-scheduler/status")
+def get_session_scheduler_status() -> dict[str, Any]:
+    from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
+
+    return {"ok": True, "scheduler": paper_trading_v2_scheduler.status()}
+
+
+@router.post("/session-scheduler/start")
+def start_session_scheduler(req: SchedulerStartRequest) -> dict[str, Any]:
+    from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
+
+    return {"ok": True, "scheduler": paper_trading_v2_scheduler.start(interval_seconds=req.interval_seconds)}
+
+
+@router.post("/session-scheduler/stop")
+def stop_session_scheduler() -> dict[str, Any]:
+    from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
+
+    return {"ok": True, "scheduler": paper_trading_v2_scheduler.shutdown(wait=False)}
+
+
+@router.post("/session-scheduler/run-once")
+def run_session_scheduler_once(req: SchedulerRunOnceRequest) -> dict[str, Any]:
+    from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
+
+    return {"ok": True, "result": paper_trading_v2_scheduler.run_once(limit=req.limit, as_of_time=req.as_of_time)}
 
 
 @router.get("/portfolios/{portfolio_id}/orders")

@@ -3,6 +3,7 @@ export type JsonObject = Record<string, unknown>;
 
 export type DataSource = "DB_HISTORICAL" | "TDX_REALTIME";
 export type SelectionMode = "single_package" | "intersection" | "union" | "weighted_fusion";
+export type PaperSessionMode = "REPLAY_ONLY" | "LIVE_ONLY" | "CATCHUP_THEN_LIVE";
 
 export type TradingDayDefaults = {
   as_of_date: string;
@@ -222,6 +223,61 @@ export type ReplayResult = {
   trading_days: string[];
   day_results: Array<JsonObject>;
   reset_audit?: JsonObject | null;
+};
+
+export type PaperSession = {
+  session_id: string;
+  portfolio_id: string;
+  mode: PaperSessionMode;
+  status: string;
+  phase: string;
+  start_date: string;
+  end_date?: string | null;
+  historical_data_source?: DataSource | string | null;
+  live_data_source?: DataSource | string | null;
+  runtime_config?: JsonObject;
+  validated_execution_policy?: JsonObject;
+  created_by?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  last_error?: JsonObject | null;
+};
+
+export type PaperSessionProgress = {
+  session: PaperSession;
+  current_trade_date?: string | null;
+  last_processed_bar_time?: string | null;
+  latest_available_bar_time?: string | null;
+  next_expected_bar_time?: string | null;
+  day_count: number;
+  events: JsonObject[];
+};
+
+export type PaperSessionCapabilities = {
+  portfolio_id: string;
+  portfolio_data_source: string;
+  algo_code?: string | null;
+  validated_execution_policy_id?: string | null;
+  modes: Record<string, { can_start: boolean; errors: JsonObject[] }>;
+};
+
+export type PaperSchedulerStatus = {
+  running: boolean;
+  thread_alive: boolean;
+  interval_seconds: number;
+  tickable_statuses: string[];
+  last_run_at?: string | null;
+  last_result?: JsonObject | null;
+};
+
+export type PaperSchedulerRunResult = {
+  started_at: string;
+  completed_at?: string;
+  session_count: number;
+  processed: JsonObject[];
+  errors: JsonObject[];
 };
 
 export type Activation = {
