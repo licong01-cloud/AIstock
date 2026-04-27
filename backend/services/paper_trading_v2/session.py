@@ -12,7 +12,6 @@ import threading
 from datetime import UTC, date, datetime
 from typing import Any, Literal
 
-from backend.services.selection_center.runtime_profile import normalize_selection_runtime_config
 from backend.services.trading_core.errors import (
     DataUnavailableError,
     InvalidStateTransitionError,
@@ -41,6 +40,7 @@ from .models import (
 from .live_session import PaperTradingLiveMinuteExecutor
 from .replay import PaperTradingHistoricalReplay
 from .repository import PaperTradingV2Repository
+from .service import PaperTradingV2PortfolioService
 
 
 SUPPORTED_HISTORICAL_SESSION_SOURCES = {MinuteDataSource.DB_HISTORICAL}
@@ -165,7 +165,11 @@ class PaperTradingSessionService:
                 },
             )
 
-        config = normalize_selection_runtime_config(runtime_config or {})
+        config = PaperTradingV2PortfolioService(repository=self.repository).resolve_runtime_config_for_date(
+            portfolio=portfolio,
+            trade_date=start_date,
+            runtime_config=runtime_config or {},
+        )
         self._reject_raw_execution_overrides(config)
         policy_context = self._portfolio_policy_context(portfolio.execution_policy, portfolio_id=portfolio_id)
         require_execution_algo_supports_mode(
@@ -178,6 +182,7 @@ class PaperTradingSessionService:
             "auto_switch_to_live": auto_switch_to_live,
             "confirm_reset": confirm_reset,
             "confirm_text": confirm_text,
+            "freeze_runtime_profile": True,
             **dict(config.get("paper_v2_session") or {}),
         }
         session = PaperTradingSession(
