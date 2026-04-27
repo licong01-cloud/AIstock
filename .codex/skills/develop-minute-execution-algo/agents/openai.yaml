@@ -1,0 +1,4 @@
+interface:
+  display_name: "Develop Minute Execution Algo"
+  short_description: "Build fail-fast minute execution algos"
+  default_prompt: "Develop or modify an AIstock intraday minute execution strategy using the standard fail-fast minute execution contract."

@@ -280,7 +280,7 @@ Important directories:
 
 ## Codex Skill Notes - 2026-04-27
 
-- Created local Codex skill `develop-minute-execution-algo` at `C:\Users\lc999\.codex\skills\develop-minute-execution-algo` so future intraday minute execution algorithms follow the V25-derived standard contract.
+- Created local Codex skill `develop-minute-execution-algo` at `C:\Users\lc999\.codex\skills\develop-minute-execution-algo` and a Git-tracked mirror at `.codex/skills/develop-minute-execution-algo` so future intraday minute execution algorithms follow the V25-derived standard contract.
 - The skill requires asset/program separation, core/adapter layering, explicit historical/realtime capabilities, market-state vs data-error taxonomy, no silent fallback, QE/Paper v2 consistency, and targeted tests before reporting completion.
 - Use this skill for future V24/V25/V26-style execution strategy work, QE Qlib minute execution helpers, Paper Trading v2 execution adapters, and any suspend/limit/pre_close/minute-bar execution-policy wiring.
 
