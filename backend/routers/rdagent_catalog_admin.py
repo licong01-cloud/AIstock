@@ -231,17 +231,17 @@ def list_factors(
     if sort_by:
         valid_sort_fields = {
             "name": "factor_name",
-            "ic": "ic",
-            "sharpe": "sharpe",
-            "ann_ret": "annualized_return",
-            "mdd": "max_drawdown",
+            "ic": "m.ic_mean",
+            "sharpe": "m.top_excess_sharpe",
+            "ann_ret": "m.top_excess_annual_return",
+            "mdd": "m.top_max_drawdown",
         }
         if sort_by in valid_sort_fields:
             order_by = valid_sort_fields[sort_by]
             if sort_order == "desc":
-                order_by += " DESC"
+                order_by += " DESC NULLS LAST"
             elif sort_order == "asc":
-                order_by += " ASC"
+                order_by += " ASC NULLS FIRST"
 
     sql = """
         SELECT factor_name, expression, source, region, tags,
@@ -253,9 +253,28 @@ def list_factors(
                source_task_id, source_code_origin, source_loop_tag, source_index,
                raw_payload,
                LEFT(code_text, 500) AS code_text_preview,
-               ic, annualized_return, max_drawdown, sharpe,
-               factor_type, data_source, asset_path, node_id
+               m.ic_mean AS ic,
+               m.top_excess_annual_return AS annualized_return,
+               m.top_max_drawdown AS max_drawdown,
+               m.top_excess_sharpe AS sharpe,
+               factor_type, data_source, asset_path, node_id,
+               m.ic_mean AS ind_ic,
+               m.top_excess_sharpe AS ind_sharpe,
+               m.top_excess_annual_return AS ind_annual_return,
+               m.top_max_drawdown AS ind_max_drawdown,
+               m.icir AS ind_icir,
+               m.rank_ic_mean AS ind_rank_ic
         FROM aistock_factor_catalog
+        LEFT JOIN LATERAL (
+            SELECT ic_mean, top_excess_sharpe, top_excess_annual_return,
+                   top_max_drawdown, icir, rank_ic_mean
+            FROM aistock_factor_metrics
+            WHERE factor_name = aistock_factor_catalog.factor_name
+              AND eval_window = 'full'
+              AND calc_engine = 'qe_eval_v2'
+            ORDER BY calculated_at DESC
+            LIMIT 1
+        ) m ON TRUE
         {where_sql}
         ORDER BY {order_by}
         LIMIT %s OFFSET %s
@@ -283,7 +302,8 @@ def list_factors(
         source_task_id, source_code_origin, source_loop_tag, source_index,
         raw_payload, code_text_preview,
         ic_val, ann_ret_val, max_dd_val, sharpe_val,
-        factor_type_val, data_source_val, asset_path_val, node_id_val
+        factor_type_val, data_source_val, asset_path_val, node_id_val,
+        ind_ic_val, ind_sharpe_val, ind_ann_ret_val, ind_max_dd_val, ind_icir_val, ind_rank_ic_val
     ) in rows:
         items.append(
             {
@@ -325,6 +345,12 @@ def list_factors(
                 "data_source": data_source_val,
                 "asset_path": asset_path_val,
                 "node_id": node_id_val,
+                "ind_ic": ind_ic_val,
+                "ind_sharpe": ind_sharpe_val,
+                "ind_annual_return": ind_ann_ret_val,
+                "ind_max_drawdown": ind_max_dd_val,
+                "ind_icir": ind_icir_val,
+                "ind_rank_ic": ind_rank_ic_val,
             }
         )
 
