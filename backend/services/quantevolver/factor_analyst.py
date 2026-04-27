@@ -1089,17 +1089,15 @@ class FactorAnalyst:
 
         expression = factor_info.get("expression")
         code_text = factor_info.get("code_text")
-        ic = factor_info.get("ic")
-        sharpe = factor_info.get("sharpe")
-        ann_ret = factor_info.get("annualized_return") or factor_info.get("best_performance_ann_ret")
 
         # 获取独立因子指标
         ind = self._get_independent_metrics(factor_name) or {}
 
         # 有独立指标 → 提取关键值
-        ic = ind.get("ic_mean") or ic
-        sharpe = ind.get("top_excess_sharpe") or sharpe
-        ann_ret = ind.get("top_excess_annual_return") or ann_ret
+        # Only authoritative independent metrics are valid for current factor analysis.
+        ic = ind.get("ic_mean")
+        sharpe = ind.get("top_excess_sharpe")
+        ann_ret = ind.get("top_excess_annual_return")
         icir_ann = ind.get("icir_annualized")
         _hp_class = classify_holding_period(ind.get("ic_decay_half_life"))
 
@@ -1429,13 +1427,24 @@ class FactorAnalyst:
 
                 # 数据
                 cur.execute(
-                    f"""SELECT id, factor_name, factor_source, category, grade,
-                               grade_reason, classification_reason, ic_value,
-                               sharpe_value, ann_ret_value, description,
-                               factor_dimension, factor_profile, analyzed_at
-                        FROM qe_factor_classification
+                    f"""SELECT c.id, c.factor_name, c.factor_source, c.category, c.grade,
+                               c.grade_reason, c.classification_reason,
+                               m.ic_mean AS ic_value,
+                               m.top_excess_sharpe AS sharpe_value,
+                               m.top_excess_annual_return AS ann_ret_value,
+                               c.description, c.factor_dimension, c.factor_profile, c.analyzed_at
+                        FROM qe_factor_classification c
+                        LEFT JOIN LATERAL (
+                            SELECT ic_mean, top_excess_sharpe, top_excess_annual_return
+                            FROM aistock_factor_metrics
+                            WHERE factor_name = c.factor_name
+                              AND eval_window = 'full'
+                              AND calc_engine = 'qe_eval_v2'
+                            ORDER BY calculated_at DESC
+                            LIMIT 1
+                        ) m ON TRUE
                         WHERE {where_clause}
-                        ORDER BY grade ASC, ic_value DESC NULLS LAST
+                        ORDER BY c.grade ASC, m.ic_mean DESC NULLS LAST
                         LIMIT %s OFFSET %s""",
                     params + [limit, offset],
                 )
@@ -1475,16 +1484,27 @@ class FactorAnalyst:
             with conn.cursor() as cur:
                 sql = """
                     SELECT c.factor_name, c.factor_source, c.category, c.grade,
-                           c.ic_value, c.sharpe_value, c.ann_ret_value,
+                           m.ic_mean AS ic_value,
+                           m.top_excess_sharpe AS sharpe_value,
+                           m.top_excess_annual_return AS ann_ret_value,
                            c.factor_profile
                     FROM qe_factor_classification c
+                    LEFT JOIN LATERAL (
+                        SELECT ic_mean, top_excess_sharpe, top_excess_annual_return
+                        FROM aistock_factor_metrics
+                        WHERE factor_name = c.factor_name
+                          AND eval_window = 'full'
+                          AND calc_engine = 'qe_eval_v2'
+                        ORDER BY calculated_at DESC
+                        LIMIT 1
+                    ) m ON TRUE
                     WHERE c.grade IS NOT NULL
                     ORDER BY
                         CASE c.grade
                             WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
                             WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
                         END ASC,
-                        c.ic_value DESC NULLS LAST
+                        m.ic_mean DESC NULLS LAST
                 """
                 cur.execute(sql)
                 cols = [desc[0] for desc in cur.description]
