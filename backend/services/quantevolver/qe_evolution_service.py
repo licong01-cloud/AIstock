@@ -45,6 +45,14 @@ class AutoEvolutionScheduler:
             return self._node_clients[node_id]
         return self.workspace_client
 
+    def _get_task_status(self, task_id: str) -> Optional[str]:
+        """Read latest task status so background submit loops can stop cleanly."""
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT status FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                row = cur.fetchone()
+        return row[0] if row else None
+
     def _get_callback_url_for_task(self, task_id: str) -> Optional[str]:
         """查询任务关联节点的 callback_url，用于 Loop 完成后主动回调。"""
         with get_conn() as conn:
@@ -1972,6 +1980,21 @@ class AutoEvolutionScheduler:
             raise ValueError(f"演进任务正在运行中: {task_id}")
 
         task_type = task.get('task_type', 'evolution')
+        if force_full_train and task_type == "custom_evo":
+            strategy_evo_config = task.get("strategy_evo_config") or {}
+            if isinstance(strategy_evo_config, str):
+                strategy_evo_config = json.loads(strategy_evo_config)
+            backtest_only_loops = [
+                loop.get("loop_index")
+                for loop in strategy_evo_config.get("loops", [])
+                if loop.get("backtest_only")
+            ]
+            if backtest_only_loops:
+                raise ValueError(
+                    "force_full_train=True would override backtest_only loop config "
+                    f"for custom_evo loops {backtest_only_loops}; refusing to silently "
+                    "change the UI-defined comparison. Resume with force_full_train=false."
+                )
 
         new_max = task['max_loops']
         if additional_loops > 0:
@@ -2188,26 +2211,46 @@ class AutoEvolutionScheduler:
                 logger.warning(f"[get_task_detail] live status check failed for {loop_id}: {e}")
                 rd_status = "failed"  # RDAgent 不可达，视为失败
 
-            if rd_status in ("completed", "failed", "not_found"):
+            if task_type in ("custom_evo", "strategy_evo") and rd_status == "not_found":
+                logger.info(
+                    "[get_task_detail] Loop %s not visible on RD-Agent yet; "
+                    "keeping DB status=%s instead of treating it as terminal",
+                    loop_id,
+                    loop_data.get("status"),
+                )
+                continue
+
+            if rd_status in ("completed", "failed", "error", "not_found"):
                 if task_type in ("custom_evo", "strategy_evo"):
-                    # 并行调度任务：触发完整处理流程（metrics采集+DB更新+后续loop调度），
-                    # 不直接改 status，避免抢跑 run_with_sem 的调度循环
-                    try:
-                        logger.info(f"[get_task_detail] 触发完整处理: {loop_id} (rd_status={rd_status})")
-                        await self._safe_process_completed_loop(task_id, loop_id)
-                        # 重新读取 loop 状态以反映处理结果
+                    if rd_status == "completed":
+                        try:
+                            logger.info(f"[get_task_detail] processing completed loop: {loop_id}")
+                            await self._safe_process_completed_loop(task_id, loop_id)
+                            with get_conn() as conn:
+                                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                                    cur.execute("SELECT * FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
+                                    updated = cur.fetchone()
+                                    if updated:
+                                        for i, lp in enumerate(result['loops']):
+                                            if lp.get('loop_id') == loop_id:
+                                                result['loops'][i] = dict(updated)
+                                                break
+                            any_synced = True
+                        except Exception as e:
+                            logger.error(f"[get_task_detail] completed-loop processing failed for {loop_id}: {e}")
+                    else:
+                        new_status = "failed" if rd_status in ("failed", "error", "not_found") else rd_status
                         with get_conn() as conn:
-                            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                                cur.execute("SELECT * FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
-                                updated = cur.fetchone()
-                                if updated:
-                                    for i, lp in enumerate(result['loops']):
-                                        if lp.get('loop_id') == loop_id:
-                                            result['loops'][i] = dict(updated)
-                                            break
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    "UPDATE qe_evolution_loops SET status = %s, updated_at = NOW() "
+                                    "WHERE loop_id = %s AND status IN ('running', 'processing')",
+                                    (new_status, loop_id),
+                                )
+                            conn.commit()
+                        loop_data["status"] = new_status
                         any_synced = True
-                    except Exception as e:
-                        logger.error(f"[get_task_detail] 完整处理失败 for {loop_id}: {e}")
+                        logger.info(f"[get_task_detail] synced loop {loop_id}: rd_status={rd_status} -> {new_status}")
                 else:
                     # 标准演进任务：保留原有快速同步逻辑
                     new_status = "failed" if rd_status in ("failed", "not_found") else "completed"
@@ -2260,76 +2303,96 @@ class AutoEvolutionScheduler:
         return result
         
     async def stop_task(self, task_id: str) -> dict:
-        """
-        暂停演进任务：标记 task 为 paused → 终止 RDAgent 侧进程 → 标记 loop 为 cancelled。
-        返回详细结果（不静默吞错）。
-        """
-        result = {"task_id": task_id, "paused": False, "loop_killed": None}
+        """Stop a QE evolution task and all non-terminal loops.
 
-        # 1. 找到当前 running 的 loop
-        running_loop = None
+        The stop action is task-scoped: it pauses the task first so background
+        submit loops stop, marks every pending/running/processing loop as
+        cancelled, and then asks RD-Agent to kill every non-completed loop
+        because DB state can lag behind workspace process state.  It never
+        stops only the latest loop.
+        """
+        result = {
+            "task_id": task_id,
+            "paused": False,
+            "loops_killed": [],
+            "loops_cancelled": [],
+            # Backward-compatible alias; callers should prefer loops_killed.
+            "loop_killed": None,
+        }
+
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT task_id FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                if not cur.fetchone():
+                    raise ValueError(f"Task not found: {task_id}")
                 cur.execute(
-                    "SELECT loop_id, loop_index FROM qe_evolution_loops "
-                    "WHERE task_id = %s AND status IN ('running', 'processing') "
-                    "ORDER BY loop_index DESC LIMIT 1",
+                    "SELECT loop_id, loop_index, status FROM qe_evolution_loops "
+                    "WHERE task_id = %s AND status <> 'completed' "
+                    "ORDER BY loop_index ASC",
                     (task_id,),
                 )
-                running_loop = cur.fetchone()
+                loops_to_stop = [dict(row) for row in cur.fetchall()]
 
-        # 2. 标记 task 为 paused（先改状态，阻止新 loop 提交）
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("UPDATE qe_evolution_tasks SET status = 'paused', updated_at = NOW() WHERE task_id = %s", (task_id,))
+                # Pause first.  Long-running submit loops check task status and
+                # will stop before submitting any later loops.
+                cur.execute(
+                    "UPDATE qe_evolution_tasks SET status = 'paused', updated_at = NOW() WHERE task_id = %s",
+                    (task_id,),
+                )
+                cur.execute(
+                    "UPDATE qe_evolution_loops SET status = 'cancelled', updated_at = NOW() "
+                    "WHERE task_id = %s AND status IN ('running', 'processing', 'pending') "
+                    "RETURNING loop_id, loop_index",
+                    (task_id,),
+                )
+                result["loops_cancelled"] = [dict(row) for row in cur.fetchall()]
             conn.commit()
         result["paused"] = True
-        logger.info(f"Task {task_id} manually stopped/paused.")
+        logger.info(
+            "Task %s stopped: cancelled %d non-terminal loops",
+            task_id,
+            len(result["loops_cancelled"]),
+        )
 
-        # 3. 终止 RDAgent 侧正在运行的 loop 进程
-        if running_loop:
-            loop_index = running_loop["loop_index"]
+        for loop_row in loops_to_stop:
+            loop_index = loop_row["loop_index"]
             loop_id = f"Loop{loop_index}"
-            loop_db_id = running_loop["loop_id"]
+            loop_db_id = loop_row["loop_id"]
             kill_success = False
             kill_error = None
-
+            kill_result = None
             try:
                 client = self._get_workspace_client_for_task(task_id)
                 kill_result = await client.kill_loop(task_id, loop_id)
-                kill_success = kill_result.get("killed", False)
+                kill_success = bool(kill_result.get("killed", False))
                 kill_error = kill_result.get("error")
                 if kill_error:
-                    logger.warning(f"Kill loop {loop_db_id} returned error: {kill_error}")
+                    logger.warning("Kill loop %s returned error: %s", loop_db_id, kill_error)
                 else:
-                    logger.info(f"Kill loop {loop_db_id} success: {kill_result}")
+                    logger.info("Kill loop %s result: %s", loop_db_id, kill_result)
             except Exception as e:
                 kill_error = str(e)
-                logger.error(f"Failed to kill loop process for {loop_db_id}: {e}")
+                if "404" in kill_error or "No pid.txt" in kill_error:
+                    kill_error = None
+                    kill_result = {"status": "no_process", "detail": "pid file not found"}
+                    logger.info("Loop %s has no remote pid; treated as already stopped", loop_db_id)
+                else:
+                    logger.error("Failed to kill loop process for %s: %s", loop_db_id, e)
 
-            # 无论 kill 是否成功，都标记 loop 为 cancelled（防止被 scan 重新处理）
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE qe_evolution_loops SET status = 'cancelled', updated_at = NOW() "
-                        "WHERE loop_id = %s AND status IN ('running', 'processing')",
-                        (loop_db_id,),
-                    )
-                    rows_affected = cur.rowcount
-                conn.commit()
-
-            result["loop_killed"] = {
+            item = {
                 "loop_id": loop_db_id,
+                "loop_index": loop_index,
+                "previous_status": loop_row.get("status"),
                 "process_killed": kill_success,
-                "db_cancelled": rows_affected > 0,
+                "db_cancelled": any(
+                    row.get("loop_id") == loop_db_id for row in result["loops_cancelled"]
+                ),
                 "error": kill_error,
+                "kill_result": kill_result,
             }
-            if kill_error:
-                logger.warning(
-                    f"Task {task_id} paused but loop {loop_db_id} kill had issues: {kill_error}. "
-                    f"Loop marked cancelled in DB (db_cancelled={rows_affected > 0}). "
-                    f"Remote process may still be running."
-                )
+            result["loops_killed"].append(item)
+            if result["loop_killed"] is None:
+                result["loop_killed"] = item
 
         return result
 
@@ -3316,10 +3379,18 @@ class AutoEvolutionScheduler:
             mode = "serial"
             parallelism = 1
 
-        # 标记任务为 running
+        # Mark task as running only if it has not been stopped since enqueue.
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("UPDATE qe_evolution_tasks SET status = 'running', updated_at = NOW() WHERE task_id = %s", (task_id,))
+                cur.execute(
+                    "UPDATE qe_evolution_tasks SET status = 'running', updated_at = NOW() "
+                    "WHERE task_id = %s AND status IN ('pending', 'running')",
+                    (task_id,),
+                )
+                if cur.rowcount == 0:
+                    logger.info(f"Task {task_id} is no longer pending/running; abort loop submission")
+                    conn.commit()
+                    return
             conn.commit()
 
         # 恢复场景：过滤掉已完成的 loop，只提交 pending/failed 的
@@ -3773,6 +3844,10 @@ class AutoEvolutionScheduler:
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"
 
+        if self._get_task_status(task_id) != "running":
+            logger.info(f"Custom evolution task {task_id} is not running; skip submitting Loop {loop_index}")
+            return None
+
         # 创建 LOOP 记录
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -3832,6 +3907,17 @@ class AutoEvolutionScheduler:
                 conn.commit()
 
             # 3. 执行层提交
+            if self._get_task_status(task_id) != "running":
+                logger.info(f"Custom evolution task {task_id} stopped before executor submit for Loop {loop_index}")
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE qe_evolution_loops SET status = 'cancelled', updated_at = NOW() WHERE loop_id = %s AND status = 'running'",
+                            (evolution_loop_db_id,),
+                        )
+                    conn.commit()
+                return None
+
             composer = ConfigComposer()
             client = self._get_workspace_client_for_task(task_id)
             executor = BacktestExecutor(composer, client)
@@ -3944,10 +4030,18 @@ class AutoEvolutionScheduler:
             mode = "serial"
             parallelism = 1
 
-        # 标记任务为 running
+        # Mark task as running only if it has not been stopped since enqueue.
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("UPDATE qe_evolution_tasks SET status = 'running', updated_at = NOW() WHERE task_id = %s", (task_id,))
+                cur.execute(
+                    "UPDATE qe_evolution_tasks SET status = 'running', updated_at = NOW() "
+                    "WHERE task_id = %s AND status IN ('pending', 'running')",
+                    (task_id,),
+                )
+                if cur.rowcount == 0:
+                    logger.info(f"Task {task_id} is no longer pending/running; abort loop submission")
+                    conn.commit()
+                    return
             conn.commit()
 
         # 过滤已完成的 loop
@@ -3979,27 +4073,39 @@ class AutoEvolutionScheduler:
         if mode == "serial":
             for loop_config in loops_to_run:
                 loop_index = loop_config.get("loop_index")
+                if self._get_task_status(task_id) != "running":
+                    logger.info(f"Custom evolution task {task_id} is no longer running; stop submitting at Loop {loop_index}")
+                    break
                 loop_id = await self.submit_custom_evo_loop(task_id, loop_index, force_full_train=force_full_train)
                 if not loop_id:
-                    logger.error(f"自定义演进 Loop {loop_index} 提交失败，停止后续 Loops")
+                    logger.error(f"Custom evolution Loop {loop_index} submit failed; stop subsequent loops")
                     break
 
-                # 等待完成（超时 4 小时，因为包含训练）
                 max_wait = 14400
                 waited = 0
                 interval = 15
+                final_status = None
+                stop_requested = False
                 while waited < max_wait:
                     await asyncio.sleep(interval)
                     waited += interval
+                    if self._get_task_status(task_id) != "running":
+                        logger.info(f"Custom evolution task {task_id} stopped while waiting for Loop {loop_index}")
+                        stop_requested = True
+                        break
                     with get_conn() as conn:
                         with conn.cursor() as cur:
                             cur.execute("SELECT status FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
                             row = cur.fetchone()
-                    if not row or row[0] in ("completed", "failed", "cancelled"):
+                    final_status = row[0] if row else None
+                    if not row or final_status in ("completed", "failed", "cancelled"):
                         break
 
+                if stop_requested:
+                    break
+
                 if waited >= max_wait:
-                    logger.error(f"自定义演进 Loop {loop_index} 等待超时（{max_wait}s），标记为 failed")
+                    logger.error(f"Custom evolution Loop {loop_index} wait timed out ({max_wait}s); marking failed")
                     with get_conn() as conn:
                         with conn.cursor() as cur:
                             cur.execute(
@@ -4009,34 +4115,52 @@ class AutoEvolutionScheduler:
                         conn.commit()
                     continue
 
-                if loop_id:
+                if loop_id and final_status == "completed":
                     await self._safe_process_completed_loop(task_id, loop_id)
+                elif loop_id:
+                    logger.info(
+                        f"Custom evolution Loop {loop_index} ended with status={final_status}; "
+                        "skip completed-loop metrics processing"
+                    )
         else:
             sem = asyncio.Semaphore(parallelism)
-            logger.info(f"自定义演进 {task_id} 并行模式启动，并行度={parallelism}，共 {len(loops_to_run)} 个 Loop")
+            logger.info(
+                f"Custom evolution {task_id} parallel mode start: "
+                f"parallelism={parallelism}, loops={len(loops_to_run)}"
+            )
 
             async def run_with_sem(loop_config):
                 loop_index = loop_config.get("loop_index")
                 async with sem:
+                    if self._get_task_status(task_id) != "running":
+                        logger.info(f"Custom evolution task {task_id} is no longer running; skip Loop {loop_index}")
+                        return None
                     loop_id = await self.submit_custom_evo_loop(task_id, loop_index, force_full_train=force_full_train)
                     if not loop_id:
                         return None
                     max_wait = 14400
                     waited = 0
                     interval = 15
+                    final_status = None
                     while waited < max_wait:
                         await asyncio.sleep(interval)
                         waited += interval
+                        if self._get_task_status(task_id) != "running":
+                            logger.info(f"Custom evolution task {task_id} stopped while waiting for Loop {loop_index}")
+                            return loop_id
                         with get_conn() as conn:
                             with conn.cursor() as cur:
                                 cur.execute("SELECT status FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
                                 row = cur.fetchone()
-                        if not row or row[0] in ("completed", "failed", "cancelled"):
+                        final_status = row[0] if row else None
+                        if not row or final_status in ("completed", "failed", "cancelled"):
                             break
                     if waited >= max_wait:
-                        logger.error(f"并行模式 Loop {loop_index} 等待超时（{max_wait}s）")
-                    if loop_id:
+                        logger.error(f"?????? Loop {loop_index} ????????{max_wait}s??")
+                    if loop_id and final_status == "completed":
                         await self._safe_process_completed_loop(task_id, loop_id)
+                    elif loop_id:
+                        logger.info(f"Custom evolution Loop {loop_index} ended with status={final_status}; skip metrics processing")
                     return loop_id
 
             tasks = [run_with_sem(lc) for lc in loops_to_run]

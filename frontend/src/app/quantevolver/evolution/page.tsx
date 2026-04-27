@@ -1094,12 +1094,16 @@ export default function EvolutionDashboard() {
   // 停止任务
   const handleStopTask = async (taskId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm("确定要停止此演进任务吗？")) return;
+    if (!confirm("确定要停止此演进任务吗？当前运行中的 Loop 会被终止，后续未运行的 Loop 也会被一并停止。")) return;
     try {
       const res = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}/stop`, { method: "POST" });
       const data = await res.json();
-      if (data.status === "success") {
-        appendLogs([`[System] 任务 ${taskId} 已停止`]);
+      if (data.status === "success" || data.status === "warning") {
+        const detail = data.detail || {};
+        const killed = detail.loops_killed?.length ?? 0;
+        const cancelled = detail.loops_cancelled?.length ?? 0;
+        appendLogs([`[System] 任务 ${taskId} 已停止：终止/检查 ${killed} 个 Loop，标记停止 ${cancelled} 个未完成 Loop`]);
+        if (data.status === "warning") appendLogs([`[Warning] ${data.message}`]);
         fetchTasks();
       } else {
         alert("停止失败: " + (data.detail || "未知错误"));

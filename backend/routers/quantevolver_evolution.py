@@ -513,15 +513,20 @@ async def get_evolution_task_detail(task_id: str):
 async def stop_evolution_task(task_id: str):
     try:
         stop_result = await scheduler.stop_task(task_id)
-        # 检查是否有 kill 失败的情况，向前端透明报告
-        loop_info = stop_result.get("loop_killed")
-        if loop_info and loop_info.get("error"):
+        failed_kills = [
+            item for item in stop_result.get("loops_killed", [])
+            if item.get("error")
+        ]
+        if failed_kills:
             return {
                 "status": "warning",
-                "message": f"Task {task_id} 已标记暂停，但终止远端进程时遇到问题: {loop_info['error']}",
+                "message": (
+                    f"Task {task_id} ????????? Loop ??????"
+                    f"? {len(failed_kills)} ???????????"
+                ),
                 "detail": stop_result,
             }
-        return {"status": "success", "message": f"Task {task_id} 已暂停。", "detail": stop_result}
+        return {"status": "success", "message": f"Task {task_id} ?????", "detail": stop_result}
     except Exception as e:
         logger.error(f"Failed to stop task {task_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
