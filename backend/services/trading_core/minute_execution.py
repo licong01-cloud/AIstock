@@ -82,6 +82,8 @@ class MinuteExecutionEngine:
                 market_context=context,
             )
             if step_fill is None:
+                if market_state_aware and getattr(algo, "_last_no_fill_reason", None):
+                    events.append(self._no_fill_event(current_order, algo, bar.bar_time))
                 continue
             if max_participation_rate is not None:
                 max_qty = int(bar.volume * max_participation_rate)
@@ -136,6 +138,8 @@ class MinuteExecutionEngine:
             fills.append(fill)
             events.append(event)
 
+        if not fills and market_state_aware and events:
+            return current_order, fills, events
         if not fills and market_state_aware and getattr(algo, "_last_no_fill_reason", None):
             events.append(self._no_fill_event(current_order, algo, minute_bars[-1].bar_time))
             return current_order, fills, events

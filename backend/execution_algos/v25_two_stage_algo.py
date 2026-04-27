@@ -156,6 +156,8 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
         bar_data: Dict[str, Any],
         market_context: Dict[str, Any],
     ) -> Optional[StepResult]:
+        self._last_no_fill_reason = None
+        self._last_no_fill_context = {}
         if self.is_complete(state):
             return None
 
@@ -171,6 +173,7 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
         market_state = classify_v25_minute_market_state(
             side=state.side,
             price=cur_price,
+            volume=bar_data.get("volume"),
             prev_close=prev_close,
             limit_up=limit_up,
             limit_down=limit_down,

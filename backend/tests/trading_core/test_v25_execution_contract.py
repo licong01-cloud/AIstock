@@ -13,6 +13,7 @@ from backend.execution_algos.v25_core import (
     LATE_LEN,
     LATE_WEIGHT,
     REASON_LIMIT_UP_BUY_BLOCKED,
+    REASON_INTRADAY_HALT_OR_NO_BAR,
     REASON_P0_LIMIT_BUY_AT_DOWN_LIMIT,
     REASON_PREV_CLOSE_MISSING_DATA_ERROR,
     REASON_PREV_CLOSE_MISSING_WITH_SUSPEND,
@@ -93,28 +94,28 @@ def _context(
     return ctx
 
 
-def _bar(close: float = 10.1, *, limit_up=11.0, limit_down=9.0, suspended: bool = False):
+def _bar(close: float = 10.1, *, limit_up=11.0, limit_down=9.0, suspended: bool = False, volume: int = 10000):
     return {
         "open": 10.0,
         "high": max(10.2, close),
         "low": min(9.8, close),
         "close": close,
-        "volume": 10000,
+        "volume": volume,
         "limit_up": limit_up,
         "limit_down": limit_down,
         "is_suspended": suspended,
     }
 
 
-def _minute_bar(close: float = 10.1) -> MinuteBar:
+def _minute_bar(close: float = 10.1, *, volume: int = 10000, minute: int = 31) -> MinuteBar:
     return MinuteBar(
         symbol="000001.SZ",
-        bar_time=datetime(2024, 1, 2, 9, 31),
+        bar_time=datetime(2024, 1, 2, 9, minute),
         open=10.0,
         high=max(10.2, close),
         low=min(9.8, close),
         close=close,
-        volume=10000,
+        volume=volume,
         limit_up=11.0,
         limit_down=9.0,
     )
@@ -171,6 +172,17 @@ def test_v25_market_classifier_separates_business_state_from_data_error() -> Non
     assert data_error.action == V25MarketAction.DATA_ERROR
     assert data_error.reason == REASON_PREV_CLOSE_MISSING_DATA_ERROR
 
+    zero_volume = classify_v25_minute_market_state(
+        side="BUY",
+        price=10.0,
+        volume=0,
+        prev_close=10.0,
+        limit_up=11.0,
+        limit_down=9.0,
+    )
+    assert zero_volume.action == V25MarketAction.SKIP
+    assert zero_volume.reason == REASON_INTRADAY_HALT_OR_NO_BAR
+
 
 def test_v25_paper_adapter_skips_confirmed_suspend_without_requiring_full_context() -> None:
     algo = _algo()
@@ -225,6 +237,21 @@ def test_v25_paper_adapter_handles_limit_block_and_p0_without_fallback() -> None
     assert p0.quantity == 300
     assert p0.reason == REASON_P0_LIMIT_BUY_AT_DOWN_LIMIT
     assert p0_state.is_complete is True
+
+
+def test_v25_paper_adapter_skips_zero_volume_bar_as_no_fill_business_state() -> None:
+    algo = _algo()
+    state = algo.init_order("000001.SZ", "BUY", 10000)
+
+    result = algo.compute_step(
+        state,
+        _bar(close=10.1, volume=0),
+        _context(bars=1, observed_only=True),
+    )
+
+    assert result is None
+    assert state.step == 1
+    assert algo._last_no_fill_reason == REASON_INTRADAY_HALT_OR_NO_BAR
 
 
 def test_v25_realtime_streaming_accepts_one_observed_bar_and_persists_plan() -> None:
@@ -285,3 +312,24 @@ def test_minute_execution_engine_lets_v25_handle_limit_block_as_business_state(m
     assert len(events) == 1
     assert events[0].event_type == OrderEventType.NO_FILL
     assert events[0].reason == REASON_LIMIT_UP_BUY_BLOCKED
+
+
+def test_minute_execution_engine_records_v25_zero_volume_no_fill_then_fills(monkeypatch) -> None:
+    _patch_registry_v25(monkeypatch)
+    engine = MinuteExecutionEngine()
+
+    final_order, fills, events = engine.execute_order(
+        order=_order(quantity=10000),
+        minute_bars=[
+            _minute_bar(close=10.1, volume=0, minute=31),
+            _minute_bar(close=9.0, volume=10000, minute=32),
+        ],
+        algo_code="V25_TWO_STAGE",
+        algo_config={},
+        market_context=_context(bars=2, observed_only=True),
+    )
+
+    assert final_order.status == OrderStatus.FILLED
+    assert sum(fill.quantity for fill in fills) == 10000
+    assert any(event.event_type == OrderEventType.NO_FILL for event in events)
+    assert events[0].reason == REASON_INTRADAY_HALT_OR_NO_BAR

@@ -36,6 +36,7 @@ REASON_LIMIT_DATA_MISSING_DUE_TO_SUSPEND = "limit_data_missing_due_to_suspend"
 REASON_LIMIT_PRICE_MISSING_DATA_ERROR = "limit_price_missing_data_error"
 REASON_PRICE_MISSING_WITH_SUSPEND = "price_missing_with_suspend"
 REASON_PRICE_MISSING_DATA_ERROR = "price_missing_data_error"
+REASON_VOLUME_INVALID_DATA_ERROR = "volume_invalid_data_error"
 REASON_TRADABLE = "tradable"
 
 
@@ -115,6 +116,7 @@ def classify_v25_minute_market_state(
     *,
     side: str,
     price: Any,
+    volume: Any | None = None,
     prev_close: Any,
     limit_up: Any,
     limit_down: Any,
@@ -141,6 +143,23 @@ def classify_v25_minute_market_state(
             "unsupported_side",
             {"side": side},
         )
+
+    volume_number: float | None = None
+    if volume is not None:
+        try:
+            volume_number = float(volume)
+        except (TypeError, ValueError):
+            return V25MarketState(
+                V25MarketAction.DATA_ERROR,
+                REASON_VOLUME_INVALID_DATA_ERROR,
+                {"volume": volume},
+            )
+        if not np.isfinite(volume_number) or volume_number < 0:
+            return V25MarketState(
+                V25MarketAction.DATA_ERROR,
+                REASON_VOLUME_INVALID_DATA_ERROR,
+                {"volume": volume},
+            )
 
     if not is_positive_finite(price):
         if suspended:
@@ -190,6 +209,12 @@ def classify_v25_minute_market_state(
     px = float(price)
     up = float(limit_up)
     down = float(limit_down)
+    if volume_number is not None and volume_number <= 0:
+        return V25MarketState(
+            V25MarketAction.SKIP,
+            REASON_INTRADAY_HALT_OR_NO_BAR,
+            {"price": px, "volume": volume_number},
+        )
     if normalized_side == "BUY":
         if px >= up * (1 - price_epsilon):
             return V25MarketState(V25MarketAction.SKIP, REASON_LIMIT_UP_BUY_BLOCKED, {"price": px, "limit_up": up})
