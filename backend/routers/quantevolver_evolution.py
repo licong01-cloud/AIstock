@@ -25,6 +25,7 @@ from psycopg2.extras import RealDictCursor, execute_values
 from ..services.quantevolver.factor_eligibility_service import FactorEligibilityService
 from ..services.quantevolver.evaluation_universe_service import EvaluationUniverseService
 from ..services.quantevolver.experiment_config import normalize_label_horizon
+from ..services.quantevolver.factor_official_evaluation_service import CALC_ENGINE
 from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
 
 # RD-Agent QE workspace API base URL
@@ -2749,8 +2750,7 @@ async def get_correlation_pair(
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 for fn in [fa, fb]:
                     cur.execute("""
-                        SELECT factor_name, source, ic, sharpe, annualized_return,
-                               max_drawdown, is_sota_factor, is_available,
+                        SELECT factor_name, source, is_sota_factor, is_available,
                                realtime_code_text, asset_path, qe_code_path
                         FROM aistock_factor_catalog WHERE factor_name = %s LIMIT 1
                     """, (fn,))
@@ -2761,9 +2761,9 @@ async def get_correlation_pair(
                                ic_positive_ratio, top_sharpe, top_max_drawdown, top_annual_return,
                                top_excess_annual_return, coverage, turnover, group_return_monotonicity
                         FROM aistock_factor_metrics
-                        WHERE factor_name = %s AND eval_window = 'full'
+                        WHERE factor_name = %s AND eval_window = 'full' AND calc_engine = %s
                         ORDER BY calculated_at DESC LIMIT 1
-                    """, (fn,))
+                    """, (fn, CALC_ENGINE))
                     ind_row = cur.fetchone()
 
                     cur.execute("""
@@ -2979,9 +2979,9 @@ def get_related_factors(
                                top_annual_return, top_excess_annual_return,
                                top_max_drawdown, ic_positive_ratio
                         FROM aistock_factor_metrics
-                        WHERE factor_name = ANY(%s) AND eval_window = 'full'
+                        WHERE factor_name = ANY(%s) AND eval_window = 'full' AND calc_engine = %s
                         ORDER BY factor_name, calculated_at DESC
-                    """, (all_names,))
+                    """, (all_names, CALC_ENGINE))
                     for mrow in cur.fetchall():
                         metrics_map[mrow[0]] = {
                             "ic_mean": float(mrow[1]) if mrow[1] is not None else None,
@@ -3880,4 +3880,3 @@ def list_factor_metrics_jobs(limit: int = 20):
         if isinstance(row.get("summary"), str):
             row["summary"] = json.loads(row["summary"])
     return {"items": rows}
-
