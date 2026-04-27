@@ -28,6 +28,7 @@ from backend.services.trading_core.oms import OMS
 
 from .models import PaperDayRunResult, PaperRun, PortfolioStatus
 from .repository import PaperTradingV2Repository
+from .service import PaperTradingV2PortfolioService
 
 
 class PaperTradingDayRunner:
@@ -107,7 +108,11 @@ class PaperTradingDayRunner:
                 },
             )
 
-        config = normalize_selection_runtime_config(runtime_config or {})
+        config = PaperTradingV2PortfolioService(repository=self.repository).resolve_runtime_config_for_date(
+            portfolio=portfolio,
+            trade_date=trade_date,
+            runtime_config=runtime_config or {},
+        )
         runtime_profile = parse_selection_runtime_profile(config)
         self._reject_raw_execution_overrides(config)
         execution_policy_context = self._execution_policy_context_for_date(portfolio, trade_date)
