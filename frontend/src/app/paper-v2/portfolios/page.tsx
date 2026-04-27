@@ -231,29 +231,29 @@ export default function PaperV2PortfoliosPage() {
       <div className="pv2-grid pv2-grid-main">
         <SectionCard title="从单个策略包启动模拟盘" eyebrow="单包执行主链路" action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
           <div className="pv2-form-grid">
-            <div className="pv2-field"><label>StrategyPackage</label><select className="pv2-select" value={packageId} onChange={(event) => setPackageId(event.target.value)}>{packages.map((item) => <option value={item.package_id} key={item.package_id}>{item.package_name} / {item.package_status}</option>)}</select></div>
-            <div className="pv2-field"><label>组合名称</label><input className="pv2-input" value={name} onChange={(event) => setName(event.target.value)} /></div>
-            <div className="pv2-field"><label>初始资金</label><input className="pv2-input" type="number" min={1} value={initialCash} onChange={(event) => setInitialCash(Number(event.target.value))} /></div>
-            <div className="pv2-field"><label>启动模式</label><select className="pv2-select" value={startMode} onChange={(event) => setStartMode(event.target.value as "replay" | "realtime")}><option value="replay">历史分钟回放</option><option value="realtime">直接进入实时模拟盘</option></select></div>
-            <div className="pv2-field"><label>数据源</label><input className="pv2-input" value={dataSource} readOnly /></div>
-            <div className="pv2-field"><label>已验证执行策略</label><select className="pv2-select" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">Manifest 默认策略（后端会导入并校验）</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code} / {item.paper_enabled ? "可用于模拟盘" : "未启用"}</option>)}</select></div>
+            <div className="pv2-field"><label>StrategyPackage</label><select className="pv2-select" data-testid="portfolio-package" value={packageId} onChange={(event) => setPackageId(event.target.value)}>{packages.map((item) => <option value={item.package_id} key={item.package_id}>{item.package_name} / {item.package_status}</option>)}</select></div>
+            <div className="pv2-field"><label>组合名称</label><input className="pv2-input" data-testid="portfolio-name" value={name} onChange={(event) => setName(event.target.value)} /></div>
+            <div className="pv2-field"><label>初始资金</label><input className="pv2-input" data-testid="portfolio-initial-cash" type="number" min={1} value={initialCash} onChange={(event) => setInitialCash(Number(event.target.value))} /></div>
+            <div className="pv2-field"><label>启动模式</label><select className="pv2-select" data-testid="portfolio-start-mode" value={startMode} onChange={(event) => setStartMode(event.target.value as "replay" | "realtime")}><option value="replay">历史分钟回放</option><option value="realtime">直接进入实时模拟盘</option></select></div>
+            <div className="pv2-field"><label>数据源</label><input className="pv2-input" data-testid="portfolio-data-source" value={dataSource} readOnly /></div>
+            <div className="pv2-field"><label>已验证执行策略</label><select className="pv2-select" data-testid="portfolio-policy" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">Manifest 默认策略（后端会导入并校验）</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code} / {item.paper_enabled ? "可用于模拟盘" : "未启用"}</option>)}</select></div>
             {startMode === "replay" ? <>
-              <div className="pv2-field"><label>回放开始日期</label><input className="pv2-input" type="date" value={replayStart} onChange={(event) => setReplayStart(event.target.value)} /></div>
-              <div className="pv2-field"><label>回放结束日期</label><input className="pv2-input" type="date" value={replayEnd} onChange={(event) => setReplayEnd(event.target.value)} /></div>
-              <div className="pv2-field"><label>追赶后切换实时</label><label className="pv2-chip"><input type="checkbox" checked={autoSwitchToLive} onChange={(event) => setAutoSwitchToLive(event.target.checked)} /> 回放追赶完成后自动进入 TDX 实时模拟</label></div>
-            </> : <div className="pv2-field"><label>实时模拟开始日期</label><input className="pv2-input" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></div>}
+              <div className="pv2-field"><label>回放开始日期</label><input className="pv2-input" data-testid="portfolio-replay-start" type="date" value={replayStart} onChange={(event) => setReplayStart(event.target.value)} /></div>
+              <div className="pv2-field"><label>回放结束日期</label><input className="pv2-input" data-testid="portfolio-replay-end" type="date" value={replayEnd} onChange={(event) => setReplayEnd(event.target.value)} /></div>
+              <div className="pv2-field"><label>追赶后切换实时</label><label className="pv2-chip"><input data-testid="portfolio-auto-switch" type="checkbox" checked={autoSwitchToLive} onChange={(event) => setAutoSwitchToLive(event.target.checked)} /> 回放追赶完成后自动进入 TDX 实时模拟</label></div>
+            </> : <div className="pv2-field"><label>实时模拟开始日期</label><input className="pv2-input" data-testid="portfolio-live-start" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></div>}
           </div>
 
           <div className="pv2-card" style={{ marginTop: 14 }}>
             <div className="pv2-eyebrow">运行时选股配置（不写入策略包 Manifest）</div>
             <div className="pv2-form-grid">
-              <div className="pv2-field"><label>TopK</label><input className="pv2-input" type="number" min={1} max={50} value={topK} onChange={(event) => setTopK(Number(event.target.value))} /></div>
-              <div className="pv2-field"><label>行业黑名单</label><input className="pv2-input" value={industryBlacklist} placeholder="银行, 房地产" onChange={(event) => setIndustryBlacklist(event.target.value)} /></div>
-              <div className="pv2-field"><label>停牌处理</label><label className="pv2-chip"><input type="checkbox" checked={excludeSuspended} onChange={(event) => setExcludeSuspended(event.target.checked)} /> 剔除并补位</label></div>
-              <div className="pv2-field"><label>HMM</label><label className="pv2-chip"><input type="checkbox" checked={hmmEnabled} onChange={(event) => setHmmEnabled(event.target.checked)} /> 启用 HMM</label></div>
-              <div className="pv2-field"><label>HMM 模型版本</label><select className="pv2-select" value={hmmConfigId} disabled={!hmmEnabled} onChange={(event) => setHmmConfigId(event.target.value)}><option value="">选择模型版本</option>{hmmConfigs.map((item) => <option value={item.config_id} key={item.config_id}>{item.display_name} / {item.model_type}</option>)}</select></div>
-              <div className="pv2-field"><label>HMM 快照</label><select className="pv2-select" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)}><option value="">选择已完成快照</option>{hmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{hmmSnapshotLabel(item)}</option>)}</select></div>
-              <div className="pv2-field"><label>HMM Preset</label><select className="pv2-select" value={hmmPreset} disabled={!hmmEnabled} onChange={(event) => setHmmPreset(event.target.value)}><option value="preset_A">preset_A</option><option value="preset_B">preset_B</option></select></div>
+              <div className="pv2-field"><label>TopK</label><input className="pv2-input" data-testid="portfolio-top-k" type="number" min={1} max={50} value={topK} onChange={(event) => setTopK(Number(event.target.value))} /></div>
+              <div className="pv2-field"><label>行业黑名单</label><input className="pv2-input" data-testid="portfolio-industry-blacklist" value={industryBlacklist} placeholder="银行, 房地产" onChange={(event) => setIndustryBlacklist(event.target.value)} /></div>
+              <div className="pv2-field"><label>停牌处理</label><label className="pv2-chip"><input data-testid="portfolio-exclude-suspended" type="checkbox" checked={excludeSuspended} onChange={(event) => setExcludeSuspended(event.target.checked)} /> 剔除并补位</label></div>
+              <div className="pv2-field"><label>HMM</label><label className="pv2-chip"><input data-testid="portfolio-hmm-enabled" type="checkbox" checked={hmmEnabled} onChange={(event) => setHmmEnabled(event.target.checked)} /> 启用 HMM</label></div>
+              <div className="pv2-field"><label>HMM 模型版本</label><select className="pv2-select" data-testid="portfolio-hmm-config" value={hmmConfigId} disabled={!hmmEnabled} onChange={(event) => setHmmConfigId(event.target.value)}><option value="">选择模型版本</option>{hmmConfigs.map((item) => <option value={item.config_id} key={item.config_id}>{item.display_name} / {item.model_type}</option>)}</select></div>
+              <div className="pv2-field"><label>HMM 快照</label><select className="pv2-select" data-testid="portfolio-hmm-snapshot" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)}><option value="">选择已完成快照</option>{hmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{hmmSnapshotLabel(item)}</option>)}</select></div>
+              <div className="pv2-field"><label>HMM Preset</label><select className="pv2-select" data-testid="portfolio-hmm-preset" value={hmmPreset} disabled={!hmmEnabled} onChange={(event) => setHmmPreset(event.target.value)}><option value="preset_A">preset_A</option><option value="preset_B">preset_B</option></select></div>
             </div>
           </div>
 
@@ -268,7 +268,7 @@ export default function PaperV2PortfoliosPage() {
               {startMode === "replay" ? <span className="pv2-chip">追赶切实时: {autoSwitchToLive ? "TDX_REALTIME" : "关闭"}</span> : null}
             </div>
           </div>
-          <button className="pv2-button-primary" onClick={createPortfolio} disabled={busy} type="button">{busy ? "处理中..." : startMode === "replay" ? (autoSwitchToLive ? "创建组合并回放追赶到实时" : "创建组合并开始历史回放") : "创建实时模拟盘"}</button>
+          <button className="pv2-button-primary" data-testid="portfolio-create" onClick={createPortfolio} disabled={busy} type="button">{busy ? "处理中..." : startMode === "replay" ? (autoSwitchToLive ? "创建组合并回放追赶到实时" : "创建组合并开始历史回放") : "创建实时模拟盘"}</button>
           {created ? <JsonPanel value={{ created_portfolio_id: created.portfolio_id, package_id: created.package_id, manifest_sha256: created.manifest_sha256, runtime_profile_version: createdRuntimeVersion, session_progress: sessionProgress }} /> : null}
         </SectionCard>
 

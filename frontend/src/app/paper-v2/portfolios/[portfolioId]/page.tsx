@@ -92,11 +92,11 @@ export default function PaperV2PortfolioDetailPage() {
             eyebrow={loading ? "加载中" : "已冻结模拟盘 v2 组合"}
             action={
               <div className="pv2-row-actions">
-                <button className="pv2-button" onClick={() => lifecycle(portfolio.status === "PAUSED" ? "resume" : "pause")} type="button">
+                <button className="pv2-button" data-testid="portfolio-lifecycle-pause-resume" onClick={() => lifecycle(portfolio.status === "PAUSED" ? "resume" : "pause")} type="button">
                   {portfolio.status === "PAUSED" ? "恢复" : "暂停"}
                 </button>
-                <button className="pv2-button" onClick={() => lifecycle("complete")} type="button">完成</button>
-                <button className="pv2-button-danger" onClick={() => lifecycle("retire")} type="button">退役</button>
+                <button className="pv2-button" data-testid="portfolio-lifecycle-complete" onClick={() => lifecycle("complete")} type="button">完成</button>
+                <button className="pv2-button-danger" data-testid="portfolio-lifecycle-retire" onClick={() => lifecycle("retire")} type="button">退役</button>
               </div>
             }
           >

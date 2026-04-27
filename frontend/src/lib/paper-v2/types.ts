@@ -150,7 +150,8 @@ export type SelectionWatchlistImportResult = {
 };
 
 export type ExecutionPolicy = {
-  policy_id: string;
+  validated_execution_policy_id?: string;
+  policy_id?: string;
   package_id?: string;
   manifest_sha256?: string;
   policy_name?: string;
@@ -160,6 +161,7 @@ export type ExecutionPolicy = {
   algo_config?: JsonObject;
   validation_status?: string;
   paper_enabled?: boolean;
+  is_portfolio_default?: boolean;
   source_backtest_id?: string;
   source_backtest_status?: string;
   validated_at?: string | null;

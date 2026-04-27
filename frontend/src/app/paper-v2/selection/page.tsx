@@ -229,31 +229,31 @@ export default function PaperV2SelectionPage() {
       <div className="pv2-grid pv2-grid-main">
         <SectionCard title="选股控制" eyebrow="StrategyPackage 权威推理" action={<button className="pv2-button" onClick={loadPackages} disabled={loading} type="button">刷新策略包</button>}>
           <div className="pv2-form-grid">
-            <div className="pv2-field"><label>模式</label><select className="pv2-select" value={mode} onChange={(event) => updateMode(event.target.value as SelectionMode)}><option value="single_package">单策略包</option><option value="weighted_fusion">加权融合</option><option value="intersection">交集</option><option value="union">并集</option></select></div>
-            <div className="pv2-field"><label>交易日期</label><input className="pv2-input" type="date" value={tradeDate} onChange={(event) => setTradeDate(event.target.value)} /></div>
-            <div className="pv2-field"><label>数据源</label><select className="pv2-select" value={dataSource} onChange={(event) => setDataSource(event.target.value as DataSource)}><option value="DB_HISTORICAL">DB_HISTORICAL 历史分钟回放</option><option value="TDX_REALTIME">TDX_REALTIME 实时行情</option></select></div>
-            <div className="pv2-field"><label>TopK（默认 20，最高 50）</label><input className="pv2-input" type="number" min={1} max={50} value={topK} onChange={(event) => setTopK(Number(event.target.value))} /></div>
-            <div className="pv2-field"><label>行业黑名单</label><input className="pv2-input" placeholder="银行, 房地产" value={industryBlacklist} onChange={(event) => setIndustryBlacklist(event.target.value)} /></div>
-            <div className="pv2-field"><label>可交易性</label><label className="pv2-chip"><input type="checkbox" checked={excludeSuspended} onChange={(event) => setExcludeSuspended(event.target.checked)} /> 剔除已确认停牌股票并按后续排名补位</label></div>
+            <div className="pv2-field"><label>模式</label><select className="pv2-select" data-testid="selection-mode" value={mode} onChange={(event) => updateMode(event.target.value as SelectionMode)}><option value="single_package">单策略包</option><option value="weighted_fusion">加权融合</option><option value="intersection">交集</option><option value="union">并集</option></select></div>
+            <div className="pv2-field"><label>交易日期</label><input className="pv2-input" data-testid="selection-trade-date" type="date" value={tradeDate} onChange={(event) => setTradeDate(event.target.value)} /></div>
+            <div className="pv2-field"><label>数据源</label><select className="pv2-select" data-testid="selection-data-source" value={dataSource} onChange={(event) => setDataSource(event.target.value as DataSource)}><option value="DB_HISTORICAL">DB_HISTORICAL 历史分钟回放</option><option value="TDX_REALTIME">TDX_REALTIME 实时行情</option></select></div>
+            <div className="pv2-field"><label>TopK（默认 20，最高 50）</label><input className="pv2-input" data-testid="selection-top-k" type="number" min={1} max={50} value={topK} onChange={(event) => setTopK(Number(event.target.value))} /></div>
+            <div className="pv2-field"><label>行业黑名单</label><input className="pv2-input" data-testid="selection-industry-blacklist" placeholder="银行, 房地产" value={industryBlacklist} onChange={(event) => setIndustryBlacklist(event.target.value)} /></div>
+            <div className="pv2-field"><label>可交易性</label><label className="pv2-chip"><input data-testid="selection-exclude-suspended" type="checkbox" checked={excludeSuspended} onChange={(event) => setExcludeSuspended(event.target.checked)} /> 剔除已确认停牌股票并按后续排名补位</label></div>
           </div>
           <div className="pv2-card" style={{ marginTop: 14 }}>
             <div className="pv2-row-actions">
-              <label className="pv2-chip"><input type="checkbox" checked={hmmEnabled} onChange={(event) => setHmmEnabled(event.target.checked)} /> 启用 HMM</label>
-              <select className="pv2-select" value={hmmConfigId} disabled={!hmmEnabled} onChange={(event) => setHmmConfigId(event.target.value)} style={{ maxWidth: 260 }}>
+              <label className="pv2-chip"><input data-testid="selection-hmm-enabled" type="checkbox" checked={hmmEnabled} onChange={(event) => setHmmEnabled(event.target.checked)} /> 启用 HMM</label>
+              <select className="pv2-select" data-testid="selection-hmm-config" value={hmmConfigId} disabled={!hmmEnabled} onChange={(event) => setHmmConfigId(event.target.value)} style={{ maxWidth: 260 }}>
                 <option value="">选择模型版本</option>
                 {hmmConfigs.map((item) => <option value={item.config_id} key={item.config_id}>{item.display_name} / {item.model_type}</option>)}
               </select>
-              <select className="pv2-select" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)} style={{ maxWidth: 280 }}>
+              <select className="pv2-select" data-testid="selection-hmm-snapshot" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)} style={{ maxWidth: 280 }}>
                 <option value="">选择已完成快照</option>
                 {hmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{hmmSnapshotLabel(item)}</option>)}
               </select>
-              <select className="pv2-select" value={hmmPreset} disabled={!hmmEnabled} onChange={(event) => setHmmPreset(event.target.value)} style={{ maxWidth: 150 }}>
+              <select className="pv2-select" data-testid="selection-hmm-preset" value={hmmPreset} disabled={!hmmEnabled} onChange={(event) => setHmmPreset(event.target.value)} style={{ maxWidth: 150 }}>
                 <option value="preset_A">preset_A</option>
                 <option value="preset_B">preset_B</option>
               </select>
             </div>
           </div>
-          <button className="pv2-button-primary" disabled={running} onClick={runSelection} type="button">{running ? "运行中..." : "运行选股"}</button>
+          <button className="pv2-button-primary" data-testid="selection-run" disabled={running} onClick={runSelection} type="button">{running ? "运行中..." : "运行选股"}</button>
         </SectionCard>
 
         <SectionCard title="策略包选择器" eyebrow={`${selectedPackages.length} 个已选择`}>
@@ -261,13 +261,13 @@ export default function PaperV2SelectionPage() {
             rows={packages}
             empty="暂无可选 StrategyPackage。请先启用策略包选股。"
             columns={[
-              { key: "pick", header: "选择", render: (row) => <input type="checkbox" checked={Boolean(selected[row.package_id])} onChange={(event) => updatePackageSelection(row.package_id, event.target.checked)} /> },
+              { key: "pick", header: "选择", render: (row) => <input data-testid={`selection-package-${row.package_id}`} type="checkbox" checked={Boolean(selected[row.package_id])} onChange={(event) => updatePackageSelection(row.package_id, event.target.checked)} /> },
               { key: "name", header: "策略包", render: (row) => <><strong>{row.package_name}</strong><br /><span className="pv2-muted pv2-mono">{shortHash(row.package_id, 7)}</span></> },
               { key: "status", header: "状态", render: (row) => <StatusBadge status={row.package_status} /> },
               { key: "annual", header: "年化", render: (row) => formatPercent(row.metrics_summary?.annual_return) },
               { key: "ic", header: "IC", render: (row) => formatPercent(row.metrics_summary?.ic) },
               { key: "model", header: "模型", render: (row) => <StatusBadge status={String(row.model_state?.staleness_status || "unknown")} /> },
-              { key: "weight", header: "权重", render: (row) => <input className="pv2-input" type="number" step="0.1" value={weights[row.package_id] ?? 1} disabled={mode !== "weighted_fusion"} onChange={(event) => setWeights((prev) => ({ ...prev, [row.package_id]: Number(event.target.value) }))} /> },
+              { key: "weight", header: "权重", render: (row) => <input className="pv2-input" data-testid={`selection-weight-${row.package_id}`} type="number" step="0.1" value={weights[row.package_id] ?? 1} disabled={mode !== "weighted_fusion"} onChange={(event) => setWeights((prev) => ({ ...prev, [row.package_id]: Number(event.target.value) }))} /> },
             ]}
           />
         </SectionCard>
@@ -276,9 +276,9 @@ export default function PaperV2SelectionPage() {
       {dataSource === "TDX_REALTIME" ? <NoticePanel title="实时数据源提示" tone="warning">当前权威 artifact 推理仍要求 DB_HISTORICAL；选择 TDX_REALTIME 时后端会明确失败，不会静默回退。</NoticePanel> : null}
       {mode !== "single_package" ? <NoticePanel title="多策略包边界" tone="warning">多策略包当前只用于统一选股研究；不能直接创建模拟盘执行组合。</NoticePanel> : null}
 
-      <SectionCard title="选股结果" eyebrow={run ? `run_id ${shortHash(run.run_id)}` : "尚未运行"} action={<button className="pv2-button" onClick={addToWatchlist} disabled={!run || !resultRows.length} type="button">一键加入自选股票池</button>}>
+      <SectionCard title="选股结果" eyebrow={run ? `run_id ${shortHash(run.run_id)}` : "尚未运行"} action={<button className="pv2-button" data-testid="selection-add-watchlist" onClick={addToWatchlist} disabled={!run || !resultRows.length} type="button">一键加入自选股票池</button>}>
         <div className="pv2-form-grid" style={{ marginBottom: 12 }}>
-          <div className="pv2-field"><label>自选分类名称</label><input className="pv2-input" value={watchlistCategoryName} onChange={(event) => setWatchlistCategoryName(event.target.value)} placeholder="自动创建或复用同名分类" /></div>
+          <div className="pv2-field"><label>自选分类名称</label><input className="pv2-input" data-testid="selection-watchlist-name" value={watchlistCategoryName} onChange={(event) => setWatchlistCategoryName(event.target.value)} placeholder="自动创建或复用同名分类" /></div>
         </div>
         <PaperTable
           rows={resultRows}
@@ -318,14 +318,14 @@ export default function PaperV2SelectionPage() {
       <SectionCard title="历史选股记录与动态聚合" eyebrow="点击记录可显示结果">
         <div className="pv2-row-actions" style={{ marginBottom: 12 }}>
           <button className="pv2-button" onClick={loadPackages} disabled={loading} type="button">刷新记录</button>
-          <button className="pv2-button-primary" onClick={aggregateSelectedRuns} disabled={!aggregateEnabled} type="button">聚合已选股票</button>
+          <button className="pv2-button-primary" data-testid="selection-aggregate-runs" onClick={aggregateSelectedRuns} disabled={!aggregateEnabled} type="button">聚合已选股票</button>
           <span className="pv2-muted">已选 {sourceRunIds.length} 条；聚合模式不能为单策略包。</span>
         </div>
         <PaperTable
           rows={runs}
           empty="暂无选股运行。"
           columns={[
-            { key: "pick", header: "聚合", render: (row) => <input type="checkbox" checked={Boolean(selectedRuns[row.run_id])} onChange={(event) => setSelectedRuns((prev) => ({ ...prev, [row.run_id]: event.target.checked }))} /> },
+            { key: "pick", header: "聚合", render: (row) => <input data-testid={`selection-run-checkbox-${row.run_id}`} type="checkbox" checked={Boolean(selectedRuns[row.run_id])} onChange={(event) => setSelectedRuns((prev) => ({ ...prev, [row.run_id]: event.target.checked }))} /> },
             { key: "run", header: "运行记录", render: (row) => <button className="pv2-link-button" onClick={() => showHistoryRun(row.run_id)} type="button">{runLabel(row)}</button> },
             { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status || "unknown"} /> },
             { key: "source", header: "数据源", render: (row) => row.data_source },

@@ -181,16 +181,16 @@ export default function PaperV2ModelHmmPage() {
       <div className="pv2-grid pv2-grid-main">
         <SectionCard title="StrategyPackage 模型新鲜度" eyebrow="人工重训练">
           <div className="pv2-form-grid">
-            <div className="pv2-field"><label>策略包</label><select className="pv2-select" value={packageId} onChange={(event) => setPackageId(event.target.value)}><option value="">选择策略包</option>{packages.map((item) => <option key={item.package_id} value={item.package_id}>{item.package_name} / {item.package_status}</option>)}</select></div>
-            <div className="pv2-field"><label>截至日期</label><input className="pv2-input" type="date" value={asOfDate} onChange={(event) => setAsOfDate(event.target.value)} /></div>
-            <div className="pv2-field"><label>回看天数</label><input className="pv2-input" type="number" min={30} value={lookbackDays} onChange={(event) => setLookbackDays(Number(event.target.value))} /></div>
+            <div className="pv2-field"><label>策略包</label><select className="pv2-select" data-testid="model-package" value={packageId} onChange={(event) => setPackageId(event.target.value)}><option value="">选择策略包</option>{packages.map((item) => <option key={item.package_id} value={item.package_id}>{item.package_name} / {item.package_status}</option>)}</select></div>
+            <div className="pv2-field"><label>截至日期</label><input className="pv2-input" data-testid="model-as-of-date" type="date" value={asOfDate} onChange={(event) => setAsOfDate(event.target.value)} /></div>
+            <div className="pv2-field"><label>回看天数</label><input className="pv2-input" data-testid="model-lookback-days" type="number" min={30} value={lookbackDays} onChange={(event) => setLookbackDays(Number(event.target.value))} /></div>
           </div>
           <div className="pv2-chip-row" style={{ marginTop: 12 }}>
             <span className="pv2-chip">package: {selectedPackage?.package_name || "-"}</span>
             <span className="pv2-chip">manifest: {shortHash(selectedPackage?.manifest_sha256)}</span>
           </div>
           <div className="pv2-row-actions" style={{ marginTop: 12 }}>
-            <button className="pv2-button" disabled={busy || !packageId} onClick={previewModelRetrain} type="button">预览重训练</button>
+            <button className="pv2-button" data-testid="model-retrain-preview" disabled={busy || !packageId} onClick={previewModelRetrain} type="button">预览重训练</button>
             <ConfirmAction label="提交重训练任务" disabled={busy || !packageId} danger confirmText={packageId || "-"} onConfirm={startModelRetrain} />
           </div>
           <h3>当前模型状态</h3>
@@ -200,17 +200,17 @@ export default function PaperV2ModelHmmPage() {
 
         <SectionCard title="HMM 滚动训练" eyebrow="WSL 执行维护">
           <div className="pv2-form-grid">
-            <div className="pv2-field"><label>HMM 配置</label><select className="pv2-select" value={configId} onChange={(event) => setConfigId(event.target.value)}><option value="">选择配置</option>{configs.map((item) => <option key={item.config_id} value={item.config_id}>{item.display_name} / {item.model_type}</option>)}</select></div>
-            <div className="pv2-field"><label>截至日期</label><input className="pv2-input" type="date" value={hmmAsOfDate} onChange={(event) => setHmmAsOfDate(event.target.value)} /></div>
-            <div className="pv2-field"><label>验证月数</label><input className="pv2-input" type="number" min={1} max={3} value={validationMonths} onChange={(event) => setValidationMonths(Number(event.target.value))} /></div>
-            <div className="pv2-field"><label>训练年数</label><input className="pv2-input" type="number" min={1} step="0.5" value={trainWindowYears} onChange={(event) => setTrainWindowYears(Number(event.target.value))} /></div>
+            <div className="pv2-field"><label>HMM 配置</label><select className="pv2-select" data-testid="hmm-config" value={configId} onChange={(event) => setConfigId(event.target.value)}><option value="">选择配置</option>{configs.map((item) => <option key={item.config_id} value={item.config_id}>{item.display_name} / {item.model_type}</option>)}</select></div>
+            <div className="pv2-field"><label>截至日期</label><input className="pv2-input" data-testid="hmm-as-of-date" type="date" value={hmmAsOfDate} onChange={(event) => setHmmAsOfDate(event.target.value)} /></div>
+            <div className="pv2-field"><label>验证月数</label><input className="pv2-input" data-testid="hmm-validation-months" type="number" min={1} max={3} value={validationMonths} onChange={(event) => setValidationMonths(Number(event.target.value))} /></div>
+            <div className="pv2-field"><label>训练年数</label><input className="pv2-input" data-testid="hmm-train-years" type="number" min={1} step="0.5" value={trainWindowYears} onChange={(event) => setTrainWindowYears(Number(event.target.value))} /></div>
           </div>
           <div className="pv2-chip-row" style={{ marginTop: 12 }}>
             <span className="pv2-chip">config: {selectedConfig?.display_name || "-"}</span>
             <span className="pv2-chip">建议验证期：3 个月</span>
           </div>
           <div className="pv2-row-actions" style={{ marginTop: 12 }}>
-            <button className="pv2-button" disabled={busy || !configId} onClick={previewHmmRolling} type="button">预览滚动切分</button>
+            <button className="pv2-button" data-testid="hmm-rolling-preview" disabled={busy || !configId} onClick={previewHmmRolling} type="button">预览滚动切分</button>
             <ConfirmAction label="触发 HMM 滚动训练" disabled={busy || !configId} danger confirmText={configId || "-"} onConfirm={triggerHmmRolling} />
           </div>
           {hmmPreview ? <JsonPanel value={hmmPreview} /> : null}
