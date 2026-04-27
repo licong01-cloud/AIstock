@@ -106,6 +106,10 @@ async function openSection(page: Page, heading: string) {
   return page.locator("section").filter({ has: page.getByRole("heading", { name: heading }) });
 }
 
+function field(section: ReturnType<typeof openSection> extends Promise<infer T> ? T : never, label: string) {
+  return section.locator(".pv2-field").filter({ hasText: label });
+}
+
 test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
   test.beforeAll(async ({ request }) => {
     const health = await request.get(`${API_BASE.replace(/\/api\/v1$/, "")}/openapi.json`);
@@ -215,13 +219,13 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
 
     const createSection = await openSection(page, "从单个策略包启动模拟盘");
     await createSection.locator("select").first().selectOption(target.package_id);
-    await createSection.locator("input.pv2-input").nth(0).fill(`E2E-${Date.now()}`);
-    await createSection.locator("input.pv2-input").nth(1).fill("1000000");
-    await createSection.locator("select").nth(1).selectOption("replay");
-    await createSection.locator("select").nth(2).selectOption("DB_HISTORICAL");
-    await createSection.locator("input.pv2-input").nth(2).fill("2026-04-20");
-    await createSection.locator("input.pv2-input").nth(3).fill(REPLAY_TRADE_DATE);
-    await createSection.locator("input.pv2-input").nth(4).fill("20");
+    await field(createSection, "组合名称").locator("input").fill(`E2E-${Date.now()}`);
+    await field(createSection, "初始资金").locator("input").fill("1000000");
+    await field(createSection, "启动模式").locator("select").selectOption("replay");
+    await expect(field(createSection, "数据源").locator("input")).toHaveValue("DB_HISTORICAL");
+    await field(createSection, "回放开始日期").locator("input").fill("2026-04-20");
+    await field(createSection, "回放结束日期").locator("input").fill(REPLAY_TRADE_DATE);
+    await field(createSection, "TopK").locator("input").fill("20");
     await createSection.getByRole("button", { name: "创建并开始历史回放" }).click();
 
     await expect(page.getByText("组合操作失败")).toBeVisible({ timeout: 30_000 });
