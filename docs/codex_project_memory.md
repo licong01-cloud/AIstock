@@ -148,7 +148,7 @@ Important directories:
 - Paper v2 supports per-trade-date activation of backtest-validated execution policies through `paper_v2.execution_policy_activation` and `/execution-policy-activations`. Day runner/readiness use the active date policy first and the portfolio default policy otherwise.
 - Selection Center exposes `/runs/{run_id}/excluded-results` for suspended/blacklisted trace review.
 - Paper v2 performance reports now include annualized return, annualized volatility, Sharpe, average daily return, win-day ratio, and explicit insufficient-data reasons rather than fabricating unavailable metrics.
-- UI/manual page联调 remains deferred per user direction; use a non-8001 temporary backend port for API validation.
+- UI/manual page鑱旇皟 remains deferred per user direction; use a non-8001 temporary backend port for API validation.
 
 ## Selection Runtime HMM / Industry Data Update - 2026-04-26
 
@@ -309,3 +309,10 @@ Important directories:
 - StrategyPackage should be treated as a frozen research alpha asset for factor set, model family/assets, QE lineage, and metrics; Paper v2 runtime choices such as selection TopK, suspend filtering, industry blacklist, HMM snapshot/preset, daily/rebalance policy, minute execution policy activation, data-source roles, replay/live mode, and reset behavior must be mutable only through versioned/audited runtime configuration.
 - Runtime changes must create traceable versions/hashes/activations and be copied into selection runs, paper runs, and trade sessions; they must not mutate frozen manifests, validated policies, model/HMM assets, QE artifacts, or selection artifacts.
 - The next implementation must include code-audit/static-scan gates and full backend-driven UI E2E validation on development ports 8011/8012 and 3011/3012, without restarting production backend port 8001.
+
+## Paper v2 Baseline Alignment - 2026-04-27
+
+- Added `docs/architecture/paper_trading_v2_baseline_alignment_20260427.md` after checking current code, historical Paper v2 docs, frontend routes, schemas, and tests against the new gap-closure design.
+- Alignment conclusion: the gap-closure design matches the current code when read as implemented baseline plus next-phase gaps. Implemented pieces include StrategyPackage persistence/status/metrics/policies/model state/artifacts, Selection Center runtime filters/HMM/multi-package aggregation/watchlist, Paper v2 ledgers/replay/reset/session framework, V25 core/adapter/capabilities, and the Paper v2 UI route tree.
+- Explicit remaining gaps are still runtime profile version/audit tables and APIs, UI use of session capability diagnostics, V25 day_features provider for real Paper v2 V25 runs, and full backend-driven UI value validation on dev ports. Current V25 code correctly fails without `day_features`; no default day-feature fallback is allowed in authoritative Paper v2.
+- Baseline tests passed: `pytest backend/tests/trading_core backend/tests/strategy_package backend/tests/paper_trading_v2 backend/tests/selection_center -q -p no:cacheprovider` -> 125 passed.
