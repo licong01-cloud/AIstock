@@ -216,6 +216,7 @@ class PaperTradingReadinessService:
             execution_policy_json,
             package_id=manifest.package_id,
         )
+        require_day_features = PaperTradingDayRunner._policy_requires_day_features(execution_policy_json)
         checked_symbols = sorted(set(current_positions) | {intent.symbol for intent in intents})
         if not checked_symbols:
             raise StrategyPackageValidationError(
@@ -229,6 +230,7 @@ class PaperTradingReadinessService:
                 source=portfolio.data_source,
                 min_bars=required_bars,
                 require_suspend_status=True,
+                require_day_features=require_day_features,
             )
             if not market_input.minute_bars:
                 raise DataUnavailableError(
@@ -238,7 +240,11 @@ class PaperTradingReadinessService:
         checks.append(
             PaperReadinessCheck(
                 check_name="minute_market_data",
-                context={"symbol_count": len(checked_symbols), "min_required_bars": required_bars},
+                context={
+                    "symbol_count": len(checked_symbols),
+                    "min_required_bars": required_bars,
+                    "require_day_features": require_day_features,
+                },
             )
         )
 

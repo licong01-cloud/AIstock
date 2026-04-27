@@ -413,6 +413,7 @@ class PaperTradingLiveMinuteExecutor:
         portfolio = self.repository.get_portfolio(session.portfolio_id)
         policy_json = run.runtime_config["validated_execution_policy"]["policy_json"]
         capability = require_execution_algo_supports_mode(policy_json, mode="LIVE_ONLY", package_id=portfolio.package_id)
+        require_day_features = capability.algo_code == "V25_TWO_STAGE"
         algo_config = dict(policy_json.get("algo_config") or {})
         states = self.repository.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)
         if not states:
@@ -448,6 +449,7 @@ class PaperTradingLiveMinuteExecutor:
                 source=session.live_data_source or MinuteDataSource.TDX_REALTIME,
                 until_time=as_of_time,
                 require_suspend_status=True,
+                require_day_features=require_day_features,
             )
             if market_input.minute_bars:
                 touched_prices[state.symbol] = market_input.minute_bars[-1].close

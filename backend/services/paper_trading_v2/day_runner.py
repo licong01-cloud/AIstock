@@ -279,6 +279,7 @@ class PaperTradingDayRunner:
                 execution_policy_json,
                 package_id=manifest.package_id,
             )
+            require_day_features = self._policy_requires_day_features(execution_policy_json)
 
             for intent in intents:
                 market_input = self.market_data_provider.load_symbol_input(
@@ -287,6 +288,7 @@ class PaperTradingDayRunner:
                     source=portfolio.data_source,
                     min_bars=required_bars,
                     require_suspend_status=True,
+                    require_day_features=require_day_features,
                 )
                 if not market_input.minute_bars:
                     raise DataUnavailableError(
@@ -306,6 +308,8 @@ class PaperTradingDayRunner:
                         "limit_up": market_input.market_context.get("limit_up"),
                         "limit_down": market_input.market_context.get("limit_down"),
                         "suspend_status": market_input.market_context.get("suspend_status"),
+                        "day_features_schema_version": market_input.market_context.get("day_features_schema_version"),
+                        "day_features_trade_date": market_input.market_context.get("day_features_trade_date"),
                     },
                 )
                 order = self.oms.create_order(intent)
@@ -513,6 +517,10 @@ class PaperTradingDayRunner:
     @staticmethod
     def _required_minute_bars_for_policy(policy_json: dict[str, Any], *, package_id: str) -> int:
         return required_minute_bars_for_policy(policy_json, package_id=package_id)
+
+    @staticmethod
+    def _policy_requires_day_features(policy_json: dict[str, Any]) -> bool:
+        return str(policy_json.get("algo_code") or "").strip().upper() == "V25_TWO_STAGE"
 
     @staticmethod
     def _reject_raw_execution_overrides(runtime_config: dict[str, Any]) -> None:

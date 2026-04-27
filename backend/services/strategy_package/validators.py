@@ -78,9 +78,15 @@ class StrategyPackageValidator:
                     "registered_algos": sorted(ALGO_REGISTRY),
                 },
             )
+        algo_config = dict(normalized_policy.get("algo_config") or {})
+        if algo_code == "V25_TWO_STAGE" and bool(algo_config.get("allow_default_day_features")):
+            raise StrategyPackageValidationError(
+                "V25_TWO_STAGE allow_default_day_features is diagnostic-only and cannot enter Paper Trading v2",
+                context={"package_id": package_id, "algo_code": algo_code},
+            )
         asset_paths = validate_runtime_asset_paths(
             algo_code=algo_code,
-            algo_config=dict(normalized_policy.get("algo_config") or {}),
+            algo_config=algo_config,
             package_id=package_id,
         )
         if not instantiate_runtime:

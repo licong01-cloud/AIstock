@@ -21,6 +21,7 @@ from backend.services.trading_core.limit_price_provider import (
     StkLimitPriceProvider,
 )
 from backend.services.trading_core.models import MinuteBar
+from backend.services.paper_trading_v2.day_features import DbV25DayFeatureProvider, V25DayFeatureProvider, V25DayFeatures
 
 
 PRICE_UNIT_DIVISOR = 1000.0
@@ -118,11 +119,13 @@ class PaperV2MinuteMarketDataProvider:
         *,
         limit_price_provider: StkLimitPriceProvider | None = None,
         suspend_status_provider: SuspendStatusProvider | None = None,
+        day_feature_provider: V25DayFeatureProvider | None = None,
         tdx_fetcher: TdxMinuteFetcher | None = None,
         conn_factory: ConnFactory | None = None,
     ) -> None:
         self.limit_price_provider = limit_price_provider or StkLimitPriceProvider()
         self.suspend_status_provider = suspend_status_provider or DbSuspendStatusProvider(conn_factory=conn_factory)
+        self.day_feature_provider = day_feature_provider or DbV25DayFeatureProvider(conn_factory=conn_factory)
         self.tdx_fetcher = tdx_fetcher or fetch_minute_kline_tdx
         self.conn_factory = conn_factory or get_conn
 
@@ -134,6 +137,7 @@ class PaperV2MinuteMarketDataProvider:
         source: MinuteDataSource = MinuteDataSource.TDX_REALTIME,
         min_bars: int = 1,
         require_suspend_status: bool = False,
+        require_day_features: bool = False,
     ) -> MinuteExecutionMarketInput:
         symbol = str(symbol or "").strip()
         if not symbol:
@@ -158,6 +162,7 @@ class PaperV2MinuteMarketDataProvider:
                     context={"symbol": symbol, "trade_date": trade_date.isoformat()},
                 )
             suspend_status = self.suspend_status_provider.get_suspend_status(symbol, trade_date)
+        day_features = self._load_day_features(symbol=symbol, trade_date=trade_date, required=require_day_features)
 
         raw_bars = self._load_raw_bars(symbol, trade_date, source)
         minute_bars = self._build_minute_bars(
@@ -188,6 +193,7 @@ class PaperV2MinuteMarketDataProvider:
             minute_bars=minute_bars,
             limit_price=limit_price,
             suspend_status=suspend_status,
+            day_features=day_features,
         )
         return MinuteExecutionMarketInput(
             symbol=symbol,
@@ -205,6 +211,7 @@ class PaperV2MinuteMarketDataProvider:
         source: MinuteDataSource,
         expected_bars: int,
         require_suspend_status: bool = False,
+        require_day_features: bool = False,
     ) -> MinuteExecutionMarketInput:
         """Load a completed historical day with no realtime fallback."""
 
@@ -219,6 +226,7 @@ class PaperV2MinuteMarketDataProvider:
             source=source,
             min_bars=expected_bars,
             require_suspend_status=require_suspend_status,
+            require_day_features=require_day_features,
         )
 
     def load_observed_intraday(
@@ -229,6 +237,7 @@ class PaperV2MinuteMarketDataProvider:
         source: MinuteDataSource,
         until_time: datetime,
         require_suspend_status: bool = False,
+        require_day_features: bool = False,
     ) -> MinuteExecutionMarketInput:
         """Load only observed intraday bars up to ``until_time``.
 
@@ -264,6 +273,7 @@ class PaperV2MinuteMarketDataProvider:
                     context={"symbol": symbol, "trade_date": trade_date.isoformat()},
                 )
             suspend_status = self.suspend_status_provider.get_suspend_status(symbol, trade_date)
+        day_features = self._load_day_features(symbol=symbol, trade_date=trade_date, required=require_day_features)
 
         raw_bars = self._load_raw_bars_from_tdx(symbol, trade_date, allow_empty=True)
         minute_bars = self._build_minute_bars(
@@ -284,6 +294,7 @@ class PaperV2MinuteMarketDataProvider:
             minute_bars=observed,
             limit_price=limit_price,
             suspend_status=suspend_status,
+            day_features=day_features,
         )
         context["until_time"] = until_time.isoformat()
         context["feed_mode"] = "observed_intraday"
@@ -518,11 +529,12 @@ class PaperV2MinuteMarketDataProvider:
         minute_bars: list[MinuteBar],
         limit_price: DailyLimitPrice,
         suspend_status: DailySuspendStatus | None = None,
+        day_features: V25DayFeatures | None = None,
     ) -> dict[str, Any]:
         # The V24 implementation currently consumes these legacy "full_day_*"
         # names. In realtime TDX mode they mean "observed bars so far"; callers
         # can enforce min_bars=31 before invoking V24.
-        return {
+        context = {
             "stock_id": symbol,
             "trade_date": trade_date.isoformat(),
             "data_source": source.value,
@@ -548,6 +560,19 @@ class PaperV2MinuteMarketDataProvider:
             "full_day_high": [bar.high for bar in minute_bars],
             "full_day_low": [bar.low for bar in minute_bars],
         }
+        if day_features is not None:
+            context.update(day_features.market_context_payload())
+        return context
+
+    def _load_day_features(self, *, symbol: str, trade_date: date, required: bool) -> V25DayFeatures | None:
+        if not required:
+            return None
+        if self.day_feature_provider is None:
+            raise DataUnavailableError(
+                "V25 day_features provider is required",
+                context={"symbol": symbol, "trade_date": trade_date.isoformat()},
+            )
+        return self.day_feature_provider.load_day_features(symbol=symbol, trade_date=trade_date)
 
     @staticmethod
     def _positive_price_from_li(value: Any, column: str, symbol: str, trade_date: date) -> float:

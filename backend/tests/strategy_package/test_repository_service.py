@@ -105,6 +105,32 @@ def test_strategy_package_execution_policy_accepts_registered_v25_contract_witho
         service.enable_execution_policy_for_paper(manifest.package_id, policy.policy_id)
 
 
+def test_strategy_package_rejects_v25_default_day_features_for_paper() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(make_manifest())
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+
+    policy = service.create_execution_policy(
+        package_id=manifest.package_id,
+        policy_name="qe v25 diagnostic defaults",
+        policy_json={
+            "algo_code": "V25_TWO_STAGE",
+            "algo_config": {
+                "early_model_path": "missing_early.pt",
+                "late_model_path": "missing_late.pt",
+                "allow_default_day_features": True,
+            },
+        },
+        source_backtest_id="bt_1",
+        source_backtest_status="COMPLETED",
+        paper_enabled=False,
+    )
+
+    with pytest.raises(StrategyPackageValidationError, match="diagnostic-only"):
+        service.enable_execution_policy_for_paper(manifest.package_id, policy.policy_id)
+
+
 def test_strategy_package_execution_policy_rejects_unregistered_algo_for_paper() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(make_manifest())

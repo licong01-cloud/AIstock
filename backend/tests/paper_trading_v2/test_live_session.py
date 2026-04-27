@@ -25,7 +25,16 @@ class FakeLiveMarket:
     def __init__(self, bars: list[MinuteBar]) -> None:
         self.bars = bars
 
-    def load_observed_intraday(self, *, symbol, trade_date, source, until_time, require_suspend_status=False):
+    def load_observed_intraday(
+        self,
+        *,
+        symbol,
+        trade_date,
+        source,
+        until_time,
+        require_suspend_status=False,
+        require_day_features=False,
+    ):
         observed = [bar for bar in self.bars if bar.symbol == symbol and bar.bar_time <= until_time]
         return MinuteExecutionMarketInput(
             symbol=symbol,
