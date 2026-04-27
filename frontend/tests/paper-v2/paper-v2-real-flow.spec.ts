@@ -214,6 +214,13 @@ async function expectNoRawJsonUi(page: Page) {
   await expect(page.locator("body")).not.toContainText(/\bJSON\b/i);
 }
 
+async function recoverFromDevChunkError(page: Page) {
+  const chunkError = page.getByText(/Loading chunk .* failed|页面加载出错|ChunkLoadError/i).first();
+  if (await chunkError.isVisible({ timeout: 5_000 }).catch(() => false)) {
+    await page.reload({ waitUntil: "domcontentloaded" });
+  }
+}
+
 test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
   test.beforeAll(async ({ request }) => {
     const health = await request.get(`${API_BASE.replace(/\/api\/v1$/, "")}/openapi.json`);
@@ -339,6 +346,12 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await page.getByTestId("selection-run").click();
     await expect(results.locator("tbody tr").first()).toBeVisible({ timeout: 90_000 });
     await expect(results).toContainText("intersection_aggregate");
+
+    await page.getByTestId("selection-mode").selectOption("union");
+    await chooseSelectionPackages(page, [first.package_id, third.package_id]);
+    await page.getByTestId("selection-run").click();
+    await expect(results.locator("tbody tr").first()).toBeVisible({ timeout: 90_000 });
+    await expect(results).toContainText("union_aggregate");
 
     await page.getByTestId("selection-mode").selectOption("single_package");
     await chooseSelectionPackages(page, [first.package_id]);
@@ -473,6 +486,28 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(page.locator("body")).toContainText("READY");
   });
 
+  test("Portfolio detail completes and retires an isolated test portfolio", async ({ page, request }) => {
+    const target = ensuredPackages[0];
+    const policy = await requireV25PaperPolicy(request, target);
+    const portfolio = await createPaperPortfolioOnly(request, target, policy, `E2E-Lifecycle-${Date.now()}`);
+
+    await page.goto(`/paper-v2/portfolios/${portfolio.portfolio_id}`);
+    await page.getByTestId("portfolio-lifecycle-complete").click();
+    await expect.poll(async () => {
+      const { payload } = await apiJson(request, `/paper-v2/portfolios/${portfolio.portfolio_id}`);
+      return payload.portfolio?.status;
+    }, { timeout: 30_000 }).toBe("COMPLETED");
+    await expect(page.locator("body")).toContainText("COMPLETED");
+
+    await page.getByTestId("portfolio-lifecycle-retire").click();
+    await expect.poll(async () => {
+      const { payload } = await apiJson(request, `/paper-v2/portfolios/${portfolio.portfolio_id}`);
+      return payload.portfolio?.status;
+    }, { timeout: 30_000 }).toBe("RETIRED");
+    await expect(page.locator("body")).toContainText("RETIRED");
+    await expectNoRawJsonUi(page);
+  });
+
   test("Run console validates readiness, policy/runtime audit, replay reject/reset, and live waiting controls", async ({ page, request }) => {
     const target = ensuredPackages[0];
     const policy = await requireV25PaperPolicy(request, target);
@@ -547,6 +582,9 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     const target = ensuredPackages[0];
     const hmm = await requireHmmRuntimeChoice(request);
     await page.goto("/paper-v2/model-hmm");
+    await recoverFromDevChunkError(page);
+    await expect(page.getByTestId("model-package")).toBeVisible({ timeout: 60_000 });
+    await expect.poll(async () => page.getByTestId("model-package").locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)), { timeout: 60_000 }).toContain(target.package_id);
 
     await page.getByTestId("model-package").selectOption(target.package_id);
     await page.getByTestId("model-as-of-date").fill(REPLAY_TRADE_DATE);
