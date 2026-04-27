@@ -14,21 +14,68 @@ class ExecutionAlgoCapability:
     """Paper v2 runtime requirements that cannot be inferred from registration."""
 
     algo_code: str
-    min_required_bars: int = 1
+    historical_min_required_bars: int = 1
+    historical_requires_full_day: bool = False
+    live_supported: bool = False
+    live_min_start_bars: int = 1
+    live_step_mode: str = "unsupported"
+    plan_horizon_bars: int | None = None
     runtime_asset_keys: tuple[str, ...] = ()
 
+    @property
+    def min_required_bars(self) -> int:
+        """Backward-compatible historical requirement used by day replay."""
 
-DEFAULT_EXECUTION_ALGO_CAPABILITY = ExecutionAlgoCapability(algo_code="*", min_required_bars=1)
+        return self.historical_min_required_bars
+
+
+DEFAULT_EXECUTION_ALGO_CAPABILITY = ExecutionAlgoCapability(algo_code="*")
 
 EXECUTION_ALGO_CAPABILITIES: dict[str, ExecutionAlgoCapability] = {
+    "CLOSE_PRICE": ExecutionAlgoCapability(
+        algo_code="CLOSE_PRICE",
+        historical_min_required_bars=1,
+        live_supported=True,
+        live_min_start_bars=1,
+        live_step_mode="close_bar_only",
+    ),
+    "TWAP": ExecutionAlgoCapability(
+        algo_code="TWAP",
+        historical_min_required_bars=1,
+        live_supported=True,
+        live_min_start_bars=1,
+        live_step_mode="streaming_step",
+    ),
+    "VWAP": ExecutionAlgoCapability(
+        algo_code="VWAP",
+        historical_min_required_bars=1,
+        live_supported=False,
+        live_min_start_bars=1,
+        live_step_mode="unsupported",
+    ),
+    "POV": ExecutionAlgoCapability(
+        algo_code="POV",
+        historical_min_required_bars=1,
+        live_supported=True,
+        live_min_start_bars=1,
+        live_step_mode="streaming_step",
+    ),
     "V24_PLAN": ExecutionAlgoCapability(
         algo_code="V24_PLAN",
-        min_required_bars=31,
+        historical_min_required_bars=31,
+        live_supported=False,
+        live_min_start_bars=31,
+        live_step_mode="unsupported",
         runtime_asset_keys=("model_path",),
     ),
     "V25_TWO_STAGE": ExecutionAlgoCapability(
         algo_code="V25_TWO_STAGE",
-        min_required_bars=240,
+        historical_min_required_bars=240,
+        historical_requires_full_day=True,
+        live_supported=False,
+        live_min_start_bars=1,
+        live_step_mode="unsupported",
+        plan_horizon_bars=240,
         runtime_asset_keys=("early_model_path", "late_model_path"),
     ),
 }
@@ -45,7 +92,11 @@ def get_execution_algo_capability(algo_code: Any) -> ExecutionAlgoCapability:
     normalized = normalize_execution_algo_code(algo_code)
     return EXECUTION_ALGO_CAPABILITIES.get(
         normalized,
-        ExecutionAlgoCapability(algo_code=normalized, min_required_bars=DEFAULT_EXECUTION_ALGO_CAPABILITY.min_required_bars),
+        ExecutionAlgoCapability(
+            algo_code=normalized,
+            historical_min_required_bars=DEFAULT_EXECUTION_ALGO_CAPABILITY.historical_min_required_bars,
+            live_supported=False,
+        ),
     )
 
 
@@ -81,7 +132,49 @@ def required_minute_bars_for_policy(policy_json: dict[str, Any], *, package_id: 
             )
         return value
     capability = get_execution_algo_capability(policy_json.get("algo_code"))
-    return capability.min_required_bars
+    return capability.historical_min_required_bars
+
+
+def require_execution_algo_supports_mode(
+    policy_json: dict[str, Any],
+    *,
+    mode: str,
+    package_id: str | None = None,
+) -> ExecutionAlgoCapability:
+    """Validate that a policy can run in the requested Paper v2 session mode."""
+
+    if not isinstance(policy_json, dict):
+        raise StrategyPackageValidationError(
+            "minute execution policy must be an object",
+            context={"package_id": package_id, "mode": mode},
+        )
+    normalized_mode = str(mode or "").strip().upper()
+    capability = get_execution_algo_capability(policy_json.get("algo_code"))
+    if normalized_mode in {"REPLAY_ONLY", "HISTORICAL", "HISTORICAL_REPLAY"}:
+        return capability
+    if normalized_mode in {"LIVE_ONLY", "LIVE", "CATCHUP_THEN_LIVE"}:
+        if not capability.live_supported:
+            from .errors import AlgoRealtimeUnsupportedError
+
+            raise AlgoRealtimeUnsupportedError(
+                "minute execution algorithm is not declared real-time safe for Paper v2",
+                context={
+                    "package_id": package_id,
+                    "algo_code": capability.algo_code,
+                    "mode": normalized_mode,
+                    "historical_min_required_bars": capability.historical_min_required_bars,
+                    "live_min_start_bars": capability.live_min_start_bars,
+                    "plan_horizon_bars": capability.plan_horizon_bars,
+                    "reason": "live incremental adapter is not available; no algorithm fallback is allowed",
+                },
+            )
+        return capability
+    from .errors import AlgoModeUnsupportedError
+
+    raise AlgoModeUnsupportedError(
+        "unsupported Paper v2 execution mode",
+        context={"package_id": package_id, "mode": normalized_mode, "algo_code": capability.algo_code},
+    )
 
 
 def validate_runtime_asset_paths(

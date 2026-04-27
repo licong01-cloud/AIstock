@@ -49,3 +49,23 @@ class ExecutionAlgoError(TradingCoreError):
 
 class RiskRuleError(TradingCoreError):
     error_code = "RISK_RULE_ERROR"
+
+
+class SessionConfigError(StrategyPackageValidationError):
+    error_code = "SESSION_CONFIG_INVALID"
+
+
+class SessionSourceUnsupportedError(UnsupportedFeatureError):
+    error_code = "SESSION_SOURCE_UNSUPPORTED"
+
+
+class SessionAlreadyRunningError(InvalidStateTransitionError):
+    error_code = "SESSION_ALREADY_RUNNING"
+
+
+class AlgoModeUnsupportedError(UnsupportedFeatureError):
+    error_code = "ALGO_MODE_UNSUPPORTED"
+
+
+class AlgoRealtimeUnsupportedError(AlgoModeUnsupportedError):
+    error_code = "ALGO_REALTIME_UNSUPPORTED"

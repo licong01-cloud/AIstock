@@ -16,6 +16,8 @@ from backend.services.paper_trading_v2.readiness import PaperTradingReadinessSer
 from backend.services.paper_trading_v2.replay import PaperTradingHistoricalReplay
 from backend.services.paper_trading_v2.repository import PaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
+from backend.services.paper_trading_v2.session import PaperTradingSessionRunner, PaperTradingSessionService
+from backend.services.paper_trading_v2.models import PaperSessionMode
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
 
 router = APIRouter(prefix="/paper-v2", tags=["paper-v2"])
@@ -57,6 +59,19 @@ class ActivateExecutionPolicyRequest(BaseModel):
     activated_by: str | None = None
     reason: str | None = None
     replace_existing: bool = False
+
+
+class CreateSessionRequest(BaseModel):
+    mode: PaperSessionMode
+    start_date: date
+    end_date: date | None = None
+    historical_data_source: MinuteDataSource | None = None
+    live_data_source: MinuteDataSource | None = None
+    runtime_config: dict[str, Any] = Field(default_factory=dict)
+    rerun_policy: Literal["reject_existing", "reset_portfolio"] = "reject_existing"
+    confirm_reset: bool = False
+    confirm_text: str | None = None
+    created_by: str | None = None
 
 
 def _raise_http(exc: TradingCoreError) -> None:
@@ -304,6 +319,90 @@ def replay_portfolio(portfolio_id: str, req: ReplayRequest) -> dict[str, Any]:
             confirm_text=req.confirm_text,
         )
         return {"ok": True, "result": result.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/portfolios/{portfolio_id}/sessions")
+def create_portfolio_session(portfolio_id: str, req: CreateSessionRequest) -> dict[str, Any]:
+    try:
+        session = PaperTradingSessionService().create_session(
+            portfolio_id=portfolio_id,
+            mode=req.mode,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            historical_data_source=req.historical_data_source,
+            live_data_source=req.live_data_source,
+            runtime_config=req.runtime_config,
+            rerun_policy=req.rerun_policy,
+            confirm_reset=req.confirm_reset,
+            confirm_text=req.confirm_text,
+            created_by=req.created_by,
+        )
+        return {"ok": True, "session": session.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/portfolios/{portfolio_id}/sessions")
+def list_portfolio_sessions(portfolio_id: str, limit: int = 100) -> dict[str, Any]:
+    try:
+        sessions = PaperTradingSessionService().list_sessions(portfolio_id, limit=limit)
+        return {"ok": True, "sessions": [session.model_dump(mode="json") for session in sessions]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/sessions/{session_id}")
+def get_trade_session(session_id: str) -> dict[str, Any]:
+    try:
+        session = PaperTradingSessionService().get_session(session_id)
+        return {"ok": True, "session": session.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/sessions/{session_id}/progress")
+def get_trade_session_progress(session_id: str, event_limit: int = 100) -> dict[str, Any]:
+    try:
+        progress = PaperTradingSessionService().progress(session_id, event_limit=event_limit)
+        return {"ok": True, "progress": progress.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/sessions/{session_id}/tick")
+def tick_trade_session(session_id: str) -> dict[str, Any]:
+    try:
+        progress = PaperTradingSessionRunner().tick(session_id)
+        return {"ok": True, "progress": progress.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/sessions/{session_id}/pause")
+def pause_trade_session(session_id: str) -> dict[str, Any]:
+    try:
+        session = PaperTradingSessionService().pause(session_id)
+        return {"ok": True, "session": session.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/sessions/{session_id}/resume")
+def resume_trade_session(session_id: str) -> dict[str, Any]:
+    try:
+        session = PaperTradingSessionService().resume(session_id)
+        return {"ok": True, "session": session.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/sessions/{session_id}/stop")
+def stop_trade_session(session_id: str) -> dict[str, Any]:
+    try:
+        session = PaperTradingSessionService().stop(session_id)
+        return {"ok": True, "session": session.model_dump(mode="json")}
     except TradingCoreError as exc:
         _raise_http(exc)
 

@@ -14,7 +14,19 @@ from backend.services.trading_core.ledger import CashLedgerEntry
 from backend.services.trading_core.models import AccountSnapshot, Fill, Order, OrderEvent, PositionLot, RunStatus
 
 from .market_data import MinuteDataSource
-from .models import ExecutionPolicyActivationStatus, PaperExecutionPolicyActivation, PaperPortfolio, PaperRun, PortfolioStatus
+from .models import (
+    ExecutionPolicyActivationStatus,
+    IntradaySnapshot,
+    OrderExecutionState,
+    PaperExecutionPolicyActivation,
+    PaperPortfolio,
+    PaperRun,
+    PaperSessionDay,
+    PaperSessionPhase,
+    PaperSessionStatus,
+    PaperTradingSession,
+    PortfolioStatus,
+)
 
 ConnFactory = Callable[[], Iterator[Any]]
 
@@ -167,6 +179,279 @@ class PaperTradingV2Repository:
                 if cur.rowcount != 1:
                     raise InvalidStateTransitionError("paper run update failed", context={"run_id": run.run_id})
         return updated
+
+    def create_session(self, session: PaperTradingSession) -> PaperTradingSession:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO paper_v2.trade_session (
+                        session_id, portfolio_id, mode, status, phase, start_date,
+                        end_date, historical_data_source, live_data_source,
+                        runtime_config_json, validated_execution_policy_json,
+                        created_by, created_at, updated_at, started_at,
+                        completed_at, last_error_json
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        session.session_id,
+                        session.portfolio_id,
+                        session.mode.value,
+                        session.status.value,
+                        session.phase.value,
+                        session.start_date,
+                        session.end_date,
+                        session.historical_data_source.value if session.historical_data_source else None,
+                        session.live_data_source.value if session.live_data_source else None,
+                        psycopg2.extras.Json(session.runtime_config),
+                        psycopg2.extras.Json(session.validated_execution_policy),
+                        session.created_by,
+                        session.created_at,
+                        session.updated_at,
+                        session.started_at,
+                        session.completed_at,
+                        psycopg2.extras.Json(session.last_error) if session.last_error else None,
+                    ),
+                )
+        return session
+
+    def get_session(self, session_id: str) -> PaperTradingSession:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM paper_v2.trade_session WHERE session_id = %s", (session_id,))
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError("paper v2 trade session does not exist", context={"session_id": session_id})
+        return self._session_from_row(dict(row))
+
+    def list_sessions(self, portfolio_id: str, *, limit: int = 100) -> list[PaperTradingSession]:
+        self.get_portfolio(portfolio_id)
+        rows = self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.trade_session
+            WHERE portfolio_id = %s
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (portfolio_id, limit),
+        )
+        return [self._session_from_row(row) for row in rows]
+
+    def list_active_sessions(self, portfolio_id: str) -> list[PaperTradingSession]:
+        rows = self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.trade_session
+            WHERE portfolio_id = %s
+              AND status NOT IN ('SUCCEEDED', 'FAILED', 'STOPPED')
+            ORDER BY created_at DESC
+            """,
+            (portfolio_id,),
+        )
+        return [self._session_from_row(row) for row in rows]
+
+    def update_session_status(
+        self,
+        session_id: str,
+        *,
+        status: PaperSessionStatus,
+        phase: PaperSessionPhase | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+        last_error: dict[str, Any] | None = None,
+    ) -> PaperTradingSession:
+        current = self.get_session(session_id)
+        updated = current.model_copy(
+            update={
+                "status": status,
+                "phase": phase or current.phase,
+                "started_at": started_at if started_at is not None else current.started_at,
+                "completed_at": completed_at if completed_at is not None else current.completed_at,
+                "last_error": last_error,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE paper_v2.trade_session
+                    SET status = %s, phase = %s, updated_at = %s, started_at = %s,
+                        completed_at = %s, last_error_json = %s
+                    WHERE session_id = %s
+                    """,
+                    (
+                        updated.status.value,
+                        updated.phase.value,
+                        updated.updated_at,
+                        updated.started_at,
+                        updated.completed_at,
+                        psycopg2.extras.Json(last_error) if last_error else None,
+                        session_id,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    raise DataUnavailableError("paper v2 trade session does not exist", context={"session_id": session_id})
+        return updated
+
+    def save_session_day(self, day: PaperSessionDay) -> PaperSessionDay:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO paper_v2.session_day (
+                        session_day_id, session_id, portfolio_id, trade_date, run_id,
+                        status, phase, data_source, expected_bar_count,
+                        latest_available_bar_time, last_processed_bar_time,
+                        created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (session_id, trade_date) DO UPDATE SET
+                        run_id = EXCLUDED.run_id,
+                        status = EXCLUDED.status,
+                        phase = EXCLUDED.phase,
+                        data_source = EXCLUDED.data_source,
+                        expected_bar_count = EXCLUDED.expected_bar_count,
+                        latest_available_bar_time = EXCLUDED.latest_available_bar_time,
+                        last_processed_bar_time = EXCLUDED.last_processed_bar_time,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        day.session_day_id,
+                        day.session_id,
+                        day.portfolio_id,
+                        day.trade_date,
+                        day.run_id,
+                        day.status.value,
+                        day.phase.value,
+                        day.data_source.value,
+                        day.expected_bar_count,
+                        day.latest_available_bar_time,
+                        day.last_processed_bar_time,
+                        day.created_at,
+                        day.updated_at,
+                    ),
+                )
+        return day
+
+    def list_session_days(self, session_id: str) -> list[PaperSessionDay]:
+        rows = self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.session_day
+            WHERE session_id = %s
+            ORDER BY trade_date
+            """,
+            (session_id,),
+        )
+        return [self._session_day_from_row(row) for row in rows]
+
+    def save_session_event(
+        self,
+        *,
+        session_id: str,
+        event_type: str,
+        message: str,
+        run_id: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO paper_v2.session_events (session_id, run_id, event_type, message, context)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        session_id,
+                        run_id,
+                        event_type,
+                        message,
+                        psycopg2.extras.Json(context or {}),
+                    ),
+                )
+
+    def list_session_events(self, session_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
+        return self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.session_events
+            WHERE session_id = %s
+            ORDER BY created_at ASC, event_id ASC
+            LIMIT %s
+            """,
+            (session_id, limit),
+        )
+
+    def save_order_execution_state(self, state: OrderExecutionState) -> OrderExecutionState:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO paper_v2.order_execution_state (
+                        execution_state_id, session_id, run_id, order_id, symbol,
+                        trade_date, algo_code, algo_state_json, plan_json, plan_sha256,
+                        last_processed_bar_time, filled_quantity, remaining_quantity,
+                        status, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (order_id) DO UPDATE SET
+                        algo_state_json = EXCLUDED.algo_state_json,
+                        plan_json = EXCLUDED.plan_json,
+                        plan_sha256 = EXCLUDED.plan_sha256,
+                        last_processed_bar_time = EXCLUDED.last_processed_bar_time,
+                        filled_quantity = EXCLUDED.filled_quantity,
+                        remaining_quantity = EXCLUDED.remaining_quantity,
+                        status = EXCLUDED.status,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        state.execution_state_id,
+                        state.session_id,
+                        state.run_id,
+                        state.order_id,
+                        state.symbol,
+                        state.trade_date,
+                        state.algo_code,
+                        psycopg2.extras.Json(state.algo_state),
+                        psycopg2.extras.Json(state.plan) if state.plan is not None else None,
+                        state.plan_sha256,
+                        state.last_processed_bar_time,
+                        state.filled_quantity,
+                        state.remaining_quantity,
+                        state.status,
+                        state.created_at,
+                        state.updated_at,
+                    ),
+                )
+        return state
+
+    def save_intraday_snapshot(self, snapshot: IntradaySnapshot) -> IntradaySnapshot:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO paper_v2.intraday_snapshots (
+                        snapshot_id, session_id, run_id, portfolio_id, trade_date,
+                        snapshot_time, cash, market_value, nav, positions_json, source, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (run_id, snapshot_time) DO NOTHING
+                    """,
+                    (
+                        snapshot.snapshot_id,
+                        snapshot.session_id,
+                        snapshot.run_id,
+                        snapshot.portfolio_id,
+                        snapshot.trade_date,
+                        snapshot.snapshot_time,
+                        snapshot.cash,
+                        snapshot.market_value,
+                        snapshot.nav,
+                        psycopg2.extras.Json(snapshot.positions),
+                        snapshot.source,
+                        snapshot.created_at,
+                    ),
+                )
+        return snapshot
 
     def save_execution_policy_activation(
         self,
@@ -700,6 +985,46 @@ class PaperTradingV2Repository:
             (portfolio_id, limit),
         )
 
+    @staticmethod
+    def _session_from_row(row: dict[str, Any]) -> PaperTradingSession:
+        return PaperTradingSession(
+            session_id=row["session_id"],
+            portfolio_id=row["portfolio_id"],
+            mode=row["mode"],
+            status=row["status"],
+            phase=row["phase"],
+            start_date=row["start_date"],
+            end_date=row.get("end_date"),
+            historical_data_source=MinuteDataSource(row["historical_data_source"]) if row.get("historical_data_source") else None,
+            live_data_source=MinuteDataSource(row["live_data_source"]) if row.get("live_data_source") else None,
+            runtime_config=row.get("runtime_config_json") or {},
+            validated_execution_policy=row.get("validated_execution_policy_json") or {},
+            created_by=row.get("created_by"),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            started_at=row.get("started_at"),
+            completed_at=row.get("completed_at"),
+            last_error=row.get("last_error_json"),
+        )
+
+    @staticmethod
+    def _session_day_from_row(row: dict[str, Any]) -> PaperSessionDay:
+        return PaperSessionDay(
+            session_day_id=row["session_day_id"],
+            session_id=row["session_id"],
+            portfolio_id=row["portfolio_id"],
+            trade_date=row["trade_date"],
+            run_id=row.get("run_id"),
+            status=row["status"],
+            phase=row["phase"],
+            data_source=MinuteDataSource(row["data_source"]),
+            expected_bar_count=row.get("expected_bar_count"),
+            latest_available_bar_time=row.get("latest_available_bar_time"),
+            last_processed_bar_time=row.get("last_processed_bar_time"),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
     def _fetch_rows(self, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -721,6 +1046,11 @@ class InMemoryPaperTradingV2Repository:
         self.run_events: list[dict[str, Any]] = []
         self.reset_audits: list[dict[str, Any]] = []
         self.execution_policy_activations: dict[str, PaperExecutionPolicyActivation] = {}
+        self.sessions: dict[str, PaperTradingSession] = {}
+        self.session_days: dict[tuple[str, date], PaperSessionDay] = {}
+        self.session_events: list[dict[str, Any]] = []
+        self.order_execution_states: dict[str, OrderExecutionState] = {}
+        self.intraday_snapshots: dict[tuple[str, datetime], IntradaySnapshot] = {}
 
     def create_portfolio(self, portfolio: PaperPortfolio) -> PaperPortfolio:
         self.portfolios[portfolio.portfolio_id] = portfolio
@@ -757,6 +1087,97 @@ class InMemoryPaperTradingV2Repository:
         )
         self.runs[run.run_id] = updated
         return updated
+
+    def create_session(self, session: PaperTradingSession) -> PaperTradingSession:
+        self.get_portfolio(session.portfolio_id)
+        self.sessions[session.session_id] = session
+        return session
+
+    def get_session(self, session_id: str) -> PaperTradingSession:
+        try:
+            return self.sessions[session_id]
+        except KeyError as exc:
+            raise DataUnavailableError("paper v2 trade session does not exist", context={"session_id": session_id}) from exc
+
+    def list_sessions(self, portfolio_id: str, *, limit: int = 100) -> list[PaperTradingSession]:
+        self.get_portfolio(portfolio_id)
+        rows = [session for session in self.sessions.values() if session.portfolio_id == portfolio_id]
+        rows.sort(key=lambda item: item.created_at, reverse=True)
+        return rows[:limit]
+
+    def list_active_sessions(self, portfolio_id: str) -> list[PaperTradingSession]:
+        terminal = {PaperSessionStatus.SUCCEEDED, PaperSessionStatus.FAILED, PaperSessionStatus.STOPPED}
+        return [
+            session
+            for session in self.list_sessions(portfolio_id, limit=10_000)
+            if session.status not in terminal
+        ]
+
+    def update_session_status(
+        self,
+        session_id: str,
+        *,
+        status: PaperSessionStatus,
+        phase: PaperSessionPhase | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+        last_error: dict[str, Any] | None = None,
+    ) -> PaperTradingSession:
+        current = self.get_session(session_id)
+        updated = current.model_copy(
+            update={
+                "status": status,
+                "phase": phase or current.phase,
+                "started_at": started_at if started_at is not None else current.started_at,
+                "completed_at": completed_at if completed_at is not None else current.completed_at,
+                "last_error": last_error,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        self.sessions[session_id] = updated
+        return updated
+
+    def save_session_day(self, day: PaperSessionDay) -> PaperSessionDay:
+        self.session_days[(day.session_id, day.trade_date)] = day.model_copy(update={"updated_at": datetime.now(UTC)})
+        return self.session_days[(day.session_id, day.trade_date)]
+
+    def list_session_days(self, session_id: str) -> list[PaperSessionDay]:
+        rows = [day for (stored_session_id, _date), day in self.session_days.items() if stored_session_id == session_id]
+        rows.sort(key=lambda item: item.trade_date)
+        return rows
+
+    def save_session_event(
+        self,
+        *,
+        session_id: str,
+        event_type: str,
+        message: str,
+        run_id: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        self.session_events.append(
+            {
+                "event_id": len(self.session_events) + 1,
+                "session_id": session_id,
+                "run_id": run_id,
+                "event_type": event_type,
+                "message": message,
+                "context": context or {},
+                "created_at": datetime.now(UTC),
+            }
+        )
+
+    def list_session_events(self, session_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
+        return [dict(item) for item in self.session_events if item.get("session_id") == session_id][:limit]
+
+    def save_order_execution_state(self, state: OrderExecutionState) -> OrderExecutionState:
+        self.order_execution_states[state.order_id] = state
+        return state
+
+    def save_intraday_snapshot(self, snapshot: IntradaySnapshot) -> IntradaySnapshot:
+        key = (snapshot.run_id, snapshot.snapshot_time)
+        self.intraday_snapshots.setdefault(key, snapshot)
+        return self.intraday_snapshots[key]
 
     def save_execution_policy_activation(
         self,

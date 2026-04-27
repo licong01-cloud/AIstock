@@ -256,6 +256,89 @@ CREATE TABLE IF NOT EXISTS paper_v2.run (
     UNIQUE(portfolio_id, trade_date)
 );
 
+CREATE TABLE IF NOT EXISTS paper_v2.trade_session (
+    session_id TEXT PRIMARY KEY,
+    portfolio_id TEXT NOT NULL REFERENCES paper_v2.portfolio(portfolio_id),
+    mode TEXT NOT NULL CHECK (mode IN ('REPLAY_ONLY', 'LIVE_ONLY', 'CATCHUP_THEN_LIVE')),
+    status TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE,
+    historical_data_source TEXT CHECK (historical_data_source IN ('TDX_REALTIME', 'DB_HISTORICAL')),
+    live_data_source TEXT CHECK (live_data_source IN ('TDX_REALTIME', 'DB_HISTORICAL')),
+    runtime_config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    validated_execution_policy_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    last_error_json JSONB
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.session_day (
+    session_day_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES paper_v2.trade_session(session_id),
+    portfolio_id TEXT NOT NULL REFERENCES paper_v2.portfolio(portfolio_id),
+    trade_date DATE NOT NULL,
+    run_id TEXT REFERENCES paper_v2.run(run_id),
+    status TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    data_source TEXT NOT NULL CHECK (data_source IN ('TDX_REALTIME', 'DB_HISTORICAL')),
+    expected_bar_count INTEGER,
+    latest_available_bar_time TIMESTAMPTZ,
+    last_processed_bar_time TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(session_id, trade_date)
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.order_execution_state (
+    execution_state_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES paper_v2.trade_session(session_id),
+    run_id TEXT NOT NULL REFERENCES paper_v2.run(run_id),
+    order_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    trade_date DATE NOT NULL,
+    algo_code TEXT NOT NULL,
+    algo_state_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    plan_json JSONB,
+    plan_sha256 TEXT,
+    last_processed_bar_time TIMESTAMPTZ,
+    filled_quantity INTEGER NOT NULL CHECK (filled_quantity >= 0),
+    remaining_quantity INTEGER NOT NULL CHECK (remaining_quantity >= 0),
+    status TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(order_id)
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.intraday_snapshots (
+    snapshot_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES paper_v2.trade_session(session_id),
+    run_id TEXT NOT NULL REFERENCES paper_v2.run(run_id),
+    portfolio_id TEXT NOT NULL REFERENCES paper_v2.portfolio(portfolio_id),
+    trade_date DATE NOT NULL,
+    snapshot_time TIMESTAMPTZ NOT NULL,
+    cash DOUBLE PRECISION NOT NULL,
+    market_value DOUBLE PRECISION NOT NULL,
+    nav DOUBLE PRECISION NOT NULL,
+    positions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    source TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(run_id, snapshot_time)
+);
+
+CREATE TABLE IF NOT EXISTS paper_v2.session_events (
+    event_id BIGSERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES paper_v2.trade_session(session_id),
+    run_id TEXT,
+    event_type TEXT NOT NULL,
+    message TEXT NOT NULL,
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS paper_v2.orders (
     order_id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES paper_v2.run(run_id),
@@ -389,6 +472,11 @@ CREATE INDEX IF NOT EXISTS idx_paper_v2_portfolio_package ON paper_v2.portfolio(
 CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_v2_exec_policy_activation_active ON paper_v2.execution_policy_activation(portfolio_id, trade_date) WHERE status = 'ACTIVE';
 CREATE INDEX IF NOT EXISTS idx_paper_v2_exec_policy_activation_portfolio ON paper_v2.execution_policy_activation(portfolio_id, trade_date DESC, activated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_run_portfolio_date ON paper_v2.run(portfolio_id, trade_date);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_trade_session_portfolio ON paper_v2.trade_session(portfolio_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_session_day_session ON paper_v2.session_day(session_id, trade_date);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_order_execution_state_session ON paper_v2.order_execution_state(session_id, run_id);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_intraday_snapshots_session ON paper_v2.intraday_snapshots(session_id, trade_date, snapshot_time);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_session_events_session ON paper_v2.session_events(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_fills_run ON paper_v2.fills(run_id);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_positions_portfolio_date ON paper_v2.positions(portfolio_id, trade_date);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_reset_audit_portfolio ON paper_v2.reset_audit(portfolio_id, created_at DESC);

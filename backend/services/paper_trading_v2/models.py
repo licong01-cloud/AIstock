@@ -124,6 +124,147 @@ class PaperReplayResult(BaseModel):
     reset_audit: dict[str, Any] | None = None
 
 
+class PaperSessionMode(str, Enum):
+    REPLAY_ONLY = "REPLAY_ONLY"
+    LIVE_ONLY = "LIVE_ONLY"
+    CATCHUP_THEN_LIVE = "CATCHUP_THEN_LIVE"
+
+
+class PaperSessionStatus(str, Enum):
+    CREATED = "CREATED"
+    PREFLIGHTING = "PREFLIGHTING"
+    REPLAYING = "REPLAYING"
+    CATCHING_UP = "CATCHING_UP"
+    SWITCHING_TO_LIVE = "SWITCHING_TO_LIVE"
+    LIVE_RUNNING = "LIVE_RUNNING"
+    LIVE_WAITING_FOR_BAR = "LIVE_WAITING_FOR_BAR"
+    LIVE_WAITING_NEXT_TRADING_DAY = "LIVE_WAITING_NEXT_TRADING_DAY"
+    PAUSED = "PAUSED"
+    STOPPING = "STOPPING"
+    STOPPED = "STOPPED"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
+class PaperSessionPhase(str, Enum):
+    HISTORICAL_REPLAY = "historical_replay"
+    CURRENT_DAY_CATCHUP = "current_day_catchup"
+    LIVE_INTRADAY = "live_intraday"
+    DAY_FINALIZATION = "day_finalization"
+    WAITING_NEXT_DAY = "waiting_next_day"
+
+
+class PaperTradingSession(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(default_factory=lambda: f"psess_{uuid4().hex}")
+    portfolio_id: str
+    mode: PaperSessionMode
+    status: PaperSessionStatus = PaperSessionStatus.CREATED
+    phase: PaperSessionPhase
+    start_date: date
+    end_date: date | None = None
+    historical_data_source: MinuteDataSource | None = None
+    live_data_source: MinuteDataSource | None = None
+    runtime_config: dict[str, Any] = Field(default_factory=dict)
+    validated_execution_policy: dict[str, Any] = Field(default_factory=dict)
+    created_by: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    last_error: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_mode_sources(self) -> "PaperTradingSession":
+        if self.mode == PaperSessionMode.REPLAY_ONLY:
+            if self.historical_data_source is None:
+                raise ValueError("REPLAY_ONLY requires historical_data_source")
+            if self.live_data_source is not None:
+                raise ValueError("REPLAY_ONLY must not set live_data_source")
+            if self.end_date is None:
+                raise ValueError("REPLAY_ONLY requires end_date")
+        if self.mode == PaperSessionMode.LIVE_ONLY:
+            if self.live_data_source is None:
+                raise ValueError("LIVE_ONLY requires live_data_source")
+            if self.historical_data_source is not None:
+                raise ValueError("LIVE_ONLY must not set historical_data_source")
+        if self.mode == PaperSessionMode.CATCHUP_THEN_LIVE:
+            if self.historical_data_source is None or self.live_data_source is None:
+                raise ValueError("CATCHUP_THEN_LIVE requires both historical_data_source and live_data_source")
+        if self.end_date is not None and self.end_date < self.start_date:
+            raise ValueError("end_date cannot be before start_date")
+        return self
+
+
+class PaperSessionDay(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_day_id: str = Field(default_factory=lambda: f"psday_{uuid4().hex}")
+    session_id: str
+    portfolio_id: str
+    trade_date: date
+    run_id: str | None = None
+    status: PaperSessionStatus
+    phase: PaperSessionPhase
+    data_source: MinuteDataSource
+    expected_bar_count: int | None = None
+    latest_available_bar_time: datetime | None = None
+    last_processed_bar_time: datetime | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class OrderExecutionState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    execution_state_id: str = Field(default_factory=lambda: f"oexec_{uuid4().hex}")
+    session_id: str
+    run_id: str
+    order_id: str
+    symbol: str
+    trade_date: date
+    algo_code: str
+    algo_state: dict[str, Any] = Field(default_factory=dict)
+    plan: dict[str, Any] | None = None
+    plan_sha256: str | None = None
+    last_processed_bar_time: datetime | None = None
+    filled_quantity: int = Field(ge=0)
+    remaining_quantity: int = Field(ge=0)
+    status: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class IntradaySnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot_id: str = Field(default_factory=lambda: f"isnap_{uuid4().hex}")
+    session_id: str
+    run_id: str
+    portfolio_id: str
+    trade_date: date
+    snapshot_time: datetime
+    cash: float
+    market_value: float
+    nav: float
+    positions: list[dict[str, Any]]
+    source: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class PaperSessionProgress(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session: PaperTradingSession
+    current_trade_date: date | None = None
+    last_processed_bar_time: datetime | None = None
+    latest_available_bar_time: datetime | None = None
+    next_expected_bar_time: datetime | None = None
+    day_count: int = 0
+    events: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class PaperReadinessCheck(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
