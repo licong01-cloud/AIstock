@@ -42,6 +42,22 @@ class StrategyPackageValidator:
                 )
 
     def validate_for_paper_trading(self, manifest: StrategyPackageManifest) -> None:
+        self.validate_manifest_identity_for_paper_trading(manifest)
+        self.validate_execution_policy_for_paper(
+            package_id=manifest.package_id,
+            policy_json=manifest.minute_execution_policy.model_dump(mode="json"),
+        )
+
+    def validate_manifest_identity_for_paper_trading(self, manifest: StrategyPackageManifest) -> None:
+        """Validate immutable package lineage/status without binding execution algo.
+
+        Paper v2 freezes the StrategyPackage factor/model manifest, while the
+        minute execution policy can be selected from a separate backtest-
+        validated policy snapshot. Callers that already validate such a policy
+        should use this method instead of validating the manifest's historical
+        minute policy asset.
+        """
+
         self.validate_manifest(manifest)
         if manifest.package_status not in {
             PackageStatus.BACKTEST_APPROVED,
@@ -55,10 +71,6 @@ class StrategyPackageValidator:
                     "package_status": manifest.package_status.value,
                 },
             )
-        self.validate_execution_policy_for_paper(
-            package_id=manifest.package_id,
-            policy_json=manifest.minute_execution_policy.model_dump(mode="json"),
-        )
 
     def validate_execution_policy_for_paper(
         self,

@@ -94,7 +94,7 @@ class PaperTradingDayRunner:
                 "portfolio frozen manifest does not match frozen package invariants",
                 context={"portfolio_id": portfolio_id, "package_id": portfolio.package_id},
             )
-        self.validator.validate_for_paper_trading(manifest)
+        self.validator.validate_manifest_identity_for_paper_trading(manifest)
         self.calendar_provider.ensure_trading_day(trade_date)
         existing_run = self.repository.get_run_by_portfolio_date(portfolio_id, trade_date)
         if existing_run is not None:
@@ -135,7 +135,12 @@ class PaperTradingDayRunner:
         self.repository.save_run_event(run_id=run.run_id, event_type="RUN_STARTED", message="paper v2 day run started")
 
         try:
-            data_ready = self._require_data_ready(manifest=manifest, trade_date=trade_date, runtime_config=config)
+            data_ready = self._require_data_ready(
+                manifest=manifest,
+                trade_date=trade_date,
+                runtime_config=config,
+                execution_policy_json=execution_policy_json,
+            )
             self.repository.save_run_event(
                 run_id=run.run_id,
                 event_type="DATA_READY",
@@ -411,14 +416,24 @@ class PaperTradingDayRunner:
             self.repository.save_run_event(run_id=run.run_id, event_type="RUN_FAILED", message=str(exc), context=error["context"])
             raise
 
-    def _require_data_ready(self, *, manifest: Any, trade_date: date, runtime_config: dict[str, Any]) -> list[dict[str, Any]]:
+    def _require_data_ready(
+        self,
+        *,
+        manifest: Any,
+        trade_date: date,
+        runtime_config: dict[str, Any],
+        execution_policy_json: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         ready: list[dict[str, Any]] = []
-        requirements = manifest.minute_execution_policy.data_requirements
+        requirements = self._data_requirements_for_policy(
+            execution_policy_json or manifest.minute_execution_policy.model_dump(mode="json"),
+            package_id=manifest.package_id,
+        )
         runtime_profile = parse_selection_runtime_profile(runtime_config)
-        if requirements.requires_suspend_status or runtime_profile.tradability.exclude_suspended:
+        if requirements["requires_suspend_status"] or runtime_profile.tradability.exclude_suspended:
             status = self.refresh_audit.require_success(dataset="suspend_d", trade_date=trade_date)
             ready.append(self._refresh_status_context("suspend_d", status))
-        if requirements.requires_limit_price:
+        if requirements["requires_limit_price"]:
             status = self.refresh_audit.require_success(dataset="stk_limit", trade_date=trade_date)
             ready.append(self._refresh_status_context("stk_limit", status))
         return ready
@@ -521,6 +536,28 @@ class PaperTradingDayRunner:
     @staticmethod
     def _policy_requires_day_features(policy_json: dict[str, Any]) -> bool:
         return str(policy_json.get("algo_code") or "").strip().upper() == "V25_TWO_STAGE"
+
+    @staticmethod
+    def _data_requirements_for_policy(policy_json: dict[str, Any], *, package_id: str) -> dict[str, bool]:
+        requirements = policy_json.get("data_requirements")
+        if not isinstance(requirements, dict):
+            raise StrategyPackageValidationError(
+                "validated execution policy requires data_requirements",
+                context={"package_id": package_id, "algo_code": policy_json.get("algo_code")},
+            )
+        required_keys = {
+            "requires_minute_bar",
+            "requires_limit_price",
+            "requires_trade_calendar",
+            "requires_suspend_status",
+        }
+        missing = sorted(key for key in required_keys if key not in requirements)
+        if missing:
+            raise StrategyPackageValidationError(
+                "validated execution policy data_requirements are incomplete",
+                context={"package_id": package_id, "algo_code": policy_json.get("algo_code"), "missing_keys": missing},
+            )
+        return {key: bool(requirements.get(key)) for key in required_keys}
 
     @staticmethod
     def _reject_raw_execution_overrides(runtime_config: dict[str, Any]) -> None:

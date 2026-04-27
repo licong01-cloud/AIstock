@@ -156,19 +156,7 @@ class PaperTradingV2PortfolioService:
         if validate_manifest_execution_policy:
             self.validator.validate_for_paper_trading(manifest)
             return
-        self.validator.validate_manifest(manifest)
-        package_status = getattr(manifest, "package_status", None)
-        allowed = {"BACKTEST_APPROVED", "SELECTION_ENABLED", "PAPER_ENABLED"}
-        status_value = getattr(package_status, "value", str(package_status))
-        if status_value not in allowed:
-            raise StrategyPackageValidationError(
-                "package is not approved for paper trading",
-                context={
-                    "package_id": getattr(manifest, "package_id", None),
-                    "package_status": status_value,
-                    "allowed_statuses": sorted(allowed),
-                },
-            )
+        self.validator.validate_manifest_identity_for_paper_trading(manifest)
 
     def list_portfolios(self, *, limit: int = 100) -> list[PaperPortfolio]:
         return self.repository.list_portfolios(limit=limit)

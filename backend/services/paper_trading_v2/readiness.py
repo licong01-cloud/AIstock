@@ -92,7 +92,7 @@ class PaperTradingReadinessService:
         execution_policy_context = self._execution_policy_context_for_date(portfolio, trade_date)
         execution_policy_json = execution_policy_context["policy_json"]
         config["validated_execution_policy"] = execution_policy_context
-        self.validator.validate_for_paper_trading(manifest)
+        self.validator.validate_manifest_identity_for_paper_trading(manifest)
         self.validator.validate_execution_policy_for_paper(
             package_id=manifest.package_id,
             policy_json=execution_policy_json,
@@ -115,11 +115,14 @@ class PaperTradingReadinessService:
             )
         checks.append(PaperReadinessCheck(check_name="run_date_available", context={"trade_date": trade_date.isoformat()}))
 
-        requirements = manifest.minute_execution_policy.data_requirements
-        if requirements.requires_suspend_status or runtime_profile.tradability.exclude_suspended:
+        requirements = PaperTradingDayRunner._data_requirements_for_policy(
+            execution_policy_json,
+            package_id=manifest.package_id,
+        )
+        if requirements["requires_suspend_status"] or runtime_profile.tradability.exclude_suspended:
             status = self.refresh_audit.require_success(dataset="suspend_d", trade_date=trade_date)
             checks.append(self._audit_check("suspend_d_refresh", status))
-        if requirements.requires_limit_price:
+        if requirements["requires_limit_price"]:
             status = self.refresh_audit.require_success(dataset="stk_limit", trade_date=trade_date)
             checks.append(self._audit_check("stk_limit_refresh", status))
 
