@@ -30,8 +30,8 @@ const FACTOR_TYPE_MAP: Record<string, string> = {
 };
 const GRADE_ORDER: Record<string, number> = { S: 0, A: 1, B: 2, C: 3, D: 4 };
 
-type Factor = { factor_name: string; source: string; ic?: number; sharpe?: number; is_sota_factor?: boolean;
-  category?: string; grade?: string; description?: string; ann_ret_value?: number; factor_type?: string; data_source?: string };
+type Factor = { factor_name: string; source: string; ic?: number | null; sharpe?: number | null; is_sota_factor?: boolean;
+  category?: string; grade?: string; description?: string; ann_ret_value?: number | null; factor_type?: string; data_source?: string };
 type Model = { model_id: string; model_name: string; model_type?: string; ic?: number; annualized_return?: number; is_sota?: boolean; display_name?: string; description?: string };
 type Strategy = { strategy_id: string; display_name: string; strategy_type?: string; portfolio_config?: any; description?: string; market?: string; catalog_source?: string; };
 
@@ -247,7 +247,7 @@ export default function ComposePage() {
   const [corrPairs, setCorrPairs] = useState<Array<{factor_a: string; factor_b: string; correlation: number}>>([]);
   const [corrLoading, setCorrLoading] = useState(false);
   const [corrAnalyzed, setCorrAnalyzed] = useState(false);
-  const [classificationMap, setClassificationMap] = useState<Record<string, {ic_value?: number; sharpe_value?: number; ann_ret_value?: number; grade?: string; category?: string}>>({});
+  const [classificationMap, setClassificationMap] = useState<Record<string, {grade?: string; category?: string}>>({});
 
   /* ── 结果状态 ── */
   const [evalResult, setEvalResult] = useState<EvalResult | null>(null);
@@ -263,7 +263,7 @@ export default function ComposePage() {
     setLoading(true);
     try {
       const [fRes, mRes, sRes, cRes] = await Promise.all([
-        fetch(`${API}/rdagent/catalogs/factors?limit=1000&exclude_source=qlib_alpha158,alpha158,alpha360`).then(r => r.json()),
+        fetch(`${API}/quantevolver/factors?limit=1000&exclude_source=qlib_alpha158,alpha158,alpha360&sort_field=ind_ic&sort_order=desc`).then(r => r.json()),
         fetch(`${API}/quantevolver/models?limit=100`).then(r => r.json()),
         fetch(`${API}/quantevolver/strategies?limit=50`).then(r => r.json()),
         fetch(`${API}/quantevolver/factor-analyst/classifications?limit=1000&active_only=false`).then(r => r.json()).catch(() => ({ items: [] })),
@@ -273,11 +273,20 @@ export default function ComposePage() {
       setClassificationMap(classMap);
       
       const enrichedFactors = (fRes.items || []).map((f: any) => {
-        const cls = classMap[f.name];
+        const name = f.factor_name ?? f.name;
+        const cls = classMap[name];
         return { 
-          factor_name: f.name, source: f.source, ic: f.performance_metrics?.ic ?? f.ic, sharpe: f.performance_metrics?.information_ratio ?? f.sharpe, is_sota_factor: f.is_sota_factor,
-          factor_type: f.factor_type, data_source: f.data_source, category: cls?.category, grade: cls?.grade, 
-          description: f.description_cn || cls?.description, ann_ret_value: f.performance_metrics?.annualized_return ?? f.annualized_return ?? cls?.ann_ret_value,
+          factor_name: name,
+          source: f.source,
+          ic: f.ind_ic ?? null,
+          sharpe: f.ind_sharpe ?? null,
+          is_sota_factor: f.is_sota_factor,
+          factor_type: f.factor_type,
+          data_source: f.data_source,
+          category: f.category ?? cls?.category,
+          grade: f.official_grade ?? f.grade ?? cls?.grade,
+          description: f.description_cn || f.cl_description,
+          ann_ret_value: f.ind_annual_return ?? null,
         };
       });
       setFactors(enrichedFactors);
@@ -538,9 +547,9 @@ export default function ComposePage() {
       const fac = factorMap.get(name);
       return {
         name,
-        ic: cls?.ic_value ?? fac?.ic ?? null,
-        sharpe: cls?.sharpe_value ?? fac?.sharpe ?? null,
-        ann_ret: cls?.ann_ret_value ?? fac?.ann_ret_value ?? null,
+        ic: fac?.ic ?? null,
+        sharpe: fac?.sharpe ?? null,
+        ann_ret: fac?.ann_ret_value ?? null,
         grade: cls?.grade ?? fac?.grade ?? null,
         category: cls?.category ?? fac?.category ?? null,
       };
