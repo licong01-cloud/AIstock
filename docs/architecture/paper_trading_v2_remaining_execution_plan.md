@@ -240,12 +240,16 @@ Tasks:
   - single package selection;
   - package intersection;
   - package union;
-  - weighted package fusion later.
+  - weighted package fusion using rank-normalized scores and explicit source trace.
+- Keep multi-package selection-to-paper disabled until a combined StrategyPackage
+  or SelectionBundle contract freezes the aggregate source.
 
 Acceptance:
 
 - Every selection result is traceable to package id, manifest hash, trade date,
   data source, and runtime config.
+- Multi-package aggregate rows preserve source package ids, ranks, raw scores,
+  normalized rank scores, and weights where applicable.
 - Empty selection results fail unless explicitly recorded as a valid no-candidate
   result with reasons.
 
@@ -346,3 +350,39 @@ separate final environment step and validate with:
 ```powershell
 python -c "import torch; print(torch.__version__)"
 ```
+
+## 9. Backend Continuation Update - 2026-04-26
+
+Additional backend work completed after the baseline above:
+
+- Runtime profile validation and normalization for Selection Center and Paper v2.
+- Industry blacklist filtering with backfill and persisted exclusion trace.
+- HMM runtime fail-fast boundary; later upgraded to precomputed-artifact execution in Section 10.
+- StrategyPackage model retrain job skeleton and API with manual confirmation.
+- Paper v2 per-trade-date backtest-validated execution policy activation and API.
+- Selection excluded-results trace API.
+- Extended Paper v2 performance report metrics with insufficient-data reasons.
+
+Still out of scope by decision:
+
+- V25 adapter implementation.
+- QMT, Shadow, live trading.
+- Multi-package Paper v2 execution.
+- Paper-only execution options not represented in backtest-validated policies.
+
+## 10. HMM / Industry Runtime Update - 2026-04-26
+
+Additional backend work completed:
+
+- Added a Selection Center industry lookup provider backed by `market.sw_index_member`.
+- Confirmed the Shenwan sector data chain is already available through existing Tushare datasets and local DB tables: `sw_index_classify`, `sw_index_member`, `sw_daily`, and `sector_data`.
+- Kept `backend/data_service` semantics unchanged. StrategyPackage/Paper v2 uses its own PIT industry provider because existing data-service sector APIs expose factor-style `sector_data`, not authoritative stock-to-industry metadata for runtime filters.
+- Industry blacklist now matches L1/L2/L3 code or name, records matched item/level and full industry context, and fails fast if no PIT/candidate industry metadata exists.
+- HMM runtime now consumes existing completed HMM snapshots and precomputed coefficient artifacts. It requires `model_snapshot_id`, `signal_preset`, local model file, trade-date coefficients, and stock-sector mapping for every candidate.
+- HMM rolling training now has manual preview/trigger APIs under `/api/v1/hmm-training`. The default plan is a 3-year training window plus the latest 3 calendar months of validation; one- or two-month validation windows are diagnostic-only and return warnings. The WSL training script receives the computed split dates, and coefficient precompute must succeed before a snapshot is marked completed.
+
+Still out of scope by decision:
+
+- HMM training or rolling retraining execution from Selection Center / Paper v2.
+- Automatic daily HMM coefficient refresh for trade dates after the snapshot coefficient window.
+- Neutral HMM coefficient fallback when an enabled HMM artifact is incomplete.
