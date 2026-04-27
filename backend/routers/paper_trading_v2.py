@@ -353,6 +353,14 @@ def list_portfolio_sessions(portfolio_id: str, limit: int = 100) -> dict[str, An
         _raise_http(exc)
 
 
+@router.get("/portfolios/{portfolio_id}/session-capabilities")
+def get_portfolio_session_capabilities(portfolio_id: str) -> dict[str, Any]:
+    try:
+        return {"ok": True, "capabilities": PaperTradingSessionService().session_capabilities(portfolio_id)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.get("/sessions/{session_id}")
 def get_trade_session(session_id: str) -> dict[str, Any]:
     try:

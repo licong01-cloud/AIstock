@@ -195,3 +195,111 @@ def test_tdx_market_data_provider_fails_on_invalid_bar_price() -> None:
             source=MinuteDataSource.TDX_REALTIME,
             min_bars=31,
         )
+
+
+def test_observed_intraday_filters_future_bars_without_fabrication() -> None:
+    provider = PaperV2MinuteMarketDataProvider(
+        limit_price_provider=FakeLimitProvider(),
+        tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(5),
+    )
+
+    result = provider.load_observed_intraday(
+        symbol="000001.SZ",
+        trade_date=date(2024, 1, 2),
+        source=MinuteDataSource.TDX_REALTIME,
+        until_time=datetime(2024, 1, 2, 9, 33),
+    )
+
+    assert [bar.bar_time for bar in result.minute_bars] == [
+        datetime(2024, 1, 2, 9, 31),
+        datetime(2024, 1, 2, 9, 32),
+        datetime(2024, 1, 2, 9, 33),
+    ]
+    assert result.market_context["feed_mode"] == "observed_intraday"
+    assert result.market_context["observed_bar_count"] == 3
+
+
+def test_observed_intraday_can_return_empty_waiting_input() -> None:
+    provider = PaperV2MinuteMarketDataProvider(
+        limit_price_provider=FakeLimitProvider(),
+        tdx_fetcher=lambda _symbol, _trade_date: [],
+    )
+
+    result = provider.load_observed_intraday(
+        symbol="000001.SZ",
+        trade_date=date(2024, 1, 2),
+        source=MinuteDataSource.TDX_REALTIME,
+        until_time=datetime(2024, 1, 2, 9, 30),
+    )
+
+    assert result.minute_bars == []
+    assert result.market_context["observed_bar_count"] == 0
+
+
+def test_load_new_bars_uses_strict_cursor() -> None:
+    provider = PaperV2MinuteMarketDataProvider(
+        limit_price_provider=FakeLimitProvider(),
+        tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(5),
+    )
+
+    bars = provider.load_new_bars(
+        symbol="000001.SZ",
+        trade_date=date(2024, 1, 2),
+        source=MinuteDataSource.TDX_REALTIME,
+        after_time=datetime(2024, 1, 2, 9, 32),
+        until_time=datetime(2024, 1, 2, 9, 34),
+    )
+
+    assert [bar.bar_time for bar in bars] == [
+        datetime(2024, 1, 2, 9, 33),
+        datetime(2024, 1, 2, 9, 34),
+    ]
+
+
+def test_latest_available_bar_time_uses_common_symbol_time() -> None:
+    def fetcher(symbol: str, trade_date: date):
+        return make_raw_bars(4 if symbol == "000001.SZ" else 3, trade_date=trade_date)
+
+    provider = PaperV2MinuteMarketDataProvider(
+        limit_price_provider=FakeLimitProvider(),
+        tdx_fetcher=fetcher,
+    )
+
+    latest = provider.latest_available_bar_time(
+        symbols=["000001.SZ", "000002.SZ"],
+        trade_date=date(2024, 1, 2),
+        source=MinuteDataSource.TDX_REALTIME,
+        as_of_time=datetime(2024, 1, 2, 9, 40),
+    )
+
+    assert latest == datetime(2024, 1, 2, 9, 33)
+
+
+def test_live_feed_rejects_db_source_instead_of_fallback() -> None:
+    provider = PaperV2MinuteMarketDataProvider(
+        limit_price_provider=FakeLimitProvider(),
+        tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(5),
+    )
+
+    with pytest.raises(DataUnavailableError, match="TDX_REALTIME"):
+        provider.load_observed_intraday(
+            symbol="000001.SZ",
+            trade_date=date(2024, 1, 2),
+            source=MinuteDataSource.DB_HISTORICAL,
+            until_time=datetime(2024, 1, 2, 9, 33),
+        )
+
+
+def test_completed_day_rejects_realtime_source_instead_of_fallback() -> None:
+    provider = PaperV2MinuteMarketDataProvider(
+        limit_price_provider=FakeLimitProvider(),
+        tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(5),
+    )
+
+    with pytest.raises(DataUnavailableError, match="historical DB"):
+        provider.load_completed_day(
+            symbol="000001.SZ",
+            trade_date=date(2024, 1, 2),
+            source=MinuteDataSource.TDX_REALTIME,
+            expected_bars=5,
+        )

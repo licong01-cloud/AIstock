@@ -181,3 +181,14 @@ def test_catchup_session_fails_fast_without_source_role_split() -> None:
             live_data_source=MinuteDataSource.TDX_REALTIME,
         )
 
+
+def test_session_capabilities_expose_only_real_startable_modes() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
+
+    capabilities = PaperTradingSessionService(repository=paper_repo).session_capabilities(portfolio.portfolio_id)
+
+    assert capabilities["modes"]["REPLAY_ONLY"]["can_start"] is True
+    assert capabilities["modes"]["LIVE_ONLY"]["can_start"] is False
+    assert capabilities["modes"]["LIVE_ONLY"]["errors"]
+    assert capabilities["modes"]["CATCHUP_THEN_LIVE"]["can_start"] is False
+    assert capabilities["modes"]["CATCHUP_THEN_LIVE"]["errors"]

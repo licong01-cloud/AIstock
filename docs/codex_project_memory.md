@@ -246,6 +246,8 @@ Important directories:
 - Implemented session models, schema DDL, repository persistence, session APIs, and `REPLAY_ONLY` session ticking through the existing strict historical replay path.
 - Split execution algorithm capabilities into historical/live semantics. V25 remains historical/full-day capable with 240-bar requirements but is explicitly not declared real-time safe; live V25 now fails with `ALGO_REALTIME_UNSUPPORTED` instead of requiring 240 bars at open or falling back to another algorithm.
 - `LIVE_ONLY` and `CATCHUP_THEN_LIVE` sessions are intentionally fail-fast until incremental per-minute execution state and source-role split are implemented; they do not use the closed-day runner as a fake live path.
+- Added source-role minute-feed primitives on `PaperV2MinuteMarketDataProvider`: completed-day DB loading, observed intraday TDX bars, cursor-based new-bar loading, and latest common live bar time. These methods reject DB/TDX role misuse rather than falling back.
+- Paper v2 exposes session capability diagnostics so the UI can tell which modes are genuinely startable. `REPLAY_ONLY` can be startable when portfolio/source/policy match; `LIVE_ONLY` and `CATCHUP_THEN_LIVE` remain not startable until the incremental executor and source-role split are fully implemented.
 
 ## Production Port Safety - 2026-04-27
 

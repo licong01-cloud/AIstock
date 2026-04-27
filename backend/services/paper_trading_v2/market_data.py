@@ -197,6 +197,178 @@ class PaperV2MinuteMarketDataProvider:
             market_context=context,
         )
 
+    def load_completed_day(
+        self,
+        *,
+        symbol: str,
+        trade_date: date,
+        source: MinuteDataSource,
+        expected_bars: int,
+        require_suspend_status: bool = False,
+    ) -> MinuteExecutionMarketInput:
+        """Load a completed historical day with no realtime fallback."""
+
+        if source != MinuteDataSource.DB_HISTORICAL:
+            raise DataUnavailableError(
+                "completed-day minute feed requires an explicit historical DB source",
+                context={"symbol": symbol, "trade_date": trade_date.isoformat(), "source": source.value},
+            )
+        return self.load_symbol_input(
+            symbol=symbol,
+            trade_date=trade_date,
+            source=source,
+            min_bars=expected_bars,
+            require_suspend_status=require_suspend_status,
+        )
+
+    def load_observed_intraday(
+        self,
+        *,
+        symbol: str,
+        trade_date: date,
+        source: MinuteDataSource,
+        until_time: datetime,
+        require_suspend_status: bool = False,
+    ) -> MinuteExecutionMarketInput:
+        """Load only observed intraday bars up to ``until_time``.
+
+        Empty observed bars are returned as an explicit waiting input. Fetch
+        failures still raise; this method never falls back to historical DB.
+        """
+
+        symbol = str(symbol or "").strip()
+        if not symbol:
+            raise DataUnavailableError("symbol is required for observed intraday minute feed")
+        if source != MinuteDataSource.TDX_REALTIME:
+            raise DataUnavailableError(
+                "observed intraday minute feed requires TDX_REALTIME",
+                context={"symbol": symbol, "trade_date": trade_date.isoformat(), "source": source.value},
+            )
+        if until_time.date() != trade_date:
+            raise DataUnavailableError(
+                "observed intraday until_time must match trade_date",
+                context={"symbol": symbol, "trade_date": trade_date.isoformat(), "until_time": until_time.isoformat()},
+            )
+
+        limit_price = self.limit_price_provider.get_limit_price(symbol, trade_date)
+        if limit_price.pre_close is None or limit_price.pre_close <= 0:
+            raise DataUnavailableError(
+                "pre_close is required for observed intraday minute context",
+                context={"symbol": symbol, "trade_date": trade_date.isoformat()},
+            )
+        suspend_status = None
+        if require_suspend_status:
+            if self.suspend_status_provider is None:
+                raise DataUnavailableError(
+                    "suspend status provider is required",
+                    context={"symbol": symbol, "trade_date": trade_date.isoformat()},
+                )
+            suspend_status = self.suspend_status_provider.get_suspend_status(symbol, trade_date)
+
+        raw_bars = self._load_raw_bars_from_tdx(symbol, trade_date, allow_empty=True)
+        minute_bars = self._build_minute_bars(
+            symbol=symbol,
+            trade_date=trade_date,
+            raw_bars=raw_bars,
+            limit_price=limit_price,
+            source=source,
+            require_suspend_status=require_suspend_status,
+            suspend_status=suspend_status,
+        )
+        until_cmp = self._naive_for_compare(until_time)
+        observed = [bar for bar in minute_bars if self._naive_for_compare(bar.bar_time) <= until_cmp]
+        context = self._build_market_context(
+            symbol=symbol,
+            trade_date=trade_date,
+            source=source,
+            minute_bars=observed,
+            limit_price=limit_price,
+            suspend_status=suspend_status,
+        )
+        context["until_time"] = until_time.isoformat()
+        context["feed_mode"] = "observed_intraday"
+        return MinuteExecutionMarketInput(
+            symbol=symbol,
+            trade_date=trade_date,
+            source=source,
+            minute_bars=observed,
+            market_context=context,
+        )
+
+    def load_new_bars(
+        self,
+        *,
+        symbol: str,
+        trade_date: date,
+        source: MinuteDataSource,
+        after_time: datetime | None,
+        until_time: datetime,
+        require_suspend_status: bool = False,
+    ) -> list[MinuteBar]:
+        """Load new observed bars after a persisted cursor."""
+
+        observed = self.load_observed_intraday(
+            symbol=symbol,
+            trade_date=trade_date,
+            source=source,
+            until_time=until_time,
+            require_suspend_status=require_suspend_status,
+        ).minute_bars
+        if after_time is None:
+            return observed
+        after_cmp = self._naive_for_compare(after_time)
+        return [bar for bar in observed if self._naive_for_compare(bar.bar_time) > after_cmp]
+
+    def latest_available_bar_time(
+        self,
+        *,
+        symbols: list[str],
+        trade_date: date,
+        source: MinuteDataSource,
+        as_of_time: datetime,
+    ) -> datetime | None:
+        """Return the latest common observed bar time across symbols."""
+
+        normalized_symbols = [str(symbol or "").strip() for symbol in symbols if str(symbol or "").strip()]
+        if not normalized_symbols:
+            raise DataUnavailableError(
+                "symbols are required for latest available minute bar time",
+                context={"trade_date": trade_date.isoformat(), "source": source.value},
+            )
+        if source != MinuteDataSource.TDX_REALTIME:
+            raise DataUnavailableError(
+                "latest available live minute bar time requires TDX_REALTIME",
+                context={"trade_date": trade_date.isoformat(), "source": source.value},
+            )
+        as_of_cmp = self._naive_for_compare(as_of_time)
+        latest_by_symbol: list[datetime] = []
+        for symbol in normalized_symbols:
+            raw_bars = self._load_raw_bars_from_tdx(symbol, trade_date, allow_empty=True)
+            bar_times = []
+            for raw in raw_bars:
+                bar_time = raw.get("time") or raw.get("bar_time") or raw.get("trade_time")
+                if not isinstance(bar_time, datetime):
+                    raise DataUnavailableError(
+                        "minute bar time is missing or invalid",
+                        context={"symbol": symbol, "trade_date": trade_date.isoformat(), "source": source.value},
+                    )
+                if bar_time.date() != trade_date:
+                    raise DataUnavailableError(
+                        "minute bar date does not match requested trade_date",
+                        context={
+                            "symbol": symbol,
+                            "trade_date": trade_date.isoformat(),
+                            "bar_time": bar_time.isoformat(),
+                            "source": source.value,
+                        },
+                    )
+                if self._naive_for_compare(bar_time) <= as_of_cmp:
+                    bar_times.append(bar_time)
+            if not bar_times:
+                return None
+            latest_by_symbol.append(max(bar_times))
+        return min(latest_by_symbol)
+
     def _load_raw_bars(
         self,
         symbol: str,
@@ -204,19 +376,7 @@ class PaperV2MinuteMarketDataProvider:
         source: MinuteDataSource,
     ) -> list[dict[str, Any]]:
         if source == MinuteDataSource.TDX_REALTIME:
-            try:
-                raw_bars = self.tdx_fetcher(symbol, trade_date)
-            except Exception as exc:
-                raise DataUnavailableError(
-                    "TDX minute data fetch failed",
-                    context={"symbol": symbol, "trade_date": trade_date.isoformat()},
-                ) from exc
-            if not raw_bars:
-                raise DataUnavailableError(
-                    "TDX returned no minute bars",
-                    context={"symbol": symbol, "trade_date": trade_date.isoformat()},
-                )
-            return raw_bars
+            return self._load_raw_bars_from_tdx(symbol, trade_date, allow_empty=False)
 
         if source == MinuteDataSource.DB_HISTORICAL:
             return self._load_raw_bars_from_db(symbol, trade_date)
@@ -225,6 +385,27 @@ class PaperV2MinuteMarketDataProvider:
             "unsupported minute data source",
             context={"symbol": symbol, "source": str(source)},
         )
+
+    def _load_raw_bars_from_tdx(
+        self,
+        symbol: str,
+        trade_date: date,
+        *,
+        allow_empty: bool,
+    ) -> list[dict[str, Any]]:
+        try:
+            raw_bars = self.tdx_fetcher(symbol, trade_date)
+        except Exception as exc:
+            raise DataUnavailableError(
+                "TDX minute data fetch failed",
+                context={"symbol": symbol, "trade_date": trade_date.isoformat()},
+            ) from exc
+        if not raw_bars and not allow_empty:
+            raise DataUnavailableError(
+                "TDX returned no minute bars",
+                context={"symbol": symbol, "trade_date": trade_date.isoformat()},
+            )
+        return raw_bars or []
 
     def _load_raw_bars_from_db(self, symbol: str, trade_date: date) -> list[dict[str, Any]]:
         with self.conn_factory() as conn:
@@ -468,6 +649,10 @@ class PaperV2MinuteMarketDataProvider:
                 context={"symbol": symbol, "bar_time": bar_time.isoformat()},
             )
         return False
+
+    @staticmethod
+    def _naive_for_compare(value: datetime) -> datetime:
+        return value.replace(tzinfo=None) if value.tzinfo is not None else value
 
 
 class TradeCalendarProvider:

@@ -188,6 +188,63 @@ class PaperTradingSessionService:
     def list_sessions(self, portfolio_id: str, *, limit: int = 100) -> list[PaperTradingSession]:
         return self.repository.list_sessions(portfolio_id, limit=limit)
 
+    def session_capabilities(self, portfolio_id: str) -> dict[str, Any]:
+        portfolio = self.repository.get_portfolio(portfolio_id)
+        policy_context = self._portfolio_policy_context(portfolio.execution_policy, portfolio_id=portfolio_id)
+        policy_json = policy_context["policy_json"]
+        capabilities: dict[str, Any] = {
+            "portfolio_id": portfolio_id,
+            "portfolio_data_source": portfolio.data_source.value,
+            "algo_code": policy_context.get("algo_code"),
+            "validated_execution_policy_id": policy_context.get("validated_execution_policy_id"),
+            "modes": {},
+        }
+        for mode in PaperSessionMode:
+            mode_payload: dict[str, Any] = {"can_start": False, "errors": []}
+            try:
+                if mode == PaperSessionMode.REPLAY_ONLY:
+                    self._validate_sources(
+                        mode=mode,
+                        portfolio_data_source=portfolio.data_source,
+                        historical_data_source=MinuteDataSource.DB_HISTORICAL,
+                        live_data_source=None,
+                    )
+                    require_execution_algo_supports_mode(
+                        policy_json,
+                        mode="HISTORICAL",
+                        package_id=portfolio.package_id,
+                    )
+                    mode_payload["can_start"] = True
+                elif mode == PaperSessionMode.LIVE_ONLY:
+                    self._validate_sources(
+                        mode=mode,
+                        portfolio_data_source=portfolio.data_source,
+                        historical_data_source=None,
+                        live_data_source=MinuteDataSource.TDX_REALTIME,
+                    )
+                    require_execution_algo_supports_mode(
+                        policy_json,
+                        mode=mode.value,
+                        package_id=portfolio.package_id,
+                    )
+                    mode_payload["errors"].append(
+                        {
+                            "error_code": "UNSUPPORTED_FEATURE",
+                            "message": "Paper v2 live incremental executor is not implemented yet",
+                        }
+                    )
+                elif mode == PaperSessionMode.CATCHUP_THEN_LIVE:
+                    self._validate_sources(
+                        mode=mode,
+                        portfolio_data_source=portfolio.data_source,
+                        historical_data_source=MinuteDataSource.DB_HISTORICAL,
+                        live_data_source=MinuteDataSource.TDX_REALTIME,
+                    )
+            except TradingCoreError as exc:
+                mode_payload["errors"].append(exc.to_dict())
+            capabilities["modes"][mode.value] = mode_payload
+        return capabilities
+
     def progress(self, session_id: str, *, event_limit: int = 100) -> PaperSessionProgress:
         session = self.repository.get_session(session_id)
         days = self.repository.list_session_days(session_id)

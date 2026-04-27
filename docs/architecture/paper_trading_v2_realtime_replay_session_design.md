@@ -1083,3 +1083,60 @@ Before code implementation starts, confirm:
 - tests include negative paths and idempotency, not only happy paths;
 - temporary backend/frontend ports are used for validation.
 
+## 26. Implementation Supplement - 2026-04-27
+
+### 26.1 Development And Verification Port Rule
+
+During development, Codex must not restart or stop the production FastAPI
+backend on port `8001`.
+
+Verification must use temporary ports only:
+
+```text
+backend: 8011 or 8012
+frontend: 3011 or 3012
+```
+
+Before starting a temporary service, the implementation workflow must check
+whether the chosen port is already occupied. If both approved backend or
+frontend ports are occupied, do not kill the process silently; report the
+blocking port/process and choose only an approved free port or stop.
+
+After development is complete, Codex should report whether production backend
+restart is needed. The project owner will execute the production restart.
+
+### 26.2 Remaining Capability Implementation Order
+
+The remaining work must be implemented in this order so no UI or API can imply
+business capability that is not actually implemented:
+
+1. Source-role minute feed:
+   - `load_completed_day` for completed historical days;
+   - `load_observed_intraday` for bars observed so far;
+   - `load_new_bars` for cursor-based incremental reads;
+   - `latest_available_bar_time` for waiting/progress state.
+2. Live session state machine:
+   - create durable `LIVE_ONLY` sessions only after selected algorithm is live-safe;
+   - tick without new bars must persist `LIVE_WAITING_FOR_BAR`, not success;
+   - tick with unavailable/late required bars must persist a structured failure.
+3. Incremental execution:
+   - add a per-minute execution API using `OrderExecutionState`;
+   - persist order state before and after every bar;
+   - guarantee repeated ticks do not duplicate fills.
+4. Catch-up-to-live:
+   - replay completed days with explicit historical source;
+   - process current-day observed bars with explicit live source;
+   - switch to live waiting only after cursor catches up.
+5. UI wiring:
+   - expose only backend-supported session modes and algorithm/source pairs;
+   - display structured errors and waiting states.
+
+### 26.3 V25 Boundary For This Implementation Stage
+
+V25 historical replay can remain supported through full-day historical bars and
+the existing Torch-backed adapter. V25 real-time live execution remains
+unsupported until a real-time-safe adapter is implemented and tested.
+
+This is not a fallback and not a downgrade. A live request using V25 must fail
+with `ALGO_REALTIME_UNSUPPORTED` until the adapter consumes only observed bars
+and persisted algorithm state.
