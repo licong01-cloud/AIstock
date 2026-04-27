@@ -81,6 +81,17 @@ logger = logging.getLogger("aistock.routers.quantevolver")
 
 router = APIRouter(prefix="/quantevolver", tags=["QuantEvolver"])
 
+QE_EXPERIMENT_LOG_TERMINAL_STATUSES = {
+    "completed",
+    "failed",
+    "interrupted",
+    "timeout",
+    "cancelled",
+    "canceled",
+    "stopped",
+}
+QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES = 500
+
 
 def _multi_alpha_distributed_enabled() -> bool:
     """Return whether experimental distributed Multi-Alpha execution is enabled."""
@@ -5389,6 +5400,70 @@ def _candidate_run_log_files(
     return unique
 
 
+def _read_text_tail_lines(path: Path, max_lines: int = QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES) -> list[str]:
+    """Read the tail of a log without loading unbounded historical output."""
+    if max_lines <= 0 or not path.exists() or not path.is_file():
+        return []
+    chunk_size = 8192
+    data = b""
+    with path.open("rb") as f:
+        f.seek(0, os.SEEK_END)
+        pos = f.tell()
+        while pos > 0 and data.count(b"\n") <= max_lines:
+            read_size = min(chunk_size, pos)
+            pos -= read_size
+            f.seek(pos)
+            data = f.read(read_size) + data
+    return data.decode("utf-8", errors="replace").splitlines()[-max_lines:]
+
+
+def _load_experiment_local_log_tail(
+    *,
+    qe_task_id: str | None,
+    qe_loop_id: str | None,
+    workspace_path: str | None,
+    tail_lines: int = QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES,
+) -> tuple[Path | None, list[str]]:
+    limit = max(1, min(int(tail_lines or QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES), 5000))
+    for path in _candidate_run_log_files(
+        qe_task_id=qe_task_id,
+        qe_loop_id=qe_loop_id,
+        workspace_path=workspace_path,
+    ):
+        if path.exists():
+            return path, _read_text_tail_lines(path, limit)
+    return None, []
+
+
+async def _stream_experiment_local_log_tail(
+    *,
+    experiment_id: str,
+    experiment_status: str | None,
+    qe_task_id: str | None,
+    qe_loop_id: str | None,
+    workspace_path: str | None,
+    tail_lines: int = QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES,
+):
+    path, lines = _load_experiment_local_log_tail(
+        qe_task_id=qe_task_id,
+        qe_loop_id=qe_loop_id,
+        workspace_path=workspace_path,
+        tail_lines=tail_lines,
+    )
+    yield (
+        "data: [System] Experiment "
+        f"{experiment_id} is terminal ({experiment_status}); showing local log tail only.\n\n"
+    )
+    if path:
+        yield f"data: [System] Log source: {path}\n\n"
+    if lines:
+        for log_line in lines:
+            yield f"data: {log_line}\n\n"
+    else:
+        yield "data: [System] No local run.log tail is available.\n\n"
+    yield f"data: [System] AIstock authoritative final status: {experiment_status}\n\n"
+
+
 def _load_experiment_terminal_status(experiment_id: str) -> str | None:
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -6053,11 +6128,54 @@ async def get_experiment_run_status(experiment_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/experiments/{experiment_id}/logs/tail")
+async def get_experiment_logs_tail(
+    experiment_id: str,
+    tail: int = Query(QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES, ge=1, le=5000),
+):
+    """Return local run.log tail without opening the RD-Agent live log stream."""
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT qe_task_id, qe_loop_id, status, workspace_path
+                    FROM qe_experiments
+                    WHERE experiment_id = %s
+                    """,
+                    (experiment_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="Experiment not found")
+                qe_task_id, qe_loop_id, db_status, workspace_path = row
+
+        path, lines = _load_experiment_local_log_tail(
+            qe_task_id=qe_task_id,
+            qe_loop_id=qe_loop_id,
+            workspace_path=workspace_path,
+            tail_lines=tail,
+        )
+        return {
+            "status": "success",
+            "data": {
+                "experiment_id": experiment_id,
+                "experiment_status": db_status,
+                "terminal": str(db_status or "").lower() in QE_EXPERIMENT_LOG_TERMINAL_STATUSES,
+                "log_path": str(path) if path else None,
+                "logs": lines,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Read experiment log tail failed: {experiment_id}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/experiments/{experiment_id}/logs")
 async def stream_experiment_logs(experiment_id: str):
     """Stream experiment logs and append the authoritative AIstock terminal status."""
-    from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
-
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -6076,6 +6194,24 @@ async def stream_experiment_logs(experiment_id: str):
 
         if not qe_task_id:
             raise HTTPException(status_code=400, detail="?????????????")
+
+        if str(db_status or "").lower() in QE_EXPERIMENT_LOG_TERMINAL_STATUSES:
+            return StreamingResponse(
+                _stream_experiment_local_log_tail(
+                    experiment_id=experiment_id,
+                    experiment_status=db_status,
+                    qe_task_id=qe_task_id,
+                    qe_loop_id=qe_loop_id,
+                    workspace_path=workspace_path,
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
 
         node_id = None
         if isinstance(custom_params, str):
@@ -6128,7 +6264,7 @@ async def stream_experiment_logs(experiment_id: str):
             finally:
                 try:
                     final_status = _load_experiment_terminal_status(experiment_id) or db_status
-                    if final_status in {"completed", "failed", "interrupted", "timeout"}:
+                    if str(final_status or "").lower() in QE_EXPERIMENT_LOG_TERMINAL_STATUSES:
                         yield f"data: [System] AIstock authoritative final status: {final_status}\n\n"
                 finally:
                     await client.close()

@@ -21,6 +21,16 @@ const FactorList = dynamic(() => import("../components/FactorList"), { ssr: fals
 const ModelList = dynamic(() => import("../components/ModelList"), { ssr: false });
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
+const TERMINAL_LOG_STATUSES = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "canceled",
+  "interrupted",
+  "timeout",
+  "paused",
+  "stopped",
+]);
 
 // 模块级样式常量 — 避免每次渲染重新创建对象
 const cardStyle: React.CSSProperties = {
@@ -628,10 +638,36 @@ export default function EvolutionDashboard() {
       setActiveLoopIndex(null);
       fetchTaskDetail(activeTaskId);
 
+      const selectedTask = tasks.find(t => t.task_id === activeTaskId);
+      const selectedStatus = selectedTask?.status?.toLowerCase();
+
       // 连接 SSE 日志流
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
+      }
+
+      if (selectedStatus && TERMINAL_LOG_STATUSES.has(selectedStatus)) {
+        let cancelled = false;
+        appendLogs([`[System] 任务 ${activeTaskId} 已是终态(${selectedStatus})，只读取本地日志尾部，不打开实时日志流...`]);
+        fetch(`${API}/quantevolver/evolution/tasks/${activeTaskId}/logs/tail?tail=200`)
+          .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+          .then(data => {
+            if (cancelled) return;
+            const payload = data?.data || data;
+            const logLines = Array.isArray(payload?.logs) ? payload.logs : [];
+            appendLogs(logLines.length ? logLines : ["[System] 未找到本地 evolution.log 尾部内容"]);
+            appendLogs([`[System] 任务终态: ${payload?.task_status || selectedStatus}，未连接 RDAgent 实时日志流`]);
+          })
+          .catch(e => {
+            if (!cancelled) appendLogs([`[Error] 读取本地日志尾部失败: ${e?.message || e}`]);
+          });
+        const detailInterval = setInterval(() => fetchTaskDetail(activeTaskId), 60000);
+        return () => {
+          cancelled = true;
+          activeTaskIdRef.current = null;
+          clearInterval(detailInterval);
+        };
       }
 
       appendLogs([`[System] 已连接到任务 ${activeTaskId} 的实时日志流...`]);
@@ -644,9 +680,30 @@ export default function EvolutionDashboard() {
       function createSSE(taskId: string) {
         const sse = new EventSource(`${API}/quantevolver/evolution/tasks/${taskId}/logs`);
         sse.onmessage = (event) => {
-          reconnectCount = 0; // 收到消息重置重连计数
           try {
             const data = JSON.parse(event.data);
+            const terminalLogEvent =
+              data.status === "deleted" ||
+              data.status === "missing" ||
+              data.event === "task_deleted" ||
+              data.event === "task_log_workspace_missing" ||
+              data.event === "task_log_terminal";
+
+            if (terminalLogEvent) {
+              const logLines = data.logs ? (Array.isArray(data.logs) ? data.logs : [String(data.logs)]) : [];
+              appendLogs(logLines.length ? logLines : ["[System] 日志流已关闭"]);
+              sse.close();
+              if (eventSourceRef.current === sse) eventSourceRef.current = null;
+              if (activeTaskIdRef.current === boundTaskId) {
+                activeTaskIdRef.current = null;
+                setActiveTaskId(null);
+                setLoops([]);
+                fetchTasks();
+              }
+              return;
+            }
+
+            reconnectCount = 0; // 收到有效消息才重置重连计数
 
             // 处理日志消息
             if (data.logs) {
@@ -678,8 +735,23 @@ export default function EvolutionDashboard() {
           }
         };
 
-        sse.onerror = () => {
+        sse.onerror = async () => {
           sse.close();
+          if (activeTaskIdRef.current !== boundTaskId) return;
+          try {
+            const taskRes = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}`);
+            if (taskRes.status === 404 || taskRes.status === 204) {
+              appendLogs([`[System] 任务 ${taskId} 已不存在，停止日志流重连`]);
+              if (eventSourceRef.current === sse) eventSourceRef.current = null;
+              activeTaskIdRef.current = null;
+              setActiveTaskId(null);
+              setLoops([]);
+              fetchTasks();
+              return;
+            }
+          } catch {
+            // Network errors still use the bounded reconnect path below.
+          }
           if (reconnectCount < MAX_RECONNECT && activeTaskIdRef.current === boundTaskId) {
             reconnectCount++;
             setTimeout(() => {
@@ -702,7 +774,6 @@ export default function EvolutionDashboard() {
 
       // 定时刷新任务详情（更新 loop 列表），但不重建 SSE
       // 仅当选中任务为 running 时才定时刷新，否则依赖手动刷新
-      const selectedTask = tasks.find(t => t.task_id === activeTaskId);
       const detailDelay = selectedTask?.status === "running" ? 15000 : 60000;
       const detailInterval = setInterval(() => fetchTaskDetail(activeTaskId), detailDelay);
       return () => {
@@ -1467,6 +1538,13 @@ export default function EvolutionDashboard() {
     e.stopPropagation();
     if (!confirm(`确定要删除演进任务「${taskName}」吗？\n\n将同时删除所有关联的 Loop 记录、SOTA 注册、子实验和因子/模型指标。\n此操作不可撤销！`)) return;
     try {
+      if (activeTaskId === taskId) {
+        activeTaskIdRef.current = null; // 阻止旧 SSE onerror 继续重连
+        if (eventSourceRef.current) {
+          eventSourceRef.current.close();
+          eventSourceRef.current = null;
+        }
+      }
       const res = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}`, { method: "DELETE" });
       const data = await res.json();
       if (data.status === "success") {

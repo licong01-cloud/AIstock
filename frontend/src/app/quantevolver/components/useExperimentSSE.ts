@@ -9,6 +9,15 @@ const MAX_RECONNECT = 100;
 /** 重连间隔（ms） */
 const RECONNECT_DELAY = 3000;
 const ACTIVE_STATUS_POLL_INTERVAL = 10000;
+const TERMINAL_EXPERIMENT_LOG_STATUSES = new Set([
+  "completed",
+  "failed",
+  "interrupted",
+  "timeout",
+  "cancelled",
+  "canceled",
+  "stopped",
+]);
 
 export interface UseExperimentSSEOptions {
   /** 是否在 SSE 断开后持续轮询最终状态（compose 模式），默认 true */
@@ -290,11 +299,45 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
   const openLogs = useCallback((experimentId: string) => {
     abortRef.current = false;
     reconnectCountRef.current = 0;
-    setRunLogs(["[System] 正在连接日志流..."]);
-    setRunStatus("running");
+    setRunLogs(["[System] 正在检查实验状态..."]);
     setEnhancedMetrics(null);
-    connectSSE(experimentId);
-  }, [connectSSE]);
+    fetch(`${API}/quantevolver/experiments/${experimentId}/run-status`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (abortRef.current) return;
+        const status = String(data?.status || "").toLowerCase();
+        if (TERMINAL_EXPERIMENT_LOG_STATUSES.has(status)) {
+          stopStatusPolling();
+          eventSourceRef.current?.close();
+          eventSourceRef.current = null;
+          setRunStatus(status === "completed" ? "completed" : status === "interrupted" ? "interrupted" : "failed");
+          setRunLogs([`[System] 实验已是终态(${status})，只读取本地 run.log 尾部，不打开实时日志流...`]);
+          fetch(`${API}/quantevolver/experiments/${experimentId}/logs/tail?tail=300`)
+            .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+            .then(tailData => {
+              if (abortRef.current) return;
+              const payload = tailData?.data || tailData;
+              const lines = Array.isArray(payload?.logs) ? payload.logs : [];
+              if (lines.length) lines.forEach((line: string) => appendLog(line));
+              else appendLog("[System] 未找到本地 run.log 尾部内容");
+              appendLog(`[System] 最终状态: ${payload?.experiment_status || status}，未连接 RDAgent 实时日志流`);
+            })
+            .catch(e => {
+              if (!abortRef.current) appendLog(`[Error] 读取本地日志尾部失败: ${e?.message || e}`);
+            });
+          return;
+        }
+        setRunStatus("running");
+        setRunLogs(["[System] 正在连接实时日志流..."]);
+        connectSSE(experimentId);
+      })
+      .catch(() => {
+        if (abortRef.current) return;
+        setRunStatus("running");
+        setRunLogs(["[System] 正在连接实时日志流..."]);
+        connectSSE(experimentId);
+      });
+  }, [appendLog, connectSSE, stopStatusPolling]);
 
   /** 关闭 SSE */
   const closeLogs = useCallback(() => {

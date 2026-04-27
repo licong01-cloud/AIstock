@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, Future, as_completed
 from typing import Callable, Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 import httpx
 
 # 导入未来的 EvolutionService (目前可能为空实现)
@@ -1007,6 +1007,9 @@ def stream_task_logs(task_id: str):
     底层会调用 RDAgent 的日志 API 进行转发
     """
     try:
+        if not scheduler.task_exists(task_id):
+            logger.info("Log stream requested for deleted/nonexistent task %s; returning 204", task_id)
+            return Response(status_code=204)
         return StreamingResponse(
             scheduler.stream_task_logs(task_id),
             media_type="text/event-stream",
@@ -1015,6 +1018,19 @@ def stream_task_logs(task_id: str):
     except Exception as e:
         logger.error(f"Failed to establish log stream for task {task_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/tasks/{task_id}/logs/tail", summary="Read local evolution log tail without opening a live stream")
+def get_task_log_tail(task_id: str, tail: int = Query(500, ge=1, le=5000)):
+    try:
+        if not scheduler.task_exists(task_id):
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {"status": "success", "data": scheduler.get_task_log_tail(task_id, tail)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to read log tail for task {task_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/sota", summary="获取全局 SOTA 历史榜单")
 async def list_sota_registry():
