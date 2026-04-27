@@ -21,9 +21,13 @@ import type {
   PaperRun,
   PaperSchedulerStatus,
   PaperSession,
+  PaperSessionCapabilities,
   PaperSessionProgress,
   ReadinessResult,
   ReplayResult,
+  RuntimeConfigActivation,
+  RuntimeProfile,
+  RuntimeProfileVersion,
 } from "@/lib/paper-v2/types";
 
 const DEFAULT_RUNTIME = {
@@ -44,6 +48,13 @@ function parseRuntime(text: string): JsonObject {
   return parsed as JsonObject;
 }
 
+function parseRuntimeProfileText(text: string): JsonObject {
+  const payload = { ...parseRuntime(text) };
+  delete payload.paper_v2_session;
+  delete payload.paper_v2_replay;
+  return payload;
+}
+
 function asDate(value: unknown): string {
   if (!value) return "-";
   return String(value).slice(0, 19).replace("T", " ");
@@ -61,6 +72,17 @@ export default function PaperV2RunConsolePage() {
   const [errors, setErrors] = useState<JsonObject[]>([]);
   const [policies, setPolicies] = useState<ExecutionPolicy[]>([]);
   const [activations, setActivations] = useState<Activation[]>([]);
+  const [capabilities, setCapabilities] = useState<PaperSessionCapabilities | null>(null);
+  const [runtimeProfiles, setRuntimeProfiles] = useState<RuntimeProfile[]>([]);
+  const [runtimeVersions, setRuntimeVersions] = useState<RuntimeProfileVersion[]>([]);
+  const [runtimeActivations, setRuntimeActivations] = useState<RuntimeConfigActivation[]>([]);
+  const [configAudit, setConfigAudit] = useState<JsonObject[]>([]);
+  const [runtimeProfileName, setRuntimeProfileName] = useState("开盘前运行配置");
+  const [runtimeProfileId, setRuntimeProfileId] = useState("");
+  const [runtimeVersionId, setRuntimeVersionId] = useState("");
+  const [runtimeActivationDate, setRuntimeActivationDate] = useState(todayIso());
+  const [runtimeActivationReason, setRuntimeActivationReason] = useState("开盘前调整运行配置");
+  const [replaceRuntimeActivation, setReplaceRuntimeActivation] = useState(false);
   const [tradeDate, setTradeDate] = useState(todayIso());
   const [runtimeText, setRuntimeText] = useState(JSON.stringify(DEFAULT_RUNTIME, null, 2));
   const [readiness, setReadiness] = useState<ReadinessResult | null>(null);
@@ -83,11 +105,30 @@ export default function PaperV2RunConsolePage() {
     [readiness, tradeDate],
   );
   const latestSession = useMemo(() => sessions[0] || null, [sessions]);
+  const replayCapability = capabilities?.modes?.REPLAY_ONLY;
+  const liveCapability = capabilities?.modes?.LIVE_ONLY;
+  const catchupCapability = capabilities?.modes?.CATCHUP_THEN_LIVE;
+  const replayBlocked = Boolean(replayCapability && !replayCapability.can_start);
+  const liveBlocked = Boolean(liveCapability && !liveCapability.can_start);
+  const catchupBlocked = Boolean(catchupCapability && !catchupCapability.can_start);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [portfolioRow, runRows, sessionRows, schedulerRow, eventRows, errorRows, policyRows, activationRows] = await Promise.all([
+      const [
+        portfolioRow,
+        runRows,
+        sessionRows,
+        schedulerRow,
+        eventRows,
+        errorRows,
+        policyRows,
+        activationRows,
+        capabilityRow,
+        runtimeProfileRows,
+        runtimeActivationRows,
+        auditRows,
+      ] = await Promise.all([
         paperV2Api.getPortfolio(portfolioId),
         paperV2Api.runs(portfolioId),
         paperV2Api.sessions(portfolioId),
@@ -96,6 +137,10 @@ export default function PaperV2RunConsolePage() {
         paperV2Api.errors(portfolioId),
         paperV2Api.executionPolicies(portfolioId),
         paperV2Api.activations(portfolioId),
+        paperV2Api.sessionCapabilities(portfolioId),
+        paperV2Api.runtimeProfiles(portfolioId),
+        paperV2Api.runtimeConfigActivations(portfolioId),
+        paperV2Api.configChangeAudit(portfolioId),
       ]);
       setPortfolio(portfolioRow);
       setRuns(runRows);
@@ -105,16 +150,41 @@ export default function PaperV2RunConsolePage() {
       setErrors(errorRows);
       setPolicies(policyRows);
       setActivations(activationRows);
+      setCapabilities(capabilityRow);
+      setRuntimeProfiles(runtimeProfileRows);
+      setRuntimeActivations(runtimeActivationRows);
+      setConfigAudit(auditRows);
       if (!policyId) {
         const defaultPolicy = policyRows.find((item) => item.is_portfolio_default) || policyRows.find((item) => item.paper_enabled);
         setPolicyId(defaultPolicy?.policy_id || "");
       }
+      const nextProfileId = runtimeProfileId || runtimeProfileRows[0]?.profile_id || "";
+      if (!runtimeProfileId) setRuntimeProfileId(nextProfileId);
+      if (!runtimeActivationDate) setRuntimeActivationDate(todayIso());
     } catch (exc) {
       setError(exc);
     }
-  }, [portfolioId, policyId]);
+  }, [portfolioId, policyId, runtimeActivationDate, runtimeProfileId]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!runtimeProfileId) {
+      setRuntimeVersions([]);
+      setRuntimeVersionId("");
+      return;
+    }
+    let alive = true;
+    paperV2Api.runtimeProfileVersions(portfolioId, runtimeProfileId).then((rows) => {
+      if (!alive) return;
+      setRuntimeVersions(rows);
+      if (!rows.find((item) => item.profile_version_id === runtimeVersionId)) {
+        setRuntimeVersionId(rows[0]?.profile_version_id || "");
+      }
+    }).catch((exc) => {
+      if (alive) setError(exc);
+    });
+    return () => { alive = false; };
+  }, [portfolioId, runtimeProfileId, runtimeVersionId]);
   useEffect(() => {
     setReadiness(null);
     setRunResult(null);
@@ -263,6 +333,65 @@ export default function PaperV2RunConsolePage() {
     }
   }
 
+  async function saveRuntimeProfile() {
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await paperV2Api.createRuntimeProfile(portfolioId, {
+        profile_name: runtimeProfileName,
+        config_json: parseRuntimeProfileText(runtimeText),
+        created_by: "paper_v2_ui",
+        reason: runtimeActivationReason,
+      });
+      setRuntimeProfileId(saved.profile.profile_id);
+      setRuntimeVersionId(saved.version.profile_version_id);
+      await load();
+    } catch (exc) {
+      setError(exc);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveRuntimeProfileVersion() {
+    setBusy(true);
+    setError(null);
+    try {
+      if (!runtimeProfileId) throw new Error("请先选择运行配置 Profile。");
+      const version = await paperV2Api.createRuntimeProfileVersion(portfolioId, runtimeProfileId, {
+        config_json: parseRuntimeProfileText(runtimeText),
+        created_by: "paper_v2_ui",
+        reason: runtimeActivationReason,
+      });
+      setRuntimeVersionId(version.profile_version_id);
+      await load();
+    } catch (exc) {
+      setError(exc);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function activateRuntimeProfile() {
+    setBusy(true);
+    setError(null);
+    try {
+      if (!runtimeVersionId) throw new Error("请先选择运行配置版本。");
+      await paperV2Api.activateRuntimeConfig(portfolioId, {
+        trade_date: runtimeActivationDate,
+        profile_version_id: runtimeVersionId,
+        activated_by: "paper_v2_ui",
+        reason: runtimeActivationReason,
+        replace_existing: replaceRuntimeActivation,
+      });
+      await load();
+    } catch (exc) {
+      setError(exc);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main>
       <div className="pv2-detail-nav">
@@ -322,6 +451,34 @@ export default function PaperV2RunConsolePage() {
             ]}
           />
         </SectionCard>
+
+        <SectionCard title="运行配置版本与审计" eyebrow="HMM / 黑名单 / TopK / 停牌过滤">
+          <div className="pv2-form-grid">
+            <div className="pv2-field"><label>Profile 名称</label><input className="pv2-input" value={runtimeProfileName} onChange={(event) => setRuntimeProfileName(event.target.value)} /></div>
+            <div className="pv2-field"><label>已保存 Profile</label><select className="pv2-select" value={runtimeProfileId} onChange={(event) => setRuntimeProfileId(event.target.value)}><option value="">选择 Profile</option>{runtimeProfiles.map((item) => <option value={item.profile_id} key={item.profile_id}>{item.profile_name} / {item.status}</option>)}</select></div>
+            <div className="pv2-field"><label>Profile 版本</label><select className="pv2-select" value={runtimeVersionId} onChange={(event) => setRuntimeVersionId(event.target.value)}><option value="">选择版本</option>{runtimeVersions.map((item) => <option value={item.profile_version_id} key={item.profile_version_id}>v{item.version_no} / {shortHash(item.config_sha256)}</option>)}</select></div>
+            <div className="pv2-field"><label>激活日期</label><input className="pv2-input" type="date" value={runtimeActivationDate} onChange={(event) => setRuntimeActivationDate(event.target.value)} /></div>
+            <div className="pv2-field"><label>替换同日激活</label><label className="pv2-chip"><input type="checkbox" checked={replaceRuntimeActivation} onChange={(event) => setReplaceRuntimeActivation(event.target.checked)} /> 需要原因并写审计</label></div>
+          </div>
+          <div className="pv2-field" style={{ marginTop: 12 }}><label>变更原因</label><input className="pv2-input" value={runtimeActivationReason} onChange={(event) => setRuntimeActivationReason(event.target.value)} /></div>
+          <div className="pv2-row-actions" style={{ marginTop: 12 }}>
+            <button className="pv2-button" disabled={busy} onClick={saveRuntimeProfile} type="button">保存为新 Profile</button>
+            <button className="pv2-button" disabled={busy || !runtimeProfileId} onClick={saveRuntimeProfileVersion} type="button">保存为新版本</button>
+            <button className="pv2-button-primary" disabled={busy || !runtimeVersionId} onClick={activateRuntimeProfile} type="button">按日期激活版本</button>
+          </div>
+          <NoticePanel title="运行配置不会修改策略包资产" tone="info">这里保存和激活的是模拟盘运行配置版本。它只影响未来 run/session，并会复制版本 hash 到运行快照；不会修改 StrategyPackage manifest、模型权重、HMM 资产或已验证执行策略。</NoticePanel>
+          <PaperTable
+            rows={runtimeActivations.slice(0, 8)}
+            empty="暂无运行配置激活记录。"
+            columns={[
+              { key: "date", header: "日期", render: (row) => row.trade_date },
+              { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
+              { key: "version", header: "版本", render: (row) => shortHash(row.profile_version_id) },
+              { key: "hash", header: "配置 Hash", render: (row) => shortHash(row.context?.config_sha256 as string | undefined) },
+            ]}
+          />
+          <JsonPanel value={{ runtime_profiles: runtimeProfiles, runtime_versions: runtimeVersions, config_change_audit: configAudit.slice(0, 6) }} />
+        </SectionCard>
       </div>
 
       <div className="pv2-grid pv2-grid-2">
@@ -333,9 +490,10 @@ export default function PaperV2RunConsolePage() {
             <div className="pv2-field"><label>追赶后切实时</label><label className="pv2-chip"><input type="checkbox" checked={autoSwitchToLive} onChange={(event) => setAutoSwitchToLive(event.target.checked)} /> 回放完成后进入 TDX 实时模拟</label></div>
           </div>
           <div className="pv2-row-actions" style={{ marginTop: 12 }}>
-            <button className="pv2-button" disabled={busy} onClick={() => replay("reject_existing")} type="button">{autoSwitchToLive ? "回放追赶到实时（拒绝已有）" : "回放（拒绝已有）"}</button>
-            <ConfirmAction label={autoSwitchToLive ? "重置、回放并切实时" : "重置并回放"} danger disabled={busy} confirmText={portfolioId} onConfirm={() => replay("reset_portfolio")} />
+            <button className="pv2-button" disabled={busy || (autoSwitchToLive ? catchupBlocked : replayBlocked)} onClick={() => replay("reject_existing")} type="button">{autoSwitchToLive ? "回放追赶到实时（拒绝已有）" : "回放（拒绝已有）"}</button>
+            <ConfirmAction label={autoSwitchToLive ? "重置、回放并切实时" : "重置并回放"} danger disabled={busy || (autoSwitchToLive ? catchupBlocked : replayBlocked)} confirmText={portfolioId} onConfirm={() => replay("reset_portfolio")} />
           </div>
+          {(autoSwitchToLive ? catchupBlocked : replayBlocked) ? <NoticePanel title="当前模式被后端能力诊断禁用" tone="warning"><JsonPanel value={autoSwitchToLive ? catchupCapability : replayCapability} /></NoticePanel> : null}
           <NoticePanel title="重置会删除该组合账本历史" tone="warning">
             系统支持重置回放，但必须输入完整 portfolio_id 确认。仅在需要替换该组合所有现有运行、订单、成交、现金、持仓、快照、事件和错误时使用。
           </NoticePanel>
@@ -350,11 +508,12 @@ export default function PaperV2RunConsolePage() {
             <div className="pv2-field"><label>调度间隔（秒）</label><input className="pv2-input" type="number" min={1} max={3600} value={schedulerInterval} onChange={(event) => setSchedulerInterval(Number(event.target.value))} /></div>
           </div>
           <div className="pv2-row-actions" style={{ marginTop: 12 }}>
-            <button className="pv2-button-primary" disabled={busy} onClick={startLiveSession} type="button">创建实时会话并执行一次 Tick</button>
+            <button className="pv2-button-primary" disabled={busy || liveBlocked} onClick={startLiveSession} type="button">创建实时会话并执行一次 Tick</button>
             <button className="pv2-button" disabled={busy} onClick={() => schedulerAction("run_once")} type="button">后台调度执行一次</button>
             <button className="pv2-button" disabled={busy || schedulerStatus?.running} onClick={() => schedulerAction("start")} type="button">启动后台调度</button>
             <button className="pv2-button" disabled={busy || !schedulerStatus?.running} onClick={() => schedulerAction("stop")} type="button">停止后台调度</button>
           </div>
+          {liveBlocked ? <NoticePanel title="实时模式被后端能力诊断禁用" tone="warning"><JsonPanel value={liveCapability} /></NoticePanel> : null}
           <NoticePanel title="后台调度不会改变业务逻辑" tone="info">
             调度器只调用与页面相同的 session tick 接口。无新分钟线时进入等待状态；数据、算法或策略产物缺失会显示后端错误，不会降级到日频或其他算法。
           </NoticePanel>
