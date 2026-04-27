@@ -325,3 +325,12 @@ Important directories:
 - Alignment conclusion: the gap-closure design matches the current code when read as implemented baseline plus next-phase gaps. Implemented pieces include StrategyPackage persistence/status/metrics/policies/model state/artifacts, Selection Center runtime filters/HMM/multi-package aggregation/watchlist, Paper v2 ledgers/replay/reset/session framework, V25 core/adapter/capabilities, and the Paper v2 UI route tree.
 - Explicit remaining gaps are still runtime profile version/audit tables and APIs, UI use of session capability diagnostics, V25 day_features provider for real Paper v2 V25 runs, and full backend-driven UI value validation on dev ports. Current V25 code correctly fails without `day_features`; no default day-feature fallback is allowed in authoritative Paper v2.
 - Baseline tests passed: `pytest backend/tests/trading_core backend/tests/strategy_package backend/tests/paper_trading_v2 backend/tests/selection_center -q -p no:cacheprovider` -> 125 passed.
+
+## Paper v2 WSL UNC / V25 Day Features Update - 2026-04-27
+
+- `develop-minute-execution-algo` is for creating or changing intraday minute execution strategy implementations and their standard contract; do not use it as a generic Paper v2 bug-fix or architecture-refactor skill.
+- Removed Windows-side runtime probing/reading of WSL UNC paths from StrategyPackage model asset resolution, manual factor validation result handling, and stock-pool generation. WSL-origin outputs must be explicitly copied by a WSL subprocess into Windows-visible temp/cache paths, or accessed inside WSL through `wsl -d <configured distro>`.
+- WSL distro selection for stock-pool WSL commands is explicit through `AISTOCK_WSL_DISTRO` or `QLIB_WSL_DISTRO`; no hard-coded `Ubuntu` distro is used in the updated stock-pool sync/generation paths.
+- Added `DbV25DayFeatureProvider` for Paper v2 V25 execution context. It builds `paper_v2_v25_day_features_v2` from audited previous-trading-day DB data and injects `market_context.day_features` only when the active policy is `V25_TWO_STAGE`.
+- Seeded local `market.dataset_date_refresh_audit` rows from existing tables for `kline_daily_raw`, `daily_basic`, `stock_moneyflow_ts`, `sector_data`, and `index_daily`, so V25 day-feature readiness can be checked against explicit audit rows instead of assuming table presence.
+- `allow_default_day_features` remains diagnostic-only inside the V25 algorithm implementation; StrategyPackage/Paper v2 validation rejects it for authoritative Paper Trading v2 policies.
