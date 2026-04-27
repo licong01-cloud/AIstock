@@ -228,6 +228,10 @@ export const paperV2Api = {
     const data = await apiFetch<{ session: PaperSession }>(`/paper-v2/portfolios/${portfolioId}/sessions`, body(payload));
     return data.session;
   },
+  async listSessions(portfolioId: string): Promise<PaperSession[]> {
+    const data = await apiFetch<{ sessions: PaperSession[] }>(`/paper-v2/portfolios/${portfolioId}/sessions`);
+    return data.sessions || [];
+  },
   async sessions(portfolioId: string): Promise<PaperSession[]> {
     const data = await apiFetch<{ sessions: PaperSession[] }>(`/paper-v2/portfolios/${portfolioId}/sessions`);
     return data.sessions || [];

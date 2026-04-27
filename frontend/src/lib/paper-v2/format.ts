@@ -53,9 +53,9 @@ export function asText(value: unknown): string {
 
 export function statusTone(status: unknown): "success" | "danger" | "warning" | "info" | "neutral" {
   const s = String(status || "").toUpperCase();
-  if (["READY", "PASSED", "SUCCEEDED", "SUCCESS", "COMPLETED", "PAPER_ENABLED", "SELECTION_ENABLED", "ACTIVE", "CURRENT"].includes(s)) return "success";
-  if (["FAILED", "ERROR", "REJECTED", "PAPER_FAILED", "BLOCKED"].includes(s)) return "danger";
-  if (["STALE", "STALE_WARNING", "WARNING", "PENDING", "DRAFT", "RETRAINING", "RUNNING", "PAUSED"].includes(s)) return "warning";
+  if (["READY", "PASSED", "SUCCEEDED", "SUCCESS", "COMPLETED", "PAPER_ENABLED", "SELECTION_ENABLED", "ACTIVE", "CURRENT", "FILLED", "ALL_TRADED"].includes(s)) return "success";
+  if (["FAILED", "ERROR", "REJECTED", "PAPER_FAILED", "BLOCKED", "CANCELED", "CANCELLED", "EXPIRED"].includes(s)) return "danger";
+  if (["STALE", "STALE_WARNING", "WARNING", "PENDING", "DRAFT", "RETRAINING", "RUNNING", "PAUSED", "PARTIALLY_FILLED", "PARTIAL_FILLED", "NEW", "SUBMITTED"].includes(s)) return "warning";
   if (["UNSUPPORTED", "NOT_RUN", "NO_DATA"].includes(s)) return "info";
   return "neutral";
 }
@@ -90,6 +90,14 @@ const STATUS_LABELS: Record<string, string> = {
   UNKNOWN: "未知",
   BUY: "买入",
   SELL: "卖出",
+  FILLED: "已全部成交",
+  PARTIALLY_FILLED: "部分成交",
+  PARTIAL_FILLED: "部分成交",
+  NEW: "新订单",
+  SUBMITTED: "已提交",
+  CANCELED: "已取消",
+  CANCELLED: "已取消",
+  EXPIRED: "已过期",
   EVENT: "事件",
   EXCLUDED: "已剔除",
   SINGLE_PACKAGE: "单策略包",

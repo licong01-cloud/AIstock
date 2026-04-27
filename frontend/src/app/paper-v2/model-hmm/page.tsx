@@ -257,7 +257,7 @@ export default function PaperV2ModelHmmPage() {
             { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
             { key: "trained", header: "训练时间", render: (row) => row.trained_at },
             { key: "sectors", header: "行业数", render: (row) => row.sector_count },
-            { key: "path", header: "路径", render: (row) => <span className="pv2-mono">{row.model_path}</span> },
+            { key: "asset", header: "模型产物", render: (row) => row.model_path ? <StatusBadge status="READY" /> : <StatusBadge status="NO_DATA" /> },
           ]}
         />
       </SectionCard>

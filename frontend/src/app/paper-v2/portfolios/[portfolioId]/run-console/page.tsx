@@ -115,6 +115,7 @@ export default function PaperV2RunConsolePage() {
     }
     return {
       paper_v2_session: { signal_data_source: "DB_HISTORICAL" },
+      selection_artifact_config: { auto_generate: true, inference_backend: "wsl" },
       runtime_profile: {
         selection: { top_k: safeTopK },
         tradability: { exclude_suspended: runtimeExcludeSuspended },
@@ -445,6 +446,10 @@ export default function PaperV2RunConsolePage() {
               <div className="pv2-field">
                 <label>信号数据源</label>
                 <input className="pv2-input" value="DB_HISTORICAL" readOnly />
+              </div>
+              <div className="pv2-field">
+                <label>选股产物</label>
+                <input className="pv2-input" value="自动生成：WSL 最新数据推理" readOnly />
               </div>
             </div>
             <div className="pv2-field" style={{ marginTop: 12 }}>

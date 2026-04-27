@@ -94,6 +94,24 @@ export default function PaperV2OverviewPage() {
         </div>
       </SectionCard>
 
+      <SectionCard title="正在运行模拟盘监控" eyebrow="资金 / 持仓 / 交易 / 收益" action={<Link className="pv2-button-primary" href="/paper-v2/running">打开运行监控</Link>}>
+        <NoticePanel title="独立运行视图" tone="info">
+          运行监控页汇总 READY / RUNNING / PAUSED 的 Paper v2 组合，并展示启动以来的订单、成交、当前资金、持仓、净值和收益曲线入口。
+        </NoticePanel>
+        <PaperTable
+          rows={summaries.filter(({ portfolio }) => ["READY", "RUNNING", "PAUSED"].includes(portfolio.status)).slice(0, 6)}
+          empty="暂无正在运行或待运行的模拟盘组合。"
+          columns={[
+            { key: "name", header: "模拟盘", render: ({ portfolio }) => <Link href={`/paper-v2/portfolios/${portfolio.portfolio_id}`}>{portfolio.portfolio_name}</Link> },
+            { key: "status", header: "状态", render: ({ portfolio }) => <StatusBadge status={portfolio.status} /> },
+            { key: "nav", header: "最新净值", render: ({ latestSnapshot, portfolio }) => formatCompact(latestSnapshot?.nav || portfolio.initial_cash) },
+            { key: "cash", header: "现金", render: ({ latestSnapshot }) => formatCompact(latestSnapshot?.cash) },
+            { key: "run", header: "最近运行", render: ({ latestRun }) => latestRun ? `${latestRun.trade_date} / ${latestRun.status}` : "尚未运行" },
+            { key: "action", header: "统计", render: ({ portfolio }) => <Link className="pv2-link-button" href={`/paper-v2/portfolios/${portfolio.portfolio_id}`}>查看完整统计</Link> },
+          ]}
+        />
+      </SectionCard>
+
       <SectionCard title="活跃模拟组合" eyebrow={loading ? "加载中" : "模拟盘 v2"} action={<Link className="pv2-button" href="/paper-v2/portfolios">打开中心</Link>}>
         <PaperTable
           rows={summaries}

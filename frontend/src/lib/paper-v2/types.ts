@@ -385,4 +385,14 @@ export type HmmSnapshot = {
   sector_count: number;
   status: string;
   metrics_json?: JsonObject | null;
+  coefficient_artifacts?: Array<{
+    filename?: string;
+    path?: string;
+    preset?: string;
+    start_date?: string;
+    end_date?: string;
+    covered_trade_dates?: string[];
+    date_count?: number;
+    parse_error?: string;
+  }>;
 };

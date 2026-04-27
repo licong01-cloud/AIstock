@@ -15,6 +15,22 @@ function runLabel(run: SelectionRun): string {
   return `${run.trade_date} / ${run.mode} / ${run.package_ids.map((item) => shortHash(item, 5)).join(", ")}`;
 }
 
+function artifactCoversTradeDate(snapshot: HmmSnapshot, preset: string, tradeDate: string) {
+  return (snapshot.coefficient_artifacts || []).find((artifact) => {
+    if (artifact.parse_error) return false;
+    if (artifact.preset !== preset) return false;
+    const dates = artifact.covered_trade_dates || [];
+    if (dates.length) return dates.includes(tradeDate);
+    return Boolean(artifact.start_date && artifact.end_date && artifact.start_date <= tradeDate && tradeDate <= artifact.end_date);
+  });
+}
+
+function artifactCoverageLabel(snapshot: HmmSnapshot, preset: string) {
+  const artifacts = (snapshot.coefficient_artifacts || []).filter((artifact) => artifact.preset === preset && !artifact.parse_error);
+  if (!artifacts.length) return `${preset} 无系数文件`;
+  return artifacts.map((artifact) => `${artifact.start_date || "?"}~${artifact.end_date || "?"} (${artifact.date_count || 0}日)`).join("; ");
+}
+
 export default function PaperV2SelectionPage() {
   const [packages, setPackages] = useState<SelectablePackage[]>([]);
   const [runs, setRuns] = useState<SelectionRun[]>([]);
@@ -45,6 +61,11 @@ export default function PaperV2SelectionPage() {
   const sourceRunIds = useMemo(() => runs.filter((item) => selectedRuns[item.run_id]).map((item) => item.run_id), [runs, selectedRuns]);
   const singlePackageMode = mode === "single_package";
   const selectedPackageName = selectedPackages[0]?.package_name || "策略包";
+  const selectedHmmSnapshot = useMemo(() => hmmSnapshots.find((item) => item.snapshot_id === hmmSnapshotId) || null, [hmmSnapshotId, hmmSnapshots]);
+  const selectedHmmArtifact = useMemo(
+    () => selectedHmmSnapshot ? artifactCoversTradeDate(selectedHmmSnapshot, hmmPreset, tradeDate) || null : null,
+    [hmmPreset, selectedHmmSnapshot, tradeDate],
+  );
 
   const loadPackages = useCallback(async () => {
     setLoading(true);
@@ -103,6 +124,14 @@ export default function PaperV2SelectionPage() {
     return () => { alive = false; };
   }, [hmmConfigId, hmmSnapshotId]);
 
+  useEffect(() => {
+    if (!hmmSnapshots.length) return;
+    const current = hmmSnapshots.find((item) => item.snapshot_id === hmmSnapshotId);
+    if (current && artifactCoversTradeDate(current, hmmPreset, tradeDate)) return;
+    const firstCovered = hmmSnapshots.find((item) => artifactCoversTradeDate(item, hmmPreset, tradeDate));
+    setHmmSnapshotId(firstCovered?.snapshot_id || "");
+  }, [hmmPreset, hmmSnapshotId, hmmSnapshots, tradeDate]);
+
   function updateMode(nextMode: SelectionMode) {
     setMode(nextMode);
     if (nextMode !== "single_package") return;
@@ -131,6 +160,7 @@ export default function PaperV2SelectionPage() {
         enabled: hmmEnabled,
         model_snapshot_id: hmmEnabled ? hmmSnapshotId : null,
         signal_preset: hmmEnabled ? hmmPreset : null,
+        coefficients_path: hmmEnabled ? selectedHmmArtifact?.path || null : null,
       },
     };
     const config: JsonObject = {
@@ -160,7 +190,11 @@ export default function PaperV2SelectionPage() {
     try {
       const packageIds = selectedPackages.map((item) => item.package_id);
       if (topK < 1 || topK > 50) throw new Error("TopK 必须在 1 到 50 之间。");
-      if (hmmEnabled && (!hmmConfigId || !hmmSnapshotId)) throw new Error("启用 HMM 时必须选择模型版本和已完成快照。");
+      if (hmmEnabled && !hmmConfigId) throw new Error("启用 HMM 时必须选择模型版本。");
+      if (hmmEnabled && !hmmSnapshotId) throw new Error(`没有 HMM 快照系数覆盖交易日 ${tradeDate} / ${hmmPreset}。请切换交易日、快照或预设，或先执行 HMM 滚动训练。`);
+      if (hmmEnabled && !selectedHmmArtifact) {
+        throw new Error(`HMM 系数文件不覆盖交易日 ${tradeDate} / ${hmmPreset}。请改选覆盖该日期的快照，或先执行 HMM 滚动训练生成新系数。`);
+      }
       if (singlePackageMode && packageIds.length !== 1) throw new Error("单策略包模式必须且只能选择一个 StrategyPackage。");
       if (!singlePackageMode && packageIds.length < 2) throw new Error("多策略包聚合至少需要两个 StrategyPackage。");
       const next = await selectionCenterApi.runSelection({ package_ids: packageIds, trade_date: tradeDate, data_source: dataSource, mode, runtime_config: runtimeConfig() });
@@ -245,13 +279,30 @@ export default function PaperV2SelectionPage() {
               </select>
               <select className="pv2-select" data-testid="selection-hmm-snapshot" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)} style={{ maxWidth: 280 }}>
                 <option value="">选择已完成快照</option>
-                {hmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{hmmSnapshotLabel(item)}</option>)}
+                {hmmSnapshots.map((item) => {
+                  const artifact = artifactCoversTradeDate(item, hmmPreset, tradeDate);
+                  const disabled = hmmEnabled && !artifact;
+                  return <option value={item.snapshot_id} key={item.snapshot_id} disabled={disabled}>{hmmSnapshotLabel(item)} / {artifact ? `覆盖 ${artifact.start_date}~${artifact.end_date}` : artifactCoverageLabel(item, hmmPreset)}</option>;
+                })}
               </select>
               <select className="pv2-select" data-testid="selection-hmm-preset" value={hmmPreset} disabled={!hmmEnabled} onChange={(event) => setHmmPreset(event.target.value)} style={{ maxWidth: 150 }}>
                 <option value="preset_A">preset_A</option>
                 <option value="preset_B">preset_B</option>
               </select>
             </div>
+            {hmmEnabled ? (
+              <div data-testid="selection-hmm-coverage" style={{ marginTop: 10 }}>
+                {selectedHmmArtifact ? (
+                  <NoticePanel title="HMM 系数覆盖已确认" tone="success">
+                    当前快照使用 {hmmPreset}，系数文件覆盖 {selectedHmmArtifact.start_date} 至 {selectedHmmArtifact.end_date}。选股请求会显式传入 coefficients_path，避免误用过期系数。
+                  </NoticePanel>
+                ) : (
+                  <NoticePanel title="HMM 系数不覆盖当前交易日" tone="warning">
+                    没有已完成快照的 {hmmPreset} 系数覆盖 {tradeDate}。选股不会继续调用后端伪装成功；请切换交易日、快照或预设，或先在“模型与 HMM”页面执行滚动训练。
+                  </NoticePanel>
+                )}
+              </div>
+            ) : null}
           </div>
           <button className="pv2-button-primary" data-testid="selection-run" disabled={running} onClick={runSelection} type="button">{running ? "运行中..." : "运行选股"}</button>
         </SectionCard>
