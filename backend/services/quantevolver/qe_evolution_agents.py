@@ -732,27 +732,39 @@ class EvolutionFactorAgent:
                 if target_cats:
                     ph = ",".join(["%s"] * len(target_cats))
                     cur.execute(f"""
-                        SELECT c.factor_name, c.category, c.grade, c.ic_value,
+                        SELECT c.factor_name, c.category, c.grade, m.ic_mean AS ic_value,
                                c.factor_profile, c.factor_source
                         FROM qe_factor_classification c
                         JOIN aistock_factor_catalog fc
                           ON c.factor_name = fc.factor_name AND c.factor_source = fc.source
+                        LEFT JOIN LATERAL (
+                            SELECT ic_mean
+                            FROM aistock_factor_metrics
+                            WHERE factor_name = c.factor_name AND eval_window = 'full' AND calc_engine = %s
+                            ORDER BY calculated_at DESC LIMIT 1
+                        ) m ON TRUE
                         WHERE c.category IN ({ph})
                           AND fc.is_available = TRUE
                         ORDER BY RANDOM()
                         LIMIT 60
-                    """, target_cats)
+                    """, [CALC_ENGINE, *target_cats])
                 else:
                     cur.execute("""
-                        SELECT c.factor_name, c.category, c.grade, c.ic_value,
+                        SELECT c.factor_name, c.category, c.grade, m.ic_mean AS ic_value,
                                c.factor_profile, c.factor_source
                         FROM qe_factor_classification c
                         JOIN aistock_factor_catalog fc
                           ON c.factor_name = fc.factor_name AND c.factor_source = fc.source
+                        LEFT JOIN LATERAL (
+                            SELECT ic_mean
+                            FROM aistock_factor_metrics
+                            WHERE factor_name = c.factor_name AND eval_window = 'full' AND calc_engine = %s
+                            ORDER BY calculated_at DESC LIMIT 1
+                        ) m ON TRUE
                         WHERE fc.is_available = TRUE
                         ORDER BY RANDOM()
                         LIMIT 60
-                    """)
+                    """, (CALC_ENGINE,))
                 cols = [desc[0] for desc in cur.description]
                 candidates = [dict(zip(cols, row)) for row in cur.fetchall()]
 
@@ -843,7 +855,7 @@ class EvolutionFactorAgent:
                 with conn.cursor() as cur:
                     ph = ",".join(["%s"] * len(all_factor_names))
                     cur.execute(f"""
-                        SELECT c.factor_name, c.category, c.grade, c.ic_value,
+                        SELECT c.factor_name, c.category, c.grade, m.ic_mean AS ic_value,
                                c.factor_profile,
                                m.ic_mean, m.icir, m.rank_ic_mean
                         FROM qe_factor_classification c
@@ -869,7 +881,7 @@ class EvolutionFactorAgent:
         keep_lines = []
         for fn in keep_factors:
             d = detail_map.get(fn, {})
-            ic = d.get("ic_mean") or d.get("ic_value")
+            ic = d.get("ic_mean")
             ic_str = f"{float(ic):.4f}" if ic is not None else "N/A"
             imp_val = importance_map.get(fn, 0.0)
             tag = f" [重要性={imp_val:.4f},受保护]" if fn in protected_set else f" [重要性={imp_val:.4f}]"
@@ -880,7 +892,7 @@ class EvolutionFactorAgent:
             if fn in set(keep_factors):
                 continue
             d = detail_map.get(fn, {})
-            ic = d.get("ic_mean") or d.get("ic_value")
+            ic = d.get("ic_mean")
             ic_str = f"{float(ic):.4f}" if ic is not None else "N/A"
             icir_str = f"{float(d['icir']):.4f}" if d.get("icir") is not None else "N/A"
             new_lines.append(f"- {fn} | {d.get('category', '?')} | {d.get('grade', '?')} | IC={ic_str} | ICIR={icir_str}")
