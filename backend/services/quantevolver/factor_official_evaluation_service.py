@@ -777,7 +777,6 @@ class FactorOfficialEvaluationService:
                         cur.rowcount,
                     )
 
-                grouped_full_metrics: Dict[str, Dict[str, Any]] = {}
                 factor_level_enrichment: Dict[str, Dict[str, Any]] = {}
                 for metric_rec in engine_data.get("metrics", []):
                     if (
@@ -851,25 +850,6 @@ class FactorOfficialEvaluationService:
                     }
                     cur.execute(_UPSERT_SQL, params)
                     inserted += 1
-                    if rec.get("eval_window") == "full":
-                        grouped_full_metrics[factor_name] = rec
-
-                for factor_name, full_m in grouped_full_metrics.items():
-                    cur.execute(
-                        """
-                        UPDATE aistock_factor_catalog
-                        SET ic = COALESCE(%s, ic),
-                            sharpe = COALESCE(%s, sharpe),
-                            annualized_return = COALESCE(%s, annualized_return)
-                        WHERE factor_name = %s
-                        """,
-                        (
-                            full_m.get("ic_mean"),
-                            full_m.get("top_sharpe"),
-                            full_m.get("top_annual_return"),
-                            factor_name,
-                        ),
-                    )
 
         return {
             "inserted": inserted,
