@@ -1,8 +1,10 @@
 """Strict V25 two-stage minute execution algorithm.
 
-This backend adapter is self-contained so V25_TWO_STAGE does not depend on the
-local git-ignored rl_execution package.  Missing model files, unavailable CUDA,
-invalid market context, or invalid plans fail fast; it never falls back to TWAP.
+This is the Paper v2 adapter for the shared V25 core. Missing model files,
+unavailable CUDA, invalid market context, or invalid plans fail fast; it never
+falls back to TWAP. Normal market non-tradable states such as suspension or
+limit-up/limit-down blocks are classified explicitly instead of being treated as
+configuration/model failures.
 """
 from __future__ import annotations
 
@@ -13,25 +15,25 @@ import numpy as np
 
 from .base_algo import BaseExecutionAlgo, OrderState, StepResult
 from .registry import register
-
-
-EARLY_WEIGHT = 0.8879
-LATE_WEIGHT = 0.1121
-EARLY_LEN = 30
-LATE_LEN = 210
-TOTAL_LEN = 240
-GAP_RATIO_EDGES = [-0.70, -0.50, -0.30, -0.10, 0.10, 0.30, 0.50, 0.70]
+from .v25_core import (
+    EARLY_LEN,
+    LATE_LEN,
+    TOTAL_LEN,
+    REASON_LIMIT_DATA_MISSING_DUE_TO_SUSPEND,
+    REASON_PREV_CLOSE_MISSING_WITH_SUSPEND,
+    REASON_PRICE_MISSING_WITH_SUSPEND,
+    REASON_SUSPENDED_BY_EXCHANGE,
+    REASON_SUSPENDED_BY_SUSPEND_D,
+    V25MarketAction,
+    V25TwoStageCore,
+    V25TwoStageCoreError,
+    classify_v25_minute_market_state,
+    infer_limit_pct,
+)
 
 
 class V25TwoStageUnavailableError(RuntimeError):
     """Raised when V25_TWO_STAGE cannot run authoritatively."""
-
-
-def _gap_ratio_to_bucket(gap_ratio: float) -> int:
-    for i, edge in enumerate(GAP_RATIO_EDGES):
-        if gap_ratio < edge:
-            return i
-    return len(GAP_RATIO_EDGES)
 
 
 def _load_state(torch: Any, path: str, device: Any) -> Any:
@@ -99,6 +101,7 @@ def _make_model_classes(torch: Any):
 @register
 class V25TwoStageAlgo(BaseExecutionAlgo):
     ALGO_CODE = "V25_TWO_STAGE"
+    HANDLES_MARKET_STATE = True
 
     def __init__(self, config: Dict[str, Any] | None = None) -> None:
         super().__init__(config)
@@ -137,8 +140,15 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
         self._late_model.load_state_dict(_load_state(torch, late_model_path, self._device))
         self._early_model.eval()
         self._late_model.eval()
+        self._core = V25TwoStageCore(
+            early_predictor=self._predict_early,
+            late_predictor=self._predict_late,
+        )
         self._plan: Optional[np.ndarray] = None
         self._plan_key: Optional[tuple[str, str]] = None
+        self._plan_metadata: dict[str, Any] = {}
+        self._last_no_fill_reason: Optional[str] = None
+        self._last_no_fill_context: dict[str, Any] = {}
 
     def compute_step(
         self,
@@ -154,6 +164,36 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
             state.is_complete = True
             return None
 
+        cur_price = float(bar_data.get("close") or 0)
+        prev_close = market_context.get("prev_close")
+        limit_up = bar_data.get("limit_up") or market_context.get("limit_up")
+        limit_down = bar_data.get("limit_down") or market_context.get("limit_down")
+        market_state = classify_v25_minute_market_state(
+            side=state.side,
+            price=cur_price,
+            prev_close=prev_close,
+            limit_up=limit_up,
+            limit_down=limit_down,
+            is_suspended=bool(bar_data.get("is_suspended")),
+            suspend_status=market_context.get("suspend_status"),
+            require_limit_price=True,
+        )
+        if market_state.is_error:
+            raise V25TwoStageUnavailableError(
+                f"V25_TWO_STAGE market data error: {market_state.reason}"
+            )
+        if market_state.action == V25MarketAction.SKIP and market_state.reason in {
+            REASON_SUSPENDED_BY_SUSPEND_D,
+            REASON_SUSPENDED_BY_EXCHANGE,
+            REASON_PREV_CLOSE_MISSING_WITH_SUSPEND,
+            REASON_PRICE_MISSING_WITH_SUSPEND,
+            REASON_LIMIT_DATA_MISSING_DUE_TO_SUSPEND,
+        }:
+            self._last_no_fill_reason = market_state.reason
+            self._last_no_fill_context = dict(market_state.context)
+            state.step += 1
+            return None
+
         close_arr = self._require_array(market_context, "full_day_close")
         vol_arr = self._require_array(market_context, "full_day_volume")
         high_arr = self._require_array(market_context, "full_day_high")
@@ -164,8 +204,6 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
         if len(close_arr) < TOTAL_LEN and not realtime_streaming:
             raise V25TwoStageUnavailableError("V25_TWO_STAGE requires at least 240 minute bars")
 
-        prev_close = self._require_positive(market_context, "prev_close")
-        cur_price = float(bar_data.get("close") or 0)
         open_arr = market_context.get("full_day_open")
         if open_arr is not None:
             open_price = float(self._require_array(market_context, "full_day_open")[0])
@@ -179,7 +217,7 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
         if side not in {"BUY", "SELL"}:
             raise V25TwoStageUnavailableError(f"V25_TWO_STAGE unsupported side: {state.side}")
         is_buy = side == "BUY"
-        limit_pct = float(market_context.get("limit_pct") or self._infer_limit_pct(stock_id))
+        limit_pct = float(market_context.get("limit_pct") or infer_limit_pct(stock_id))
         if limit_pct <= 0:
             raise V25TwoStageUnavailableError("V25_TWO_STAGE requires positive limit_pct")
         day_features = self._day_features(market_context.get("day_features"))
@@ -188,7 +226,7 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
         if self._plan is None or self._plan_key != plan_key:
             self._plan = self._generate_plan(
                 open_price=open_price,
-                prev_close=prev_close,
+                prev_close=float(prev_close),
                 stock_id=stock_id,
                 is_buy=is_buy,
                 limit_pct=limit_pct,
@@ -202,8 +240,19 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
         horizon = TOTAL_LEN if realtime_streaming else min(len(close_arr), TOTAL_LEN)
         if horizon <= 0:
             raise V25TwoStageUnavailableError("V25_TWO_STAGE execution horizon is invalid")
-        if cur_step >= horizon - 1:
+
+        if market_state.action == V25MarketAction.SKIP:
+            self._last_no_fill_reason = market_state.reason
+            self._last_no_fill_context = dict(market_state.context)
+            state.step += 1
+            return None
+
+        if market_state.action == V25MarketAction.P0_FORCE:
             step_qty = remaining
+            reason = market_state.reason
+        elif cur_step >= horizon - 1:
+            step_qty = remaining
+            reason = f"V25_TWO_STAGE step {state.step + 1}/{horizon}"
         else:
             remaining_weight = float(self._plan[cur_step:].sum())
             if remaining_weight <= 1e-8:
@@ -211,9 +260,12 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
             frac = float(self._plan[cur_step]) / remaining_weight
             step_qty = self._round_lot(int(remaining * frac))
             step_qty = min(step_qty, remaining)
+            reason = f"V25_TWO_STAGE step {state.step + 1}/{horizon}"
 
         state.step += 1
         if step_qty <= 0:
+            self._last_no_fill_reason = "round_lot_zero"
+            self._last_no_fill_context = {"cur_step": cur_step, "remaining_quantity": remaining}
             return None
 
         state.executed_quantity += step_qty
@@ -225,8 +277,46 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
             side=state.side,
             quantity=step_qty,
             price=cur_price,
-            reason=f"V25_TWO_STAGE step {state.step}/{horizon}",
+            reason=reason,
         )
+
+    def _predict_early(
+        self,
+        gap_bucket: int,
+        gap_ratio_abs: float,
+        gap_ratio_signed: float,
+        limit_pct: float,
+        is_buy: float,
+        day_features: np.ndarray,
+    ) -> np.ndarray:
+        torch = self._torch
+        with torch.no_grad():
+            gb = torch.LongTensor([gap_bucket]).to(self._device)
+            gr_abs = torch.FloatTensor([gap_ratio_abs]).to(self._device)
+            gr_signed = torch.FloatTensor([gap_ratio_signed]).to(self._device)
+            lp = torch.FloatTensor([limit_pct]).to(self._device)
+            ib = torch.FloatTensor([is_buy]).to(self._device)
+            df = torch.FloatTensor([day_features.astype(np.float32)]).to(self._device)
+            return self._early_model(gb, gr_abs, gr_signed, lp, ib, df).cpu().numpy()[0]
+
+    def _predict_late(
+        self,
+        gap_bucket: int,
+        gap_ratio_abs: float,
+        is_buy: float,
+        early_weight: float,
+        early_peak_pos: float,
+        early_concentration: float,
+    ) -> np.ndarray:
+        torch = self._torch
+        with torch.no_grad():
+            gb = torch.LongTensor([gap_bucket]).to(self._device)
+            gr_abs = torch.FloatTensor([gap_ratio_abs]).to(self._device)
+            ib = torch.FloatTensor([is_buy]).to(self._device)
+            ew = torch.FloatTensor([early_weight]).to(self._device)
+            epp = torch.FloatTensor([early_peak_pos]).to(self._device)
+            ec = torch.FloatTensor([early_concentration]).to(self._device)
+            return self._late_model(gb, gr_abs, ib, ew, epp, ec).cpu().numpy()[0]
 
     def _generate_plan(
         self,
@@ -238,40 +328,19 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
         limit_pct: float,
         day_features: np.ndarray,
     ) -> np.ndarray:
-        gap_pct = np.clip((open_price - prev_close) / prev_close, -0.20, 0.20)
-        gap_ratio = float(gap_pct / limit_pct)
-        gap_bucket = _gap_ratio_to_bucket(gap_ratio)
-        torch = self._torch
-        with torch.no_grad():
-            gb = torch.LongTensor([gap_bucket]).to(self._device)
-            gr_abs = torch.FloatTensor([abs(gap_ratio)]).to(self._device)
-            gr_signed = torch.FloatTensor([gap_ratio]).to(self._device)
-            lp = torch.FloatTensor([limit_pct]).to(self._device)
-            ib = torch.FloatTensor([1.0 if is_buy else 0.0]).to(self._device)
-            df = torch.FloatTensor([day_features.astype(np.float32)]).to(self._device)
-            pred_early = self._early_model(gb, gr_abs, gr_signed, lp, ib, df).cpu().numpy()[0]
-            early_weight_raw = float(pred_early.sum())
-            early_peak_pos = float(pred_early.argmax() / max(EARLY_LEN - 1, 1))
-            early_mean = float(pred_early.mean())
-            early_concentration = float(pred_early.max() / (early_mean + 1e-8))
-            ew = torch.FloatTensor([early_weight_raw]).to(self._device)
-            epp = torch.FloatTensor([early_peak_pos]).to(self._device)
-            ec = torch.FloatTensor([early_concentration]).to(self._device)
-            pred_late = self._late_model(gb, gr_abs, ib, ew, epp, ec).cpu().numpy()[0]
-
-        plan = np.concatenate([pred_early * EARLY_WEIGHT, pred_late * LATE_WEIGHT]).astype(np.float64)
-        if len(plan) != TOTAL_LEN or np.isnan(plan).any() or plan.sum() <= 1e-8:
-            raise V25TwoStageUnavailableError(
-                f"V25_TWO_STAGE generated invalid plan for {stock_id}: len={len(plan)} sum={plan.sum()}"
+        try:
+            result = self._core.generate_plan(
+                open_price=open_price,
+                prev_close=prev_close,
+                stock_id=stock_id,
+                side="BUY" if is_buy else "SELL",
+                limit_pct=limit_pct,
+                day_features=day_features,
             )
-        plan = plan / plan.sum()
-        early_sum = float(plan[:EARLY_LEN].sum())
-        late_sum = float(plan[EARLY_LEN:].sum())
-        if abs(early_sum - EARLY_WEIGHT) > 1e-4 or abs(late_sum - LATE_WEIGHT) > 1e-4:
-            raise V25TwoStageUnavailableError(
-                f"V25_TWO_STAGE weight mismatch: early={early_sum:.6f} late={late_sum:.6f}"
-            )
-        return plan
+        except V25TwoStageCoreError as exc:
+            raise V25TwoStageUnavailableError(str(exc)) from exc
+        self._plan_metadata = dict(result.metadata)
+        return result.weights
 
     @staticmethod
     def _require_array(ctx: Dict[str, Any], key: str) -> np.ndarray:
@@ -283,25 +352,15 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
             raise V25TwoStageUnavailableError(f"V25_TWO_STAGE market_context.{key} is invalid")
         return arr
 
-    @staticmethod
-    def _require_positive(ctx: Dict[str, Any], key: str) -> float:
-        val = float(ctx.get(key) or 0)
-        if val <= 0:
-            raise V25TwoStageUnavailableError(f"V25_TWO_STAGE requires positive {key}")
-        return val
-
-    @staticmethod
-    def _day_features(value: Any) -> np.ndarray:
+    def _day_features(self, value: Any) -> np.ndarray:
         if value is None:
-            return np.zeros(10, dtype=np.float32)
+            if bool(self.config.get("allow_default_day_features")):
+                return np.zeros(10, dtype=np.float32)
+            raise V25TwoStageUnavailableError(
+                "V25_TWO_STAGE requires market_context.day_features; "
+                "set allow_default_day_features=true only for an explicitly audited diagnostic run"
+            )
         arr = np.asarray(value, dtype=np.float32)
         if arr.shape != (10,) or np.isnan(arr).any():
             raise V25TwoStageUnavailableError("V25_TWO_STAGE day_features must be a 10-element array")
         return arr
-
-    @staticmethod
-    def _infer_limit_pct(stock_id: str) -> float:
-        code = stock_id.split(".")[0]
-        if code.startswith(("300", "301", "688", "689")):
-            return 0.20
-        return 0.10

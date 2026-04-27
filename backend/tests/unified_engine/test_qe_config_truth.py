@@ -45,6 +45,12 @@ def _base_yaml(**kwargs):
     return ConfigComposer()._compose_conf_yaml(**params)
 
 
+def _slice_yaml_between(yaml_text: str, start_marker: str, end_marker: str) -> str:
+    start = yaml_text.index(start_marker)
+    end = yaml_text.index(end_marker, start)
+    return yaml_text[start:end]
+
+
 def test_v25_execution_algo_generates_v25_inner_strategy():
     yaml_text = _base_yaml(
         execution_algo="V25_TWO_STAGE",
@@ -56,6 +62,38 @@ def test_v25_execution_algo_generates_v25_inner_strategy():
     assert "effective_algo: V25_TWO_STAGE" in yaml_text
     assert "early_model_path:" in yaml_text
     assert "late_model_path:" in yaml_text
+
+
+def test_v25_execution_algo_receives_suspend_artifact_when_signal_filter_enabled():
+    yaml_text = _base_yaml(
+        execution_algo="V25_TWO_STAGE",
+        execution_algo_params={"device": "cpu"},
+        custom_params={
+            "filter_suspended_on_signal": True,
+            "suspend_filter_file": "qe_suspend_filter.json",
+            "suspend_filter_strict": True,
+        },
+    )
+
+    inner_strategy = _slice_yaml_between(
+        yaml_text,
+        "            inner_strategy:",
+        "            # qe_execution_trace:",
+    )
+    outer_strategy = _slice_yaml_between(
+        yaml_text,
+        "    strategy:",
+        "    model:",
+    )
+
+    assert "class: TailTWAPWithV25TwoStageStrategy" in inner_strategy
+    assert "filter_suspended_on_signal: true" in inner_strategy
+    assert "suspend_filter_file: qe_suspend_filter.json" in inner_strategy
+    assert "suspend_filter_strict: true" in inner_strategy
+    assert "class: SuspendFilterTopkDropoutStrategy" in outer_strategy
+    assert "filter_suspended_on_signal: true" in outer_strategy
+    assert "suspend_filter_file: qe_suspend_filter.json" in outer_strategy
+    assert "suspend_filter_strict: true" in outer_strategy
 
 
 def test_v25_backend_algo_fails_before_optional_runtime_fallback():

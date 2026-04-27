@@ -422,6 +422,31 @@ class ConfigComposer:
             }
         raise AssertionError(f"unreachable execution algo: {algo}")
 
+    @classmethod
+    def _execution_algo_params_with_runtime_filters(
+        cls,
+        execution_algo: Optional[str],
+        execution_algo_params: Optional[Dict[str, Any]],
+        custom_params: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Apply runtime filters that must also reach the minute inner_strategy."""
+
+        params = dict(execution_algo_params or {})
+        if (
+            cls._normalize_execution_algo(execution_algo) == "V25_TWO_STAGE"
+            and cls._is_suspend_filter_enabled(custom_params)
+        ):
+            params.setdefault("filter_suspended_on_signal", True)
+            params.setdefault(
+                "suspend_filter_file",
+                (custom_params or {}).get("suspend_filter_file") or SUSPEND_FILTER_FILE,
+            )
+            params.setdefault(
+                "suspend_filter_strict",
+                bool((custom_params or {}).get("suspend_filter_strict", True)),
+            )
+        return params
+
     @staticmethod
     def _is_suspend_filter_enabled(custom_params: Optional[Dict[str, Any]]) -> bool:
         params = custom_params or {}
@@ -2240,7 +2265,12 @@ class ConfigComposer:
         lines.append("    executor:")
         if backtest_freq == "day":
             # 日线模式：单层 SimulatorExecutor
-            algo_cfg = self._execution_algo_config(execution_algo, execution_algo_params)
+            effective_execution_algo_params = self._execution_algo_params_with_runtime_filters(
+                execution_algo,
+                execution_algo_params,
+                custom_params,
+            )
+            algo_cfg = self._execution_algo_config(execution_algo, effective_execution_algo_params)
             if algo_cfg["effective_algo"] != "CLOSE_PRICE":
                 raise ValueError(
                     "day backtest is only valid for execution_algo=CLOSE_PRICE; "
@@ -2269,7 +2299,12 @@ class ConfigComposer:
             lines.append("                    time_per_step: 1min")
             lines.append("                    generate_portfolio_metrics: false")
             lines.append("            inner_strategy:")
-            algo_cfg = self._execution_algo_config(execution_algo, execution_algo_params)
+            effective_execution_algo_params = self._execution_algo_params_with_runtime_filters(
+                execution_algo,
+                execution_algo_params,
+                custom_params,
+            )
+            algo_cfg = self._execution_algo_config(execution_algo, effective_execution_algo_params)
             lines.append(f"                class: {algo_cfg['class']}")
             lines.append(f"                module_path: {algo_cfg['module_path']}")
             if algo_cfg.get("kwargs"):

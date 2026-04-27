@@ -1,4 +1,4 @@
-﻿"""QE V25 two-stage minute execution strategy.
+"""QE V25 two-stage minute execution strategy.
 
 This module is intentionally self-contained for Qlib experiment workspaces.
 It fails fast for missing models/devices and logs the early/late allocation
@@ -21,6 +21,10 @@ from tail_twap_strategy import (
     TAIL_START_OFFSET,
     REALLOC_OFFSET,
 )
+try:
+    from qe_suspend_filter import QESuspendFilter
+except Exception:  # pragma: no cover - Qlib workspace packaging guard
+    QESuspendFilter = None
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +121,9 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
         unfilled_handler=None,
         unfilled_trigger_minute=None,
         unfilled_backup_depth=None,
+        filter_suspended_on_signal=False,
+        suspend_filter_file=None,
+        suspend_filter_strict=True,
         **kwargs,
     ):
         super().__init__(
@@ -145,6 +152,17 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
         self._late_model.load_state_dict(_load_state(self._late_model_path, self._device))
         self._early_model.eval()
         self._late_model.eval()
+        if filter_suspended_on_signal:
+            if QESuspendFilter is None:
+                raise RuntimeError("V25 suspend filter requested but qe_suspend_filter is not importable")
+            self._qe_suspend_filter = QESuspendFilter(
+                enabled=True,
+                suspend_filter_file=suspend_filter_file,
+                strict=suspend_filter_strict,
+                logger_obj=logger,
+            )
+        else:
+            self._qe_suspend_filter = None
         logger.info("[TailTWAPv25] loaded early=%s late=%s device=%s", self._early_model_path, self._late_model_path, self._device)
 
     def reset(self, outer_trade_decision=None, **kwargs):
@@ -153,6 +171,14 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
             self._v25_plans: dict[str, np.ndarray] = {}
             self._v25_plan_generated: dict[str, bool] = {}
             self._v25_plan_failed: set[str] = set()
+            self._v25_no_fill_reasons: dict[str, str] = {}
+
+    def _is_artifact_suspended(self, stock_id, trade_time) -> bool:
+        if self._qe_suspend_filter is None:
+            return False
+        suspended = self._qe_suspend_filter.suspended_symbols(trade_time)
+        aliases = self._qe_suspend_filter._symbol_aliases(stock_id)
+        return bool(aliases & suspended)
 
     def _generate_plan_for_order(self, stock_id, direction, trade_start_time, trade_end_time):
         open_price = self.trade_exchange.get_close(stock_id, trade_start_time, trade_end_time, method="ts_data_last")
@@ -244,6 +270,15 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
                 start_time=trade_start_time,
                 end_time=trade_end_time,
             ):
+                self._v25_no_fill_reasons[order.stock_id] = "suspended_by_exchange"
+                continue
+            if self._is_artifact_suspended(order.stock_id, trade_start_time):
+                logger.info(
+                    "[TailTWAPv25] skip suspended stock from artifact stock=%s trade_time=%s reason=suspended_by_suspend_d",
+                    order.stock_id,
+                    trade_start_time,
+                )
+                self._v25_no_fill_reasons[order.stock_id] = "suspended_by_suspend_d"
                 continue
             amount_remain = self.trade_amount_remain[order.stock_id]
             if amount_remain <= 1e-5:

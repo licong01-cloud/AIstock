@@ -37,7 +37,7 @@ class ExecutionAlgoAdapter:
         bar: MinuteBar,
         market_context: dict[str, Any],
     ) -> StepFill | None:
-        if bar.is_suspended:
+        if bar.is_suspended and not bool(getattr(algo, "HANDLES_MARKET_STATE", False)):
             return None
         result = algo.compute_step(state, bar.to_algo_bar(), market_context)
         if result is None:

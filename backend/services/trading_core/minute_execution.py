@@ -7,7 +7,7 @@ from typing import Any
 
 from .errors import DataUnavailableError, ExecutionAlgoError, UnsupportedFeatureError
 from .execution_algo_adapter import ExecutionAlgoAdapter
-from .models import Fill, MinuteBar, Order, OrderEvent, OrderStatus
+from .models import Fill, MinuteBar, Order, OrderEvent, OrderEventType, OrderStatus
 from .oms import OMS
 from .risk import RiskEngine
 
@@ -44,19 +44,20 @@ class MinuteExecutionEngine:
                 "order must be submitted before minute execution",
                 context={"order_id": order.order_id, "status": order.status.value},
             )
+        config = dict(algo_config or {})
+        algo, state = self.adapter.create_state(order, algo_code, config)
+        market_state_aware = bool(getattr(algo, "HANDLES_MARKET_STATE", False))
         if not minute_bars:
             raise DataUnavailableError(
                 "minute bars are required for paper trading",
                 context={"order_id": order.order_id, "symbol": order.symbol},
             )
-        self._validate_bars(order, minute_bars)
-        self.risk_engine.validate_order_execution_context(
-            order=order,
-            minute_bars=minute_bars,
-        )
-
-        config = dict(algo_config or {})
-        algo, state = self.adapter.create_state(order, algo_code, config)
+        self._validate_bars(order, minute_bars, require_executable=not market_state_aware)
+        if not market_state_aware:
+            self.risk_engine.validate_order_execution_context(
+                order=order,
+                minute_bars=minute_bars,
+            )
         max_participation_rate = config.get("max_participation_rate")
         if max_participation_rate is not None:
             max_participation_rate = float(max_participation_rate)
@@ -135,6 +136,9 @@ class MinuteExecutionEngine:
             fills.append(fill)
             events.append(event)
 
+        if not fills and market_state_aware and getattr(algo, "_last_no_fill_reason", None):
+            events.append(self._no_fill_event(current_order, algo, minute_bars[-1].bar_time))
+            return current_order, fills, events
         if not fills:
             raise ExecutionAlgoError(
                 "minute execution produced no fills",
@@ -180,7 +184,12 @@ class MinuteExecutionEngine:
             )
         if not new_bars:
             return order, execution_state, [], []
-        self._validate_bars(order, new_bars)
+        config = dict(algo_config or {})
+        algo, state = self.adapter.create_state(order, algo_code, config)
+        self._restore_algo_state(state, execution_state)
+        self._restore_persisted_plan(algo, execution_state)
+        market_state_aware = bool(getattr(algo, "HANDLES_MARKET_STATE", False))
+        self._validate_bars(order, new_bars, require_executable=not market_state_aware)
         if execution_state.order_id != order.order_id:
             raise ExecutionAlgoError(
                 "execution state order_id does not match order",
@@ -200,11 +209,6 @@ class MinuteExecutionEngine:
                         "last_processed_bar_time": last_processed.isoformat(),
                     },
                 )
-
-        config = dict(algo_config or {})
-        algo, state = self.adapter.create_state(order, algo_code, config)
-        self._restore_algo_state(state, execution_state)
-        self._restore_persisted_plan(algo, execution_state)
         max_participation_rate = config.get("max_participation_rate")
         if max_participation_rate is not None:
             max_participation_rate = float(max_participation_rate)
@@ -224,10 +228,11 @@ class MinuteExecutionEngine:
             if current_order.status == OrderStatus.FILLED:
                 processed_time = bar.bar_time
                 continue
-            self.risk_engine.validate_order_execution_context(
-                order=current_order,
-                minute_bars=[bar],
-            )
+            if not market_state_aware:
+                self.risk_engine.validate_order_execution_context(
+                    order=current_order,
+                    minute_bars=[bar],
+                )
             step_fill = self.adapter.compute_step(
                 algo=algo,
                 state=state,
@@ -236,6 +241,15 @@ class MinuteExecutionEngine:
             )
             processed_time = bar.bar_time
             if step_fill is None:
+                if market_state_aware and getattr(algo, "_last_no_fill_reason", None):
+                    events.append(
+                        self._no_fill_event(
+                            current_order,
+                            algo,
+                            bar.bar_time,
+                            event_id=self._incremental_event_id(current_order.order_id, bar.bar_time, suffix="NOFILL"),
+                        )
+                    )
                 continue
             if max_participation_rate is not None:
                 max_qty = int(bar.volume * max_participation_rate)
@@ -309,7 +323,13 @@ class MinuteExecutionEngine:
         )
         return current_order, updated_state, fills, events
 
-    def _validate_bars(self, order: Order, minute_bars: list[MinuteBar]) -> None:
+    def _validate_bars(
+        self,
+        order: Order,
+        minute_bars: list[MinuteBar],
+        *,
+        require_executable: bool = True,
+    ) -> None:
         previous: datetime | None = None
         for bar in sorted(minute_bars, key=lambda item: item.bar_time):
             if bar.symbol != order.symbol:
@@ -327,7 +347,7 @@ class MinuteExecutionEngine:
                     context={"order_id": order.order_id, "bar_time": bar.bar_time.isoformat()},
                 )
             previous = bar.bar_time
-        if all(bar.is_suspended or bar.volume <= 0 for bar in minute_bars):
+        if require_executable and all(bar.is_suspended or bar.volume <= 0 for bar in minute_bars):
             raise DataUnavailableError(
                 "minute bars contain no executable volume",
                 context={"order_id": order.order_id, "symbol": order.symbol},
@@ -359,6 +379,8 @@ class MinuteExecutionEngine:
 
             algo._plan = np.asarray(plan["weights"], dtype=np.float64)
             algo._plan_key = tuple(plan["plan_key"]) if isinstance(plan.get("plan_key"), list) else None
+            if isinstance(plan.get("metadata"), dict) and hasattr(algo, "_plan_metadata"):
+                algo._plan_metadata = dict(plan["metadata"])
         except Exception as exc:
             raise ExecutionAlgoError(
                 "persisted execution plan is invalid",
@@ -375,15 +397,43 @@ class MinuteExecutionEngine:
         except AttributeError:
             weights = [float(item) for item in plan]
         plan_key = getattr(algo, "_plan_key", None)
+        metadata = getattr(algo, "_plan_metadata", None)
         return {
             "weights": weights,
             "plan_key": list(plan_key) if isinstance(plan_key, tuple) else plan_key,
+            "metadata": dict(metadata) if isinstance(metadata, dict) else {},
         }
+
+    @staticmethod
+    def _no_fill_event(
+        order: Order,
+        algo: Any,
+        bar_time: datetime,
+        *,
+        event_id: str | None = None,
+    ) -> OrderEvent:
+        reason = str(getattr(algo, "_last_no_fill_reason", None) or "no_fill")
+        context = getattr(algo, "_last_no_fill_context", None)
+        metadata = {
+            "algo_code": getattr(algo, "ALGO_CODE", None),
+            "no_fill_context": dict(context) if isinstance(context, dict) else {},
+        }
+        payload: dict[str, Any] = {
+            "order_id": order.order_id,
+            "event_type": OrderEventType.NO_FILL,
+            "event_time": bar_time,
+            "reason": reason,
+            "metadata": metadata,
+        }
+        if event_id is not None:
+            payload["event_id"] = event_id
+        return OrderEvent(**payload)
 
     @staticmethod
     def _incremental_fill_id(order_id: str, bar_time: datetime) -> str:
         return f"fill_{order_id}_{bar_time.strftime('%Y%m%d%H%M%S')}"
 
     @staticmethod
-    def _incremental_event_id(order_id: str, bar_time: datetime) -> str:
-        return f"evt_{order_id}_{bar_time.strftime('%Y%m%d%H%M%S')}"
+    def _incremental_event_id(order_id: str, bar_time: datetime, *, suffix: str | None = None) -> str:
+        base = f"evt_{order_id}_{bar_time.strftime('%Y%m%d%H%M%S')}"
+        return f"{base}_{suffix}" if suffix else base
