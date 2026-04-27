@@ -510,12 +510,8 @@ def sync_factors_from_task(
                 else:
                     dedup_group_id = str(uuid.uuid4())[:12]
 
-            # 获取回测指标
+            # Task/loop 回测指标仅保留为原始 trace，不再写入 catalog 兼容指标字段。
             metrics = factor_metrics.get(fname, {})
-            ann_ret = metrics.get("annualized_return")
-            max_dd = metrics.get("max_drawdown")
-            info_ratio = metrics.get("information_ratio")
-            ic_val = metrics.get("ic")
             loop_id = metrics.get("loop_id")
 
             # UPSERT 到 aistock_factor_catalog
@@ -525,8 +521,7 @@ def sync_factors_from_task(
                     expression, is_sota_factor, first_sota_task_id,
                     source_task_id, source_code_origin,
                     source_loop_tag, source_index,
-                    ic, annualized_return, max_drawdown, sharpe,
-                    performance_metrics, best_performance_ann_ret, best_performance_sharpe,
+                    performance_metrics,
                     dedup_hash, dedup_group_id, is_dedup_primary, code_text, asset_path
                 )
                 VALUES (
@@ -534,8 +529,7 @@ def sync_factors_from_task(
                     %s, %s, %s,
                     %s, %s,
                     %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s, %s,
+                    %s,
                     %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (factor_name, source) DO UPDATE SET
@@ -546,13 +540,7 @@ def sync_factors_from_task(
                     source_code_origin = EXCLUDED.source_code_origin,
                     source_loop_tag = EXCLUDED.source_loop_tag,
                     source_index = EXCLUDED.source_index,
-                    ic = EXCLUDED.ic,
-                    annualized_return = EXCLUDED.annualized_return,
-                    max_drawdown = EXCLUDED.max_drawdown,
-                    sharpe = EXCLUDED.sharpe,
                     performance_metrics = EXCLUDED.performance_metrics,
-                    best_performance_ann_ret = EXCLUDED.best_performance_ann_ret,
-                    best_performance_sharpe = EXCLUDED.best_performance_sharpe,
                     first_sota_task_id = COALESCE(aistock_factor_catalog.first_sota_task_id, EXCLUDED.first_sota_task_id),
                     dedup_hash = COALESCE(EXCLUDED.dedup_hash, aistock_factor_catalog.dedup_hash),
                     dedup_group_id = COALESCE(EXCLUDED.dedup_group_id, aistock_factor_catalog.dedup_group_id),
@@ -570,8 +558,7 @@ def sync_factors_from_task(
                         expression, True, task_id,
                         task_id, source_code_origin,
                         str(loop_id) if loop_id is not None else None, i,
-                        ic_val, ann_ret, max_dd, info_ratio,
-                        perf_metrics_json, ann_ret, info_ratio,
+                        perf_metrics_json,
                         dedup_hash, dedup_group_id, is_dedup_primary,
                         code_text_value,
                         asset_path_value or None,
@@ -579,7 +566,7 @@ def sync_factors_from_task(
                     # rowcount: 1 for insert, 1 for update
                     inserted += 1
 
-            logger.info(f"[{task_id}] 因子 {fname} 入库成功 (loop={loop_id}, ic={ic_val}, ann_ret={ann_ret}, sharpe={info_ratio})")
+            logger.info(f"[{task_id}] 因子 {fname} 入库成功 (loop={loop_id}, task metrics kept only in performance_metrics trace)")
 
         except Exception as e:
             err_msg = f"因子 {fname} 入库失败: {e}"
@@ -680,11 +667,7 @@ def sync_factors_from_loop(
                 else:
                     dedup_group_id = str(uuid.uuid4())[:12]
 
-            # 回测指标来自 Loop 整体 metrics
-            ann_ret = loop_metrics.get("annualized_return")
-            max_dd = loop_metrics.get("max_drawdown")
-            info_ratio = loop_metrics.get("information_ratio")
-            ic_val = loop_metrics.get("ic")
+            # Loop 回测指标仅保留为原始 trace，不再写入 catalog 兼容指标字段。
 
             # 保存因子代码文件到 task_dir (如果提供)
             code_text_value = code_for_factor or None
@@ -710,8 +693,7 @@ def sync_factors_from_loop(
                     expression, is_sota_factor, first_sota_task_id,
                     source_task_id, source_code_origin,
                     source_loop_tag, source_index,
-                    ic, annualized_return, max_drawdown, sharpe,
-                    performance_metrics, best_performance_ann_ret, best_performance_sharpe,
+                    performance_metrics,
                     dedup_hash, dedup_group_id, is_dedup_primary, code_text, asset_path
                 )
                 VALUES (
@@ -719,8 +701,7 @@ def sync_factors_from_loop(
                     %s, %s, %s,
                     %s, %s,
                     %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s, %s,
+                    %s,
                     %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (factor_name, source) DO UPDATE SET
@@ -731,13 +712,7 @@ def sync_factors_from_loop(
                     source_code_origin = EXCLUDED.source_code_origin,
                     source_loop_tag = EXCLUDED.source_loop_tag,
                     source_index = EXCLUDED.source_index,
-                    ic = EXCLUDED.ic,
-                    annualized_return = EXCLUDED.annualized_return,
-                    max_drawdown = EXCLUDED.max_drawdown,
-                    sharpe = EXCLUDED.sharpe,
                     performance_metrics = EXCLUDED.performance_metrics,
-                    best_performance_ann_ret = EXCLUDED.best_performance_ann_ret,
-                    best_performance_sharpe = EXCLUDED.best_performance_sharpe,
                     first_sota_task_id = COALESCE(aistock_factor_catalog.first_sota_task_id, EXCLUDED.first_sota_task_id),
                     dedup_hash = COALESCE(EXCLUDED.dedup_hash, aistock_factor_catalog.dedup_hash),
                     dedup_group_id = COALESCE(EXCLUDED.dedup_group_id, aistock_factor_catalog.dedup_group_id),
@@ -753,8 +728,7 @@ def sync_factors_from_loop(
                         expression, True, task_id,
                         task_id, "loop_manual_sync",
                         source_loop_tag, i,
-                        ic_val, ann_ret, max_dd, info_ratio,
-                        perf_metrics_json, ann_ret, info_ratio,
+                        perf_metrics_json,
                         dedup_hash, dedup_group_id, is_dedup_primary,
                         code_text_value,
                         asset_path_value,
@@ -763,7 +737,7 @@ def sync_factors_from_loop(
 
             logger.info(
                 f"[{task_id}] Loop {loop_id} 因子 {fname} 入库成功 "
-                f"(ic={ic_val}, ann_ret={ann_ret})"
+                "(loop metrics kept only in performance_metrics trace)"
             )
 
         except Exception as e:
