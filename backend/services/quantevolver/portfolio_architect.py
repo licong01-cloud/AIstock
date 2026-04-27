@@ -308,11 +308,20 @@ class PortfolioArchitect:
             with conn.cursor() as cur:
                 placeholders = ",".join(["%s"] * len(names_only))
                 cur.execute(f"""
-                    SELECT factor_name, factor_source, category, grade,
-                           ic_value, sharpe_value, ann_ret_value
-                    FROM qe_factor_classification
-                    WHERE factor_name IN ({placeholders})
-                """, names_only)
+                    SELECT c.factor_name, c.factor_source, c.category, c.grade,
+                           m.ic_mean AS ic_value,
+                           m.top_excess_sharpe AS sharpe_value,
+                           m.top_excess_annual_return AS ann_ret_value
+                    FROM qe_factor_classification c
+                    LEFT JOIN LATERAL (
+                        SELECT ic_mean, top_excess_sharpe, top_excess_annual_return
+                        FROM aistock_factor_metrics
+                        WHERE factor_name = c.factor_name AND eval_window = 'full' AND calc_engine = %s
+                        ORDER BY calculated_at DESC
+                        LIMIT 1
+                    ) m ON TRUE
+                    WHERE c.factor_name IN ({placeholders})
+                """, [CALC_ENGINE, *names_only])
                 # (name, source) 精确匹配 + name-only fallback
                 classified_by_pair: Dict[Tuple[str, str], Dict] = {}
                 classified_by_name: Dict[str, Dict] = {}
@@ -762,7 +771,9 @@ class PortfolioArchitect:
             g = f.get("grade", "")
             if g:
                 reason_parts.append(f"评级{g}({grade_label.get(g, g)})")
-            ic = f.get("ic_value")
+            ic = f.get("ic_mean")
+            if ic is None:
+                ic = f.get("ic_value")
             if ic is not None:
                 reason_parts.append(f"IC={ic:.4f}")
             cat = f.get("category", "")
@@ -843,9 +854,11 @@ class PortfolioArchitect:
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT c.factor_name, c.factor_source, c.category, c.grade,
-                           c.ic_value, c.sharpe_value, c.ann_ret_value,
+                           m.ic_mean AS ic_value,
+                           m.top_excess_sharpe AS sharpe_value,
+                           m.top_excess_annual_return AS ann_ret_value,
                            c.description, c.classification_reason,
-                           c.factor_profile, c.ic_decay_half_life,
+                           c.factor_profile, m.ic_decay_half_life,
                            m.ic_mean, m.icir, m.rank_ic_mean, m.rank_icir,
                            m.rank_ic_5d, m.rank_ic_10d, m.rank_ic_20d,
                            m.group_return_monotonicity
@@ -853,7 +866,8 @@ class PortfolioArchitect:
                     LEFT JOIN LATERAL (
                         SELECT ic_mean, icir, rank_ic_mean, rank_icir,
                                rank_ic_5d, rank_ic_10d, rank_ic_20d,
-                               group_return_monotonicity
+                               group_return_monotonicity, top_excess_sharpe,
+                               top_excess_annual_return, ic_decay_half_life
                         FROM aistock_factor_metrics
                         WHERE factor_name = c.factor_name AND eval_window = 'full' AND calc_engine = %s
                         ORDER BY calculated_at DESC
@@ -865,7 +879,7 @@ class PortfolioArchitect:
                             WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
                             WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
                         END ASC,
-                        c.ic_value DESC NULLS LAST
+                        m.ic_mean DESC NULLS LAST
                 """, (CALC_ENGINE,))
                 cols = [desc[0] for desc in cur.description]
                 factors = [dict(zip(cols, row)) for row in cur.fetchall()]
@@ -906,7 +920,9 @@ class PortfolioArchitect:
                 cur.execute("""
                     WITH ranked AS (
                         SELECT c.factor_name, c.factor_source, c.category, c.grade,
-                               c.ic_value, c.sharpe_value, c.factor_profile,
+                               m.ic_mean AS ic_value,
+                               m.top_excess_sharpe AS sharpe_value,
+                               c.factor_profile,
                                m.ic_mean, m.icir, m.rank_ic_mean,
                                m.top_excess_annual_return, m.ic_decay_half_life,
                                ROW_NUMBER() OVER (
@@ -932,7 +948,7 @@ class PortfolioArchitect:
                                   WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
                                   WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
                               END <= %s
-                          AND COALESCE(m.ic_mean, c.ic_value, 0) > %s
+                           AND m.ic_mean > %s
                     )
                     SELECT * FROM ranked WHERE rn <= %s
                     ORDER BY category, rn
@@ -944,7 +960,7 @@ class PortfolioArchitect:
         """构建轻量筛选 prompt (~2000 tokens)，返回候选因子列表文本。"""
         lines = []
         for f in candidates:
-            ic = f.get("ic_mean") or f.get("ic_value")
+            ic = f.get("ic_mean")
             ic_str = f"{float(ic):.4f}" if ic is not None else "N/A"
             icir_str = f"{float(f['icir']):.4f}" if f.get("icir") is not None else "N/A"
             lines.append(
@@ -1018,7 +1034,7 @@ class PortfolioArchitect:
         # 构建详细的因子数据
         detail_lines = []
         for f in screened_factors:
-            ic = f.get("ic_mean") or f.get("ic_value")
+            ic = f.get("ic_mean")
             ic_str = f"{float(ic):.4f}" if ic is not None else "N/A"
             icir_str = f"{float(f['icir']):.4f}" if f.get("icir") is not None else "N/A"
             rank_ic = f.get("rank_ic_mean")
