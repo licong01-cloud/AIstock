@@ -25,6 +25,13 @@ type SelectionRunSummary = {
   aggregate_results?: JsonObject[];
 };
 
+type ExecutionPolicySummary = {
+  policy_id: string;
+  algo_code?: string;
+  paper_enabled?: boolean;
+  policy_name?: string;
+};
+
 let ensuredPackages: PackageSummary[] = [];
 let ensuredRuns: SelectionRunSummary[] = [];
 
@@ -61,6 +68,9 @@ async function ensurePackageFromExperiment(request: APIRequestContext, experimen
     });
     expect(response.ok(), `create package ${experimentId}: ${JSON.stringify(payload)}`).toBeTruthy();
     found = payload.package;
+  }
+  if (!found) {
+    throw new Error(`StrategyPackage setup failed for ${experimentId}`);
   }
   if (found.package_status === "BACKTEST_APPROVED") {
     const { response, payload } = await apiJson(request, `/strategy-packages/${found.package_id}/enable-selection`, { method: "POST" });
@@ -100,6 +110,15 @@ async function ensureSuccessfulSelectionRun(request: APIRequestContext, pkg: Pac
   expect(payload.run.status).toBe("SUCCEEDED");
   expect(payload.run.aggregate_results?.length || 0).toBeGreaterThan(0);
   return payload.run;
+}
+
+async function requireV25PaperPolicy(request: APIRequestContext, pkg: PackageSummary): Promise<ExecutionPolicySummary> {
+  const { response, payload } = await apiJson(request, `/strategy-packages/${pkg.package_id}/execution-policies`);
+  expect(response.ok(), `load execution policies for ${pkg.package_name}: ${JSON.stringify(payload)}`).toBeTruthy();
+  const policies: ExecutionPolicySummary[] = payload.execution_policies || [];
+  const policy = policies.find((item) => item.algo_code === "V25_TWO_STAGE" && item.paper_enabled);
+  expect(policy, `${pkg.package_name} must already have a paper-enabled V25_TWO_STAGE policy; test must not mutate strategy assets`).toBeTruthy();
+  return policy!;
 }
 
 async function openSection(page: Page, heading: string) {
@@ -211,26 +230,61 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(results).toContainText(/union|source_run|raw_rank|artifact_source/);
   });
 
-  test("Portfolio page exposes single-package paper setup and fails fast on unavailable V24/V25 assets", async ({ page }) => {
+  test("Portfolio page creates a V25 replay portfolio and exposes ledger/performance", async ({ page, request }) => {
     const target = ensuredPackages[0];
-    await page.goto(`/paper-v2/portfolios?package_id=${target.package_id}`);
-    await expect(page.getByRole("heading", { name: "从单个策略包启动模拟盘" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "当前正在运行或已创建的模拟盘" })).toBeVisible();
+    const policy = await requireV25PaperPolicy(request, target);
+    const portfolioName = `E2E-V25-${Date.now()}`;
 
-    const createSection = await openSection(page, "从单个策略包启动模拟盘");
-    await createSection.locator("select").first().selectOption(target.package_id);
-    await field(createSection, "组合名称").locator("input").fill(`E2E-${Date.now()}`);
-    await field(createSection, "初始资金").locator("input").fill("1000000");
-    await field(createSection, "启动模式").locator("select").selectOption("replay");
-    await expect(field(createSection, "数据源").locator("input")).toHaveValue("DB_HISTORICAL");
-    await field(createSection, "回放开始日期").locator("input").fill("2026-04-20");
-    await field(createSection, "回放结束日期").locator("input").fill(REPLAY_TRADE_DATE);
-    await field(createSection, "TopK").locator("input").fill("20");
+    await page.goto(`/paper-v2/portfolios?package_id=${target.package_id}`);
+    await expect(page.locator("body")).toContainText("V25_TWO_STAGE");
+
+    const createSection = page.locator("section.pv2-card").first();
+    await createSection.locator("select").nth(0).selectOption(target.package_id);
+    await createSection.locator("input.pv2-input").nth(0).fill(portfolioName);
+    await createSection.locator("input.pv2-input").nth(1).fill("1000000");
+    await createSection.locator("select").nth(1).selectOption("replay");
+    await expect(createSection.locator("input.pv2-input").nth(2)).toHaveValue("DB_HISTORICAL");
+    await createSection.locator("select").nth(2).selectOption(policy.policy_id);
+    await expect(createSection.locator("select").nth(2)).toContainText("V25_TWO_STAGE");
+    await createSection.locator("input.pv2-input").nth(3).fill(REPLAY_TRADE_DATE);
+    await createSection.locator("input.pv2-input").nth(4).fill(REPLAY_TRADE_DATE);
+    await createSection.locator('input[type="number"]').nth(1).fill("20");
     await createSection.locator("button.pv2-button-primary").click();
 
-    await expect(page.getByText("组合操作失败")).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator("body")).toContainText(/V24_PLAN|DATA_UNAVAILABLE|EXECUTION_ALGO_ERROR|model_path/);
-    await expect(page.locator("body")).not.toContainText("created_portfolio_id");
+    const createdJson = page.locator("pre.pv2-json").filter({ hasText: "created_portfolio_id" }).last();
+    await expect(createdJson).toBeVisible({ timeout: 180_000 });
+    await expect(createdJson).toContainText("SUCCEEDED", { timeout: 30_000 });
+    const createdPayload = JSON.parse((await createdJson.textContent()) || "{}");
+    const portfolioId = String(createdPayload.created_portfolio_id || "");
+    expect(portfolioId).toMatch(/^paper_/);
+    expect(createdPayload.session_progress?.session?.status).toBe("SUCCEEDED");
+
+    const [runs, orders, fills, positions, snapshots, errors, performance] = await Promise.all([
+      apiJson(request, `/paper-v2/portfolios/${portfolioId}/runs?limit=100`),
+      apiJson(request, `/paper-v2/portfolios/${portfolioId}/orders?limit=1000`),
+      apiJson(request, `/paper-v2/portfolios/${portfolioId}/fills?limit=1000`),
+      apiJson(request, `/paper-v2/portfolios/${portfolioId}/positions?limit=1000`),
+      apiJson(request, `/paper-v2/portfolios/${portfolioId}/daily-snapshots?limit=1000`),
+      apiJson(request, `/paper-v2/portfolios/${portfolioId}/errors?limit=1000`),
+      apiJson(request, `/paper-v2/portfolios/${portfolioId}/performance-report`),
+    ]);
+    expect(runs.payload.runs?.[0]?.status).toBe("SUCCEEDED");
+    expect(orders.payload.orders?.length || 0).toBeGreaterThan(0);
+    expect(fills.payload.fills?.length || 0).toBeGreaterThan(0);
+    expect(positions.payload.positions?.length || 0).toBeGreaterThan(0);
+    expect(snapshots.payload.daily_snapshots?.length || 0).toBeGreaterThan(0);
+    expect(errors.payload.errors?.length || 0).toBe(0);
+    expect(performance.payload.performance_report?.snapshot_count).toBeGreaterThan(0);
+
+    await page.goto(`/paper-v2/portfolios/${portfolioId}/ledger`);
+    await expect(page.locator("table").nth(0).locator("tbody tr").first()).toBeVisible();
+    await expect(page.locator("table").nth(1).locator("tbody tr").first()).toBeVisible();
+    await expect(page.locator("table").nth(3).locator("tbody tr").first()).toBeVisible();
+    await expect(page.locator("table").nth(4).locator("tbody tr").first()).toBeVisible();
+
+    await page.goto(`/paper-v2/portfolios/${portfolioId}/performance`);
+    await expect(page.locator("pre.pv2-json")).toContainText("snapshot_count");
+    await expect(page.locator("table").nth(0).locator("tbody tr").first()).toBeVisible();
   });
 
   test("Negative APIs return structured errors and TDX realtime minute endpoint is reachable", async ({ request }) => {
