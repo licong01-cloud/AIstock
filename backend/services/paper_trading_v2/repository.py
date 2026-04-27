@@ -15,17 +15,25 @@ from backend.services.trading_core.models import AccountSnapshot, Fill, Order, O
 
 from .market_data import MinuteDataSource
 from .models import (
+    ConfigChangeType,
     ExecutionPolicyActivationStatus,
     IntradaySnapshot,
     OrderExecutionState,
+    PaperConfigChangeAudit,
     PaperExecutionPolicyActivation,
     PaperPortfolio,
     PaperRun,
+    PaperRuntimeConfigActivation,
+    PaperRuntimeProfile,
+    PaperRuntimeProfileVersion,
     PaperSessionDay,
     PaperSessionPhase,
     PaperSessionStatus,
     PaperTradingSession,
     PortfolioStatus,
+    RuntimeConfigActivationStatus,
+    RuntimeProfileStatus,
+    RuntimeProfileValidationStatus,
 )
 
 ConnFactory = Callable[[], Iterator[Any]]
@@ -608,6 +616,275 @@ class PaperTradingV2Repository:
         )
         return [self._execution_policy_activation_from_row(row) for row in rows]
 
+    def save_runtime_profile(self, profile: PaperRuntimeProfile) -> PaperRuntimeProfile:
+        self.get_portfolio(profile.portfolio_id)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO paper_v2.runtime_profile (
+                        profile_id, portfolio_id, package_id, profile_name, status,
+                        current_version_id, created_by, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        profile.profile_id,
+                        profile.portfolio_id,
+                        profile.package_id,
+                        profile.profile_name,
+                        profile.status.value,
+                        profile.current_version_id,
+                        profile.created_by,
+                        profile.created_at,
+                        profile.updated_at,
+                    ),
+                )
+        return profile
+
+    def update_runtime_profile_current_version(
+        self,
+        *,
+        profile_id: str,
+        current_version_id: str,
+    ) -> PaperRuntimeProfile:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE paper_v2.runtime_profile
+                    SET current_version_id = %s, updated_at = NOW()
+                    WHERE profile_id = %s
+                    """,
+                    (current_version_id, profile_id),
+                )
+                if cur.rowcount != 1:
+                    raise DataUnavailableError("paper v2 runtime profile does not exist", context={"profile_id": profile_id})
+        return self.get_runtime_profile(profile_id)
+
+    def get_runtime_profile(self, profile_id: str) -> PaperRuntimeProfile:
+        rows = self._fetch_rows("SELECT * FROM paper_v2.runtime_profile WHERE profile_id = %s", (profile_id,))
+        if not rows:
+            raise DataUnavailableError("paper v2 runtime profile does not exist", context={"profile_id": profile_id})
+        return self._runtime_profile_from_row(rows[0])
+
+    def list_runtime_profiles(self, portfolio_id: str, *, limit: int = 100) -> list[PaperRuntimeProfile]:
+        self.get_portfolio(portfolio_id)
+        rows = self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.runtime_profile
+            WHERE portfolio_id = %s
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT %s
+            """,
+            (portfolio_id, limit),
+        )
+        return [self._runtime_profile_from_row(row) for row in rows]
+
+    def save_runtime_profile_version(
+        self,
+        version: PaperRuntimeProfileVersion,
+    ) -> PaperRuntimeProfileVersion:
+        self.get_runtime_profile(version.profile_id)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO paper_v2.runtime_profile_version (
+                        profile_version_id, profile_id, version_no, config_json,
+                        config_sha256, validation_status, validation_errors,
+                        created_by, reason, created_at, supersedes_version_id
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        version.profile_version_id,
+                        version.profile_id,
+                        version.version_no,
+                        psycopg2.extras.Json(version.config_json),
+                        version.config_sha256,
+                        version.validation_status.value,
+                        psycopg2.extras.Json(version.validation_errors),
+                        version.created_by,
+                        version.reason,
+                        version.created_at,
+                        version.supersedes_version_id,
+                    ),
+                )
+        return version
+
+    def get_runtime_profile_version(self, profile_version_id: str) -> PaperRuntimeProfileVersion:
+        rows = self._fetch_rows(
+            "SELECT * FROM paper_v2.runtime_profile_version WHERE profile_version_id = %s",
+            (profile_version_id,),
+        )
+        if not rows:
+            raise DataUnavailableError(
+                "paper v2 runtime profile version does not exist",
+                context={"profile_version_id": profile_version_id},
+            )
+        return self._runtime_profile_version_from_row(rows[0])
+
+    def list_runtime_profile_versions(
+        self,
+        profile_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[PaperRuntimeProfileVersion]:
+        self.get_runtime_profile(profile_id)
+        rows = self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.runtime_profile_version
+            WHERE profile_id = %s
+            ORDER BY version_no DESC, created_at DESC
+            LIMIT %s
+            """,
+            (profile_id, limit),
+        )
+        return [self._runtime_profile_version_from_row(row) for row in rows]
+
+    def save_runtime_config_activation(
+        self,
+        activation: PaperRuntimeConfigActivation,
+    ) -> PaperRuntimeConfigActivation:
+        self.get_portfolio(activation.portfolio_id)
+        self.get_runtime_profile_version(activation.profile_version_id)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO paper_v2.runtime_config_activation (
+                        activation_id, portfolio_id, trade_date, profile_version_id,
+                        status, activated_at, activated_by, reason, context,
+                        superseded_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        activation.activation_id,
+                        activation.portfolio_id,
+                        activation.trade_date,
+                        activation.profile_version_id,
+                        activation.status.value,
+                        activation.activated_at,
+                        activation.activated_by,
+                        activation.reason,
+                        psycopg2.extras.Json(activation.context),
+                        activation.superseded_at,
+                    ),
+                )
+        active = self.get_active_runtime_config_activation(activation.portfolio_id, activation.trade_date)
+        if active is None:
+            raise InvalidStateTransitionError(
+                "paper runtime config activation was not persisted as active",
+                context={"activation_id": activation.activation_id},
+            )
+        return active
+
+    def get_active_runtime_config_activation(
+        self,
+        portfolio_id: str,
+        trade_date: date,
+    ) -> PaperRuntimeConfigActivation | None:
+        rows = self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.runtime_config_activation
+            WHERE portfolio_id = %s AND trade_date = %s AND status = 'ACTIVE'
+            ORDER BY activated_at DESC
+            LIMIT 1
+            """,
+            (portfolio_id, trade_date),
+        )
+        return self._runtime_config_activation_from_row(rows[0]) if rows else None
+
+    def supersede_runtime_config_activation(
+        self,
+        *,
+        portfolio_id: str,
+        trade_date: date,
+    ) -> int:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE paper_v2.runtime_config_activation
+                    SET status = 'SUPERSEDED', superseded_at = NOW()
+                    WHERE portfolio_id = %s AND trade_date = %s AND status = 'ACTIVE'
+                    """,
+                    (portfolio_id, trade_date),
+                )
+                return int(cur.rowcount)
+
+    def list_runtime_config_activations(
+        self,
+        portfolio_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[PaperRuntimeConfigActivation]:
+        self.get_portfolio(portfolio_id)
+        rows = self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.runtime_config_activation
+            WHERE portfolio_id = %s
+            ORDER BY trade_date DESC, activated_at DESC
+            LIMIT %s
+            """,
+            (portfolio_id, limit),
+        )
+        return [self._runtime_config_activation_from_row(row) for row in rows]
+
+    def save_config_change_audit(self, audit: PaperConfigChangeAudit) -> PaperConfigChangeAudit:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    INSERT INTO paper_v2.config_change_audit (
+                        portfolio_id, package_id, object_type, object_id, change_type,
+                        before_json, after_json, before_sha256, after_sha256,
+                        reason, created_by, request_id, code_version, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING *
+                    """,
+                    (
+                        audit.portfolio_id,
+                        audit.package_id,
+                        audit.object_type,
+                        audit.object_id,
+                        audit.change_type.value,
+                        psycopg2.extras.Json(audit.before_json) if audit.before_json is not None else None,
+                        psycopg2.extras.Json(audit.after_json) if audit.after_json is not None else None,
+                        audit.before_sha256,
+                        audit.after_sha256,
+                        audit.reason,
+                        audit.created_by,
+                        audit.request_id,
+                        audit.code_version,
+                        audit.created_at,
+                    ),
+                )
+                row = dict(cur.fetchone())
+        return self._config_change_audit_from_row(row)
+
+    def list_config_change_audit(
+        self,
+        portfolio_id: str,
+        *,
+        limit: int = 200,
+    ) -> list[PaperConfigChangeAudit]:
+        self.get_portfolio(portfolio_id)
+        rows = self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.config_change_audit
+            WHERE portfolio_id = %s
+            ORDER BY created_at DESC, audit_id DESC
+            LIMIT %s
+            """,
+            (portfolio_id, limit),
+        )
+        return [self._config_change_audit_from_row(row) for row in rows]
+
     def list_runs(self, portfolio_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
         return self._fetch_rows(
             """
@@ -1104,6 +1381,71 @@ class PaperTradingV2Repository:
         )
 
     @staticmethod
+    def _runtime_profile_from_row(row: dict[str, Any]) -> PaperRuntimeProfile:
+        return PaperRuntimeProfile(
+            profile_id=row["profile_id"],
+            portfolio_id=row["portfolio_id"],
+            package_id=row["package_id"],
+            profile_name=row["profile_name"],
+            status=RuntimeProfileStatus(row["status"]),
+            current_version_id=row.get("current_version_id"),
+            created_by=row.get("created_by"),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _runtime_profile_version_from_row(row: dict[str, Any]) -> PaperRuntimeProfileVersion:
+        return PaperRuntimeProfileVersion(
+            profile_version_id=row["profile_version_id"],
+            profile_id=row["profile_id"],
+            version_no=int(row["version_no"]),
+            config_json=row["config_json"] or {},
+            config_sha256=row["config_sha256"],
+            validation_status=RuntimeProfileValidationStatus(row["validation_status"]),
+            validation_errors=row["validation_errors"] or [],
+            created_by=row.get("created_by"),
+            reason=row.get("reason"),
+            created_at=row["created_at"],
+            supersedes_version_id=row.get("supersedes_version_id"),
+        )
+
+    @staticmethod
+    def _runtime_config_activation_from_row(row: dict[str, Any]) -> PaperRuntimeConfigActivation:
+        return PaperRuntimeConfigActivation(
+            activation_id=row["activation_id"],
+            portfolio_id=row["portfolio_id"],
+            trade_date=row["trade_date"],
+            profile_version_id=row["profile_version_id"],
+            status=RuntimeConfigActivationStatus(row["status"]),
+            activated_at=row["activated_at"],
+            activated_by=row.get("activated_by"),
+            reason=row.get("reason"),
+            context=row.get("context") or {},
+            superseded_at=row.get("superseded_at"),
+        )
+
+    @staticmethod
+    def _config_change_audit_from_row(row: dict[str, Any]) -> PaperConfigChangeAudit:
+        return PaperConfigChangeAudit(
+            audit_id=row.get("audit_id"),
+            portfolio_id=row.get("portfolio_id"),
+            package_id=row.get("package_id"),
+            object_type=row["object_type"],
+            object_id=row["object_id"],
+            change_type=ConfigChangeType(row["change_type"]),
+            before_json=row.get("before_json"),
+            after_json=row.get("after_json"),
+            before_sha256=row.get("before_sha256"),
+            after_sha256=row.get("after_sha256"),
+            reason=row.get("reason"),
+            created_by=row.get("created_by"),
+            request_id=row.get("request_id"),
+            code_version=row.get("code_version"),
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
     def _session_from_row(row: dict[str, Any]) -> PaperTradingSession:
         return PaperTradingSession(
             session_id=row["session_id"],
@@ -1205,6 +1547,10 @@ class InMemoryPaperTradingV2Repository:
         self.run_events: list[dict[str, Any]] = []
         self.reset_audits: list[dict[str, Any]] = []
         self.execution_policy_activations: dict[str, PaperExecutionPolicyActivation] = {}
+        self.runtime_profiles: dict[str, PaperRuntimeProfile] = {}
+        self.runtime_profile_versions: dict[str, PaperRuntimeProfileVersion] = {}
+        self.runtime_config_activations: dict[str, PaperRuntimeConfigActivation] = {}
+        self.config_change_audits: list[PaperConfigChangeAudit] = []
         self.sessions: dict[str, PaperTradingSession] = {}
         self.session_days: dict[tuple[str, date], PaperSessionDay] = {}
         self.session_events: list[dict[str, Any]] = []
@@ -1442,6 +1788,163 @@ class InMemoryPaperTradingV2Repository:
             if activation.portfolio_id == portfolio_id
         ]
         rows.sort(key=lambda item: (item.trade_date, item.activated_at), reverse=True)
+        return rows[:limit]
+
+    def save_runtime_profile(self, profile: PaperRuntimeProfile) -> PaperRuntimeProfile:
+        self.get_portfolio(profile.portfolio_id)
+        self.runtime_profiles[profile.profile_id] = profile
+        return profile
+
+    def update_runtime_profile_current_version(
+        self,
+        *,
+        profile_id: str,
+        current_version_id: str,
+    ) -> PaperRuntimeProfile:
+        profile = self.get_runtime_profile(profile_id)
+        updated = profile.model_copy(
+            update={
+                "current_version_id": current_version_id,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        self.runtime_profiles[profile_id] = updated
+        return updated
+
+    def get_runtime_profile(self, profile_id: str) -> PaperRuntimeProfile:
+        try:
+            return self.runtime_profiles[profile_id]
+        except KeyError as exc:
+            raise DataUnavailableError("paper v2 runtime profile does not exist", context={"profile_id": profile_id}) from exc
+
+    def list_runtime_profiles(self, portfolio_id: str, *, limit: int = 100) -> list[PaperRuntimeProfile]:
+        self.get_portfolio(portfolio_id)
+        rows = [profile for profile in self.runtime_profiles.values() if profile.portfolio_id == portfolio_id]
+        rows.sort(key=lambda item: (item.updated_at, item.created_at), reverse=True)
+        return rows[:limit]
+
+    def save_runtime_profile_version(
+        self,
+        version: PaperRuntimeProfileVersion,
+    ) -> PaperRuntimeProfileVersion:
+        self.get_runtime_profile(version.profile_id)
+        duplicate = [
+            item
+            for item in self.runtime_profile_versions.values()
+            if item.profile_id == version.profile_id
+            and (item.version_no == version.version_no or item.config_sha256 == version.config_sha256)
+        ]
+        if duplicate:
+            raise InvalidStateTransitionError(
+                "runtime profile version already exists for version_no or config hash",
+                context={"profile_id": version.profile_id, "version_no": version.version_no},
+            )
+        self.runtime_profile_versions[version.profile_version_id] = version
+        return version
+
+    def get_runtime_profile_version(self, profile_version_id: str) -> PaperRuntimeProfileVersion:
+        try:
+            return self.runtime_profile_versions[profile_version_id]
+        except KeyError as exc:
+            raise DataUnavailableError(
+                "paper v2 runtime profile version does not exist",
+                context={"profile_version_id": profile_version_id},
+            ) from exc
+
+    def list_runtime_profile_versions(
+        self,
+        profile_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[PaperRuntimeProfileVersion]:
+        self.get_runtime_profile(profile_id)
+        rows = [version for version in self.runtime_profile_versions.values() if version.profile_id == profile_id]
+        rows.sort(key=lambda item: (item.version_no, item.created_at), reverse=True)
+        return rows[:limit]
+
+    def save_runtime_config_activation(
+        self,
+        activation: PaperRuntimeConfigActivation,
+    ) -> PaperRuntimeConfigActivation:
+        self.get_portfolio(activation.portfolio_id)
+        self.get_runtime_profile_version(activation.profile_version_id)
+        if (
+            activation.status == RuntimeConfigActivationStatus.ACTIVE
+            and self.get_active_runtime_config_activation(activation.portfolio_id, activation.trade_date) is not None
+        ):
+            raise InvalidStateTransitionError(
+                "active runtime config activation already exists for portfolio trade_date",
+                context={"portfolio_id": activation.portfolio_id, "trade_date": activation.trade_date.isoformat()},
+            )
+        self.runtime_config_activations[activation.activation_id] = activation
+        return activation
+
+    def get_active_runtime_config_activation(
+        self,
+        portfolio_id: str,
+        trade_date: date,
+    ) -> PaperRuntimeConfigActivation | None:
+        active = [
+            activation
+            for activation in self.runtime_config_activations.values()
+            if activation.portfolio_id == portfolio_id
+            and activation.trade_date == trade_date
+            and activation.status == RuntimeConfigActivationStatus.ACTIVE
+        ]
+        active.sort(key=lambda item: item.activated_at, reverse=True)
+        return active[0] if active else None
+
+    def supersede_runtime_config_activation(
+        self,
+        *,
+        portfolio_id: str,
+        trade_date: date,
+    ) -> int:
+        count = 0
+        for activation_id, activation in list(self.runtime_config_activations.items()):
+            if (
+                activation.portfolio_id == portfolio_id
+                and activation.trade_date == trade_date
+                and activation.status == RuntimeConfigActivationStatus.ACTIVE
+            ):
+                self.runtime_config_activations[activation_id] = activation.model_copy(
+                    update={
+                        "status": RuntimeConfigActivationStatus.SUPERSEDED,
+                        "superseded_at": datetime.now(UTC),
+                    }
+                )
+                count += 1
+        return count
+
+    def list_runtime_config_activations(
+        self,
+        portfolio_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[PaperRuntimeConfigActivation]:
+        self.get_portfolio(portfolio_id)
+        rows = [
+            activation
+            for activation in self.runtime_config_activations.values()
+            if activation.portfolio_id == portfolio_id
+        ]
+        rows.sort(key=lambda item: (item.trade_date, item.activated_at), reverse=True)
+        return rows[:limit]
+
+    def save_config_change_audit(self, audit: PaperConfigChangeAudit) -> PaperConfigChangeAudit:
+        saved = audit.model_copy(update={"audit_id": len(self.config_change_audits) + 1})
+        self.config_change_audits.append(saved)
+        return saved
+
+    def list_config_change_audit(
+        self,
+        portfolio_id: str,
+        *,
+        limit: int = 200,
+    ) -> list[PaperConfigChangeAudit]:
+        self.get_portfolio(portfolio_id)
+        rows = [item for item in self.config_change_audits if item.portfolio_id == portfolio_id]
+        rows.sort(key=lambda item: (item.created_at, item.audit_id or 0), reverse=True)
         return rows[:limit]
 
     def list_runs(self, portfolio_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
