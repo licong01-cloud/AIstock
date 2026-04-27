@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 import psycopg2.extras as pgx
 
 from ..db.pg_pool import get_conn
+from .data_refresh_audit import DataRefreshAuditRepository
 from .tushare_rate_limiter import get_limiter
 from .tushare_dataset_specs import DatasetSpec, QueryMode
 
@@ -98,6 +99,7 @@ class TushareSyncEngine:
 
     def __init__(self):
         self._pro = None  # lazy
+        self._refresh_audit = DataRefreshAuditRepository()
 
     @property
     def pro(self):
@@ -114,22 +116,36 @@ class TushareSyncEngine:
                 """INSERT INTO market.ingestion_jobs
                    (job_id, job_type, status, created_at, started_at, summary)
                    VALUES (%s, %s, 'running', NOW(), NOW(), %s)""",
-                (job_id, job_type, _json_dump(summary)),
+                (str(job_id), job_type, _json_dump(summary)),
             )
         return job_id
 
     def _start_existing_job(self, conn, job_id: uuid.UUID, summary: Dict[str, Any]) -> None:
         with conn.cursor() as cur:
+            cur.execute("SELECT summary FROM market.ingestion_jobs WHERE job_id=%s", (str(job_id),))
+            row = cur.fetchone()
+            base: Dict[str, Any] = {}
+            if row and row[0]:
+                try:
+                    base = json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "_start_existing_job: failed to parse existing summary for job %s",
+                        job_id,
+                    )
+                    base = {}
+            base.update(summary or {})
             cur.execute(
                 """UPDATE market.ingestion_jobs
                       SET status='running', started_at=COALESCE(started_at, NOW()), summary=%s
                     WHERE job_id=%s""",
-                (_json_dump(summary), job_id),
+                (_json_dump(base), str(job_id)),
             )
 
     def _finish_job(self, conn, job_id: uuid.UUID, status: str, summary: Dict[str, Any]) -> None:
         with conn.cursor() as cur:
-            cur.execute("SELECT summary FROM market.ingestion_jobs WHERE job_id=%s", (job_id,))
+            cur.execute("SELECT summary FROM market.ingestion_jobs WHERE job_id=%s", (str(job_id),))
             row = cur.fetchone()
             base: Dict[str, Any] = {}
             if row and row[0]:
@@ -144,14 +160,14 @@ class TushareSyncEngine:
                 """UPDATE market.ingestion_jobs
                       SET status=%s, finished_at=NOW(), summary=%s
                     WHERE job_id=%s""",
-                (status, _json_dump(base), job_id),
+                (status, _json_dump(base), str(job_id)),
             )
 
     def _log(self, conn, job_id: uuid.UUID, level: str, message: str) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO market.ingestion_logs (job_id, ts, level, message) VALUES (%s, NOW(), %s, %s)",
-                (job_id, level.upper(), message),
+                (str(job_id), level.upper(), message),
             )
 
     def _update_progress(self, conn, job_id: uuid.UUID, result: SyncResult) -> None:
@@ -172,7 +188,7 @@ class TushareSyncEngine:
                 """UPDATE market.ingestion_jobs
                       SET summary = COALESCE(summary::jsonb, '{}'::jsonb) || %s::jsonb
                     WHERE job_id = %s""",
-                (_json_dump(payload), job_id),
+                (_json_dump(payload), str(job_id)),
             )
 
     # -- data fetch / upsert ------------------------------------------------
@@ -242,6 +258,41 @@ class TushareSyncEngine:
             pgx.execute_values(cur, sql, values)
         return len(values)
 
+    def _replace_date_batch(
+        self,
+        conn,
+        spec: DatasetSpec,
+        trade_date: dt.date,
+        rows: List[Dict[str, Any]],
+    ) -> int:
+        """Replace one fetched date window so upstream deletions do not leave stale rows."""
+        if spec.query_mode != QueryMode.BY_DATE:
+            raise RuntimeError(f"{spec.name}: replace_existing_dates only supports BY_DATE specs")
+        if not spec.date_column:
+            raise RuntimeError(f"{spec.name}: replace_existing_dates requires date_column")
+
+        previous_autocommit = getattr(conn, "autocommit", None)
+        try:
+            if previous_autocommit is not None:
+                conn.autocommit = False
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"DELETE FROM {spec.target_table} WHERE {spec.date_column} = %s",
+                    (trade_date,),
+                )
+            inserted = self._upsert_batch(conn, spec, rows)
+            conn.commit()
+            return inserted
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            if previous_autocommit is not None:
+                conn.autocommit = previous_autocommit
+
     def _get_incremental_cursor(self, conn, spec: DatasetSpec) -> Optional[dt.date]:
         """Return max(date_column) from target table, or None if empty."""
         sql = f"SELECT max({spec.date_column}) FROM {spec.target_table}"
@@ -267,12 +318,36 @@ class TushareSyncEngine:
             ymd = d.strftime("%Y%m%d")
             try:
                 rows = self._fetch_from_tushare(spec, {"trade_date": ymd})
-                inserted = self._upsert_batch(conn, spec, rows)
+                if spec.replace_existing_dates:
+                    inserted = self._replace_date_batch(conn, spec, d, rows)
+                else:
+                    inserted = self._upsert_batch(conn, spec, rows)
+                self._refresh_audit.record_success(
+                    dataset=spec.name,
+                    trade_date=d,
+                    row_count=inserted,
+                    job_id=str(job_id),
+                    data_source="tushare",
+                    metadata={"tushare_api": spec.tushare_api, "mode": spec.query_mode.value},
+                    conn=conn,
+                )
                 result.inserted_rows += inserted
                 result.success_batches += 1
             except Exception as exc:
                 result.failed_batches += 1
                 self._log(conn, job_id, "error", f"{spec.name} {d} failed: {exc}")
+                try:
+                    self._refresh_audit.record_failure(
+                        dataset=spec.name,
+                        trade_date=d,
+                        error_message=str(exc),
+                        job_id=str(job_id),
+                        data_source="tushare",
+                        metadata={"tushare_api": spec.tushare_api, "mode": spec.query_mode.value},
+                        conn=conn,
+                    )
+                except Exception as audit_exc:
+                    self._log(conn, job_id, "error", f"{spec.name} {d} refresh audit failed: {audit_exc}")
 
             try:
                 self._update_progress(conn, job_id, result)

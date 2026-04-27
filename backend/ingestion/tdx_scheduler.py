@@ -49,6 +49,21 @@ _logger = logging.getLogger(__name__)
 # Datasets that the unified engine handles (bypass subprocess scripts)
 _ENGINE_DATASETS = frozenset(DATASET_REGISTRY.keys())
 
+_AUTO_RETRY_DELAY_MINUTES = 60
+_AUTO_RETRY_DEDUP_SECONDS = 60
+_AUTO_RETRY_EXCLUDED_DATASETS = frozenset(
+    {
+        "_data_freshness_check",
+        "_auto_retry_stale",
+        "_weekend_compensation",
+    }
+)
+_AUTO_RETRY_EXCLUDED_PREFIXES = ("_suspend_d_", "correlation_", "factor_metrics_")
+_AUTO_RETRY_CHECK_ALIASES = {
+    # sw_sector is the scheduled composite dataset; sw_daily is the table checked.
+    "sw_sector": "sw_daily",
+}
+
 # TDX datasets whose incremental mode should go through Go backend API (not ingest_incremental.py)
 _GO_INCREMENTAL_DATASETS: Dict[str, Dict[str, str]] = {
     "kline_daily_raw": {
@@ -117,6 +132,24 @@ def _parse_options(options: Any) -> Dict[str, Any]:
         except json.JSONDecodeError:
             return {}
     return {}
+
+
+def _is_auto_retry_excluded_dataset(dataset: str) -> bool:
+    ds = (dataset or "").strip().lower()
+    return ds in _AUTO_RETRY_EXCLUDED_DATASETS or ds.startswith(_AUTO_RETRY_EXCLUDED_PREFIXES)
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_zero_update_success(status: str, inserted_rows: Any) -> bool:
+    return (status or "").lower() == "success" and _coerce_int(inserted_rows) == 0
 
 
 from ..db.pg_pool import get_conn
@@ -241,6 +274,7 @@ class TDXScheduler:
         self._job_snapshots: Dict[str, str] = {}
         self._lock = threading.RLock()
         self._tracker = _FutureTracker()
+        self._delayed_retry_keys: set[str] = set()
         DEFAULT_TEST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -312,7 +346,7 @@ class TDXScheduler:
                 )
         return rows
 
-    def _execute(self, sql: str, params: Tuple[Any, ...]) -> None:
+    def _execute(self, sql: str, params: Tuple[Any, ...] = ()) -> None:
         t0 = time.time()
         with _get_conn(self._db_cfg) as conn:
             with conn.cursor() as cur:
@@ -326,6 +360,148 @@ class TDXScheduler:
                     "slow execute %.1fms thread=%s sql=%s params=%s",
                     cost_ms, threading.current_thread().name, preview, params,
                 )
+
+    @staticmethod
+    def _frequency_cooldown_seconds(frequency: str) -> int:
+        freq = (frequency or "").strip().lower()
+        try:
+            if freq.endswith("s") and freq[:-1].isdigit():
+                return max(1, int(int(freq[:-1]) * 0.8))
+            if freq.endswith("m") and freq[:-1].isdigit():
+                return max(55, int(int(freq[:-1]) * 60 * 0.8))
+            if freq.endswith("h") and freq[:-1].isdigit():
+                return max(55, int(int(freq[:-1]) * 3600 * 0.8))
+        except Exception:
+            return 55
+        if freq in {"daily", "day", "1d"}:
+            return 23 * 3600
+        if freq in {"weekly", "week", "1w"}:
+            return 6 * 24 * 3600
+        return 55
+
+    def _claim_scheduled_fire(
+        self,
+        schedule_id: str,
+        dataset: str,
+        mode: str,
+        frequency: str,
+    ) -> bool:
+        """Claim a scheduled fire in DB so multiple backend instances do not duplicate it."""
+        if not schedule_id:
+            return True
+        cooldown_seconds = self._frequency_cooldown_seconds(frequency)
+        try:
+            rows = self._fetchall(
+                """
+                UPDATE market.ingestion_schedules
+                   SET last_run_at = NOW(),
+                       last_status = 'claimed',
+                       updated_at = NOW()
+                 WHERE schedule_id = %s
+                   AND (
+                       last_run_at IS NULL
+                       OR last_run_at < NOW() - (%s || ' seconds')::interval
+                   )
+                 RETURNING schedule_id
+                """,
+                (schedule_id, str(cooldown_seconds)),
+            )
+            if not rows:
+                _logger.info(
+                    "skip duplicate scheduled ingestion: schedule=%s dataset=%s mode=%s cooldown=%ss",
+                    schedule_id, dataset, mode, cooldown_seconds,
+                )
+                return False
+            return True
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("scheduled ingestion claim failed for %s/%s: %s", dataset, mode, exc)
+            return True
+
+    def _recent_dataset_submission_exists(
+        self,
+        dataset: str,
+        mode: str,
+        window_seconds: int = _AUTO_RETRY_DEDUP_SECONDS,
+    ) -> bool:
+        ds = (dataset or "").strip().lower()
+        md = (mode or "").strip().lower()
+        if not ds:
+            return False
+        try:
+            rows = self._fetchall(
+                """
+                SELECT job_id
+                  FROM market.ingestion_jobs
+                 WHERE created_at >= NOW() - (%s || ' seconds')::interval
+                   AND lower(summary->>'dataset') = %s
+                   AND lower(COALESCE(summary->>'mode', '')) = %s
+                   AND status IN ('queued', 'pending', 'running', 'success')
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                (str(max(int(window_seconds), 1)), ds, md),
+            )
+            return bool(rows)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("recent dataset submission check failed for %s/%s: %s", dataset, mode, exc)
+            return False
+
+    def _mark_job_skipped_duplicate(
+        self,
+        job_id_str: Optional[str],
+        dataset: str,
+        mode: str,
+        reason: str,
+    ) -> None:
+        if not job_id_str:
+            return
+        try:
+            job_id = uuid.UUID(str(job_id_str))
+        except Exception:
+            return
+        payload = {
+            "dataset": dataset,
+            "mode": mode,
+            "skipped": True,
+            "skip_reason": reason,
+        }
+        try:
+            self._execute(
+                """
+                UPDATE market.ingestion_jobs
+                   SET status = 'success',
+                       finished_at = NOW(),
+                       summary = COALESCE(summary::jsonb, '{}'::jsonb) || %s::jsonb
+                 WHERE job_id = %s
+                """,
+                (json.dumps(payload, ensure_ascii=False, default=str), job_id),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("failed to mark duplicate job %s as skipped: %s", job_id, exc)
+
+    def _job_update_outcome(self, job_id: uuid.UUID) -> Dict[str, Any]:
+        rows = self._fetchall(
+            """
+            SELECT status,
+                   COALESCE(
+                       summary->>'inserted_rows',
+                       summary#>>'{stats,inserted_rows}',
+                       summary#>>'{counters,inserted_rows}'
+                   ) AS inserted_rows
+              FROM market.ingestion_jobs
+             WHERE job_id = %s
+            """,
+            (job_id,),
+        )
+        return dict(rows[0]) if rows else {}
+
+    def _check_dataset_recovered(self, dataset: str) -> Optional[Any]:
+        check_dataset = _AUTO_RETRY_CHECK_ALIASES.get(dataset, dataset)
+        checker = DataCompletenessChecker(self._db_cfg)
+        results = checker.check_datasets([check_dataset])
+        if not results:
+            return None
+        return results[0]
 
     # ------------------------------------------------------------------
     # schedule management
@@ -415,7 +591,8 @@ class TDXScheduler:
         schedule_id = str(row["schedule_id"])
         dataset = row.get("dataset")
         mode = row.get("mode")
-        job.do(self._scheduled_ingestion_run, schedule_id, dataset, mode, options).tag(
+        frequency = row.get("frequency", "")
+        job.do(self._scheduled_ingestion_run, schedule_id, dataset, mode, options, frequency).tag(
             f"ingestion:{schedule_id}"
         )
         return job
@@ -547,19 +724,87 @@ class TDXScheduler:
 
         return start_date, latest_trading
 
+    def _resolve_suspend_d_refresh_range(
+        self,
+        date_strategy: str,
+        today: Optional[dt.date] = None,
+    ) -> Tuple[dt.date, dt.date]:
+        """Resolve the explicit date range for scheduled suspend_d refreshes.
+
+        ``suspend_d`` is a pre-trade mutable dataset.  Its scheduled jobs must
+        re-fetch current/next trading days explicitly instead of relying on the
+        incremental MAX(date)+1 cursor, because the previous evening may have
+        already inserted tomorrow's rows and same-day morning refreshes still
+        need to upsert newer rows.
+        """
+        today = today or dt.date.today()
+        strategy = (date_strategy or "current_or_next_trading_day").strip().lower()
+        current_is_trading = self._is_trading_day(today)
+
+        def next_trading_day(strictly_after: bool) -> dt.date:
+            op = ">" if strictly_after else ">="
+            rows = self._fetchall(
+                f"""
+                SELECT MIN(cal_date) AS trade_date
+                FROM market.trading_calendar
+                WHERE is_trading = TRUE AND cal_date {op} %s
+                """,
+                (today,),
+            )
+            value = rows[0].get("trade_date") if rows else None
+            if value is None:
+                raise RuntimeError("trading_calendar has no next trading day for suspend_d refresh")
+            return value
+
+        if strategy == "current_trading_day":
+            if not current_is_trading:
+                raise RuntimeError("current_trading_day suspend_d refresh requested on a non-trading day")
+            return today, today
+        if strategy == "next_trading_day":
+            target = next_trading_day(strictly_after=current_is_trading)
+            return target, target
+        if strategy == "current_and_next_trading_day":
+            if current_is_trading:
+                nxt = next_trading_day(strictly_after=True)
+                return min(today, nxt), max(today, nxt)
+            target = next_trading_day(strictly_after=False)
+            return target, target
+        if strategy == "current_or_next_trading_day":
+            target = today if current_is_trading else next_trading_day(strictly_after=False)
+            return target, target
+        raise RuntimeError(f"unsupported suspend_d date_strategy: {date_strategy}")
+
     # ------------------------------------------------------------------
     def _scheduled_ingestion_run(
-        self, schedule_id: str, dataset: str, mode: str, options: Dict[str, Any]
+        self, schedule_id: str, dataset: str, mode: str, options: Dict[str, Any], frequency: str = ""
     ) -> None:
-        key = f"ingestion:{dataset}:{mode}"
+        if not self._claim_scheduled_fire(schedule_id, dataset, mode, frequency):
+            return
+
+        key = f"ingestion:{(dataset or '').strip().lower()}:{(mode or '').strip().lower()}"
         if self._tracker.is_running(key):
             # avoid overlapping ingestion of same dataset/mode
+            if schedule_id:
+                self._update_ingestion_schedule(
+                    schedule_id,
+                    last_status="skip_duplicate_running",
+                    next_run=self._next_run_for(schedule_id),
+                )
+            return
+        if self._recent_dataset_submission_exists(dataset, mode):
+            if schedule_id:
+                self._update_ingestion_schedule(
+                    schedule_id,
+                    last_status="skip_duplicate_recent",
+                    next_run=self._next_run_for(schedule_id),
+                )
             return
 
         # --- trading-day gate: on non-trading days, check if latest trading day
         # has data; if stale, proceed with sync (API data may arrive late) ---
         # news_realtime 不受交易日限制，非交易日也需正常入库
-        if dataset != "news_realtime":
+        skip_auto_range = bool(options.get("skip_auto_range"))
+        if dataset != "news_realtime" and not skip_auto_range:
             today = dt.date.today()
             try:
                 if not self._is_trading_day(today):
@@ -589,7 +834,7 @@ class TDXScheduler:
 
         # --- auto-range: compute catch-up interval (skip for news_realtime) ---
         effective_options = dict(options)
-        if dataset != "news_realtime":
+        if dataset != "news_realtime" and not skip_auto_range:
             try:
                 start_date, end_date = self._compute_auto_range(dataset)
                 if start_date is not None and end_date is not None:
@@ -662,6 +907,17 @@ class TDXScheduler:
     ) -> uuid.UUID:
         run_id = uuid.uuid4()
         ds_lower = (dataset or "").strip().lower()
+        mode_lower = (mode or "").strip().lower()
+        key = f"ingestion:{ds_lower}:{mode_lower}"
+        if not options.get("allow_duplicate") and self._tracker.is_running(key):
+            _logger.info("skip duplicate ingestion submission: %s/%s is already running", dataset, mode)
+            self._mark_job_skipped_duplicate(
+                options.get("job_id"),
+                dataset,
+                mode,
+                "duplicate_running",
+            )
+            return run_id
 
         # Composite dataset: sw_sector = sw_index_classify + sw_index_member + sw_daily
         if ds_lower == "sw_sector":
@@ -693,6 +949,17 @@ class TDXScheduler:
                 self._run_weekend_compensation,
                 run_id, schedule_id, triggered_by, options,
             )
+        # Internal pre-trade/periodic suspend_d refresh schedules.
+        elif ds_lower == "suspend_d" and options.get("date_strategy"):
+            future = self._executor.submit(
+                self._run_suspend_d_refresh,
+                run_id, schedule_id, ds_lower, mode, triggered_by, options,
+            )
+        elif ds_lower.startswith("_suspend_d_"):
+            future = self._executor.submit(
+                self._run_suspend_d_refresh,
+                run_id, schedule_id, ds_lower, mode, triggered_by, options,
+            )
         # Route engine-supported datasets through TushareSyncEngine
         elif ds_lower in _ENGINE_DATASETS and not options.get("script"):
             future = self._executor.submit(
@@ -711,7 +978,6 @@ class TDXScheduler:
                 self._run_ingestion_process, run_id, schedule_id, dataset, mode, triggered_by, cmd
             )
 
-        key = f"ingestion:{dataset}:{mode}" if schedule_id else f"ingestion-manual:{run_id}"
         self._tracker.add(key, future)
 
         def _cleanup(_future: Future) -> None:
@@ -735,6 +1001,11 @@ class TDXScheduler:
         Auto-retry at 23:00 acts as the safety net.
         """
         opts = dict(options or {})
+        retry_key = f"{(dataset or '').strip().lower()}:{(mode or '').strip().lower()}"
+        if retry_key in self._delayed_retry_keys:
+            _logger.info("delayed_retry: %s already scheduled, skipping duplicate", retry_key)
+            return
+        self._delayed_retry_keys.add(retry_key)
 
         def _execute() -> None:
             _logger.info(
@@ -742,9 +1013,14 @@ class TDXScheduler:
                 dataset, mode, reason, delay_minutes,
             )
             try:
+                if self._recent_dataset_submission_exists(dataset, mode):
+                    _logger.info("delayed_retry: skip %s/%s because a recent job already ran", dataset, mode)
+                    return
                 self.run_ingestion_now(dataset, mode, triggered_by="delayed_retry", options=opts)
             except Exception as exc:
                 _logger.error("delayed_retry: %s/%s failed: %s", dataset, mode, exc)
+            finally:
+                self._delayed_retry_keys.discard(retry_key)
 
         delay_seconds = delay_minutes * 60
         _logger.info(
@@ -1620,7 +1896,7 @@ class TDXScheduler:
 
             expected_date = check_results[0].expected_date if check_results else None
             overall = "ok" if not stale else "partial"
-            job_status = "success" if overall == "ok" else "failed"
+            job_status = "success" if overall == "ok" else "partial"
 
             summary = {
                 "dataset": "_data_freshness_check", "mode": "check",
@@ -1703,8 +1979,10 @@ class TDXScheduler:
         job_id = uuid.UUID(job_id_str) if job_id_str else None
 
         retried: list = []
+        delayed: list = []
         errors: list = []
         report_rows: list = []
+        latest_trading = None
 
         # 依赖分层定义
         _LAYER_2 = {"sw_sector", "stock_moneyflow_ts"}
@@ -1734,36 +2012,31 @@ class TDXScheduler:
             except Exception as exc:
                 _log.warning("Phase 0 zombie cleanup failed: %s", exc)
 
-            # ── Phase 1: 数据新鲜度 ──────────────────────────────────
-            ltd_rows = self._fetchall(
-                "SELECT MAX(cal_date) AS latest FROM market.trading_calendar"
-                " WHERE is_trading = TRUE AND cal_date <= CURRENT_DATE"
-            )
-            latest_trading = ltd_rows[0]["latest"] if ltd_rows else None
+            # Phase 1: run the same health checker used by alerting instead of
+            # maintaining a separate hard-coded MAX(date) list here.
+            checker = DataCompletenessChecker(self._db_cfg)
+            check_results = checker.check_all()
+            latest_trading = check_results[0].expected_date if check_results else None
             if latest_trading is None:
-                raise RuntimeError("trading_calendar 无数据")
+                raise RuntimeError("trading_calendar has no data")
             _log.info("auto-retry Phase 1: latest_trading=%s", latest_trading)
 
-            freshness_rows = self._fetchall("""
-                SELECT * FROM (VALUES
-                    ('kline_daily_raw',       (SELECT MAX(trade_date)::date FROM market.kline_daily_raw)),
-                    ('kline_minute_raw',      (SELECT MAX(trade_time)::date FROM market.kline_minute_raw)),
-                    ('daily_basic',           (SELECT MAX(trade_date)::date FROM market.daily_basic)),
-                    ('adj_factor',            (SELECT MAX(trade_date)::date FROM market.adj_factor)),
-                    ('index_daily',           (SELECT MAX(trade_date)::date FROM market.index_daily)),
-                    ('stk_limit',             (SELECT MAX(trade_date)::date FROM market.stk_limit)),
-                    ('bak_basic',             (SELECT MAX(trade_date)::date FROM market.bak_basic)),
-                    ('stock_moneyflow_ts',    (SELECT MAX(trade_date)::date FROM market.moneyflow_ts)),
-                    ('sw_sector',             (SELECT MAX(trade_date)::date FROM market.sw_daily)),
-                    ('sector_data',           (SELECT MAX(trade_date)::date FROM market.sector_data)),
-                    ('cyq_perf',              (SELECT MAX(trade_date)::date FROM market.cyq_perf)),
-                    ('margin_detail',         (SELECT MAX(trade_date)::date FROM market.margin_detail))
-                ) AS t(dataset, max_date)
-            """)
-            freshness_map: Dict[str, Any] = {r["dataset"]: r["max_date"] for r in freshness_rows}
+            check_map: Dict[str, Dict[str, Any]] = {}
+            for r in check_results:
+                item = {
+                    "dataset": r.dataset,
+                    "status": r.status,
+                    "max_date": r.max_date,
+                    "is_fresh": r.status == "ok",
+                    "coverage_pct": r.coverage_pct,
+                    "gaps": list(r.gaps or []),
+                }
+                check_map[r.dataset] = item
+                alias = next((k for k, v in _AUTO_RETRY_CHECK_ALIASES.items() if v == r.dataset), None)
+                if alias:
+                    check_map[alias] = {**item, "dataset": alias, "source_dataset": r.dataset}
 
-            # ── Phase 2: 今日 job 结果扫描 ───────────────────────────
-            # inserted_rows 兼容3种格式: 顶层 / stats 嵌套 / rows 字段
+            # Phase 2: scan today's job results; inserted_rows is stored in several legacy shapes.
             today_jobs = self._fetchall("""
                 SELECT
                     (summary::json->>'dataset') AS dataset,
@@ -1771,6 +2044,7 @@ class TDXScheduler:
                     COALESCE(
                         (summary::json->>'inserted_rows')::bigint,
                         (summary::json#>>'{stats,inserted_rows}')::bigint,
+                        (summary::json#>>'{counters,inserted_rows}')::bigint,
                         (summary::json->>'rows')::bigint
                     ) AS inserted_rows,
                     summary::json->>'start_date' AS start_date,
@@ -1778,17 +2052,17 @@ class TDXScheduler:
                     summary::json->>'skipped' AS skipped,
                     summary::json->>'message' AS message
                 FROM market.ingestion_jobs
-                WHERE started_at >= CURRENT_DATE
+                WHERE COALESCE(started_at, created_at) >= CURRENT_DATE
                   AND summary::json->>'dataset' IS NOT NULL
-                  AND (summary::json->>'dataset') NOT IN ('_data_freshness_check', '_auto_retry_stale')
-                ORDER BY started_at DESC
+                ORDER BY COALESCE(started_at, created_at) DESC
             """)
 
-            # 取每个数据集最近一条 job 的状态
             job_map: Dict[str, Dict[str, Any]] = {}
             for r in today_jobs:
-                ds = r["dataset"]
-                if ds and ds not in job_map:
+                ds = (r["dataset"] or "").strip().lower()
+                if not ds or _is_auto_retry_excluded_dataset(ds):
+                    continue
+                if ds not in job_map:
                     job_map[ds] = {
                         "status": r["status"] or "unknown",
                         "inserted_rows": r["inserted_rows"],
@@ -1798,51 +2072,80 @@ class TDXScheduler:
                         "message": r["message"],
                     }
 
-            # ── Phase 3: 生成报告 ────────────────────────────────────
-            # 所有已启用的增量调度
+            # Phase 3: report only real datasets. Internal schedules are excluded
+            # so they never create fake stale rows or retry_exhausted alerts.
             active_schedules = self._fetchall(
-                "SELECT schedule_id, dataset FROM market.ingestion_schedules"
-                " WHERE enabled = TRUE AND dataset NOT IN ('_data_freshness_check', '_auto_retry_stale')"
+                "SELECT schedule_id, dataset, mode FROM market.ingestion_schedules WHERE enabled = TRUE"
             )
-            schedule_map = {r["dataset"]: r["schedule_id"] for r in active_schedules}
-            all_report_datasets = sorted(
-                set(freshness_map.keys()) | set(job_map.keys()) | set(schedule_map.keys())
-            )
+            schedule_map = {
+                (r["dataset"] or "").strip().lower(): {
+                    "schedule_id": r["schedule_id"],
+                    "mode": (r.get("mode") or "incremental").strip().lower(),
+                }
+                for r in active_schedules
+                if (r.get("dataset") or "").strip()
+                and not _is_auto_retry_excluded_dataset(str(r.get("dataset")))
+            }
+            all_report_datasets = sorted(set(check_map.keys()) | set(job_map.keys()) | set(schedule_map.keys()))
 
             for ds in all_report_datasets:
+                if _is_auto_retry_excluded_dataset(ds):
+                    continue
                 entry: Dict[str, Any] = {"dataset": ds}
-                # job 状态
                 job_info = job_map.get(ds, {})
                 entry["today_job_status"] = job_info.get("status", "no_job_today")
                 entry["inserted_rows"] = job_info.get("inserted_rows")
                 entry["skipped"] = job_info.get("skipped", False)
-                # 数据新鲜度
-                mx = freshness_map.get(ds)
+
+                check_info = check_map.get(ds)
+                mx = check_info.get("max_date") if check_info else None
                 entry["data_max_date"] = str(mx) if mx else None
-                entry["is_fresh"] = mx is not None and mx >= latest_trading
-                # 判定 action
+                entry["health_status"] = check_info.get("status") if check_info else "not_checked"
+                entry["is_fresh"] = True if check_info is None else bool(check_info.get("is_fresh"))
+                if check_info and check_info.get("source_dataset"):
+                    entry["source_dataset"] = check_info["source_dataset"]
+
                 action = "none"
-                if entry["today_job_status"] == "failed":
+                if check_info is None:
+                    entry["note"] = "no health-check rule"
+                elif _is_zero_update_success(entry["today_job_status"], entry.get("inserted_rows")) and not entry["is_fresh"]:
+                    action = "delay_retry"
+                    entry["note"] = f"job succeeded but no rows; retry delayed {_AUTO_RETRY_DELAY_MINUTES}min"
+                elif entry["today_job_status"] == "failed" and ds in schedule_map:
                     action = "retry"
                 elif not entry["is_fresh"] and ds in schedule_map:
                     action = "retry"
                 elif entry["skipped"] and "up to date" in str(job_info.get("message", "")):
                     entry["note"] = "already up to date"
-                # Zero-rows: job succeeded but 0 rows inserted → retry
-                if entry["today_job_status"] == "success" and entry.get("inserted_rows") == 0:
-                    if not entry["is_fresh"]:
-                        entry["action"] = "retry"
-                        entry["note"] = "job succeeded but 0 rows inserted"
                 entry["action"] = action
                 report_rows.append(entry)
 
             stale_count = sum(1 for e in report_rows if not e["is_fresh"])
             failed_count = sum(1 for e in report_rows if e["today_job_status"] == "failed")
             retry_count = sum(1 for e in report_rows if e["action"] == "retry")
+            delayed_count = sum(1 for e in report_rows if e["action"] == "delay_retry")
             _log.info(
-                "auto-retry Phase 3 report: stale=%d, failed=%d, need_retry=%d",
-                stale_count, failed_count, retry_count,
+                "auto-retry Phase 3 report: stale=%d, failed=%d, need_retry=%d, delayed=%d",
+                stale_count, failed_count, retry_count, delayed_count,
             )
+
+            for entry in [e for e in report_rows if e["action"] == "delay_retry"]:
+                ds = entry["dataset"]
+                sched = schedule_map.get(ds)
+                if not sched:
+                    entry["action"] = "skip_no_schedule"
+                    continue
+                retry_mode = sched.get("mode") or "incremental"
+                self._schedule_delayed_retry(
+                    ds,
+                    retry_mode,
+                    delay_minutes=_AUTO_RETRY_DELAY_MINUTES,
+                    reason="success_without_data_update",
+                    options={"triggered_by": "auto_retry_delayed_no_update"},
+                )
+                entry["retry_status"] = "delayed"
+                entry["retry_after_minutes"] = _AUTO_RETRY_DELAY_MINUTES
+                delayed.append(ds)
 
             # ── Phase 4: 分层自动重试（3次指数退避 + 重新检查） ──────
             # Layer 1: 独立数据集 → Layer 2: sw_sector, stock_moneyflow_ts → Layer 3: sector_data
@@ -1867,21 +2170,28 @@ class TDXScheduler:
 
                 for entry in layer:
                     ds = entry["dataset"]
-                    sid = schedule_map.get(ds)
-                    if not sid:
+                    sched = schedule_map.get(ds)
+                    if not sched:
                         _log.warning("auto-retry: %s has no active schedule, skipping", ds)
                         entry["action"] = "skip_no_schedule"
                         continue
+                    sid = sched["schedule_id"]
+                    retry_mode = sched.get("mode") or "incremental"
 
                     attempt = 0
                     recovered = False
-                    while attempt < _MAX_RETRY_ATTEMPTS and not recovered:
+                    delayed_no_update = False
+                    while attempt < _MAX_RETRY_ATTEMPTS and not recovered and not delayed_no_update:
                         _log.info("auto-retry L%d: %s attempt %d/%d (reason: job=%s, max=%s)",
                                   layer_idx, ds, attempt + 1, _MAX_RETRY_ATTEMPTS,
                                   entry["today_job_status"], entry["data_max_date"])
 
                         # Submit ingestion
                         retry_opts: Dict[str, Any] = {"triggered_by": "auto_retry"}
+                        if self._recent_dataset_submission_exists(ds, retry_mode):
+                            _log.info("auto-retry L%d: skip %s because a recent job already exists", layer_idx, ds)
+                            entry["retry_status"] = "skipped_duplicate_recent"
+                            break
                         try:
                             ar_start, ar_end = self._compute_auto_range(ds)
                             if ar_start is not None and ar_end is not None:
@@ -1898,8 +2208,8 @@ class TDXScheduler:
                                 """INSERT INTO market.ingestion_jobs
                                        (job_id, job_type, status, created_at, summary)
                                    VALUES (%s, %s, 'queued', NOW(), %s)""",
-                                (retry_job_id, "incremental",
-                                 _json_dump({"dataset": ds, "mode": "incremental",
+                                (retry_job_id, retry_mode,
+                                 _json_dump({"dataset": ds, "mode": retry_mode,
                                              "triggered_by": "auto_retry",
                                              "attempt": attempt + 1})),
                             )
@@ -1908,10 +2218,10 @@ class TDXScheduler:
                             _log.warning("auto-retry L%d: failed to create job record for %s: %s",
                                         layer_idx, ds, jr_exc)
 
-                        self._submit_ingestion(sid, ds, "incremental", "auto_retry", retry_opts)
+                        self._submit_ingestion(sid, ds, retry_mode, "auto_retry", retry_opts)
 
                         # Wait for this job to complete (10 min timeout)
-                        key = f"ingestion:{ds}:incremental"
+                        key = f"ingestion:{ds}:{retry_mode}"
                         fut = self._tracker.get_future(key)
                         if fut is not None:
                             try:
@@ -1924,10 +2234,8 @@ class TDXScheduler:
 
                         # Re-check freshness after retry
                         try:
-                            checker = DataCompletenessChecker(self._db_cfg)
-                            ds_result = checker.check_datasets([ds])
-                            if ds_result:
-                                r = ds_result[0]
+                            r = self._check_dataset_recovered(ds)
+                            if r is not None:
                                 if r.status == "ok":
                                     recovered = True
                                     _log.info("auto-retry L%d: %s RECOVERED on attempt %d",
@@ -1949,6 +2257,26 @@ class TDXScheduler:
                                     entry["retry_attempts"] = attempt + 1
                                     break
                                 else:
+                                    outcome = self._job_update_outcome(retry_job_id)
+                                    if _is_zero_update_success(outcome.get("status", ""), outcome.get("inserted_rows")):
+                                        delayed_no_update = True
+                                        self._schedule_delayed_retry(
+                                            ds,
+                                            retry_mode,
+                                            delay_minutes=_AUTO_RETRY_DELAY_MINUTES,
+                                            reason="auto_retry_success_without_data_update",
+                                            options={"triggered_by": "auto_retry_delayed_no_update"},
+                                        )
+                                        entry["retry_status"] = "delayed_no_update"
+                                        entry["retry_attempts"] = attempt + 1
+                                        entry["retry_after_minutes"] = _AUTO_RETRY_DELAY_MINUTES
+                                        retried.append(ds)
+                                        delayed.append(ds)
+                                        _log.info(
+                                            "auto-retry L%d: %s produced no rows; delayed next retry by %dmin",
+                                            layer_idx, ds, _AUTO_RETRY_DELAY_MINUTES,
+                                        )
+                                        break
                                     _log.info("auto-retry L%d: %s attempt %d still %s (coverage=%.1f%%)",
                                               layer_idx, ds, attempt + 1, r.status,
                                               r.coverage_pct or 0)
@@ -1959,13 +2287,17 @@ class TDXScheduler:
                         attempt += 1
 
                         # Backoff before next attempt (if not last)
-                        if attempt < _MAX_RETRY_ATTEMPTS and not recovered:
+                        if attempt < _MAX_RETRY_ATTEMPTS and not recovered and not delayed_no_update:
                             backoff_min = _RETRY_BACKOFF_MINUTES[attempt - 1]
                             _log.info("auto-retry L%d: %s backoff %dmin before attempt %d",
                                       layer_idx, ds, backoff_min, attempt + 1)
                             time.sleep(backoff_min * 60)
 
                     # After all attempts: check if exhausted
+                    if delayed_no_update:
+                        continue
+                    if entry.get("retry_status") == "skipped_duplicate_recent":
+                        continue
                     if not recovered:
                         _log.error("auto-retry L%d: %s EXHAUSTED after %d attempts",
                                    layer_idx, ds, _MAX_RETRY_ATTEMPTS)
@@ -1992,9 +2324,10 @@ class TDXScheduler:
                         if ds in ("bak_basic", "sw_sector"):
                             try:
                                 self._schedule_delayed_retry(
-                                    ds, "incremental", delay_minutes=60,
+                                    ds, retry_mode, delay_minutes=_AUTO_RETRY_DELAY_MINUTES,
                                     reason=f"auto_retry exhausted after {_MAX_RETRY_ATTEMPTS} attempts",
                                 )
+                                delayed.append(ds)
                             except Exception as delay_exc:
                                 _log.error(
                                     "auto-retry: failed to schedule delayed retry for %s: %s",
@@ -2009,7 +2342,7 @@ class TDXScheduler:
             errors.append({"dataset": "_scan", "error": str(exc)})
 
         # ── 写入报告 ────────────────────────────────────────────────
-        overall = "ok" if not errors and not retried else ("partial" if retried else "failed")
+        overall = "ok" if not errors and not retried and not delayed else ("partial" if (retried or delayed) else "failed")
         summary = {
             "dataset": "_auto_retry_stale",
             "mode": "check_and_retry",
@@ -2018,6 +2351,7 @@ class TDXScheduler:
             "overall": overall,
             "datasets": report_rows,
             "retried_datasets": retried,
+            "delayed_retry_datasets": delayed,
             "retry_errors": errors,
         }
         final_status = "success" if overall == "ok" else "partial"
@@ -2245,6 +2579,92 @@ class TDXScheduler:
         if schedule_id:
             self._update_ingestion_schedule(
                 schedule_id, last_run=start_ts, last_status=status, last_error=None,
+            )
+
+    def _run_suspend_d_refresh(
+        self,
+        run_id: uuid.UUID,
+        schedule_id: Optional[str],
+        schedule_dataset: str,
+        mode: str,
+        triggered_by: str,
+        options: Dict[str, Any],
+    ) -> None:
+        """Refresh actual ``suspend_d`` rows for current/next trading windows."""
+        start_ts = _now()
+        job_id_str = options.get("job_id")
+        job_id = uuid.UUID(job_id_str) if job_id_str else None
+        strategy = str(options.get("date_strategy") or "current_or_next_trading_day")
+        status = "success"
+        error_msg = None
+        result_dict: Dict[str, Any] = {}
+
+        try:
+            if options.get("start_date") and options.get("end_date"):
+                start_date = dt.date.fromisoformat(str(options["start_date"]))
+                end_date = dt.date.fromisoformat(str(options["end_date"]))
+            else:
+                start_date, end_date = self._resolve_suspend_d_refresh_range(strategy)
+
+            spec = DATASET_REGISTRY["suspend_d"]
+            result = TushareSyncEngine().sync(
+                spec=spec,
+                mode=mode,
+                start_date=start_date,
+                end_date=end_date,
+                job_id=job_id,
+            )
+            status = "success" if result.ok else "failed"
+            result_dict = result.as_dict()
+            result_dict.update(
+                {
+                    "schedule_dataset": schedule_dataset,
+                    "actual_dataset": "suspend_d",
+                    "date_strategy": strategy,
+                    "refresh_start_date": start_date.isoformat(),
+                    "refresh_end_date": end_date.isoformat(),
+                }
+            )
+            if job_id is not None:
+                self._execute(
+                    """
+                    UPDATE market.ingestion_jobs
+                    SET summary = COALESCE(summary::jsonb, '{}'::jsonb) || %s::jsonb
+                    WHERE job_id = %s
+                    """,
+                    (json.dumps(result_dict, ensure_ascii=False, default=str), job_id),
+                )
+        except Exception as exc:
+            status = "failed"
+            error_msg = str(exc)
+            _logger.exception("suspend_d refresh failed for %s: %s", schedule_dataset, exc)
+            if job_id is not None:
+                self._execute(
+                    """
+                    UPDATE market.ingestion_jobs
+                    SET status = 'failed',
+                        finished_at = NOW(),
+                        summary = COALESCE(summary::jsonb, '{}'::jsonb) || %s::jsonb
+                    WHERE job_id = %s
+                    """,
+                    (
+                        json.dumps(
+                            {
+                                "schedule_dataset": schedule_dataset,
+                                "actual_dataset": "suspend_d",
+                                "date_strategy": strategy,
+                                "error": error_msg,
+                            },
+                            ensure_ascii=False,
+                            default=str,
+                        ),
+                        job_id,
+                    ),
+                )
+
+        if schedule_id:
+            self._update_ingestion_schedule(
+                schedule_id, last_run=start_ts, last_status=status, last_error=error_msg,
             )
 
     def _run_ingestion_process(

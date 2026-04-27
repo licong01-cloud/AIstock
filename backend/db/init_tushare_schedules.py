@@ -40,7 +40,7 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "cyq_perf",              "mode": "incremental", "frequency": "daily", "at": "18:10"},
 
     # ── Phase 6 — 数据新鲜度检查 ────────────────────────────────────
-    {"dataset": "_data_freshness_check", "mode": "incremental", "frequency": "daily", "at": "18:30"},
+    {"dataset": "_data_freshness_check", "mode": "incremental", "frequency": "daily", "at": "22:00"},
 
     # ── Phase 7 — Tushare 延迟数据（融资融券通常 18:00+ 才可用） ────
     {"dataset": "margin_detail",         "mode": "incremental", "frequency": "daily", "at": "19:00"},

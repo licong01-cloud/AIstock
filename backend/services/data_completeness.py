@@ -44,7 +44,7 @@ class TierConfig:
 LIGHT_TIER = TierConfig(
     name="light",
     tables=[
-        "adj_factor", "stk_limit", "stock_st", "bak_basic",
+        "adj_factor", "stk_limit", "suspend_d", "stock_st", "bak_basic",
         "index_daily", "sw_daily", "margin_detail", "cyq_perf",
         "stock_basic", "sector_data",
     ],
@@ -73,7 +73,7 @@ ALL_TIERS = [LIGHT_TIER, MEDIUM_TIER, HEAVY_TIER]
 
 # Tables that should NOT have row-count expectations checked
 # (variable-row tables: only change on announcement dates)
-NO_COUNT_TABLES = frozenset({"stock_st", "bak_basic", "sw_index_member", "stock_basic", "stk_limit"})
+NO_COUNT_TABLES = frozenset({"stock_st", "bak_basic", "sw_index_member", "stock_basic", "stk_limit", "suspend_d"})
 
 # Tables where gap detection doesn't apply (static/reference tables with
 # no meaningful daily date column — e.g. list_date tracks IPO dates, not
@@ -96,6 +96,7 @@ T_PLUS_1_TABLES = frozenset({"margin_detail"})
 DATASET_TABLE_MAP: Dict[str, Tuple[str, str]] = {
     "adj_factor":           ("market.adj_factor",           "trade_date"),
     "stk_limit":            ("market.stk_limit",            "trade_date"),
+    "suspend_d":            ("market.suspend_d",            "trade_date"),
     "stock_st":             ("market.stock_st",             "ann_date"),
     "bak_basic":            ("market.bak_basic",            "trade_date"),
     "index_daily":          ("market.index_daily",          "trade_date"),
@@ -223,6 +224,17 @@ class DataCompletenessChecker:
                     (count,),
                 )
                 return [r[0] for r in cur.fetchall()]
+
+    def _get_previous_trading_day(self, latest_trading: dt.date) -> Optional[dt.date]:
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT MAX(cal_date) FROM market.trading_calendar"
+                    " WHERE is_trading = TRUE AND cal_date < %s",
+                    (latest_trading,),
+                )
+                row = cur.fetchone()
+                return row[0] if row and row[0] else None
 
     def _checked_query(self, sql: str, params: tuple = (), timeout: str = "10s") -> List[Any]:
         """Execute a query with statement_timeout guard. Returns fetchall()."""
@@ -397,8 +409,12 @@ class DataCompletenessChecker:
                     result.status = "ok"
                 elif ds in T_PLUS_1_TABLES:
                     # T+1 upstream sources (margin_detail): data for day T
-                    # arrives on T+1, so being 1 day behind is normal.
-                    if mx >= latest_trading - dt.timedelta(days=1):
+                    # arrives on the next trading day, so the previous trading
+                    # day is still considered fresh across weekends/holidays.
+                    tolerated_date = self._get_previous_trading_day(latest_trading)
+                    if tolerated_date is None:
+                        tolerated_date = latest_trading - dt.timedelta(days=1)
+                    if mx >= tolerated_date:
                         result.status = "ok"
                     else:
                         result.status = "stale"
