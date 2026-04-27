@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { ReactNode } from "react";
 
 const TABS = [
+  { href: "/paper-trading/package-selection", label: "Package Selection" },
   { href: "/paper-trading/selection", label: "🔍 实盘选股" },
   { href: "/paper-trading/training", label: "🔧 模型训练" },
   { href: "/paper-trading/config", label: "⚙️ 模拟盘配置" },

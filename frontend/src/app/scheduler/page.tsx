@@ -116,8 +116,8 @@ function formatBeijingTime(value?: string | null) {
   }
 }
 
-async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
-  const resp = await fetch(`${SCHEDULER_BASE}${path}`, {
+async function fetchBaseJSON<T>(base: string, path: string, options?: RequestInit): Promise<T> {
+  const resp = await fetch(`${base.replace(/\/$/, "")}${path}`, {
     headers: { "Content-Type": "application/json" },
     cache: "no-store",
     ...options,
@@ -126,17 +126,24 @@ async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
   return resp.json();
 }
 
-async function fetchApiJSON<T>(path: string, options?: RequestInit): Promise<T> {
-  const resp = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    cache: "no-store",
-    ...options,
-  });
-  if (!resp.ok) throw new Error(await resp.text());
-  return resp.json();
+async function fetchJSON<T>(path: string, options?: RequestInit, base = SCHEDULER_BASE): Promise<T> {
+  return fetchBaseJSON<T>(base, path, options);
+}
+
+async function fetchApiJSON<T>(path: string, options?: RequestInit, base = API_BASE): Promise<T> {
+  return fetchBaseJSON<T>(base, path, options);
 }
 
 export default function SchedulerPage() {
+  const [nodeId, setNodeId] = useState("");
+  const [nodeRouteReady, setNodeRouteReady] = useState(false);
+  const schedulerBase = useMemo(
+    () =>
+      nodeId
+        ? `${API_BASE}/dispatch/nodes/${encodeURIComponent(nodeId)}/proxy/scheduler`
+        : SCHEDULER_BASE,
+    [nodeId],
+  );
   const [tasks, setTasks] = useState<Task[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [taskId, setTaskId] = useState("");
@@ -191,11 +198,33 @@ export default function SchedulerPage() {
   const monacoConfiguredRef = useRef(false);
   const editorRef = useRef<any>(null);
 
-  const baseUrlLabel = useMemo(() => SCHEDULER_BASE.replace(/\/$/, ""), []);
+  const baseUrlLabel = useMemo(() => schedulerBase.replace(/\/$/, ""), [schedulerBase]);
+
+  useEffect(() => {
+    const readNodeId = () => {
+      setNodeId((new URLSearchParams(window.location.search).get("node_id") || "").trim());
+      setNodeRouteReady(true);
+    };
+    readNodeId();
+    window.addEventListener("popstate", readNodeId);
+    return () => window.removeEventListener("popstate", readNodeId);
+  }, []);
+
+  async function fetchSchedulerJSON<T>(path: string, options?: RequestInit): Promise<T> {
+    return fetchJSON<T>(path, options, schedulerBase);
+  }
+
+  async function fetchTemplateJSON<T>(path: string, options?: RequestInit): Promise<T> {
+    if (!nodeId) {
+      return fetchApiJSON<T>(path, options);
+    }
+    const schedulerPath = path.replace(/^\/rdagent\/templates/, "/templates");
+    return fetchJSON<T>(schedulerPath, options, schedulerBase);
+  }
 
   const loadTasks = async () => {
     try {
-      const data = await fetchJSON<{ items: Task[] }>("/tasks");
+      const data = await fetchSchedulerJSON<{ items: Task[] }>("/tasks");
       setTasks(data.items || []);
     } catch (e) {
       console.error(e);
@@ -490,7 +519,7 @@ export default function SchedulerPage() {
     setTplListLoading(true);
     setTplError(null);
     try {
-      const data = await fetchApiJSON<{ items: TemplateSummary[] }>("/rdagent/templates");
+      const data = await fetchTemplateJSON<{ items: TemplateSummary[] }>("/rdagent/templates");
       const items = sortTemplates(data.items || []);
       setTplList(items);
       const defaultBase = getDefaultBaseTemplate(items);
@@ -514,13 +543,13 @@ export default function SchedulerPage() {
     setTplDraftLoading(true);
     setTplError(null);
     try {
-      const listData = await fetchApiJSON<{ items: TemplateFileItem[] }>(
+      const listData = await fetchTemplateJSON<{ items: TemplateFileItem[] }>(
         `/rdagent/templates/${encodeURIComponent(scenario)}/${encodeURIComponent(version)}/files`,
       );
       const items = (listData.items || []).slice().sort((a, b) => a.path.localeCompare(b.path));
       const files = await Promise.all(
         items.map(async (file) => {
-          const data = await fetchApiJSON<{ content: string; path: string }>(
+          const data = await fetchTemplateJSON<{ content: string; path: string }>(
             `/rdagent/templates/${encodeURIComponent(scenario)}/${encodeURIComponent(
               version,
             )}/file?path=${encodeURIComponent(file.path)}`,
@@ -851,7 +880,7 @@ export default function SchedulerPage() {
     setTplShowApplyLog(true);
     
     try {
-      const result = await fetchApiJSON<ApplyResult>(
+      const result = await fetchTemplateJSON<ApplyResult>(
         `/rdagent/templates/${encodeURIComponent(item.scenario)}/${encodeURIComponent(
           item.version,
         )}/apply?force=true&backup=true`,
@@ -880,7 +909,7 @@ export default function SchedulerPage() {
     setTplError(null);
     
     try {
-      const result = await fetchApiJSON<{
+      const result = await fetchTemplateJSON<{
         ok: boolean;
         scenario: string;
         version: string;
@@ -946,7 +975,7 @@ export default function SchedulerPage() {
         changed_files: changedFiles,
         files,
       };
-      await fetchApiJSON("/rdagent/templates/publish", {
+      await fetchTemplateJSON("/rdagent/templates/publish", {
         method: "POST",
         body: JSON.stringify(payload),
       });
@@ -974,7 +1003,7 @@ export default function SchedulerPage() {
         scenario: tplHistoryScenario || undefined,
         version: tplHistoryVersion || undefined,
       };
-      const data = await fetchJSON<{ items: TemplateHistoryItem[] }>("/templates/history", {
+      const data = await fetchSchedulerJSON<{ items: TemplateHistoryItem[] }>("/templates/history", {
         method: "POST",
         body: JSON.stringify(payload),
       });
@@ -995,7 +1024,7 @@ export default function SchedulerPage() {
       const payload = tplRollbackBackup
         ? { backup_path: tplRollbackBackup }
         : { scenario: tplRollbackScenario, version: tplRollbackVersion };
-      await fetchJSON("/templates/rollback", {
+      await fetchSchedulerJSON("/templates/rollback", {
         method: "POST",
         body: JSON.stringify(payload),
       });
@@ -1012,7 +1041,7 @@ export default function SchedulerPage() {
 
   const loadEnv = async () => {
     try {
-      const data = await fetchJSON<{ content: string }>("/config/env");
+      const data = await fetchSchedulerJSON<{ content: string }>("/config/env");
       setEnvText(data.content || "");
     } catch (e) {
       console.error(e);
@@ -1022,7 +1051,7 @@ export default function SchedulerPage() {
   const saveEnv = async () => {
     setEnvSaving(true);
     try {
-      await fetchJSON("/config/env", { method: "POST", body: JSON.stringify({ content: envText }) });
+      await fetchSchedulerJSON("/config/env", { method: "POST", body: JSON.stringify({ content: envText }) });
     } catch (e) {
       console.error(e);
     } finally {
@@ -1043,12 +1072,13 @@ export default function SchedulerPage() {
   }, [envText]);
 
   useEffect(() => {
+    if (!nodeRouteReady) return;
     loadEnv();
-  }, []);
+  }, [schedulerBase, nodeRouteReady]);
 
   const loadDatasets = async () => {
     try {
-      const data = await fetchJSON<{ items: Dataset[] }>("/datasets");
+      const data = await fetchSchedulerJSON<{ items: Dataset[] }>("/datasets");
       setDatasets(data.items || []);
     } catch (e) {
       console.error(e);
@@ -1058,7 +1088,7 @@ export default function SchedulerPage() {
   const loadLog = async () => {
     if (!taskId) return;
     try {
-      const data = await fetchJSON<{ log: string }>(`/tasks/${taskId}/logs`);
+      const data = await fetchSchedulerJSON<{ log: string }>(`/tasks/${taskId}/logs`);
       setLog(data.log || "");
     } catch (e) {
       console.error(e);
@@ -1068,7 +1098,7 @@ export default function SchedulerPage() {
   const loadResults = async () => {
     if (!taskId) return;
     try {
-      const data = await fetchJSON<{ items: ResultItem[] }>(`/tasks/${taskId}/results`);
+      const data = await fetchSchedulerJSON<{ items: ResultItem[] }>(`/tasks/${taskId}/results`);
       setResults(data.items || []);
     } catch (e) {
       console.error(e);
@@ -1076,10 +1106,11 @@ export default function SchedulerPage() {
   };
 
   useEffect(() => {
+    if (!nodeRouteReady) return;
     loadTasks();
     loadDatasets();
     loadTemplateList();
-  }, []);
+  }, [schedulerBase, nodeRouteReady]);
 
   const handleCreateTask = async (formData: FormData) => {
     setCreating(true);
@@ -1090,7 +1121,7 @@ export default function SchedulerPage() {
         all_duration: formData.get("all_duration") || "1:00:00",
         evolving_mode: formData.get("evolving_mode") || "llm",
       };
-      await fetchJSON("/tasks", { method: "POST", body: JSON.stringify(payload) });
+      await fetchSchedulerJSON("/tasks", { method: "POST", body: JSON.stringify(payload) });
       await loadTasks();
     } catch (e) {
       console.error(e);
@@ -1105,7 +1136,7 @@ export default function SchedulerPage() {
         name: formData.get("ds_name") || "",
         provider_uri: formData.get("provider_uri") || "",
       };
-      await fetchJSON("/datasets", { method: "POST", body: JSON.stringify(payload) });
+      await fetchSchedulerJSON("/datasets", { method: "POST", body: JSON.stringify(payload) });
       await loadDatasets();
     } catch (e) {
       console.error(e);
@@ -1128,6 +1159,11 @@ export default function SchedulerPage() {
               当前调度后端地址：
               <code className={styles.codeChip}>{baseUrlLabel}</code>
             </div>
+            {nodeId && (
+              <div className={styles.textSmall}>
+                Node: <code className={styles.codeChip}>{nodeId}</code>
+              </div>
+            )}
           </div>
           <div className={styles.rowWrap}>
             <button

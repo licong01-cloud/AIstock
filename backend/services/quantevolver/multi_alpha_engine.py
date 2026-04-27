@@ -241,90 +241,70 @@ class MultiAlphaEngine:
         all_experiment_files: dict[str, str],
         group_configs: list[dict],
     ) -> None:
-        """将统一回测所需的文件添加到 Loop 根目录。
+        """Add unified-backtest files to the loop root.
 
-        meta_model_runner.py 合并预测后调用:
-          python qrun_limit_minute.py conf.yaml --pred-backtest combined_prediction.pkl
-          python read_exp_res.py
-
-        需要在根目录有:
-        - qrun_limit_minute.py (回测脚本)
-        - read_exp_res.py (结果提取)
-        - conf.yaml (统一回测配置: qlib_init + port_analysis_config)
-        - 策略依赖文件 (custom_strategy.py, tail_twap_strategy.py 等)
-        - benchmark_sh000300.parquet (benchmark 数据)
+        Group experiments are train-only and may not include portfolio strategy
+        dependencies.  Build one authoritative full backtest bundle for the
+        root instead of copying dependencies from a train-only group.
         """
-        # 从第一个 group 的文件中复制回测依赖到根目录
-        first_group = group_configs[0]["group_name"]
-        prefix = f"group_{first_group}/"
+        unified_files = self._generate_unified_backtest_files(group_configs)
+        conf_yaml = unified_files.get("conf.yaml")
+        if not conf_yaml:
+            raise RuntimeError(
+                "Unified backtest bundle missing conf.yaml; cannot run pred-backtest"
+            )
 
-        # 需要复制到根目录的文件列表（必须存在）
-        required_backtest_deps = [
-            "qrun_limit_minute.py",
-            "read_exp_res.py",
-            "custom_strategy.py",
-            "tail_twap_strategy.py",
-            "qe_custom_loaders.py",
-        ]
-        # 可选文件（有 fallback 机制）
-        optional_backtest_deps = [
-            "benchmark_sh000300.parquet",
-        ]
-
-        for fname in required_backtest_deps:
-            src_key = f"{prefix}{fname}"
-            if src_key not in all_experiment_files:
+        required_root_files = ["qrun_limit_minute.py", "read_exp_res.py"]
+        for fname in required_root_files:
+            if fname not in unified_files:
                 raise RuntimeError(
-                    f"统一回测依赖文件缺失: {src_key}。"
-                    f"compose_group_experiment 未生成此文件。"
+                    f"Unified backtest dependency missing: {fname}. "
+                    "compose_experiment_in_memory did not generate it."
                 )
-            all_experiment_files[fname] = all_experiment_files[src_key]
 
-        for fname in optional_backtest_deps:
-            src_key = f"{prefix}{fname}"
-            if src_key in all_experiment_files:
-                all_experiment_files[fname] = all_experiment_files[src_key]
+        # Copy the whole generated root bundle. This preserves any factors,
+        # loaders, strategy modules, and .b64 binary payloads referenced by
+        # conf.yaml without fabricating missing dependencies.
+        for fname, content in unified_files.items():
+            all_experiment_files[fname] = content
 
-        # 生成统一回测专用 conf.yaml（不需要 model/dataset 训练配置）
-        unified_conf = self._generate_unified_backtest_conf(group_configs)
-        all_experiment_files["conf.yaml"] = unified_conf
+        referenced_modules = {
+            "custom_strategy.py": ["custom_strategy"],
+            "tail_twap_strategy.py": ["tail_twap_strategy"],
+            "tail_twap_v24_strategy.py": ["tail_twap_v24_strategy"],
+            "qe_custom_loaders.py": ["qe_custom_loaders"],
+        }
+        for fname, needles in referenced_modules.items():
+            if any(needle in conf_yaml for needle in needles) and fname not in unified_files:
+                raise RuntimeError(
+                    f"Unified backtest conf.yaml references {fname}, but the file was not generated"
+                )
 
-    def _generate_unified_backtest_conf(self, group_configs: list[dict]) -> str:
-        """生成统一回测用的 conf.yaml。
+        all_experiment_files["conf.yaml"] = conf_yaml
 
-        只需要:
-        - qlib_init (数据路径)
-        - port_analysis_config (策略/执行器/回测参数)
-        - task.dataset (SigAnaRecord 需要 label 计算 IC)
-        - task.record (SigAnaRecord + PortAnaRecord)
-
-        从第一个 group 的 conf.yaml 继承，移除 model 训练相关配置。
-        """
-        from ruamel.yaml import YAML
+    def _generate_unified_backtest_files(self, group_configs: list[dict]) -> dict[str, str]:
+        """Generate the authoritative root file bundle for pred-backtest."""
+        if not self.composer:
+            raise RuntimeError("MultiAlphaEngine requires composer to build unified backtest files")
+        if not group_configs:
+            raise RuntimeError("Unified backtest requires at least one group config")
 
         first_group = group_configs[0]["group_name"]
-        prefix = f"group_{first_group}/conf.yaml"
+        first_group_obj = next(
+            (g for g in self.ma_config.alpha_groups if g.group_name == first_group), None
+        )
+        if first_group_obj is None:
+            raise RuntimeError(
+                f"Unified backtest cannot find first group in multi_alpha_config: {first_group}"
+            )
 
-        # 这个方法在 compose 阶段调用，此时 experiment_files 还没写入磁盘
-        # 需要从 composer 重新生成一份完整的回测配置
-        # 最简单的方案：用 composer 生成一份完整配置（train_only=False），
-        # 但这会包含 model 训练配置。更好的方案：直接从第一个 group 的 conf.yaml 修改。
-
-        # 从 composer 获取完整回测配置（不是 train_only）
         custom_params = self.config.build_custom_params()
         if "disable_alpha158" not in custom_params:
             custom_params["disable_alpha158"] = True
 
-        # 获取第一个 group 的因子列表（用于 dataset 配置）
-        first_group_obj = next(
-            (g for g in self.ma_config.groups if g.group_name == first_group), None
-        )
-        factor_names = first_group_obj.factor_names if first_group_obj else []
-
-        # 生成完整配置（含回测），但不需要实际训练
         result = self.composer.compose_experiment_in_memory(
-            factor_names=factor_names,
-            model_id=first_group_obj.model_id if first_group_obj else "LGBModel",
+            factor_names=first_group_obj.factor_names,
+            model_id=first_group_obj.model_id,
             strategy_id=self.config.strategy_id,
             data_split=self.config.data_split,
             custom_params=custom_params,
@@ -334,14 +314,14 @@ class MultiAlphaEngine:
             execution_algo_params=self.config.execution_algo_params,
             strategy_params=self.config.build_strategy_params(),
             node_id=None,
-            train_only=False,  # 需要完整的 PortAnaRecord 配置
+            train_only=False,
         )
-        conf_yaml = result.get("experiment_files", {}).get("conf.yaml", "")
-        if not conf_yaml:
+        files = result.get("experiment_files") or {}
+        if not isinstance(files, dict) or not files:
             raise RuntimeError(
-                "统一回测 conf.yaml 生成失败: compose_experiment_in_memory 未返回 conf.yaml"
+                "Unified backtest file generation failed: compose_experiment_in_memory returned no files"
             )
-        return conf_yaml
+        return files
 
     def _generate_meta_runner_script(self, group_configs: list[dict]) -> str:
         """Generate the meta_model_runner.py script that combines group predictions."""
@@ -378,6 +358,7 @@ GROUP_NAMES = {group_names!r}
 GROUP_PREDICTION_PATHS = {group_prediction_paths!r}
 META_METHOD = "{method}"
 LOOKBACK = {lookback}
+IC_QUALITY = {{}}
 
 
 def _resolve_prediction_path(path_value):
@@ -386,7 +367,7 @@ def _resolve_prediction_path(path_value):
     p = Path(path_value)
     if p.exists():
         return p
-    normalized = str(path_value).replace("\\", "/")
+    normalized = str(path_value).replace("\\\\", "/")
     marker = "/qe_workspace/"
     marker_idx = normalized.find(marker)
     if marker_idx >= 0:
@@ -480,6 +461,75 @@ def load_label():
     )
 
 
+def compute_daily_ic_series(pred_s, label_s, dates, context, min_daily_samples=10):
+    """Compute daily IC after dropping invalid rows; persist skipped-day diagnostics."""
+    daily_ics = []
+    skipped = []
+    for dt in dates:
+        if isinstance(pred_s.index, pd.MultiIndex):
+            p_day = pred_s.xs(dt, level=0)
+            r_day = label_s.xs(dt, level=0)
+        else:
+            p_day = pred_s
+            r_day = label_s
+
+        aligned = pd.concat(
+            [p_day.rename("prediction"), r_day.rename("label")],
+            axis=1,
+        ).dropna()
+        raw_samples = int(len(p_day))
+        valid_samples = int(len(aligned))
+
+        reason = None
+        if valid_samples < min_daily_samples:
+            reason = "insufficient_valid_samples_after_dropna"
+        elif aligned["prediction"].nunique(dropna=True) < 2:
+            reason = "constant_prediction"
+        elif aligned["label"].nunique(dropna=True) < 2:
+            reason = "constant_or_all_nan_label"
+
+        if reason:
+            skipped.append({{
+                "date": str(dt),
+                "reason": reason,
+                "raw_samples": raw_samples,
+                "valid_samples": valid_samples,
+            }})
+            continue
+
+        ic = aligned["prediction"].corr(aligned["label"], method="spearman")
+        if np.isnan(ic):
+            skipped.append({{
+                "date": str(dt),
+                "reason": "nan_spearman_ic",
+                "raw_samples": raw_samples,
+                "valid_samples": valid_samples,
+            }})
+            continue
+        daily_ics.append(float(ic))
+
+    total_days = len(dates)
+    required_valid_days = min(5, max(1, int(total_days * 0.5)))
+    IC_QUALITY[context] = {{
+        "total_days": int(total_days),
+        "valid_days": int(len(daily_ics)),
+        "skipped_days": int(len(skipped)),
+        "skipped_samples": skipped[:20],
+    }}
+    if skipped:
+        print(
+            f"[WARN] {{context}} skipped {{len(skipped)}} invalid daily IC days "
+            f"after dropping NaN/constant rows; first={{skipped[:5]}}"
+        )
+    if len(daily_ics) < required_valid_days:
+        raise RuntimeError(
+            f"{{context}} produced only {{len(daily_ics)}} valid daily IC days "
+            f"out of {{total_days}}; required={{required_valid_days}}; "
+            f"skipped={{skipped[:10]}}"
+        )
+    return daily_ics
+
+
 def combine(preds, actual_returns=None):
     """Combine predictions using IC-weighted/equal method (standalone, no external imports)."""
     group_names = list(preds.keys())
@@ -499,22 +549,12 @@ def combine(preds, actual_returns=None):
             if len(dates) > LOOKBACK:
                 cutoff = dates[-LOOKBACK]
                 common = [idx for idx in common if (idx[0] if isinstance(idx, tuple) else idx) >= cutoff]
-            daily_ics = []
-            for dt in sorted(set(idx[0] if isinstance(idx, tuple) else idx for idx in common)):
-                if isinstance(pred_s.index, pd.MultiIndex):
-                    p_day = pred_s.xs(dt, level=0)
-                    r_day = actual_returns.xs(dt, level=0)
-                else:
-                    p_day = pred_s
-                    r_day = actual_returns
-                if len(p_day) < 10:
-                    raise RuntimeError(f"Group {{g_name}} has insufficient daily samples on {{dt}}")
-                ic = p_day.corr(r_day, method="spearman")
-                if np.isnan(ic):
-                    raise RuntimeError(f"Group {{g_name}} produced NaN IC on {{dt}}")
-                daily_ics.append(ic)
-            if not daily_ics:
-                raise RuntimeError(f"Group {{g_name}} produced no valid daily IC values")
+            daily_ics = compute_daily_ic_series(
+                pred_s,
+                actual_returns,
+                sorted(set(idx[0] if isinstance(idx, tuple) else idx for idx in common)),
+                f"weight:{{g_name}}",
+            )
             mean_ic = float(np.mean(daily_ics))
             if mean_ic <= 0:
                 raise RuntimeError(f"Group {{g_name}} produced non-positive IC mean: {{mean_ic}}")
@@ -563,32 +603,16 @@ def compute_group_metrics(preds, label):
         p = pred_s.loc[common_idx]
         r = label.loc[common_idx]
 
-        daily_ics = []
         dates = sorted(set(
             idx[0] if isinstance(idx, tuple) else idx for idx in common_idx
         ))
-        for dt in dates:
-            if isinstance(p.index, pd.MultiIndex):
-                p_day = p.xs(dt, level=0)
-                r_day = r.xs(dt, level=0)
-            else:
-                p_day = p
-                r_day = r
-            if len(p_day) < 10:
-                raise RuntimeError(f"Group {{g_name}} has insufficient daily samples on {{dt}}")
-            ic = p_day.corr(r_day, method="spearman")
-            if np.isnan(ic):
-                raise RuntimeError(f"Group {{g_name}} produced NaN IC on {{dt}}")
-            daily_ics.append(ic)
-
-        if not daily_ics:
-            raise RuntimeError(f"Group {{g_name}} produced no daily IC values")
+        daily_ics = compute_daily_ic_series(p, r, dates, f"group:{{g_name}}")
         avg_ic = float(np.mean(daily_ics))
         std_ic = float(np.std(daily_ics))
         gm = {{
             "ic": round(avg_ic, 6),
             "icir": round(avg_ic / std_ic, 4) if std_ic > 1e-8 else None,
-            "sharpe": round((avg_ic / std_ic) * np.sqrt(252) / np.sqrt(len(dates)), 4) if std_ic > 1e-8 else None,
+            "sharpe": round((avg_ic / std_ic) * np.sqrt(252) / np.sqrt(len(daily_ics)), 4) if std_ic > 1e-8 else None,
         }}
         if gm["icir"] is None or gm["sharpe"] is None:
             raise RuntimeError(f"Group {{g_name}} produced degenerate ICIR/Sharpe")
@@ -625,6 +649,40 @@ def compute_correlations(preds):
     return corrs
 
 
+def prepare_unified_backtest_env():
+    """Prepare root features required by the unified pred-backtest dataset."""
+    import os
+    import subprocess
+
+    prepare_script = Path("prepare_factors.py")
+    if not prepare_script.exists():
+        raise RuntimeError("Unified backtest requires prepare_factors.py in the loop root")
+
+    print("\\n=== Preparing unified backtest dataset ===")
+    prep_result = subprocess.run([sys.executable, str(prepare_script)])
+    if prep_result.returncode != 0:
+        raise RuntimeError("prepare_factors.py FAILED (exit code %s). Cannot run unified backtest." % prep_result.returncode)
+
+    if not Path("combined_factors_df.parquet").exists():
+        raise RuntimeError("prepare_factors.py completed but combined_factors_df.parquet is missing")
+
+    env = os.environ.copy()
+    factor_env = Path(".factor_env")
+    if factor_env.exists():
+        for raw_line in factor_env.read_text().splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].strip()
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            env[key.strip()] = value.strip().strip("'").strip('"')
+    print("[OK] Unified backtest dataset prepared")
+    return env
+
+
 def main():
     preds = load_predictions()
     if len(preds) < 2:
@@ -656,25 +714,10 @@ def main():
     common = combined_s.index.intersection(label.index)
     if len(common) < 50:
         raise RuntimeError(f"Combined prediction has insufficient label overlap: {{len(common)}}")
-    daily_ics = []
     dates = sorted(set(
         idx[0] if isinstance(idx, tuple) else idx for idx in common
     ))
-    for dt in dates:
-        if isinstance(combined_s.index, pd.MultiIndex):
-            c_day = combined_s.xs(dt, level=0)
-            r_day = label.xs(dt, level=0)
-        else:
-            c_day = combined_s
-            r_day = label
-        if len(c_day) < 10:
-            raise RuntimeError(f"Combined prediction has insufficient daily samples on {{dt}}")
-        ic = c_day.corr(r_day, method="spearman")
-        if np.isnan(ic):
-            raise RuntimeError(f"Combined prediction produced NaN IC on {{dt}}")
-        daily_ics.append(ic)
-    if not daily_ics:
-        raise RuntimeError("Combined prediction produced no daily IC values")
+    daily_ics = compute_daily_ic_series(combined_s, label, dates, "combined")
     combined_ic = round(float(np.mean(daily_ics)), 6)
     print(f"\\nCombined IC: {{combined_ic}}")
 
@@ -686,6 +729,7 @@ def main():
         "meta_method": META_METHOD,
         "total_groups": len(preds),
         "group_names": list(preds.keys()),
+        "ic_quality": IC_QUALITY,
     }}
     with open("multi_alpha_results.json", "w") as f:
         json.dump(ma_results, f, indent=2, default=str)
@@ -697,7 +741,8 @@ def main():
     bt_cmd = [sys.executable, "qrun_limit_minute.py", "conf.yaml",
               "--pred-backtest", "combined_prediction.pkl"]
     print(f"Command: {{' '.join(bt_cmd)}}")
-    bt_result = subprocess.run(bt_cmd)
+    bt_env = prepare_unified_backtest_env()
+    bt_result = subprocess.run(bt_cmd, env=bt_env)
     if bt_result.returncode != 0:
         raise RuntimeError(
             f"Unified backtest FAILED (exit code {{bt_result.returncode}}). "

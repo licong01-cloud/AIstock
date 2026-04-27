@@ -9,15 +9,31 @@ import json
 import uuid
 from typing import Any, Dict, List
 
+from dotenv import load_dotenv
+
 from .pg_pool import get_conn
 
 
 _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     # ── Phase 1 — 盘前 ──────────────────────────────────────────────
     {"dataset": "stk_limit",             "mode": "incremental", "frequency": "daily", "at": "09:01"},
+    {"dataset": "suspend_d",             "mode": "incremental", "frequency": "1h",
+     "date_strategy": "current_and_next_trading_day", "skip_auto_range": True},
+    {"dataset": "_suspend_d_tminus1_1730", "mode": "incremental", "frequency": "daily", "at": "17:30",
+     "date_strategy": "next_trading_day", "skip_auto_range": True},
+    {"dataset": "_suspend_d_morning_0730", "mode": "incremental", "frequency": "daily", "at": "07:30",
+     "date_strategy": "current_or_next_trading_day", "skip_auto_range": True},
+    {"dataset": "_suspend_d_preopen_0850", "mode": "incremental", "frequency": "daily", "at": "08:50",
+     "date_strategy": "current_or_next_trading_day", "skip_auto_range": True},
+    {"dataset": "_suspend_d_preopen_0905", "mode": "incremental", "frequency": "daily", "at": "09:05",
+     "date_strategy": "current_or_next_trading_day", "skip_auto_range": True},
+    {"dataset": "_suspend_d_midday_1240", "mode": "incremental", "frequency": "daily", "at": "12:40",
+     "date_strategy": "current_or_next_trading_day", "skip_auto_range": True},
+    {"dataset": "_suspend_d_close_1610", "mode": "incremental", "frequency": "daily", "at": "16:10",
+     "date_strategy": "current_and_next_trading_day", "skip_auto_range": True},
 
     # ── Phase 2a — 周末补偿检查（每天10:00触发，仅周六实际执行）────
-    {"dataset": "_weekend_compensation", "mode": "check",       "frequency": "daily", "at": "10:00"},
+    {"dataset": "_weekend_compensation", "mode": "incremental", "frequency": "daily", "at": "10:00"},
 
     # ── Phase 2 — TDX 数据（收盘后即可） ────────────────────────────
     {"dataset": "kline_daily_raw",       "mode": "incremental", "frequency": "daily", "at": "16:10"},
@@ -55,12 +71,18 @@ def ensure_tushare_schedules() -> int:
 
     Returns the number of rows actually inserted or updated.
     """
+    load_dotenv(override=True)
     affected = 0
     with get_conn() as conn:
         with conn.cursor() as cur:
             for entry in _DEFAULT_SCHEDULES:
                 sid = str(uuid.uuid4())
-                options = json.dumps({"at": entry["at"]}, ensure_ascii=False)
+                options_payload = {
+                    k: v
+                    for k, v in entry.items()
+                    if k not in {"dataset", "mode", "frequency", "enabled"} and v is not None
+                }
+                options = json.dumps(options_payload, ensure_ascii=False)
                 cur.execute(
                     """
                     INSERT INTO market.ingestion_schedules

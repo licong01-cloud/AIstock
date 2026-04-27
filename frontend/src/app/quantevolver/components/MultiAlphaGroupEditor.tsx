@@ -2,6 +2,9 @@
 
 import React, { useState, useCallback, useMemo } from "react";
 
+const MULTI_ALPHA_DISTRIBUTED_ENABLED =
+  process.env.NEXT_PUBLIC_MULTI_ALPHA_DISTRIBUTED_ENABLED === "1";
+
 // ── Types ──────────────────────────────────────────────────────────
 
 export interface AlphaGroupConfig {
@@ -85,7 +88,7 @@ export default function MultiAlphaGroupEditor({
     min_ic: "0.02",
     max_factors_per_group: "15",
     max_intra_corr: "0.7",
-    execution_mode: "distributed",
+    execution_mode: "serial",
   });
 
   // A1: 展开状态
@@ -113,6 +116,9 @@ export default function MultiAlphaGroupEditor({
     setLoading(true);
     setError(null);
     try {
+      if (autoParams.execution_mode === "distributed" && !MULTI_ALPHA_DISTRIBUTED_ENABLED) {
+        throw new Error("分布式 Multi-Alpha 尚未启用；请使用 WSL 单节点串行模式完成阶段 1 验证。");
+      }
       const params = new URLSearchParams({
         min_grade: autoParams.min_grade,
         min_ic: autoParams.min_ic,
@@ -837,8 +843,15 @@ export default function MultiAlphaGroupEditor({
             >
               <option value="serial">串行</option>
               <option value="local_parallel">本机并行</option>
-              <option value="distributed">分布式</option>
+              <option value="distributed" disabled={!MULTI_ALPHA_DISTRIBUTED_ENABLED}>
+                分布式{MULTI_ALPHA_DISTRIBUTED_ENABLED ? "" : "（阶段 3 启用）"}
+              </option>
             </select>
+            {!MULTI_ALPHA_DISTRIBUTED_ENABLED && (
+              <p className="mt-1 text-[11px] text-amber-600">
+                当前阶段仅允许 WSL 单节点验证；分布式训练将在阶段 3 完成后开放。
+              </p>
+            )}
           </div>
         </div>
       </div>

@@ -32,6 +32,27 @@ interface Bottleneck {
   action_params: Record<string, any>;
 }
 
+interface OptimizationGuidance {
+  rule_id: string;
+  severity: string;
+  message: string;
+  recommendation: string;
+  action_type: string;
+  affected_groups: string[];
+  evidence?: Record<string, any>;
+  source_fields?: string[];
+}
+
+interface GroupDiagnostic {
+  group_name: string;
+  contribution_to_combined_ic?: number | null;
+  data_available?: Record<string, boolean>;
+  ic_diagnostics?: Record<string, any>;
+  training_diagnostics?: Record<string, any>;
+  prediction_diagnostics?: Record<string, any>;
+  feature_importance_top?: Array<Record<string, any>>;
+}
+
 interface DiagnosticsData {
   experiment_id: string;
   groups: GroupMetrics[];
@@ -41,6 +62,13 @@ interface DiagnosticsData {
   bottlenecks: Bottleneck[];
   recommendations: Bottleneck[];
   combined_ic: number | null;
+  combined_vs_groups?: Record<string, any>;
+  portfolio_diagnostics?: Record<string, any>;
+  diversification?: Record<string, any>;
+  group_diagnostics?: GroupDiagnostic[];
+  data_availability?: Record<string, any>;
+  ic_quality?: Record<string, any>;
+  optimization_guidance?: OptimizationGuidance[];
 }
 
 // ── Styles ─────────────────────────────────────────────────────────
@@ -58,6 +86,20 @@ const headerStyle: React.CSSProperties = {
   borderBottom: "1px solid #f1f5f9",
   backgroundColor: "#f8fafc",
 };
+
+function fmtNum(value: any, digits = 4) {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
+}
+
+function fmtPct(value: any, digits = 1) {
+  return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(digits)}%` : "-";
+}
+
+function severityStyle(severity: string): React.CSSProperties {
+  if (severity === "high") return { backgroundColor: "#fef2f2", borderColor: "#fecaca", color: "#991b1b" };
+  if (severity === "medium") return { backgroundColor: "#fffbeb", borderColor: "#fed7aa", color: "#92400e" };
+  return { backgroundColor: "#f0fdf4", borderColor: "#bbf7d0", color: "#166534" };
+}
 
 // ── Component ──────────────────────────────────────────────────────
 
@@ -98,6 +140,20 @@ export default function MultiAlphaDiagnosticsPage() {
     () => data?.groups.map((g) => g.group_name) || [],
     [data]
   );
+
+  const groupDiagByName = useMemo(() => {
+    const m = new Map<string, GroupDiagnostic>();
+    (data?.group_diagnostics || []).forEach((g) => {
+      if (g.group_name) m.set(g.group_name, g);
+    });
+    return m;
+  }, [data]);
+
+  const availability = data?.data_availability || {};
+  const portfolio = data?.portfolio_diagnostics || {};
+  const diversification = data?.diversification || {};
+  const icQualityEntries = Object.entries(data?.ic_quality || {});
+  const optimizationGuidance = data?.optimization_guidance || [];
 
   if (loading)
     return (
@@ -147,6 +203,114 @@ export default function MultiAlphaDiagnosticsPage() {
           {data.execution_mode || "-"} | Combined IC:{" "}
           {data.combined_ic != null ? data.combined_ic.toFixed(4) : "-"}
         </p>
+      </div>
+
+      {/* 0. 统一分析覆盖率 + 组合回测诊断 */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "24px",
+          marginBottom: "24px",
+        }}
+      >
+        <div style={cardStyle}>
+          <div style={headerStyle}>
+            <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#1e293b" }}>
+              统一分析数据覆盖率
+            </h2>
+          </div>
+          <div style={{ padding: "20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+            {[
+              ["组合增强指标", availability.combined_enhanced_metrics ? "已入库" : "缺失"],
+              ["组合收益曲线", availability.combined_return_curves ? "已入库" : "缺失"],
+              ["组合交易诊断", availability.combined_trade_diagnostics ? "已入库" : "缺失"],
+              ["组合预测诊断", availability.combined_prediction_diagnostics ? "已入库" : "缺失"],
+              ["组级增强指标", `${availability.groups_with_enhanced_metrics ?? 0}/${availability.groups_total ?? uniqueGroupNames.length}`],
+              ["组级训练诊断", availability.combined_training_diagnostics ? "组合有训练数据" : "以组级数据为准"],
+            ].map(([label, value]) => (
+              <div key={label} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "10px" }}>
+                <div style={{ fontSize: 12, color: "#64748b" }}>{label}</div>
+                <div style={{ marginTop: 4, fontSize: 14, fontWeight: 700, color: String(value).includes("缺失") ? "#dc2626" : "#0f172a" }}>
+                  {value}
+                </div>
+              </div>
+            ))}
+            {Array.isArray(availability.missing_group_enhanced_metrics) &&
+              availability.missing_group_enhanced_metrics.length > 0 && (
+                <div
+                  style={{
+                    gridColumn: "1 / -1",
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    border: "1px solid #fecaca",
+                    backgroundColor: "#fef2f2",
+                    color: "#991b1b",
+                    fontSize: 12,
+                  }}
+                >
+                  缺少组级增强指标：{availability.missing_group_enhanced_metrics.join(", ")}。这些组不会生成训练/预测级优化建议，需先修复产物采集。
+                </div>
+              )}
+            {icQualityEntries.length > 0 && (
+              <div
+                style={{
+                  gridColumn: "1 / -1",
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  border: "1px solid #bfdbfe",
+                  backgroundColor: "#eff6ff",
+                  color: "#1e3a8a",
+                  fontSize: 12,
+                }}
+              >
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                  IC 质量诊断
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px 80px", gap: 6 }}>
+                  {icQualityEntries.map(([name, quality]) => (
+                    <React.Fragment key={name}>
+                      <span style={{ fontFamily: "monospace" }}>{name}</span>
+                      <span>days: {quality?.total_days ?? "-"}</span>
+                      <span>valid: {quality?.valid_days ?? "-"}</span>
+                      <span>skipped: {quality?.skipped_days ?? "-"}</span>
+                    </React.Fragment>
+                  ))}
+                </div>
+                <div style={{ marginTop: 6, color: "#475569" }}>
+                  仅当标签/预测为空值或常量时才剔除单日 IC；有效交易日覆盖不足时后端仍会直接失败。
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={headerStyle}>
+            <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#1e293b" }}>
+              组合回测诊断
+            </h2>
+          </div>
+          <div style={{ padding: "20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+            {[
+              ["年化收益(含成本)", fmtPct(portfolio.annualized_return_with_cost, 2)],
+              ["年化收益(无成本)", fmtPct(portfolio.annualized_return_no_cost, 2)],
+              ["成本拖累", fmtPct(portfolio.cost_drag_annualized, 2)],
+              ["最大回撤(含成本)", fmtPct(portfolio.max_drawdown_with_cost, 2)],
+              ["年化换手", fmtNum(portfolio.annualized_turnover, 2)],
+              ["Top30稳定性", fmtPct(portfolio.top30_stability, 1)],
+              ["有效组数", fmtNum(diversification.effective_group_count, 2)],
+              ["最大组间相关", fmtNum(diversification.max_abs_correlation, 4)],
+            ].map(([label, value]) => (
+              <div key={label} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "10px" }}>
+                <div style={{ fontSize: 12, color: "#64748b" }}>{label}</div>
+                <div style={{ marginTop: 4, fontSize: 14, fontWeight: 700, color: "#0f172a", fontFamily: "monospace" }}>
+                  {value}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* 1. Group Performance Matrix */}
@@ -617,7 +781,7 @@ export default function MultiAlphaDiagnosticsPage() {
         </div>
       </div>
 
-      {/* 4. 单组深度诊断（简化版：显示每组 top 因子） */}
+      {/* 4. 单组深度诊断 */}
       <div style={{ ...cardStyle, marginBottom: "24px" }}>
         <div style={headerStyle}>
           <h2
@@ -628,7 +792,7 @@ export default function MultiAlphaDiagnosticsPage() {
               color: "#1e293b",
             }}
           >
-            各组因子详情
+            单组训练 / 预测 / 因子诊断
           </h2>
         </div>
         <div
@@ -639,67 +803,181 @@ export default function MultiAlphaDiagnosticsPage() {
             gap: "16px",
           }}
         >
-          {data.groups.map((g) => (
-            <div
-              key={g.group_name}
-              style={{
-                border: "1px solid #e2e8f0",
-                borderRadius: "8px",
-                padding: "12px",
-              }}
-            >
+          {data.groups.map((g) => {
+            const diag = groupDiagByName.get(g.group_name);
+            const train = diag?.training_diagnostics || {};
+            const pred = diag?.prediction_diagnostics || {};
+            const icDiag = diag?.ic_diagnostics || {};
+            const topFactors = diag?.feature_importance_top || [];
+            const dataAvailable = diag?.data_available || {};
+
+            return (
               <div
+                key={g.group_name}
                 style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  marginBottom: "8px",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "8px",
+                  padding: "12px",
                 }}
               >
-                <span
-                  style={{ fontWeight: 600, fontSize: 14, color: "#1e293b" }}
-                >
-                  {g.group_name}
-                </span>
-                <span
+                <div
                   style={{
-                    fontSize: 12,
-                    color: "#64748b",
-                    fontFamily: "monospace",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    marginBottom: "8px",
                   }}
                 >
-                  {g.factor_count} 因子 | IC:{" "}
-                  {g.group_ic != null ? g.group_ic.toFixed(4) : "-"}
-                </span>
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: "4px",
-                  maxHeight: "80px",
-                  overflowY: "auto",
-                }}
-              >
-                {g.factor_names.map((f) => (
-                  <span
-                    key={f}
+                  <span style={{ fontWeight: 600, fontSize: 14, color: "#1e293b" }}>
+                    {g.group_name}
+                  </span>
+                  <span style={{ fontSize: 12, color: "#64748b", fontFamily: "monospace" }}>
+                    {g.factor_count} 因子 | IC: {g.group_ic != null ? g.group_ic.toFixed(4) : "-"}
+                  </span>
+                </div>
+
+                {!dataAvailable.enhanced_metrics && (
+                  <div
                     style={{
-                      padding: "1px 6px",
-                      backgroundColor: "#f1f5f9",
-                      color: "#475569",
-                      fontSize: 10,
-                      borderRadius: "3px",
-                      fontFamily: "monospace",
+                      marginBottom: 10,
+                      padding: "8px",
+                      borderRadius: 6,
+                      backgroundColor: "#fef2f2",
+                      color: "#991b1b",
+                      fontSize: 12,
                     }}
                   >
-                    {f}
-                  </span>
-                ))}
+                    该组缺少增强指标，训练/预测/因子诊断不会被静默推断。
+                  </div>
+                )}
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 10 }}>
+                  <MetricChip label="贡献IC" value={fmtNum(diag?.contribution_to_combined_ic, 5)} />
+                  <MetricChip label="IC正率" value={fmtPct(icDiag.ic_positive_ratio, 1)} />
+                  <MetricChip label="Rank换手" value={fmtPct(pred.pred_rank_turnover, 1)} />
+                  <MetricChip label="Top30稳定" value={fmtPct(pred.top30_stability, 1)} />
+                  <MetricChip label="Train Loss" value={fmtNum(train.final_train_loss, 5)} />
+                  <MetricChip label="Valid Loss" value={fmtNum(train.final_val_loss, 5)} />
+                  <MetricChip label="过拟合比" value={fmtNum(train.overfit_ratio, 3)} />
+                  <MetricChip label="泛化Gap" value={fmtNum(train.generalization_gap, 5)} />
+                  <MetricChip label="Loss点数" value={`${train.train_loss_points ?? 0}/${train.val_loss_points ?? 0}`} />
+                </div>
+
+                <div style={{ marginBottom: 8, fontSize: 12, fontWeight: 600, color: "#475569" }}>
+                  Top 因子重要性
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", maxHeight: "80px", overflowY: "auto" }}>
+                  {topFactors.length > 0 ? (
+                    topFactors.map((f, idx) => (
+                      <span
+                        key={`${g.group_name}-${f.name || idx}`}
+                        style={{
+                          padding: "1px 6px",
+                          backgroundColor: "#ecfeff",
+                          color: "#155e75",
+                          fontSize: 10,
+                          borderRadius: "3px",
+                          fontFamily: "monospace",
+                        }}
+                      >
+                        {f.name || f.factor || `factor_${idx + 1}`}
+                        {typeof f.gain_pct === "number" ? ` ${f.gain_pct.toFixed(1)}%` : ""}
+                      </span>
+                    ))
+                  ) : (
+                    g.factor_names.map((f) => (
+                      <span
+                        key={f}
+                        style={{
+                          padding: "1px 6px",
+                          backgroundColor: "#f1f5f9",
+                          color: "#475569",
+                          fontSize: 10,
+                          borderRadius: "3px",
+                          fontFamily: "monospace",
+                        }}
+                      >
+                        {f}
+                      </span>
+                    ))
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
+
+      {/* 5. 多Alpha优化指导 */}
+      {optimizationGuidance.length > 0 && (
+        <div style={{ ...cardStyle, marginBottom: "24px" }}>
+          <div style={headerStyle}>
+            <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#0f766e" }}>
+              基于回测与训练数据的优化指导 ({optimizationGuidance.length})
+            </h2>
+          </div>
+          <div style={{ padding: "20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+            {optimizationGuidance.map((item, i) => (
+              <div
+                key={`${item.rule_id}-${i}`}
+                style={{
+                  padding: "12px 16px",
+                  borderRadius: "8px",
+                  border: "1px solid",
+                  ...severityStyle(item.severity),
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase" }}>
+                    {item.severity}
+                  </span>
+                  <span style={{ fontSize: 12, fontWeight: 700 }}>{item.rule_id}</span>
+                </div>
+                <p style={{ margin: "0 0 6px", fontSize: 13, color: "#334155" }}>{item.message}</p>
+                <p style={{ margin: "0 0 8px", fontSize: 12, color: "#047857", fontWeight: 600 }}>
+                  {item.recommendation}
+                </p>
+                {item.affected_groups?.length > 0 && (
+                  <div style={{ marginBottom: 6, fontSize: 11, color: "#475569" }}>
+                    影响组：{item.affected_groups.join(", ")}
+                  </div>
+                )}
+                {item.evidence && (
+                  <pre
+                    style={{
+                      margin: 0,
+                      padding: "8px",
+                      borderRadius: 6,
+                      backgroundColor: "rgba(255,255,255,0.65)",
+                      color: "#334155",
+                      fontSize: 10,
+                      overflowX: "auto",
+                    }}
+                  >
+                    {JSON.stringify(item.evidence, null, 2)}
+                  </pre>
+                )}
+                <a
+                  href={`/quantevolver/multi-alpha/evolve-wizard?source_exp=${expId}&action=${item.action_type}&target=${(item.affected_groups || []).join(",")}`}
+                  style={{
+                    display: "inline-flex",
+                    marginTop: 8,
+                    padding: "5px 10px",
+                    borderRadius: 6,
+                    backgroundColor: "#ffffff",
+                    border: "1px solid #cbd5e1",
+                    color: "#0f766e",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    textDecoration: "none",
+                  }}
+                >
+                  进入演进向导
+                </a>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 5. 瓶颈识别 */}
       {data.bottlenecks.length > 0 && (
@@ -847,7 +1125,7 @@ export default function MultiAlphaDiagnosticsPage() {
       )}
 
       {/* 无瓶颈时显示健康状态 */}
-      {data.bottlenecks.length === 0 && (
+      {data.bottlenecks.length === 0 && optimizationGuidance.length === 0 && (
         <div
           style={{
             ...cardStyle,
@@ -861,6 +1139,17 @@ export default function MultiAlphaDiagnosticsPage() {
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+function MetricChip({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div style={{ border: "1px solid #e2e8f0", borderRadius: 6, padding: "6px 8px", backgroundColor: "#f8fafc" }}>
+      <div style={{ fontSize: 10, color: "#64748b" }}>{label}</div>
+      <div style={{ marginTop: 2, fontSize: 12, fontWeight: 700, color: "#0f172a", fontFamily: "monospace" }}>
+        {value}
+      </div>
     </div>
   );
 }

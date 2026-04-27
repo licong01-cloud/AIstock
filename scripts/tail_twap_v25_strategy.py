@@ -284,6 +284,27 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
             if amount_remain <= 1e-5:
                 continue
 
+            unit = self.trade_exchange.get_amount_of_trade_unit(
+                stock_id=order.stock_id,
+                start_time=order.start_time,
+                end_time=order.end_time,
+            )
+            effective_unit = unit if unit is not None and unit > 0 else 100
+            if order.direction == Order.BUY and amount_remain < effective_unit:
+                self._v25_no_fill_reasons[order.stock_id] = "buy_below_trade_unit"
+                continue
+            if order.direction == Order.SELL and amount_remain < effective_unit:
+                # Odd-lot/fractional sell orders are cleanup orders; sending
+                # them immediately avoids wasting V25 slices on sub-lot dust.
+                order_list.append(Order(
+                    stock_id=order.stock_id,
+                    amount=amount_remain,
+                    start_time=trade_start_time,
+                    end_time=trade_end_time,
+                    direction=order.direction,
+                ))
+                continue
+
             if order.stock_id not in self._p0_done:
                 try:
                     close_price = self.trade_exchange.get_close(order.stock_id, trade_start_time, trade_end_time, method="ts_data_last")
@@ -341,13 +362,12 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
             if is_last_step:
                 amount_delta = amount_remain + self._realloc_extra.get(order.stock_id, 0)
 
-            unit = self.trade_exchange.get_amount_of_trade_unit(
-                stock_id=order.stock_id,
-                start_time=order.start_time,
-                end_time=order.end_time,
-            )
             max_amount = amount_remain + self._realloc_extra.get(order.stock_id, 0)
-            if unit is not None and unit > 0:
+            if is_last_step and order.direction == Order.SELL:
+                # A-share sells can clear odd-lot/fractional residuals; do not
+                # re-round final liquidation back to the 100-share trade unit.
+                amount_delta_target = min(amount_delta, max_amount)
+            elif unit is not None and unit > 0:
                 amount_delta_target = min(np.round(amount_delta / unit) * unit, max_amount)
             else:
                 amount_delta_target = min(amount_delta, max_amount)

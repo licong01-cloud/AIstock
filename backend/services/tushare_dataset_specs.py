@@ -34,6 +34,7 @@ class DatasetSpec:
     row_limit: int = 0                     # if >0, fail when single API call returns >= this many rows
     code_param_name: str = "ts_code"       # BY_CODE: API parameter name for the code value
     skip_date_params: bool = False         # True = don't pass start_date/end_date to API
+    replace_existing_dates: bool = False   # True = replace one date window instead of append-only upsert
     rate_per_minute: int = 500             # per-API 频率限制，默认 500/min (10000积分)
 
 
@@ -236,6 +237,23 @@ STK_LIMIT = DatasetSpec(
     rate_per_minute=200,
 )
 
+SUSPEND_D = DatasetSpec(
+    name="suspend_d",
+    tushare_api="suspend_d",
+    target_table="market.suspend_d",
+    primary_keys=["trade_date", "ts_code", "suspend_type"],
+    query_mode=QueryMode.BY_DATE,
+    columns={
+        "trade_date": "date",
+        "ts_code": "text",
+        "suspend_type": "text",
+        "suspend_timing": "text",
+    },
+    batch_sleep=0.3,
+    rate_per_minute=200,
+    replace_existing_dates=True,
+)
+
 
 # ---------------------------------------------------------------------------
 # 3 Shenwan (申万) sector dataset definitions
@@ -338,6 +356,7 @@ DATASET_REGISTRY: Dict[str, DatasetSpec] = {
         STOCK_ST,
         BAK_BASIC,
         STK_LIMIT,
+        SUSPEND_D,
         MARGIN_DETAIL,
         SW_INDEX_CLASSIFY,
         SW_INDEX_MEMBER,

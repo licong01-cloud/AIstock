@@ -168,3 +168,11 @@
   - Added detailed design document: docs/architecture/paper_v2_ui_selection_portfolio_completion_plan.md.
   - Confirmed DB has target QE experiments and existing packaged StrategyPackages for qe_20260416_002701, qe_20260413_084216, qe_20260416_082012.
 - Timestamp: 2026-04-26T23:59:23
+
+## Session: 2026-04-27 QE Config Truthfulness / No-Silent-Override Hardening
+- **Status:** started
+- Actions taken:
+  - Activated planning-with-files for persistent tracking.
+  - Re-read docs/codex_project_memory.md.
+  - Captured dirty git baseline; many pre-existing modified/untracked files are present.
+  - Added new task plan section for this work.

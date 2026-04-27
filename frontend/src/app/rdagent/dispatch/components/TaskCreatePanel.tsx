@@ -34,6 +34,9 @@ export default function TaskCreatePanel({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [actionSelection, setActionSelection] = useState("llm");
   const [costeerMaxLoop, setCosteerMaxLoop] = useState(5);
+  const [multiProcN, setMultiProcN] = useState(1);
+  const [appTpl, setAppTpl] = useState("../app_tpl/all/v4/rdagent");
+  const [customEnvText, setCustomEnvText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -79,7 +82,20 @@ export default function TaskCreatePanel({
         body.evolving_n = evolvingN;
         body.action_selection = actionSelection;
         body.costeer_max_loop = costeerMaxLoop;
+        body.multi_proc_n = multiProcN;
+        body.app_tpl = appTpl.trim();
         if (allDuration) body.all_duration = allDuration;
+        if (customEnvText.trim()) {
+          try {
+            const parsedEnv = JSON.parse(customEnvText);
+            if (!parsedEnv || Array.isArray(parsedEnv) || typeof parsedEnv !== "object") {
+              throw new Error("custom_env must be a JSON object");
+            }
+            body.custom_env = parsedEnv;
+          } catch (envErr: any) {
+            throw new Error(`Custom Env JSON invalid: ${envErr?.message || envErr}`);
+          }
+        }
       }
 
       const res = await fetch(`${API_BASE}/dispatch/tasks`, {
@@ -218,6 +234,52 @@ export default function TaskCreatePanel({
               max={20}
               value={costeerMaxLoop}
               onChange={e => setCosteerMaxLoop(parseInt(e.target.value) || 5)}
+            />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: "#6b7280" }}>Multi Proc</label>
+            <input
+              style={{ ...selectStyle, width: 80 }}
+              type="number"
+              min={1}
+              max={16}
+              value={multiProcN}
+              onChange={e => setMultiProcN(parseInt(e.target.value) || 1)}
+            />
+          </div>
+          <div style={{ flex: "1 1 360px", minWidth: 280 }}>
+            <label style={{ fontSize: 11, color: "#6b7280", display: "block" }}>RD-Agent app_tpl</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                style={{ ...inputStyle, flex: 1 }}
+                value={appTpl}
+                onChange={e => setAppTpl(e.target.value)}
+                placeholder="../app_tpl/all/v4/rdagent"
+              />
+              <button
+                type="button"
+                onClick={() => setAppTpl("../app_tpl/all/v25/rdagent")}
+                style={{
+                  padding: "8px 10px", fontSize: 12, borderRadius: 6,
+                  border: "1px solid #d1d5db", background: "#fff", cursor: "pointer",
+                }}
+              >
+                V25
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
+              V25 requires the target node to have app_tpl/all/v25 deployed.
+            </div>
+          </div>
+          <div style={{ flex: "1 1 100%", minWidth: 280 }}>
+            <label style={{ fontSize: 11, color: "#6b7280", display: "block" }}>
+              Custom Env JSON
+            </label>
+            <textarea
+              style={{ ...inputStyle, minHeight: 54, fontFamily: "monospace", resize: "vertical" }}
+              value={customEnvText}
+              onChange={e => setCustomEnvText(e.target.value)}
+              placeholder='{"V25_DEVICE":"cuda"}'
             />
           </div>
         </div>

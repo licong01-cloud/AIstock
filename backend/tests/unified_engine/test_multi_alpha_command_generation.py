@@ -15,8 +15,88 @@ from backend.services.quantevolver.multi_alpha_engine import MultiAlphaEngine
 from backend.services.quantevolver.multi_alpha_resource_planner import plan_assignments
 from backend.services.quantevolver.multi_alpha_result_collector import MultiAlphaResultCollector
 from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
+from backend.services.quantevolver.callback_urls import build_aistock_callback_url
 from backend.routers import quantevolver as quantevolver_router
 from backend.routers.quantevolver import _build_multi_alpha_group_command
+
+
+class TestQrunLimitMinutePredBacktest:
+    def test_runner_declares_pred_backtest_without_changing_existing_modes(self):
+        runner = Path("scripts/qrun_limit_minute.py").read_text(encoding="utf-8")
+
+        assert "add_mutually_exclusive_group" in runner
+        assert 'add_argument("--backtest-only"' in runner
+        assert 'add_argument("--train-only"' in runner
+        assert 'add_argument("--pred-backtest"' in runner
+        assert "def _run_pred_backtest" in runner
+
+    def test_pred_backtest_injects_prediction_and_label_for_records(self):
+        runner = Path("scripts/qrun_limit_minute.py").read_text(encoding="utf-8")
+
+        assert 'recorder.save_objects(**{"pred.pkl": pred_df, "label.pkl": raw_label})' in runner
+        assert 'if "SignalRecord" in rec_class' in runner
+        assert 'if not has_port_ana' in runner
+
+
+class TestMultiAlphaRolloutGate:
+    def test_distributed_mode_rejected_until_feature_flag_enabled(self):
+        with patch.dict("os.environ", {"AISTOCK_MULTI_ALPHA_DISTRIBUTED_ENABLED": ""}):
+            with pytest.raises(Exception) as exc:
+                quantevolver_router._assert_multi_alpha_execution_mode_supported(
+                    {"execution_mode": "distributed"}
+                )
+
+        assert getattr(exc.value, "status_code", None) == 400
+        assert "distributed execution is disabled" in str(exc.value.detail)
+
+    def test_distributed_mode_allowed_when_feature_flag_enabled(self):
+        with patch.dict("os.environ", {"AISTOCK_MULTI_ALPHA_DISTRIBUTED_ENABLED": "1"}):
+            quantevolver_router._assert_multi_alpha_execution_mode_supported(
+                {"execution_mode": "distributed"}
+            )
+
+
+class TestQELoopCallbackUrls:
+    def test_wsl_qe_callback_uses_concrete_8001_endpoint_not_node_base(self):
+        with patch.dict("os.environ", {
+            "AISTOCK_QE_LOOP_CALLBACK_URL": "",
+            "AISTOCK_QE_CALLBACK_BASE_URL": "",
+            "AISTOCK_BACKEND_CALLBACK_BASE_URL": "",
+            "AISTOCK_BACKEND_BASE_URL": "",
+        }):
+            url = quantevolver_router._resolve_qe_experiment_callback_url(
+                "wsl2-5080",
+                "http://192.168.50.1:8000",
+            )
+
+        assert url == "http://127.0.0.1:8001/api/v1/quantevolver/webhook/loop-completed"
+
+    def test_remote_qe_callback_expands_compute_node_base(self):
+        with patch.dict("os.environ", {
+            "AISTOCK_QE_LOOP_CALLBACK_URL": "",
+            "AISTOCK_QE_CALLBACK_BASE_URL": "",
+            "AISTOCK_BACKEND_CALLBACK_BASE_URL": "",
+            "AISTOCK_BACKEND_BASE_URL": "",
+        }):
+            url = quantevolver_router._resolve_qe_experiment_callback_url(
+                "rdagent-node1",
+                "http://192.168.50.10:8001",
+            )
+
+        assert url == "http://192.168.50.10:8001/api/v1/quantevolver/webhook/loop-completed"
+
+    def test_full_callback_override_is_preserved(self):
+        with patch.dict("os.environ", {
+            "AISTOCK_QE_LOOP_CALLBACK_URL": "http://aistock.local/cb/qe",
+        }):
+            url = build_aistock_callback_url(
+                endpoint_path="/api/v1/quantevolver/webhook/loop-completed",
+                full_url_env="AISTOCK_QE_LOOP_CALLBACK_URL",
+                node_id="wsl2-5080",
+                node_callback_url="http://127.0.0.1:8000",
+            )
+
+        assert url == "http://aistock.local/cb/qe"
 
 
 class TestConfigComposerCommandGeneration:
@@ -170,6 +250,15 @@ class TestMultiAlphaPlanner:
 
 
 class TestMultiAlphaCommandBuilder:
+    def test_run_endpoint_rejects_removed_legacy_engine_mode(self):
+        with pytest.raises(quantevolver_router.HTTPException) as exc_info:
+            asyncio.get_event_loop().run_until_complete(
+                quantevolver_router.run_experiment("any_experiment", engine_mode="legacy")
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "legacy execution engine has been removed" in exc_info.value.detail
+
     def test_prefers_command_core_without_legacy_cd(self):
         cmd = _build_multi_alpha_group_command(
             {
@@ -184,19 +273,18 @@ class TestMultiAlphaCommandBuilder:
         assert "cd /mnt/f/legacy" not in cmd
         assert "on wsl2-5080" in cmd
 
-    def test_falls_back_to_legacy_command(self):
-        cmd = _build_multi_alpha_group_command(
-            {
-                "group_name": "price_volume",
-                "wsl_command_core": "",
-                "wsl_command": "python qrun_limit_minute.py conf.yaml",
-            }
-        )
-
-        assert cmd == "echo '=== Running group: price_volume ===' && (python qrun_limit_minute.py conf.yaml)"
+    def test_rejects_legacy_command_without_unified_core(self):
+        with pytest.raises(ValueError, match="missing wsl_command_core"):
+            _build_multi_alpha_group_command(
+                {
+                    "group_name": "price_volume",
+                    "wsl_command_core": "",
+                    "wsl_command": "python qrun_limit_minute.py conf.yaml",
+                }
+            )
 
     def test_raises_when_group_has_no_executable_command(self):
-        with pytest.raises(ValueError, match="has no executable command"):
+        with pytest.raises(ValueError, match="missing wsl_command_core"):
             _build_multi_alpha_group_command(
                 {
                     "group_name": "price_volume",
@@ -229,6 +317,7 @@ class TestMultiAlphaMetaRunner:
         assert "_resolve_prediction_path" in script
         assert "GROUP_PREDICTION_PATHS.get(g_name)" in script
         assert "src_exp/Loop1/group_price_volume/output/pred.pkl" in script
+        compile(script, "meta_model_runner.py", "exec")
 
     def test_meta_runner_fails_when_prediction_missing(self):
         engine = MultiAlphaEngine.__new__(MultiAlphaEngine)
@@ -244,9 +333,94 @@ class TestMultiAlphaMetaRunner:
         assert 'raise RuntimeError("Missing prediction_path for reuse group")' in script
         assert 'raise RuntimeError(' in script
         assert 'Missing prediction files for groups' in script
+        compile(script, "meta_model_runner.py", "exec")
 
 
 class TestMultiAlphaEngineFailFast:
+    def test_root_backtest_files_are_generated_from_full_unified_bundle(self):
+        class DummyComposer:
+            def compose_experiment_in_memory(self, **kwargs):
+                assert kwargs["train_only"] is False
+                return {
+                    "experiment_files": {
+                        "conf.yaml": "task:\n  record: []\n  module_path: qe_custom_loaders\n",
+                        "qrun_limit_minute.py": "runner",
+                        "read_exp_res.py": "reader",
+                        "qe_custom_loaders.py": "loader",
+                        "benchmark_sh000300.parquet.b64": "AA==",
+                    }
+                }
+
+        engine = MultiAlphaEngine.__new__(MultiAlphaEngine)
+        engine.composer = DummyComposer()
+        engine.config = SimpleNamespace(
+            strategy_id=None,
+            data_split={},
+            execution_algo=None,
+            execution_algo_params=None,
+            experiment_name="exp_demo",
+            build_custom_params=lambda: {},
+            build_strategy_params=lambda: {},
+        )
+        engine.ma_config = SimpleNamespace(
+            alpha_groups=[
+                SimpleNamespace(
+                    group_name="price_volume",
+                    factor_names=["f1"],
+                    model_id="m1",
+                )
+            ]
+        )
+
+        files = {
+            "group_price_volume/conf.yaml": "group train-only conf",
+            "group_price_volume/qrun_limit_minute.py": "train-only runner",
+            "group_price_volume/read_exp_res.py": "train-only reader",
+        }
+
+        engine._add_root_backtest_files(files, [{"group_name": "price_volume"}])
+
+        assert files["conf.yaml"].startswith("task:")
+        assert files["qrun_limit_minute.py"] == "runner"
+        assert files["read_exp_res.py"] == "reader"
+        assert files["qe_custom_loaders.py"] == "loader"
+        assert files["benchmark_sh000300.parquet.b64"] == "AA=="
+
+    def test_root_backtest_files_fail_when_referenced_module_missing(self):
+        class DummyComposer:
+            def compose_experiment_in_memory(self, **kwargs):
+                return {
+                    "experiment_files": {
+                        "conf.yaml": "class: custom_strategy.CustomStrategy\n",
+                        "qrun_limit_minute.py": "runner",
+                        "read_exp_res.py": "reader",
+                    }
+                }
+
+        engine = MultiAlphaEngine.__new__(MultiAlphaEngine)
+        engine.composer = DummyComposer()
+        engine.config = SimpleNamespace(
+            strategy_id=None,
+            data_split={},
+            execution_algo=None,
+            execution_algo_params=None,
+            experiment_name="exp_demo",
+            build_custom_params=lambda: {},
+            build_strategy_params=lambda: {},
+        )
+        engine.ma_config = SimpleNamespace(
+            alpha_groups=[
+                SimpleNamespace(
+                    group_name="price_volume",
+                    factor_names=["f1"],
+                    model_id="m1",
+                )
+            ]
+        )
+
+        with pytest.raises(RuntimeError, match="custom_strategy.py"):
+            engine._add_root_backtest_files({}, [{"group_name": "price_volume"}])
+
     def test_run_rejects_reuse_model_fallback(self):
         engine = MultiAlphaEngine.__new__(MultiAlphaEngine)
         engine.config = SimpleNamespace(
@@ -663,6 +837,69 @@ class TestRouterMultiAlphaDiagnosticsFallback:
         assert merged["meta_weight"] == 0.4
         assert merged["status"] == "completed"
 
+    def test_diagnostics_returns_persisted_multi_alpha_analysis(self):
+        from backend.services.quantevolver.multi_alpha_diagnostics import MultiAlphaDiagnostics
+
+        diag = MultiAlphaDiagnostics()
+        unified_row = (
+            "completed",
+            {
+                "multi_alpha_detail": {
+                    "meta_method": "equal",
+                    "combined_ic": 0.03,
+                    "group_results": [
+                        {"group_name": "g1", "ic": 0.02, "icir": 1.0, "sharpe": 1.1, "meta_weight": 0.5, "model_id": "m1"},
+                        {"group_name": "g2", "ic": -0.01, "icir": -0.5, "sharpe": -0.8, "meta_weight": 0.5, "model_id": "m2"},
+                    ],
+                    "group_correlations": {"g1|g2": 0.1},
+                },
+                "multi_alpha_analysis": {
+                    "schema_version": 1,
+                    "combined_vs_groups": {"combined_ic": 0.03, "best_group_ic": 0.02},
+                    "portfolio_diagnostics": {"annualized_turnover": 31.0},
+                    "diversification": {"effective_group_count": 2.0},
+                    "group_diagnostics": [
+                        {
+                            "group_name": "g2",
+                            "training_diagnostics": {"overfit_ratio": 1.4},
+                            "prediction_diagnostics": {"pred_rank_turnover": 0.3},
+                        }
+                    ],
+                    "data_availability": {"groups_with_enhanced_metrics": 2, "ic_quality": True},
+                    "ic_quality": {"combined": {"valid_days": 9, "skipped_days": 1}},
+                    "optimization_guidance": [
+                        {
+                            "rule_id": "group_overfit_risk",
+                            "severity": "medium",
+                            "message": "g2 overfit",
+                            "recommendation": "regularize",
+                            "action_type": "switch_model",
+                            "affected_groups": ["g2"],
+                            "evidence": {"overfit_ratio": 1.4},
+                            "source_fields": ["multi_alpha_analysis.group_diagnostics"],
+                        }
+                    ],
+                },
+            },
+            {"execution_mode": "serial", "meta_model": {"method": "equal"}},
+        )
+
+        with patch.object(diag, "_load_groups", return_value=[]), \
+             patch.object(diag, "_load_meta_info", return_value={}), \
+             patch.object(diag, "_load_correlations", return_value={}), \
+             patch("backend.services.quantevolver.multi_alpha_diagnostics.get_conn") as mock_get_conn:
+            conn = mock_get_conn.return_value.__enter__.return_value
+            cur = conn.cursor.return_value.__enter__.return_value
+            cur.fetchone.return_value = unified_row
+
+            result = diag.analyze("exp_1")
+
+        diagnostics = result["diagnostics"]
+        assert diagnostics["data_availability"]["groups_with_enhanced_metrics"] == 2
+        assert diagnostics["ic_quality"]["combined"]["skipped_days"] == 1
+        assert diagnostics["portfolio_diagnostics"]["annualized_turnover"] == 31.0
+        assert diagnostics["optimization_guidance"][0]["rule_id"] == "group_overfit_risk"
+
 
 class TestRouterEnhancedMetricsFallback:
     def test_enhanced_metrics_falls_back_to_cached_result_metrics(self):
@@ -720,6 +957,30 @@ class TestRouterEnhancedMetricsFallback:
         assert result["cumulative_excess_with_cost"] == [0.01]
         assert result["train_loss_curve"] == [0.5, 0.3]
 
+    def test_enhanced_metrics_exposes_cached_multi_alpha_analysis(self):
+        with patch.object(quantevolver_router, "get_conn") as mock_get_conn:
+            conn = mock_get_conn.return_value.__enter__.return_value
+            cur = conn.cursor.return_value.__enter__.return_value
+            cur.fetchone.return_value = (
+                None,
+                "task_x",
+                {
+                    "enhanced_metrics": {
+                        "summary": {"IC": 0.04},
+                        "multi_alpha_analysis": {
+                            "schema_version": 1,
+                            "data_availability": {"groups_with_enhanced_metrics": 2},
+                        },
+                    },
+                    "multi_alpha_detail": {"total_groups": 2},
+                },
+            )
+
+            result = asyncio.run(quantevolver_router.get_experiment_enhanced_metrics("exp_1"))
+
+        assert result["multi_alpha_detail"]["total_groups"] == 2
+        assert result["multi_alpha_analysis"]["data_availability"]["groups_with_enhanced_metrics"] == 2
+
 
 class TestRouterMultiAlphaNodeLoopTracking:
     def test_poll_multi_alpha_nodes_uses_group_qe_loop_id(self):
@@ -755,6 +1016,64 @@ class TestRouterMultiAlphaNodeLoopTracking:
 
 
 class TestMultiAlphaResultCollectorFailFast:
+    def test_build_result_metrics_embeds_multi_alpha_analysis(self):
+        collector = MultiAlphaResultCollector()
+
+        result = collector._build_result_metrics(
+            {
+                "IC": 0.03,
+                "_enhanced_metrics": {
+                    "summary": {
+                        "IC": 0.03,
+                        "1day.excess_return_with_cost.annualized_return": 0.10,
+                        "1day.excess_return_without_cost.annualized_return": 0.12,
+                    },
+                    "trade_diagnostics": {"annualized_turnover": 31.0},
+                    "prediction_diagnostics": {"pred_rank_turnover": 0.4},
+                },
+            },
+            "equal",
+            {"g1": 0.5, "g2": 0.5},
+            [
+                {"group_name": "g1", "ic": 0.02, "icir": 1.0, "sharpe": 1.1, "meta_weight": 0.5, "factor_count": 1, "model_id": "m1"},
+                {"group_name": "g2", "ic": -0.01, "icir": -0.5, "sharpe": -0.8, "meta_weight": 0.5, "factor_count": 1, "model_id": "m2"},
+            ],
+            {"g1|g2": 0.1},
+            {
+                "g1": {
+                    "summary": {"IC": 0.02, "Rank IC": 0.021, "l2.train": 0.9, "l2.valid": 1.0},
+                    "ic_diagnostics": {"ic_series": [0.01, 0.03], "ic_positive_ratio": 1.0},
+                    "prediction_diagnostics": {"pred_rank_turnover": 0.2, "top30_stability": 0.6},
+                    "factor_analysis": {"feature_importance": [{"name": "f1", "gain": 1.0}]},
+                },
+                "g2": {
+                    "summary": {"IC": -0.01, "Rank IC": -0.011, "l2.train": 0.8, "l2.valid": 1.1},
+                    "ic_diagnostics": {"ic_series": [-0.01, -0.02], "ic_positive_ratio": 0.0},
+                    "prediction_diagnostics": {"pred_rank_turnover": 0.3, "top30_stability": 0.5},
+                },
+            },
+            {
+                "combined": {
+                    "total_days": 10,
+                    "valid_days": 9,
+                    "skipped_days": 1,
+                    "skipped_samples": [
+                        {"date": "2026-03-09", "reason": "insufficient_valid_samples_after_dropna"}
+                    ],
+                }
+            },
+        )
+
+        analysis = result["multi_alpha_analysis"]
+        assert result["multi_alpha_detail"]["ic_quality"]["combined"]["skipped_days"] == 1
+        assert analysis["ic_quality"]["combined"]["valid_days"] == 9
+        assert analysis["data_availability"]["ic_quality"] is True
+        assert analysis["data_availability"]["groups_with_enhanced_metrics"] == 2
+        assert analysis["portfolio_diagnostics"]["cost_drag_annualized"] == pytest.approx(-0.02)
+        assert analysis["group_diagnostics"][0]["training_diagnostics"]["final_train_loss"] == 0.9
+        assert result["enhanced_metrics"]["multi_alpha_analysis"]["schema_version"] == 1
+        assert any(g["rule_id"] == "negative_weighted_group" for g in analysis["optimization_guidance"])
+
     def test_collect_and_persist_requires_qe_loop_id(self):
         collector = MultiAlphaResultCollector()
 
@@ -888,3 +1207,116 @@ class TestMultiAlphaResultCollectorFailFast:
                 {"g1": {}},
                 {"g1": 1.0},
             )
+
+class TestMultiAlphaPhase2ArtifactValidation:
+    def test_single_node_artifact_validation_requires_group_prediction(self):
+        from backend.services.quantevolver.multi_alpha_result_collector import MultiAlphaArtifactError
+
+        class DummyClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+            async def download_workspace_file_bytes(self, task_id, loop_id, file_path):
+                return b"combined" if file_path == "combined_prediction.pkl" else b"x"
+
+            async def get_workspace_file(self, task_id, loop_id, file_path):
+                return {"ok": True}
+
+            async def download_group_predictions(self, task_id, loop_id, group_name):
+                raise RuntimeError("pred not found")
+
+        collector = MultiAlphaResultCollector()
+        with patch("backend.services.quantevolver.qe_workspace_client.QEWorkspaceClient", return_value=DummyClient()):
+            with pytest.raises(MultiAlphaArtifactError, match="group g1 pred.pkl"):
+                asyncio.run(collector._validate_single_node_artifacts(
+                    "task_x",
+                    "Loop1",
+                    [{"group_name": "g1", "status": "completed"}],
+                ))
+
+    def test_single_node_artifact_validation_accepts_required_artifacts(self):
+        class DummyClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+            async def download_workspace_file_bytes(self, task_id, loop_id, file_path):
+                return b"combined"
+
+            async def get_workspace_file(self, task_id, loop_id, file_path):
+                if file_path.endswith("qlib_results_enhanced.json"):
+                    return {"summary": {"IC": 0.1}, "artifact": file_path}
+                return {"ok": True, "artifact": file_path}
+
+            async def download_group_predictions(self, task_id, loop_id, group_name):
+                return b"pred"
+
+        collector = MultiAlphaResultCollector()
+        with patch("backend.services.quantevolver.qe_workspace_client.QEWorkspaceClient", return_value=DummyClient()):
+            asyncio.run(collector._validate_single_node_artifacts(
+                "task_x",
+                "Loop1",
+                [{"group_name": "g1", "status": "completed"}],
+            ))
+
+    def test_multi_alpha_results_completed_without_meta_is_conflict_not_empty_success(self):
+        with patch.object(quantevolver_router, "get_conn") as mock_get_conn:
+            conn = mock_get_conn.return_value.__enter__.return_value
+            cur = conn.cursor.return_value.__enter__.return_value
+            cur.fetchone.return_value = ("completed", {})
+            cur.fetchall.side_effect = [
+                [(
+                    "g1", ["f1"], "m1", "DatasetH",
+                    None, None, None, None,
+                    "node1", "completed", None,
+                )],
+                [],
+            ]
+            cur.description = [
+                ("group_name",), ("factor_names",), ("model_id",), ("dataset_type",),
+                ("group_ic",), ("group_icir",), ("group_sharpe",), ("meta_weight",),
+                ("assigned_node_id",), ("status",), ("error_message",),
+            ]
+
+            with pytest.raises(quantevolver_router.HTTPException) as exc:
+                quantevolver_router.get_multi_alpha_results("exp_1")
+
+        assert exc.value.status_code == 409
+        assert "artifact-ready" in str(exc.value.detail)
+
+    def test_run_status_marks_artifact_collection_failure_explicitly(self):
+        collector_instance = SimpleNamespace(
+            collect_and_persist=AsyncMock(side_effect=RuntimeError("missing multi_alpha_results.json"))
+        )
+
+        with patch.object(quantevolver_router, "get_conn") as mock_get_conn, \
+             patch.object(quantevolver_router, "_load_multi_alpha_status_payload", return_value={
+                 "stage": "result_collection",
+                 "artifact_status": "validating",
+                 "groups": [],
+                 "total_groups": 2,
+                 "completed_groups": 2,
+                 "failed_groups": 0,
+                 "running_groups": 0,
+                 "group_status_counts": {"completed": 2},
+             }), \
+             patch.object(quantevolver_router, "_poll_multi_alpha_nodes", AsyncMock(return_value="completed")), \
+             patch.object(quantevolver_router, "_mark_multi_alpha_artifact_failure") as mark_failed, \
+             patch("backend.services.quantevolver.multi_alpha_result_collector.MultiAlphaResultCollector", return_value=collector_instance):
+            conn = mock_get_conn.return_value.__enter__.return_value
+            cur = conn.cursor.return_value.__enter__.return_value
+            cur.fetchone.return_value = ("running", "task_x", "Loop1", None, "multi")
+            cur.description = [("status",), ("qe_task_id",), ("qe_loop_id",), ("result_metrics",), ("alpha_mode",)]
+
+            result = asyncio.run(quantevolver_router.get_experiment_run_status("exp_1"))
+
+        assert result["status"] == "failed"
+        assert result["multi_alpha_stage"] == "failed_artifact"
+        assert result["artifact_status"] == "failed"
+        assert "missing multi_alpha_results.json" in result["error"]
+        mark_failed.assert_called_once()

@@ -19,6 +19,7 @@
   python qrun_limit_minute.py conf.yaml                  # 完整训练+回测
   python qrun_limit_minute.py conf.yaml --backtest-only   # 跳过训练，只回测
   python qrun_limit_minute.py conf.yaml --train-only      # 只训练，跳过回测
+  python qrun_limit_minute.py conf.yaml --pred-backtest combined_prediction.pkl  # 从已有预测直接回测
 """
 import argparse
 import gc
@@ -47,6 +48,131 @@ except ModuleNotFoundError:
 import qlib
 from qlib.config import C
 
+
+
+# === 分钟级交易记录功能（环境变量控制）===
+import json
+import pickle
+from collections import defaultdict
+import pandas as pd
+
+# 环境变量：SAVE_MINUTE_TRADES=1 启用分钟级记录
+SAVE_MINUTE_TRADES = os.environ.get('SAVE_MINUTE_TRADES', '0') == '1'
+
+def save_minute_trades_from_recorder(recorder, output_dir='.'):
+    """从recorder中提取并保存分钟级交易记录
+    
+    环境变量控制：
+        SAVE_MINUTE_TRADES=1  启用分钟级记录保存（默认关闭）
+        
+    保存文件：
+        minute_trades.json - 分钟级交易详情
+        minute_summary.csv - 汇总统计（前30分钟vs后210分钟）
+    """
+    if not SAVE_MINUTE_TRADES:
+        return  # 默认行为：不保存，无性能影响
+    
+    try:
+        print('[INFO] SAVE_MINUTE_TRADES=1: Extracting minute-level trades...')
+        
+        # 尝试加载positions
+        try:
+            positions = recorder.load_object('portfolio_analysis/positions.pkl')
+        except Exception as e:
+            print(f'[WARN] No positions.pkl found: {e}')
+            return
+        
+        if positions is None or (hasattr(positions, 'empty') and positions.empty):
+            print('[WARN] Positions data is empty')
+            return
+        
+        print(f'[INFO] Positions shape: {positions.shape}')
+        print(f'[INFO] Positions index: {positions.index.names}')
+        
+        # 提取分钟级数据
+        minute_data = defaultdict(lambda: defaultdict(list))
+        
+        if isinstance(positions.index, pd.MultiIndex):
+            dates = positions.index.get_level_values(0).unique()
+            
+            for date in dates:
+                date_str = str(date)[:10]
+                try:
+                    day_positions = positions.loc[date]
+                    
+                    # 检查是否是分钟级数据
+                    if isinstance(day_positions.index, pd.DatetimeIndex):
+                        for timestamp in day_positions.index:
+                            if hasattr(timestamp, 'hour'):
+                                minute = timestamp.hour * 60 + timestamp.minute - 9 * 60 - 30
+                                if 0 <= minute < 240:
+                                    row = day_positions.loc[timestamp]
+                                    for stock in row.index:
+                                        pos = row[stock]
+                                        if abs(pos) > 1e-6:
+                                            minute_data[date_str][stock].append({
+                                                'minute': int(minute),
+                                                'position': float(pos),
+                                                'timestamp': str(timestamp)
+                                            })
+                except Exception as e:
+                    print(f'[WARN] Failed to process {date}: {e}')
+        
+        if not minute_data:
+            print('[WARN] No minute-level data extracted')
+            return
+        
+        # 保存JSON
+        output_path = Path(output_dir) / 'minute_trades.json'
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(dict(minute_data), f, indent=2, ensure_ascii=False)
+        
+        print(f'[INFO] ✓ Minute trades saved: {output_path}')
+        
+        # 生成汇总统计
+        summary_data = []
+        for date, stocks in minute_data.items():
+            for stock, trades in stocks.items():
+                if not trades:
+                    continue
+                
+                early = [t for t in trades if t['minute'] < 30]
+                late = [t for t in trades if t['minute'] >= 30]
+                
+                early_qty = sum(abs(t['position']) for t in early)
+                late_qty = sum(abs(t['position']) for t in late)
+                total = early_qty + late_qty
+                
+                if total > 0:
+                    summary_data.append({
+                        'date': date,
+                        'stock': stock,
+                        'early_30min_qty': early_qty,
+                        'late_210min_qty': late_qty,
+                        'early_pct': early_qty / total * 100,
+                        'late_pct': late_qty / total * 100,
+                        'total_minutes': len(trades)
+                    })
+        
+        if summary_data:
+            df = pd.DataFrame(summary_data)
+            summary_path = Path(output_dir) / 'minute_summary.csv'
+            df.to_csv(summary_path, index=False)
+            
+            print(f'[INFO] ✓ Summary saved: {summary_path}')
+            print(f'[INFO]   Samples: {len(df)}')
+            print(f'[INFO]   Avg early 30min: {df["early_pct"].mean():.2f}%')
+            print(f'[INFO]   v25 target: 88.79%')
+            
+            if df['early_pct'].mean() > 70:
+                print('[INFO]   ✅ Matches v25 high-weight pattern')
+            else:
+                print('[INFO]   ⚠️  Lower than expected v25 pattern')
+        
+    except Exception as e:
+        print(f'[ERROR] Failed to save minute trades: {e}')
+        import traceback
+        traceback.print_exc()
 
 def render_yaml_template(yaml_path: str) -> str:
     """用环境变量渲染 Jinja2 模板，返回渲染后的 YAML 字符串。"""
@@ -172,10 +298,13 @@ def inject_benchmark(config: dict, benchmark_series):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("yaml_path", nargs="?", default="conf.yaml")
-    parser.add_argument("--backtest-only", action="store_true",
-                        help="跳过模型训练，从已有 mlruns 加载模型直接回测")
-    parser.add_argument("--train-only", action="store_true",
-                        help="只训练模型+生成 pred.pkl，跳过回测（多Alpha从节点模式）")
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--backtest-only", action="store_true",
+                            help="skip training and backtest with an existing mlruns model")
+    mode_group.add_argument("--train-only", action="store_true",
+                            help="train and generate pred.pkl without portfolio backtest")
+    mode_group.add_argument("--pred-backtest", type=str, metavar="PRED_PKL",
+                            help="run IC analysis and portfolio backtest from an existing prediction pkl")
     args = parser.parse_args()
 
     # Jinja2 渲染 → YAML 解析
@@ -206,18 +335,155 @@ def main():
 
     experiment_name = config.get("experiment_name", "workflow")
 
-    if args.backtest_only:
-        # ── Backtest-only 模式：跳过训练，加载已有模型 ──
+    if args.pred_backtest:
+        # Pred-backtest mode: use an externally supplied prediction file.
+        pred_path = Path(args.pred_backtest)
+        if not pred_path.exists():
+            raise FileNotFoundError(
+                f"--pred-backtest: prediction file not found: {pred_path.resolve()}"
+            )
+        print(f"[INFO] Pred-backtest mode: loading prediction from {pred_path}")
+        _run_pred_backtest(config, experiment_name, pred_path)
+    elif args.backtest_only:
+        # Backtest-only mode: skip training and load an existing model.
         print("[INFO] Backtest-only mode: skipping model training, loading existing model")
         _run_backtest_only(config, experiment_name)
     elif args.train_only:
-        # ── Train-only 模式：训练+生成pred.pkl，跳过回测 ──
+        # Train-only mode: generate pred.pkl but skip portfolio backtest.
         print("[INFO] Train-only mode: training model + generating predictions, skipping backtest")
         _run_train_only(config, experiment_name)
     else:
-        # ── 完整模式：训练 + 回测 ──
+        # Full mode: train and backtest.
         recorder = task_train(config.get("task"), experiment_name=experiment_name)
         recorder.save_objects(config=config)
+        
+        # 保存分钟级交易记录（环境变量控制）
+        save_minute_trades_from_recorder(recorder, output_dir=os.getcwd())
+
+
+def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
+    """从已有的 prediction pkl 文件直接执行 IC分析 + 选股 + 分钟线回测。
+
+    用于多Alpha统一回测：主节点合并各组 pred.pkl 后，用 combined prediction
+    执行完整的选股策略（TopK）+ 分钟线执行（TailTWAP）+ 回测分析。
+
+    流程：
+    1. 加载 combined_prediction.pkl（MultiIndex: datetime × instrument → score）
+    2. 初始化 dataset（只需要 test segment 的 label，用于 SigAnaRecord 计算 IC）
+    3. 创建新 recorder，注入 pred.pkl
+    4. 执行 SigAnaRecord（IC/ICIR 分析）
+    5. 执行 PortAnaRecord（选股+分钟线回测：收益/回撤/Sharpe/换手率/持仓）
+    """
+    import copy
+    import pickle
+    import pandas as pd
+    from qlib.utils import init_instance_by_config
+    from qlib.workflow import R
+    from qlib.data.dataset import Dataset
+
+    # 1. 加载 prediction
+    with open(pred_path, "rb") as f:
+        pred_df = pickle.load(f)
+
+    if isinstance(pred_df, pd.Series):
+        pred_df = pred_df.to_frame("score")
+    if not isinstance(pred_df, pd.DataFrame):
+        raise TypeError(
+            f"--pred-backtest: prediction 文件内容类型错误: {type(pred_df).__name__}，"
+            f"期望 pd.DataFrame 或 pd.Series"
+        )
+    if not isinstance(pred_df.index, pd.MultiIndex):
+        raise ValueError(
+            f"--pred-backtest: prediction 必须是 MultiIndex (datetime, instrument)，"
+            f"实际 index 类型: {type(pred_df.index).__name__}"
+        )
+
+    print(f"[INFO] Loaded prediction: {len(pred_df)} rows, "
+          f"columns={list(pred_df.columns)}, "
+          f"date range: {pred_df.index.get_level_values(0).min()} ~ "
+          f"{pred_df.index.get_level_values(0).max()}")
+
+    # 2. 初始化 dataset（需要 label 用于 SigAnaRecord 计算 IC）
+    task_config = copy.deepcopy(config.get("task"))
+    dataset: Dataset = init_instance_by_config(task_config["dataset"], accept_types=Dataset)
+    dataset.config(dump_all=False, recursive=True)
+
+    # 从 dataset 提取 label（SigAnaRecord 依赖 label.pkl 存在于 recorder 中）
+    from qlib.data.dataset.handler import DataHandlerLP
+    from qlib.data.dataset import DatasetH
+    from qlib.utils import class_casting
+    with class_casting(dataset, DatasetH):
+        try:
+            raw_label = dataset.prepare(segments="test", col_set="label", data_key=DataHandlerLP.DK_R)
+        except TypeError:
+            raw_label = dataset.prepare(segments="test", col_set="label")
+    if raw_label is None or (hasattr(raw_label, 'empty') and raw_label.empty):
+        raise RuntimeError(
+            "--pred-backtest: 无法从 dataset 获取 label。"
+            "SigAnaRecord 需要 label 来计算 IC/ICIR。"
+            "请检查 conf.yaml 的 dataset 配置和数据路径。"
+        )
+    print(f"[INFO] Extracted label from dataset: {len(raw_label)} rows")
+
+    # 3. 构建 records 列表：跳过 SignalRecord（不需要模型预测），保留 SigAnaRecord + PortAnaRecord
+    records_config = task_config.get("record", [])
+    if isinstance(records_config, dict):
+        records_config = [records_config]
+
+    filtered_records = []
+    for rec in records_config:
+        rec_class = rec.get("class", "")
+        if "SignalRecord" in rec_class:
+            # SignalRecord 需要 model 来生成 pred.pkl，pred-backtest 模式下跳过
+            # pred.pkl 已经直接注入 recorder
+            print(f"[INFO] Pred-backtest: skipping {rec_class} (prediction already provided)")
+            continue
+        filtered_records.append(rec)
+
+    if not filtered_records:
+        raise RuntimeError(
+            "--pred-backtest: 过滤后没有可执行的 record。"
+            "conf.yaml 必须包含 SigAnaRecord 和/或 PortAnaRecord。"
+        )
+
+    # 检查必须有 PortAnaRecord（回测是核心目的）
+    has_port_ana = any("PortAna" in r.get("class", "") for r in filtered_records)
+    if not has_port_ana:
+        raise RuntimeError(
+            "--pred-backtest: conf.yaml 中缺少 PortAnaRecord。"
+            "统一回测必须包含 PortAnaRecord 才能执行选股+回测。"
+        )
+
+    # 4. 创建新 recorder，注入 pred.pkl + label.pkl，执行 records
+    # SigAnaRecord 和 PortAnaRecord 不包含 <MODEL>/<DATASET> 占位符，
+    # 不需要 fill_placeholder。直接用 init_instance_by_config 实例化。
+
+    with R.start(experiment_name=experiment_name):
+        recorder = R.get_recorder()
+        # 注入 prediction 和 label 到 recorder
+        # SigAnaRecord 依赖: pred.pkl + label.pkl（check() 验证两者都存在）
+        # PortAnaRecord 依赖: pred.pkl（从 recorder 加载预测信号）
+        recorder.save_objects(**{"pred.pkl": pred_df, "label.pkl": raw_label})
+        print(f"[INFO] Injected pred.pkl + label.pkl into recorder: {recorder.info['id']}")
+
+        for record_config in filtered_records:
+            rec_class = record_config.get("class", "")
+            print(f"[INFO] Executing: {rec_class}")
+            r = init_instance_by_config(
+                record_config,
+                recorder=recorder,
+                default_module="qlib.workflow.record_temp",
+                try_kwargs={"dataset": dataset},
+            )
+            r.generate()
+            print(f"[INFO] Completed: {rec_class}")
+
+        recorder.save_objects(config=config)
+        
+        # 保存分钟级交易记录（环境变量控制）
+        save_minute_trades_from_recorder(recorder, output_dir=os.getcwd())
+
+    print("[INFO] Pred-backtest completed: IC analysis + portfolio backtest done")
 
 
 def _run_train_only(config: dict, experiment_name: str):

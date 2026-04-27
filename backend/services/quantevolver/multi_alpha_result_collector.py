@@ -42,6 +42,10 @@ _COL_MAP = {
 }
 
 
+class MultiAlphaArtifactError(RuntimeError):
+    """Raised when completed multi-alpha execution is missing required artifacts."""
+
+
 class MultiAlphaResultCollector:
     """多Alpha实验结果收集器。"""
 
@@ -99,6 +103,8 @@ class MultiAlphaResultCollector:
                 f"实验 {parent_experiment_id} 缺少 qe_loop_id，无法获取回测指标"
             )
 
+        group_enhanced_metrics: dict[str, dict] = {}
+
         if is_distributed:
             # ── 分布式场景：跨节点收集预测 + 本地 meta 合并 ──────
             logger.info(f"分布式多Alpha结果收集: {len(node_ids)} 节点, {len(groups)} 组")
@@ -107,10 +113,12 @@ class MultiAlphaResultCollector:
             )
             # 分布式收集后直接拿到完整 ma_results
             combined_metrics = ma_results.pop("_combined_metrics", {})
+            group_enhanced_metrics = ma_results.get("group_enhanced_metrics", {}) or {}
         else:
             # ── 单节点场景：从 workspace 获取结果 ──────────────
             # get_loop_metrics 返回完整的 qlib_results_enhanced.json
             # 它本身就是 enhanced_metrics，需要标记以便 _build_result_metrics 正确处理
+            await self._validate_single_node_artifacts(qe_task_id, qe_loop_id, groups)
             raw_metrics = await self._fetch_combined_metrics(qe_task_id, qe_loop_id)
             combined_metrics = {}
             if raw_metrics:
@@ -121,6 +129,9 @@ class MultiAlphaResultCollector:
                 combined_metrics["_enhanced_metrics"] = raw_metrics
             ma_results = await self._fetch_multi_alpha_results_json(
                 qe_task_id, qe_loop_id
+            )
+            group_enhanced_metrics = await self._fetch_single_node_group_enhanced(
+                qe_task_id, qe_loop_id, groups
             )
 
         # ── Phase 2: 解析多Alpha独有指标 ──────────────────────────
@@ -142,6 +153,7 @@ class MultiAlphaResultCollector:
         group_metrics = ma_results.get("group_metrics", {})
         meta_weights = ma_results.get("meta_weights", {})
         correlations = ma_results.get("correlations", {})
+        ic_quality = ma_results.get("ic_quality", {})
         if ma_results.get("meta_method"):
             meta_method = ma_results["meta_method"]
         logger.info(
@@ -195,7 +207,13 @@ class MultiAlphaResultCollector:
 
         # ── Phase 4: 回写统一分析层 ───────────────────────────────
         result_metrics = self._build_result_metrics(
-            combined_metrics, meta_method, meta_weights, group_results, correlations
+            combined_metrics,
+            meta_method,
+            meta_weights,
+            group_results,
+            correlations,
+            group_enhanced_metrics,
+            ic_quality,
         )
         self._update_experiment_unified(
             parent_experiment_id, combined_metrics, result_metrics
@@ -212,6 +230,7 @@ class MultiAlphaResultCollector:
             "combined_metrics": {
                 k: v for k, v in combined_metrics.items() if k != "_raw_json"
             },
+            "result_metrics": result_metrics,
             "group_results": group_results,
             "meta_weights": meta_weights,
             "correlations": correlations,
@@ -238,18 +257,27 @@ class MultiAlphaResultCollector:
     async def _fetch_combined_metrics(
         self, task_id: str, loop_id: str
     ) -> dict[str, Any]:
-        """通过 QEWorkspaceClient 获取标准 Qlib 回测指标。
+        """Fetch the authoritative combined enhanced metrics artifact.
 
-        失败时抛出 RuntimeError，不静默返回空 dict。
+        The workspace `/metrics` endpoint can expose only a flattened summary.
+        Multi-alpha parent experiments need the full `qlib_results_enhanced.json`
+        so unified analysis matches single-alpha QE output. Missing or malformed
+        artifacts fail fast.
         """
         from .qe_workspace_client import QEWorkspaceClient
 
         async with QEWorkspaceClient() as client:
-            metrics = await client.get_loop_metrics(task_id, loop_id)
-            if not metrics:
+            raw = await client.get_workspace_file(
+                task_id, loop_id, "qlib_results_enhanced.json"
+            )
+            metrics = self._parse_required_json_artifact(
+                "qlib_results_enhanced.json", raw
+            )
+            summary = metrics.get("summary")
+            if not isinstance(summary, dict) or not summary:
                 raise RuntimeError(
-                    f"回测指标为空: task={task_id}, loop={loop_id}. "
-                    f"可能原因: WSL 执行尚未完成或 read_exp_res.py 未生成指标"
+                    f"qlib_results_enhanced.json missing non-empty summary: "
+                    f"task={task_id}, loop={loop_id}"
                 )
             return metrics
 
@@ -269,6 +297,133 @@ class MultiAlphaResultCollector:
                 )
                 cols = [d[0] for d in cur.description]
                 return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def _parse_required_json_artifact(self, artifact_name: str, raw: Any) -> dict[str, Any]:
+        """Parse a required JSON artifact and reject empty or malformed content."""
+        if isinstance(raw, dict):
+            parsed = raw
+        elif isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as e:
+                raise MultiAlphaArtifactError(
+                    f"{artifact_name} is not valid JSON: {e}"
+                ) from e
+        else:
+            raise MultiAlphaArtifactError(
+                f"{artifact_name} has invalid type: {type(raw).__name__}"
+            )
+
+        if not parsed:
+            raise MultiAlphaArtifactError(f"{artifact_name} is empty")
+        return parsed
+
+    async def _validate_single_node_artifacts(
+        self,
+        task_id: str,
+        loop_id: str,
+        groups: list[dict],
+    ) -> None:
+        """Validate required artifacts before single-node collection succeeds.
+
+        A completed loop without these artifacts is not a successful multi-alpha
+        run and must not be converted into an empty UI success state.
+        """
+        from .qe_workspace_client import QEWorkspaceClient
+
+        errors: list[str] = []
+        node_ids = {g.get("assigned_node_id") for g in groups if g.get("assigned_node_id")}
+        if len(node_ids) > 1:
+            raise MultiAlphaArtifactError(
+                f"single-node artifact validation received multiple nodes: {sorted(node_ids)}"
+            )
+        client_cm = QEWorkspaceClient.for_node(next(iter(node_ids))) if node_ids else QEWorkspaceClient()
+        async with client_cm as client:
+            try:
+                combined = await client.download_workspace_file_bytes(
+                    task_id, loop_id, "combined_prediction.pkl"
+                )
+                if not combined:
+                    errors.append("combined_prediction.pkl is empty")
+            except Exception as e:
+                errors.append(f"combined_prediction.pkl missing or unreadable: {e}")
+
+            for artifact_name in ("multi_alpha_results.json", "qlib_results_enhanced.json"):
+                try:
+                    raw = await client.get_workspace_file(task_id, loop_id, artifact_name)
+                    parsed = self._parse_required_json_artifact(artifact_name, raw)
+                    if artifact_name == "qlib_results_enhanced.json" and "summary" not in parsed:
+                        errors.append(f"{artifact_name} missing required summary section")
+                except Exception as e:
+                    errors.append(f"{artifact_name} missing or invalid: {e}")
+
+            for group in groups:
+                group_name = group.get("group_name")
+                if not group_name:
+                    errors.append(f"group record missing group_name: {group}")
+                    continue
+                if group.get("reuse_mode") in ("reuse_prediction", "reuse_model"):
+                    prediction_path = group.get("prediction_path")
+                    if not prediction_path:
+                        errors.append(f"group {group_name} reuse mode missing prediction_path")
+                    continue
+                try:
+                    pred_bytes = await client.download_group_predictions(
+                        task_id, loop_id, group_name
+                    )
+                    if not pred_bytes:
+                        errors.append(f"group {group_name} pred.pkl is empty")
+                except Exception as e:
+                    errors.append(f"group {group_name} pred.pkl missing or unreadable: {e}")
+                try:
+                    artifact_name = f"group_{group_name}/qlib_results_enhanced.json"
+                    raw = await client.get_workspace_file(task_id, loop_id, artifact_name)
+                    parsed = self._parse_required_json_artifact(artifact_name, raw)
+                    if "summary" not in parsed:
+                        errors.append(f"{artifact_name} missing required summary section")
+                except Exception as e:
+                    errors.append(
+                        f"group {group_name} qlib_results_enhanced.json missing or invalid: {e}"
+                    )
+
+        if errors:
+            raise MultiAlphaArtifactError(
+                "Multi-alpha required artifacts are not ready or invalid: "
+                + "; ".join(errors)
+            )
+
+    async def _fetch_single_node_group_enhanced(
+        self,
+        task_id: str,
+        loop_id: str,
+        groups: list[dict],
+    ) -> dict[str, dict]:
+        """Fetch group-level enhanced metrics from the single-node workspace."""
+        from .qe_workspace_client import QEWorkspaceClient
+
+        group_enhanced: dict[str, dict] = {}
+        node_ids = {g.get("assigned_node_id") for g in groups if g.get("assigned_node_id")}
+        if len(node_ids) > 1:
+            raise MultiAlphaArtifactError(
+                f"single-node group enhanced fetch received multiple nodes: {sorted(node_ids)}"
+            )
+        client_cm = QEWorkspaceClient.for_node(next(iter(node_ids))) if node_ids else QEWorkspaceClient()
+        async with client_cm as client:
+            for group in groups:
+                group_name = group.get("group_name")
+                if not group_name:
+                    raise MultiAlphaArtifactError(f"group record missing group_name: {group}")
+                if group.get("reuse_mode") in ("reuse_prediction", "reuse_model"):
+                    continue
+                artifact_name = f"group_{group_name}/qlib_results_enhanced.json"
+                raw = await client.get_workspace_file(task_id, loop_id, artifact_name)
+                parsed = self._parse_required_json_artifact(artifact_name, raw)
+                if "summary" not in parsed:
+                    raise MultiAlphaArtifactError(
+                        f"{artifact_name} missing required summary section"
+                    )
+                group_enhanced[group_name] = parsed
+        return group_enhanced
 
     async def _fetch_multi_alpha_results_json(
         self, task_id: str, loop_id: str
@@ -537,6 +692,7 @@ class MultiAlphaResultCollector:
             "combined_ic": combined_metrics.get("IC") or combined_metrics.get("Rank IC"),
             "meta_method": method,
             "total_groups": len(group_predictions),
+            "group_enhanced_metrics": group_enhanced,
             "_combined_metrics": combined_metrics,
         }
 
@@ -1133,6 +1289,8 @@ class MultiAlphaResultCollector:
         meta_weights: dict[str, float],
         group_results: list[dict],
         correlations: dict[str, float],
+        group_enhanced_metrics: dict[str, dict] | None = None,
+        ic_quality: dict[str, Any] | None = None,
     ) -> dict:
         """构建 result_metrics JSON，兼容单Alpha格式 + multi_alpha_detail 嵌套。
 
@@ -1154,16 +1312,410 @@ class MultiAlphaResultCollector:
             result[k] = v
 
         combined_ic = combined_metrics.get("IC") or combined_metrics.get("Rank IC")
-        result["multi_alpha_detail"] = {
+        multi_alpha_detail = {
             "meta_method": meta_method,
             "meta_weights": meta_weights,
             "combined_ic": float(combined_ic) if combined_ic is not None else None,
             "total_groups": len(group_results),
             "group_results": group_results,
             "group_correlations": correlations,
+            "ic_quality": ic_quality or {},
         }
+        result["multi_alpha_detail"] = multi_alpha_detail
+
+        multi_alpha_analysis = self._build_multi_alpha_analysis(
+            combined_metrics=combined_metrics,
+            combined_enhanced=enhanced if isinstance(enhanced, dict) else {},
+            multi_alpha_detail=multi_alpha_detail,
+            group_enhanced_metrics=group_enhanced_metrics or {},
+            ic_quality=ic_quality or {},
+        )
+        result["multi_alpha_analysis"] = multi_alpha_analysis
+
+        if isinstance(result.get("enhanced_metrics"), dict):
+            result["enhanced_metrics"]["multi_alpha_detail"] = multi_alpha_detail
+            result["enhanced_metrics"]["multi_alpha_analysis"] = multi_alpha_analysis
 
         return result
+
+    def _build_multi_alpha_analysis(
+        self,
+        combined_metrics: dict,
+        combined_enhanced: dict,
+        multi_alpha_detail: dict,
+        group_enhanced_metrics: dict[str, dict],
+        ic_quality: dict[str, Any] | None = None,
+    ) -> dict:
+        """Build compact multi-alpha diagnostics without storing full group artifacts."""
+        summary = combined_enhanced.get("summary") if isinstance(combined_enhanced, dict) else {}
+        if not isinstance(summary, dict):
+            summary = {}
+        summary_source = summary or combined_metrics
+
+        group_results = multi_alpha_detail.get("group_results") or []
+        meta_weights = multi_alpha_detail.get("meta_weights") or {}
+        correlations = multi_alpha_detail.get("group_correlations") or {}
+        combined_ic = self._safe_float(multi_alpha_detail.get("combined_ic"))
+        ic_quality = ic_quality or multi_alpha_detail.get("ic_quality") or {}
+        if not isinstance(ic_quality, dict):
+            ic_quality = {}
+
+        group_diagnostics: list[dict[str, Any]] = []
+        for group in group_results:
+            if not isinstance(group, dict):
+                continue
+            group_name = group.get("group_name")
+            if not group_name:
+                continue
+            enhanced = group_enhanced_metrics.get(group_name) or {}
+            group_summary = enhanced.get("summary") if isinstance(enhanced, dict) else {}
+            if not isinstance(group_summary, dict):
+                group_summary = {}
+            ic_diag = enhanced.get("ic_diagnostics") if isinstance(enhanced, dict) else {}
+            if not isinstance(ic_diag, dict):
+                ic_diag = {}
+            train_diag = enhanced.get("training_diagnostics") if isinstance(enhanced, dict) else {}
+            if not isinstance(train_diag, dict):
+                train_diag = {}
+            pred_diag = enhanced.get("prediction_diagnostics") if isinstance(enhanced, dict) else {}
+            if not isinstance(pred_diag, dict):
+                pred_diag = {}
+
+            train_curve = train_diag.get("train_loss_curve")
+            val_curve = train_diag.get("val_loss_curve")
+            final_train = self._first_present_number(
+                self._safe_float(train_diag.get("final_train_loss")),
+                self._last_number(train_curve),
+                self._first_number(group_summary, ("l2.train", "train_loss", "loss.train")),
+            )
+            final_val = self._first_present_number(
+                self._safe_float(train_diag.get("final_val_loss")),
+                self._last_number(val_curve),
+                self._first_number(group_summary, ("l2.valid", "valid_loss", "loss.valid")),
+            )
+            overfit_ratio = self._safe_float(train_diag.get("overfit_ratio"))
+            if overfit_ratio is None and final_train not in (None, 0) and final_val is not None:
+                overfit_ratio = final_val / final_train
+            generalization_gap = None
+            if final_train is not None and final_val is not None:
+                generalization_gap = final_val - final_train
+
+            group_ic = self._safe_float(group.get("ic"))
+            group_weight = self._safe_float(group.get("meta_weight"))
+            contribution = None
+            if group_ic is not None and group_weight is not None:
+                contribution = group_ic * group_weight
+
+            group_diagnostics.append({
+                "group_name": group_name,
+                "model_id": group.get("model_id"),
+                "factor_count": group.get("factor_count"),
+                "meta_weight": group_weight,
+                "group_ic": group_ic,
+                "group_icir": self._safe_float(group.get("icir")),
+                "group_sharpe": self._safe_float(group.get("sharpe")),
+                "contribution_to_combined_ic": contribution,
+                "data_available": {
+                    "enhanced_metrics": bool(enhanced),
+                    "ic_diagnostics": bool(ic_diag),
+                    "training_diagnostics": bool(train_diag) or final_train is not None or final_val is not None,
+                    "prediction_diagnostics": bool(pred_diag),
+                    "feature_importance": bool(self._top_feature_importance(enhanced, limit=1)),
+                },
+                "ic_diagnostics": {
+                    "ic_mean": self._first_present_number(
+                        self._safe_float(ic_diag.get("ic_mean")),
+                        self._safe_float(group_summary.get("IC")),
+                    ),
+                    "rank_ic_mean": self._first_present_number(
+                        self._safe_float(ic_diag.get("rank_ic_mean")),
+                        self._safe_float(group_summary.get("Rank IC")),
+                    ),
+                    "ic_positive_ratio": self._safe_float(ic_diag.get("ic_positive_ratio")),
+                    "rank_ic_positive_ratio": self._safe_float(ic_diag.get("rank_ic_positive_ratio")),
+                    "ic_days": len(ic_diag.get("ic_series") or []),
+                },
+                "training_diagnostics": {
+                    "train_loss_points": len(train_curve) if isinstance(train_curve, list) else 0,
+                    "val_loss_points": len(val_curve) if isinstance(val_curve, list) else 0,
+                    "final_train_loss": final_train,
+                    "final_val_loss": final_val,
+                    "generalization_gap": generalization_gap,
+                    "overfit_ratio": overfit_ratio,
+                    "best_epoch": train_diag.get("best_epoch"),
+                    "convergence_ratio": self._safe_float(train_diag.get("convergence_ratio")),
+                },
+                "prediction_diagnostics": {
+                    "pred_std": self._safe_float(pred_diag.get("pred_std")),
+                    "pred_autocorr_1d": self._safe_float(pred_diag.get("pred_autocorr_1d")),
+                    "pred_rank_turnover": self._safe_float(pred_diag.get("pred_rank_turnover")),
+                    "top30_stability": self._safe_float(pred_diag.get("top30_stability")),
+                },
+                "feature_importance_top": self._top_feature_importance(enhanced, limit=10),
+            })
+
+        weights = [self._safe_float(v) for v in meta_weights.values()]
+        weights = [w for w in weights if w is not None]
+        weight_sum = sum(weights)
+        hhi = sum(w * w for w in weights) if weights else None
+        effective_groups = (1.0 / hhi) if hhi and hhi > 0 else None
+        dominant_group = None
+        if meta_weights:
+            dominant_group = max(meta_weights, key=lambda k: self._safe_float(meta_weights.get(k)) or 0)
+
+        corr_values = [abs(self._safe_float(v) or 0.0) for v in correlations.values()]
+        high_corr_pairs = [
+            {"pair": k, "correlation": self._safe_float(v)}
+            for k, v in correlations.items()
+            if abs(self._safe_float(v) or 0.0) >= 0.7
+        ]
+
+        portfolio_diagnostics = self._build_portfolio_diagnostics(summary_source, combined_enhanced)
+        data_availability = {
+            "combined_enhanced_metrics": bool(combined_enhanced),
+            "combined_ic_diagnostics": bool(combined_enhanced.get("ic_diagnostics")) if isinstance(combined_enhanced, dict) else False,
+            "combined_return_curves": bool(combined_enhanced.get("return_curves")) if isinstance(combined_enhanced, dict) else False,
+            "combined_trade_diagnostics": bool(combined_enhanced.get("trade_diagnostics")) if isinstance(combined_enhanced, dict) else False,
+            "combined_prediction_diagnostics": bool(combined_enhanced.get("prediction_diagnostics")) if isinstance(combined_enhanced, dict) else False,
+            "combined_training_diagnostics": bool(combined_enhanced.get("training_diagnostics")) if isinstance(combined_enhanced, dict) else False,
+            "groups_with_enhanced_metrics": len(group_enhanced_metrics),
+            "groups_total": len(group_results),
+            "ic_quality": bool(ic_quality),
+            "missing_group_enhanced_metrics": [
+                g.get("group_name")
+                for g in group_results
+                if isinstance(g, dict) and g.get("group_name") not in group_enhanced_metrics
+            ],
+        }
+
+        analysis = {
+            "schema_version": 1,
+            "combined_vs_groups": {
+                "combined_ic": combined_ic,
+                "best_group_ic": max(
+                    (d.get("group_ic") for d in group_diagnostics if d.get("group_ic") is not None),
+                    default=None,
+                ),
+                "weighted_group_ic": sum(
+                    d.get("contribution_to_combined_ic") or 0.0 for d in group_diagnostics
+                ) if group_diagnostics else None,
+            },
+            "portfolio_diagnostics": portfolio_diagnostics,
+            "diversification": {
+                "weight_sum": weight_sum,
+                "weight_hhi": hhi,
+                "effective_group_count": effective_groups,
+                "dominant_group": dominant_group,
+                "dominant_weight": self._safe_float(meta_weights.get(dominant_group)) if dominant_group else None,
+                "avg_abs_correlation": (sum(corr_values) / len(corr_values)) if corr_values else None,
+                "max_abs_correlation": max(corr_values) if corr_values else None,
+                "high_correlation_pairs": high_corr_pairs,
+            },
+            "group_diagnostics": group_diagnostics,
+            "data_availability": data_availability,
+            "ic_quality": ic_quality,
+        }
+        analysis["optimization_guidance"] = self._generate_multi_alpha_guidance(analysis)
+        return analysis
+
+    def _build_portfolio_diagnostics(self, summary: dict, combined_enhanced: dict) -> dict:
+        trade_diag = combined_enhanced.get("trade_diagnostics") if isinstance(combined_enhanced, dict) else {}
+        if not isinstance(trade_diag, dict):
+            trade_diag = {}
+        pred_diag = combined_enhanced.get("prediction_diagnostics") if isinstance(combined_enhanced, dict) else {}
+        if not isinstance(pred_diag, dict):
+            pred_diag = {}
+
+        ann_no_cost = self._first_number(summary, (
+            "1day.excess_return_without_cost.annualized_return",
+            "annualized_return_no_cost",
+            "ann_return_no_cost",
+        ))
+        ann_with_cost = self._first_number(summary, (
+            "1day.excess_return_with_cost.annualized_return",
+            "annualized_return",
+            "ann_return_with_cost",
+        ))
+        cost_drag = None
+        if ann_no_cost is not None and ann_with_cost is not None:
+            cost_drag = ann_with_cost - ann_no_cost
+
+        return {
+            "annualized_return_no_cost": ann_no_cost,
+            "annualized_return_with_cost": ann_with_cost,
+            "cost_drag_annualized": cost_drag,
+            "max_drawdown_no_cost": self._first_number(summary, (
+                "1day.excess_return_without_cost.max_drawdown",
+                "max_drawdown_no_cost",
+            )),
+            "max_drawdown_with_cost": self._first_number(summary, (
+                "1day.excess_return_with_cost.max_drawdown",
+                "max_drawdown",
+            )),
+            "information_ratio_with_cost": self._first_number(summary, (
+                "1day.excess_return_with_cost.information_ratio",
+                "information_ratio",
+            )),
+            "avg_turnover": self._safe_float(trade_diag.get("avg_turnover")),
+            "annualized_turnover": self._safe_float(trade_diag.get("annualized_turnover")),
+            "pred_rank_turnover": self._safe_float(pred_diag.get("pred_rank_turnover")),
+            "top30_stability": self._safe_float(pred_diag.get("top30_stability")),
+        }
+
+    def _generate_multi_alpha_guidance(self, analysis: dict) -> list[dict[str, Any]]:
+        guidance: list[dict[str, Any]] = []
+        combined = analysis.get("combined_vs_groups") or {}
+        combined_ic = self._safe_float(combined.get("combined_ic"))
+        best_group_ic = self._safe_float(combined.get("best_group_ic"))
+        if combined_ic is not None and best_group_ic is not None and best_group_ic - combined_ic > 0.01:
+            guidance.append({
+                "rule_id": "combined_underperforms_best_group",
+                "severity": "medium",
+                "message": "组合 IC 明显低于最佳单组，Meta 权重或组间冲突需要复核。",
+                "recommendation": "优先尝试调整 Meta 方法、lookback_days，或降低弱组权重后重跑统一回测。",
+                "action_type": "tune_meta",
+                "affected_groups": [],
+                "evidence": {"combined_ic": combined_ic, "best_group_ic": best_group_ic},
+                "source_fields": ["multi_alpha_analysis.combined_vs_groups"],
+            })
+
+        diversification = analysis.get("diversification") or {}
+        dominant_weight = self._safe_float(diversification.get("dominant_weight"))
+        if dominant_weight is not None and dominant_weight > 0.6:
+            guidance.append({
+                "rule_id": "weight_concentration",
+                "severity": "medium",
+                "message": "Meta 权重集中在单一 Alpha 组，多 Alpha 分散收益有限。",
+                "recommendation": "补强低权重组的因子质量，或新增低相关数据源组后再训练。",
+                "action_type": "add_factors",
+                "affected_groups": [diversification.get("dominant_group")] if diversification.get("dominant_group") else [],
+                "evidence": {"dominant_weight": dominant_weight, "effective_group_count": diversification.get("effective_group_count")},
+                "source_fields": ["multi_alpha_analysis.diversification"],
+            })
+
+        for pair in diversification.get("high_correlation_pairs") or []:
+            pair_key = pair.get("pair") or ""
+            groups = pair_key.split("|") if "|" in pair_key else []
+            guidance.append({
+                "rule_id": "high_group_correlation",
+                "severity": "medium",
+                "message": "存在高相关 Alpha 组，组合信号可能重复。",
+                "recommendation": "合并高相关组，或移除其中一组的重叠因子后重新验证。",
+                "action_type": "merge_groups",
+                "affected_groups": groups,
+                "evidence": pair,
+                "source_fields": ["multi_alpha_analysis.diversification.high_correlation_pairs"],
+            })
+
+        for group in analysis.get("group_diagnostics") or []:
+            group_name = group.get("group_name")
+            group_ic = self._safe_float(group.get("group_ic"))
+            weight = self._safe_float(group.get("meta_weight"))
+            if group_name and group_ic is not None and weight is not None and group_ic < -0.005 and weight > 0.05:
+                guidance.append({
+                    "rule_id": "negative_weighted_group",
+                    "severity": "high",
+                    "message": f"{group_name} 组 IC 为负且仍有有效权重，会拖累组合。",
+                    "recommendation": "优先移除该组、替换模型，或重新筛选该组因子后再纳入 Meta。",
+                    "action_type": "switch_model",
+                    "affected_groups": [group_name],
+                    "evidence": {"group_ic": group_ic, "meta_weight": weight},
+                    "source_fields": ["multi_alpha_analysis.group_diagnostics"],
+                })
+
+            training = group.get("training_diagnostics") or {}
+            overfit_ratio = self._safe_float(training.get("overfit_ratio"))
+            if group_name and overfit_ratio is not None and overfit_ratio > 1.2:
+                guidance.append({
+                    "rule_id": "group_overfit_risk",
+                    "severity": "medium",
+                    "message": f"{group_name} 组训练/验证损失差异偏大，存在过拟合风险。",
+                    "recommendation": "降低模型复杂度、增加正则化，或缩短/重筛该组高噪声因子。",
+                    "action_type": "switch_model",
+                    "affected_groups": [group_name],
+                    "evidence": training,
+                    "source_fields": ["multi_alpha_analysis.group_diagnostics.training_diagnostics"],
+                })
+
+            prediction = group.get("prediction_diagnostics") or {}
+            rank_turnover = self._safe_float(prediction.get("pred_rank_turnover"))
+            top30_stability = self._safe_float(prediction.get("top30_stability"))
+            if group_name and (
+                (rank_turnover is not None and rank_turnover > 0.75)
+                or (top30_stability is not None and top30_stability < 0.25)
+            ):
+                guidance.append({
+                    "rule_id": "group_prediction_instability",
+                    "severity": "low",
+                    "message": f"{group_name} 组预测排名稳定性偏弱。",
+                    "recommendation": "检查该组高频噪声因子，必要时调低换手或增加预测平滑约束。",
+                    "action_type": "add_factors",
+                    "affected_groups": [group_name],
+                    "evidence": prediction,
+                    "source_fields": ["multi_alpha_analysis.group_diagnostics.prediction_diagnostics"],
+                })
+
+        portfolio = analysis.get("portfolio_diagnostics") or {}
+        annualized_turnover = self._safe_float(portfolio.get("annualized_turnover"))
+        cost_drag = self._safe_float(portfolio.get("cost_drag_annualized"))
+        if (annualized_turnover is not None and annualized_turnover > 30) or (
+            cost_drag is not None and cost_drag < -0.02
+        ):
+            guidance.append({
+                "rule_id": "combined_turnover_cost_risk",
+                "severity": "low",
+                "message": "组合回测换手或交易成本拖累偏高。",
+                "recommendation": "调高持仓稳定性约束、降低 topk/n_drop 换仓强度，或重新评估交易成本参数。",
+                "action_type": "tune_meta",
+                "affected_groups": [],
+                "evidence": {"annualized_turnover": annualized_turnover, "cost_drag_annualized": cost_drag},
+                "source_fields": ["multi_alpha_analysis.portfolio_diagnostics"],
+            })
+
+        severity_order = {"high": 0, "medium": 1, "low": 2}
+        return sorted(guidance, key=lambda item: severity_order.get(item.get("severity"), 3))
+
+    @staticmethod
+    def _safe_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _first_number(self, data: dict, keys: tuple[str, ...]) -> float | None:
+        for key in keys:
+            value = self._safe_float(data.get(key))
+            if value is not None:
+                return value
+        return None
+
+    def _last_number(self, value: Any) -> float | None:
+        if isinstance(value, list) and value:
+            return self._safe_float(value[-1])
+        return None
+
+    @staticmethod
+    def _first_present_number(*values: float | None) -> float | None:
+        for value in values:
+            if value is not None:
+                return value
+        return None
+
+    def _top_feature_importance(self, enhanced: dict, limit: int = 10) -> list[dict[str, Any]]:
+        if not isinstance(enhanced, dict):
+            return []
+        factor_analysis = enhanced.get("factor_analysis") or {}
+        if not isinstance(factor_analysis, dict):
+            return []
+        raw = factor_analysis.get("feature_importance") or enhanced.get("feature_importance")
+        if isinstance(raw, list):
+            return [x for x in raw[:limit] if isinstance(x, dict)]
+        if isinstance(raw, dict):
+            rows = [{"name": k, "importance": v} for k, v in raw.items()]
+            return rows[:limit]
+        return []
 
     def _update_experiment_unified(
         self,

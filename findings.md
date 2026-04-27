@@ -166,3 +166,8 @@
 - `StrategyPackageRuntime` correctly rejects direct `selection_scores` and requires persisted authoritative artifacts; UI must request explicit auto generation before running selection.
 - HMM runtime already requires a completed snapshot and coefficient artifact; UI can safely expose config/snapshot dropdowns without adding runtime fallback.
 - Existing watchlist service supports `entry_price`, `entry_rank`, `entry_source`, `entry_task_id`, `entry_loop_id`, `entry_as_of`, which is sufficient for Selection Center one-click watchlist import when the backend prevalidates prices.
+
+## QE Config Truthfulness Findings (2026-04-27)
+- Session started at 2026-04-27T00:36:40.7611171+08:00.
+- Existing worktree is already dirty before this task; commits must stage only task-owned changes.
+- User-reported root issue confirmed from prior analysis: UI/custom params persisted V25_TWO_STAGE, while generated Qlib config defaulted to TailTWAPWithLimitStrategy; hold_thresh=5 was serialized but not enforced by custom strategy override.

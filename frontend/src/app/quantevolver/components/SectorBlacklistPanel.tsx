@@ -29,9 +29,10 @@ interface Props {
   enabled: boolean;
   onEnabledChange: (v: boolean) => void;
   onPoolPathChange: (wslPath: string | null) => void;
+  onBlacklistSnapshotChange?: (snapshot: any | null) => void;
 }
 
-export default function SectorBlacklistPanel({ enabled, onEnabledChange, onPoolPathChange }: Props) {
+export default function SectorBlacklistPanel({ enabled, onEnabledChange, onPoolPathChange, onBlacklistSnapshotChange }: Props) {
   const [tree, setTree] = useState<Sw1Group[]>([]);
   const [blacklist, setBlacklist] = useState<BlacklistEntry[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -69,7 +70,7 @@ export default function SectorBlacklistPanel({ enabled, onEnabledChange, onPoolP
 
   // 启用状态或黑名单变化时自动生成股票池
   useEffect(() => {
-    if (!enabled) { onPoolPathChange(null); return; }
+    if (!enabled) { onPoolPathChange(null); onBlacklistSnapshotChange?.(null); return; }
     generatePool();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, blacklist]);
@@ -85,20 +86,24 @@ export default function SectorBlacklistPanel({ enabled, onEnabledChange, onPoolP
         const msg = d.detail || JSON.stringify(d);
         setError(`生成失败 (HTTP ${res.status}): ${msg}`);
         onPoolPathChange(null);
+        onBlacklistSnapshotChange?.(null);
         setGenMsg("");
         return;
       }
       if (d.wsl_path) {
         onPoolPathChange(d.wsl_path);
+        onBlacklistSnapshotChange?.(d.blacklist_snapshot || null);
         setGenMsg(`已生成: ${d.wsl_path} (${d.stock_count} 只)`);
       } else {
         setError(`生成失败: 后端未返回 wsl_path。响应: ${JSON.stringify(d)}`);
         onPoolPathChange(null);
+        onBlacklistSnapshotChange?.(null);
         setGenMsg("");
       }
     } catch (e: any) {
       setError(`生成请求异常: ${e.message}`);
       onPoolPathChange(null);
+      onBlacklistSnapshotChange?.(null);
       setGenMsg("");
     } finally {
       setGenerating(false);

@@ -10,9 +10,10 @@ import json
 import logging
 import os
 import subprocess
-from datetime import datetime, timezone
+import calendar
+from datetime import date, datetime, timedelta, timezone
 from dataclasses import asdict, fields as dc_fields
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import psycopg2
 import psycopg2.extras
@@ -26,6 +27,32 @@ logger = logging.getLogger(__name__)
 _DEFAULT_CONFIG_MAP: Dict[str, type] = {
     "sector_hmm": SectorHMMConfig,
 }
+
+DEFAULT_ROLLING_TRAIN_YEARS = 3.0
+DEFAULT_VALIDATION_WINDOW_MONTHS = 3
+MIN_RECOMMENDED_VALIDATION_TRADING_DAYS = 60
+MIN_RECOMMENDED_TRAIN_TRADING_DAYS = 500
+
+
+def _coerce_date(value: Any, *, field_name: str = "date") -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        return date.fromisoformat(value[:10])
+    raise ValueError(f"{field_name} must be a date or ISO date string")
+
+
+def _last_day_of_month(year: int, month: int) -> int:
+    return calendar.monthrange(year, month)[1]
+
+
+def _add_months(day: date, months: int) -> date:
+    month_index = day.month - 1 + months
+    year = day.year + month_index // 12
+    month = month_index % 12 + 1
+    return day.replace(day=min(day.day, _last_day_of_month(year, month)), year=year, month=month)
 
 
 class HMMTrainingService:
@@ -154,7 +181,60 @@ class HMMTrainingService:
     def _attach_snapshot_display_name(cls, row: Dict[str, Any]) -> Dict[str, Any]:
         out = dict(row)
         out["display_name"] = cls._snapshot_display_name(out)
+        out["coefficient_artifacts"] = cls._list_snapshot_coefficient_artifacts(out.get("model_path"))
         return out
+
+    @staticmethod
+    def _list_snapshot_coefficient_artifacts(model_path: Any) -> List[Dict[str, Any]]:
+        """Return explicit HMM coefficient coverage for UI preflight.
+
+        The selection runtime still validates the selected artifact and exact
+        trade date. This metadata is only used to prevent users from selecting a
+        snapshot/preset that cannot possibly cover the requested date.
+        """
+
+        if not model_path:
+            return []
+        model_dir = os.path.dirname(os.path.abspath(str(model_path)))
+        if not os.path.isdir(model_dir):
+            return []
+
+        artifacts: List[Dict[str, Any]] = []
+        for filename in sorted(os.listdir(model_dir)):
+            if not filename.startswith("coefficients_") or not filename.endswith(".json"):
+                continue
+            path = os.path.join(model_dir, filename)
+            stem = filename[:-5]
+            parts = stem.split("_")
+            if len(parts) < 4:
+                continue
+            preset = "_".join(parts[1:-2])
+            start_date = parts[-2]
+            end_date = parts[-1]
+            artifact: Dict[str, Any] = {
+                "filename": filename,
+                "path": path,
+                "preset": preset,
+                "start_date": start_date,
+                "end_date": end_date,
+                "covered_trade_dates": [],
+                "date_count": 0,
+            }
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    payload = json.load(fh)
+                daily = payload.get("daily_coefficients") if isinstance(payload, dict) else None
+                if isinstance(daily, dict):
+                    covered = sorted(str(item) for item in daily.keys())
+                    artifact["covered_trade_dates"] = covered
+                    artifact["date_count"] = len(covered)
+                    if covered:
+                        artifact["start_date"] = covered[0]
+                        artifact["end_date"] = covered[-1]
+            except Exception as exc:  # pragma: no cover - diagnostic metadata only
+                artifact["parse_error"] = str(exc)
+            artifacts.append(artifact)
+        return artifacts
 
     def delete_config(self, config_id: str) -> None:
         """删除超参版本。有关联快照时拒绝（抛出 ValueError）。"""
@@ -207,6 +287,286 @@ class HMMTrainingService:
                 )
                 row = cur.fetchone()
         return dict(row)
+
+    def preview_rolling_training(
+        self,
+        config_id: str,
+        *,
+        as_of_date: date | None = None,
+        train_window_years: float = DEFAULT_ROLLING_TRAIN_YEARS,
+        validation_window_months: int = DEFAULT_VALIDATION_WINDOW_MONTHS,
+    ) -> Dict[str, Any]:
+        """Build a manual rolling-training plan without mutating DB state."""
+
+        config_row = self._get_config(config_id)
+        latest_completed, data_max_dates = self._latest_completed_hmm_data_date(as_of_date=as_of_date)
+        lookback_days = int(train_window_years * 365) + 140
+        trading_days = self._list_trading_days(
+            latest_completed - timedelta(days=lookback_days),
+            latest_completed,
+        )
+        plan = self.build_rolling_training_plan(
+            trading_days=trading_days,
+            latest_completed_trade_date=latest_completed,
+            train_window_years=train_window_years,
+            validation_window_months=validation_window_months,
+        )
+        base_config = config_row["config_json"]
+        if isinstance(base_config, str):
+            base_config = json.loads(base_config)
+        rolling_config = self._rolling_config_from_plan(base_config, plan)
+        return {
+            "config_id": config_id,
+            "model_type": config_row["model_type"],
+            "display_name": config_row["display_name"],
+            "recommended_validation_window_months": DEFAULT_VALIDATION_WINDOW_MONTHS,
+            "best_validation_policy": "latest_3_calendar_months",
+            "data_max_dates": {key: value.isoformat() if value else None for key, value in data_max_dates.items()},
+            **plan,
+            "rolling_config_json": rolling_config,
+            "manual_confirm_required": True,
+            "confirm_text_required": config_id,
+        }
+
+    def trigger_rolling_training(
+        self,
+        config_id: str,
+        *,
+        confirm_text: str,
+        as_of_date: date | None = None,
+        train_window_years: float = DEFAULT_ROLLING_TRAIN_YEARS,
+        validation_window_months: int = DEFAULT_VALIDATION_WINDOW_MONTHS,
+    ) -> Dict[str, Any]:
+        """Persist a rolling plan on the config and create a pending job."""
+
+        if str(confirm_text or "").strip() != config_id:
+            raise ValueError("rolling HMM training requires explicit confirmation text matching config_id")
+        preview = self.preview_rolling_training(
+            config_id,
+            as_of_date=as_of_date,
+            train_window_years=train_window_years,
+            validation_window_months=validation_window_months,
+        )
+        rolling_config = preview["rolling_config_json"]
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT COUNT(*) FROM model_train_jobs
+                       WHERE config_id = %s AND status IN ('pending', 'running')""",
+                    (config_id,),
+                )
+                active_count = cur.fetchone()[0]
+                if active_count > 0:
+                    raise ValueError(
+                        f"配置 {config_id} 下已有活跃训练任务（pending/running），"
+                        "请等待完成后再触发"
+                    )
+                cur.execute(
+                    """
+                    UPDATE model_train_configs
+                    SET config_json = %s
+                    WHERE config_id = %s
+                    """,
+                    (json.dumps(rolling_config, ensure_ascii=False), config_id),
+                )
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """INSERT INTO model_train_jobs (config_id, status)
+                       VALUES (%s, 'pending')
+                       RETURNING job_id, config_id, snapshot_id, status,
+                                 started_at, completed_at, error_message""",
+                    (config_id,),
+                )
+                row = cur.fetchone()
+        job = dict(row)
+        job["rolling_training_preview"] = {
+            key: value
+            for key, value in preview.items()
+            if key != "rolling_config_json"
+        }
+        return job
+
+    def _get_config(self, config_id: str) -> Dict[str, Any]:
+        sql = """
+            SELECT config_id, model_type, display_name, config_json,
+                   cron_expression, cron_enabled, created_at
+            FROM model_train_configs
+            WHERE config_id = %s
+        """
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, (config_id,))
+                row = cur.fetchone()
+        if row is None:
+            raise ValueError(f"配置 {config_id} 不存在")
+        return dict(row)
+
+    def _latest_completed_hmm_data_date(
+        self,
+        *,
+        as_of_date: date | None,
+    ) -> tuple[date, Dict[str, date | None]]:
+        cutoff = as_of_date or date.today()
+        queries = {
+            "sector_data": "SELECT MAX(trade_date) FROM market.sector_data WHERE trade_date <= %s",
+            "sw_daily": "SELECT MAX(trade_date) FROM market.sw_daily WHERE trade_date <= %s",
+            "index_daily_000300": (
+                "SELECT MAX(trade_date) FROM market.index_daily "
+                "WHERE ts_code = '000300.SH' AND trade_date <= %s"
+            ),
+        }
+        max_dates: Dict[str, date | None] = {}
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for name, sql in queries.items():
+                    cur.execute(sql, (cutoff,))
+                    value = cur.fetchone()[0]
+                    max_dates[name] = _coerce_date(value, field_name=name) if value else None
+        missing = [name for name, value in max_dates.items() if value is None]
+        if missing:
+            raise RuntimeError(
+                "HMM rolling training requires completed sector/index data before planning; "
+                f"missing max trade_date for: {', '.join(missing)}"
+            )
+        return min(value for value in max_dates.values() if value is not None), max_dates
+
+    def _list_trading_days(self, start_date: date, end_date: date) -> List[date]:
+        sql = """
+            SELECT cal_date
+            FROM market.trading_calendar
+            WHERE cal_date >= %s AND cal_date <= %s AND is_trading = TRUE
+            ORDER BY cal_date
+        """
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (start_date, end_date))
+                rows = cur.fetchall()
+        trading_days = [_coerce_date(row[0], field_name="cal_date") for row in rows]
+        if not trading_days:
+            raise RuntimeError(
+                f"market.trading_calendar has no trading days between {start_date} and {end_date}"
+            )
+        return trading_days
+
+    @staticmethod
+    def build_rolling_training_plan(
+        *,
+        trading_days: Iterable[date | datetime | str],
+        latest_completed_trade_date: date | datetime | str,
+        train_window_years: float = DEFAULT_ROLLING_TRAIN_YEARS,
+        validation_window_months: int = DEFAULT_VALIDATION_WINDOW_MONTHS,
+    ) -> Dict[str, Any]:
+        """Compute the manual rolling HMM train/validation split.
+
+        The preferred validation window is the latest three calendar months.
+        One- or two-month windows remain available for diagnostics but produce
+        warnings because they are usually too noisy for HMM state validation.
+        """
+
+        if train_window_years <= 0:
+            raise ValueError("train_window_years must be positive")
+        if validation_window_months not in (1, 2, 3):
+            raise ValueError("validation_window_months must be one of 1, 2, or 3")
+
+        latest_requested = _coerce_date(latest_completed_trade_date, field_name="latest_completed_trade_date")
+        unique_days = sorted({_coerce_date(day, field_name="trading_day") for day in trading_days})
+        usable_days = [day for day in unique_days if day <= latest_requested]
+        if not usable_days:
+            raise ValueError("trading_days must contain at least one date <= latest_completed_trade_date")
+
+        latest_completed = usable_days[-1]
+        warnings: List[str] = []
+        if latest_completed != latest_requested:
+            warnings.append(
+                "latest_completed_trade_date was not in trading_days; adjusted to previous trading day"
+            )
+
+        validation_anchor = _add_months(latest_completed, -validation_window_months) + timedelta(days=1)
+        validation_days = [day for day in usable_days if validation_anchor <= day <= latest_completed]
+        if not validation_days:
+            raise ValueError("computed validation window contains no trading days")
+        validation_start = validation_days[0]
+        validation_end = validation_days[-1]
+
+        train_candidates = [day for day in usable_days if day < validation_start]
+        if not train_candidates:
+            raise ValueError("computed training window has no trading day before validation_start")
+        train_end = train_candidates[-1]
+
+        whole_months = int(round(train_window_years * 12))
+        if abs(train_window_years * 12 - whole_months) < 1e-9:
+            train_anchor = _add_months(train_end, -whole_months)
+        else:
+            train_anchor = train_end - timedelta(days=int(train_window_years * 365))
+        train_days = [day for day in usable_days if train_anchor <= day <= train_end]
+        if not train_days:
+            raise ValueError("computed training window contains no trading days")
+        train_start = train_days[0]
+
+        if validation_window_months < DEFAULT_VALIDATION_WINDOW_MONTHS:
+            warnings.append(
+                "validation_window_months below 3 is supported only for diagnostics; "
+                "3 calendar months is the recommended default"
+            )
+        if len(validation_days) < MIN_RECOMMENDED_VALIDATION_TRADING_DAYS:
+            warnings.append(
+                f"validation window has only {len(validation_days)} trading days; "
+                f"{MIN_RECOMMENDED_VALIDATION_TRADING_DAYS}+ is recommended"
+            )
+        if len(train_days) < MIN_RECOMMENDED_TRAIN_TRADING_DAYS:
+            warnings.append(
+                f"training window has only {len(train_days)} trading days; "
+                f"{MIN_RECOMMENDED_TRAIN_TRADING_DAYS}+ is recommended"
+            )
+
+        return {
+            "latest_completed_trade_date": latest_completed.isoformat(),
+            "train_window_years": train_window_years,
+            "validation_window_months": validation_window_months,
+            "train_start": train_start.isoformat(),
+            "train_end": train_end.isoformat(),
+            "validation_start": validation_start.isoformat(),
+            "validation_end": validation_end.isoformat(),
+            "coefficient_start": validation_start.isoformat(),
+            "coefficient_end": validation_end.isoformat(),
+            "train_trading_days": len(train_days),
+            "validation_trading_days": len(validation_days),
+            "recommended_validation_window_months": DEFAULT_VALIDATION_WINDOW_MONTHS,
+            "best_validation_policy": "latest_3_calendar_months",
+            "warnings": warnings,
+        }
+
+    @staticmethod
+    def _rolling_config_from_plan(base_config: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
+        config = dict(base_config or {})
+        config.update(
+            {
+                "train_start": plan["train_start"],
+                "train_end": plan["train_end"],
+                "val_start": plan["validation_start"],
+                "val_end": plan["validation_end"],
+                "coefficient_start": plan["coefficient_start"],
+                "coefficient_end": plan["coefficient_end"],
+            }
+        )
+        rolling_meta = dict(config.get("rolling_training") or {})
+        rolling_meta.update(
+            {
+                "enabled": True,
+                "executor": "wsl_rdagent_gpu",
+                "train_window_years": plan["train_window_years"],
+                "validation_window_months": plan["validation_window_months"],
+                "best_validation_policy": plan["best_validation_policy"],
+                "latest_completed_trade_date": plan["latest_completed_trade_date"],
+                "train_trading_days": plan["train_trading_days"],
+                "validation_trading_days": plan["validation_trading_days"],
+                "warnings": list(plan.get("warnings") or []),
+                "computed_at": datetime.now(timezone.utc).isoformat(),
+                "precompute_coefficients_required": True,
+            }
+        )
+        config["rolling_training"] = rolling_meta
+        return config
 
     def run_training(self, job_id: str, config_id: str) -> None:
         """后台执行训练：WSL subprocess → 更新状态 → 创建快照。
@@ -282,10 +642,6 @@ class HMMTrainingService:
                 errors="replace",
             )
 
-            # 清理临时配置文件
-            if os.path.exists(config_tmp_path):
-                os.remove(config_tmp_path)
-
             if result.returncode != 0:
                 error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
                 self._fail_job(job_id, error_msg)
@@ -303,7 +659,11 @@ class HMMTrainingService:
             except (json.JSONDecodeError, IndexError):
                 logger.warning("无法解析训练脚本输出: %s", stdout_text)
 
-            # Step 5: Mark job completed and create snapshot
+            # Step 5: 预计算 HMM 系数文件。Paper/Selection runtime 依赖这些
+            # artifact，因此预计算失败时训练 job 必须失败，不能产生 ready 快照。
+            self._precompute_coefficients_for_snapshot(model_path, config_json)
+
+            # Step 6: Mark job completed and create snapshot
             with get_conn() as conn:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     # Create snapshot (with metrics if available)
@@ -332,18 +692,13 @@ class HMMTrainingService:
                 job_id, config_id, snapshot_id, sector_count,
             )
 
-            # Step 6: 预计算 HMM 系数文件（所有 preset × 默认日期范围）
-            try:
-                self._precompute_coefficients_for_snapshot(model_path, config_json)
-            except Exception as exc:
-                logger.warning(
-                    "HMM 系数预计算失败（不影响训练结果）: %s", exc,
-                )
-
         except subprocess.TimeoutExpired:
             self._fail_job(job_id, "训练超时（超过 30 分钟）")
         except Exception as exc:
             self._fail_job(job_id, str(exc))
+        finally:
+            if os.path.exists(config_tmp_path):
+                os.remove(config_tmp_path)
 
     def list_jobs(self, config_id: str) -> List[Dict[str, Any]]:
         """列出某配置的训练任务，按创建时间降序。"""
@@ -523,13 +878,27 @@ class HMMTrainingService:
                 "preset_B": {"trending": 1.10, "neutral": 1.00, "fading": 0.92},
             }
 
-        # 日期范围：与 QE 回测标准时间段一致
-        # test_start = RDAGENT_DEFAULT_DATA_SPLIT["test_start"] = "2024-07-01"
-        # backtest_end = test_end - 7 天（与 config_composer._ensure_backtest_end 一致）
-        from datetime import date, timedelta, datetime as _dt
-        test_start = "2024-07-01"
-        test_end = cfg.get("test_end", "2026-03-10")
-        backtest_end = (_dt.strptime(test_end, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
+        rolling_meta = cfg.get("rolling_training") if isinstance(cfg.get("rolling_training"), dict) else {}
+        strict_range = bool(rolling_meta.get("precompute_coefficients_required"))
+        test_start = cfg.get("coefficient_start") or cfg.get("val_start")
+        backtest_end = cfg.get("coefficient_end") or cfg.get("val_end")
+        if not test_start or not backtest_end:
+            if strict_range:
+                raise RuntimeError(
+                    "rolling HMM training requires explicit coefficient_start/coefficient_end "
+                    "or val_start/val_end for coefficient precompute"
+                )
+            test_start = "2024-07-01"
+            test_end = cfg.get("test_end", "2026-03-10")
+            backtest_end = (
+                datetime.strptime(str(test_end), "%Y-%m-%d") - timedelta(days=7)
+            ).strftime("%Y-%m-%d")
+        test_start = _coerce_date(test_start, field_name="coefficient_start").isoformat()
+        backtest_end = _coerce_date(backtest_end, field_name="coefficient_end").isoformat()
+        if test_start > backtest_end:
+            raise RuntimeError(
+                f"invalid HMM coefficient precompute range: {test_start} > {backtest_end}"
+            )
 
         model_dir = os.path.dirname(os.path.abspath(model_path))
         wsl_model_path = self._to_wsl_path(os.path.abspath(model_path))
@@ -543,6 +912,7 @@ class HMMTrainingService:
         # DB 连接参数
         db_password = os.environ["TDX_DB_PASSWORD"]
 
+        generated_count = 0
         for preset_key, preset_coeffs in signal_presets.items():
             # 提取实际系数（可能是嵌套结构 {label, coefficients: {1: {...}}}）
             if isinstance(preset_coeffs, dict) and "coefficients" in preset_coeffs:
@@ -552,7 +922,7 @@ class HMMTrainingService:
                 actual_coeffs = preset_coeffs
 
             if not actual_coeffs:
-                continue
+                raise RuntimeError(f"HMM signal preset has no coefficients: {preset_key}")
 
             coeff_filename = f"coefficients_{preset_key}_{test_start}_{backtest_end}.json"
             coeff_path = os.path.join(model_dir, coeff_filename)
@@ -594,6 +964,10 @@ class HMMTrainingService:
                 raise RuntimeError(f"HMM 系数预计算失败 ({preset_key}): {proc.stderr}")
 
             logger.info(f"预计算完成: {coeff_filename}")
+            generated_count += 1
+
+        if generated_count == 0:
+            raise RuntimeError("HMM coefficient precompute produced no artifacts")
 
     @staticmethod
     def _to_wsl_path(win_path: str) -> str:

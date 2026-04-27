@@ -59,6 +59,13 @@ class DiagnosticsReport:
     bottlenecks: list[Bottleneck]
     recommendations: list[Bottleneck]  # same structure, prioritized
     combined_ic: float | None = None
+    combined_vs_groups: dict[str, Any] = field(default_factory=dict)
+    portfolio_diagnostics: dict[str, Any] = field(default_factory=dict)
+    diversification: dict[str, Any] = field(default_factory=dict)
+    group_diagnostics: list[dict[str, Any]] = field(default_factory=list)
+    data_availability: dict[str, Any] = field(default_factory=dict)
+    ic_quality: dict[str, Any] = field(default_factory=dict)
+    optimization_guidance: list[dict[str, Any]] = field(default_factory=list)
 
 
 # ── Service ───────────────────────────────────────────────────────────
@@ -68,12 +75,13 @@ class MultiAlphaDiagnostics:
 
     def analyze(self, experiment_id: str) -> dict[str, Any]:
         """Full diagnostic analysis for a Multi-Alpha experiment."""
-        groups, meta_info, correlations = self._load_analysis_inputs(experiment_id)
+        groups, meta_info, correlations, analysis = self._load_analysis_inputs(experiment_id)
         if not groups:
             return {"ok": False, "error": f"No groups found for experiment {experiment_id}"}
 
         bottlenecks = self.identify_bottlenecks(groups, correlations)
         recommendations = self._prioritize_recommendations(bottlenecks)
+        analysis = self._ensure_analysis(analysis, groups, meta_info, correlations)
 
         report = DiagnosticsReport(
             experiment_id=experiment_id,
@@ -84,23 +92,32 @@ class MultiAlphaDiagnostics:
             bottlenecks=bottlenecks,
             recommendations=recommendations,
             combined_ic=meta_info.get("combined_ic"),
+            combined_vs_groups=analysis.get("combined_vs_groups") or {},
+            portfolio_diagnostics=analysis.get("portfolio_diagnostics") or {},
+            diversification=analysis.get("diversification") or {},
+            group_diagnostics=analysis.get("group_diagnostics") or [],
+            data_availability=analysis.get("data_availability") or {},
+            ic_quality=analysis.get("ic_quality") or {},
+            optimization_guidance=analysis.get("optimization_guidance") or [],
         )
         return {"ok": True, "diagnostics": asdict(report)}
 
     def compute_group_correlations(self, experiment_id: str) -> dict[str, Any]:
         """Return cached group-pair correlations."""
-        _, _, correlations = self._load_analysis_inputs(experiment_id)
+        _, _, correlations, _ = self._load_analysis_inputs(experiment_id)
         return {"ok": True, "experiment_id": experiment_id, "correlations": correlations}
 
     def get_recommendations(self, experiment_id: str) -> dict[str, Any]:
         """Return prioritized action recommendations."""
-        groups, _, correlations = self._load_analysis_inputs(experiment_id)
+        groups, meta_info, correlations, analysis = self._load_analysis_inputs(experiment_id)
         bottlenecks = self.identify_bottlenecks(groups, correlations)
         recommendations = self._prioritize_recommendations(bottlenecks)
+        analysis = self._ensure_analysis(analysis, groups, meta_info, correlations)
         return {
             "ok": True,
             "experiment_id": experiment_id,
             "recommendations": [asdict(r) for r in recommendations],
+            "optimization_guidance": analysis.get("optimization_guidance") or [],
         }
 
     # ── Bottleneck Rules Engine ────────────────────────────────────
@@ -217,7 +234,7 @@ class MultiAlphaDiagnostics:
     def _load_analysis_inputs(
         self,
         experiment_id: str,
-    ) -> tuple[list[GroupMetrics], dict[str, Any], dict[str, float]]:
+    ) -> tuple[list[GroupMetrics], dict[str, Any], dict[str, float], dict[str, Any]]:
         unified = self._load_unified_detail(experiment_id)
         groups = self._merge_groups_with_unified(self._load_groups(experiment_id), unified)
         if not groups:
@@ -235,7 +252,7 @@ class MultiAlphaDiagnostics:
         if not correlations:
             correlations = unified.get("correlations") or {}
 
-        return groups, meta_info, correlations
+        return groups, meta_info, correlations, unified.get("analysis") or {}
 
     def _load_groups(self, experiment_id: str) -> list[GroupMetrics]:
         """Load group records from DB."""
@@ -350,6 +367,12 @@ class MultiAlphaDiagnostics:
         result_metrics = self._parse_jsonish(result_metrics_raw) or {}
         multi_alpha_config = self._parse_jsonish(multi_alpha_config_raw) or {}
         detail = result_metrics.get("multi_alpha_detail") or {}
+        nested_enhanced = result_metrics.get("enhanced_metrics") or {}
+        if not isinstance(nested_enhanced, dict):
+            nested_enhanced = {}
+        analysis = result_metrics.get("multi_alpha_analysis") or nested_enhanced.get("multi_alpha_analysis") or {}
+        if not isinstance(analysis, dict):
+            analysis = {}
         return {
             "status": status,
             "multi_detail": detail,
@@ -357,6 +380,7 @@ class MultiAlphaDiagnostics:
             "execution_mode": multi_alpha_config.get("execution_mode"),
             "combined_ic": detail.get("combined_ic") if detail else result_metrics.get("IC"),
             "correlations": detail.get("group_correlations") or {},
+            "analysis": analysis,
         }
 
     def _build_groups_from_unified(self, unified: dict[str, Any]) -> list[GroupMetrics]:
@@ -429,6 +453,107 @@ class MultiAlphaDiagnostics:
         """Sort bottlenecks by severity (high → medium → low)."""
         severity_order = {"high": 0, "medium": 1, "low": 2}
         return sorted(bottlenecks, key=lambda b: severity_order.get(b.severity, 3))
+
+    def _ensure_analysis(
+        self,
+        analysis: dict[str, Any],
+        groups: list[GroupMetrics],
+        meta_info: dict[str, Any],
+        correlations: dict[str, float],
+    ) -> dict[str, Any]:
+        """Return persisted analysis or derive a compact DB-only version."""
+        if isinstance(analysis, dict) and analysis.get("schema_version"):
+            return analysis
+
+        group_diagnostics = []
+        weighted_group_ic = 0.0
+        best_group_ic = None
+        for group in groups:
+            contribution = None
+            if group.group_ic is not None and group.meta_weight is not None:
+                contribution = group.group_ic * group.meta_weight
+                weighted_group_ic += contribution
+            if group.group_ic is not None:
+                best_group_ic = group.group_ic if best_group_ic is None else max(best_group_ic, group.group_ic)
+            group_diagnostics.append({
+                "group_name": group.group_name,
+                "model_id": group.model_id,
+                "factor_count": group.factor_count,
+                "meta_weight": group.meta_weight,
+                "group_ic": group.group_ic,
+                "group_icir": group.group_icir,
+                "group_sharpe": group.group_sharpe,
+                "contribution_to_combined_ic": contribution,
+                "data_available": {
+                    "enhanced_metrics": False,
+                    "ic_diagnostics": False,
+                    "training_diagnostics": False,
+                    "prediction_diagnostics": False,
+                    "feature_importance": False,
+                },
+                "ic_diagnostics": {},
+                "training_diagnostics": {},
+                "prediction_diagnostics": {},
+                "feature_importance_top": [],
+            })
+
+        weights = [g.meta_weight for g in groups if g.meta_weight is not None]
+        hhi = sum(w * w for w in weights) if weights else None
+        effective_groups = (1.0 / hhi) if hhi and hhi > 0 else None
+        dominant = None
+        if weights:
+            dominant_group = max(groups, key=lambda g: g.meta_weight or 0)
+            dominant = {
+                "name": dominant_group.group_name,
+                "weight": dominant_group.meta_weight,
+            }
+
+        corr_values = [abs(v) for v in correlations.values() if isinstance(v, (int, float))]
+        high_corr_pairs = [
+            {"pair": k, "correlation": v}
+            for k, v in correlations.items()
+            if isinstance(v, (int, float)) and abs(v) >= 0.7
+        ]
+
+        derived = {
+            "schema_version": 1,
+            "combined_vs_groups": {
+                "combined_ic": meta_info.get("combined_ic"),
+                "best_group_ic": best_group_ic,
+                "weighted_group_ic": weighted_group_ic if group_diagnostics else None,
+            },
+            "portfolio_diagnostics": {},
+            "diversification": {
+                "weight_sum": sum(weights) if weights else None,
+                "weight_hhi": hhi,
+                "effective_group_count": effective_groups,
+                "dominant_group": dominant.get("name") if dominant else None,
+                "dominant_weight": dominant.get("weight") if dominant else None,
+                "avg_abs_correlation": (sum(corr_values) / len(corr_values)) if corr_values else None,
+                "max_abs_correlation": max(corr_values) if corr_values else None,
+                "high_correlation_pairs": high_corr_pairs,
+            },
+            "group_diagnostics": group_diagnostics,
+            "data_availability": {
+                "combined_enhanced_metrics": False,
+                "combined_training_diagnostics": False,
+                "ic_quality": False,
+                "groups_with_enhanced_metrics": 0,
+                "groups_total": len(groups),
+                "missing_group_enhanced_metrics": [g.group_name for g in groups],
+            },
+            "ic_quality": {},
+        }
+        try:
+            from .multi_alpha_result_collector import MultiAlphaResultCollector
+
+            derived["optimization_guidance"] = (
+                MultiAlphaResultCollector()._generate_multi_alpha_guidance(derived)
+            )
+        except Exception as e:
+            logger.error(f"Failed to derive multi-alpha optimization guidance: {e}")
+            derived["optimization_guidance"] = []
+        return derived
 
     @staticmethod
     def _parse_jsonish(value: Any) -> Any:

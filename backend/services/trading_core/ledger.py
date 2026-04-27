@@ -32,6 +32,19 @@ class FeeModel:
         return max(notional * rate, self.min_cost)
 
 
+@dataclass(frozen=True)
+class CashLedgerEntry:
+    fill_id: str
+    portfolio_id: str
+    trade_date: date
+    symbol: str
+    side: OrderSide
+    notional: float
+    fee: float
+    cash_delta: float
+    cash_after: float
+
+
 class InMemoryLedger:
     """Small ledger used by tests and the first Paper v2 vertical slice."""
 
@@ -51,6 +64,7 @@ class InMemoryLedger:
         self.fee_model = fee_model or FeeModel()
         self.positions: dict[str, PositionLot] = {}
         self.fills: list[Fill] = []
+        self.cash_entries: list[CashLedgerEntry] = []
 
     def apply_fill(self, fill: Fill) -> None:
         if fill.side == OrderSide.BUY:
@@ -109,6 +123,19 @@ class InMemoryLedger:
                 },
             )
         self.cash -= total_cost
+        self.cash_entries.append(
+            CashLedgerEntry(
+                fill_id=fill.fill_id,
+                portfolio_id=self.portfolio_id,
+                trade_date=fill.trade_time.date(),
+                symbol=fill.symbol,
+                side=fill.side,
+                notional=notional,
+                fee=fee,
+                cash_delta=-total_cost,
+                cash_after=self.cash,
+            )
+        )
         current = self.positions.get(fill.symbol)
         fill_date = fill.trade_time.date()
         if current is None:
@@ -158,6 +185,19 @@ class InMemoryLedger:
         fee = self.fee_model.calculate(fill)
         notional = fill.quantity * fill.price
         self.cash += notional - fee
+        self.cash_entries.append(
+            CashLedgerEntry(
+                fill_id=fill.fill_id,
+                portfolio_id=self.portfolio_id,
+                trade_date=fill.trade_time.date(),
+                symbol=fill.symbol,
+                side=fill.side,
+                notional=notional,
+                fee=fee,
+                cash_delta=notional - fee,
+                cash_after=self.cash,
+            )
+        )
         remaining = current.quantity - fill.quantity
         remaining_available = current.available_quantity - fill.quantity
         if remaining == 0:

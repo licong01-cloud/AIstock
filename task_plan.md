@@ -184,3 +184,68 @@ Phase 2: 后端能力补齐
 | `auto_generate` 不进入 artifact hash | 这是编排开关，不改变模型推理结果 |
 | 自选加入使用 selection result 的 `reference_price` | 加入价必须与选股时点可追溯，缺价格直接失败 |
 | 多策略包聚合只用于选股研究 | 当前不创建多策略包模拟盘执行 |
+
+---
+
+# Task Plan: QE Config Truthfulness / No-Silent-Override Hardening (2026-04-27)
+
+## Goal
+Ensure every UI-visible QE/RDAgent configuration is either executed exactly as submitted or fails fast with an explicit error. Remove silent config mutation, fix V25 and hold-threshold execution mismatch, address remote execution audit issues, add optional suspend_d-based daily selection filtering, and verify via backend/UI flows on ports 8011/3011.
+
+## Current Phase
+Phase 1: Baseline documents and code scan
+
+## Phases
+
+### Phase 1: Baseline Docs & Workspace Safety
+- [ ] Read docs/architecture/qe_remote_execution_capability_audit_20260427.md
+- [ ] Read Desktop v25 fix documents
+- [ ] Capture dirty worktree baseline and avoid staging unrelated pre-existing changes
+- **Status:** in_progress
+
+### Phase 2: Config/Execution Scan
+- [ ] Scan QE compose API payload, persistence, config composer, WSL/remote command generation, result collector, UI display
+- [ ] Scan auto-evolution and Multi-Alpha branches for silent defaults/fallbacks/config rewrites
+- [ ] Document silent-mutation findings in indings.md
+- **Status:** pending
+
+### Phase 3: Fail-Fast Contract & V25/Hold Fixes
+- [ ] Add strict execution policy resolution for V25 rather than default TailTWAP fallback
+- [ ] Enforce hold_thresh in ScoreWeightedTopkStrategyV2 generated/runtime code
+- [ ] Add visible trace/assertions so generated config matches UI/custom params
+- **Status:** pending
+
+### Phase 4: suspend_d Selection Filtering
+- [ ] Design and implement UI/API/runtime config switch for filtering suspended stocks during daily signal generation
+- [ ] Use local market.suspend_d data with audit/readiness; decide cache/export artifact for backtest runtime
+- [ ] Add fail-fast behavior for incomplete data when filter enabled
+- **Status:** pending
+
+### Phase 5: Remote Execution Audit Remediation
+- [ ] Implement issues from qe_remote_execution_capability_audit_20260427.md
+- [ ] Add tests/smokes for remote/compute-node command generation and artifact retrieval
+- **Status:** pending
+
+### Phase 6: Verification
+- [ ] Backend unit tests for config composer, execution algo resolution, hold threshold, suspend filtering, remote execution
+- [ ] Frontend build/type checks and Playwright/UI tests on backend 8011 + frontend 3011
+- [ ] Validate with real QE experiment branch and V25 repaired strategy
+- **Status:** pending
+
+### Phase 7: Git Traceability
+- [ ] Commit only files modified in this task, grouped by concern
+- [ ] Include clear commit messages and report hashes; push if remote auth works
+- **Status:** pending
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Fail-fast beats fallback for any UI-visible trading/execution config | Silent defaults caused the V25/TailTWAP mismatch and must be prevented |
+| Preserve existing dirty worktree baseline | Many files are already modified before this task; do not revert or accidentally commit unrelated work |
+| Use temporary ports 8011/3011 only | Matches project memory and avoids disrupting existing services |
+
+## Errors Encountered
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| None yet | - | - |
+

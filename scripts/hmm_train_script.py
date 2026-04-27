@@ -25,6 +25,7 @@ import argparse
 import json
 import sys
 import os
+from datetime import date
 
 # Ensure project roots on sys.path
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -59,19 +60,38 @@ def main() -> None:
         from model_training.hmm.config import HMMTrainConfig
         from model_training.hmm.train_sector_hmm import train_all_sectors, validate_model
 
-        # 映射配置字段到 HMMTrainConfig
+        def _parse_optional_date(key: str):
+            value = config_dict.get(key)
+            if value in (None, ""):
+                return None
+            if isinstance(value, date):
+                return value
+            return date.fromisoformat(str(value)[:10])
+
+        # 映射配置字段到 HMMTrainConfig。滚动训练日期必须进入 RD-Agent
+        # config；否则会退回 RD-Agent 默认 split，导致预览和实际训练不一致。
+        cfg_kwargs = {
+            "n_states": config_dict.get("n_states", 3),
+            "covariance_type": config_dict.get("covariance_type", "diag"),
+            "n_iter": config_dict.get("n_iter", 300),
+            "rolling_window": config_dict.get("rolling_window", 5),
+            "zscore": config_dict.get("zscore", False),
+            "use_limit_down": config_dict.get("use_limit_down", False),
+            "db_password": args.db_password or "",
+        }
+        for date_key in ("train_start", "train_end", "val_start", "val_end"):
+            parsed = _parse_optional_date(date_key)
+            if parsed is not None:
+                cfg_kwargs[date_key] = parsed
+
         cfg = HMMTrainConfig(
-            n_states=config_dict.get("n_states", 3),
-            covariance_type=config_dict.get("covariance_type", "diag"),
-            n_iter=config_dict.get("n_iter", 300),
-            rolling_window=config_dict.get("rolling_window", 5),
-            zscore=config_dict.get("zscore", False),
-            use_limit_down=config_dict.get("use_limit_down", False),
-            db_password=args.db_password or "",
+            **cfg_kwargs,
         )
 
         print(f"配置: n_states={cfg.n_states}, cov={cfg.covariance_type}, "
-              f"rw={cfg.rolling_window}, zscore={cfg.zscore}", file=sys.stderr)
+              f"rw={cfg.rolling_window}, zscore={cfg.zscore}, "
+              f"train={cfg.train_start}~{cfg.train_end}, "
+              f"val={cfg.val_start}~{cfg.val_end}", file=sys.stderr)
 
         # Step 1: 训练
         print("[Step 1/2] 训练模型", file=sys.stderr)

@@ -46,6 +46,99 @@ _TASK_TYPE_COMMANDS = {
 _CUSTOM_TASK_TYPES = {"correlation_compute", "official_evaluation"}
 
 
+def _stringify_env_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    return str(value)
+
+
+def _normalize_env_overrides(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    env: Dict[str, str] = {}
+    for key, raw in value.items():
+        key_s = str(key).strip()
+        if not key_s or raw is None:
+            continue
+        env[key_s] = _stringify_env_value(raw)
+    return env
+
+
+def _derive_linux_home_from_node(node: Dict[str, Any]) -> str:
+    """Infer the Linux home directory used by RD-Agent worker nodes."""
+    for key in (
+        "qlib_rdagent_root",
+        "qlib_data_path",
+        "qlib_minute_path",
+        "workspace_base",
+        "factor_data_dir",
+    ):
+        value = node.get(key)
+        if not isinstance(value, str) or not value.startswith("/home/"):
+            continue
+        parts = value.split("/")
+        if len(parts) >= 3 and parts[2]:
+            return f"/home/{parts[2]}"
+    return "/home/lc999"
+
+
+def _default_rdagent_conda_path(node: Dict[str, Any]) -> str:
+    home = _derive_linux_home_from_node(node)
+    return ":".join(
+        [
+            f"{home}/miniconda3/envs/rdagent-gpu/bin",
+            f"{home}/miniconda3/condabin",
+            f"{home}/miniconda3/bin",
+            "/usr/local/sbin",
+            "/usr/local/bin",
+            "/usr/sbin",
+            "/usr/bin",
+            "/sbin",
+            "/bin",
+        ]
+    )
+
+
+def build_rdagent_env_overrides(
+    *,
+    data: Dict[str, Any],
+    node: Dict[str, Any],
+    config: Dict[str, Any],
+) -> Dict[str, str]:
+    """Build the actual env passed to the remote RD-Agent scheduler.
+
+    The dispatch UI stores app_tpl/costeer/multiproc in task config, but RD-Agent
+    only consumes them through environment variables.
+    """
+    env = _normalize_env_overrides(data.get("custom_env"))
+
+    app_tpl = config.get("app_tpl")
+    if app_tpl:
+        env.setdefault("RD_AGENT_SETTINGS__APP_TPL", _stringify_env_value(app_tpl))
+
+    multi_proc_n = config.get("multi_proc_n")
+    if multi_proc_n is not None:
+        env.setdefault("RD_AGENT_SETTINGS__MULTI_PROC_N", _stringify_env_value(multi_proc_n))
+
+    costeer_max_loop = config.get("costeer_max_loop")
+    if costeer_max_loop is not None:
+        max_loop_s = _stringify_env_value(costeer_max_loop)
+        env.setdefault("CoSTEER_MAX_LOOP", max_loop_s)
+        env.setdefault("FACTOR_CoSTEER_MAX_LOOP", max_loop_s)
+        env.setdefault("MODEL_CoSTEER_MAX_LOOP", max_loop_s)
+
+    if node.get("qlib_data_path"):
+        env.setdefault("QLIB_DAY_DATA", _stringify_env_value(node["qlib_data_path"]))
+    if node.get("qlib_minute_path"):
+        env.setdefault("QLIB_MINUTE_DATA", _stringify_env_value(node["qlib_minute_path"]))
+
+    # Scheduler services are often launched without interactive shell startup files.
+    # RD-Agent's QlibCondaEnv then cannot find `conda`/`python` unless PATH is explicit.
+    env.setdefault("PATH", _default_rdagent_conda_path(node))
+
+    return env
+
+
 class DispatchService:
     """调度中心核心服务。"""
 
@@ -262,6 +355,13 @@ class DispatchService:
     _LOG_COLLECTOR_MAX_RETRIES = 30       # 最多重连次数
     _LOG_COLLECTOR_RETRY_INTERVAL = 10    # 重连间隔（秒）
 
+    def _append_local_log_line(self, task_id: str, line: str) -> None:
+        log_dir = DISPATCH_LOGS_DIR / task_id
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "output.log"
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(line.rstrip("\n") + "\n")
+
     def _start_collector(self, task_id: str, client: "ComputeNodeClient", remote_task_id: str) -> None:
         """启动日志采集器（带去重）。"""
         existing = self._active_collectors.get(task_id)
@@ -284,6 +384,11 @@ class DispatchService:
         while retries < self._LOG_COLLECTOR_MAX_RETRIES:
             try:
                 async with aiofiles.open(str(log_file), "a", encoding="utf-8") as f:
+                    await f.write(
+                        f"[dispatch] attaching remote log stream: "
+                        f"{client.base_url}/scheduler/tasks/{remote_task_id}/logs/stream\n"
+                    )
+                    await f.flush()
                     async for line in client.stream_logs(remote_task_id):
                         stripped = line.strip()
                         if not stripped.startswith("data: "):
@@ -360,6 +465,7 @@ class DispatchService:
             "multi_proc_n": data.get("multi_proc_n", 1),
             "app_tpl": data.get("app_tpl", "../app_tpl/all/v4/rdagent"),
         }
+        env_overrides = build_rdagent_env_overrides(data=data, node=node, config=config)
 
         # 写入 DB
         task = self._insert_task({
@@ -367,12 +473,19 @@ class DispatchService:
             "task_type": task_type,
             "node_id": node["node_id"],
             "config": config,
-            "env_overrides": data.get("custom_env", {}),
+            "env_overrides": env_overrides,
             "total_loops": config["evolving_n"],
             "time_limit": config.get("all_duration"),
         })
         task_id = task["task_id"]
         self._add_event(task_id, "created", {"config": config})
+        self._append_local_log_line(
+            task_id,
+            (
+                f"[dispatch] created local task type={task_type} node={node['node_id']} "
+                f"app_tpl={config.get('app_tpl')} loop_n={config.get('evolving_n')}"
+            ),
+        )
 
         # 构造节点请求
         scheduler_payload = {
@@ -381,12 +494,19 @@ class DispatchService:
             "loop_n": config["evolving_n"],
             "all_duration": config.get("all_duration") or "99:00:00",
             "evolving_mode": config.get("action_selection", "llm"),
-            "env_overrides": data.get("custom_env", {}),
+            "app_tpl": config.get("app_tpl"),
+            "costeer_max_loop": config.get("costeer_max_loop"),
+            "multi_proc_n": config.get("multi_proc_n"),
+            "env_overrides": env_overrides,
         }
 
         # 提交到节点
         try:
             client = ComputeNodeClient(node["api_base_url"])
+            self._append_local_log_line(
+                task_id,
+                f"[dispatch] submitting to {client.base_url}/scheduler/tasks payload={json.dumps(scheduler_payload, ensure_ascii=False)}",
+            )
             resp = await client.create_task(scheduler_payload)
             # 节点返回格式: {"task": {"id": N, "name": "...", ...}}
             task_data = resp.get("task", resp)
@@ -399,7 +519,11 @@ class DispatchService:
                 remote_task_id=remote_task_id,
                 started_at=datetime.now(timezone.utc).isoformat(),
             )
-            self._add_event(task_id, "submitted", {"remote_task_id": remote_task_id})
+            self._add_event(task_id, "submitted", {
+                "remote_task_id": remote_task_id,
+                "scheduler_payload": scheduler_payload,
+            })
+            self._append_local_log_line(task_id, f"[dispatch] submitted remote_task_id={remote_task_id}")
             # 更新节点当前任务
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -413,6 +537,7 @@ class DispatchService:
             self._start_collector(task_id, client, remote_task_id)
         except Exception as e:
             logger.error("提交任务到节点失败: %s", e)
+            self._append_local_log_line(task_id, f"[dispatch] submit failed: {e}")
             self._update_task_fields(task_id, status="failed", error_message=str(e))
             self._add_event(task_id, "submit_failed", {"error": str(e)})
             task["status"] = "failed"
@@ -730,9 +855,23 @@ class DispatchService:
     def get_task_logs_full(self, task_id: str, offset: int = 0, limit: int = 1000) -> Dict[str, Any]:
         log_file = DISPATCH_LOGS_DIR / task_id / "output.log"
         if not log_file.exists():
-            return {"task_id": task_id, "lines": [], "total": 0}
+            task = self.get_task(task_id)
+            tail = (task or {}).get("log_tail") or ""
+            lines = tail.splitlines() if tail else []
+            return {
+                "task_id": task_id,
+                "lines": lines[offset:offset + limit],
+                "total": len(lines),
+                "offset": offset,
+                "source": "db_log_tail" if lines else "missing",
+            }
         with open(log_file, "r", encoding="utf-8", errors="replace") as f:
             all_lines = f.readlines()
+        if not all_lines:
+            task = self.get_task(task_id)
+            tail = (task or {}).get("log_tail") or ""
+            if tail:
+                all_lines = [line + "\n" for line in tail.splitlines()]
         total = len(all_lines)
         return {
             "task_id": task_id,

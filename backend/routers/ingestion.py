@@ -295,7 +295,16 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
         return None
     if ds in {"kline_daily_raw", "kline_minute_raw"}:
         return "tdx_api"
-    if ds in {"stock_moneyflow_ts", "stock_basic", "stock_st", "bak_basic", "daily_basic", "stk_limit", "margin_detail"}:
+    if ds in {
+        "stock_moneyflow_ts",
+        "stock_basic",
+        "stock_st",
+        "bak_basic",
+        "daily_basic",
+        "stk_limit",
+        "suspend_d",
+        "margin_detail",
+    }:
         return "tushare"
     if ds in {"index_daily", "index_basic"}:
         return "tushare"
@@ -1180,6 +1189,13 @@ class BatchCreateSchedulesRequest(BaseModel):
     items: List[BatchScheduleItem]
 
 
+def _suspend_d_refresh_options() -> Dict[str, Any]:
+    return {
+        "date_strategy": "current_and_next_trading_day",
+        "skip_auto_range": True,
+    }
+
+
 @router.post("/ingestion/schedule/batch-create")
 def batch_create_ingestion_schedules(payload: BatchCreateSchedulesRequest) -> Dict[str, Any]:
     """Batch create/update daily ingestion schedules for multiple datasets."""
@@ -1193,6 +1209,11 @@ def batch_create_ingestion_schedules(payload: BatchCreateSchedulesRequest) -> Di
             options["at"] = item.at
         if item.workers and item.workers > 0:
             options["workers"] = item.workers
+        frequency = item.frequency
+        if item.dataset == "suspend_d":
+            frequency = "1h"
+            options.update(_suspend_d_refresh_options())
+            options.pop("at", None)
 
         # upsert: find existing or create new
         rows = _fetchall(
@@ -1207,7 +1228,7 @@ def batch_create_ingestion_schedules(payload: BatchCreateSchedulesRequest) -> Di
                ON CONFLICT (schedule_id)
                DO UPDATE SET enabled=EXCLUDED.enabled, frequency=EXCLUDED.frequency,
                              options=EXCLUDED.options, updated_at=NOW()""",
-            (schedule_id, item.dataset, item.mode, item.enabled, item.frequency, _json_dump(options)),
+            (schedule_id, item.dataset, item.mode, item.enabled, frequency, _json_dump(options)),
         )
         data = _ensure_ingestion_schedule(schedule_id)
         results.append(_serialize_ingestion_schedule(data))
@@ -1228,6 +1249,7 @@ _DAILY_PRESETS = [
     ("stock_st", "incremental"),
     ("bak_basic", "incremental"),
     ("stk_limit", "incremental"),
+    ("suspend_d", "incremental"),
     ("margin_detail", "incremental"),
     ("sw_sector", "incremental"),
     ("sector_data", "incremental"),
@@ -1284,6 +1306,8 @@ def _run_preset(dataset: str, mode: str, triggered_by: str, workers: Optional[in
     opts: Dict[str, Any] = {"job_id": str(job_id)}
     if workers:
         opts["workers"] = workers
+    if dataset == "suspend_d":
+        opts.update(_suspend_d_refresh_options())
     run_id = scheduler.run_ingestion_now(
         dataset=dataset, mode=mode, triggered_by=triggered_by, options=opts,
     )
@@ -1496,6 +1520,11 @@ def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="stk_limit init requires start_date")
         if mode == "init" and not options.get("end_date"):
             raise HTTPException(status_code=400, detail="stk_limit init requires end_date")
+    elif dataset == "suspend_d":
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="suspend_d init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="suspend_d init requires end_date")
     elif dataset == "margin_detail":
         if mode == "init" and not options.get("start_date"):
             raise HTTPException(status_code=400, detail="margin_detail init requires start_date")
@@ -2184,7 +2213,7 @@ def get_data_gaps(
         "kline_daily_raw",
         "kline_minute_raw", "kline_weekly",
         "stock_moneyflow_ts", "minute_1m",
-        "stock_st", "bak_basic",
+        "stock_st", "bak_basic", "suspend_d",
         "xtquant_pershare_index",
         "sw_daily", "sector_data",
         "index_daily", "index_basic",

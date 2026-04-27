@@ -34,6 +34,63 @@ from .data_service.preprocessor import (
 from .services.factor_validator import FactorValidator
 
 logger = logging.getLogger("aistock.inference")
+LAST_STRICT_FEATURE_FILTER: dict[str, Any] | None = None
+
+def _strict_inference_enabled() -> bool:
+    return str(os.environ.get("AISTOCK_STRICT_INFERENCE", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _drop_invalid_feature_rows_for_strict(X: pd.DataFrame) -> pd.DataFrame:
+    """Drop unscorable rows in strict mode instead of filling missing features."""
+
+    global LAST_STRICT_FEATURE_FILTER
+    if not _strict_inference_enabled():
+        LAST_STRICT_FEATURE_FILTER = None
+        return X
+
+    numeric = X.copy()
+    for col in numeric.columns:
+        if numeric[col].dtype == "object":
+            numeric[col] = pd.to_numeric(numeric[col], errors="coerce")
+    values = numeric.to_numpy(dtype="float64", copy=False)
+    invalid_mask = pd.isna(values) | ~np.isfinite(values)
+    if not invalid_mask.any():
+        LAST_STRICT_FEATURE_FILTER = {
+            "enabled": True,
+            "input_rows": int(len(numeric)),
+            "kept_rows": int(len(numeric)),
+            "dropped_rows": 0,
+            "invalid_cell_count": 0,
+            "invalid_columns": [],
+        }
+        return numeric
+
+    invalid_rows = invalid_mask.any(axis=1)
+    invalid_columns = sorted({str(numeric.columns[col_idx]) for _, col_idx in zip(*np.where(invalid_mask))})
+    dropped_rows = int(invalid_rows.sum())
+    kept_rows = int((~invalid_rows).sum())
+    LAST_STRICT_FEATURE_FILTER = {
+        "enabled": True,
+        "input_rows": int(len(numeric)),
+        "kept_rows": kept_rows,
+        "dropped_rows": dropped_rows,
+        "invalid_cell_count": int(invalid_mask.sum()),
+        "invalid_columns": invalid_columns[:200],
+    }
+    if kept_rows <= 0:
+        raise ValueError(
+            "strict StrategyPackage inference found no fully-scored instruments; "
+            "refusing to fill missing features with defaults",
+            LAST_STRICT_FEATURE_FILTER,
+        )
+    logger.warning(
+        "strict StrategyPackage inference dropped %s unscorable rows with missing/non-finite features; "
+        "kept %s rows and did not fill defaults",
+        dropped_rows,
+        kept_rows,
+    )
+    return numeric.loc[~invalid_rows]
+
 
 def _safe_get_datetime_level(df_or_index) -> pd.Index:
     """安全地从DataFrame或Index中获取datetime层级
@@ -215,11 +272,28 @@ def predict_scores(
 ) -> np.ndarray:
     """模型预测三分支: lgb / pytorch / qlib_generic → 返回 1-D scores 数组."""
     # 确保数值类型
+    X = X.copy()
     for col in X.columns:
         if X[col].dtype == "object":
             X[col] = pd.to_numeric(X[col], errors="coerce")
-    X = X.fillna(0)
-    X = X.replace([np.inf, -np.inf], 0)
+    if _strict_inference_enabled():
+        values = X.to_numpy(dtype="float64", copy=False)
+        invalid_mask = pd.isna(values) | ~np.isfinite(values)
+        if invalid_mask.any():
+            invalid_columns = sorted(
+                {
+                    str(X.columns[col_idx])
+                    for _, col_idx in zip(*np.where(invalid_mask))
+                }
+            )
+            raise ValueError(
+                "strict StrategyPackage inference found missing or non-finite model features; "
+                "refusing to fill with defaults",
+                {"invalid_columns": invalid_columns[:50], "invalid_cell_count": int(invalid_mask.sum())},
+            )
+    else:
+        X = X.fillna(0)
+        X = X.replace([np.inf, -np.inf], 0)
 
     if model_kind == "lgb":
         scores = inner_model.predict(X.values)
@@ -347,7 +421,11 @@ class InferenceEngine:
                     if row:
                         return datetime.combine(row[0], datetime.min.time())
         except Exception as e:
+            if _strict_inference_enabled():
+                raise ValueError(f"strict inference requires trading calendar query success: {e}") from e
             logger.warning(f"查询交易日历失败，使用原日期: {e}")
+        if _strict_inference_enabled():
+            raise ValueError(f"strict inference found no trading calendar date <= {target_date.date()}")
         return target_date
 
     def _validate_data_freshness(self, df_history: pd.DataFrame, requested_date: datetime, actual_date: datetime) -> None:
@@ -448,8 +526,12 @@ class InferenceEngine:
                     rows = cur.fetchall() or []
             stock_count = len(rows)
             logger.info(f"股票池筛选完成: 共 {stock_count} 只股票（已剔除所有历史ST股票）")
+            if stock_count <= 0 and _strict_inference_enabled():
+                raise ValueError("strict inference default universe is empty")
             return [str(r[0]) for r in rows if r and r[0]]
         except Exception as e:
+            if _strict_inference_enabled():
+                raise ValueError(f"strict inference default universe query failed: {e}") from e
             logger.error(f"默认股票池查询失败: {e}")
             return []
 
@@ -834,6 +916,11 @@ class InferenceEngine:
         # 检查是否还有缺失的因子
         missing_factors = [col for col in col_list if col not in out]
         if missing_factors:
+            if _strict_inference_enabled():
+                raise ValueError(
+                    "strict inference Alpha158/static feature calculation is missing required factors: "
+                    f"{missing_factors}"
+                )
             logger.warning(f"Alpha158因子计算后仍缺失: {missing_factors}")
             # 对于缺失的因子，创建全NaN的Series
             for col in missing_factors:
@@ -1163,6 +1250,8 @@ class InferenceEngine:
             df_history, required_window, buffer_days=5
         )
         if not is_sufficient:
+            if _strict_inference_enabled():
+                raise ValueError(f"strict inference data window is insufficient: {window_msg}")
             logger.warning(window_msg)
             # 不中断执行，但记录警告
 
@@ -1236,6 +1325,11 @@ class InferenceEngine:
                 # 验证预计算字段完整性
                 is_valid, missing_fields = validate_precomputed_factors(df_fund)
                 if not is_valid:
+                    if _strict_inference_enabled():
+                        raise ValueError(
+                            "strict inference precomputed factor data is incomplete: "
+                            f"missing={missing_fields}"
+                        )
                     logger.warning(f"预计算字段不完整，缺失: {missing_fields}")
 
                 fund_instruments = df_fund.index.get_level_values('instrument').unique()
@@ -1249,6 +1343,8 @@ class InferenceEngine:
                     f.write(f"df_fund列数: {len(df_fund.columns)}\n")
                     f.write(f"df_fund前30列: {list(df_fund.columns)[:30]}\n")
             else:
+                if _strict_inference_enabled():
+                    raise ValueError("strict inference requires fundamental/moneyflow/sector DB data")
                 logger.warning("数据库中没有找到资金流数据")
                 df_fund = pd.DataFrame()
             
@@ -1299,6 +1395,11 @@ class InferenceEngine:
                         if len(common_after) > 0:
                             logger.info(f"✓ instrument格式转换成功")
                         else:
+                            if _strict_inference_enabled():
+                                raise ValueError(
+                                    "strict inference instrument format conversion failed: "
+                                    "df_history and df_fund have no common instruments"
+                                )
                             logger.error(f"❌ instrument格式转换后仍不匹配")
                             logger.error(f"df_history样例: {history_instruments[:3].tolist()}")
                             logger.error(f"df_fund转换后样例: {fund_instruments_new[:3].tolist()}")
@@ -1318,6 +1419,8 @@ class InferenceEngine:
                 logger.info(f"共同instrument数量: {len(common_instruments)}")
                 
                 if len(common_instruments) == 0:
+                    if _strict_inference_enabled():
+                        raise ValueError("strict inference found no common instruments between price and static data")
                     logger.error("❌ df_history和df_fund没有共同的instrument，格式不匹配！")
                     logger.error(f"df_history样例: {list(history_instruments)[:3]}")
                     logger.error(f"df_fund样例: {list(fund_instruments)[:3]}")
@@ -1408,6 +1511,11 @@ class InferenceEngine:
             
             # 检查是否为空DataFrame（QE实验可能只使用Alpha158基线因子）
             if df_factors_raw.empty:
+                if _strict_inference_enabled() and dynamic_feats:
+                    raise ValueError(
+                        "strict inference dynamic factor output is empty while dynamic factors are required: "
+                        f"{dynamic_feats}"
+                    )
                 logger.info("SOTA因子返回空DataFrame，将只使用Alpha158基线因子")
                 df_factors = pd.DataFrame()
             else:
@@ -1422,6 +1530,11 @@ class InferenceEngine:
                     df_factors = df_factors_raw.loc[last_date]
                     logger.info(f"SOTA因子优化：使用目标日期 {last_date.date()} 的因子值")
                 else:
+                    if _strict_inference_enabled():
+                        raise ValueError(
+                            f"strict inference SOTA factors missing target date {last_date.date()}; "
+                            "refusing to use an earlier factor date"
+                        )
                     # 如果目标日期不存在，使用最近可用日期
                     available_dates = sota_dates.unique()
                     if len(available_dates) > 0:
@@ -1473,6 +1586,11 @@ class InferenceEngine:
                 logger.error(f"❌ Alpha158列数不匹配！请求{len(alpha158_feats)}个，返回{len(alpha_subset.columns)}个")
                 logger.error(f"请求的因子: {alpha158_feats}")
                 logger.error(f"返回的因子: {list(alpha_subset.columns)}")
+                if _strict_inference_enabled():
+                    raise ValueError(
+                        "strict inference Alpha158 feature count mismatch: "
+                        f"requested={len(alpha158_feats)}, returned={len(alpha_subset.columns)}"
+                    )
             
             # 验证所有列都是Series（不使用兜底方案）
             for col in alpha_subset.columns:
@@ -1504,6 +1622,11 @@ class InferenceEngine:
         
         # 7.6 处理特征数量不匹配的情况
         if num_features_expected > 0 and actual_count != num_features_expected:
+            if _strict_inference_enabled():
+                raise ValueError(
+                    "strict inference model feature count mismatch; refusing to pad or truncate features: "
+                    f"expected={num_features_expected}, actual={actual_count}"
+                )
             logger.warning(
                 f"特征数量不匹配: 模型期望 {num_features_expected} 个特征，实际提供 {actual_count} 个特征。"
             )
@@ -1525,6 +1648,11 @@ class InferenceEngine:
         
         unique_dates = _safe_get_datetime_level(df_factors_combined).unique()
         if actual_date not in unique_dates:
+            if _strict_inference_enabled():
+                raise ValueError(
+                    f"strict inference factors do not contain exact actual_date {actual_date.date()}; "
+                    "refusing to use an earlier date"
+                )
             earlier_dates = unique_dates[unique_dates <= actual_date]
             if earlier_dates.empty:
                 raise ValueError(f"推理日期 {actual_date} 无有效数据")
@@ -1540,7 +1668,7 @@ class InferenceEngine:
             f.write(f"df_today列名: {list(df_today.columns)[:50]}\n")
 
         # 7. 模型预测（使用提取的模块级函数）
-        X = df_today
+        X = _drop_invalid_feature_rows_for_strict(df_today)
         logger.info(f"模型预测: model_kind={model_kind}, X.shape={X.shape}")
 
         scores = predict_scores(model, inner_model, model_kind, X)

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { Suspense, useEffect, useState, useCallback, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import MultiAlphaGroupEditor, {
   type MultiAlphaConfig,
@@ -71,7 +71,7 @@ const btnSecondary: React.CSSProperties = {
 
 // ── Component ──────────────────────────────────────────────────────
 
-export default function EvolveWizardPage() {
+function EvolveWizardPageContent() {
   const searchParams = useSearchParams();
   const initialSourceExp = searchParams.get("source_exp") || "";
 
@@ -169,7 +169,7 @@ export default function EvolveWizardPage() {
       setSubmitResult({ ok: false, error: e.message });
     }
     setSubmitting(false);
-  }, [newConfig]);
+  }, [newConfig, selectedExpId]);
 
   // ── Diff computation ──────────────────────────────────────────────
 
@@ -959,5 +959,13 @@ export default function EvolveWizardPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function EvolveWizardPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: "24px" }}>Loading...</div>}>
+      <EvolveWizardPageContent />
+    </Suspense>
   );
 }

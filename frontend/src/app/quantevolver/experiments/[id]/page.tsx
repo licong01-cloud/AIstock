@@ -75,9 +75,17 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
         // Enhanced metrics: 优先 DB（已展平），fallback RDAgent（嵌套需展平）
         // 后端 /enhanced-metrics 端点返回已展平数据（dates/ic_series/top_stocks 在顶层，无 status/data 包装）
         const hasData = (v: any) => v != null && (!Array.isArray(v) || v.length > 0);
+        const enhancedDataKeys = [
+          "dates", "return_dates", "ic_series", "rank_ic_series",
+          "cumulative_excess_no_cost", "cumulative_excess_with_cost",
+          "drawdown_series", "top_stocks", "bottom_stocks", "all_stocks",
+          "stock_trades", "trade_diagnostics", "prediction_diagnostics",
+          "factor_analysis", "feature_importance", "train_loss_curve",
+          "absolute_returns", "multi_alpha_detail", "multi_alpha_analysis",
+        ];
         const isValidFlat = (obj: any) =>
           obj && typeof obj === "object" && !obj.detail &&
-          (hasData(obj.dates) || hasData(obj.ic_series) || hasData(obj.top_stocks) || hasData(obj.feature_importance) || hasData(obj.train_loss_curve));
+          enhancedDataKeys.some(k => hasData(obj[k]));
 
         if (isValidFlat(enhDbRes)) {
           // DB 端点返回的已展平数据，直接使用

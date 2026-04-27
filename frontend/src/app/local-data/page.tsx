@@ -59,6 +59,7 @@ const INGESTION_DATASETS_BY_SOURCE: Record<DataSource, Record<string, string>> =
     sw_index_member: "申万行业成分股PIT映射（Tushare index_member_all）",
     sw_daily: "申万行业指数日线（Tushare sw_daily）",
     sector_data: "申万L2行业展开到个股（22列，后处理）",
+    suspend_d: "Tushare suspend_d daily suspend/resume info",
     stk_limit: "每日涨跌停价格（Tushare stk_limit）",
     margin_detail: "融资融券明细（Tushare margin_detail）",
   },
@@ -83,6 +84,7 @@ const TRUNCABLE_DATASETS: string[] = [
   "stock_st",
   "bak_basic",
   "stk_limit",
+  "suspend_d",
   "margin_detail",
   "daily_basic",
   "anns_d",
@@ -287,6 +289,9 @@ export default function LocalDataPage() {
       } else if (lower === "stk_limit") {
         dataSource = "Tushare";
         dataset = "stk_limit";
+      } else if (lower === "suspend_d") {
+        dataSource = "Tushare";
+        dataset = "suspend_d";
       } else if (lower === "stock_basic") {
         dataSource = "Tushare";
         dataset = "stock_basic";
@@ -492,6 +497,7 @@ function InitTab() {
     { key: "bak_basic", label: "bak_basic · 历史股票列表" },
     { key: "daily_basic", label: "daily_basic · 股票每日指标（Tushare）" },
     { key: "stk_limit", label: "stk_limit · 每日涨跌停价格（Tushare）" },
+    { key: "suspend_d", label: "suspend_d - Daily suspend/resume info (Tushare)" },
     {
       key: "anns_d",
       label: "anns_d · 上市公司公告（Tushare anns_d）",
@@ -736,6 +742,7 @@ function InitTab() {
           "stock_st",
           "bak_basic",
           "stk_limit",
+          "suspend_d",
           "margin_detail",
           "anns_d",
           "cyq_perf",
@@ -767,6 +774,7 @@ function InitTab() {
           "index_daily",
           "stock_st",
           "bak_basic",
+          "suspend_d",
           "anns_d",
           "cyq_perf",
           "cyq_chips",
@@ -780,7 +788,7 @@ function InitTab() {
           opts.index_markets = indexMarkets;
         }
       }
-      if (dataset === "stock_st" || dataset === "bak_basic" || dataset === "stk_limit" || dataset === "margin_detail" || dataset === "anns_d" || dataset === "cyq_perf" || dataset === "cyq_chips") {
+      if (dataset === "stock_st" || dataset === "bak_basic" || dataset === "stk_limit" || dataset === "suspend_d" || dataset === "margin_detail" || dataset === "anns_d" || dataset === "cyq_perf" || dataset === "cyq_chips") {
         if (!opts.start_date || !opts.end_date) {
           setError("请填写起止日期再执行初始化。");
           return;
@@ -992,6 +1000,7 @@ function InitTab() {
               "stock_st",
               "bak_basic",
               "stk_limit",
+              "suspend_d",
               "margin_detail",
               "anns_d",
             ].includes(dataset))) && (
@@ -1218,6 +1227,7 @@ function IncrementalTab({
     { key: "bak_basic", label: "bak_basic · 历史股票列表（按交易日增量）" },
     { key: "daily_basic", label: "daily_basic · 股票每日指标（Tushare）" },
     { key: "stk_limit", label: "stk_limit · 每日涨跌停价格（Tushare）" },
+    { key: "suspend_d", label: "suspend_d - Daily suspend/resume info (Tushare)" },
     {
       key: "anns_d",
       label: "anns_d · 上市公司公告（Tushare anns_d）",
@@ -3824,6 +3834,7 @@ function DataStatsTab({
       k === "kline_minute_raw" ||
       k === "stock_moneyflow_ts" ||
       k === "margin_detail" ||
+      k === "suspend_d" ||
       k === "index_daily"
     ) {
       return "market";
@@ -3948,6 +3959,7 @@ function DataStatsTab({
           lower === "stock_st" ||
           lower === "bak_basic" ||
           lower === "stk_limit" ||
+          lower === "suspend_d" ||
           lower === "margin_detail" ||
           lower === "anns_d" ||
           lower === "index_daily" ||
@@ -4218,6 +4230,7 @@ function DataStatsTab({
                       "cyq_perf",
                       "cyq_chips",
                       "stk_limit",
+                      "suspend_d",
                       "margin_detail",
                     ].includes(kind);
 
@@ -5024,7 +5037,7 @@ const WORKER_SUPPORTED_DATASETS = new Set([
 ]);
 
 // 每日定时调度快捷创建：12 个目标数据集及默认执行时间
-const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; defaultAt: string }[] = [
+const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; defaultAt: string; frequency?: string }[] = [
   { dataset: "kline_daily_raw", label: "日线（未复权 RAW）", source: "TDX", defaultAt: "17:00" },
   { dataset: "kline_minute_raw", label: "分钟线（RAW）", source: "TDX", defaultAt: "17:00" },
   // Tushare 盘后数据（按执行时间排序）
@@ -5041,6 +5054,7 @@ const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; 
   { dataset: "stock_st", label: "ST 标记", source: "Tushare", defaultAt: "17:33" },
   { dataset: "bak_basic", label: "备用基础信息", source: "Tushare", defaultAt: "17:36" },
   { dataset: "stk_limit", label: "每日涨跌停价格", source: "Tushare", defaultAt: "09:10" },
+  { dataset: "suspend_d", label: "Daily suspend/resume info", source: "Tushare", defaultAt: "", frequency: "1h" },
 ];
 
 /** 数据健康检查报告组件 — 在 _auto_retry_stale 调度卡片内展开 */
@@ -5413,9 +5427,9 @@ function IngestionSchedulesTab() {
       const items = targets.map((p) => ({
         dataset: p.dataset,
         mode: "incremental" as const,
-        frequency: "daily",
+        frequency: p.frequency || "daily",
         enabled: true,
-        at: presetTimes[p.dataset] || p.defaultAt,
+        at: p.frequency ? undefined : presetTimes[p.dataset] || p.defaultAt,
         workers: presetWorkers[p.dataset] || undefined,
       }));
       await backendRequest("POST", "/api/ingestion/schedule/batch-create", {

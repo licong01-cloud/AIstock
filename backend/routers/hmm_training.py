@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
@@ -59,6 +60,7 @@ class SnapshotResponse(BaseModel):
     sector_count: int = 0
     status: str = "pending"
     metrics_json: Optional[Dict[str, Any]] = None
+    coefficient_artifacts: Optional[List[Dict[str, Any]]] = None
 
     class Config:
         from_attributes = True
@@ -72,6 +74,7 @@ class JobResponse(BaseModel):
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     error_message: Optional[str] = None
+    rolling_training_preview: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True
@@ -80,6 +83,16 @@ class JobResponse(BaseModel):
 class CronUpdateRequest(BaseModel):
     cron_expression: Optional[str] = None
     cron_enabled: bool = False
+
+
+class RollingTrainingPreviewRequest(BaseModel):
+    as_of_date: Optional[date] = None
+    train_window_years: float = 3.0
+    validation_window_months: int = 3
+
+
+class RollingTrainingTriggerRequest(RollingTrainingPreviewRequest):
+    confirm_text: str
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +106,12 @@ def _stringify_row(row: Dict[str, Any]) -> Dict[str, Any]:
         if key in out and out[key] is not None:
             out[key] = str(out[key])
     return out
+
+
+def _http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +158,47 @@ def trigger_training(config_id: str, background_tasks: BackgroundTasks):
         return _stringify_row(job)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post(
+    "/configs/{config_id}/rolling-training/preview",
+    response_model=Dict[str, Any],
+    summary="预览 HMM 手工滚动训练计划",
+)
+def preview_rolling_training(config_id: str, req: RollingTrainingPreviewRequest):
+    try:
+        return service.preview_rolling_training(
+            config_id,
+            as_of_date=req.as_of_date,
+            train_window_years=req.train_window_years,
+            validation_window_months=req.validation_window_months,
+        )
+    except Exception as exc:
+        raise _http_error(exc)
+
+
+@router.post(
+    "/configs/{config_id}/rolling-training/trigger",
+    response_model=JobResponse,
+    summary="确认并触发 HMM 手工滚动训练",
+)
+def trigger_rolling_training(
+    config_id: str,
+    req: RollingTrainingTriggerRequest,
+    background_tasks: BackgroundTasks,
+):
+    try:
+        job = service.trigger_rolling_training(
+            config_id,
+            confirm_text=req.confirm_text,
+            as_of_date=req.as_of_date,
+            train_window_years=req.train_window_years,
+            validation_window_months=req.validation_window_months,
+        )
+        background_tasks.add_task(service.run_training, job["job_id"], config_id)
+        return _stringify_row(job)
+    except Exception as exc:
+        raise _http_error(exc)
 
 
 @router.get(
