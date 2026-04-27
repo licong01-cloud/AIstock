@@ -177,11 +177,6 @@ export default function PairDetail({
     if (!mA || !mB) return null;
     type Row = { label: string; va: number | null | undefined; vb: number | null | undefined; higherBetter: boolean; pct?: boolean };
     const rows: Row[] = [];
-    // Task级
-    rows.push({ label: "IC", va: mA.catalog?.ic, vb: mB.catalog?.ic, higherBetter: true });
-    rows.push({ label: "Sharpe", va: mA.catalog?.sharpe, vb: mB.catalog?.sharpe, higherBetter: true });
-    rows.push({ label: "年化收益", va: mA.catalog?.annualized_return, vb: mB.catalog?.annualized_return, higherBetter: true, pct: true });
-    rows.push({ label: "最大回撤", va: mA.catalog?.max_drawdown, vb: mB.catalog?.max_drawdown, higherBetter: true, pct: true });
     // Independent
     rows.push({ label: "IC均值", va: mA.independent?.ic_mean, vb: mB.independent?.ic_mean, higherBetter: true });
     rows.push({ label: "Rank IC", va: mA.independent?.rank_ic_mean, vb: mB.independent?.rank_ic_mean, higherBetter: true });
@@ -321,11 +316,8 @@ export default function PairDetail({
             <div style={{ background: "#fff", borderRadius: 12, padding: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)", marginBottom: 24 }}>
               <h3 style={{ margin: "0 0 16px", fontSize: 14, fontWeight: 600, color: "#374151" }}>因子指标对比</h3>
 
-              {/* Task级指标 */}
-              <ComparisonSection title="Task级指标" rows={comparison.rows.slice(0, 4)} factorA={factorA} factorB={factorB} />
-
               {/* 独立指标 */}
-              <ComparisonSection title="独立指标（更准确）" rows={comparison.rows.slice(4, 15)} factorA={factorA} factorB={factorB} />
+              <ComparisonSection title="独立指标（权威来源）" rows={comparison.rows} factorA={factorA} factorB={factorB} />
 
               {/* LLM分析 */}
               {(mA?.classification || mB?.classification) && (
