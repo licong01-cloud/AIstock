@@ -231,3 +231,10 @@ Important directories:
 - Added `/api/v1/paper-v2/trading-days/defaults` so non-trading/pre-open UI defaults use the latest data-ready trading day from `stk_limit` refresh audit instead of blindly using wall-clock today; this prevents weekend/pre-open defaults like 2026-04-27 when DB historical data is only ready through 2026-04-24.
 - Playwright Paper v2 E2E now validates the UI through temporary backend/frontend ports: QE package display, successful live-data selection for the first three packages, watchlist import with reference prices, historical multi-run union aggregation, portfolio creation fail-fast for unavailable V24/V25 execution assets, structured negative errors, and TDX minute endpoint reachability.
 - Paper portfolio replay remains blocked for the current QE packages because their minute execution policy references unavailable V24 assets; V25 adapter/QMT/Shadow/live trading were intentionally not implemented in this phase.
+
+## Local GPU / PyTorch Runtime Note - 2026-04-27
+
+- Current workstation GPU for AIstock V25 execution validation: NVIDIA GeForce RTX 5080, NVIDIA Blackwell generation.
+- RTX 5080 requires a PyTorch build with CUDA 12.8 or newer for GPU execution; CUDA 12.6/12.4-era PyTorch wheels are not suitable for authoritative V25 GPU validation.
+- Preferred local installation target for Paper Trading v2 V25 Windows backend execution is PyTorch CUDA 12.8 (`cu128`) in the same Python environment used by `backend.main`.
+- After installing torch, verify with `python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO_CUDA')"` before running Paper v2 V25 replay.
