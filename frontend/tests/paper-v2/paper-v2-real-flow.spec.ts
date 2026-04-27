@@ -226,7 +226,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await field(createSection, "回放开始日期").locator("input").fill("2026-04-20");
     await field(createSection, "回放结束日期").locator("input").fill(REPLAY_TRADE_DATE);
     await field(createSection, "TopK").locator("input").fill("20");
-    await createSection.getByRole("button", { name: "创建并开始历史回放" }).click();
+    await createSection.locator("button.pv2-button-primary").click();
 
     await expect(page.getByText("组合操作失败")).toBeVisible({ timeout: 30_000 });
     await expect(page.locator("body")).toContainText(/V24_PLAN|DATA_UNAVAILABLE|EXECUTION_ALGO_ERROR|model_path/);
