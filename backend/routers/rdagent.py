@@ -30,6 +30,7 @@ from ..services.rdagent_selection_service import build_loop_selection
 
 from ..services.rdagent_task_sync_service import rdagent_task_sync_service  # reload trigger
 from ..services.rdagent_candidate_service import get_candidate_service
+from ..services.quantevolver.factor_official_evaluation_service import CALC_ENGINE
 
 from ..inference_engine import InferenceEngine
 
@@ -455,10 +456,23 @@ def list_local_tasks_with_metrics(
                         m_agg.best_ann_return AS best_model_ann_return,
                         m_agg.best_max_drawdown AS best_model_max_drawdown
                     FROM
-                        (SELECT COUNT(*) AS cnt, MAX(ic) AS best_ic, MAX(sharpe) AS best_sharpe,
-                                MAX(annualized_return) AS best_ann_return, MAX(max_drawdown) AS best_max_drawdown
-                         FROM aistock_factor_catalog
-                         WHERE source_task_id = t.task_id AND is_sota_factor = TRUE) f_agg,
+                        (SELECT COUNT(*) AS cnt,
+                                MAX(fm.ic_mean) AS best_ic,
+                                MAX(fm.top_excess_sharpe) AS best_sharpe,
+                                MAX(fm.top_excess_annual_return) AS best_ann_return,
+                                MIN(fm.top_max_drawdown) AS best_max_drawdown
+                         FROM aistock_factor_catalog fc
+                         LEFT JOIN LATERAL (
+                             SELECT ic_mean, top_excess_sharpe,
+                                    top_excess_annual_return, top_max_drawdown
+                             FROM aistock_factor_metrics
+                             WHERE factor_name = fc.factor_name
+                               AND eval_window = 'full'
+                               AND calc_engine = %s
+                             ORDER BY calculated_at DESC
+                             LIMIT 1
+                         ) fm ON TRUE
+                         WHERE fc.source_task_id = t.task_id AND fc.is_sota_factor = TRUE) f_agg,
                         (SELECT COUNT(*) AS cnt, MAX(ic) AS best_ic, MAX(sharpe) AS best_sharpe,
                                 MAX(annualized_return) AS best_ann_return, MAX(max_drawdown) AS best_max_drawdown
                          FROM aistock_model_catalog
@@ -466,7 +480,7 @@ def list_local_tasks_with_metrics(
                 ) agg ON TRUE
                 ORDER BY agg.{sort_col} {order} NULLS LAST
                 LIMIT %s OFFSET %s
-            """, (limit, offset))
+            """, (CALC_ENGINE, limit, offset))
             items = [dict(r) for r in cur.fetchall()]
 
             cur.execute("SELECT COUNT(*) FROM aistock_task_catalog")
@@ -484,13 +498,27 @@ def get_task_sota_details(task_id: str) -> Dict[str, Any]:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # SOTA factors
             cur.execute("""
-                SELECT factor_name, source, ic, sharpe, annualized_return, max_drawdown,
-                       icir, factor_type, data_source, description_cn,
-                       source_loop_tag, code_text, expression
-                FROM aistock_factor_catalog
-                WHERE source_task_id = %s AND is_sota_factor = TRUE
-                ORDER BY ic DESC NULLS LAST
-            """, (task_id,))
+                SELECT c.factor_name, c.source,
+                       m.ic_mean AS ic,
+                       m.top_excess_sharpe AS sharpe,
+                       m.top_excess_annual_return AS annualized_return,
+                       m.top_max_drawdown AS max_drawdown,
+                       m.icir, c.factor_type, c.data_source, c.description_cn,
+                       c.source_loop_tag, c.code_text, c.expression
+                FROM aistock_factor_catalog c
+                LEFT JOIN LATERAL (
+                    SELECT ic_mean, icir, top_excess_sharpe,
+                           top_excess_annual_return, top_max_drawdown
+                    FROM aistock_factor_metrics
+                    WHERE factor_name = c.factor_name
+                      AND eval_window = 'full'
+                      AND calc_engine = %s
+                    ORDER BY calculated_at DESC
+                    LIMIT 1
+                ) m ON TRUE
+                WHERE c.source_task_id = %s AND c.is_sota_factor = TRUE
+                ORDER BY m.ic_mean DESC NULLS LAST
+            """, (CALC_ENGINE, task_id))
             factors = [dict(r) for r in cur.fetchall()]
 
             # SOTA models
