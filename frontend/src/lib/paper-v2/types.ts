@@ -294,6 +294,63 @@ export type Activation = {
   reason?: string | null;
 };
 
+export type RuntimeProfile = {
+  profile_id: string;
+  portfolio_id: string;
+  package_id: string;
+  profile_name: string;
+  status: string;
+  current_version_id?: string | null;
+  created_by?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type RuntimeProfileVersion = {
+  profile_version_id: string;
+  profile_id: string;
+  version_no: number;
+  config_json: JsonObject;
+  config_sha256: string;
+  validation_status: string;
+  validation_errors?: JsonObject[];
+  created_by?: string | null;
+  reason?: string | null;
+  created_at?: string;
+  supersedes_version_id?: string | null;
+};
+
+export type RuntimeConfigActivation = {
+  activation_id: string;
+  portfolio_id: string;
+  trade_date: string;
+  profile_version_id: string;
+  status: string;
+  activated_at?: string;
+  activated_by?: string | null;
+  reason?: string | null;
+  context?: JsonObject;
+  superseded_at?: string | null;
+};
+
+export type ConfigChangeAudit = {
+  audit_id?: number;
+  portfolio_id?: string | null;
+  package_id?: string | null;
+  object_type: string;
+  object_id: string;
+  change_type: string;
+  before_json?: JsonObject | null;
+  after_json?: JsonObject | null;
+  before_sha256?: string | null;
+  after_sha256?: string | null;
+  reason?: string | null;
+  created_by?: string | null;
+  request_id?: string | null;
+  code_version?: string | null;
+  created_at?: string;
+};
+
 export type HmmConfig = {
   config_id: string;
   model_type: string;
