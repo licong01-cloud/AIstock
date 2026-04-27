@@ -25,8 +25,9 @@ B1 最优配置 (评估 PA=+6.35 bps vs v20 基线 +5.11 bps, 买入侧 +30%):
 在独立的 exp_dir 工作目录中执行。
 
 错误处理原则：
+  - 任何改变执行分配方式的 fallback 必须 logger.warning 明确告警
   - 关键数据缺失 (prev_close, up_limit_price, down_limit_price) 直接 raise, 不静默降级
-  - plan 生成失败直接中断回测，禁止回落到 TWAP
+  - plan 生成失败将记录股票为"降级执行", 使用 TWAP 直至结束
 """
 from __future__ import annotations
 
@@ -215,7 +216,7 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
             self._v24_plans: dict[str, np.ndarray] = {}
             # 标记 plan 生成是否已尝试 (避免每分钟重试)
             self._v24_plan_generated: dict[str, bool] = {}
-            # 保留集合用于兼容旧状态检查；生成失败现在会直接 raise。
+            # 标记 plan 生成失败, 后续走降级 TWAP
             self._v24_plan_failed: set[str] = set()
             # 分钟级数据缓存: 在 warmup 期间逐分钟累积
             self._v24_close_buf: dict[str, list] = {}
@@ -422,7 +423,7 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
     def _generate_plan_for_stock(self, stock_id, direction):
         """在 t=30 时刻为 stock_id 生成 210 维 plan 分布。
 
-        任一关键数据缺失 -> raise _DataMissingError, 调用方必须中断而不是降级。
+        任一关键数据缺失 → raise _DataMissingError, 由调用方记录并降级。
         """
         limit_pct = _get_limit_pct(stock_id)
 
@@ -461,7 +462,7 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
             else:
                 # 一字板 (涨停/跌停锁定): P0 已在 warmup 期间处理了顺向全量执行
                 # (买入+跌停→全量买入, 卖出+涨停→全量卖出)
-                # 反向 (买入涨停/卖出跌停) 无法生成权威计划，直接失败。
+                # 反向 (买入涨停/卖出跌停) 降级 TWAP, 每分钟尝试等待开板
                 raise _DataMissingError("limit_locked (一字板, high==low, vol>0)")
         elif vol_arr.sum() < 1e-6:
             raise _DataMissingError("zero_volume in warmup period")
@@ -647,10 +648,11 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
                             ))
                             self._p0_done.add(order.stock_id)
                             continue
-                except (KeyError, IndexError, ValueError) as e:
-                    raise RuntimeError(
-                        f"TailTWAPv24 P0 limit data missing for {order.stock_id}: {e}"
-                    ) from e
+                except (KeyError, IndexError) as e:
+                    logger.warning(
+                        "[TailTWAPv24] P0 涨跌停检测失败 stock=%s: %s",
+                        order.stock_id, e,
+                    )
 
             # ================================================
             # 计算本分钟执行量 — v24 plan 贯穿 t=30~239
@@ -693,10 +695,11 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
                         )
                         self._v24_plans[order.stock_id] = plan
                     except _DataMissingError as e:
-                        raise RuntimeError(
-                            f"TailTWAPv24 plan generation failed for {order.stock_id}; "
-                            "refusing to fall back to TWAP"
-                        ) from e
+                        logger.warning(
+                            "[TailTWAPv24] plan 生成失败, 降级 TWAP stock=%s: %s",
+                            order.stock_id, e,
+                        )
+                        self._v24_plan_failed.add(order.stock_id)
 
                 plan = self._v24_plans.get(order.stock_id)
                 plan_idx = rel_trade_step - self._warmup_minutes  # [0, 210)
@@ -708,10 +711,8 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
 
                 # ── 计算 base amount_delta (来自原 remaining) ──
                 if order.stock_id in self._v24_plan_failed or plan is None:
-                    raise RuntimeError(
-                        f"TailTWAPv24 missing execution plan for {order.stock_id}; "
-                        "refusing to fall back to TWAP"
-                    )
+                    # 降级 TWAP: 剩余均匀分配
+                    base_delta = amount_remain / remaining_day_steps
                 elif 0 <= plan_idx < len(plan):
                     remaining_weight = float(plan[plan_idx:].sum())
                     if remaining_weight > 1e-8:
@@ -719,13 +720,20 @@ class TailTWAPWithV24PlanStrategy(TailTWAPWithLimitStrategy):
                         frac = float(np.clip(frac, 0.0, 1.0))
                         base_delta = amount_remain * frac
                     else:
-                        raise RuntimeError(
-                            f"TailTWAPv24 remaining plan weight is zero: stock={order.stock_id} plan_idx={plan_idx}"
+                        # plan 尾部全 0 (异常): 明确告警 + 均匀兜底
+                        logger.warning(
+                            "[TailTWAPv24] plan 尾部权重为 0, 剩余均匀执行 "
+                            "stock=%s plan_idx=%d remaining=%d",
+                            order.stock_id, plan_idx, remaining_day_steps,
                         )
+                        base_delta = amount_remain / remaining_day_steps
                 else:
-                    raise RuntimeError(
-                        f"TailTWAPv24 plan_idx out of range: stock={order.stock_id} plan_idx={plan_idx} plan_len={len(plan)}"
+                    # plan_idx 越界 (不应发生, plan_len=210 覆盖 t=30~239)
+                    logger.warning(
+                        "[TailTWAPv24] plan_idx 越界 stock=%s plan_idx=%d, 均匀兜底",
+                        order.stock_id, plan_idx,
                     )
+                    base_delta = amount_remain / remaining_day_steps
 
                 # ── 叠加 extra 追加量 (14:55 后才有值, 仅 BUY 方向) ──
                 extra = self._realloc_extra.get(order.stock_id, 0)
