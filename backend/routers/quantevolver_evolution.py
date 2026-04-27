@@ -339,6 +339,7 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
             )
             merged_params["sector_hmm_model_path"] = hmm_model_path
             merged_params["enable_sector_hmm"] = True
+            merged_params["hmm_model_version_id"] = req.hmm_model_version_id
             if req.hmm_signal_preset:
                 merged_params["hmm_signal_preset"] = req.hmm_signal_preset
                 # 从 DB 读取模型的 signal_presets 注入到 strategy_params

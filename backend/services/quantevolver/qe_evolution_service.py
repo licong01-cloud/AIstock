@@ -4279,7 +4279,11 @@ class AutoEvolutionScheduler:
             if not exp_row or not exp_row[0]:
                 raise ValueError(f"Base experiment {base_exp_id} has no multi_alpha_config")
 
-            from .experiment_config_builders import build_config_from_multi_alpha
+            from .experiment_config_builders import (
+                _build_hmm_config_from_fields,
+                _pop_hmm_fields,
+                build_config_from_multi_alpha,
+            )
 
             multi_alpha_raw = exp_row[0]
             if isinstance(multi_alpha_raw, str):
@@ -4288,15 +4292,31 @@ class AutoEvolutionScheduler:
             data_split = exp_row[4]
             if isinstance(data_split, str):
                 data_split = json.loads(data_split)
+            custom_params = exp_row[5] or {}
+            if isinstance(custom_params, str):
+                custom_params = json.loads(custom_params)
             strat_params = exp_row[6]
             if isinstance(strat_params, str):
                 strat_params = json.loads(strat_params)
+            task_strategy_params = self._parse_json_field(
+                task.get("strategy_params"),
+                f"multi_alpha_task[{task_id}].strategy_params",
+            )
+            custom_params_clean = dict(custom_params or {})
+            strat_params_clean = dict(strat_params or {})
+            task_strategy_params_clean = dict(task_strategy_params or {})
+            hmm_config = _build_hmm_config_from_fields(
+                _pop_hmm_fields(custom_params_clean),
+                _pop_hmm_fields(strat_params_clean),
+                _pop_hmm_fields(task_strategy_params_clean),
+            )
 
             cfg = build_config_from_multi_alpha(
                 multi_alpha_config=multi_alpha_raw,
                 data_split=data_split,
                 strategy_id=exp_row[3],
-                strategy_params=strat_params,
+                strategy_params=strat_params_clean or None,
+                hmm_config=hmm_config,
                 node_id=task.get("node_id"),
                 experiment_name=f"{task_id}_Loop{loop_index}",
             )

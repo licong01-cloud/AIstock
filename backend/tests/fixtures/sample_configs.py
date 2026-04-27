@@ -71,6 +71,16 @@ EVOLUTION_TASK_WITH_STRATEGY_PARAMS: dict[str, Any] = {
     "execution_algo_params": {"interval": 5},
 }
 
+EVOLUTION_TASK_WITH_HMM: dict[str, Any] = {
+    **EVOLUTION_TASK_MINIMAL,
+    "strategy_params": {
+        "enable_sector_hmm": True,
+        "hmm_model_version_id": "hmm_snap_001",
+        "sector_hmm_model_path": "/mnt/f/Dev/AIstock/data/hmm_models/cfg_test/20260401/models.json",
+        "hmm_signal_preset": "preset_B",
+    },
+}
+
 # ── Path 3: strategy evo loop ─────────────────────────────────────────────────
 
 STRATEGY_EVO_BASE_CONFIG: dict[str, Any] = {

@@ -13,10 +13,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from services.quantevolver.experiment_config import ExperimentConfig, HmmConfig
 from services.quantevolver.experiment_config_builders import (
+    _build_hmm_config_from_fields,
+    _pop_hmm_fields,
     build_config_from_exp_record,
     build_config_from_evolution_loop,
     build_config_from_strategy_evo_loop,
     build_config_from_custom_evo_loop,
+    build_config_from_multi_alpha,
 )
 from tests.fixtures.sample_configs import (
     EXP_RECORD_MINIMAL,
@@ -25,6 +28,7 @@ from tests.fixtures.sample_configs import (
     EVOLUTION_TASK_MINIMAL,
     EVOLUTION_TASK_WITH_UNFILLED,
     EVOLUTION_TASK_WITH_STRATEGY_PARAMS,
+    EVOLUTION_TASK_WITH_HMM,
     STRATEGY_EVO_BASE_CONFIG,
     STRATEGY_EVO_LOOP_NO_HMM,
     STRATEGY_EVO_LOOP_WITH_HMM,
@@ -34,6 +38,16 @@ from tests.fixtures.sample_configs import (
     CUSTOM_EVO_TASK,
     HMM_SNAPSHOT,
 )
+
+
+MULTI_ALPHA_CONFIG = {
+    "alpha_groups": [
+        {"group_name": "momentum", "factor_names": ["Alpha001"], "model_id": "model_lgbm_v1"},
+        {"group_name": "flow", "factor_names": ["Alpha002"], "model_id": "model_lgbm_v1"},
+    ],
+    "meta_model": {"method": "equal"},
+    "execution_mode": "serial",
+}
 
 
 # ── HmmConfig 单元测试 ─────────────────────────────────────────────────────────
@@ -211,7 +225,36 @@ class TestBuildConfigFromExpRecord:
         assert cfg.factor_names == ["Alpha001", "Alpha003"]
         assert cfg.stock_pool == "csi300"
         assert cfg.label_type == "Ref($close, -2)/Ref($close, -1) - 1"
-        assert cfg.hmm is None  # known gap
+        assert cfg.hmm is None
+
+    def test_task_level_hmm_applies_to_auto_evolution_loop(self):
+        cfg = build_config_from_evolution_loop(
+            EVOLUTION_CONFIG_MINIMAL, EVOLUTION_TASK_WITH_HMM
+        )
+        params = cfg.build_custom_params()
+        assert cfg.hmm is not None
+        assert params["enable_sector_hmm"] is True
+        assert params["hmm_model_version_id"] == "hmm_snap_001"
+        assert params["sector_hmm_model_path"] == HMM_SNAPSHOT["model_path"]
+        assert params["hmm_signal_preset"] == "preset_B"
+        assert "enable_sector_hmm" not in (cfg.strategy_params or {})
+
+    def test_task_level_hmm_overrides_reviewer_loop_config(self):
+        reviewer_config = {
+            **EVOLUTION_CONFIG_MINIMAL,
+            "model_params": {
+                "topk": 50,
+                "enable_sector_hmm": False,
+                "hmm_model_version_id": "reviewer_should_not_win",
+            },
+        }
+        cfg = build_config_from_evolution_loop(
+            reviewer_config, EVOLUTION_TASK_WITH_HMM
+        )
+        params = cfg.build_custom_params()
+        assert params["enable_sector_hmm"] is True
+        assert params["hmm_model_version_id"] == "hmm_snap_001"
+        assert params["sector_hmm_model_path"] == HMM_SNAPSHOT["model_path"]
 
     def test_unfilled_handler(self):
         cfg = build_config_from_evolution_loop(
@@ -237,6 +280,23 @@ class TestBuildConfigFromExpRecord:
         params = cfg.build_custom_params()
         # model_params has topk=50
         assert params.get("topk") == 50
+
+    def test_auto_evolution_inherits_hmm_from_base_experiment_config(self):
+        base_config = {
+            **EVOLUTION_CONFIG_MINIMAL,
+            "model_params": {
+                "topk": 50,
+                "enable_sector_hmm": True,
+                "hmm_model_version_id": "hmm_snap_001",
+                "sector_hmm_model_path": HMM_SNAPSHOT["model_path"],
+                "hmm_signal_preset": "preset_A",
+            },
+        }
+        cfg = build_config_from_evolution_loop(base_config, EVOLUTION_TASK_MINIMAL)
+        params = cfg.build_custom_params()
+        assert params["enable_sector_hmm"] is True
+        assert params["hmm_model_version_id"] == "hmm_snap_001"
+        assert params["sector_hmm_model_path"] == HMM_SNAPSHOT["model_path"]
 
 
 class TestBuildConfigFromStrategyEvoLoop:
@@ -324,3 +384,77 @@ class TestBuildConfigFromCustomEvoLoop:
         ):
             with pytest.raises(ValueError, match="nonexistent_snap"):
                 build_config_from_custom_evo_loop(loop, CUSTOM_EVO_TASK)
+
+    def test_multi_alpha_custom_loop_with_hmm(self):
+        loop = {
+            **CUSTOM_EVO_LOOP_FULL,
+            "alpha_mode": "multi",
+            "multi_alpha_config": MULTI_ALPHA_CONFIG,
+        }
+        with patch(
+            "services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
+            return_value=HMM_SNAPSHOT["model_path"],
+        ):
+            cfg = build_config_from_custom_evo_loop(loop, CUSTOM_EVO_TASK)
+        params = cfg.build_custom_params()
+        assert cfg.alpha_mode == "multi"
+        assert cfg.multi_alpha_config is not None
+        assert params["enable_sector_hmm"] is True
+        assert params["hmm_model_version_id"] == "hmm_snap_001"
+
+
+class TestBuildConfigFromMultiAlpha:
+    def test_single_multi_alpha_builder_accepts_hmm_config(self):
+        cfg = build_config_from_multi_alpha(
+            multi_alpha_config=MULTI_ALPHA_CONFIG,
+            data_split={"train_start": "2020-01-01", "test_end": "2023-01-01"},
+            strategy_id="TopkDropoutStrategy",
+            hmm_config={
+                "enable_sector_hmm": True,
+                "hmm_model_version_id": "hmm_snap_001",
+                "sector_hmm_model_path": HMM_SNAPSHOT["model_path"],
+                "hmm_signal_preset": "preset_A",
+            },
+        )
+        params = cfg.build_custom_params()
+        assert cfg.alpha_mode == "multi"
+        assert cfg.multi_alpha_config is not None
+        assert params["enable_sector_hmm"] is True
+        assert params["sector_hmm_model_path"] == HMM_SNAPSHOT["model_path"]
+
+    def test_multi_alpha_auto_loop_hmm_uses_task_level_policy(self):
+        base_custom_params = {
+            "enable_sector_hmm": True,
+            "hmm_model_version_id": "base_hmm",
+            "sector_hmm_model_path": "/mnt/f/base_hmm/models.json",
+            "hmm_signal_preset": "preset_A",
+        }
+        base_strategy_params = {
+            "topk": 20,
+            "enable_sector_hmm": False,
+            "hmm_model_version_id": "strategy_should_not_win",
+        }
+        task_strategy_params = dict(EVOLUTION_TASK_WITH_HMM["strategy_params"])
+
+        custom_clean = dict(base_custom_params)
+        strategy_clean = dict(base_strategy_params)
+        task_clean = dict(task_strategy_params)
+        hmm_cfg = _build_hmm_config_from_fields(
+            _pop_hmm_fields(custom_clean),
+            _pop_hmm_fields(strategy_clean),
+            _pop_hmm_fields(task_clean),
+        )
+
+        cfg = build_config_from_multi_alpha(
+            multi_alpha_config=MULTI_ALPHA_CONFIG,
+            data_split={"train_start": "2020-01-01", "test_end": "2023-01-01"},
+            strategy_id="TopkDropoutStrategy",
+            strategy_params=strategy_clean,
+            hmm_config=hmm_cfg,
+        )
+        params = cfg.build_custom_params()
+        assert params["topk"] == 20
+        assert params["enable_sector_hmm"] is True
+        assert params["hmm_model_version_id"] == "hmm_snap_001"
+        assert params["sector_hmm_model_path"] == HMM_SNAPSHOT["model_path"]
+        assert "enable_sector_hmm" not in cfg.build_strategy_params()

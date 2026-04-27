@@ -162,6 +162,55 @@ def _bool_from_config(value: Any) -> bool:
     return bool(value)
 
 
+_HMM_PARAM_KEYS = (
+    "enable_sector_hmm",
+    "hmm_model_version_id",
+    "sector_hmm_model_path",
+    "hmm_signal_preset",
+    "hmm_signal_presets",
+)
+
+
+def _pop_hmm_fields(params: dict[str, Any]) -> dict[str, Any]:
+    """Remove HMM runtime fields from a params dict and return them."""
+    fields: dict[str, Any] = {}
+    if not isinstance(params, dict):
+        return fields
+
+    if "enable_sector_hmm" in params:
+        fields["enable_sector_hmm"] = _bool_from_config(params.pop("enable_sector_hmm"))
+
+    for key in _HMM_PARAM_KEYS:
+        if key == "enable_sector_hmm" or key not in params:
+            continue
+        value = params.pop(key)
+        if value not in (None, ""):
+            fields[key] = value
+    return fields
+
+
+def _build_hmm_config_from_fields(*field_layers: dict[str, Any]) -> HmmConfig | None:
+    """Build HMM config from layered fields; later layers are authoritative."""
+    merged: dict[str, Any] = {}
+    for fields in field_layers:
+        merged.update(fields or {})
+    if (
+        _bool_from_config(merged.get("enable_sector_hmm", False))
+        and not merged.get("hmm_model_version_id")
+        and merged.get("sector_hmm_model_path")
+    ):
+        # Older auto-evolution tasks persisted the resolved path but not the
+        # snapshot id. Keep them executable; new submissions persist the id.
+        merged["hmm_model_version_id"] = "from_resolved_model_path"
+    return _build_hmm_config(
+        enable_sector_hmm=_bool_from_config(merged.get("enable_sector_hmm", False)),
+        hmm_model_version_id=merged.get("hmm_model_version_id"),
+        sector_hmm_model_path=merged.get("sector_hmm_model_path"),
+        hmm_signal_preset=merged.get("hmm_signal_preset"),
+        hmm_signal_presets=merged.get("hmm_signal_presets"),
+    )
+
+
 # ── Path 1: run_experiment (routers/quantevolver.py:3255) ─────────────────────
 
 def build_config_from_exp_record(
@@ -246,14 +295,17 @@ def build_config_from_evolution_loop(
     config — reviewer validated_config or base_experiment config dict.
     task   — qe_evolution_tasks DB row.
 
-    NOTE: Path 2 does not inject HMM (known gap in existing code). HmmConfig
-    is left None until Path 2 is updated to carry HMM fields on the task record.
+    HMM is treated as task-level runtime policy.  Reviewer output may tune
+    model_params between loops, but task strategy_params override any HMM fields
+    so every auto-evolution loop keeps the user-selected snapshot/preset.
     """
     model_params_base: dict[str, Any] = dict(config.get("model_params") or {})
+    config_hmm_fields = _pop_hmm_fields(model_params_base)
 
     effective_strategy_params: dict[str, Any] = dict(
         _parse_json_field(task.get("strategy_params") or {})
     )
+    task_hmm_fields = _pop_hmm_fields(effective_strategy_params)
     strategy_filter_suspended = effective_strategy_params.pop("filter_suspended_on_signal", None)
     strategy_filter_suspended = effective_strategy_params.pop("exclude_suspended", strategy_filter_suspended)
     strategy_suspend_filter_strict = effective_strategy_params.pop("suspend_filter_strict", None)
@@ -287,6 +339,7 @@ def build_config_from_evolution_loop(
         inherited=model_params_base.get("label_horizon"),
         context="evolution_loop",
     )
+    hmm = _build_hmm_config_from_fields(config_hmm_fields, task_hmm_fields)
 
     # Multi-Alpha 透传 (Path 2)
     alpha_mode = config.get("alpha_mode") or task.get("alpha_mode") or "single"
@@ -302,7 +355,7 @@ def build_config_from_evolution_loop(
         stock_pool=task.get("stock_pool"),
         label_type=task.get("label_type"),
         label_horizon=label_horizon,
-        hmm=None,  # Path 2 does not inject HMM (known gap)
+        hmm=hmm,
         execution_algo=effective_execution_algo,
         execution_algo_params=effective_execution_algo_params or None,
         filter_suspended_on_signal=filter_suspended_on_signal,
@@ -547,6 +600,7 @@ def build_config_from_retry_loop(
 
     # model_params is the original custom_params snapshot
     model_params_base: dict[str, Any] = dict(config.get("model_params") or {})
+    config_hmm_fields = _pop_hmm_fields(model_params_base)
     config_label_horizon = model_params_base.get("label_horizon") or config.get("label_horizon")
     if config_label_horizon not in (None, ""):
         label_horizon = normalize_label_horizon(
@@ -576,6 +630,7 @@ def build_config_from_retry_loop(
     effective_strategy_params: dict[str, Any] = dict(
         _parse_json_field(_snapshot_or_task("strategy_params") or {})
     )
+    snapshot_hmm_fields = _pop_hmm_fields(effective_strategy_params)
     strategy_filter_suspended = effective_strategy_params.pop("filter_suspended_on_signal", None)
     strategy_filter_suspended = effective_strategy_params.pop("exclude_suspended", strategy_filter_suspended)
     strategy_suspend_filter_strict = effective_strategy_params.pop("suspend_filter_strict", None)
@@ -601,17 +656,7 @@ def build_config_from_retry_loop(
         suspend_filter_strict_source = model_params_base.get("suspend_filter_strict", True)
     suspend_filter_strict = _bool_from_config(suspend_filter_strict_source)
 
-    # HMM: extract from model_params_base (where the original submission stored them)
-    enable_sector_hmm: bool = bool(model_params_base.pop("enable_sector_hmm", False))
-    hmm_model_version_id: str | None = model_params_base.pop("hmm_model_version_id", None)
-    sector_hmm_model_path: str | None = model_params_base.pop("sector_hmm_model_path", None)
-    hmm_signal_preset: str | None = model_params_base.pop("hmm_signal_preset", None)
-    hmm = _build_hmm_config(
-        enable_sector_hmm=enable_sector_hmm,
-        hmm_model_version_id=hmm_model_version_id,
-        sector_hmm_model_path=sector_hmm_model_path,
-        hmm_signal_preset=hmm_signal_preset,
-    )
+    hmm = _build_hmm_config_from_fields(config_hmm_fields, snapshot_hmm_fields)
 
     unfilled_handler: str | None = _snapshot_or_task("unfilled_handler")
     unfilled_handler_params = _build_unfilled_handler_params(

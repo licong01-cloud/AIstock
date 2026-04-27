@@ -24,6 +24,7 @@ from tests.fixtures.sample_configs import (
     EVOLUTION_CONFIG_MINIMAL,
     EVOLUTION_TASK_MINIMAL,
     EVOLUTION_TASK_WITH_UNFILLED,
+    EVOLUTION_TASK_WITH_HMM,
     STRATEGY_EVO_BASE_CONFIG,
     STRATEGY_EVO_LOOP_NO_HMM,
     STRATEGY_EVO_LOOP_WITH_HMM,
@@ -217,6 +218,20 @@ class TestBacktestExecutorBasic:
         assert cp["unfilled_handler"] == "cancel_and_resubmit"
         assert cp["unfilled_trigger_minute"] == 145
         assert cp["unfilled_backup_depth"] == 3
+
+    def test_path2_hmm_in_custom_params_for_all_auto_loops(self):
+        cfg = build_config_from_evolution_loop(
+            EVOLUTION_CONFIG_MINIMAL, EVOLUTION_TASK_WITH_HMM,
+            experiment_name="task_001/Loop2",
+        )
+        ctx = make_ctx(task_id="task_001", loop_index=2, experiment_name="task_001/Loop2")
+        compose_call = self._run_and_get_compose_call(cfg, ctx)
+        cp = compose_call.kwargs["custom_params"]
+
+        assert cp["enable_sector_hmm"] is True
+        assert cp["hmm_model_version_id"] == "hmm_snap_001"
+        assert cp["sector_hmm_model_path"] == HMM_SNAPSHOT["model_path"]
+        assert cp["hmm_signal_preset"] == "preset_B"
 
     def test_path3_compose_params_no_hmm(self):
         """Path 3: submit_strategy_evo_loop — 验证 compose 参数与 qe_evolution_service.py:2820-2860 一致"""
