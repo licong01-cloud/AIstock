@@ -16,6 +16,8 @@
 
 import argparse
 import os
+import shlex
+import subprocess
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -33,25 +35,45 @@ DB_NAME = os.getenv("TDX_DB_NAME", "aistock")
 DB_USER = os.getenv("TDX_DB_USER", "postgres")
 DB_PASS = os.getenv("TDX_DB_PASSWORD", "")
 
-# Qlib all.txt 路径（通过 WSL UNC 路径访问）
-ALL_TXT_PATH = Path(os.getenv(
-    "QLIB_INSTRUMENTS_WIN",
-    r"\\wsl.localhost\Ubuntu\home\lc999\data\qlib_bin\instruments\all.txt"
-))
-
 # 输出目录
 OUTPUT_DIR = Path(os.getenv(
     "STOCK_POOL_OUTPUT_DIR",
     "F:/Dev/AIstock/stock_pools"
 ))
 
-# Qlib instruments 目录（WSL UNC路径），文件需放在此处才能被 Qlib 按名称引用
-QLIB_INSTRUMENTS_DIR = Path(os.getenv(
-    "QLIB_INSTRUMENTS_DIR_WIN",
-    r"\\wsl.localhost\Ubuntu\home\lc999\data\qlib_bin\instruments"
-))
+
+def _wsl_distro() -> str:
+    distro = (os.getenv("AISTOCK_WSL_DISTRO") or os.getenv("QLIB_WSL_DISTRO") or "").strip()
+    if not distro:
+        raise RuntimeError("AISTOCK_WSL_DISTRO or QLIB_WSL_DISTRO is required")
+    return distro
 
 
+def _resolve_qlib_instruments_wsl() -> str:
+    explicit = (os.getenv("QLIB_INSTRUMENTS_WSL") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    qlib_data = (os.getenv("QLIB_DATA_PATH_WSL") or "").strip()
+    if not qlib_data:
+        raise RuntimeError("QLIB_INSTRUMENTS_WSL or QLIB_DATA_PATH_WSL is required")
+    return f"{qlib_data.rstrip('/')}/instruments"
+
+
+def _win_to_wsl(win_path: str) -> str:
+    value = win_path.replace("\\", "/")
+    if len(value) >= 2 and value[1] == ":":
+        return f"/mnt/{value[0].lower()}{value[2:]}"
+    return value
+
+
+def _run_wsl(script: str, *, timeout: int = 30) -> str:
+    cmd = ["wsl", "-d", _wsl_distro(), "--", "bash", "-lc", script]
+    result = subprocess.run(cmd, timeout=timeout, check=False, capture_output=True)
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        stdout = result.stdout.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(stderr or stdout or f"WSL command failed with exit code {result.returncode}")
+    return result.stdout.decode("utf-8", errors="replace")
 def get_blocked_stocks(conn, query_date: date) -> set:
     """查询指定日期应被排除的股票代码集合。"""
     with conn.cursor() as cur:
@@ -86,14 +108,33 @@ def get_blocked_stocks(conn, query_date: date) -> set:
     return blocked_stocks
 
 
-def load_all_txt(path: Path) -> list:
-    """加载 Qlib all.txt，返回行列表（保留原始格式）。"""
-    if not path.exists():
-        raise FileNotFoundError(f"Qlib all.txt 不存在: {path}")
-    with open(path, "r", encoding="utf-8") as f:
-        lines = [line.rstrip("\n") for line in f if line.strip()]
+def load_all_txt(qlib_instruments_wsl: str) -> list:
+    """通过 WSL 子进程加载 Qlib all.txt，避免 Windows 侧 UNC 访问。"""
+    all_txt_wsl = f"{qlib_instruments_wsl.rstrip('/')}/all.txt"
+    stdout = _run_wsl(
+        f"test -f {shlex.quote(all_txt_wsl)} && cat {shlex.quote(all_txt_wsl)}",
+        timeout=30,
+    )
+    lines = [line.rstrip("\n") for line in stdout.splitlines() if line.strip()]
     print(f"[INFO] 加载 all.txt: {len(lines)} 只股票")
     return lines
+
+
+def sync_pool_to_qlib(output_path: Path, instrument_name: str, qlib_instruments_wsl: str) -> str:
+    """让 WSL 从 Windows 输出目录复制股票池文件到 Qlib instruments。"""
+    source_wsl = _win_to_wsl(str(output_path.resolve()))
+    qlib_dir = qlib_instruments_wsl.rstrip("/")
+    dest_wsl = f"{qlib_dir}/{instrument_name}.txt"
+    tmp_wsl = f"{qlib_dir}/.{instrument_name}.tmp"
+    _run_wsl(
+        "set -e\n"
+        f"test -f {shlex.quote(source_wsl)}\n"
+        f"mkdir -p {shlex.quote(qlib_dir)}\n"
+        f"cp {shlex.quote(source_wsl)} {shlex.quote(tmp_wsl)}\n"
+        f"mv {shlex.quote(tmp_wsl)} {shlex.quote(dest_wsl)}\n",
+        timeout=30,
+    )
+    return dest_wsl
 
 
 def generate_pool(query_date: date, output_dir: Path) -> Path:
@@ -107,7 +148,8 @@ def generate_pool(query_date: date, output_dir: Path) -> Path:
     finally:
         conn.close()
 
-    all_lines = load_all_txt(ALL_TXT_PATH)
+    qlib_instruments_wsl = _resolve_qlib_instruments_wsl()
+    all_lines = load_all_txt(qlib_instruments_wsl)
 
     if not blocked:
         # 无排除行业，直接复制 all.txt 内容
@@ -133,19 +175,8 @@ def generate_pool(query_date: date, output_dir: Path) -> Path:
 
     # 同步到 Qlib instruments 目录（Qlib 按名称+自动加.txt查找）
     instrument_name = f"filtered_pool_{query_date.strftime('%Y%m%d')}"
-    qlib_dest = QLIB_INSTRUMENTS_DIR / f"{instrument_name}.txt"
     try:
-        import shutil, tempfile
-        # 原子写入：先写临时文件再 rename，避免目标文件被其他进程锁定时 PermissionError
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(QLIB_INSTRUMENTS_DIR), suffix=".tmp")
-        os.close(tmp_fd)
-        try:
-            shutil.copy2(str(output_path), tmp_path)
-            os.replace(tmp_path, str(qlib_dest))
-        except BaseException:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            raise
+        qlib_dest = sync_pool_to_qlib(output_path, instrument_name, qlib_instruments_wsl)
         print(f"[INFO] 已同步到 Qlib instruments: {qlib_dest}")
     except Exception as e:
         print(f"[ERROR] 同步到 Qlib instruments 失败: {e}")
