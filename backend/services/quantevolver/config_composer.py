@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import uuid
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -116,18 +117,23 @@ SUPPORTED_QE_EXECUTION_ALGOS = {
     "V25_TWO_STAGE",
 }
 DEFAULT_QE_EXECUTION_ALGO = "TWAP"
-V25_DEFAULT_PARAMS = {
-    "early_model_path": "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt",
-    "late_model_path": "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt",
-    "device": "cuda",
-}
 SUSPEND_FILTER_FILE = "qe_suspend_filter.json"
+RDAGENT_FACTOR_TEMPLATE_WIN = Path(os.getenv(
+    "RDAGENT_FACTOR_TEMPLATE_WIN",
+    str(QE_WORKSPACE_WIN.parent / "rdagent" / "scenarios" / "qlib" / "experiment" / "factor_template"),
+))
+AUTHORITATIVE_QE_HELPER_ASSETS = {
+    # V25 is a strategy/model asset. The framework may copy it into a workspace,
+    # but must not treat a divergent local script copy as the asset authority.
+    "tail_twap_v25_strategy.py": RDAGENT_FACTOR_TEMPLATE_WIN / "tail_twap_v25_strategy.py",
+}
 
 
 class ConfigComposer:
     """配置组装器。"""
 
     _workspace_config_cache: Optional[Dict[str, str]] = None
+    _execution_algo_catalog_cache: Dict[str, Dict[str, Any]] = {}
 
     @staticmethod
     def _validate_data_split(data_split: Dict[str, str]):
@@ -242,6 +248,70 @@ class ConfigComposer:
 
 
     @staticmethod
+    def _sha256_file(path: Path) -> str:
+        raw = path.read_bytes()
+        if path.suffix.lower() == ".py":
+            text = raw.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
+            return hashlib.sha256(text.encode("utf-8")).hexdigest()
+        return hashlib.sha256(raw).hexdigest()
+
+    @classmethod
+    def _execution_algo_catalog_entry(cls, algo_code: str) -> Dict[str, Any]:
+        algo = str(algo_code).strip().upper()
+        cached = cls._execution_algo_catalog_cache.get(algo)
+        if cached is not None:
+            return dict(cached)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT default_config, is_enabled
+                    FROM public.execution_algorithm_catalog
+                    WHERE algo_code = %s
+                    """,
+                    (algo,),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise ValueError(
+                f"execution_algo='{algo}' is not registered in execution_algorithm_catalog; "
+                "refusing to synthesize runtime defaults from code."
+            )
+        default_config, is_enabled = row
+        if not is_enabled:
+            raise ValueError(f"execution_algo='{algo}' is disabled in execution_algorithm_catalog")
+        if default_config is None:
+            default_config = {}
+        if not isinstance(default_config, dict):
+            raise ValueError(
+                f"execution_algorithm_catalog.default_config for {algo} must be a JSON object"
+            )
+        entry = {"default_config": dict(default_config), "is_enabled": bool(is_enabled)}
+        cls._execution_algo_catalog_cache[algo] = entry
+        return dict(entry)
+
+    @classmethod
+    def _resolve_qe_helper_asset(cls, scripts_dir: Path, helper_name: str) -> Path:
+        authoritative_path = AUTHORITATIVE_QE_HELPER_ASSETS.get(helper_name)
+        if authoritative_path is None:
+            return scripts_dir / helper_name
+        if not authoritative_path.exists():
+            raise FileNotFoundError(
+                f"Authoritative QE helper asset missing for {helper_name}: {authoritative_path}"
+            )
+        local_path = scripts_dir / helper_name
+        if local_path.exists():
+            local_hash = cls._sha256_file(local_path)
+            authoritative_hash = cls._sha256_file(authoritative_path)
+            if local_hash != authoritative_hash:
+                raise ValueError(
+                    f"QE helper asset mismatch for {helper_name}: local={local_path} "
+                    f"sha256={local_hash}, authoritative={authoritative_path} "
+                    f"sha256={authoritative_hash}. Refusing to copy a divergent strategy asset."
+                )
+        return authoritative_path
+
+    @staticmethod
     def _normalize_execution_algo(execution_algo: Optional[str]) -> str:
         """Return the exact QE execution algo or raise; never silently fallback."""
         raw = (execution_algo or DEFAULT_QE_EXECUTION_ALGO).strip().upper()
@@ -340,7 +410,8 @@ class ConfigComposer:
                 "kwargs": params,
             }
         if algo == "V25_TWO_STAGE":
-            for key, value in V25_DEFAULT_PARAMS.items():
+            catalog_defaults = cls._execution_algo_catalog_entry(algo)["default_config"]
+            for key, value in catalog_defaults.items():
                 params.setdefault(key, value)
             return {
                 "requested_algo": execution_algo,
@@ -688,7 +759,7 @@ class ConfigComposer:
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
             for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
-                helper_src = scripts_dir / helper_name
+                helper_src = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_src.exists():
                     shutil.copy2(helper_src, exp_dir / helper_name)
             # benchmark parquet
@@ -986,7 +1057,7 @@ class ConfigComposer:
             if v24_path.exists():
                 experiment_files["tail_twap_v24_strategy.py"] = v24_path.read_text(encoding="utf-8")
             for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
-                helper_path = scripts_dir / helper_name
+                helper_path = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_path.exists():
                     experiment_files[helper_name] = helper_path.read_text(encoding="utf-8")
             # benchmark parquet 是二进制文件，需要特殊处理
@@ -1465,7 +1536,7 @@ class ConfigComposer:
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
             for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
-                helper_src = scripts_dir / helper_name
+                helper_src = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_src.exists():
                     shutil.copy2(helper_src, exp_dir / helper_name)
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
