@@ -10,6 +10,8 @@ from typing import Any
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+from .factor_official_evaluation_service import CALC_ENGINE
+
 
 class QEEvolutionDataService:
     """QE演进数据服务 - 为LLM提供分析所需的数据"""
@@ -44,27 +46,38 @@ class QEEvolutionDataService:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         query = """
-            SELECT 
-                factor_name,
-                description_cn,
-                formula_hint,
-                factor_type,
-                data_source,
-                tags,
-                ic,
-                icir,
-                sharpe,
-                annualized_return,
-                max_drawdown,
-                information_ratio,
-                interface_info,
-                code_text
-            FROM aistock_factor_catalog
-            WHERE ic IS NOT NULL AND ic >= %s
-            ORDER BY ic DESC
+            SELECT
+                c.factor_name,
+                c.description_cn,
+                c.formula_hint,
+                c.factor_type,
+                c.data_source,
+                c.tags,
+                m.ic_mean AS ic,
+                m.icir,
+                m.top_excess_sharpe AS sharpe,
+                m.top_excess_annual_return AS annualized_return,
+                m.top_max_drawdown AS max_drawdown,
+                m.top_excess_sharpe AS information_ratio,
+                c.interface_info,
+                c.code_text
+            FROM aistock_factor_catalog c
+            JOIN LATERAL (
+                SELECT ic_mean, icir, top_excess_sharpe,
+                       top_excess_annual_return, top_max_drawdown
+                FROM aistock_factor_metrics
+                WHERE factor_name = c.factor_name
+                  AND eval_window = 'full'
+                  AND calc_engine = %s
+                ORDER BY calculated_at DESC
+                LIMIT 1
+            ) m ON TRUE
+            WHERE m.ic_mean >= %s
+              AND c.is_available = TRUE
+            ORDER BY m.ic_mean DESC
             LIMIT %s
         """
-        cursor.execute(query, (min_ic, limit))
+        cursor.execute(query, (CALC_ENGINE, min_ic, limit))
         factors = cursor.fetchall()
 
         result = []
