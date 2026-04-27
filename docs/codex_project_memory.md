@@ -272,6 +272,12 @@ Important directories:
 - Framework code changes that alter how existing assets are interpreted or executed are high-risk global behavior changes even if the assets themselves are untouched. Execution adapters, selection runtime, risk/ledger/fee logic, factor inference, and model-loading behavior must be called out explicitly.
 - V25-specific note: changing `V25_TWO_STAGE` adapter/capability code changes the global interpreter for existing V25 policies, while changing V25 `.pt` weights, catalog asset paths, or validated policy JSON changes assets. Keep those paths separate and require stricter validation for either kind of change.
 
+## GitHub Traceability Rule - 2026-04-27
+
+- After user confirmation on 2026-04-27, Codex development changes in this repository must be committed and pushed to GitHub so every modified file is traceable.
+- Do not include unrelated pre-existing dirty worktree files in a commit. Stage only the files modified for the current task unless the user explicitly asks to commit all workspace changes.
+- If a follow-up memory/process note is added because of a user instruction, commit and push that note as well.
+
 
 ## Minute Execution Standard / V25 Core Update - 2026-04-27
 
