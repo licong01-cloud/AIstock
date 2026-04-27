@@ -1946,7 +1946,7 @@ class ConfigComposer:
             "model_type", "dataset_cls", "step_len", "num_timesteps", "num_features",
             "quick_train",  # 快速训练模式：控制模型训练参数
             "label_type",   # 训练标签类型：close/open/vwap
-            "label_horizon",  # Training label horizon: 1/3/5/10d
+            "label_horizon",  # Training label horizon: 1/3/5/10/20d
             "stock_pool",   # 股票池文件路径
             "backtest_freq",        # 回测频率（已在上层提取）
             "execution_algo",       # 执行算法（已在上层提取到 inner_strategy）

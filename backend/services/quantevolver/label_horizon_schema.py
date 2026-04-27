@@ -8,7 +8,7 @@ from ...db.pg_pool import get_conn
 
 
 CONSTRAINT_NAME = "ck_qe_evolution_tasks_label_horizon"
-ALLOWED_LABEL_HORIZONS = (1, 3, 5, 10)
+ALLOWED_LABEL_HORIZONS = (1, 3, 5, 10, 20)
 
 
 @lru_cache(maxsize=1)

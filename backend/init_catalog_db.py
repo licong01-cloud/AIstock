@@ -598,7 +598,7 @@ def init_database():
                         label_horizon INTEGER NOT NULL DEFAULT 1,
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         updated_at TIMESTAMPTZ DEFAULT NOW(),
-                        CONSTRAINT ck_qe_evolution_tasks_label_horizon CHECK (label_horizon IN (1, 3, 5, 10))
+                        CONSTRAINT ck_qe_evolution_tasks_label_horizon CHECK (label_horizon IN (1, 3, 5, 10, 20))
                     );
                 """,
                 "qe_evolution_loops": """
@@ -860,15 +860,27 @@ def init_database():
                     print(f"Adding column '{col_name}' to qe_evolution_tasks...")
                     cur.execute(f"ALTER TABLE qe_evolution_tasks ADD COLUMN {col_name} {col_type};")
             cur.execute("""
-                SELECT 1
+                SELECT pg_get_constraintdef(oid)
                 FROM pg_constraint
                 WHERE conname = 'ck_qe_evolution_tasks_label_horizon'
             """)
-            if not cur.fetchone():
+            label_horizon_constraint = cur.fetchone()
+            label_horizon_constraint_def = str(label_horizon_constraint[0]) if label_horizon_constraint else ""
+            missing_label_horizons = [
+                value for value in (1, 3, 5, 10, 20)
+                if str(value) not in label_horizon_constraint_def
+            ]
+            if label_horizon_constraint and missing_label_horizons:
+                cur.execute("""
+                    ALTER TABLE qe_evolution_tasks
+                    DROP CONSTRAINT ck_qe_evolution_tasks_label_horizon
+                """)
+                label_horizon_constraint = None
+            if not label_horizon_constraint:
                 cur.execute("""
                     ALTER TABLE qe_evolution_tasks
                     ADD CONSTRAINT ck_qe_evolution_tasks_label_horizon
-                    CHECK (label_horizon IN (1, 3, 5, 10))
+                    CHECK (label_horizon IN (1, 3, 5, 10, 20))
                 """)
 
             # ============================================================

@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, model_validator
 
-ALLOWED_LABEL_HORIZONS = {1, 3, 5, 10}
+ALLOWED_LABEL_HORIZONS = {1, 3, 5, 10, 20}
 DEFAULT_LABEL_HORIZON = 1
 
 

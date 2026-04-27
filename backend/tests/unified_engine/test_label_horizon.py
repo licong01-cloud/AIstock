@@ -1,7 +1,7 @@
 import pytest
 
 from backend.services.quantevolver.config_composer import ConfigComposer
-from backend.services.quantevolver.experiment_config import ExperimentConfig
+from backend.services.quantevolver.experiment_config import ExperimentConfig, normalize_label_horizon
 from backend.services.quantevolver.experiment_config_builders import (
     build_config_from_custom_evo_loop,
     build_config_from_strategy_evo_loop,
@@ -30,10 +30,14 @@ def test_experiment_config_injects_non_default_label_horizon():
     cfg = ExperimentConfig(
         factor_names=["Alpha001"],
         model_id="model_lgbm_v1",
-        label_horizon=5,
+        label_horizon=20,
     )
 
-    assert cfg.build_custom_params()["label_horizon"] == 5
+    assert cfg.build_custom_params()["label_horizon"] == 20
+
+
+def test_normalize_label_horizon_accepts_20d():
+    assert normalize_label_horizon(20) == 20
 
 
 def test_experiment_config_rejects_invalid_label_horizon():
@@ -42,6 +46,12 @@ def test_experiment_config_rejects_invalid_label_horizon():
             factor_names=["Alpha001"],
             model_id="model_lgbm_v1",
             label_horizon=2,
+        )
+    with pytest.raises(ValueError, match="label_horizon"):
+        ExperimentConfig(
+            factor_names=["Alpha001"],
+            model_id="model_lgbm_v1",
+            label_horizon=21,
         )
 
 
@@ -67,14 +77,14 @@ def test_config_composer_uses_horizon_aware_formula():
         model_info=None,
         strategy_info=None,
         data_split=DATA_SPLIT,
-        custom_params={"label_type": "vwap", "label_horizon": 10},
+        custom_params={"label_type": "vwap", "label_horizon": 20},
         has_custom_factors=False,
         has_alpha158=False,
         backtest_freq="day",
         execution_algo="CLOSE_PRICE",
     )
 
-    assert 'label: ["Ref($vwap, -11) / Ref($vwap, -1) - 1"]' in yaml_text
+    assert 'label: ["Ref($vwap, -21) / Ref($vwap, -1) - 1"]' in yaml_text
 
 
 def test_config_composer_does_not_pass_blacklist_metadata_to_strategy():

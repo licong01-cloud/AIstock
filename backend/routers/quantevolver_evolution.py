@@ -130,7 +130,7 @@ class EvolutionTaskCreateRequest(BaseModel):
     additional_factor_keys: Optional[List[str]] = Field(None, description="从因子库额外添加的因子key列表，格式 ['name||source', ...]，与来源默认因子合并")
     node_id: Optional[str] = Field(None, description="执行节点 ID，None=默认本地节点")
     label_type: Optional[str] = Field(None, description="训练标签类型: close(默认) / open(可执行价) / vwap(均价)")
-    label_horizon: Optional[int] = Field(None, description="训练标签期限: 1/3/5/10d，默认继承源实验或 1d")
+    label_horizon: Optional[int] = Field(None, description="训练标签期限: 1/3/5/10/20d，默认继承源实验或 1d")
     # ── Multi-Alpha (Phase 3) ──────────────────────────────────────
     alpha_mode: Optional[str] = Field(None, description="single (默认) / multi")
     multi_alpha_config: Optional[Dict[str, Any]] = Field(None, description="Multi-Alpha 分组配置 JSON")
@@ -644,7 +644,7 @@ class EvolutionTaskForkRequest(BaseModel):
     unfilled_handler_params: Optional[Dict[str, Any]] = Field(None, description="尾盘处理参数，如 {backup_depth: 15}")
     additional_factor_keys: Optional[List[str]] = Field(None, description="从因子库额外添加的因子key列表")
     node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
-    label_horizon: Optional[int] = Field(None, description="训练标签期限: 1/3/5/10d；全量重训 fork 可覆盖源 Loop")
+    label_horizon: Optional[int] = Field(None, description="训练标签期限: 1/3/5/10/20d；全量重训 fork 可覆盖源 Loop")
 
 @router.post("/tasks/{task_id}/fork", summary="从指定 Loop 分叉出全新演进任务")
 async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, background_tasks: BackgroundTasks):
@@ -867,7 +867,7 @@ class CustomEvoLoopConfig(BaseModel):
     sector_blacklist: Optional[List[str]] = Field(None, description="行业黑名单")
     stock_pool: Optional[str] = Field(None, description="Qlib股票池文件WSL路径")
     label_type: Optional[str] = Field(None, description="训练标签类型: close/open/vwap")
-    label_horizon: Optional[int] = Field(None, description="训练标签期限: 1/3/5/10d")
+    label_horizon: Optional[int] = Field(None, description="训练标签期限: 1/3/5/10/20d")
     data_split: Optional[Dict[str, str]] = Field(None, description="数据划分覆盖，None=使用系统默认")
     # backtest-only 模式（复用已训练模型，仅回测）
     backtest_only: bool = Field(False, description="是否跳过训练仅回测（需提供 model_source，且因子不可变更）")

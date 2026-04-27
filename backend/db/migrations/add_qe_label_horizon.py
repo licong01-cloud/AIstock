@@ -13,7 +13,13 @@ from backend.services.quantevolver.label_horizon_schema import (
 )
 
 
-ALLOWED = (1, 3, 5, 10)
+ALLOWED = (1, 3, 5, 10, 20)
+
+
+def _constraint_missing_values(definition: str | None) -> list[int]:
+    if not definition:
+        return list(ALLOWED)
+    return [value for value in ALLOWED if str(value) not in definition]
 
 
 def run_migration() -> None:
@@ -49,14 +55,25 @@ def run_migration() -> None:
                 )
             cur.execute(
                 """
-                SELECT 1
+                SELECT pg_get_constraintdef(oid)
                 FROM pg_constraint
                 WHERE conname = %s
                   AND conrelid = 'qe_evolution_tasks'::regclass
                 """,
                 (CONSTRAINT_NAME,),
             )
-            if cur.fetchone() is None:
+            constraint = cur.fetchone()
+            definition = str(constraint[0]) if constraint else None
+            if constraint and _constraint_missing_values(definition):
+                cur.execute(
+                    f"""
+                    ALTER TABLE qe_evolution_tasks
+                    DROP CONSTRAINT {CONSTRAINT_NAME}
+                    """
+                )
+                definition = None
+
+            if _constraint_missing_values(definition):
                 cur.execute(
                     f"""
                     ALTER TABLE qe_evolution_tasks

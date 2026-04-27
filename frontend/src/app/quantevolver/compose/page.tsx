@@ -171,7 +171,7 @@ export default function ComposePage() {
   const [disableAlphaBaseline, setDisableAlphaBaseline] = useState(false);
   const [quickTrain, setQuickTrain] = useState(false);
   const [labelType, setLabelType] = useState<"close" | "open" | "vwap">("close");
-  const [labelHorizon, setLabelHorizon] = useState<1 | 3 | 5 | 10>(1);
+  const [labelHorizon, setLabelHorizon] = useState<1 | 3 | 5 | 10 | 20>(1);
   const [blacklistEnabled, setBlacklistEnabled] = useState(false);
   const [stockPoolPath, setStockPoolPath] = useState<string | null>(null);
   const [blacklistSnapshot, setBlacklistSnapshot] = useState<any | null>(null);
@@ -394,8 +394,8 @@ export default function ComposePage() {
         if (exp.custom_params.topk) setTopk(exp.custom_params.topk);
         if (exp.custom_params.n_drop) setNDrop(exp.custom_params.n_drop);
         if (exp.custom_params.hold_thresh) setHoldThresh(exp.custom_params.hold_thresh);
-        if ([1, 3, 5, 10].includes(Number(exp.custom_params.label_horizon || 1))) {
-          setLabelHorizon(Number(exp.custom_params.label_horizon || 1) as 1 | 3 | 5 | 10);
+        if ([1, 3, 5, 10, 20].includes(Number(exp.custom_params.label_horizon || 1))) {
+          setLabelHorizon(Number(exp.custom_params.label_horizon || 1) as 1 | 3 | 5 | 10 | 20);
         }
         if (exp.custom_params.execution_algo) {
           setExecutionAlgo(exp.custom_params.execution_algo);
@@ -1614,7 +1614,7 @@ export default function ComposePage() {
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "12px", marginTop: "12px", flexWrap: "wrap" }}>
                 <span style={{ fontSize: "14px", color: "#475569", fontWeight: 600, whiteSpace: "nowrap" }}>Label Horizon</span>
-                {([1, 3, 5, 10] as const).map(h => (
+                {([1, 3, 5, 10, 20] as const).map(h => (
                   <button
                     data-testid={`qe-label-horizon-${h}`}
                     key={h}
