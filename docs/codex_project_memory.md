@@ -264,3 +264,11 @@ Important directories:
 - Use development frontend ports `3011` or `3012` for UI validation. Before starting a dev frontend, check whether the target port is already occupied.
 - After code changes are complete, notify the user that production services may need a user-managed restart; do not restart production services directly.
 
+## Asset / Program Framework Separation Rule - 2026-04-27
+
+- Program framework changes and persisted/trained asset changes must be treated as separate change classes. During framework development, Codex must not silently modify saved assets.
+- Protected assets include StrategyPackage frozen manifests and manifest hashes, validated execution policies, model asset paths, model weight files, QE experiment artifacts, selection score artifacts, HMM snapshots/coefficients, and any DB row or filesystem file that represents a persisted strategy/model/data asset.
+- Any asset modification requires explicit user confirmation in the current task, an impact analysis listing affected asset IDs/paths/hashes, a backup or reproducible rollback path, and targeted validation. Do not bundle asset edits into infrastructure/API/UI refactors.
+- Framework code changes that alter how existing assets are interpreted or executed are high-risk global behavior changes even if the assets themselves are untouched. Execution adapters, selection runtime, risk/ledger/fee logic, factor inference, and model-loading behavior must be called out explicitly.
+- V25-specific note: changing `V25_TWO_STAGE` adapter/capability code changes the global interpreter for existing V25 policies, while changing V25 `.pt` weights, catalog asset paths, or validated policy JSON changes assets. Keep those paths separate and require stricter validation for either kind of change.
+
