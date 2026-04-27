@@ -246,3 +246,11 @@ Important directories:
 - Implemented session models, schema DDL, repository persistence, session APIs, and `REPLAY_ONLY` session ticking through the existing strict historical replay path.
 - Split execution algorithm capabilities into historical/live semantics. V25 remains historical/full-day capable with 240-bar requirements but is explicitly not declared real-time safe; live V25 now fails with `ALGO_REALTIME_UNSUPPORTED` instead of requiring 240 bars at open or falling back to another algorithm.
 - `LIVE_ONLY` and `CATCHUP_THEN_LIVE` sessions are intentionally fail-fast until incremental per-minute execution state and source-role split are implemented; they do not use the closed-day runner as a fake live path.
+
+## Production Port Safety - 2026-04-27
+
+- Treat FastAPI backend port `8001` as the user's production backend. Codex must not stop, restart, or otherwise manage the `8001` service during development/testing unless the user explicitly asks in that turn.
+- Use development backend ports `8011` or `8012` for validation. Before starting a dev backend, check whether the target port is already occupied.
+- Use development frontend ports `3011` or `3012` for UI validation. Before starting a dev frontend, check whether the target port is already occupied.
+- After code changes are complete, notify the user that production services may need a user-managed restart; do not restart production services directly.
+
