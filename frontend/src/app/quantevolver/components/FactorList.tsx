@@ -71,6 +71,11 @@ type Factor = {
   ind_sharpe?: number | null;
   ind_annual_return?: number | null;
   ind_rank_ic?: number | null;
+  ind_rank_ic_1d?: number | null;
+  ind_rank_ic_5d?: number | null;
+  ind_rank_ic_10d?: number | null;
+  ind_rank_ic_20d?: number | null;
+  ind_rank_ic_best_abs?: number | null;
   ind_icir?: number | null;
   official_grade?: string | null;
   official_score?: number | null;
@@ -119,6 +124,11 @@ export type MergedFactor = {
   representative_score?: number | null;
   ind_ic?: number | null;
   ind_rank_ic?: number | null;
+  ind_rank_ic_1d?: number | null;
+  ind_rank_ic_5d?: number | null;
+  ind_rank_ic_10d?: number | null;
+  ind_rank_ic_20d?: number | null;
+  ind_rank_ic_best_abs?: number | null;
   ind_rank_ic_1m?: number | null;
   ind_sharpe?: number | null;
   ind_annual_return?: number | null;
@@ -766,6 +776,11 @@ export default function FactorList({
         llm_risk_notes: f.official_llm_risk_notes ?? null,
         ind_ic: f.ind_ic ?? ind?.ic_mean ?? null,
         ind_rank_ic: f.ind_rank_ic ?? null,
+        ind_rank_ic_1d: f.ind_rank_ic_1d ?? null,
+        ind_rank_ic_5d: f.ind_rank_ic_5d ?? null,
+        ind_rank_ic_10d: f.ind_rank_ic_10d ?? null,
+        ind_rank_ic_20d: f.ind_rank_ic_20d ?? null,
+        ind_rank_ic_best_abs: f.ind_rank_ic_best_abs ?? null,
         ind_sharpe: f.ind_sharpe ?? ind?.sharpe ?? null,
         ind_annual_return: f.ind_annual_return ?? ind?.annual_return ?? null,
         has_ind_metrics: f.ind_ic != null || !!ind,
@@ -2577,6 +2592,11 @@ export default function FactorList({
                 <th style={{ ...thStyle, width: 50 }}>状态</th>
                 <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("ind_ic")}>IC(独立){getSortIndicator("ind_ic")}</th>
                 <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("ind_rank_ic")}>RankIC(独立){getSortIndicator("ind_rank_ic")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} title="按 1D 独立 Rank IC 排序" onClick={() => handleSort("ind_rank_ic_1d")}>RIC 1D{getSortIndicator("ind_rank_ic_1d")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} title="按 5D 独立 Rank IC 排序" onClick={() => handleSort("ind_rank_ic_5d")}>RIC 5D{getSortIndicator("ind_rank_ic_5d")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} title="按 10D 独立 Rank IC 排序" onClick={() => handleSort("ind_rank_ic_10d")}>RIC 10D{getSortIndicator("ind_rank_ic_10d")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} title="按 20D 独立 Rank IC 排序" onClick={() => handleSort("ind_rank_ic_20d")}>RIC 20D{getSortIndicator("ind_rank_ic_20d")}</th>
+                <th style={{ ...thStyle, cursor: "pointer" }} title="按 1D/5D/10D/20D 中 |Rank IC| 最大值排序，用于发现可反向使用的强信号" onClick={() => handleSort("ind_rank_ic_best_abs")}>Best |RIC|{getSortIndicator("ind_rank_ic_best_abs")}</th>
                 <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("ind_sharpe")}>Sharpe(独立){getSortIndicator("ind_sharpe")}</th>
                 <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("ind_annual_return")}>年化(独立){getSortIndicator("ind_annual_return")}</th>
                 <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("has_ind_metrics")}>独立指标{getSortIndicator("has_ind_metrics")}</th>
@@ -2594,6 +2614,18 @@ export default function FactorList({
                 const isExpanded = expandedDescriptions.has(rowKey);
                 const isSelected = actualSelectedFactors.has(selectKey);
                 const dim = f.factor_dimension ? DIMENSION_NAMES[f.factor_dimension] : null;
+                const horizonRankIc = [
+                  { label: "1D", value: f.ind_rank_ic_1d },
+                  { label: "5D", value: f.ind_rank_ic_5d },
+                  { label: "10D", value: f.ind_rank_ic_10d },
+                  { label: "20D", value: f.ind_rank_ic_20d },
+                ];
+                const bestHorizonRankIc = horizonRankIc.reduce<{ label: string; value: number } | null>((best, item) => {
+                  if (item.value == null || !Number.isFinite(Number(item.value))) return best;
+                  const value = Number(item.value);
+                  return !best || Math.abs(value) > Math.abs(best.value) ? { label: item.label, value } : best;
+                }, null);
+                const bestRankIcAbs = f.ind_rank_ic_best_abs ?? (bestHorizonRankIc ? Math.abs(bestHorizonRankIc.value) : null);
 
                 return (
                   <React.Fragment key={rowKey}>
@@ -2693,6 +2725,24 @@ export default function FactorList({
                           style={{ color: f.ind_rank_ic != null ? ((f.ind_rank_ic ?? 0) > 0 ? "#059669" : "#dc2626") : "#9ca3af" }}
                         >
                           {f.ind_rank_ic != null ? f.ind_rank_ic.toFixed(4) : "-"}
+                        </span>
+                      </td>
+                      {horizonRankIc.map(item => (
+                        <td key={item.label} style={tdStyle}>
+                          <span
+                            title={item.value != null ? `${item.label} 独立 Rank IC: ${item.value.toFixed(4)}` : undefined}
+                            style={{ color: item.value != null ? ((item.value ?? 0) > 0 ? "#059669" : "#dc2626") : "#9ca3af" }}
+                          >
+                            {item.value != null ? item.value.toFixed(4) : "-"}
+                          </span>
+                        </td>
+                      ))}
+                      <td style={tdStyle}>
+                        <span
+                          title={bestHorizonRankIc ? `最强周期 ${bestHorizonRankIc.label}: signed RankIC=${bestHorizonRankIc.value.toFixed(4)}` : undefined}
+                          style={{ color: bestHorizonRankIc ? (bestHorizonRankIc.value > 0 ? "#059669" : "#dc2626") : "#9ca3af", fontWeight: bestHorizonRankIc ? 700 : 400 }}
+                        >
+                          {bestRankIcAbs != null ? bestRankIcAbs.toFixed(4) : "-"}
                         </span>
                       </td>
                       <td style={tdStyle}>
@@ -2821,7 +2871,7 @@ export default function FactorList({
 
                       return (
                       <tr style={{ borderBottom: "1px solid #f3f4f6" }}>
-        <td colSpan={17} style={{ padding: "0 10px 10px 10px" }}>
+        <td colSpan={22} style={{ padding: "0 10px 10px 10px" }}>
                           <div style={{
                             background: isSelection ? "#eff6ff" : "#faf5ff", borderRadius: 8, padding: "10px 14px",
                             fontSize: 12, lineHeight: 1.7, color: "#374151",

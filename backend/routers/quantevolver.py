@@ -384,6 +384,18 @@ def list_factors(
             "annualized_return": "c.annualized_return",
             "is_sota_factor": "c.is_sota_factor",
             "ind_rank_ic": "m.rank_ic_mean",
+            "ind_rank_ic_1d": "m.rank_ic_1d",
+            "ind_rank_ic_5d": "m.rank_ic_5d",
+            "ind_rank_ic_10d": "m.rank_ic_10d",
+            "ind_rank_ic_20d": "m.rank_ic_20d",
+            "ind_rank_ic_best_abs": (
+                "CASE WHEN m.rank_ic_1d IS NULL AND m.rank_ic_5d IS NULL "
+                "AND m.rank_ic_10d IS NULL AND m.rank_ic_20d IS NULL THEN NULL "
+                "ELSE GREATEST(COALESCE(ABS(m.rank_ic_1d), 0), "
+                "COALESCE(ABS(m.rank_ic_5d), 0), "
+                "COALESCE(ABS(m.rank_ic_10d), 0), "
+                "COALESCE(ABS(m.rank_ic_20d), 0)) END"
+            ),
             "ind_ic": "m.ic_mean",
             "ind_sharpe": "m.top_excess_sharpe",
             "ind_annual_return": "m.top_excess_annual_return",
@@ -436,11 +448,23 @@ def list_factors(
                     SELECT c.factor_name, c.source, c.expression, c.ic, c.sharpe,
                            c.annualized_return, c.is_sota_factor, c.catalog_source,
                            c.description_cn, c.generated_at_utc, c.is_available,
-                           m.ic_mean AS ind_ic, m.top_excess_sharpe AS ind_sharpe,
-                           m.top_excess_annual_return AS ind_annual_return,
-                           m.rank_ic_mean AS ind_rank_ic, m.icir AS ind_icir,
-                           m.calculated_at AS ind_calculated_at,
-                           m1m.rank_ic_mean AS ind_rank_ic_1m,
+                            m.ic_mean AS ind_ic, m.top_excess_sharpe AS ind_sharpe,
+                            m.top_excess_annual_return AS ind_annual_return,
+                            m.rank_ic_mean AS ind_rank_ic, m.icir AS ind_icir,
+                            m.rank_ic_1d AS ind_rank_ic_1d,
+                            m.rank_ic_5d AS ind_rank_ic_5d,
+                            m.rank_ic_10d AS ind_rank_ic_10d,
+                            m.rank_ic_20d AS ind_rank_ic_20d,
+                            CASE WHEN m.rank_ic_1d IS NULL AND m.rank_ic_5d IS NULL
+                                      AND m.rank_ic_10d IS NULL AND m.rank_ic_20d IS NULL
+                                 THEN NULL
+                                 ELSE GREATEST(COALESCE(ABS(m.rank_ic_1d), 0),
+                                               COALESCE(ABS(m.rank_ic_5d), 0),
+                                               COALESCE(ABS(m.rank_ic_10d), 0),
+                                               COALESCE(ABS(m.rank_ic_20d), 0))
+                            END AS ind_rank_ic_best_abs,
+                            m.calculated_at AS ind_calculated_at,
+                            m1m.rank_ic_mean AS ind_rank_ic_1m,
                            cl.category, cl.classification_reason, cl.factor_dimension,
                            cl.description AS cl_description, cl.id AS classification_id,
                            cl.ts_info_density, cl.cross_horizon_consistency,
@@ -459,7 +483,8 @@ def list_factors(
                     FROM aistock_factor_catalog c
                     LEFT JOIN LATERAL (
                         SELECT ic_mean, top_excess_sharpe, top_excess_annual_return,
-                               rank_ic_mean, icir, calculated_at
+                               rank_ic_mean, icir, calculated_at,
+                               rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d
                         FROM aistock_factor_metrics
                         WHERE factor_name = c.factor_name AND eval_window = 'full'
                         ORDER BY calculated_at DESC
