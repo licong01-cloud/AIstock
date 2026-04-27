@@ -115,6 +115,56 @@ def make_paper_enabled_manifest():
     return freeze_manifest(manifest)
 
 
+def test_create_portfolio_with_requested_policy_does_not_validate_manifest_algo_asset() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = freeze_manifest(
+        make_manifest(algo_code="V24_PLAN").model_copy(update={"package_status": PackageStatus.PAPER_ENABLED})
+    )
+    package_repo.save_manifest(manifest)
+    policy = StrategyPackageService(repository=package_repo).create_execution_policy(
+        package_id=manifest.package_id,
+        policy_name="requested_twappolicy",
+        policy_json={
+            "execution_level": "minute",
+            "bar_freq": "1m",
+            "algo_code": "TWAP",
+            "algo_config": {"split_count": 3},
+            "fallback_algo_code": None,
+            "data_requirements": {
+                "requires_minute_bar": True,
+                "requires_limit_price": True,
+                "requires_suspend_status": True,
+                "requires_trade_calendar": True,
+            },
+            "fallback_policy": {"on_missing_minute_bar": "fail", "on_algo_error": "fail"},
+            "quality_report": {
+                "record_slippage": True,
+                "record_participation_rate": True,
+                "record_unfilled_reason": True,
+            },
+        },
+        source_backtest_id="unit_twappolicy_backtest",
+        source_backtest_status="BACKTEST_VALIDATED",
+        paper_enabled=True,
+    )
+
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="requested policy paper",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={"validated_execution_policy_id": policy.policy_id},
+    )
+
+    assert portfolio.execution_policy["validated_execution_policy_id"] == policy.policy_id
+    assert portfolio.execution_policy["algo_code"] == "TWAP"
+
+
 def runtime_with_authoritative_scores(
     manifest,
     *,

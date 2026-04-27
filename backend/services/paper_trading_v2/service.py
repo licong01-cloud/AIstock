@@ -105,7 +105,10 @@ class PaperTradingV2PortfolioService:
     ) -> PaperPortfolio:
         record = self.package_repository.get(package_id)
         manifest = record.current_manifest()
-        self.validator.validate_for_paper_trading(manifest)
+        self._validate_package_manifest_for_portfolio(
+            manifest,
+            validate_manifest_execution_policy=execution_policy is None,
+        )
         if not manifest.manifest_sha256:
             raise StrategyPackageValidationError(
                 "paper portfolio requires frozen strategy package manifest",
@@ -134,6 +137,38 @@ class PaperTradingV2PortfolioService:
         if hasattr(self.package_repository, "mark_paper_portfolio_created"):
             self.package_repository.mark_paper_portfolio_created(package_id, saved.portfolio_id)
         return saved
+
+    def _validate_package_manifest_for_portfolio(
+        self,
+        manifest: Any,
+        *,
+        validate_manifest_execution_policy: bool,
+    ) -> None:
+        """Validate frozen package identity without forcing obsolete manifest algo.
+
+        StrategyPackage freezes factor/model lineage. Paper v2 may choose a
+        separate backtest-validated minute execution policy at portfolio
+        creation time. When such a policy is explicitly supplied, validating the
+        old manifest minute policy would incorrectly block V25/TWAP/etc. dynamic
+        execution selection before the requested policy is validated below.
+        """
+
+        if validate_manifest_execution_policy:
+            self.validator.validate_for_paper_trading(manifest)
+            return
+        self.validator.validate_manifest(manifest)
+        package_status = getattr(manifest, "package_status", None)
+        allowed = {"BACKTEST_APPROVED", "SELECTION_ENABLED", "PAPER_ENABLED"}
+        status_value = getattr(package_status, "value", str(package_status))
+        if status_value not in allowed:
+            raise StrategyPackageValidationError(
+                "package is not approved for paper trading",
+                context={
+                    "package_id": getattr(manifest, "package_id", None),
+                    "package_status": status_value,
+                    "allowed_statuses": sorted(allowed),
+                },
+            )
 
     def list_portfolios(self, *, limit: int = 100) -> list[PaperPortfolio]:
         return self.repository.list_portfolios(limit=limit)
