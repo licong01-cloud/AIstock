@@ -305,7 +305,7 @@ V25 需要 `market_context.day_features`。下一阶段必须实现或核对 `V2
 
 ```text
 day_features: length=10 finite float array
-day_features_schema_version: paper_v2_v25_day_features_v1
+day_features_schema_version: paper_v2_v25_day_features_v2
 day_features_source: db_pit_previous_trading_day
 day_features_trade_date: <feature_date, strictly before trade_date>
 day_features_fields: ordered field names
@@ -329,13 +329,13 @@ day_features_audit: dataset refresh audit summary
 | 3 | `stock_hl_range` | `market.kline_daily_raw` | 缺 high/low 或 low <= 0 |
 | 4 | `stock_volume_log1p` | `market.kline_daily_raw.volume_hand` | 缺成交量或负数 |
 | 5 | `turnover_rate` | `market.daily_basic.turnover_rate` | 缺值或非有限 |
-| 6 | `volume_ratio` | `market.daily_basic.volume_ratio` | 缺值或非有限 |
+| 6 | `free_float_turnover_rate` | `market.daily_basic.turnover_rate_f` | 缺值或非有限 |
 | 7 | `pb_log1p` | `market.daily_basic.pb` | 缺值或 pb <= -1 |
 | 8 | `market_ret_1d` | `market.index_daily` benchmark pct_chg | 缺指数行或 pct_chg 非有限 |
 | 9 | `sector_pct_change` | `market.sector_data.sw2_pct_change` | 缺行业映射/行业日数据 |
 | 10 | `moneyflow_net_ratio` | `market.moneyflow_ts.net_mf_amount / kline amount` | 缺资金流或成交额 <= 0 |
 
-如果后续 QE/V25 训练合约确认了不同字段或归一化，应作为新的 schema version 增量接入；不得静默改变 `paper_v2_v25_day_features_v1` 的字段顺序。
+如果后续 QE/V25 训练合约确认了不同字段或归一化，应作为新的 schema version 增量接入；不得静默改变 `paper_v2_v25_day_features_v2` 的字段顺序。`paper_v2_v25_day_features_v1` 因本地 `volume_ratio` 全为空，仅作为提交历史中的未启用草案，不进入权威运行。
 
 ### 6.3 WSL UNC 与资产访问隔离
 

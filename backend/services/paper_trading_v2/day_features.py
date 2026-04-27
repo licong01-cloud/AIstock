@@ -20,7 +20,7 @@ from backend.services.trading_core.errors import DataUnavailableError
 ConnFactory = Callable[[], Iterator[Any]]
 
 PRICE_UNIT_DIVISOR = 1000.0
-V25_DAY_FEATURE_SCHEMA_VERSION = "paper_v2_v25_day_features_v1"
+V25_DAY_FEATURE_SCHEMA_VERSION = "paper_v2_v25_day_features_v2"
 V25_DAY_FEATURE_SOURCE = "db_pit_previous_trading_day"
 V25_DAY_FEATURE_FIELDS: tuple[str, ...] = (
     "stock_ret_1d",
@@ -28,7 +28,7 @@ V25_DAY_FEATURE_FIELDS: tuple[str, ...] = (
     "stock_hl_range",
     "stock_volume_log1p",
     "turnover_rate",
-    "volume_ratio",
+    "free_float_turnover_rate",
     "pb_log1p",
     "market_ret_1d",
     "sector_pct_change",
@@ -113,7 +113,12 @@ class DbV25DayFeatureProvider:
             feature_date,
         )
         turnover_rate = self._required_float(basic["turnover_rate"], "turnover_rate", normalized_symbol, feature_date) / 100.0
-        volume_ratio = self._required_float(basic["volume_ratio"], "volume_ratio", normalized_symbol, feature_date)
+        free_float_turnover_rate = self._required_float(
+            basic["turnover_rate_f"],
+            "turnover_rate_f",
+            normalized_symbol,
+            feature_date,
+        ) / 100.0
         pb = self._required_float(basic["pb"], "pb", normalized_symbol, feature_date)
         if pb <= -1:
             raise DataUnavailableError(
@@ -130,7 +135,7 @@ class DbV25DayFeatureProvider:
             high_price / low_price - 1.0,
             math.log1p(volume_hand),
             turnover_rate,
-            volume_ratio,
+            free_float_turnover_rate,
             math.log1p(pb),
             market_pct_chg,
             sector_pct_change,
@@ -209,7 +214,7 @@ class DbV25DayFeatureProvider:
     def _load_daily_basic_row(self, symbol: str, trade_date: date) -> dict[str, Any]:
         row = self._query_one(
             """
-            SELECT turnover_rate, volume_ratio, pb
+            SELECT turnover_rate, turnover_rate_f, pb
             FROM market.daily_basic
             WHERE ts_code = %s
               AND trade_date = %s
@@ -222,7 +227,7 @@ class DbV25DayFeatureProvider:
         )
         if row is None:
             self._raise_missing_row("market.daily_basic", symbol, trade_date)
-        return {"turnover_rate": row[0], "volume_ratio": row[1], "pb": row[2]}
+        return {"turnover_rate": row[0], "turnover_rate_f": row[1], "pb": row[2]}
 
     def _load_moneyflow_row(self, symbol: str, trade_date: date) -> dict[str, Any]:
         row = self._query_one(

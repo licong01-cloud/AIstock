@@ -55,7 +55,7 @@ class StaticV25Provider(DbV25DayFeatureProvider):
         return {"open_li": 9000, "high_li": 11000, "low_li": 8000, "close_li": 10000, "volume_hand": 100, "amount_li": 1_000_000}
 
     def _load_daily_basic_row(self, symbol: str, trade_date: date) -> dict[str, Any]:
-        return {"turnover_rate": 5.0, "volume_ratio": 1.2, "pb": 2.0}
+        return {"turnover_rate": 5.0, "turnover_rate_f": 6.0, "pb": 2.0}
 
     def _load_moneyflow_row(self, symbol: str, trade_date: date) -> dict[str, Any]:
         return {"net_mf_amount": 50.0}
@@ -96,6 +96,7 @@ def test_db_v25_day_feature_provider_builds_ten_finite_features() -> None:
     assert all(math.isfinite(value) for value in features.values)
     assert features.values[0] == pytest.approx(0.25)
     assert features.values[4] == pytest.approx(0.05)
+    assert features.values[5] == pytest.approx(0.06)
     assert features.values[7] == pytest.approx(0.025)
     assert features.values[8] == pytest.approx(-0.01)
     assert features.values[9] == pytest.approx(0.05)
