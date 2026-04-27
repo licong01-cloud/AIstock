@@ -61,6 +61,27 @@ class ActivateExecutionPolicyRequest(BaseModel):
     replace_existing: bool = False
 
 
+class CreateRuntimeProfileRequest(BaseModel):
+    profile_name: str = Field(min_length=1)
+    config_json: dict[str, Any] = Field(default_factory=dict)
+    created_by: str | None = None
+    reason: str | None = None
+
+
+class CreateRuntimeProfileVersionRequest(BaseModel):
+    config_json: dict[str, Any] = Field(default_factory=dict)
+    created_by: str | None = None
+    reason: str | None = None
+
+
+class ActivateRuntimeConfigRequest(BaseModel):
+    trade_date: date
+    profile_version_id: str = Field(min_length=1)
+    activated_by: str | None = None
+    reason: str | None = None
+    replace_existing: bool = False
+
+
 class CreateSessionRequest(BaseModel):
     mode: PaperSessionMode
     start_date: date
@@ -316,6 +337,112 @@ def list_portfolio_execution_policy_activations(portfolio_id: str, limit: int = 
             "portfolio_id": portfolio_id,
             "activations": [activation.model_dump(mode="json") for activation in activations],
         }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/portfolios/{portfolio_id}/runtime-profiles")
+def create_portfolio_runtime_profile(portfolio_id: str, req: CreateRuntimeProfileRequest) -> dict[str, Any]:
+    try:
+        profile, version = PaperTradingV2PortfolioService().create_runtime_profile(
+            portfolio_id=portfolio_id,
+            profile_name=req.profile_name,
+            config_json=req.config_json,
+            created_by=req.created_by,
+            reason=req.reason,
+        )
+        return {
+            "ok": True,
+            "profile": profile.model_dump(mode="json"),
+            "version": version.model_dump(mode="json"),
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/portfolios/{portfolio_id}/runtime-profiles")
+def list_portfolio_runtime_profiles(portfolio_id: str, limit: int = 100) -> dict[str, Any]:
+    try:
+        profiles = PaperTradingV2PortfolioService().list_runtime_profiles(portfolio_id, limit=limit)
+        return {"ok": True, "profiles": [profile.model_dump(mode="json") for profile in profiles]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/portfolios/{portfolio_id}/runtime-profiles/{profile_id}/versions")
+def create_portfolio_runtime_profile_version(
+    portfolio_id: str,
+    profile_id: str,
+    req: CreateRuntimeProfileVersionRequest,
+) -> dict[str, Any]:
+    try:
+        version = PaperTradingV2PortfolioService().create_runtime_profile_version(
+            portfolio_id=portfolio_id,
+            profile_id=profile_id,
+            config_json=req.config_json,
+            created_by=req.created_by,
+            reason=req.reason,
+        )
+        return {"ok": True, "version": version.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/portfolios/{portfolio_id}/runtime-profiles/{profile_id}/versions")
+def list_portfolio_runtime_profile_versions(
+    portfolio_id: str,
+    profile_id: str,
+    limit: int = 100,
+) -> dict[str, Any]:
+    try:
+        profile = PaperTradingV2PortfolioService().repository.get_runtime_profile(profile_id)
+        if profile.portfolio_id != portfolio_id:
+            _raise_http(
+                DataUnavailableError(
+                    "paper v2 runtime profile does not belong to portfolio",
+                    context={"portfolio_id": portfolio_id, "profile_id": profile_id},
+                )
+            )
+        versions = PaperTradingV2PortfolioService().list_runtime_profile_versions(profile_id, limit=limit)
+        return {"ok": True, "versions": [version.model_dump(mode="json") for version in versions]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/portfolios/{portfolio_id}/runtime-config-activations")
+def activate_portfolio_runtime_config(portfolio_id: str, req: ActivateRuntimeConfigRequest) -> dict[str, Any]:
+    try:
+        activation = PaperTradingV2PortfolioService().activate_runtime_config(
+            portfolio_id=portfolio_id,
+            trade_date=req.trade_date,
+            profile_version_id=req.profile_version_id,
+            activated_by=req.activated_by,
+            reason=req.reason,
+            replace_existing=req.replace_existing,
+        )
+        return {"ok": True, "activation": activation.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/portfolios/{portfolio_id}/runtime-config-activations")
+def list_portfolio_runtime_config_activations(portfolio_id: str, limit: int = 100) -> dict[str, Any]:
+    try:
+        activations = PaperTradingV2PortfolioService().list_runtime_config_activations(portfolio_id, limit=limit)
+        return {
+            "ok": True,
+            "portfolio_id": portfolio_id,
+            "activations": [activation.model_dump(mode="json") for activation in activations],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/portfolios/{portfolio_id}/config-change-audit")
+def list_portfolio_config_change_audit(portfolio_id: str, limit: int = 200) -> dict[str, Any]:
+    try:
+        rows = PaperTradingV2PortfolioService().list_config_change_audit(portfolio_id, limit=limit)
+        return {"ok": True, "audit": [row.model_dump(mode="json") for row in rows]}
     except TradingCoreError as exc:
         _raise_http(exc)
 
