@@ -10,7 +10,7 @@ import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { hmmTrainingApi, paperV2Api, strategyPackageApi } from "@/lib/paper-v2/api";
 import { formatCompact, hmmSnapshotLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
-import type { DataSource, ExecutionPolicy, HmmConfig, HmmSnapshot, JsonObject, PaperPortfolio, PaperSessionProgress, StrategyPackage } from "@/lib/paper-v2/types";
+import type { DataSource, ExecutionPolicy, HmmConfig, HmmSnapshot, JsonObject, PaperPortfolio, PaperSessionProgress, RuntimeProfileVersion, StrategyPackage } from "@/lib/paper-v2/types";
 
 function daysAgoIso(days: number): string {
   const d = new Date();
@@ -42,6 +42,7 @@ export default function PaperV2PortfoliosPage() {
   const [hmmSnapshotId, setHmmSnapshotId] = useState("");
   const [hmmPreset, setHmmPreset] = useState("preset_A");
   const [created, setCreated] = useState<PaperPortfolio | null>(null);
+  const [createdRuntimeVersion, setCreatedRuntimeVersion] = useState<RuntimeProfileVersion | null>(null);
   const [sessionProgress, setSessionProgress] = useState<PaperSessionProgress | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);
@@ -126,12 +127,11 @@ export default function PaperV2PortfoliosPage() {
     return () => { alive = false; };
   }, [hmmConfigId, hmmSnapshotId]);
 
-  function runtimeConfig(): JsonObject {
+  function runtimeProfileConfig(): JsonObject {
     const blacklist = industryBlacklist.split(",").map((item) => item.trim()).filter(Boolean);
     return {
       top_k: topK,
       selection_artifact_config: { auto_generate: true, inference_backend: "wsl" },
-      paper_v2_session: { signal_data_source: "DB_HISTORICAL" },
       runtime_profile: {
         selection: { top_k: topK },
         tradability: { exclude_suspended: excludeSuspended },
@@ -145,9 +145,14 @@ export default function PaperV2PortfoliosPage() {
     };
   }
 
+  function sessionRuntimeConfig(): JsonObject {
+    return { paper_v2_session: { signal_data_source: "DB_HISTORICAL" } };
+  }
+
   async function createPortfolio() {
     setError(null);
     setCreated(null);
+    setCreatedRuntimeVersion(null);
     setSessionProgress(null);
     setBusy(true);
     try {
@@ -165,6 +170,19 @@ export default function PaperV2PortfoliosPage() {
         execution_policy: policyId ? { validated_execution_policy_id: policyId } : undefined,
       });
       setCreated(portfolio);
+      const runtimeProfile = await paperV2Api.createRuntimeProfile(portfolio.portfolio_id, {
+        profile_name: `${name} 运行配置`,
+        config_json: runtimeProfileConfig(),
+        created_by: "paper_v2_ui",
+        reason: "创建模拟盘时保存可变运行配置",
+      });
+      setCreatedRuntimeVersion(runtimeProfile.version);
+      await paperV2Api.activateRuntimeConfig(portfolio.portfolio_id, {
+        trade_date: portfolioStartDate,
+        profile_version_id: runtimeProfile.version.profile_version_id,
+        activated_by: "paper_v2_ui",
+        reason: "创建模拟盘时按开始日期激活运行配置",
+      });
       if (startMode === "replay") {
         const session = await paperV2Api.createSession(portfolio.portfolio_id, {
           mode: "REPLAY_ONLY",
@@ -172,7 +190,7 @@ export default function PaperV2PortfoliosPage() {
           end_date: replayEnd,
           historical_data_source: "DB_HISTORICAL",
           live_data_source: autoSwitchToLive ? "TDX_REALTIME" : null,
-          runtime_config: runtimeConfig(),
+          runtime_config: sessionRuntimeConfig(),
           rerun_policy: "reject_existing",
           auto_switch_to_live: autoSwitchToLive,
           created_by: "paper_v2_ui",
@@ -183,7 +201,7 @@ export default function PaperV2PortfoliosPage() {
           mode: "LIVE_ONLY",
           start_date: startDate,
           live_data_source: "TDX_REALTIME",
-          runtime_config: runtimeConfig(),
+          runtime_config: sessionRuntimeConfig(),
           rerun_policy: "reject_existing",
           created_by: "paper_v2_ui",
         });
@@ -251,7 +269,7 @@ export default function PaperV2PortfoliosPage() {
             </div>
           </div>
           <button className="pv2-button-primary" onClick={createPortfolio} disabled={busy} type="button">{busy ? "处理中..." : startMode === "replay" ? (autoSwitchToLive ? "创建组合并回放追赶到实时" : "创建组合并开始历史回放") : "创建实时模拟盘"}</button>
-          {created ? <JsonPanel value={{ created_portfolio_id: created.portfolio_id, package_id: created.package_id, manifest_sha256: created.manifest_sha256, session_progress: sessionProgress }} /> : null}
+          {created ? <JsonPanel value={{ created_portfolio_id: created.portfolio_id, package_id: created.package_id, manifest_sha256: created.manifest_sha256, runtime_profile_version: createdRuntimeVersion, session_progress: sessionProgress }} /> : null}
         </SectionCard>
 
         <SectionCard title="组合生命周期规则" eyebrow="防止假成功">
