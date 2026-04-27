@@ -390,9 +390,9 @@ def list_factors(
         SORT_FIELD_MAP = {
             "factor_name": "c.factor_name",
             "source": "c.source",
-            "ic": "c.ic",
-            "sharpe": "c.sharpe",
-            "annualized_return": "c.annualized_return",
+            "ic": "m.ic_mean",
+            "sharpe": "m.top_excess_sharpe",
+            "annualized_return": "m.top_excess_annual_return",
             "is_sota_factor": "c.is_sota_factor",
             "ind_rank_ic": "m.rank_ic_mean",
             "ind_rank_ic_1d": "m.rank_ic_1d",
@@ -429,7 +429,7 @@ def list_factors(
                 col = SORT_FIELD_MAP[sort_field]
                 order_clause = f"{col} {direction} {nulls_clause}"
         else:
-            order_clause = "c.is_sota_factor DESC NULLS LAST, c.ic DESC NULLS LAST"
+            order_clause = "c.is_sota_factor DESC NULLS LAST, m.ic_mean DESC NULLS LAST"
 
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -456,9 +456,12 @@ def list_factors(
 
                 # LEFT JOIN 独立因子指标 + 分类表
                 cur.execute(f"""
-                    SELECT c.factor_name, c.source, c.expression, c.ic, c.sharpe,
-                           c.annualized_return, c.is_sota_factor, c.catalog_source,
+                    SELECT c.factor_name, c.source, c.expression,
+                           m.ic_mean AS ic, m.top_excess_sharpe AS sharpe,
+                           m.top_excess_annual_return AS annualized_return,
+                           c.is_sota_factor, c.catalog_source,
                            c.description_cn, c.generated_at_utc, c.is_available,
+                           c.factor_type, c.data_source,
                             m.ic_mean AS ind_ic, m.top_excess_sharpe AS ind_sharpe,
                             m.top_excess_annual_return AS ind_annual_return,
                             m.rank_ic_mean AS ind_rank_ic, m.icir AS ind_icir,
