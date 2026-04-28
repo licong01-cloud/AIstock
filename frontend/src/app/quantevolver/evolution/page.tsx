@@ -196,6 +196,7 @@ export default function EvolutionDashboard() {
     stock_pool: string;
     filter_suspended_on_signal: boolean;
     suspend_filter_strict: boolean;
+    node_id: string;
     collapsed: boolean;
     // backtest-only 模式
     backtest_only: boolean;
@@ -224,6 +225,7 @@ export default function EvolutionDashboard() {
     stock_pool: "",
     filter_suspended_on_signal: false,
     suspend_filter_strict: true,
+    node_id: "",
     collapsed: false,
     backtest_only: false,
     model_source_task_id: "",
@@ -234,6 +236,7 @@ export default function EvolutionDashboard() {
   const [customEvoExecutionMode, setCustomEvoExecutionMode] = useState<string>("serial");
   const [customEvoParallelism, setCustomEvoParallelism] = useState<number>(2);
   const [customEvoNodeId, setCustomEvoNodeId] = useState<string>("");
+  const [customEvoNodeParallelism, setCustomEvoNodeParallelism] = useState<Record<string, number>>({});
   const [customEvoInitSource, setCustomEvoInitSource] = useState<"manual" | "qe_experiment" | "evolution_loop" | "rdagent_task">("manual");
   const [customEvoFirstLoopReady, setCustomEvoFirstLoopReady] = useState(false);
   // 自定义演进 — 从来源加载配置的辅助状态
@@ -272,6 +275,7 @@ export default function EvolutionDashboard() {
       execution_algo_params: { ...first.execution_algo_params },
       unfilled_handler_params: { ...first.unfilled_handler_params },
       data_split: first.data_split ? { ...first.data_split } : null,
+      node_id: "",
       collapsed: true,
     }]);
   };
@@ -279,6 +283,33 @@ export default function EvolutionDashboard() {
     if (index === 0) return; // 第一个不可删除
     setCustomEvoLoops(prev => prev.filter((_, i) => i !== index));
   };
+
+  const defaultCustomEvoNodeId = customEvoNodeId || "wsl2-5080";
+  const resolveCustomLoopNodeId = useCallback((loop: CustomEvoLoopConfig, index: number) => {
+    const loop1Node = customEvoLoops[0]?.node_id || defaultCustomEvoNodeId;
+    if (index === 0) return loop.node_id || defaultCustomEvoNodeId;
+    return loop.node_id || loop1Node;
+  }, [customEvoLoops, defaultCustomEvoNodeId]);
+
+  const customEvoResolvedNodeIds = useMemo(() => {
+    return Array.from(new Set(customEvoLoops.map((loop, idx) => resolveCustomLoopNodeId(loop, idx))));
+  }, [customEvoLoops, resolveCustomLoopNodeId]);
+
+  const getNodeDisplayName = useCallback((nodeId: string) => {
+    const node = computeNodes.find((n: any) => n.node_id === nodeId);
+    return node?.display_name || node?.node_id || nodeId;
+  }, [computeNodes]);
+
+  useEffect(() => {
+    setCustomEvoNodeParallelism(prev => {
+      const next: Record<string, number> = {};
+      for (const nodeId of customEvoResolvedNodeIds) {
+        const raw = prev[nodeId] ?? 1;
+        next[nodeId] = Math.min(4, Math.max(1, Number(raw) || 1));
+      }
+      return next;
+    });
+  }, [customEvoResolvedNodeIds]);
 
   // 自定义演进 — 从来源加载配置到第一个 Loop
   // 根据因子名列表查询因子库，返回完整的 "name||source" key 集合
@@ -1024,6 +1055,9 @@ export default function EvolutionDashboard() {
           backtest_only: loop.backtest_only,
           model_source_task_id: loop.backtest_only ? (loop.model_source_task_id || undefined) : undefined,
           model_source_loop_index: loop.backtest_only ? (loop.model_source_loop_index ?? undefined) : undefined,
+          node_id: i === 0
+            ? (loop.node_id || customEvoNodeId || undefined)
+            : (loop.node_id || undefined),
         }));
         const execMode = customEvoExecutionMode === "parallel" ? `parallel_${customEvoParallelism}` : "serial";
         const res = await fetch(`${API}/quantevolver/evolution/custom-tasks`, {
@@ -1035,6 +1069,7 @@ export default function EvolutionDashboard() {
             loops: loopsPayload,
             execution_mode: execMode,
             node_id: customEvoNodeId || undefined,
+            node_parallelism: customEvoNodeParallelism,
             engine_mode: "unified",
           }),
         });
@@ -1049,6 +1084,7 @@ export default function EvolutionDashboard() {
           alert(`自定义演进任务创建成功！共 ${data.total_loops} 个 Loop`);
           setShowCreateTask(false);
           setCustomEvoLoops([makeDefaultCustomLoop()]);
+          setCustomEvoNodeParallelism({});
           setCustomEvoFirstLoopReady(false);
           fetchTasks();
           setTimeout(() => setActiveTaskId(data.task_id), 500);
@@ -2004,6 +2040,7 @@ export default function EvolutionDashboard() {
                           setCustomEvoExecutionMode("serial");
                           setCustomEvoParallelism(2);
                           setCustomEvoNodeId("");
+                          setCustomEvoNodeParallelism({});
                         }
                       }}
                       style={{
@@ -3068,6 +3105,29 @@ export default function EvolutionDashboard() {
                   {/* Loop 内容（可折叠） */}
                   {!(loopIdx > 0 && loop.collapsed) && (
                   <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "12px" }}>
+                    <div style={{ border: "1px solid #bae6fd", borderRadius: "8px", padding: "10px", backgroundColor: "#f0f9ff" }}>
+                      <label style={{ display: "block", fontSize: "12px", fontWeight: 700, color: "#0369a1", marginBottom: "5px" }}>
+                        Loop 执行节点
+                      </label>
+                      <select
+                        value={loop.node_id}
+                        onChange={e => updateCustomEvoLoop(loopIdx, { node_id: e.target.value })}
+                        style={{ width: "100%", padding: "6px 10px", borderRadius: "6px", border: "1px solid #7dd3fc", fontSize: "13px", backgroundColor: "#fff" }}
+                      >
+                        <option value="">
+                          {loopIdx === 0 ? `使用任务默认节点 (${getNodeDisplayName(defaultCustomEvoNodeId)})` : `继承 Loop 1 (${getNodeDisplayName(resolveCustomLoopNodeId(customEvoLoops[0] || loop, 0))})`}
+                        </option>
+                        <option value="wsl2-5080">wsl2-5080 (local/default)</option>
+                        {computeNodes.filter((n: any) => n.node_id !== "wsl2-5080").map((n: any) => (
+                          <option key={n.node_id} value={n.node_id} disabled={n.status === "offline"}>
+                            {n.display_name || n.node_id} ({n.status || "unknown"}{n.gpu_model ? `, ${n.gpu_model}` : ""})
+                          </option>
+                        ))}
+                      </select>
+                      <div style={{ marginTop: "5px", fontSize: "11px", color: "#64748b" }}>
+                        实际节点：{getNodeDisplayName(resolveCustomLoopNodeId(loop, loopIdx))}；busy 可提交，offline/API 不可达会被后端拒绝。
+                      </div>
+                    </div>
                     {/* backtest-only 模式开关 */}
                     {loop.model_source_task_id && (
                       <div style={{ padding: "10px 14px", backgroundColor: loop.backtest_only ? "#eff6ff" : "#f8fafc", borderRadius: "8px", border: `1px solid ${loop.backtest_only ? "#93c5fd" : "#e2e8f0"}` }}>
@@ -3296,13 +3356,14 @@ export default function EvolutionDashboard() {
                   </div>
                   {customEvoExecutionMode === "parallel" && (
                     <div>
-                      <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "4px" }}>并行度</label>
+                      <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "4px" }}>旧全局并行度</label>
                       <select value={customEvoParallelism} onChange={e => setCustomEvoParallelism(parseInt(e.target.value))} style={{ width: "100%", padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}>
+                        <option value={1}>1</option>
                         <option value={2}>2</option>
+                        <option value={3}>3</option>
                         <option value={4}>4</option>
-                        <option value={6}>6</option>
-                        <option value={8}>8</option>
                       </select>
+                      <div style={{ fontSize: "10px", color: "#94a3b8", marginTop: "3px" }}>实际限流以下方每节点并行度为准</div>
                     </div>
                   )}
                   <div>
@@ -3320,6 +3381,37 @@ export default function EvolutionDashboard() {
                   </div>
                 </div>
               </div>
+              {customEvoExecutionMode === "parallel" && (
+                <div style={{ border: "1px solid #fed7aa", borderRadius: "8px", padding: "12px", backgroundColor: "#fff7ed" }}>
+                  <div style={{ fontSize: "13px", fontWeight: 700, color: "#9a3412", marginBottom: "8px" }}>每节点并行度（默认1，最大4）</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                    {customEvoResolvedNodeIds.map(nodeId => {
+                      const loopsOnNode = customEvoLoops
+                        .map((loop, idx) => ({ idx, node: resolveCustomLoopNodeId(loop, idx) }))
+                        .filter(item => item.node === nodeId)
+                        .map(item => `Loop${item.idx + 1}`)
+                        .join(", ");
+                      const node = computeNodes.find((n: any) => n.node_id === nodeId);
+                      return (
+                        <div key={nodeId} style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 120px", gap: "10px", alignItems: "center", padding: "8px", border: "1px solid #fdba74", borderRadius: "6px", backgroundColor: "#fff" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, color: "#7c2d12" }}>
+                            {getNodeDisplayName(nodeId)}
+                            <span style={{ marginLeft: "6px", fontWeight: 500, color: node?.status === "offline" ? "#dc2626" : "#64748b" }}>({node?.status || "unknown"})</span>
+                          </div>
+                          <div style={{ fontSize: "11px", color: "#64748b" }}>{loopsOnNode}</div>
+                          <select
+                            value={customEvoNodeParallelism[nodeId] ?? 1}
+                            onChange={e => setCustomEvoNodeParallelism(prev => ({ ...prev, [nodeId]: Math.min(4, Math.max(1, parseInt(e.target.value) || 1)) }))}
+                            style={{ width: "100%", padding: "5px 8px", borderRadius: "5px", border: "1px solid #fdba74", fontSize: "12px" }}
+                          >
+                            {[1, 2, 3, 4].map(v => <option key={v} value={v}>{v}</option>)}
+                          </select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
             )}
 

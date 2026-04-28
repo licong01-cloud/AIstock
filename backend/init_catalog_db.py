@@ -612,6 +612,7 @@ def init_database():
                         agent_analysis JSONB,
                         is_sota BOOLEAN DEFAULT FALSE,
                         status TEXT DEFAULT 'pending',
+                        node_id TEXT,
                         experiment_id TEXT REFERENCES qe_experiments(experiment_id),
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -925,6 +926,18 @@ def init_database():
             if not cur.fetchone():
                 print("Adding column 'factor_blacklist' to qe_evolution_tasks...")
                 cur.execute("ALTER TABLE qe_evolution_tasks ADD COLUMN factor_blacklist JSONB DEFAULT '[]'::jsonb")
+
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name='qe_evolution_loops' AND column_name='node_id'
+            """)
+            if not cur.fetchone():
+                print("Adding column 'node_id' to qe_evolution_loops...")
+                cur.execute("ALTER TABLE qe_evolution_loops ADD COLUMN node_id TEXT")
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_qe_evolution_loops_task_node
+                ON qe_evolution_loops(task_id, node_id)
+            """)
 
             # ============================================================
             # catalog_id 关联列迁移（已有数据库升级用，新库由 CREATE TABLE 定义）

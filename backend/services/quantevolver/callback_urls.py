@@ -46,11 +46,16 @@ def build_aistock_callback_url(
     is_default_wsl = not node_id or node_id == "wsl2-5080"
     if configured_base:
         base = configured_base
-    elif is_default_wsl or _is_local_callback_base(raw):
+    elif is_default_wsl:
         # The FastAPI backend for this project normally runs on 8001.
         base = "http://127.0.0.1:8001"
     else:
-        base = raw or "http://127.0.0.1:8001"
+        if not raw or _is_local_callback_base(raw):
+            raise ValueError(
+                "Remote QE callback URL must be configured with a non-localhost "
+                f"AIstock base URL for node_id={node_id!r}; refusing localhost fallback."
+            )
+        base = raw
 
     base = base.rstrip("/")
     if base.endswith(endpoint_path):

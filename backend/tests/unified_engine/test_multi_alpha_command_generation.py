@@ -37,6 +37,12 @@ class TestQrunLimitMinutePredBacktest:
         assert 'if "SignalRecord" in rec_class' in runner
         assert 'if not has_port_ana' in runner
 
+    def test_runner_subscribes_factor_for_v25_raw_price_conversion(self):
+        runner = Path("scripts/qrun_limit_minute.py").read_text(encoding="utf-8")
+
+        assert "'$factor'" in runner
+        assert "'$up_limit_price', '$down_limit_price', '$prev_close', '$factor'" in runner
+
 
 class TestMultiAlphaRolloutGate:
     def test_distributed_mode_rejected_until_feature_flag_enabled(self):
@@ -84,6 +90,19 @@ class TestQELoopCallbackUrls:
             )
 
         assert url == "http://192.168.50.10:8001/api/v1/quantevolver/webhook/loop-completed"
+
+    def test_remote_qe_callback_rejects_localhost_without_override(self):
+        with patch.dict("os.environ", {
+            "AISTOCK_QE_LOOP_CALLBACK_URL": "",
+            "AISTOCK_QE_CALLBACK_BASE_URL": "",
+            "AISTOCK_BACKEND_CALLBACK_BASE_URL": "",
+            "AISTOCK_BACKEND_BASE_URL": "",
+        }):
+            with pytest.raises(ValueError, match="Remote QE callback URL"):
+                quantevolver_router._resolve_qe_experiment_callback_url(
+                    "rdagent-node1",
+                    "http://127.0.0.1:8001",
+                )
 
     def test_full_callback_override_is_preserved(self):
         with patch.dict("os.environ", {

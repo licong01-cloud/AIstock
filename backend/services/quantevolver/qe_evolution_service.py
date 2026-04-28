@@ -16,6 +16,12 @@ from .qe_workspace_client import QEWorkspaceClient
 from .qe_evolution_agents import EvolutionAgents, EvolutionFactorAgent, EvolutionModelAgent, AnalystResult
 from .callback_urls import build_aistock_callback_url
 from .experiment_config import DEFAULT_LABEL_HORIZON, normalize_label_horizon
+from .node_execution import (
+    normalize_node_parallelism,
+    preflight_qe_node,
+    resolve_custom_loop_nodes,
+    resolve_default_qe_node_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +93,50 @@ class AutoEvolutionScheduler:
                 cur.execute("SELECT node_id FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                 row = cur.fetchone()
         return self._get_workspace_client_for_node_id(row.get("node_id") if row else None)
+
+    @staticmethod
+    def _normalize_loop_db_id(task_id: str, loop_id_or_index: str | int) -> str:
+        if isinstance(loop_id_or_index, int):
+            return f"{task_id}_Loop{loop_id_or_index}"
+        loop_value = str(loop_id_or_index)
+        if loop_value.startswith(task_id + "_"):
+            return loop_value
+        if loop_value.startswith("Loop"):
+            return f"{task_id}_{loop_value}"
+        return loop_value
+
+    def _get_loop_node_id(self, task_id: str, loop_id_or_index: str | int) -> str:
+        loop_db_id = self._normalize_loop_db_id(task_id, loop_id_or_index)
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT l.node_id AS loop_node_id, t.node_id AS task_node_id
+                    FROM qe_evolution_tasks t
+                    LEFT JOIN qe_evolution_loops l ON l.task_id = t.task_id AND l.loop_id = %s
+                    WHERE t.task_id = %s
+                    """,
+                    (loop_db_id, task_id),
+                )
+                row = cur.fetchone()
+        if row:
+            return row.get("loop_node_id") or row.get("task_node_id") or resolve_default_qe_node_id()
+        return resolve_default_qe_node_id()
+
+    def _get_workspace_client_for_loop(self, task_id: str, loop_id_or_index: str | int) -> QEWorkspaceClient:
+        return self._get_workspace_client_for_node_id(self._get_loop_node_id(task_id, loop_id_or_index))
+
+    def _get_callback_url_for_node(self, node_id: Optional[str]) -> Optional[str]:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT callback_url FROM infra.compute_nodes WHERE node_id = %s", (node_id,))
+                row = cur.fetchone()
+        return build_aistock_callback_url(
+            endpoint_path="/api/v1/quantevolver/evolution/webhook/loop-completed",
+            full_url_env="AISTOCK_QE_EVOLUTION_LOOP_CALLBACK_URL",
+            node_id=node_id,
+            node_callback_url=row.get("callback_url") if row else None,
+        )
 
     def _get_task_status(self, task_id: str) -> Optional[str]:
         """Read latest task status so background submit loops can stop cleanly."""
@@ -1973,7 +2023,7 @@ class AutoEvolutionScheduler:
                 evolution_loop_db_id = loop_row['loop_id']
 
                 try:
-                    client = self._get_workspace_client_for_task(task_id)
+                    client = self._get_workspace_client_for_loop(task_id, evolution_loop_db_id)
                     status_resp = await client.get_loop_status(task_id, loop_id)
                     rd_status = status_resp.get("status")
 
@@ -2309,12 +2359,13 @@ class AutoEvolutionScheduler:
             loop_id = loop_data['loop_id']
             loop_index = loop_data['loop_index']
             try:
-                client = self._get_workspace_client_for_task(task_id)
+                client = self._get_workspace_client_for_loop(task_id, loop_id)
                 live = await client.get_loop_status(task_id, f"Loop{loop_index}")
                 rd_status = live.get("status")
             except Exception as e:
                 logger.warning(f"[get_task_detail] live status check failed for {loop_id}: {e}")
-                rd_status = "failed"  # RDAgent 不可达，视为失败
+                loop_data["live_status_error"] = str(e)
+                continue
 
             if task_type in ("custom_evo", "strategy_evo") and rd_status == "not_found":
                 logger.info(
@@ -2427,11 +2478,12 @@ class AutoEvolutionScheduler:
 
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT task_id FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
-                if not cur.fetchone():
+                cur.execute("SELECT task_id, node_id FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                task_row = cur.fetchone()
+                if not task_row:
                     raise ValueError(f"Task not found: {task_id}")
                 cur.execute(
-                    "SELECT loop_id, loop_index, status FROM qe_evolution_loops "
+                    "SELECT loop_id, loop_index, status, node_id FROM qe_evolution_loops "
                     "WHERE task_id = %s AND status <> 'completed' "
                     "ORDER BY loop_index ASC",
                     (task_id,),
@@ -2463,11 +2515,12 @@ class AutoEvolutionScheduler:
             loop_index = loop_row["loop_index"]
             loop_id = f"Loop{loop_index}"
             loop_db_id = loop_row["loop_id"]
+            loop_node_id = loop_row.get("node_id") or task_row.get("node_id") or resolve_default_qe_node_id()
             kill_success = False
             kill_error = None
             kill_result = None
             try:
-                client = self._get_workspace_client_for_task(task_id)
+                client = self._get_workspace_client_for_node_id(loop_node_id)
                 kill_result = await client.kill_loop(task_id, loop_id)
                 kill_success = bool(kill_result.get("killed", False))
                 kill_error = kill_result.get("error")
@@ -2625,18 +2678,16 @@ class AutoEvolutionScheduler:
         """
         from .config_composer import (
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
-            QE_WORKSPACE_WIN,
             ConfigComposer,
         )
 
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"
-
         # 1. 验证 loop 存在且状态为 failed
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
-                    "SELECT loop_id, status, config_json FROM qe_evolution_loops WHERE loop_id = %s",
+                    "SELECT loop_id, status, config_json, node_id FROM qe_evolution_loops WHERE loop_id = %s",
                     (evolution_loop_db_id,),
                 )
                 loop_row = cur.fetchone()
@@ -2659,27 +2710,31 @@ class AutoEvolutionScheduler:
                 task = cur.fetchone()
         if not task:
             raise ValueError(f"任务不存在: {task_id}")
+        effective_node_id = loop_row.get("node_id") or task.get("node_id") or resolve_default_qe_node_id()
+        if not loop_row.get("node_id"):
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE qe_evolution_loops SET node_id = %s, updated_at = NOW() WHERE loop_id = %s",
+                        (effective_node_id, evolution_loop_db_id),
+                    )
+                conn.commit()
+        await preflight_qe_node(effective_node_id)
 
-        # 3. 检查 workspace 中训练是否已完成
-        workspace_dir = QE_WORKSPACE_WIN / task_id / loop_id
-        mlruns_dir = workspace_dir / "mlruns"
+        client = self._get_workspace_client_for_node_id(effective_node_id)
 
-        if not workspace_dir.exists() or not mlruns_dir.exists():
+        # 3. Verify training artifacts on the recorded node. Do not inspect the
+        # local filesystem for remote loops, because that can hide node mismatch.
+        try:
+            await client.download_mlruns_params(task_id, loop_id)
+        except Exception as e:
             raise ValueError(
-                f"Loop workspace 不存在: {workspace_dir}，无法重试"
-            )
-
-        import glob
-        params_files = glob.glob(str(mlruns_dir / "**" / "params.pkl"), recursive=True)
-        if not params_files:
-            raise ValueError(
-                f"模型文件 params.pkl 不存在于 {mlruns_dir}，"
-                f"训练未完成，无法跳过训练直接回测。"
-                f"请使用恢复任务功能重新执行完整训练。"
-            )
+                f"Loop {evolution_loop_db_id} has no usable mlruns params on node "
+                f"{effective_node_id}; retry cannot switch nodes or silently rerun training."
+            ) from e
 
         logger.info(
-            f"Retry loop {evolution_loop_db_id}: params.pkl found at {params_files[0]}, using backtest-only mode"
+            f"Retry loop {evolution_loop_db_id}: params.pkl verified on node {effective_node_id}, using backtest-only mode"
         )
 
         # 4. 更新 loop 状态为 running
@@ -2705,29 +2760,40 @@ class AutoEvolutionScheduler:
             from .executors.backtest import BacktestExecutor, BacktestMode
             from .executors.base import ExecutionContext
 
-            cfg = build_config_from_retry_loop(config, task, experiment_name=f"{task_id}/{loop_id}")
+            task_for_retry = dict(task)
+            task_for_retry["node_id"] = effective_node_id
+            cfg = build_config_from_retry_loop(config, task_for_retry, experiment_name=f"{task_id}/{loop_id}")
 
             composer = ConfigComposer()
-            client = self._get_workspace_client_for_task(task_id)
             executor = BacktestExecutor(composer, client)
-            hmm_coeff_path = workspace_dir / "hmm_sector_coefficients.json"
-            if hmm_coeff_path.exists():
+            if cfg.hmm and cfg.hmm.enable_sector_hmm:
+                try:
+                    hmm_coeff_json = await client.get_workspace_file(
+                        task_id,
+                        loop_id,
+                        "hmm_sector_coefficients.json",
+                    )
+                except Exception as e:
+                    raise ValueError(
+                        f"Loop {evolution_loop_db_id} is HMM-enabled but "
+                        f"hmm_sector_coefficients.json is not readable on node {effective_node_id}."
+                    ) from e
+                if not isinstance(hmm_coeff_json, str):
+                    hmm_coeff_json = json.dumps(hmm_coeff_json, ensure_ascii=False)
                 extra_params = dict(cfg.extra_params or {})
-                extra_params[PRECOMPUTED_HMM_COEFF_JSON_PARAM] = hmm_coeff_path.read_text(
-                    encoding="utf-8"
-                )
+                extra_params[PRECOMPUTED_HMM_COEFF_JSON_PARAM] = hmm_coeff_json
                 cfg = cfg.model_copy(update={"extra_params": extra_params})
                 logger.info(
-                    "Retry loop %s: reusing HMM coefficients artifact %s",
+                    "Retry loop %s: reusing HMM coefficients artifact from node %s",
                     evolution_loop_db_id,
-                    hmm_coeff_path,
+                    effective_node_id,
                 )
             ctx = ExecutionContext(
                 task_id=task_id,
                 loop_index=loop_index,
                 experiment_name=f"{task_id}/{loop_id}",
-                node_id=task.get("node_id"),
-                callback_url=self._get_callback_url_for_task(task_id),
+                node_id=effective_node_id,
+                callback_url=self._get_callback_url_for_node(effective_node_id),
                 model_source={
                     "source_task_id": task_id,
                     "source_loop": f"Loop{loop_index}",
@@ -3014,7 +3080,7 @@ class AutoEvolutionScheduler:
         注意：loop_id 来自路由参数（如 "Loop2"），DB 中存储的是 "{task_id}_Loop{N}" 格式
         """
         dest_dir = os.path.join(SOTA_ASSETS_DIR, task_id, loop_id)
-        client = self._get_workspace_client_for_task(task_id)
+        client = self._get_workspace_client_for_loop(task_id, loop_id)
         synced_path = await client.download_loop_assets(task_id, loop_id, dest_dir)
         
         # 更新 DB SOTA registry：loop_id 在 DB 中是 "{task_id}_{loop_id}" 格式
@@ -3784,9 +3850,12 @@ class AutoEvolutionScheduler:
 
         try:
             # 获取回测结果
-            client = self._get_workspace_client_for_task(task_id)
+            execution_node_id = self._get_loop_node_id(task_id, evolution_loop_db_id)
+            client = self._get_workspace_client_for_loop(task_id, evolution_loop_db_id)
             loop_id = f"Loop{loop_index}"
             metrics = await client.get_loop_metrics(task_id, loop_id)
+            metrics.setdefault("execution_trace", {})["node_id"] = execution_node_id
+            metrics["execution_node_id"] = execution_node_id
 
             # Normalize metric keys
             _METRIC_ALIASES = {
@@ -3918,6 +3987,7 @@ class AutoEvolutionScheduler:
         loops_config: List[Dict[str, Any]] = None,
         execution_mode: str = "serial",
         node_id: Optional[str] = None,
+        node_parallelism: Optional[Dict[str, int]] = None,
         engine_mode: str = "unified",
     ) -> str:
         """
@@ -3930,6 +4000,12 @@ class AutoEvolutionScheduler:
             raise ValueError(
                 "QE legacy execution engine has been removed; only engine_mode='unified' is supported."
             )
+        loops_config, loop1_node_id, selected_node_ids = resolve_custom_loop_nodes(
+            [dict(loop_cfg) for loop_cfg in loops_config],
+            node_id,
+        )
+        node_parallelism = normalize_node_parallelism(selected_node_ids, node_parallelism)
+
         normalized_loops = []
         for idx, loop_cfg in enumerate(loops_config, start=1):
             cfg = dict(loop_cfg)
@@ -3957,6 +4033,7 @@ class AutoEvolutionScheduler:
             cfg["label_horizon"] = label_horizon
             normalized_loops.append(cfg)
         loops_config = normalized_loops
+        node_id = loop1_node_id
 
         # 生成 task_id
         suffix = uuid.uuid4().hex[:4]
@@ -4003,7 +4080,12 @@ class AutoEvolutionScheduler:
                 """, (
                     new_task_id, task_name, target_desc, len(loops_config),
                     base_exp_id, node_id,
-                    json.dumps({"loops": loops_config, "engine_mode": engine_mode}),
+                    json.dumps({
+                        "loops": loops_config,
+                        "engine_mode": engine_mode,
+                        "node_parallelism": node_parallelism,
+                        "node_resolution_policy": "loop1_inherit_v1",
+                    }),
                     execution_mode,
                     first_label_horizon,
                 ))
@@ -4090,6 +4172,7 @@ class AutoEvolutionScheduler:
 
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"
+        effective_node_id = loop_config.get("node_id") or task.get("node_id") or resolve_default_qe_node_id()
 
         if self._get_task_status(task_id) != "running":
             logger.info(f"Custom evolution task {task_id} is not running; skip submitting Loop {loop_index}")
@@ -4097,13 +4180,24 @@ class AutoEvolutionScheduler:
 
         # 创建 LOOP 记录
         with get_conn() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT node_id FROM qe_evolution_loops WHERE loop_id = %s", (evolution_loop_db_id,))
+                existing_loop = cur.fetchone()
+                existing_node_id = existing_loop.get("node_id") if existing_loop else None
+                if existing_node_id and existing_node_id != effective_node_id:
+                    raise ValueError(
+                        f"Loop {evolution_loop_db_id} is locked to node {existing_node_id}; "
+                        f"refusing to submit on {effective_node_id}"
+                    )
                 cur.execute("""
                     INSERT INTO qe_evolution_loops
-                    (loop_id, task_id, loop_index, status, action_type)
-                    VALUES (%s, %s, %s, 'running', 'custom_config')
-                    ON CONFLICT (loop_id) DO UPDATE SET status = 'running', updated_at = NOW()
-                """, (evolution_loop_db_id, task_id, loop_index))
+                    (loop_id, task_id, loop_index, status, action_type, node_id)
+                    VALUES (%s, %s, %s, 'running', 'custom_config', %s)
+                    ON CONFLICT (loop_id) DO UPDATE SET
+                        status = 'running',
+                        node_id = COALESCE(qe_evolution_loops.node_id, EXCLUDED.node_id),
+                        updated_at = NOW()
+                """, (evolution_loop_db_id, task_id, loop_index, effective_node_id))
             conn.commit()
 
         try:
@@ -4144,6 +4238,8 @@ class AutoEvolutionScheduler:
                 "data_split": cfg.data_split or {},
                 "label_type": cfg.label_type,
                 "label_horizon": cfg.label_horizon,
+                "node_id": effective_node_id,
+                "execution_node_id": effective_node_id,
             }
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -4165,15 +4261,17 @@ class AutoEvolutionScheduler:
                     conn.commit()
                 return None
 
+            await preflight_qe_node(effective_node_id)
+
             composer = ConfigComposer()
-            client = self._get_workspace_client_for_task(task_id)
+            client = self._get_workspace_client_for_node_id(effective_node_id)
             executor = BacktestExecutor(composer, client)
             ctx = ExecutionContext(
                 task_id=task_id,
                 loop_index=loop_index,
                 experiment_name=experiment_name,
-                node_id=task.get("node_id"),
-                callback_url=self._get_callback_url_for_task(task_id),
+                node_id=effective_node_id,
+                callback_url=self._get_callback_url_for_node(effective_node_id),
             )
             # backtest-only 模式：注入 model_source 并切换执行模式
             # force_full_train 可覆盖 backtest_only 配置，用于恢复时源模型不可用的场景
@@ -4182,16 +4280,39 @@ class AutoEvolutionScheduler:
                     raise ValueError(
                         f"Loop {loop_index}: backtest_only=True 但未指定 model_source"
                     )
+                model_source = {
+                    "source_task_id": cfg.model_source_task_id,
+                    "source_loop": f"Loop{cfg.model_source_loop_index}",
+                }
+                extra_experiment_files = {}
+                source_node_id = self._get_loop_node_id(
+                    cfg.model_source_task_id,
+                    int(cfg.model_source_loop_index),
+                )
+                if source_node_id != effective_node_id:
+                    import base64
+
+                    source_client = self._get_workspace_client_for_node_id(source_node_id)
+                    mlruns_tar = await source_client.download_mlruns_params(
+                        cfg.model_source_task_id,
+                        f"Loop{cfg.model_source_loop_index}",
+                    )
+                    if not mlruns_tar:
+                        raise RuntimeError(
+                            "cross-node custom evolution missing source model params: "
+                            f"{cfg.model_source_task_id}/Loop{cfg.model_source_loop_index}"
+                        )
+                    extra_experiment_files["mlruns_params.tar.gz.b64"] = base64.b64encode(mlruns_tar).decode("ascii")
+                    model_source["cross_node"] = True
+
                 ctx = ExecutionContext(
                     task_id=task_id,
                     loop_index=loop_index,
                     experiment_name=experiment_name,
-                    node_id=task.get("node_id"),
-                    callback_url=self._get_callback_url_for_task(task_id),
-                    model_source={
-                        "source_task_id": cfg.model_source_task_id,
-                        "source_loop": f"Loop{cfg.model_source_loop_index}",
-                    },
+                    node_id=effective_node_id,
+                    callback_url=self._get_callback_url_for_node(effective_node_id),
+                    model_source=model_source,
+                    extra_experiment_files=extra_experiment_files or None,
                 )
                 mode = BacktestMode.BACKTEST_ONLY
                 logger.info(
@@ -4267,6 +4388,31 @@ class AutoEvolutionScheduler:
                     )
                 conn.commit()
             raise ValueError(error_msg)
+
+        loops_config, loop1_node_id, selected_node_ids = resolve_custom_loop_nodes(
+            [dict(loop_cfg) for loop_cfg in loops_config],
+            task.get("node_id"),
+        )
+        node_parallelism = normalize_node_parallelism(
+            selected_node_ids,
+            custom_evo_config.get("node_parallelism"),
+        )
+        custom_evo_config["loops"] = loops_config
+        custom_evo_config["node_parallelism"] = node_parallelism
+        custom_evo_config["node_resolution_policy"] = "loop1_inherit_v1"
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qe_evolution_tasks
+                    SET node_id = %s, strategy_evo_config = %s, updated_at = NOW()
+                    WHERE task_id = %s
+                    """,
+                    (loop1_node_id, json.dumps(custom_evo_config), task_id),
+                )
+            conn.commit()
+        task = dict(task)
+        task["node_id"] = loop1_node_id
 
         execution_mode_raw = task.get("strategy_evo_execution_mode", "serial")
         if execution_mode_raw.startswith("parallel"):
@@ -4370,14 +4516,19 @@ class AutoEvolutionScheduler:
                         "skip completed-loop metrics processing"
                     )
         else:
-            sem = asyncio.Semaphore(parallelism)
+            node_semaphores = {
+                node_id: asyncio.Semaphore(limit)
+                for node_id, limit in node_parallelism.items()
+            }
             logger.info(
                 f"Custom evolution {task_id} parallel mode start: "
-                f"parallelism={parallelism}, loops={len(loops_to_run)}"
+                f"legacy_parallelism={parallelism}, node_parallelism={node_parallelism}, loops={len(loops_to_run)}"
             )
 
             async def run_with_sem(loop_config):
                 loop_index = loop_config.get("loop_index")
+                loop_node_id = loop_config.get("node_id") or loop1_node_id
+                sem = node_semaphores[loop_node_id]
                 async with sem:
                     if self._get_task_status(task_id) != "running":
                         logger.info(f"Custom evolution task {task_id} is no longer running; skip Loop {loop_index}")

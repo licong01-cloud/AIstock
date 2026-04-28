@@ -28,9 +28,9 @@ def test_stop_task_cancels_all_non_terminal_loops_and_kills_each_candidate(monke
 
         def execute(self, sql, params=None):
             normalized = " ".join(sql.lower().split())
-            if normalized.startswith("select task_id from qe_evolution_tasks"):
-                self.rows = [{"task_id": params[0]}] if params[0] == task_id else []
-            elif normalized.startswith("select loop_id, loop_index, status from qe_evolution_loops"):
+            if normalized.startswith("select task_id, node_id from qe_evolution_tasks"):
+                self.rows = [{"task_id": params[0], "node_id": "wsl2-5080"}] if params[0] == task_id else []
+            elif normalized.startswith("select loop_id, loop_index, status, node_id from qe_evolution_loops"):
                 self.rows = [row.copy() for row in db["loops"] if row["status"] != "completed"]
             elif normalized.startswith("update qe_evolution_tasks set status = 'paused'"):
                 db["task_status"] = "paused"
@@ -77,7 +77,7 @@ def test_stop_task_cancels_all_non_terminal_loops_and_kills_each_candidate(monke
     fake_client = FakeClient()
     monkeypatch.setattr(qes, "get_conn", lambda: FakeConn())
     scheduler = qes.AutoEvolutionScheduler.__new__(qes.AutoEvolutionScheduler)
-    scheduler._get_workspace_client_for_task = lambda _task_id: fake_client
+    scheduler._get_workspace_client_for_node_id = lambda _node_id: fake_client
 
     result = asyncio.run(scheduler.stop_task(task_id))
 

@@ -76,6 +76,11 @@ from ..db.pg_pool import get_conn
 from ..services.quantevolver.callback_urls import build_aistock_callback_url
 from ..services.quantevolver.experiment_config import normalize_label_horizon
 from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
+from ..services.quantevolver.node_execution import (
+    QENodePreflightError,
+    preflight_qe_node,
+    resolve_default_qe_node_id,
+)
 
 logger = logging.getLogger("aistock.routers.quantevolver")
 
@@ -2915,11 +2920,13 @@ async def sync_experiment_results(experiment_id: str):
     if not qe_loop_id:
         raise HTTPException(status_code=400, detail="实验缺少 qe_loop_id，无法同步")
 
+    execution_node_id = _get_recorded_experiment_node(exp_record) or resolve_default_qe_node_id()
+
     try:
-        async with QEWorkspaceClient() as client:
+        async with QEWorkspaceClient.for_node(execution_node_id) as client:
             metrics = await client.get_loop_metrics(qe_task_id, qe_loop_id)
             _update_experiment_with_metrics(experiment_id, metrics)
-            return {"ok": True, "experiment_id": experiment_id, "metrics": metrics}
+            return {"ok": True, "experiment_id": experiment_id, "node_id": execution_node_id, "metrics": metrics}
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
             raise HTTPException(status_code=404, detail="回测指标尚未生成")
@@ -5519,6 +5526,23 @@ def _resolve_qe_experiment_callback_url(
     )
 
 
+def _parse_qe_custom_params(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return dict(parsed) if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _get_recorded_experiment_node(exp_record: dict[str, Any]) -> str | None:
+    custom_params = _parse_qe_custom_params(exp_record.get("custom_params"))
+    return custom_params.get("execution_node_id") or custom_params.get("node_id")
+
+
 @router.post("/experiments/{experiment_id}/run")
 async def run_experiment(experiment_id: str, engine_mode: Optional[str] = "unified", node_id: str = None):
     """一键执行单次实验：读取配置 → compose_in_memory → 提交 RDAgent。
@@ -5844,29 +5868,62 @@ async def _run_experiment_unified(experiment_id: str, node_id: str = None):
             raise HTTPException(status_code=409, detail="实验正在执行中，请勿重复提交")
 
         experiment_name = exp_record.get("experiment_name") or f"qe_exp_{experiment_id}"
+        recorded_node_id = _get_recorded_experiment_node(exp_record)
+        if recorded_node_id and node_id and recorded_node_id != node_id:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_code": "QE_RERUN_NODE_LOCKED",
+                    "message": (
+                        f"Experiment {experiment_id} is locked to node {recorded_node_id}; "
+                        f"refusing to rerun on {node_id}."
+                    ),
+                    "context": {
+                        "experiment_id": experiment_id,
+                        "recorded_node_id": recorded_node_id,
+                        "requested_node_id": node_id,
+                    },
+                },
+            )
+        effective_node_id = node_id or recorded_node_id or resolve_default_qe_node_id()
+        try:
+            await preflight_qe_node(effective_node_id)
+        except QENodePreflightError as e:
+            raise HTTPException(status_code=400, detail=e.to_detail()) from e
+
         cfg = build_config_from_exp_record(exp_record, experiment_name=experiment_name)
 
         # 查询远端节点 callback_url
         callback_url = None
         node_callback_base = None
-        if node_id:
+        if effective_node_id:
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT callback_url FROM infra.compute_nodes WHERE node_id = %s", (node_id,))
+                    cur.execute("SELECT callback_url FROM infra.compute_nodes WHERE node_id = %s", (effective_node_id,))
                     row = cur.fetchone()
                     if row:
                         node_callback_base = row[0]
-        callback_url = _resolve_qe_experiment_callback_url(node_id, node_callback_base)
+        try:
+            callback_url = _resolve_qe_experiment_callback_url(effective_node_id, node_callback_base)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_code": "QE_CALLBACK_URL_UNREACHABLE",
+                    "message": str(e),
+                    "context": {"node_id": effective_node_id},
+                },
+            ) from e
 
         ctx = ExecutionContext(
             task_id=experiment_name,
             loop_index=1,
-            experiment_name=experiment_name,
-            node_id=node_id,
+            experiment_name=f"{experiment_name}/Loop1",
+            node_id=effective_node_id,
             callback_url=callback_url,
         )
 
-        client = QEWorkspaceClient.for_node(node_id) if node_id else QEWorkspaceClient()
+        client = QEWorkspaceClient.for_node(effective_node_id)
         async with client:
             executor = BacktestExecutor(cc, client)
             result = await executor.submit(cfg, ctx, mode=BacktestMode.FULL_TRAIN)
@@ -5884,7 +5941,7 @@ async def _run_experiment_unified(experiment_id: str, node_id: str = None):
                         END,
                         started_at = NOW()
                     WHERE experiment_id = %s
-                """, (experiment_name, result.job_id, node_id, node_id, experiment_id))
+                """, (experiment_name, result.job_id, effective_node_id, effective_node_id, experiment_id))
             conn.commit()
 
         return {
@@ -5893,6 +5950,7 @@ async def _run_experiment_unified(experiment_id: str, node_id: str = None):
             "qe_task_id": experiment_name,
             "qe_loop_id": result.job_id,
             "engine": "unified",
+            "node_id": effective_node_id,
         }
     except HTTPException:
         raise
@@ -6436,43 +6494,45 @@ async def get_experiment_enhanced_metrics(experiment_id: str):
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT qe_loop_id, qe_task_id, result_metrics, workspace_path FROM qe_experiments WHERE experiment_id = %s",
+                    "SELECT qe_loop_id, qe_task_id, result_metrics, workspace_path, custom_params FROM qe_experiments WHERE experiment_id = %s",
                     (experiment_id,),
                 )
                 row = cur.fetchone()
                 if not row:
                     raise HTTPException(status_code=404, detail="实验不存在")
                 if len(row) >= 4:
-                    qe_loop_id, qe_task_id, result_metrics_raw, workspace_path = row[:4]
+                    qe_loop_id, qe_task_id, result_metrics_raw, workspace_path, custom_params_raw = row[:5]
                 else:
                     qe_loop_id, qe_task_id, result_metrics_raw = row
                     workspace_path = None
+                    custom_params_raw = None
+
+        custom_params = _parse_qe_custom_params(custom_params_raw)
+        recorded_execution_node_id = custom_params.get("execution_node_id") or custom_params.get("node_id")
 
         cached_flat = _extract_cached_enhanced(result_metrics_raw)
         if _has_enhanced_detail(cached_flat):
             return cached_flat
 
-        local_payload = _load_local_enhanced_metrics_payload(
-            qe_task_id=qe_task_id,
-            qe_loop_id=qe_loop_id,
-            workspace_path=workspace_path,
-        )
-        local_flat = _flatten_enhanced_payload(local_payload)
-        if local_flat:
-            if cached_flat.get("summary") and not local_flat.get("summary"):
-                local_flat["summary"] = cached_flat["summary"]
-            return local_flat
+        if not recorded_execution_node_id:
+            local_payload = _load_local_enhanced_metrics_payload(
+                qe_task_id=qe_task_id,
+                qe_loop_id=qe_loop_id,
+                workspace_path=workspace_path,
+            )
+            local_flat = _flatten_enhanced_payload(local_payload)
+            if local_flat:
+                if cached_flat.get("summary") and not local_flat.get("summary"):
+                    local_flat["summary"] = cached_flat["summary"]
+                return local_flat
 
         if not qe_loop_id:
             raise HTTPException(status_code=404, detail="增强指标不可用")
 
         from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
-        base_url = QEWorkspaceClient().base_url
-        url = f"{base_url}/tasks/{qe_task_id}/loops/{qe_loop_id}/enhanced-metrics"
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            data = response.json()
+        execution_node_id = recorded_execution_node_id or resolve_default_qe_node_id()
+        async with QEWorkspaceClient.for_node(execution_node_id) as client:
+            data = await client.get_enhanced_metrics(qe_task_id, qe_loop_id)
 
         flat = _flatten_enhanced_payload(data)
         if flat:

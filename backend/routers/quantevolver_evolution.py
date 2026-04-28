@@ -27,6 +27,13 @@ from ..services.quantevolver.evaluation_universe_service import EvaluationUniver
 from ..services.quantevolver.experiment_config import normalize_label_horizon
 from ..services.quantevolver.factor_official_evaluation_service import CALC_ENGINE
 from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
+from ..services.quantevolver.node_execution import (
+    QENodePreflightError,
+    get_compute_node,
+    normalize_node_parallelism,
+    preflight_qe_nodes,
+    resolve_custom_loop_nodes,
+)
 
 # RD-Agent QE workspace API base URL
 RDAGENT_QE_BASE = os.getenv("RDAGENT_RESULTS_API_BASE_URL", "http://127.0.0.1:9000").rstrip("/")
@@ -880,6 +887,7 @@ class CustomEvoLoopConfig(BaseModel):
     backtest_only: bool = Field(False, description="是否跳过训练仅回测（需提供 model_source，且因子不可变更）")
     model_source_task_id: Optional[str] = Field(None, description="模型来源任务 ID（backtest_only=True 时必填）")
     model_source_loop_index: Optional[int] = Field(None, description="模型来源 Loop 索引（backtest_only=True 时必填）")
+    node_id: Optional[str] = Field(None, description="Loop execution node; blank inherits Loop1")
 
 class CustomEvolutionCreateRequest(BaseModel):
     task_name: str = Field(..., description="任务名称")
@@ -887,14 +895,12 @@ class CustomEvolutionCreateRequest(BaseModel):
     loops: List[CustomEvoLoopConfig] = Field(..., description="Loop 配置列表，至少1个", min_length=1)
     execution_mode: str = Field("serial", description="执行方式: serial / parallel_N (N=2,4,6,8)")
     node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
+    node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism, default 1, max 4")
     engine_mode: str = Field("unified", description="引擎模式: only unified is supported")
 
-@router.post("/custom-tasks", summary="创建自定义演进任务（每个 Loop 完全自定义因子+模型+策略）")
+@router.post("/custom-tasks", summary="Create custom evolution task")
 async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, background_tasks: BackgroundTasks):
-    """
-    创建自定义演进任务。与策略演进不同，每个 Loop 都可以完全自定义因子、模型、策略配置，
-    执行完整的训练+回测流程（非 backtest-only）。
-    """
+    """Create a custom_evo task with explicit per-loop execution nodes."""
     try:
         try:
             ensure_qe_label_horizon_schema()
@@ -907,52 +913,53 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
                 detail="QE legacy execution engine has been removed; only engine_mode='unified' is supported.",
             )
 
-        # 验证 loops 配置
         loop_source_horizons: Dict[int, int] = {}
-        for i, loop_cfg in enumerate(req.loops):
+        for i, loop_cfg in enumerate(req.loops, start=1):
             try:
                 loop_label_horizon = normalize_label_horizon(loop_cfg.label_horizon)
             except ValueError as e:
-                raise HTTPException(status_code=400, detail=f"Loop {i+1}: {e}") from e
-            if not loop_cfg.factor_keys or len(loop_cfg.factor_keys) == 0:
-                raise HTTPException(status_code=400, detail=f"Loop {i+1} 必须选择至少一个因子")
+                raise HTTPException(status_code=400, detail=f"Loop {i}: {e}") from e
+            if not loop_cfg.factor_keys:
+                raise HTTPException(status_code=400, detail=f"Loop {i}: factor_keys is required")
             if not loop_cfg.model_id:
-                raise HTTPException(status_code=400, detail=f"Loop {i+1} 必须选择一个模型")
-            # HMM 验证
+                raise HTTPException(status_code=400, detail=f"Loop {i}: model_id is required")
             if loop_cfg.enable_sector_hmm and not loop_cfg.hmm_model_version_id:
-                raise HTTPException(status_code=400, detail=f"Loop {i+1} 启用 HMM 时必须提供 hmm_model_version_id")
-            # backtest-only 验证：因子不可变更
+                raise HTTPException(status_code=400, detail=f"Loop {i}: hmm_model_version_id is required when HMM is enabled")
             if loop_cfg.backtest_only:
                 if not loop_cfg.model_source_task_id or loop_cfg.model_source_loop_index is None:
-                    raise HTTPException(status_code=400, detail=f"Loop {i+1} 启用 backtest-only 但未指定 model_source")
+                    raise HTTPException(status_code=400, detail=f"Loop {i}: backtest-only requires model_source")
                 try:
                     source_label_horizon = scheduler._get_source_loop_label_horizon(
                         loop_cfg.model_source_task_id,
                         loop_cfg.model_source_loop_index,
                     )
                 except ValueError as e:
-                    raise HTTPException(status_code=400, detail=f"Loop {i+1}: {e}") from e
+                    raise HTTPException(status_code=400, detail=f"Loop {i}: {e}") from e
                 loop_source_horizons[i] = source_label_horizon
                 if loop_label_horizon != source_label_horizon:
-                    raise HTTPException(status_code=400, detail=(
-                        f"Loop {i+1} 启用 backtest-only，但 label_horizon={loop_label_horizon} "
-                        f"与源模型 label_horizon={source_label_horizon} 不一致。"
-                        "backtest-only 禁止修改训练标签期限，请关闭 backtest-only 后重训。"
-                    ))
-                source_factors = _get_source_loop_factors(loop_cfg.model_source_task_id, loop_cfg.model_source_loop_index)
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Loop {i}: backtest-only label_horizon={loop_label_horizon} does not match "
+                            f"source model label_horizon={source_label_horizon}"
+                        ),
+                    )
+                source_factors = _get_source_loop_factors(
+                    loop_cfg.model_source_task_id,
+                    loop_cfg.model_source_loop_index,
+                )
                 if source_factors is None:
-                    raise HTTPException(status_code=400, detail=(
-                        f"Loop {i+1}: 源 Loop {loop_cfg.model_source_task_id}/Loop{loop_cfg.model_source_loop_index} "
-                        f"不存在或无法读取因子配置，无法启用 backtest-only 模式"
-                    ))
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Loop {i}: source loop factors cannot be read; backtest-only is not allowed",
+                    )
                 current_factors = sorted(k.split("||")[0] for k in loop_cfg.factor_keys)
                 if current_factors != sorted(source_factors):
-                    raise HTTPException(status_code=400, detail=(
-                        f"Loop {i+1} 启用 backtest-only 但因子列表与源模型不一致。"
-                        f"backtest-only 模式要求因子不可变更，请关闭 backtest-only 或恢复原因子配置。"
-                    ))
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Loop {i}: backtest-only requires the same factor list as the source model",
+                    )
 
-        # 为 loops 配置分配 loop_index
         loops_config = []
         for i, loop_cfg in enumerate(req.loops, start=1):
             cfg_dict = loop_cfg.dict()
@@ -966,28 +973,45 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
                 f"custom_loop[{i}].execution_algo",
             )
             cfg_dict["label_horizon"] = normalize_label_horizon(loop_cfg.label_horizon)
-            if loop_cfg.backtest_only and (i - 1) in loop_source_horizons:
-                cfg_dict["source_label_horizon"] = loop_source_horizons[i - 1]
+            if loop_cfg.backtest_only and i in loop_source_horizons:
+                cfg_dict["source_label_horizon"] = loop_source_horizons[i]
             loops_config.append(cfg_dict)
 
-        # 节点可用性校验
-        if req.node_id:
-            from ..services.dispatch_service import DispatchService
-            svc = DispatchService()
-            node = svc.get_node(req.node_id)
-            if not node or node.get("status") == "offline":
-                raise HTTPException(status_code=400, detail=f"节点 {req.node_id} 不存在或离线")
-            for cfg_dict in loops_config:
-                stock_pool = cfg_dict.get("stock_pool")
-                if stock_pool and "filtered_pool" in stock_pool:
-                    _sync_stock_pool_to_remote(stock_pool, node)
+        try:
+            loops_config, loop1_node_id, selected_node_ids = resolve_custom_loop_nodes(
+                loops_config,
+                req.node_id,
+            )
+            node_parallelism = normalize_node_parallelism(
+                selected_node_ids,
+                req.node_parallelism,
+            )
+            node_rows = await preflight_qe_nodes(selected_node_ids)
+        except QENodePreflightError as e:
+            raise HTTPException(status_code=400, detail=e.to_detail()) from e
+
+        for cfg_dict in loops_config:
+            stock_pool = cfg_dict.get("stock_pool")
+            if stock_pool and "filtered_pool" in stock_pool:
+                node = node_rows.get(cfg_dict["node_id"]) or get_compute_node(cfg_dict["node_id"])
+                if not node:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error_code": "QE_NODE_NOT_FOUND",
+                            "message": f"Node {cfg_dict['node_id']} does not exist.",
+                            "context": {"node_id": cfg_dict["node_id"]},
+                        },
+                    )
+                _sync_stock_pool_to_remote(stock_pool, node)
 
         new_task_id = await scheduler.create_custom_evo_task(
             task_name=req.task_name,
             target_desc=req.target_desc,
             loops_config=loops_config,
             execution_mode=req.execution_mode or "serial",
-            node_id=req.node_id,
+            node_id=loop1_node_id,
+            node_parallelism=node_parallelism,
             engine_mode="unified",
         )
 
@@ -996,7 +1020,12 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             "task_id": new_task_id,
             "total_loops": len(loops_config),
             "execution_mode": req.execution_mode or "serial",
-            "message": f"自定义演进任务已创建，{len(loops_config)} 个 Loop 后台启动中",
+            "node_assignments": [
+                {"loop_index": cfg.get("loop_index"), "node_id": cfg.get("node_id")}
+                for cfg in loops_config
+            ],
+            "node_parallelism": node_parallelism,
+            "message": f"Custom evolution task created with {len(loops_config)} loops.",
         }
     except HTTPException:
         raise
@@ -1129,11 +1158,8 @@ async def get_loop_enhanced_metrics(task_id: str, loop_id: str):
         rdagent_loop_id = loop_id
         if loop_id.startswith(task_id + "_"):
             rdagent_loop_id = loop_id[len(task_id) + 1:]
-        url = f"{RDAGENT_QE_BASE}/api/v1/qe_workspace/tasks/{task_id}/loops/{rdagent_loop_id}/enhanced-metrics"
-        async with httpx.AsyncClient(timeout=RDAGENT_QE_TIMEOUT) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            data = resp.json()
+        client = scheduler._get_workspace_client_for_loop(task_id, evolution_loop_db_id)
+        data = await client.get_enhanced_metrics(task_id, rdagent_loop_id)
 
         # 若 RD-Agent 未返回 bottom_stocks，尝试从 all_stocks 计算
         if not data.get("bottom_stocks"):
@@ -1175,6 +1201,8 @@ async def get_loop_enhanced_metrics(task_id: str, loop_id: str):
         raise HTTPException(status_code=e.response.status_code, detail=str(e))
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"RD-Agent unreachable: {e}")
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @router.get("/tasks/{task_id}/trajectory", summary="获取演进轨迹（本地 qe_evolution_loops 数据）")
