@@ -334,3 +334,11 @@ Important directories:
 - Added `DbV25DayFeatureProvider` for Paper v2 V25 execution context. It builds `paper_v2_v25_day_features_v2` from audited previous-trading-day DB data and injects `market_context.day_features` only when the active policy is `V25_TWO_STAGE`.
 - Seeded local `market.dataset_date_refresh_audit` rows from existing tables for `kline_daily_raw`, `daily_basic`, `stock_moneyflow_ts`, `sector_data`, and `index_daily`, so V25 day-feature readiness can be checked against explicit audit rows instead of assuming table presence.
 - `allow_default_day_features` remains diagnostic-only inside the V25 algorithm implementation; StrategyPackage/Paper v2 validation rejects it for authoritative Paper Trading v2 policies.
+
+## HMM Daily Coefficient Generation Update - 2026-04-28
+
+- Added `docs/architecture/hmm_daily_coefficient_generation_design_20260428.md` defining the Paper v2 / Selection Center HMM daily prediction contract: HMM training remains separate from daily coefficient generation; each `effective_trade_date` coefficient must be generated from a strictly earlier completed `as_of_trade_date`.
+- Added HMM Training API endpoints under `/api/v1/hmm-training/snapshots/{snapshot_id}/daily-coefficients/{preview,generate}`. Generation requires `confirm_text == snapshot_id`, writes additive coefficient artifacts beside `models.json`, and refuses to overwrite mismatched existing artifacts.
+- Extended `scripts/precompute_hmm_coefficients.py` with `output_trade_date` remapping so forward-filtered as-of coefficients can be emitted for the next trading day without reading future data.
+- Updated `/paper-v2/model-hmm` with a Chinese daily coefficient generation card and UI E2E coverage. Selection Center/Paper v2 still consume only generated artifacts and fail fast when HMM coefficients do not cover the requested trade date.
+- Validation completed on development ports 8012/3012 without restarting production port 8001: backend Paper v2/Selection/HMM tests passed and Paper v2 Playwright UI suite passed.

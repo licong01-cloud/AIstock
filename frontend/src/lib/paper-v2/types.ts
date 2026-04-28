@@ -394,5 +394,13 @@ export type HmmSnapshot = {
     covered_trade_dates?: string[];
     date_count?: number;
     parse_error?: string;
+    generation_mode?: string;
+    as_of_trade_date?: string;
+    effective_trade_date?: string;
+    generated_at?: string;
+    snapshot_id?: string;
+    config_id?: string;
+    artifact_sha256?: string;
+    input_data_max_dates?: JsonObject;
   }>;
 };

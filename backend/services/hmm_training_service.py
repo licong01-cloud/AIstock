@@ -11,6 +11,7 @@ import logging
 import os
 import subprocess
 import calendar
+import hashlib
 from datetime import date, datetime, timedelta, timezone
 from dataclasses import asdict, fields as dc_fields
 from typing import Any, Dict, Iterable, List, Optional
@@ -32,6 +33,7 @@ DEFAULT_ROLLING_TRAIN_YEARS = 3.0
 DEFAULT_VALIDATION_WINDOW_MONTHS = 3
 MIN_RECOMMENDED_VALIDATION_TRADING_DAYS = 60
 MIN_RECOMMENDED_TRAIN_TRADING_DAYS = 500
+HMM_DAILY_COEFFICIENT_MODE = "daily_asof_prediction_v1"
 
 
 def _coerce_date(value: Any, *, field_name: str = "date") -> date:
@@ -223,6 +225,7 @@ class HMMTrainingService:
             try:
                 with open(path, "r", encoding="utf-8") as fh:
                     payload = json.load(fh)
+                artifact["artifact_sha256"] = HMMTrainingService._file_sha256(path)
                 daily = payload.get("daily_coefficients") if isinstance(payload, dict) else None
                 if isinstance(daily, dict):
                     covered = sorted(str(item) for item in daily.keys())
@@ -231,6 +234,18 @@ class HMMTrainingService:
                     if covered:
                         artifact["start_date"] = covered[0]
                         artifact["end_date"] = covered[-1]
+                if isinstance(payload, dict):
+                    for key in (
+                        "generation_mode",
+                        "as_of_trade_date",
+                        "effective_trade_date",
+                        "generated_at",
+                        "snapshot_id",
+                        "config_id",
+                        "input_data_max_dates",
+                    ):
+                        if key in payload:
+                            artifact[key] = payload[key]
             except Exception as exc:  # pragma: no cover - diagnostic metadata only
                 artifact["parse_error"] = str(exc)
             artifacts.append(artifact)
@@ -447,6 +462,343 @@ class HMMTrainingService:
                 f"market.trading_calendar has no trading days between {start_date} and {end_date}"
             )
         return trading_days
+
+    def _require_trading_day(self, trade_date: date, *, field_name: str) -> None:
+        self._list_trading_days(trade_date, trade_date)
+
+    def _next_trading_day(self, trade_date: date) -> date:
+        search_end = trade_date + timedelta(days=31)
+        days = self._list_trading_days(trade_date + timedelta(days=1), search_end)
+        return days[0]
+
+    @staticmethod
+    def _safe_preset_key(signal_preset: str) -> str:
+        text = str(signal_preset or "").strip()
+        if not text:
+            raise ValueError("signal_preset is required")
+        allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+        if any(char not in allowed for char in text):
+            raise ValueError(
+                "signal_preset may only contain letters, digits, underscores, and hyphens"
+            )
+        return text
+
+    @staticmethod
+    def _file_sha256(path: str) -> str:
+        digest = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _normalise_config_json(config_json: Any) -> Dict[str, Any]:
+        if isinstance(config_json, dict):
+            return dict(config_json)
+        if isinstance(config_json, str):
+            loaded = json.loads(config_json)
+            if not isinstance(loaded, dict):
+                raise ValueError("HMM config_json must decode to a JSON object")
+            return loaded
+        raise ValueError("HMM config_json must be a JSON object")
+
+    @staticmethod
+    def _default_signal_presets() -> Dict[str, Dict[str, float]]:
+        return {
+            "preset_A": {"trending": 1.05, "neutral": 1.00, "fading": 0.96},
+            "preset_B": {"trending": 1.10, "neutral": 1.00, "fading": 0.92},
+        }
+
+    @classmethod
+    def _extract_signal_preset_coefficients(
+        cls,
+        config_json: Any,
+        signal_preset: str,
+    ) -> Dict[str, float]:
+        cfg = cls._normalise_config_json(config_json)
+        presets = cfg.get("signal_presets")
+        if not isinstance(presets, dict) or not presets:
+            presets = cls._default_signal_presets()
+        if signal_preset not in presets:
+            raise ValueError(f"HMM signal_preset does not exist in config: {signal_preset}")
+        preset_coeffs = presets[signal_preset]
+        if isinstance(preset_coeffs, dict) and "coefficients" in preset_coeffs:
+            nested = preset_coeffs.get("coefficients")
+            if isinstance(nested, dict):
+                preset_coeffs = nested.get("1") or next(iter(nested.values()), None)
+        if not isinstance(preset_coeffs, dict) or not preset_coeffs:
+            raise ValueError(f"HMM signal_preset has no coefficients: {signal_preset}")
+        result: Dict[str, float] = {}
+        for label, raw_value in preset_coeffs.items():
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"HMM coefficient for {signal_preset}.{label} must be numeric"
+                ) from exc
+            if not value > 0:
+                raise ValueError(
+                    f"HMM coefficient for {signal_preset}.{label} must be positive"
+                )
+            result[str(label)] = value
+        return result
+
+    def _resolve_daily_coefficient_plan(
+        self,
+        *,
+        snapshot_id: str,
+        signal_preset: str,
+        as_of_date: date | None = None,
+        effective_trade_date: date | None = None,
+    ) -> Dict[str, Any]:
+        snapshot = self.get_snapshot(snapshot_id)
+        if snapshot is None:
+            raise ValueError(f"HMM snapshot {snapshot_id} does not exist")
+        snapshot_status = str(snapshot.get("status") or "").strip().lower()
+        if snapshot_status not in {"completed", "success", "succeeded", "ready"}:
+            raise RuntimeError(
+                f"HMM snapshot {snapshot_id} is not completed: {snapshot.get('status')}"
+            )
+
+        model_path = os.path.abspath(str(snapshot.get("model_path") or ""))
+        if not model_path or not os.path.isfile(model_path):
+            raise RuntimeError(
+                f"HMM model artifact is missing for snapshot {snapshot_id}: {snapshot.get('model_path')}"
+            )
+
+        preset_key = self._safe_preset_key(signal_preset)
+        config_row = self._get_config(str(snapshot["config_id"]))
+        preset_coeffs = self._extract_signal_preset_coefficients(
+            config_row["config_json"],
+            preset_key,
+        )
+
+        requested_as_of = _coerce_date(as_of_date, field_name="as_of_date") if as_of_date else None
+        latest_completed, data_max_dates = self._latest_completed_hmm_data_date(
+            as_of_date=requested_as_of,
+        )
+        if requested_as_of is not None:
+            self._require_trading_day(requested_as_of, field_name="as_of_date")
+            if latest_completed < requested_as_of:
+                raise RuntimeError(
+                    "HMM daily coefficient generation requires completed data for as_of_date; "
+                    f"requested {requested_as_of}, latest common data date is {latest_completed}"
+                )
+            as_of = requested_as_of
+        else:
+            as_of = latest_completed
+            self._require_trading_day(as_of, field_name="as_of_date")
+
+        if effective_trade_date is None:
+            effective = self._next_trading_day(as_of)
+        else:
+            effective = _coerce_date(
+                effective_trade_date,
+                field_name="effective_trade_date",
+            )
+            self._require_trading_day(effective, field_name="effective_trade_date")
+        if effective <= as_of:
+            raise ValueError(
+                "effective_trade_date must be later than as_of_trade_date for daily HMM prediction"
+            )
+
+        model_dir = os.path.dirname(model_path)
+        output_filename = f"coefficients_{preset_key}_{effective.isoformat()}_{effective.isoformat()}.json"
+        output_path = os.path.join(model_dir, output_filename)
+        existing = os.path.exists(output_path)
+        existing_status: Dict[str, Any] | None = None
+        if existing:
+            existing_status = self._validate_existing_daily_artifact(
+                output_path=output_path,
+                snapshot_id=snapshot_id,
+                config_id=str(snapshot["config_id"]),
+                signal_preset=preset_key,
+                as_of_trade_date=as_of,
+                effective_trade_date=effective,
+            )
+
+        return {
+            "snapshot_id": snapshot_id,
+            "snapshot_display_name": snapshot.get("display_name"),
+            "config_id": str(snapshot["config_id"]),
+            "config_display_name": config_row.get("display_name"),
+            "model_path": model_path,
+            "model_dir": model_dir,
+            "signal_preset": preset_key,
+            "preset_coeffs": preset_coeffs,
+            "as_of_trade_date": as_of.isoformat(),
+            "effective_trade_date": effective.isoformat(),
+            "generation_mode": HMM_DAILY_COEFFICIENT_MODE,
+            "input_data_max_dates": {
+                key: value.isoformat() if value else None
+                for key, value in data_max_dates.items()
+            },
+            "output_filename": output_filename,
+            "output_path": output_path,
+            "existing_artifact": existing,
+            "existing_artifact_status": existing_status,
+            "requires_wsl": True,
+            "confirm_text_required": snapshot_id,
+        }
+
+    def _validate_existing_daily_artifact(
+        self,
+        *,
+        output_path: str,
+        snapshot_id: str,
+        config_id: str,
+        signal_preset: str,
+        as_of_trade_date: date,
+        effective_trade_date: date,
+    ) -> Dict[str, Any]:
+        try:
+            with open(output_path, "r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+        except Exception as exc:
+            raise RuntimeError(
+                f"HMM daily coefficient artifact exists but cannot be read: {output_path}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"HMM daily coefficient artifact is not a JSON object: {output_path}")
+        expected = {
+            "generation_mode": HMM_DAILY_COEFFICIENT_MODE,
+            "snapshot_id": snapshot_id,
+            "config_id": config_id,
+            "preset_key": signal_preset,
+            "as_of_trade_date": as_of_trade_date.isoformat(),
+            "effective_trade_date": effective_trade_date.isoformat(),
+        }
+        mismatches = {
+            key: {"expected": value, "actual": payload.get(key)}
+            for key, value in expected.items()
+            if str(payload.get(key) or "") != value
+        }
+        daily = payload.get("daily_coefficients")
+        if not isinstance(daily, dict) or effective_trade_date.isoformat() not in daily:
+            mismatches["daily_coefficients"] = {
+                "expected": effective_trade_date.isoformat(),
+                "actual": sorted(daily.keys()) if isinstance(daily, dict) else type(daily).__name__,
+            }
+        if mismatches:
+            raise RuntimeError(
+                "HMM daily coefficient artifact already exists with different metadata; "
+                f"refusing to overwrite {output_path}: {json.dumps(mismatches, ensure_ascii=False)}"
+            )
+        return {
+            "status": "EXISTS",
+            "path": output_path,
+            "artifact_sha256": self._file_sha256(output_path),
+            "date_count": len(daily),
+        }
+
+    def preview_daily_coefficients(
+        self,
+        snapshot_id: str,
+        *,
+        signal_preset: str,
+        as_of_date: date | None = None,
+        effective_trade_date: date | None = None,
+    ) -> Dict[str, Any]:
+        return self._resolve_daily_coefficient_plan(
+            snapshot_id=snapshot_id,
+            signal_preset=signal_preset,
+            as_of_date=as_of_date,
+            effective_trade_date=effective_trade_date,
+        )
+
+    def generate_daily_coefficients(
+        self,
+        snapshot_id: str,
+        *,
+        signal_preset: str,
+        confirm_text: str,
+        as_of_date: date | None = None,
+        effective_trade_date: date | None = None,
+    ) -> Dict[str, Any]:
+        if str(confirm_text or "").strip() != snapshot_id:
+            raise ValueError(
+                "HMM daily coefficient generation requires explicit confirmation text matching snapshot_id"
+            )
+        plan = self._resolve_daily_coefficient_plan(
+            snapshot_id=snapshot_id,
+            signal_preset=signal_preset,
+            as_of_date=as_of_date,
+            effective_trade_date=effective_trade_date,
+        )
+        if plan["existing_artifact"]:
+            return {
+                **plan,
+                "status": "EXISTS",
+                "created": False,
+                "artifact_sha256": plan["existing_artifact_status"]["artifact_sha256"],
+            }
+
+        wsl_model_path = self._to_wsl_path(plan["model_path"])
+        wsl_output_path = self._to_wsl_path(plan["output_path"])
+        wsl_script = self._to_wsl_path(
+            os.path.abspath(os.path.join(
+                os.path.dirname(__file__), "..", "..", "scripts",
+                "precompute_hmm_coefficients.py",
+            ))
+        )
+        stdin_params = {
+            "model_path": wsl_model_path,
+            "test_start": plan["as_of_trade_date"],
+            "backtest_end": plan["as_of_trade_date"],
+            "output_trade_date": plan["effective_trade_date"],
+            "as_of_trade_date": plan["as_of_trade_date"],
+            "generation_mode": HMM_DAILY_COEFFICIENT_MODE,
+            "snapshot_id": plan["snapshot_id"],
+            "config_id": plan["config_id"],
+            "input_data_max_dates": plan["input_data_max_dates"],
+            "preset_coeffs": plan["preset_coeffs"],
+            "preset_key": plan["signal_preset"],
+            "db_host": os.getenv("TDX_DB_HOST", "127.0.0.1"),
+            "db_port": int(os.getenv("TDX_DB_PORT", "5432")),
+            "db_name": os.getenv("TDX_DB_NAME", "aistock"),
+            "db_user": os.getenv("TDX_DB_USER", "postgres"),
+            "db_password": os.getenv("TDX_DB_PASSWORD", ""),
+        }
+        wsl_cmd = (
+            "source ~/miniconda3/etc/profile.d/conda.sh && "
+            "conda activate rdagent-gpu && "
+            f"python {wsl_script} --output-path '{wsl_output_path}'"
+        )
+        proc = subprocess.run(
+            ["wsl", "bash", "-c", wsl_cmd],
+            input=json.dumps(stdin_params, ensure_ascii=False),
+            capture_output=True,
+            text=True,
+            timeout=300,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if proc.stderr:
+            for line in proc.stderr.strip().splitlines():
+                logger.info("[HMM-daily-coefficients] %s", line)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "HMM daily coefficient generation failed: "
+                f"returncode={proc.returncode}; stderr_tail={proc.stderr[-4000:]}"
+            )
+        if not os.path.isfile(plan["output_path"]):
+            raise RuntimeError(
+                f"HMM daily coefficient generation did not create output file: {plan['output_path']}"
+            )
+        artifact_status = self._validate_existing_daily_artifact(
+            output_path=plan["output_path"],
+            snapshot_id=plan["snapshot_id"],
+            config_id=plan["config_id"],
+            signal_preset=plan["signal_preset"],
+            as_of_trade_date=_coerce_date(plan["as_of_trade_date"], field_name="as_of_trade_date"),
+            effective_trade_date=_coerce_date(plan["effective_trade_date"], field_name="effective_trade_date"),
+        )
+        return {
+            **plan,
+            "status": "CREATED",
+            "created": True,
+            "artifact_sha256": artifact_status["artifact_sha256"],
+        }
 
     @staticmethod
     def build_rolling_training_plan(

@@ -5,6 +5,7 @@ const TDX_BASE = process.env.TDX_BASE_URL || "http://127.0.0.1:19080";
 const QE_EXPERIMENTS = ["qe_20260416_002701", "qe_20260413_084216", "qe_20260416_082012"];
 const REPLAY_TRADE_DATE = process.env.PAPER_V2_E2E_TRADE_DATE || "2026-04-24";
 const ACTIVATION_TRADE_DATE = process.env.PAPER_V2_E2E_ACTIVATION_DATE || "2026-04-28";
+const HMM_UNCOVERED_TRADE_DATE = process.env.PAPER_V2_E2E_HMM_UNCOVERED_DATE || "2026-04-29";
 
 type JsonObject = Record<string, any>;
 
@@ -390,7 +391,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(page.locator(".pv2-error-panel")).toContainText("TopK");
 
     await page.getByTestId("selection-top-k").fill("20");
-    await page.getByTestId("selection-trade-date").fill(ACTIVATION_TRADE_DATE);
+    await page.getByTestId("selection-trade-date").fill(HMM_UNCOVERED_TRADE_DATE);
     await expect(page.getByTestId("selection-hmm-coverage")).toContainText("HMM 系数不覆盖当前交易日");
     await page.getByTestId("selection-run").click();
     await expect(page.locator(".pv2-error-panel")).toContainText(/HMM 快照系数覆盖|HMM 系数文件不覆盖/);
@@ -613,6 +614,24 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await page.getByTestId("hmm-train-years").fill("3");
     await page.getByTestId("hmm-rolling-preview").click();
     await expect(page.locator(".pv2-readable-panel").filter({ hasText: "Latest Completed Trade Date" })).toContainText(REPLAY_TRADE_DATE, { timeout: 60_000 });
+
+    await page.getByTestId("hmm-daily-snapshot").selectOption(hmm.snapshot_id);
+    await page.getByTestId("hmm-daily-preset").selectOption("preset_A");
+    await page.getByTestId("hmm-daily-as-of-date").fill(hmm.trade_date);
+    await page.getByTestId("hmm-daily-effective-date").fill("");
+    await page.getByTestId("hmm-daily-preview").click();
+    await expect(page.locator(".pv2-readable-panel").filter({ hasText: "Generation Mode" }).last()).toContainText("daily_asof_prediction_v1", { timeout: 60_000 });
+    await page.getByTestId("hmm-daily-generate").click();
+    await page.getByTestId("hmm-daily-generate-input").fill(hmm.snapshot_id);
+    const dailyGenerateResponse = page.waitForResponse(
+      (response) => response.url().includes("/hmm-training/snapshots/")
+        && response.url().includes("/daily-coefficients/generate")
+        && response.request().method() === "POST",
+      { timeout: 300_000 },
+    );
+    await page.getByTestId("hmm-daily-generate-confirm").click();
+    expect((await dailyGenerateResponse).ok()).toBeTruthy();
+    await expect(page.locator(".pv2-readable-panel").filter({ hasText: "Artifact Sha256" }).last()).toContainText(/CREATED|EXISTS/, { timeout: 300_000 });
     await expectNoRawJsonUi(page);
   });
 

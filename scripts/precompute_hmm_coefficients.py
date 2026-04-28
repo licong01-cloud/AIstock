@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 import sys
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -89,6 +89,12 @@ def main() -> None:
         "trending": 1.05, "neutral": 1.00, "fading": 0.96,
     })
     preset_key = params.get("preset_key")
+    output_trade_date = params.get("output_trade_date")
+    as_of_trade_date = params.get("as_of_trade_date")
+    generation_mode = params.get("generation_mode")
+    snapshot_id = params.get("snapshot_id")
+    config_id = params.get("config_id")
+    input_data_max_dates = params.get("input_data_max_dates")
 
     db_host = params.get("db_host", "127.0.0.1")
     db_port = params.get("db_port", 5432)
@@ -332,6 +338,18 @@ def main() -> None:
             day_coeffs[code] = preset_coeffs.get(label, 1.0)
         daily_coefficients[d] = day_coeffs
 
+    if output_trade_date:
+        source_trade_date = as_of_trade_date or backtest_end
+        source_coefficients = daily_coefficients.get(source_trade_date)
+        if not isinstance(source_coefficients, dict) or not source_coefficients:
+            print(
+                "ERROR: HMM daily generation did not produce coefficients for "
+                f"as_of_trade_date={source_trade_date}; available={sorted(daily_coefficients.keys())[-5:]}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        daily_coefficients = {str(output_trade_date): source_coefficients}
+
     result = {
         "model_path": model_path,
         "preset_key": preset_key,
@@ -342,6 +360,16 @@ def main() -> None:
         "daily_coefficients": daily_coefficients,
         "stock_sector_map": stock_sector_map,
     }
+    if output_trade_date:
+        result.update({
+            "generation_mode": generation_mode or "daily_asof_prediction_v1",
+            "as_of_trade_date": as_of_trade_date or backtest_end,
+            "effective_trade_date": str(output_trade_date),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "snapshot_id": snapshot_id,
+            "config_id": config_id,
+            "input_data_max_dates": input_data_max_dates,
+        })
 
     result_json = json.dumps(result, ensure_ascii=False)
     print(result_json)

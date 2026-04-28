@@ -95,6 +95,16 @@ class RollingTrainingTriggerRequest(RollingTrainingPreviewRequest):
     confirm_text: str
 
 
+class DailyCoefficientPreviewRequest(BaseModel):
+    signal_preset: str
+    as_of_date: Optional[date] = None
+    effective_trade_date: Optional[date] = None
+
+
+class DailyCoefficientGenerateRequest(DailyCoefficientPreviewRequest):
+    confirm_text: str
+
+
 # ---------------------------------------------------------------------------
 # Helper: convert DB row values to strings for Pydantic serialization
 # ---------------------------------------------------------------------------
@@ -235,6 +245,41 @@ def get_snapshot(snapshot_id: str):
     if row is None:
         raise HTTPException(status_code=404, detail=f"快照 {snapshot_id} 不存在")
     return _stringify_row(row)
+
+
+@router.post(
+    "/snapshots/{snapshot_id}/daily-coefficients/preview",
+    response_model=Dict[str, Any],
+    summary="Preview daily HMM coefficient generation",
+)
+def preview_daily_coefficients(snapshot_id: str, req: DailyCoefficientPreviewRequest):
+    try:
+        return service.preview_daily_coefficients(
+            snapshot_id,
+            signal_preset=req.signal_preset,
+            as_of_date=req.as_of_date,
+            effective_trade_date=req.effective_trade_date,
+        )
+    except Exception as exc:
+        raise _http_error(exc)
+
+
+@router.post(
+    "/snapshots/{snapshot_id}/daily-coefficients/generate",
+    response_model=Dict[str, Any],
+    summary="Generate daily HMM coefficients from latest completed data",
+)
+def generate_daily_coefficients(snapshot_id: str, req: DailyCoefficientGenerateRequest):
+    try:
+        return service.generate_daily_coefficients(
+            snapshot_id,
+            signal_preset=req.signal_preset,
+            as_of_date=req.as_of_date,
+            effective_trade_date=req.effective_trade_date,
+            confirm_text=req.confirm_text,
+        )
+    except Exception as exc:
+        raise _http_error(exc)
 
 
 @router.delete("/snapshots/{snapshot_id}", summary="删除快照")

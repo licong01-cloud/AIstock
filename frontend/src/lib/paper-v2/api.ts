@@ -410,6 +410,12 @@ export const hmmTrainingApi = {
   async snapshots(configId: string): Promise<HmmSnapshot[]> {
     return apiFetch<HmmSnapshot[]>(`/hmm-training/configs/${configId}/snapshots`);
   },
+  async previewDailyCoefficients(snapshotId: string, payload: JsonObject): Promise<JsonObject> {
+    return apiFetch(`/hmm-training/snapshots/${snapshotId}/daily-coefficients/preview`, body(payload));
+  },
+  async generateDailyCoefficients(snapshotId: string, payload: JsonObject): Promise<JsonObject> {
+    return apiFetch(`/hmm-training/snapshots/${snapshotId}/daily-coefficients/generate`, body(payload));
+  },
 };
 
 export { API_BASE };
