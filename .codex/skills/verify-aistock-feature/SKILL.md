@@ -57,13 +57,16 @@ Run the first-stage local Paper v2 + Selection Center validation entry points:
 ```bash
 conda run -n AIstock python -m nox -s l0
 conda run -n AIstock python -m nox -s paper_v2_backend
-conda run -n AIstock python -m nox -s paper_v2_l3
+set BACKEND_PORT=8012
+set FRONTEND_PORT=3011
+python scripts/aistock_validate.py services --backend-port 8012 --tdx-port 19080
+C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s paper_v2_l3
 ```
 
 Validate this skill metadata:
 
 ```bash
-python C:/Users/lc999/.codex/skills/.system/skill-creator/scripts/quick_validate.py .codex/skills/verify-aistock-feature
+python "%USERPROFILE%/.codex/skills/.system/skill-creator/scripts/quick_validate.py" .codex/skills/verify-aistock-feature
 ```
 
 ## Report Format

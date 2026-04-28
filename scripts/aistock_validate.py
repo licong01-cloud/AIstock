@@ -6,6 +6,8 @@ import os
 import re
 import socket
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 
@@ -32,6 +34,24 @@ def _is_port_open(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.3)
         return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _http_probe(url: str, timeout: float = 5.0) -> tuple[bool, str]:
+    request = urllib.request.Request(url, headers={"Accept": "application/json,text/plain,*/*"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read(4096)
+            if response.status < 200 or response.status >= 300:
+                return False, f"HTTP {response.status}"
+            if not body.strip():
+                return False, "empty response body"
+            return True, f"HTTP {response.status}, {len(body)} bytes"
+    except urllib.error.HTTPError as exc:
+        return False, f"HTTP {exc.code}: {exc.reason}"
+    except urllib.error.URLError as exc:
+        return False, f"connection failed: {exc.reason}"
+    except TimeoutError:
+        return False, "timeout"
 
 
 def cmd_record(args: argparse.Namespace) -> int:
@@ -73,6 +93,25 @@ def cmd_ports(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def cmd_services(args: argparse.Namespace) -> int:
+    checks = [
+        (
+            "FastAPI backend",
+            f"http://127.0.0.1:{args.backend_port}/openapi.json",
+        ),
+        (
+            "TDX realtime minute endpoint",
+            f"http://127.0.0.1:{args.tdx_port}/api/kline-all/tdx?code={args.tdx_probe_code}&type=minute1",
+        ),
+    ]
+    failed = False
+    for name, url in checks:
+        ok, detail = _http_probe(url, timeout=args.timeout)
+        print(f"{name}: {'ok' if ok else 'FAILED'} - {url} - {detail}")
+        failed = failed or not ok
+    return 1 if failed else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AIstock local validation helper.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -87,6 +126,13 @@ def build_parser() -> argparse.ArgumentParser:
     ports.add_argument("--allow-occupied", action="store_true")
     ports.add_argument("ports", nargs="+")
     ports.set_defaults(func=cmd_ports)
+
+    services = sub.add_parser("services", help="Fail-fast check required local validation services.")
+    services.add_argument("--backend-port", default=os.environ.get("BACKEND_PORT", "8012"))
+    services.add_argument("--tdx-port", default=os.environ.get("TDX_HTTP_PORT", "19080"))
+    services.add_argument("--tdx-probe-code", default=os.environ.get("TDX_PROBE_CODE", "SZ000001"))
+    services.add_argument("--timeout", type=float, default=5.0)
+    services.set_defaults(func=cmd_services)
 
     return parser
 

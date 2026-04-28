@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import socket
 from pathlib import Path
 
 import nox
@@ -35,6 +36,17 @@ def _run_pytest(session: nox.Session, *args: str) -> None:
     )
 
 
+def _is_port_open(port: str) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.3)
+        return sock.connect_ex(("127.0.0.1", int(port))) == 0
+
+
+def _codex_quick_validate_script() -> Path:
+    codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    return codex_home / "skills" / ".system" / "skill-creator" / "scripts" / "quick_validate.py"
+
+
 @nox.session(venv_backend="none")
 def l0(session: nox.Session) -> None:
     """Run local static gates that do not start AIstock services."""
@@ -47,9 +59,12 @@ def l0(session: nox.Session) -> None:
         "frontend/playwright.config.ts",
         "frontend/tests/paper-v2",
     ]
+    quick_validate = _codex_quick_validate_script()
+    if not quick_validate.exists():
+        session.error(f"Missing Codex skill validator: {quick_validate}")
     session.run(
         "python",
-        "C:/Users/lc999/.codex/skills/.system/skill-creator/scripts/quick_validate.py",
+        str(quick_validate),
         ".codex/skills/verify-aistock-feature",
         external=True,
     )
@@ -92,22 +107,37 @@ def paper_v2_ui(session: nox.Session) -> None:
         external=True,
     )
     session.run(
-        "npm",
-        "run",
-        "test:e2e",
-        "--",
-        "tests/paper-v2",
-        env=_env(
-            {
-                "BACKEND_PORT": backend_port,
-                "FRONTEND_PORT": frontend_port,
-                "PAPER_V2_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
-                "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
-            }
-        ),
-        cwd=ROOT / "frontend",
+        "python",
+        "scripts/aistock_validate.py",
+        "services",
+        "--backend-port",
+        backend_port,
+        "--tdx-port",
+        os.environ.get("TDX_HTTP_PORT", "19080"),
         external=True,
     )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "npm",
+            "run",
+            "test:e2e",
+            "--",
+            "tests/paper-v2",
+            env=_env(
+                {
+                    "BACKEND_PORT": backend_port,
+                    "FRONTEND_PORT": frontend_port,
+                    "PAPER_V2_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+                    "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
 
 
 @nox.session(venv_backend="none")
@@ -116,5 +146,5 @@ def paper_v2_l3(session: nox.Session) -> None:
     session.run("python", "scripts/aistock_validate.py", "record", "--module", "paper_v2_selection_center", "--level", "L3", "--title", "Paper v2 Selection Center L3 regression", external=True)
     session.notify("l0")
     session.notify("paper_v2_backend")
-    if "--with-ui" in session.posargs:
+    if os.environ.get("PAPER_V2_L3_SKIP_UI") != "1":
         session.notify("paper_v2_ui")

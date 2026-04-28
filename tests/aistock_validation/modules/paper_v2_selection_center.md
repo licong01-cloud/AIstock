@@ -65,6 +65,9 @@ strongly coupled.
 ```bash
 conda run -n AIstock python -m nox -s l0
 conda run -n AIstock python -m nox -s paper_v2_backend
-conda run -n AIstock python -m nox -s paper_v2_ui -- 8012 3012
+set BACKEND_PORT=8012
+set FRONTEND_PORT=3011
+python scripts/aistock_validate.py services --backend-port 8012 --tdx-port 19080
+python -m nox -s paper_v2_ui
 conda run -n AIstock python -m nox -s paper_v2_l3
 ```

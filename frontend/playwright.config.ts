@@ -8,6 +8,7 @@ const apiBase =
   process.env.NEXT_PUBLIC_API_BASE ||
   process.env.PAPER_V2_API_BASE ||
   `http://127.0.0.1:${backendPort}/api/v1`;
+const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEBSERVER === "1";
 
 export default defineConfig({
   testDir: ".",
@@ -31,7 +32,7 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  webServer: {
+  webServer: skipWebServer ? undefined : {
     command: `npm run dev -- -p ${frontendPort}`,
     url: process.env.FRONTEND_BASE_URL || `http://127.0.0.1:${frontendPort}/quantevolver/compose`,
     reuseExistingServer: true,

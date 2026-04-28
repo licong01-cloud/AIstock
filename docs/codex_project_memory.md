@@ -364,3 +364,11 @@ Important directories:
 - Added local-only validation entry points with `noxfile.py`, `scripts/aistock_validate.py`, `.pre-commit-config.yaml`, `.semgrep/aistock/guardrails.yml`, `requirements-dev.txt`, and `tests/aistock_validation`.
 - Installed `nox` and `pytest-html` into the local `AIstock` conda environment; no external tool source trees were cloned into the AIstock repository.
 - First-stage commands validated locally without starting or restarting any backend/frontend service: `conda run -n AIstock python -m nox -s l0` passed, and `conda run -n AIstock python -m nox -s paper_v2_backend` passed with 103 tests.
+
+## Paper v2 + Selection Center Validation L3 Closure - 2026-04-29
+
+- Completed the first full local L3 validation of Paper v2 + Selection Center with UI included by default in `nox -s paper_v2_l3`; the run used backend port 8012, frontend port 3011, and TDX port 19080 without touching production backend port 8001.
+- Hardened the local validation runner: `scripts/aistock_validate.py services` now fail-fast probes the FastAPI `/openapi.json` endpoint and the TDX realtime minute endpoint before Playwright starts, and `paper_v2_ui` wires this check into the UI E2E flow.
+- Fixed validation-tool robustness: Nox no longer passes unsupported `cwd` to `Session.run`, the Codex skill validator path is resolved from `CODEX_HOME` or the user home directory instead of a workstation hardcode, and Playwright can explicitly skip its web server only when reusing an already-running frontend.
+- Verified commands: `nox -s l0` passed with 0 HIGH findings and 13 existing MEDIUM review findings; `nox -s paper_v2_backend` passed with 103 tests; `nox -s paper_v2_ui` passed with 12 Playwright tests; `nox -s paper_v2_l3` passed L0 + backend + UI in one run.
+- Evidence record: `tests/aistock_validation/history/paper_v2_selection_center/20260429_015310_l3_paper-v2-selection-center-l3-regression.md`. No StrategyPackage manifests, model weights, HMM snapshots, validated execution policies, QE/RD-Agent artifacts, or source strategy assets were modified by this framework-validation change.
