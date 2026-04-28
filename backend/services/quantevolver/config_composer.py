@@ -432,10 +432,7 @@ class ConfigComposer:
         """Apply runtime filters that must also reach the minute inner_strategy."""
 
         params = dict(execution_algo_params or {})
-        if (
-            cls._normalize_execution_algo(execution_algo) == "V25_TWO_STAGE"
-            and cls._is_suspend_filter_enabled(custom_params)
-        ):
+        if cls._is_v25_execution(execution_algo):
             params.setdefault("filter_suspended_on_signal", True)
             params.setdefault(
                 "suspend_filter_file",
@@ -446,6 +443,10 @@ class ConfigComposer:
                 bool((custom_params or {}).get("suspend_filter_strict", True)),
             )
         return params
+
+    @classmethod
+    def _is_v25_execution(cls, execution_algo: Optional[str]) -> bool:
+        return cls._normalize_execution_algo(execution_algo) == "V25_TWO_STAGE"
 
     @staticmethod
     def _is_suspend_filter_enabled(custom_params: Optional[Dict[str, Any]]) -> bool:
@@ -561,6 +562,40 @@ class ConfigComposer:
                 f"'{strategy_class}'. Supported strategies: {sorted(supported)}. "
                 "QE blocks this request instead of silently ignoring the UI configuration."
             )
+
+    def _prepare_suspend_filter_runtime(
+        self,
+        *,
+        custom_params: Optional[Dict[str, Any]],
+        data_split: Dict[str, str],
+        strategy_info: Optional[Dict],
+        execution_algo: Optional[str],
+    ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """Build the suspend artifact needed by signal filtering or V25 execution."""
+
+        signal_filter_enabled = self._is_suspend_filter_enabled(custom_params)
+        execution_filter_required = self._is_v25_execution(execution_algo)
+        if not signal_filter_enabled and not execution_filter_required:
+            return custom_params, None
+
+        if custom_params is None:
+            custom_params = {}
+
+        if signal_filter_enabled:
+            strategy_class_for_suspend = self._get_strategy_class_name(strategy_info)
+            self._ensure_suspend_filter_supported(strategy_class_for_suspend)
+
+        suspend_filter_json = self._build_suspend_filter_artifact(
+            data_split,
+            strict_audit=bool(custom_params.get("suspend_filter_strict", True)),
+        )
+        custom_params["suspend_filter_file"] = SUSPEND_FILTER_FILE
+        custom_params.setdefault("suspend_filter_strict", True)
+
+        if signal_filter_enabled:
+            custom_params["filter_suspended_on_signal"] = True
+
+        return custom_params, suspend_filter_json
 
     def compose_experiment(
         self,
@@ -701,19 +736,12 @@ class ConfigComposer:
                     f"支持的策略: {', '.join(sorted(_hmm_supported_classes))}"
                 )
 
-        suspend_filter_json: Optional[str] = None
-        if self._is_suspend_filter_enabled(custom_params):
-            if custom_params is None:
-                custom_params = {}
-            strategy_class_for_suspend = self._get_strategy_class_name(strategy_info)
-            self._ensure_suspend_filter_supported(strategy_class_for_suspend)
-            suspend_filter_json = self._build_suspend_filter_artifact(
-                data_split,
-                strict_audit=bool(custom_params.get("suspend_filter_strict", True)),
-            )
-            custom_params["filter_suspended_on_signal"] = True
-            custom_params["suspend_filter_file"] = SUSPEND_FILTER_FILE
-            custom_params.setdefault("suspend_filter_strict", True)
+        custom_params, suspend_filter_json = self._prepare_suspend_filter_runtime(
+            custom_params=custom_params,
+            data_split=data_split,
+            strategy_info=strategy_info,
+            execution_algo=execution_algo,
+        )
 
         # 生成conf.yaml
         conf_yaml = self._compose_conf_yaml(
@@ -1009,18 +1037,14 @@ class ConfigComposer:
                     f"请切换到支持 HMM 的策略或关闭 HMM。"
                 )
 
-        if self._is_suspend_filter_enabled(custom_params):
-            if custom_params is None:
-                custom_params = {}
-            strategy_class_for_suspend = self._get_strategy_class_name(strategy_info)
-            self._ensure_suspend_filter_supported(strategy_class_for_suspend)
-            experiment_files[SUSPEND_FILTER_FILE] = self._build_suspend_filter_artifact(
-                data_split,
-                strict_audit=bool(custom_params.get("suspend_filter_strict", True)),
-            )
-            custom_params["filter_suspended_on_signal"] = True
-            custom_params["suspend_filter_file"] = SUSPEND_FILTER_FILE
-            custom_params.setdefault("suspend_filter_strict", True)
+        custom_params, suspend_filter_json = self._prepare_suspend_filter_runtime(
+            custom_params=custom_params,
+            data_split=data_split,
+            strategy_info=strategy_info,
+            execution_algo=execution_algo,
+        )
+        if suspend_filter_json:
+            experiment_files[SUSPEND_FILTER_FILE] = suspend_filter_json
 
         # 1) conf.yaml
         conf_yaml = self._compose_conf_yaml(
@@ -1486,19 +1510,12 @@ class ConfigComposer:
             execution_algo_params["unfilled_trigger_minute"] = _cp["unfilled_trigger_minute"]
         if _cp.get("unfilled_backup_depth"):
             execution_algo_params["unfilled_backup_depth"] = _cp["unfilled_backup_depth"]
-        suspend_filter_json: Optional[str] = None
-        if self._is_suspend_filter_enabled(custom_params):
-            if custom_params is None:
-                custom_params = {}
-            strategy_class_for_suspend = self._get_strategy_class_name(strategy_info)
-            self._ensure_suspend_filter_supported(strategy_class_for_suspend)
-            suspend_filter_json = self._build_suspend_filter_artifact(
-                data_split,
-                strict_audit=bool(custom_params.get("suspend_filter_strict", True)),
-            )
-            custom_params["filter_suspended_on_signal"] = True
-            custom_params["suspend_filter_file"] = SUSPEND_FILTER_FILE
-            custom_params.setdefault("suspend_filter_strict", True)
+        custom_params, suspend_filter_json = self._prepare_suspend_filter_runtime(
+            custom_params=custom_params,
+            data_split=data_split,
+            strategy_info=strategy_info,
+            execution_algo=execution_algo,
+        )
 
         # 生成conf.yaml
         conf_yaml = self._compose_conf_yaml(

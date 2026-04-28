@@ -56,12 +56,50 @@ def test_v25_execution_algo_generates_v25_inner_strategy():
         execution_algo="V25_TWO_STAGE",
         execution_algo_params={"device": "cpu"},
     )
+    inner_strategy = _slice_yaml_between(
+        yaml_text,
+        "            inner_strategy:",
+        "            # qe_execution_trace:",
+    )
+    outer_strategy = _slice_yaml_between(
+        yaml_text,
+        "    strategy:",
+        "    model:",
+    )
 
-    assert "class: TailTWAPWithV25TwoStageStrategy" in yaml_text
-    assert "module_path: tail_twap_v25_strategy" in yaml_text
+    assert "class: TailTWAPWithV25TwoStageStrategy" in inner_strategy
+    assert "module_path: tail_twap_v25_strategy" in inner_strategy
+    assert "filter_suspended_on_signal: true" in inner_strategy
+    assert "suspend_filter_file: qe_suspend_filter.json" in inner_strategy
+    assert "suspend_filter_strict: true" in inner_strategy
+    assert "class: SuspendFilterTopkDropoutStrategy" not in outer_strategy
+    assert "filter_suspended_on_signal: true" not in outer_strategy
     assert "effective_algo: V25_TWO_STAGE" in yaml_text
     assert "early_model_path:" in yaml_text
     assert "late_model_path:" in yaml_text
+
+
+def test_v25_execution_prepares_suspend_artifact_without_signal_filter(monkeypatch):
+    composer = ConfigComposer()
+    calls = []
+
+    def fake_build_suspend_filter_artifact(data_split, *, strict_audit=True):
+        calls.append((data_split, strict_audit))
+        return '{"enabled": true, "suspended_by_date": {}}'
+
+    monkeypatch.setattr(composer, "_build_suspend_filter_artifact", fake_build_suspend_filter_artifact)
+    custom_params, artifact = composer._prepare_suspend_filter_runtime(
+        custom_params={},
+        data_split=DATA_SPLIT,
+        strategy_info=None,
+        execution_algo="V25_TWO_STAGE",
+    )
+
+    assert artifact == '{"enabled": true, "suspended_by_date": {}}'
+    assert calls == [(DATA_SPLIT, True)]
+    assert custom_params["suspend_filter_file"] == "qe_suspend_filter.json"
+    assert custom_params["suspend_filter_strict"] is True
+    assert "filter_suspended_on_signal" not in custom_params
 
 
 def test_v25_execution_algo_receives_suspend_artifact_when_signal_filter_enabled():
