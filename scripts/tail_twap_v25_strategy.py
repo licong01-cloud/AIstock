@@ -34,6 +34,7 @@ EARLY_LEN = 30
 LATE_LEN = 210
 TOTAL_LEN = 240
 GAP_RATIO_EDGES = [-0.70, -0.50, -0.30, -0.10, 0.10, 0.30, 0.50, 0.70]
+PRICE_EPSILON = 1e-6
 
 
 class EarlyPlanNetEnhanced(nn.Module):
@@ -103,6 +104,42 @@ def _load_state(path: str, device: torch.device):
     if isinstance(ckpt, dict) and "model" in ckpt:
         return ckpt["model"]
     return ckpt
+
+
+def _is_valid_price(value) -> bool:
+    try:
+        return value is not None and not np.isnan(value) and float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_valid_factor(value) -> bool:
+    try:
+        return value is not None and not np.isnan(value) and float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _to_raw_price(adjusted_price, factor) -> float:
+    return float(adjusted_price) / float(factor)
+
+
+def _price_at_or_above(price, limit_price) -> bool:
+    return float(price) >= float(limit_price) * (1.0 - PRICE_EPSILON)
+
+
+def _price_at_or_below(price, limit_price) -> bool:
+    return float(price) <= float(limit_price) * (1.0 + PRICE_EPSILON)
+
+
+class _V25MarketNoFill(Exception):
+    """Market-state no-fill; this must not be treated as a V25 config failure."""
+
+    def __init__(self, stock_id: str, reason: str, detail: str = ""):
+        super().__init__(f"{reason}: stock={stock_id} {detail}".strip())
+        self.stock_id = stock_id
+        self.reason = reason
+        self.detail = detail
 
 
 class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
@@ -180,15 +217,116 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
         aliases = self._qe_suspend_filter._symbol_aliases(stock_id)
         return bool(aliases & suspended)
 
-    def _generate_plan_for_order(self, stock_id, direction, trade_start_time, trade_end_time):
-        open_price = self.trade_exchange.get_close(stock_id, trade_start_time, trade_end_time, method="ts_data_last")
-        prev_close = self.trade_exchange.quote.get_data(
-            stock_id, trade_start_time, trade_end_time, field="$prev_close", method="ts_data_last"
+    def _read_quote_data(self, stock_id, trade_start_time, trade_end_time, field):
+        try:
+            return self.trade_exchange.quote.get_data(
+                stock_id,
+                trade_start_time,
+                trade_end_time,
+                field=field,
+                method="ts_data_last",
+            )
+        except (KeyError, IndexError, ValueError, AttributeError):
+            return None
+
+    def _require_raw_price(self, stock_id, trade_start_time, trade_end_time, adjusted_price, field, prev_close=None):
+        if not _is_valid_price(adjusted_price):
+            reason = self._market_block_reason(
+                stock_id,
+                trade_start_time,
+                trade_end_time,
+                close_price=adjusted_price,
+                prev_close=prev_close,
+            )
+            if reason:
+                raise _V25MarketNoFill(stock_id, reason, f"{field}={adjusted_price}")
+            raise RuntimeError(
+                f"{field}_missing_data_error for V25 raw-price conversion: "
+                f"stock={stock_id} adjusted_price={adjusted_price}"
+            )
+        factor = self._read_quote_data(stock_id, trade_start_time, trade_end_time, "$factor")
+        if not _is_valid_factor(factor):
+            reason = self._market_block_reason(
+                stock_id,
+                trade_start_time,
+                trade_end_time,
+                close_price=adjusted_price,
+                prev_close=prev_close,
+            )
+            if reason:
+                raise _V25MarketNoFill(stock_id, reason, f"factor={factor} field={field}")
+            raise RuntimeError(
+                f"factor_missing_data_error for V25 raw-price conversion: "
+                f"stock={stock_id} field={field} factor={factor}"
+            )
+        raw_price = _to_raw_price(adjusted_price, factor)
+        if not _is_valid_price(raw_price):
+            raise RuntimeError(
+                f"raw_price_invalid_data_error for V25 raw-price conversion: "
+                f"stock={stock_id} field={field} adjusted_price={adjusted_price} factor={factor} raw_price={raw_price}"
+            )
+        return raw_price, float(factor)
+
+    def _safe_check_exchange_suspended(self, stock_id, trade_start_time, trade_end_time) -> bool:
+        try:
+            return bool(self.trade_exchange.check_stock_suspended(
+                stock_id=stock_id,
+                start_time=trade_start_time,
+                end_time=trade_end_time,
+            ))
+        except (KeyError, IndexError, ValueError, AttributeError):
+            return False
+
+    def _market_block_reason(self, stock_id, trade_start_time, trade_end_time, close_price=None, prev_close=None):
+        if self._safe_check_exchange_suspended(stock_id, trade_start_time, trade_end_time):
+            return "suspended_by_exchange"
+        if self._is_artifact_suspended(stock_id, trade_start_time):
+            return "suspended_by_suspend_d"
+
+        volume = self._read_quote_data(stock_id, trade_start_time, trade_end_time, "$volume")
+        try:
+            volume_is_zero = volume is not None and not np.isnan(volume) and float(volume) <= 0
+        except (TypeError, ValueError):
+            volume_is_zero = False
+        if volume_is_zero:
+            return "intraday_halt_or_no_bar"
+
+        if close_price is not None and not _is_valid_price(close_price):
+            if volume is None:
+                return None
+            return "intraday_halt_or_no_bar"
+        if prev_close is not None and not _is_valid_price(prev_close) and volume_is_zero:
+            return "intraday_halt_or_no_bar"
+        return None
+
+    def _record_no_fill_reason(self, stock_id, reason, trade_start_time, detail=""):
+        self._v25_no_fill_reasons[stock_id] = reason
+        logger.info(
+            "[TailTWAPv25] market-state stock=%s trade_time=%s reason=%s detail=%s",
+            stock_id,
+            trade_start_time,
+            reason,
+            detail,
         )
-        if open_price is None or np.isnan(open_price) or open_price <= 0:
-            raise RuntimeError(f"invalid open/current price for V25 plan: stock={stock_id} price={open_price}")
-        if prev_close is None or np.isnan(prev_close) or prev_close <= 0:
-            raise RuntimeError(f"missing prev_close for V25 plan: stock={stock_id} prev_close={prev_close}")
+
+    def _generate_plan_for_order(self, stock_id, direction, trade_start_time, trade_end_time):
+        open_price_adjusted = self._read_quote_data(stock_id, trade_start_time, trade_end_time, "$open")
+        prev_close = self._read_quote_data(stock_id, trade_start_time, trade_end_time, "$prev_close")
+        if not _is_valid_price(prev_close):
+            reason = self._market_block_reason(
+                stock_id, trade_start_time, trade_end_time, close_price=open_price_adjusted, prev_close=prev_close
+            )
+            if reason:
+                raise _V25MarketNoFill(stock_id, reason, f"prev_close={prev_close}")
+            raise RuntimeError(f"prev_close_missing_data_error for V25 plan: stock={stock_id} prev_close={prev_close}")
+        open_price, factor = self._require_raw_price(
+            stock_id,
+            trade_start_time,
+            trade_end_time,
+            open_price_adjusted,
+            "$open",
+            prev_close=prev_close,
+        )
         limit_pct = _get_limit_pct(stock_id)
         gap_pct = np.clip((float(open_price) - float(prev_close)) / float(prev_close), -0.20, 0.20)
         gap_ratio = float(gap_pct / limit_pct) if limit_pct > 1e-8 else 0.0
@@ -222,8 +360,9 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
         if abs(early_sum - EARLY_WEIGHT) > 1e-4 or abs(late_sum - LATE_WEIGHT) > 1e-4:
             raise RuntimeError(f"V25 plan weight mismatch: early={early_sum:.6f} late={late_sum:.6f}")
         logger.info(
-            "[TailTWAPv25] generated plan stock=%s is_buy=%s early_sum=%.4f late_sum=%.4f gap_ratio=%.4f",
-            stock_id, bool(is_buy), early_sum, late_sum, gap_ratio,
+            "[TailTWAPv25] generated plan stock=%s is_buy=%s early_sum=%.4f late_sum=%.4f "
+            "gap_ratio=%.4f price_basis=raw open_raw=%.6f prev_close_raw=%.6f factor=%.8f",
+            stock_id, bool(is_buy), early_sum, late_sum, gap_ratio, open_price, float(prev_close), factor,
         )
         return plan
 
@@ -265,20 +404,9 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
 
         order_list = []
         for order in self.outer_trade_decision.get_decision():
-            if self.trade_exchange.check_stock_suspended(
-                stock_id=order.stock_id,
-                start_time=trade_start_time,
-                end_time=trade_end_time,
-            ):
-                self._v25_no_fill_reasons[order.stock_id] = "suspended_by_exchange"
-                continue
-            if self._is_artifact_suspended(order.stock_id, trade_start_time):
-                logger.info(
-                    "[TailTWAPv25] skip suspended stock from artifact stock=%s trade_time=%s reason=suspended_by_suspend_d",
-                    order.stock_id,
-                    trade_start_time,
-                )
-                self._v25_no_fill_reasons[order.stock_id] = "suspended_by_suspend_d"
+            market_reason = self._market_block_reason(order.stock_id, trade_start_time, trade_end_time)
+            if market_reason:
+                self._record_no_fill_reason(order.stock_id, market_reason, trade_start_time)
                 continue
             amount_remain = self.trade_amount_remain[order.stock_id]
             if amount_remain <= 1e-5:
@@ -307,16 +435,47 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
 
             if order.stock_id not in self._p0_done:
                 try:
-                    close_price = self.trade_exchange.get_close(order.stock_id, trade_start_time, trade_end_time, method="ts_data_last")
-                    if close_price is None or np.isnan(close_price) or close_price <= 0:
-                        raise RuntimeError(f"invalid close price: {close_price}")
-                    limit_up = self.trade_exchange.quote.get_data(order.stock_id, trade_start_time, trade_end_time, field="$up_limit_price", method="ts_data_last")
-                    limit_down = self.trade_exchange.quote.get_data(order.stock_id, trade_start_time, trade_end_time, field="$down_limit_price", method="ts_data_last")
-                    if limit_up is None or np.isnan(limit_up) or limit_up <= 0:
-                        raise RuntimeError(f"invalid up_limit_price: {limit_up}")
-                    if limit_down is None or np.isnan(limit_down) or limit_down <= 0:
-                        raise RuntimeError(f"invalid down_limit_price: {limit_down}")
-                    if order.direction == Order.BUY and close_price <= limit_down:
+                    close_price_adjusted = self.trade_exchange.get_close(order.stock_id, trade_start_time, trade_end_time, method="ts_data_last")
+                    if not _is_valid_price(close_price_adjusted):
+                        reason = self._market_block_reason(
+                            order.stock_id, trade_start_time, trade_end_time, close_price=close_price_adjusted
+                        )
+                        if reason:
+                            self._record_no_fill_reason(order.stock_id, reason, trade_start_time, f"close_price={close_price_adjusted}")
+                            continue
+                        raise RuntimeError(f"V25 P0 close_price_missing_data_error for {order.stock_id}: {close_price_adjusted}")
+                    close_price, factor = self._require_raw_price(
+                        order.stock_id,
+                        trade_start_time,
+                        trade_end_time,
+                        close_price_adjusted,
+                        "$close",
+                    )
+                    limit_up = self._read_quote_data(order.stock_id, trade_start_time, trade_end_time, "$up_limit_price")
+                    limit_down = self._read_quote_data(order.stock_id, trade_start_time, trade_end_time, "$down_limit_price")
+                    if not _is_valid_price(limit_up) or not _is_valid_price(limit_down):
+                        reason = self._market_block_reason(
+                            order.stock_id, trade_start_time, trade_end_time, close_price=close_price_adjusted
+                        )
+                        if reason:
+                            self._record_no_fill_reason(
+                                order.stock_id,
+                                "limit_data_missing_due_to_suspend",
+                                trade_start_time,
+                                f"market_reason={reason} limit_up={limit_up} limit_down={limit_down}",
+                            )
+                            continue
+                        raise RuntimeError(
+                            f"V25 P0 limit_price_missing_data_error for {order.stock_id}: "
+                            f"up_limit={limit_up} down_limit={limit_down}"
+                        )
+                    if order.direction == Order.BUY and _price_at_or_below(close_price, limit_down):
+                        self._record_no_fill_reason(
+                            order.stock_id,
+                            "p0_limit_buy_at_down_limit",
+                            trade_start_time,
+                            f"price_basis=raw close_raw={close_price:.6f} down_limit_raw={float(limit_down):.6f} factor={factor:.8f}",
+                        )
                         order_list.append(Order(
                             stock_id=order.stock_id,
                             amount=amount_remain,
@@ -326,7 +485,13 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
                         ))
                         self._p0_done.add(order.stock_id)
                         continue
-                    if order.direction == Order.SELL and close_price >= limit_up:
+                    if order.direction == Order.SELL and _price_at_or_above(close_price, limit_up):
+                        self._record_no_fill_reason(
+                            order.stock_id,
+                            "p0_limit_sell_at_up_limit",
+                            trade_start_time,
+                            f"price_basis=raw close_raw={close_price:.6f} up_limit_raw={float(limit_up):.6f} factor={factor:.8f}",
+                        )
                         order_list.append(Order(
                             stock_id=order.stock_id,
                             amount=amount_remain,
@@ -336,14 +501,50 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
                         ))
                         self._p0_done.add(order.stock_id)
                         continue
+                    if order.direction == Order.BUY and _price_at_or_above(close_price, limit_up):
+                        self._record_no_fill_reason(
+                            order.stock_id,
+                            "limit_up_buy_blocked",
+                            trade_start_time,
+                            f"price_basis=raw close_raw={close_price:.6f} up_limit_raw={float(limit_up):.6f} factor={factor:.8f}",
+                        )
+                        continue
+                    if order.direction == Order.SELL and _price_at_or_below(close_price, limit_down):
+                        self._record_no_fill_reason(
+                            order.stock_id,
+                            "limit_down_sell_blocked",
+                            trade_start_time,
+                            f"price_basis=raw close_raw={close_price:.6f} down_limit_raw={float(limit_down):.6f} factor={factor:.8f}",
+                        )
+                        continue
+                except _V25MarketNoFill as exc:
+                    self._record_no_fill_reason(order.stock_id, exc.reason, trade_start_time, exc.detail)
+                    continue
                 except (KeyError, IndexError, ValueError) as exc:
-                    raise RuntimeError(f"V25 P0 limit data missing for {order.stock_id}: {exc}") from exc
+                    reason = self._market_block_reason(order.stock_id, trade_start_time, trade_end_time)
+                    if reason:
+                        self._record_no_fill_reason(
+                            order.stock_id,
+                            "limit_data_missing_due_to_suspend",
+                            trade_start_time,
+                            f"market_reason={reason} error={exc}",
+                        )
+                        continue
+                    raise RuntimeError(f"V25 P0 limit_price_missing_data_error for {order.stock_id}: {exc}") from exc
 
             if not self._v25_plan_generated.get(order.stock_id, False):
-                self._v25_plan_generated[order.stock_id] = True
-                self._v25_plans[order.stock_id] = self._generate_plan_for_order(
-                    order.stock_id, order.direction, trade_start_time, trade_end_time
-                )
+                try:
+                    self._v25_plans[order.stock_id] = self._generate_plan_for_order(
+                        order.stock_id, order.direction, trade_start_time, trade_end_time
+                    )
+                    self._v25_plan_generated[order.stock_id] = True
+                except _V25MarketNoFill as exc:
+                    self._record_no_fill_reason(order.stock_id, exc.reason, trade_start_time, exc.detail)
+                    self._v25_plan_generated[order.stock_id] = False
+                    continue
+                except Exception:
+                    self._v25_plan_failed.add(order.stock_id)
+                    raise
             plan = self._v25_plans.get(order.stock_id)
             remaining_day_steps = max(end_idx - trade_step + 1, 1)
             if plan is None:

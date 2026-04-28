@@ -37,6 +37,7 @@ REASON_LIMIT_PRICE_MISSING_DATA_ERROR = "limit_price_missing_data_error"
 REASON_PRICE_MISSING_WITH_SUSPEND = "price_missing_with_suspend"
 REASON_PRICE_MISSING_DATA_ERROR = "price_missing_data_error"
 REASON_VOLUME_INVALID_DATA_ERROR = "volume_invalid_data_error"
+REASON_PRICE_BASIS_MISMATCH_DATA_ERROR = "price_basis_mismatch_data_error"
 REASON_TRADABLE = "tradable"
 
 
@@ -124,11 +125,17 @@ def classify_v25_minute_market_state(
     suspend_status: Any = None,
     require_limit_price: bool = True,
     price_epsilon: float = 1e-6,
+    price_basis: str = "raw",
+    limit_price_basis: str | None = None,
 ) -> V25MarketState:
     """Classify one minute before V25 execution.
 
     The classifier is intentionally strict about true data errors but models
     suspension and limit constraints as business states.
+
+    All price inputs must use the same price basis. AIstock's authoritative
+    minute-execution basis is raw/unadjusted RMB price. Qlib adapters must
+    convert adjusted OHLC with ``$factor`` before calling this classifier.
     """
 
     suspended, suspend_reason = has_suspend_evidence(
@@ -142,6 +149,20 @@ def classify_v25_minute_market_state(
             V25MarketAction.DATA_ERROR,
             "unsupported_side",
             {"side": side},
+        )
+
+    normalized_price_basis = str(price_basis or "raw").strip().lower()
+    normalized_limit_basis = str(limit_price_basis or normalized_price_basis).strip().lower()
+    raw_aliases = {"raw", "unadjusted", "none"}
+    if normalized_price_basis != normalized_limit_basis or normalized_price_basis not in raw_aliases:
+        return V25MarketState(
+            V25MarketAction.DATA_ERROR,
+            REASON_PRICE_BASIS_MISMATCH_DATA_ERROR,
+            {
+                "price_basis": price_basis,
+                "limit_price_basis": limit_price_basis,
+                "expected_basis": "raw",
+            },
         )
 
     volume_number: float | None = None
@@ -263,6 +284,12 @@ class V25TwoStageCore:
         limit_pct: float | None = None,
         day_features: np.ndarray,
     ) -> V25PlanResult:
+        """Generate a 240-step V25 plan.
+
+        ``open_price`` and ``prev_close`` must be on the same basis. AIstock
+        adapters pass raw/unadjusted RMB prices; Qlib adjusted OHLC must be
+        converted with ``$factor`` before calling this core.
+        """
         if not is_positive_finite(open_price) or not is_positive_finite(prev_close):
             raise V25TwoStageCoreError("V25 plan requires positive open_price and prev_close")
         normalized_side = str(side or "").strip().upper()

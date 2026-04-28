@@ -123,6 +123,9 @@ def test_tdx_market_data_provider_builds_minute_input_with_observed_context() ->
     assert result.minute_bars[0].limit_up == 11.0
     assert result.minute_bars[0].volume == 100_000
     assert result.market_context["prev_close"] == 10.0
+    assert result.market_context["price_basis"] == "raw"
+    assert result.market_context["limit_price_basis"] == "raw"
+    assert result.market_context["prev_close_basis"] == "raw"
     assert result.market_context["observed_only"] is True
     assert len(result.market_context["full_day_close"]) == 31
 

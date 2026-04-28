@@ -192,11 +192,42 @@ auction_included
 day_features
 ```
 
+### 6.1 价格基准对齐规范
+
+日内执行策略的市场状态判断必须使用同一套价格基准。AIstock 的标准执行基准为
+`raw` / 不复权人民币价格：
+
+- `price` / 分钟 OHLC；
+- `prev_close`；
+- `limit_up` / `limit_down`；
+- open gap / `gap_ratio` 特征。
+
+严禁把复权 OHLC 直接与不复权 `prev_close`、涨停价、跌停价比较。特别是 Qlib 分钟
+bin 的价格约定为：
+
+- `$open/$close/$high/$low` 是复权价格；
+- `$factor` 是复权因子；
+- `$prev_close/$up_limit_price/$down_limit_price` 来自 `market.stk_limit`，是不复权价格；
+- Qlib adapter 必须先计算 `raw_price = adjusted_price / $factor`，再做涨跌停、P0、
+  买入涨停阻塞、卖出跌停阻塞、open gap / `gap_ratio` 计算。
+
+必须 fail-fast：
+
+- 有有效分钟 bar 但 `$factor` 缺失、非有限或小于等于 0；
+- `price_basis` 与 `limit_price_basis` 不一致；
+- 代码路径中存在复权价格与不复权价格的直接比较；
+- 缺少价格基准元数据且 adapter 无法证明输入同基准。
+
+不得 fail-fast 为程序错误：
+
+- 有权威停牌、临停或无 bar 证据导致价格或 factor 缺失；此时应记录明确 market-state reason。
+
 规则：
 
 - `DB_HISTORICAL` 闭日回放必须检查完整分钟线覆盖。
 - `TDX_REALTIME` 只代表已观察分钟线，不能伪造未来 full-day 数据。
 - `QLIB_BACKTEST` adapter 必须保留与 Paper v2 相同的市场状态语义。
+- `QLIB_BACKTEST` adapter 必须显式处理复权/不复权转换，不能把 Qlib 复权 OHLC 与 raw limit/pre_close 混用。
 - 缺字段时必须按第 5 节判断，不得填默认值伪装成功。
 
 ## 7. ExecutionPlan 与状态持久化

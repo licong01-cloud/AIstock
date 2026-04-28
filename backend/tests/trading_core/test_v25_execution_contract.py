@@ -17,6 +17,7 @@ from backend.execution_algos.v25_core import (
     REASON_P0_LIMIT_BUY_AT_DOWN_LIMIT,
     REASON_PREV_CLOSE_MISSING_DATA_ERROR,
     REASON_PREV_CLOSE_MISSING_WITH_SUSPEND,
+    REASON_PRICE_BASIS_MISMATCH_DATA_ERROR,
     TOTAL_LEN,
     V25MarketAction,
     V25TwoStageCore,
@@ -78,6 +79,9 @@ def _context(
 ):
     ctx = {
         "stock_id": "000001.SZ",
+        "price_basis": "raw",
+        "limit_price_basis": "raw",
+        "prev_close_basis": "raw",
         "prev_close": prev_close,
         "full_day_open": [10.0] * bars,
         "full_day_close": [10.1] * bars,
@@ -182,6 +186,18 @@ def test_v25_market_classifier_separates_business_state_from_data_error() -> Non
     )
     assert zero_volume.action == V25MarketAction.SKIP
     assert zero_volume.reason == REASON_INTRADAY_HALT_OR_NO_BAR
+
+    basis_error = classify_v25_minute_market_state(
+        side="SELL",
+        price=5.0,
+        prev_close=10.0,
+        limit_up=11.0,
+        limit_down=9.0,
+        price_basis="qfq",
+        limit_price_basis="raw",
+    )
+    assert basis_error.action == V25MarketAction.DATA_ERROR
+    assert basis_error.reason == REASON_PRICE_BASIS_MISMATCH_DATA_ERROR
 
 
 def test_v25_paper_adapter_skips_confirmed_suspend_without_requiring_full_context() -> None:

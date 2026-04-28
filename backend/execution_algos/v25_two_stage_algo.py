@@ -170,6 +170,13 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
         prev_close = market_context.get("prev_close")
         limit_up = bar_data.get("limit_up") or market_context.get("limit_up")
         limit_down = bar_data.get("limit_down") or market_context.get("limit_down")
+        price_basis = str(bar_data.get("price_basis") or market_context.get("price_basis") or "raw")
+        limit_price_basis = str(
+            bar_data.get("limit_price_basis")
+            or market_context.get("limit_price_basis")
+            or market_context.get("prev_close_basis")
+            or price_basis
+        )
         market_state = classify_v25_minute_market_state(
             side=state.side,
             price=cur_price,
@@ -180,6 +187,8 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
             is_suspended=bool(bar_data.get("is_suspended")),
             suspend_status=market_context.get("suspend_status"),
             require_limit_price=True,
+            price_basis=price_basis,
+            limit_price_basis=limit_price_basis,
         )
         if market_state.is_error:
             raise V25TwoStageUnavailableError(
