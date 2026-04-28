@@ -350,3 +350,9 @@ Important directories:
 - Added `/api/v1/hmm-training/snapshots/{snapshot_id}/daily-coefficients/jobs`, `/api/v1/hmm-training/daily-coefficients/jobs/{job_id}`, and snapshot job-list APIs. The old synchronous `/generate` endpoint remains for direct diagnostics, but the UI uses job creation plus polling.
 - Updated `/paper-v2/model-hmm` to show daily coefficient job status, artifact result, SHA256, and job audit table without exposing raw JSON content; generated HMM model/coefficients assets remain runtime assets and are not committed.
 - Applied the new schema on the local dev database and validated with backend tests, frontend type/build checks, and full Paper v2 Playwright UI E2E on 8012/3012. Production port 8001 was not restarted.
+
+## AIstock Testing / Version Management System Design - 2026-04-29
+
+- Added `docs/architecture/aistock_testing_version_management_system_design_20260429.md` to define the target result-oriented automated testing and version-management system for AIstock.
+- The design standardizes L0-L5 validation levels, reusable test matrices, test run records, UI/API/DB/log cross-validation, protected-asset safety, no-silent-fallback guardrails, development-port isolation, and phased rollout from local validation to release candidate gates.
+- Recommended the first stable internal release process: complete the testing baseline first, then use SemVer `0.x.y`, Conventional Commits, `VERSION`, `CHANGELOG.md`, and release candidate reports before tagging a future `v0.1.0`.
