@@ -31,7 +31,7 @@ const FACTOR_TYPE_MAP: Record<string, string> = {
 const GRADE_ORDER: Record<string, number> = { S: 0, A: 1, B: 2, C: 3, D: 4 };
 
 type Factor = { factor_name: string; source: string; ic?: number | null; sharpe?: number | null; is_sota_factor?: boolean;
-  category?: string; grade?: string; description?: string; ann_ret_value?: number | null; factor_type?: string; data_source?: string };
+  category?: string; official_grade?: string | null; official_score?: number | null; description?: string; ind_annual_return?: number | null; factor_type?: string; data_source?: string };
 type Model = { model_id: string; model_name: string; model_type?: string; ic?: number; annualized_return?: number; is_sota?: boolean; display_name?: string; description?: string };
 type Strategy = { strategy_id: string; display_name: string; strategy_type?: string; portfolio_config?: any; description?: string; market?: string; catalog_source?: string; };
 
@@ -247,7 +247,7 @@ export default function ComposePage() {
   const [corrPairs, setCorrPairs] = useState<Array<{factor_a: string; factor_b: string; correlation: number}>>([]);
   const [corrLoading, setCorrLoading] = useState(false);
   const [corrAnalyzed, setCorrAnalyzed] = useState(false);
-  const [classificationMap, setClassificationMap] = useState<Record<string, {grade?: string; category?: string}>>({});
+  const [classificationMap, setClassificationMap] = useState<Record<string, {official_grade?: string | null; official_score?: number | null; category?: string}>>({});
 
   /* ── 结果状态 ── */
   const [evalResult, setEvalResult] = useState<EvalResult | null>(null);
@@ -284,9 +284,10 @@ export default function ComposePage() {
           factor_type: f.factor_type,
           data_source: f.data_source,
           category: f.category ?? cls?.category,
-          grade: f.official_grade ?? f.grade ?? cls?.grade,
+          official_grade: f.official_grade ?? cls?.official_grade ?? null,
+          official_score: f.official_score ?? cls?.official_score ?? null,
           description: f.description_cn || f.cl_description,
-          ann_ret_value: f.ind_annual_return ?? null,
+          ind_annual_return: f.ind_annual_return ?? null,
         };
       });
       setFactors(enrichedFactors);
@@ -508,7 +509,7 @@ export default function ComposePage() {
     }).sort((a, b) => {
       if (!factorSortKey || !factorSortDir) return 0;
       const dir = factorSortDir === "asc" ? 1 : -1;
-      if (factorSortKey === "grade") return dir * ((GRADE_ORDER[a.grade || "D"] ?? 5) - (GRADE_ORDER[b.grade || "D"] ?? 5));
+      if (factorSortKey === "grade") return dir * ((GRADE_ORDER[a.official_grade || "D"] ?? 5) - (GRADE_ORDER[b.official_grade || "D"] ?? 5));
       if (factorSortKey === "ic") return dir * ((b.ic ?? -999) - (a.ic ?? -999));
       if (factorSortKey === "sharpe") return dir * ((b.sharpe ?? -999) - (a.sharpe ?? -999));
       if (factorSortKey === "name") return dir * a.factor_name.localeCompare(b.factor_name);
@@ -549,8 +550,8 @@ export default function ComposePage() {
         name,
         ic: fac?.ic ?? null,
         sharpe: fac?.sharpe ?? null,
-        ann_ret: fac?.ann_ret_value ?? null,
-        grade: cls?.grade ?? fac?.grade ?? null,
+        ann_ret: fac?.ind_annual_return ?? null,
+        official_grade: cls?.official_grade ?? fac?.official_grade ?? null,
         category: cls?.category ?? fac?.category ?? null,
       };
     }).sort((a, b) => (Math.abs(b.ic ?? 0)) - (Math.abs(a.ic ?? 0)));
@@ -1461,7 +1462,7 @@ export default function ComposePage() {
                           <tr key={f.name} style={{ borderTop: "1px solid #f1f5f9", backgroundColor: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
                             <td style={{ padding: "5px 8px", fontFamily: "monospace", fontSize: 11, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.name}>{f.name}</td>
                             <td style={{ padding: "5px 8px", textAlign: "center" }}>
-                              {f.grade ? <span style={{ padding: "1px 6px", borderRadius: 3, fontSize: 10, fontWeight: 700, color: "#fff", backgroundColor: f.grade === "S" ? "#7c3aed" : f.grade === "A" ? "#2563eb" : f.grade === "B" ? "#10b981" : f.grade === "C" ? "#f59e0b" : "#ef4444" }}>{f.grade}</span> : "-"}
+                              {f.official_grade ? <span style={{ padding: "1px 6px", borderRadius: 3, fontSize: 10, fontWeight: 700, color: "#fff", backgroundColor: f.official_grade === "S" ? "#7c3aed" : f.official_grade === "A" ? "#2563eb" : f.official_grade === "B" ? "#10b981" : f.official_grade === "C" ? "#f59e0b" : "#ef4444" }}>{f.official_grade}</span> : "-"}
                             </td>
                             <td style={{ padding: "5px 8px", textAlign: "right", fontFamily: "monospace", color: (f.ic ?? 0) > 0.03 ? "#059669" : "#64748b" }}>{f.ic != null ? f.ic.toFixed(4) : "-"}</td>
                             <td style={{ padding: "5px 8px", textAlign: "right", fontFamily: "monospace", color: "#64748b" }}>{f.sharpe != null ? f.sharpe.toFixed(3) : "-"}</td>

@@ -1,8 +1,8 @@
 ﻿# 因子权威口径与运行路径硬编码整改方案（Phase 2）
 
-更新日期：2026-04-28
+更新日期：2026-04-29
 
-> 状态：方案文档。当前阶段只做分析和设计；等待其他窗口提交完成并获得用户最终确认后，再执行代码修改。
+> 状态：执行中。用户已确认其他窗口提交完成；本阶段在测试端口验证后提交代码，不触碰生产端口 `8001`。
 
 ## 1. 背景与目标
 
@@ -50,6 +50,45 @@
       <td>路径与密钥配置</td>
       <td>运行路径来自 compute node 配置、环境变量、StrategyPackage artifact、DB/对象存储配置。</td>
       <td>不得在生产代码中硬编码 <code>F:/Dev</code>、<code>/mnt/f</code>、<code>/home/lc999</code>、个人用户名、默认数据库密码。</td>
+    </tr>
+  </tbody>
+</table>
+
+## 10. 2026-04-29 验证记录
+
+<table border="1" cellspacing="0" cellpadding="6">
+  <thead>
+    <tr>
+      <th>验证层级</th>
+      <th>命令/端口</th>
+      <th>结果</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Python 编译</td>
+      <td><code>python -m py_compile</code> 覆盖本阶段修改的 backend/router/service/test 文件。</td>
+      <td>通过。</td>
+    </tr>
+    <tr>
+      <td>静态护栏</td>
+      <td><code>pytest backend/tests/test_factor_metrics_authority_static.py -q</code></td>
+      <td>5 项通过，覆盖 <code>calc_engine</code>、旧评级读取、前端旧字段、运行路径和敏感 fallback。</td>
+    </tr>
+    <tr>
+      <td>前端构建</td>
+      <td><code>cd frontend; npm run build</code></td>
+      <td>通过。一次 Windows/Next 临时构建产物缺块后清理 <code>.next</code> 并重跑通过。</td>
+    </tr>
+    <tr>
+      <td>测试后端 API</td>
+      <td><code>uvicorn backend.main:app --host 127.0.0.1 --port 8011</code></td>
+      <td>通过。验证因子列表、分类列表、Multi-Alpha 候选、相关性详情、手工因子无快照 fail-fast 均符合 official/ind 口径。</td>
+    </tr>
+    <tr>
+      <td>测试前端 UI</td>
+      <td><code>NEXT_PUBLIC_API_BASE=http://127.0.0.1:8011/api/v1 npm run start -- -p 3011</code> + Playwright smoke。</td>
+      <td>通过。<code>/quantevolver/factors</code>、<code>/quantevolver/compose</code>、<code>/quantevolver/factor-correlation</code>、<code>/quantevolver/factor-deletion</code> 均返回 200，无 page error/console error/request failed。</td>
     </tr>
   </tbody>
 </table>
@@ -481,3 +520,37 @@
 - 每次只 stage 当前阶段文件。
 - 如果其他窗口已提交，需要先基于最新 `origin/main` rebase/merge 后再开始。
 - 若出现同文件冲突，先报告冲突位置和影响，不擅自覆盖他人修改。
+
+## 9. 2026-04-29 执行落地记录
+
+<table border="1" cellspacing="0" cellpadding="6">
+  <thead>
+    <tr>
+      <th>整改项</th>
+      <th>落地设计</th>
+      <th>验证要求</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>生产评级读取</td>
+      <td>生产筛选、排序、prompt、相关性详情统一读取 active <code>qe_factor_official_ratings.official_grade/official_score</code>；<code>qe_factor_classification.grade</code> 仅允许以 <code>legacy_grade</code> 命名保留调试输出，不参与决策。</td>
+      <td>静态测试禁止 <code>c.grade/cl.grade/fc.grade</code> 参与生产读取；API smoke 返回 <code>official_grade</code>。</td>
+    </tr>
+    <tr>
+      <td>独立指标展示</td>
+      <td>前端因子库、Compose、Multi-Alpha 候选、相关性详情、删除候选、手工因子结果只使用 <code>official_*</code> 与 <code>ind_*</code> 字段；旧 <code>ic_value/sharpe_value/ann_ret_value/v2_grade/v2_score</code> 不再作为正常展示字段。</td>
+      <td>静态测试扫描 QuantEvolver UI 关键页面，禁止旧字段和 <code>*.grade</code> 当前因子评级回退。</td>
+    </tr>
+    <tr>
+      <td>手工因子 full pipeline</td>
+      <td>手工因子全流程必须带 <code>data_date</code>，通过 <code>FactorOfficialEvaluationService</code> 写入官方独立指标，再调用 active <code>FactorRatingService</code> 写入官方评级；旧 WSL 指标脚本不再作为产品化写入路径。</td>
+      <td>无快照时 UI/后端 fail-fast；成功结果展示 official metrics DB 写入数量和官方评级 run 统计。</td>
+    </tr>
+    <tr>
+      <td>运行态路径和密钥</td>
+      <td>生产运行路径改为环境变量、repo-local artifact root 或 compute node 配置；删除数据库密码 fallback，缺少必需配置时 fail-fast。</td>
+      <td>静态测试禁止 <code>F:/Dev</code>、<code>F:\Dev</code>、<code>/mnt/f</code>、<code>/home/lc999</code>、个人密码和 shell 密码 fallback。</td>
+    </tr>
+  </tbody>
+</table>

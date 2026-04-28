@@ -450,6 +450,7 @@ def get_factor_detail(
         "data_source": data.get("data_source"),
         # Classification (from qe_factor_classification JOIN)
         "category": data.get("cl_category"),
+        "official_grade": data.get("cl_grade"),
         "grade": data.get("cl_grade"),
         "llm_analysis": data.get("cl_llm_analysis"),
         "classification_description": data.get("cl_description"),

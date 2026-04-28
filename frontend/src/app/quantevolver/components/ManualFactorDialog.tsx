@@ -7,6 +7,7 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onCreated?: () => void;
+  dataDate?: string;
 }
 
 const DATASETS_REF = `可用数据集（MultiIndex: datetime, instrument，日频 A 股全市场）:
@@ -41,7 +42,7 @@ if __name__ == "__main__":
     compute_factor()
 `;
 
-export default function ManualFactorDialog({ open, onClose, onCreated }: Props) {
+export default function ManualFactorDialog({ open, onClose, onCreated, dataDate }: Props) {
   const [factorName, setFactorName] = useState("m_");
   const [codeText, setCodeText] = useState(DEFAULT_CODE);
   const [description, setDescription] = useState("");
@@ -89,11 +90,16 @@ export default function ManualFactorDialog({ open, onClose, onCreated }: Props) 
   const handleFullPipeline = useCallback(async () => {
     setLoading(true); setStage("完整流水线（验证→入库→指标→分类）..."); setError(""); setResult(null);
     try {
+      if (!dataDate) {
+        setError("请先在因子库选择数据快照；手工因子全流程必须写入官方独立指标快照。");
+        setLoading(false); setStage("");
+        return;
+      }
       const code = codeText.replace(/REPLACE_ME/g, factorName);
       const resp = await fetch(`${API}/quantevolver/factors/manual/full-pipeline`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ factor_name: factorName, code_text: code, description: description || undefined }),
+        body: JSON.stringify({ factor_name: factorName, code_text: code, description: description || undefined, data_date: dataDate }),
       });
       if (!resp.ok) { setError(`HTTP ${resp.status}: ${await resp.text()}`); setLoading(false); setStage(""); return; }
       const data = await resp.json();
@@ -102,7 +108,7 @@ export default function ManualFactorDialog({ open, onClose, onCreated }: Props) 
       else setError(data.error || "流水线失败");
     } catch (e: any) { setError(e?.message || "请求失败"); }
     setLoading(false); setStage("");
-  }, [factorName, codeText, description, onCreated]);
+  }, [factorName, codeText, description, dataDate, onCreated]);
 
   if (!open) return null;
 
@@ -202,11 +208,12 @@ export default function ManualFactorDialog({ open, onClose, onCreated }: Props) 
           >保存入库</button>
           <button
             onClick={handleFullPipeline}
-            disabled={loading || !factorName || factorName.length < 3}
+            disabled={loading || !factorName || factorName.length < 3 || !dataDate}
+            title={dataDate ? `使用快照 ${dataDate} 写入官方指标和评级` : "请先选择因子库数据快照"}
             style={{
               padding: "8px 16px", fontSize: 13, borderRadius: 6, border: "none",
               background: "#7c3aed", color: "#fff", fontWeight: 600, cursor: loading ? "not-allowed" : "pointer",
-              opacity: loading ? 0.5 : 1,
+              opacity: (loading || !dataDate) ? 0.5 : 1,
             }}
           >完整入库（含指标）</button>
         </div>
@@ -240,7 +247,7 @@ export default function ManualFactorDialog({ open, onClose, onCreated }: Props) 
               <div>
                 <strong>入库成功</strong>: {result.factor_name}
                 {result.classification && (
-                  <span> | 分类: {result.classification.category} | 评级: {result.classification.grade}</span>
+                  <span> | 语义分类: {result.classification.category}</span>
                 )}
               </div>
             )}
@@ -248,20 +255,19 @@ export default function ManualFactorDialog({ open, onClose, onCreated }: Props) 
               <div>
                 <strong>完整流水线完成</strong>: {result.factor_name}
                 {result.save?.classification && (
-                  <div>分类: {result.save.classification.category} | 评级: {result.save.classification.grade}</div>
+                  <div>语义分类: {result.save.classification.category}</div>
                 )}
-                {result.metrics?.success && result.metrics.factors?.[result.factor_name]?.full && (() => {
-                  const m = result.metrics.factors[result.factor_name].full;
-                  return (
-                    <div style={{ marginTop: 4 }}>
-                      IC={m.ic_mean?.toFixed(4) || "-"} |
-                      ICIR={m.icir?.toFixed(4) || "-"} |
-                      RankIC={m.rank_ic_mean?.toFixed(4) || "-"} |
-                      Sharpe={m.top_sharpe?.toFixed(2) || "-"} |
-                      AnnRet={m.top_annual_return ? (m.top_annual_return * 100).toFixed(1) + "%" : "-"}
-                    </div>
-                  );
-                })()}
+                {result.metrics?.success && (
+                  <div style={{ marginTop: 4 }}>
+                    官方独立指标已写入: inserted={result.metrics.db_result?.inserted ?? "-"} |
+                    snapshot={result.metrics.snapshot_date ?? dataDate ?? "-"}
+                  </div>
+                )}
+                {result.rating?.ok && (
+                  <div style={{ marginTop: 4 }}>
+                    官方评级已完成: success={result.rating.success_count ?? "-"} / total={result.rating.total_factors ?? "-"}
+                  </div>
+                )}
               </div>
             )}
           </div>

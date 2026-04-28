@@ -246,7 +246,11 @@ class TrainingService:
         try:
             # 写入临时配置文件
             workspace = params.get("workspace_path", "/tmp/paper_training")
-            wsl_workspace = workspace.replace("F:", "/mnt/f").replace("\\", "/")
+            workspace_posix = str(workspace).replace("\\", "/")
+            if len(workspace_posix) >= 2 and workspace_posix[1] == ":":
+                wsl_workspace = f"/mnt/{workspace_posix[0].lower()}{workspace_posix[2:]}"
+            else:
+                wsl_workspace = workspace_posix
 
             # 通过 WSL 写配置
             config_path = f"{wsl_workspace}/retrain_config_{job_id}.yaml"

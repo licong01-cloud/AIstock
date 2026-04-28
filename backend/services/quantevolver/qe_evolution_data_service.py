@@ -3,6 +3,7 @@ QE演进LLM数据服务
 提供因子信息、历史轨迹、配置建议等数据供LLM分析
 """
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -17,12 +18,15 @@ class QEEvolutionDataService:
     """QE演进数据服务 - 为LLM提供分析所需的数据"""
 
     def __init__(self, db_config: dict | None = None):
+        db_password = os.getenv("TDX_DB_PASSWORD", "")
+        if db_config is None and not db_password:
+            raise RuntimeError("TDX_DB_PASSWORD is required for QEEvolutionDataService")
         self.db_config = db_config or {
-            "host": "127.0.0.1",
-            "port": 5432,
-            "database": "aistock",
-            "user": "postgres",
-            "password": "lc78080808",
+            "host": os.getenv("TDX_DB_HOST", "127.0.0.1"),
+            "port": int(os.getenv("TDX_DB_PORT", "5432")),
+            "database": os.getenv("TDX_DB_NAME", "aistock"),
+            "user": os.getenv("TDX_DB_USER", "postgres"),
+            "password": db_password,
         }
         self._conn = None
 

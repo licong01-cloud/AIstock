@@ -41,7 +41,9 @@ interface FactorIndependentMetrics {
 }
 
 interface FactorClassification {
-  grade: string | null;
+  official_grade: string | null;
+  official_score: number | null;
+  official_rule_version: string | null;
   category: string | null;
   llm_analysis: string | null;
   description: string | null;
@@ -337,9 +339,9 @@ export default function PairDetail({
                     <tbody>
                       <tr style={trStyle}>
                         <td style={tdStyle}>评级</td>
-                        <td style={tdCenterStyle}>{mA?.classification?.grade ?? "-"}</td>
-                        <td style={tdCenterStyle}>{mB?.classification?.grade ?? "-"}</td>
-                        <td style={tdCenterStyle}><WinnerBadge winner={judgeGrade(mA?.classification?.grade, mB?.classification?.grade)} nameA={factorA} nameB={factorB} /></td>
+                        <td style={tdCenterStyle}>{mA?.classification?.official_grade ?? "-"}</td>
+                        <td style={tdCenterStyle}>{mB?.classification?.official_grade ?? "-"}</td>
+                        <td style={tdCenterStyle}><WinnerBadge winner={judgeGrade(mA?.classification?.official_grade, mB?.classification?.official_grade)} nameA={factorA} nameB={factorB} /></td>
                       </tr>
                       <tr style={trStyle}>
                         <td style={tdStyle}>分类</td>

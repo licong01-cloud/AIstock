@@ -29,8 +29,6 @@ type Candidate = {
   ic_oos_is_ratio?: number | null;
   official_grade?: string | null;
   official_score?: number | null;
-  v2_grade?: string | null;
-  v2_score?: number | null;
 };
 
 type AnalyzeResult = {
@@ -356,9 +354,9 @@ export default function FactorDeletionPage() {
                       <td style={td}>{fmt(c.ic_oos_is_ratio, 2)}</td>
                       <td style={td}>{fmt(c.coverage, 2)}</td>
                       <td style={td}>
-                        {(c.official_grade || c.v2_grade) ? (
+                        {c.official_grade ? (
                           <span>
-                            <b>{c.official_grade || c.v2_grade}</b> {fmt(c.official_score ?? c.v2_score, 1)}
+                            <b>{c.official_grade}</b> {fmt(c.official_score, 1)}
                           </span>
                         ) : (
                           "-"

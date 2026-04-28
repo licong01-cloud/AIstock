@@ -22,9 +22,6 @@ except ImportError:  # tests may import backend/services as a top-level package
 logger = logging.getLogger("aistock.quantevolver.stock_pool_sync")
 
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
-_DEFAULT_LOCAL_QLIB_DATA_PATH = "/home/lc999/data/qlib_bin"
-
-
 def _wsl_distro() -> str:
     distro = os.getenv("AISTOCK_WSL_DISTRO") or os.getenv("QLIB_WSL_DISTRO") or ""
     distro = distro.strip()
@@ -49,7 +46,9 @@ def _resolve_local_stock_pool_path(stock_pool_path: str) -> str:
     if "/" in value or "\\" in value:
         return value.replace("\\", "/")
     filename = value if value.endswith(".txt") else f"{value}.txt"
-    qlib_data_path = os.getenv("QLIB_DATA_PATH_WSL", _DEFAULT_LOCAL_QLIB_DATA_PATH).rstrip("/")
+    qlib_data_path = os.getenv("QLIB_DATA_PATH_WSL", "").strip().rstrip("/")
+    if not qlib_data_path:
+        raise RuntimeError("QLIB_DATA_PATH_WSL is required to resolve local stock_pool paths")
     return f"{qlib_data_path}/instruments/{filename}"
 
 
@@ -115,7 +114,9 @@ def sync_stock_pool_to_remote_node(stock_pool_path: str, node: dict[str, Any]) -
     _assert_wsl_file_exists(local_stock_pool_path)
     local_sha256 = _wsl_sha256(local_stock_pool_path)
 
-    ssh_user = node.get("ssh_user") or "lc999"
+    ssh_user = node.get("ssh_user") or ""
+    if not ssh_user:
+        raise RuntimeError(f"node {node_id} missing ssh_user; cannot sync stock_pool")
     ssh_target = f"{ssh_user}@{host}"
     remote_instruments_dir = f"{remote_qlib_data.rstrip('/')}/instruments"
     remote_path = f"{remote_instruments_dir}/{os.path.basename(local_stock_pool_path)}"
@@ -175,10 +176,15 @@ def sync_all_filtered_pools_to_remote_node(node: dict[str, Any]) -> dict[str, st
     if not remote_qlib_data:
         raise RuntimeError(f"node {node_id} missing qlib_data_path; cannot sync filtered pools")
 
-    ssh_user = node.get("ssh_user") or "lc999"
+    ssh_user = node.get("ssh_user") or ""
+    if not ssh_user:
+        raise RuntimeError(f"node {node_id} missing ssh_user; cannot sync filtered pools")
     ssh_target = f"{ssh_user}@{host}"
     remote_instruments_dir = f"{remote_qlib_data.rstrip('/')}/instruments"
-    local_instruments_dir = f"{os.getenv('QLIB_DATA_PATH_WSL', _DEFAULT_LOCAL_QLIB_DATA_PATH).rstrip('/')}/instruments"
+    local_qlib_data = os.getenv("QLIB_DATA_PATH_WSL", "").strip().rstrip("/")
+    if not local_qlib_data:
+        raise RuntimeError("QLIB_DATA_PATH_WSL is required to sync filtered pools")
+    local_instruments_dir = f"{local_qlib_data}/instruments"
 
     _run_checked(
         ["ssh", ssh_target, "mkdir", "-p", remote_instruments_dir],

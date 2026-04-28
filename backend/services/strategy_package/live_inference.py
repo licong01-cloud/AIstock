@@ -336,9 +336,6 @@ class QEExperimentRuntimeAssetResolver:
         qe_workspace_root = str(os.getenv("QE_WORKSPACE_WIN") or "").strip()
         if qe_workspace_root:
             candidates.append(Path(qe_workspace_root) / experiment_id)
-        default_root = Path("F:/Dev/RD-Agent-main/qe_workspace")
-        if default_root.exists():
-            candidates.append(default_root / experiment_id)
         existing = [candidate for candidate in candidates if candidate.exists() and candidate.is_dir()]
         for candidate in existing:
             if any(candidate.glob("**/artifacts/params.pkl")):

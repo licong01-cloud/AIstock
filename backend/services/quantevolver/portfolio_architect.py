@@ -1,4 +1,4 @@
-"""
+﻿"""
 QuantEvolver Phase 2: PortfolioArchitect（组合架构师）
 
 功能：
@@ -18,6 +18,47 @@ from ...db.pg_pool import get_conn
 from .factor_official_evaluation_service import CALC_ENGINE
 
 logger = logging.getLogger("aistock.quantevolver.portfolio_architect")
+
+_ACTIVE_RATING_JOIN_SQL = """
+LEFT JOIN LATERAL (
+    SELECT official_grade, official_score, rule_version
+    FROM qe_factor_official_ratings r
+    WHERE r.factor_catalog_id = c.id
+      AND r.rule_version = (
+          SELECT rule_version FROM qe_rating_rule_versions
+          WHERE status = 'active'
+          ORDER BY activated_at DESC NULLS LAST, created_at DESC
+          LIMIT 1
+      )
+    ORDER BY r.graded_at DESC
+    LIMIT 1
+) fr ON TRUE
+"""
+
+_CLASSIFICATION_RATING_JOIN_SQL = """
+JOIN aistock_factor_catalog cat
+  ON cat.factor_name = c.factor_name AND cat.source = c.factor_source
+LEFT JOIN LATERAL (
+    SELECT official_grade, official_score, rule_version
+    FROM qe_factor_official_ratings r
+    WHERE r.factor_catalog_id = cat.id
+      AND r.rule_version = (
+          SELECT rule_version FROM qe_rating_rule_versions
+          WHERE status = 'active'
+          ORDER BY activated_at DESC NULLS LAST, created_at DESC
+          LIMIT 1
+      )
+    ORDER BY r.graded_at DESC
+    LIMIT 1
+) fr ON TRUE
+"""
+
+_OFFICIAL_GRADE_ORDER_SQL = """
+CASE fr.official_grade
+    WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
+    WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
+END
+"""
 
 
 class PortfolioArchitect:
@@ -153,7 +194,7 @@ class PortfolioArchitect:
             # 增强：IC/ICIR/最佳持有期/评级
             ic_str = f"{float(d['ic_mean']):.4f}" if d.get("ic_mean") is not None else "N/A"
             icir_str = f"{float(d['icir']):.4f}" if d.get("icir") is not None else "N/A"
-            grade_str = d.get("grade") or "N/A"
+            grade_str = d.get("official_grade") or "N/A"
             # 找最佳持有期
             holding_periods = {}
             for key_name, label in [("rank_ic_1d", "1d"), ("rank_ic_5d", "5d"), ("rank_ic_10d", "10d"), ("rank_ic_20d", "20d")]:
@@ -308,11 +349,13 @@ class PortfolioArchitect:
             with conn.cursor() as cur:
                 placeholders = ",".join(["%s"] * len(names_only))
                 cur.execute(f"""
-                    SELECT c.factor_name, c.factor_source, c.category, c.grade,
+                    SELECT c.factor_name, c.factor_source, c.category,
+                           fr.official_grade, fr.official_score,
                            m.ic_mean AS ic_value,
                            m.top_excess_sharpe AS sharpe_value,
                            m.top_excess_annual_return AS ann_ret_value
                     FROM qe_factor_classification c
+                    {_CLASSIFICATION_RATING_JOIN_SQL}
                     LEFT JOIN LATERAL (
                         SELECT ic_mean, top_excess_sharpe, top_excess_annual_return
                         FROM aistock_factor_metrics
@@ -327,8 +370,8 @@ class PortfolioArchitect:
                 classified_by_name: Dict[str, Dict] = {}
                 for row in cur.fetchall():
                     info = {
-                        "category": row[2], "grade": row[3],
-                        "ic": row[4], "sharpe": row[5], "ann_ret": row[6],
+                        "category": row[2], "official_grade": row[3], "official_score": row[4],
+                        "ic": row[5], "sharpe": row[6], "ann_ret": row[7],
                     }
                     classified_by_pair[(row[0], row[1])] = info
                     classified_by_name.setdefault(row[0], info)
@@ -348,7 +391,7 @@ class PortfolioArchitect:
             categories[cat]["count"] += 1
             categories[cat]["factors"].append(name)
 
-            grade = info.get("grade")
+            grade = info.get("official_grade")
             if grade:
                 total_grade_score += grade_scores.get(grade, 0)
                 classified_count += 1
@@ -385,7 +428,7 @@ class PortfolioArchitect:
                            m.top_excess_sharpe, m.top_excess_annual_return,
                            m.group_return_monotonicity, m.turnover,
                            m.ic_decay_half_life,
-                           cl.category, fr.official_grade AS grade,
+                           cl.category, fr.official_grade AS official_grade, fr.official_score,
                            cl.factor_dimension, cl.factor_profile
                     FROM aistock_factor_catalog c
                     LEFT JOIN LATERAL (
@@ -401,15 +444,7 @@ class PortfolioArchitect:
                     ) m ON TRUE
                     LEFT JOIN qe_factor_classification cl
                         ON c.factor_name = cl.factor_name AND c.source = cl.factor_source
-                    LEFT JOIN LATERAL (
-                        SELECT official_grade FROM qe_factor_official_ratings r
-                        WHERE r.factor_catalog_id = c.id
-                          AND r.rule_version = (
-                              SELECT rule_version FROM qe_rating_rule_versions
-                              WHERE status = 'active' ORDER BY activated_at DESC LIMIT 1
-                          )
-                        ORDER BY r.graded_at DESC LIMIT 1
-                    ) fr ON TRUE
+                    {_ACTIVE_RATING_JOIN_SQL}
                     WHERE c.factor_name IN ({ph})
                 """, [CALC_ENGINE, *names_only])
                 cols = [d[0] for d in cur.description]
@@ -768,7 +803,7 @@ class PortfolioArchitect:
         factor_details_enriched = []
         for f in selected_factors:
             reason_parts = []
-            g = f.get("grade", "")
+            g = f.get("official_grade", "")
             if g:
                 reason_parts.append(f"评级{g}({grade_label.get(g, g)})")
             ic = f.get("ic_mean")
@@ -792,7 +827,7 @@ class PortfolioArchitect:
         for cat, cat_factors in factor_metadata["by_category"].items():
             cat_grade_dist = {}
             for cf in cat_factors:
-                g = cf.get("grade", "D")
+                g = cf.get("official_grade", "D")
                 cat_grade_dist[g] = cat_grade_dist.get(g, 0) + 1
             selected_in_cat = category_summary.get(cat, {}).get("count", 0)
             all_categories_overview[cat] = {
@@ -852,17 +887,19 @@ class PortfolioArchitect:
         """获取因子库元数据摘要，供智能生成使用。"""
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT c.factor_name, c.factor_source, c.category, c.grade,
-                           m.ic_mean AS ic_value,
-                           m.top_excess_sharpe AS sharpe_value,
-                           m.top_excess_annual_return AS ann_ret_value,
+                cur.execute(f"""
+                    SELECT c.factor_name, c.factor_source, c.category,
+                           fr.official_grade, fr.official_score,
+                           m.ic_mean AS ind_ic,
+                           m.top_excess_sharpe AS ind_sharpe,
+                           m.top_excess_annual_return AS ind_annual_return,
                            c.description, c.classification_reason,
                            c.factor_profile, m.ic_decay_half_life,
                            m.ic_mean, m.icir, m.rank_ic_mean, m.rank_icir,
                            m.rank_ic_5d, m.rank_ic_10d, m.rank_ic_20d,
                            m.group_return_monotonicity
                     FROM qe_factor_classification c
+                    {_CLASSIFICATION_RATING_JOIN_SQL}
                     LEFT JOIN LATERAL (
                         SELECT ic_mean, icir, rank_ic_mean, rank_icir,
                                rank_ic_5d, rank_ic_10d, rank_ic_20d,
@@ -873,13 +910,9 @@ class PortfolioArchitect:
                         ORDER BY calculated_at DESC
                         LIMIT 1
                     ) m ON TRUE
-                    WHERE c.grade IS NOT NULL
-                    ORDER BY
-                        CASE c.grade
-                            WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
-                            WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
-                        END ASC,
-                        m.ic_mean DESC NULLS LAST
+                    WHERE fr.official_grade IS NOT NULL
+                    ORDER BY {_OFFICIAL_GRADE_ORDER_SQL} ASC,
+                             ABS(m.rank_ic_mean) DESC NULLS LAST
                 """, (CALC_ENGINE,))
                 cols = [desc[0] for desc in cur.description]
                 factors = [dict(zip(cols, row)) for row in cur.fetchall()]
@@ -895,7 +928,7 @@ class PortfolioArchitect:
         # 评级分布
         grade_dist = {}
         for f in factors:
-            g = f.get("grade", "D")
+            g = f.get("official_grade", "D")
             grade_dist[g] = grade_dist.get(g, 0) + 1
 
         return {
@@ -917,24 +950,22 @@ class PortfolioArchitect:
 
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(f"""
                     WITH ranked AS (
-                        SELECT c.factor_name, c.factor_source, c.category, c.grade,
-                               m.ic_mean AS ic_value,
-                               m.top_excess_sharpe AS sharpe_value,
+                        SELECT c.factor_name, c.factor_source, c.category,
+                               fr.official_grade, fr.official_score,
+                               m.ic_mean AS ind_ic,
+                               m.top_excess_sharpe AS ind_sharpe,
                                c.factor_profile,
                                m.ic_mean, m.icir, m.rank_ic_mean,
                                m.top_excess_annual_return, m.ic_decay_half_life,
                                ROW_NUMBER() OVER (
                                    PARTITION BY c.category
-                                   ORDER BY
-                                       CASE c.grade
-                                           WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
-                                           WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
-                                       END ASC,
-                                       m.ic_mean DESC NULLS LAST
+                                   ORDER BY {_OFFICIAL_GRADE_ORDER_SQL} ASC,
+                                            ABS(m.rank_ic_mean) DESC NULLS LAST
                                ) AS rn
                         FROM qe_factor_classification c
+                        {_CLASSIFICATION_RATING_JOIN_SQL}
                         LEFT JOIN LATERAL (
                             SELECT ic_mean, icir, rank_ic_mean,
                                    top_excess_annual_return, ic_decay_half_life
@@ -943,11 +974,8 @@ class PortfolioArchitect:
                             ORDER BY calculated_at DESC
                             LIMIT 1
                         ) m ON TRUE
-                        WHERE c.grade IS NOT NULL
-                          AND CASE c.grade
-                                  WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
-                                  WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
-                              END <= %s
+                        WHERE fr.official_grade IS NOT NULL
+                          AND {_OFFICIAL_GRADE_ORDER_SQL} <= %s
                            AND m.ic_mean > %s
                     )
                     SELECT * FROM ranked WHERE rn <= %s
@@ -964,7 +992,7 @@ class PortfolioArchitect:
             ic_str = f"{float(ic):.4f}" if ic is not None else "N/A"
             icir_str = f"{float(f['icir']):.4f}" if f.get("icir") is not None else "N/A"
             lines.append(
-                f"{f['factor_name']} | {f['category']} | {f['grade']} | IC={ic_str} | ICIR={icir_str}"
+                f"{f['factor_name']} | {f['category']} | {f.get("official_grade", "未评级")} | IC={ic_str} | ICIR={icir_str}"
             )
         factor_table = "\n".join(lines)
 
@@ -1052,7 +1080,7 @@ class PortfolioArchitect:
             complement = ", ".join(usage.get("complementary_categories", [])[:3]) if usage.get("complementary_categories") else ""
 
             line = (
-                f"- {f['factor_name']} | 类别={f['category']} | 评级={f['grade']} | "
+                f"- {f['factor_name']} | 类别={f['category']} | 评级={f.get("official_grade", "未评级")} | "
                 f"IC={ic_str} | ICIR={icir_str} | RankIC={rank_ic_str} | 超额收益={ret_str}"
             )
             if role:
@@ -1221,7 +1249,7 @@ class PortfolioArchitect:
         # 过滤：评级达标
         candidates = [
             f for f in all_factors
-            if grade_order.get(f.get("grade", "D"), 4) <= min_grade_val
+            if grade_order.get(f.get("official_grade", "D"), 4) <= min_grade_val
         ]
 
         if not candidates:
@@ -1253,7 +1281,7 @@ class PortfolioArchitect:
             if cat not in category_count:
                 for f in cat_factors:
                     if f["factor_name"] not in selected_names:
-                        if grade_order.get(f.get("grade", "D"), 4) <= min_grade_val:
+                        if grade_order.get(f.get("official_grade", "D"), 4) <= min_grade_val:
                             selected.append(f)
                             selected_names.add(f["factor_name"])
                             category_count[cat] = 1
@@ -1347,7 +1375,7 @@ class PortfolioArchitect:
             ic_values = []
             icir_values = []
             for f in cat_factors:
-                g = f.get("grade", "D")
+                g = f.get("official_grade", "D")
                 grade_counts[g] = grade_counts.get(g, 0) + 1
                 if f.get("ic_mean") is not None:
                     ic_values.append(float(f["ic_mean"]))
@@ -1379,7 +1407,7 @@ class PortfolioArchitect:
         available_factors_lines = []
         for cat, cat_factors in factor_metadata["by_category"].items():
             cat_name = FACTOR_CATEGORIES.get(cat, cat)
-            names = [f"{f['factor_name']}({f.get('grade','?')})" for f in cat_factors]
+            names = [f"{f['factor_name']}({f.get("official_grade", "未评级")})" for f in cat_factors]
             available_factors_lines.append(f"  {cat}({cat_name}): {', '.join(names)}")
         available_factors = "\n".join(available_factors_lines)
 
@@ -1455,3 +1483,4 @@ class PortfolioArchitect:
             return llm_model_id
         logger.warning(f"LLM选择的模型 '{llm_model_id}' 不存在，回退到最佳模型")
         return self._select_best_model()
+

@@ -95,8 +95,8 @@ export type MergedFactor = {
   is_available?: boolean;
   description_cn?: string;
   category?: string;
-  grade?: string;
-  grade_reason?: string;
+  official_grade?: string | null;
+  official_grade_reason?: string | null;
   classification_reason?: string;
   factor_dimension?: string;
   description?: string;
@@ -740,8 +740,8 @@ export default function FactorList({
         is_available: f.is_available !== false,
         description_cn: f.description_cn,
         category: f.category,
-        grade: f.official_grade ?? f.grade,
-        grade_reason: f.official_grade_reason_structured?.summary ?? f.legacy_grade_reason ?? f.grade_reason,
+        official_grade: f.official_grade ?? null,
+        official_grade_reason: f.official_grade_reason_structured?.summary ?? null,
         classification_reason: f.classification_reason,
         factor_dimension: f.factor_dimension,
         description: f.cl_description,
@@ -2684,13 +2684,13 @@ export default function FactorList({
                         )}
                       </td>
                       <td style={tdStyle}>
-                        {f.grade ? (
+                        {f.official_grade ? (
                           <span style={{
                             padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700,
-                            background: GRADE_COLORS[f.grade] || "#6b7280",
+                            background: GRADE_COLORS[f.official_grade] || "#6b7280",
                             color: "#fff",
                           }}>
-                            {f.grade}
+                            {f.official_grade}
                           </span>
                         ) : (
                           <span style={{ color: "#d1d5db", fontSize: 10 }}>-</span>
@@ -3022,10 +3022,10 @@ export default function FactorList({
                             )}
 
                             {/* 评级原因 */}
-                            {f.grade_reason && (
+                            {f.official_grade_reason && (
                               <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e5e7eb" }}>
                                 <strong style={{ color: "#ea580c", fontSize: 11 }}>评级原因</strong>
-                                <div style={{ marginTop: 4 }}>{f.grade_reason}</div>
+                                <div style={{ marginTop: 4 }}>{f.official_grade_reason}</div>
                                 {f.official_grade_reason_structured?.failed_gates?.length ? (() => {
                                   const gates = f.official_grade_reason_structured.failed_gates;
                                   const aFails = gates.filter((g: string) => g.startsWith("a_"));
@@ -3459,6 +3459,7 @@ export default function FactorList({
 
       <ManualFactorDialog
         open={manualDialogOpen}
+        dataDate={activeSnapshot || undefined}
         onClose={() => setManualDialogOpen(false)}
         onCreated={() => {
           loadData();

@@ -21,6 +21,23 @@ from .factor_official_evaluation_service import CALC_ENGINE
 
 logger = logging.getLogger("aistock.quantevolver.multi_alpha_selector")
 
+_IND_RANK_IC_BEST_ABS_SQL = """
+CASE WHEN fm.rank_ic_1d IS NULL AND fm.rank_ic_5d IS NULL
+          AND fm.rank_ic_10d IS NULL AND fm.rank_ic_20d IS NULL THEN NULL
+     ELSE GREATEST(COALESCE(ABS(fm.rank_ic_1d), 0),
+                   COALESCE(ABS(fm.rank_ic_5d), 0),
+                   COALESCE(ABS(fm.rank_ic_10d), 0),
+                   COALESCE(ABS(fm.rank_ic_20d), 0))
+END
+"""
+
+_OFFICIAL_GRADE_ORDER_SQL = """
+CASE fr.official_grade
+    WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
+    WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
+END
+"""
+
 
 # ── 默认组模板：data_source_group → (推荐 model_id, dataset_type, compute) ──
 
@@ -202,18 +219,19 @@ class MultiAlphaFactorSelector:
 
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(f"""
                     SELECT fc.factor_name, fc.factor_source, fc.category,
-                           fr.official_grade AS grade,
-                           fm.ic_mean AS ic_value, fc.data_source_group, fc.holding_period_class,
+                           fr.official_grade AS official_grade, fr.official_score,
+                           fm.ic_mean AS ind_ic, fc.data_source_group, fc.holding_period_class,
                            fc.ts_info_density, fc.linearity,
                            fm.rank_ic_1d, fm.rank_ic_5d, fm.rank_ic_10d, fm.rank_ic_20d,
-                           fm.icir_annualized, fm.rank_icir_annualized
+                           fm.icir_annualized, fm.rank_icir_annualized,
+                           {_IND_RANK_IC_BEST_ABS_SQL} AS ind_rank_ic_best_abs
                     FROM qe_factor_classification fc
                     JOIN aistock_factor_catalog cat
                         ON cat.factor_name = fc.factor_name AND cat.source = fc.factor_source
                     LEFT JOIN LATERAL (
-                        SELECT official_grade FROM qe_factor_official_ratings r
+                        SELECT official_grade, official_score FROM qe_factor_official_ratings r
                         WHERE r.factor_catalog_id = cat.id
                           AND r.rule_version = (
                               SELECT rule_version FROM qe_rating_rule_versions
@@ -231,7 +249,8 @@ class MultiAlphaFactorSelector:
                     WHERE cat.is_available = TRUE
                       AND fc.data_source_group IS NOT NULL
                       AND fc.data_source_group != 'unknown'
-                    ORDER BY fr.official_grade, ABS(fm.ic_mean) DESC NULLS LAST
+                    ORDER BY {_OFFICIAL_GRADE_ORDER_SQL} ASC,
+                             {_IND_RANK_IC_BEST_ABS_SQL} DESC NULLS LAST
                 """, (CALC_ENGINE,))
                 cols = [d[0] for d in cur.description]
                 all_factors = [dict(zip(cols, r)) for r in cur.fetchall()]
@@ -239,24 +258,16 @@ class MultiAlphaFactorSelector:
         candidates = []
         for f in all_factors:
             # Grade filter
-            if grade_order.get(f["grade"], 5) > min_val:
+            if grade_order.get(f["official_grade"], 5) > min_val:
                 continue
 
             # Holding period filter
             if holding_period_filter and f.get("holding_period_class") not in holding_period_filter:
                 continue
 
-            # best_horizon_IC = max across all periods
-            ics = [
-                abs(f.get("rank_ic_1d") or 0),
-                abs(f.get("rank_ic_5d") or 0),
-                abs(f.get("rank_ic_10d") or 0),
-                abs(f.get("rank_ic_20d") or 0),
-                abs(f.get("ic_value") or 0),
-            ]
-            f["best_horizon_ic"] = max(ics)
+            f["best_horizon_ic"] = f.get("ind_rank_ic_best_abs") or 0
 
-            if f["best_horizon_ic"] < min_ic:
+            if f["ind_rank_ic_best_abs"] is None or f["ind_rank_ic_best_abs"] < min_ic:
                 continue
 
             candidates.append(f)

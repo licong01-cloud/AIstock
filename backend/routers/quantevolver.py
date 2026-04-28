@@ -1,4 +1,4 @@
-"""
+﻿"""
 QuantEvolver 后端API路由
 
 路由前缀: /quantevolver (在main.py中通过prefix="/api/v1"注册，最终路径为/api/v1/quantevolver/...)
@@ -45,9 +45,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 def _win_to_wsl(path: str) -> str:
-    """将 Windows 路径转为 WSL 路径：F:\\x\\y → /mnt/f/x/y。"""
+    """Convert a Windows path to a WSL mount path."""
     p = str(path).replace("\\", "/")
     if len(p) >= 2 and p[1] == ":":
         drive = p[0].lower()
@@ -294,7 +296,7 @@ def sync_model_task(task_id: str, req: SyncModelTaskRequest = None):
         if not task_dir:
             # 使用默认路径
             from pathlib import Path
-            default_root = Path("f:/Dev/AIstock/rdagent_assets/rdagent_tasks") / task_id
+            default_root = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "rdagent_tasks" / task_id
             default_root.mkdir(parents=True, exist_ok=True)
             task_dir = str(default_root)
 
@@ -986,6 +988,7 @@ class ManualFactorCreate(BaseModel):
     code_text: str = Field(..., description="因子 Python 代码")
     description: Optional[str] = Field(None, description="因子描述")
     expression: Optional[str] = Field(None, description="因子表达式（可选）")
+    data_date: Optional[str] = Field(None, description="?????????? (YYYYMMDD)")
 
 
 class ManualFactorValidate(BaseModel):
@@ -1766,7 +1769,17 @@ def multi_alpha_classified_factors(
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT fc.factor_name, fr.official_grade AS grade, fm.ic_mean AS ic_value, fc.category,
+                    SELECT fc.factor_name,
+                           fr.official_grade, fr.official_score,
+                           fm.ic_mean AS ind_ic,
+                           CASE WHEN fm.rank_ic_1d IS NULL AND fm.rank_ic_5d IS NULL
+                                     AND fm.rank_ic_10d IS NULL AND fm.rank_ic_20d IS NULL THEN NULL
+                                ELSE GREATEST(COALESCE(ABS(fm.rank_ic_1d), 0),
+                                              COALESCE(ABS(fm.rank_ic_5d), 0),
+                                              COALESCE(ABS(fm.rank_ic_10d), 0),
+                                              COALESCE(ABS(fm.rank_ic_20d), 0))
+                           END AS ind_rank_ic_best_abs,
+                           fc.category,
                            fc.data_source_group, fc.holding_period_class,
                            fm.icir_annualized, fm.rank_ic_1d, fm.rank_ic_5d,
                            fm.rank_ic_10d, fm.rank_ic_20d
@@ -1782,7 +1795,7 @@ def multi_alpha_classified_factors(
                     JOIN aistock_factor_catalog cat
                         ON cat.factor_name = fc.factor_name AND cat.source = fc.factor_source
                     LEFT JOIN LATERAL (
-                        SELECT official_grade FROM qe_factor_official_ratings r
+                        SELECT official_grade, official_score FROM qe_factor_official_ratings r
                         WHERE r.factor_catalog_id = cat.id
                           AND r.rule_version = (
                               SELECT rule_version FROM qe_rating_rule_versions
@@ -1792,7 +1805,12 @@ def multi_alpha_classified_factors(
                     ) fr ON TRUE
                     WHERE cat.is_available = TRUE
                       AND fc.data_source_group = %s
-                    ORDER BY ABS(fm.ic_mean) DESC NULLS LAST
+                    ORDER BY
+                        CASE fr.official_grade
+                            WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
+                            WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
+                        END ASC,
+                        ind_rank_ic_best_abs DESC NULLS LAST
                 """, (data_source_group,))
                 cols = [d[0] for d in cur.description]
                 rows = [dict(zip(cols, r)) for r in cur.fetchall()]
@@ -1800,7 +1818,7 @@ def multi_alpha_classified_factors(
         # 过滤评级和排除名单
         results = []
         for f in rows:
-            if grade_order.get(f.get("grade"), 5) > min_val:
+            if grade_order.get(f.get("official_grade"), 5) > min_val:
                 continue
             if f["factor_name"] in exclude_set:
                 continue
@@ -1853,9 +1871,22 @@ def multi_alpha_validate_config(config: dict = Body(...)):
                 with conn.cursor() as cur:
                     placeholders = ",".join(["%s"] * len(all_factor_names))
                     cur.execute(f"""
-                        SELECT factor_name, grade, data_source_group
-                        FROM qe_factor_classification
-                        WHERE factor_name IN ({placeholders})
+                        SELECT fc.factor_name, fr.official_grade, fc.data_source_group
+                        FROM qe_factor_classification fc
+                        JOIN aistock_factor_catalog cat
+                            ON cat.factor_name = fc.factor_name AND cat.source = fc.factor_source
+                        LEFT JOIN LATERAL (
+                            SELECT official_grade FROM qe_factor_official_ratings r
+                            WHERE r.factor_catalog_id = cat.id
+                              AND r.rule_version = (
+                                  SELECT rule_version FROM qe_rating_rule_versions
+                                  WHERE status = 'active'
+                                  ORDER BY activated_at DESC NULLS LAST, created_at DESC
+                                  LIMIT 1
+                              )
+                            ORDER BY r.graded_at DESC LIMIT 1
+                        ) fr ON TRUE
+                        WHERE fc.factor_name IN ({placeholders})
                     """, all_factor_names)
                     classified = {r[0]: {"grade": r[1], "dsg": r[2]} for r in cur.fetchall()}
 
@@ -1884,12 +1915,23 @@ def multi_alpha_classification_coverage():
                 # 总体统计
                 cur.execute("""
                     SELECT COUNT(*) AS total,
-                           COUNT(CASE WHEN grade IS NOT NULL THEN 1 END) AS has_grade,
-                           COUNT(CASE WHEN data_source_group IS NOT NULL
-                                       AND data_source_group != 'unknown' THEN 1 END) AS has_dsg
+                           COUNT(CASE WHEN fr.official_grade IS NOT NULL THEN 1 END) AS has_grade,
+                           COUNT(CASE WHEN fc.data_source_group IS NOT NULL
+                                       AND fc.data_source_group != 'unknown' THEN 1 END) AS has_dsg
                     FROM qe_factor_classification fc
                     JOIN aistock_factor_catalog cat
                         ON cat.factor_name = fc.factor_name AND cat.source = fc.factor_source
+                    LEFT JOIN LATERAL (
+                        SELECT official_grade FROM qe_factor_official_ratings r
+                        WHERE r.factor_catalog_id = cat.id
+                          AND r.rule_version = (
+                              SELECT rule_version FROM qe_rating_rule_versions
+                              WHERE status = 'active'
+                              ORDER BY activated_at DESC NULLS LAST, created_at DESC
+                              LIMIT 1
+                          )
+                        ORDER BY r.graded_at DESC LIMIT 1
+                    ) fr ON TRUE
                     WHERE cat.is_available = TRUE
                 """)
                 total_row = cur.fetchone()
@@ -2098,7 +2140,7 @@ def create_strategy(req: CreateStrategyRequest):
         from ..db.pg_pool import get_conn
         
         # 保存源码到文件系统
-        strategies_dir = Path("F:/Dev/AIstock/rdagent_assets/qe_strategies")
+        strategies_dir = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_strategies"
         strategies_dir.mkdir(parents=True, exist_ok=True)
         file_path = strategies_dir / f"{req.strategy_id}.py"
         with open(file_path, "w", encoding="utf-8") as f:
@@ -2161,7 +2203,7 @@ def update_strategy(strategy_id: str, req: UpdateStrategyRequest):
             params.append(req.strategy_type)
         if req.source_code is not None:
             # 同步更新文件系统中的源码
-            strategies_dir = Path("F:/Dev/AIstock/rdagent_assets/qe_strategies")
+            strategies_dir = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_strategies"
             strategies_dir.mkdir(parents=True, exist_ok=True)
             file_path = strategies_dir / f"{strategy_id}.py"
             with open(file_path, "w", encoding="utf-8") as f:
@@ -2235,7 +2277,7 @@ def clone_strategy(strategy_id: str, req: CreateStrategyRequest):
         from ..db.pg_pool import get_conn
         
         # 保存源码到文件系统
-        strategies_dir = Path("F:/Dev/AIstock/rdagent_assets/qe_strategies")
+        strategies_dir = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_strategies"
         strategies_dir.mkdir(parents=True, exist_ok=True)
         file_path = strategies_dir / f"{req.strategy_id}.py"
         with open(file_path, "w", encoding="utf-8") as f:
@@ -2988,11 +3030,14 @@ def trigger_experiment_selection(experiment_id: str, req: ExperimentSelectionReq
 # 因子值缓存管理 (Factor Value Cache)
 # ============================================================
 
-FACTOR_CACHE_SINGLE_DIR = Path("F:/Dev/AIstock/rdagent_assets/factor_values/single")
-FACTOR_CACHE_META_PATH = Path("F:/Dev/AIstock/rdagent_assets/factor_values/_meta.json")
-FACTOR_CODE_DIR = Path("F:/Dev/AIstock/rdagent_assets/qe_factors")
-BACKFILL_SCRIPT_WSL = "/mnt/f/Dev/AIstock/scripts/backfill_factor_cache.py"
-FACTOR_CACHE_TASK_DIR = Path("F:/Dev/AIstock/rdagent_assets/factor_values/_tasks")
+FACTOR_CACHE_SINGLE_DIR = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values" / "single"
+FACTOR_CACHE_META_PATH = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values" / "_meta.json"
+FACTOR_CODE_DIR = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_factors"
+BACKFILL_SCRIPT_WSL = os.getenv(
+    "AISTOCK_FACTOR_CACHE_BACKFILL_WSL",
+    _win_to_wsl(str(AISTOCK_PROJECT_ROOT / "scripts" / "backfill_factor_cache.py")),
+)
+FACTOR_CACHE_TASK_DIR = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values" / "_tasks"
 
 
 def _get_all_factors_with_code_text() -> list:
@@ -3328,10 +3373,12 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
     log_path = Path(tempfile.gettempdir()) / f"{task_id}.log"
 
     factors_arg = ",".join(req.factor_names) if req.factor_names else ""
+    project_root_wsl = _win_to_wsl(str(AISTOCK_PROJECT_ROOT))
     cmd_parts = [
         "wsl", "bash", "-lc",
-        f"cd /mnt/f/Dev/AIstock && "
-        f"export TDX_DB_PASSWORD=\"${{TDX_DB_PASSWORD:-lc78080808}}\" && "
+        f"cd {project_root_wsl} && "
+        f"test -n \"$TDX_DB_PASSWORD\" || (echo 'TDX_DB_PASSWORD is required' >&2; exit 2) && "
+        f"export TDX_DB_PASSWORD=\"$TDX_DB_PASSWORD\" && "
         f"source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent-gpu && "
         f"python {BACKFILL_SCRIPT_WSL} "
         f"--task-id {task_id} "
@@ -3545,6 +3592,7 @@ async def manual_factor_full_pipeline(req: ManualFactorCreate):
         code_text=req.code_text,
         description=req.description,
         expression=req.expression,
+        data_date=req.data_date,
     )
     return result
 
@@ -6635,7 +6683,7 @@ async def delete_experiment(
     import shutil
     from pathlib import Path
     from ..services.quantevolver.config_composer import QE_WORKSPACE_WIN, QE_EXPERIMENTS_ROOT
-    sota_dir = os.environ.get("QE_SOTA_ASSETS_DIR", "f:/Dev/AIstock/rdagent_assets/qe_sota_assets")
+    sota_dir = os.environ.get("QE_SOTA_ASSETS_DIR", str(AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_sota_assets"))
     for dir_path in [
         QE_WORKSPACE_WIN / experiment_id,
         QE_EXPERIMENTS_ROOT / experiment_id,
@@ -7083,3 +7131,4 @@ def get_ic_decay_trend(
         "count": len(trend),
         "trend": trend,
     }
+

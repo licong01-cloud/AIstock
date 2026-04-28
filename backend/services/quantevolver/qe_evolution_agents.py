@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 import json
 import asyncio
 from dataclasses import dataclass, field, asdict
@@ -13,6 +13,34 @@ except ImportError:
     litellm = None
 
 logger = logging.getLogger(__name__)
+
+_ACTIVE_OFFICIAL_RATING_JOIN_SQL = """
+JOIN aistock_factor_catalog fc
+  ON c.factor_name = fc.factor_name AND c.factor_source = fc.source
+LEFT JOIN LATERAL (
+    SELECT official_grade, official_score, rule_version
+    FROM qe_factor_official_ratings r
+    WHERE r.factor_catalog_id = fc.id
+      AND r.rule_version = (
+          SELECT rule_version FROM qe_rating_rule_versions
+          WHERE status = 'active'
+          ORDER BY activated_at DESC NULLS LAST, created_at DESC
+          LIMIT 1
+      )
+    ORDER BY r.graded_at DESC
+    LIMIT 1
+) fr ON TRUE
+"""
+
+_IND_RANK_IC_BEST_ABS_SQL = """
+CASE WHEN m.rank_ic_1d IS NULL AND m.rank_ic_5d IS NULL
+          AND m.rank_ic_10d IS NULL AND m.rank_ic_20d IS NULL THEN NULL
+     ELSE GREATEST(COALESCE(ABS(m.rank_ic_1d), 0),
+                   COALESCE(ABS(m.rank_ic_5d), 0),
+                   COALESCE(ABS(m.rank_ic_10d), 0),
+                   COALESCE(ABS(m.rank_ic_20d), 0))
+END
+"""
 
 
 @dataclass
@@ -732,13 +760,13 @@ class EvolutionFactorAgent:
                 if target_cats:
                     ph = ",".join(["%s"] * len(target_cats))
                     cur.execute(f"""
-                        SELECT c.factor_name, c.category, c.grade, m.ic_mean AS ic_value,
+                        SELECT c.factor_name, c.category, fr.official_grade, fr.official_score,
+                               m.ic_mean AS ind_ic, {_IND_RANK_IC_BEST_ABS_SQL} AS ind_rank_ic_best_abs,
                                c.factor_profile, c.factor_source
                         FROM qe_factor_classification c
-                        JOIN aistock_factor_catalog fc
-                          ON c.factor_name = fc.factor_name AND c.factor_source = fc.source
+                        {_ACTIVE_OFFICIAL_RATING_JOIN_SQL}
                         LEFT JOIN LATERAL (
-                            SELECT ic_mean
+                            SELECT ic_mean, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d
                             FROM aistock_factor_metrics
                             WHERE factor_name = c.factor_name AND eval_window = 'full' AND calc_engine = %s
                             ORDER BY calculated_at DESC LIMIT 1
@@ -749,14 +777,14 @@ class EvolutionFactorAgent:
                         LIMIT 60
                     """, [CALC_ENGINE, *target_cats])
                 else:
-                    cur.execute("""
-                        SELECT c.factor_name, c.category, c.grade, m.ic_mean AS ic_value,
+                    cur.execute(f"""
+                        SELECT c.factor_name, c.category, fr.official_grade, fr.official_score,
+                               m.ic_mean AS ind_ic, {_IND_RANK_IC_BEST_ABS_SQL} AS ind_rank_ic_best_abs,
                                c.factor_profile, c.factor_source
                         FROM qe_factor_classification c
-                        JOIN aistock_factor_catalog fc
-                          ON c.factor_name = fc.factor_name AND c.factor_source = fc.source
+                        {_ACTIVE_OFFICIAL_RATING_JOIN_SQL}
                         LEFT JOIN LATERAL (
-                            SELECT ic_mean
+                            SELECT ic_mean, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d
                             FROM aistock_factor_metrics
                             WHERE factor_name = c.factor_name AND eval_window = 'full' AND calc_engine = %s
                             ORDER BY calculated_at DESC LIMIT 1
@@ -775,7 +803,7 @@ class EvolutionFactorAgent:
         grade_weights = {"S": 4, "A": 3, "B": 2, "C": 1, "D": 1}
         weighted = []
         for c in candidates:
-            grade = c.get("grade") or ""
+            grade = c.get("official_grade") or ""
             w = grade_weights.get(grade, 1)  # 未评级同D级处理，权重=1
             weighted.extend([c] * w)
         if len(weighted) > 40:
@@ -810,8 +838,14 @@ class EvolutionFactorAgent:
         # ── Step 4: screen_candidates [LLM#2] — 从 DB 加载提示词 ──
         candidate_lines = []
         for c in candidates:
-            ic_str = f"{float(c['ic_value']):.4f}" if c.get("ic_value") is not None else "N/A"
-            candidate_lines.append(f"{c['factor_name']} | {c['category']} | {c['grade']} | IC={ic_str}")
+            rank_ic_str = (
+                f"{float(c['ind_rank_ic_best_abs']):.4f}"
+                if c.get("ind_rank_ic_best_abs") is not None else "N/A"
+            )
+            candidate_lines.append(
+                f"{c['factor_name']} | {c['category']} | official={c.get('official_grade') or '未评级'} | "
+                f"RankIC_best_abs={rank_ic_str}"
+            )
 
         step4_prompt_data = pm.get_active_prompt_text("evolution_factor_agent", "screen_candidates")
         if not step4_prompt_data:
@@ -855,12 +889,13 @@ class EvolutionFactorAgent:
                 with conn.cursor() as cur:
                     ph = ",".join(["%s"] * len(all_factor_names))
                     cur.execute(f"""
-                        SELECT c.factor_name, c.category, c.grade, m.ic_mean AS ic_value,
+                        SELECT c.factor_name, c.category, fr.official_grade, fr.official_score,
                                c.factor_profile,
-                               m.ic_mean, m.icir, m.rank_ic_mean
+                               m.ic_mean, m.icir, m.rank_ic_mean, {_IND_RANK_IC_BEST_ABS_SQL} AS ind_rank_ic_best_abs
                         FROM qe_factor_classification c
+                        {_ACTIVE_OFFICIAL_RATING_JOIN_SQL}
                         LEFT JOIN LATERAL (
-                            SELECT ic_mean, icir, rank_ic_mean
+                            SELECT ic_mean, icir, rank_ic_mean, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d
                             FROM aistock_factor_metrics
                             WHERE factor_name = c.factor_name AND eval_window = 'full' AND calc_engine = %s
                             ORDER BY calculated_at DESC LIMIT 1
@@ -869,9 +904,10 @@ class EvolutionFactorAgent:
                     """, [CALC_ENGINE, *all_factor_names])
                     for row in cur.fetchall():
                         detail_map[row[0]] = {
-                            "factor_name": row[0], "category": row[1], "grade": row[2],
-                            "ic_value": row[3], "factor_profile": row[4],
+                            "factor_name": row[0], "category": row[1], "official_grade": row[2],
+                            "official_score": row[3], "factor_profile": row[4],
                             "ic_mean": row[5], "icir": row[6], "rank_ic_mean": row[7],
+                            "ind_rank_ic_best_abs": row[8],
                         }
 
         logger.info(f"EvolutionFactorAgent Step 5: {len(detail_map)} factor details fetched")
@@ -885,7 +921,7 @@ class EvolutionFactorAgent:
             ic_str = f"{float(ic):.4f}" if ic is not None else "N/A"
             imp_val = importance_map.get(fn, 0.0)
             tag = f" [重要性={imp_val:.4f},受保护]" if fn in protected_set else f" [重要性={imp_val:.4f}]"
-            keep_lines.append(f"- {fn} | {d.get('category', '?')} | {d.get('grade', '?')} | IC={ic_str}{tag}")
+            keep_lines.append(f"- {fn} | {d.get('category', '?')} | official={d.get('official_grade', '未评级')} | IC={ic_str}{tag}")
 
         new_lines = []
         for fn in screened_names:
@@ -895,7 +931,7 @@ class EvolutionFactorAgent:
             ic = d.get("ic_mean")
             ic_str = f"{float(ic):.4f}" if ic is not None else "N/A"
             icir_str = f"{float(d['icir']):.4f}" if d.get("icir") is not None else "N/A"
-            new_lines.append(f"- {fn} | {d.get('category', '?')} | {d.get('grade', '?')} | IC={ic_str} | ICIR={icir_str}")
+            new_lines.append(f"- {fn} | {d.get('category', '?')} | official={d.get('official_grade', '未评级')} | IC={ic_str} | ICIR={icir_str}")
 
         # 相关性警告
         corr_warnings = []
@@ -1467,4 +1503,5 @@ class EvolutionModelAgent:
                     GROUP BY category
                 """, factor_list)
                 return {row[0]: row[1] for row in cur.fetchall()}
+
 

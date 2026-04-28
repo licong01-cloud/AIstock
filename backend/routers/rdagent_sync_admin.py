@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+from pathlib import PurePosixPath
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body
@@ -81,11 +84,16 @@ def get_task_complete_assets(task_id: str) -> Dict[str, Any]:
         import json
 
         # 使用WSL中的conda rdagent-gpu环境执行脚本文件
-        script_path = "/mnt/f/Dev/RD-Agent-main/debug_tools/wsl_extract_task_assets.py"
-        python_path = "/home/lc999/miniconda3/envs/rdagent-gpu/bin/python"
-        cmd = f"cd /mnt/f/Dev/RD-Agent-main/debug_tools && {python_path} {script_path} {task_id}"
+        rdagent_root = os.getenv("QLIB_RDAGENT_ROOT_WSL", "").strip()
+        python_path = os.getenv("QLIB_WSL_PYTHON", "").strip()
+        if not rdagent_root or not python_path:
+            return {
+                "ok": False,
+                "task_id": task_id,
+                "error": "QLIB_RDAGENT_ROOT_WSL and QLIB_WSL_PYTHON are required",
+            }
+        script_path = str(PurePosixPath(rdagent_root) / "debug_tools" / "wsl_extract_task_assets.py")
 
-        # 直接使用wsl执行，指定UTF-8编码
         result = subprocess.run(
             ['wsl', python_path, script_path, task_id],
             capture_output=True,

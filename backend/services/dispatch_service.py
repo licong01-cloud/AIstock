@@ -81,7 +81,13 @@ def _derive_linux_home_from_node(node: Dict[str, Any]) -> str:
         parts = value.split("/")
         if len(parts) >= 3 and parts[2]:
             return f"/home/{parts[2]}"
-    return "/home/lc999"
+    explicit_home = str(node.get("linux_home") or node.get("ssh_home") or "").strip()
+    if explicit_home:
+        return explicit_home.rstrip("/")
+    raise RuntimeError(
+        "compute node must provide a Linux home path or one of qlib_rdagent_root/"
+        "qlib_data_path/qlib_minute_path/workspace_base/factor_data_dir under /home/<user>"
+    )
 
 
 def _default_rdagent_conda_path(node: Dict[str, Any]) -> str:

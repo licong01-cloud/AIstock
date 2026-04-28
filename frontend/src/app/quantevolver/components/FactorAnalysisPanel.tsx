@@ -18,9 +18,9 @@ interface FactorDetailData {
   source_loop_tag?: string;
   factor_type?: string;
   data_source?: string;
-  // Classification (from qe_factor_classification)
+  // Classification plus official rating.
   category?: string;
-  grade?: string;
+  official_grade?: string | null;
   llm_analysis?: string;
   classification_description?: string;
   factor_dimension?: string;
@@ -93,7 +93,7 @@ function FactorDetailModal({ factorName, onClose }: { factorName: string; onClos
     }).finally(() => setLoading(false));
   }, [factorName]);
 
-  const gc = detail?.grade ? (GRADE_COLORS[detail.grade] ?? GRADE_COLORS.C) : null;
+  const gc = detail?.official_grade ? (GRADE_COLORS[detail.official_grade] ?? GRADE_COLORS.C) : null;
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", justifyContent: "center", alignItems: "center" }} onClick={onClose}>
@@ -103,9 +103,9 @@ function FactorDetailModal({ factorName, onClose }: { factorName: string; onClos
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#0f172a" }}>{factorName}</h3>
-            {gc && detail?.grade && (
+            {gc && detail?.official_grade && (
               <span style={{ padding: "2px 10px", borderRadius: 12, fontSize: 11, fontWeight: 700, backgroundColor: gc.bg, color: gc.text }}>
-                {detail.grade}
+                {detail.official_grade}
               </span>
             )}
             {detail?.category && (

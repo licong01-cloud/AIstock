@@ -41,8 +41,10 @@ interface MultiAlphaGroupEditorProps {
 
 interface ClassifiedFactor {
   factor_name: string;
-  grade: string;
-  ic_value: number | null;
+  official_grade: string | null;
+  official_score: number | null;
+  ind_ic: number | null;
+  ind_rank_ic_best_abs: number | null;
   category: string;
   data_source_group: string;
   holding_period_class: string | null;
@@ -693,16 +695,16 @@ export default function MultiAlphaGroupEditor({
                                 <td className="py-0.5 font-mono text-gray-600 dark:text-gray-400">{cf.factor_name}</td>
                                 <td className="py-0.5 text-center">
                                   <span className={`px-1 rounded ${
-                                    cf.grade === "S" ? "bg-yellow-100 text-yellow-700" :
-                                    cf.grade === "A" ? "bg-green-100 text-green-700" :
-                                    cf.grade === "B" ? "bg-blue-100 text-blue-700" :
+                                    cf.official_grade === "S" ? "bg-yellow-100 text-yellow-700" :
+                                    cf.official_grade === "A" ? "bg-green-100 text-green-700" :
+                                    cf.official_grade === "B" ? "bg-blue-100 text-blue-700" :
                                     "bg-gray-100 text-gray-600"
                                   }`}>
-                                    {cf.grade}
+                                    {cf.official_grade ?? "-"}
                                   </span>
                                 </td>
                                 <td className="py-0.5 text-right text-gray-500">
-                                  {cf.ic_value != null ? Math.abs(cf.ic_value).toFixed(4) : "-"}
+                                  {cf.ind_rank_ic_best_abs != null ? cf.ind_rank_ic_best_abs.toFixed(4) : (cf.ind_ic != null ? Math.abs(cf.ind_ic).toFixed(4) : "-")}
                                 </td>
                                 <td className="py-0.5 text-right">
                                   <button

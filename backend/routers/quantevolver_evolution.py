@@ -2795,9 +2795,29 @@ async def get_correlation_pair(
                     ind_row = cur.fetchone()
 
                     cur.execute("""
-                        SELECT grade, category, llm_analysis, description,
-                               factor_dimension, grade_reason, factor_source
-                        FROM qe_factor_classification WHERE factor_name = %s LIMIT 1
+                        SELECT fr.official_grade, fr.official_score,
+                               fr.rule_version AS official_rule_version,
+                               cl.category, cl.llm_analysis, cl.description,
+                               cl.factor_dimension, cl.grade_reason, cl.factor_source
+                        FROM qe_factor_classification cl
+                        LEFT JOIN aistock_factor_catalog cat
+                            ON cat.factor_name = cl.factor_name AND cat.source = cl.factor_source
+                        LEFT JOIN LATERAL (
+                            SELECT official_grade, official_score, rule_version
+                            FROM qe_factor_official_ratings r
+                            WHERE r.factor_catalog_id = cat.id
+                              AND r.rule_version = (
+                                  SELECT rule_version
+                                  FROM qe_rating_rule_versions
+                                  WHERE status = 'active'
+                                  ORDER BY activated_at DESC NULLS LAST, created_at DESC
+                                  LIMIT 1
+                              )
+                            ORDER BY r.graded_at DESC
+                            LIMIT 1
+                        ) fr ON TRUE
+                        WHERE cl.factor_name = %s
+                        LIMIT 1
                     """, (fn,))
                     cl_row = cur.fetchone()
 

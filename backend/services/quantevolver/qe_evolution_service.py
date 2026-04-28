@@ -25,7 +25,28 @@ from .node_execution import (
 
 logger = logging.getLogger(__name__)
 
-SOTA_ASSETS_DIR = os.environ.get("QE_SOTA_ASSETS_DIR", "f:/Dev/AIstock/rdagent_assets/qe_sota_assets")
+_ACTIVE_RATING_JOIN_SQL = """
+JOIN aistock_factor_catalog cat
+  ON cat.factor_name = c.factor_name AND cat.source = c.factor_source
+LEFT JOIN LATERAL (
+    SELECT official_grade, official_score, rule_version
+    FROM qe_factor_official_ratings r
+    WHERE r.factor_catalog_id = cat.id
+      AND r.rule_version = (
+          SELECT rule_version FROM qe_rating_rule_versions
+          WHERE status = 'active'
+          ORDER BY activated_at DESC NULLS LAST, created_at DESC
+          LIMIT 1
+      )
+    ORDER BY r.graded_at DESC
+    LIMIT 1
+) fr ON TRUE
+"""
+
+SOTA_ASSETS_DIR = os.environ.get(
+    "QE_SOTA_ASSETS_DIR",
+    str(Path(__file__).resolve().parents[3] / "rdagent_assets" / "qe_sota_assets"),
+)
 QE_EVOLUTION_LOG_TERMINAL_STATUSES = {
     "completed",
     "failed",
@@ -1240,12 +1261,13 @@ class AutoEvolutionScheduler:
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT c.category, c.grade,
+                    cur.execute(f"""
+                        SELECT c.category, fr.official_grade,
                                COUNT(*) as cnt,
                                AVG(m.ic_mean) as avg_ic,
                                AVG(m.top_excess_sharpe) as avg_sharpe
                         FROM qe_factor_classification c
+                        {_ACTIVE_RATING_JOIN_SQL}
                         LEFT JOIN LATERAL (
                             SELECT ic_mean, top_excess_sharpe
                             FROM aistock_factor_metrics
@@ -1255,9 +1277,9 @@ class AutoEvolutionScheduler:
                             ORDER BY calculated_at DESC
                             LIMIT 1
                         ) m ON TRUE
-                        WHERE c.grade IS NOT NULL
-                        GROUP BY c.category, c.grade
-                        ORDER BY c.category, c.grade
+                        WHERE fr.official_grade IS NOT NULL
+                        GROUP BY c.category, fr.official_grade
+                        ORDER BY c.category, fr.official_grade
                     """, (CALC_ENGINE,))
                     rows = cur.fetchall()
 

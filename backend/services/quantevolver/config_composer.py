@@ -1,4 +1,4 @@
-"""
+﻿"""
 QuantEvolver Phase 2: ConfigComposer（配置组装器）
 
 功能：
@@ -26,64 +26,49 @@ from .experiment_config import normalize_label_horizon
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
 
-# ── RDAgent 侧 QE 专用实验工作区（WSL 可直接访问） ──
-# Windows路径，用于文件写入
-QE_WORKSPACE_WIN = Path(os.getenv(
-    "QE_WORKSPACE_WIN",
-    "F:/Dev/RD-Agent-main/qe_workspace"
-))
-# WSL路径，用于生成执行命令
-QE_WORKSPACE_WSL = os.getenv(
-    "QE_WORKSPACE_WSL",
-    "/mnt/f/Dev/RD-Agent-main/qe_workspace"
-)
 
-# ── QE 专用程序目录（模板文件、脚本等，独立于 RD-Agent 核心代码） ──
-QE_PROGRAMS_WIN = Path(os.getenv(
-    "QE_PROGRAMS_WIN",
-    "F:/Dev/RD-Agent-main/qe_programs"
-))
-QE_PROGRAMS_WSL = os.getenv(
-    "QE_PROGRAMS_WSL",
-    "/mnt/f/Dev/RD-Agent-main/qe_programs"
-)
-
-# 旧的AIstock侧实验目录（保留兼容）
-QE_EXPERIMENTS_ROOT = Path(os.getenv(
-    "QE_EXPERIMENTS_ROOT",
-    "f:/Dev/AIstock/rdagent_assets/qe_experiments"
-))
-
-# ── AIstock 项目根目录 / 因子缓存目录 ──
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
-FACTOR_CACHE_ROOT_WIN = Path(os.getenv(
+
+
+def _win_to_wsl_guess(path: Path) -> str:
+    text = str(path).replace("\\", "/")
+    if len(text) >= 2 and text[1] == ":":
+        return f"/mnt/{text[0].lower()}{text[2:]}"
+    return text
+
+
+def _env_path(name: str, default: Path) -> Path:
+    return Path(os.getenv(name, str(default)))
+
+
+# QE runtime paths must come from environment/configuration or repo-local artifact roots.
+QE_WORKSPACE_WIN = _env_path(
+    "QE_WORKSPACE_WIN",
+    AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_workspace",
+)
+QE_WORKSPACE_WSL = os.getenv("QE_WORKSPACE_WSL", _win_to_wsl_guess(QE_WORKSPACE_WIN))
+
+QE_PROGRAMS_WIN = _env_path(
+    "QE_PROGRAMS_WIN",
+    AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_programs",
+)
+QE_PROGRAMS_WSL = os.getenv("QE_PROGRAMS_WSL", _win_to_wsl_guess(QE_PROGRAMS_WIN))
+
+QE_EXPERIMENTS_ROOT = _env_path(
+    "QE_EXPERIMENTS_ROOT",
+    AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_experiments",
+)
+FACTOR_CACHE_ROOT_WIN = _env_path(
     "FACTOR_CACHE_ROOT_WIN",
-    str(AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values"),
-))
-
-# ── RDAgent 因子数据目录（与 FACTOR_CoSTEER_data_folder 保持一致，包含 sw2 行业数据） ──
-RDAGENT_FACTOR_DATA_WSL = os.getenv(
-    "RDAGENT_FACTOR_DATA_WSL",
-    "/mnt/f/dev/RD-Agent-main/git_ignore_folder/factor_implementation_source_data"
+    AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values",
 )
 
-# ── QLib 数据路径（与 RDAgent conf_baseline.yaml 一致） ──
-QLIB_DATA_PATH_WSL = os.getenv(
-    "QLIB_DATA_PATH_WSL",
-    "/home/lc999/data/qlib_bin"
-)
-QLIB_MINUTE_PATH_WSL = os.getenv(
-    "QLIB_MINUTE_PATH_WSL",
-    "/home/lc999/data/qlib_minute_bin"
-)
+RDAGENT_FACTOR_DATA_WSL = os.getenv("RDAGENT_FACTOR_DATA_WSL", "").strip()
+QLIB_DATA_PATH_WSL = os.getenv("QLIB_DATA_PATH_WSL", "").strip()
+QLIB_MINUTE_PATH_WSL = os.getenv("QLIB_MINUTE_PATH_WSL", "").strip()
+RDAGENT_CODE_ROOT_WSL = os.getenv("QLIB_RDAGENT_ROOT_WSL", "").strip()
 
-# ── RDAgent 源码根目录（用于子进程 PYTHONPATH，执行节点 .env 中定义） ──
-RDAGENT_CODE_ROOT_WSL = os.getenv(
-    "QLIB_RDAGENT_ROOT_WSL",
-    "/mnt/f/Dev/RD-Agent-main"
-)
-
-# ── RDAgent 默认数据时间段（与 rdagent conf_baseline.yaml 保持一致） ──
+# RDAgent default data split.
 RDAGENT_DEFAULT_DATA_SPLIT = {
     "train_start": "2018-08-01",
     "train_end": "2022-12-31",
@@ -402,7 +387,11 @@ class ConfigComposer:
                 "kwargs": params,
             }
         if algo == "V24_PLAN":
-            params.setdefault("model_path", "/home/lc999/data/rl_models/v24/v24_plan_net.pt")
+            if not params.get("model_path"):
+                model_path = os.getenv("QE_V24_PLAN_MODEL_PATH", "").strip()
+                if not model_path:
+                    raise ValueError("QE_V24_PLAN_MODEL_PATH is required for V24_PLAN execution")
+                params["model_path"] = model_path
             return {
                 "requested_algo": execution_algo,
                 "effective_algo": algo,
@@ -1242,7 +1231,7 @@ class ConfigComposer:
         import re as _re
         strategy_pkg_dir = Path(__file__).parent.parent / "rebalance_strategies"
         # factor_template 目录：score_weighted_strategy.py 等策略基类所在位置
-        _rdagent_root = QE_WORKSPACE_WIN.parent  # F:/Dev/RD-Agent-main
+        _rdagent_root = QE_WORKSPACE_WIN.parent
         factor_template_dir = _rdagent_root / "rdagent" / "scenarios" / "qlib" / "experiment" / "factor_template"
         # 只允许复制策略类文件，避免误复制 qrun_limit.py / read_exp_res.py 等运行时文件
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
@@ -3620,7 +3609,7 @@ model_cls = {nn_class_name}
         import re as _re
         strategy_pkg_dir = Path(__file__).parent.parent / "rebalance_strategies"
         # factor_template 目录：score_weighted_strategy.py 等策略基类所在位置
-        _rdagent_root = QE_WORKSPACE_WIN.parent  # F:/Dev/RD-Agent-main
+        _rdagent_root = QE_WORKSPACE_WIN.parent
         factor_template_dir = _rdagent_root / "rdagent" / "scenarios" / "qlib" / "experiment" / "factor_template"
         # 只允许复制策略类文件，避免误复制 qrun_limit.py / read_exp_res.py 等运行时文件
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
@@ -4217,3 +4206,4 @@ model_cls = {nn_class_name}
             return (None, None)
         except Exception as e:
             raise RuntimeError(f"[QE] 因子来源检测失败: factor={factor_name}, {e}") from e
+

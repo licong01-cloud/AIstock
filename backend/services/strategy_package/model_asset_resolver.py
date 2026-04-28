@@ -340,7 +340,7 @@ class ModelAssetResolver:
 
     @staticmethod
     def _translate_wsl_mount_path(original_path: str) -> Path | None:
-        # /mnt/f/path/file.pt -> F:\path\file.pt
+        # Convert WSL mount paths back to Windows drive paths.
         parts = original_path.replace("\\", "/").split("/")
         if len(parts) >= 4 and parts[1] == "mnt" and len(parts[2]) == 1:
             drive = parts[2].upper()

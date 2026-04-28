@@ -165,8 +165,9 @@ def _normalize_workspace_path(ws_path: Optional[str]) -> Optional[str]:
     if not ws_path:
         return None
     p = str(ws_path).replace("\\", "/")
-    if p.startswith("/mnt/f/"):
-        p = "F:/" + p[7:]
+    parts = p.split("/", 3)
+    if len(parts) == 4 and parts[0] == "" and parts[1] == "mnt" and len(parts[2]) == 1:
+        p = f"{parts[2].upper()}:/" + parts[3]
     return p
 
 class TaskSyncResult(BaseModel):

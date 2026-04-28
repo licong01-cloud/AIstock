@@ -595,6 +595,44 @@ def _get_official_grade(factor_name: str) -> Optional[str]:
         return None
 
 
+_ACTIVE_RATING_JOIN_SQL = """
+LEFT JOIN aistock_factor_catalog cat
+  ON cat.factor_name = c.factor_name AND cat.source = c.factor_source
+LEFT JOIN LATERAL (
+    SELECT official_grade, official_score, grade_reason_structured, rule_version
+    FROM qe_factor_official_ratings r
+    WHERE r.factor_catalog_id = cat.id
+      AND r.rule_version = (
+          SELECT rule_version FROM qe_rating_rule_versions
+          WHERE status = 'active'
+          ORDER BY activated_at DESC NULLS LAST, created_at DESC
+          LIMIT 1
+      )
+    ORDER BY r.graded_at DESC
+    LIMIT 1
+) fr ON TRUE
+"""
+
+
+_OFFICIAL_GRADE_ORDER_SQL = """
+CASE fr.official_grade
+    WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
+    WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
+END
+"""
+
+
+_IND_RANK_IC_BEST_ABS_SQL = """
+CASE WHEN m.rank_ic_1d IS NULL AND m.rank_ic_5d IS NULL
+          AND m.rank_ic_10d IS NULL AND m.rank_ic_20d IS NULL THEN NULL
+     ELSE GREATEST(COALESCE(ABS(m.rank_ic_1d), 0),
+                   COALESCE(ABS(m.rank_ic_5d), 0),
+                   COALESCE(ABS(m.rank_ic_10d), 0),
+                   COALESCE(ABS(m.rank_ic_20d), 0))
+END
+"""
+
+
 def _determine_factor_dimension(factor_name: str, category: str,
                                 code_text: Optional[str] = None,
                                 expression: Optional[str] = None) -> str:
@@ -1399,19 +1437,19 @@ class FactorAnalyst:
         params = []
 
         if source_filter:
-            conditions.append("factor_source = %s")
+            conditions.append("c.factor_source = %s")
             params.append(source_filter)
         if exclude_source_filter:
             ex_list = [s.strip() for s in exclude_source_filter.split(",") if s.strip()]
             if ex_list:
                 placeholders = ",".join(["%s"] * len(ex_list))
-                conditions.append(f"factor_source NOT IN ({placeholders})")
+                conditions.append(f"c.factor_source NOT IN ({placeholders})")
                 params.extend(ex_list)
         if category_filter:
-            conditions.append("category = %s")
+            conditions.append("c.category = %s")
             params.append(category_filter)
         if grade_filter:
-            conditions.append("grade = %s")
+            conditions.append("fr.official_grade = %s")
             params.append(grade_filter)
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
@@ -1420,22 +1458,34 @@ class FactorAnalyst:
             with conn.cursor() as cur:
                 # 总数
                 cur.execute(
-                    f"SELECT COUNT(*) FROM qe_factor_classification WHERE {where_clause}",
+                    f"""SELECT COUNT(*)
+                        FROM qe_factor_classification c
+                        {_ACTIVE_RATING_JOIN_SQL}
+                        WHERE {where_clause}""",
                     params,
                 )
                 total = cur.fetchone()[0]
 
                 # 数据
                 cur.execute(
-                    f"""SELECT c.id, c.factor_name, c.factor_source, c.category, c.grade,
+                    f"""SELECT c.id, c.factor_name, c.factor_source, c.category,
+                               fr.official_grade, fr.official_score, fr.rule_version AS official_rule_version,
                                c.grade_reason, c.classification_reason,
-                               m.ic_mean AS ic_value,
-                               m.top_excess_sharpe AS sharpe_value,
-                               m.top_excess_annual_return AS ann_ret_value,
+                               m.ic_mean AS ind_ic,
+                               m.top_excess_sharpe AS ind_sharpe,
+                               m.top_excess_annual_return AS ind_annual_return,
+                               m.rank_ic_mean AS ind_rank_ic,
+                               m.rank_ic_1d AS ind_rank_ic_1d,
+                               m.rank_ic_5d AS ind_rank_ic_5d,
+                               m.rank_ic_10d AS ind_rank_ic_10d,
+                               m.rank_ic_20d AS ind_rank_ic_20d,
+                               {_IND_RANK_IC_BEST_ABS_SQL} AS ind_rank_ic_best_abs,
                                c.description, c.factor_dimension, c.factor_profile, c.analyzed_at
                         FROM qe_factor_classification c
+                        {_ACTIVE_RATING_JOIN_SQL}
                         LEFT JOIN LATERAL (
-                            SELECT ic_mean, top_excess_sharpe, top_excess_annual_return
+                            SELECT ic_mean, top_excess_sharpe, top_excess_annual_return,
+                                   rank_ic_mean, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d
                             FROM aistock_factor_metrics
                             WHERE factor_name = c.factor_name
                               AND eval_window = 'full'
@@ -1444,7 +1494,7 @@ class FactorAnalyst:
                             LIMIT 1
                         ) m ON TRUE
                         WHERE {where_clause}
-                        ORDER BY c.grade ASC, m.ic_mean DESC NULLS LAST
+                        ORDER BY {_OFFICIAL_GRADE_ORDER_SQL} ASC, {_IND_RANK_IC_BEST_ABS_SQL} DESC NULLS LAST
                         LIMIT %s OFFSET %s""",
                     params + [limit, offset],
                 )
@@ -1482,15 +1532,20 @@ class FactorAnalyst:
         # 获取所有已分类因子
         with get_conn() as conn:
             with conn.cursor() as cur:
-                sql = """
-                    SELECT c.factor_name, c.factor_source, c.category, c.grade,
-                           m.ic_mean AS ic_value,
-                           m.top_excess_sharpe AS sharpe_value,
-                           m.top_excess_annual_return AS ann_ret_value,
+                sql = f"""
+                    SELECT c.factor_name, c.factor_source, c.category,
+                           fr.official_grade, fr.official_score,
+                           m.ic_mean AS ind_ic,
+                           m.top_excess_sharpe AS ind_sharpe,
+                           m.top_excess_annual_return AS ind_annual_return,
+                           m.rank_ic_1d, m.rank_ic_5d, m.rank_ic_10d, m.rank_ic_20d,
+                           {_IND_RANK_IC_BEST_ABS_SQL} AS ind_rank_ic_best_abs,
                            c.factor_profile
                     FROM qe_factor_classification c
+                    {_ACTIVE_RATING_JOIN_SQL}
                     LEFT JOIN LATERAL (
-                        SELECT ic_mean, top_excess_sharpe, top_excess_annual_return
+                        SELECT ic_mean, top_excess_sharpe, top_excess_annual_return,
+                               rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d
                         FROM aistock_factor_metrics
                         WHERE factor_name = c.factor_name
                           AND eval_window = 'full'
@@ -1498,13 +1553,9 @@ class FactorAnalyst:
                         ORDER BY calculated_at DESC
                         LIMIT 1
                     ) m ON TRUE
-                    WHERE c.grade IS NOT NULL
-                    ORDER BY
-                        CASE c.grade
-                            WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2
-                            WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5
-                        END ASC,
-                        m.ic_mean DESC NULLS LAST
+                    WHERE fr.official_grade IS NOT NULL
+                    ORDER BY {_OFFICIAL_GRADE_ORDER_SQL} ASC,
+                             {_IND_RANK_IC_BEST_ABS_SQL} DESC NULLS LAST
                 """
                 cur.execute(sql)
                 cols = [desc[0] for desc in cur.description]
@@ -1513,7 +1564,7 @@ class FactorAnalyst:
         # 过滤
         candidates = []
         for f in all_factors:
-            f_grade_val = grade_order.get(f["grade"], 5)
+            f_grade_val = grade_order.get(f["official_grade"], 5)
             if f_grade_val > min_grade_val:
                 continue
             if include_categories and f["category"] not in include_categories:
