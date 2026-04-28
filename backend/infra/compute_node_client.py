@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, AsyncIterator, Dict, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -64,6 +65,27 @@ class ComputeNodeClient:
     async def get_task_progress(self, remote_task_id: str) -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=self.timeout, proxy=None) as c:
             resp = await c.get(f"{self.base_url}/scheduler/tasks/{remote_task_id}/progress")
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_scheduler_task(self, remote_task_id: str) -> Dict[str, Any]:
+        task_id = quote(str(remote_task_id), safe="")
+        async with httpx.AsyncClient(timeout=self.timeout, proxy=None) as c:
+            resp = await c.get(f"{self.base_url}/scheduler/tasks/{task_id}")
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_scheduler_results(self, remote_task_id: str) -> Dict[str, Any]:
+        task_id = quote(str(remote_task_id), safe="")
+        async with httpx.AsyncClient(timeout=self.timeout, proxy=None) as c:
+            resp = await c.get(f"{self.base_url}/scheduler/tasks/{task_id}/results")
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_rdagent_loops(self, log_dir: str) -> Dict[str, Any]:
+        task_key = quote(str(log_dir), safe="")
+        async with httpx.AsyncClient(timeout=_LONG_TIMEOUT, proxy=None) as c:
+            resp = await c.get(f"{self.base_url}/tasks/{task_key}/loops")
             resp.raise_for_status()
             return resp.json()
 

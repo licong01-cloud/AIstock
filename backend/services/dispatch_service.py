@@ -44,6 +44,8 @@ _TASK_TYPE_COMMANDS = {
 }
 
 _CUSTOM_TASK_TYPES = {"correlation_compute", "official_evaluation"}
+_REMOTE_CONDA_ENV = "rdagent-gpu"
+_SECRET_ENV_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
 
 
 def _stringify_env_value(value: Any) -> str:
@@ -86,7 +88,7 @@ def _default_rdagent_conda_path(node: Dict[str, Any]) -> str:
     home = _derive_linux_home_from_node(node)
     return ":".join(
         [
-            f"{home}/miniconda3/envs/rdagent-gpu/bin",
+            f"{home}/miniconda3/envs/{_REMOTE_CONDA_ENV}/bin",
             f"{home}/miniconda3/condabin",
             f"{home}/miniconda3/bin",
             "/usr/local/sbin",
@@ -97,6 +99,66 @@ def _default_rdagent_conda_path(node: Dict[str, Any]) -> str:
             "/bin",
         ]
     )
+
+
+def _redact_env_for_log(env: Dict[str, Any]) -> Dict[str, Any]:
+    redacted: Dict[str, Any] = {}
+    for key, value in env.items():
+        key_s = str(key)
+        if any(marker in key_s.upper() for marker in _SECRET_ENV_MARKERS):
+            redacted[key_s] = "***REDACTED***"
+        else:
+            redacted[key_s] = value
+    return redacted
+
+
+def _redact_scheduler_payload_for_log(payload: Dict[str, Any]) -> Dict[str, Any]:
+    safe = dict(payload)
+    env = safe.get("env_overrides")
+    if isinstance(env, dict):
+        safe["env_overrides"] = _redact_env_for_log(env)
+    return safe
+
+
+def _loop_has_metric(loop: Dict[str, Any]) -> bool:
+    metric_keys = (
+        "valid_score",
+        "test_score",
+        "mle_score",
+        "ic",
+        "rank_ic",
+        "annualized_return",
+        "max_drawdown",
+        "information_ratio",
+        "sharpe",
+    )
+    return any(loop.get(key) is not None for key in metric_keys)
+
+
+def _loop_has_success_evidence(loop: Dict[str, Any]) -> bool:
+    return bool(loop.get("feedback") is True or loop.get("is_sota") is True or _loop_has_metric(loop))
+
+
+def _normalize_running_task_ids(metrics: Optional[Dict[str, Any]]) -> list[str]:
+    if not metrics:
+        return []
+    running_tasks = metrics.get("running_tasks")
+    if not running_tasks:
+        return []
+    if isinstance(running_tasks, (str, int)):
+        running_tasks = [running_tasks]
+    if not isinstance(running_tasks, list):
+        return []
+
+    normalized: list[str] = []
+    for item in running_tasks:
+        if item is None:
+            continue
+        task_id = str(item).strip()
+        if not task_id or task_id.lower() in {"none", "null", "nan"}:
+            continue
+        normalized.append(task_id)
+    return normalized
 
 
 def build_rdagent_env_overrides(
@@ -129,12 +191,21 @@ def build_rdagent_env_overrides(
 
     if node.get("qlib_data_path"):
         env.setdefault("QLIB_DAY_DATA", _stringify_env_value(node["qlib_data_path"]))
+        env.setdefault("QLIB_DATA_PATH_WSL", _stringify_env_value(node["qlib_data_path"]))
     if node.get("qlib_minute_path"):
         env.setdefault("QLIB_MINUTE_DATA", _stringify_env_value(node["qlib_minute_path"]))
+        env.setdefault("QLIB_MINUTE_PATH_WSL", _stringify_env_value(node["qlib_minute_path"]))
+    if node.get("qlib_rdagent_root"):
+        env.setdefault("QLIB_RDAGENT_ROOT_WSL", _stringify_env_value(node["qlib_rdagent_root"]))
 
     # Scheduler services are often launched without interactive shell startup files.
     # RD-Agent's QlibCondaEnv then cannot find `conda`/`python` unless PATH is explicit.
+    home = _derive_linux_home_from_node(node)
     env.setdefault("PATH", _default_rdagent_conda_path(node))
+    env.setdefault("CONDA_DEFAULT_ENV", _REMOTE_CONDA_ENV)
+    env.setdefault("QLIB_WSL_CONDA_ENV", _REMOTE_CONDA_ENV)
+    env.setdefault("QLIB_WSL_CONDA_SH", f"{home}/miniconda3/etc/profile.d/conda.sh")
+    env.setdefault("QLIB_SCRIPTS_SUBDIR", "scripts")
 
     return env
 
@@ -247,7 +318,9 @@ class DispatchService:
         if result["online"]:
             try:
                 metrics = await client.get_system_metrics()
-                if metrics.get("running_tasks"):
+                running_tasks = _normalize_running_task_ids(metrics)
+                metrics["running_tasks"] = running_tasks
+                if running_tasks:
                     new_status = "busy"
             except Exception as e:
                 logger.warning("获取节点 %s 系统指标失败: %s", node_id, e)
@@ -505,7 +578,10 @@ class DispatchService:
             client = ComputeNodeClient(node["api_base_url"])
             self._append_local_log_line(
                 task_id,
-                f"[dispatch] submitting to {client.base_url}/scheduler/tasks payload={json.dumps(scheduler_payload, ensure_ascii=False)}",
+                (
+                    f"[dispatch] submitting to {client.base_url}/scheduler/tasks "
+                    f"payload={json.dumps(_redact_scheduler_payload_for_log(scheduler_payload), ensure_ascii=False)}"
+                ),
             )
             resp = await client.create_task(scheduler_payload)
             # 节点返回格式: {"task": {"id": N, "name": "...", ...}}
@@ -521,7 +597,7 @@ class DispatchService:
             )
             self._add_event(task_id, "submitted", {
                 "remote_task_id": remote_task_id,
-                "scheduler_payload": scheduler_payload,
+                "scheduler_payload": _redact_scheduler_payload_for_log(scheduler_payload),
             })
             self._append_local_log_line(task_id, f"[dispatch] submitted remote_task_id={remote_task_id}")
             # 更新节点当前任务
@@ -884,6 +960,56 @@ class DispatchService:
         log_file = DISPATCH_LOGS_DIR / task_id / "output.log"
         return log_file if log_file.exists() else None
 
+    async def _validate_remote_rdagent_success(
+        self,
+        *,
+        task: Dict[str, Any],
+        client: ComputeNodeClient,
+        progress: Dict[str, Any],
+    ) -> tuple[bool, Optional[str], Dict[str, Any]]:
+        """Verify that a remote RD-Agent success has at least one usable loop result."""
+        if task.get("task_type") not in _TASK_TYPE_COMMANDS:
+            return True, None, {}
+
+        meta: Dict[str, Any] = {
+            "remote_task_id": task.get("remote_task_id"),
+            "node_status": progress.get("status"),
+            "current_loop": progress.get("current_loop"),
+            "total_loops": progress.get("total_loops"),
+        }
+
+        try:
+            scheduler_resp = await client.get_scheduler_task(str(task["remote_task_id"]))
+            scheduler_task = scheduler_resp.get("task") or scheduler_resp
+            if isinstance(scheduler_task, dict):
+                meta["rdagent_log_dir"] = scheduler_task.get("rdagent_log_dir")
+                meta["scheduler_status"] = scheduler_task.get("status")
+        except Exception as exc:
+            meta["scheduler_task_error"] = str(exc)
+
+        log_dir = meta.get("rdagent_log_dir") or progress.get("rdagent_log_dir")
+        if not log_dir:
+            return False, "remote_success_without_rdagent_log_dir", meta
+
+        try:
+            loops_resp = await client.get_rdagent_loops(str(log_dir))
+            loops = loops_resp.get("loops") or []
+        except Exception as exc:
+            meta["loops_error"] = str(exc)
+            return False, "remote_success_loop_validation_error", meta
+
+        meta["loop_count"] = len(loops)
+        meta["metric_loop_count"] = sum(1 for loop in loops if isinstance(loop, dict) and _loop_has_metric(loop))
+        meta["successful_loop_count"] = sum(
+            1 for loop in loops if isinstance(loop, dict) and _loop_has_success_evidence(loop)
+        )
+
+        if not loops:
+            return False, "remote_success_without_loops", meta
+        if meta["successful_loop_count"] <= 0:
+            return False, "remote_success_without_valid_loop_result", meta
+        return True, None, meta
+
     # ── 状态同步（供调度器调用） ──
 
     async def sync_running_tasks(self) -> int:
@@ -912,13 +1038,26 @@ class DispatchService:
                 if "status" in progress:
                     node_status = progress["status"]
                     if node_status in ("success", "fail", "failed", "canceled"):
-                        # 节点侧用 "fail"，本地统一为 "failed"
-                        if node_status in ("fail", "failed"):
+                        if node_status == "success":
+                            ok, reason, meta = await self._validate_remote_rdagent_success(
+                                task=task,
+                                client=client,
+                                progress=progress,
+                            )
+                            if ok:
+                                updates["status"] = "success"
+                            else:
+                                updates["status"] = "failed"
+                                updates["error_message"] = reason or "remote_success_validation_failed"
+                                self._add_event(task["task_id"], "remote_success_rejected", {
+                                    "reason": reason,
+                                    "validation": meta,
+                                })
+                        elif node_status in ("fail", "failed"):
                             updates["status"] = "failed"
                         else:
                             updates["status"] = node_status
                         updates["finished_at"] = datetime.now(timezone.utc).isoformat()
-                        # 清空节点当前任务
                         with get_conn() as conn:
                             with conn.cursor() as cur:
                                 cur.execute(
@@ -926,15 +1065,27 @@ class DispatchService:
                                     (task["task_id"],),
                                 )
                     elif node_status == "running":
-                        # 兜底：节点仍报 running，但进度已满 → 推断为 success
                         cur_loop = progress.get("current_loop", 0)
                         tot_loop = progress.get("total_loops", 0)
                         if tot_loop > 0 and cur_loop >= tot_loop:
-                            updates["status"] = "success"
+                            ok, reason, meta = await self._validate_remote_rdagent_success(
+                                task=task,
+                                client=client,
+                                progress={**progress, "status": "success"},
+                            )
+                            if ok:
+                                updates["status"] = "success"
+                            else:
+                                updates["status"] = "failed"
+                                updates["error_message"] = reason or "remote_completion_validation_failed"
+                                self._add_event(task["task_id"], "remote_success_rejected", {
+                                    "reason": reason,
+                                    "validation": meta,
+                                })
                             updates["finished_at"] = datetime.now(timezone.utc).isoformat()
                             logger.info(
-                                "任务 %s 节点仍报 running 但进度已满 (%d/%d)，自动标记为 success",
-                                task["task_id"], cur_loop, tot_loop,
+                                "Task %s reached loop target on node (%d/%d); validated final status=%s",
+                                task["task_id"], cur_loop, tot_loop, updates["status"],
                             )
                             with get_conn() as conn:
                                 with conn.cursor() as cur:
