@@ -26,6 +26,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ...db.pg_pool import get_conn
+from .factor_official_evaluation_service import CALC_ENGINE
 
 logger = logging.getLogger("aistock.quantevolver.factor_cleanup_service")
 
@@ -344,6 +345,10 @@ class FactorCleanupService:
     # ────────────────────────────────────────────────────────────────
     def _load_factors_full(self, conn) -> List[Dict[str, Any]]:
         """加载启用因子 + 评级 + 1d out_sample metrics + 分类字段 (与 /factors 列对齐)."""
+        from .factor_rating_service import factor_rating_service
+
+        rules = factor_rating_service.list_rule_versions()
+        active_rule_version = rules.get("active_version") or rules.get("default_version")
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -351,6 +356,7 @@ class FactorCleanupService:
                     SELECT DISTINCT ON (factor_catalog_id)
                         factor_catalog_id, official_grade, official_score
                     FROM qe_factor_official_ratings
+                    WHERE rule_version = %s
                     ORDER BY factor_catalog_id, graded_at DESC
                 ),
                 metrics AS (
@@ -359,12 +365,17 @@ class FactorCleanupService:
                         icir, rank_icir, ic_positive_ratio, coverage,
                         top_excess_sharpe, top_excess_annual_return
                     FROM aistock_factor_metrics
-                    WHERE eval_window = 'out_sample' AND return_horizon = '1d'
+                    WHERE eval_window = 'out_sample'
+                      AND return_horizon = '1d'
+                      AND calc_engine = %s
                     ORDER BY factor_catalog_id, calculated_at DESC
                 )
                 SELECT
                     a.id, a.factor_name, a.source, a.expression,
-                    a.ic, a.sharpe, a.annualized_return, a.is_sota_factor,
+                    m.ic_mean AS ic,
+                    m.top_excess_sharpe AS sharpe,
+                    m.top_excess_annual_return AS annualized_return,
+                    a.is_sota_factor,
                     a.description_cn, a.is_available,
                     r.official_grade, r.official_score,
                     m.ic_mean         AS ind_ic,
@@ -385,7 +396,8 @@ class FactorCleanupService:
                 LEFT JOIN qe_factor_classification cl
                     ON cl.factor_name = a.factor_name AND cl.factor_source = a.source
                 WHERE a.is_available = TRUE
-                """
+                """,
+                (active_rule_version, CALC_ENGINE),
             )
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]

@@ -27,6 +27,8 @@ type Candidate = {
   monthly_ic_trend_slope?: number | null;
   ic_sign_consistency_12m?: number | null;
   ic_oos_is_ratio?: number | null;
+  official_grade?: string | null;
+  official_score?: number | null;
   v2_grade?: string | null;
   v2_score?: number | null;
 };
@@ -308,7 +310,7 @@ export default function FactorDeletionPage() {
                   <th style={th}>符号一致</th>
                   <th style={th}>OOS/IS</th>
                   <th style={th}>覆盖</th>
-                  <th style={th}>v2评分</th>
+                  <th style={th}>当前评级</th>
                 </tr>
               </thead>
               <tbody>
@@ -354,9 +356,9 @@ export default function FactorDeletionPage() {
                       <td style={td}>{fmt(c.ic_oos_is_ratio, 2)}</td>
                       <td style={td}>{fmt(c.coverage, 2)}</td>
                       <td style={td}>
-                        {c.v2_grade ? (
+                        {(c.official_grade || c.v2_grade) ? (
                           <span>
-                            <b>{c.v2_grade}</b> {fmt(c.v2_score, 1)}
+                            <b>{c.official_grade || c.v2_grade}</b> {fmt(c.official_score ?? c.v2_score, 1)}
                           </span>
                         ) : (
                           "-"

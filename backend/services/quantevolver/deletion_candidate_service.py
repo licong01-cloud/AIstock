@@ -22,6 +22,7 @@ import logging
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ...db.pg_pool import get_conn
+from .factor_official_evaluation_service import CALC_ENGINE
 
 logger = logging.getLogger(__name__)
 
@@ -105,12 +106,18 @@ class DeletionCandidateService:
     # Data loading
     # ────────────────────────────────────────────────────────────────
     def _load_factors(self) -> List[Dict[str, Any]]:
-        """Join catalog + metrics + latest monthly_ic + v2 rating into one row per factor."""
+        """Join catalog + authoritative metrics + latest monthly_ic + active official rating."""
+        from .factor_rating_service import factor_rating_service
+
+        rules = factor_rating_service.list_rule_versions()
+        active_rule_version = rules.get("active_version") or rules.get("default_version")
         sql = """
         WITH latest_metrics AS (
             SELECT DISTINCT ON (factor_catalog_id) *
             FROM aistock_factor_metrics
             WHERE factor_catalog_id IS NOT NULL
+              AND eval_window = 'full'
+              AND calc_engine = %s
             ORDER BY factor_catalog_id, snapshot_date DESC NULLS LAST, created_at DESC NULLS LAST
         ),
         latest_monthly AS (
@@ -122,13 +129,13 @@ class DeletionCandidateService:
             FROM aistock_factor_monthly_ic
             ORDER BY factor_name, month_end DESC
         ),
-        latest_v2 AS (
+        latest_rating AS (
             SELECT DISTINCT ON (factor_catalog_id)
                 factor_catalog_id,
-                official_grade AS v2_grade,
-                official_score AS v2_score
+                official_grade,
+                official_score
             FROM qe_factor_official_ratings
-            WHERE rule_version = 'v2.0.0'
+            WHERE rule_version = %s
             ORDER BY factor_catalog_id, snapshot_date DESC NULLS LAST
         )
         SELECT
@@ -156,16 +163,18 @@ class DeletionCandidateService:
             lm.ic_sign_consistency_12m,
             lm.monthly_ic_trend_slope,
             lm.ic_oos_is_ratio,
-            lv.v2_grade,
-            lv.v2_score
+            lr.official_grade,
+            lr.official_score,
+            lr.official_grade AS v2_grade,
+            lr.official_score AS v2_score
         FROM aistock_factor_catalog c
         LEFT JOIN latest_metrics           m  ON m.factor_catalog_id = c.id
         LEFT JOIN latest_monthly           lm ON lm.factor_name      = c.factor_name
-        LEFT JOIN latest_v2                lv ON lv.factor_catalog_id = c.id
+        LEFT JOIN latest_rating            lr ON lr.factor_catalog_id = c.id
         """
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute(sql)
+                cur.execute(sql, (CALC_ENGINE, active_rule_version))
                 cols = [d[0] for d in cur.description]
                 return [dict(zip(cols, row)) for row in cur.fetchall()]
 

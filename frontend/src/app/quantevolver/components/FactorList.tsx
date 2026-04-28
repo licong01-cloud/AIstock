@@ -3491,7 +3491,7 @@ export default function FactorList({
             {!cleanupResult && !cleanupExecuteResult && (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 <div style={{ background: "#fff7ed", padding: 12, borderRadius: 8, fontSize: 12, color: "#9a3412", lineHeight: 1.7 }}>
-                  <div style={{ fontWeight: 700, marginBottom: 4 }}>清洗规则 (与 _factor_cleanup_noise_negcorr.py 一致)</div>
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>清洗规则（后端产品化服务）</div>
                   <div>• <strong>near_identical</strong> — 簇内冗余: cluster_role='member' (complete-linkage 阈值 0.999)</div>
                   <div>• <strong>pure_noise_v2</strong> — 纯噪声: grade=D + |ic|&lt;0.003 + |rank_ic|&lt;0.003 + pos∈[0.45,0.55] + |rank_icir|&lt;0.1</div>
                   <div>• <strong>reverse_redundant</strong> — 反向重复: corr ≤ -0.999, 留正 IC / |IC| 大者</div>

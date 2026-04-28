@@ -6973,6 +6973,7 @@ def get_ic_decay_trend(
     返回按 snapshot_date 排序的 IC/ICIR/Rank IC 序列，用于绘制衰变趋势图。
     """
     from ..db.pg_pool import get_conn
+    from ..services.quantevolver.factor_official_evaluation_service import CALC_ENGINE
 
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -6999,9 +7000,10 @@ def get_ic_decay_trend(
                 FROM aistock_factor_metrics
                 WHERE factor_name = %s
                   AND eval_window = %s
+                  AND calc_engine = %s
                   AND snapshot_date IS NOT NULL
                 ORDER BY snapshot_date ASC
-            """, (factor_name, eval_window))
+            """, (factor_name, eval_window, CALC_ENGINE))
 
             columns = [desc[0] for desc in cur.description]
             rows = cur.fetchall()
@@ -7017,6 +7019,7 @@ def get_ic_decay_trend(
     return {
         "factor_name": factor_name,
         "eval_window": eval_window,
+        "calc_engine": CALC_ENGINE,
         "count": len(trend),
         "trend": trend,
     }
