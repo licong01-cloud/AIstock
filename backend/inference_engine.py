@@ -92,6 +92,23 @@ def _drop_invalid_feature_rows_for_strict(X: pd.DataFrame) -> pd.DataFrame:
     return numeric.loc[~invalid_rows]
 
 
+def _build_score_frame_for_scored_features(scored_features: pd.DataFrame, scores: Any) -> pd.DataFrame:
+    """Build a score frame aligned to the rows that were actually scored."""
+
+    score_values = np.asarray(scores)
+    if score_values.ndim > 1:
+        score_values = score_values[:, -1]
+    if len(score_values) != len(scored_features):
+        raise ValueError(
+            "model score length mismatch after strict feature filtering; "
+            "refusing to pad, truncate, or align scores to unscorable instruments: "
+            f"scores={len(score_values)}, scored_rows={len(scored_features)}"
+        )
+    df_scores = pd.DataFrame(index=scored_features.index)
+    df_scores["score"] = score_values
+    return df_scores
+
+
 def _safe_get_datetime_level(df_or_index) -> pd.Index:
     """安全地从DataFrame或Index中获取datetime层级
     
@@ -1673,11 +1690,7 @@ class InferenceEngine:
 
         scores = predict_scores(model, inner_model, model_kind, X)
 
-        if len(scores) != len(df_today) and scores.ndim > 1:
-            scores = scores[:, -1]
-
-        df_scores = pd.DataFrame(index=df_today.index)
-        df_scores["score"] = scores
+        df_scores = _build_score_frame_for_scored_features(X, scores)
 
         # 保存信号到数据库（使用提取的模块级函数）
         save_signals_to_db(task_run_id, loop_id, requested_trade_date, df_scores)

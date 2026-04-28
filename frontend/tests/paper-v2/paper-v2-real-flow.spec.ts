@@ -141,20 +141,27 @@ async function requireHmmRuntimeChoice(request: APIRequestContext): Promise<HmmR
   const { response, payload } = await apiJson(request, "/hmm-training/configs");
   expect(response.ok(), `load HMM configs: ${JSON.stringify(payload)}`).toBeTruthy();
   const configs: JsonObject[] = Array.isArray(payload) ? payload : (payload.configs || []);
-  const preferred = configs.find((item) => String(item.display_name || "").includes("w5_zscore")) || configs[0];
-  expect(preferred?.config_id, "HMM config must exist for UI runtime selection").toBeTruthy();
-  const snapshots = await apiJson(request, `/hmm-training/configs/${preferred.config_id}/snapshots`);
-  expect(snapshots.response.ok(), `load HMM snapshots: ${JSON.stringify(snapshots.payload)}`).toBeTruthy();
-  const rows: JsonObject[] = Array.isArray(snapshots.payload) ? snapshots.payload : (snapshots.payload.snapshots || []);
-  const ready = rows.find((item) => {
-    const artifacts: JsonObject[] = Array.isArray(item.coefficient_artifacts) ? item.coefficient_artifacts : [];
-    return ["completed", "ready", "success", "succeeded"].includes(String(item.status || "").toLowerCase())
-      && artifacts.some((artifact) => artifact.preset === "preset_A" && Array.isArray(artifact.covered_trade_dates) && artifact.covered_trade_dates.includes(REPLAY_TRADE_DATE));
-  });
-  expect(ready?.snapshot_id, "HMM completed snapshot must exist for UI runtime selection").toBeTruthy();
-  const artifact = (Array.isArray(ready!.coefficient_artifacts) ? ready!.coefficient_artifacts : []).find((item: JsonObject) => item.preset === "preset_A" && item.covered_trade_dates.includes(REPLAY_TRADE_DATE));
-  expect(artifact?.path, "HMM coefficient artifact must cover the replay trade date").toBeTruthy();
-  return { config_id: String(preferred.config_id), snapshot_id: String(ready!.snapshot_id), coefficient_path: String(artifact.path) };
+  expect(configs.length, "HMM config must exist for UI runtime selection").toBeGreaterThan(0);
+  const ordered = [
+    ...configs.filter((item) => String(item.display_name || "").includes("w5_zscore_candidate")),
+    ...configs.filter((item) => !String(item.display_name || "").includes("w5_zscore_candidate")),
+  ];
+  for (const config of ordered) {
+    const snapshots = await apiJson(request, `/hmm-training/configs/${config.config_id}/snapshots`);
+    expect(snapshots.response.ok(), `load HMM snapshots: ${JSON.stringify(snapshots.payload)}`).toBeTruthy();
+    const rows: JsonObject[] = Array.isArray(snapshots.payload) ? snapshots.payload : (snapshots.payload.snapshots || []);
+    const ready = rows.find((item) => {
+      const artifacts: JsonObject[] = Array.isArray(item.coefficient_artifacts) ? item.coefficient_artifacts : [];
+      return ["completed", "ready", "success", "succeeded"].includes(String(item.status || "").toLowerCase())
+        && artifacts.some((artifact) => artifact.preset === "preset_A" && Array.isArray(artifact.covered_trade_dates) && artifact.covered_trade_dates.includes(REPLAY_TRADE_DATE));
+    });
+    if (!ready) continue;
+    const artifact = (Array.isArray(ready.coefficient_artifacts) ? ready.coefficient_artifacts : []).find((item: JsonObject) => item.preset === "preset_A" && item.covered_trade_dates.includes(REPLAY_TRADE_DATE));
+    if (artifact?.path) {
+      return { config_id: String(config.config_id), snapshot_id: String(ready.snapshot_id), coefficient_path: String(artifact.path) };
+    }
+  }
+  throw new Error(`HMM completed snapshot with preset_A coefficients covering ${REPLAY_TRADE_DATE} must exist for UI runtime selection`);
 }
 
 async function createPaperPortfolioOnly(

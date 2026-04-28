@@ -113,7 +113,7 @@ export default function PaperV2SelectionPage() {
       if (!alive) return;
       const ready = rows.filter((item) => ["completed", "ready", "success", "succeeded"].includes(String(item.status || "").toLowerCase()));
       setHmmSnapshots(ready);
-      if (!ready.find((item) => item.snapshot_id === hmmSnapshotId)) setHmmSnapshotId(ready[0]?.snapshot_id || "");
+      setHmmSnapshotId((current) => (ready.find((item) => item.snapshot_id === current) ? current : ready[0]?.snapshot_id || ""));
     }).catch((exc) => {
       if (alive) {
         setHmmSnapshots([]);
@@ -122,14 +122,15 @@ export default function PaperV2SelectionPage() {
       }
     });
     return () => { alive = false; };
-  }, [hmmConfigId, hmmSnapshotId]);
+  }, [hmmConfigId]);
 
   useEffect(() => {
     if (!hmmSnapshots.length) return;
     const current = hmmSnapshots.find((item) => item.snapshot_id === hmmSnapshotId);
     if (current && artifactCoversTradeDate(current, hmmPreset, tradeDate)) return;
     const firstCovered = hmmSnapshots.find((item) => artifactCoversTradeDate(item, hmmPreset, tradeDate));
-    setHmmSnapshotId(firstCovered?.snapshot_id || "");
+    const nextSnapshotId = firstCovered?.snapshot_id || "";
+    if (nextSnapshotId !== hmmSnapshotId) setHmmSnapshotId(nextSnapshotId);
   }, [hmmPreset, hmmSnapshotId, hmmSnapshots, tradeDate]);
 
   function updateMode(nextMode: SelectionMode) {
