@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIstock Feature Verification"
+  short_description: "Run result-oriented AIstock feature validation."
+  default_prompt: "Use this skill to design and run AIstock feature tests, UI E2E checks, log audits, and business oracle validation before reporting completion."
