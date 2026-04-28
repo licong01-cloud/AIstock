@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // 与后端 sw2-tree 返回字段一致
 interface Sw2Item {
@@ -37,8 +37,12 @@ export default function SectorBlacklistPanel({ enabled, onEnabledChange, onPoolP
   const [blacklist, setBlacklist] = useState<BlacklistEntry[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [generating, setGenerating] = useState(false);
+  const [blacklistLoaded, setBlacklistLoaded] = useState(false);
   const [genMsg, setGenMsg] = useState("");
   const [error, setError] = useState("");
+  const generationInFlightRef = useRef(false);
+  const pendingGenerateRef = useRef(false);
+  const generationSeqRef = useRef(0);
 
   const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 
@@ -65,17 +69,40 @@ export default function SectorBlacklistPanel({ enabled, onEnabledChange, onPoolP
         if (!d.ok) throw new Error(`blacklist 返回错误: ${JSON.stringify(d)}`);
         setBlacklist(d.items || []);
       })
-      .catch(e => setError(`黑名单加载失败: ${e.message}`));
+      .catch(e => setError(`黑名单加载失败: ${e.message}`))
+      .finally(() => setBlacklistLoaded(true));
   }, []);
 
-  // 启用状态或黑名单变化时自动生成股票池
+  // Wait for the initial blacklist load and serialize pool generation requests.
   useEffect(() => {
-    if (!enabled) { onPoolPathChange(null); onBlacklistSnapshotChange?.(null); return; }
+    if (!enabled) {
+      generationSeqRef.current += 1;
+      pendingGenerateRef.current = false;
+      onPoolPathChange(null);
+      onBlacklistSnapshotChange?.(null);
+      return;
+    }
+    if (!blacklistLoaded) return;
     generatePool();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, blacklist]);
+  }, [enabled, blacklistLoaded]);
 
   async function generatePool() {
+    if (!enabled) {
+      pendingGenerateRef.current = false;
+      setGenerating(false);
+      setGenMsg("");
+      onPoolPathChange(null);
+      onBlacklistSnapshotChange?.(null);
+      return;
+    }
+    if (generationInFlightRef.current) {
+      generationSeqRef.current += 1;
+      pendingGenerateRef.current = true;
+      return;
+    }
+    generationInFlightRef.current = true;
+    const seq = ++generationSeqRef.current;
     setGenerating(true);
     setGenMsg("生成中...");
     setError("");
@@ -83,6 +110,7 @@ export default function SectorBlacklistPanel({ enabled, onEnabledChange, onPoolP
       const res = await fetch(`${API}/quantevolver/stock-pool/generate`, { method: "POST" });
       const d = await res.json();
       if (!res.ok) {
+        if (seq !== generationSeqRef.current) return;
         const msg = d.detail || JSON.stringify(d);
         setError(`生成失败 (HTTP ${res.status}): ${msg}`);
         onPoolPathChange(null);
@@ -90,6 +118,7 @@ export default function SectorBlacklistPanel({ enabled, onEnabledChange, onPoolP
         setGenMsg("");
         return;
       }
+      if (seq !== generationSeqRef.current) return;
       if (d.wsl_path) {
         onPoolPathChange(d.wsl_path);
         onBlacklistSnapshotChange?.(d.blacklist_snapshot || null);
@@ -101,12 +130,19 @@ export default function SectorBlacklistPanel({ enabled, onEnabledChange, onPoolP
         setGenMsg("");
       }
     } catch (e: any) {
+      if (seq !== generationSeqRef.current) return;
       setError(`生成请求异常: ${e.message}`);
       onPoolPathChange(null);
       onBlacklistSnapshotChange?.(null);
       setGenMsg("");
     } finally {
-      setGenerating(false);
+      generationInFlightRef.current = false;
+      if (pendingGenerateRef.current) {
+        pendingGenerateRef.current = false;
+        void generatePool();
+      } else {
+        setGenerating(false);
+      }
     }
   }
 
@@ -131,6 +167,7 @@ export default function SectorBlacklistPanel({ enabled, onEnabledChange, onPoolP
       const d = await res.json();
       if (!res.ok || !d.ok) throw new Error(d.detail || JSON.stringify(d));
       setBlacklist(prev => [...prev, entry]);
+      void generatePool();
     } catch (e: any) {
       setError(`添加黑名单失败: ${e.message}`);
     }
@@ -142,6 +179,7 @@ export default function SectorBlacklistPanel({ enabled, onEnabledChange, onPoolP
       const d = await res.json();
       if (!res.ok || !d.ok) throw new Error(d.detail || JSON.stringify(d));
       setBlacklist(prev => prev.filter(b => b.sw2_code !== sw2_code));
+      void generatePool();
     } catch (e: any) {
       setError(`删除黑名单失败: ${e.message}`);
     }
@@ -160,6 +198,7 @@ export default function SectorBlacklistPanel({ enabled, onEnabledChange, onPoolP
       });
       const d = await res.json();
       if (!res.ok || !d.ok) throw new Error(d.detail || JSON.stringify(d));
+      void generatePool();
     } catch (e: any) {
       setError(`更新失败: ${e.message}`);
     }

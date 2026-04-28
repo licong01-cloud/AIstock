@@ -15,10 +15,12 @@
 """
 
 import argparse
+import hashlib
 import os
 import shlex
 import subprocess
 import sys
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 
@@ -66,14 +68,28 @@ def _win_to_wsl(win_path: str) -> str:
     return value
 
 
-def _run_wsl(script: str, *, timeout: int = 30) -> str:
+def _run_wsl(script: str, *, timeout: int = 30, input_bytes: bytes | None = None) -> str:
     cmd = ["wsl", "-d", _wsl_distro(), "--", "bash", "-lc", script]
-    result = subprocess.run(cmd, timeout=timeout, check=False, capture_output=True)
+    try:
+        result = subprocess.run(
+            cmd,
+            input=input_bytes,
+            timeout=timeout,
+            check=False,
+            capture_output=True,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"WSL command timed out after {timeout}s while syncing stock_pool. "
+            f"cmd={cmd!r}"
+        ) from exc
     if result.returncode != 0:
         stderr = result.stderr.decode("utf-8", errors="replace").strip()
         stdout = result.stdout.decode("utf-8", errors="replace").strip()
         raise RuntimeError(stderr or stdout or f"WSL command failed with exit code {result.returncode}")
     return result.stdout.decode("utf-8", errors="replace")
+
+
 def get_blocked_stocks(conn, query_date: date) -> set:
     """查询指定日期应被排除的股票代码集合。"""
     with conn.cursor() as cur:
@@ -121,19 +137,38 @@ def load_all_txt(qlib_instruments_wsl: str) -> list:
 
 
 def sync_pool_to_qlib(output_path: Path, instrument_name: str, qlib_instruments_wsl: str) -> str:
-    """让 WSL 从 Windows 输出目录复制股票池文件到 Qlib instruments。"""
-    source_wsl = _win_to_wsl(str(output_path.resolve()))
+    """Copy the generated pool into Qlib instruments using WSL stdin."""
+    if not output_path.exists():
+        raise FileNotFoundError(f"stock_pool output file not found: {output_path}")
+    payload = output_path.read_bytes()
+    expected_sha256 = hashlib.sha256(payload).hexdigest()
     qlib_dir = qlib_instruments_wsl.rstrip("/")
     dest_wsl = f"{qlib_dir}/{instrument_name}.txt"
-    tmp_wsl = f"{qlib_dir}/.{instrument_name}.tmp"
-    _run_wsl(
-        "set -e\n"
-        f"test -f {shlex.quote(source_wsl)}\n"
+    tmp_wsl = f"{qlib_dir}/.{instrument_name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    sha_wsl = f"{tmp_wsl}.sha256"
+    sync_timeout = int(os.getenv("STOCK_POOL_SYNC_TIMEOUT_SEC", "120"))
+    stdout = _run_wsl(
+        "set -euo pipefail\n"
         f"mkdir -p {shlex.quote(qlib_dir)}\n"
-        f"cp {shlex.quote(source_wsl)} {shlex.quote(tmp_wsl)}\n"
-        f"mv {shlex.quote(tmp_wsl)} {shlex.quote(dest_wsl)}\n",
-        timeout=30,
+        f"trap 'rm -f {shlex.quote(tmp_wsl)} {shlex.quote(sha_wsl)}' EXIT\n"
+        f"cat > {shlex.quote(tmp_wsl)}\n"
+        f"sha256sum {shlex.quote(tmp_wsl)} > {shlex.quote(sha_wsl)}\n"
+        f"read -r actual_sha _ < {shlex.quote(sha_wsl)}\n"
+        f"if [ \"\\$actual_sha\" != {shlex.quote(expected_sha256)} ]; then "
+        f"echo \"stock_pool tmp checksum mismatch: \\$actual_sha\" >&2; exit 1; fi\n"
+        f"mv -f {shlex.quote(tmp_wsl)} {shlex.quote(dest_wsl)}\n"
+        f"sha256sum {shlex.quote(dest_wsl)} > {shlex.quote(sha_wsl)}\n"
+        f"read -r final_sha _ < {shlex.quote(sha_wsl)}\n"
+        "printf '%s\\n' \"\\$final_sha\"\n",
+        timeout=sync_timeout,
+        input_bytes=payload,
     )
+    actual_sha256 = stdout.strip().splitlines()[-1] if stdout.strip() else ""
+    if actual_sha256 != expected_sha256:
+        raise RuntimeError(
+            f"Qlib instruments stock_pool checksum mismatch: "
+            f"expected={expected_sha256} actual={actual_sha256} dest={dest_wsl}"
+        )
     return dest_wsl
 
 
