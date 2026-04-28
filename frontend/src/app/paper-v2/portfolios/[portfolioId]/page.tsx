@@ -69,11 +69,7 @@ export default function PaperV2PortfolioDetailPage() {
       setOrders(orderRows);
       setFills(fillRows);
       setPositions(positionRows);
-      try {
-        setPerformance(await paperV2Api.performance(portfolioId));
-      } catch {
-        setPerformance(null);
-      }
+      setPerformance(snapshotRows.length ? await paperV2Api.performanceOrNull(portfolioId) : null);
     } catch (exc) {
       setError(exc);
     } finally {

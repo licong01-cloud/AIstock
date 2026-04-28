@@ -28,6 +28,8 @@ from backend.services.strategy_package.selection_artifact import (
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+    QEExperimentRuntimeAssetResolver,
+    QEExperimentRuntimeSource,
     LiveInferenceResult,
 )
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, UnsupportedFeatureError
@@ -401,6 +403,67 @@ def test_selection_artifact_service_generates_live_inference_artifact_without_ex
 
     assert run.status == SelectionRunStatus.SUCCEEDED
     assert [item.symbol for item in run.aggregate_results] == ["000001.SZ", "000002.SZ"]
+
+
+def test_live_inference_factor_order_uses_static_dataloader_schema(tmp_path) -> None:
+    workspace = tmp_path / "qe_workspace" / "qe_static_schema"
+    factors_dir = workspace / "factors"
+    artifacts_dir = workspace / "mlruns" / "1" / "artifacts"
+    factors_dir.mkdir(parents=True)
+    artifacts_dir.mkdir(parents=True)
+    (artifacts_dir / "params.pkl").write_bytes(b"test model placeholder")
+    for factor_name in ["factor_b", "factor_a", "factor_c"]:
+        (factors_dir / f"{factor_name}.py").write_text(
+            "import pandas as pd\n"
+            f"def calculate():\n    return pd.DataFrame({{{factor_name!r}: [1.0]}})\n",
+            encoding="utf-8",
+        )
+    static_columns = pd.MultiIndex.from_tuples(
+        [("feature", "factor_b"), ("feature", "factor_a"), ("feature", "factor_c")]
+    )
+    pd.DataFrame([[1.0, 2.0, 3.0]], columns=static_columns).to_parquet(workspace / "combined_factors_df.parquet")
+    (workspace / "conf.yaml").write_text(
+        """
+data_handler_config:
+  data_loader:
+    class: NestedDataLoader
+    kwargs:
+      dataloader_l:
+        - class: qlib.contrib.data.loader.Alpha158DL
+          kwargs:
+            config:
+              feature:
+                - ["Ref($close, 1) / $close - 1"]
+                - ["ROC1"]
+        - class: qlib.data.dataset.loader.StaticDataLoader
+          kwargs:
+            config: combined_factors_df.parquet
+""",
+        encoding="utf-8",
+    )
+
+    resolver = QEExperimentRuntimeAssetResolver(cache_root=tmp_path / "runtime_cache")
+    source = QEExperimentRuntimeSource(
+        experiment_id="qe_static_schema",
+        db_workspace_path=workspace,
+        asset_workspace_path=workspace,
+        factor_names=["factor_a"],
+        custom_params={},
+        data_split={},
+    )
+
+    prepared = resolver.prepare_workspace(
+        package_id="pkg_static_schema",
+        manifest_sha256="a" * 64,
+        source=source,
+    )
+
+    assert prepared.alpha158_factors == ["ROC1"]
+    assert prepared.dynamic_factors == ["factor_b", "factor_a", "factor_c"]
+    assert prepared.factor_order == ["ROC1", "factor_b", "factor_a", "factor_c"]
+    payload = json.loads(prepared.factor_order_path.read_text(encoding="utf-8"))
+    assert payload["dynamic_factor_source"] == "qe_static_dataloader"
+    assert payload["qe_experiment_factor_name_count"] == 1
 
 
 def test_selection_center_intersection() -> None:

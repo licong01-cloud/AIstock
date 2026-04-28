@@ -380,6 +380,16 @@ export const paperV2Api = {
     const data = await apiFetch<{ performance_report: JsonObject }>(`/paper-v2/portfolios/${portfolioId}/performance-report`);
     return data.performance_report;
   },
+  async performanceOrNull(portfolioId: string): Promise<JsonObject | null> {
+    try {
+      return await this.performance(portfolioId);
+    } catch (error) {
+      if (error instanceof PaperV2ApiError && error.status === 404 && error.errorCode === "DATA_UNAVAILABLE") {
+        return null;
+      }
+      throw error;
+    }
+  },
   async runs(portfolioId: string): Promise<PaperRun[]> {
     const data = await apiFetch<{ runs: PaperRun[] }>(`/paper-v2/portfolios/${portfolioId}/runs`);
     return data.runs || [];

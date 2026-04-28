@@ -92,12 +92,7 @@ export default function PaperV2RunningPage() {
           paperV2Api.snapshots(portfolio.portfolio_id),
           paperV2Api.errors(portfolio.portfolio_id),
         ]);
-        let performance: JsonObject | null = null;
-        try {
-          performance = await paperV2Api.performance(portfolio.portfolio_id);
-        } catch {
-          performance = null;
-        }
+        const performance = snapshots.length ? await paperV2Api.performanceOrNull(portfolio.portfolio_id) : null;
         return { portfolio, latestRun: runs[0], latestSession: sessions[0], orders, fills, positions, snapshots, errors, performance };
       }));
       setRows(summaries);

@@ -40,11 +40,16 @@ export default function PaperV2PerformancePage() {
       ]);
       setPortfolio(portfolioRow);
       setSnapshots(snapshotRows);
-      try {
-        setReport(await paperV2Api.performance(portfolioId));
-      } catch (exc) {
+      if (snapshotRows.length) {
+        try {
+          setReport(await paperV2Api.performance(portfolioId));
+        } catch (exc) {
+          setReport(null);
+          setReportError(exc);
+        }
+      } else {
         setReport(null);
-        setReportError(exc);
+        setReportError(null);
       }
     } catch (exc) {
       setError(exc);

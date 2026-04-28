@@ -8,6 +8,7 @@ current DB data window and applying the saved QE model.
 
 from __future__ import annotations
 
+import ast
 import json
 import math
 import os
@@ -232,11 +233,11 @@ class QEExperimentRuntimeAssetResolver:
             raise StrategyPackageValidationError("selection_artifact_config must be an object")
 
         source_conf = self._resolve_conf_path(source)
+        factor_source_dir = self._resolve_factor_source_dir(source)
         alpha158_factors, dynamic_factors, factor_order = self._build_factor_order(
             source=source,
             conf_path=source_conf,
         )
-        factor_source_dir = self._resolve_factor_source_dir(source)
         factor_files = self._resolve_factor_files(factor_source_dir, dynamic_factors)
         model_source_path, model_candidate_count = self._resolve_model_params_path(source, artifact_config)
 
@@ -262,6 +263,8 @@ class QEExperimentRuntimeAssetResolver:
                     "factor_order": factor_order,
                     "alpha158_factors": alpha158_factors,
                     "dynamic_factors": dynamic_factors,
+                    "dynamic_factor_source": "qe_static_dataloader" if dynamic_factors != source.factor_names else "qe_experiments.factor_names",
+                    "qe_experiment_factor_name_count": len(source.factor_names),
                     "source": AUTHORITATIVE_SELECTION_SOURCE_TYPE,
                     "is_aligned": True,
                 },
@@ -373,7 +376,11 @@ class QEExperimentRuntimeAssetResolver:
     ) -> tuple[list[str], list[str], list[str]]:
         disable_alpha158 = bool(source.custom_params.get("disable_alpha158"))
         alpha158_factors = [] if disable_alpha158 else self._extract_alpha158_aliases(conf_path)
-        dynamic_factors = list(source.factor_names)
+        static_loader_factors = self._extract_static_loader_feature_names(
+            source=source,
+            conf_path=conf_path,
+        )
+        dynamic_factors = static_loader_factors or list(source.factor_names)
         factor_order = [*alpha158_factors, *dynamic_factors]
         if not factor_order:
             raise StrategyPackageValidationError(
@@ -387,6 +394,108 @@ class QEExperimentRuntimeAssetResolver:
                 context={"experiment_id": source.experiment_id, "duplicates": duplicates},
             )
         return alpha158_factors, dynamic_factors, factor_order
+
+    def _extract_static_loader_feature_names(
+        self,
+        *,
+        source: QEExperimentRuntimeSource,
+        conf_path: Path,
+    ) -> list[str]:
+        try:
+            conf = yaml.safe_load(conf_path.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            raise StrategyPackageValidationError(
+                "failed to parse QE conf.yaml for static factor order",
+                context={"conf_path": str(conf_path), "error": str(exc)},
+            ) from exc
+
+        configs = self._find_static_loader_configs(conf)
+        if not configs:
+            return []
+
+        factors: list[str] = []
+        missing_paths: list[str] = []
+        unreadable_paths: list[dict[str, str]] = []
+        for config in configs:
+            if not isinstance(config, str) or not config.strip():
+                continue
+            path = Path(config)
+            candidates = [path] if path.is_absolute() else [
+                source.asset_workspace_path / path,
+                source.db_workspace_path / path,
+                conf_path.parent / path,
+            ]
+            resolved = next((candidate for candidate in candidates if candidate.exists() and candidate.is_file()), None)
+            if resolved is None:
+                missing_paths.append(config)
+                continue
+            try:
+                factors.extend(self._read_static_feature_columns(resolved))
+            except Exception as exc:
+                unreadable_paths.append({"path": str(resolved), "error": str(exc)})
+
+        if missing_paths or unreadable_paths:
+            raise DataUnavailableError(
+                "QE StaticDataLoader feature-order artifact is unavailable for live inference",
+                context={
+                    "experiment_id": source.experiment_id,
+                    "conf_path": str(conf_path),
+                    "missing_configs": missing_paths,
+                    "unreadable_configs": unreadable_paths,
+                },
+            )
+        if not factors:
+            return []
+        unique: list[str] = []
+        seen: set[str] = set()
+        for factor in factors:
+            if factor not in seen:
+                unique.append(factor)
+                seen.add(factor)
+        return unique
+
+    def _find_static_loader_configs(self, node: Any) -> list[Any]:
+        configs: list[Any] = []
+        if isinstance(node, dict):
+            if node.get("class") == "qlib.data.dataset.loader.StaticDataLoader":
+                configs.append((node.get("kwargs") or {}).get("config"))
+            for value in node.values():
+                configs.extend(self._find_static_loader_configs(value))
+        elif isinstance(node, list):
+            for value in node:
+                configs.extend(self._find_static_loader_configs(value))
+        return configs
+
+    def _read_static_feature_columns(self, path: Path) -> list[str]:
+        suffix = path.suffix.lower()
+        if suffix == ".parquet":
+            try:
+                import pyarrow.parquet as pq  # type: ignore
+
+                names = list(pq.ParquetFile(path).schema_arrow.names)
+            except Exception as exc:
+                raise StrategyPackageValidationError(
+                    "failed to read parquet feature schema for live inference",
+                    context={"path": str(path), "error": str(exc)},
+                ) from exc
+            factors: list[str] = []
+            for name in names:
+                parsed: Any = name
+                if isinstance(name, str) and name.startswith("("):
+                    try:
+                        parsed = ast.literal_eval(name)
+                    except (SyntaxError, ValueError):
+                        parsed = name
+                if isinstance(parsed, tuple) and len(parsed) >= 2 and parsed[0] == "feature":
+                    factors.append(str(parsed[1]))
+                elif isinstance(parsed, str) and parsed not in {"datetime", "instrument"}:
+                    factors.append(parsed)
+            return factors
+
+        raise StrategyPackageValidationError(
+            "unsupported StaticDataLoader feature-order artifact format for live inference",
+            context={"path": str(path), "suffix": suffix},
+        )
 
     def _extract_alpha158_aliases(self, conf_path: Path) -> list[str]:
         try:
