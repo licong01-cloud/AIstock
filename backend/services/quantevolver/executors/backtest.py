@@ -15,6 +15,7 @@ from ..experiment_config import ExperimentConfig
 from .base import BaseExecutor, ExecutionContext, ExecutionResult
 
 logger = logging.getLogger("aistock.quantevolver.executors.backtest")
+_PRECOMPUTED_HMM_COEFF_JSON_PARAM = "_precomputed_hmm_coefficients_json"
 
 
 class BacktestMode(str, Enum):
@@ -112,12 +113,16 @@ class BacktestExecutor(BaseExecutor):
             )
 
         # 4. 构建传给 RDAgent 的 config 记录
+        persisted_model_params = {
+            k: v for k, v in custom_params.items()
+            if k != _PRECOMPUTED_HMM_COEFF_JSON_PARAM
+        }
         rdagent_config = {
             "factor_list": config.factor_names,
             "model_id": config.model_id,
             "strategy_id": config.strategy_id,
             "data_split": config.data_split,
-            "model_params": custom_params,
+            "model_params": persisted_model_params,
         }
 
         # 5. 提交到 RDAgent

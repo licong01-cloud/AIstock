@@ -7,7 +7,10 @@ from fastapi import HTTPException
 
 from backend.routers.quantevolver_evolution import _merge_strategy_runtime_flags, _reject_nested_runtime_flags
 from backend.execution_algos.v25_two_stage_algo import V25TwoStageAlgo, V25TwoStageUnavailableError
-from backend.services.quantevolver.config_composer import ConfigComposer
+from backend.services.quantevolver.config_composer import (
+    PRECOMPUTED_HMM_COEFF_JSON_PARAM,
+    ConfigComposer,
+)
 from backend.services.quantevolver.experiment_config_builders import build_config_from_retry_loop
 from backend.services.quantevolver.stock_pool_sync import sync_stock_pool_to_remote_node
 
@@ -100,6 +103,23 @@ def test_v25_execution_prepares_suspend_artifact_without_signal_filter(monkeypat
     assert custom_params["suspend_filter_file"] == "qe_suspend_filter.json"
     assert custom_params["suspend_filter_strict"] is True
     assert "filter_suspended_on_signal" not in custom_params
+
+
+def test_hmm_precomputed_coefficients_skip_runtime_precompute(monkeypatch):
+    composer = ConfigComposer()
+    coeff_json = '{"daily_coefficients": {"2024-07-01": {}}, "stock_sector_map": {}}'
+
+    def fail_precompute(*args, **kwargs):
+        raise AssertionError("runtime precompute should not be called")
+
+    monkeypatch.setattr(composer, "_precompute_hmm_coefficients", fail_precompute)
+
+    resolved = composer._resolve_hmm_coefficients_json(
+        {PRECOMPUTED_HMM_COEFF_JSON_PARAM: coeff_json},
+        DATA_SPLIT,
+    )
+
+    assert resolved == coeff_json
 
 
 def test_v25_execution_algo_receives_suspend_artifact_when_signal_filter_enabled():

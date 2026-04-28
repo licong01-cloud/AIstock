@@ -2623,7 +2623,11 @@ class AutoEvolutionScheduler:
 
         Returns: {"loop_id": str, "mode": "backtest_only"|"full"}
         """
-        from .config_composer import QE_WORKSPACE_WIN, ConfigComposer
+        from .config_composer import (
+            PRECOMPUTED_HMM_COEFF_JSON_PARAM,
+            QE_WORKSPACE_WIN,
+            ConfigComposer,
+        )
 
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"
@@ -2706,6 +2710,18 @@ class AutoEvolutionScheduler:
             composer = ConfigComposer()
             client = self._get_workspace_client_for_task(task_id)
             executor = BacktestExecutor(composer, client)
+            hmm_coeff_path = workspace_dir / "hmm_sector_coefficients.json"
+            if hmm_coeff_path.exists():
+                extra_params = dict(cfg.extra_params or {})
+                extra_params[PRECOMPUTED_HMM_COEFF_JSON_PARAM] = hmm_coeff_path.read_text(
+                    encoding="utf-8"
+                )
+                cfg = cfg.model_copy(update={"extra_params": extra_params})
+                logger.info(
+                    "Retry loop %s: reusing HMM coefficients artifact %s",
+                    evolution_loop_db_id,
+                    hmm_coeff_path,
+                )
             ctx = ExecutionContext(
                 task_id=task_id,
                 loop_index=loop_index,

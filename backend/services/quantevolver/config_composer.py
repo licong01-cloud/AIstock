@@ -118,6 +118,7 @@ SUPPORTED_QE_EXECUTION_ALGOS = {
 }
 DEFAULT_QE_EXECUTION_ALGO = "TWAP"
 SUSPEND_FILTER_FILE = "qe_suspend_filter.json"
+PRECOMPUTED_HMM_COEFF_JSON_PARAM = "_precomputed_hmm_coefficients_json"
 RDAGENT_FACTOR_TEMPLATE_WIN = Path(os.getenv(
     "RDAGENT_FACTOR_TEMPLATE_WIN",
     str(QE_WORKSPACE_WIN.parent / "rdagent" / "scenarios" / "qlib" / "experiment" / "factor_template"),
@@ -597,6 +598,28 @@ class ConfigComposer:
 
         return custom_params, suspend_filter_json
 
+    @staticmethod
+    def _validate_hmm_coefficients_json(content: str) -> None:
+        data = json.loads(content)
+        if "daily_coefficients" not in data or "stock_sector_map" not in data:
+            raise RuntimeError(
+                "precomputed HMM coefficients missing required fields: "
+                f"keys={list(data.keys())}"
+            )
+
+    def _resolve_hmm_coefficients_json(
+        self,
+        strategy_params: Dict[str, Any],
+        data_split: Dict[str, str],
+    ) -> str:
+        precomputed = strategy_params.get(PRECOMPUTED_HMM_COEFF_JSON_PARAM)
+        if precomputed:
+            content = str(precomputed).strip()
+            self._validate_hmm_coefficients_json(content)
+            logger.info("Using precomputed HMM coefficients from source workspace")
+            return content
+        return self._precompute_hmm_coefficients(strategy_params, data_split)
+
     def compose_experiment(
         self,
         factor_names: List[str],
@@ -709,7 +732,7 @@ class ConfigComposer:
         if _cp.get("enable_sector_hmm"):
             # 构造 strategy_params 供 _precompute_hmm_coefficients 使用
             _hmm_sp = dict(custom_params or {})
-            hmm_json_content = self._precompute_hmm_coefficients(_hmm_sp, data_split)
+            hmm_json_content = self._resolve_hmm_coefficients_json(_hmm_sp, data_split)
             custom_params["hmm_coefficients_file"] = "hmm_sector_coefficients.json"
 
             # 严格验证：策略必须原生支持 HMM
@@ -1000,7 +1023,7 @@ class ConfigComposer:
         if _cp.get("enable_sector_hmm"):
             # 构造 strategy_params 供 _precompute_hmm_coefficients 使用
             _hmm_sp = dict(_cp)
-            hmm_json = self._precompute_hmm_coefficients(_hmm_sp, data_split)
+            hmm_json = self._resolve_hmm_coefficients_json(_hmm_sp, data_split)
             experiment_files["hmm_sector_coefficients.json"] = hmm_json
             # 注入到 custom_params 以便 _compose_conf_yaml 写入 strategy kwargs
             if custom_params is None:
@@ -1985,6 +2008,7 @@ class ConfigComposer:
             "filter_suspend_d",
             "suspend_filter_file",
             "suspend_filter_strict",
+            PRECOMPUTED_HMM_COEFF_JSON_PARAM,
         } | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _LINEAR_HP_KEYS
 
         if custom_params:
