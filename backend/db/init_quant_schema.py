@@ -495,6 +495,30 @@ DDL: List[str] = [
         error_message    TEXT
     )
     """,
+    # model_train_daily_coefficient_jobs: HMM daily as-of coefficient generation audit jobs
+    """
+    CREATE TABLE IF NOT EXISTS model_train_daily_coefficient_jobs (
+        job_id                TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+        snapshot_id           TEXT NOT NULL REFERENCES model_train_snapshots(snapshot_id) ON DELETE RESTRICT,
+        config_id             TEXT NOT NULL REFERENCES model_train_configs(config_id) ON DELETE RESTRICT,
+        signal_preset         TEXT NOT NULL,
+        as_of_trade_date      DATE NOT NULL,
+        effective_trade_date  DATE NOT NULL,
+        generation_mode       TEXT NOT NULL,
+        status                TEXT NOT NULL DEFAULT 'PENDING',
+        result_status         TEXT,
+        requested_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        started_at            TIMESTAMPTZ,
+        completed_at          TIMESTAMPTZ,
+        input_data_max_dates  JSONB NOT NULL DEFAULT '{}'::jsonb,
+        output_path           TEXT NOT NULL,
+        artifact_sha256       TEXT,
+        plan_json             JSONB NOT NULL,
+        result_json           JSONB,
+        error_message         TEXT,
+        error_context         JSONB
+    )
+    """,
     # (model_type, display_name) 联合唯一索引
     """
     CREATE UNIQUE INDEX IF NOT EXISTS uq_model_train_configs_type_name
@@ -508,6 +532,14 @@ DDL: List[str] = [
     """
     CREATE INDEX IF NOT EXISTS idx_model_train_jobs_config_id
     ON model_train_jobs (config_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_model_train_daily_coeff_jobs_snapshot
+    ON model_train_daily_coefficient_jobs (snapshot_id, requested_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_model_train_daily_coeff_jobs_config
+    ON model_train_daily_coefficient_jobs (config_id, requested_at DESC)
     """,
 ]
 

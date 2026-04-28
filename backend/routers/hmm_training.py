@@ -105,6 +105,31 @@ class DailyCoefficientGenerateRequest(DailyCoefficientPreviewRequest):
     confirm_text: str
 
 
+class DailyCoefficientJobResponse(BaseModel):
+    job_id: str
+    snapshot_id: str
+    config_id: str
+    signal_preset: str
+    as_of_trade_date: str
+    effective_trade_date: str
+    generation_mode: str
+    status: str
+    result_status: Optional[str] = None
+    requested_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    input_data_max_dates: Optional[Dict[str, Any]] = None
+    output_path: Optional[str] = None
+    artifact_sha256: Optional[str] = None
+    plan_json: Optional[Dict[str, Any]] = None
+    result_json: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = None
+    error_context: Optional[Dict[str, Any]] = None
+
+    class Config:
+        from_attributes = True
+
+
 # ---------------------------------------------------------------------------
 # Helper: convert DB row values to strings for Pydantic serialization
 # ---------------------------------------------------------------------------
@@ -112,9 +137,12 @@ class DailyCoefficientGenerateRequest(DailyCoefficientPreviewRequest):
 def _stringify_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """Convert datetime / non-string values to strings for Pydantic models."""
     out = dict(row)
-    for key in ("created_at", "trained_at", "started_at", "completed_at"):
+    for key in ("created_at", "trained_at", "requested_at", "started_at", "completed_at"):
         if key in out and out[key] is not None:
             out[key] = str(out[key])
+    for key in ("as_of_trade_date", "effective_trade_date"):
+        if key in out and out[key] is not None:
+            out[key] = str(out[key])[:10]
     return out
 
 
@@ -278,6 +306,63 @@ def generate_daily_coefficients(snapshot_id: str, req: DailyCoefficientGenerateR
             effective_trade_date=req.effective_trade_date,
             confirm_text=req.confirm_text,
         )
+    except Exception as exc:
+        raise _http_error(exc)
+
+
+@router.post(
+    "/snapshots/{snapshot_id}/daily-coefficients/jobs",
+    response_model=DailyCoefficientJobResponse,
+    summary="Create an async daily HMM coefficient generation job",
+)
+def create_daily_coefficients_job(
+    snapshot_id: str,
+    req: DailyCoefficientGenerateRequest,
+    background_tasks: BackgroundTasks,
+):
+    try:
+        job = service.start_daily_coefficients_job(
+            snapshot_id,
+            signal_preset=req.signal_preset,
+            as_of_date=req.as_of_date,
+            effective_trade_date=req.effective_trade_date,
+            confirm_text=req.confirm_text,
+        )
+        background_tasks.add_task(service.run_daily_coefficients_job, job["job_id"])
+        return _stringify_row(job)
+    except Exception as exc:
+        raise _http_error(exc)
+
+
+@router.get(
+    "/daily-coefficients/jobs/{job_id}",
+    response_model=DailyCoefficientJobResponse,
+    summary="Get async daily HMM coefficient generation job status",
+)
+def get_daily_coefficients_job(job_id: str):
+    try:
+        job = service.get_daily_coefficient_job(job_id)
+        if job is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"HMM daily coefficient job {job_id} does not exist",
+            )
+        return _stringify_row(job)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _http_error(exc)
+
+
+@router.get(
+    "/snapshots/{snapshot_id}/daily-coefficients/jobs",
+    response_model=List[DailyCoefficientJobResponse],
+    summary="List async daily HMM coefficient generation jobs for a snapshot",
+)
+def list_daily_coefficients_jobs(snapshot_id: str, limit: int = 50):
+    try:
+        rows = service.list_daily_coefficient_jobs(snapshot_id=snapshot_id, limit=limit)
+        return [_stringify_row(row) for row in rows]
     except Exception as exc:
         raise _http_error(exc)
 

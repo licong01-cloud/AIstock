@@ -623,15 +623,16 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(page.locator(".pv2-readable-panel").filter({ hasText: "Generation Mode" }).last()).toContainText("daily_asof_prediction_v1", { timeout: 60_000 });
     await page.getByTestId("hmm-daily-generate").click();
     await page.getByTestId("hmm-daily-generate-input").fill(hmm.snapshot_id);
-    const dailyGenerateResponse = page.waitForResponse(
+    const dailyJobResponse = page.waitForResponse(
       (response) => response.url().includes("/hmm-training/snapshots/")
-        && response.url().includes("/daily-coefficients/generate")
+        && response.url().includes("/daily-coefficients/jobs")
         && response.request().method() === "POST",
-      { timeout: 300_000 },
+      { timeout: 60_000 },
     );
     await page.getByTestId("hmm-daily-generate-confirm").click();
-    expect((await dailyGenerateResponse).ok()).toBeTruthy();
-    await expect(page.locator(".pv2-readable-panel").filter({ hasText: "Artifact Sha256" }).last()).toContainText(/CREATED|EXISTS/, { timeout: 300_000 });
+    expect((await dailyJobResponse).ok()).toBeTruthy();
+    await expect(page.getByTestId("hmm-daily-job-status")).toContainText("COMPLETED", { timeout: 300_000 });
+    await expect(page.getByTestId("hmm-daily-job-status")).toContainText(/CREATED|EXISTS/, { timeout: 300_000 });
     await expectNoRawJsonUi(page);
   });
 

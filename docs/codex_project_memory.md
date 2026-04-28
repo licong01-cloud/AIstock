@@ -342,3 +342,11 @@ Important directories:
 - Extended `scripts/precompute_hmm_coefficients.py` with `output_trade_date` remapping so forward-filtered as-of coefficients can be emitted for the next trading day without reading future data.
 - Updated `/paper-v2/model-hmm` with a Chinese daily coefficient generation card and UI E2E coverage. Selection Center/Paper v2 still consume only generated artifacts and fail fast when HMM coefficients do not cover the requested trade date.
 - Validation completed on development ports 8012/3012 without restarting production port 8001: backend Paper v2/Selection/HMM tests passed and Paper v2 Playwright UI suite passed.
+
+## HMM Daily Coefficient Async Job Update - 2026-04-28
+
+- Replaced the Paper v2 HMM page's long synchronous daily coefficient generation call with a durable async job flow to avoid Next.js dev proxy `socket hang up` on WSL/conda generation.
+- Added `model_train_daily_coefficient_jobs` via `backend/migrations/hmm_daily_coefficient_jobs_20260428.sql` and `backend/db/init_quant_schema.py`; each job records PIT dates, preset, plan, status, result artifact hash, and fail-fast error context.
+- Added `/api/v1/hmm-training/snapshots/{snapshot_id}/daily-coefficients/jobs`, `/api/v1/hmm-training/daily-coefficients/jobs/{job_id}`, and snapshot job-list APIs. The old synchronous `/generate` endpoint remains for direct diagnostics, but the UI uses job creation plus polling.
+- Updated `/paper-v2/model-hmm` to show daily coefficient job status, artifact result, SHA256, and job audit table without exposing raw JSON content; generated HMM model/coefficients assets remain runtime assets and are not committed.
+- Applied the new schema on the local dev database and validated with backend tests, frontend type/build checks, and full Paper v2 Playwright UI E2E on 8012/3012. Production port 8001 was not restarted.

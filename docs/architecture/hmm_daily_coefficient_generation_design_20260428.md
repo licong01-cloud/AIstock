@@ -1,7 +1,7 @@
 ﻿# HMM 每日系数生成设计方案（Paper v2 / Selection Center）
 
 日期：2026-04-28
-状态：Implemented in current development branch
+状态：Implemented in current development branch; async job update added 2026-04-28
 
 ## 1. 背景与问题
 
@@ -51,6 +51,9 @@
 ```text
 POST /api/v1/hmm-training/snapshots/{snapshot_id}/daily-coefficients/preview
 POST /api/v1/hmm-training/snapshots/{snapshot_id}/daily-coefficients/generate
+POST /api/v1/hmm-training/snapshots/{snapshot_id}/daily-coefficients/jobs
+GET  /api/v1/hmm-training/daily-coefficients/jobs/{job_id}
+GET  /api/v1/hmm-training/snapshots/{snapshot_id}/daily-coefficients/jobs
 ```
 
 请求体：
@@ -69,6 +72,38 @@ POST /api/v1/hmm-training/snapshots/{snapshot_id}/daily-coefficients/generate
 - `as_of_date` 可省略，后端自动选择最新公共完整数据日。
 - `effective_trade_date` 可省略，后端自动选择 as-of 后的下一个交易日。
 - `generate` 必须提供 `confirm_text == snapshot_id`。
+- `/jobs` 是 UI 和长耗时生成的权威入口：请求只做参数、PIT 数据与目标产物校验，随后创建持久化任务并立即返回 `job_id`；WSL 生成在 FastAPI background task 中执行，UI 轮询任务状态。
+- 保留同步 `/generate` 仅用于直接 API/脚本诊断，不作为前端长耗时交互路径。
+
+## 5.1 异步任务与代理超时控制
+
+Next.js dev rewrite proxy 对长时间 HTTP 连接不应作为业务可靠性边界。每日系数生成可能触发 WSL/conda/Python 推理，耗时从数秒到数分钟不等，因此 UI 不再等待同步 `/generate` 请求完成。
+
+新增持久化表：
+
+```text
+model_train_daily_coefficient_jobs
+```
+
+关键字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `job_id` | 每次人工生成请求的审计 ID。 |
+| `snapshot_id` / `config_id` | HMM 快照与配置来源。 |
+| `signal_preset` | 本次生成使用的 HMM 信号预设。 |
+| `as_of_trade_date` / `effective_trade_date` | PIT 数据截至日与生效交易日。 |
+| `status` | `PENDING` / `RUNNING` / `COMPLETED` / `FAILED`。 |
+| `result_status` | 产物结果：`CREATED` 或 `EXISTS`。 |
+| `plan_json` | 创建任务时冻结的校验计划。 |
+| `result_json` | 完成后记录的产物结果。 |
+| `error_message` / `error_context` | 失败时的明确错误与堆栈尾部。 |
+
+失败语义：
+
+- WSL 命令失败、超时、目标文件未生成、已有文件元数据不匹配、缺数据、非交易日等全部进入 `FAILED`，并在 UI 原样展示。
+- 不允许把失败任务转成空系数、默认系数或成功状态。
+- 不覆盖已有不匹配产物；元数据一致的已有产物只记录为 `EXISTS`。
 
 ## 6. 产物格式
 

@@ -11,7 +11,7 @@ import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { hmmTrainingApi, strategyPackageApi } from "@/lib/paper-v2/api";
 import { hmmSnapshotLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
-import type { HmmConfig, HmmJob, HmmSnapshot, JsonObject, StrategyPackage } from "@/lib/paper-v2/types";
+import type { HmmConfig, HmmDailyCoefficientJob, HmmJob, HmmSnapshot, JsonObject, StrategyPackage } from "@/lib/paper-v2/types";
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
   const seen = new Set<string>();
@@ -33,6 +33,54 @@ function presetKeysFromConfig(config: HmmConfig | undefined): string[] {
 
 function completedSnapshot(snapshot: HmmSnapshot): boolean {
   return ["COMPLETED", "SUCCESS", "SUCCEEDED", "READY"].includes(String(snapshot.status || "").toUpperCase());
+}
+
+function dailyPreviewSummary(value: JsonObject | null): JsonObject | null {
+  if (!value) return null;
+  const existing = value.existing_artifact_status;
+  return {
+    snapshot_id: value.snapshot_id,
+    snapshot_display_name: value.snapshot_display_name,
+    config_id: value.config_id,
+    config_display_name: value.config_display_name,
+    signal_preset: value.signal_preset,
+    as_of_trade_date: value.as_of_trade_date,
+    effective_trade_date: value.effective_trade_date,
+    generation_mode: value.generation_mode,
+    input_data_max_dates: value.input_data_max_dates,
+    existing_artifact: value.existing_artifact,
+    existing_artifact_status: existing && typeof existing === "object" && !Array.isArray(existing)
+      ? {
+          status: (existing as JsonObject).status,
+          artifact_sha256: (existing as JsonObject).artifact_sha256,
+          date_count: (existing as JsonObject).date_count,
+        }
+      : existing,
+    requires_wsl: value.requires_wsl,
+    confirm_text_required: value.confirm_text_required,
+  };
+}
+
+function dailyJobSummary(value: JsonObject | null): JsonObject | null {
+  if (!value) return null;
+  return {
+    job_id: value.job_id,
+    snapshot_id: value.snapshot_id,
+    config_id: value.config_id,
+    signal_preset: value.signal_preset,
+    as_of_trade_date: value.as_of_trade_date,
+    effective_trade_date: value.effective_trade_date,
+    generation_mode: value.generation_mode,
+    status: value.status,
+    result_status: value.result_status,
+    requested_at: value.requested_at,
+    started_at: value.started_at,
+    completed_at: value.completed_at,
+    input_data_max_dates: value.input_data_max_dates,
+    artifact_sha256: value.artifact_sha256,
+    error_message: value.error_message,
+    error_context: value.error_context,
+  };
 }
 
 export default function PaperV2ModelHmmPage() {
@@ -59,6 +107,8 @@ export default function PaperV2ModelHmmPage() {
   const [dailyEffectiveDate, setDailyEffectiveDate] = useState("");
   const [dailyPreview, setDailyPreview] = useState<JsonObject | null>(null);
   const [dailyResult, setDailyResult] = useState<JsonObject | null>(null);
+  const [dailyJob, setDailyJob] = useState<HmmDailyCoefficientJob | null>(null);
+  const [dailyJobs, setDailyJobs] = useState<HmmDailyCoefficientJob[]>([]);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -127,9 +177,24 @@ export default function PaperV2ModelHmmPage() {
     }
   }, [configId]);
 
+  const loadDailyJobs = useCallback(async () => {
+    if (!dailySnapshotId) {
+      setDailyJobs([]);
+      return;
+    }
+    setError(null);
+    try {
+      const rows = await hmmTrainingApi.dailyCoefficientJobs(dailySnapshotId);
+      setDailyJobs(rows);
+    } catch (exc) {
+      setError(exc);
+    }
+  }, [dailySnapshotId]);
+
   useEffect(() => { loadPackages(); loadHmm(); }, [loadPackages, loadHmm]);
   useEffect(() => { loadModelDetail(); }, [loadModelDetail]);
   useEffect(() => { loadHmmDetail(); }, [loadHmmDetail]);
+  useEffect(() => { loadDailyJobs(); }, [loadDailyJobs]);
   useEffect(() => {
     if (dailySnapshotId && snapshots.some((item) => item.snapshot_id === dailySnapshotId)) return;
     setDailySnapshotId(readySnapshots[0]?.snapshot_id || "");
@@ -137,6 +202,29 @@ export default function PaperV2ModelHmmPage() {
   useEffect(() => {
     if (!dailyPresetOptions.includes(dailyPreset)) setDailyPreset(dailyPresetOptions[0] || "preset_A");
   }, [dailyPreset, dailyPresetOptions]);
+  useEffect(() => {
+    if (!dailyJob?.job_id) return;
+    if (["COMPLETED", "FAILED"].includes(String(dailyJob.status || "").toUpperCase())) return;
+    let active = true;
+    const timer = window.setInterval(async () => {
+      try {
+        const next = await hmmTrainingApi.dailyCoefficientJob(dailyJob.job_id);
+        if (!active) return;
+        setDailyJob(next);
+        setDailyResult(next as unknown as JsonObject);
+        if (["COMPLETED", "FAILED"].includes(String(next.status || "").toUpperCase())) {
+          await loadHmmDetail();
+          await loadDailyJobs();
+        }
+      } catch (exc) {
+        if (active) setError(exc);
+      }
+    }, 2000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [dailyJob?.job_id, dailyJob?.status, loadDailyJobs, loadHmmDetail]);
 
   async function previewModelRetrain() {
     setBusy(true);
@@ -229,12 +317,13 @@ export default function PaperV2ModelHmmPage() {
     setBusy(true);
     setError(null);
     try {
-      const result = await hmmTrainingApi.generateDailyCoefficients(dailySnapshotId, {
+      const job = await hmmTrainingApi.startDailyCoefficientJob(dailySnapshotId, {
         ...dailyPayload(),
         confirm_text: dailySnapshotId,
       });
-      setDailyResult(result);
-      await loadHmmDetail();
+      setDailyJob(job);
+      setDailyResult(job as unknown as JsonObject);
+      await loadDailyJobs();
     } catch (exc) {
       setError(exc);
     } finally {
@@ -315,8 +404,16 @@ export default function PaperV2ModelHmmPage() {
           <button className="pv2-button" data-testid="hmm-daily-preview" disabled={busy || !dailySnapshotId || !dailyPreset} onClick={previewDailyCoefficients} type="button">预览每日系数</button>
           <ConfirmAction testId="hmm-daily-generate" label="生成每日系数" disabled={busy || !dailySnapshotId || !dailyPreset} danger confirmText={dailySnapshotId || "-"} onConfirm={generateDailyCoefficients} />
         </div>
-        {dailyPreview ? <><h3>每日系数生成预览</h3><JsonPanel value={dailyPreview} /></> : null}
-        {dailyResult ? <><h3>每日系数生成结果</h3><JsonPanel value={dailyResult} /></> : null}
+        {dailyPreview ? <><h3>每日系数生成预览</h3><JsonPanel value={dailyPreviewSummary(dailyPreview)} /></> : null}
+        {dailyResult ? <><h3>每日系数生成任务</h3><JsonPanel value={dailyJobSummary(dailyResult)} /></> : null}
+        {dailyJob ? (
+          <div className="pv2-chip-row" data-testid="hmm-daily-job-status" style={{ marginTop: 12 }}>
+            <span className="pv2-chip">任务：{shortHash(dailyJob.job_id)}</span>
+            <span className="pv2-chip">状态：{dailyJob.status}</span>
+            <span className="pv2-chip">产物：{dailyJob.result_status || "-"}</span>
+            <span className="pv2-chip">SHA256：{shortHash(dailyJob.artifact_sha256)}</span>
+          </div>
+        ) : null}
       </SectionCard>
 
       <div className="pv2-grid pv2-grid-2">
@@ -348,6 +445,22 @@ export default function PaperV2ModelHmmPage() {
           />
         </SectionCard>
       </div>
+
+      <SectionCard title="HMM 每日系数任务" eyebrow="异步生成审计">
+        <PaperTable
+          rows={dailyJobs}
+          empty="暂无每日系数生成任务。"
+          columns={[
+            { key: "job", header: "任务", render: (row) => <span className="pv2-mono">{shortHash(row.job_id)}</span> },
+            { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
+            { key: "preset", header: "预设", render: (row) => row.signal_preset },
+            { key: "dates", header: "日期", render: (row) => `${row.as_of_trade_date} -> ${row.effective_trade_date}` },
+            { key: "result", header: "产物状态", render: (row) => row.result_status || "-" },
+            { key: "sha", header: "产物哈希", render: (row) => shortHash(row.artifact_sha256) },
+            { key: "error", header: "错误", render: (row) => row.error_message || "-" },
+          ]}
+        />
+      </SectionCard>
 
       <SectionCard title="HMM 快照与系数产物" eyebrow="运行时产物">
         <PaperTable

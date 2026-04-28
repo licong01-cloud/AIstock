@@ -12,6 +12,7 @@ import os
 import subprocess
 import calendar
 import hashlib
+import traceback
 from datetime import date, datetime, timedelta, timezone
 from dataclasses import asdict, fields as dc_fields
 from typing import Any, Dict, Iterable, List, Optional
@@ -725,6 +726,10 @@ class HMMTrainingService:
             as_of_date=as_of_date,
             effective_trade_date=effective_trade_date,
         )
+        return self._execute_daily_coefficient_plan(plan)
+
+    def _execute_daily_coefficient_plan(self, plan: Dict[str, Any]) -> Dict[str, Any]:
+        """Run the blocking WSL coefficient generation for an already validated plan."""
         if plan["existing_artifact"]:
             return {
                 **plan,
@@ -799,6 +804,229 @@ class HMMTrainingService:
             "created": True,
             "artifact_sha256": artifact_status["artifact_sha256"],
         }
+
+    @staticmethod
+    def _normalise_daily_job_row(row: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(row)
+        for key in ("as_of_trade_date", "effective_trade_date"):
+            value = out.get(key)
+            if isinstance(value, (date, datetime)):
+                out[key] = value.isoformat()[:10]
+        for key in ("requested_at", "started_at", "completed_at"):
+            value = out.get(key)
+            if hasattr(value, "isoformat"):
+                out[key] = value.isoformat()
+        for key in ("input_data_max_dates", "plan_json", "result_json", "error_context"):
+            value = out.get(key)
+            if isinstance(value, str):
+                try:
+                    out[key] = json.loads(value)
+                except json.JSONDecodeError:
+                    pass
+        return out
+
+    def _insert_daily_coefficient_job(self, plan: Dict[str, Any]) -> Dict[str, Any]:
+        sql = """
+            INSERT INTO model_train_daily_coefficient_jobs
+                (snapshot_id, config_id, signal_preset, as_of_trade_date,
+                 effective_trade_date, generation_mode, status,
+                 input_data_max_dates, output_path, plan_json)
+            VALUES
+                (%s, %s, %s, %s, %s, %s, 'PENDING', %s, %s, %s)
+            RETURNING job_id, snapshot_id, config_id, signal_preset,
+                      as_of_trade_date, effective_trade_date, generation_mode,
+                      status, result_status, requested_at, started_at, completed_at,
+                      input_data_max_dates, output_path, artifact_sha256,
+                      plan_json, result_json, error_message, error_context
+        """
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    sql,
+                    (
+                        plan["snapshot_id"],
+                        plan["config_id"],
+                        plan["signal_preset"],
+                        plan["as_of_trade_date"],
+                        plan["effective_trade_date"],
+                        plan["generation_mode"],
+                        psycopg2.extras.Json(plan["input_data_max_dates"]),
+                        plan["output_path"],
+                        psycopg2.extras.Json(plan),
+                    ),
+                )
+                row = cur.fetchone()
+        return self._normalise_daily_job_row(dict(row))
+
+    def start_daily_coefficients_job(
+        self,
+        snapshot_id: str,
+        *,
+        signal_preset: str,
+        confirm_text: str,
+        as_of_date: date | None = None,
+        effective_trade_date: date | None = None,
+    ) -> Dict[str, Any]:
+        """Create a durable background job and return immediately.
+
+        The WSL generation itself runs in ``run_daily_coefficients_job`` so UI
+        calls do not depend on a long-lived Next.js dev proxy connection.
+        """
+        if str(confirm_text or "").strip() != snapshot_id:
+            raise ValueError(
+                "HMM daily coefficient generation requires explicit confirmation text matching snapshot_id"
+            )
+        plan = self._resolve_daily_coefficient_plan(
+            snapshot_id=snapshot_id,
+            signal_preset=signal_preset,
+            as_of_date=as_of_date,
+            effective_trade_date=effective_trade_date,
+        )
+        return self._insert_daily_coefficient_job(plan)
+
+    def get_daily_coefficient_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        sql = """
+            SELECT job_id, snapshot_id, config_id, signal_preset,
+                   as_of_trade_date, effective_trade_date, generation_mode,
+                   status, result_status, requested_at, started_at, completed_at,
+                   input_data_max_dates, output_path, artifact_sha256,
+                   plan_json, result_json, error_message, error_context
+            FROM model_train_daily_coefficient_jobs
+            WHERE job_id = %s
+        """
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, (job_id,))
+                row = cur.fetchone()
+        return self._normalise_daily_job_row(dict(row)) if row else None
+
+    def list_daily_coefficient_jobs(
+        self,
+        *,
+        snapshot_id: str | None = None,
+        config_id: str | None = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        if not snapshot_id and not config_id:
+            raise ValueError("snapshot_id or config_id is required when listing daily coefficient jobs")
+        limit = max(1, min(int(limit), 200))
+        where: List[str] = []
+        params: List[Any] = []
+        if snapshot_id:
+            where.append("snapshot_id = %s")
+            params.append(snapshot_id)
+        if config_id:
+            where.append("config_id = %s")
+            params.append(config_id)
+        params.append(limit)
+        sql = f"""
+            SELECT job_id, snapshot_id, config_id, signal_preset,
+                   as_of_trade_date, effective_trade_date, generation_mode,
+                   status, result_status, requested_at, started_at, completed_at,
+                   input_data_max_dates, output_path, artifact_sha256,
+                   plan_json, result_json, error_message, error_context
+            FROM model_train_daily_coefficient_jobs
+            WHERE {' AND '.join(where)}
+            ORDER BY requested_at DESC
+            LIMIT %s
+        """
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, tuple(params))
+                rows = cur.fetchall()
+        return [self._normalise_daily_job_row(dict(row)) for row in rows]
+
+    def _mark_daily_coefficient_job_running(self, job_id: str) -> None:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE model_train_daily_coefficient_jobs
+                    SET status = 'RUNNING', started_at = COALESCE(started_at, NOW()),
+                        error_message = NULL, error_context = NULL
+                    WHERE job_id = %s AND status = 'PENDING'
+                    """,
+                    (job_id,),
+                )
+
+    def _complete_daily_coefficient_job(self, job_id: str, result: Dict[str, Any]) -> None:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE model_train_daily_coefficient_jobs
+                    SET status = 'COMPLETED',
+                        result_status = %s,
+                        completed_at = NOW(),
+                        output_path = %s,
+                        artifact_sha256 = %s,
+                        result_json = %s,
+                        error_message = NULL,
+                        error_context = NULL
+                    WHERE job_id = %s
+                    """,
+                    (
+                        str(result.get("status") or ""),
+                        str(result.get("output_path") or ""),
+                        result.get("artifact_sha256"),
+                        psycopg2.extras.Json(result),
+                        job_id,
+                    ),
+                )
+
+    def _fail_daily_coefficient_job(
+        self,
+        job_id: str,
+        message: str,
+        context: Dict[str, Any] | None = None,
+    ) -> None:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE model_train_daily_coefficient_jobs
+                    SET status = 'FAILED',
+                        completed_at = NOW(),
+                        error_message = %s,
+                        error_context = %s
+                    WHERE job_id = %s
+                    """,
+                    (message, psycopg2.extras.Json(context or {}), job_id),
+                )
+
+    def run_daily_coefficients_job(self, job_id: str) -> None:
+        """Background executor for daily HMM coefficient jobs."""
+        job = self.get_daily_coefficient_job(job_id)
+        if job is None:
+            logger.error("HMM daily coefficient job does not exist: %s", job_id)
+            return
+        if str(job.get("status") or "").upper() in {"COMPLETED", "FAILED"}:
+            logger.info("HMM daily coefficient job already terminal: %s", job_id)
+            return
+
+        self._mark_daily_coefficient_job_running(job_id)
+        try:
+            plan = self._resolve_daily_coefficient_plan(
+                snapshot_id=str(job["snapshot_id"]),
+                signal_preset=str(job["signal_preset"]),
+                as_of_date=_coerce_date(job["as_of_trade_date"], field_name="as_of_trade_date"),
+                effective_trade_date=_coerce_date(
+                    job["effective_trade_date"],
+                    field_name="effective_trade_date",
+                ),
+            )
+            result = self._execute_daily_coefficient_plan(plan)
+            self._complete_daily_coefficient_job(job_id, result)
+        except Exception as exc:  # fail-fast and persist full diagnostic context
+            logger.exception("HMM daily coefficient job failed: %s", job_id)
+            self._fail_daily_coefficient_job(
+                job_id,
+                str(exc),
+                {
+                    "exception_type": exc.__class__.__name__,
+                    "traceback_tail": traceback.format_exc()[-8000:],
+                },
+            )
 
     @staticmethod
     def build_rolling_training_plan(

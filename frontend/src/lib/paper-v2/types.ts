@@ -375,6 +375,28 @@ export type HmmJob = {
   rolling_training_preview?: JsonObject | null;
 };
 
+export type HmmDailyCoefficientJob = {
+  job_id: string;
+  snapshot_id: string;
+  config_id: string;
+  signal_preset: string;
+  as_of_trade_date: string;
+  effective_trade_date: string;
+  generation_mode: string;
+  status: string;
+  result_status?: string | null;
+  requested_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  input_data_max_dates?: JsonObject | null;
+  output_path?: string | null;
+  artifact_sha256?: string | null;
+  plan_json?: JsonObject | null;
+  result_json?: JsonObject | null;
+  error_message?: string | null;
+  error_context?: JsonObject | null;
+};
+
 export type HmmSnapshot = {
   snapshot_id: string;
   config_id: string;

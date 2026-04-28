@@ -3,6 +3,7 @@ import type {
   DataSource,
   ExecutionPolicy,
   HmmConfig,
+  HmmDailyCoefficientJob,
   HmmJob,
   HmmSnapshot,
   JsonObject,
@@ -415,6 +416,15 @@ export const hmmTrainingApi = {
   },
   async generateDailyCoefficients(snapshotId: string, payload: JsonObject): Promise<JsonObject> {
     return apiFetch(`/hmm-training/snapshots/${snapshotId}/daily-coefficients/generate`, body(payload));
+  },
+  async startDailyCoefficientJob(snapshotId: string, payload: JsonObject): Promise<HmmDailyCoefficientJob> {
+    return apiFetch(`/hmm-training/snapshots/${snapshotId}/daily-coefficients/jobs`, body(payload));
+  },
+  async dailyCoefficientJob(jobId: string): Promise<HmmDailyCoefficientJob> {
+    return apiFetch<HmmDailyCoefficientJob>(`/hmm-training/daily-coefficients/jobs/${jobId}`);
+  },
+  async dailyCoefficientJobs(snapshotId: string): Promise<HmmDailyCoefficientJob[]> {
+    return apiFetch<HmmDailyCoefficientJob[]>(`/hmm-training/snapshots/${snapshotId}/daily-coefficients/jobs`);
   },
 };
 

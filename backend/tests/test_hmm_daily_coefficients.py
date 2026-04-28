@@ -3,6 +3,7 @@
 import json
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -168,3 +169,91 @@ def test_generate_daily_coefficients_passes_pit_dates_to_wsl_script(tmp_path: Pa
     assert captured["params"]["output_trade_date"] == "2026-04-28"
     assert captured["params"]["generation_mode"] == HMM_DAILY_COEFFICIENT_MODE
     assert captured["params"]["preset_coeffs"]["trending"] == pytest.approx(1.05)
+
+
+def test_start_daily_coefficients_job_persists_validated_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    svc, _ = _service_with_snapshot(tmp_path, monkeypatch)
+    captured: dict[str, Any] = {}
+
+    def fake_insert(plan: dict[str, Any]) -> dict[str, Any]:
+        captured.update(plan)
+        return {
+            "job_id": "job_1",
+            "snapshot_id": plan["snapshot_id"],
+            "config_id": plan["config_id"],
+            "signal_preset": plan["signal_preset"],
+            "as_of_trade_date": plan["as_of_trade_date"],
+            "effective_trade_date": plan["effective_trade_date"],
+            "generation_mode": plan["generation_mode"],
+            "status": "PENDING",
+            "result_status": None,
+        }
+
+    monkeypatch.setattr(svc, "_insert_daily_coefficient_job", fake_insert)
+
+    job = svc.start_daily_coefficients_job(
+        "snapshot_1",
+        signal_preset="preset_A",
+        confirm_text="snapshot_1",
+    )
+
+    assert job["status"] == "PENDING"
+    assert captured["as_of_trade_date"] == "2026-04-27"
+    assert captured["effective_trade_date"] == "2026-04-28"
+    assert captured["generation_mode"] == HMM_DAILY_COEFFICIENT_MODE
+
+
+def test_run_daily_coefficients_job_marks_completed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    svc, _ = _service_with_snapshot(tmp_path, monkeypatch)
+    events: dict[str, Any] = {}
+    job = {
+        "job_id": "job_1",
+        "snapshot_id": "snapshot_1",
+        "config_id": "cfg_1",
+        "signal_preset": "preset_A",
+        "as_of_trade_date": "2026-04-27",
+        "effective_trade_date": "2026-04-28",
+        "status": "PENDING",
+    }
+
+    monkeypatch.setattr(svc, "get_daily_coefficient_job", lambda job_id: job)
+    monkeypatch.setattr(svc, "_mark_daily_coefficient_job_running", lambda job_id: events.update({"running": job_id}))
+
+    def fake_execute(plan: dict[str, Any]) -> dict[str, Any]:
+        return {**plan, "status": "CREATED", "artifact_sha256": "a" * 64}
+
+    monkeypatch.setattr(svc, "_execute_daily_coefficient_plan", fake_execute)
+    monkeypatch.setattr(svc, "_complete_daily_coefficient_job", lambda job_id, result: events.update({"completed": (job_id, result)}))
+
+    svc.run_daily_coefficients_job("job_1")
+
+    assert events["running"] == "job_1"
+    assert events["completed"][0] == "job_1"
+    assert events["completed"][1]["status"] == "CREATED"
+    assert events["completed"][1]["artifact_sha256"] == "a" * 64
+
+
+def test_run_daily_coefficients_job_marks_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    svc, _ = _service_with_snapshot(tmp_path, monkeypatch)
+    events: dict[str, Any] = {}
+    job = {
+        "job_id": "job_1",
+        "snapshot_id": "snapshot_1",
+        "config_id": "cfg_1",
+        "signal_preset": "preset_A",
+        "as_of_trade_date": "2026-04-27",
+        "effective_trade_date": "2026-04-28",
+        "status": "PENDING",
+    }
+
+    monkeypatch.setattr(svc, "get_daily_coefficient_job", lambda job_id: job)
+    monkeypatch.setattr(svc, "_mark_daily_coefficient_job_running", lambda job_id: events.update({"running": job_id}))
+    monkeypatch.setattr(svc, "_execute_daily_coefficient_plan", lambda plan: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(svc, "_fail_daily_coefficient_job", lambda job_id, message, context=None: events.update({"failed": (job_id, message, context)}))
+
+    svc.run_daily_coefficients_job("job_1")
+
+    assert events["running"] == "job_1"
+    assert events["failed"][0] == "job_1"
+    assert "boom" in events["failed"][1]
+    assert events["failed"][2]["exception_type"] == "RuntimeError"
