@@ -91,15 +91,16 @@ AIstock 不应依赖单一测试工具，而应组合业界成熟实践：
 | 前端组件 | Testing Library | 从用户视角验证组件行为 | 后续补充关键组件测试，减少只靠 E2E |
 | API 合约 | Schemathesis | 基于 OpenAPI 的 API property/fuzz 测试 | 先用于只读/安全端点，逐步扩展写接口 |
 | 数据质量 | Pandera / Great Expectations | DataFrame/table schema、时效性、唯一性、范围 | market、selection、paper_v2、strategy_pkg 核心数据门禁 |
-| DB 集成 | Testcontainers | 临时 PostgreSQL/TimescaleDB 集成测试 | CI 中隔离测试 repository/migration |
+| DB 集成 | Testcontainers | 临时 PostgreSQL/TimescaleDB 集成测试 | 本地隔离运行 repository/migration 测试 |
 | Python 质量 | Ruff、mypy/pyright | lint、格式、类型 | L0 静态门禁 |
 | 前端质量 | TypeScript tsc、ESLint | 类型和前端静态检查 | UI 改动必须 `npx tsc --noEmit` |
-| 安全扫描 | Gitleaks、Bandit、OWASP WSTG/ZAP | secret、Python 安全、Web 安全 | pre-commit/CI 必跑 secret；高风险接口跑安全测试 |
+| 安全扫描 | Gitleaks、Bandit、OWASP WSTG/ZAP | secret、Python 安全、Web 安全 | pre-commit/本地流水线必跑 secret；高风险接口跑安全测试 |
 | 自定义规则 | Semgrep | 禁止硬编码路径、静默 fallback、资产写入 | 建议新增 `.semgrep/aistock/*.yml` |
 | 可访问性 | axe-core | WCAG/无障碍自动检查 | 关键 UI E2E 后加无障碍检查 |
 | 报告 | Allure Report / pytest-html | 测试报告、附件、趋势 | 本地先用 Markdown run record，后续接 Allure |
 | 可观测性 | OpenTelemetry、结构化日志 | 长流程 trace、日志关联 | QE、HMM、Selection、Paper session 后续接入 |
-| 版本发布 | SemVer、Conventional Commits、release-please / semantic-release | 版本号、changelog、GitHub release | 推荐先用 SemVer + Conventional Commits + release-please |
+| 本地流水线编排 | nox / scripts/aistock_validate.py | Codex、Claude Code、人工共用执行入口 | 本地权威执行，不依赖云端部署 |
+| 版本发布 | SemVer、Conventional Commits、release-please / 手工 release checklist | 版本号、changelog、release report、tag | 推荐先用本地 release candidate 报告 + SemVer + Conventional Commits |
 | Git 钩子 | pre-commit | 本地提交前门禁 | 后续配置 Ruff/Gitleaks/Semgrep/自定义扫描 |
 
 参考来源：
@@ -123,6 +124,37 @@ AIstock 不应依赖单一测试工具，而应组合业界成熟实践：
 - Conventional Commits：https://www.conventionalcommits.org/
 - release-please：https://github.com/googleapis/release-please
 - semantic-release：https://semantic-release.gitbook.io/
+
+## 4.1 本地优先流水线决策
+
+AIstock 暂不把云端 CI / 云端部署作为测试体系目标。原因：
+
+- AIstock 依赖本地 PostgreSQL/TimescaleDB、TDX Go 服务、WSL/Qlib/RD-Agent、GPU/Torch/CUDA、本地行情数据、策略和模型资产。
+- 这些依赖在云端重建成本高、保密和资产同步风险高，而且很难复现真实开发机/交易环境。
+- 云端只适合非常轻量的静态检查；但只做云端轻量检查会给人“已验证”的错觉，无法证明选股、HMM、Paper v2 回放和实时模拟盘业务可用。
+
+因此第一版自动化测试流水线采用“本地权威执行”模式：
+
+```text
+Codex / Claude Code / 人工
+        |
+        v
+AIstock 仓库内统一入口：nox 或 scripts/aistock_validate.py
+        |
+        +-- L0 静态门禁
+        +-- L1 单功能测试
+        +-- L2 业务链路测试
+        +-- L3 模块全量回归
+        +-- L4 跨模块集成
+        +-- L5 本地发布候选验证
+```
+
+要求：
+
+- 自动化入口必须能在本地开发机执行。
+- 必须使用 8011/8012 后端和 3011/3012 前端做验证，禁止影响 8001。
+- 测试报告、run record、trace 路径、日志路径、数据样本和资产审计结果必须落到本地仓库记录中。
+- 未来如果引入 GitHub Actions，也只能作为可选的轻量静态检查，不作为 AIstock 业务验证的权威结论。
 
 ## 5. 仓库目录设计
 
@@ -199,6 +231,44 @@ tests/aistock_validation/
 - 大型 trace、截图、日志、数据库 dump 不提交，只在 run record 记录路径、hash、摘要。
 - 每次大功能修改必须更新对应模块矩阵。
 - 每次模块全量测试必须保存历史记录。
+
+### 5.3 自动化测试流水线的仓库归属
+
+结论：自动化测试流水线的权威定义应直接放在 AIstock 自己的仓库内，不建议创建独立测试仓库。
+
+推荐放在 AIstock 仓库的内容：
+
+```text
+noxfile.py                         # 统一本地测试入口
+scripts/aistock_validate.py         # 可选：AIstock 专用编排脚本
+.pytest.ini / pyproject.toml        # pytest marker、ruff、工具配置
+.pre-commit-config.yaml             # 本地提交前门禁
+.semgrep/aistock/*.yml              # AIstock 专用静态规则
+.codex/skills/verify-aistock-feature/
+frontend/playwright.config.ts
+frontend/tests/e2e/ 或 frontend/e2e/
+tests/aistock_validation/
+  catalog/
+  modules/
+  templates/
+  history/
+```
+
+同仓库的理由：
+
+- 测试用例必须与业务代码、DB schema、API contract、UI 文案、StrategyPackage/Paper v2 合约同版本演进。
+- 每次代码改动可以在同一个 commit 中包含功能、测试、测试矩阵和 run record，便于追溯。
+- Codex、Claude Code 或人工只需 checkout 一个仓库即可执行完整验证，不需要额外同步测试仓库版本。
+- 避免独立测试仓库与 AIstock 主仓库版本错配，导致“测试通过但测的是旧契约”。
+- AIstock 的测试数据、端口、资产安全规则、业务 oracle 高度项目定制，不适合抽成通用仓库。
+
+独立仓库只在以下情况才有价值：
+
+- 未来有多个项目复用同一套通用测试 runner。
+- 需要发布不含 AIstock 业务细节的通用测试工具包。
+- 需要把大型测试报告归档、历史 trace 存储、数据质量报表单独托管。
+
+即使未来出现独立仓库，也只能承载通用工具或大体积历史报告；AIstock 的权威测试矩阵、业务 oracle、Playwright 用例、Semgrep 规则、release gate 仍应留在 AIstock 主仓库。
 
 ## 6. 测试分级体系
 
@@ -583,25 +653,27 @@ docs/releases/
 - 高危规则纳入 L0。
 - 误报记录为 whitelist，但必须有理由。
 
-### Phase 5：CI 与发布候选流程
+### Phase 5：本地发布候选流程
 
-目标：把本地规范升级为可重复的版本发布流程。
+目标：把本地规范升级为可重复的本地 release candidate 验证流程，不依赖云端 CI 或云端部署。
 
 交付：
 
-- GitHub Actions 或本地等价 CI 脚本。
+- `noxfile.py` 或 `scripts/aistock_validate.py`，作为 Codex、Claude Code、人工共同执行的本地统一入口。
 - `VERSION`。
 - `CHANGELOG.md`。
 - `docs/releases/release_process.md`。
 - release candidate report 模板。
 - Conventional Commits 规范。
-- release-please 配置或手动 release checklist。
+- release-please 配置或手工 release checklist。
+- 可选：本地 Windows Task Scheduler / PowerShell 脚本 / self-hosted runner 启动器，但不把云端 CI 作为必要条件。
 
 验证：
 
+- 在本机完成一次 dry-run release candidate：L0 + 高风险模块 L3 + 必要 L4。
 - 生成第一个 release candidate report。
-- 完成一次 dry-run 发布流程。
-- 明确需要人工验证的部分，如真实交易时间 live 数据。
+- 验证报告中包含：命令、端口、数据样本、日志路径、Playwright trace 路径、DB/API 检查、资产安全结论。
+- 明确需要人工验证的部分，如真实交易时间 TDX_REALTIME live 数据。
 
 ### Phase 6：全仓质量治理与长期维护
 
@@ -636,13 +708,33 @@ docs/releases/
 ## 13. 需要决策的内容
 
 1. 版本号起点：建议等 Phase 1 + Paper v2/Selection L3 通过后打 `v0.1.0`。
-2. CI 平台：如果 GitHub Actions 可以访问必要环境，优先 GitHub Actions；如果本地数据/WSL/GPU 依赖强，则先做本地 CI 脚本。
+2. 流水线执行位置：不采用云端部署/云端 CI 作为权威验证；优先本地 `nox` / `scripts/aistock_validate.py`，必要时只增加本地 self-hosted runner 或 PowerShell 启动器。
 3. 报告系统：初期 Markdown run record，后续是否引入 Allure。
 4. 数据质量工具：轻量优先 Pandera；如果需要更完整数据治理 UI/历史，可引入 Great Expectations。
-5. API fuzz：Schemathesis 先只测只读/幂等接口，写接口需要测试 DB 或 sandbox。
+5. API fuzz：Schemathesis 先只测只读/幂等接口，写接口必须使用本地测试 DB 或明确 sandbox，禁止污染生产数据或策略资产。
 6. 安全扫描强度：Gitleaks 应尽快加入；Bandit/ZAP 可在对外部署前加强。
 
-## 14. 完成定义
+## 14. 本次仓库归属结论
+
+自动化测试流水线不单独建独立仓库，先直接放在 AIstock 主仓库中。
+
+最终推荐形态：
+
+```text
+AIstock/
+  noxfile.py
+  scripts/aistock_validate.py
+  .pre-commit-config.yaml
+  .semgrep/aistock/
+  .codex/skills/verify-aistock-feature/
+  tests/aistock_validation/
+  frontend/tests/e2e/
+  docs/releases/
+```
+
+保留在主仓库意味着：代码、测试、文档、版本、发布报告一起演进；每次功能修改都可以同时更新测试矩阵和验证记录；其他开发工具只需要按仓库内命令执行，不需要额外理解一个测试仓库的版本对应关系。
+
+## 15. 完成定义
 
 当以下条件满足时，可以认为 AIstock 拥有第一版可用测试与版本管理体系：
 
