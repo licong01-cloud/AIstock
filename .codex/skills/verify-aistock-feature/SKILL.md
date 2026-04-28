@@ -14,7 +14,8 @@ Read these files before planning or running validation:
 1. `AGENTS.override.md`
 2. `docs/codex_project_memory.md`
 3. `docs/architecture/aistock_result_oriented_testing_standard.md`, if present.
-4. The impacted module matrix under `tests/aistock_validation/modules/`, if present.
+4. `docs/architecture/aistock_testing_version_management_system_design_20260429.md`, if present.
+5. The impacted module matrix under `tests/aistock_validation/modules/`, if present.
 
 Do not modify `AGENTS.md`.
 
@@ -41,6 +42,7 @@ Non-negotiable checks:
 - No silent protected-asset modification.
 - UI must expose real backend capabilities with readable Chinese business state, not raw JSON dumps.
 - Backend fail-fast errors must reach the UI and tests with actionable code/context.
+- For the first-stage rollout, treat Selection Center as part of the Paper Trading v2 validation slice.
 
 ## Useful Commands
 
@@ -48,6 +50,14 @@ Create a test run record:
 
 ```bash
 python .codex/skills/verify-aistock-feature/scripts/new_test_run.py --module paper_trading_v2 --level L3 --title "Paper v2 replay regression"
+```
+
+Run the first-stage local Paper v2 + Selection Center validation entry points:
+
+```bash
+conda run -n AIstock python -m nox -s l0
+conda run -n AIstock python -m nox -s paper_v2_backend
+conda run -n AIstock python -m nox -s paper_v2_l3
 ```
 
 Validate this skill metadata:

@@ -1,0 +1,6 @@
+# Local-only AIstock validation tooling.
+# Install into the AIstock conda environment, not into the repository tree:
+#   conda run -n AIstock python -m pip install -r requirements-dev.txt
+nox>=2025.2.9
+pytest-html>=4.1.1
+semgrep>=1.124.0

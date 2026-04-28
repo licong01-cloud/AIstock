@@ -357,3 +357,10 @@ Important directories:
 - The design standardizes L0-L5 validation levels, reusable test matrices, test run records, UI/API/DB/log cross-validation, protected-asset safety, no-silent-fallback guardrails, development-port isolation, and phased rollout from local validation to release candidate gates.
 - Recommended the first stable internal release process: complete the testing baseline first, then use SemVer `0.x.y`, Conventional Commits, `VERSION`, `CHANGELOG.md`, and release candidate reports before tagging a future `v0.1.0`.
 - Updated the testing design to make local execution authoritative: AIstock should not rely on cloud CI/deployment for business validation because the environment depends on local DB, TDX, WSL/Qlib/RD-Agent, GPU/Torch, data, and strategy/model assets. The automation pipeline should live in the AIstock repository itself (`noxfile.py`, validation scripts, Semgrep rules, Playwright tests, `tests/aistock_validation`, and Codex skills) so code, tests, business oracles, and release gates version together. Cloud checks, if ever added, are optional lightweight static checks only.
+
+## Paper v2 + Selection Center Validation Bootstrap - 2026-04-29
+
+- Selection Center is included in the first Paper Trading v2 validation rollout because the backend and UI flows are strongly coupled.
+- Added local-only validation entry points with `noxfile.py`, `scripts/aistock_validate.py`, `.pre-commit-config.yaml`, `.semgrep/aistock/guardrails.yml`, `requirements-dev.txt`, and `tests/aistock_validation`.
+- Installed `nox` and `pytest-html` into the local `AIstock` conda environment; no external tool source trees were cloned into the AIstock repository.
+- First-stage commands validated locally without starting or restarting any backend/frontend service: `conda run -n AIstock python -m nox -s l0` passed, and `conda run -n AIstock python -m nox -s paper_v2_backend` passed with 103 tests.

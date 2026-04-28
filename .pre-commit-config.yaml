@@ -1,0 +1,14 @@
+repos:
+  - repo: local
+    hooks:
+      - id: aistock-skill-validate
+        name: Validate AIstock Codex skill metadata
+        entry: python C:/Users/lc999/.codex/skills/.system/skill-creator/scripts/quick_validate.py .codex/skills/verify-aistock-feature
+        language: system
+        pass_filenames: false
+
+      - id: aistock-guardrails
+        name: AIstock local guardrail scan
+        entry: python .codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py --changed-only --fail-on HIGH
+        language: system
+        pass_filenames: false
