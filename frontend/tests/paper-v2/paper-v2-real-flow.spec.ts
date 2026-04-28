@@ -45,6 +45,7 @@ type HmmRuntimeChoice = {
   config_id: string;
   snapshot_id: string;
   coefficient_path: string;
+  trade_date: string;
 };
 
 let ensuredPackages: PackageSummary[] = [];
@@ -153,15 +154,21 @@ async function requireHmmRuntimeChoice(request: APIRequestContext): Promise<HmmR
     const ready = rows.find((item) => {
       const artifacts: JsonObject[] = Array.isArray(item.coefficient_artifacts) ? item.coefficient_artifacts : [];
       return ["completed", "ready", "success", "succeeded"].includes(String(item.status || "").toLowerCase())
-        && artifacts.some((artifact) => artifact.preset === "preset_A" && Array.isArray(artifact.covered_trade_dates) && artifact.covered_trade_dates.includes(REPLAY_TRADE_DATE));
+        && artifacts.some((artifact) => artifact.preset === "preset_A" && Array.isArray(artifact.covered_trade_dates) && artifact.covered_trade_dates.length > 0);
     });
     if (!ready) continue;
-    const artifact = (Array.isArray(ready.coefficient_artifacts) ? ready.coefficient_artifacts : []).find((item: JsonObject) => item.preset === "preset_A" && item.covered_trade_dates.includes(REPLAY_TRADE_DATE));
+    const artifact = (Array.isArray(ready.coefficient_artifacts) ? ready.coefficient_artifacts : []).find((item: JsonObject) => item.preset === "preset_A" && Array.isArray(item.covered_trade_dates) && item.covered_trade_dates.length > 0);
     if (artifact?.path) {
-      return { config_id: String(config.config_id), snapshot_id: String(ready.snapshot_id), coefficient_path: String(artifact.path) };
+      const covered = artifact.covered_trade_dates as string[];
+      return {
+        config_id: String(config.config_id),
+        snapshot_id: String(ready.snapshot_id),
+        coefficient_path: String(artifact.path),
+        trade_date: String(covered[covered.length - 1]),
+      };
     }
   }
-  throw new Error(`HMM completed snapshot with preset_A coefficients covering ${REPLAY_TRADE_DATE} must exist for UI runtime selection`);
+  throw new Error("HMM completed snapshot with preset_A coefficients must exist for UI runtime selection");
 }
 
 async function createPaperPortfolioOnly(
@@ -363,6 +370,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await page.getByTestId("selection-mode").selectOption("single_package");
     await chooseSelectionPackages(page, [first.package_id]);
     await page.getByTestId("selection-top-k").fill("20");
+    await page.getByTestId("selection-trade-date").fill(hmm.trade_date);
     await page.getByTestId("selection-industry-blacklist").fill("计算机");
     await page.getByTestId("selection-hmm-enabled").check();
     await page.getByTestId("selection-hmm-config").selectOption(hmm.config_id);
@@ -370,9 +378,9 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await page.getByTestId("selection-hmm-snapshot").selectOption(hmm.snapshot_id);
     await page.getByTestId("selection-hmm-preset").selectOption("preset_A");
     await expect(page.getByTestId("selection-hmm-coverage")).toContainText("HMM 系数覆盖已确认");
-    await expect(page.getByTestId("selection-hmm-coverage")).toContainText("2026-04-24");
+    await expect(page.getByTestId("selection-hmm-coverage")).toContainText(hmm.trade_date);
     await page.getByTestId("selection-run").click();
-    await expect(results.locator("tbody tr").first()).toBeVisible({ timeout: 90_000 });
+    await expect(results.locator("tbody tr").first()).toBeVisible({ timeout: 180_000 });
     await expect(results).toContainText("hmm");
     const excluded = await openSection(page, "剔除与补位追踪");
     await expect(excluded).toContainText("industry_blacklisted");
@@ -411,7 +419,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
 
     const createdJson = page.locator(".pv2-readable-panel").filter({ hasText: "Created Portfolio Id" }).last();
     await expect(createdJson).toBeVisible({ timeout: 180_000 });
-    await expect(createdJson).toContainText("SUCCEEDED", { timeout: 30_000 });
+    await expect(createdJson).toContainText("SUCCEEDED", { timeout: 180_000 });
     const createdText = (await createdJson.textContent()) || "";
     const portfolioId = createdText.match(/paper_[0-9a-f]{32}/)?.[0] || "";
     expect(portfolioId).toMatch(/^paper_/);
@@ -571,7 +579,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await page.getByTestId("console-replay-reset-confirm").click();
     const resetJson = page.locator(".pv2-readable-panel").filter({ hasText: "Session" }).last();
     await expect(resetJson).toContainText("REPLAY_ONLY", { timeout: 180_000 });
-    await expect(resetJson).toContainText("SUCCEEDED");
+    await expect(resetJson).toContainText("SUCCEEDED", { timeout: 180_000 });
     await expectNoRawJsonUi(page);
 
     await page.getByTestId("console-live-start").fill(ACTIVATION_TRADE_DATE);

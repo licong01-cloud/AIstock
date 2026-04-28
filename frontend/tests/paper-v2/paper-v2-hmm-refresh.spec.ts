@@ -22,3 +22,26 @@ test("Selection Center HMM snapshot loading does not poll in a render loop", asy
   expect(snapshotUrls.length).toBeLessThanOrEqual(3);
   expect(extraRequests).toBeLessThanOrEqual(1);
 });
+
+test("Portfolio creation HMM snapshot loading does not poll in a render loop", async ({ page }) => {
+  const snapshotUrls: string[] = [];
+  page.on("request", (request) => {
+    const url = request.url();
+    if (/\/api\/v1\/hmm-training\/configs\/[^/]+\/snapshots/.test(url)) {
+      snapshotUrls.push(url);
+    }
+  });
+
+  await page.goto("/paper-v2/portfolios");
+  await expect(page.getByTestId("portfolio-hmm-config")).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId("portfolio-hmm-enabled").check();
+  await expect(page.getByTestId("portfolio-hmm-snapshot")).toBeVisible({ timeout: 60_000 });
+
+  await page.waitForTimeout(2_000);
+  const countAfterInitialLoad = snapshotUrls.length;
+  await page.waitForTimeout(5_000);
+  const extraRequests = snapshotUrls.length - countAfterInitialLoad;
+
+  expect(snapshotUrls.length).toBeLessThanOrEqual(3);
+  expect(extraRequests).toBeLessThanOrEqual(1);
+});

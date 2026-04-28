@@ -255,7 +255,8 @@ export default function PaperV2RunConsolePage() {
         confirm_text: rerunPolicy === "reset_portfolio" ? portfolioId : null,
         created_by: "paper_v2_ui",
       });
-      setSessionProgress(await paperV2Api.tickSession(session.session_id));
+      setSessionProgress({ session, day_count: 0, events: [] });
+      setSessionProgress(await paperV2Api.tickSessionAndWait(session.session_id));
       await load();
     } catch (exc) {
       setError(exc);
@@ -277,7 +278,8 @@ export default function PaperV2RunConsolePage() {
         rerun_policy: "reject_existing",
         created_by: "paper_v2_ui",
       });
-      setSessionProgress(await paperV2Api.tickSession(session.session_id));
+      setSessionProgress({ session, day_count: 0, events: [] });
+      setSessionProgress(await paperV2Api.tickSessionAndWait(session.session_id));
       await load();
     } catch (exc) {
       setError(exc);
@@ -290,7 +292,7 @@ export default function PaperV2RunConsolePage() {
     setBusy(true);
     setError(null);
     try {
-      setSessionProgress(await paperV2Api.tickSession(sessionId));
+      setSessionProgress(await paperV2Api.tickSessionAndWait(sessionId));
       await load();
     } catch (exc) {
       setError(exc);

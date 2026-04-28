@@ -121,6 +121,8 @@ def main() -> int:
     expected_date = (cutoff_dt or trade_dt).date()
 
     os.environ["AISTOCK_STRICT_INFERENCE"] = "1"
+    os.environ.setdefault("AISTOCK_INFERENCE_NATURAL_DAY_MULTIPLIER", "1.8")
+    os.environ.setdefault("AISTOCK_INFERENCE_NATURAL_DAY_BUFFER", "20")
     # The shared InferenceEngine writes diagnostics to a Windows-style path.
     # Redirect only that path while running inside WSL.
     _patch_windows_debug_open()

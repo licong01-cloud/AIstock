@@ -9,6 +9,7 @@ and the requirements in 模型权重文件定位方案_v2.md.
 import inspect
 import json
 import logging
+import math
 import pickle
 import os
 import tempfile
@@ -90,6 +91,35 @@ def _drop_invalid_feature_rows_for_strict(X: pd.DataFrame) -> pd.DataFrame:
         kept_rows,
     )
     return numeric.loc[~invalid_rows]
+
+
+def _inference_natural_days_needed(required_window: int) -> int:
+    """Convert required trading-day lookback to natural days for DB loading.
+
+    The default keeps the historical behavior. StrategyPackage strict WSL
+    inference can opt in to a wider audited window through environment variables
+    so long-window factors do not fail only because holidays reduced the loaded
+    trading-day count. This is not a fallback: strict mode still fails if the
+    wider window cannot provide enough rows.
+    """
+
+    multiplier_raw = os.environ.get("AISTOCK_INFERENCE_NATURAL_DAY_MULTIPLIER", "1.5")
+    buffer_raw = os.environ.get("AISTOCK_INFERENCE_NATURAL_DAY_BUFFER", "10")
+    try:
+        multiplier = float(multiplier_raw)
+        buffer_days = int(buffer_raw)
+    except ValueError as exc:
+        raise ValueError(
+            "invalid inference data-window configuration: "
+            f"AISTOCK_INFERENCE_NATURAL_DAY_MULTIPLIER={multiplier_raw!r}, "
+            f"AISTOCK_INFERENCE_NATURAL_DAY_BUFFER={buffer_raw!r}"
+        ) from exc
+    if multiplier <= 0 or buffer_days < 0:
+        raise ValueError(
+            "invalid inference data-window configuration: multiplier must be positive "
+            "and buffer must be non-negative"
+        )
+    return int(math.ceil(required_window * multiplier)) + buffer_days
 
 
 def _build_score_frame_for_scored_features(scored_features: pd.DataFrame, scores: Any) -> pd.DataFrame:
@@ -1215,8 +1245,8 @@ class InferenceEngine:
         # 4.1 检查因子所需的数据窗口
         # factor_order 已在步骤2中通过 _infer_expected_features 获取
         required_window = get_required_data_window(factor_order)
-        # 将交易日转换为自然日（约1.4倍）
-        natural_days_needed = int(required_window * 1.5) + 10  # 额外10天安全余量
+        # 将交易日转换为自然日；StrategyPackage 严格推理可通过环境变量扩大窗口。
+        natural_days_needed = _inference_natural_days_needed(required_window)
         start_date = actual_date - timedelta(days=natural_days_needed)
 
         logger.info(f"因子所需数据窗口: {required_window}交易日, 加载{natural_days_needed}自然日数据")

@@ -43,3 +43,24 @@ def test_score_frame_rejects_length_mismatch_after_filtering(monkeypatch):
 
     with pytest.raises(ValueError, match="score length mismatch"):
         inference_engine._build_score_frame_for_scored_features(scored, np.array([0.1, 0.2]))
+
+
+def test_inference_natural_days_uses_legacy_default(monkeypatch):
+    monkeypatch.delenv("AISTOCK_INFERENCE_NATURAL_DAY_MULTIPLIER", raising=False)
+    monkeypatch.delenv("AISTOCK_INFERENCE_NATURAL_DAY_BUFFER", raising=False)
+
+    assert inference_engine._inference_natural_days_needed(260) == 400
+
+
+def test_inference_natural_days_can_be_widened_for_strict_package_inference(monkeypatch):
+    monkeypatch.setenv("AISTOCK_INFERENCE_NATURAL_DAY_MULTIPLIER", "1.8")
+    monkeypatch.setenv("AISTOCK_INFERENCE_NATURAL_DAY_BUFFER", "20")
+
+    assert inference_engine._inference_natural_days_needed(260) == 488
+
+
+def test_inference_natural_days_rejects_invalid_config(monkeypatch):
+    monkeypatch.setenv("AISTOCK_INFERENCE_NATURAL_DAY_MULTIPLIER", "0")
+
+    with pytest.raises(ValueError, match="invalid inference data-window configuration"):
+        inference_engine._inference_natural_days_needed(260)

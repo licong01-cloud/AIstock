@@ -120,12 +120,14 @@ export default function PaperV2PortfoliosPage() {
       if (!alive) return;
       const ready = rows.filter((item) => ["completed", "ready", "success", "succeeded"].includes(String(item.status || "").toLowerCase()));
       setHmmSnapshots(ready);
-      if (!ready.find((item) => item.snapshot_id === hmmSnapshotId)) setHmmSnapshotId(ready[0]?.snapshot_id || "");
+      setHmmSnapshotId((current) => (
+        ready.find((item) => item.snapshot_id === current) ? current : ready[0]?.snapshot_id || ""
+      ));
     }).catch((exc) => {
       if (alive) setError(exc);
     });
     return () => { alive = false; };
-  }, [hmmConfigId, hmmSnapshotId]);
+  }, [hmmConfigId]);
 
   function runtimeProfileConfig(): JsonObject {
     const blacklist = industryBlacklist.split(",").map((item) => item.trim()).filter(Boolean);
@@ -195,7 +197,8 @@ export default function PaperV2PortfoliosPage() {
           auto_switch_to_live: autoSwitchToLive,
           created_by: "paper_v2_ui",
         });
-        setSessionProgress(await paperV2Api.tickSession(session.session_id));
+        setSessionProgress({ session, day_count: 0, events: [] });
+        setSessionProgress(await paperV2Api.tickSessionAndWait(session.session_id));
       } else {
         const session = await paperV2Api.createSession(portfolio.portfolio_id, {
           mode: "LIVE_ONLY",
@@ -205,7 +208,8 @@ export default function PaperV2PortfoliosPage() {
           rerun_policy: "reject_existing",
           created_by: "paper_v2_ui",
         });
-        setSessionProgress(await paperV2Api.tickSession(session.session_id));
+        setSessionProgress({ session, day_count: 0, events: [] });
+        setSessionProgress(await paperV2Api.tickSessionAndWait(session.session_id));
       }
       await load();
     } catch (exc) {

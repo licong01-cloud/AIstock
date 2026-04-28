@@ -83,6 +83,31 @@ function body(payload: unknown): RequestInit {
   return { method: "POST", body: JSON.stringify(payload) };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isSessionTerminal(progress: PaperSessionProgress): boolean {
+  return ["SUCCEEDED", "FAILED", "STOPPED"].includes(String(progress.session?.status || "").toUpperCase());
+}
+
+function isNetworkAbort(error: unknown): boolean {
+  if (error instanceof PaperV2ApiError) return false;
+  if (error instanceof SyntaxError) return true;
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /Failed to fetch|NetworkError|socket hang up|ECONNRESET|aborted|Load failed|Unexpected token|Unexpected end of JSON/i.test(message);
+}
+
+async function fetchSessionProgress(sessionId: string): Promise<PaperSessionProgress> {
+  const data = await apiFetch<{ progress: PaperSessionProgress }>(`/paper-v2/sessions/${sessionId}/progress`);
+  return data.progress;
+}
+
+async function fetchTickSession(sessionId: string, payload: JsonObject = {}): Promise<PaperSessionProgress> {
+  const data = await apiFetch<{ progress: PaperSessionProgress }>(`/paper-v2/sessions/${sessionId}/tick`, body(payload));
+  return data.progress;
+}
+
 export const strategyPackageApi = {
   async qeSources(sourceKind = "all", limit = 200): Promise<QEPackagingSource[]> {
     const qs = new URLSearchParams({ source_kind: sourceKind, limit: String(limit) });
@@ -237,12 +262,39 @@ export const paperV2Api = {
     return data.sessions || [];
   },
   async sessionProgress(sessionId: string): Promise<PaperSessionProgress> {
-    const data = await apiFetch<{ progress: PaperSessionProgress }>(`/paper-v2/sessions/${sessionId}/progress`);
-    return data.progress;
+    return fetchSessionProgress(sessionId);
   },
   async tickSession(sessionId: string, payload: JsonObject = {}): Promise<PaperSessionProgress> {
-    const data = await apiFetch<{ progress: PaperSessionProgress }>(`/paper-v2/sessions/${sessionId}/tick`, body(payload));
-    return data.progress;
+    return fetchTickSession(sessionId, payload);
+  },
+  async tickSessionAndWait(sessionId: string, payload: JsonObject = {}, options: { timeoutMs?: number; pollMs?: number } = {}): Promise<PaperSessionProgress> {
+    const timeoutMs = options.timeoutMs ?? 240_000;
+    const pollMs = options.pollMs ?? 2_000;
+    const startedAt = Date.now();
+    try {
+      const progress = await fetchTickSession(sessionId, payload);
+      if (isSessionTerminal(progress)) return progress;
+    } catch (error) {
+      if (!isNetworkAbort(error)) throw error;
+      // The backend may continue a long replay after the dev proxy drops the socket.
+      // Poll persisted session progress; do not fabricate success.
+    }
+
+    let lastProgress = await fetchSessionProgress(sessionId);
+    while (!isSessionTerminal(lastProgress)) {
+      if (Date.now() - startedAt > timeoutMs) {
+        throw new PaperV2ApiError(
+          `session ${sessionId} did not reach a terminal status within ${timeoutMs}ms`,
+          408,
+          { session_id: sessionId, last_progress: lastProgress },
+          "SESSION_PROGRESS_TIMEOUT",
+          { session_id: sessionId, last_status: lastProgress.session?.status },
+        );
+      }
+      await sleep(pollMs);
+      lastProgress = await fetchSessionProgress(sessionId);
+    }
+    return lastProgress;
   },
   async sessionLifecycle(sessionId: string, action: "pause" | "resume" | "stop"): Promise<PaperSession> {
     const data = await apiFetch<{ session: PaperSession }>(`/paper-v2/sessions/${sessionId}/${action}`, { method: "POST" });
