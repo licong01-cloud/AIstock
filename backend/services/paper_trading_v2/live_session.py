@@ -104,6 +104,10 @@ class PaperTradingLiveMinuteExecutor:
             session = self._run_historical_catchup(session, as_of_time=now)
         return self._tick_live_intraday(session, as_of_time=now)
 
+    @staticmethod
+    def _manual_tick_only(session: PaperTradingSession) -> bool:
+        return bool((session.runtime_config.get("paper_v2_session") or {}).get("manual_tick_only"))
+
     def _run_historical_catchup(
         self,
         session: PaperTradingSession,
@@ -126,9 +130,10 @@ class PaperTradingLiveMinuteExecutor:
             missing_days = [item for item in trading_days if item not in completed_days]
             if missing_days:
                 opts = dict(session.runtime_config.get("paper_v2_session") or {})
+                catchup_status = PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.CATCHING_UP
                 self.repository.update_session_status(
                     session.session_id,
-                    status=PaperSessionStatus.CATCHING_UP,
+                    status=catchup_status,
                     phase=PaperSessionPhase.HISTORICAL_REPLAY,
                     started_at=session.started_at or datetime.now(UTC),
                 )
@@ -171,7 +176,7 @@ class PaperTradingLiveMinuteExecutor:
                 )
         return self.repository.update_session_status(
             session.session_id,
-            status=PaperSessionStatus.SWITCHING_TO_LIVE,
+            status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.SWITCHING_TO_LIVE,
             phase=PaperSessionPhase.LIVE_INTRADAY,
             started_at=session.started_at or datetime.now(UTC),
         )
@@ -209,6 +214,8 @@ class PaperTradingLiveMinuteExecutor:
         run = self.repository.get_run_by_portfolio_date(session.portfolio_id, as_of_time.date())
         if run is None:
             run = self._prepare_live_run(session, trade_date=as_of_time.date(), as_of_time=as_of_time)
+            if run.status == RunStatus.SUCCEEDED:
+                return self._progress(session.session_id)
         elif run.status == RunStatus.SUCCEEDED:
             updated = self._save_waiting_next_day(
                 session,
@@ -361,6 +368,72 @@ class PaperTradingLiveMinuteExecutor:
                 "live_step_mode": capability.live_step_mode,
             },
         )
+        if not intents:
+            if not current_positions:
+                raise StrategyPackageValidationError(
+                    "live rebalance produced no order intents and portfolio has no positions to mark",
+                    context={"session_id": session.session_id, "portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
+                )
+            prices = self._snapshot_prices_for_positions(
+                symbols=list(current_positions),
+                trade_date=trade_date,
+                as_of_time=as_of_time,
+                live_data_source=session.live_data_source,
+                known_prices=current_prices,
+            )
+            snapshot = AccountSnapshot(
+                portfolio_id=portfolio.portfolio_id,
+                cash=latest_cash,
+                market_value=sum(position.quantity * prices[position.symbol] for position in current_positions.values()),
+                nav=latest_cash + sum(position.quantity * prices[position.symbol] for position in current_positions.values()),
+                snapshot_time=as_of_time,
+            )
+            self.repository.save_positions(
+                run_id=run.run_id,
+                trade_date=trade_date,
+                positions=list(current_positions.values()),
+                prices=prices,
+            )
+            self.repository.save_daily_snapshot(
+                run_id=run.run_id,
+                trade_date=trade_date,
+                snapshot=snapshot,
+                metadata={
+                    "position_count": len(current_positions),
+                    "order_count": 0,
+                    "fill_count": 0,
+                    "session_id": session.session_id,
+                    "no_rebalance_required": True,
+                    "reason": "target_positions_equal_current_positions",
+                },
+            )
+            self.repository.save_session_day(
+                PaperSessionDay(
+                    session_id=session.session_id,
+                    portfolio_id=portfolio.portfolio_id,
+                    trade_date=trade_date,
+                    run_id=run.run_id,
+                    status=PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
+                    phase=PaperSessionPhase.WAITING_NEXT_DAY,
+                    data_source=run.data_source,
+                )
+            )
+            self.repository.save_session_event(
+                session_id=session.session_id,
+                run_id=run.run_id,
+                event_type="NO_REBALANCE_REQUIRED",
+                message="target positions match current positions; live day finalized without orders",
+                context={"trade_date": trade_date.isoformat(), "position_count": len(current_positions), "nav": snapshot.nav},
+            )
+            succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
+            self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.READY)
+            self.repository.update_session_status(
+                session.session_id,
+                status=PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
+                phase=PaperSessionPhase.WAITING_NEXT_DAY,
+                started_at=session.started_at or datetime.now(UTC),
+            )
+            return succeeded
         for intent in intents:
             order = self.oms.create_order(intent)
             self.repository.save_order(run.run_id, order)
@@ -403,7 +476,7 @@ class PaperTradingLiveMinuteExecutor:
         )
         self.repository.update_session_status(
             session.session_id,
-            status=PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+            status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_FOR_BAR,
             phase=PaperSessionPhase.LIVE_INTRADAY,
             started_at=session.started_at or datetime.now(UTC),
         )

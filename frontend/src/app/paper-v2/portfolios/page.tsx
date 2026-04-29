@@ -148,7 +148,7 @@ export default function PaperV2PortfoliosPage() {
   }
 
   function sessionRuntimeConfig(): JsonObject {
-    return { paper_v2_session: { signal_data_source: "DB_HISTORICAL" } };
+    return { paper_v2_session: { signal_data_source: "DB_HISTORICAL", manual_tick_only: true } };
   }
 
   async function createPortfolio() {
@@ -198,7 +198,7 @@ export default function PaperV2PortfoliosPage() {
           created_by: "paper_v2_ui",
         });
         setSessionProgress({ session, day_count: 0, events: [] });
-        setSessionProgress(await paperV2Api.tickSessionAndWait(session.session_id));
+        setSessionProgress(await paperV2Api.tickSessionAndWait(session.session_id, { allow_paused: true }));
       } else {
         const session = await paperV2Api.createSession(portfolio.portfolio_id, {
           mode: "LIVE_ONLY",
@@ -209,7 +209,7 @@ export default function PaperV2PortfoliosPage() {
           created_by: "paper_v2_ui",
         });
         setSessionProgress({ session, day_count: 0, events: [] });
-        setSessionProgress(await paperV2Api.tickSessionAndWait(session.session_id));
+        setSessionProgress(await paperV2Api.tickSessionAndWait(session.session_id, { allow_paused: true }));
       }
       await load();
     } catch (exc) {

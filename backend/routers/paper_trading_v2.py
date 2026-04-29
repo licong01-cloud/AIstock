@@ -99,6 +99,7 @@ class CreateSessionRequest(BaseModel):
 
 class TickSessionRequest(BaseModel):
     as_of_time: dt.datetime | None = None
+    allow_paused: bool = False
 
 
 class SchedulerStartRequest(BaseModel):
@@ -584,7 +585,11 @@ def get_trade_session_progress(session_id: str, event_limit: int = 100) -> dict[
 @router.post("/sessions/{session_id}/tick")
 def tick_trade_session(session_id: str, req: TickSessionRequest | None = None) -> dict[str, Any]:
     try:
-        progress = PaperTradingSessionRunner().tick(session_id, as_of_time=req.as_of_time if req else None)
+        progress = PaperTradingSessionRunner().tick(
+            session_id,
+            as_of_time=req.as_of_time if req else None,
+            allow_paused=req.allow_paused if req else False,
+        )
         return {"ok": True, "progress": progress.model_dump(mode="json")}
     except TradingCoreError as exc:
         _raise_http(exc)

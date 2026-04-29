@@ -121,7 +121,7 @@ def choose_replay_start(api: ApiClient, live_date: dt.date, *, lookback_trading_
 
 def runtime_config(top_k: int) -> dict[str, Any]:
     return {
-        "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+        "paper_v2_session": {"signal_data_source": "DB_HISTORICAL", "manual_tick_only": True},
         "selection_artifact_config": {"auto_generate": True, "inference_backend": "wsl"},
         "runtime_profile": {
             "selection": {"top_k": top_k},
@@ -177,7 +177,7 @@ def run_catchup_live(args: argparse.Namespace) -> dict[str, Any]:
         "created_by": "paper_v2_live_validation",
     }
     session = api.request("POST", f"/paper-v2/portfolios/{portfolio['portfolio_id']}/sessions", session_payload).payload["session"]
-    tick_payload: dict[str, Any] = {}
+    tick_payload: dict[str, Any] = {"allow_paused": True}
     if args.as_of_time:
         tick_payload["as_of_time"] = args.as_of_time
     tick_result = api.request("POST", f"/paper-v2/sessions/{session['session_id']}/tick", tick_payload).payload["progress"]

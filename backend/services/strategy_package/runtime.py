@@ -334,9 +334,4 @@ class RebalanceEngine:
                     },
                 )
             )
-        if not intents:
-            raise StrategyPackageValidationError(
-                "rebalance produced no order intents",
-                context={"package_id": package_id, "portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
-            )
         return intents

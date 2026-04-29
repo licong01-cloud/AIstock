@@ -124,6 +124,42 @@ def test_replay_only_session_create_tick_and_progress() -> None:
     assert event_types == ["SESSION_CREATED", "SESSION_REPLAY_STARTED", "SESSION_REPLAY_SUCCEEDED"]
 
 
+def test_manual_tick_only_session_starts_paused_and_runs_only_when_allowed() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.REPLAY_ONLY,
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        historical_data_source=MinuteDataSource.DB_HISTORICAL,
+        runtime_config={"paper_v2_session": {"manual_tick_only": True}},
+        created_by="unit_test",
+    )
+
+    assert session.status == PaperSessionStatus.PAUSED
+    scheduler_result = PaperTradingV2SessionScheduler(repository=paper_repo).run_once(limit=10)
+    assert scheduler_result["session_count"] == 0
+
+    fake_replay = FakeReplayService()
+    skipped = PaperTradingSessionRunner(
+        repository=paper_repo,
+        replay_service=fake_replay,  # type: ignore[arg-type]
+    ).tick(session.session_id)
+    assert skipped.session.status == PaperSessionStatus.PAUSED
+    assert fake_replay.calls == []
+
+    progress = PaperTradingSessionRunner(
+        repository=paper_repo,
+        replay_service=fake_replay,  # type: ignore[arg-type]
+    ).tick(session.session_id, allow_paused=True)
+
+    assert progress.session.status == PaperSessionStatus.SUCCEEDED
+    assert fake_replay.calls[0]["runtime_config"]["paper_v2_session"]["manual_tick_only"] is True
+    event_types = [event["event_type"] for event in paper_repo.list_session_events(session.session_id)]
+    assert "SESSION_TICK_SKIPPED" in event_types
+    assert "SESSION_MANUAL_TICK_STARTED" in event_types
+
+
 def test_session_rejects_historical_tdx_source_instead_of_fallback() -> None:
     _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
 

@@ -185,10 +185,11 @@ class PaperTradingSessionService:
             "freeze_runtime_profile": True,
             **dict(config.get("paper_v2_session") or {}),
         }
+        manual_tick_only = bool(config["paper_v2_session"].get("manual_tick_only", False))
         session = PaperTradingSession(
             portfolio_id=portfolio_id,
             mode=session_mode,
-            status=PaperSessionStatus.CREATED,
+            status=PaperSessionStatus.PAUSED if manual_tick_only else PaperSessionStatus.CREATED,
             phase=self._initial_phase(session_mode),
             start_date=start_date,
             end_date=end_date,
@@ -209,6 +210,7 @@ class PaperTradingSessionService:
                 "historical_data_source": historical_source.value if historical_source else None,
                 "live_data_source": live_source.value if live_source else None,
                 "rerun_policy": rerun_policy,
+                "manual_tick_only": manual_tick_only,
             },
         )
         return saved
@@ -511,7 +513,13 @@ class PaperTradingSessionRunner:
         self.replay_service = replay_service or PaperTradingHistoricalReplay(repository=self.repository)
         self.live_executor = live_executor or PaperTradingLiveMinuteExecutor(repository=self.repository)
 
-    def tick(self, session_id: str, *, as_of_time: datetime | None = None) -> PaperSessionProgress:
+    def tick(
+        self,
+        session_id: str,
+        *,
+        as_of_time: datetime | None = None,
+        allow_paused: bool = False,
+    ) -> PaperSessionProgress:
         lock = _session_tick_lock(session_id)
         if not lock.acquire(blocking=False):
             exc = SessionLockTimeoutError(
@@ -532,13 +540,20 @@ class PaperTradingSessionRunner:
         try:
             with self.repository.session_tick_lock(session_id):
                 session = self.repository.get_session(session_id)
-                if session.status == PaperSessionStatus.PAUSED:
+                if session.status == PaperSessionStatus.PAUSED and not allow_paused:
                     self.repository.save_session_event(
                         session_id=session_id,
                         event_type="SESSION_TICK_SKIPPED",
                         message="paper v2 session tick skipped because session is paused",
                     )
                     return PaperTradingSessionService(repository=self.repository).progress(session_id)
+                if session.status == PaperSessionStatus.PAUSED:
+                    self.repository.save_session_event(
+                        session_id=session_id,
+                        event_type="SESSION_MANUAL_TICK_STARTED",
+                        message="paper v2 paused manual-tick session claimed by explicit tick request",
+                        context={"allow_paused": True},
+                    )
                 if session.status in TERMINAL_SESSION_STATUSES:
                     return PaperTradingSessionService(repository=self.repository).progress(session_id)
                 if session.mode != PaperSessionMode.REPLAY_ONLY:
@@ -571,9 +586,14 @@ class PaperTradingSessionRunner:
             self._mark_failed(session, error)
             raise error
         started_at = session.started_at or (as_of_time or datetime.now(UTC))
+        replay_status = (
+            PaperSessionStatus.PAUSED
+            if bool((session.runtime_config.get("paper_v2_session") or {}).get("manual_tick_only"))
+            else PaperSessionStatus.REPLAYING
+        )
         self.repository.update_session_status(
             session.session_id,
-            status=PaperSessionStatus.REPLAYING,
+            status=replay_status,
             phase=PaperSessionPhase.HISTORICAL_REPLAY,
             started_at=started_at,
         )

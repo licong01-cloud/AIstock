@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
@@ -283,6 +283,56 @@ class PaperTradingDayRunner:
             ledger.cash = latest_cash
             ledger.positions = dict(current_positions)
             ledger.settle_trade_date(trade_date)
+            if not intents:
+                if not ledger.positions:
+                    raise StrategyPackageValidationError(
+                        "rebalance produced no order intents and portfolio has no positions to mark",
+                        context={"portfolio_id": portfolio_id, "run_id": run.run_id, "trade_date": trade_date.isoformat()},
+                    )
+                snapshot_prices, snapshot_time = self._load_snapshot_marks_for_held_positions(
+                    symbols=list(ledger.positions),
+                    trade_date=trade_date,
+                    data_source=portfolio.data_source,
+                    run_id=run.run_id,
+                )
+                account_snapshot = ledger.account_snapshot(prices=snapshot_prices, snapshot_time=snapshot_time)
+                position_list = list(ledger.positions.values())
+                self.repository.save_positions(
+                    run_id=run.run_id,
+                    trade_date=trade_date,
+                    positions=position_list,
+                    prices=snapshot_prices,
+                )
+                self.repository.save_daily_snapshot(
+                    run_id=run.run_id,
+                    trade_date=trade_date,
+                    snapshot=account_snapshot,
+                    metadata={
+                        "position_count": len(position_list),
+                        "order_count": 0,
+                        "fill_count": 0,
+                        "no_rebalance_required": True,
+                        "reason": "target_positions_equal_current_positions",
+                    },
+                )
+                self.repository.save_run_event(
+                    run_id=run.run_id,
+                    event_type="NO_REBALANCE_REQUIRED",
+                    message="target positions match current positions; persisted mark-to-market snapshot without orders",
+                    context={"position_count": len(position_list), "snapshot_time": snapshot_time.isoformat()},
+                )
+                succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
+                ready_portfolio = self.repository.update_portfolio_status(portfolio_id, PortfolioStatus.READY)
+                self.repository.save_run_event(run_id=run.run_id, event_type="RUN_SUCCEEDED", message="paper v2 no-rebalance day run succeeded")
+                return PaperDayRunResult(
+                    portfolio=ready_portfolio,
+                    run=succeeded,
+                    orders=[],
+                    fills=[],
+                    events=[],
+                    positions=position_list,
+                    account_snapshot=account_snapshot,
+                )
 
             orders = []
             fills = []
@@ -617,8 +667,25 @@ class PaperTradingDayRunner:
         data_source: MinuteDataSource,
         run_id: str,
     ) -> dict[str, float]:
+        prices, _snapshot_time = self._load_snapshot_marks_for_held_positions(
+            symbols=symbols,
+            trade_date=trade_date,
+            data_source=data_source,
+            run_id=run_id,
+        )
+        return prices
+
+    def _load_snapshot_marks_for_held_positions(
+        self,
+        *,
+        symbols: list[str],
+        trade_date: date,
+        data_source: MinuteDataSource,
+        run_id: str,
+    ) -> tuple[dict[str, float], datetime]:
         prices: dict[str, float] = {}
         context_rows: dict[str, Any] = {}
+        snapshot_times: list[datetime] = []
         for symbol in sorted(symbols):
             market_input = self.market_data_provider.load_symbol_input(
                 symbol=symbol,
@@ -635,6 +702,7 @@ class PaperTradingDayRunner:
                 )
             last_bar = market_input.minute_bars[-1]
             prices[symbol] = last_bar.close
+            snapshot_times.append(last_bar.bar_time)
             context_rows[symbol] = {
                 "price": last_bar.close,
                 "bar_time": last_bar.bar_time.isoformat(),
@@ -653,7 +721,12 @@ class PaperTradingDayRunner:
                 "prices": context_rows,
             },
         )
-        return prices
+        if not snapshot_times:
+            raise DataUnavailableError(
+                "snapshot price marks require at least one held position",
+                context={"trade_date": trade_date.isoformat(), "source": data_source.value},
+            )
+        return prices, max(snapshot_times)
 
     @staticmethod
     def _required_minute_bars_for_manifest(manifest) -> int:

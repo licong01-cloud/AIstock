@@ -130,6 +130,13 @@ export default function PaperV2RunConsolePage() {
     const { paper_v2_session: _session, paper_v2_replay: _replay, ...profile } = runtimeConfig;
     return profile;
   }, [runtimeConfig]);
+  const manualTickRuntimeConfig = useMemo<JsonObject>(() => ({
+    ...runtimeConfig,
+    paper_v2_session: {
+      ...((runtimeConfig.paper_v2_session as JsonObject | undefined) || {}),
+      manual_tick_only: true,
+    },
+  }), [runtimeConfig]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -250,7 +257,7 @@ export default function PaperV2RunConsolePage() {
         end_date: replayEnd,
         historical_data_source: "DB_HISTORICAL",
         live_data_source: autoSwitchToLive ? "TDX_REALTIME" : null,
-        runtime_config: runtimeConfig,
+        runtime_config: manualTickRuntimeConfig,
         rerun_policy: rerunPolicy,
         auto_switch_to_live: autoSwitchToLive,
         confirm_reset: rerunPolicy === "reset_portfolio",
@@ -260,7 +267,7 @@ export default function PaperV2RunConsolePage() {
       setSessionProgress({ session, day_count: 0, events: [] });
       setSessionProgress(await paperV2Api.tickSessionAndWait(
         session.session_id,
-        {},
+        { allow_paused: true },
         autoSwitchToLive
           ? { timeoutMs: 600_000, pollMs: 2_000, settleStatuses: LIVE_TICK_SETTLED_STATUSES }
           : { timeoutMs: 600_000, pollMs: 2_000 },
@@ -282,14 +289,14 @@ export default function PaperV2RunConsolePage() {
         mode: "LIVE_ONLY",
         start_date: liveStartDate,
         live_data_source: "TDX_REALTIME",
-        runtime_config: runtimeConfig,
+        runtime_config: manualTickRuntimeConfig,
         rerun_policy: "reject_existing",
         created_by: "paper_v2_ui",
       });
       setSessionProgress({ session, day_count: 0, events: [] });
       setSessionProgress(await paperV2Api.tickSessionAndWait(
         session.session_id,
-        {},
+        { allow_paused: true },
         { timeoutMs: 180_000, pollMs: 2_000, settleStatuses: LIVE_TICK_SETTLED_STATUSES },
       ));
       await load();
