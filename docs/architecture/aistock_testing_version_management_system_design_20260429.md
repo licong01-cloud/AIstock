@@ -79,6 +79,18 @@ UI 禁止直接展示原始 JSON 给普通操作员。配置、风控、执行�
 - 启动前必须检查端口占用。
 - 完成开发后只通知用户是否需要重启生产服务，由用户执行生产重启。
 
+### 3.6 当前内网阶段的测试范围裁剪
+
+当前 AIstock 仅在内网由单一操作者使用，本阶段测试流水线不纳入权限、角色、认证、越权访问、Web 安全扫描等安全相关用例。这些用例后续在部署模型或使用人群变化时作为独立安全门禁补充，不混入 Paper v2 / Selection Center 的业务验证结论。
+
+当前阶段继续保留以下非安全性质的工程与业务门禁：
+
+- 业务 fail-fast：禁止空结果、默认价格、默认资金、默认持仓、日频 fallback 或 TWAP fallback 伪装成功。
+- 数据质量：检查交易日历、dataset refresh audit、suspend/limit/daily/sector/index 数据时效性。
+- 持久化一致性：检查 selection 结果、paper run event、order/fill/cash/position/snapshot 的可追溯和一致性。
+- 资产隔离：框架测试和开发不得修改 StrategyPackage manifest、模型权重、HMM snapshot、validated execution policy、QE/RD-Agent 资产。
+- UI/后端一致性：按钮必须调用真实后端能力，错误必须透传，普通操作员界面不得展示 raw JSON。
+
 ## 4. 推荐开源工具与成熟实践
 
 AIstock 不应依赖单一测试工具，而应组合业界成熟实践：
@@ -94,7 +106,7 @@ AIstock 不应依赖单一测试工具，而应组合业界成熟实践：
 | DB 集成 | Testcontainers | 临时 PostgreSQL/TimescaleDB 集成测试 | 本地隔离运行 repository/migration 测试 |
 | Python 质量 | Ruff、mypy/pyright | lint、格式、类型 | L0 静态门禁 |
 | 前端质量 | TypeScript tsc、ESLint | 类型和前端静态检查 | UI 改动必须 `npx tsc --noEmit` |
-| 安全扫描 | Gitleaks、Bandit、OWASP WSTG/ZAP | secret、Python 安全、Web 安全 | pre-commit/本地流水线必跑 secret；高风险接口跑安全测试 |
+| 安全扫描 | Gitleaks、Bandit、OWASP WSTG/ZAP | secret、Python 安全、Web 安全 | 当前内网阶段暂不纳入必跑门禁；未来对外或多人使用前再加入 |
 | 自定义规则 | Semgrep | 禁止硬编码路径、静默 fallback、资产写入 | 建议新增 `.semgrep/aistock/*.yml` |
 | 可访问性 | axe-core | WCAG/无障碍自动检查 | 关键 UI E2E 后加无障碍检查 |
 | 报告 | Allure Report / pytest-html | 测试报告、附件、趋势 | 本地先用 Markdown run record，后续接 Allure |
@@ -639,7 +651,7 @@ docs/releases/
   - silent fallback。
   - forbidden daily fallback。
   - protected asset write。
-- Gitleaks 配置。
+- Gitleaks 配置（当前内网阶段作为未来安全门禁候选，不纳入 Paper v2 L3 必跑项）。
 - Pandera / Great Expectations 数据质量 smoke：
   - suspend_d。
   - dataset_date_refresh_audit。
@@ -650,7 +662,7 @@ docs/releases/
 验证：
 
 - 对当前仓库跑一次只读扫描，输出 baseline。
-- 高危规则纳入 L0。
+- 高危业务/资产规则纳入 L0；权限、认证、Web 安全规则暂不纳入当前阶段。
 - 误报记录为 whitelist，但必须有理由。
 
 ### Phase 5：本地发布候选流程
@@ -712,7 +724,7 @@ docs/releases/
 3. 报告系统：初期 Markdown run record，后续是否引入 Allure。
 4. 数据质量工具：轻量优先 Pandera；如果需要更完整数据治理 UI/历史，可引入 Great Expectations。
 5. API fuzz：Schemathesis 先只测只读/幂等接口，写接口必须使用本地测试 DB 或明确 sandbox，禁止污染生产数据或策略资产。
-6. 安全扫描强度：Gitleaks 应尽快加入；Bandit/ZAP 可在对外部署前加强。
+6. 安全扫描强度：当前内网单人阶段暂不做权限/安全测试；Gitleaks、Bandit、ZAP 等在对外部署或多人使用前作为独立阶段补充。
 
 ## 14. 本次仓库归属结论
 

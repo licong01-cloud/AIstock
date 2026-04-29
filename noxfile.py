@@ -53,6 +53,7 @@ def l0(session: nox.Session) -> None:
     scan_paths = session.posargs or [
         "noxfile.py",
         "scripts/aistock_validate.py",
+        "scripts/aistock_data_quality_smoke.py",
         "scripts/paper_v2_live_validation.py",
         "backend/tests/paper_trading_v2",
         "backend/tests/selection_center",
@@ -91,6 +92,21 @@ def paper_v2_backend(session: nox.Session) -> None:
         "-p",
         "no:cacheprovider",
     )
+
+
+@nox.session(venv_backend="none")
+def paper_v2_data_quality(session: nox.Session) -> None:
+    """Run read-only Paper v2 + Selection Center data-quality smoke checks."""
+    args = [
+        "scripts/aistock_data_quality_smoke.py",
+        "--scope",
+        "paper_v2_selection_center",
+        "--output",
+        "tmp/paper_v2_data_quality_smoke.json",
+    ]
+    if session.posargs:
+        args.extend(session.posargs)
+    session.run("python", *args, env=_env(), external=True)
 
 
 @nox.session(venv_backend="none")
@@ -147,6 +163,7 @@ def paper_v2_l3(session: nox.Session) -> None:
     session.run("python", "scripts/aistock_validate.py", "record", "--module", "paper_v2_selection_center", "--level", "L3", "--title", "Paper v2 Selection Center L3 regression", external=True)
     session.notify("l0")
     session.notify("paper_v2_backend")
+    session.notify("paper_v2_data_quality")
     if os.environ.get("PAPER_V2_L3_SKIP_UI") != "1":
         session.notify("paper_v2_ui")
 

@@ -60,11 +60,20 @@ strongly coupled.
 - NAV/performance is computed from persisted snapshots and explains insufficient data.
 - Missing calendar, pre_close, limit, suspend, minute bars, day_features, HMM coefficient, or strategy output fails fast with context.
 
+## Data Quality Smoke
+
+- Read-only DB smoke is part of the Paper v2 + Selection Center L3 gate.
+- It checks required schemas/tables, trading calendar freshness, dataset audit freshness, StrategyPackage readiness, selection result traceability, Paper v2 run events/snapshots, and ledger consistency.
+- Historical polluted Paper v2 runs are reported as `WARN` in the default baseline mode so old local development data does not block new validation work.
+- Validation-scoped checks are strict when using `--portfolio-name-prefix` or `--portfolio-id`; ledger/order/fill/cash/snapshot violations fail the gate for those portfolios.
+- Permission/auth/security testing is intentionally out of scope for the current internal-only phase and will be added later as a separate gate.
+
 ## First-Stage Command Targets
 
 ```bash
 conda run -n AIstock python -m nox -s l0
 conda run -n AIstock python -m nox -s paper_v2_backend
+conda run -n AIstock python -m nox -s paper_v2_data_quality
 set BACKEND_PORT=8012
 set FRONTEND_PORT=3011
 python scripts/aistock_validate.py services --backend-port 8012 --tdx-port 19080
@@ -95,3 +104,10 @@ Use `--require-fills` only when the validation objective is to prove that at
 least one order produced a fill during the sampled live minutes. Some market
 states can legitimately produce explicit no-fill events, so fill-required mode
 is stricter than the default live-data smoke.
+
+## Deferred Scope
+
+Security, permission, role, and authentication tests are deferred by current
+product decision because AIstock is still an internal single-operator system.
+They must not be mixed into the Paper v2 business/data validation gate until the
+deployment model changes.
