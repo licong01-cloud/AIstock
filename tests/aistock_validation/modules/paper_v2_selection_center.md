@@ -50,6 +50,7 @@ strongly coupled.
 - Inspect running portfolio list and details: funds, holdings, orders, fills, NAV, errors, config audit.
 - Refresh/reopen pages and verify persisted state.
 - Fail test on pageerror, console error, requestfailed, unexpected 4xx/5xx, or raw JSON operator display.
+- When current realtime market data is unavailable, run the same UI flow with `PAPER_V2_SKIP_REALTIME=1`; this skips only TDX realtime probing and live-session trading assertions, while keeping DB historical replay, selection, aggregation, ledger, HMM, and audit checks mandatory.
 
 ## Business Oracles
 
@@ -79,6 +80,18 @@ set FRONTEND_PORT=3011
 python scripts/aistock_validate.py services --backend-port 8012 --tdx-port 19080
 python -m nox -s paper_v2_ui
 conda run -n AIstock python -m nox -s paper_v2_l3
+```
+
+Non-realtime validation mode:
+
+```bash
+set BACKEND_PORT=8011
+set FRONTEND_PORT=3011
+set PAPER_V2_API_BASE=http://127.0.0.1:8011/api/v1
+set NEXT_PUBLIC_API_BASE=http://127.0.0.1:8011/api/v1
+set PAPER_V2_SKIP_REALTIME=1
+set PAPER_V2_E2E_SKIP_REALTIME=1
+python -m nox -s paper_v2_l3
 ```
 
 ## Trading-Hours Live Validation

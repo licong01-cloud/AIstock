@@ -131,6 +131,7 @@ def paper_v2_ui(session: nox.Session) -> None:
         backend_port,
         "--tdx-port",
         os.environ.get("TDX_HTTP_PORT", "19080"),
+        *(["--skip-tdx"] if os.environ.get("PAPER_V2_SKIP_REALTIME") == "1" else []),
         external=True,
     )
     old_cwd = Path.cwd()
@@ -149,6 +150,10 @@ def paper_v2_ui(session: nox.Session) -> None:
                     "PAPER_V2_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
                     "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
                     "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                    "PAPER_V2_E2E_SKIP_REALTIME": os.environ.get(
+                        "PAPER_V2_E2E_SKIP_REALTIME",
+                        os.environ.get("PAPER_V2_SKIP_REALTIME", "0"),
+                    ),
                 }
             ),
             external=True,

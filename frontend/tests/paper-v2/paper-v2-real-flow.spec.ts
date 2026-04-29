@@ -6,6 +6,8 @@ const QE_EXPERIMENTS = ["qe_20260416_002701", "qe_20260413_084216", "qe_20260416
 const REPLAY_TRADE_DATE = process.env.PAPER_V2_E2E_TRADE_DATE || "2026-04-24";
 const ACTIVATION_TRADE_DATE = process.env.PAPER_V2_E2E_ACTIVATION_DATE || "2026-04-28";
 const HMM_UNCOVERED_TRADE_DATE = process.env.PAPER_V2_E2E_HMM_UNCOVERED_DATE || "2026-04-29";
+const SKIP_REALTIME =
+  process.env.PAPER_V2_E2E_SKIP_REALTIME === "1" || process.env.PAPER_V2_SKIP_REALTIME === "1";
 
 type JsonObject = Record<string, any>;
 
@@ -253,6 +255,22 @@ async function recoverFromDevChunkError(page: Page) {
   }
 }
 
+async function expectSelectOptionValue(page: Page, testId: string, value: string, timeout = 60_000) {
+  const readValues = async () =>
+    page.getByTestId(testId).locator("option").evaluateAll((options) =>
+      options.map((option) => (option as HTMLOptionElement).value),
+    );
+  try {
+    await expect.poll(readValues, { timeout }).toContain(value);
+  } catch (error) {
+    // Next dev can occasionally serve an unhydrated page after repeated route
+    // compiles. Reload once, then require the real backend data to appear.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await recoverFromDevChunkError(page);
+    await expect.poll(readValues, { timeout }).toContain(value);
+  }
+}
+
 test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
   test.beforeAll(async ({ request }) => {
     const health = await request.get(`${API_BASE.replace(/\/api\/v1$/, "")}/openapi.json`);
@@ -345,11 +363,14 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(page.getByText("多策略包当前只用于统一选股研究")).toBeVisible();
 
     const history = await openSection(page, "历史选股记录与动态聚合");
-    const rows = history.locator("tbody tr").filter({ hasText: "single_package" });
-    await expect(rows.nth(0)).toBeVisible();
-    await expect(rows.nth(1)).toBeVisible();
-    await rows.nth(0).locator('input[type="checkbox"]').check();
-    await rows.nth(1).locator('input[type="checkbox"]').check();
+    const sourceRunIds = ensuredRuns.slice(0, 2).map((item) => item.run_id);
+    expect(sourceRunIds.length, "E2E setup must create at least two compatible single-package runs").toBe(2);
+    for (const runId of sourceRunIds) {
+      const checkbox = page.getByTestId(`selection-run-checkbox-${runId}`);
+      await expect(checkbox, `compatible selection run ${runId} must be visible in history`).toBeVisible();
+      await checkbox.check();
+    }
+    await expect(page.getByTestId("selection-aggregate-runs")).toBeEnabled();
     await history.getByRole("button", { name: "聚合已选股票" }).click();
 
     const results = await openSection(page, "选股结果");
@@ -621,14 +642,16 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(resetJson).toContainText("SUCCEEDED", { timeout: 180_000 });
     await expectNoRawJsonUi(page);
 
-    await page.getByTestId("console-live-start").fill(ACTIVATION_TRADE_DATE);
-    const liveButton = page.getByTestId("console-live-create");
-    if (await liveButton.isEnabled()) {
-      await liveButton.click();
-      await expect(page.locator(".pv2-readable-panel").last()).toContainText(/LIVE_|FAILED|WAITING|SESSION|ALGO/, { timeout: 90_000 });
-    } else {
-      await expect(liveButton).toBeDisabled();
-      await expect(page.locator("body")).toContainText(/实时模拟|TDX_REALTIME|TDX 实时/);
+    if (!SKIP_REALTIME) {
+      await page.getByTestId("console-live-start").fill(ACTIVATION_TRADE_DATE);
+      const liveButton = page.getByTestId("console-live-create");
+      if (await liveButton.isEnabled()) {
+        await liveButton.click();
+        await expect(page.locator(".pv2-readable-panel").last()).toContainText(/LIVE_|FAILED|WAITING|SESSION|ALGO/, { timeout: 90_000 });
+      } else {
+        await expect(liveButton).toBeDisabled();
+        await expect(page.locator("body")).toContainText(/实时模拟|TDX_REALTIME|TDX 实时/);
+      }
     }
   });
 
@@ -638,7 +661,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await page.goto("/paper-v2/model-hmm");
     await recoverFromDevChunkError(page);
     await expect(page.getByTestId("model-package")).toBeVisible({ timeout: 60_000 });
-    await expect.poll(async () => page.getByTestId("model-package").locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)), { timeout: 60_000 }).toContain(target.package_id);
+    await expectSelectOptionValue(page, "model-package", target.package_id);
 
     await page.getByTestId("model-package").selectOption(target.package_id);
     await page.getByTestId("model-as-of-date").fill(REPLAY_TRADE_DATE);
@@ -674,7 +697,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expectNoRawJsonUi(page);
   });
 
-  test("Negative APIs return structured errors and TDX realtime minute endpoint is reachable", async ({ request }) => {
+  test("Negative APIs return structured errors and optional TDX realtime minute endpoint is reachable", async ({ request }) => {
     const missing = await apiJson(request, "/strategy-packages/from-qe-experiment/not_exists_for_failfast/manifest");
     expect(missing.response.status()).toBe(404);
     expect(missing.payload.detail.error_code).toBe("DATA_UNAVAILABLE");
@@ -692,12 +715,14 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     expect(badSelection.response.ok()).toBeFalsy();
     expect(JSON.stringify(badSelection.payload)).toMatch(/not a trading day|DATA_UNAVAILABLE|trade_date/);
 
-    const tdx = await request.get(`${TDX_BASE}/api/kline-all/tdx?code=SZ000001&type=minute1`, { timeout: 30_000 });
-    expect(tdx.ok(), `TDX backend must respond at ${TDX_BASE}`).toBeTruthy();
-    const payload = await tdx.json();
-    expect(payload.code).toBe(0);
-    const bars = payload.data?.list || [];
-    expect(Array.isArray(bars)).toBeTruthy();
-    expect(bars.length, "TDX minute endpoint should return real minute bars instead of a fake default").toBeGreaterThan(0);
+    if (!SKIP_REALTIME) {
+      const tdx = await request.get(`${TDX_BASE}/api/kline-all/tdx?code=SZ000001&type=minute1`, { timeout: 30_000 });
+      expect(tdx.ok(), `TDX backend must respond at ${TDX_BASE}`).toBeTruthy();
+      const payload = await tdx.json();
+      expect(payload.code).toBe(0);
+      const bars = payload.data?.list || [];
+      expect(Array.isArray(bars)).toBeTruthy();
+      expect(bars.length, "TDX minute endpoint should return real minute bars instead of a fake default").toBeGreaterThan(0);
+    }
   });
 });

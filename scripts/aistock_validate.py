@@ -98,12 +98,15 @@ def cmd_services(args: argparse.Namespace) -> int:
         (
             "FastAPI backend",
             f"http://127.0.0.1:{args.backend_port}/openapi.json",
-        ),
-        (
-            "TDX realtime minute endpoint",
-            f"http://127.0.0.1:{args.tdx_port}/api/kline-all/tdx?code={args.tdx_probe_code}&type=minute1",
-        ),
+        )
     ]
+    if not args.skip_tdx:
+        checks.append(
+            (
+                "TDX realtime minute endpoint",
+                f"http://127.0.0.1:{args.tdx_port}/api/kline-all/tdx?code={args.tdx_probe_code}&type=minute1",
+            )
+        )
     failed = False
     for name, url in checks:
         ok, detail = _http_probe(url, timeout=args.timeout)
@@ -132,6 +135,12 @@ def build_parser() -> argparse.ArgumentParser:
     services.add_argument("--tdx-port", default=os.environ.get("TDX_HTTP_PORT", "19080"))
     services.add_argument("--tdx-probe-code", default=os.environ.get("TDX_PROBE_CODE", "SZ000001"))
     services.add_argument("--timeout", type=float, default=5.0)
+    services.add_argument(
+        "--skip-tdx",
+        action="store_true",
+        default=os.environ.get("PAPER_V2_SKIP_REALTIME") == "1",
+        help="Skip TDX realtime probing for non-realtime validation runs.",
+    )
     services.set_defaults(func=cmd_services)
 
     return parser
