@@ -5,14 +5,17 @@ import json
 import os
 import sys
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+DATASET_CLOSE_READY_AFTER = time(18, 0)
 
 
 @dataclass
@@ -170,15 +173,42 @@ class DataQualitySmoke:
             self._pass("schema_required_tables", "required Paper v2/Selection tables exist", {"table_count": len(required)})
 
     def _latest_trading_day(self, cur: Any) -> date:
+        as_of_date = self._latest_completed_market_date()
         latest = self._query_one(
             cur,
-            "SELECT max(cal_date) FROM market.trading_calendar WHERE is_trading = true AND cal_date <= current_date",
+            "SELECT max(cal_date) FROM market.trading_calendar WHERE is_trading = true AND cal_date <= %s",
+            (as_of_date,),
         )
         if latest is None:
-            self._fail("trading_calendar_latest", "no completed trading day found in market.trading_calendar")
+            self._fail(
+                "trading_calendar_latest",
+                "no completed trading day found in market.trading_calendar",
+                {"as_of_date": as_of_date},
+            )
             raise SmokeFailure("no completed trading day found")
-        self._pass("trading_calendar_latest", "latest completed trading day resolved", {"latest_trading_day": latest})
+        self._pass(
+            "trading_calendar_latest",
+            "latest completed trading day resolved",
+            {"latest_trading_day": latest, "as_of_date": as_of_date, "daily_ready_after": DATASET_CLOSE_READY_AFTER.isoformat()},
+        )
         return latest
+
+    def _latest_completed_market_date(self) -> date:
+        """Return the latest date whose daily market datasets can be expected.
+
+        Before the local post-close data-ready window, today's trading day is not
+        completed for daily bars/limits/moneyflow, so the smoke gate must not
+        demand same-day daily data that cannot exist yet.
+        """
+
+        try:
+            now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        except Exception:
+            now = datetime.now()
+        as_of_date = now.date()
+        if now.time() < DATASET_CLOSE_READY_AFTER:
+            as_of_date -= timedelta(days=1)
+        return as_of_date
 
     def _previous_trading_day(self, cur: Any, latest_trading_day: date) -> date:
         previous = self._query_one(

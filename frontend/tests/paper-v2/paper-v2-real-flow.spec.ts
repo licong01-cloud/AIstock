@@ -44,6 +44,16 @@ type PaperPortfolioSummary = {
   status: string;
 };
 
+type WatchlistImportPayload = {
+  ok: boolean;
+  run_id: string;
+  category_id: number;
+  entry_source: string;
+  entry_as_of: string;
+  requested_top_k: number;
+  imported_symbols: string[];
+};
+
 type HmmRuntimeChoice = {
   config_id: string;
   snapshot_id: string;
@@ -271,6 +281,61 @@ async function expectSelectOptionValue(page: Page, testId: string, value: string
   }
 }
 
+async function assertWatchlistImportPersistence(
+  request: APIRequestContext,
+  payload: WatchlistImportPayload,
+  expectedCategoryName: string,
+  expectedSourceName: string,
+) {
+  expect(payload.ok, `watchlist import response: ${JSON.stringify(payload)}`).toBeTruthy();
+  expect(payload.run_id).toBeTruthy();
+  expect(payload.category_id).toBeGreaterThan(0);
+  expect(payload.entry_source).toContain(expectedSourceName);
+  expect(payload.entry_as_of).toBe(REPLAY_TRADE_DATE);
+  expect(payload.requested_top_k).toBe(20);
+  expect(payload.imported_symbols.length).toBeGreaterThan(0);
+  expect(payload.imported_symbols.length).toBeLessThanOrEqual(20);
+
+  const categories = await apiJson(request, "/watchlist/categories");
+  expect(categories.response.ok(), JSON.stringify(categories.payload)).toBeTruthy();
+  const category = (categories.payload || []).find((item: JsonObject) => Number(item.id) === Number(payload.category_id));
+  expect(category, `watchlist category ${payload.category_id} should exist`).toBeTruthy();
+  expect(String(category.name)).toBe(expectedCategoryName);
+
+  const aggregate = await apiJson(request, `/selection-center/runs/${payload.run_id}/aggregate-results`);
+  expect(aggregate.response.ok(), JSON.stringify(aggregate.payload)).toBeTruthy();
+  const aggregateRows: JsonObject[] = aggregate.payload.aggregate_results || [];
+  const selectedRows = aggregateRows
+    .filter((row) => payload.imported_symbols.includes(String(row.symbol)))
+    .sort((a, b) => Number(a.rank) - Number(b.rank));
+  expect(selectedRows.length).toBe(payload.imported_symbols.length);
+
+  const items = await apiJson(
+    request,
+    `/watchlist/items?category_id=${payload.category_id}&page=1&page_size=50&sort_by=entry_rank&sort_dir=asc`,
+  );
+  expect(items.response.ok(), JSON.stringify(items.payload)).toBeTruthy();
+  const watchRows: JsonObject[] = items.payload.items || [];
+  expect(items.payload.total).toBeGreaterThanOrEqual(payload.imported_symbols.length);
+
+  for (const selectedRow of selectedRows) {
+    const symbol = String(selectedRow.symbol);
+    const watchRow = watchRows.find((row) => row.code === symbol);
+    if (!watchRow) {
+      throw new Error(`watchlist row for ${symbol} should be persisted`);
+    }
+    expect(watchRow.category_names || "").toContain(expectedCategoryName);
+    expect(watchRow.entry_source || "").toContain(expectedSourceName);
+    expect(watchRow.entry_task_id).toBe(payload.run_id);
+    expect(watchRow.entry_as_of).toBe(REPLAY_TRADE_DATE);
+    expect(watchRow.entry_rank).toBe(Number(selectedRow.rank));
+    expect(Number(watchRow.entry_price)).toBeCloseTo(Number(selectedRow.reference_price), 4);
+    expect(Number(watchRow.entry_price)).toBeGreaterThan(0);
+    expect(String(watchRow.created_at || "")).toMatch(/^\d{4}-\d{2}-\d{2}/);
+    expect(String(watchRow.updated_at || "")).toMatch(/^\d{4}-\d{2}-\d{2}/);
+  }
+}
+
 test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
   test.beforeAll(async ({ request }) => {
     const health = await request.get(`${API_BASE.replace(/\/api\/v1$/, "")}/openapi.json`);
@@ -317,7 +382,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(page.getByRole("link", { name: "从此包启动模拟盘" }).first()).toBeVisible();
   });
 
-  test("Selection Center runs live-data inference, displays history, and imports watchlist items", async ({ page }) => {
+  test("Selection Center runs live-data inference, displays history, and imports watchlist items", async ({ page, request }) => {
     const target = ensuredPackages[0];
     await page.goto("/paper-v2/selection");
     await expect(page.getByRole("heading", { name: "选股控制" })).toBeVisible();
@@ -344,12 +409,42 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(results.locator("tbody tr").first()).toBeVisible();
     await expect(results).toContainText("选股参考价");
 
-    await results.locator("input.pv2-input").first().fill(`PaperV2-E2E-${Date.now()}`);
+    const watchlistCategoryName = `PaperV2-E2E-Watchlist-${Date.now()}`;
+    await results.locator("input.pv2-input").first().fill(watchlistCategoryName);
+    const importResponse = page.waitForResponse((response) =>
+      response.url().includes("/selection-center/runs/")
+        && response.url().endsWith("/add-to-watchlist")
+        && response.request().method() === "POST",
+    );
     await results.getByRole("button", { name: "一键加入自选股票池" }).click();
+    const importResult = await importResponse;
+    expect(importResult.ok(), `watchlist import HTTP ${importResult.status()}`).toBeTruthy();
+    const importEnvelope = await importResult.json() as { ok: boolean; result: WatchlistImportPayload };
+    expect(importEnvelope.ok, `watchlist import envelope: ${JSON.stringify(importEnvelope)}`).toBeTruthy();
+    const importPayload = importEnvelope.result;
     await expect(results).toContainText("已加入自选股票池", { timeout: 30_000 });
     await expect(results).toContainText(target.package_name);
+    await assertWatchlistImportPersistence(request, importPayload, watchlistCategoryName, target.package_name);
     await expectNoRawJsonUi(page);
 
+    await page.goto("/watchlist");
+    await expect(page.getByTestId("watchlist-title")).toBeVisible({ timeout: 60_000 });
+    await expectSelectOptionValue(page, "watchlist-category-filter", String(importPayload.category_id));
+    await page.getByTestId("watchlist-category-filter").selectOption(String(importPayload.category_id));
+    await expectSelectOptionValue(page, "watchlist-source-task-filter", importPayload.run_id);
+    await page.getByTestId("watchlist-source-task-filter").selectOption(importPayload.run_id);
+    const firstImportedSymbol = importPayload.imported_symbols[0];
+    await expect(page.getByTestId(`watchlist-row-${firstImportedSymbol}`)).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId(`watchlist-cell-source-${firstImportedSymbol}`)).toContainText(target.package_name);
+    await expect(page.getByTestId(`watchlist-cell-source-id-${firstImportedSymbol}`)).toContainText(importPayload.run_id);
+    await expect(page.getByTestId(`watchlist-cell-rank-${firstImportedSymbol}`)).toContainText("1");
+    await expect(page.getByTestId(`watchlist-cell-entry-price-${firstImportedSymbol}`)).not.toContainText("-");
+    await expect(page.getByTestId(`watchlist-cell-entry-as-of-${firstImportedSymbol}`)).toContainText(REPLAY_TRADE_DATE);
+    await expect(page.getByTestId("watchlist-items-table")).toContainText("加入以来涨幅");
+    await expect(page.getByTestId("watchlist-items-table")).toContainText("加入时间");
+    await expectNoRawJsonUi(page);
+
+    await page.goto("/paper-v2/selection");
     const history = await openSection(page, "历史选股记录与动态聚合");
     await expect(history).toContainText("点击记录可显示结果");
     await history.locator("tbody button").first().click();

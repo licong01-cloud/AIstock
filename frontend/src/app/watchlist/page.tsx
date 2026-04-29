@@ -27,7 +27,9 @@ interface WatchlistItem {
   last_conclusion?: string | null;
   entry_price?: number | null;
   entry_rank?: number | null;
+  entry_source?: string | null;
   entry_task_id?: string | null;
+  entry_as_of?: string | null;
   last?: number | null;
   pct_change?: number | null;
   pct_since_entry?: number | null;
@@ -1269,7 +1271,7 @@ function WatchlistPage() {
   return (
     <main style={{ padding: 24 }}>
       <section style={{ marginBottom: 16 }}>
-        <h1 style={{ margin: 0, fontSize: 22 }}>⭐ 自选股票池</h1>
+        <h1 data-testid="watchlist-title" style={{ margin: 0, fontSize: 22 }}>⭐ 自选股票池</h1>
       </section>
 
       {/* 列表控制条：排序、分页、自动刷新 */}
@@ -1286,6 +1288,7 @@ function WatchlistPage() {
         <div>
           <span style={{ marginRight: 6 }}>分类：</span>
           <select
+            data-testid="watchlist-category-filter"
             value={currentCatId ?? ""}
             onChange={(e) => {
               const v = e.target.value === "" ? null : Number(e.target.value);
@@ -1306,6 +1309,7 @@ function WatchlistPage() {
         <div>
           <span style={{ marginRight: 6 }}>来源TASK：</span>
           <select
+            data-testid="watchlist-source-task-filter"
             title="来源TASK"
             value={selectedSourceTaskId}
             onChange={(e) => {
@@ -2288,6 +2292,7 @@ function WatchlistPage() {
           }}
         >
           <table
+            data-testid="watchlist-items-table"
             style={{
               width: "100%",
               borderCollapse: "collapse",
@@ -2333,7 +2338,8 @@ function WatchlistPage() {
                 >
                   分类 {sortBy === "category" && (sortDir === "asc" ? "↑" : "↓")}
                 </th>
-                <th style={{ padding: 6, textAlign: "left" }}>来源Task</th>
+                <th style={{ padding: 6, textAlign: "left" }}>来源</th>
+                <th style={{ padding: 6, textAlign: "left" }}>来源Run</th>
                 <th
                   style={{ padding: 6, textAlign: "right", cursor: "pointer" }}
                   onClick={() => toggleSort("entry_rank")}
@@ -2346,6 +2352,7 @@ function WatchlistPage() {
                 >
                   加入价格 {sortBy === "entry_price" && (sortDir === "asc" ? "↑" : "↓")}
                 </th>
+                <th style={{ padding: 6, textAlign: "left" }}>入池基准日</th>
                 <th
                   style={{
                     padding: 6,
@@ -2485,6 +2492,7 @@ function WatchlistPage() {
                 return (
                   <tr
                     key={row.id}
+                    data-testid={`watchlist-row-${row.code}`}
                     style={{
                       borderTop: "1px solid #f0f0f0",
                       background: selected ? "#eff6ff" : "#fff",
@@ -2502,14 +2510,20 @@ function WatchlistPage() {
                     </td>
                     <td style={{ padding: 6 }}>{row.name}</td>
                     <td style={{ padding: 6 }}>{row.category_names || "-"}</td>
-                    <td style={{ padding: 6, fontFamily: "monospace", color: "#6b7280" }}>
+                    <td data-testid={`watchlist-cell-source-${row.code}`} style={{ padding: 6, color: "#374151" }}>
+                      {row.entry_source || "-"}
+                    </td>
+                    <td data-testid={`watchlist-cell-source-id-${row.code}`} style={{ padding: 6, fontFamily: "monospace", color: "#6b7280" }}>
                       {row.entry_task_id || "-"}
                     </td>
-                    <td style={{ padding: 6, textAlign: "right", color: "#6b7280" }}>
+                    <td data-testid={`watchlist-cell-rank-${row.code}`} style={{ padding: 6, textAlign: "right", color: "#6b7280" }}>
                       {row.entry_rank != null ? String(row.entry_rank) : "-"}
                     </td>
-                    <td style={{ padding: 6, textAlign: "right", color: "#6b7280" }}>
+                    <td data-testid={`watchlist-cell-entry-price-${row.code}`} style={{ padding: 6, textAlign: "right", color: "#6b7280" }}>
                       {row.entry_price != null ? row.entry_price.toFixed(3) : "-"}
+                    </td>
+                    <td data-testid={`watchlist-cell-entry-as-of-${row.code}`} style={{ padding: 6, color: "#6b7280" }}>
+                      {row.entry_as_of ? formatDate(row.entry_as_of) : "-"}
                     </td>
                     <td style={{ padding: 6, textAlign: "right" }}>
                       {row.last != null ? row.last.toFixed(3) : "-"}
@@ -2611,7 +2625,7 @@ function WatchlistPage() {
               })}
               {items.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={17} style={{ padding: 10, textAlign: "center" }}>
+                  <td colSpan={23} style={{ padding: 10, textAlign: "center" }}>
                     暂无自选股票。
                   </td>
                 </tr>

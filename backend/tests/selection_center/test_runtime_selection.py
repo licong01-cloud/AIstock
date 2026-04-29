@@ -1207,3 +1207,108 @@ def test_selection_center_rejects_multi_package_paper_portfolio_without_combined
             start_date=date(2024, 1, 3),
             data_source=MinuteDataSource.DB_HISTORICAL,
         )
+
+
+def test_selection_center_adds_selection_run_to_watchlist_with_trace(monkeypatch) -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = ready_manifest_with_score_rows(
+        "qe_watchlist_pkg",
+        [
+            {"symbol": "000001.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03, "reference_price": 10.5},
+            {"symbol": "000002.SZ", "score": 0.88, "rank": 2, "target_weight": 0.03, "reference_price": 11.5},
+            {"symbol": "000003.SZ", "score": 0.77, "rank": 3, "target_weight": 0.03, "reference_price": 12.5},
+        ],
+    )
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    )
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+    )
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "backend.services.selection_center.service.watchlist_service.list_categories",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "backend.services.selection_center.service.watchlist_service.create_category",
+        lambda name, description: captured.setdefault("created_category", (name, description)) and 901,
+    )
+
+    def fake_add_items_bulk_from_task_selection(**kwargs):
+        captured["watchlist_call"] = kwargs
+        items = kwargs["items"]
+        return {
+            "ok": True,
+            "added": len(items),
+            "skipped": 0,
+            "moved": 0,
+            "errors": [],
+            "item_ids_by_code": {item["code"]: idx + 1 for idx, item in enumerate(items)},
+        }
+
+    monkeypatch.setattr(
+        "backend.services.selection_center.service.watchlist_service.add_items_bulk_from_task_selection",
+        fake_add_items_bulk_from_task_selection,
+    )
+
+    result = service.add_run_to_watchlist(
+        run_id=run.run_id,
+        category_name="PaperV2-E2E-Watchlist",
+        top_k=2,
+        on_conflict="move",
+    )
+
+    assert result["ok"] is True
+    assert result["category_id"] == 901
+    assert result["entry_source"] == "qe_watchlist_pkg"
+    assert result["entry_as_of"] == "2024-01-02"
+    assert result["imported_symbols"] == ["000001.SZ", "000002.SZ"]
+    assert captured["created_category"][0] == "PaperV2-E2E-Watchlist"
+
+    call = captured["watchlist_call"]
+    assert call["category_id"] == 901
+    assert call["on_conflict"] == "move"
+    assert call["entry_source"] == "qe_watchlist_pkg"
+    items = call["items"]
+    assert [item["code"] for item in items] == ["000001.SZ", "000002.SZ"]
+    assert [item["entry_price"] for item in items] == [10.5, 11.5]
+    assert [item["rank"] for item in items] == [1, 2]
+    assert all(item["task_id"] == run.run_id for item in items)
+    assert all(item["as_of"] == "2024-01-02" for item in items)
+    assert all(item["entry_source"] == "qe_watchlist_pkg" for item in items)
+    assert "Selection Center single_package" in items[0]["note"]
+
+
+def test_selection_center_watchlist_import_rejects_missing_reference_price() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = ready_manifest_with_score_rows(
+        "pkg_watchlist_missing_price",
+        [
+            {"symbol": "000001.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03},
+            {"symbol": "000002.SZ", "score": 0.88, "rank": 2, "target_weight": 0.03, "reference_price": 11.5},
+        ],
+    )
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    )
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+    )
+
+    with pytest.raises(StrategyPackageValidationError, match="requires reference_price"):
+        service.add_run_to_watchlist(run_id=run.run_id, top_k=2)

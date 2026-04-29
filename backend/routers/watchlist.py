@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from ..services import watchlist_service
 from ..db.pg_pool import get_conn
@@ -12,6 +12,8 @@ router = APIRouter(prefix="/watchlist", tags=["watchlist"])
 @router.get("/all", summary="获取所有自选股票（全量数据，不分页）")
 def list_items_all() -> Dict[str, Any]:
     """获取所有自选股票数据（全量，不分页）"""
+    conn = None
+    cursor = None
     try:
         conn = get_conn()
         cursor = conn.cursor()
@@ -51,12 +53,14 @@ def list_items_all() -> Dict[str, Any]:
                 "entryAsOf": row[11].isoformat() if row[11] else None
             })
         
-        cursor.close()
-        conn.close()
-        
         return {"data": items, "total": len(items)}
     except Exception as e:
-        return {"data": [], "total": 0}
+        raise HTTPException(status_code=500, detail=f"自选股票池全量查询失败: {e}") from e
+    finally:
+        if cursor is not None:
+            cursor.close()
+        if conn is not None:
+            conn.close()
 
 
 @router.get("/items/source-tasks", summary="获取自选股票池中所有来源TASK列表")
@@ -86,7 +90,7 @@ def list_source_tasks() -> List[Dict[str, Any]]:
         
         return tasks
     except Exception as e:
-        return []
+        raise HTTPException(status_code=500, detail=f"自选股票池来源查询失败: {e}") from e
 
 
 @router.get("/categories", summary="自选分类列表")

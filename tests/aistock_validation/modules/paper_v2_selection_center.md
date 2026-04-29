@@ -44,7 +44,7 @@ strongly coupled.
 - Navigate to Paper v2 and Selection Center pages.
 - Select package, runtime profile, topK, HMM, industry blacklist, suspend filter, and execution policy options.
 - Execute selection and open existing selection records.
-- Add selected symbols to watchlist when UI supports the operation.
+- Add selected symbols to watchlist when UI supports the operation, then verify the imported category, source StrategyPackage name, source run id, rank, entry price, entry as-of date, created/updated time, and the `/watchlist` page display.
 - Create or inspect Paper v2 portfolio.
 - Run historical replay where backend data is available.
 - Inspect running portfolio list and details: funds, holdings, orders, fills, NAV, errors, config audit.
@@ -56,6 +56,7 @@ strongly coupled.
 
 - Selection must be authoritative live/latest inference or a declared live artifact, not QE backtest pred.pkl.
 - Selection result is traceable by package_id, manifest_sha256, trade_date, data_source, runtime_config_hash.
+- Watchlist imports from Selection Center must be traceable by selection run id, StrategyPackage source name, entry rank, reference entry price, and entry_as_of date; missing reference prices must fail fast.
 - Paper v2 uses minute data only; no daily fallback.
 - Ledger state changes only from fills.
 - NAV/performance is computed from persisted snapshots and explains insufficient data.
