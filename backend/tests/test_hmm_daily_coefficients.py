@@ -38,6 +38,8 @@ def _service_with_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> t
             "display_name": "HMM config",
             "model_type": "sector_hmm",
             "config_json": {
+                "method": "pup",
+                "horizon_weights": {"5": 0.2, "10": 0.3, "20": 0.5},
                 "signal_presets": {
                     "preset_A": {"trending": 1.05, "neutral": 1.0, "fading": 0.96},
                     "preset_nested": {"coefficients": {"1": {"trending": 1.02, "neutral": 1.0, "fading": 0.98}}},
@@ -168,6 +170,8 @@ def test_generate_daily_coefficients_passes_pit_dates_to_wsl_script(tmp_path: Pa
     assert captured["params"]["as_of_trade_date"] == "2026-04-27"
     assert captured["params"]["output_trade_date"] == "2026-04-28"
     assert captured["params"]["generation_mode"] == HMM_DAILY_COEFFICIENT_MODE
+    assert captured["params"]["config_json"]["method"] == "pup"
+    assert captured["params"]["config_json"]["horizon_weights"]["20"] == pytest.approx(0.5)
     assert captured["params"]["preset_coeffs"]["trending"] == pytest.approx(1.05)
 
 

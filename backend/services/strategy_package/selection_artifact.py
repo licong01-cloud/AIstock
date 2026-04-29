@@ -392,6 +392,7 @@ class StrategyPackageSelectionArtifactService:
 
         artifacts: list[SelectionScoreArtifact] = []
         for current_date in unique_dates:
+            score_trade_date = cutoff_date or current_date
             result = provider.run(
                 workspace=prepared,
                 trade_date=current_date,
@@ -401,14 +402,14 @@ class StrategyPackageSelectionArtifactService:
                 result.scores,
                 package_id=package_id,
                 manifest_sha256=manifest.manifest_sha256,
-                trade_date=cutoff_date or current_date,
+                trade_date=score_trade_date,
                 topk=int(manifest.portfolio_policy.topk),
                 include_reference_price=include_reference_price,
             )
             artifact = SelectionScoreArtifact(
                 package_id=package_id,
                 manifest_sha256=manifest.manifest_sha256,
-                trade_date=cutoff_date or current_date,
+                trade_date=current_date,
                 data_source=data_source,
                 runtime_config_hash=runtime_hash,
                 scores_json=scores,
@@ -438,6 +439,8 @@ class StrategyPackageSelectionArtifactService:
                     "topk": int(manifest.portfolio_policy.topk),
                     "trade_date_requested": current_date.isoformat(),
                     "cutoff_date": cutoff_date.isoformat() if cutoff_date else None,
+                    "score_trade_date": score_trade_date.isoformat(),
+                    "reference_price_trade_date": score_trade_date.isoformat() if include_reference_price else None,
                     "provider_metadata": result.metadata,
                 },
             )
@@ -818,6 +821,7 @@ class StrategyPackageSelectionArtifactService:
                         "raw_rank": row["rank"],
                         "manifest_sha256": manifest_sha256,
                         "reference_price_missing": reference_price is None,
+                        "reference_price_trade_date": trade_date.isoformat(),
                     },
                     "reason": "live_qe_model_inference_score",
                 }

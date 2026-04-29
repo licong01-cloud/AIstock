@@ -6,7 +6,7 @@ from datetime import date
 from typing import Any
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
-from backend.services.paper_trading_v2.market_data import PaperV2MinuteMarketDataProvider, TradeCalendarProvider
+from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
 from backend.services.selection_center.runtime_profile import normalize_selection_runtime_config, parse_selection_runtime_profile
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.runtime import RebalanceEngine, StrategyPackageRuntime, TargetPositionEngine
@@ -149,6 +149,14 @@ class PaperTradingDayRunner:
             )
             current_positions = self.repository.load_latest_positions(portfolio_id, trade_date)
             latest_cash = self.repository.load_latest_cash(portfolio, trade_date)
+            if self._ensure_current_prices_for_existing_positions(
+                config=config,
+                current_positions=current_positions,
+                trade_date=trade_date,
+                data_source=portfolio.data_source,
+                run_id=run.run_id,
+            ):
+                run = self.repository.update_run_runtime_config(run, config)
             total_equity = self._resolve_total_equity(
                 latest_cash=latest_cash,
                 current_positions=current_positions,
@@ -363,12 +371,16 @@ class PaperTradingDayRunner:
                         "order_event_count": len(events),
                     },
                 )
-            for symbol in ledger.positions:
-                if symbol not in snapshot_prices:
-                    raise DataUnavailableError(
-                        "snapshot price is required for held position",
-                        context={"portfolio_id": portfolio_id, "symbol": symbol, "trade_date": trade_date.isoformat()},
+            missing_snapshot_symbols = [symbol for symbol in ledger.positions if symbol not in snapshot_prices]
+            if missing_snapshot_symbols:
+                snapshot_prices.update(
+                    self._load_snapshot_prices_for_held_positions(
+                        symbols=missing_snapshot_symbols,
+                        trade_date=trade_date,
+                        data_source=portfolio.data_source,
+                        run_id=run.run_id,
                     )
+                )
             account_snapshot = ledger.account_snapshot(
                 prices=snapshot_prices,
                 snapshot_time=max(bar_time for bar_time in [fill.trade_time for fill in fills]),
@@ -451,6 +463,7 @@ class PaperTradingDayRunner:
             artifact_config = runtime_config.get("selection_artifact")
         if not isinstance(artifact_config, dict) or not bool(artifact_config.get("auto_generate")):
             return
+        cutoff_date = self._parse_selection_cutoff_date(artifact_config, trade_date=trade_date)
         runtime_hash = selection_artifact_runtime_hash(runtime_config)
         force_regenerate = bool(artifact_config.get("force_regenerate"))
         artifact_repository = getattr(self.runtime, "artifact_repository", None)
@@ -479,7 +492,27 @@ class PaperTradingDayRunner:
             data_source=data_source,
             runtime_config=runtime_config,
             include_reference_price=True,
+            cutoff_date=cutoff_date,
         )
+
+    @staticmethod
+    def _parse_selection_cutoff_date(artifact_config: dict[str, Any], *, trade_date: date) -> date | None:
+        raw = artifact_config.get("cutoff_date")
+        if raw is None or raw == "":
+            return None
+        try:
+            parsed = date.fromisoformat(str(raw))
+        except ValueError as exc:
+            raise StrategyPackageValidationError(
+                "selection_artifact_config.cutoff_date must be YYYY-MM-DD",
+                context={"cutoff_date": raw},
+            ) from exc
+        if parsed > trade_date:
+            raise StrategyPackageValidationError(
+                "selection_artifact_config.cutoff_date cannot be after trade_date",
+                context={"trade_date": trade_date.isoformat(), "cutoff_date": parsed.isoformat()},
+            )
+        return parsed
 
     @staticmethod
     def _refresh_status_context(dataset: str, status: Any) -> dict[str, Any]:
@@ -521,6 +554,106 @@ class PaperTradingDayRunner:
                 )
             market_value += position.quantity * float(price)
         return float(latest_cash) + market_value
+
+    def _ensure_current_prices_for_existing_positions(
+        self,
+        *,
+        config: dict[str, Any],
+        current_positions: dict[str, PositionLot],
+        trade_date: date,
+        data_source: MinuteDataSource,
+        run_id: str,
+    ) -> bool:
+        if not current_positions or config.get("current_prices"):
+            return False
+        if data_source != MinuteDataSource.DB_HISTORICAL:
+            return False
+
+        prices: dict[str, float] = {}
+        price_context: dict[str, Any] = {}
+        for symbol in sorted(current_positions):
+            market_input = self.market_data_provider.load_symbol_input(
+                symbol=symbol,
+                trade_date=trade_date,
+                source=MinuteDataSource.DB_HISTORICAL,
+                min_bars=1,
+                require_suspend_status=True,
+                require_day_features=False,
+            )
+            if not market_input.minute_bars:
+                raise DataUnavailableError(
+                    "historical replay current position price requires at least one DB minute bar",
+                    context={"symbol": symbol, "trade_date": trade_date.isoformat(), "source": data_source.value},
+                )
+            first_bar = market_input.minute_bars[0]
+            prices[symbol] = first_bar.close
+            price_context[symbol] = {
+                "price": first_bar.close,
+                "bar_time": first_bar.bar_time.isoformat(),
+                "source": data_source.value,
+                "basis": "first_observed_minute_close",
+            }
+
+        config["current_prices"] = prices
+        config["current_price_context"] = price_context
+        self.repository.save_run_event(
+            run_id=run_id,
+            event_type="CURRENT_POSITION_PRICES_LOADED",
+            message="historical DB minute prices loaded for existing position equity",
+            context={
+                "trade_date": trade_date.isoformat(),
+                "symbol_count": len(prices),
+                "basis": "first_observed_minute_close",
+                "data_source": data_source.value,
+            },
+        )
+        return True
+
+    def _load_snapshot_prices_for_held_positions(
+        self,
+        *,
+        symbols: list[str],
+        trade_date: date,
+        data_source: MinuteDataSource,
+        run_id: str,
+    ) -> dict[str, float]:
+        prices: dict[str, float] = {}
+        context_rows: dict[str, Any] = {}
+        for symbol in sorted(symbols):
+            market_input = self.market_data_provider.load_symbol_input(
+                symbol=symbol,
+                trade_date=trade_date,
+                source=data_source,
+                min_bars=1,
+                require_suspend_status=True,
+                require_day_features=False,
+            )
+            if not market_input.minute_bars:
+                raise DataUnavailableError(
+                    "snapshot price is required for held position",
+                    context={"symbol": symbol, "trade_date": trade_date.isoformat(), "source": data_source.value},
+                )
+            last_bar = market_input.minute_bars[-1]
+            prices[symbol] = last_bar.close
+            context_rows[symbol] = {
+                "price": last_bar.close,
+                "bar_time": last_bar.bar_time.isoformat(),
+                "source": data_source.value,
+                "basis": "latest_available_minute_close",
+            }
+        self.repository.save_run_event(
+            run_id=run_id,
+            event_type="HELD_POSITION_SNAPSHOT_PRICES_LOADED",
+            message="minute prices loaded for held positions without same-day order market data",
+            context={
+                "trade_date": trade_date.isoformat(),
+                "symbol_count": len(prices),
+                "basis": "latest_available_minute_close",
+                "data_source": data_source.value,
+                "prices": context_rows,
+            },
+        )
+        return prices
 
     @staticmethod
     def _required_minute_bars_for_manifest(manifest) -> int:

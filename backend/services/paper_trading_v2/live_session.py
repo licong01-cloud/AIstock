@@ -7,7 +7,7 @@ live work and it never switches data sources or algorithms implicitly.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
@@ -262,6 +262,7 @@ class PaperTradingLiveMinuteExecutor:
         config["paper_v2_session"]["signal_data_source"] = self._signal_data_source(session, portfolio_data_source=portfolio.data_source)
         config["paper_v2_session"]["live_step_mode"] = capability.live_step_mode
         config["paper_v2_session"]["live_data_source"] = session.live_data_source.value if session.live_data_source else None
+        self._ensure_live_selection_cutoff(config, trade_date=trade_date)
 
         ready = self.day_helper._require_data_ready(
             manifest=manifest,
@@ -733,6 +734,24 @@ class PaperTradingLiveMinuteExecutor:
             "live Paper v2 session requires explicit paper_v2_session.signal_data_source=DB_HISTORICAL",
             context={"session_id": session.session_id, "portfolio_data_source": portfolio_data_source.value},
         )
+
+    def _ensure_live_selection_cutoff(self, config: dict[str, Any], *, trade_date: date) -> None:
+        artifact_config = config.get("selection_artifact_config")
+        if artifact_config is None:
+            artifact_config = config.get("selection_artifact")
+        if artifact_config is None:
+            return
+        if not isinstance(artifact_config, dict):
+            raise SessionConfigError("selection_artifact_config must be an object")
+        if artifact_config.get("cutoff_date"):
+            return
+        if not bool(artifact_config.get("auto_generate")):
+            return
+        lookup_start = trade_date - timedelta(days=31)
+        previous_days = self.calendar_provider.list_trading_days(lookup_start, trade_date - timedelta(days=1))
+        cutoff_date = previous_days[-1]
+        artifact_config["cutoff_date"] = cutoff_date.isoformat()
+        config.setdefault("paper_v2_session", {})["selection_cutoff_date"] = cutoff_date.isoformat()
 
     def _current_position_prices(
         self,

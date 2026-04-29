@@ -63,6 +63,17 @@ python scripts/aistock_validate.py services --backend-port 8012 --tdx-port 19080
 C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s paper_v2_l3
 ```
 
+Run the trading-hours Paper v2 catch-up-to-live validation after TDX has current-day minute bars:
+
+```bash
+set BACKEND_PORT=8012
+set FRONTEND_PORT=3011
+C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s paper_v2_live -- --require-live-bars
+```
+
+By default this replays one latest completed historical trading day before live.
+Use `--replay-lookback-trading-days N` only for longer catch-up coverage.
+
 Validate this skill metadata:
 
 ```bash

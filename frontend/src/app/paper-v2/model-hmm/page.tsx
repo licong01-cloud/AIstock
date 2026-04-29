@@ -78,9 +78,16 @@ function dailyJobSummary(value: JsonObject | null): JsonObject | null {
     completed_at: value.completed_at,
     input_data_max_dates: value.input_data_max_dates,
     artifact_sha256: value.artifact_sha256,
-    error_message: value.error_message,
-    error_context: value.error_context,
+    error_message: compactError(value.error_message),
   };
+}
+
+function compactError(value: unknown): string {
+  const text = String(value || "").trim();
+  if (!text) return "-";
+  const head = text.split("; stderr_tail=")[0].split("\n")[0].trim();
+  if (!head) return "任务失败，详细诊断已记录在后台日志";
+  return head.length > 180 ? `${head.slice(0, 180)}...` : head;
 }
 
 export default function PaperV2ModelHmmPage() {
@@ -440,7 +447,7 @@ export default function PaperV2ModelHmmPage() {
               { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
               { key: "snapshot", header: "快照", render: (row) => row.snapshot_id ? <span title={row.snapshot_id}>{snapshotLabelById.get(row.snapshot_id) || shortHash(row.snapshot_id)}</span> : "-" },
               { key: "started", header: "开始时间", render: (row) => row.started_at || "-" },
-              { key: "error", header: "错误", render: (row) => row.error_message || "-" },
+              { key: "error", header: "错误", render: (row) => <span title={row.error_message || ""}>{compactError(row.error_message)}</span> },
             ]}
           />
         </SectionCard>
@@ -457,7 +464,7 @@ export default function PaperV2ModelHmmPage() {
             { key: "dates", header: "日期", render: (row) => `${row.as_of_trade_date} -> ${row.effective_trade_date}` },
             { key: "result", header: "产物状态", render: (row) => row.result_status || "-" },
             { key: "sha", header: "产物哈希", render: (row) => shortHash(row.artifact_sha256) },
-            { key: "error", header: "错误", render: (row) => row.error_message || "-" },
+            { key: "error", header: "错误", render: (row) => <span title={row.error_message || ""}>{compactError(row.error_message)}</span> },
           ]}
         />
       </SectionCard>

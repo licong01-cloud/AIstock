@@ -71,3 +71,27 @@ python scripts/aistock_validate.py services --backend-port 8012 --tdx-port 19080
 python -m nox -s paper_v2_ui
 conda run -n AIstock python -m nox -s paper_v2_l3
 ```
+
+## Trading-Hours Live Validation
+
+Run this after the A-share market has produced current-day TDX minute bars. It
+creates an isolated Paper v2 portfolio, replays the latest completed DB
+historical trading day, switches to `TDX_REALTIME` for the current trading day,
+and verifies the live session, runs, orders, persisted errors, and live bar
+cursor. It must not modify StrategyPackage, QE, model, HMM, or execution-policy
+assets.
+
+```bash
+set BACKEND_PORT=8012
+set FRONTEND_PORT=3011
+python -m nox -s paper_v2_live -- --require-live-bars
+```
+
+The default command replays one latest completed historical trading day before
+switching to live. Use `--replay-lookback-trading-days N` only when the test
+objective is to validate a longer catch-up window.
+
+Use `--require-fills` only when the validation objective is to prove that at
+least one order produced a fill during the sampled live minutes. Some market
+states can legitimately produce explicit no-fill events, so fill-required mode
+is stricter than the default live-data smoke.

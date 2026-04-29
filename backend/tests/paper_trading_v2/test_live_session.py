@@ -4,7 +4,15 @@ from datetime import date, datetime, timedelta
 
 from backend.services.paper_trading_v2.live_session import PaperTradingLiveMinuteExecutor
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, MinuteExecutionMarketInput
-from backend.services.paper_trading_v2.models import OrderExecutionState, PaperRun, PaperSessionMode, PaperSessionStatus
+from backend.services.paper_trading_v2.models import (
+    OrderExecutionState,
+    PaperReplayDayResult,
+    PaperReplayResult,
+    PaperRun,
+    PaperSessionMode,
+    PaperSessionPhase,
+    PaperSessionStatus,
+)
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.paper_trading_v2.session import PaperTradingSessionRunner, PaperTradingSessionService
@@ -19,6 +27,49 @@ from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 class FakeCalendar:
     def ensure_trading_day(self, trade_date: date) -> None:
         return None
+
+    def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
+        days: list[date] = []
+        current = start_date
+        while current <= end_date:
+            days.append(current)
+            current += timedelta(days=1)
+        return days
+
+
+class FakeReplayService:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def run(self, **kwargs):
+        self.calls.append(kwargs)
+        return PaperReplayResult(
+            portfolio_id=kwargs["portfolio_id"],
+            start_date=kwargs["start_date"],
+            end_date=kwargs["end_date"],
+            data_source=MinuteDataSource.DB_HISTORICAL,
+            trading_days=[kwargs["start_date"], kwargs["end_date"]],
+            day_results=[
+                PaperReplayDayResult(
+                    trade_date=kwargs["start_date"],
+                    run_id="catchup_run_start",
+                    status=RunStatus.SUCCEEDED,
+                    nav=100_001,
+                    order_count=1,
+                    fill_count=1,
+                    position_count=1,
+                ),
+                PaperReplayDayResult(
+                    trade_date=kwargs["end_date"],
+                    run_id="catchup_run_end",
+                    status=RunStatus.SUCCEEDED,
+                    nav=100_002,
+                    order_count=1,
+                    fill_count=1,
+                    position_count=1,
+                ),
+            ],
+        )
 
 
 class FakeLiveMarket:
@@ -64,7 +115,7 @@ class FakeLiveMarket:
         return max(times) if times else None
 
 
-def make_portfolio_repo() -> tuple[InMemoryPaperTradingV2Repository, str]:
+def make_portfolio_repo(*, data_source: MinuteDataSource = MinuteDataSource.TDX_REALTIME) -> tuple[InMemoryPaperTradingV2Repository, str]:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = freeze_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.PAPER_ENABLED}))
@@ -77,7 +128,7 @@ def make_portfolio_repo() -> tuple[InMemoryPaperTradingV2Repository, str]:
         portfolio_name="live session test",
         initial_cash=100_000,
         start_date=date(2024, 1, 2),
-        data_source=MinuteDataSource.TDX_REALTIME,
+        data_source=data_source,
     )
     return paper_repo, portfolio.portfolio_id
 
@@ -169,3 +220,95 @@ def test_live_session_tick_processes_new_minute_bar_once() -> None:
         as_of_time=datetime(2024, 1, 2, 9, 31),
     )
     assert len(paper_repo.list_fills_for_run(run.run_id)) == 1
+
+
+def test_live_session_injects_previous_trading_day_selection_cutoff() -> None:
+    executor = PaperTradingLiveMinuteExecutor(
+        repository=InMemoryPaperTradingV2Repository(),
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeLiveMarket([]),
+    )
+    config = {"selection_artifact_config": {"auto_generate": True}, "paper_v2_session": {}}
+
+    executor._ensure_live_selection_cutoff(config, trade_date=date(2024, 1, 4))
+
+    assert config["selection_artifact_config"]["cutoff_date"] == "2024-01-03"
+    assert config["paper_v2_session"]["selection_cutoff_date"] == "2024-01-03"
+
+
+def test_catchup_then_live_replays_previous_days_and_processes_current_live_bar() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo(data_source=MinuteDataSource.DB_HISTORICAL)
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.CATCHUP_THEN_LIVE,
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 4),
+        historical_data_source=MinuteDataSource.DB_HISTORICAL,
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio_id,
+            trade_date=date(2024, 1, 4),
+            status=RunStatus.RUNNING,
+            data_source=MinuteDataSource.TDX_REALTIME,
+            runtime_config={
+                "validated_execution_policy": {
+                    "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 2, "allow_partial_fill": True}},
+                }
+            },
+        )
+    )
+    order = OMS().create_order(
+        OrderIntent(
+            package_id="pkg_test",
+            portfolio_id=portfolio_id,
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=600,
+            target_trade_date=date(2024, 1, 4),
+        )
+    )
+    paper_repo.save_order(run.run_id, order)
+    paper_repo.save_order_execution_state(
+        OrderExecutionState(
+            session_id=session.session_id,
+            run_id=run.run_id,
+            order_id=order.order_id,
+            symbol=order.symbol,
+            trade_date=run.trade_date,
+            algo_code="TWAP",
+            filled_quantity=0,
+            remaining_quantity=order.quantity,
+            status=order.status.value,
+        )
+    )
+    bars = [
+        bar.model_copy(update={"bar_time": datetime(2024, 1, 4, 9, 31)})
+        for bar in make_bars()[:1]
+    ]
+    replay = FakeReplayService()
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeLiveMarket(bars),
+        replay_service=replay,  # type: ignore[arg-type]
+    )
+
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 4, 9, 31),
+    )
+
+    days = paper_repo.list_session_days(session.session_id)
+    historical_days = [item for item in days if item.phase == PaperSessionPhase.HISTORICAL_REPLAY]
+    live_days = [item for item in days if item.phase == PaperSessionPhase.LIVE_INTRADAY]
+    fills = paper_repo.list_fills_for_run(run.run_id)
+    assert replay.calls[0]["start_date"] == date(2024, 1, 2)
+    assert replay.calls[0]["end_date"] == date(2024, 1, 3)
+    assert [item.trade_date for item in historical_days] == [date(2024, 1, 2), date(2024, 1, 3)]
+    assert live_days[-1].trade_date == date(2024, 1, 4)
+    assert live_days[-1].last_processed_bar_time == datetime(2024, 1, 4, 9, 31)
+    assert progress.session.status == PaperSessionStatus.LIVE_WAITING_FOR_BAR
+    assert len(fills) == 1

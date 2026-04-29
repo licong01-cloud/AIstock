@@ -348,7 +348,11 @@ def test_selection_artifact_service_generates_live_inference_artifact_without_ex
     class FakeProvider:
         backend_name = "fake_live"
 
-        def run(self, **_kwargs):
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
             return LiveInferenceResult(
                 scores=[
                     {"symbol": "000002.SZ", "score": 0.8, "rank": 2},
@@ -369,11 +373,12 @@ def test_selection_artifact_service_generates_live_inference_artifact_without_ex
     )
     package_repo.save_manifest(manifest)
     artifact_repo = InMemorySelectionScoreArtifactRepository()
+    live_provider = FakeProvider()
     artifact_service = StrategyPackageSelectionArtifactService(
         package_repository=package_repo,
         artifact_repository=artifact_repo,
         runtime_asset_resolver=FakeResolver(),
-        live_inference_provider=FakeProvider(),
+        live_inference_provider=live_provider,
     )
 
     artifact = artifact_service.generate_from_live_inference(
@@ -386,6 +391,18 @@ def test_selection_artifact_service_generates_live_inference_artifact_without_ex
     assert artifact.metadata["source_type"] == AUTHORITATIVE_SELECTION_SOURCE_TYPE
     assert artifact.metadata["authority_scope"] == AUTHORITATIVE_SELECTION_SCOPE
     assert [row["symbol"] for row in artifact.scores_json[:3]] == ["000001.SZ", "000002.SZ", "000003.SZ"]
+
+    cutoff_artifact = artifact_service.generate_from_live_inference(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 3),
+        cutoff_date=date(2024, 1, 2),
+        include_reference_price=False,
+    )
+    assert cutoff_artifact.trade_date == date(2024, 1, 3)
+    assert cutoff_artifact.metadata["cutoff_date"] == "2024-01-02"
+    assert cutoff_artifact.metadata["score_trade_date"] == "2024-01-02"
+    assert live_provider.calls[-1]["trade_date"] == date(2024, 1, 3)
+    assert live_provider.calls[-1]["cutoff_date"] == date(2024, 1, 2)
 
     service = SelectionCenterService(
         package_repository=package_repo,

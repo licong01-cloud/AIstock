@@ -53,6 +53,7 @@ def l0(session: nox.Session) -> None:
     scan_paths = session.posargs or [
         "noxfile.py",
         "scripts/aistock_validate.py",
+        "scripts/paper_v2_live_validation.py",
         "backend/tests/paper_trading_v2",
         "backend/tests/selection_center",
         "backend/tests/strategy_package",
@@ -148,3 +149,31 @@ def paper_v2_l3(session: nox.Session) -> None:
     session.notify("paper_v2_backend")
     if os.environ.get("PAPER_V2_L3_SKIP_UI") != "1":
         session.notify("paper_v2_ui")
+
+
+@nox.session(venv_backend="none")
+def paper_v2_live(session: nox.Session) -> None:
+    """Run Paper v2 catch-up-to-live validation against dev backend and TDX."""
+    backend_port = os.environ.get("BACKEND_PORT", "8012")
+    tdx_port = os.environ.get("TDX_HTTP_PORT", "19080")
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "services",
+        "--backend-port",
+        backend_port,
+        "--tdx-port",
+        tdx_port,
+        external=True,
+    )
+    session.run(
+        "python",
+        "scripts/paper_v2_live_validation.py",
+        "--api-base",
+        os.environ.get("PAPER_V2_API_BASE", f"http://127.0.0.1:{backend_port}/api/v1"),
+        "--tdx-base-url",
+        os.environ.get("TDX_BASE_URL", f"http://127.0.0.1:{tdx_port}"),
+        *session.posargs,
+        env=_env(),
+        external=True,
+    )

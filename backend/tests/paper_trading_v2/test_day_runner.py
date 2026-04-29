@@ -7,6 +7,7 @@ import pytest
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import (
     DailySuspendStatus,
+    MinuteExecutionMarketInput,
     MinuteDataSource,
     PaperV2MinuteMarketDataProvider,
 )
@@ -29,7 +30,7 @@ from backend.services.strategy_package.selection_artifact import (
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
-from backend.services.trading_core.models import AccountSnapshot, RunStatus
+from backend.services.trading_core.models import AccountSnapshot, MinuteBar, PositionLot, RunStatus
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -108,6 +109,63 @@ def make_raw_bars(*, include_suspend_status: bool = True) -> list[dict]:
             row["is_suspended"] = False
         rows.append(row)
     return rows
+
+
+class FakeDbMinuteProvider:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def load_symbol_input(
+        self,
+        *,
+        symbol: str,
+        trade_date: date,
+        source: MinuteDataSource,
+        min_bars: int,
+        require_suspend_status: bool = False,
+        require_day_features: bool = False,
+    ) -> MinuteExecutionMarketInput:
+        self.calls.append(
+            {
+                "symbol": symbol,
+                "trade_date": trade_date,
+                "source": source,
+                "min_bars": min_bars,
+                "require_suspend_status": require_suspend_status,
+                "require_day_features": require_day_features,
+            }
+        )
+        start = datetime.combine(trade_date, datetime.min.time()).replace(hour=9, minute=31)
+        minute_bars = [
+            MinuteBar(
+                symbol=symbol,
+                bar_time=start + timedelta(minutes=i),
+                open=10.0 + i * 0.1,
+                high=10.2 + i * 0.1,
+                low=9.9 + i * 0.1,
+                close=10.1 + i * 0.1,
+                volume=100_000,
+                amount=1_000_000.0,
+                limit_up=11.0,
+                limit_down=9.0,
+            )
+            for i in range(max(min_bars, 3))
+        ]
+        return MinuteExecutionMarketInput(
+            symbol=symbol,
+            trade_date=trade_date,
+            source=source,
+            minute_bars=minute_bars,
+            market_context={
+                "stock_id": symbol,
+                "trade_date": trade_date.isoformat(),
+                "data_source": source.value,
+                "prev_close": 10.0,
+                "limit_up": 11.0,
+                "limit_down": 9.0,
+                "suspend_status": {"is_suspended": False},
+            },
+        )
 
 
 def make_paper_enabled_manifest():
@@ -274,6 +332,104 @@ def test_paper_trading_day_runner_persists_full_day_path() -> None:
         "ORDER_EXECUTED",
         "RUN_SUCCEEDED",
     ]
+
+
+def test_db_historical_day_runner_loads_real_minute_price_for_existing_position_equity() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = make_paper_enabled_manifest()
+    package_repo.save_manifest(manifest)
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="historical existing position",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+    )
+    previous_run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio.portfolio_id,
+            trade_date=date(2024, 1, 2),
+            status=RunStatus.SUCCEEDED,
+            data_source=MinuteDataSource.DB_HISTORICAL,
+        )
+    )
+    paper_repo.save_positions(
+        run_id=previous_run.run_id,
+        trade_date=date(2024, 1, 2),
+        positions=[
+            PositionLot(
+                portfolio_id=portfolio.portfolio_id,
+                symbol="000001.SZ",
+                quantity=100,
+                available_quantity=100,
+                avg_cost=10.0,
+                trade_date=date(2024, 1, 2),
+            )
+        ],
+        prices={"000001.SZ": 10.0},
+    )
+    provider = FakeDbMinuteProvider()
+
+    result = PaperTradingDayRunner(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=provider,  # type: ignore[arg-type]
+        runtime=runtime_with_authoritative_scores(
+            manifest,
+            trade_date=date(2024, 1, 3),
+            data_source=MinuteDataSource.DB_HISTORICAL.value,
+        ),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=RecordingRefreshAudit(),
+    ).run_day(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 3),
+    )
+
+    assert result.run.status == RunStatus.SUCCEEDED
+    assert result.run.runtime_config["current_prices"]["000001.SZ"] == 10.1
+    assert result.run.runtime_config["current_price_context"]["000001.SZ"]["basis"] == "first_observed_minute_close"
+    assert provider.calls[0]["min_bars"] == 1
+    assert provider.calls[0]["source"] == MinuteDataSource.DB_HISTORICAL
+    assert any(
+        item["event_type"] == "CURRENT_POSITION_PRICES_LOADED"
+        for item in paper_repo.list_run_events(portfolio.portfolio_id, run_id=result.run.run_id)
+    )
+
+
+def test_day_runner_loads_snapshot_price_for_held_position_without_order_market_data() -> None:
+    paper_repo = InMemoryPaperTradingV2Repository()
+    run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id="paper_test",
+            trade_date=date(2024, 1, 3),
+            status=RunStatus.RUNNING,
+            data_source=MinuteDataSource.DB_HISTORICAL,
+        )
+    )
+    provider = FakeDbMinuteProvider()
+    prices = PaperTradingDayRunner(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=provider,  # type: ignore[arg-type]
+    )._load_snapshot_prices_for_held_positions(
+        symbols=["000002.SZ"],
+        trade_date=date(2024, 1, 3),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        run_id=run.run_id,
+    )
+
+    assert prices["000002.SZ"] == pytest.approx(10.3)
+    assert provider.calls[0]["min_bars"] == 1
+    assert provider.calls[0]["symbol"] == "000002.SZ"
+    assert any(
+        item["event_type"] == "HELD_POSITION_SNAPSHOT_PRICES_LOADED"
+        for item in paper_repo.run_events
+    )
 
 
 def test_paper_trading_day_runner_rejects_raw_execution_policy_override() -> None:

@@ -88,8 +88,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isSessionTerminal(progress: PaperSessionProgress): boolean {
-  return ["SUCCEEDED", "FAILED", "STOPPED"].includes(String(progress.session?.status || "").toUpperCase());
+function isSessionSettled(progress: PaperSessionProgress, settleStatuses?: string[]): boolean {
+  const status = String(progress.session?.status || "").toUpperCase();
+  const expected = settleStatuses?.length ? settleStatuses : ["SUCCEEDED", "FAILED", "STOPPED"];
+  return expected.map((item) => item.toUpperCase()).includes(status);
 }
 
 function isNetworkAbort(error: unknown): boolean {
@@ -268,13 +270,17 @@ export const paperV2Api = {
   async tickSession(sessionId: string, payload: JsonObject = {}): Promise<PaperSessionProgress> {
     return fetchTickSession(sessionId, payload);
   },
-  async tickSessionAndWait(sessionId: string, payload: JsonObject = {}, options: { timeoutMs?: number; pollMs?: number } = {}): Promise<PaperSessionProgress> {
+  async tickSessionAndWait(
+    sessionId: string,
+    payload: JsonObject = {},
+    options: { timeoutMs?: number; pollMs?: number; settleStatuses?: string[] } = {},
+  ): Promise<PaperSessionProgress> {
     const timeoutMs = options.timeoutMs ?? 240_000;
     const pollMs = options.pollMs ?? 2_000;
     const startedAt = Date.now();
     try {
       const progress = await fetchTickSession(sessionId, payload);
-      if (isSessionTerminal(progress)) return progress;
+      if (isSessionSettled(progress, options.settleStatuses)) return progress;
     } catch (error) {
       if (!isNetworkAbort(error)) throw error;
       // The backend may continue a long replay after the dev proxy drops the socket.
@@ -282,12 +288,12 @@ export const paperV2Api = {
     }
 
     let lastProgress = await fetchSessionProgress(sessionId);
-    while (!isSessionTerminal(lastProgress)) {
+    while (!isSessionSettled(lastProgress, options.settleStatuses)) {
       if (Date.now() - startedAt > timeoutMs) {
         throw new PaperV2ApiError(
-          `session ${sessionId} did not reach a terminal status within ${timeoutMs}ms`,
+          `session ${sessionId} did not reach the expected status within ${timeoutMs}ms`,
           408,
-          { session_id: sessionId, last_progress: lastProgress },
+          { session_id: sessionId, expected_statuses: options.settleStatuses || ["SUCCEEDED", "FAILED", "STOPPED"], last_progress: lastProgress },
           "SESSION_PROGRESS_TIMEOUT",
           { session_id: sessionId, last_status: lastProgress.session?.status },
         );

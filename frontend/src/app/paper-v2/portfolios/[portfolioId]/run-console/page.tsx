@@ -46,6 +46,8 @@ function executionPolicyId(policy: ExecutionPolicy): string {
   return String(policy.policy_id || policy.validated_execution_policy_id || "");
 }
 
+const LIVE_TICK_SETTLED_STATUSES = ["LIVE_WAITING_FOR_BAR", "LIVE_WAITING_NEXT_TRADING_DAY", "SUCCEEDED", "FAILED", "STOPPED"];
+
 export default function PaperV2RunConsolePage() {
   const params = useParams<{ portfolioId: string }>();
   const portfolioId = String(params.portfolioId || "");
@@ -256,7 +258,13 @@ export default function PaperV2RunConsolePage() {
         created_by: "paper_v2_ui",
       });
       setSessionProgress({ session, day_count: 0, events: [] });
-      setSessionProgress(await paperV2Api.tickSessionAndWait(session.session_id));
+      setSessionProgress(await paperV2Api.tickSessionAndWait(
+        session.session_id,
+        {},
+        autoSwitchToLive
+          ? { timeoutMs: 600_000, pollMs: 2_000, settleStatuses: LIVE_TICK_SETTLED_STATUSES }
+          : { timeoutMs: 600_000, pollMs: 2_000 },
+      ));
       await load();
     } catch (exc) {
       setError(exc);
@@ -279,7 +287,11 @@ export default function PaperV2RunConsolePage() {
         created_by: "paper_v2_ui",
       });
       setSessionProgress({ session, day_count: 0, events: [] });
-      setSessionProgress(await paperV2Api.tickSessionAndWait(session.session_id));
+      setSessionProgress(await paperV2Api.tickSessionAndWait(
+        session.session_id,
+        {},
+        { timeoutMs: 180_000, pollMs: 2_000, settleStatuses: LIVE_TICK_SETTLED_STATUSES },
+      ));
       await load();
     } catch (exc) {
       setError(exc);
@@ -292,7 +304,14 @@ export default function PaperV2RunConsolePage() {
     setBusy(true);
     setError(null);
     try {
-      setSessionProgress(await paperV2Api.tickSessionAndWait(sessionId));
+      const mode = sessions.find((item) => item.session_id === sessionId)?.mode;
+      setSessionProgress(await paperV2Api.tickSessionAndWait(
+        sessionId,
+        {},
+        mode && mode !== "REPLAY_ONLY"
+          ? { timeoutMs: 180_000, pollMs: 2_000, settleStatuses: LIVE_TICK_SETTLED_STATUSES }
+          : { timeoutMs: 600_000, pollMs: 2_000 },
+      ));
       await load();
     } catch (exc) {
       setError(exc);

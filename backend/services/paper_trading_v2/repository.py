@@ -188,6 +188,18 @@ class PaperTradingV2Repository:
                     raise InvalidStateTransitionError("paper run update failed", context={"run_id": run.run_id})
         return updated
 
+    def update_run_runtime_config(self, run: PaperRun, runtime_config: dict[str, Any]) -> PaperRun:
+        updated = run.model_copy(update={"runtime_config": runtime_config})
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE paper_v2.run SET runtime_config = %s WHERE run_id = %s",
+                    (psycopg2.extras.Json(runtime_config), run.run_id),
+                )
+                if cur.rowcount != 1:
+                    raise DataUnavailableError("paper v2 run does not exist", context={"run_id": run.run_id})
+        return updated
+
     def create_session(self, session: PaperTradingSession) -> PaperTradingSession:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -1590,6 +1602,11 @@ class InMemoryPaperTradingV2Repository:
         updated = run.model_copy(
             update={"status": status, "error": error, "completed_at": datetime.now(UTC) if status in {RunStatus.SUCCEEDED, RunStatus.FAILED} else run.completed_at}
         )
+        self.runs[run.run_id] = updated
+        return updated
+
+    def update_run_runtime_config(self, run: PaperRun, runtime_config: dict[str, Any]) -> PaperRun:
+        updated = run.model_copy(update={"runtime_config": runtime_config})
         self.runs[run.run_id] = updated
         return updated
 

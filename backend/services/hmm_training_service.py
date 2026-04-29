@@ -634,6 +634,7 @@ class HMMTrainingService:
                 key: value.isoformat() if value else None
                 for key, value in data_max_dates.items()
             },
+            "config_json": config_row.get("config_json") or {},
             "output_filename": output_filename,
             "output_path": output_path,
             "existing_artifact": existing,
@@ -756,6 +757,7 @@ class HMMTrainingService:
             "snapshot_id": plan["snapshot_id"],
             "config_id": plan["config_id"],
             "input_data_max_dates": plan["input_data_max_dates"],
+            "config_json": plan.get("config_json") or {},
             "preset_coeffs": plan["preset_coeffs"],
             "preset_key": plan["signal_preset"],
             "db_host": os.getenv("TDX_DB_HOST", "127.0.0.1"),

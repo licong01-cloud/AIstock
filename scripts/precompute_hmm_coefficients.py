@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -30,18 +31,108 @@ sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
+def forward_filter_posteriors(hmm: Any, obs: np.ndarray) -> np.ndarray:
+    """Causal forward-filter posterior probabilities; no future observations are used."""
+    from hmmlearn import _hmmc
+
+    log_frameprob = hmm._compute_log_likelihood(obs)
+    _, fwd_lattice = _hmmc.forward_log(hmm.startprob_, hmm.transmat_, log_frameprob)
+    row_max = np.max(fwd_lattice, axis=1, keepdims=True)
+    row_max = np.where(np.isfinite(row_max), row_max, 0.0)
+    posteriors = np.exp(fwd_lattice - row_max)
+    denom = posteriors.sum(axis=1, keepdims=True)
+    n_states = posteriors.shape[1]
+    posteriors = np.divide(
+        posteriors,
+        denom,
+        out=np.full_like(posteriors, 1.0 / max(n_states, 1)),
+        where=denom > 0,
+    )
+    return np.nan_to_num(
+        posteriors,
+        nan=1.0 / max(n_states, 1),
+        posinf=1.0 / max(n_states, 1),
+        neginf=0.0,
+    )
+
+
 def forward_filter_states(hmm: Any, obs: np.ndarray) -> np.ndarray:
     """Causal forward-filter state decoding; no future observations are used."""
-    from hmmlearn import _hmmc
-    from hmmlearn.utils import normalize as hmm_normalize
+    return forward_filter_posteriors(hmm, obs).argmax(axis=1)
 
-    log_startprob = np.log(hmm.startprob_ + 1e-300)
-    log_transmat = np.log(hmm.transmat_ + 1e-300)
-    log_frameprob = hmm._compute_log_likelihood(obs)
-    _, fwd_lattice = _hmmc.forward_log(log_startprob, log_transmat, log_frameprob)
-    posteriors = np.exp(fwd_lattice)
-    hmm_normalize(posteriors, axis=1)
-    return posteriors.argmax(axis=1)
+
+def confidence_from_posterior(prob: np.ndarray, scale: float) -> float:
+    prob = np.nan_to_num(prob, nan=0.0, posinf=0.0, neginf=0.0)
+    total = float(prob.sum())
+    if total <= 0:
+        return 0.0
+    prob = prob / total
+    ordered = np.sort(prob)
+    margin = float(ordered[-1] - ordered[-2]) if len(ordered) > 1 else 1.0
+    return float(np.clip(margin / max(scale, 1e-6), 0.0, 1.0))
+
+
+def utility_from_state_stats(
+    prob: np.ndarray,
+    state_stats: dict[str, Any],
+    method: str,
+    horizon_weights: dict[int, float],
+) -> float:
+    if method in {"er", "er_winsor", "er_median"}:
+        field_prefix = {"er": "mu", "er_winsor": "winsor_mu", "er_median": "median"}[method]
+        total = 0.0
+        for horizon, weight in horizon_weights.items():
+            vals = np.asarray(
+                [
+                    state_stats[str(s)].get(f"{field_prefix}_{horizon}d", 0.0)
+                    for s in range(len(prob))
+                ],
+                dtype=np.float64,
+            )
+            total += weight * float(np.dot(prob, vals))
+        return total
+    if method in {"pup", "pup_z", "pup_rank", "additive_pup"}:
+        total = 0.0
+        for horizon, weight in horizon_weights.items():
+            vals = np.asarray(
+                [
+                    state_stats[str(s)].get(f"pup_{horizon}d", 0.5)
+                    for s in range(len(prob))
+                ],
+                dtype=np.float64,
+            )
+            total += weight * float(np.dot(prob, vals))
+        return 2.0 * (total - 0.5)
+    raise ValueError(f"Unknown dynamic HMM method: {method}")
+
+
+def robust_z_by_date(raw_by_sector: dict[str, float]) -> dict[str, float]:
+    values = np.asarray(
+        [v for v in raw_by_sector.values() if math.isfinite(v)],
+        dtype=np.float64,
+    )
+    if len(values) < 3:
+        return {k: 0.0 for k in raw_by_sector}
+    med = float(np.median(values))
+    q25, q75 = np.quantile(values, [0.25, 0.75])
+    iqr = float(q75 - q25)
+    scale = iqr / 1.349 if iqr > 1e-12 else float(np.std(values))
+    if scale < 1e-12:
+        return {k: 0.0 for k in raw_by_sector}
+    return {
+        k: float(np.clip((v - med) / scale, -3.0, 3.0))
+        for k, v in raw_by_sector.items()
+    }
+
+
+def rank_signal_by_date(raw_by_sector: dict[str, float]) -> dict[str, float]:
+    valid = [(k, v) for k, v in raw_by_sector.items() if math.isfinite(v)]
+    if len(valid) < 2:
+        return {k: 0.0 for k in raw_by_sector}
+    ordered = sorted(valid, key=lambda item: item[1])
+    denom = max(len(ordered) - 1, 1)
+    ranks = {k: (idx / denom) * 2.0 - 1.0 for idx, (k, _) in enumerate(ordered)}
+    return {k: float(ranks.get(k, 0.0)) for k in raw_by_sector}
 
 
 def restore_hmm(info: dict[str, Any]) -> Any:
@@ -140,7 +231,7 @@ def build_horizon_v2_observations(
 
 
 def parse_stdin() -> dict[str, Any]:
-    raw = sys.stdin.read()
+    raw = sys.stdin.read().lstrip("\ufeff")
     if not raw.strip():
         print("ERROR: no stdin JSON payload received", file=sys.stderr)
         sys.exit(1)
@@ -167,6 +258,7 @@ def main() -> None:
     preset_key = params.get("preset_key")
     output_trade_date = params.get("output_trade_date")
     as_of_trade_date = params.get("as_of_trade_date")
+    config_json = params.get("config_json") if isinstance(params.get("config_json"), dict) else {}
 
     db_host = params.get("db_host", "127.0.0.1")
     db_port = params.get("db_port", 5432)
@@ -190,19 +282,73 @@ def main() -> None:
     n_features = len(first.get("means", [[]])[0]) if first.get("means") else 4
     rolling_window = int(first.get("rolling_window", 5))
     has_horizon_v2_features = bool(first.get("feature_names") and first.get("preprocess"))
+    uses_dynamic_coefficients = bool(
+        first.get("state_validation_stats") and not first.get("state_labels")
+    )
+    dynamic_method = str(config_json.get("method") or params.get("dynamic_method") or "").strip()
+    horizon_weights = {
+        int(k): float(v)
+        for k, v in (config_json.get("horizon_weights") or {}).items()
+    }
+    if uses_dynamic_coefficients:
+        if dynamic_method not in {"er", "er_winsor", "er_median", "pup", "pup_z", "pup_rank", "additive_pup"}:
+            print(
+                "ERROR: dynamic HMM model requires explicit supported config_json.method",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if not horizon_weights:
+            print(
+                "ERROR: dynamic HMM model requires config_json.horizon_weights",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        missing_dynamic_keys = [
+            key
+            for key in ("coefficient_lambda", "coefficient_bounds", "confidence_scale")
+            if key not in config_json
+        ]
+        if missing_dynamic_keys:
+            print(
+                "ERROR: dynamic HMM model requires config_json keys: "
+                + ",".join(missing_dynamic_keys),
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    coefficient_lambda = float(config_json.get("coefficient_lambda", 0.0))
+    coefficient_bounds = config_json.get("coefficient_bounds") or [0.0, float("inf")]
+    if uses_dynamic_coefficients and (
+        not isinstance(coefficient_bounds, list) or len(coefficient_bounds) != 2
+    ):
+        print("ERROR: dynamic HMM model requires two coefficient_bounds values", file=sys.stderr)
+        sys.exit(1)
+    coeff_min = float(coefficient_bounds[0])
+    coeff_max = float(coefficient_bounds[1])
+    confidence_scale = float(config_json.get("confidence_scale", 1.0))
+    neutral_band = float(config_json.get("neutral_band", 0.0))
+    confidence_floor = float(config_json.get("confidence_floor", 0.0))
     has_zscore = "zscore_mean" in first
     zscore_mean = np.asarray(first["zscore_mean"], dtype=np.float64) if has_zscore else None
     zscore_std = np.asarray(first["zscore_std"], dtype=np.float64) if has_zscore else None
     print(
         f"  features={n_features}, rolling_window={rolling_window}, "
-        f"zscore={has_zscore}, horizon_v2_schema={has_horizon_v2_features}",
+        f"zscore={has_zscore}, horizon_v2_schema={has_horizon_v2_features}, "
+        f"dynamic_coefficients={uses_dynamic_coefficients}",
         file=sys.stderr,
     )
 
-    hmm_objs: dict[str, tuple[Any, dict[str, str], dict[str, Any]]] = {}
+    hmm_objs: dict[str, tuple[Any, dict[str, str] | None, dict[str, Any]]] = {}
     for code, info in models.items():
         try:
-            hmm_objs[code] = (restore_hmm(info), info["state_labels"], info)
+            labels = info.get("state_labels")
+            if uses_dynamic_coefficients:
+                stats = info.get("state_validation_stats")
+                if not isinstance(stats, dict) or not stats:
+                    raise KeyError("state_validation_stats")
+                labels = None
+            elif not isinstance(labels, dict) or not labels:
+                raise KeyError("state_labels")
+            hmm_objs[code] = (restore_hmm(info), labels, info)
         except Exception as exc:
             print(f"  WARNING: failed to restore HMM {code}: {exc}", file=sys.stderr)
     if not hmm_objs:
@@ -308,6 +454,8 @@ def main() -> None:
 
     print("  decoding sector states...", file=sys.stderr)
     sector_date_labels: dict[str, dict[str, str]] = {}
+    dynamic_signal_by_date: dict[str, dict[str, float]] = {}
+    dynamic_confidence_by_date: dict[str, dict[str, float]] = {}
     for idx, (code, (hmm, labels, info)) in enumerate(hmm_objs.items()):
         if code not in sector_data:
             continue
@@ -333,32 +481,101 @@ def main() -> None:
             )
             continue
         try:
-            states = forward_filter_states(hmm, obs)
+            posteriors = forward_filter_posteriors(hmm, obs)
         except Exception as exc:
             print(f"  WARNING: forward filter failed {code}: {exc}", file=sys.stderr)
             continue
 
-        by_date = {}
-        for i, td in enumerate(dates_out):
-            if start_d <= td <= end_d:
-                by_date[td.isoformat()] = labels.get(str(int(states[i])), "neutral")
-        if by_date:
-            sector_date_labels[code] = by_date
+        if uses_dynamic_coefficients:
+            state_stats = info.get("state_validation_stats")
+            if not isinstance(state_stats, dict) or not state_stats:
+                print(f"  WARNING: missing state_validation_stats {code}", file=sys.stderr)
+                continue
+            for i, td in enumerate(dates_out):
+                if start_d <= td <= end_d:
+                    prob = posteriors[i]
+                    try:
+                        raw_signal = utility_from_state_stats(
+                            prob,
+                            state_stats,
+                            dynamic_method,
+                            horizon_weights,
+                        )
+                    except Exception as exc:
+                        print(f"  WARNING: dynamic signal failed {code}: {exc}", file=sys.stderr)
+                        continue
+                    if not math.isfinite(raw_signal):
+                        raw_signal = 0.0
+                    d = td.isoformat()
+                    dynamic_signal_by_date.setdefault(d, {})[code] = float(raw_signal)
+                    dynamic_confidence_by_date.setdefault(d, {})[code] = confidence_from_posterior(
+                        prob,
+                        confidence_scale,
+                    )
+        else:
+            assert labels is not None
+            states = posteriors.argmax(axis=1)
+            by_date = {}
+            for i, td in enumerate(dates_out):
+                if start_d <= td <= end_d:
+                    by_date[td.isoformat()] = labels.get(str(int(states[i])), "neutral")
+            if by_date:
+                sector_date_labels[code] = by_date
         if (idx + 1) % 20 == 0:
             print(f"  processed {idx + 1}/{len(hmm_objs)} sectors", file=sys.stderr)
 
-    print(f"  decoded sectors={len(sector_date_labels)}", file=sys.stderr)
-    if not sector_date_labels:
-        print("ERROR: no HMM sectors decoded; refusing empty coefficient output", file=sys.stderr)
-        sys.exit(1)
-
-    all_dates = sorted({d for labels in sector_date_labels.values() for d in labels})
     daily_coefficients: dict[str, dict[str, float]] = {}
-    for d in all_dates:
-        daily_coefficients[d] = {
-            code: float(preset_coeffs.get(labels.get(d, "neutral"), 1.0))
-            for code, labels in sector_date_labels.items()
-        }
+    if uses_dynamic_coefficients:
+        dynamic_sector_count = len({code for by_sector in dynamic_signal_by_date.values() for code in by_sector})
+        print(f"  decoded dynamic sectors={dynamic_sector_count}", file=sys.stderr)
+        if not dynamic_signal_by_date:
+            print("ERROR: no dynamic HMM signals decoded; refusing empty coefficient output", file=sys.stderr)
+            sys.exit(1)
+        for d in sorted(dynamic_signal_by_date):
+            raw_map = dynamic_signal_by_date[d]
+            if dynamic_method in {"er", "er_winsor", "er_median", "pup_z"}:
+                normalized_map = robust_z_by_date(raw_map)
+            elif dynamic_method == "pup_rank":
+                normalized_map = rank_signal_by_date(raw_map)
+            else:
+                normalized_map = raw_map
+            daily_coefficients[d] = {}
+            for code, raw_signal in raw_map.items():
+                confidence = dynamic_confidence_by_date.get(d, {}).get(code, 0.0)
+                if dynamic_method in {"er", "er_winsor", "er_median", "pup_z", "pup_rank"}:
+                    normalized_signal = normalized_map.get(code, 0.0)
+                    if not math.isfinite(normalized_signal):
+                        normalized_signal = 0.0
+                    coeff = 1.0 + coefficient_lambda * confidence * normalized_signal
+                elif dynamic_method == "pup":
+                    normalized_signal = float(np.clip(raw_signal, -1.0, 1.0))
+                    if not math.isfinite(normalized_signal):
+                        normalized_signal = 0.0
+                    coeff = 1.0 + coefficient_lambda * confidence * normalized_signal
+                else:
+                    normalized_signal = float(np.clip(raw_signal, -1.0, 1.0))
+                    if not math.isfinite(normalized_signal):
+                        normalized_signal = 0.0
+                    coeff = 1.0
+                if confidence < confidence_floor or abs(normalized_signal) < neutral_band:
+                    coeff = 1.0
+                coeff = float(np.clip(coeff, coeff_min, coeff_max))
+                if not math.isfinite(coeff):
+                    print(f"  WARNING: non-finite dynamic coefficient {code} {d}", file=sys.stderr)
+                    continue
+                daily_coefficients[d][code] = round(coeff, 8)
+    else:
+        print(f"  decoded sectors={len(sector_date_labels)}", file=sys.stderr)
+        if not sector_date_labels:
+            print("ERROR: no HMM sectors decoded; refusing empty coefficient output", file=sys.stderr)
+            sys.exit(1)
+
+        all_dates = sorted({d for labels in sector_date_labels.values() for d in labels})
+        for d in all_dates:
+            daily_coefficients[d] = {
+                code: float(preset_coeffs.get(labels.get(d, "neutral"), 1.0))
+                for code, labels in sector_date_labels.items()
+            }
     if not daily_coefficients:
         print("ERROR: no daily HMM coefficients generated", file=sys.stderr)
         sys.exit(1)
@@ -382,7 +599,12 @@ def main() -> None:
         "preset_coeffs": preset_coeffs,
         "test_start": test_start,
         "backtest_end": backtest_end,
-        "sector_count": len(sector_date_labels),
+        "sector_count": (
+            len({code for by_sector in dynamic_signal_by_date.values() for code in by_sector})
+            if uses_dynamic_coefficients
+            else len(sector_date_labels)
+        ),
+        "dynamic_coefficients": uses_dynamic_coefficients,
         "daily_coefficients": daily_coefficients,
         "stock_sector_map": stock_sector_map,
     }

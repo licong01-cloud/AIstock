@@ -72,7 +72,13 @@ function simpleValue(value: unknown, key?: string): string {
   if (key === "status" || key === "side" || key === "mode") return `${statusLabel(text)}（${text}）`;
   if (/_id$/.test(key || "") && text.length > 20) return `${shortHash(text)}（${text}）`;
   if (/sha256|hash/i.test(key || "") && text.length > 20) return `${shortHash(text)}（${text}）`;
-  return text;
+  if (/error_context|traceback|stderr|stdout/i.test(key || "")) {
+    return "详细诊断已记录，请查看后台日志";
+  }
+  if (/path|filename/i.test(key || "") && /[\\/.]/.test(text)) {
+    return "本地运行产物（已登记）";
+  }
+  return text.replace(/\b[\w.-]+\.json\b/gi, "系数产物文件");
 }
 
 function ReadableValue({ value, fieldKey }: { value: unknown; fieldKey?: string }) {
