@@ -107,7 +107,10 @@ def test_v25_execution_prepares_suspend_artifact_without_signal_filter(monkeypat
 
 def test_hmm_precomputed_coefficients_skip_runtime_precompute(monkeypatch):
     composer = ConfigComposer()
-    coeff_json = '{"daily_coefficients": {"2024-07-01": {}}, "stock_sector_map": {}}'
+    coeff_json = (
+        '{"daily_coefficients": {"2024-07-01": {"801010.SI": 1.05}}, '
+        '"stock_sector_map": {"000001.SZ": "801010.SI"}}'
+    )
 
     def fail_precompute(*args, **kwargs):
         raise AssertionError("runtime precompute should not be called")

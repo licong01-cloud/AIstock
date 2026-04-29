@@ -76,6 +76,24 @@ def _read_text_tail_lines(path: Path, max_lines: int = QE_LOG_TAIL_DEFAULT_LINES
             data = f.read(read_size) + data
     return data.decode("utf-8", errors="replace").splitlines()[-max_lines:]
 
+
+def derive_custom_evo_final_status(expected_count: int, status_counts: Dict[str, int]) -> str:
+    """Return completed only when every configured custom loop completed."""
+    active_status_counts = {status: int(count) for status, count in status_counts.items() if int(count) > 0}
+    completed_count = int(status_counts.get("completed", 0))
+    failed_count = int(status_counts.get("failed", 0))
+    cancelled_count = int(status_counts.get("cancelled", 0)) + int(status_counts.get("canceled", 0))
+    if (
+        expected_count > 0
+        and completed_count == expected_count
+        and failed_count == 0
+        and cancelled_count == 0
+        and set(active_status_counts) == {"completed"}
+    ):
+        return "completed"
+    return "failed"
+
+
 class AutoEvolutionScheduler:
     """
     自动演进任务的核心调度器与状态机
@@ -2745,19 +2763,31 @@ class AutoEvolutionScheduler:
 
         client = self._get_workspace_client_for_node_id(effective_node_id)
 
-        # 3. Verify training artifacts on the recorded node. Do not inspect the
-        # local filesystem for remote loops, because that can hide node mismatch.
+        # 3. Detect whether retry can reuse training artifacts.  If a loop
+        # failed before workspace/model creation, retry must perform a full
+        # train+backtest run instead of rejecting the retry request.
+        retry_mode_name = "backtest_only"
+        retry_model_source = {
+            "source_task_id": task_id,
+            "source_loop": f"Loop{loop_index}",
+        }
         try:
             await client.download_mlruns_params(task_id, loop_id)
+            logger.info(
+                "Retry loop %s: params.pkl verified on node %s, using backtest-only mode",
+                evolution_loop_db_id,
+                effective_node_id,
+            )
         except Exception as e:
-            raise ValueError(
-                f"Loop {evolution_loop_db_id} has no usable mlruns params on node "
-                f"{effective_node_id}; retry cannot switch nodes or silently rerun training."
-            ) from e
-
-        logger.info(
-            f"Retry loop {evolution_loop_db_id}: params.pkl verified on node {effective_node_id}, using backtest-only mode"
-        )
+            retry_mode_name = "full_train"
+            retry_model_source = None
+            logger.warning(
+                "Retry loop %s: no reusable mlruns params on node %s; "
+                "falling back to full train+backtest retry. reason=%s",
+                evolution_loop_db_id,
+                effective_node_id,
+                e,
+            )
 
         # 4. 更新 loop 状态为 running
         with get_conn() as conn:
@@ -2788,7 +2818,7 @@ class AutoEvolutionScheduler:
 
             composer = ConfigComposer()
             executor = BacktestExecutor(composer, client)
-            if cfg.hmm and cfg.hmm.enable_sector_hmm:
+            if retry_mode_name == "backtest_only" and cfg.hmm and cfg.hmm.enable_sector_hmm:
                 try:
                     hmm_coeff_json = await client.get_workspace_file(
                         task_id,
@@ -2816,13 +2846,11 @@ class AutoEvolutionScheduler:
                 experiment_name=f"{task_id}/{loop_id}",
                 node_id=effective_node_id,
                 callback_url=self._get_callback_url_for_node(effective_node_id),
-                model_source={
-                    "source_task_id": task_id,
-                    "source_loop": f"Loop{loop_index}",
-                },
+                model_source=retry_model_source,
             )
-            result = await executor.submit(cfg, ctx, mode=BacktestMode.BACKTEST_ONLY)
-            logger.info(f"Retry in backtest-only mode via unified engine: {result.wsl_command}")
+            retry_mode = BacktestMode.BACKTEST_ONLY if retry_mode_name == "backtest_only" else BacktestMode.FULL_TRAIN
+            result = await executor.submit(cfg, ctx, mode=retry_mode)
+            logger.info("Retry in %s mode via unified engine: %s", retry_mode_name, result.wsl_command)
 
         except Exception as e:
             import traceback
@@ -2842,7 +2870,7 @@ class AutoEvolutionScheduler:
                 conn.commit()
             raise
 
-        return {"loop_id": evolution_loop_db_id, "mode": "backtest_only"}
+        return {"loop_id": evolution_loop_db_id, "mode": retry_mode_name}
 
     async def delete_task(self, task_id: str) -> Dict[str, Any]:
         """
@@ -3964,13 +3992,47 @@ class AutoEvolutionScheduler:
                         cur.execute("UPDATE qe_evolution_tasks SET current_loop = %s, updated_at = NOW() WHERE task_id = %s", (loop_index, task_id))
                     conn.commit()
 
-            # 检查是否所有 Loops 完成
-            if loop_index >= max_loops:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT status, COUNT(*) FROM qe_evolution_loops WHERE task_id = %s GROUP BY status",
+                        (task_id,),
+                    )
+                    status_counts = {status: count for status, count in cur.fetchall()}
+            terminal_statuses = {"completed", "failed", "cancelled", "canceled"}
+            completed_count = int(status_counts.get("completed", 0))
+            failed_count = int(status_counts.get("failed", 0))
+            cancelled_count = int(status_counts.get("cancelled", 0)) + int(status_counts.get("canceled", 0))
+            terminal_count = completed_count + failed_count + cancelled_count
+            nonterminal_count = sum(
+                int(count) for status, count in status_counts.items()
+                if status not in terminal_statuses
+            )
+
+            # Parallel loops can finish out of order. Only finalize the task
+            # after every configured loop is terminal, then require all loops
+            # to be completed before declaring task success.
+            if max_loops and terminal_count >= max_loops and nonterminal_count == 0:
+                final_status = derive_custom_evo_final_status(max_loops, status_counts)
                 with get_conn() as conn:
                     with conn.cursor() as cur:
-                        cur.execute("UPDATE qe_evolution_tasks SET status = 'completed', updated_at = NOW() WHERE task_id = %s", (task_id,))
+                        cur.execute(
+                            "UPDATE qe_evolution_tasks SET status = %s, updated_at = NOW() "
+                            "WHERE task_id = %s AND status = 'running'",
+                            (final_status, task_id),
+                        )
                     conn.commit()
-                logger.info(f"策略演进任务 {task_id} 完成")
+                logger.info(
+                    "Strategy evolution task %s final status=%s "
+                    "(expected=%s, terminal=%s, completed=%s, failed=%s, cancelled=%s)",
+                    task_id,
+                    final_status,
+                    max_loops,
+                    terminal_count,
+                    completed_count,
+                    failed_count,
+                    cancelled_count,
+                )
             else:
                 # 串行模式：提交下一个 Loop
                 execution_mode = task_row.get("strategy_evo_execution_mode", "serial") if task_row else "serial"
@@ -4481,7 +4543,18 @@ class AutoEvolutionScheduler:
             logger.info(f"自定义演进任务 {task_id} 所有 Loop 已完成")
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("UPDATE qe_evolution_tasks SET status = 'completed', updated_at = NOW() WHERE task_id = %s", (task_id,))
+                    cur.execute(
+                        "SELECT status, COUNT(*) FROM qe_evolution_loops WHERE task_id = %s GROUP BY status",
+                        (task_id,),
+                    )
+                    status_counts = {status: count for status, count in cur.fetchall()}
+            final_status = derive_custom_evo_final_status(len(loops_config), status_counts)
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE qe_evolution_tasks SET status = %s, updated_at = NOW() WHERE task_id = %s",
+                        (final_status, task_id),
+                    )
                 conn.commit()
             return
 
@@ -4597,29 +4670,26 @@ class AutoEvolutionScheduler:
                 cur.execute("SELECT status FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                 final_task = cur.fetchone()
         if final_task and final_task["status"] == "running":
-            # 检查是否还有 running 的 loop
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT COUNT(*) FROM qe_evolution_loops WHERE task_id = %s AND status = 'running'",
+                        "SELECT status, COUNT(*) FROM qe_evolution_loops WHERE task_id = %s GROUP BY status",
                         (task_id,),
                     )
-                    running_count = cur.fetchone()[0]
-            if running_count == 0:
+                    status_counts = {status: count for status, count in cur.fetchall()}
+            terminal_statuses = {"completed", "failed", "cancelled", "canceled"}
+            active_count = sum(
+                int(count) for status, count in status_counts.items()
+                if status not in terminal_statuses
+            )
+            if active_count == 0:
                 # 没有正在跑的 loop 了，检查结果
-                with get_conn() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "SELECT COUNT(*) FROM qe_evolution_loops WHERE task_id = %s AND status = 'completed'",
-                            (task_id,),
-                        )
-                        completed_count = cur.fetchone()[0]
-                        cur.execute(
-                            "SELECT COUNT(*) FROM qe_evolution_loops WHERE task_id = %s AND status = 'failed'",
-                            (task_id,),
-                        )
-                        failed_count = cur.fetchone()[0]
-                final_status = "completed" if completed_count > 0 else "failed"
+                completed_count = int(status_counts.get("completed", 0))
+                failed_count = int(status_counts.get("failed", 0))
+                cancelled_count = int(status_counts.get("cancelled", 0)) + int(status_counts.get("canceled", 0))
+                expected_count = len(loops_config)
+                terminal_count = completed_count + failed_count + cancelled_count
+                final_status = derive_custom_evo_final_status(expected_count, status_counts)
                 with get_conn() as conn:
                     with conn.cursor() as cur:
                         cur.execute(
@@ -4627,7 +4697,17 @@ class AutoEvolutionScheduler:
                             (final_status, task_id),
                         )
                     conn.commit()
-                logger.info(f"自定义演进任务 {task_id} 最终状态: {final_status} (completed={completed_count}, failed={failed_count})")
+                logger.info(
+                    "Custom evolution task %s final status: %s "
+                    "(expected=%s, terminal=%s, completed=%s, failed=%s, cancelled=%s)",
+                    task_id,
+                    final_status,
+                    expected_count,
+                    terminal_count,
+                    completed_count,
+                    failed_count,
+                    cancelled_count,
+                )
 
 
     # ── Multi-Alpha Phase 3: helper methods ──────────────────────────────

@@ -595,6 +595,12 @@ class ConfigComposer:
                 "precomputed HMM coefficients missing required fields: "
                 f"keys={list(data.keys())}"
             )
+        if not isinstance(data.get("daily_coefficients"), dict) or not data["daily_coefficients"]:
+            raise RuntimeError("precomputed HMM coefficients contain no daily_coefficients")
+        if not any(isinstance(day, dict) and day for day in data["daily_coefficients"].values()):
+            raise RuntimeError("precomputed HMM coefficients contain no non-empty daily sector coefficients")
+        if not isinstance(data.get("stock_sector_map"), dict) or not data["stock_sector_map"]:
+            raise RuntimeError("precomputed HMM coefficients contain no stock_sector_map")
 
     def _resolve_hmm_coefficients_json(
         self,
@@ -3571,10 +3577,7 @@ model_cls = {nn_class_name}
             raise RuntimeError("WSL HMM 预计算返回空结果")
 
         result = json.loads(stdout)
-        if "daily_coefficients" not in result or "stock_sector_map" not in result:
-            raise RuntimeError(
-                f"WSL HMM 预计算结果缺少必要字段: keys={list(result.keys())}"
-            )
+        self._validate_hmm_coefficients_json(stdout)
 
         logger.info(
             f"HMM 预计算完成并已缓存到文件: {coeff_filename}, "

@@ -157,7 +157,11 @@ class TestConfigComposerCommandGeneration:
             mock_run.side_effect = [
                 SimpleNamespace(returncode=1, stdout="", stderr=""),
                 SimpleNamespace(returncode=0, stdout="10.0.0.1\n", stderr=""),
-                SimpleNamespace(returncode=0, stdout='{"daily_coefficients": {}, "stock_sector_map": {}, "sector_count": 0}', stderr=""),
+                SimpleNamespace(
+                    returncode=0,
+                    stdout='{"daily_coefficients": {"2024-01-02": {"801010.SI": 1.05}}, "stock_sector_map": {"000001.SZ": "801010.SI"}, "sector_count": 1}',
+                    stderr="",
+                ),
             ]
 
             composer._precompute_hmm_coefficients(strategy_params, data_split)
@@ -165,6 +169,24 @@ class TestConfigComposerCommandGeneration:
             cmd = mock_run.call_args_list[-1].args[0][3]
             assert 'case "$_conda_sh" in "~/"*) _conda_sh="$HOME/${_conda_sh#~/}" ;; esac' in cmd
             assert 'conda activate "${QLIB_WSL_CONDA_ENV:-rdagent-gpu}"' in cmd
+
+    def test_hmm_precompute_rejects_empty_coefficients(self):
+        composer = ConfigComposer()
+        strategy_params = {
+            "sector_hmm_model_path": "F:/tmp/models.json",
+            "hmm_signal_preset": "preset_A",
+        }
+        data_split = {"test_start": "2024-01-01", "backtest_end": "2024-01-31"}
+
+        with patch("subprocess.run") as mock_run, patch.dict("os.environ", {"TDX_DB_PASSWORD": "secret"}, clear=False):
+            mock_run.side_effect = [
+                SimpleNamespace(returncode=1, stdout="", stderr=""),
+                SimpleNamespace(returncode=0, stdout="10.0.0.1\n", stderr=""),
+                SimpleNamespace(returncode=0, stdout='{"daily_coefficients": {}, "stock_sector_map": {}, "sector_count": 0}', stderr=""),
+            ]
+
+            with pytest.raises(RuntimeError, match="daily_coefficients"):
+                composer._precompute_hmm_coefficients(strategy_params, data_split)
 
     def test_generate_auto_wsl_command_keeps_legacy_cd_prefix(self):
         composer = ConfigComposer()
