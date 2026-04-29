@@ -422,6 +422,103 @@ def test_selection_artifact_service_generates_live_inference_artifact_without_ex
     assert [item.symbol for item in run.aggregate_results] == ["000001.SZ", "000002.SZ"]
 
 
+def test_selection_center_pit_mode_resolves_previous_trading_day_and_passes_cutoff(tmp_path) -> None:
+    class FakeCalendar:
+        def __init__(self) -> None:
+            self.ensure_calls: list[date] = []
+
+        def ensure_trading_day(self, trade_date: date) -> None:
+            self.ensure_calls.append(trade_date)
+
+        def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
+            assert end_date == date(2024, 1, 2)
+            return [date(2024, 1, 2)]
+
+    class FakeResolver:
+        def load_source(self, experiment_id: str):
+            return {"experiment_id": experiment_id}
+
+        def prepare_workspace(self, **_kwargs):
+            class Prepared:
+                workspace_path = tmp_path
+                factor_order_path = tmp_path / "factor_order.json"
+                factor_entry_path = tmp_path / "factor_entry.py"
+                model_params_path = tmp_path / "params.pkl"
+                model_source_path = tmp_path / "source_params.pkl"
+                factor_source_dir = tmp_path / "factors"
+                factor_order = ["f1"]
+                alpha158_factors = []
+                dynamic_factors = ["f1"]
+                model_candidate_count = 1
+
+            return Prepared()
+
+    class FakeProvider:
+        backend_name = "fake_live"
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            return LiveInferenceResult(
+                scores=[
+                    {"symbol": "000001.SZ", "score": 0.9, "rank": 1, "reference_price": 10.0},
+                    {"symbol": "000002.SZ", "score": 0.8, "rank": 2, "reference_price": 11.0},
+                ],
+                metadata={"provider": "fake"},
+            )
+
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(
+            update={
+                "package_status": PackageStatus.SELECTION_ENABLED,
+                "strategy_config": {"strategy_id": "pkg_pit"},
+            }
+        )
+    )
+    package_repo.save_manifest(manifest)
+    artifact_repo = InMemorySelectionScoreArtifactRepository()
+    provider = FakeProvider()
+    artifact_service = StrategyPackageSelectionArtifactService(
+        package_repository=package_repo,
+        artifact_repository=artifact_repo,
+        runtime_asset_resolver=FakeResolver(),
+        live_inference_provider=provider,
+    )
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        runtime=StrategyPackageRuntime(artifact_repository=artifact_repo),
+        selection_artifact_service=artifact_service,
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        calendar_provider=FakeCalendar(),
+    )
+
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 3),
+        data_source="DB_HISTORICAL",
+        runtime_config={
+            "selection_artifact_config": {
+                "auto_generate": True,
+                "inference_backend": "local",
+                "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+            },
+            "runtime_profile": {"selection": {"top_k": 2}},
+        },
+    )
+
+    assert run.status == SelectionRunStatus.SUCCEEDED
+    assert run.runtime_config["selection_artifact_config"]["cutoff_date"] == "2024-01-02"
+    assert run.runtime_config["point_in_time_context"]["score_trade_date"] == "2024-01-02"
+    assert provider.calls[-1]["trade_date"] == date(2024, 1, 3)
+    assert provider.calls[-1]["cutoff_date"] == date(2024, 1, 2)
+    assert [item.symbol for item in run.aggregate_results] == ["000001.SZ", "000002.SZ"]
+
+
 def test_live_inference_factor_order_uses_static_dataloader_schema(tmp_path) -> None:
     workspace = tmp_path / "qe_workspace" / "qe_static_schema"
     factors_dir = workspace / "factors"

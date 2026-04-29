@@ -282,6 +282,29 @@ export type PaperSchedulerRunResult = {
   errors: JsonObject[];
 };
 
+export type PaperLiveDashboard = {
+  portfolio: PaperPortfolio;
+  package: JsonObject;
+  active_session?: PaperSession | null;
+  other_active_sessions?: PaperSession[];
+  session_days?: JsonObject[];
+  current_run?: PaperRun | null;
+  scheduler?: JsonObject;
+  data_freshness?: JsonObject;
+  daily_signal?: JsonObject;
+  target_rebalance?: JsonObject;
+  minute_execution?: JsonObject;
+  intraday_nav?: JsonObject;
+  positions?: JsonObject[];
+  orders?: JsonObject[];
+  fills?: JsonObject[];
+  order_events?: JsonObject[];
+  run_events?: JsonObject[];
+  errors?: JsonObject[];
+  daily_snapshots?: JsonObject[];
+  warnings?: JsonObject[];
+};
+
 export type Activation = {
   activation_id: string;
   portfolio_id: string;

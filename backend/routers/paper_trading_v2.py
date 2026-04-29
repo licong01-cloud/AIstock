@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from backend.db.pg_pool import get_conn
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.paper_trading_v2.live_dashboard import PaperTradingLiveDashboardService
 from backend.services.paper_trading_v2.readiness import PaperTradingReadinessService
 from backend.services.paper_trading_v2.replay import PaperTradingHistoricalReplay
 from backend.services.paper_trading_v2.repository import PaperTradingV2Repository
@@ -491,6 +492,65 @@ def list_portfolio_sessions(portfolio_id: str, limit: int = 100) -> dict[str, An
     try:
         sessions = PaperTradingSessionService().list_sessions(portfolio_id, limit=limit)
         return {"ok": True, "sessions": [session.model_dump(mode="json") for session in sessions]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/portfolios/{portfolio_id}/live-dashboard")
+def get_portfolio_live_dashboard(
+    portfolio_id: str,
+    trade_date: date | None = None,
+    event_limit: int = 500,
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            "dashboard": PaperTradingLiveDashboardService().get_dashboard(
+                portfolio_id,
+                trade_date=trade_date,
+                event_limit=event_limit,
+            ),
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/portfolios/{portfolio_id}/intraday-snapshots")
+def list_portfolio_intraday_snapshots(
+    portfolio_id: str,
+    trade_date: date | None = None,
+    limit: int = 500,
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            "intraday_snapshots": PaperTradingLiveDashboardService().list_intraday_snapshots(
+                portfolio_id,
+                trade_date=trade_date,
+                limit=limit,
+            ),
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/portfolios/{portfolio_id}/minute-execution")
+def get_portfolio_minute_execution(
+    portfolio_id: str,
+    trade_date: date | None = None,
+    symbol: str | None = None,
+    limit: int = 500,
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            "minute_execution": PaperTradingLiveDashboardService().minute_execution(
+                portfolio_id,
+                trade_date=trade_date,
+                symbol=symbol,
+                limit=limit,
+            ),
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 

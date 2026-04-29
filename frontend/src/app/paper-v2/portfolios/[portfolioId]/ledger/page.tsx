@@ -107,6 +107,7 @@ export default function PaperV2LedgerPage() {
     <main>
       <div className="pv2-detail-nav">
         <Link href={`/paper-v2/portfolios/${portfolioId}`}>详情</Link>
+        <Link href={`/paper-v2/portfolios/${portfolioId}/live-dashboard`}>实时详情</Link>
         <Link href={`/paper-v2/portfolios/${portfolioId}/run-console`}>运行控制台</Link>
         <Link href={`/paper-v2/portfolios/${portfolioId}/performance`}>绩效</Link>
       </div>

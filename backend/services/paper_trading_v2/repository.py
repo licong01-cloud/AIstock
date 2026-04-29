@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import UTC, date, datetime
 from typing import Any, Callable, Iterator
@@ -9,7 +10,7 @@ from typing import Any, Callable, Iterator
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
+from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, SessionLockTimeoutError
 from backend.services.trading_core.ledger import CashLedgerEntry
 from backend.services.trading_core.models import AccountSnapshot, Fill, Order, OrderEvent, PositionLot, RunStatus
 
@@ -42,6 +43,25 @@ ConnFactory = Callable[[], Iterator[Any]]
 class PaperTradingV2Repository:
     def __init__(self, conn_factory: ConnFactory | None = None) -> None:
         self._conn_factory = conn_factory or get_conn
+
+    @contextmanager
+    def session_tick_lock(self, session_id: str) -> Iterator[None]:
+        """Hold a PostgreSQL advisory lock so multiple backend processes do not tick one session."""
+
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(2402, hashtext(%s))", (session_id,))
+                locked = bool(cur.fetchone()[0])
+            if not locked:
+                raise SessionLockTimeoutError(
+                    "paper v2 session is already being processed by another backend process",
+                    context={"session_id": session_id, "lock_scope": "postgres_advisory_lock"},
+                )
+            try:
+                yield
+            finally:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(2402, hashtext(%s))", (session_id,))
 
     def create_portfolio(self, portfolio: PaperPortfolio) -> PaperPortfolio:
         with self._conn_factory() as conn:
@@ -157,6 +177,33 @@ class PaperTradingV2Repository:
                 row = cur.fetchone()
         if not row:
             return None
+        return PaperRun(
+            run_id=row["run_id"],
+            portfolio_id=row["portfolio_id"],
+            trade_date=row["trade_date"],
+            status=RunStatus(row["status"]),
+            data_source=MinuteDataSource(row["data_source"]),
+            runtime_config=row["runtime_config"] or {},
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+            error=row["error_json"],
+        )
+
+    def get_run(self, run_id: str) -> PaperRun:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT run_id, portfolio_id, trade_date, status, data_source,
+                           runtime_config, started_at, completed_at, error_json
+                    FROM paper_v2.run
+                    WHERE run_id = %s
+                    """,
+                    (run_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError("paper v2 run does not exist", context={"run_id": run_id})
         return PaperRun(
             run_id=row["run_id"],
             portfolio_id=row["portfolio_id"],
@@ -530,6 +577,30 @@ class PaperTradingV2Repository:
             LIMIT %s
             """,
             (session_id, limit),
+        )
+
+    def list_intraday_snapshots_for_portfolio(
+        self,
+        portfolio_id: str,
+        *,
+        trade_date: date | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = [portfolio_id]
+        date_filter = ""
+        if trade_date is not None:
+            date_filter = " AND trade_date = %s"
+            params.append(trade_date)
+        params.append(limit)
+        return self._fetch_rows(
+            f"""
+            SELECT *
+            FROM paper_v2.intraday_snapshots
+            WHERE portfolio_id = %s{date_filter}
+            ORDER BY snapshot_time DESC
+            LIMIT %s
+            """,
+            tuple(params),
         )
 
     def save_execution_policy_activation(
@@ -1021,6 +1092,30 @@ class PaperTradingV2Repository:
             """,
             (run_id,),
         )
+
+    def list_order_events(self, portfolio_id: str, *, run_id: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+        params: list[Any] = [portfolio_id]
+        run_filter = ""
+        if run_id is not None:
+            run_filter = " AND oe.run_id = %s"
+            params.append(run_id)
+        params.append(limit)
+        return self._fetch_rows(
+            f"""
+            SELECT oe.*, o.symbol, o.side, o.quantity AS order_quantity,
+                   o.filled_quantity AS order_filled_quantity,
+                   o.avg_fill_price AS order_avg_fill_price,
+                   o.status AS order_status
+            FROM paper_v2.order_events oe
+            JOIN paper_v2.run r ON r.run_id = oe.run_id
+            LEFT JOIN paper_v2.orders o ON o.order_id = oe.order_id
+            WHERE r.portfolio_id = %s{run_filter}
+            ORDER BY oe.event_time DESC, oe.event_id DESC
+            LIMIT %s
+            """,
+            tuple(params),
+        )
+
 
     def save_order_event(self, run_id: str, event: OrderEvent) -> None:
         with self._conn_factory() as conn:
@@ -1569,6 +1664,10 @@ class InMemoryPaperTradingV2Repository:
         self.order_execution_states: dict[str, OrderExecutionState] = {}
         self.intraday_snapshots: dict[tuple[str, datetime], IntradaySnapshot] = {}
 
+    @contextmanager
+    def session_tick_lock(self, session_id: str) -> Iterator[None]:
+        yield
+
     def create_portfolio(self, portfolio: PaperPortfolio) -> PaperPortfolio:
         self.portfolios[portfolio.portfolio_id] = portfolio
         return portfolio
@@ -1597,6 +1696,12 @@ class InMemoryPaperTradingV2Repository:
             if run.portfolio_id == portfolio_id and run.trade_date == trade_date:
                 return run
         return None
+
+    def get_run(self, run_id: str) -> PaperRun:
+        try:
+            return self.runs[run_id]
+        except KeyError as exc:
+            raise DataUnavailableError("paper v2 run does not exist", context={"run_id": run_id}) from exc
 
     def update_run_status(self, run: PaperRun, status: RunStatus, error: dict[str, Any] | None = None) -> PaperRun:
         updated = run.model_copy(
@@ -1735,6 +1840,21 @@ class InMemoryPaperTradingV2Repository:
             snapshot.model_dump(mode="json")
             for snapshot in self.intraday_snapshots.values()
             if snapshot.session_id == session_id
+        ]
+        rows.sort(key=lambda item: item["snapshot_time"], reverse=True)
+        return rows[:limit]
+
+    def list_intraday_snapshots_for_portfolio(
+        self,
+        portfolio_id: str,
+        *,
+        trade_date: date | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        rows = [
+            snapshot.model_dump(mode="json")
+            for snapshot in self.intraday_snapshots.values()
+            if snapshot.portfolio_id == portfolio_id and (trade_date is None or snapshot.trade_date == trade_date)
         ]
         rows.sort(key=lambda item: item["snapshot_time"], reverse=True)
         return rows[:limit]
@@ -2000,6 +2120,33 @@ class InMemoryPaperTradingV2Repository:
         existing = self.events.setdefault(run_id, [])
         if not any(item.event_id == event.event_id for item in existing):
             existing.append(event)
+
+    def list_order_events(self, portfolio_id: str, *, run_id: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for stored_run_id, events in self.events.items():
+            run = self.runs.get(stored_run_id)
+            if not run or run.portfolio_id != portfolio_id:
+                continue
+            if run_id is not None and stored_run_id != run_id:
+                continue
+            order_by_id = {order.order_id: order for order in self.orders.get(stored_run_id, [])}
+            for event in events:
+                item = event.model_dump(mode="json")
+                order = order_by_id.get(event.order_id)
+                if order is not None:
+                    item.update(
+                        {
+                            "symbol": order.symbol,
+                            "side": order.side.value,
+                            "order_quantity": order.quantity,
+                            "order_filled_quantity": order.filled_quantity,
+                            "order_avg_fill_price": order.avg_fill_price,
+                            "order_status": order.status.value,
+                        }
+                    )
+                rows.append(item)
+        rows.sort(key=lambda item: str(item.get("event_time") or ""), reverse=True)
+        return rows[:limit]
 
     def save_cash_entry(self, run_id: str, entry: CashLedgerEntry) -> None:
         self.cash_entries.setdefault(run_id, []).append(entry)

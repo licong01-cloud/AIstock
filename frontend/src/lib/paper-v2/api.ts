@@ -8,6 +8,7 @@ import type {
   HmmSnapshot,
   JsonObject,
   PaperPortfolio,
+  PaperLiveDashboard,
   PaperRun,
   PaperSchedulerRunResult,
   PaperSchedulerStatus,
@@ -198,6 +199,15 @@ export const selectionCenterApi = {
     const data = await apiFetch<{ run: SelectionRun }>("/selection-center/runs", body(payload));
     return data.run;
   },
+  async resolvePitCutoff(payload: { trade_date: string; pit_mode?: string; cutoff_date?: string | null }): Promise<JsonObject> {
+    const qs = new URLSearchParams({
+      trade_date: payload.trade_date,
+      pit_mode: payload.pit_mode || "PREVIOUS_TRADING_DAY_CLOSE",
+    });
+    if (payload.cutoff_date) qs.set("cutoff_date", payload.cutoff_date);
+    const data = await apiFetch<{ point_in_time_context: JsonObject }>(`/selection-center/pit-cutoff?${qs.toString()}`);
+    return data.point_in_time_context;
+  },
   async aggregateRuns(payload: { source_run_ids: string[]; mode: SelectionMode; runtime_config: JsonObject }): Promise<SelectionRun> {
     const data = await apiFetch<{ run: SelectionRun }>("/selection-center/aggregate-runs", body(payload));
     return data.run;
@@ -361,6 +371,31 @@ export const paperV2Api = {
   async configChangeAudit(portfolioId: string): Promise<JsonObject[]> {
     const data = await apiFetch<{ audit: JsonObject[] }>(`/paper-v2/portfolios/${portfolioId}/config-change-audit`);
     return data.audit || [];
+  },
+  async liveDashboard(portfolioId: string, payload: { trade_date?: string | null; event_limit?: number } = {}): Promise<PaperLiveDashboard> {
+    const qs = new URLSearchParams();
+    if (payload.trade_date) qs.set("trade_date", payload.trade_date);
+    if (payload.event_limit) qs.set("event_limit", String(payload.event_limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const data = await apiFetch<{ dashboard: PaperLiveDashboard }>(`/paper-v2/portfolios/${portfolioId}/live-dashboard${suffix}`);
+    return data.dashboard;
+  },
+  async intradaySnapshots(portfolioId: string, payload: { trade_date?: string | null; limit?: number } = {}): Promise<JsonObject[]> {
+    const qs = new URLSearchParams();
+    if (payload.trade_date) qs.set("trade_date", payload.trade_date);
+    if (payload.limit) qs.set("limit", String(payload.limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const data = await apiFetch<{ intraday_snapshots: JsonObject[] }>(`/paper-v2/portfolios/${portfolioId}/intraday-snapshots${suffix}`);
+    return data.intraday_snapshots || [];
+  },
+  async minuteExecution(portfolioId: string, payload: { trade_date?: string | null; symbol?: string | null; limit?: number } = {}): Promise<JsonObject> {
+    const qs = new URLSearchParams();
+    if (payload.trade_date) qs.set("trade_date", payload.trade_date);
+    if (payload.symbol) qs.set("symbol", payload.symbol);
+    if (payload.limit) qs.set("limit", String(payload.limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const data = await apiFetch<{ minute_execution: JsonObject }>(`/paper-v2/portfolios/${portfolioId}/minute-execution${suffix}`);
+    return data.minute_execution;
   },
   async orders(portfolioId: string): Promise<JsonObject[]> {
     const data = await apiFetch<{ orders: JsonObject[] }>(`/paper-v2/portfolios/${portfolioId}/orders`);

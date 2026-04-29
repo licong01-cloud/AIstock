@@ -109,6 +109,7 @@ export default function PaperV2PortfolioDetailPage() {
     <main>
       <div className="pv2-detail-nav">
         <Link href="/paper-v2/portfolios">组合中心</Link>
+        <Link href={`/paper-v2/portfolios/${portfolioId}/live-dashboard`}>实时详情</Link>
         <Link href={`/paper-v2/portfolios/${portfolioId}/run-console`}>运行控制台</Link>
         <Link href={`/paper-v2/portfolios/${portfolioId}/ledger`}>账本</Link>
         <Link href={`/paper-v2/portfolios/${portfolioId}/performance`}>绩效</Link>
@@ -160,6 +161,7 @@ export default function PaperV2PortfolioDetailPage() {
               />
             </div>
             <div className="pv2-row-actions" style={{ marginTop: 14 }}>
+              <Link className="pv2-button" href={`/paper-v2/portfolios/${portfolioId}/live-dashboard`}>查看实时运行详情</Link>
               <Link className="pv2-button" href={`/paper-v2/portfolios/${portfolioId}/ledger`}>查看完整交易账本</Link>
               <Link className="pv2-button" href={`/paper-v2/portfolios/${portfolioId}/performance`}>查看收益分析</Link>
               <Link className="pv2-button" href={`/paper-v2/portfolios/${portfolioId}/run-console`}>打开运行控制台</Link>
@@ -206,6 +208,7 @@ export default function PaperV2PortfolioDetailPage() {
             <SectionCard title="操作入口" eyebrow="下一步">
               <div className="pv2-grid pv2-grid-2">
                 <Link className="pv2-button" href={`/paper-v2/portfolios/${portfolioId}/run-console`}>就绪检查 / 单日运行 / 回放</Link>
+                <Link className="pv2-button" href={`/paper-v2/portfolios/${portfolioId}/live-dashboard`}>实时运行详情</Link>
                 <Link className="pv2-button" href={`/paper-v2/portfolios/${portfolioId}/ledger`}>订单 / 成交 / 持仓</Link>
                 <Link className="pv2-button" href={`/paper-v2/portfolios/${portfolioId}/performance`}>绩效报告</Link>
                 <Link className="pv2-button-ghost" href="/paper-v2/model-hmm">模型与 HMM 维护</Link>

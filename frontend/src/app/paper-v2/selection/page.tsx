@@ -2,13 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import JsonPanel from "@/components/paper-v2/JsonPanel";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { hmmTrainingApi, paperV2Api, selectionCenterApi } from "@/lib/paper-v2/api";
-import { formatPercent, hmmSnapshotLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
+import { asText, dataSourceLabel, formatNumber, formatPercent, hmmSnapshotLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
 import type { DataSource, HmmConfig, HmmSnapshot, JsonObject, SelectablePackage, SelectionMode, SelectionRun, SelectionWatchlistImportResult } from "@/lib/paper-v2/types";
 
 function runLabel(run: SelectionRun): string {
@@ -39,6 +38,8 @@ export default function PaperV2SelectionPage() {
   const [weights, setWeights] = useState<Record<string, number>>({});
   const [mode, setMode] = useState<SelectionMode>("single_package");
   const [tradeDate, setTradeDate] = useState(todayIso());
+  const [pitMode, setPitMode] = useState("PREVIOUS_TRADING_DAY_CLOSE");
+  const [pitContext, setPitContext] = useState<JsonObject | null>(null);
   const [dataSource, setDataSource] = useState<DataSource>("DB_HISTORICAL");
   const [topK, setTopK] = useState(20);
   const [industryBlacklist, setIndustryBlacklist] = useState("");
@@ -133,6 +134,18 @@ export default function PaperV2SelectionPage() {
     if (nextSnapshotId !== hmmSnapshotId) setHmmSnapshotId(nextSnapshotId);
   }, [hmmPreset, hmmSnapshotId, hmmSnapshots, tradeDate]);
 
+  useEffect(() => {
+    let alive = true;
+    setPitContext(null);
+    if (pitMode === "NONE" || !tradeDate) return () => { alive = false; };
+    selectionCenterApi.resolvePitCutoff({ trade_date: tradeDate, pit_mode: pitMode }).then((context) => {
+      if (alive) setPitContext(context);
+    }).catch((exc) => {
+      if (alive) setError(exc);
+    });
+    return () => { alive = false; };
+  }, [pitMode, tradeDate]);
+
   function updateMode(nextMode: SelectionMode) {
     setMode(nextMode);
     if (nextMode !== "single_package") return;
@@ -164,9 +177,14 @@ export default function PaperV2SelectionPage() {
         coefficients_path: hmmEnabled ? selectedHmmArtifact?.path || null : null,
       },
     };
+    const artifactConfig: JsonObject = { auto_generate: true, inference_backend: "wsl" };
+    if (pitMode !== "NONE") {
+      artifactConfig.pit_mode = pitMode;
+      if (pitContext?.cutoff_date) artifactConfig.cutoff_date = pitContext.cutoff_date;
+    }
     const config: JsonObject = {
       top_k: topK,
-      selection_artifact_config: { auto_generate: true, inference_backend: "wsl" },
+      selection_artifact_config: artifactConfig,
       runtime_profile: runtimeProfile,
     };
     if (mode === "weighted_fusion") {
@@ -192,6 +210,7 @@ export default function PaperV2SelectionPage() {
       const packageIds = selectedPackages.map((item) => item.package_id);
       if (topK < 1 || topK > 50) throw new Error("TopK 必须在 1 到 50 之间。");
       if (hmmEnabled && !hmmConfigId) throw new Error("启用 HMM 时必须选择模型版本。");
+      if (pitMode !== "NONE" && !pitContext?.cutoff_date) throw new Error("历史时点选股必须先解析出前一交易日截止日。");
       if (hmmEnabled && !hmmSnapshotId) throw new Error(`没有 HMM 快照系数覆盖交易日 ${tradeDate} / ${hmmPreset}。请切换交易日、快照或预设，或先执行 HMM 滚动训练。`);
       if (hmmEnabled && !selectedHmmArtifact) {
         throw new Error(`HMM 系数文件不覆盖交易日 ${tradeDate} / ${hmmPreset}。请改选覆盖该日期的快照，或先执行 HMM 滚动训练生成新系数。`);
@@ -266,11 +285,19 @@ export default function PaperV2SelectionPage() {
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>模式</label><select className="pv2-select" data-testid="selection-mode" value={mode} onChange={(event) => updateMode(event.target.value as SelectionMode)}><option value="single_package">单策略包</option><option value="weighted_fusion">加权融合</option><option value="intersection">交集</option><option value="union">并集</option></select></div>
             <div className="pv2-field"><label>交易日期</label><input className="pv2-input" data-testid="selection-trade-date" type="date" value={tradeDate} onChange={(event) => setTradeDate(event.target.value)} /></div>
+            <div className="pv2-field"><label>时点口径</label><select className="pv2-select" data-testid="selection-pit-mode" value={pitMode} onChange={(event) => setPitMode(event.target.value)}><option value="PREVIOUS_TRADING_DAY_CLOSE">前一交易日收盘数据</option><option value="NONE">诊断：不强制截止日</option></select></div>
             <div className="pv2-field"><label>数据源</label><select className="pv2-select" data-testid="selection-data-source" value={dataSource} onChange={(event) => setDataSource(event.target.value as DataSource)}><option value="DB_HISTORICAL">DB_HISTORICAL 历史分钟回放</option><option value="TDX_REALTIME">TDX_REALTIME 实时行情</option></select></div>
             <div className="pv2-field"><label>TopK（默认 20，最高 50）</label><input className="pv2-input" data-testid="selection-top-k" type="number" min={1} max={50} value={topK} onChange={(event) => setTopK(Number(event.target.value))} /></div>
             <div className="pv2-field"><label>行业黑名单</label><input className="pv2-input" data-testid="selection-industry-blacklist" placeholder="银行, 房地产" value={industryBlacklist} onChange={(event) => setIndustryBlacklist(event.target.value)} /></div>
             <div className="pv2-field"><label>可交易性</label><label className="pv2-chip"><input data-testid="selection-exclude-suspended" type="checkbox" checked={excludeSuspended} onChange={(event) => setExcludeSuspended(event.target.checked)} /> 剔除已确认停牌股票并按后续排名补位</label></div>
           </div>
+          {pitMode !== "NONE" ? (
+            <NoticePanel title="历史时点选股口径" tone={pitContext?.cutoff_date ? "success" : "warning"}>
+              目标交易日 {tradeDate} 的信号只允许使用截止到 <strong data-testid="selection-cutoff-date">{asText(pitContext?.cutoff_date)}</strong> 的数据；参考价日期为 {asText(pitContext?.reference_price_trade_date)}。后端会再次校验交易日历，不能使用目标日收盘后的未来数据。
+            </NoticePanel>
+          ) : (
+            <NoticePanel title="诊断模式" tone="warning">当前不强制前一交易日 cutoff，仅用于排查历史 artifact；正式选股和模拟盘应使用前一交易日收盘口径。</NoticePanel>
+          )}
           <div className="pv2-card" style={{ marginTop: 14 }}>
             <div className="pv2-row-actions">
               <label className="pv2-chip"><input data-testid="selection-hmm-enabled" type="checkbox" checked={hmmEnabled} onChange={(event) => setHmmEnabled(event.target.checked)} /> 启用 HMM</label>
@@ -331,6 +358,8 @@ export default function PaperV2SelectionPage() {
       <SectionCard title="选股结果" eyebrow={run ? `run_id ${shortHash(run.run_id)}` : "尚未运行"} action={<button className="pv2-button" data-testid="selection-add-watchlist" onClick={addToWatchlist} disabled={!run || !resultRows.length} type="button">一键加入自选股票池</button>}>
         <div className="pv2-form-grid" style={{ marginBottom: 12 }}>
           <div className="pv2-field"><label>自选分类名称</label><input className="pv2-input" data-testid="selection-watchlist-name" value={watchlistCategoryName} onChange={(event) => setWatchlistCategoryName(event.target.value)} placeholder="自动创建或复用同名分类" /></div>
+          <div className="pv2-field"><label>目标交易日</label><div className="pv2-chip">{run?.trade_date || tradeDate}</div></div>
+          <div className="pv2-field"><label>数据截止日</label><div className="pv2-chip">{asText((run?.runtime_config?.point_in_time_context as JsonObject | undefined)?.cutoff_date || pitContext?.cutoff_date)}</div></div>
         </div>
         <PaperTable
           rows={resultRows}
@@ -345,7 +374,11 @@ export default function PaperV2SelectionPage() {
             { key: "trace", header: "追踪", render: (row) => row.component_scores ? <span className="pv2-mono">{Object.keys(row.component_scores).join(", ")}</span> : "-" },
           ]}
         />
-        {watchlistResult ? <JsonPanel value={watchlistResult as unknown as JsonObject} /> : null}
+        {watchlistResult ? (
+          <NoticePanel title="已加入自选股票池" tone="success">
+            分类 {watchlistCategoryName || watchlistResult.category_id}，来源 {watchlistResult.entry_source}，加入 {watchlistResult.imported_symbols.length} 只股票，入池基准时间 {watchlistResult.entry_as_of}。
+          </NoticePanel>
+        ) : null}
       </SectionCard>
 
       <div className="pv2-grid pv2-grid-2">
@@ -363,7 +396,18 @@ export default function PaperV2SelectionPage() {
         </SectionCard>
 
         <SectionCard title="运行配置追踪" eyebrow="本次请求">
-          <JsonPanel value={{ tradeDate, dataSource, mode, topK, selected_package_ids: selectedPackages.map((item) => item.package_id), runtime_config: runtimeConfig() }} />
+          <div className="pv2-readable-panel">
+            <div className="pv2-readable-table">
+              <div className="pv2-readable-row"><div className="pv2-readable-key">目标交易日</div><div className="pv2-readable-value">{tradeDate}</div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">数据截止日</div><div className="pv2-readable-value">{asText(pitContext?.cutoff_date)}</div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">选股模式</div><div className="pv2-readable-value"><StatusBadge status={mode.toUpperCase()} /></div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">数据源</div><div className="pv2-readable-value">{dataSourceLabel(dataSource)}</div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">TopK</div><div className="pv2-readable-value">{formatNumber(topK, 0)}</div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">停牌过滤</div><div className="pv2-readable-value">{excludeSuspended ? "启用，按后续排名补位" : "关闭"}</div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">HMM</div><div className="pv2-readable-value">{hmmEnabled ? `${hmmSnapshotId || "未选择"} / ${hmmPreset}` : "未启用"}</div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">策略包</div><div className="pv2-readable-value">{selectedPackages.map((item) => item.package_name).join(", ") || "-"}</div></div>
+            </div>
+          </div>
         </SectionCard>
       </div>
 

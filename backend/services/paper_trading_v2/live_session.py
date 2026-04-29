@@ -511,22 +511,27 @@ class PaperTradingLiveMinuteExecutor:
             )
             return self._progress(session.session_id)
 
-        if new_fill_count:
-            prices = self._snapshot_prices_for_positions(
-                symbols=list(ledger.positions),
-                trade_date=run.trade_date,
-                as_of_time=as_of_time,
-                live_data_source=session.live_data_source,
-                known_prices=touched_prices,
+        if processed_any_bar:
+            prices = (
+                self._snapshot_prices_for_positions(
+                    symbols=list(ledger.positions),
+                    trade_date=run.trade_date,
+                    as_of_time=as_of_time,
+                    live_data_source=session.live_data_source,
+                    known_prices=touched_prices,
+                )
+                if ledger.positions
+                else {}
             )
             for entry in ledger.cash_entries:
                 self.repository.save_cash_entry(run.run_id, entry)
-            self.repository.save_positions(
-                run_id=run.run_id,
-                trade_date=run.trade_date,
-                positions=list(ledger.positions.values()),
-                prices=prices,
-            )
+            if new_fill_count:
+                self.repository.save_positions(
+                    run_id=run.run_id,
+                    trade_date=run.trade_date,
+                    positions=list(ledger.positions.values()),
+                    prices=prices,
+                )
             snapshot = ledger.account_snapshot(prices=prices, snapshot_time=as_of_time)
             self.repository.save_intraday_snapshot(
                 IntradaySnapshot(

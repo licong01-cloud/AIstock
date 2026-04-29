@@ -132,8 +132,8 @@ export default function PaperV2RunningPage() {
           rows={rows}
           empty="暂无 READY / RUNNING / PAUSED 的 Paper v2 模拟盘组合。"
           columns={[
-            { key: "name", header: "模拟盘", render: (row) => <><Link href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}`}>{row.portfolio.portfolio_name}</Link><br /><span className="pv2-muted pv2-mono">{shortHash(row.portfolio.portfolio_id)}</span></> },
-            { key: "package", header: "策略包", render: (row) => <><Link href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}`}>{packageName(row.portfolio)}</Link><br /><span className="pv2-muted">{packageSource(row.portfolio)}</span></> },
+            { key: "name", header: "模拟盘", render: (row) => <><Link href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/live-dashboard`}>{row.portfolio.portfolio_name}</Link><br /><span className="pv2-muted pv2-mono">{shortHash(row.portfolio.portfolio_id)}</span></> },
+            { key: "package", header: "策略包", render: (row) => <><Link href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/live-dashboard`}>{packageName(row.portfolio)}</Link><br /><span className="pv2-muted">{packageSource(row.portfolio)}</span></> },
             { key: "status", header: "状态", render: (row) => <StatusBadge status={row.portfolio.status} /> },
             { key: "latest", header: "最近运行/会话", render: (row) => <>{row.latestRun ? `${row.latestRun.trade_date} / ${row.latestRun.status}` : "未运行"}<br /><span className="pv2-muted">{row.latestSession ? `${row.latestSession.mode} / ${row.latestSession.status}` : "无会话"}</span></> },
             { key: "nav", header: "净值", render: (row) => formatNumber(latestSnapshot(row)?.nav || row.portfolio.initial_cash, 2) },
@@ -141,14 +141,14 @@ export default function PaperV2RunningPage() {
             { key: "cash", header: "现金 / 市值", render: (row) => <>{formatNumber(latestSnapshot(row)?.cash, 2)}<br /><span className="pv2-muted">{formatNumber(latestSnapshot(row)?.market_value, 2)}</span></> },
             { key: "counts", header: "订单/成交/持仓", render: (row) => `${row.orders.length} / ${row.fills.length} / ${latestPositions(row).length}` },
             { key: "errors", header: "错误", render: (row) => row.errors.length ? <StatusBadge status="FAILED" /> : <StatusBadge status="PASSED" /> },
-            { key: "actions", header: "操作", render: (row) => <div className="pv2-row-actions"><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}`}>统计</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/ledger`}>交易</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/performance`}>收益</Link></div> },
+            { key: "actions", header: "操作", render: (row) => <div className="pv2-row-actions"><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/live-dashboard`}>实时详情</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}`}>统计</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/ledger`}>交易</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/performance`}>收益</Link></div> },
           ]}
         />
       </SectionCard>
 
       <div className="pv2-grid pv2-grid-2">
         {rows.map((row) => (
-          <SectionCard key={row.portfolio.portfolio_id} title={row.portfolio.portfolio_name} eyebrow={`策略包 ${packageName(row.portfolio)} / 启动日 ${row.portfolio.start_date}`} action={<Link className="pv2-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}`}>打开完整统计</Link>}>
+          <SectionCard key={row.portfolio.portfolio_id} title={row.portfolio.portfolio_name} eyebrow={`策略包 ${packageName(row.portfolio)} / 启动日 ${row.portfolio.start_date}`} action={<Link className="pv2-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/live-dashboard`}>打开实时详情</Link>}>
             <div className="pv2-grid pv2-grid-4">
               <MetricCard label="净值" value={formatNumber(latestSnapshot(row)?.nav || row.portfolio.initial_cash, 2)} />
               <MetricCard label="收益率" value={formatPercent(totalReturn(row))} tone={(totalReturn(row) || 0) >= 0 ? "success" : "danger"} />

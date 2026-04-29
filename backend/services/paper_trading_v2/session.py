@@ -530,34 +530,35 @@ class PaperTradingSessionRunner:
                 raise exc
             raise exc
         try:
-            session = self.repository.get_session(session_id)
-            if session.status == PaperSessionStatus.PAUSED:
-                self.repository.save_session_event(
-                    session_id=session_id,
-                    event_type="SESSION_TICK_SKIPPED",
-                    message="paper v2 session tick skipped because session is paused",
-                )
-                return PaperTradingSessionService(repository=self.repository).progress(session_id)
-            if session.status in TERMINAL_SESSION_STATUSES:
-                return PaperTradingSessionService(repository=self.repository).progress(session_id)
-            if session.mode != PaperSessionMode.REPLAY_ONLY:
-                try:
-                    return self.live_executor.tick(session, as_of_time=as_of_time)
-                except TradingCoreError as exc:
-                    self._mark_failed(session, exc)
-                    raise
-                except Exception as exc:
-                    wrapped = TradingCoreError(
-                        "paper v2 live session tick failed",
-                        context={
-                            "session_id": session.session_id,
-                            "portfolio_id": session.portfolio_id,
-                            "reason": f"{type(exc).__name__}: {exc}",
-                        },
+            with self.repository.session_tick_lock(session_id):
+                session = self.repository.get_session(session_id)
+                if session.status == PaperSessionStatus.PAUSED:
+                    self.repository.save_session_event(
+                        session_id=session_id,
+                        event_type="SESSION_TICK_SKIPPED",
+                        message="paper v2 session tick skipped because session is paused",
                     )
-                    self._mark_failed(session, wrapped)
-                    raise wrapped from exc
-            return self._run_replay_only(session, as_of_time=as_of_time)
+                    return PaperTradingSessionService(repository=self.repository).progress(session_id)
+                if session.status in TERMINAL_SESSION_STATUSES:
+                    return PaperTradingSessionService(repository=self.repository).progress(session_id)
+                if session.mode != PaperSessionMode.REPLAY_ONLY:
+                    try:
+                        return self.live_executor.tick(session, as_of_time=as_of_time)
+                    except TradingCoreError as exc:
+                        self._mark_failed(session, exc)
+                        raise
+                    except Exception as exc:
+                        wrapped = TradingCoreError(
+                            "paper v2 live session tick failed",
+                            context={
+                                "session_id": session.session_id,
+                                "portfolio_id": session.portfolio_id,
+                                "reason": f"{type(exc).__name__}: {exc}",
+                            },
+                        )
+                        self._mark_failed(session, wrapped)
+                        raise wrapped from exc
+                return self._run_replay_only(session, as_of_time=as_of_time)
         finally:
             lock.release()
 

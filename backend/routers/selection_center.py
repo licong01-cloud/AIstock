@@ -118,6 +118,26 @@ def list_selection_runs(
         _raise_http(exc)
 
 
+@router.get("/pit-cutoff")
+def resolve_selection_pit_cutoff(
+    trade_date: date,
+    pit_mode: str = "PREVIOUS_TRADING_DAY_CLOSE",
+    cutoff_date: date | None = None,
+    service: SelectionCenterService = Depends(get_selection_center_service),
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            "point_in_time_context": service.resolve_point_in_time_context(
+                trade_date=trade_date,
+                pit_mode=pit_mode,
+                explicit_cutoff_date=cutoff_date,
+            ),
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.get("/runs/{run_id}")
 def get_selection_run(
     run_id: str,

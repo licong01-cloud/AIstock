@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from math import isfinite
 from typing import Any
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.paper_trading_v2.market_data import TradeCalendarProvider
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.models import PackageStatus
@@ -47,6 +48,7 @@ class SelectionCenterService:
         refresh_audit: DataRefreshAuditRepository | Any | None = None,
         paper_portfolio_service: PaperTradingV2PortfolioService | Any | None = None,
         selection_artifact_service: StrategyPackageSelectionArtifactService | Any | None = None,
+        calendar_provider: TradeCalendarProvider | Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.repository = repository or SelectionCenterRepository()
@@ -60,6 +62,7 @@ class SelectionCenterService:
             package_repository=self.package_repository,
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
         )
+        self.calendar_provider = calendar_provider or TradeCalendarProvider()
 
     def run_single_package(
         self,
@@ -87,6 +90,7 @@ class SelectionCenterService:
         runtime_config: dict[str, Any] | None = None,
     ) -> SelectionRun:
         config = normalize_selection_runtime_config(runtime_config or {})
+        config = self._apply_point_in_time_selection_config(config, trade_date=trade_date)
         if not package_ids:
             raise StrategyPackageValidationError("selection run requires package_ids")
         if len(set(package_ids)) != len(package_ids):
@@ -191,6 +195,15 @@ class SelectionCenterService:
     def _require_data_ready(self, *, trade_date: date, runtime_config: dict[str, Any]) -> None:
         if parse_selection_runtime_profile(runtime_config).tradability.exclude_suspended:
             self.refresh_audit.require_success(dataset="suspend_d", trade_date=trade_date)
+        artifact_config = self._selection_artifact_config(runtime_config)
+        for dataset in artifact_config.get("required_cutoff_audit_datasets") or []:
+            cutoff = artifact_config.get("cutoff_date")
+            if not cutoff:
+                raise StrategyPackageValidationError(
+                    "required_cutoff_audit_datasets requires selection_artifact_config.cutoff_date",
+                    context={"required_cutoff_audit_datasets": artifact_config.get("required_cutoff_audit_datasets")},
+                )
+            self.refresh_audit.require_success(dataset=str(dataset), trade_date=date.fromisoformat(str(cutoff)))
 
     @staticmethod
     def _package_runtime_config(config: dict[str, Any], package_id: str) -> dict[str, Any]:
@@ -228,6 +241,7 @@ class SelectionCenterService:
 
         manifest = record.current_manifest()
         runtime_hash = selection_artifact_runtime_hash(runtime_config)
+        cutoff_date = self._parse_selection_cutoff_date(artifact_config, trade_date=trade_date, strict_before=True)
         force_regenerate = bool(artifact_config.get("force_regenerate"))
         artifact_repository = getattr(self.runtime, "artifact_repository", None)
         if artifact_repository is not None and not force_regenerate:
@@ -256,7 +270,143 @@ class SelectionCenterService:
             data_source=data_source,
             runtime_config=runtime_config,
             include_reference_price=True,
+            cutoff_date=cutoff_date,
         )
+
+    def resolve_point_in_time_context(
+        self,
+        *,
+        trade_date: date,
+        pit_mode: str,
+        explicit_cutoff_date: date | None = None,
+    ) -> dict[str, Any]:
+        """Resolve the target trade date to the latest allowed as-of date.
+
+        The authoritative historical selection mode is point-in-time: selecting
+        stocks for D must use data available no later than the previous trading
+        day. This method only reads the trading calendar and never fabricates a
+        cutoff when the calendar is missing.
+        """
+
+        normalized = self._normalize_pit_mode(pit_mode)
+        if normalized == "NONE":
+            return {
+                "pit_mode": "NONE",
+                "trade_date": trade_date.isoformat(),
+                "cutoff_date": explicit_cutoff_date.isoformat() if explicit_cutoff_date else None,
+                "score_trade_date": explicit_cutoff_date.isoformat() if explicit_cutoff_date else trade_date.isoformat(),
+                "reference_price_trade_date": explicit_cutoff_date.isoformat() if explicit_cutoff_date else trade_date.isoformat(),
+            }
+        self.calendar_provider.ensure_trading_day(trade_date)
+        cutoff = explicit_cutoff_date or self._previous_trading_day(trade_date)
+        if cutoff >= trade_date:
+            raise StrategyPackageValidationError(
+                "point-in-time selection cutoff_date must be before trade_date",
+                context={"trade_date": trade_date.isoformat(), "cutoff_date": cutoff.isoformat(), "pit_mode": normalized},
+            )
+        return {
+            "pit_mode": normalized,
+            "trade_date": trade_date.isoformat(),
+            "cutoff_date": cutoff.isoformat(),
+            "score_trade_date": cutoff.isoformat(),
+            "reference_price_trade_date": cutoff.isoformat(),
+            "calendar_source": "market.trading_calendar",
+        }
+
+    def _apply_point_in_time_selection_config(self, config: dict[str, Any], *, trade_date: date) -> dict[str, Any]:
+        artifact_config = self._selection_artifact_config(config)
+        raw_mode = artifact_config.get("pit_mode") or artifact_config.get("cutoff_policy") or config.get("pit_mode")
+        if raw_mode is None:
+            raw_mode = "NONE"
+        pit_mode = self._normalize_pit_mode(str(raw_mode))
+        if pit_mode == "NONE":
+            cutoff = artifact_config.get("cutoff_date")
+            if cutoff:
+                self._parse_selection_cutoff_date(artifact_config, trade_date=trade_date, strict_before=True)
+            return config
+        explicit_cutoff = self._parse_selection_cutoff_date(artifact_config, trade_date=trade_date, strict_before=True)
+        context = self.resolve_point_in_time_context(
+            trade_date=trade_date,
+            pit_mode=pit_mode,
+            explicit_cutoff_date=explicit_cutoff,
+        )
+        updated = dict(config)
+        updated_artifact = dict(artifact_config)
+        updated_artifact["pit_mode"] = context["pit_mode"]
+        updated_artifact["cutoff_date"] = context["cutoff_date"]
+        updated["selection_artifact_config"] = updated_artifact
+        if "selection_artifact" in updated:
+            updated["selection_artifact"] = updated_artifact
+        updated["point_in_time_context"] = context
+        return updated
+
+    @staticmethod
+    def _selection_artifact_config(config: dict[str, Any]) -> dict[str, Any]:
+        artifact_config = config.get("selection_artifact_config")
+        if artifact_config is None:
+            artifact_config = config.get("selection_artifact")
+        if artifact_config is None:
+            return {}
+        if not isinstance(artifact_config, dict):
+            raise StrategyPackageValidationError(
+                "runtime_config.selection_artifact_config must be an object",
+                context={"selection_artifact_config_type": type(artifact_config).__name__},
+            )
+        return artifact_config
+
+    @staticmethod
+    def _normalize_pit_mode(pit_mode: str) -> str:
+        text = str(pit_mode or "NONE").strip().upper()
+        aliases = {
+            "": "NONE",
+            "NONE": "NONE",
+            "DISABLED": "NONE",
+            "PREVIOUS_TRADING_DAY_CUTOFF": "PREVIOUS_TRADING_DAY_CLOSE",
+            "PREVIOUS_TRADING_DAY": "PREVIOUS_TRADING_DAY_CLOSE",
+            "PREVIOUS_TRADING_DAY_CLOSE": "PREVIOUS_TRADING_DAY_CLOSE",
+            "PREV_TRADING_DAY_CLOSE": "PREVIOUS_TRADING_DAY_CLOSE",
+        }
+        normalized = aliases.get(text)
+        if normalized is None:
+            raise StrategyPackageValidationError(
+                "unsupported point-in-time selection mode",
+                context={"pit_mode": pit_mode, "supported": ["NONE", "PREVIOUS_TRADING_DAY_CLOSE"]},
+            )
+        return normalized
+
+    def _previous_trading_day(self, trade_date: date) -> date:
+        lookup_start = trade_date - timedelta(days=31)
+        days = self.calendar_provider.list_trading_days(lookup_start, trade_date - timedelta(days=1))
+        if not days:
+            raise DataUnavailableError(
+                "trading calendar has no previous trading day for point-in-time selection",
+                context={"trade_date": trade_date.isoformat(), "lookup_start": lookup_start.isoformat()},
+            )
+        return days[-1]
+
+    @staticmethod
+    def _parse_selection_cutoff_date(
+        artifact_config: dict[str, Any],
+        *,
+        trade_date: date,
+        strict_before: bool = False,
+    ) -> date | None:
+        raw = artifact_config.get("cutoff_date")
+        if raw is None or raw == "":
+            return None
+        try:
+            parsed = date.fromisoformat(str(raw))
+        except ValueError as exc:
+            raise StrategyPackageValidationError(
+                "selection_artifact_config.cutoff_date must be YYYY-MM-DD",
+                context={"cutoff_date": raw},
+            ) from exc
+        if parsed > trade_date or (strict_before and parsed >= trade_date):
+            raise StrategyPackageValidationError(
+                "selection_artifact_config.cutoff_date must be before trade_date",
+                context={"trade_date": trade_date.isoformat(), "cutoff_date": parsed.isoformat()},
+            )
+        return parsed
 
     def get_run(self, run_id: str) -> SelectionRun:
         return self.repository.get_run(run_id)
