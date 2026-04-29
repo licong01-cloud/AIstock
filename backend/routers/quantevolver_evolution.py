@@ -69,6 +69,7 @@ def _reject_nested_runtime_flags(strategy_params: Optional[Dict[str, Any]], cont
         "exclude_suspended",
         "suspend_filter_strict",
         "suspend_filter_file",
+        "disable_alpha158",
     }.intersection(params)
     if duplicate_keys:
         raise HTTPException(
@@ -861,11 +862,47 @@ def _get_source_loop_factors(task_id: str, loop_index: int) -> list[str] | None:
     return sorted(config.get("factor_list") or [])
 
 
+def _get_source_loop_disable_alpha158(task_id: str, loop_index: int) -> bool | None:
+    """Read the source model's Alpha158 baseline toggle for backtest-only validation."""
+    from ..services.quantevolver.qe_evolution_service import get_conn
+    from psycopg2.extras import RealDictCursor
+    import json as _json
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT config_json FROM qe_evolution_loops WHERE task_id = %s AND loop_index = %s",
+                (task_id, loop_index),
+            )
+            row = cur.fetchone()
+    if row:
+        config = row.get("config_json") or {}
+        if isinstance(config, str):
+            config = _json.loads(config)
+        model_params = config.get("model_params") or {}
+        return bool(config.get("disable_alpha158", model_params.get("disable_alpha158", False)))
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT custom_params FROM qe_experiments WHERE qe_task_id = %s AND loop_index = %s",
+                (task_id, loop_index),
+            )
+            exp_row = cur.fetchone()
+    if not exp_row:
+        return None
+    custom_params = exp_row.get("custom_params") or {}
+    if isinstance(custom_params, str):
+        custom_params = _json.loads(custom_params)
+    return bool(custom_params.get("disable_alpha158", False))
+
+
 class CustomEvoLoopConfig(BaseModel):
     """单个自定义演进 Loop 的完整配置"""
     label: Optional[str] = Field(None, description="Loop 标签/描述")
     loop_index: Optional[int] = Field(None, description="Loop 索引（自动填充）")
     factor_keys: List[str] = Field(..., description="因子 key 列表 ['name||source', ...]")
+    disable_alpha158: bool = Field(False, description="Disable QE bundled Alpha158 20-factor baseline for this loop")
     model_id: str = Field(..., description="模型 ID")
     strategy_id: Optional[str] = Field(None, description="交易策略ID，None=使用默认 TopkDropoutStrategy")
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数: topk, n_drop, hold_thresh, risk_degree 等")
@@ -958,6 +995,20 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
                     raise HTTPException(
                         status_code=400,
                         detail=f"Loop {i}: backtest-only requires the same factor list as the source model",
+                    )
+                source_disable_alpha158 = _get_source_loop_disable_alpha158(
+                    loop_cfg.model_source_task_id,
+                    loop_cfg.model_source_loop_index,
+                )
+                if source_disable_alpha158 is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Loop {i}: source Alpha158 baseline setting cannot be read; backtest-only is not allowed",
+                    )
+                if bool(loop_cfg.disable_alpha158) != bool(source_disable_alpha158):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Loop {i}: backtest-only requires the same Alpha158 baseline setting as the source model",
                     )
 
         loops_config = []

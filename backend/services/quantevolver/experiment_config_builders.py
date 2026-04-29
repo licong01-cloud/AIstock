@@ -484,6 +484,7 @@ def build_config_from_custom_evo_loop(
     """
     factor_keys: list[str] = loop_config.get("factor_keys") or []
     factor_names: list[str] = [k.split("||")[0] for k in factor_keys]
+    disable_alpha158: bool = bool(loop_config.get("disable_alpha158", False))
 
     strategy_params: dict[str, Any] = dict(
         _parse_json_field(loop_config.get("strategy_params") or {})
@@ -570,6 +571,7 @@ def build_config_from_custom_evo_loop(
         model_source_loop_index=model_source_loop_index,
         node_id=task.get("node_id"),
         experiment_name=experiment_name,
+        extra_params={"disable_alpha158": True} if disable_alpha158 else None,
         alpha_mode=alpha_mode,
         multi_alpha_config=multi_alpha_cfg,
     )

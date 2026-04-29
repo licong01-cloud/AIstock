@@ -158,6 +158,7 @@ export default function EvolutionDashboard() {
     delete cleaned.exclude_suspended;
     delete cleaned.suspend_filter_strict;
     delete cleaned.suspend_filter_file;
+    delete cleaned.disable_alpha158;
     return cleaned;
   };
   const [computeNodes, setComputeNodes] = useState<any[]>([]);
@@ -178,6 +179,7 @@ export default function EvolutionDashboard() {
   type CustomEvoLoopConfig = {
     label: string;
     factor_keys: Set<string>;
+    disable_alpha158: boolean;
     model_id: string;
     strategy_id: string;
     strategy_params: Record<string, any>;
@@ -203,10 +205,12 @@ export default function EvolutionDashboard() {
     model_source_task_id: string;
     model_source_loop_index: number | null;
     _source_factor_keys: Set<string>; // 源模型的因子快照，用于变更检测
+    _source_disable_alpha158: boolean; // 源模型是否禁用了 Alpha158 基线
   };
   const makeDefaultCustomLoop = (): CustomEvoLoopConfig => ({
     label: "",
     factor_keys: new Set(),
+    disable_alpha158: false,
     model_id: "",
     strategy_id: "",
     strategy_params: {},
@@ -231,6 +235,7 @@ export default function EvolutionDashboard() {
     model_source_task_id: "",
     model_source_loop_index: null,
     _source_factor_keys: new Set(),
+    _source_disable_alpha158: false,
   });
   const [customEvoLoops, setCustomEvoLoops] = useState<CustomEvoLoopConfig[]>([makeDefaultCustomLoop()]);
   const [customEvoExecutionMode, setCustomEvoExecutionMode] = useState<string>("serial");
@@ -259,6 +264,14 @@ export default function EvolutionDashboard() {
           updates.backtest_only = false;
           setTimeout(() => alert("因子已变更，需要重新训练模型。已自动关闭 backtest-only 模式。"), 0);
         }
+      }
+      if (
+        updates.disable_alpha158 !== undefined &&
+        cur.backtest_only &&
+        updates.disable_alpha158 !== cur._source_disable_alpha158
+      ) {
+        updates.backtest_only = false;
+        setTimeout(() => alert("Alpha158 基线设置已变更，需要重新训练模型。已自动关闭 backtest-only 模式。"), 0);
       }
       next[index] = { ...cur, ...updates };
       return next;
@@ -362,8 +375,10 @@ export default function EvolutionDashboard() {
       const sourceLoopIdx = exp.qe_loop_id ? parseInt((exp.qe_loop_id.match(/Loop(\d+)/) || [])[1] || "1") : 1;
       const expParams = typeof exp.custom_params === "string" ? JSON.parse(exp.custom_params || "{}") : (exp.custom_params || {});
       const expHorizon = ([1, 3, 5, 10, 20].includes(Number(expParams.label_horizon || 1)) ? Number(expParams.label_horizon || 1) : 1) as 1 | 3 | 5 | 10 | 20;
+      const expDisableAlpha158 = !!expParams.disable_alpha158;
       updateCustomEvoLoop(0, {
         factor_keys: factorKeys,
+        disable_alpha158: expDisableAlpha158,
         model_id: exp.model_id || "",
         strategy_id: exp.strategy_id || "",
         strategy_params: {},
@@ -372,6 +387,7 @@ export default function EvolutionDashboard() {
         model_source_task_id: sourceTaskId,
         model_source_loop_index: sourceTaskId ? sourceLoopIdx : null,
         _source_factor_keys: new Set(factorKeys),
+        _source_disable_alpha158: expDisableAlpha158,
       });
       alert(`已加载实验配置：${factorKeys.size} 个因子，模型 ${exp.model_id || "无"}${sourceTaskId ? "（已启用 backtest-only）" : ""}`);
     } catch (e: any) {
@@ -389,6 +405,7 @@ export default function EvolutionDashboard() {
       if (!loop || !loop.config_json) { alert(`Loop ${loopIndex} 没有配置数据`); return; }
       const config = typeof loop.config_json === "string" ? JSON.parse(loop.config_json) : loop.config_json;
       const configParams = config.model_params || {};
+      const loopDisableAlpha158 = !!(config.disable_alpha158 ?? configParams.disable_alpha158);
       const loopHorizon = ([1, 3, 5, 10, 20].includes(Number(configParams.label_horizon || config.label_horizon || 1))
         ? Number(configParams.label_horizon || config.label_horizon || 1)
         : 1) as 1 | 3 | 5 | 10 | 20;
@@ -413,14 +430,16 @@ export default function EvolutionDashboard() {
       if (factorKeys.size === 0) { alert("所有因子均未在因子库中找到，无法加载"); return; }
       updateCustomEvoLoop(0, {
         factor_keys: factorKeys,
+        disable_alpha158: loopDisableAlpha158,
         model_id: config.model_id || "",
         strategy_id: config.strategy_id || "",
-        strategy_params: config.model_params || {},
+        strategy_params: stripRuntimeStrategyFlags(config.model_params),
         label_horizon: loopHorizon,
         backtest_only: true,
         model_source_task_id: taskId,
         model_source_loop_index: loopIndex,
         _source_factor_keys: new Set(factorKeys),
+        _source_disable_alpha158: loopDisableAlpha158,
       });
       alert(`已加载 Loop ${loopIndex} 配置：${factorKeys.size} 个因子，模型 ${config.model_id || "无"}（已启用 backtest-only）`);
     } catch (e: any) {
@@ -1036,6 +1055,7 @@ export default function EvolutionDashboard() {
           label: loop.label || `Loop ${i + 1}`,
           loop_index: i + 1,
           factor_keys: Array.from(loop.factor_keys),
+          disable_alpha158: !!loop.disable_alpha158,
           model_id: loop.model_id,
           strategy_id: loop.strategy_id || undefined,
           strategy_params: Object.keys(loop.strategy_params).length > 0 ? loop.strategy_params : undefined,
@@ -3073,7 +3093,7 @@ export default function EvolutionDashboard() {
                         const models = d.sota_models || [];
                         if (factors.length === 0 && models.length === 0) { alert("该 Task 没有 SOTA 资产"); return; }
                         const fk = new Set<string>(factors.map((f: any) => `${f.factor_name}||${f.source}`));
-                        updateCustomEvoLoop(0, { factor_keys: fk, model_id: models[0]?.model_id || "" });
+                        updateCustomEvoLoop(0, { factor_keys: fk, disable_alpha158: false, model_id: models[0]?.model_id || "", _source_disable_alpha158: false });
                         alert(`已加载: ${factors.length} 个因子，${models.length} 个模型`);
                       } catch (e: any) { alert(`加载失败: ${e?.message || "网络错误"}`); }
                     }} disabled={!customEvoSourceTaskId} style={{ padding: "6px 12px", backgroundColor: customEvoSourceTaskId ? "#8b5cf6" : "#e2e8f0", color: "#fff", border: "none", borderRadius: "6px", fontSize: "12px", cursor: customEvoSourceTaskId ? "pointer" : "not-allowed" }}>加载</button>
@@ -3093,7 +3113,7 @@ export default function EvolutionDashboard() {
                       </span>
                       <input type="text" value={loop.label} onChange={e => { e.stopPropagation(); updateCustomEvoLoop(loopIdx, { label: e.target.value }); }} onClick={e => e.stopPropagation()} placeholder="标签（可选）" style={{ padding: "3px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px", width: "160px" }} />
                       {loopIdx > 0 && <span style={{ fontSize: "11px", color: "#94a3b8" }}>
-                        因子:{loop.factor_keys.size} | 模型:{loop.model_id ? loop.model_id.slice(0,12) : "未选"}
+                        因子:{loop.factor_keys.size} | Alpha158:{loop.disable_alpha158 ? "关" : "开"} | 模型:{loop.model_id ? loop.model_id.slice(0,12) : "未选"}
                       </span>}
                     </div>
                     <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
@@ -3139,6 +3159,10 @@ export default function EvolutionDashboard() {
                               const changed = srcNames.size !== curNames.size || [...srcNames].some(n => !curNames.has(n));
                               if (changed) { alert("因子已变更，无法启用 backtest-only 模式。请先恢复原因子配置。"); return; }
                             }
+                            if (e.target.checked && loop.disable_alpha158 !== loop._source_disable_alpha158) {
+                              alert("Alpha158 基线设置已变更，无法启用 backtest-only 模式。请先恢复源模型的 Alpha158 设置。");
+                              return;
+                            }
                             updateCustomEvoLoop(loopIdx, { backtest_only: e.target.checked });
                           }} />
                           <label style={{ fontSize: "12px", fontWeight: 600, color: loop.backtest_only ? "#1e40af" : "#64748b" }}>
@@ -3155,6 +3179,19 @@ export default function EvolutionDashboard() {
                     <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", overflow: "hidden" }}>
                       <div style={{ padding: "8px 12px", backgroundColor: "#f0fdf4", fontSize: "12px", fontWeight: 600, color: "#166534", display: "flex", justifyContent: "space-between" }}>
                         <span>因子选择（已选 {loop.factor_keys.size} 个）</span>
+                      </div>
+                      <div style={{ padding: "10px 12px", backgroundColor: loop.disable_alpha158 ? "#fff7ed" : "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", fontWeight: 700, color: loop.disable_alpha158 ? "#c2410c" : "#166534" }}>
+                          <input
+                            type="checkbox"
+                            checked={!loop.disable_alpha158}
+                            onChange={e => updateCustomEvoLoop(loopIdx, { disable_alpha158: !e.target.checked })}
+                          />
+                          启用 Alpha158 基线因子（原始 20 因子集）
+                        </label>
+                        <div style={{ marginTop: "4px", marginLeft: "24px", fontSize: "11px", color: "#64748b", lineHeight: 1.5 }}>
+                          这是训练特征开关，不是“显示 Alpha 因子”筛选；关闭后该 Loop 只使用下方选中的因子库因子。
+                        </div>
                       </div>
                       <div style={{ maxHeight: "250px", overflow: "auto" }}>
                         <FactorList mode="selection" selectedFactors={loop.factor_keys} onFactorSelect={(selected: Set<string>) => updateCustomEvoLoop(loopIdx, { factor_keys: selected })} cacheContext={{ experimentId: customEvoSourceExpId || null, trainStart: loop.data_split?.train_start || null, backtestEnd: loop.data_split?.backtest_end || loop.data_split?.test_end || null }} />

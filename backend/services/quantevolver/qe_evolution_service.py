@@ -4145,6 +4145,8 @@ class AutoEvolutionScheduler:
         first_custom_params = dict(first_loop.get("strategy_params") or {})
         if first_loop.get("label_type"):
             first_custom_params["label_type"] = first_loop["label_type"]
+        if bool(first_loop.get("disable_alpha158", False)):
+            first_custom_params["disable_alpha158"] = True
         first_label_horizon = normalize_label_horizon(first_loop.get("label_horizon"))
         if first_label_horizon != DEFAULT_LABEL_HORIZON:
             first_custom_params["label_horizon"] = first_label_horizon
@@ -4324,6 +4326,7 @@ class AutoEvolutionScheduler:
                 "strategy_params": cfg.build_strategy_params(),
                 "execution_algo": cfg.execution_algo,
                 "execution_algo_params": cfg.execution_algo_params,
+                "disable_alpha158": bool(loop_config.get("disable_alpha158", False)),
                 "backtest_only": cfg.backtest_only,
                 "model_source_task_id": cfg.model_source_task_id,
                 "model_source_loop_index": cfg.model_source_loop_index,
