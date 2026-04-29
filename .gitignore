@@ -124,3 +124,4 @@ report/
 # Environment files (already tracked by mistake — untrack separately)
 .env
 .claude/
+aistock_models/aistock_models.egg-info/
