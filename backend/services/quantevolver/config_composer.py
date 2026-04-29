@@ -68,16 +68,34 @@ QLIB_DATA_PATH_WSL = os.getenv("QLIB_DATA_PATH_WSL", "").strip()
 QLIB_MINUTE_PATH_WSL = os.getenv("QLIB_MINUTE_PATH_WSL", "").strip()
 RDAGENT_CODE_ROOT_WSL = os.getenv("QLIB_RDAGENT_ROOT_WSL", "").strip()
 
-# RDAgent default data split.
+# QE/RDAgent default data split.
+#
+# `test_end` is the last day used by the data handler/signals.  Qlib daily
+# portfolio simulation needs one following calendar row, so the default
+# portfolio backtest stops at 2026-04-27 while the provider still contains
+# 2026-04-28 for signal/price lookups.
+QE_DEFAULT_SIGNAL_END = "2026-04-28"
+QE_DEFAULT_BACKTEST_END = "2026-04-27"
+
 RDAGENT_DEFAULT_DATA_SPLIT = {
     "train_start": "2018-08-01",
     "train_end": "2022-12-31",
     "valid_start": "2023-01-01",
     "valid_end": "2024-06-30",
     "test_start": "2024-07-01",
-    "test_end": "2026-03-10",
-    # backtest_end 不再硬编码，在 compose 时从 test_end 自动计算 -7 天
+    "test_end": QE_DEFAULT_SIGNAL_END,
+    "backtest_end": QE_DEFAULT_BACKTEST_END,
 }
+
+_LEGACY_QE_DEFAULT_SPLIT_MARKERS = (
+    # Old QE UI/system defaults before the 2026-04-28 data refresh.  When a
+    # caller sends this exact default split without an intentional override,
+    # upgrade it so new single/evolution/strategy/custom runs do not require
+    # manual date edits.
+    {"test_end": "2026-03-10", "backtest_end": None},
+    {"test_end": "2026-03-10", "backtest_end": "2026-03-09"},
+    {"test_end": "2025-12-01", "backtest_end": None},
+)
 
 # ── RDAgent 默认 LGBModel 超参数（与 conf_baseline.yaml 一致） ──
 RDAGENT_DEFAULT_LGB_KWARGS = {
@@ -141,18 +159,71 @@ class ConfigComposer:
             raise ValueError(f"valid_end ({data_split['valid_end']}) 不能晚于 test_start ({data_split['test_start']})")
         if dates["test_end"] > datetime.now():
             raise ValueError(f"test_end ({data_split['test_end']}) 不能超过当前日期")
+        if data_split.get("backtest_end"):
+            try:
+                backtest_end = datetime.strptime(data_split["backtest_end"], "%Y-%m-%d")
+            except ValueError as e:
+                raise ValueError(
+                    f"data_split[backtest_end] 日期格式错误: {data_split['backtest_end']}，应为 YYYY-MM-DD"
+                ) from e
+            if backtest_end < dates["test_start"]:
+                raise ValueError(
+                    f"backtest_end ({data_split['backtest_end']}) 不能早于 test_start ({data_split['test_start']})"
+                )
+            if backtest_end > dates["test_end"]:
+                raise ValueError(
+                    f"backtest_end ({data_split['backtest_end']}) 不能晚于 test_end ({data_split['test_end']})"
+                )
+
+    @staticmethod
+    def _is_legacy_default_split(data_split: Dict[str, str]) -> bool:
+        """Return True only for known stale system defaults, not arbitrary user windows."""
+        base_matches = (
+            data_split.get("train_start") == "2018-08-01"
+            and data_split.get("train_end") == "2022-12-31"
+            and data_split.get("valid_start") == "2023-01-01"
+            and data_split.get("valid_end") == "2024-06-30"
+            and data_split.get("test_start") == "2024-07-01"
+        )
+        if not base_matches:
+            return False
+        for marker in _LEGACY_QE_DEFAULT_SPLIT_MARKERS:
+            if data_split.get("test_end") != marker["test_end"]:
+                continue
+            expected_backtest = marker["backtest_end"]
+            if expected_backtest is None and not data_split.get("backtest_end"):
+                return True
+            if expected_backtest is not None and data_split.get("backtest_end") == expected_backtest:
+                return True
+        return False
 
     @staticmethod
     def _ensure_backtest_end(data_split: Dict[str, str]):
-        """从 test_end 自动派生 backtest_end（-7 天），确保回测结束日早于 Qlib 日历最后一条记录。
+        """Ensure every QE path has a safe portfolio backtest end.
 
-        Qlib 回测在每步执行 calendar[index+1]，若 backtest_end 是日历最后一天则越界。
-        用 -7 自然日（约 5 个交易日）确保安全边距，跨过周末和节假日。
+        Qlib daily backtest reads calendar[index+1].  With the official data
+        currently ending on 2026-04-28, the safe default portfolio end is
+        2026-04-27.  Data/signal coverage still uses `test_end`.
         """
-        from datetime import datetime, timedelta
-        if "test_end" in data_split:
-            test_end_dt = datetime.strptime(data_split["test_end"], "%Y-%m-%d")
-            data_split["backtest_end"] = (test_end_dt - timedelta(days=7)).strftime("%Y-%m-%d")
+        if not data_split.get("test_end"):
+            return
+
+        if ConfigComposer._is_legacy_default_split(data_split):
+            data_split["test_end"] = QE_DEFAULT_SIGNAL_END
+            data_split["backtest_end"] = QE_DEFAULT_BACKTEST_END
+            return
+
+        if data_split.get("backtest_end"):
+            return
+
+        # For the current latest signal date, cap portfolio simulation at the
+        # preceding safe trading day.  For older user-selected windows, test_end
+        # itself is safe because later Qlib calendar rows already exist.
+        data_split["backtest_end"] = (
+            QE_DEFAULT_BACKTEST_END
+            if data_split["test_end"] >= QE_DEFAULT_SIGNAL_END
+            else data_split["test_end"]
+        )
 
     def _fetch_workspace_config(self, node_id: Optional[str] = None) -> Dict[str, str]:
         """
@@ -2003,6 +2074,53 @@ class ConfigComposer:
                         f"模型类型 '{model_type}' 无源代码，必须在 model_hyperparameters 中"
                         f"提供 pt_model_uri 参数指定模型类路径"
                     )
+            elif "LAMBDARANK" in model_type or "LAMBDAMART" in model_type:
+                # LambdaMART 排序模型 (LightGBM LGBMRanker + lambdarank objective)
+                # 自定义 Qlib Model 类，实现 cross-sectional stock ranking
+                model_class = "LambdaRankModel"
+                model_module = "aistock_models.lambdarank"
+                model_dataset_cls = "DatasetH"
+                model_step_len = None
+                model_kwargs = {
+                    "objective": "lambdarank",
+                    "metric": "ndcg",
+                    "ndcg_eval_at": [10, 30, 50],
+                    "num_leaves": 64,
+                    "max_depth": 8,
+                    "learning_rate": 0.05,
+                    "n_estimators": 300,
+                    "min_child_samples": 100,
+                    "subsample": 0.8,
+                    "colsample_bytree": 0.8,
+                    "reg_alpha": 0.1,
+                    "reg_lambda": 0.1,
+                    "early_stopping_rounds": 20,
+                }
+                hp = model_info.get("model_hyperparameters")
+                if hp:
+                    if isinstance(hp, str):
+                        hp = json.loads(hp)
+                    model_kwargs.update(hp)
+            elif "TABPFN" in model_type:
+                # TabPFN 表格基础模型 (Nature 2025)
+                # 预训练 transformer，in-context learning，零梯度训练
+                # TabPFNModel 实现 Qlib Model 接口，通过模块路径直接加载
+                model_class = "TabPFNModel"
+                model_module = "aistock_models.tabpfn_model"
+                model_dataset_cls = "DatasetH"
+                model_step_len = None
+                model_kwargs = {
+                    "n_estimators": 8,
+                    "device": "cuda",
+                    "max_context_size": 2000,
+                    "n_bins": 10,
+                    "random_state": 42,
+                }
+                hp = model_info.get("model_hyperparameters")
+                if hp:
+                    if isinstance(hp, str):
+                        hp = json.loads(hp)
+                    model_kwargs.update(hp)
             else:
                 # 未知模型类型且无源代码，无法生成配置
                 raise ValueError(
@@ -2104,6 +2222,7 @@ class ConfigComposer:
             "unfilled_backup_depth",   # 替补候选深度（已在上层提取到 inner_strategy.kwargs）
             "initial_cash",         # 初始资金（已在上层处理）
             "hmm_model_version_id", # HMM 版本 ID（已在上层处理为 hmm_coefficients_file）
+            "hmm_config_json",      # HMM 训练配置，仅用于动态系数预计算
             # Industry blacklist metadata is persisted for UI/detail traceability.
             # The executable restriction is represented by stock_pool, not by
             # passing these metadata objects into the Qlib strategy constructor.
@@ -2643,7 +2762,7 @@ class ConfigComposer:
         """
         # 提取缓存窗口（用于全周期缓存命中判断）
         train_start = "2018-08-01"
-        test_end = "2026-04-03"
+        test_end = "2026-04-28"
         if data_split:
             train_start = data_split.get("train_start", train_start)
             test_end = data_split.get("test_end", test_end)
@@ -3249,14 +3368,15 @@ class ConfigComposer:
         - 节点 conda 安装路径与本机不同
         """
         return (
-            '_conda_sh="${QLIB_WSL_CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}" && '
-            'case "$_conda_sh" in "~/"*) _conda_sh="$HOME/${_conda_sh#~/}" ;; esac && '
-            'if [ ! -f "$_conda_sh" ]; then '
-            'for c in "$HOME/miniconda3/etc/profile.d/conda.sh" "$HOME/anaconda3/etc/profile.d/conda.sh" "/opt/conda/etc/profile.d/conda.sh"; do '
-            '[ -f "$c" ] && _conda_sh="$c" && break; '
-            'done; '
-            'fi && '
-            '[ -f "$_conda_sh" ] && . "$_conda_sh" && '
+            'if [ -n "${QLIB_WSL_CONDA_SH:-}" ] && [ -f "${QLIB_WSL_CONDA_SH}" ]; then '
+            '. "${QLIB_WSL_CONDA_SH}"; '
+            'elif [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then '
+            '. "$HOME/miniconda3/etc/profile.d/conda.sh"; '
+            'elif [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then '
+            '. "$HOME/anaconda3/etc/profile.d/conda.sh"; '
+            'elif [ -f "/opt/conda/etc/profile.d/conda.sh" ]; then '
+            '. "/opt/conda/etc/profile.d/conda.sh"; '
+            'else echo "conda.sh not found" >&2; exit 1; fi && '
             f'conda activate "${{QLIB_WSL_CONDA_ENV:-{default_env}}}"'
         )
 
@@ -3591,6 +3711,31 @@ model_cls = {nn_class_name}
         if not preset_coeffs:
             preset_coeffs = {"trending": 1.05, "neutral": 1.00, "fading": 0.96}
 
+        hmm_config_json = strategy_params.get("hmm_config_json")
+        if isinstance(hmm_config_json, str) and hmm_config_json.strip():
+            hmm_config_json = json.loads(hmm_config_json)
+        if not isinstance(hmm_config_json, dict):
+            hmm_config_json = None
+        if hmm_config_json is None:
+            snapshot_id = strategy_params.get("hmm_model_version_id")
+            if snapshot_id and snapshot_id != "from_resolved_model_path":
+                try:
+                    from ..hmm_training_service import HMMTrainingService
+                    hmm_svc = HMMTrainingService()
+                    snapshot = hmm_svc.get_snapshot(str(snapshot_id))
+                    if snapshot is not None:
+                        config_id = snapshot.get("config_id")
+                        for cfg in hmm_svc.list_configs("sector_hmm"):
+                            if cfg.get("config_id") == config_id:
+                                cj = cfg.get("config_json") or {}
+                                if isinstance(cj, str):
+                                    cj = json.loads(cj)
+                                if isinstance(cj, dict):
+                                    hmm_config_json = cj
+                                break
+                except Exception as exc:
+                    logger.warning("HMM config_json 自动解析失败，将仅使用预生成文件: %s", exc)
+
         # Windows 路径自动转 WSL 路径
         if not model_path.startswith("/"):
             mp = model_path.replace("\\", "/")
@@ -3604,6 +3749,34 @@ model_cls = {nn_class_name}
         model_dir = model_path.rsplit("/", 1)[0]
         coeff_filename = f"coefficients_{preset_key}_{test_start}_{backtest_end}.json"
         coeff_path = f"{model_dir}/{coeff_filename}"
+        strict_no_leakage = False
+        if hmm_config_json:
+            strict_value = hmm_config_json.get("strict_no_leakage")
+            strict_no_leakage = (
+                strict_value is True
+                or (isinstance(strict_value, str) and strict_value.lower() == "true")
+            )
+        if strict_no_leakage:
+            allowed_windows = hmm_config_json.get("coefficient_windows") or []
+            strict_window_ok = any(
+                str(window.get("preset")) == str(preset_key)
+                and str(window.get("test_start")) == str(test_start)
+                and str(window.get("backtest_end")) == str(backtest_end)
+                and (
+                    window.get("strict_no_leakage") is True
+                    or (
+                        isinstance(window.get("strict_no_leakage"), str)
+                        and window.get("strict_no_leakage").lower() == "true"
+                    )
+                )
+                for window in allowed_windows
+                if isinstance(window, dict)
+            )
+            if not strict_window_ok:
+                raise ValueError(
+                    "strict_no_leakage HMM 只能用于已登记的无泄漏系数窗口: "
+                    f"preset={preset_key}, test_start={test_start}, backtest_end={backtest_end}"
+                )
 
         read_result = subprocess.run(
             ["wsl", "bash", "-c", f"cat '{coeff_path}'"],
@@ -3619,6 +3792,11 @@ model_cls = {nn_class_name}
                     f"{len(data['daily_coefficients'])} 天)"
                 )
                 return read_result.stdout.strip()
+        if strict_no_leakage:
+            raise RuntimeError(
+                "strict_no_leakage HMM 必须命中预生成系数文件，禁止实时回退生成以避免未来信息泄漏: "
+                f"{coeff_path}"
+            )
 
         # ── 文件未命中 → WSL 子进程实时预计算 ──
         logger.info(f"HMM 系数文件未命中: {coeff_path}，启动实时预计算")
@@ -3640,7 +3818,7 @@ model_cls = {nn_class_name}
                     encoding="utf-8", errors="replace",
                 )
                 wsl_host_ip = _res.stdout.strip()
-                if wsl_host_ip and wsl_host_ip not in ("10.255.255.254", ""):
+                if wsl_host_ip:
                     db_params["db_host"] = wsl_host_ip
             except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
                 logger.debug("WSL host IP detection failed (non-critical): %s", e)
@@ -3653,6 +3831,8 @@ model_cls = {nn_class_name}
             "preset_key": preset_key,
             **db_params,
         }
+        if hmm_config_json:
+            stdin_params["config_json"] = hmm_config_json
 
         _script_abs = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts", "precompute_hmm_coefficients.py")
