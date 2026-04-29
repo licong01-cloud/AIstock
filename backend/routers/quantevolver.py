@@ -2893,12 +2893,13 @@ def list_experiments(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     alpha_mode: Optional[str] = Query(None, description="过滤 alpha_mode: single/multi"),
+    include_children: bool = Query(False, description="按历史页分组返回父实验及其演进 Loop"),
 ):
     """获取实验列表。支持按 alpha_mode 过滤。"""
     try:
         from ..services.quantevolver.config_composer import ConfigComposer
         cc = ConfigComposer()
-        result = cc.list_experiments(limit=limit, offset=offset)
+        result = cc.list_experiments(limit=limit, offset=offset, include_children=include_children)
         # alpha_mode 过滤（在应用层过滤，避免改动 ConfigComposer 内部查询）
         if alpha_mode and result.get("ok") and result.get("items"):
             result["items"] = [

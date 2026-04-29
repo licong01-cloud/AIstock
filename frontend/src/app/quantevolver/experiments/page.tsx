@@ -163,7 +163,7 @@ export default function ExperimentsPage() {
     const targetPage = page ?? currentPage;
     const offset = (targetPage - 1) * pageSize;
     try {
-      const res = await fetch(`${API}/quantevolver/experiments?limit=${pageSize}&offset=${offset}`);
+      const res = await fetch(`${API}/quantevolver/experiments?limit=${pageSize}&offset=${offset}&include_children=true`);
       const data = await res.json();
       const items = data.items || [];
       setExperiments(items);

@@ -3942,6 +3942,18 @@ class AutoEvolutionScheduler:
             config = loop_row['config_json']
             if isinstance(config, str):
                 config = json.loads(config)
+            with get_conn() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT base_experiment_id FROM qe_evolution_tasks WHERE task_id = %s",
+                        (task_id,),
+                    )
+                    task_parent_row = cur.fetchone()
+            history_parent_experiment_id = (
+                task_parent_row.get("base_experiment_id")
+                if task_parent_row and task_parent_row.get("base_experiment_id")
+                else task_id
+            )
 
             # 更新 LOOP 记录
             with get_conn() as conn:
@@ -3957,11 +3969,14 @@ class AutoEvolutionScheduler:
                         VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s, %s, 'completed', FALSE)
                         ON CONFLICT (experiment_id) DO UPDATE SET
                             result_metrics = EXCLUDED.result_metrics,
-                            status = EXCLUDED.status
+                            status = EXCLUDED.status,
+                            parent_experiment_id = EXCLUDED.parent_experiment_id,
+                            qe_task_id = EXCLUDED.qe_task_id,
+                            qe_loop_id = EXCLUDED.qe_loop_id
                     """, (
                         experiment_id,
                         f"{task_id} 策略回测{loop_index}",
-                        task_id, loop_id, loop_index, task_id,
+                        task_id, loop_id, loop_index, history_parent_experiment_id,
                         json.dumps(config.get("factor_list", [])),
                         config.get("model_id"), config.get("strategy_id"),
                         json.dumps(config.get("data_split", {})),

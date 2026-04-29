@@ -1383,8 +1383,12 @@ class ConfigComposer:
         self,
         limit: int = 50,
         offset: int = 0,
+        include_children: bool = False,
     ) -> Dict[str, Any]:
         """获取实验列表。"""
+        if include_children:
+            return self._list_experiment_history(limit=limit, offset=offset)
+
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT COUNT(*) FROM qe_experiments")
@@ -1409,6 +1413,115 @@ class ConfigComposer:
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
         return {"ok": True, "total": total, "items": rows}
+
+    @staticmethod
+    def _normalize_history_parent_ids(
+        rows: list[dict[str, Any]],
+        selected_parent_ids: set[str],
+    ) -> list[dict[str, Any]]:
+        """Attach custom/strategy evolution loops to their real base experiment."""
+        normalized: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            base_experiment_id = item.pop("_evolution_base_experiment_id", None)
+            item.pop("_evolution_task_type", None)
+            if item.get("is_evolution_loop") and base_experiment_id:
+                current_parent = item.get("parent_experiment_id")
+                parent_is_task_id = current_parent == item.get("qe_task_id")
+                parent_not_in_page = bool(selected_parent_ids) and current_parent not in selected_parent_ids
+                if parent_is_task_id or parent_not_in_page:
+                    item["parent_experiment_id"] = base_experiment_id
+            normalized.append(item)
+        return normalized
+
+    def _list_experiment_history(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """Return paged top-level QE history rows plus their evolution loops.
+
+        The UI groups child loops by parent_experiment_id.  Standard auto
+        evolution uses task_id == root experiment_id, but custom/strategy
+        evolution creates a separate *_base experiment while loop rows were
+        historically persisted with parent_experiment_id == task_id.  This view
+        normalizes that relationship without mutating existing experiment rows.
+        """
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM qe_experiments WHERE parent_experiment_id IS NULL")
+                total = cur.fetchone()[0]
+
+                cur.execute("""
+                    WITH parent_rows AS (
+                        SELECT e.experiment_id,
+                               GREATEST(
+                                   COALESCE(e.updated_at, e.created_at),
+                                   COALESCE((
+                                       SELECT MAX(COALESCE(c.updated_at, c.created_at))
+                                       FROM qe_experiments c
+                                       LEFT JOIN qe_evolution_tasks et
+                                         ON et.task_id = c.qe_task_id
+                                       WHERE c.experiment_id <> e.experiment_id
+                                         AND (
+                                             c.parent_experiment_id = e.experiment_id
+                                             OR et.base_experiment_id = e.experiment_id
+                                         )
+                                   ), COALESCE(e.updated_at, e.created_at))
+                               ) AS history_updated_at
+                        FROM qe_experiments e
+                        WHERE e.parent_experiment_id IS NULL
+                    )
+                    SELECT experiment_id
+                    FROM parent_rows
+                    ORDER BY history_updated_at DESC NULLS LAST, experiment_id DESC
+                    LIMIT %s OFFSET %s
+                """, (limit, offset))
+                parent_ids = [row[0] for row in cur.fetchall()]
+
+                if not parent_ids:
+                    return {"ok": True, "total": total, "items": []}
+
+                cur.execute("""
+                    SELECT e.experiment_id, e.experiment_name, e.status,
+                           e.factor_names, e.model_id, e.strategy_id,
+                           e.workspace_path, e.wsl_command,
+                           e.result_metrics, e.qe_task_id, e.qe_loop_id,
+                           e.loop_index, e.parent_experiment_id, e.is_evolution_loop,
+                           e.ic, e.icir, e.rank_ic, e.rank_icir,
+                           e.annualized_return, e.max_drawdown, e.information_ratio,
+                           e.annualized_return_no_cost, e.max_drawdown_no_cost, e.information_ratio_no_cost,
+                           e.created_at, e.updated_at, e.custom_params,
+                           e.alpha_mode, e.multi_alpha_config, e.parent_multi_alpha_id,
+                           et.base_experiment_id AS _evolution_base_experiment_id,
+                           et.task_type AS _evolution_task_type
+                    FROM qe_experiments e
+                    LEFT JOIN qe_evolution_tasks et
+                      ON et.task_id = e.qe_task_id
+                    WHERE e.experiment_id = ANY(%s)
+                       OR e.parent_experiment_id = ANY(%s)
+                       OR et.base_experiment_id = ANY(%s)
+                    ORDER BY
+                        array_position(%s::text[], COALESCE(e.parent_experiment_id, e.experiment_id, et.base_experiment_id)),
+                        CASE WHEN e.parent_experiment_id IS NULL THEN 0 ELSE 1 END,
+                        e.loop_index ASC NULLS LAST,
+                        e.created_at ASC NULLS LAST
+                """, (parent_ids, parent_ids, parent_ids, parent_ids))
+                cols = [desc[0] for desc in cur.description]
+                rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+        normalized = self._normalize_history_parent_ids(rows, set(parent_ids))
+        # Preserve parent page order, then place child loops under each parent.
+        order = {experiment_id: idx for idx, experiment_id in enumerate(parent_ids)}
+        normalized.sort(
+            key=lambda exp: (
+                order.get(exp.get("parent_experiment_id") or exp.get("experiment_id"), len(order)),
+                0 if not exp.get("parent_experiment_id") else 1,
+                exp.get("loop_index") if exp.get("loop_index") is not None else 10**9,
+                str(exp.get("created_at") or ""),
+            )
+        )
+        return {"ok": True, "total": total, "items": normalized}
 
     def get_experiment_detail(self, experiment_id: str) -> Dict[str, Any]:
         """获取实验详情。"""
