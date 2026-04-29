@@ -388,3 +388,11 @@ Important directories:
 - `HMMTrainingService` passes the registered `config_json` into the WSL coefficient-generation script so live/Paper v2 HMM prediction can use the same dynamic coefficient semantics that produced the validated precomputed artifacts.
 - Paper v2 model/HMM UI now hides raw stderr/traceback details and local file paths from ordinary operator panels while keeping backend job error details persisted for audit; successful daily coefficient jobs show status, result, dates, and artifact hash.
 - Revalidated on development ports only (`8012` backend, `3012` frontend, TDX `19080`): targeted Paper v2/Selection tests 42 passed, `backend/tests/test_hmm_daily_coefficients.py` 8 passed, `nox -s paper_v2_backend` 107 passed, `nox -s paper_v2_ui` 12 passed, and `nox -s paper_v2_live -- --require-live-bars` passed at live bar `2026-04-29T11:19:00+08:00` with replay_start `2026-04-28`, order_count 21, fill_count 74, error_count 0.
+
+## V25 Minute Execution Optimization Strategy - 2026-04-29
+
+- Added `docs/architecture/v25_minute_execution_optimization_strategy_20260429.md` as the follow-up design entry point for V25/V25.1 execution optimization.
+- The document records that current V25 is trained toward a 240-minute Oracle weight curve rather than a one-shot Oracle minute, and that the next framework change should discretize continuous weights through cumulative target curves instead of independent per-minute round-lot truncation.
+- The next V25 framework work should add board-aware lot rules, explicit fee/minimum-commission semantics, cost-aware child-order batching, residual/tail handling, and full QE/Paper v2 consistency checks before any Paper v2 admission.
+- Historical tick data may be used to generate tick-informed minute-level Oracle labels and historical aggregate features for a future V25.1, but runtime policies must fail fast if they require realtime tick data that Paper v2/live execution cannot provide; no default tick features or silent fallback are allowed.
+- No V25 model weights, StrategyPackage manifests, validated execution policies, QE/RD-Agent workspaces, DB asset rows, or runtime assets were modified by this documentation/index update.
