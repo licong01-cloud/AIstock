@@ -48,6 +48,8 @@ xtquant/
 
 # Frontend build artifacts and local temp files (not tracked)
 frontend/.next/
+frontend/.next-dev-*/
+frontend/.next-build-*/
 tmp/
 
 # Debug tools and test scripts (not tracked)

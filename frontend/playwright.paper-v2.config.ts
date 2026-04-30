@@ -30,6 +30,8 @@ export default defineConfig({
     reuseExistingServer: true,
     timeout: 120_000,
     env: {
+      NEXT_DEV_PORT: String(frontendPort),
+      NEXT_DIST_DIR: `.next-dev-${frontendPort}`,
       NEXT_PUBLIC_API_BASE: "/api/v1",
       PAPER_V2_API_PROXY_TARGET: apiBase,
     },
