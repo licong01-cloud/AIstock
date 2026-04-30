@@ -417,6 +417,9 @@ def list_factors(
     category: Optional[str] = Query(None, description="过滤类别，__empty__表示未分类"),
     grade: Optional[str] = Query(None, description="过滤评级，__empty__表示未评级"),
     availability: Optional[str] = Query(None, description="过滤可用状态: enabled/disabled/all"),
+    cache_filter: Optional[str] = Query(None, description="因子值缓存过滤: has_cache/no_cache/covers_range/missing_range/hash_mismatch"),
+    cache_start_date: Optional[str] = Query(None, description="用于判断缓存覆盖的目标开始日期"),
+    cache_end_date: Optional[str] = Query(None, description="用于判断缓存覆盖的目标结束日期"),
     sort_field: Optional[str] = Query(None, description="排序字段"),
     sort_order: Optional[str] = Query("desc", description="排序方向: asc/desc"),
     limit: int = Query(200, ge=1, le=5000),
@@ -489,6 +492,14 @@ def list_factors(
         where_clause = " AND ".join(conditions) if conditions else "1=1"
         # 分类表条件追加到 WHERE（需要 LEFT JOIN 后才能使用）
         cl_where = (" AND " + " AND ".join(cl_conditions)) if cl_conditions else ""
+        cache_sort_fields = {"cache_status", "cache_start_date", "cache_end_date", "cache_computed_at", "cache_size_mb"}
+        cache_filter_norm = (cache_filter or "all").strip().lower()
+        cache_post_process = (
+            cache_filter_norm != "all"
+            or bool(cache_start_date)
+            or bool(cache_end_date)
+            or bool(sort_field in cache_sort_fields)
+        )
 
         # 排序字段白名单映射（防SQL注入）
         SORT_FIELD_MAP = {
@@ -534,6 +545,8 @@ def list_factors(
                 order_clause = f"{col} {direction} {nulls_clause}"
         else:
             order_clause = "c.is_sota_factor DESC NULLS LAST, m.ic_mean DESC NULLS LAST"
+        query_limit = 5000 if cache_post_process else limit
+        query_offset = 0 if cache_post_process else offset
 
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -638,32 +651,75 @@ def list_factors(
                     WHERE {where_clause}{cl_where}
                     ORDER BY {order_clause}
                     LIMIT %s OFFSET %s
-                """, params + cl_params + [limit, offset])
+                """, params + cl_params + [query_limit, query_offset])
                 cols = [desc[0] for desc in cur.description]
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
         # 保留 TASK 原始指标（ic/sharpe/annualized_return）和独立指标（ind_*）同时返回
         # 前端自行决定展示优先级，不在后端覆盖
 
-        # 合并因子值缓存信息（has_cache 判断和 hash 校验分离，互不影响）
+        # 合并因子值缓存信息（回测时读取的 rdagent_assets/factor_values/single/*.parquet）
+        def _split_cache_range(date_range: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+            if not date_range or "~" not in str(date_range):
+                return None, None
+            start, end = str(date_range).split("~", 1)
+            return start.strip() or None, end.strip() or None
+
+        def _covers_target_range(row: Dict[str, Any]) -> bool:
+            if not row.get("has_cache") or row.get("cache_hash_match") is False:
+                return False
+            c_start = row.get("cache_start_date")
+            c_end = row.get("cache_end_date")
+            if not c_start or not c_end:
+                return False
+            if cache_start_date and c_start > cache_start_date:
+                try:
+                    # 与回测加载器一致：允许时序因子 lookback 导致起点晚 60 天内。
+                    gap = (datetime.strptime(c_start, "%Y-%m-%d") - datetime.strptime(cache_start_date, "%Y-%m-%d")).days
+                    if gap > 60:
+                        return False
+                except Exception:
+                    return False
+            if cache_end_date and c_end < cache_end_date:
+                return False
+            return True
+
         try:
             cache_meta = _load_cache_meta()
             cache_factors = cache_meta.get("factors", {})
 
-            # 先标记 has_cache（不依赖 DB）
+            # 先标记缓存文件与元数据；hash 校验稍后补充。
             for row in rows:
                 fn = row.get("factor_name")
-                entry = cache_factors.get(fn)
-                if entry and FACTOR_CACHE_SINGLE_DIR.joinpath(f"{fn}.parquet").exists():
+                entry = cache_factors.get(fn) or {}
+                pq = FACTOR_CACHE_SINGLE_DIR / f"{fn}.parquet"
+                cache_start, cache_end = _split_cache_range(entry.get("date_range"))
+                has_parquet = bool(entry) and pq.exists()
+                if has_parquet:
                     row["has_cache"] = True
                     row["cache_date_range"] = entry.get("date_range", "")
-                    pq = FACTOR_CACHE_SINGLE_DIR / f"{fn}.parquet"
-                    row["cache_size_mb"] = round(pq.stat().st_size / 1024 / 1024, 1) if pq.exists() else 0
+                    row["cache_start_date"] = cache_start
+                    row["cache_end_date"] = cache_end
+                    row["cache_computed_at"] = entry.get("computed_at")
+                    row["cache_as_of_date"] = entry.get("as_of_date")
+                    row["cache_window_train_start"] = entry.get("window_train_start")
+                    row["cache_window_backtest_end"] = entry.get("window_backtest_end")
+                    row["cache_data_source_mode"] = entry.get("data_source_mode")
+                    row["cache_size_mb"] = round(pq.stat().st_size / 1024 / 1024, 1)
+                    row["cache_status"] = "ok"
                 else:
                     row["has_cache"] = False
                     row["cache_date_range"] = None
+                    row["cache_start_date"] = None
+                    row["cache_end_date"] = None
+                    row["cache_computed_at"] = entry.get("computed_at")
+                    row["cache_as_of_date"] = entry.get("as_of_date")
+                    row["cache_window_train_start"] = entry.get("window_train_start")
+                    row["cache_window_backtest_end"] = entry.get("window_backtest_end")
+                    row["cache_data_source_mode"] = entry.get("data_source_mode")
                     row["cache_size_mb"] = None
                     row["cache_hash_match"] = None
+                    row["cache_status"] = "error" if entry.get("status") == "error" else "no_cache"
 
             # hash 校验（优先 DB code_text 与缓存写入一致；失败不影响 has_cache）
             try:
@@ -677,10 +733,53 @@ def list_factors(
                     cached_hash = entry.get("source_hash_raw") or entry.get("source_hash")
                     current_hash = _code_hashes.get(fn)
                     row["cache_hash_match"] = (cached_hash == current_hash) if current_hash else None
+                    if row["cache_hash_match"] is False:
+                        row["cache_status"] = "hash_mismatch"
             except Exception as e:
                 logger.warning(f"缓存 hash 校验失败（不影响 has_cache）: {e}")
+
+            for row in rows:
+                if _covers_target_range(row):
+                    row["cache_coverage_status"] = "covered"
+                elif row.get("has_cache"):
+                    row["cache_coverage_status"] = "hash_mismatch" if row.get("cache_hash_match") is False else "partial"
+                else:
+                    row["cache_coverage_status"] = row.get("cache_status") or "no_cache"
         except Exception as e:
             logger.warning(f"合并缓存信息失败: {e}")
+
+        if cache_post_process:
+            if cache_filter_norm == "has_cache":
+                rows = [r for r in rows if r.get("has_cache")]
+            elif cache_filter_norm == "no_cache":
+                rows = [r for r in rows if not r.get("has_cache")]
+            elif cache_filter_norm == "covers_range":
+                rows = [r for r in rows if r.get("cache_coverage_status") == "covered"]
+            elif cache_filter_norm == "missing_range":
+                rows = [r for r in rows if r.get("cache_coverage_status") != "covered"]
+            elif cache_filter_norm == "hash_mismatch":
+                rows = [r for r in rows if r.get("cache_hash_match") is False]
+
+            if sort_field in cache_sort_fields:
+                status_score = {"no_cache": 0, "error": 0, "hash_mismatch": 1, "partial": 2, "covered": 3, "ok": 3}
+
+                def _cache_sort_value(row: Dict[str, Any]) -> Any:
+                    if sort_field == "cache_status":
+                        return status_score.get(str(row.get("cache_coverage_status") or row.get("cache_status") or "no_cache"), 0)
+                    if sort_field == "cache_size_mb":
+                        return row.get("cache_size_mb")
+                    return row.get(sort_field)
+
+                def _cache_sort_key(row: Dict[str, Any]) -> Tuple[Any, Any]:
+                    value = _cache_sort_value(row)
+                    if sort_order == "desc":
+                        return (value is not None, value or "")
+                    return (value is None, value or "")
+
+                rows.sort(key=_cache_sort_key, reverse=(sort_order == "desc"))
+
+            total = len(rows)
+            rows = rows[offset: offset + limit]
 
         return {"ok": True, "total": total, "items": rows}
     except Exception as e:

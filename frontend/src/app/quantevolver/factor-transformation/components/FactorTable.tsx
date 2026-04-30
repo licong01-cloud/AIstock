@@ -199,6 +199,7 @@ export function FactorTable({
                   />
                 </th>
                 <th className="px-3 py-3 text-left whitespace-nowrap">因子名称</th>
+                <th className="px-3 py-3 text-left whitespace-nowrap">来源</th>
                 <th className="px-3 py-3 text-center whitespace-nowrap">SOTA</th>
                 <th className="px-3 py-3 text-center whitespace-nowrap">IC</th>
                 <th className="px-3 py-3 text-center whitespace-nowrap">Sharpe</th>
@@ -244,6 +245,11 @@ export function FactorTable({
                     title={f.factor_name}
                   >
                     {f.factor_name}
+                  </td>
+                  <td className="px-3 py-2.5 text-xs whitespace-nowrap">
+                    <span className={f.source === "alpha158" ? "text-blue-700 font-semibold" : "text-gray-500"}>
+                      {f.source}
+                    </span>
                   </td>
                   <td className="px-3 py-2.5 text-center whitespace-nowrap">
                     {f.is_sota_factor ? (

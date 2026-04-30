@@ -83,6 +83,16 @@ type Factor = {
   official_rule_version?: string | null;
   official_llm_audit_summary?: string | null;
   official_llm_risk_notes?: string[] | null;
+  has_cache?: boolean;
+  cache_date_range?: string | null;
+  cache_start_date?: string | null;
+  cache_end_date?: string | null;
+  cache_computed_at?: string | null;
+  cache_as_of_date?: string | null;
+  cache_coverage_status?: "covered" | "partial" | "hash_mismatch" | "no_cache" | "error" | null;
+  cache_status?: string | null;
+  cache_size_mb?: number | null;
+  cache_hash_match?: boolean | null;
 };
 
 export type MergedFactor = {
@@ -144,6 +154,12 @@ export type MergedFactor = {
   // 因子值缓存
   has_cache?: boolean;
   cache_date_range?: string | null;
+  cache_start_date?: string | null;
+  cache_end_date?: string | null;
+  cache_computed_at?: string | null;
+  cache_as_of_date?: string | null;
+  cache_coverage_status?: "covered" | "partial" | "hash_mismatch" | "no_cache" | "error" | null;
+  cache_status?: string | null;
   cache_size_mb?: number | null;
   cache_hash_match?: boolean | null;
 };
@@ -399,6 +415,7 @@ export default function FactorList({
   const [cacheBusy, setCacheBusy] = useState(false);
   const [cacheStartDate, setCacheStartDate] = useState(cacheContext?.trainStart || "2018-08-01");
   const [cacheEndDate, setCacheEndDate] = useState(cacheContext?.backtestEnd || "2026-04-03");
+  const [cacheCoverageFilter, setCacheCoverageFilter] = useState("all");
   const [cacheIncremental, setCacheIncremental] = useState(false);
   const [cacheTasks, setCacheTasks] = useState<CacheTask[]>([]);
   const [cacheTaskLoading, setCacheTaskLoading] = useState(false);
@@ -406,6 +423,8 @@ export default function FactorList({
   const [selectedCacheTask, setSelectedCacheTask] = useState<CacheTaskDetail | null>(null);
 
   const isSelection = mode === "selection";
+  const isAlphaSourceFilter = sourceFilter === "alpha158" || sourceFilter === "alpha360";
+  const shouldExcludeAlphaSources = !showAlpha && !isAlphaSourceFilter;
 
   const fetchCacheStats = useCallback(async () => {
     try {
@@ -796,6 +815,12 @@ export default function FactorList({
         })(),
         has_cache: f.has_cache ?? false,
         cache_date_range: f.cache_date_range ?? null,
+        cache_start_date: f.cache_start_date ?? null,
+        cache_end_date: f.cache_end_date ?? null,
+        cache_computed_at: f.cache_computed_at ?? null,
+        cache_as_of_date: f.cache_as_of_date ?? null,
+        cache_coverage_status: f.cache_coverage_status ?? null,
+        cache_status: f.cache_status ?? null,
         cache_size_mb: f.cache_size_mb ?? null,
         cache_hash_match: f.cache_hash_match ?? null,
       };
@@ -803,14 +828,16 @@ export default function FactorList({
 
     let filtered = merged;
 
-    // 客户端排序：cache_status（后端无此字段，需前端排）
+    // 缓存状态后端已支持全量排序；这里保留当前页内兜底排序。
     if (sortField === "cache_status") {
+      const statusScore: Record<string, number> = { no_cache: 0, error: 0, hash_mismatch: 1, partial: 2, covered: 3, ok: 3 };
       const cacheScore = (f: MergedFactor) => {
+        if (f.cache_coverage_status) return statusScore[f.cache_coverage_status] ?? 0;
         if (!f.has_cache) return 0;
         if (f.cache_hash_match === false) return 1;
         // partial range
-        const s = cacheContext?.trainStart;
-        const e = cacheContext?.backtestEnd;
+        const s = cacheStartDate || cacheContext?.trainStart;
+        const e = cacheEndDate || cacheContext?.backtestEnd;
         if (s && e && f.cache_date_range?.includes("~")) {
           const [cs, ce] = f.cache_date_range.split("~");
           if (cs <= s && ce >= e) return 3; // full match
@@ -825,7 +852,7 @@ export default function FactorList({
     }
 
     return filtered;
-  }, [factors, indSummary, categoryFilter, gradeFilter, sortField, sortOrder, cacheContext]);
+  }, [factors, indSummary, categoryFilter, gradeFilter, sortField, sortOrder, cacheContext, cacheStartDate, cacheEndDate]);
 
   const loadData = useCallback(async (queryOverride?: string) => {
     const requestId = ++loadDataRequestRef.current;
@@ -834,14 +861,20 @@ export default function FactorList({
     try {
       const effectiveSearch = typeof queryOverride === "string" ? queryOverride : search;
       const factorParams = new URLSearchParams({ limit: String(pageSize), offset: String((page - 1) * pageSize) });
+      const isCacheSort = !!sortField && (sortField === "cache_status" || sortField.startsWith("cache_"));
       if (sourceFilter) factorParams.set("source", sourceFilter);
       if (effectiveSearch) factorParams.set("search", effectiveSearch);
-      if (!showAlpha) factorParams.set("exclude_source", "alpha158,alpha360");
-      if (sortField && sortField !== "cache_status") factorParams.set("sort_field", sortField);
-      if (sortField && sortField !== "cache_status") factorParams.set("sort_order", sortOrder);
+      if (shouldExcludeAlphaSources) factorParams.set("exclude_source", "alpha158,alpha360");
+      if (sortField) factorParams.set("sort_field", sortField);
+      if (sortField) factorParams.set("sort_order", sortOrder);
       if (categoryFilter) factorParams.set("category", categoryFilter);
       if (gradeFilter) factorParams.set("grade", gradeFilter);
       if (availabilityFilter && availabilityFilter !== "all") factorParams.set("availability", availabilityFilter);
+      if (cacheCoverageFilter !== "all") factorParams.set("cache_filter", cacheCoverageFilter);
+      if (cacheCoverageFilter !== "all" || isCacheSort) {
+        if (cacheStartDate) factorParams.set("cache_start_date", cacheStartDate);
+        if (cacheEndDate) factorParams.set("cache_end_date", cacheEndDate);
+      }
 
       const fRes = await fetch(`${API}/quantevolver/factors?${factorParams.toString()}`).then(r => r.json());
 
@@ -854,7 +887,7 @@ export default function FactorList({
     } finally {
       if (requestId === loadDataRequestRef.current) setLoading(false);
     }
-  }, [sourceFilter, search, page, pageSize, showAlpha, sortField, sortOrder, categoryFilter, gradeFilter, availabilityFilter]);
+  }, [sourceFilter, search, page, pageSize, shouldExcludeAlphaSources, sortField, sortOrder, categoryFilter, gradeFilter, availabilityFilter, cacheCoverageFilter, cacheStartDate, cacheEndDate]);
 
   const loadIndSummary = useCallback(async () => {
     try {
@@ -1118,7 +1151,7 @@ export default function FactorList({
 
   useEffect(() => {
     setPage(1);
-  }, [sourceFilter, search, categoryFilter, gradeFilter, showAlpha, sortField, sortOrder, availabilityFilter]);
+  }, [sourceFilter, search, categoryFilter, gradeFilter, showAlpha, sortField, sortOrder, availabilityFilter, cacheCoverageFilter, cacheStartDate, cacheEndDate]);
 
   async function batchAnalyze() {
     const selectedCount = actualSelectedFactors.size;
@@ -1206,7 +1239,7 @@ export default function FactorList({
     } else if (scopeType === "filter") {
       filtersPayload = {
         source: sourceFilter || undefined,
-        exclude_source: !showAlpha ? "alpha158,alpha360" : undefined,
+        exclude_source: shouldExcludeAlphaSources ? "alpha158,alpha360" : undefined,
         search: search || undefined,
         category: categoryFilter || undefined,
         grade: gradeFilter || undefined,
@@ -1931,6 +1964,20 @@ export default function FactorList({
               <input type="date" value={cacheStartDate} onChange={e => setCacheStartDate(e.target.value)} style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }} />
               <span style={{ fontSize: 11, color: "#9ca3af" }}>~</span>
               <input type="date" value={cacheEndDate} onChange={e => setCacheEndDate(e.target.value)} style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }} />
+              <span style={{ fontSize: 11, color: "#9ca3af" }}>筛选:</span>
+              <select
+                value={cacheCoverageFilter}
+                onChange={e => setCacheCoverageFilter(e.target.value)}
+                title="按所选回测区间筛选因子值缓存。未覆盖包含无缓存、缓存结束日期不足、起点缺口超过60天或源码hash失效。"
+                style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }}
+              >
+                <option value="all">全部缓存状态</option>
+                <option value="missing_range">未覆盖该区间</option>
+                <option value="covers_range">已覆盖该区间</option>
+                <option value="has_cache">已有缓存</option>
+                <option value="no_cache">无缓存</option>
+                <option value="hash_mismatch">源码变更</option>
+              </select>
               <span style={{ fontSize: 11, color: "#9ca3af" }}>并行:</span>
               <select value={cacheWorkers} onChange={e => setCacheWorkers(Number(e.target.value))} style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }}>
                 {[1, 2, 4, 8].map(n => <option key={n} value={n}>{n}</option>)}
@@ -2064,7 +2111,14 @@ export default function FactorList({
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <select
             value={sourceFilter}
-            onChange={e => setSourceFilter(e.target.value)}
+            onChange={e => {
+              const nextSource = e.target.value;
+              setSourceFilter(nextSource);
+              setPage(1);
+              if (nextSource === "alpha158" || nextSource === "alpha360") {
+                setShowAlpha(true);
+              }
+            }}
             title="来源筛选"
             style={{ padding: "6px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db" }}
           >
@@ -2132,10 +2186,11 @@ export default function FactorList({
           <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, cursor: "pointer" }}>
             <input
               type="checkbox"
-              checked={showAlpha}
+              checked={showAlpha || isAlphaSourceFilter}
+              disabled={isAlphaSourceFilter}
               onChange={e => setShowAlpha(e.target.checked)}
             />
-            显示Alpha因子
+            显示Alpha158/Alpha360因子
           </label>
 
           {!isSelection && (
@@ -2600,6 +2655,9 @@ export default function FactorList({
                 <th style={{ ...thStyle, cursor: "pointer", width: 50 }} onClick={() => handleSort("decay_status")}>衰变{getSortIndicator("decay_status")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("ind_calculated_at")}>指标计算{getSortIndicator("ind_calculated_at")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 110 }} onClick={() => handleSort("cache_status")}>因子值缓存{getSortIndicator("cache_status")}</th>
+                <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("cache_start_date")}>缓存开始{getSortIndicator("cache_start_date")}</th>
+                <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("cache_end_date")}>缓存结束{getSortIndicator("cache_end_date")}</th>
+                <th style={{ ...thStyle, cursor: "pointer", width: 120 }} onClick={() => handleSort("cache_computed_at")}>缓存计算{getSortIndicator("cache_computed_at")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 80 }} onClick={() => handleSort("generated_at_utc")}>入库时间{getSortIndicator("generated_at_utc")}</th>
                 <th style={thStyle}>说明</th>
               </tr>
@@ -2778,17 +2836,17 @@ export default function FactorList({
                           f.cache_hash_match === false ? (
                             <span title={`源码已变更，缓存失效\n${f.cache_date_range}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#fee2e2", color: "#dc2626" }}>✗ hash不匹配</span>
                           ) : (
-                            <span title={`${f.cache_date_range} (${f.cache_size_mb} MB)`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: (() => {
-                              const s = cacheContext?.trainStart;
-                              const e = cacheContext?.backtestEnd;
+                            <span title={`${f.cache_date_range} (${f.cache_size_mb} MB)\n计算时间: ${f.cache_computed_at || "-"}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: (() => {
+                              const s = cacheStartDate || cacheContext?.trainStart;
+                              const e = cacheEndDate || cacheContext?.backtestEnd;
                               if (!s || !e || !f.cache_date_range?.includes("~")) return "#d1fae5";
                               const [cs, ce] = f.cache_date_range.split("~");
                               const startGapDays = cs > s ? Math.round((new Date(cs).getTime() - new Date(s).getTime()) / 86400000) : 0;
                               const coverageOk = startGapDays <= 60 && ce >= e;
                               return coverageOk ? "#d1fae5" : "#fef3c7";
                             })(), color: (() => {
-                              const s = cacheContext?.trainStart;
-                              const e = cacheContext?.backtestEnd;
+                              const s = cacheStartDate || cacheContext?.trainStart;
+                              const e = cacheEndDate || cacheContext?.backtestEnd;
                               if (!s || !e || !f.cache_date_range?.includes("~")) return "#059669";
                               const [cs, ce] = f.cache_date_range.split("~");
                               const startGapDays = cs > s ? Math.round((new Date(cs).getTime() - new Date(s).getTime()) / 86400000) : 0;
@@ -2796,8 +2854,8 @@ export default function FactorList({
                               return coverageOk ? "#059669" : "#d97706";
                             })() }}>
                               {(() => {
-                                const s = cacheContext?.trainStart;
-                                const e = cacheContext?.backtestEnd;
+                                const s = cacheStartDate || cacheContext?.trainStart;
+                                const e = cacheEndDate || cacheContext?.backtestEnd;
                                 if (!s || !e || !f.cache_date_range?.includes("~")) {
                                   return `✓ ${f.cache_date_range?.split("~")[0]?.slice(0, 7) || "已缓存"}~${f.cache_date_range?.split("~")[1]?.slice(0, 7) || ""}`;
                                 }
@@ -2813,6 +2871,15 @@ export default function FactorList({
                         ) : (
                           <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, color: "#9ca3af", background: "#f3f4f6" }}>— 无缓存</span>
                         )}
+                      </td>
+                      <td style={{ ...tdStyle, fontSize: 10, color: f.cache_start_date ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }}>
+                        {f.cache_start_date || "-"}
+                      </td>
+                      <td style={{ ...tdStyle, fontSize: 10, color: f.cache_end_date ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }}>
+                        {f.cache_end_date || "-"}
+                      </td>
+                      <td style={{ ...tdStyle, fontSize: 10, color: f.cache_computed_at ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }} title={f.cache_computed_at || undefined}>
+                        {f.cache_computed_at ? f.cache_computed_at.slice(0, 16).replace("T", " ") : "-"}
                       </td>
                       <td style={{ ...tdStyle, fontSize: 10, color: "#94a3b8", whiteSpace: "nowrap" }}>{f.generated_at_utc ? f.generated_at_utc.slice(0, 10) : "-"}</td>
                       <td style={tdStyle}>

@@ -176,7 +176,7 @@ export default function FactorTransformationPage() {
           factor_source: sourceFilter !== "all" ? sourceFilter : null,
           max_llm_retries: cfg.max_llm_retries,
           llm_model_id: cfg.llm_model_id || null,
-          only_pending: true,
+          only_pending: !names,
         }),
       });
       const d = await r.json();
@@ -227,7 +227,12 @@ export default function FactorTransformationPage() {
       if (statusFilter === "no_code" && f.has_original_code) return false;
       if (statusFilter !== "no_code" && st !== statusFilter) return false;
     }
-    if (searchText && !f.factor_name.toLowerCase().includes(searchText.toLowerCase())) return false;
+    if (searchText) {
+      const keyword = searchText.toLowerCase();
+      const matchName = f.factor_name.toLowerCase().includes(keyword);
+      const matchSource = f.source.toLowerCase().includes(keyword);
+      if (!matchName && !matchSource) return false;
+    }
     return true;
   });
 

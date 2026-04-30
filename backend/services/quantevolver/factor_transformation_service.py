@@ -1235,7 +1235,8 @@ RDAgent研发阶段生成的因子代码（原始代码）通过读取本地文�
         sql = f"""
             SELECT factor_name, source, asset_path FROM aistock_factor_catalog
             WHERE {where_clause}
-            ORDER BY is_sota_factor DESC NULLS LAST, factor_name
+            ORDER BY CASE WHEN source = 'alpha158' THEN 0 ELSE 1 END,
+                     is_sota_factor DESC NULLS LAST, factor_name
         """
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -1471,7 +1472,8 @@ RDAgent研发阶段生成的因子代码（原始代码）通过读取本地文�
                    is_sota_factor, ic, sharpe, qe_code_path
             FROM aistock_factor_catalog
             WHERE {where_clause}
-            ORDER BY is_sota_factor DESC NULLS LAST, factor_name
+            ORDER BY CASE WHEN source = 'alpha158' THEN 0 ELSE 1 END,
+                     is_sota_factor DESC NULLS LAST, factor_name
             LIMIT %s OFFSET %s
         """
         count_sql = f"SELECT COUNT(*) FROM aistock_factor_catalog WHERE {where_clause}"
