@@ -6,7 +6,7 @@ import datetime as dt
 from datetime import date
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.db.pg_pool import get_conn
@@ -230,6 +230,25 @@ def list_portfolios(limit: int = 100) -> dict[str, Any]:
     try:
         portfolios = PaperTradingV2PortfolioService().list_portfolios(limit=limit)
         return {"ok": True, "portfolios": [item.model_dump(mode="json") for item in portfolios]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/running-summary")
+def list_running_portfolio_summary(
+    limit: int = Query(default=100, ge=1, le=500),
+    snapshot_limit: int = Query(default=30, ge=1, le=240),
+    position_limit: int = Query(default=8, ge=1, le=100),
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            "summaries": PaperTradingV2PortfolioService().running_summary(
+                limit=limit,
+                snapshot_limit=snapshot_limit,
+                position_limit=position_limit,
+            ),
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 

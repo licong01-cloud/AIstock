@@ -101,24 +101,7 @@ class PaperTradingV2Repository:
                 row = cur.fetchone()
         if not row:
             raise DataUnavailableError("paper v2 portfolio does not exist", context={"portfolio_id": portfolio_id})
-        from backend.services.strategy_package.models import StrategyPackageManifest
-
-        return PaperPortfolio(
-            portfolio_id=row["portfolio_id"],
-            portfolio_name=row["portfolio_name"],
-            package_id=row["package_id"],
-            manifest_sha256=row["manifest_sha256"],
-            frozen_manifest=StrategyPackageManifest.model_validate(row["frozen_manifest_json"]),
-            initial_cash=float(row["initial_cash"]),
-            start_date=row["start_date"],
-            data_source=MinuteDataSource(row["data_source"]),
-            fee_policy=row["fee_policy"] or {},
-            risk_policy=row["risk_policy"] or {},
-            execution_policy=row["execution_policy"] or {},
-            status=PortfolioStatus(row["status"]),
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-        )
+        return self._portfolio_from_row(dict(row))
 
     def list_portfolios(self, *, limit: int = 100) -> list[PaperPortfolio]:
         with self._conn_factory() as conn:
@@ -126,6 +109,185 @@ class PaperTradingV2Repository:
                 cur.execute("SELECT portfolio_id FROM paper_v2.portfolio ORDER BY created_at DESC LIMIT %s", (limit,))
                 ids = [row["portfolio_id"] for row in cur.fetchall()]
         return [self.get_portfolio(portfolio_id) for portfolio_id in ids]
+
+    def list_running_summaries(
+        self,
+        *,
+        limit: int = 100,
+        snapshot_limit: int = 30,
+        position_limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        """Return a compact running-portfolio dashboard in one backend call.
+
+        The UI used to fan out seven requests per active portfolio, which can
+        exhaust browser connection/request resources once many validation
+        portfolios exist. This method keeps the same persisted data sources but
+        aggregates them server-side without triggering trading side effects.
+        """
+
+        if limit <= 0 or snapshot_limit <= 0 or position_limit <= 0:
+            raise DataUnavailableError(
+                "paper v2 running summary limits must be positive",
+                context={"limit": limit, "snapshot_limit": snapshot_limit, "position_limit": position_limit},
+            )
+        active_statuses = [PortfolioStatus.READY.value, PortfolioStatus.RUNNING.value, PortfolioStatus.PAUSED.value]
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM paper_v2.portfolio
+                    WHERE status = ANY(%s)
+                    ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    (active_statuses, limit),
+                )
+                portfolio_rows = [dict(row) for row in cur.fetchall()]
+                portfolio_ids = [row["portfolio_id"] for row in portfolio_rows]
+                if not portfolio_ids:
+                    return []
+
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (portfolio_id)
+                           run_id, portfolio_id, trade_date, status, data_source,
+                           runtime_config, started_at, completed_at, error_json
+                    FROM paper_v2.run
+                    WHERE portfolio_id = ANY(%s)
+                    ORDER BY portfolio_id, started_at DESC NULLS LAST, run_id DESC
+                    """,
+                    (portfolio_ids,),
+                )
+                latest_runs = {row["portfolio_id"]: dict(row) for row in cur.fetchall()}
+
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM (
+                        SELECT s.*,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY s.portfolio_id
+                                   ORDER BY s.created_at DESC NULLS LAST, s.updated_at DESC NULLS LAST, s.session_id DESC
+                               ) AS rn
+                        FROM paper_v2.trade_session s
+                        WHERE s.portfolio_id = ANY(%s)
+                    ) ranked
+                    WHERE rn = 1
+                    """,
+                    (portfolio_ids,),
+                )
+                latest_sessions = {row["portfolio_id"]: self._session_from_row(dict(row)) for row in cur.fetchall()}
+
+                cur.execute(
+                    """
+                    SELECT p.portfolio_id,
+                           COALESCE(o.order_count, 0) AS order_count,
+                           COALESCE(f.fill_count, 0) AS fill_count,
+                           COALESCE(e.error_count, 0) AS error_count
+                    FROM unnest(%s::text[]) AS p(portfolio_id)
+                    LEFT JOIN (
+                        SELECT portfolio_id, COUNT(*) AS order_count
+                        FROM paper_v2.orders
+                        WHERE portfolio_id = ANY(%s)
+                        GROUP BY portfolio_id
+                    ) o ON o.portfolio_id = p.portfolio_id
+                    LEFT JOIN (
+                        SELECT r.portfolio_id, COUNT(*) AS fill_count
+                        FROM paper_v2.fills f
+                        JOIN paper_v2.run r ON r.run_id = f.run_id
+                        WHERE r.portfolio_id = ANY(%s)
+                        GROUP BY r.portfolio_id
+                    ) f ON f.portfolio_id = p.portfolio_id
+                    LEFT JOIN (
+                        SELECT portfolio_id, COUNT(*) AS error_count
+                        FROM paper_v2.errors
+                        WHERE portfolio_id = ANY(%s)
+                        GROUP BY portfolio_id
+                    ) e ON e.portfolio_id = p.portfolio_id
+                    """,
+                    (portfolio_ids, portfolio_ids, portfolio_ids, portfolio_ids),
+                )
+                counts = {row["portfolio_id"]: dict(row) for row in cur.fetchall()}
+
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM (
+                        SELECT ds.*,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY ds.portfolio_id
+                                   ORDER BY ds.trade_date DESC, ds.snapshot_id DESC
+                               ) AS rn
+                        FROM paper_v2.daily_snapshots ds
+                        WHERE ds.portfolio_id = ANY(%s)
+                    ) ranked
+                    WHERE rn <= %s
+                    ORDER BY portfolio_id, trade_date DESC
+                    """,
+                    (portfolio_ids, snapshot_limit),
+                )
+                snapshots_by_portfolio: dict[str, list[dict[str, Any]]] = {portfolio_id: [] for portfolio_id in portfolio_ids}
+                for row in cur.fetchall():
+                    payload = dict(row)
+                    payload.pop("rn", None)
+                    snapshots_by_portfolio.setdefault(payload["portfolio_id"], []).append(payload)
+
+                cur.execute(
+                    """
+                    WITH latest_date AS (
+                        SELECT portfolio_id, MAX(trade_date) AS trade_date
+                        FROM paper_v2.positions
+                        WHERE portfolio_id = ANY(%s)
+                        GROUP BY portfolio_id
+                    )
+                    SELECT *
+                    FROM (
+                        SELECT p.*,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY p.portfolio_id
+                                   ORDER BY p.symbol ASC, p.position_id DESC
+                               ) AS rn
+                        FROM paper_v2.positions p
+                        JOIN latest_date d
+                          ON d.portfolio_id = p.portfolio_id
+                         AND d.trade_date = p.trade_date
+                    ) ranked
+                    WHERE rn <= %s
+                    ORDER BY portfolio_id, symbol
+                    """,
+                    (portfolio_ids, position_limit),
+                )
+                positions_by_portfolio: dict[str, list[dict[str, Any]]] = {portfolio_id: [] for portfolio_id in portfolio_ids}
+                for row in cur.fetchall():
+                    payload = dict(row)
+                    payload.pop("rn", None)
+                    positions_by_portfolio.setdefault(payload["portfolio_id"], []).append(payload)
+
+        summaries: list[dict[str, Any]] = []
+        for row in portfolio_rows:
+            portfolio = self._portfolio_from_row(row)
+            portfolio_id = portfolio.portfolio_id
+            recent_snapshots = snapshots_by_portfolio.get(portfolio_id, [])
+            latest_positions = positions_by_portfolio.get(portfolio_id, [])
+            count_row = counts.get(portfolio_id, {})
+            summaries.append(
+                {
+                    "portfolio": portfolio,
+                    "latest_run": latest_runs.get(portfolio_id),
+                    "latest_session": latest_sessions.get(portfolio_id),
+                    "latest_snapshot": recent_snapshots[0] if recent_snapshots else None,
+                    "recent_snapshots": recent_snapshots,
+                    "latest_positions": latest_positions,
+                    "counts": {
+                        "orders": int(count_row.get("order_count") or 0),
+                        "fills": int(count_row.get("fill_count") or 0),
+                        "positions": len(latest_positions),
+                        "errors": int(count_row.get("error_count") or 0),
+                    },
+                }
+            )
+        return summaries
 
     def update_portfolio_status(self, portfolio_id: str, status: PortfolioStatus) -> PaperPortfolio:
         with self._conn_factory() as conn:
@@ -1488,6 +1650,27 @@ class PaperTradingV2Repository:
         )
 
     @staticmethod
+    def _portfolio_from_row(row: dict[str, Any]) -> PaperPortfolio:
+        from backend.services.strategy_package.models import StrategyPackageManifest
+
+        return PaperPortfolio(
+            portfolio_id=row["portfolio_id"],
+            portfolio_name=row["portfolio_name"],
+            package_id=row["package_id"],
+            manifest_sha256=row["manifest_sha256"],
+            frozen_manifest=StrategyPackageManifest.model_validate(row["frozen_manifest_json"]),
+            initial_cash=float(row["initial_cash"]),
+            start_date=row["start_date"],
+            data_source=MinuteDataSource(row["data_source"]),
+            fee_policy=row["fee_policy"] or {},
+            risk_policy=row["risk_policy"] or {},
+            execution_policy=row["execution_policy"] or {},
+            status=PortfolioStatus(row["status"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
     def _runtime_profile_from_row(row: dict[str, Any]) -> PaperRuntimeProfile:
         return PaperRuntimeProfile(
             profile_id=row["profile_id"],
@@ -1680,6 +1863,45 @@ class InMemoryPaperTradingV2Repository:
 
     def list_portfolios(self, *, limit: int = 100) -> list[PaperPortfolio]:
         return list(self.portfolios.values())[:limit]
+
+    def list_running_summaries(
+        self,
+        *,
+        limit: int = 100,
+        snapshot_limit: int = 30,
+        position_limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        active = {PortfolioStatus.READY, PortfolioStatus.RUNNING, PortfolioStatus.PAUSED}
+        for portfolio in [item for item in self.list_portfolios(limit=10_000) if item.status in active][:limit]:
+            runs = self.list_runs(portfolio.portfolio_id, limit=1)
+            sessions = self.list_sessions(portfolio.portfolio_id, limit=1)
+            snapshots = self.list_daily_snapshots(portfolio.portfolio_id, limit=snapshot_limit)
+            latest_trade_date = snapshots[0]["trade_date"] if snapshots else None
+            positions = self.list_positions(portfolio.portfolio_id, limit=10_000)
+            if positions:
+                latest_position_date = positions[0]["trade_date"]
+                latest_positions = [row for row in positions if row["trade_date"] == latest_position_date][:position_limit]
+            else:
+                latest_positions = []
+            rows.append(
+                {
+                    "portfolio": portfolio,
+                    "latest_run": runs[0] if runs else None,
+                    "latest_session": sessions[0] if sessions else None,
+                    "latest_snapshot": snapshots[0] if snapshots else None,
+                    "recent_snapshots": snapshots,
+                    "latest_positions": latest_positions,
+                    "counts": {
+                        "orders": len(self.list_orders(portfolio.portfolio_id, limit=10_000)),
+                        "fills": len(self.list_fills(portfolio.portfolio_id, limit=10_000)),
+                        "positions": len(latest_positions),
+                        "errors": len(self.list_errors(portfolio.portfolio_id, limit=10_000)),
+                    },
+                    "latest_trade_date": latest_trade_date,
+                }
+            )
+        return rows
 
     def update_portfolio_status(self, portfolio_id: str, status: PortfolioStatus) -> PaperPortfolio:
         portfolio = self.get_portfolio(portfolio_id)

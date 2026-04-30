@@ -16,12 +16,10 @@ type RunningPortfolioSummary = {
   portfolio: PaperPortfolio;
   latestRun?: PaperRun;
   latestSession?: PaperSession;
-  orders: JsonObject[];
-  fills: JsonObject[];
-  positions: JsonObject[];
-  snapshots: JsonObject[];
-  errors: JsonObject[];
-  performance?: JsonObject | null;
+  counts: { orders: number; fills: number; positions: number; errors: number };
+  latestSnapshot?: JsonObject | null;
+  recentSnapshots: JsonObject[];
+  latestPositions: JsonObject[];
 };
 
 function n(value: unknown): number {
@@ -29,18 +27,24 @@ function n(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function isObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asRows(value: unknown): JsonObject[] {
+  return Array.isArray(value) ? value.filter(isObject) : [];
+}
+
 function latestSnapshot(row: RunningPortfolioSummary): JsonObject | undefined {
-  return row.snapshots[0];
+  return (row.latestSnapshot && isObject(row.latestSnapshot) ? row.latestSnapshot : undefined) || row.recentSnapshots[0];
 }
 
 function latestPositionDate(row: RunningPortfolioSummary): string {
-  return String(row.positions[0]?.trade_date || "-");
+  return String(row.latestPositions[0]?.trade_date || "-");
 }
 
 function latestPositions(row: RunningPortfolioSummary): JsonObject[] {
-  const date = latestPositionDate(row);
-  if (date === "-") return [];
-  return row.positions.filter((item) => String(item.trade_date || "") === date);
+  return row.latestPositions;
 }
 
 function totalReturn(row: RunningPortfolioSummary): number | null {
@@ -60,7 +64,7 @@ function packageSource(portfolio: PaperPortfolio): string {
 }
 
 function navSeries(row: RunningPortfolioSummary) {
-  const ordered = [...row.snapshots].reverse();
+  const ordered = [...row.recentSnapshots].reverse();
   const values = ordered.map((item) => n(item.nav)).filter((value) => Number.isFinite(value) && value > 0);
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -80,21 +84,23 @@ export default function PaperV2RunningPage() {
     setLoading(true);
     setError(null);
     try {
-      const portfolios = await paperV2Api.listPortfolios(300);
-      const active = portfolios.filter((item) => ["READY", "RUNNING", "PAUSED"].includes(String(item.status || "").toUpperCase()));
-      const summaries = await Promise.all(active.map(async (portfolio) => {
-        const [runs, sessions, orders, fills, positions, snapshots, errors] = await Promise.all([
-          paperV2Api.runs(portfolio.portfolio_id),
-          paperV2Api.listSessions(portfolio.portfolio_id),
-          paperV2Api.orders(portfolio.portfolio_id),
-          paperV2Api.fills(portfolio.portfolio_id),
-          paperV2Api.positions(portfolio.portfolio_id),
-          paperV2Api.snapshots(portfolio.portfolio_id),
-          paperV2Api.errors(portfolio.portfolio_id),
-        ]);
-        const performance = snapshots.length ? await paperV2Api.performanceOrNull(portfolio.portfolio_id) : null;
-        return { portfolio, latestRun: runs[0], latestSession: sessions[0], orders, fills, positions, snapshots, errors, performance };
-      }));
+      const summaries = (await paperV2Api.runningSummary(300)).map((item) => {
+        const counts = isObject(item.counts) ? item.counts : {};
+        return {
+          portfolio: item.portfolio as PaperPortfolio,
+          latestRun: isObject(item.latest_run) ? item.latest_run as PaperRun : undefined,
+          latestSession: isObject(item.latest_session) ? item.latest_session as PaperSession : undefined,
+          counts: {
+            orders: n(counts.orders),
+            fills: n(counts.fills),
+            positions: n(counts.positions),
+            errors: n(counts.errors),
+          },
+          latestSnapshot: isObject(item.latest_snapshot) ? item.latest_snapshot : null,
+          recentSnapshots: asRows(item.recent_snapshots),
+          latestPositions: asRows(item.latest_positions),
+        };
+      });
       setRows(summaries);
     } catch (exc) {
       setError(exc);
@@ -108,8 +114,8 @@ export default function PaperV2RunningPage() {
   const totals = useMemo(() => {
     const nav = rows.reduce((sum, row) => sum + n(latestSnapshot(row)?.nav || row.portfolio.initial_cash), 0);
     const initial = rows.reduce((sum, row) => sum + n(row.portfolio.initial_cash), 0);
-    const errors = rows.reduce((sum, row) => sum + row.errors.length, 0);
-    const fills = rows.reduce((sum, row) => sum + row.fills.length, 0);
+    const errors = rows.reduce((sum, row) => sum + row.counts.errors, 0);
+    const fills = rows.reduce((sum, row) => sum + row.counts.fills, 0);
     return { nav, initial, pnl: nav - initial, returnRate: initial ? nav / initial - 1 : null, errors, fills };
   }, [rows]);
 
@@ -139,8 +145,8 @@ export default function PaperV2RunningPage() {
             { key: "nav", header: "净值", render: (row) => formatNumber(latestSnapshot(row)?.nav || row.portfolio.initial_cash, 2) },
             { key: "ret", header: "累计收益", render: (row) => formatPercent(totalReturn(row)) },
             { key: "cash", header: "现金 / 市值", render: (row) => <>{formatNumber(latestSnapshot(row)?.cash, 2)}<br /><span className="pv2-muted">{formatNumber(latestSnapshot(row)?.market_value, 2)}</span></> },
-            { key: "counts", header: "订单/成交/持仓", render: (row) => `${row.orders.length} / ${row.fills.length} / ${latestPositions(row).length}` },
-            { key: "errors", header: "错误", render: (row) => row.errors.length ? <StatusBadge status="FAILED" /> : <StatusBadge status="PASSED" /> },
+            { key: "counts", header: "订单/成交/持仓", render: (row) => `${row.counts.orders} / ${row.counts.fills} / ${row.counts.positions}` },
+            { key: "errors", header: "错误", render: (row) => row.counts.errors ? <StatusBadge status="FAILED" /> : <StatusBadge status="PASSED" /> },
             { key: "actions", header: "操作", render: (row) => <div className="pv2-row-actions"><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/live-dashboard`}>实时详情</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}`}>统计</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/ledger`}>交易</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/performance`}>收益</Link></div> },
           ]}
         />
@@ -153,7 +159,7 @@ export default function PaperV2RunningPage() {
               <MetricCard label="净值" value={formatNumber(latestSnapshot(row)?.nav || row.portfolio.initial_cash, 2)} />
               <MetricCard label="收益率" value={formatPercent(totalReturn(row))} tone={(totalReturn(row) || 0) >= 0 ? "success" : "danger"} />
               <MetricCard label="持仓数" value={latestPositions(row).length} />
-              <MetricCard label="错误" value={row.errors.length} tone={row.errors.length ? "danger" : "success"} />
+              <MetricCard label="错误" value={row.counts.errors} tone={row.counts.errors ? "danger" : "success"} />
             </div>
             <div className="pv2-card" style={{ marginTop: 12 }}>
               <div className="pv2-eyebrow">净值曲线</div>

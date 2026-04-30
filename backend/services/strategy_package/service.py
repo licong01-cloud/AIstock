@@ -318,9 +318,11 @@ class StrategyPackageService:
             )
         if to_status == PackageStatus.PAPER_ENABLED:
             record = self.repository.get(package_id)
-            self.validator.validate_for_paper_trading(
-                record.current_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
-            )
+            # StrategyPackage freezes factor/model lineage. Minute execution
+            # policies are selected later from backtest-validated policy rows,
+            # so enabling the package for Paper v2 must not validate an obsolete
+            # manifest-embedded V24/V25 runtime asset path.
+            self.validator.validate_manifest_identity_for_paper_trading(record.current_manifest())
         return self.repository.transition_status(
             package_id=package_id,
             to_status=to_status,

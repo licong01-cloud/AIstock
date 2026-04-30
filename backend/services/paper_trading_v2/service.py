@@ -161,6 +161,19 @@ class PaperTradingV2PortfolioService:
     def list_portfolios(self, *, limit: int = 100) -> list[PaperPortfolio]:
         return self.repository.list_portfolios(limit=limit)
 
+    def running_summary(
+        self,
+        *,
+        limit: int = 100,
+        snapshot_limit: int = 30,
+        position_limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        return self.repository.list_running_summaries(
+            limit=limit,
+            snapshot_limit=snapshot_limit,
+            position_limit=position_limit,
+        )
+
     def get_portfolio(self, portfolio_id: str) -> PaperPortfolio:
         return self.repository.get_portfolio(portfolio_id)
 

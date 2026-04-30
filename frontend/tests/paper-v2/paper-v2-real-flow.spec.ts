@@ -537,7 +537,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(page.locator(".pv2-error-panel")).toContainText("TopK");
 
     await page.getByTestId("selection-top-k").fill("20");
-    await page.getByTestId("selection-trade-date").fill(REPLAY_TRADE_DATE || HMM_UNCOVERED_TRADE_DATE);
+    await page.getByTestId("selection-trade-date").fill(HMM_UNCOVERED_TRADE_DATE);
     await expect(page.getByTestId("selection-cutoff-date")).toContainText(/^\d{4}-\d{2}-\d{2}$/, { timeout: 30_000 });
     await expect(page.getByTestId("selection-hmm-coverage")).toContainText("HMM 系数不覆盖当前交易日");
     await page.getByTestId("selection-run").click();
@@ -618,9 +618,17 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(page.locator(`a[href="/paper-v2/portfolios/${replayPortfolioId}"]`).first()).toBeVisible({ timeout: 60_000 });
 
     await page.goto("/paper-v2/running");
+    await expect(page.locator(".pv2-error-panel")).toHaveCount(0);
+    await expect(page.locator("body")).not.toContainText("Failed to fetch");
     await expect(page.getByRole("heading", { name: "正在运行模拟盘列表" })).toBeVisible();
     await expect(page.locator(`a[href="/paper-v2/portfolios/${replayPortfolioId}/live-dashboard"]`).first()).toBeVisible({ timeout: 60_000 });
+    await expect(page.locator(".pv2-error-panel")).toHaveCount(0);
+    await expect(page.locator("body")).not.toContainText("Failed to fetch");
     await expect(page.locator("body")).toContainText("净值曲线");
+
+    const runningSummary = await apiJson(request, "/paper-v2/running-summary?limit=300&snapshot_limit=30&position_limit=8");
+    expect(runningSummary.response.ok(), JSON.stringify(runningSummary.payload)).toBeTruthy();
+    expect((runningSummary.payload.summaries || []).some((row: JsonObject) => row.portfolio?.portfolio_id === replayPortfolioId)).toBeTruthy();
 
     await page.goto(`/paper-v2/portfolios/${replayPortfolioId}/live-dashboard`);
     await expect(page.getByTestId("paper-live-dashboard")).toBeVisible({ timeout: 60_000 });

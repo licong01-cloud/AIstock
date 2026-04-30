@@ -234,6 +234,15 @@ export const paperV2Api = {
     const data = await apiFetch<{ portfolios: PaperPortfolio[] }>(`/paper-v2/portfolios?limit=${limit}`);
     return data.portfolios || [];
   },
+  async runningSummary(limit = 100, snapshotLimit = 30, positionLimit = 8): Promise<JsonObject[]> {
+    const qs = new URLSearchParams({
+      limit: String(limit),
+      snapshot_limit: String(snapshotLimit),
+      position_limit: String(positionLimit),
+    });
+    const data = await apiFetch<{ summaries: JsonObject[] }>(`/paper-v2/running-summary?${qs.toString()}`);
+    return data.summaries || [];
+  },
   async createPortfolio(payload: { package_id: string; portfolio_name: string; initial_cash: number; start_date: string; data_source: DataSource; fee_policy?: JsonObject; risk_policy?: JsonObject; execution_policy?: JsonObject }): Promise<PaperPortfolio> {
     const data = await apiFetch<{ portfolio: PaperPortfolio }>("/paper-v2/portfolios", body(payload));
     return data.portfolio;

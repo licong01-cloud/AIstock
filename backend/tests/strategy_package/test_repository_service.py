@@ -36,6 +36,18 @@ def test_strategy_package_repository_persists_frozen_manifest_and_status_flow() 
     ]
 
 
+def test_enable_paper_does_not_validate_manifest_minute_runtime_asset() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest(algo_code="V24_PLAN").model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    repo.save_manifest(manifest)
+
+    paper = StrategyPackageService(repository=repo).enable_paper(manifest.package_id)
+
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
+
+
 def test_strategy_package_repository_rejects_silent_manifest_replacement() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(make_manifest())
