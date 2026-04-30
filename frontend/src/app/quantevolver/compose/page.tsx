@@ -21,6 +21,30 @@ const ReturnCurveChart = dynamic(() => import("../components/charts/ReturnCurveC
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const MULTI_ALPHA_DISTRIBUTED_ENABLED =
   process.env.NEXT_PUBLIC_MULTI_ALPHA_DISTRIBUTED_ENABLED === "1";
+const QE_DEFAULT_SIGNAL_END = "2026-04-28";
+const QE_DEFAULT_BACKTEST_END = "2026-04-27";
+const DEFAULT_QE_DATA_SPLIT = {
+  train_start: "2018-08-01",
+  train_end: "2022-12-31",
+  valid_start: "2023-01-01",
+  valid_end: "2024-06-30",
+  test_start: "2024-07-01",
+  test_end: QE_DEFAULT_SIGNAL_END,
+  backtest_end: QE_DEFAULT_BACKTEST_END,
+};
+
+function deriveBacktestEnd(testEnd?: string) {
+  if (!testEnd) return QE_DEFAULT_BACKTEST_END;
+  return testEnd >= QE_DEFAULT_SIGNAL_END ? QE_DEFAULT_BACKTEST_END : testEnd;
+}
+
+function withSafeBacktestEnd(split?: Record<string, any>) {
+  const next = { ...DEFAULT_QE_DATA_SPLIT, ...(split || {}) };
+  if (!next.backtest_end) {
+    next.backtest_end = deriveBacktestEnd(next.test_end);
+  }
+  return next;
+}
 
 const DATA_SOURCE_MAP: Record<string, string> = {
   daily_pv: "日线行情", daily_basic: "每日基本面", moneyflow: "个股资金流向", cyq_perf: "筹码分布", bak_basic: "股票历史信息", multi: "多数据源",
@@ -175,11 +199,7 @@ export default function ComposePage() {
   const [blacklistEnabled, setBlacklistEnabled] = useState(false);
   const [stockPoolPath, setStockPoolPath] = useState<string | null>(null);
   const [blacklistSnapshot, setBlacklistSnapshot] = useState<any | null>(null);
-  const [dataSplit, setDataSplit] = useState({
-    train_start: "2018-08-01", train_end: "2022-12-31",
-    valid_start: "2023-01-01", valid_end: "2024-06-30",
-    test_start: "2024-07-01", test_end: "2026-03-10",
-  });
+  const [dataSplit, setDataSplit] = useState(() => ({ ...DEFAULT_QE_DATA_SPLIT }));
   const [dispatchMode, setDispatchMode] = useState<"independent" | "evolution">("independent");
   const [evolutionLoops, setEvolutionLoops] = useState(5);
   const [evolutionObjective, setEvolutionObjective] = useState("");
@@ -399,7 +419,7 @@ export default function ComposePage() {
         if (exp.model_id) setSelectedModel(exp.model_id);
       }
       if (exp.strategy_id) setSelectedStrategy(exp.strategy_id);
-      if (exp.data_split) setDataSplit(exp.data_split);
+      if (exp.data_split) setDataSplit(withSafeBacktestEnd(exp.data_split));
       if (exp.custom_params) {
         if (exp.custom_params.topk) setTopk(exp.custom_params.topk);
         if (exp.custom_params.n_drop) setNDrop(exp.custom_params.n_drop);
@@ -662,7 +682,7 @@ export default function ComposePage() {
           factor_names: factorNames,
           model_id: alphaMode === "single" ? (selectedModel || undefined) : multiAlphaConfig?.alpha_groups[0]?.model_id,
           strategy_id: selectedStrategy || undefined,
-          data_split: dataSplit, custom_params: buildRuntimeCustomParams(),
+          data_split: withSafeBacktestEnd(dataSplit), custom_params: buildRuntimeCustomParams(),
           ...buildUnfilledHandlerPayload(),
           dispatch_mode: dispatchMode,
           evolution_params: dispatchMode === "evolution" ? { loops: evolutionLoops, objective: evolutionObjective } : undefined,
@@ -982,7 +1002,7 @@ export default function ComposePage() {
                     cacheContext={{
                       experimentId: configResult?.experiment_id || priorExpId || null,
                       trainStart: dataSplit.train_start,
-                      backtestEnd: dataSplit.test_end,
+                      backtestEnd: dataSplit.backtest_end || dataSplit.test_end,
                     }}
                   />
                 </div>
@@ -1578,16 +1598,29 @@ export default function ComposePage() {
             <div style={{ backgroundColor: "#f8fafc", borderRadius: "8px", padding: "20px", border: "1px solid #e2e8f0", marginBottom: "24px" }}>
               <h3 style={{ margin: "0 0 16px", fontSize: "13px", fontWeight: 700, color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.05em" }}>时间区间与数据基线</h3>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "20px", marginBottom: "16px" }}>
-                {[ { label: "训练集", sk: "train_start", ek: "train_end" }, { label: "验证集", sk: "valid_start", ek: "valid_end" }, { label: "测试集(回测)", sk: "test_start", ek: "test_end" } ].map(seg => (
+                {[ { label: "训练集", sk: "train_start", ek: "train_end" }, { label: "验证集", sk: "valid_start", ek: "valid_end" }, { label: "测试/信号集", sk: "test_start", ek: "test_end" } ].map(seg => (
                   <div key={seg.label}>
                     <label style={labelStyle}>{seg.label}</label>
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                       <input data-testid={`qe-date-${seg.sk}`} type="date" value={(dataSplit as any)[seg.sk]} onChange={e => setDataSplit(p => ({ ...p, [seg.sk]: e.target.value }))} style={{ ...inputStyle, padding: "6px 8px", fontSize: "12px" }} />
                       <span style={{ color: "#94a3b8" }}>-</span>
-                      <input data-testid={`qe-date-${seg.ek}`} type="date" value={(dataSplit as any)[seg.ek]} onChange={e => setDataSplit(p => ({ ...p, [seg.ek]: e.target.value }))} style={{ ...inputStyle, padding: "6px 8px", fontSize: "12px" }} />
+                      <input data-testid={`qe-date-${seg.ek}`} type="date" value={(dataSplit as any)[seg.ek]} onChange={e => setDataSplit(p => {
+                        const next = { ...p, [seg.ek]: e.target.value };
+                        if (seg.ek === "test_end") next.backtest_end = deriveBacktestEnd(e.target.value);
+                        return next;
+                      })} style={{ ...inputStyle, padding: "6px 8px", fontSize: "12px" }} />
                     </div>
                   </div>
                 ))}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "20px", alignItems: "end", marginTop: "8px" }}>
+                <div>
+                  <label style={labelStyle}>组合回测截止</label>
+                  <input data-testid="qe-date-backtest-end" type="date" value={dataSplit.backtest_end || deriveBacktestEnd(dataSplit.test_end)} onChange={e => setDataSplit(p => ({ ...p, backtest_end: e.target.value }))} style={{ ...inputStyle, padding: "6px 8px", fontSize: "12px" }} />
+                </div>
+                <div style={{ fontSize: "12px", color: "#64748b", lineHeight: 1.6 }}>
+                  默认回测到 {QE_DEFAULT_BACKTEST_END}；测试/信号数据保留到 {QE_DEFAULT_SIGNAL_END}，用于 Qlib 下一交易日价格和标签读取，避免最后一日日历越界。
+                </div>
               </div>
               <div style={{ display: "flex", gap: "24px", marginTop: "16px", paddingTop: "16px", borderTop: "1px solid #e2e8f0" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "14px", color: "#475569", cursor: "pointer" }}>

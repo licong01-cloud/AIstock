@@ -1471,9 +1471,9 @@ class HMMTrainingService:
                     "or val_start/val_end for coefficient precompute"
                 )
             test_start = "2024-07-01"
-            test_end = cfg.get("test_end", "2026-03-10")
+            test_end = cfg.get("test_end", "2026-04-28")
             backtest_end = (
-                datetime.strptime(str(test_end), "%Y-%m-%d") - timedelta(days=7)
+                datetime.strptime(str(test_end), "%Y-%m-%d") - timedelta(days=1)
             ).strftime("%Y-%m-%d")
         test_start = _coerce_date(test_start, field_name="coefficient_start").isoformat()
         backtest_end = _coerce_date(backtest_end, field_name="coefficient_end").isoformat()

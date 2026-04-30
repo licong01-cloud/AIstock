@@ -2692,6 +2692,7 @@ def generate_config(req: GenerateConfigRequest):
                         cj = cfg["config_json"]
                         if isinstance(cj, str):
                             cj = json.loads(cj)
+                        custom_params["hmm_config_json"] = cj
                         if "signal_presets" in cj:
                             custom_params["hmm_signal_presets"] = cj["signal_presets"]
                         found_config = True
@@ -2728,6 +2729,7 @@ def generate_config(req: GenerateConfigRequest):
                     "sector_hmm_model_path": custom_params["sector_hmm_model_path"],
                     "hmm_signal_preset": custom_params.get("hmm_signal_preset"),
                     "hmm_signal_presets": custom_params.get("hmm_signal_presets"),
+                    "hmm_config_json": custom_params.get("hmm_config_json"),
                 }
 
             # 构建 unfilled_handler_params（去掉 unfilled_ 前缀，匹配 ExperimentConfig 期望格式）
@@ -4593,7 +4595,7 @@ class FactorTransformRequest(BaseModel):
     llm_model_id: Optional[str] = None
     test_instruments: Optional[list] = None
     test_start_date: str = "2022-01-01"
-    test_end_date: str = "2024-12-31"
+    test_end_date: str = "2026-04-28"
 
 
 class BatchTransformRequest(BaseModel):
@@ -5677,6 +5679,7 @@ async def _run_multi_alpha_experiment(experiment_id: str, node_id: str = None):
             "sector_hmm_model_path": _cp["sector_hmm_model_path"],
             "hmm_signal_preset": _cp.get("hmm_signal_preset"),
             "hmm_signal_presets": _cp.get("hmm_signal_presets"),
+            "hmm_config_json": _cp.get("hmm_config_json"),
         }
     uf_params = None
     if _cp.get("unfilled_handler"):

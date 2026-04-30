@@ -49,6 +49,8 @@ class HmmConfig(BaseModel):
     hmm_signal_preset: str | None = None
     # Path 1 only: per-sector preset overrides loaded from DB config_json
     hmm_signal_presets: dict[str, Any] | None = None
+    # Full HMM training config; dynamic HMM coefficient generation requires it.
+    hmm_config_json: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _validate_hmm_consistency(self) -> "HmmConfig":
@@ -170,6 +172,8 @@ class ExperimentConfig(BaseModel):
                 params["hmm_signal_preset"] = self.hmm.hmm_signal_preset
             if self.hmm.hmm_signal_presets:
                 params["hmm_signal_presets"] = self.hmm.hmm_signal_presets
+            if self.hmm.hmm_config_json:
+                params["hmm_config_json"] = self.hmm.hmm_config_json
 
         # 4. Sector blacklist
         if self.sector_blacklist:

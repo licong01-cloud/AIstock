@@ -368,6 +368,7 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
                             cj = cfg["config_json"]
                             if isinstance(cj, str):
                                 cj = json.loads(cj)
+                            merged_params["hmm_config_json"] = cj
                             if "signal_presets" in cj:
                                 merged_params["hmm_signal_presets"] = cj["signal_presets"]
                             break

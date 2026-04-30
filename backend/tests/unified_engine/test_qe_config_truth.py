@@ -10,6 +10,9 @@ from backend.execution_algos.v25_two_stage_algo import V25TwoStageAlgo, V25TwoSt
 from backend.services.quantevolver.config_composer import (
     PRECOMPUTED_HMM_COEFF_JSON_PARAM,
     ConfigComposer,
+    QE_DEFAULT_BACKTEST_END,
+    QE_DEFAULT_SIGNAL_END,
+    RDAGENT_DEFAULT_DATA_SPLIT,
 )
 from backend.services.quantevolver.experiment_config_builders import build_config_from_retry_loop
 from backend.services.quantevolver.stock_pool_sync import sync_stock_pool_to_remote_node
@@ -31,6 +34,54 @@ DATA_SPLIT = {
     "test_end": "2021-12-31",
     "backtest_end": "2021-12-31",
 }
+
+
+def test_qe_default_split_uses_safe_backtest_end_20260427():
+    split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
+
+    ConfigComposer._validate_data_split(split)
+    ConfigComposer._ensure_backtest_end(split)
+
+    assert split["test_end"] == QE_DEFAULT_SIGNAL_END
+    assert split["backtest_end"] == QE_DEFAULT_BACKTEST_END
+
+
+def test_current_signal_end_without_backtest_end_derives_20260427():
+    split = {
+        **DATA_SPLIT,
+        "test_start": "2024-07-01",
+        "test_end": QE_DEFAULT_SIGNAL_END,
+    }
+    split.pop("backtest_end")
+
+    ConfigComposer._ensure_backtest_end(split)
+
+    assert split["backtest_end"] == QE_DEFAULT_BACKTEST_END
+
+
+def test_legacy_qe_default_split_is_upgraded_to_current_safe_window():
+    split = {
+        "train_start": "2018-08-01",
+        "train_end": "2022-12-31",
+        "valid_start": "2023-01-01",
+        "valid_end": "2024-06-30",
+        "test_start": "2024-07-01",
+        "test_end": "2026-03-10",
+    }
+
+    ConfigComposer._ensure_backtest_end(split)
+
+    assert split["test_end"] == QE_DEFAULT_SIGNAL_END
+    assert split["backtest_end"] == QE_DEFAULT_BACKTEST_END
+
+
+def test_non_latest_user_window_uses_test_end_as_safe_backtest_end():
+    split = dict(DATA_SPLIT)
+    split.pop("backtest_end")
+
+    ConfigComposer._ensure_backtest_end(split)
+
+    assert split["backtest_end"] == "2021-12-31"
 
 
 def _base_yaml(**kwargs):

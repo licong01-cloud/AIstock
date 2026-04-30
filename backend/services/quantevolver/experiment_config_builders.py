@@ -49,6 +49,27 @@ def _resolve_hmm_snapshot(hmm_model_version_id: str) -> str:
     return snapshot["model_path"]
 
 
+def _resolve_hmm_config_json(hmm_model_version_id: str) -> dict[str, Any] | None:
+    """Resolve the DB config_json attached to an HMM snapshot."""
+    if not hmm_model_version_id or hmm_model_version_id == "from_resolved_model_path":
+        return None
+    from ..hmm_training_service import HMMTrainingService
+    svc = HMMTrainingService()
+    snapshot = svc.get_snapshot(hmm_model_version_id)
+    if snapshot is None:
+        raise ValueError(f"HMM snapshot {hmm_model_version_id!r} does not exist")
+    config_id = snapshot.get("config_id")
+    for cfg in svc.list_configs("sector_hmm"):
+        if cfg.get("config_id") == config_id:
+            cj = cfg.get("config_json") or {}
+            if isinstance(cj, str):
+                cj = json.loads(cj)
+            if not isinstance(cj, dict):
+                raise ValueError(f"HMM config_json for {hmm_model_version_id!r} is not an object")
+            return cj
+    raise ValueError(f"HMM config for snapshot {hmm_model_version_id!r} was not found")
+
+
 def _parse_json_field(value: Any) -> Any:
     """Parse a field that may arrive as a JSON string or already be a dict/list."""
     if isinstance(value, str):
@@ -62,6 +83,7 @@ def _build_hmm_config(
     sector_hmm_model_path: str | None,
     hmm_signal_preset: str | None,
     hmm_signal_presets: dict[str, Any] | None = None,
+    hmm_config_json: dict[str, Any] | None = None,
 ) -> HmmConfig | None:
     """Construct HmmConfig, resolving model_path if not already provided."""
     if not enable_sector_hmm:
@@ -70,12 +92,15 @@ def _build_hmm_config(
         raise ValueError("enable_sector_hmm=True requires hmm_model_version_id")
     if not sector_hmm_model_path:
         sector_hmm_model_path = _resolve_hmm_snapshot(hmm_model_version_id)
+    if hmm_config_json is None:
+        hmm_config_json = _resolve_hmm_config_json(hmm_model_version_id)
     return HmmConfig(
         enable_sector_hmm=True,
         hmm_model_version_id=hmm_model_version_id,
         sector_hmm_model_path=sector_hmm_model_path,
         hmm_signal_preset=hmm_signal_preset,
         hmm_signal_presets=hmm_signal_presets,
+        hmm_config_json=hmm_config_json,
     )
 
 
@@ -168,6 +193,7 @@ _HMM_PARAM_KEYS = (
     "sector_hmm_model_path",
     "hmm_signal_preset",
     "hmm_signal_presets",
+    "hmm_config_json",
 )
 
 
@@ -208,6 +234,7 @@ def _build_hmm_config_from_fields(*field_layers: dict[str, Any]) -> HmmConfig | 
         sector_hmm_model_path=merged.get("sector_hmm_model_path"),
         hmm_signal_preset=merged.get("hmm_signal_preset"),
         hmm_signal_presets=merged.get("hmm_signal_presets"),
+        hmm_config_json=merged.get("hmm_config_json"),
     )
 
 
@@ -246,6 +273,7 @@ def build_config_from_exp_record(
     hmm_model_version_id: str | None = custom_params.pop("hmm_model_version_id", None)
     hmm_signal_preset: str | None = custom_params.pop("hmm_signal_preset", None)
     hmm_signal_presets: dict[str, Any] | None = custom_params.pop("hmm_signal_presets", None)
+    hmm_config_json: dict[str, Any] | None = custom_params.pop("hmm_config_json", None)
 
     # Path 1 stores sector_hmm_model_path directly (already resolved upstream)
     hmm = _build_hmm_config(
@@ -254,6 +282,7 @@ def build_config_from_exp_record(
         sector_hmm_model_path=sector_hmm_model_path,
         hmm_signal_preset=hmm_signal_preset,
         hmm_signal_presets=hmm_signal_presets,
+        hmm_config_json=hmm_config_json,
     )
 
     strategy_params = _parse_json_field(exp_record.get("strategy_params") or {})

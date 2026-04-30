@@ -118,7 +118,7 @@ class FactorTransformationService:
         llm_model_id: Optional[str] = None,
         test_instruments: Optional[List[str]] = None,
         test_start_date: str = "2022-01-01",
-        test_end_date: str = "2024-12-31",
+        test_end_date: str = "2026-04-28",
     ) -> Dict[str, Any]:
         """对单个因子执行完整的改造工作流
 

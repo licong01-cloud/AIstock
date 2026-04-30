@@ -132,14 +132,16 @@ class TestConfigComposerCommandGeneration:
         assert all(not part.startswith("cd ") for part in core_parts)
         assert "python prepare_factors.py" in core_parts
         assert ". ./.factor_env" in core_parts
-        assert 'case "$_conda_sh"' in core_parts[0]
+        assert '[ -n "${QLIB_WSL_CONDA_SH:-}" ]' in core_parts[0]
+        assert '$HOME/miniconda3/etc/profile.d/conda.sh' in core_parts[0]
         assert 'conda activate "${QLIB_WSL_CONDA_ENV:-rdagent-gpu}"' in core_parts[0]
 
     def test_build_conda_activate_chain_expands_tilde_and_supports_fallbacks(self):
         chain = ConfigComposer._build_conda_activate_chain()
 
-        assert '${QLIB_WSL_CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}' in chain
-        assert 'case "$_conda_sh" in "~/"*) _conda_sh="$HOME/${_conda_sh#~/}" ;; esac' in chain
+        assert '[ -n "${QLIB_WSL_CONDA_SH:-}" ]' in chain
+        assert '. "${QLIB_WSL_CONDA_SH}"' in chain
+        assert '$HOME/miniconda3/etc/profile.d/conda.sh' in chain
         assert '$HOME/anaconda3/etc/profile.d/conda.sh' in chain
         assert '/opt/conda/etc/profile.d/conda.sh' in chain
         assert 'conda activate "${QLIB_WSL_CONDA_ENV:-rdagent-gpu}"' in chain
@@ -167,7 +169,8 @@ class TestConfigComposerCommandGeneration:
             composer._precompute_hmm_coefficients(strategy_params, data_split)
 
             cmd = mock_run.call_args_list[-1].args[0][3]
-            assert 'case "$_conda_sh" in "~/"*) _conda_sh="$HOME/${_conda_sh#~/}" ;; esac' in cmd
+            assert '[ -n "${QLIB_WSL_CONDA_SH:-}" ]' in cmd
+            assert '$HOME/miniconda3/etc/profile.d/conda.sh' in cmd
             assert 'conda activate "${QLIB_WSL_CONDA_ENV:-rdagent-gpu}"' in cmd
 
     def test_hmm_precompute_rejects_empty_coefficients(self):
@@ -187,6 +190,55 @@ class TestConfigComposerCommandGeneration:
 
             with pytest.raises(RuntimeError, match="daily_coefficients"):
                 composer._precompute_hmm_coefficients(strategy_params, data_split)
+
+    def test_hmm_precompute_strict_config_rejects_unapproved_window(self):
+        composer = ConfigComposer()
+        strategy_params = {
+            "sector_hmm_model_path": "F:/tmp/models.json",
+            "hmm_signal_preset": "preset_A",
+            "hmm_config_json": {
+                "strict_no_leakage": True,
+                "coefficient_windows": [
+                    {
+                        "preset": "preset_A",
+                        "test_start": "2024-07-01",
+                        "backtest_end": "2026-03-03",
+                        "strict_no_leakage": True,
+                    }
+                ],
+            },
+        }
+        data_split = {"test_start": "2024-06-28", "backtest_end": "2026-03-03"}
+
+        with patch("subprocess.run") as mock_run:
+            with pytest.raises(ValueError, match="strict_no_leakage"):
+                composer._precompute_hmm_coefficients(strategy_params, data_split)
+            mock_run.assert_not_called()
+
+    def test_hmm_precompute_strict_config_requires_precomputed_file(self):
+        composer = ConfigComposer()
+        strategy_params = {
+            "sector_hmm_model_path": "F:/tmp/models.json",
+            "hmm_signal_preset": "preset_A",
+            "hmm_config_json": {
+                "strict_no_leakage": True,
+                "coefficient_windows": [
+                    {
+                        "preset": "preset_A",
+                        "test_start": "2024-07-01",
+                        "backtest_end": "2026-03-03",
+                        "strict_no_leakage": True,
+                    }
+                ],
+            },
+        }
+        data_split = {"test_start": "2024-07-01", "backtest_end": "2026-03-03"}
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="missing")
+            with pytest.raises(RuntimeError, match="预生成系数文件"):
+                composer._precompute_hmm_coefficients(strategy_params, data_split)
+            assert mock_run.call_count == 1
 
     def test_generate_auto_wsl_command_keeps_legacy_cd_prefix(self):
         composer = ConfigComposer()
