@@ -36,12 +36,13 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 import sys
 import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import httpx
 
@@ -55,6 +56,102 @@ def _win_to_wsl(path: str) -> str:
         drive = p[0].lower()
         return f"/mnt/{drive}{p[2:]}"
     return p
+
+
+_FACTOR_CACHE_DB_ENV_KEYS = (
+    "TDX_DB_HOST",
+    "TDX_DB_PORT",
+    "TDX_DB_NAME",
+    "TDX_DB_USER",
+    "TDX_DB_PASSWORD",
+)
+_FACTOR_CACHE_PG_ALIASES = {
+    "PGHOST": "TDX_DB_HOST",
+    "PGPORT": "TDX_DB_PORT",
+    "PGDATABASE": "TDX_DB_NAME",
+    "PGUSER": "TDX_DB_USER",
+    "PGPASSWORD": "TDX_DB_PASSWORD",
+}
+
+
+def _quote_shell_arg(value: Any) -> str:
+    """Quote a value for the WSL bash command line."""
+    return shlex.quote(str(value))
+
+
+def _collect_factor_cache_wsl_db_env(source_env: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+    """Collect DB env vars that must cross the Windows -> WSL process boundary."""
+    env_source = source_env if source_env is not None else os.environ
+    db_env: Dict[str, str] = {}
+    missing: List[str] = []
+    for key in _FACTOR_CACHE_DB_ENV_KEYS:
+        value = env_source.get(key)
+        if value is None or str(value).strip() == "":
+            missing.append(key)
+        else:
+            db_env[key] = str(value)
+    if missing:
+        raise RuntimeError(
+            "Factor cache WSL task requires AIstock DB env vars: " + ", ".join(missing)
+        )
+
+    for pg_key, tdx_key in _FACTOR_CACHE_PG_ALIASES.items():
+        db_env[pg_key] = db_env[tdx_key]
+
+    statement_timeout = env_source.get("AISTOCK_PG_STATEMENT_TIMEOUT_MS")
+    if statement_timeout is not None and str(statement_timeout).strip():
+        db_env["AISTOCK_PG_STATEMENT_TIMEOUT_MS"] = str(statement_timeout)
+    return db_env
+
+
+def _build_factor_cache_wsl_process_env(
+    base_env: Optional[Mapping[str, str]],
+    db_env: Dict[str, str],
+) -> Dict[str, str]:
+    """Build a Popen env that lets WSL import selected DB vars without CLI secrets."""
+    env_source = os.environ if base_env is None else base_env
+    proc_env: Dict[str, str] = {str(k): str(v) for k, v in env_source.items()}
+    proc_env.update({str(k): str(v) for k, v in db_env.items()})
+
+    wslenv_parts = [part for part in proc_env.get("WSLENV", "").split(":") if part]
+    for key in db_env:
+        for idx, part in enumerate(wslenv_parts):
+            name, sep, flags = part.partition("/")
+            if name != key:
+                continue
+            if sep and "u" not in flags:
+                wslenv_parts[idx] = f"{name}/{flags}u"
+            break
+        else:
+            wslenv_parts.append(f"{key}/u")
+    proc_env["WSLENV"] = ":".join(wslenv_parts)
+    return proc_env
+
+
+def _build_factor_cache_wsl_shell_command(
+    *,
+    project_root_wsl: str,
+    backfill_args: List[str],
+    log_path_wsl: str,
+) -> str:
+    """Build the WSL bash script for factor-cache backfill."""
+    if not backfill_args:
+        raise ValueError("backfill_args is required")
+    python_cmd = "python " + " ".join(_quote_shell_arg(arg) for arg in backfill_args)
+    body = " ".join(
+        [
+            "set -e;",
+            f"cd {_quote_shell_arg(project_root_wsl)};",
+            'if [ -z "${TDX_DB_PASSWORD:-}" ]; then '
+            "echo 'TDX_DB_PASSWORD is required for factor cache WSL task' >&2; exit 2; fi;",
+            'source "$HOME/miniconda3/etc/profile.d/conda.sh";',
+            "conda activate rdagent-gpu;",
+            python_cmd + ";",
+        ]
+    )
+    return f"{{ {body} }} > {_quote_shell_arg(log_path_wsl)} 2>&1"
+
+
 def _build_multi_alpha_group_command(gc: dict[str, Any], node_label: str | None = None) -> str:
     group_name = gc.get("group_name", "")
     prefix = f"echo '=== Running group: {group_name} on {node_label} ==='" if node_label else f"echo '=== Running group: {group_name} ==='"
@@ -3347,6 +3444,10 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         raise HTTPException(400, "无法解析缓存窗口")
     if resolved_start > resolved_end:
         raise HTTPException(400, f"缓存窗口非法: {resolved_start} > {resolved_end}")
+    try:
+        wsl_db_env = _collect_factor_cache_wsl_db_env()
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
     # ── 从 DB 获取原始 code_text ──
     if req.factor_names:
@@ -3377,28 +3478,55 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
 
     factors_arg = ",".join(req.factor_names) if req.factor_names else ""
     project_root_wsl = _win_to_wsl(str(AISTOCK_PROJECT_ROOT))
-    cmd_parts = [
-        "wsl", "bash", "-lc",
-        f"cd {project_root_wsl} && "
-        f"test -n \"$TDX_DB_PASSWORD\" || (echo 'TDX_DB_PASSWORD is required' >&2; exit 2) && "
-        f"export TDX_DB_PASSWORD=\"$TDX_DB_PASSWORD\" && "
-        f"source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent-gpu && "
-        f"python {BACKFILL_SCRIPT_WSL} "
-        f"--task-id {task_id} "
-        f"--code-manifest {_win_to_wsl(str(manifest_path))} "
-        + (f"--experiment-id {req.experiment_id} " if req.experiment_id else "")
-        + (f"--window-train-start {resolved_start} --window-backtest-end {resolved_end} ")
-        + (f"--factor-data-dir {factor_data_dir} " if factor_data_dir else "")
-        + ("--strict-backtest-data " if req.strict_backtest_data else "")
-        + f"--workers {req.workers} --timeout {req.timeout_per_factor} "
-        + f"--json-output {_win_to_wsl(str(result_path))}"
-        + (f" --factors {factors_arg}" if factors_arg else "")
-        + (" --force" if req.force else "")
-        + (" --incremental" if req.incremental else "")
-        + (f" --resume-task-id {req.resume_task_id}" if req.resume_task_id else "")
-        + (" --retry-failed-only" if req.retry_failed_only else "")
-        + f" > {_win_to_wsl(str(log_path))} 2>&1"
+    backfill_args = [
+        BACKFILL_SCRIPT_WSL,
+        "--task-id",
+        task_id,
+        "--code-manifest",
+        _win_to_wsl(str(manifest_path)),
+        "--window-train-start",
+        resolved_start,
+        "--window-backtest-end",
+        resolved_end,
     ]
+    if req.experiment_id:
+        backfill_args.extend(["--experiment-id", req.experiment_id])
+    if factor_data_dir:
+        backfill_args.extend(["--factor-data-dir", factor_data_dir])
+    if req.strict_backtest_data:
+        backfill_args.append("--strict-backtest-data")
+    backfill_args.extend(
+        [
+            "--workers",
+            str(req.workers),
+            "--timeout",
+            str(req.timeout_per_factor),
+            "--json-output",
+            _win_to_wsl(str(result_path)),
+        ]
+    )
+    if factors_arg:
+        backfill_args.extend(["--factors", factors_arg])
+    if req.force:
+        backfill_args.append("--force")
+    if req.incremental:
+        backfill_args.append("--incremental")
+    if req.resume_task_id:
+        backfill_args.extend(["--resume-task-id", req.resume_task_id])
+    if req.retry_failed_only:
+        backfill_args.append("--retry-failed-only")
+
+    cmd_parts = [
+        "wsl",
+        "bash",
+        "-lc",
+        _build_factor_cache_wsl_shell_command(
+            project_root_wsl=project_root_wsl,
+            backfill_args=backfill_args,
+            log_path_wsl=_win_to_wsl(str(log_path)),
+        ),
+    ]
+    proc_env = _build_factor_cache_wsl_process_env(os.environ, wsl_db_env)
 
     _active_cache_tasks[task_id] = {
         "task_id": task_id,
@@ -3429,6 +3557,7 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
             proc = subprocess.Popen(
                 cmd_parts, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 creationflags=0x08000000 if sys.platform == "win32" else 0,
+                env=proc_env,
             )
             _active_cache_tasks[task_id]["pid"] = proc.pid
             proc.wait()
