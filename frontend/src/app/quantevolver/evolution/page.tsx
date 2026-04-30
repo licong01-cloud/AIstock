@@ -1573,15 +1573,40 @@ export default function EvolutionDashboard() {
 
   // 重试失败的 Loop
   const handleRetryLoop = async (taskId: string, loopIndex: number) => {
-    if (!confirm("确定要重试 Loop " + loopIndex + " 的回测吗？（跳过训练）")) return;
+    const choice = window.prompt(
+      [
+        `Choose retry mode for Loop ${loopIndex}:`,
+        "1 = Full train + backtest (recommended when model artifacts are broken)",
+        "2 = Backtest only (skip training; use only when params.pkl is known reusable)",
+        "3 = Auto (params.pkl -> backtest only, otherwise full train)",
+      ].join("\n"),
+      "1",
+    );
+    if (choice == null) return;
+    const normalizedChoice = choice.trim();
+    const retryMode = normalizedChoice === "2"
+      ? "backtest_only"
+      : normalizedChoice === "3"
+        ? "auto"
+        : "full_train";
+    const retryModeLabel = retryMode === "backtest_only"
+      ? "backtest only"
+      : retryMode === "auto"
+        ? "auto"
+        : "full train + backtest";
+    if (!confirm(`Retry Loop ${loopIndex} with mode "${retryModeLabel}"?`)) return;
     try {
-      const res = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}/loops/${loopIndex}/retry`, { method: "POST" });
+      const res = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}/loops/${loopIndex}/retry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ retry_mode: retryMode }),
+      });
       const data = await res.json();
       if (!res.ok) {
         alert("重试失败: " + (data.detail || "未知错误"));
         return;
       }
-      appendLogs([`[INFO] Loop ${loopIndex} 重试已提交`]);
+      appendLogs([`[INFO] Loop ${loopIndex} 重试已提交，mode=${retryMode}`]);
       fetchTasks();
       if (activeTaskId) fetchTaskDetail(activeTaskId);
     } catch (err: any) {

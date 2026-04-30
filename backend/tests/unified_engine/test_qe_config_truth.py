@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from backend.routers.quantevolver_evolution import _merge_strategy_runtime_flags, _reject_nested_runtime_flags
+from backend.routers.quantevolver_evolution import (
+    EvolutionLoopRetryRequest,
+    _merge_strategy_runtime_flags,
+    _reject_nested_runtime_flags,
+)
 from backend.execution_algos.v25_two_stage_algo import V25TwoStageAlgo, V25TwoStageUnavailableError
 from backend.services.quantevolver.config_composer import (
     PRECOMPUTED_HMM_COEFF_JSON_PARAM,
@@ -13,6 +17,12 @@ from backend.services.quantevolver.config_composer import (
     QE_DEFAULT_BACKTEST_END,
     QE_DEFAULT_SIGNAL_END,
     RDAGENT_DEFAULT_DATA_SPLIT,
+)
+from backend.services.quantevolver.qe_evolution_service import (
+    QE_LOOP_RETRY_MODE_AUTO,
+    QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
+    QE_LOOP_RETRY_MODE_FULL_TRAIN,
+    normalize_qe_loop_retry_mode,
 )
 from backend.services.quantevolver.experiment_config_builders import build_config_from_retry_loop
 from backend.services.quantevolver.stock_pool_sync import sync_stock_pool_to_remote_node
@@ -265,6 +275,19 @@ def test_retry_loop_preserves_loop_specific_execution_and_hold_config():
     assert cfg.stock_pool == "filtered_pool_20260426"
     assert cfg.label_type == "raw_return"
     assert cfg.label_horizon == 5
+
+
+def test_qe_loop_retry_mode_normalization():
+    assert EvolutionLoopRetryRequest().retry_mode == QE_LOOP_RETRY_MODE_AUTO
+    assert normalize_qe_loop_retry_mode(None) == QE_LOOP_RETRY_MODE_AUTO
+    assert normalize_qe_loop_retry_mode("auto") == QE_LOOP_RETRY_MODE_AUTO
+    assert normalize_qe_loop_retry_mode("backtest-only") == QE_LOOP_RETRY_MODE_BACKTEST_ONLY
+    assert normalize_qe_loop_retry_mode("backtest") == QE_LOOP_RETRY_MODE_BACKTEST_ONLY
+    assert normalize_qe_loop_retry_mode("full-train") == QE_LOOP_RETRY_MODE_FULL_TRAIN
+    assert normalize_qe_loop_retry_mode("train") == QE_LOOP_RETRY_MODE_FULL_TRAIN
+
+    with pytest.raises(ValueError, match="Invalid retry mode"):
+        normalize_qe_loop_retry_mode("invalid")
 
 
 def test_suspend_filter_wraps_topk_strategy():

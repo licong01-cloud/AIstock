@@ -135,7 +135,7 @@ export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSel
                         <button
                           onClick={(e) => { e.stopPropagation(); onRetryLoop(loop.task_id, loop.loop_index); }}
                           style={{ fontSize: "10px", color: "#ea580c", backgroundColor: "#fff7ed", padding: "2px 8px", borderRadius: "4px", border: "1px solid #fed7aa", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px", fontWeight: 600 }}
-                          title="重试回测（训练已完成则跳过训练）"
+                          title="Choose retry mode: full train + backtest / backtest only / auto"
                         >
                           <RotateCcw size={10} /> 重试
                         </button>

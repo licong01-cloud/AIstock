@@ -1274,12 +1274,23 @@ class ConfigComposer:
 
     # ── 内存生成辅助方法 ──
 
+    def _extract_nn_model_class_name(self, code_text: str, fallback: str) -> str:
+        """Extract the exported NN class name from custom model source."""
+
+        model_cls_match = re.search(r"^\s*model_cls\s*=\s*([A-Za-z_]\w*)\s*$", code_text, re.MULTILINE)
+        if model_cls_match:
+            return model_cls_match.group(1)
+
+        class_matches = re.findall(r"class\s+([A-Za-z_]\w*)\s*\(", code_text)
+        if class_matches:
+            return class_matches[-1]
+        return fallback
+
     def _build_model_py_content(self, model_info: Dict) -> str:
         """生成 model.py 文件内容（不写磁盘）。"""
         code_text = model_info.get("code_text", "")
         model_name = model_info.get("model_name", "CustomModel")
-        class_match = re.search(r'class\s+(\w+)\s*\(', code_text)
-        nn_class_name = class_match.group(1) if class_match else model_name
+        nn_class_name = self._extract_nn_model_class_name(code_text, model_name)
         return f'"""\nRDAgent SOTA模型: {model_name}\nQuantEvolver自动生成 - 由 GeneralPTNN 通过 pt_model_uri: "model.model_cls" 加载\n"""\n{code_text}\n\n# GeneralPTNN 通过此变量加载 NN 类\nmodel_cls = {nn_class_name}\n'
 
     def _build_strategy_py_content(self, strategy_info: Dict) -> tuple:
@@ -1966,10 +1977,10 @@ class ConfigComposer:
                         hp = json.loads(hp)
                     model_kwargs.update(hp)
             elif "XGB" in model_type or "XGBOOST" in model_type:
-                model_class = "XGBModel"
-                model_module = "qlib.contrib.model.xgboost"
+                model_class = "AIStockXGBModel"
+                model_module = "aistock_models.xgboost_model"
                 model_kwargs = {
-                    "n_estimators": 500,
+                    "num_boost_round": 500,
                     "max_depth": 8,
                     "learning_rate": 0.05,
                     "subsample": 0.8,
@@ -1992,7 +2003,7 @@ class ConfigComposer:
                     "learning_rate": 0.05,
                     "l2_leaf_reg": 3.0,
                     "subsample": 0.8,
-                    "verbose": 0,
+                    "bootstrap_type": "Bernoulli",
                     "task_type": "CPU",
                 }
                 hp = model_info.get("model_hyperparameters")
@@ -2000,6 +2011,17 @@ class ConfigComposer:
                     if isinstance(hp, str):
                         hp = json.loads(hp)
                     model_kwargs.update(hp)
+                # Qlib's CatBoostModel.fit injects verbose_eval. CatBoost treats
+                # verbose/logging_level/silent as mutually exclusive with it.
+                for _cat_log_key in ("verbose", "logging_level", "silent"):
+                    if _cat_log_key in model_kwargs:
+                        model_kwargs.pop(_cat_log_key, None)
+                        logger.info(
+                            "移除 CatBoostModel 互斥日志参数 %s，避免与 Qlib verbose_eval 冲突",
+                            _cat_log_key,
+                        )
+                if "subsample" in model_kwargs and "bootstrap_type" not in model_kwargs:
+                    model_kwargs["bootstrap_type"] = "Bernoulli"
             elif "LINEAR" in model_type or "RIDGE" in model_type or "LASSO" in model_type:
                 model_class = "LinearModel"
                 model_module = "qlib.contrib.model.linear"
@@ -2113,6 +2135,7 @@ class ConfigComposer:
                     "n_estimators": 8,
                     "device": "cuda",
                     "max_context_size": 2000,
+                    "predict_batch_size": 8192,
                     "n_bins": 10,
                     "random_state": 42,
                 }
@@ -2197,12 +2220,17 @@ class ConfigComposer:
             "colsample_bytree", "subsample", "n_estimators", "min_child_samples",
         }
         _XGB_HP_KEYS = {
-            "n_estimators", "max_depth", "learning_rate", "subsample",
+            "n_estimators", "num_boost_round", "early_stopping_rounds",
+            "verbose_eval", "max_depth", "learning_rate", "subsample",
             "colsample_bytree", "reg_alpha", "reg_lambda", "n_jobs",
         }
         _CATBOOST_HP_KEYS = {
             "iterations", "depth", "learning_rate", "l2_leaf_reg",
-            "subsample", "verbose", "task_type",
+            "subsample", "bootstrap_type", "task_type",
+        }
+        _TABPFN_HP_KEYS = {
+            "n_estimators", "device", "max_context_size", "predict_batch_size",
+            "min_predict_batch_size", "n_bins", "random_state",
         }
         _LINEAR_HP_KEYS = {
             "estimator", "alpha",
@@ -2236,7 +2264,7 @@ class ConfigComposer:
             "suspend_filter_file",
             "suspend_filter_strict",
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
-        } | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _LINEAR_HP_KEYS
+        } | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS
 
         if custom_params:
             # ── 模型超参透传: 从 custom_params 中提取模型超参 → model_kwargs ──
@@ -2245,10 +2273,12 @@ class ConfigComposer:
                 hp_keys = _PTNN_HP_KEYS
             elif model_class in ("LGBModel",):
                 hp_keys = _LGB_HP_KEYS
-            elif model_class in ("XGBModel",):
+            elif model_class in ("XGBModel", "AIStockXGBModel"):
                 hp_keys = _XGB_HP_KEYS
             elif model_class in ("CatBoostModel",):
                 hp_keys = _CATBOOST_HP_KEYS
+            elif model_class in ("TabPFNModel",):
+                hp_keys = _TABPFN_HP_KEYS
             elif model_class in ("LinearModel",):
                 hp_keys = _LINEAR_HP_KEYS
             # 也包括有自定义代码的 PTNN 模型
@@ -3661,9 +3691,9 @@ python read_exp_res.py
 
         model_name = model_info.get("model_name", "CustomModel")
 
-        # 从源代码中提取NN类名
-        class_match = re.search(r'class\s+(\w+)\s*\(', code_text)
-        nn_class_name = class_match.group(1) if class_match else model_name
+        # 从源代码中提取 NN 主类名。优先尊重代码中显式导出的 model_cls，
+        # 否则使用最后一个 class，避免 TCN/辅助层类被误选为模型入口。
+        nn_class_name = self._extract_nn_model_class_name(code_text, model_name)
 
         # 构建 model.py：纯NN类 + model_cls 导出
         # 与 RDAgent 中 model.py 的格式完全一致

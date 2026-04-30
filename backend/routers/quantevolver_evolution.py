@@ -11,12 +11,18 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future, as_completed
 from typing import Callable, Dict, Any, List, Optional
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request, Query
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request, Query, Body
 from fastapi.responses import Response, StreamingResponse
 import httpx
 
 # 导入未来的 EvolutionService (目前可能为空实现)
-from ..services.quantevolver.qe_evolution_service import AutoEvolutionScheduler
+from ..services.quantevolver.qe_evolution_service import (
+    AutoEvolutionScheduler,
+    QE_LOOP_RETRY_MODE_AUTO,
+    QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
+    QE_LOOP_RETRY_MODE_FULL_TRAIN,
+    normalize_qe_loop_retry_mode,
+)
 from ..services.quantevolver.factor_value_loader import FactorValueLoader
 from ..services.quantevolver.correlation_engine import CorrelationEngine, CorrelationResult
 from ..db.pg_pool import get_conn
@@ -566,6 +572,18 @@ class EvolutionTaskResumeRequest(BaseModel):
     additional_loops: int = Field(0, description="额外增加的演进轮数（0 表示使用原 max_loops）")
     force_full_train: bool = Field(False, description="强制完整训练+回测，忽略 loop 配置中的 backtest_only")
 
+
+class EvolutionLoopRetryRequest(BaseModel):
+    retry_mode: str = Field(
+        QE_LOOP_RETRY_MODE_AUTO,
+        description=(
+            "Retry mode: "
+            f"{QE_LOOP_RETRY_MODE_AUTO} / "
+            f"{QE_LOOP_RETRY_MODE_BACKTEST_ONLY} / "
+            f"{QE_LOOP_RETRY_MODE_FULL_TRAIN}"
+        ),
+    )
+
 @router.post("/tasks/{task_id}/resume", summary="恢复已暂停/已完成的演进任务，继续演进")
 async def resume_evolution_task(task_id: str, req: EvolutionTaskResumeRequest, background_tasks: BackgroundTasks):
     """
@@ -601,8 +619,13 @@ async def resume_evolution_task(task_id: str, req: EvolutionTaskResumeRequest, b
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/tasks/{task_id}/loops/{loop_index}/retry", summary="重试失败的 Loop（自动判断从训练或回测恢复）")
-async def retry_evolution_loop(task_id: str, loop_index: int, background_tasks: BackgroundTasks):
+@router.post("/tasks/{task_id}/loops/{loop_index}/retry", summary="Retry failed Loop with selectable mode")
+async def retry_evolution_loop(
+    task_id: str,
+    loop_index: int,
+    background_tasks: BackgroundTasks,
+    req: Optional[EvolutionLoopRetryRequest] = Body(default=None),
+):
     """重试失败的 Loop。
 
     自动检测 workspace 中训练状态：
@@ -617,6 +640,8 @@ async def retry_evolution_loop(task_id: str, loop_index: int, background_tasks: 
         except RuntimeError as e:
             raise HTTPException(status_code=500, detail=str(e)) from e
 
+        requested_retry_mode = normalize_qe_loop_retry_mode(req.retry_mode if req else None)
+
         # 预检查：验证 loop 状态（快速返回错误，不进 background）
         from ..services.quantevolver.qe_evolution_service import get_conn
         from psycopg2.extras import RealDictCursor
@@ -630,11 +655,12 @@ async def retry_evolution_loop(task_id: str, loop_index: int, background_tasks: 
         if row["status"] not in ("failed", "cancelled"):
             raise ValueError(f"Loop 状态为 '{row['status']}'，只有 failed/cancelled 可以重试")
 
-        background_tasks.add_task(scheduler.retry_loop, task_id, loop_index)
+        background_tasks.add_task(scheduler.retry_loop, task_id, loop_index, requested_retry_mode)
         return {
             "status": "success",
             "loop_id": evolution_loop_db_id,
             "mode": "pending",
+            "requested_retry_mode": requested_retry_mode,
             "message": f"Loop {loop_index} 重试已提交到后台",
         }
     except ValueError as e:

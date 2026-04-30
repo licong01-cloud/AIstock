@@ -59,6 +59,33 @@ QE_EVOLUTION_LOG_TERMINAL_STATUSES = {
 }
 QE_LOG_TAIL_DEFAULT_LINES = 500
 
+QE_LOOP_RETRY_MODE_AUTO = "auto"
+QE_LOOP_RETRY_MODE_BACKTEST_ONLY = "backtest_only"
+QE_LOOP_RETRY_MODE_FULL_TRAIN = "full_train"
+QE_LOOP_RETRY_MODES = {
+    QE_LOOP_RETRY_MODE_AUTO,
+    QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
+    QE_LOOP_RETRY_MODE_FULL_TRAIN,
+}
+_QE_LOOP_RETRY_MODE_ALIASES = {
+    "backtest": QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
+    "only_backtest": QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
+    "train": QE_LOOP_RETRY_MODE_FULL_TRAIN,
+    "full": QE_LOOP_RETRY_MODE_FULL_TRAIN,
+}
+
+
+def normalize_qe_loop_retry_mode(mode: Optional[str]) -> str:
+    """Normalize explicit loop retry mode from API/UI callers."""
+    normalized = (mode or QE_LOOP_RETRY_MODE_AUTO).strip().lower().replace("-", "_")
+    normalized = _QE_LOOP_RETRY_MODE_ALIASES.get(normalized, normalized)
+    if normalized not in QE_LOOP_RETRY_MODES:
+        raise ValueError(
+            "Invalid retry mode: "
+            f"{mode!r}. Expected one of: {sorted(QE_LOOP_RETRY_MODES)}"
+        )
+    return normalized
+
 
 def _read_text_tail_lines(path: Path, max_lines: int = QE_LOG_TAIL_DEFAULT_LINES) -> List[str]:
     """Read a bounded tail from a potentially large UTF-8-ish log file."""
@@ -2707,15 +2734,22 @@ class AutoEvolutionScheduler:
         )
         return result
 
-    async def retry_loop(self, task_id: str, loop_index: int) -> Dict[str, Any]:
+    async def retry_loop(
+        self,
+        task_id: str,
+        loop_index: int,
+        retry_mode: str = QE_LOOP_RETRY_MODE_AUTO,
+    ) -> Dict[str, Any]:
         """重试失败的 Loop：自动判断训练是否已完成，决定从训练或回测恢复.
 
         判断逻辑：
         - workspace 中 mlruns 有 params.pkl → 训练完成，使用 --backtest-only
         - 无 params.pkl → 训练未完成，全量重跑
 
-        Returns: {"loop_id": str, "mode": "backtest_only"|"full"}
+        Returns: {"loop_id": str, "mode": "backtest_only"|"full_train"}
         """
+        requested_retry_mode = normalize_qe_loop_retry_mode(retry_mode)
+
         from .config_composer import (
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
             ConfigComposer,
@@ -2763,30 +2797,48 @@ class AutoEvolutionScheduler:
 
         client = self._get_workspace_client_for_node_id(effective_node_id)
 
-        # 3. Detect whether retry can reuse training artifacts.  If a loop
-        # failed before workspace/model creation, retry must perform a full
-        # train+backtest run instead of rejecting the retry request.
-        retry_mode_name = "backtest_only"
-        retry_model_source = {
-            "source_task_id": task_id,
-            "source_loop": f"Loop{loop_index}",
-        }
-        try:
-            await client.download_mlruns_params(task_id, loop_id)
+        # 3. Resolve retry mode. UI/API callers may force full training or
+        # backtest-only; auto preserves the old artifact-based behavior.
+        retry_mode_name = requested_retry_mode
+        retry_model_source = None
+        if requested_retry_mode in (
+            QE_LOOP_RETRY_MODE_AUTO,
+            QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
+        ):
+            try:
+                await client.download_mlruns_params(task_id, loop_id)
+                retry_mode_name = QE_LOOP_RETRY_MODE_BACKTEST_ONLY
+                retry_model_source = {
+                    "source_task_id": task_id,
+                    "source_loop": f"Loop{loop_index}",
+                }
+                logger.info(
+                    "Retry loop %s: params.pkl verified on node %s, using backtest-only mode "
+                    "(requested=%s)",
+                    evolution_loop_db_id,
+                    effective_node_id,
+                    requested_retry_mode,
+                )
+            except Exception as e:
+                if requested_retry_mode == QE_LOOP_RETRY_MODE_BACKTEST_ONLY:
+                    raise ValueError(
+                        f"Loop {evolution_loop_db_id} was requested as backtest-only, "
+                        f"but reusable mlruns params.pkl is not available on node {effective_node_id}."
+                    ) from e
+                retry_mode_name = QE_LOOP_RETRY_MODE_FULL_TRAIN
+                logger.warning(
+                    "Retry loop %s: no reusable mlruns params on node %s; "
+                    "falling back to full train+backtest retry. reason=%s",
+                    evolution_loop_db_id,
+                    effective_node_id,
+                    e,
+                )
+        else:
+            retry_mode_name = QE_LOOP_RETRY_MODE_FULL_TRAIN
             logger.info(
-                "Retry loop %s: params.pkl verified on node %s, using backtest-only mode",
+                "Retry loop %s: using forced full train+backtest mode on node %s",
                 evolution_loop_db_id,
                 effective_node_id,
-            )
-        except Exception as e:
-            retry_mode_name = "full_train"
-            retry_model_source = None
-            logger.warning(
-                "Retry loop %s: no reusable mlruns params on node %s; "
-                "falling back to full train+backtest retry. reason=%s",
-                evolution_loop_db_id,
-                effective_node_id,
-                e,
             )
 
         # 4. 更新 loop 状态为 running

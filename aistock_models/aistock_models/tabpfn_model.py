@@ -67,6 +67,8 @@ class TabPFNModel(Model):
       - n_estimators: Ensemble size (default 8, more = more stable)
       - device: 'cuda' or 'cpu' (default 'cuda')
       - max_context_size: Max training samples to use as context (default 2000)
+      - predict_batch_size: Test rows per predict_proba call (default 8192)
+      - min_predict_batch_size: Smallest adaptive retry batch after CUDA OOM
       - n_bins: Number of quantile bins for regression discretization (default 10)
       - random_state: Random seed for reproducibility (default 42)
     """
@@ -75,6 +77,8 @@ class TabPFNModel(Model):
                  n_estimators=8,
                  device="cuda",
                  max_context_size=2000,
+                 predict_batch_size=8192,
+                 min_predict_batch_size=256,
                  n_bins=10,
                  random_state=42,
                  **kwargs):
@@ -82,6 +86,8 @@ class TabPFNModel(Model):
         self.n_estimators = n_estimators
         self.device = device
         self.max_context_size = max_context_size
+        self.predict_batch_size = int(predict_batch_size) if predict_batch_size else 0
+        self.min_predict_batch_size = max(1, int(min_predict_batch_size))
         self.n_bins = n_bins
         self.random_state = random_state
         self.classifier = None
@@ -89,6 +95,20 @@ class TabPFNModel(Model):
         self._bin_edges = None  # for converting classes back to regression
         self._n_classes_ = None
         self.n_features_ = None
+
+    @staticmethod
+    def _is_cuda_oom(exc: Exception) -> bool:
+        msg = f"{type(exc).__name__}: {exc}".lower()
+        return "cuda out of memory" in msg or "cudnn_status_alloc_failed" in msg
+
+    def _empty_cuda_cache(self):
+        if not str(self.device).lower().startswith("cuda"):
+            return
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
 
     def fit(self, dataset: DatasetH, reweighter=None, **kwargs):
         """Store training data as in-context examples.
@@ -190,18 +210,60 @@ class TabPFNModel(Model):
         X_test = df_test.values.astype(np.float64)
 
         X_train, y_train_binned = self._context
+        class_centers = 0.5 * (self._bin_edges[:-1] + self._bin_edges[1:])
 
         # TabPFN in-context prediction
         try:
             self.classifier.fit(X_train, y_train_binned)
-            proba = self.classifier.predict_proba(X_test)
+            n_test = len(X_test)
+            if n_test == 0:
+                return pd.Series([], index=df_test.index, dtype=np.float64, name="score")
+
+            batch_size = self.predict_batch_size or n_test
+            if batch_size >= n_test:
+                proba = self.classifier.predict_proba(X_test)
+                scores = proba @ class_centers
+                return pd.Series(scores, index=df_test.index, name="score")
+
+            scores = np.empty(n_test, dtype=np.float64)
+            start = 0
+            current_batch_size = max(self.min_predict_batch_size, batch_size)
+            logger.info(
+                "TabPFNModel.predict: rows=%d, predict_batch_size=%d",
+                n_test,
+                current_batch_size,
+            )
+
+            while start < n_test:
+                end = min(start + current_batch_size, n_test)
+                try:
+                    proba = self.classifier.predict_proba(X_test[start:end])
+                    scores[start:end] = proba @ class_centers
+                    start = end
+                except Exception as e:
+                    if self._is_cuda_oom(e) and current_batch_size > self.min_predict_batch_size:
+                        next_batch_size = max(self.min_predict_batch_size, current_batch_size // 2)
+                        logger.warning(
+                            "TabPFN CUDA OOM on rows %d:%d; reducing predict_batch_size %d -> %d",
+                            start,
+                            end,
+                            current_batch_size,
+                            next_batch_size,
+                        )
+                        current_batch_size = next_batch_size
+                        self._empty_cuda_cache()
+                        continue
+                    logger.error(
+                        "TabPFN predict failed on rows %d:%d with batch_size=%d: %s",
+                        start,
+                        end,
+                        current_batch_size,
+                        e,
+                    )
+                    raise
         except Exception as e:
             logger.error("TabPFN predict failed: %s", e)
             raise
-
-        # Convert class probabilities to continuous scores
-        class_centers = 0.5 * (self._bin_edges[:-1] + self._bin_edges[1:])
-        scores = proba @ class_centers
 
         return pd.Series(scores, index=df_test.index, name="score")
 
