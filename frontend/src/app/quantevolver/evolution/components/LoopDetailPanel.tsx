@@ -7,6 +7,14 @@ import {
 import dynamic from "next/dynamic";
 import type { Loop } from "./TopologyPanel";
 import LoopMetricsComparison from "./LoopMetricsComparison";
+import {
+  extractLoopDiagnostics,
+  formatBool,
+  formatCount,
+  formatMoneyCompact,
+  formatPercent,
+  formatShortText,
+} from "./loopDiagnostics";
 import { AllStocksTable } from "../../components/AllStocksTable";
 import { FactorAnalysisPanel } from "../../components/FactorAnalysisPanel";
 import { StrategyConfigCard } from "../../components/StrategyConfigCard";
@@ -346,7 +354,12 @@ const OverviewContent = React.memo(function OverviewContent({
   activeTask,
   enhancedMetrics,
 }: OverviewContentProps) {
-  const m = activeLoopData.metrics_json || {};
+  const diagnostics = extractLoopDiagnostics(activeLoopData, enhancedMetrics);
+  const m = diagnostics.metrics || {};
+  const ar = diagnostics.absoluteReturns || {};
+  const hasAbsoluteReturns = Object.keys(ar).length > 0;
+  const positionInfo = diagnostics.position;
+  const modelInfo = diagnostics.model;
 
   const cfg = activeLoopData.config_json;
   const actionType = cfg?.action_type || "initial";
@@ -363,9 +376,6 @@ const OverviewContent = React.memo(function OverviewContent({
   const hyperKeys = ["topk", "n_drop", "lr", "batch_size", "d_model", "n_head", "dropout", "n_epochs", "early_stop"];
   const hyperParams = hyperKeys.filter(k => cfg?.[k] !== undefined).map(k => ({ key: k, val: cfg[k] }));
 
-  const ar = enhancedMetrics?.absolute_returns;
-
-  // 合并指标：信号质量 + 超额收益 + 绝对收益
   const metricGroups = [
     {
       label: "信号质量", color: "#3b82f6", items: [
@@ -375,26 +385,70 @@ const OverviewContent = React.memo(function OverviewContent({
       ],
     },
     {
-      label: "超额收益(相对300)", color: "#8b5cf6", items: [
-        { label: "超额 Sharpe", source: m, key: "sharpe", digits: 2 },
-        { label: "超额年化", source: m, key: "annualized_return", digits: 3, pct: true },
-        { label: "超额最大回撤", source: m, key: "max_drawdown", digits: 1, pct: true },
+      label: "含成本收益(相对基准)", color: "#8b5cf6", items: [
+        { label: "Sharpe", source: m, key: "sharpe", digits: 2 },
+        { label: "年化收益", source: m, key: "annualized_return", digits: 2, pct: true },
+        { label: "最大回撤", source: m, key: "max_drawdown", digits: 2, pct: true },
       ],
     },
     {
-      label: "绝对收益(账户)", color: "#059669", items: ar ? [
-        { label: "CAGR", source: ar, key: "cagr", digits: 1, pct: true },
-        { label: "总收益率", source: ar, key: "total_return", digits: 1, pct: true },
-        { label: "绝对夏普", source: ar, key: "sharpe", digits: 2 },
-        { label: "绝对最大回撤", source: ar, key: "max_drawdown", digits: 1, pct: true },
-        { label: "年化波动率", source: ar, key: "annualized_volatility", digits: 1, pct: true },
-        { label: "资金利用率", source: ar, key: "avg_cash_ratio", digits: 1, pct: true, invert: true },
+      label: "绝对收益(账户)", color: "#059669", items: hasAbsoluteReturns ? [
+        { label: "CAGR", source: ar, key: "cagr", digits: 2, pct: true },
+        { label: "总收益", source: ar, key: "total_return", digits: 2, pct: true },
+        { label: "绝对 Sharpe", source: ar, key: "sharpe", digits: 2 },
+        { label: "绝对最大回撤", source: ar, key: "max_drawdown", digits: 2, pct: true },
+        { label: "年化波动率", source: ar, key: "annualized_volatility", digits: 2, pct: true },
+        { label: "平均资金利用率", source: ar, key: "avg_cash_ratio", digits: 2, pct: true, invert: true },
         { label: "期末持仓数", source: ar, key: "final_stock_count", digits: 0 },
       ] : [
         { label: "CAGR", source: m, key: "cagr", digits: 3, pct: true },
       ],
     },
   ];
+
+  const modelSummaryItems = [
+    { label: "回测模型", value: formatShortText(modelInfo.modelId || modelInfo.modelType, 28), title: modelInfo.modelId || modelInfo.modelType || "" },
+    { label: "模型类型", value: modelInfo.modelType || "-" },
+    { label: "训练周期", value: modelInfo.labelHorizon || "-" },
+    { label: "自定义因子", value: formatCount(modelInfo.customFactorCount), sub: modelInfo.alpha158Enabled === undefined ? "Alpha158: -" : `Alpha158: ${modelInfo.alpha158Enabled ? "ON" : "OFF"}` },
+    { label: "HMM", value: formatBool(modelInfo.hmm.enabled), sub: modelInfo.hmm.signalPreset || modelInfo.hmm.version || "-" },
+    { label: "HMM 快照", value: formatShortText(modelInfo.hmm.snapshot, 24), title: modelInfo.hmm.snapshot || "" },
+  ];
+
+  const holdingSummaryItems = [
+    { label: "最小持仓", value: formatCount(positionInfo.minCount) },
+    { label: "平均持仓", value: formatCount(positionInfo.avgCount, 1) },
+    { label: "最大持仓", value: formatCount(positionInfo.maxCount) },
+    { label: "P95 持仓", value: formatCount(positionInfo.p95Count, 1) },
+    { label: "期末持仓", value: formatCount(positionInfo.finalStockCount) },
+    { label: "结束现金", value: formatMoneyCompact(positionInfo.finalCash) },
+    { label: "股票市值", value: formatMoneyCompact(positionInfo.finalStockValue) },
+    { label: "结束总权益", value: formatMoneyCompact(positionInfo.finalTotalValue) },
+    { label: "结束现金占比", value: formatPercent(positionInfo.finalCashRatio, 2) },
+  ];
+
+  const hasHoldingRange = positionInfo.minCount !== undefined || positionInfo.avgCount !== undefined || positionInfo.maxCount !== undefined;
+
+  const renderSummaryCard = (
+    title: string,
+    color: string,
+    items: Array<{ label: string; value: string; sub?: string; title?: string }>,
+    note?: string,
+  ) => (
+    <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #e2e8f0", padding: "20px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+      <h3 style={{ margin: "0 0 14px 0", fontSize: "13px", fontWeight: 700, color, textTransform: "uppercase", letterSpacing: "0.05em" }}>{title}</h3>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "10px" }}>
+        {items.map((item) => (
+          <div key={item.label} title={item.title} style={{ padding: "10px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", minWidth: 0 }}>
+            <div style={{ fontSize: "11px", color: "#64748b", fontWeight: 700, marginBottom: "4px" }}>{item.label}</div>
+            <div style={{ fontSize: "16px", color: "#0f172a", fontWeight: 800, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.value}</div>
+            {item.sub && <div style={{ marginTop: "3px", fontSize: "11px", color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.sub}</div>}
+          </div>
+        ))}
+      </div>
+      {note && <div style={{ marginTop: "10px", fontSize: "12px", color: "#64748b", lineHeight: 1.6 }}>{note}</div>}
+    </div>
+  );
 
   return (
     <>
@@ -441,6 +495,23 @@ const OverviewContent = React.memo(function OverviewContent({
 
       {/* 策略与执行配置 */}
       <StrategyConfigCard source={{ loopConfig: activeLoopData.config_json, taskConfig: activeTask }} />
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "20px" }}>
+        {renderSummaryCard(
+          "模型 / HMM / 因子",
+          "#2563eb",
+          modelSummaryItems,
+          "字段均从 loop config、metrics_json.enhanced_metrics 或已缓存增强结果读取，不触发重跑或改变实验期行为。",
+        )}
+        {renderSummaryCard(
+          "持仓 / 资金",
+          "#059669",
+          holdingSummaryItems,
+          hasHoldingRange
+            ? "目标持仓 50 只允许附近波动；若最大/P95 长期显著高于 60，应优先检查替补、尾盘成交和目标组合漂移。"
+            : "历史 Loop 尚未回填 positions 摘要时，最小/平均/最大持仓显示为 “-”；结束现金、股票市值可继续从 absolute_returns 展示。",
+        )}
+      </div>
 
       {/* 回测表现指标 */}
       <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #e2e8f0", padding: "20px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>

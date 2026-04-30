@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { GitMerge, RotateCcw, ExternalLink, ChevronDown, ChevronRight } from "lucide-react";
+import { extractLoopDiagnostics, formatBool, formatShortText } from "./loopDiagnostics";
 
 export interface Loop {
   loop_id: string;
@@ -100,6 +101,10 @@ export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSel
             const sotaFactorsArr = Array.from(sotaFactorSet) as string[];
             const newFactors = thisFactors.filter((f: string) => !sotaFactorSet.has(f));
             const isFactorsExpanded = expandedFactors.has(loop.loop_index);
+            const diagnostics = extractLoopDiagnostics(loop);
+            const loopComment = diagnostics.comment;
+            const modelLabel = diagnostics.model.modelId || diagnostics.model.modelType;
+            const hmmLabel = formatBool(diagnostics.model.hmm.enabled);
 
             return (
               <div
@@ -153,6 +158,25 @@ export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSel
                     </div>
                   </div>
                   <div style={{ fontSize: "11px", color: "#64748b", marginTop: "4px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>{loop.action_type || "UNKNOWN"}</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "6px" }}>
+                    {modelLabel && (
+                      <span title={modelLabel} style={{ fontSize: "10px", color: "#1d4ed8", backgroundColor: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "999px", padding: "2px 6px", fontFamily: "monospace", fontWeight: 700 }}>
+                        M:{formatShortText(modelLabel, 16)}
+                      </span>
+                    )}
+                    {diagnostics.model.labelHorizon && (
+                      <span style={{ fontSize: "10px", color: "#7c2d12", backgroundColor: "#ffedd5", border: "1px solid #fed7aa", borderRadius: "999px", padding: "2px 6px", fontWeight: 700 }}>
+                        {diagnostics.model.labelHorizon}
+                      </span>
+                    )}
+                    <span style={{ fontSize: "10px", color: diagnostics.model.hmm.enabled ? "#166534" : "#64748b", backgroundColor: diagnostics.model.hmm.enabled ? "#dcfce7" : "#f1f5f9", border: `1px solid ${diagnostics.model.hmm.enabled ? "#bbf7d0" : "#e2e8f0"}`, borderRadius: "999px", padding: "2px 6px", fontWeight: 700 }}>
+                      HMM:{hmmLabel}
+                    </span>
+                  </div>
+                  <div title={loopComment.fullText} style={{ marginTop: "8px", padding: "8px 10px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "6px", color: "#475569", fontSize: "11px", lineHeight: 1.5 }}>
+                    <span style={{ color: "#0f172a", fontWeight: 700, marginRight: "4px" }}>说明</span>
+                    {loopComment.shortText}
+                  </div>
                   {loop.metrics_json && loop.status === "completed" && (
                     <div style={{ display: "flex", gap: "8px", marginTop: "6px", fontSize: "11px", color: "#475569", fontFamily: "monospace" }}>
                       {loop.metrics_json.IC != null && <span>IC:{typeof loop.metrics_json.IC === "number" ? loop.metrics_json.IC.toFixed(4) : loop.metrics_json.IC}</span>}
