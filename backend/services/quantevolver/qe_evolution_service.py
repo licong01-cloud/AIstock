@@ -161,6 +161,104 @@ class AutoEvolutionScheduler:
         return self._get_workspace_client_for_node_id(row.get("node_id") if row else None)
 
     @staticmethod
+    def _log_stream_node_label(node_id: Optional[str]) -> str:
+        return (str(node_id).strip() if node_id else "") or "local"
+
+    @staticmethod
+    def _log_stream_node_key(node_id: Optional[str]) -> str:
+        return (str(node_id).strip() if node_id else "") or "__local__"
+
+    def _get_log_stream_node_plan_for_task(self, task_id: str) -> Dict[str, Any]:
+        """
+        Return every execution node that can own logs for a task.
+
+        Custom evolution can submit different loops to different nodes; the
+        task-level node only represents Loop1/default submission and is not
+        sufficient for distributed realtime logs.
+        """
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT task_id, task_type, node_id, strategy_evo_config
+                    FROM qe_evolution_tasks
+                    WHERE task_id = %s
+                    """,
+                    (task_id,),
+                )
+                task = cur.fetchone()
+                cur.execute(
+                    """
+                    SELECT loop_index, node_id
+                    FROM qe_evolution_loops
+                    WHERE task_id = %s
+                      AND node_id IS NOT NULL
+                      AND BTRIM(node_id) <> ''
+                    ORDER BY loop_index ASC
+                    """,
+                    (task_id,),
+                )
+                loop_rows = [dict(row) for row in cur.fetchall()]
+
+        if not task:
+            return {
+                "task_id": task_id,
+                "node_ids": [None],
+                "warnings": [f"Task {task_id} not found while resolving log nodes."],
+            }
+
+        node_ids: List[Optional[str]] = []
+        seen: set[str] = set()
+        warnings: List[str] = []
+        default_node_id = resolve_default_qe_node_id()
+
+        def add_node(raw_node_id: Optional[str]) -> None:
+            normalized = (str(raw_node_id).strip() if raw_node_id else "") or None
+            key = self._log_stream_node_key(normalized)
+            if normalized == default_node_id and "__local__" in seen:
+                return
+            if normalized is None and default_node_id in seen:
+                return
+            if key not in seen:
+                seen.add(key)
+                node_ids.append(normalized)
+
+        add_node(task.get("node_id"))
+
+        if task.get("task_type") == "custom_evo":
+            try:
+                strategy_config = self._parse_custom_evo_strategy_config(
+                    task.get("strategy_evo_config"),
+                    task_id=task_id,
+                )
+                resolved_loops, _loop1_node_id, _selected = resolve_custom_loop_nodes(
+                    [dict(loop_cfg) for loop_cfg in strategy_config["loops"]],
+                    task.get("node_id"),
+                )
+                for loop_cfg in resolved_loops:
+                    add_node(loop_cfg.get("node_id"))
+            except Exception as exc:
+                warning = (
+                    f"Failed to resolve custom_evo log nodes from strategy_evo_config "
+                    f"for task {task_id}: {exc}"
+                )
+                warnings.append(warning)
+                logger.warning(warning)
+
+        for row in loop_rows:
+            add_node(row.get("node_id"))
+
+        if not node_ids:
+            add_node(None)
+
+        return {
+            "task_id": task_id,
+            "task_type": task.get("task_type"),
+            "node_ids": node_ids,
+            "warnings": warnings,
+        }
+
+    @staticmethod
     def _normalize_loop_db_id(task_id: str, loop_id_or_index: str | int) -> str:
         if isinstance(loop_id_or_index, int):
             return f"{task_id}_Loop{loop_id_or_index}"
@@ -3059,7 +3157,7 @@ class AutoEvolutionScheduler:
         }
         
     async def stream_task_logs(self, task_id: str):
-        """Forward RDAgent SSE logs without keeping the local log file locked."""
+        """Forward RDAgent SSE logs, including all loop nodes for distributed custom_evo tasks."""
         current_status = self._get_task_status(task_id)
         if self._is_log_stream_stop_requested(task_id) or current_status is None:
             payload = {
@@ -3090,7 +3188,14 @@ class AutoEvolutionScheduler:
         self._register_log_stream(task_id)
         log_dir = os.path.join(SOTA_ASSETS_DIR, task_id, "logs")
         log_path = os.path.join(log_dir, "evolution.log")
-        client = self._get_workspace_client_for_task(task_id)
+        node_plan = self._get_log_stream_node_plan_for_task(task_id)
+        node_ids = list(node_plan.get("node_ids") or [])
+        if not node_ids:
+            node_ids = [None]
+            node_plan.setdefault("warnings", []).append(
+                f"Task {task_id} log node plan was empty; using local log stream only."
+            )
+        distributed_stream = len(node_ids) > 1
 
         async def append_local_log(text: str) -> None:
             os.makedirs(log_dir, exist_ok=True)
@@ -3109,6 +3214,60 @@ class AutoEvolutionScheduler:
                 return None
             return payload if isinstance(payload, dict) else None
 
+        def normalize_logs(value: Any) -> List[str]:
+            if value is None:
+                return []
+            if isinstance(value, list):
+                return [str(item) for item in value]
+            return [str(value)]
+
+        def node_prefix_log_line(log_line: str, node_id: Optional[str]) -> str:
+            label = self._log_stream_node_label(node_id)
+            prefix = f"[{label}]"
+            text = str(log_line)
+            return text if text.startswith(prefix) else f"{prefix} {text}"
+
+        def prepare_sse_line(raw_line: str, node_id: Optional[str], *, decorate_node: bool) -> tuple[str, str, Optional[Dict[str, Any]]]:
+            text = raw_line[len("data:"):].strip() if raw_line.startswith("data:") else raw_line
+            payload = parse_payload(text) if text else None
+            if not decorate_node:
+                return as_sse(raw_line), text, payload
+
+            label = self._log_stream_node_label(node_id)
+            if payload is None:
+                decorated_payload: Dict[str, Any] = {
+                    "status": "running",
+                    "event": "node_log",
+                    "node_id": label,
+                    "logs": [node_prefix_log_line(text or raw_line, node_id)],
+                }
+            else:
+                decorated_payload = dict(payload)
+                decorated_payload["node_id"] = label
+                decorated_payload["source_node_id"] = label
+                decorated_payload.setdefault("event", "node_log")
+                logs = normalize_logs(decorated_payload.get("logs"))
+                if logs:
+                    decorated_payload["logs"] = [
+                        node_prefix_log_line(log_line, node_id)
+                        for log_line in logs
+                    ]
+
+            decorated_text = json.dumps(decorated_payload, ensure_ascii=False)
+            return f"data: {decorated_text}\n\n", decorated_text, decorated_payload
+
+        def warning_sse(message: str, *, event: str, node_id: Optional[str] = None) -> tuple[str, str]:
+            label = self._log_stream_node_label(node_id) if node_id is not None else None
+            payload: Dict[str, Any] = {
+                "status": "warning",
+                "event": event,
+                "logs": [message],
+            }
+            if label is not None:
+                payload["node_id"] = label
+            text = json.dumps(payload, ensure_ascii=False)
+            return f"data: {text}\n\n", text
+
         def is_workspace_waiting(payload: Optional[Dict[str, Any]]) -> bool:
             if not payload or payload.get("status") != "waiting":
                 return False
@@ -3118,49 +3277,185 @@ class AutoEvolutionScheduler:
             return any("Task directory not found yet" in str(item) for item in logs)
 
         try:
-            session_header = f"\n{'='*60}\n[Session Start] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{'='*60}\n"
+            node_labels = ", ".join(self._log_stream_node_label(node_id) for node_id in node_ids)
+            session_header = (
+                f"\n{'='*60}\n"
+                f"[Session Start] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"[Log Nodes] {node_labels}\n"
+                f"{'='*60}\n"
+            )
             await append_local_log(session_header)
 
-            async for line in client.stream_task_logs(task_id):
-                text = line[len("data:"):].strip() if line.startswith("data:") else line
-                payload = parse_payload(text) if text else None
+            for warning in node_plan.get("warnings") or []:
+                sse, text = warning_sse(f"[System] {warning}", event="log_node_resolution_warning")
+                await append_local_log(text + "\n")
+                yield sse
 
-                if self._is_log_stream_stop_requested(task_id):
-                    closed = {
-                        "status": "deleted",
-                        "event": "task_deleted",
-                        "logs": [f"Task {task_id} is being deleted; log stream closed."],
-                    }
-                    yield f"data: {json.dumps(closed, ensure_ascii=False)}\n\n"
-                    return
+            async def forward_single_node(node_id: Optional[str]):
+                client = self._get_workspace_client_for_node_id(node_id)
+                async for line in client.stream_task_logs(task_id):
+                    text = line[len("data:"):].strip() if line.startswith("data:") else line
+                    payload = parse_payload(text) if text else None
 
-                if is_workspace_waiting(payload):
-                    current_status = self._get_task_status(task_id)
-                    if current_status is None:
-                        deleted = {
+                    if self._is_log_stream_stop_requested(task_id):
+                        closed = {
                             "status": "deleted",
                             "event": "task_deleted",
-                            "logs": [f"Task {task_id} no longer exists; log stream closed."],
+                            "logs": [f"Task {task_id} is being deleted; log stream closed."],
                         }
-                        yield f"data: {json.dumps(deleted, ensure_ascii=False)}\n\n"
+                        yield f"data: {json.dumps(closed, ensure_ascii=False)}\n\n"
                         return
-                    if current_status in {"completed", "failed", "cancelled", "paused"}:
-                        missing = {
-                            "status": "missing",
-                            "event": "task_log_workspace_missing",
-                            "logs": [
-                                f"Task {task_id} is {current_status}, but its RDAgent workspace is missing; log stream closed."
-                            ],
-                        }
-                        yield f"data: {json.dumps(missing, ensure_ascii=False)}\n\n"
-                        return
-                    # Transient pre-start wait: show it in UI but do not persist one line per second.
-                    yield as_sse(line)
-                    continue
 
-                if text:
+                    if is_workspace_waiting(payload):
+                        latest_status = self._get_task_status(task_id)
+                        if latest_status is None:
+                            deleted = {
+                                "status": "deleted",
+                                "event": "task_deleted",
+                                "logs": [f"Task {task_id} no longer exists; log stream closed."],
+                            }
+                            yield f"data: {json.dumps(deleted, ensure_ascii=False)}\n\n"
+                            return
+                        if latest_status in {"completed", "failed", "cancelled", "paused"}:
+                            missing = {
+                                "status": "missing",
+                                "event": "task_log_workspace_missing",
+                                "logs": [
+                                    f"Task {task_id} is {latest_status}, but its RDAgent workspace is missing; log stream closed."
+                                ],
+                            }
+                            yield f"data: {json.dumps(missing, ensure_ascii=False)}\n\n"
+                            return
+                        # Transient pre-start wait: show it in UI but do not persist one line per second.
+                        yield as_sse(line)
+                        continue
+
+                    if text:
+                        await append_local_log(text + "\n")
+                    yield as_sse(line)
+
+            if not distributed_stream:
+                node_id = node_ids[0] if node_ids else None
+                try:
+                    async for chunk in forward_single_node(node_id):
+                        yield chunk
+                except Exception as exc:
+                    logger.exception("QE log stream failed for task %s node %s", task_id, self._log_stream_node_label(node_id))
+                    sse, text = warning_sse(
+                        f"[{self._log_stream_node_label(node_id)}] log stream failed: {exc}",
+                        event="node_log_stream_error",
+                        node_id=node_id,
+                    )
                     await append_local_log(text + "\n")
-                yield as_sse(line)
+                    yield sse
+                return
+
+            queue: asyncio.Queue = asyncio.Queue()
+
+            async def read_node_stream(node_id: Optional[str]) -> None:
+                node_key = self._log_stream_node_key(node_id)
+                try:
+                    client = self._get_workspace_client_for_node_id(node_id)
+                    async for line in client.stream_task_logs(task_id):
+                        await queue.put({"kind": "line", "node_id": node_id, "node_key": node_key, "line": line})
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:
+                    logger.exception("QE distributed log stream failed for task %s node %s", task_id, self._log_stream_node_label(node_id))
+                    await queue.put({"kind": "error", "node_id": node_id, "node_key": node_key, "error": str(exc)})
+                finally:
+                    queue.put_nowait({"kind": "done", "node_id": node_id, "node_key": node_key})
+
+            worker_tasks: Dict[str, asyncio.Task] = {
+                self._log_stream_node_key(node_id): asyncio.create_task(read_node_stream(node_id))
+                for node_id in node_ids
+            }
+            active_workers = len(worker_tasks)
+            terminal_missing_nodes: set[str] = set()
+            try:
+                while active_workers > 0:
+                    if self._is_log_stream_stop_requested(task_id):
+                        closed = {
+                            "status": "deleted",
+                            "event": "task_deleted",
+                            "logs": [f"Task {task_id} is being deleted; distributed log stream closed."],
+                        }
+                        yield f"data: {json.dumps(closed, ensure_ascii=False)}\n\n"
+                        return
+
+                    try:
+                        item = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        if self._get_task_status(task_id) is None:
+                            deleted = {
+                                "status": "deleted",
+                                "event": "task_deleted",
+                                "logs": [f"Task {task_id} no longer exists; distributed log stream closed."],
+                            }
+                            yield f"data: {json.dumps(deleted, ensure_ascii=False)}\n\n"
+                            return
+                        continue
+
+                    kind = item.get("kind")
+                    node_id = item.get("node_id")
+                    node_key = item.get("node_key")
+                    if kind == "done":
+                        active_workers -= 1
+                        continue
+                    if kind == "error":
+                        sse, text = warning_sse(
+                            f"[{self._log_stream_node_label(node_id)}] log stream failed: {item.get('error')}",
+                            event="node_log_stream_error",
+                            node_id=node_id,
+                        )
+                        await append_local_log(text + "\n")
+                        yield sse
+                        continue
+
+                    sse_line, persist_text, payload = prepare_sse_line(
+                        item.get("line") or "",
+                        node_id,
+                        decorate_node=True,
+                    )
+
+                    if is_workspace_waiting(payload):
+                        latest_status = self._get_task_status(task_id)
+                        if latest_status is None:
+                            deleted = {
+                                "status": "deleted",
+                                "event": "task_deleted",
+                                "logs": [f"Task {task_id} no longer exists; distributed log stream closed."],
+                            }
+                            yield f"data: {json.dumps(deleted, ensure_ascii=False)}\n\n"
+                            return
+                        if latest_status in {"completed", "failed", "cancelled", "paused"}:
+                            if node_key not in terminal_missing_nodes:
+                                terminal_missing_nodes.add(node_key)
+                                sse, text = warning_sse(
+                                    f"[{self._log_stream_node_label(node_id)}] Task {task_id} is {latest_status}, "
+                                    "but this node's RDAgent workspace is missing; stopping this node log stream.",
+                                    event="node_log_workspace_missing",
+                                    node_id=node_id,
+                                )
+                                await append_local_log(text + "\n")
+                                yield sse
+                            task = worker_tasks.get(node_key)
+                            if task:
+                                task.cancel()
+                            continue
+                        # Transient pre-start wait: show it in UI but do not persist one line per second.
+                        yield sse_line
+                        continue
+
+                    if persist_text:
+                        await append_local_log(persist_text + "\n")
+                    yield sse_line
+            finally:
+                for task in worker_tasks.values():
+                    if not task.done():
+                        task.cancel()
+                if worker_tasks:
+                    await asyncio.gather(*worker_tasks.values(), return_exceptions=True)
         finally:
             self._unregister_log_stream(task_id)
 
