@@ -83,3 +83,36 @@ Rerun cleanup ordering         PASS by code review: validation before cleanup
 Targeted pytest                PASS: 32 passed
 Frontend TypeScript            PASS
 ```
+
+## Checksum Output Parsing Fix
+
+A real submission reported a false checksum mismatch where the digest was identical but the local value included the file path from `sha256sum` output:
+
+```text
+local=<hash>  /home/lc999/data/qlib_bin/instruments/filtered_pool_20260501.txt
+remote=<same hash>
+```
+
+Fix:
+
+- Parse both local and remote `sha256sum` output in Python by taking the first whitespace-delimited token.
+- Validate the parsed digest is exactly 64 lowercase hex characters.
+- Remove dependence on shell `awk` output formatting for this business check.
+- Keep fail-fast behavior for invalid checksum output or real digest mismatch.
+
+Validation:
+
+```text
+python -m py_compile backend/services/quantevolver/stock_pool_sync.py backend/tests/unified_engine/test_qe_config_truth.py
+python -m pytest backend/tests/unified_engine/test_qe_config_truth.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py backend/tests/unified_engine/test_qe_node_execution.py -q
+```
+
+Result:
+
+```text
+Check                          Result
+-----------------------------  ---------------------------------------------
+Checksum parser regression     PASS: local full sha256sum line parses to hash
+QE targeted pytest             PASS: 32 passed
+Real QE execution              NOT RUN by Codex
+```

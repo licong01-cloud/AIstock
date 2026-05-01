@@ -31,6 +31,7 @@ _LINUX_PATH_KEYS = (
     "factor_data_dir",
     "qlib_rdagent_root",
 )
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _wsl_distro() -> str:
@@ -144,6 +145,15 @@ def _run_checked(cmd: list[str], *, timeout: int, error_prefix: str) -> subproce
     return result
 
 
+def _extract_sha256(output: bytes, *, context: str) -> str:
+    """Parse sha256sum output into the exact 64-hex digest and reject anything invalid."""
+    text = output.decode("utf-8", errors="replace").strip()
+    digest = text.split()[0] if text else ""
+    if not _SHA256_RE.fullmatch(digest):
+        raise RuntimeError(f"invalid sha256 output for {context}: {text!r}")
+    return digest
+
+
 def _assert_wsl_file_exists(stock_pool_path: str) -> None:
     _run_checked(
         _wsl_bash_command(f"test -f {shlex.quote(stock_pool_path)}"),
@@ -154,11 +164,11 @@ def _assert_wsl_file_exists(stock_pool_path: str) -> None:
 
 def _wsl_sha256(stock_pool_path: str) -> str:
     result = _run_checked(
-        _wsl_bash_command(f"sha256sum {shlex.quote(stock_pool_path)} | awk '{{print $1}}'"),
+        _wsl_bash_command(f"sha256sum {shlex.quote(stock_pool_path)}"),
         timeout=10,
         error_prefix=f"failed to checksum WSL stock_pool file: {stock_pool_path}",
     )
-    return result.stdout.decode("utf-8", errors="replace").strip()
+    return _extract_sha256(result.stdout, context=f"local stock_pool {stock_pool_path}")
 
 
 def sync_stock_pool_to_remote_node(stock_pool_path: str, node: dict[str, Any]) -> dict[str, str]:
@@ -209,11 +219,15 @@ def sync_stock_pool_to_remote_node(stock_pool_path: str, node: dict[str, Any]) -
         timeout=30,
         error_prefix=f"failed to sync stock_pool {local_stock_pool_path} -> {ssh_target}:{remote_instruments_dir}/",
     )
-    remote_checksum = _run_checked(
-        ["ssh", ssh_target, f"sha256sum {shlex.quote(remote_path)} | awk '{{print $1}}'"],
+    remote_result = _run_checked(
+        ["ssh", ssh_target, f"sha256sum {shlex.quote(remote_path)}"],
         timeout=10,
         error_prefix=f"failed to checksum remote stock_pool {ssh_target}:{remote_path}",
-    ).stdout.decode("utf-8", errors="replace").strip()
+    )
+    remote_checksum = _extract_sha256(
+        remote_result.stdout,
+        context=f"remote stock_pool {ssh_target}:{remote_path}",
+    )
     if remote_checksum != local_sha256:
         raise RuntimeError(
             f"stock_pool checksum mismatch after sync: local={local_sha256} "

@@ -45,6 +45,8 @@ DATA_SPLIT = {
     "backtest_end": "2021-12-31",
 }
 
+TEST_SHA256 = "3b4ad5e17e49166df13840f453619a87cafaa70dda129daafee8adf0fca4e1b5"
+
 
 def test_qe_default_split_uses_safe_backtest_end_20260427():
     split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
@@ -360,7 +362,7 @@ def test_remote_stock_pool_sync_local_node_checks_file_and_checksum(monkeypatch)
     class Result:
         returncode = 0
         stderr = b""
-        stdout = b"abc123\n"
+        stdout = f"{TEST_SHA256}  /home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt\n".encode()
 
     def fake_run(cmd, timeout, check, capture_output):
         calls.append(cmd)
@@ -375,7 +377,7 @@ def test_remote_stock_pool_sync_local_node_checks_file_and_checksum(monkeypatch)
 
     assert result["status"] == "skipped"
     assert result["reason"] == "local_node"
-    assert result["sha256"] == "abc123"
+    assert result["sha256"] == TEST_SHA256
     assert any("test -f" in part for cmd in calls for part in cmd)
     assert all("Ubuntu" not in cmd for call in calls for cmd in call if cmd != "Ubuntu-Test")
     assert any("Ubuntu-Test" in cmd for call in calls for cmd in call)
@@ -387,7 +389,7 @@ def test_remote_stock_pool_sync_resolves_instrument_name(monkeypatch):
     class Result:
         returncode = 0
         stderr = b""
-        stdout = b"abc123\n"
+        stdout = f"{TEST_SHA256}  /home/lc999/data/qlib_bin/instruments/filtered_pool_20260426.txt\n".encode()
 
     def fake_run(cmd, timeout, check, capture_output):
         calls.append(cmd)
@@ -412,7 +414,7 @@ def test_remote_stock_pool_sync_derives_missing_ssh_user_from_node_paths(monkeyp
     class Result:
         returncode = 0
         stderr = b""
-        stdout = b"abc123\n"
+        stdout = f"{TEST_SHA256}  /home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt\n".encode()
 
     def fake_run(cmd, timeout, check, capture_output):
         calls.append(cmd)
