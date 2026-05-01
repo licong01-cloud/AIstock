@@ -1,4 +1,7 @@
 import asyncio
+import subprocess
+
+import pytest
 
 from backend.services.quantevolver import qe_evolution_service as qes
 from backend.services.quantevolver.qe_workspace_client import QELoopWorkspaceCleanupUnavailable
@@ -187,3 +190,74 @@ def test_local_node_filesystem_loop_cleanup_deletes_only_target_loop(tmp_path, m
     assert result["existed"] is True
     assert not target.exists()
     assert sibling.exists()
+
+
+def test_remote_node_filesystem_loop_cleanup_uses_ssh_and_reports_success(monkeypatch):
+    scheduler = qes.AutoEvolutionScheduler.__new__(qes.AutoEvolutionScheduler)
+    captured = {}
+
+    monkeypatch.setattr(
+        scheduler,
+        "_get_compute_node_for_loop_cleanup",
+        lambda node_id: {
+            "node_id": "rdagent-node1",
+            "api_base_url": "http://192.168.50.215:9000",
+            "ssh_user": "lc999",
+            "workspace_base": "/home/lc999/projects/RD-Agent-main/qe_workspace",
+        },
+    )
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(cmd, 0, stdout="existed=True\n", stderr="")
+
+    monkeypatch.setattr(qes.subprocess, "run", fake_run)
+
+    result = scheduler._cleanup_loop_workspace_via_node_filesystem(
+        "rdagent-node1",
+        "task-a",
+        "Loop15",
+        reason="api cleanup unavailable",
+    )
+
+    assert result["method"] == "node_filesystem_ssh"
+    assert result["node_id"] == "rdagent-node1"
+    assert result["existed"] is True
+    assert captured["cmd"][:5] == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+    assert captured["cmd"][5] == "lc999@192.168.50.215"
+    assert "python3 -c" in captured["cmd"][6]
+    assert "/home/lc999/projects/RD-Agent-main/qe_workspace" in captured["cmd"][6]
+    assert "Loop15" in captured["cmd"][6]
+    assert captured["kwargs"]["check"] is False
+
+
+def test_remote_node_filesystem_loop_cleanup_fails_fast_on_ssh_error(monkeypatch):
+    scheduler = qes.AutoEvolutionScheduler.__new__(qes.AutoEvolutionScheduler)
+
+    monkeypatch.setattr(
+        scheduler,
+        "_get_compute_node_for_loop_cleanup",
+        lambda node_id: {
+            "node_id": "rdagent-node1",
+            "api_base_url": "http://192.168.50.215:9000",
+            "ssh_user": "lc999",
+            "workspace_base": "/home/lc999/projects/RD-Agent-main/qe_workspace",
+        },
+    )
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 255, stdout="", stderr="Permission denied")
+
+    monkeypatch.setattr(qes.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError) as exc:
+        scheduler._cleanup_loop_workspace_via_node_filesystem(
+            "rdagent-node1",
+            "task-a",
+            "Loop15",
+            reason="api cleanup unavailable",
+        )
+
+    assert "Remote loop workspace cleanup via ssh failed" in str(exc.value)
+    assert "Permission denied" in str(exc.value)
