@@ -1,5 +1,6 @@
 
 import sys
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -438,6 +439,39 @@ def test_remote_stock_pool_sync_derives_missing_ssh_user_from_node_paths(monkeyp
     assert result["status"] == "synced"
     assert result["remote_path"] == "/home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt"
     assert any("lc999@192.168.50.215" in str(part) for cmd in calls for part in cmd)
+    ssh_calls = [cmd for cmd in calls if cmd and cmd[0] == "ssh"]
+    assert ssh_calls
+    assert all("BatchMode=yes" in cmd for cmd in ssh_calls)
+    assert all("ConnectTimeout=10" in cmd for cmd in ssh_calls)
+    assert all("StrictHostKeyChecking=accept-new" in cmd for cmd in ssh_calls)
+    assert all("NumberOfPasswordPrompts=0" in cmd for cmd in ssh_calls)
+    scp_commands = [part for cmd in calls for part in cmd if isinstance(part, str) and part.startswith("scp ")]
+    assert scp_commands
+    assert all("BatchMode=yes" in cmd for cmd in scp_commands)
+    assert all("ConnectionAttempts=1" in cmd for cmd in scp_commands)
+    assert all("StrictHostKeyChecking=accept-new" in cmd for cmd in scp_commands)
+    assert all("NumberOfPasswordPrompts=0" in cmd for cmd in scp_commands)
+
+
+def test_remote_stock_pool_sync_timeout_error_is_actionable(monkeypatch):
+    from backend.services.quantevolver import stock_pool_sync
+
+    def fake_run(cmd, timeout, check, capture_output):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+
+    monkeypatch.setattr(stock_pool_sync.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError) as exc:
+        stock_pool_sync._run_checked(
+            ["ssh", "lc999@192.168.50.215", "mkdir", "-p", "/home/lc999/data/qlib_bin/instruments"],
+            timeout=10,
+            error_prefix="failed to create remote instruments dir",
+        )
+
+    message = str(exc.value)
+    assert "command timed out after 10s" in message
+    assert "failed to create remote instruments dir" in message
+    assert "lc999@192.168.50.215" in message
 
 
 def test_remote_stock_pool_sync_rejects_ambiguous_derived_ssh_user(monkeypatch):

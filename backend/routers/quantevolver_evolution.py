@@ -1337,9 +1337,13 @@ async def _prepare_custom_evo_loop_configs(
     except QENodePreflightError as e:
         raise HTTPException(status_code=400, detail=e.to_detail()) from e
 
+    synced_stock_pool_keys: set[tuple[str, str]] = set()
     for cfg_dict in loops_config:
         stock_pool = cfg_dict.get("stock_pool")
         if stock_pool and "filtered_pool" in stock_pool:
+            sync_key = (str(cfg_dict["node_id"]), str(stock_pool))
+            if sync_key in synced_stock_pool_keys:
+                continue
             node = node_rows.get(cfg_dict["node_id"]) or get_compute_node(cfg_dict["node_id"])
             if not node:
                 raise HTTPException(
@@ -1351,6 +1355,7 @@ async def _prepare_custom_evo_loop_configs(
                     },
                 )
             _sync_stock_pool_to_remote(stock_pool, node)
+            synced_stock_pool_keys.add(sync_key)
 
     return loops_config, loop1_node_id, node_parallelism
 

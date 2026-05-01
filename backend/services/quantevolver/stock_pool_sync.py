@@ -32,6 +32,26 @@ _LINUX_PATH_KEYS = (
     "qlib_rdagent_root",
 )
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_SSH_CONNECT_TIMEOUT_SECONDS = 10
+_SSH_COMMAND_TIMEOUT_SECONDS = 30
+_SCP_TRANSFER_TIMEOUT_SECONDS = 60
+_SSH_OPTIONS = [
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    f"ConnectTimeout={_SSH_CONNECT_TIMEOUT_SECONDS}",
+    "-o",
+    "ConnectionAttempts=1",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+    "-o",
+    "NumberOfPasswordPrompts=0",
+    "-o",
+    "ServerAliveInterval=5",
+    "-o",
+    "ServerAliveCountMax=2",
+]
+_SCP_OPTIONS = " ".join(shlex.quote(part) for part in _SSH_OPTIONS)
 
 
 def _wsl_distro() -> str:
@@ -135,14 +155,30 @@ def _resolve_ssh_user(node: dict[str, Any], *, purpose: str) -> str:
     )
 
 
+def _safe_cmd_for_error(cmd: list[str]) -> str:
+    return " ".join(shlex.quote(str(part)) for part in cmd)
+
+
 def _run_checked(cmd: list[str], *, timeout: int, error_prefix: str) -> subprocess.CompletedProcess:
-    result = subprocess.run(cmd, timeout=timeout, check=False, capture_output=True)
+    try:
+        result = subprocess.run(cmd, timeout=timeout, check=False, capture_output=True)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"{error_prefix}: command timed out after {timeout}s: {_safe_cmd_for_error(cmd)}"
+        ) from exc
     if result.returncode != 0:
         stderr = result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
         stdout = result.stdout.decode("utf-8", errors="replace") if result.stdout else ""
         detail = stderr.strip() or stdout.strip()
-        raise RuntimeError(f"{error_prefix}: {detail}")
+        raise RuntimeError(
+            f"{error_prefix}: {detail or 'command failed without output'}; "
+            f"command={_safe_cmd_for_error(cmd)}"
+        )
     return result
+
+
+def _ssh_command(ssh_target: str, remote_command: str) -> list[str]:
+    return ["ssh", *_SSH_OPTIONS, ssh_target, remote_command]
 
 
 def _extract_sha256(output: bytes, *, context: str) -> str:
@@ -205,23 +241,23 @@ def sync_stock_pool_to_remote_node(stock_pool_path: str, node: dict[str, Any]) -
     remote_path = f"{remote_instruments_dir}/{os.path.basename(local_stock_pool_path)}"
 
     _run_checked(
-        ["ssh", ssh_target, "mkdir", "-p", remote_instruments_dir],
-        timeout=10,
+        _ssh_command(ssh_target, f"mkdir -p -- {shlex.quote(remote_instruments_dir)}"),
+        timeout=_SSH_COMMAND_TIMEOUT_SECONDS,
         error_prefix=f"failed to create remote instruments dir {ssh_target}:{remote_instruments_dir}",
     )
 
     _run_checked(
         _wsl_bash_command(
-            "scp -o ConnectTimeout=10 "
+            f"scp {_SCP_OPTIONS} "
             f"{shlex.quote(local_stock_pool_path)} "
             f"{shlex.quote(f'{ssh_target}:{remote_instruments_dir}/')}"
         ),
-        timeout=30,
+        timeout=_SCP_TRANSFER_TIMEOUT_SECONDS,
         error_prefix=f"failed to sync stock_pool {local_stock_pool_path} -> {ssh_target}:{remote_instruments_dir}/",
     )
     remote_result = _run_checked(
-        ["ssh", ssh_target, f"sha256sum {shlex.quote(remote_path)}"],
-        timeout=10,
+        _ssh_command(ssh_target, f"sha256sum {shlex.quote(remote_path)}"),
+        timeout=_SSH_COMMAND_TIMEOUT_SECONDS,
         error_prefix=f"failed to checksum remote stock_pool {ssh_target}:{remote_path}",
     )
     remote_checksum = _extract_sha256(
@@ -272,17 +308,17 @@ def sync_all_filtered_pools_to_remote_node(node: dict[str, Any]) -> dict[str, st
     local_instruments_dir = f"{local_qlib_data}/instruments"
 
     _run_checked(
-        ["ssh", ssh_target, "mkdir", "-p", remote_instruments_dir],
-        timeout=10,
+        _ssh_command(ssh_target, f"mkdir -p -- {shlex.quote(remote_instruments_dir)}"),
+        timeout=_SSH_COMMAND_TIMEOUT_SECONDS,
         error_prefix=f"failed to create remote instruments dir {ssh_target}:{remote_instruments_dir}",
     )
     _run_checked(
         _wsl_bash_command(
-            "scp -o ConnectTimeout=10 "
+            f"scp {_SCP_OPTIONS} "
             f"{shlex.quote(local_instruments_dir)}/filtered_pool_*.txt "
             f"{shlex.quote(f'{ssh_target}:{remote_instruments_dir}/')}"
         ),
-        timeout=60,
+        timeout=_SCP_TRANSFER_TIMEOUT_SECONDS,
         error_prefix=f"failed to sync filtered_pool files -> {ssh_target}:{remote_instruments_dir}/",
     )
     logger.info("synced all filtered_pool files -> %s:%s/", ssh_target, remote_instruments_dir)
