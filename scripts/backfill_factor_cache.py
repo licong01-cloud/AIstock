@@ -176,18 +176,14 @@ def resolve_execution_context(args) -> dict[str, Any]:
     if not factor_data_dir:
         raise ValueError("无法解析 factor_data_dir")
 
-    default_train = data_split.get("train_start") or args.start or "2018-08-01"
-    default_end = data_split.get("test_end") or args.end or "2026-04-03"
-    if not data_split.get("train_start") and not args.start:
-        print(f"[WARN] 未指定 train_start，使用 fallback: {default_train}")
-    if not data_split.get("test_end") and not args.end:
-        print(f"[WARN] 未指定 test_end，使用 fallback: {default_end}")
-    req_train = args.window_train_start or args.start or default_train
-    req_end = args.window_backtest_end or args.end or default_end
+    req_train = args.window_train_start or args.start
+    req_end = args.window_backtest_end or args.end
+    if not req_train or not req_end:
+        raise ValueError("必须显式指定缓存窗口: --window-train-start/--window-backtest-end 或 --start/--end")
     print(f"缓存窗口: {req_train} ~ {req_end}")
 
-    window_train_start = max(default_train, req_train)
-    window_backtest_end = min(default_end, req_end)
+    window_train_start = req_train
+    window_backtest_end = req_end
 
     if window_train_start > window_backtest_end:
         raise ValueError(

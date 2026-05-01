@@ -3629,8 +3629,8 @@ def factor_cache_stats():
 class FactorCacheComputeRequest(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="因子名列表；空/None = 全部可用因子")
     experiment_id: Optional[str] = Field(None, description="实验 ID；仅用于继承节点/数据目录配置，不限制缓存作用域")
-    start_date: Optional[str] = Field(None, description="起始日期；为空则使用 QE 默认 train_start")
-    end_date: Optional[str] = Field(None, description="结束日期；为空则使用 QE 默认 test_end")
+    start_date: str = Field(..., description="起始日期；必须由 UI 显式传入")
+    end_date: str = Field(..., description="结束日期；必须由 UI 显式传入")
     workers: int = Field(4, description="并行度: 2/4/8/10")
     timeout_per_factor: int = Field(1200, description="单因子超时秒数")
     incremental: bool = Field(False, description="增量模式: 优先仅补齐缺失后段")
@@ -3646,34 +3646,20 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
     if req.workers < 1 or req.workers > 10:
         raise HTTPException(400, "workers 必须为 1~10")
 
-    from ..services.quantevolver.config_composer import ConfigComposer, RDAGENT_DEFAULT_DATA_SPLIT
+    from ..services.quantevolver.config_composer import ConfigComposer
 
     cc = ConfigComposer()
     exp_record = None
     node_id = None
     factor_data_dir = None
-    base_split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
-    resolved_start = req.start_date or base_split.get("train_start")
-    resolved_end = req.end_date or base_split.get("test_end")
+    resolved_start = req.start_date.strip()
+    resolved_end = req.end_date.strip()
 
     if req.experiment_id:
         exp_record = cc._get_experiment_record(req.experiment_id)
         if not exp_record:
             raise HTTPException(404, f"实验 {req.experiment_id} 不存在")
-        data_split = exp_record.get("data_split")
-        if isinstance(data_split, str):
-            data_split = json.loads(data_split)
-        if data_split:
-            if not isinstance(data_split, dict):
-                raise HTTPException(400, f"实验 {req.experiment_id} 的 data_split 非法")
-            cc._validate_data_split(data_split)
-            base_split.update(data_split)
         node_id = exp_record.get("node_id") or None
-
-    if req.start_date is None:
-        resolved_start = base_split.get("train_start")
-    if req.end_date is None:
-        resolved_end = base_split.get("test_end")
 
     rdagent_cfg = cc._fetch_workspace_config(node_id)
     factor_data_dir = rdagent_cfg.get("factor_data_dir")
@@ -3681,7 +3667,12 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         raise HTTPException(400, "无法解析 QE 默认 factor_data_dir")
 
     if not resolved_start or not resolved_end:
-        raise HTTPException(400, "无法解析缓存窗口")
+        raise HTTPException(400, "start_date/end_date 必须由 UI 显式传入")
+    try:
+        datetime.strptime(resolved_start, "%Y-%m-%d")
+        datetime.strptime(resolved_end, "%Y-%m-%d")
+    except ValueError as e:
+        raise HTTPException(400, "start_date/end_date 必须为 YYYY-MM-DD 格式") from e
     if resolved_start > resolved_end:
         raise HTTPException(400, f"缓存窗口非法: {resolved_start} > {resolved_end}")
     try:

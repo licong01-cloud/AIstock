@@ -4019,8 +4019,8 @@ def _get_pipeline():
 async def compute_factor_values(
     background_tasks: BackgroundTasks,
     factor_names: Optional[List[str]] = Query(None),
-    start_date: str = Query("2018-08-01"),
-    end_date: str = Query("2026-04-28"),
+    start_date: str = Query(...),
+    end_date: str = Query(...),
     max_workers: int = Query(1),
     timeout_per_factor: int = Query(600),
     data_date: Optional[str] = Query(None),

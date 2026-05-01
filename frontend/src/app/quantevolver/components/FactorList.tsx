@@ -6,6 +6,8 @@ import ManualFactorDialog from "./ManualFactorDialog";
 import IcSeriesChart from "./charts/IcSeriesChart";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
+const FACTOR_CACHE_DEFAULT_START = "2018-08-01";
+const FACTOR_CACHE_DEFAULT_END = "2026-04-28";
 
 async function fetchJsonOrThrow(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
@@ -439,8 +441,8 @@ export default function FactorList({
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
   const [cacheWorkers, setCacheWorkers] = useState(4);
   const [cacheBusy, setCacheBusy] = useState(false);
-  const [cacheStartDate, setCacheStartDate] = useState(cacheContext?.trainStart || "2018-08-01");
-  const [cacheEndDate, setCacheEndDate] = useState(cacheContext?.backtestEnd || "2026-04-28");
+  const [cacheStartDate, setCacheStartDate] = useState(FACTOR_CACHE_DEFAULT_START);
+  const [cacheEndDate, setCacheEndDate] = useState(FACTOR_CACHE_DEFAULT_END);
   const [cacheCoverageFilter, setCacheCoverageFilter] = useState("all");
   const [cacheIncremental, setCacheIncremental] = useState(false);
   const [cacheTasks, setCacheTasks] = useState<CacheTask[]>([]);
@@ -492,11 +494,6 @@ export default function FactorList({
       fetchCacheTasks();
     }
   }, [isSelection, fetchCacheStats, fetchCacheTasks]);
-
-  useEffect(() => {
-    if (cacheContext?.trainStart) setCacheStartDate(cacheContext.trainStart);
-    if (cacheContext?.backtestEnd) setCacheEndDate(cacheContext.backtestEnd);
-  }, [cacheContext?.trainStart, cacheContext?.backtestEnd]);
 
   useEffect(() => {
     if (isSelection) return;
