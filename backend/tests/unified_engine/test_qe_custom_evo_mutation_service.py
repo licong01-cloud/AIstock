@@ -1,6 +1,7 @@
 import asyncio
 
 from backend.services.quantevolver import qe_evolution_service as qes
+from backend.services.quantevolver.qe_workspace_client import QELoopWorkspaceCleanupUnavailable
 
 
 class FakeConnContext:
@@ -31,6 +32,7 @@ class FakeCursor:
     def __init__(self, state):
         self.state = state
         self.sql = ""
+        self.rowcount = 0
 
     def __enter__(self):
         return self
@@ -41,6 +43,7 @@ class FakeCursor:
     def execute(self, sql, params=None):
         self.sql = " ".join(str(sql).split())
         self.state["sql"].append(self.sql)
+        self.rowcount = 1 if self.sql.startswith("DELETE") else 0
 
     def fetchone(self):
         if "pg_try_advisory_lock" in self.sql:
@@ -58,6 +61,14 @@ class FakeCursor:
                     "node_parallelism": {"node-a": 1, "node-b": 1},
                 },
                 "strategy_evo_execution_mode": "serial",
+            }
+        if "FROM qe_evolution_loops" in self.sql:
+            return {
+                "loop_id": "task-a_Loop2",
+                "loop_index": 2,
+                "status": "completed",
+                "node_id": "node-b",
+                "experiment_id": "task-a_L2",
             }
         return None
 
@@ -114,3 +125,65 @@ def test_append_custom_evo_loops_uses_get_conn_context_manager_for_lock(monkeypa
     assert result["new_loop_indexes"] == [3]
     assert state["entered"] == state["exited"]
     assert any("pg_advisory_unlock" in sql for sql in state["sql"])
+
+
+def test_delete_custom_evo_loop_result_uses_filesystem_cleanup_when_api_route_missing(monkeypatch):
+    _patch_fake_db(monkeypatch)
+    scheduler = qes.AutoEvolutionScheduler.__new__(qes.AutoEvolutionScheduler)
+
+    class MissingCleanupClient:
+        async def cleanup_loop_workspace(self, task_id, loop_name):
+            raise QELoopWorkspaceCleanupUnavailable(f"missing endpoint: {task_id}/{loop_name}")
+
+    monkeypatch.setattr(scheduler, "_get_workspace_client_for_node_id", lambda node_id: MissingCleanupClient())
+    monkeypatch.setattr(scheduler, "_cleanup_local_custom_evo_loop_dirs", lambda task_id, loop_index: [])
+    monkeypatch.setattr(
+        scheduler,
+        "_cleanup_loop_workspace_via_node_filesystem",
+        lambda node_id, task_id, loop_name, reason: {
+            "ok": True,
+            "method": "node_filesystem_local",
+            "node_id": node_id,
+            "existed": False,
+            "reason": reason,
+        },
+    )
+
+    result = asyncio.run(scheduler.delete_custom_evo_loop_result("task-a", 2))
+
+    assert result["remote_cleanup"]["method"] == "node_filesystem_local"
+    assert result["remote_cleanup"]["node_id"] == "node-b"
+    assert "missing endpoint" in result["remote_cleanup"]["reason"]
+
+
+def test_local_node_filesystem_loop_cleanup_deletes_only_target_loop(tmp_path, monkeypatch):
+    scheduler = qes.AutoEvolutionScheduler.__new__(qes.AutoEvolutionScheduler)
+    workspace = tmp_path / "qe_workspace"
+    target = workspace / "task-a" / "Loop2"
+    sibling = workspace / "task-a" / "Loop1"
+    target.mkdir(parents=True)
+    sibling.mkdir(parents=True)
+    (target / "run.log").write_text("old", encoding="utf-8")
+    (sibling / "run.log").write_text("keep", encoding="utf-8")
+
+    monkeypatch.setattr(
+        scheduler,
+        "_get_compute_node_for_loop_cleanup",
+        lambda node_id: {
+            "node_id": "wsl2-5080",
+            "api_base_url": "http://127.0.0.1:9000",
+            "workspace_base": str(workspace),
+        },
+    )
+
+    result = scheduler._cleanup_loop_workspace_via_node_filesystem(
+        "wsl2-5080",
+        "task-a",
+        "Loop2",
+        reason="api cleanup unavailable",
+    )
+
+    assert result["method"] == "node_filesystem_local"
+    assert result["existed"] is True
+    assert not target.exists()
+    assert sibling.exists()

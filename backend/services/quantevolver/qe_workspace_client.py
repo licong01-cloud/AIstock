@@ -7,6 +7,11 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+
+class QELoopWorkspaceCleanupUnavailable(RuntimeError):
+    """Raised when RD-Agent cannot service loop-scoped workspace cleanup."""
+
+
 class QEWorkspaceClient:
     """
     专门负责与被物理隔离的 RDAgent 端进行网络交互的客户端
@@ -312,7 +317,7 @@ class QEWorkspaceClient:
             return True
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise RuntimeError(
+                raise QELoopWorkspaceCleanupUnavailable(
                     "RD-Agent QE workspace API does not expose loop-level cleanup "
                     f"or the loop path is unavailable: {task_id}/{rdagent_loop_id}"
                 ) from e
