@@ -7,6 +7,25 @@ import IcSeriesChart from "./charts/IcSeriesChart";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 
+async function fetchJsonOrThrow(url: string, init?: RequestInit) {
+  const res = await fetch(url, init);
+  const text = await res.text();
+  let data: any = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
+      throw new Error(`响应不是有效 JSON: ${text.slice(0, 200)}`);
+    }
+  }
+  if (!res.ok) {
+    const detail = typeof data?.detail === "string" ? data.detail : data?.message || text;
+    throw new Error(detail ? `HTTP ${res.status}: ${detail}` : `HTTP ${res.status}`);
+  }
+  return data;
+}
+
 // ── 月频 IC 衰变趋势面板 ──
 function MonthlyIcPanel({ factorName, apiBase }: { factorName: string; apiBase: string }) {
   const [data, setData] = useState<any>(null);
@@ -89,6 +108,9 @@ type Factor = {
   cache_end_date?: string | null;
   cache_computed_at?: string | null;
   cache_as_of_date?: string | null;
+  cache_source?: string | null;
+  cache_source_label?: string | null;
+  cache_data_source_mode?: string | null;
   cache_coverage_status?: "covered" | "partial" | "hash_mismatch" | "no_cache" | "error" | null;
   cache_status?: string | null;
   cache_size_mb?: number | null;
@@ -158,6 +180,9 @@ export type MergedFactor = {
   cache_end_date?: string | null;
   cache_computed_at?: string | null;
   cache_as_of_date?: string | null;
+  cache_source?: string | null;
+  cache_source_label?: string | null;
+  cache_data_source_mode?: string | null;
   cache_coverage_status?: "covered" | "partial" | "hash_mismatch" | "no_cache" | "error" | null;
   cache_status?: string | null;
   cache_size_mb?: number | null;
@@ -385,6 +410,7 @@ export default function FactorList({
     last_backfill?: any;
     hash_ok: number; hash_mismatch: number; cache_error: number; no_cache: number;
     disabled_total: number; disabled_cached: number;
+    by_source?: Record<string, number>;
   };
   type CacheTask = {
     task_id: string;
@@ -819,6 +845,9 @@ export default function FactorList({
         cache_end_date: f.cache_end_date ?? null,
         cache_computed_at: f.cache_computed_at ?? null,
         cache_as_of_date: f.cache_as_of_date ?? null,
+        cache_source: f.cache_source ?? null,
+        cache_source_label: f.cache_source_label ?? null,
+        cache_data_source_mode: f.cache_data_source_mode ?? null,
         cache_coverage_status: f.cache_coverage_status ?? null,
         cache_status: f.cache_status ?? null,
         cache_size_mb: f.cache_size_mb ?? null,
@@ -876,7 +905,10 @@ export default function FactorList({
         if (cacheEndDate) factorParams.set("cache_end_date", cacheEndDate);
       }
 
-      const fRes = await fetch(`${API}/quantevolver/factors?${factorParams.toString()}`).then(r => r.json());
+      const fRes = await fetchJsonOrThrow(`${API}/quantevolver/factors?${factorParams.toString()}`);
+      if (!fRes?.ok || !Array.isArray(fRes.items)) {
+        throw new Error(fRes?.detail || fRes?.message || "因子列表接口返回结构异常");
+      }
 
       if (requestId !== loadDataRequestRef.current) return;
       setFactors(fRes.items || []);
@@ -1946,6 +1978,9 @@ export default function FactorList({
                   {" "}|{" "}
                   {cacheStats.total_size_mb > 1024 ? `${(cacheStats.total_size_mb / 1024).toFixed(1)} GB` : `${cacheStats.total_size_mb} MB`} |
                   {" "}{cacheStats.date_range_dominant}
+                  {cacheStats.by_source && (
+                    <> | 回测{cacheStats.by_source.backtest || 0} / 官方{cacheStats.by_source.realtime_snapshot || 0}</>
+                  )}
                 </span>
                 {cacheStats.disabled_total > 0 && (
                   <span style={{ fontSize: 11, color: "#9ca3af", background: "#f3f4f6", padding: "1px 6px", borderRadius: 4 }}>
@@ -2681,6 +2716,12 @@ export default function FactorList({
                   return !best || Math.abs(value) > Math.abs(best.value) ? { label: item.label, value } : best;
                 }, null);
                 const bestRankIcAbs = f.ind_rank_ic_best_abs ?? (bestHorizonRankIc ? Math.abs(bestHorizonRankIc.value) : null);
+                const cacheSourceLabel = f.cache_source_label || (f.cache_source === "realtime_snapshot" ? "官方快照" : f.cache_source === "backtest" ? "回测缓存" : "");
+                const cacheTitleSuffix = [
+                  cacheSourceLabel ? `来源: ${cacheSourceLabel}` : null,
+                  f.cache_data_source_mode ? `数据模式: ${f.cache_data_source_mode}` : null,
+                  f.cache_as_of_date ? `截至: ${f.cache_as_of_date}` : null,
+                ].filter(Boolean).join("\n");
 
                 return (
                   <React.Fragment key={rowKey}>
@@ -2834,9 +2875,9 @@ export default function FactorList({
                       <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
                         {f.has_cache ? (
                           f.cache_hash_match === false ? (
-                            <span title={`源码已变更，缓存失效\n${f.cache_date_range}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#fee2e2", color: "#dc2626" }}>✗ hash不匹配</span>
+                            <span title={`源码已变更，缓存失效\n${f.cache_date_range}${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#fee2e2", color: "#dc2626" }}>✗ hash不匹配</span>
                           ) : (
-                            <span title={`${f.cache_date_range} (${f.cache_size_mb} MB)\n计算时间: ${f.cache_computed_at || "-"}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: (() => {
+                            <span title={`${f.cache_date_range} (${f.cache_size_mb} MB)\n计算时间: ${f.cache_computed_at || "-"}${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: (() => {
                               const s = cacheStartDate || cacheContext?.trainStart;
                               const e = cacheEndDate || cacheContext?.backtestEnd;
                               if (!s || !e || !f.cache_date_range?.includes("~")) return "#d1fae5";
@@ -2857,19 +2898,25 @@ export default function FactorList({
                                 const s = cacheStartDate || cacheContext?.trainStart;
                                 const e = cacheEndDate || cacheContext?.backtestEnd;
                                 if (!s || !e || !f.cache_date_range?.includes("~")) {
-                                  return `✓ ${f.cache_date_range?.split("~")[0]?.slice(0, 7) || "已缓存"}~${f.cache_date_range?.split("~")[1]?.slice(0, 7) || ""}`;
+                                  const prefix = `✓ ${f.cache_date_range?.split("~")[0]?.slice(0, 7) || "已缓存"}~${f.cache_date_range?.split("~")[1]?.slice(0, 7) || ""}`;
+                                  return cacheSourceLabel ? `${prefix} · ${cacheSourceLabel}` : prefix;
                                 }
                                 const [cs, ce] = f.cache_date_range.split("~");
                                 const startGapDays = cs > s ? Math.round((new Date(cs).getTime() - new Date(s).getTime()) / 86400000) : 0;
                                 const coverageOk = startGapDays <= 60 && ce >= e;
-                                return coverageOk
+                                const prefix = coverageOk
                                   ? `✓ ${cs.slice(0, 7)}~${ce.slice(0, 7)}`
                                   : `△ ${cs.slice(0, 7)}~${ce.slice(0, 7)}`;
+                                return cacheSourceLabel ? `${prefix} · ${cacheSourceLabel}` : prefix;
                               })()}
                             </span>
                           )
                         ) : (
-                          <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, color: "#9ca3af", background: "#f3f4f6" }}>— 无缓存</span>
+                          f.cache_status === "error" ? (
+                            <span title={`最近一次缓存计算失败${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}\n计算时间: ${f.cache_computed_at || "-"}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, color: "#dc2626", background: "#fee2e2" }}>✗ 计算失败</span>
+                          ) : (
+                            <span title={cacheTitleSuffix || undefined} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, color: "#9ca3af", background: "#f3f4f6" }}>— 无缓存</span>
+                          )
                         )}
                       </td>
                       <td style={{ ...tdStyle, fontSize: 10, color: f.cache_start_date ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }}>

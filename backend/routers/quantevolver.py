@@ -142,7 +142,7 @@ def _build_factor_cache_wsl_shell_command(
         [
             "set -e;",
             f"cd {_quote_shell_arg(project_root_wsl)};",
-            'if [ -z "${TDX_DB_PASSWORD:-}" ]; then '
+            'if [ -z "$TDX_DB_PASSWORD" ]; then '
             "echo 'TDX_DB_PASSWORD is required for factor cache WSL task' >&2; exit 2; fi;",
             'source "$HOME/miniconda3/etc/profile.d/conda.sh";',
             "conda activate rdagent-gpu;",
@@ -658,13 +658,9 @@ def list_factors(
         # 保留 TASK 原始指标（ic/sharpe/annualized_return）和独立指标（ind_*）同时返回
         # 前端自行决定展示优先级，不在后端覆盖
 
-        # 合并因子值缓存信息（回测时读取的 rdagent_assets/factor_values/single/*.parquet）
-        def _split_cache_range(date_range: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
-            if not date_range or "~" not in str(date_range):
-                return None, None
-            start, end = str(date_range).split("~", 1)
-            return start.strip() or None, end.strip() or None
-
+        # 合并因子值缓存信息：
+        # - rdagent_assets/factor_values         回测缓存
+        # - rdagent_assets/factor_values_realtime 官方评估/实盘快照缓存
         def _covers_target_range(row: Dict[str, Any]) -> bool:
             if not row.get("has_cache") or row.get("cache_hash_match") is False:
                 return False
@@ -685,41 +681,46 @@ def list_factors(
             return True
 
         try:
-            cache_meta = _load_cache_meta()
-            cache_factors = cache_meta.get("factors", {})
-
             # 先标记缓存文件与元数据；hash 校验稍后补充。
             for row in rows:
                 fn = row.get("factor_name")
-                entry = cache_factors.get(fn) or {}
-                pq = FACTOR_CACHE_SINGLE_DIR / f"{fn}.parquet"
-                cache_start, cache_end = _split_cache_range(entry.get("date_range"))
-                has_parquet = bool(entry) and pq.exists()
-                if has_parquet:
+                selected_cache = _choose_best_factor_cache_candidate(
+                    _collect_factor_cache_candidates(str(fn)),
+                    cache_start_date,
+                    cache_end_date,
+                )
+                if selected_cache and selected_cache.get("valid_cache"):
+                    entry = selected_cache.get("entry") or {}
                     row["has_cache"] = True
-                    row["cache_date_range"] = entry.get("date_range", "")
-                    row["cache_start_date"] = cache_start
-                    row["cache_end_date"] = cache_end
-                    row["cache_computed_at"] = entry.get("computed_at")
-                    row["cache_as_of_date"] = entry.get("as_of_date")
-                    row["cache_window_train_start"] = entry.get("window_train_start")
-                    row["cache_window_backtest_end"] = entry.get("window_backtest_end")
-                    row["cache_data_source_mode"] = entry.get("data_source_mode")
-                    row["cache_size_mb"] = round(pq.stat().st_size / 1024 / 1024, 1)
+                    row["cache_date_range"] = selected_cache.get("cache_date_range") or ""
+                    row["cache_start_date"] = selected_cache.get("cache_start_date")
+                    row["cache_end_date"] = selected_cache.get("cache_end_date")
+                    row["cache_computed_at"] = selected_cache.get("cache_computed_at")
+                    row["cache_as_of_date"] = selected_cache.get("cache_as_of_date")
+                    row["cache_window_train_start"] = selected_cache.get("cache_window_train_start")
+                    row["cache_window_backtest_end"] = selected_cache.get("cache_window_backtest_end")
+                    row["cache_data_source_mode"] = selected_cache.get("cache_data_source_mode")
+                    row["cache_size_mb"] = selected_cache.get("cache_size_mb")
+                    row["cache_source"] = selected_cache.get("source_key")
+                    row["cache_source_label"] = selected_cache.get("source_label")
                     row["cache_status"] = "ok"
+                    row["_cache_meta_entry"] = entry
                 else:
+                    entry = (selected_cache or {}).get("entry") or {}
                     row["has_cache"] = False
                     row["cache_date_range"] = None
                     row["cache_start_date"] = None
                     row["cache_end_date"] = None
-                    row["cache_computed_at"] = entry.get("computed_at")
-                    row["cache_as_of_date"] = entry.get("as_of_date")
-                    row["cache_window_train_start"] = entry.get("window_train_start")
-                    row["cache_window_backtest_end"] = entry.get("window_backtest_end")
-                    row["cache_data_source_mode"] = entry.get("data_source_mode")
+                    row["cache_computed_at"] = (selected_cache or {}).get("cache_computed_at") or entry.get("computed_at")
+                    row["cache_as_of_date"] = (selected_cache or {}).get("cache_as_of_date") or entry.get("as_of_date")
+                    row["cache_window_train_start"] = (selected_cache or {}).get("cache_window_train_start") or entry.get("window_train_start")
+                    row["cache_window_backtest_end"] = (selected_cache or {}).get("cache_window_backtest_end") or entry.get("window_backtest_end")
+                    row["cache_data_source_mode"] = (selected_cache or {}).get("cache_data_source_mode") or entry.get("data_source_mode")
                     row["cache_size_mb"] = None
                     row["cache_hash_match"] = None
-                    row["cache_status"] = "error" if entry.get("status") == "error" else "no_cache"
+                    row["cache_source"] = (selected_cache or {}).get("source_key")
+                    row["cache_source_label"] = (selected_cache or {}).get("source_label")
+                    row["cache_status"] = (selected_cache or {}).get("cache_status") or ("error" if entry.get("status") == "error" else "no_cache")
 
             # hash 校验（优先 DB code_text 与缓存写入一致；失败不影响 has_cache）
             try:
@@ -729,10 +730,10 @@ def list_factors(
                     if not row.get("has_cache"):
                         continue
                     fn = row["factor_name"]
-                    entry = cache_factors.get(fn, {})
+                    entry = row.get("_cache_meta_entry") or {}
                     cached_hash = entry.get("source_hash_raw") or entry.get("source_hash")
                     current_hash = _code_hashes.get(fn)
-                    row["cache_hash_match"] = (cached_hash == current_hash) if current_hash else None
+                    row["cache_hash_match"] = (cached_hash == current_hash) if cached_hash and current_hash else None
                     if row["cache_hash_match"] is False:
                         row["cache_status"] = "hash_mismatch"
             except Exception as e:
@@ -745,6 +746,7 @@ def list_factors(
                     row["cache_coverage_status"] = "hash_mismatch" if row.get("cache_hash_match") is False else "partial"
                 else:
                     row["cache_coverage_status"] = row.get("cache_status") or "no_cache"
+                row.pop("_cache_meta_entry", None)
         except Exception as e:
             logger.warning(f"合并缓存信息失败: {e}")
 
@@ -3229,8 +3231,26 @@ def trigger_experiment_selection(experiment_id: str, req: ExperimentSelectionReq
 # 因子值缓存管理 (Factor Value Cache)
 # ============================================================
 
-FACTOR_CACHE_SINGLE_DIR = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values" / "single"
-FACTOR_CACHE_META_PATH = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values" / "_meta.json"
+FACTOR_CACHE_ROOT = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values"
+FACTOR_CACHE_SINGLE_DIR = FACTOR_CACHE_ROOT / "single"
+FACTOR_CACHE_META_PATH = FACTOR_CACHE_ROOT / "_meta.json"
+FACTOR_CACHE_REALTIME_ROOT = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values_realtime"
+FACTOR_CACHE_REALTIME_SINGLE_DIR = FACTOR_CACHE_REALTIME_ROOT / "single"
+FACTOR_CACHE_REALTIME_META_PATH = FACTOR_CACHE_REALTIME_ROOT / "_meta.json"
+FACTOR_CACHE_SOURCE_SPECS: Tuple[Dict[str, Any], ...] = (
+    {
+        "key": "backtest",
+        "label": "回测缓存",
+        "single_dir": FACTOR_CACHE_SINGLE_DIR,
+        "meta_path": FACTOR_CACHE_META_PATH,
+    },
+    {
+        "key": "realtime_snapshot",
+        "label": "官方快照",
+        "single_dir": FACTOR_CACHE_REALTIME_SINGLE_DIR,
+        "meta_path": FACTOR_CACHE_REALTIME_META_PATH,
+    },
+)
 FACTOR_CODE_DIR = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_factors"
 BACKFILL_SCRIPT_WSL = os.getenv(
     "AISTOCK_FACTOR_CACHE_BACKFILL_WSL",
@@ -3292,30 +3312,153 @@ def _get_all_factors_with_code_text() -> list:
 
 # 当前运行中的后台任务
 _active_cache_tasks: Dict[str, Dict[str, Any]] = {}
-_cache_meta_ttl: Dict[str, Any] = {"loaded_at": 0, "meta": None}
+_cache_meta_ttl: Dict[str, Dict[str, Any]] = {}
 
 
-def _load_cache_meta(ttl_sec: int = 30) -> dict:
+def _load_cache_meta(ttl_sec: int = 30, meta_path: Optional[Path] = None) -> dict:
     """读取 _meta.json（带 TTL 缓存，避免高频 IO）。"""
     import time
+    path = Path(meta_path) if meta_path is not None else FACTOR_CACHE_META_PATH
+    cache_key = str(path.resolve())
     now = time.time()
-    if now - _cache_meta_ttl.get("loaded_at", 0) < ttl_sec and _cache_meta_ttl.get("meta"):
-        return _cache_meta_ttl["meta"]
+    cached = _cache_meta_ttl.get(cache_key)
+    if cached and now - cached.get("loaded_at", 0) < ttl_sec and cached.get("meta") is not None:
+        return cached["meta"]
     meta = {}
     try:
-        if FACTOR_CACHE_META_PATH.exists():
-            meta = json.loads(FACTOR_CACHE_META_PATH.read_text(encoding="utf-8"))
+        if path.exists():
+            meta = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
-        logger.error(f"_meta.json 已损坏（JSON 解析失败）: {e}，请检查文件 {FACTOR_CACHE_META_PATH}")
+        logger.error(f"_meta.json 已损坏（JSON 解析失败）: {e}，请检查文件 {path}")
         raise RuntimeError(f"_meta.json 已损坏: {e}") from e
-    _cache_meta_ttl["loaded_at"] = now
-    _cache_meta_ttl["meta"] = meta
+    _cache_meta_ttl[cache_key] = {"loaded_at": now, "meta": meta}
     return meta
 
 
-def _invalidate_cache_meta():
+def _invalidate_cache_meta(meta_path: Optional[Path] = None):
     """使 meta 内存缓存失效。"""
-    _cache_meta_ttl["loaded_at"] = 0
+    if meta_path is None:
+        _cache_meta_ttl.clear()
+    else:
+        _cache_meta_ttl.pop(str(Path(meta_path).resolve()), None)
+
+
+def _split_factor_cache_range(date_range: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    if not date_range or "~" not in str(date_range):
+        return None, None
+    start, end = str(date_range).split("~", 1)
+    return start.strip() or None, end.strip() or None
+
+
+def _factor_cache_candidate_covers(
+    candidate: Dict[str, Any],
+    target_start: Optional[str] = None,
+    target_end: Optional[str] = None,
+    *,
+    max_start_gap_days: int = 60,
+) -> bool:
+    if not candidate.get("valid_cache"):
+        return False
+    c_start = candidate.get("cache_start_date")
+    c_end = candidate.get("cache_end_date")
+    if not c_start or not c_end:
+        return False
+    if target_start and c_start > target_start:
+        try:
+            gap = (datetime.strptime(c_start, "%Y-%m-%d") - datetime.strptime(target_start, "%Y-%m-%d")).days
+        except Exception:
+            return False
+        if gap > max_start_gap_days:
+            return False
+    if target_end and c_end < target_end:
+        return False
+    return True
+
+
+def _collect_factor_cache_candidates(
+    factor_name: str,
+    source_specs: Optional[Tuple[Dict[str, Any], ...]] = None,
+) -> List[Dict[str, Any]]:
+    """Collect cache candidates from all authoritative factor-value cache roots.
+
+    The factor list must not let a failed backtest-cache attempt hide a valid
+    official/realtime snapshot cache for the same factor.
+    """
+    candidates: List[Dict[str, Any]] = []
+    specs = source_specs or FACTOR_CACHE_SOURCE_SPECS
+    for spec in specs:
+        meta_path = Path(spec["meta_path"])
+        single_dir = Path(spec["single_dir"])
+        meta = _load_cache_meta(meta_path=meta_path)
+        entry = (meta.get("factors") or {}).get(factor_name) or {}
+        parquet_path = single_dir / f"{factor_name}.parquet"
+        has_entry = bool(entry)
+        has_file = parquet_path.exists()
+        if not has_entry and not has_file:
+            continue
+
+        status = str(entry.get("status") or ("ok" if has_file else "no_cache")).lower()
+        cache_start, cache_end = _split_factor_cache_range(entry.get("date_range"))
+        valid_cache = has_entry and has_file and status != "error"
+        size_mb = round(parquet_path.stat().st_size / 1024 / 1024, 1) if has_file else None
+        candidates.append(
+            {
+                "source_key": spec["key"],
+                "source_label": spec["label"],
+                "entry": entry,
+                "meta_path": meta_path,
+                "parquet_path": parquet_path,
+                "has_entry": has_entry,
+                "has_file": has_file,
+                "valid_cache": valid_cache,
+                "cache_status": "ok" if valid_cache else ("error" if status == "error" else "no_cache"),
+                "cache_date_range": entry.get("date_range"),
+                "cache_start_date": cache_start,
+                "cache_end_date": cache_end,
+                "cache_computed_at": entry.get("computed_at"),
+                "cache_as_of_date": entry.get("as_of_date"),
+                "cache_window_train_start": entry.get("window_train_start"),
+                "cache_window_backtest_end": entry.get("window_backtest_end"),
+                "cache_data_source_mode": entry.get("data_source_mode"),
+                "cache_size_mb": size_mb,
+            }
+        )
+    return candidates
+
+
+def _choose_best_factor_cache_candidate(
+    candidates: List[Dict[str, Any]],
+    target_start: Optional[str] = None,
+    target_end: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Choose the cache row to expose in the factor library.
+
+    Valid parquet+meta caches always outrank error-only metadata. Among valid
+    caches, prefer the one covering the requested range, then fresher end/as-of
+    dates and computed time.
+    """
+    valid = [c for c in candidates if c.get("valid_cache")]
+    if valid:
+        def _valid_key(candidate: Dict[str, Any]) -> Tuple[int, str, str, str, float]:
+            covers = 1 if _factor_cache_candidate_covers(candidate, target_start, target_end) else 0
+            return (
+                covers,
+                str(candidate.get("cache_end_date") or ""),
+                str(candidate.get("cache_as_of_date") or ""),
+                str(candidate.get("cache_computed_at") or ""),
+                float(candidate.get("cache_size_mb") or 0),
+            )
+
+        return max(valid, key=_valid_key)
+
+    if not candidates:
+        return None
+
+    def _non_valid_key(candidate: Dict[str, Any]) -> Tuple[int, str]:
+        is_error = 1 if candidate.get("cache_status") == "error" else 0
+        return (is_error, str(candidate.get("cache_computed_at") or ""))
+
+    return max(candidates, key=_non_valid_key)
 
 
 def _read_file_from_path(path_str: Optional[str]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
@@ -3386,13 +3529,11 @@ def _load_failed_tail(path: Path, limit: int = 20) -> List[Dict[str, Any]]:
 def factor_cache_stats():
     """返回缓存总览：总缓存数、占用空间、覆盖率、日期范围分布。"""
     try:
-        if not FACTOR_CACHE_SINGLE_DIR.exists():
-            return {
-                "ok": True, "total_cached": 0, "total_size_mb": 0,
-                "coverage_pct": 0, "date_range_dominant": "unknown",
-            }
-
-        cached_files = list(FACTOR_CACHE_SINGLE_DIR.glob("*.parquet"))
+        cached_files: List[Path] = []
+        for spec in FACTOR_CACHE_SOURCE_SPECS:
+            single_dir = Path(spec["single_dir"])
+            if single_dir.exists():
+                cached_files.extend(single_dir.glob("*.parquet"))
         total_size = sum(f.stat().st_size for f in cached_files)
 
         # 代码因子总数 + 可用/禁用因子名集合（从 DB 查询）
@@ -3423,10 +3564,8 @@ def factor_cache_stats():
             logger.error(f"查询因子总数失败: {e}")
             raise HTTPException(status_code=500, detail=f"数据库查询失败: {e}")
 
-        # meta 分布
-        meta = _load_cache_meta()
-        factors_meta = meta.get("factors", {})
         range_dist: Dict[str, int] = {}
+        by_source: Dict[str, int] = {}
 
         # 细分缓存状态：cache_ok / cache_error / hash_mismatch / no_cache
         cache_ok = 0
@@ -3435,30 +3574,31 @@ def factor_cache_stats():
         disabled_cached = 0
 
         for fn in db_available_names:
-            entry = factors_meta.get(fn, {})
+            selected_cache = _choose_best_factor_cache_candidate(_collect_factor_cache_candidates(fn))
+            entry = (selected_cache or {}).get("entry") or {}
             cached_hash = entry.get("source_hash_raw") or entry.get("source_hash")
             current_hash = db_code_hashes.get(fn)
-            meta_status = entry.get("status")
-            has_parquet = FACTOR_CACHE_SINGLE_DIR.joinpath(f"{fn}.parquet").exists()
 
-            if meta_status == "error":
-                # _meta.json 明确记录了失败
-                cache_error += 1
-            elif has_parquet:
+            if selected_cache and selected_cache.get("valid_cache"):
                 if current_hash and cached_hash and cached_hash != current_hash:
                     hash_mismatch += 1
                 else:
                     cache_ok += 1
-                dr = entry.get("date_range", "unknown")
+                dr = selected_cache.get("cache_date_range") or "unknown"
                 range_dist[dr] = range_dist.get(dr, 0) + 1
+                source_key = str(selected_cache.get("source_key") or "unknown")
+                by_source[source_key] = by_source.get(source_key, 0) + 1
+            elif selected_cache and selected_cache.get("cache_status") == "error":
+                # _meta.json 明确记录了失败
+                cache_error += 1
             # else: no_cache, 不计入
 
         # 禁用因子缓存统计
         for fn in db_disabled_names:
-            if FACTOR_CACHE_SINGLE_DIR.joinpath(f"{fn}.parquet").exists():
+            selected_cache = _choose_best_factor_cache_candidate(_collect_factor_cache_candidates(fn))
+            if selected_cache and selected_cache.get("valid_cache"):
                 disabled_cached += 1
-                entry = factors_meta.get(fn, {})
-                dr = entry.get("date_range", "unknown")
+                dr = selected_cache.get("cache_date_range") or "unknown"
                 range_dist[dr] = range_dist.get(dr, 0) + 1
 
         dominant_range = max(range_dist.items(), key=lambda x: x[1])[0] if range_dist else "unknown"
@@ -3477,7 +3617,8 @@ def factor_cache_stats():
             "no_cache": total_code_factors - cache_ok - hash_mismatch - cache_error,
             "disabled_total": total_disabled_factors,
             "disabled_cached": disabled_cached,
-            "last_backfill": meta.get("_last_backfill"),
+            "by_source": by_source,
+            "last_backfill": _load_cache_meta().get("_last_backfill"),
             "active_tasks": sum(1 for t in _active_cache_tasks.values() if t.get("status") == "running"),
         }
     except Exception as e:

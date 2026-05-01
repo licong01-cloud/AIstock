@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from backend.routers import quantevolver as qe_router
@@ -75,3 +77,102 @@ def test_build_factor_cache_wsl_shell_command_quotes_paths_and_omits_secret_valu
     assert "TDX_DB_PASSWORD" in command
     assert "TDX_DB_PASSWORD=" not in command
     assert "dummy-secret" not in command
+
+
+def _write_cache_meta(root, factors) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "single").mkdir(parents=True, exist_ok=True)
+    (root / "_meta.json").write_text(
+        json.dumps({"factors": factors}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _cache_source_specs(tmp_path):
+    backtest_root = tmp_path / "factor_values"
+    realtime_root = tmp_path / "factor_values_realtime"
+    return (
+        {
+            "key": "backtest",
+            "label": "回测缓存",
+            "single_dir": backtest_root / "single",
+            "meta_path": backtest_root / "_meta.json",
+        },
+        {
+            "key": "realtime_snapshot",
+            "label": "官方快照",
+            "single_dir": realtime_root / "single",
+            "meta_path": realtime_root / "_meta.json",
+        },
+    )
+
+
+def test_factor_cache_prefers_realtime_valid_cache_over_backtest_error(tmp_path) -> None:
+    qe_router._invalidate_cache_meta()
+    specs = _cache_source_specs(tmp_path)
+    backtest_root = tmp_path / "factor_values"
+    realtime_root = tmp_path / "factor_values_realtime"
+    _write_cache_meta(
+        backtest_root,
+        {
+            "RESI5": {
+                "status": "error",
+                "computed_at": "2026-05-01T00:22:26",
+                "error": "factor.py did not produce output",
+            }
+        },
+    )
+    _write_cache_meta(
+        realtime_root,
+        {
+            "RESI5": {
+                "status": "ok",
+                "computed_at": "2026-05-01T08:21:46",
+                "date_range": "2018-08-07~2026-04-10",
+                "as_of_date": "2026-04-10",
+                "data_source_mode": "snapshot",
+                "rows": 7247352,
+            }
+        },
+    )
+    (realtime_root / "single" / "RESI5.parquet").write_bytes(b"PAR1")
+
+    selected = qe_router._choose_best_factor_cache_candidate(
+        qe_router._collect_factor_cache_candidates("RESI5", source_specs=specs),
+        "2018-08-01",
+        "2026-04-10",
+    )
+
+    assert selected is not None
+    assert selected["valid_cache"] is True
+    assert selected["source_key"] == "realtime_snapshot"
+    assert selected["cache_start_date"] == "2018-08-07"
+    assert selected["cache_end_date"] == "2026-04-10"
+    assert selected["cache_status"] == "ok"
+
+
+def test_factor_cache_uses_error_only_when_no_valid_cache_exists(tmp_path) -> None:
+    qe_router._invalidate_cache_meta()
+    specs = _cache_source_specs(tmp_path)
+    backtest_root = tmp_path / "factor_values"
+    realtime_root = tmp_path / "factor_values_realtime"
+    _write_cache_meta(
+        backtest_root,
+        {
+            "KLEN": {
+                "status": "error",
+                "computed_at": "2026-05-01T00:22:26",
+                "error": "runtime failed",
+            }
+        },
+    )
+    _write_cache_meta(realtime_root, {})
+
+    selected = qe_router._choose_best_factor_cache_candidate(
+        qe_router._collect_factor_cache_candidates("KLEN", source_specs=specs)
+    )
+
+    assert selected is not None
+    assert selected["valid_cache"] is False
+    assert selected["cache_status"] == "error"
+    assert selected["source_key"] == "backtest"

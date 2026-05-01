@@ -127,10 +127,11 @@ def _find_positions_pickle(task_id: str, loop_id: str, loop_index: Optional[int]
     except Exception:
         pass
 
-    candidates.extend([
-        Path(_PROJECT_ROOT) / "rdagent_assets" / "qe_workspace",
-        Path("F:/Dev/RD-Agent-main/qe_workspace"),
-    ])
+    legacy_workspace = os.getenv("RDAGENT_WORKSPACE_WIN")
+    if legacy_workspace:
+        candidates.append(Path(legacy_workspace))
+
+    candidates.append(Path(_PROJECT_ROOT) / "rdagent_assets" / "qe_workspace")
 
     seen = set()
     for base in candidates:
