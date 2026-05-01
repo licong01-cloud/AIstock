@@ -17,6 +17,7 @@ interface DimensionHeatmapProps {
 }
 
 const LAYOUT = {
+  autosize: true,
   height: 260,
   margin: { t: 30, r: 20, b: 60, l: 40 },
   barmode: "group" as const,
@@ -27,7 +28,7 @@ const LAYOUT = {
 };
 
 const CONFIG = { responsive: true, displayModeBar: false };
-const plotStyle = { width: "100%" };
+const plotStyle = { width: "100%", height: "260px", minHeight: "260px" };
 
 export default React.memo(function DimensionHeatmap({
   dimension_stats,
@@ -69,6 +70,7 @@ export default React.memo(function DimensionHeatmap({
         data={traces}
         layout={LAYOUT}
         config={CONFIG}
+        useResizeHandler
         style={plotStyle}
       />
       <div style={{

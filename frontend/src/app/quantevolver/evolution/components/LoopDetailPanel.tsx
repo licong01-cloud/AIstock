@@ -178,7 +178,7 @@ export default React.memo(function LoopDetailPanel({
       </div>
 
       {rightPanelView === "trajectory" ? (
-        <div style={{ flex: 1, overflowY: "auto", padding: "24px", backgroundColor: "#fafaf9", display: "flex", flexDirection: "column", gap: "16px" }}>
+        <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflowY: "auto", padding: "24px", backgroundColor: "#fafaf9", display: "flex", flexDirection: "column", gap: "16px" }}>
           <EvolutionTrajectory taskId={activeTaskId} />
           {loops && loops.length > 0 && (
             <LoopMetricsComparison

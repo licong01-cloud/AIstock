@@ -28,6 +28,7 @@ interface MetricsTrajectoryChartProps {
 }
 
 const LAYOUT = {
+  autosize: true,
   height: 320,
   margin: { t: 30, r: 120, b: 40, l: 50 },
   xaxis: { dtick: 1, domain: [0, 0.85], tickprefix: "Loop " },
@@ -54,7 +55,7 @@ const LAYOUT = {
 };
 
 const CONFIG = { responsive: true, displayModeBar: false };
-const plotStyle = { width: "100%" };
+const plotStyle = { width: "100%", height: "320px", minHeight: "320px" };
 
 export default React.memo(function MetricsTrajectoryChart({
   trajectory,
@@ -149,6 +150,7 @@ export default React.memo(function MetricsTrajectoryChart({
       data={traces}
       layout={LAYOUT}
       config={CONFIG}
+      useResizeHandler
       style={plotStyle}
     />
   );

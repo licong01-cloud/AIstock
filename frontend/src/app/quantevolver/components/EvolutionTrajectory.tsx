@@ -131,7 +131,7 @@ export default React.memo(function EvolutionTrajectory({ taskId }: EvolutionTraj
   const data = processedData;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
       {/* Summary stats */}
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
         {[
@@ -158,7 +158,7 @@ export default React.memo(function EvolutionTrajectory({ taskId }: EvolutionTraj
       {/* Metrics trajectory chart */}
       <div style={{
         backgroundColor: "#fff", borderRadius: 8,
-        border: "1px solid #e2e8f0", padding: 16,
+        border: "1px solid #e2e8f0", padding: 16, minWidth: 0, overflow: "hidden",
       }}>
         <h4 style={{
           margin: "0 0 12px", fontSize: 13, fontWeight: 700,
@@ -176,7 +176,7 @@ export default React.memo(function EvolutionTrajectory({ taskId }: EvolutionTraj
       {data.sota_history.length > 0 && (
         <div style={{
           backgroundColor: "#fff", borderRadius: 8,
-          border: "1px solid #e2e8f0", padding: 16,
+          border: "1px solid #e2e8f0", padding: 16, minWidth: 0, overflowX: "auto",
         }}>
           <h4 style={{
             margin: "0 0 12px", fontSize: 13, fontWeight: 700,
@@ -219,7 +219,7 @@ export default React.memo(function EvolutionTrajectory({ taskId }: EvolutionTraj
       {Object.keys(data.dimension_stats).length > 0 && (
         <div style={{
           backgroundColor: "#fff", borderRadius: 8,
-          border: "1px solid #e2e8f0", padding: 16,
+          border: "1px solid #e2e8f0", padding: 16, minWidth: 0, overflow: "hidden",
         }}>
           <h4 style={{
             margin: "0 0 12px", fontSize: 13, fontWeight: 700,
