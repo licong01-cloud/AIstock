@@ -53,6 +53,214 @@ _PROJECT_ROOT = os.path.normpath(
 logger = logging.getLogger(__name__)
 
 
+def _position_metric_missing(enhanced_metrics: Dict[str, Any]) -> bool:
+    ar = enhanced_metrics.get("absolute_returns") if isinstance(enhanced_metrics, dict) else None
+    pos = enhanced_metrics.get("position_summary") if isinstance(enhanced_metrics, dict) else None
+    holding = enhanced_metrics.get("holding_audit") if isinstance(enhanced_metrics, dict) else None
+    sources = [s for s in (ar, pos, holding) if isinstance(s, dict)]
+    return not any(
+        s.get("position_count_avg") is not None and s.get("position_count_max") is not None
+        for s in sources
+    )
+
+
+def _install_qlib_position_pickle_stub() -> None:
+    """Allow reading Qlib Position pickle snapshots on machines without qlib installed."""
+    import sys
+    import types
+
+    if "qlib.backtest.position" in sys.modules:
+        return
+
+    qlib_mod = sys.modules.setdefault("qlib", types.ModuleType("qlib"))
+    backtest_mod = sys.modules.setdefault("qlib.backtest", types.ModuleType("qlib.backtest"))
+    position_mod = types.ModuleType("qlib.backtest.position")
+
+    class Position:  # noqa: D401 - pickle placeholder only
+        pass
+
+    Position.__module__ = "qlib.backtest.position"
+    position_mod.Position = Position
+    setattr(qlib_mod, "backtest", backtest_mod)
+    setattr(backtest_mod, "position", position_mod)
+    sys.modules["qlib.backtest.position"] = position_mod
+
+
+def _to_float(value: Any) -> Optional[float]:
+    import math
+
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _load_pickle_with_qlib_stub(path: Path) -> Any:
+    import pickle
+
+    try:
+        with path.open("rb") as f:
+            return pickle.load(f)
+    except ModuleNotFoundError as exc:
+        if "qlib" not in str(exc) and not getattr(exc, "name", "").startswith("qlib"):
+            raise
+        _install_qlib_position_pickle_stub()
+        with path.open("rb") as f:
+            return pickle.load(f)
+
+
+def _find_positions_pickle(task_id: str, loop_id: str, loop_index: Optional[int]) -> Optional[Path]:
+    loop_name = f"Loop{loop_index}" if loop_index is not None else loop_id
+    candidates: List[Path] = []
+
+    env_workspace = os.getenv("QE_WORKSPACE_WIN")
+    if env_workspace:
+        candidates.append(Path(env_workspace))
+
+    try:
+        from ..services.quantevolver.config_composer import QE_WORKSPACE_WIN
+
+        candidates.append(Path(QE_WORKSPACE_WIN))
+    except Exception:
+        pass
+
+    candidates.extend([
+        Path(_PROJECT_ROOT) / "rdagent_assets" / "qe_workspace",
+        Path("F:/Dev/RD-Agent-main/qe_workspace"),
+    ])
+
+    seen = set()
+    for base in candidates:
+        if not base:
+            continue
+        try:
+            base = base.resolve()
+        except Exception:
+            continue
+        if base in seen:
+            continue
+        seen.add(base)
+        loop_dir = base / task_id / loop_name
+        if not loop_dir.exists():
+            continue
+        direct = loop_dir / "mlruns"
+        search_root = direct if direct.exists() else loop_dir
+        matches = list(search_root.rglob("positions_normal_1day.pkl"))
+        if matches:
+            return matches[0]
+    return None
+
+
+def _compute_position_summary_from_pickle(path: Path) -> Optional[Dict[str, Any]]:
+    positions = _load_pickle_with_qlib_stub(path)
+    if not isinstance(positions, dict) or not positions:
+        return None
+
+    counts: List[int] = []
+    final_cash = None
+    final_total = None
+    final_stock_value = None
+    final_stock_count = None
+
+    for snapshot in positions.values():
+        position_map = getattr(snapshot, "position", None)
+        if position_map is None and isinstance(snapshot, dict):
+            position_map = snapshot.get("position", snapshot)
+        if not isinstance(position_map, dict):
+            continue
+
+        stock_count = 0
+        stock_value = 0.0
+        for sid, item in position_map.items():
+            if sid in ("cash", "now_account_value"):
+                continue
+            amount = _to_float(item.get("amount")) if isinstance(item, dict) else None
+            if amount is not None and amount <= 0:
+                continue
+            stock_count += 1
+            if isinstance(item, dict):
+                price = _to_float(item.get("price"))
+                if amount is not None and price is not None:
+                    stock_value += amount * price
+
+        counts.append(stock_count)
+        final_cash = _to_float(position_map.get("cash"))
+        final_total = _to_float(position_map.get("now_account_value"))
+        final_stock_count = stock_count
+        if stock_value > 0:
+            final_stock_value = stock_value
+
+    if not counts:
+        return None
+
+    sorted_counts = sorted(counts)
+    p95_idx = int(round((len(sorted_counts) - 1) * 0.95))
+    if final_stock_value is None and final_cash is not None and final_total is not None:
+        final_stock_value = final_total - final_cash
+
+    summary: Dict[str, Any] = {
+        "position_count_min": int(min(counts)),
+        "position_count_avg": float(sum(counts) / len(counts)),
+        "position_count_max": int(max(counts)),
+        "position_count_p95": float(sorted_counts[p95_idx]),
+        "final_stock_count": int(final_stock_count or 0),
+        "position_count_days": len(counts),
+        "position_summary_source": str(path),
+    }
+    if final_cash is not None:
+        summary["final_cash"] = final_cash
+    if final_stock_value is not None:
+        summary["final_stock_value"] = final_stock_value
+    if final_total is not None:
+        summary["final_total_value"] = final_total
+    if final_cash is not None and final_total:
+        summary["final_cash_ratio"] = final_cash / final_total
+    return summary
+
+
+def _augment_enhanced_metrics_with_positions(
+    task_id: str,
+    loop_id: str,
+    loop_index: Optional[int],
+    enhanced_metrics: Dict[str, Any],
+) -> tuple[Dict[str, Any], bool]:
+    if not isinstance(enhanced_metrics, dict) or not _position_metric_missing(enhanced_metrics):
+        return enhanced_metrics, False
+
+    path = _find_positions_pickle(task_id, loop_id, loop_index)
+    if not path:
+        return enhanced_metrics, False
+
+    try:
+        summary = _compute_position_summary_from_pickle(path)
+    except Exception as exc:
+        logger.warning("Failed to compute QE position summary from %s: %s", path, exc)
+        return enhanced_metrics, False
+    if not summary:
+        return enhanced_metrics, False
+
+    data = dict(enhanced_metrics)
+    data["position_summary"] = {**data.get("position_summary", {}), **summary}
+    data["holding_audit"] = {**data.get("holding_audit", {}), **summary}
+    data["absolute_returns"] = {**data.get("absolute_returns", {}), **summary}
+    return data, True
+
+
+def _cache_loop_enhanced_metrics(task_id: str, loop_id: str, metrics_json: Dict[str, Any]) -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE qe_evolution_loops
+                   SET metrics_json = %s::jsonb, updated_at = NOW()
+                   WHERE loop_id = %s""",
+                (json.dumps(metrics_json, ensure_ascii=False), f"{task_id}_{loop_id}"),
+            )
+        conn.commit()
+
+
 def _merge_strategy_runtime_flags(
     strategy_params: Optional[Dict[str, Any]],
     filter_suspended_on_signal: bool,
@@ -524,6 +732,39 @@ async def get_evolution_task_detail(task_id: str):
         detail = await scheduler.get_task_detail(task_id)
         if not detail:
             raise HTTPException(status_code=404, detail="Task not found")
+        for loop in detail.get("loops", []):
+            metrics = loop.get("metrics_json")
+            if isinstance(metrics, str):
+                try:
+                    metrics = json.loads(metrics)
+                except Exception:
+                    metrics = None
+            if not isinstance(metrics, dict):
+                metrics = {}
+            if loop.get("status") not in ("completed", "failed"):
+                continue
+            cached_enhanced = metrics.get("enhanced_metrics")
+            if not isinstance(cached_enhanced, dict):
+                cached_enhanced = {}
+            enhanced, changed = _augment_enhanced_metrics_with_positions(
+                task_id,
+                f"Loop{loop.get('loop_index')}",
+                loop.get("loop_index"),
+                cached_enhanced,
+            )
+            if not changed:
+                continue
+            metrics["enhanced_metrics"] = enhanced
+            loop["metrics_json"] = metrics
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE qe_evolution_loops
+                           SET metrics_json = %s::jsonb, updated_at = NOW()
+                           WHERE loop_id = %s""",
+                        (json.dumps(metrics, ensure_ascii=False), loop.get("loop_id")),
+                    )
+                conn.commit()
         return {"status": "success", "data": detail}
     except HTTPException:
         raise
@@ -1230,6 +1471,11 @@ async def get_loop_enhanced_metrics(task_id: str, loop_id: str):
             cached = row[0] if isinstance(row[0], dict) else _json.loads(row[0])
             cached_em = cached.get("enhanced_metrics")
             if cached_em:
+                loop_index = int(loop_id.replace("Loop", "")) if loop_id.startswith("Loop") and loop_id[4:].isdigit() else None
+                cached_em, changed = _augment_enhanced_metrics_with_positions(task_id, loop_id, loop_index, cached_em)
+                if changed:
+                    cached["enhanced_metrics"] = cached_em
+                    _cache_loop_enhanced_metrics(task_id, loop_id, cached)
                 return {"status": "success", "data": cached_em}
 
         # DB 中 loop_id 格式为 "{task_id}_{LoopN}"，RDAgent 文件系统期望 "LoopN"
@@ -1238,6 +1484,8 @@ async def get_loop_enhanced_metrics(task_id: str, loop_id: str):
             rdagent_loop_id = loop_id[len(task_id) + 1:]
         client = scheduler._get_workspace_client_for_loop(task_id, evolution_loop_db_id)
         data = await client.get_enhanced_metrics(task_id, rdagent_loop_id)
+        loop_index = int(rdagent_loop_id.replace("Loop", "")) if rdagent_loop_id.startswith("Loop") and rdagent_loop_id[4:].isdigit() else None
+        data, _ = _augment_enhanced_metrics_with_positions(task_id, rdagent_loop_id, loop_index, data)
 
         # 若 RD-Agent 未返回 bottom_stocks，尝试从 all_stocks 计算
         if not data.get("bottom_stocks"):

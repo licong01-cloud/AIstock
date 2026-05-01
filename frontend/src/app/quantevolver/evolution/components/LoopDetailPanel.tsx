@@ -192,6 +192,8 @@ export default React.memo(function LoopDetailPanel({
             <LoopMetricsComparison
               loops={loops}
               taskType={taskType}
+              evolutionMode={activeTask?.evolution_mode}
+              sourceType={activeTask?.source_type}
               onLoopSelect={onLoopSelect}
               selectedLoopIndex={activeLoopData?.loop_index}
             />

@@ -16,6 +16,8 @@ import {
 interface LoopMetricsComparisonProps {
   loops: any[];
   taskType?: string;
+  evolutionMode?: string;
+  sourceType?: string;
   onLoopSelect?: (loopIndex: number) => void;
   selectedLoopIndex?: number;
 }
@@ -99,10 +101,13 @@ const tdRightStyle: React.CSSProperties = {
 export default function LoopMetricsComparison({
   loops,
   taskType,
+  evolutionMode,
+  sourceType,
   onLoopSelect,
   selectedLoopIndex,
 }: LoopMetricsComparisonProps) {
   if (!loops || loops.length === 0) return null;
+  const showAction = (taskType || sourceType || "evolution") === "evolution" && (evolutionMode || "auto") === "auto";
 
   const rows: LoopRow[] = loops.map((loop, sourceIndex) => {
     const diagnostics = extractLoopDiagnostics(loop);
@@ -156,12 +161,12 @@ export default function LoopMetricsComparison({
       </div>
 
       <div style={{ overflowX: "auto", border: "1px solid #e5e7eb", borderRadius: "6px", backgroundColor: "#fff" }}>
-        <table style={{ width: "100%", minWidth: "1700px", borderCollapse: "collapse", fontSize: "13px" }}>
+        <table style={{ width: "100%", minWidth: showAction ? "1700px" : "1600px", borderCollapse: "collapse", fontSize: "13px" }}>
           <thead>
             <tr style={{ backgroundColor: "#f1f5f9", borderBottom: "2px solid #e5e7eb" }}>
               <th style={thStyle}>Loop</th>
               <th style={thStyle}>SOTA</th>
-              <th style={thStyle}>动作</th>
+              {showAction && <th style={thStyle}>动作</th>}
               <th style={thStyle}>Loop说明</th>
               <th style={thStyle}>模型</th>
               <th style={thStyle}>周期</th>
@@ -231,7 +236,7 @@ export default function LoopMetricsComparison({
                       {loop.is_sota ? "是" : "否"}
                     </span>
                   </td>
-                  <td style={tdStyle}>{loop.action_type || diagnostics.model.modelId || "-"}</td>
+                  {showAction && <td style={tdStyle}>{loop.action_type || diagnostics.model.modelId || "-"}</td>}
                   <td
                     title={diagnostics.comment.fullText}
                     style={{ ...tdStyle, minWidth: "220px", maxWidth: "320px", whiteSpace: "normal", lineHeight: 1.45, color: "#334155" }}

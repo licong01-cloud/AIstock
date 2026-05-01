@@ -1507,6 +1507,17 @@ export default function EvolutionDashboard() {
       .then(json => {
         if (json?.status === "success" && json?.data) {
           setEnhancedMetrics(json.data);
+          setLoops(prev => prev.map(loop => (
+            loop.loop_index === activeLoopData.loop_index
+              ? {
+                  ...loop,
+                  metrics_json: {
+                    ...(loop.metrics_json || {}),
+                    enhanced_metrics: json.data,
+                  },
+                }
+              : loop
+          )));
         }
       })
       .catch((e) => {
@@ -1993,6 +2004,8 @@ export default function EvolutionDashboard() {
           onSelectLoop={handleSelectLoop}
           onRetryLoop={handleRetryLoop}
           taskType={tasks.find(t => t.task_id === activeTaskId)?.task_type}
+          evolutionMode={tasks.find(t => t.task_id === activeTaskId)?.evolution_mode}
+          sourceType={tasks.find(t => t.task_id === activeTaskId)?.source_type}
         />
 
         {/* Loop 详情看板 — React.memo 子组件 */}

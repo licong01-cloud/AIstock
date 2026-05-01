@@ -25,6 +25,8 @@ interface TopologyPanelProps {
   onSelectLoop: (index: number) => void;
   onRetryLoop?: (taskId: string, loopIndex: number) => void;
   taskType?: string;
+  evolutionMode?: string;
+  sourceType?: string;
 }
 
 const cardStyle: React.CSSProperties = {
@@ -47,8 +49,9 @@ const headerStyle: React.CSSProperties = {
   alignItems: "center",
 };
 
-export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSelectLoop, onRetryLoop, taskType }: TopologyPanelProps) {
+export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSelectLoop, onRetryLoop, taskType, evolutionMode, sourceType }: TopologyPanelProps) {
   const [expandedFactors, setExpandedFactors] = useState<Set<number>>(new Set());
+  const showAction = (taskType || sourceType || "evolution") === "evolution" && (evolutionMode || "auto") === "auto";
 
   const sotaFactorSet = React.useMemo(() => {
     const sotaLoop = loops.find(l => l.is_sota);
@@ -157,7 +160,9 @@ export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSel
                       )}
                     </div>
                   </div>
-                  <div style={{ fontSize: "11px", color: "#64748b", marginTop: "4px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>{loop.action_type || "UNKNOWN"}</div>
+                  {showAction && (
+                    <div style={{ fontSize: "11px", color: "#64748b", marginTop: "4px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>{loop.action_type || "UNKNOWN"}</div>
+                  )}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "6px" }}>
                     {modelLabel && (
                       <span title={modelLabel} style={{ fontSize: "10px", color: "#1d4ed8", backgroundColor: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "999px", padding: "2px 6px", fontFamily: "monospace", fontWeight: 700 }}>
