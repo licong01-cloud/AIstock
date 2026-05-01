@@ -48,6 +48,13 @@ _REMOTE_CONDA_ENV = "rdagent-gpu"
 _SECRET_ENV_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
 
 
+def _int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
 def _stringify_env_value(value: Any) -> str:
     if isinstance(value, bool):
         return "1" if value else "0"
@@ -224,7 +231,9 @@ class DispatchService:
 
     # 任务进度同步连续失败计数（task_id → 连续失败次数）
     _sync_fail_counts: Dict[str, int] = {}
-    _SYNC_FAIL_THRESHOLD = 3  # 连续失败 3 次（约 45 秒）自动标记 failed
+    _SYNC_FAIL_THRESHOLD = _int_env("AISTOCK_DISPATCH_SYNC_FAIL_THRESHOLD", 3)
+    # Custom jobs can be CPU/IO bound for minutes while still writing logs/results.
+    _CUSTOM_SYNC_FAIL_THRESHOLD = _int_env("AISTOCK_CUSTOM_TASK_SYNC_FAIL_THRESHOLD", 10)
 
     # ━━━━━━━━━━━━━━━━━━━━━━
     # 节点管理
@@ -338,6 +347,11 @@ class DispatchService:
         if not node:
             raise ValueError(f"节点不存在: {node_id}")
         return ComputeNodeClient(node["api_base_url"])
+
+    def _sync_fail_threshold_for_task(self, task: Dict[str, Any]) -> int:
+        if task.get("task_type") in _CUSTOM_TASK_TYPES:
+            return self._CUSTOM_SYNC_FAIL_THRESHOLD
+        return self._SYNC_FAIL_THRESHOLD
 
     # ━━━━━━━━━━━━━━━━━━━━━━
     # 任务管理
@@ -1119,10 +1133,11 @@ class DispatchService:
                 tid = task["task_id"]
                 self._sync_fail_counts[tid] = self._sync_fail_counts.get(tid, 0) + 1
                 count = self._sync_fail_counts[tid]
+                threshold = self._sync_fail_threshold_for_task(task)
                 logger.warning(
-                    "同步任务进度失败 (task=%s, 连续第%d次): %s", tid, count, e,
+                    "同步任务进度失败 (task=%s, 连续第%d/%d次): %s", tid, count, threshold, e,
                 )
-                if count >= self._SYNC_FAIL_THRESHOLD:
+                if count >= threshold:
                     logger.error(
                         "任务 %s 连续 %d 次同步失败，自动标记为 failed", tid, count,
                     )
@@ -1135,6 +1150,7 @@ class DispatchService:
                     self._add_event(tid, "auto_failed", {
                         "reason": "sync_unreachable",
                         "consecutive_failures": count,
+                        "threshold": threshold,
                         "last_error": str(e),
                     })
                     # 清空节点当前任务

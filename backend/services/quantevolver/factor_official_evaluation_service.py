@@ -347,13 +347,51 @@ class FactorOfficialEvaluationService:
         }))
         task_id = created["task_id"]
 
+        snapshot_date = self._snapshot_date_from_data_date(data_date)
+        created_at = created.get("created_at")
         deadline = time.time() + max(timeout_per_factor * max(len(eligible_names), 1), 600)
+        sync_failure_grace = max(300, min(timeout_per_factor + 120, 1800))
+        last_activity_at = time.time()
+        last_metric_rows = 0
         last_task = created
         while time.time() < deadline:
             asyncio.run(dispatch_service.sync_running_tasks())
             last_task = dispatch_service.get_task(task_id) or last_task
             status = last_task.get("status")
+            coverage = self._get_metrics_coverage(
+                eligible_names,
+                snapshot_date=snapshot_date,
+                calculated_after=created_at,
+            )
+            metric_rows = int(coverage.get("metric_rows") or 0)
+            if metric_rows > last_metric_rows:
+                last_metric_rows = metric_rows
+                last_activity_at = time.time()
+            if coverage.get("complete"):
+                self._mark_dispatch_recovered_success(dispatch_service, task_id, last_task)
+                return self._build_recovered_metrics_result(
+                    requested=requested or eligible_names,
+                    eligible_names=eligible_names,
+                    skipped=skipped,
+                    snapshot_date=snapshot_date,
+                    coverage=coverage,
+                    task_id=task_id,
+                    remote_task_id=last_task.get("remote_task_id"),
+                    dispatch_status=last_task.get("status"),
+                    reason="db_metrics_complete",
+                )
             if status in {"success", "failed", "canceled"}:
+                if status == "failed" and self._is_sync_unreachable_failure(last_task):
+                    if time.time() - last_activity_at <= sync_failure_grace:
+                        logger.warning(
+                            "official evaluation dispatch %s marked failed by sync, "
+                            "but metrics are still progressing (%s/%s factors); waiting",
+                            task_id,
+                            coverage.get("complete_factor_count"),
+                            len(eligible_names),
+                        )
+                        time.sleep(5)
+                        continue
                 break
             time.sleep(2)
         else:
@@ -366,6 +404,11 @@ class FactorOfficialEvaluationService:
         latest_result.setdefault("skipped_factors", skipped)
         latest_result.setdefault("dispatch_task_id", task_id)
         latest_result.setdefault("remote_task_id", last_task.get("remote_task_id"))
+        if latest_result.get("success") is True:
+            self._mark_dispatch_recovered_success(dispatch_service, task_id, last_task)
+            latest_result.setdefault("dispatch_status", last_task.get("status"))
+            latest_result.setdefault("recovered_from_dispatch_status", last_task.get("status"))
+            return latest_result
         if last_task.get("status") == "success":
             latest_result.setdefault("success", True)
             return latest_result
@@ -408,7 +451,148 @@ class FactorOfficialEvaluationService:
         latest_result.setdefault("error", " | ".join(error_parts))
         if log_excerpt:
             latest_result.setdefault("logs", log_excerpt)
+        latest_result.setdefault(
+            "metrics_coverage",
+            self._get_metrics_coverage(
+                eligible_names,
+                snapshot_date=snapshot_date,
+                calculated_after=created_at,
+            ),
+        )
         return latest_result
+
+    @staticmethod
+    def _snapshot_date_from_data_date(data_date: str) -> str:
+        value = str(data_date or "").strip()
+        if len(value) == 8 and value.isdigit():
+            return f"{value[:4]}-{value[4:6]}-{value[6:8]}"
+        return value
+
+    @staticmethod
+    def _is_sync_unreachable_failure(task: Dict[str, Any]) -> bool:
+        message = str(task.get("error_message") or "")
+        return "sync" in message.lower() or "同步失败" in message or "节点不可达" in message
+
+    def _get_metrics_coverage(
+        self,
+        factor_names: List[str],
+        snapshot_date: str,
+        calculated_after: Any = None,
+    ) -> Dict[str, Any]:
+        if not factor_names:
+            return {
+                "complete": True,
+                "complete_factor_count": 0,
+                "expected_factor_count": 0,
+                "metric_rows": 0,
+                "missing_factors": [],
+                "factors": {},
+            }
+
+        params: List[Any] = [factor_names, CALC_ENGINE, snapshot_date]
+        after_clause = ""
+        if calculated_after is not None:
+            after_clause = "AND calculated_at >= %s"
+            params.append(calculated_after)
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT factor_name, COUNT(*) AS metric_rows, MAX(calculated_at) AS latest_calculated_at
+                    FROM aistock_factor_metrics
+                    WHERE factor_name = ANY(%s)
+                      AND calc_engine = %s
+                      AND snapshot_date = %s
+                      {after_clause}
+                    GROUP BY factor_name
+                    """,
+                    params,
+                )
+                rows = cur.fetchall()
+
+        factors: Dict[str, Dict[str, Any]] = {}
+        for factor_name, metric_rows, latest_calculated_at in rows:
+            factors[factor_name] = {
+                "metric_rows": int(metric_rows or 0),
+                "latest_calculated_at": str(latest_calculated_at) if latest_calculated_at else None,
+                "complete": int(metric_rows or 0) >= 5,
+            }
+
+        missing = [
+            name for name in factor_names
+            if not factors.get(name, {}).get("complete")
+        ]
+        metric_rows_total = sum(item["metric_rows"] for item in factors.values())
+        complete_count = len(factor_names) - len(missing)
+        return {
+            "complete": len(missing) == 0,
+            "complete_factor_count": complete_count,
+            "expected_factor_count": len(factor_names),
+            "metric_rows": metric_rows_total,
+            "missing_factors": missing,
+            "factors": factors,
+            "calc_engine": CALC_ENGINE,
+            "snapshot_date": snapshot_date,
+        }
+
+    def _build_recovered_metrics_result(
+        self,
+        requested: List[str],
+        eligible_names: List[str],
+        skipped: List[str],
+        snapshot_date: str,
+        coverage: Dict[str, Any],
+        task_id: str,
+        remote_task_id: Any,
+        dispatch_status: Any,
+        reason: str,
+    ) -> Dict[str, Any]:
+        return {
+            "success": True,
+            "requested_factors": requested,
+            "eligible_factors": eligible_names,
+            "skipped_factors": skipped,
+            "pipeline_version": PIPELINE_VERSION,
+            "code_source": CODE_SOURCE,
+            "snapshot_date": snapshot_date,
+            "db_result": {
+                "inserted": coverage.get("metric_rows", 0),
+                "skipped": 0,
+                "errors": [],
+                "calc_engine": CALC_ENGINE,
+                "recovered_from_db": True,
+            },
+            "total_metrics_inserted": coverage.get("metric_rows", 0),
+            "total_metrics_skipped": 0,
+            "success_count": coverage.get("complete_factor_count", 0),
+            "fail_count": 0,
+            "metrics_coverage": coverage,
+            "dispatch_task_id": task_id,
+            "remote_task_id": remote_task_id,
+            "dispatch_status": dispatch_status,
+            "recovered_from_dispatch_status": dispatch_status,
+            "recovery_reason": reason,
+        }
+
+    @staticmethod
+    def _mark_dispatch_recovered_success(dispatch_service: Any, task_id: str, task: Dict[str, Any]) -> None:
+        if task.get("status") == "success":
+            return
+        try:
+            dispatch_service._update_task_fields(
+                task_id,
+                status="success",
+                error_message=None,
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            dispatch_service._add_event(task_id, "recovered_success", {
+                "reason": "official_evaluation_metrics_available",
+                "previous_status": task.get("status"),
+                "previous_error": task.get("error_message"),
+            })
+        except Exception as exc:
+            logger.warning("failed to mark dispatch task recovered success (%s): %s", task_id, exc)
 
     def _compute_local(
         self,
@@ -583,6 +767,10 @@ class FactorOfficialEvaluationService:
             "universe_count": universe_meta["count"],
             "pipeline_summary": summary,
             "db_result": db_result,
+            "success_count": success_count,
+            "fail_count": failed_count,
+            "total_metrics_inserted": db_result["inserted"],
+            "total_metrics_skipped": db_result["skipped"],
         }
         all_errors = []
         if error_detail:

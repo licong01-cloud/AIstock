@@ -418,6 +418,7 @@ class FactorTransformationService:
         import os
         import shutil
         import tempfile
+        from pathlib import Path
         import pandas as pd
         try:
             from backend.data_service.realtime_factor_data_loader import RealtimeFactorDataLoader
@@ -452,8 +453,9 @@ class FactorTransformationService:
                 os.makedirs(factors_subdir, exist_ok=True)
 
                 # 生成独立执行脚本（在子进程中运行，避免 os.chdir 线程安全问题）
+                project_root = str(Path(__file__).resolve().parents[3])
                 runner_code = self._build_original_factor_runner_script(
-                    factor_name, tmpdir, instruments, start_date, end_date
+                    factor_name, tmpdir, instruments, start_date, end_date, project_root
                 )
                 runner_path = os.path.join(tmpdir, "_runner.py")
                 with open(runner_path, "w", encoding="utf-8") as fh:
@@ -472,7 +474,7 @@ class FactorTransformationService:
                 )
 
                 if proc.returncode != 0:
-                    stderr_msg = proc.stderr[:500] if proc.stderr else "无错误输出"
+                    stderr_msg = proc.stderr[-4000:] if proc.stderr else "无错误输出"
                     return None, f"原始因子执行失败(exit={proc.returncode}): {stderr_msg}"
 
                 # 读取子进程输出的结果文件
@@ -500,6 +502,7 @@ class FactorTransformationService:
         instruments: List[str],
         start_date: str,
         end_date: str,
+        project_root: str,
     ) -> str:
         """生成在子进程中执行原始因子代码的 runner 脚本。
 
@@ -520,13 +523,81 @@ instruments = {repr(instruments)}
 start_date = {repr(start_date)}
 end_date = {repr(end_date)}
 tmpdir = {repr(tmpdir)}
+project_root = {repr(project_root)}
+
+if project_root and project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from backend.data_service.realtime_factor_data_loader import RealtimeFactorDataLoader as _RFDLoader
+from backend.data_service.qe_data_service import build_static_factors as _build_static_factors
+
+_REALTIME_LOADER = _RFDLoader()
+
+class _StaticFactorsLoader:
+    def load(self, instruments, start_date, end_date, columns=None):
+        df = _build_static_factors(instruments, start_date, end_date)
+        if columns and not df.empty:
+            available = [c for c in columns if c in df.columns]
+            return df[available] if available else df
+        return df
+
+_STATIC_FACTORS_LOADER = _StaticFactorsLoader()
+
+def _write_result(result):
+    import pandas as pd
+    if isinstance(result, pd.Series):
+        result = result.to_frame(factor_name)
+    if isinstance(result, pd.DataFrame):
+        result.to_parquet(os.path.join(tmpdir, "_result.parquet"))
+        print(f"OK: shape={{result.shape}}, columns={{list(result.columns)}}")
+        return True
+    print(f"WARN: 返回类型不是 DataFrame: {{type(result)}}", file=sys.stderr)
+    return False
+
+def _try_write_existing_result_h5(code_path):
+    import pandas as pd
+    candidates = [
+        os.path.join(os.path.dirname(code_path), "result.h5"),
+        os.path.join(tmpdir, "result.h5"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            result = pd.read_hdf(path)
+            return _write_result(result)
+    return False
+
+def _invoke_factor(func, func_name):
+    sig = inspect.signature(func)
+    params = list(sig.parameters.values())
+    param_names = [p.name for p in params]
+    accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
+    can_kwargs = accepts_kwargs or all(
+        name in param_names for name in ("instruments", "start_date", "end_date")
+    )
+    if can_kwargs:
+        return func(instruments=instruments, start_date=start_date, end_date=end_date)
+    positional = [
+        p for p in params
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    if len(positional) >= 3:
+        return func(instruments, start_date, end_date)
+    if len(params) == 0 or all(p.default is not inspect.Parameter.empty for p in params):
+        return func()
+    raise TypeError(f"函数 {{func_name}} 参数无法自动调用: {{param_names}}")
 
 try:
     code_path = os.path.join(tmpdir, "factors", f"{{factor_name}}.py")
     with open(code_path, "r", encoding="utf-8") as f:
         original_code = f.read()
 
-    ns = {{"__name__": "__main__", "__builtins__": __builtins__, "__file__": code_path}}
+    ns = {{
+        "__name__": "__main__",
+        "__builtins__": __builtins__,
+        "__file__": code_path,
+        "_REALTIME_LOADER": _REALTIME_LOADER,
+        "_STATIC_FACTORS_LOADER": _STATIC_FACTORS_LOADER,
+    }}
     exec(compile(original_code, code_path, "exec"), ns)
 
     # 查找 calculate_ 函数
@@ -534,32 +605,30 @@ try:
     if func_name not in ns:
         funcs = [k for k in ns if k.startswith("calculate_")]
         if not funcs:
+            if _try_write_existing_result_h5(code_path):
+                sys.exit(0)
+            if "compute_factor" in ns:
+                result = ns["compute_factor"]()
+                if result is not None:
+                    if not _write_result(result):
+                        sys.exit(1)
+                    sys.exit(0)
+                if _try_write_existing_result_h5(code_path):
+                    sys.exit(0)
             print(f"ERROR: 未找到 calculate_{{factor_name}} 函数", file=sys.stderr)
             sys.exit(1)
         func_name = funcs[0]
 
     func = ns[func_name]
-    sig = inspect.signature(func)
-    params = list(sig.parameters.keys())
-
-    if len(params) == 0:
-        result = func()
-    elif len(params) >= 3:
-        result = func(instruments=instruments, start_date=start_date, end_date=end_date)
-    else:
-        print(f"ERROR: 函数 {{func_name}} 参数数量异常({{len(params)}}): {{params}}", file=sys.stderr)
-        sys.exit(1)
+    result = _invoke_factor(func, func_name)
 
     if result is None:
+        if _try_write_existing_result_h5(code_path):
+            sys.exit(0)
         print("ERROR: 因子函数返回 None", file=sys.stderr)
         sys.exit(1)
 
-    import pandas as pd
-    if isinstance(result, pd.DataFrame):
-        result.to_parquet(os.path.join(tmpdir, "_result.parquet"))
-        print(f"OK: shape={{result.shape}}, columns={{list(result.columns)}}")
-    else:
-        print(f"WARN: 返回类型不是 DataFrame: {{type(result)}}", file=sys.stderr)
+    if not _write_result(result):
         sys.exit(1)
 
 except Exception:
