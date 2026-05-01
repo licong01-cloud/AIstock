@@ -464,7 +464,40 @@ export default function FactorList({
     task_state?: any;
     failed_tail?: any[];
   };
+  type RemoteNodeStats = {
+    node_id: string;
+    display_name?: string | null;
+    status?: string | null;
+    host?: string;
+    configured?: boolean;
+    reachable?: boolean;
+    factor_cache_dir?: string | null;
+    resolved_factor_cache_dir?: string | null;
+    remote_cached?: number;
+    synced?: number;
+    missing?: number;
+    stale?: number;
+    error?: string;
+  };
+  type RemoteFactorStatus = {
+    status: "synced" | "missing" | "stale" | string;
+    local_date_range?: string | null;
+    remote_date_range?: string | null;
+  };
+  type RemoteCacheStats = {
+    ok: boolean;
+    local: { cached: number; size_mb: number; cache_root?: string; meta_sha256?: string | null };
+    selected_node_id?: string | null;
+    remote_nodes: RemoteNodeStats[];
+    factor_status: Record<string, RemoteFactorStatus>;
+    last_sync?: any;
+  };
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
+  const [remoteStats, setRemoteStats] = useState<RemoteCacheStats | null>(null);
+  const [selectedRemoteNodeId, setSelectedRemoteNodeId] = useState<string>("");
+  const [remoteStatsLoading, setRemoteStatsLoading] = useState(false);
+  const [remoteStatsError, setRemoteStatsError] = useState<string>("");
+  const [remoteSyncBusy, setRemoteSyncBusy] = useState(false);
   const [cacheWorkers, setCacheWorkers] = useState(4);
   const [cacheBusy, setCacheBusy] = useState(false);
   const [cacheStartDate, setCacheStartDate] = useState(FACTOR_CACHE_DEFAULT_START);
@@ -487,6 +520,27 @@ export default function FactorList({
       if (d.ok) setCacheStats(d);
     } catch {}
   }, []);
+
+  const fetchRemoteStats = useCallback(async (nodeId?: string | null) => {
+    if (isSelection) return;
+    setRemoteStatsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      const effectiveNode = nodeId || selectedRemoteNodeId;
+      if (effectiveNode) params.set("node_id", effectiveNode);
+      const r = await fetch(`${API}/quantevolver/factor-cache/remote-stats${params.toString() ? `?${params.toString()}` : ""}`);
+      const d = await r.json();
+      if (!r.ok || d.ok === false) throw new Error(d.detail || d.error || "远端缓存统计加载失败");
+      if (d.ok) {
+        setRemoteStats(d);
+        setRemoteStatsError("");
+        if (!selectedRemoteNodeId && d.selected_node_id) setSelectedRemoteNodeId(d.selected_node_id);
+      }
+    } catch (e: any) {
+      setRemoteStatsError(e?.message || "远端缓存统计加载失败");
+    }
+    finally { setRemoteStatsLoading(false); }
+  }, [isSelection, selectedRemoteNodeId]);
 
   const fetchCacheTasks = useCallback(async () => {
     setCacheTaskLoading(true);
@@ -517,9 +571,10 @@ export default function FactorList({
   useEffect(() => {
     if (!isSelection) {
       fetchCacheStats();
+      fetchRemoteStats();
       fetchCacheTasks();
     }
-  }, [isSelection, fetchCacheStats, fetchCacheTasks]);
+  }, [isSelection, fetchCacheStats, fetchRemoteStats, fetchCacheTasks]);
 
   useEffect(() => {
     if (isSelection) return;
@@ -527,11 +582,12 @@ export default function FactorList({
     if (!hasRunning) return;
     const timer = setInterval(() => {
       fetchCacheStats();
+      fetchRemoteStats();
       fetchCacheTasks();
       if (selectedCacheTaskId) fetchCacheTaskDetail(selectedCacheTaskId);
     }, 5000);
     return () => clearInterval(timer);
-  }, [isSelection, cacheTasks, selectedCacheTaskId, fetchCacheStats, fetchCacheTasks, fetchCacheTaskDetail]);
+  }, [isSelection, cacheTasks, selectedCacheTaskId, fetchCacheStats, fetchRemoteStats, fetchCacheTasks, fetchCacheTaskDetail]);
 
   const triggerCacheCompute = useCallback(async (
     factorNames?: string[],
@@ -565,12 +621,39 @@ export default function FactorList({
       const d = await r.json();
       if (d.ok) {
         setSelectedCacheTaskId(d.task_id);
-        await Promise.all([fetchCacheStats(), fetchCacheTasks(), fetchCacheTaskDetail(d.task_id)]);
+        await Promise.all([fetchCacheStats(), fetchRemoteStats(), fetchCacheTasks(), fetchCacheTaskDetail(d.task_id)]);
         alert(`计算任务已提交 (task_id: ${d.task_id})`);
       }
       else alert(d.detail || "提交失败");
     } catch (e: any) { alert(e.message); } finally { setCacheBusy(false); }
-  }, [cacheWorkers, cacheStartDate, cacheEndDate, cacheContext?.experimentId, fetchCacheStats, fetchCacheTasks, fetchCacheTaskDetail]);
+  }, [cacheWorkers, cacheStartDate, cacheEndDate, cacheContext?.experimentId, fetchCacheStats, fetchRemoteStats, fetchCacheTasks, fetchCacheTaskDetail]);
+
+  const triggerRemoteSync = useCallback(async (factorNames?: string[]) => {
+    setRemoteSyncBusy(true);
+    try {
+      const body: any = {
+        node_id: selectedRemoteNodeId || undefined,
+        factor_names: factorNames && factorNames.length > 0 ? factorNames : undefined,
+        force: false,
+        configure_default_dir: true,
+      };
+      const r = await fetch(`${API}/quantevolver/factor-cache/sync-to-node`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok || d.ok === false) throw new Error(d.detail || d.error || d.job?.error || "同步失败");
+      await fetchRemoteStats(selectedRemoteNodeId);
+      const job = d.job || d.jobs?.[0];
+      alert(`远端同步完成：同步 ${job?.sync_count ?? "-"}，跳过 ${job?.skipped_count ?? "-"}`);
+    } catch (e: any) {
+      alert(e.message || "远端同步失败");
+      await fetchRemoteStats(selectedRemoteNodeId);
+    } finally {
+      setRemoteSyncBusy(false);
+    }
+  }, [selectedRemoteNodeId, fetchRemoteStats]);
 
   const clearAllCache = useCallback(async () => {
     if (!confirm("确认清空所有因子值缓存？此操作不可恢复。")) return;
@@ -579,9 +662,10 @@ export default function FactorList({
       const d = await r.json();
       alert(`已删除 ${d.deleted} 个缓存文件`);
       fetchCacheStats();
+      fetchRemoteStats();
       window.location.reload();
     } catch (e: any) { alert(e.message); }
-  }, [fetchCacheStats]);
+  }, [fetchCacheStats, fetchRemoteStats]);
 
   const clearOneCache = useCallback(async (factorName: string) => {
     if (!confirm(`确认删除因子 ${factorName} 的缓存？`)) return;
@@ -589,14 +673,18 @@ export default function FactorList({
       const r = await fetch(`${API}/quantevolver/factor-cache/${encodeURIComponent(factorName)}`, { method: "DELETE" });
       const d = await r.json();
       if (!r.ok || !d.ok) throw new Error(d.detail || d.error || "删除失败");
-      await Promise.all([fetchCacheStats(), fetchCacheTasks()]);
+      await Promise.all([fetchCacheStats(), fetchRemoteStats(), fetchCacheTasks()]);
       window.location.reload();
     } catch (e: any) {
       alert(e.message || "删除失败");
     }
-  }, [fetchCacheStats, fetchCacheTasks]);
+  }, [fetchCacheStats, fetchRemoteStats, fetchCacheTasks]);
 
   const actualSelectedFactors = mode === "selection" ? selectedFactors : localSelectedFactors;
+  const selectedRemoteNode = remoteStats?.remote_nodes?.find(n => n.node_id === selectedRemoteNodeId)
+    || remoteStats?.remote_nodes?.[0]
+    || null;
+  const remoteFactorStatusByName = remoteStats?.factor_status || {};
   const selectedRatingRule = ratingRules.find(rule => rule.rule_version === selectedRatingVersion);
   const selectedRatingRuleExecutable = Boolean(
     selectedRatingRule
@@ -2025,11 +2113,51 @@ export default function FactorList({
                 <span style={{ fontSize: 11, color: "#9ca3af" }}>
                   {cacheStats.active_tasks > 0 && `⏳ ${cacheStats.active_tasks} 个任务运行中`}
                 </span>
+                {remoteStats && (
+                  <span style={{ fontSize: 12, color: selectedRemoteNode?.reachable === false ? "#dc2626" : "#64748b", background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 6, padding: "2px 8px" }}>
+                    WSL缓存 {remoteStats.local.cached}
+                    {selectedRemoteNode ? (
+                      <>
+                        {" "}｜远端 {selectedRemoteNode.display_name || selectedRemoteNode.node_id}: {selectedRemoteNode.remote_cached ?? 0}
+                        {" "}｜已同步 <span style={{ color: "#059669" }}>{selectedRemoteNode.synced ?? 0}</span>
+                        {(selectedRemoteNode.missing || 0) > 0 && <>｜缺失 <span style={{ color: "#d97706" }}>{selectedRemoteNode.missing}</span></>}
+                        {(selectedRemoteNode.stale || 0) > 0 && <>｜过期 <span style={{ color: "#dc2626" }}>{selectedRemoteNode.stale}</span></>}
+                      </>
+                    ) : "｜无远端节点"}
+                  </span>
+                )}
+                {remoteStatsLoading && <span style={{ fontSize: 11, color: "#94a3b8" }}>远端统计刷新中...</span>}
+                {remoteStatsError && (
+                  <span style={{ fontSize: 12, color: "#dc2626", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "2px 8px" }}>
+                    远端统计失败：{remoteStatsError}
+                  </span>
+                )}
               </>
             ) : (
               <span style={{ fontSize: 12, color: "#9ca3af" }}>加载中...</span>
             )}
             <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              {remoteStats?.remote_nodes?.length ? (
+                <>
+                  <span style={{ fontSize: 11, color: "#9ca3af" }}>远端:</span>
+                  <select
+                    value={selectedRemoteNodeId}
+                    onChange={e => { setSelectedRemoteNodeId(e.target.value); fetchRemoteStats(e.target.value); }}
+                    style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }}
+                  >
+                    {remoteStats.remote_nodes.map(node => (
+                      <option key={node.node_id} value={node.node_id}>
+                        {node.display_name || node.node_id}{node.reachable === false ? " (不可达)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <button onClick={() => triggerRemoteSync()} disabled={remoteSyncBusy}
+                    title="增量同步本地已有但远端缺失、过期或上次同步失败的因子缓存文件"
+                    style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", fontWeight: 600, cursor: "pointer", opacity: remoteSyncBusy ? 0.5 : 1 }}>
+                    {remoteSyncBusy ? "同步中..." : "补充同步"}
+                  </button>
+                </>
+              ) : null}
               <span style={{ fontSize: 11, color: "#9ca3af" }}>区间:</span>
               <input type="date" value={cacheStartDate} onChange={e => setCacheStartDate(e.target.value)} style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }} />
               <span style={{ fontSize: 11, color: "#9ca3af" }}>~</span>
@@ -2072,6 +2200,12 @@ export default function FactorList({
                   计算选中 ({actualSelectedFactors.size})
                 </button>
               )}
+              {actualSelectedFactors.size > 0 && remoteStats?.remote_nodes?.length ? (
+                <button onClick={() => triggerRemoteSync(Array.from(actualSelectedFactors).map(k => k.split("||")[0]))} disabled={remoteSyncBusy}
+                  style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #0f766e", background: "#f0fdfa", color: "#0f766e", fontWeight: 600, cursor: "pointer", opacity: remoteSyncBusy ? 0.5 : 1 }}>
+                  同步选中
+                </button>
+              ) : null}
               <button onClick={clearAllCache}
                 style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #dc2626", background: "#fef2f2", color: "#dc2626", fontWeight: 600, cursor: "pointer" }}>
                 一键清空
@@ -2724,6 +2858,7 @@ export default function FactorList({
                 <th style={{ ...thStyle, cursor: "pointer", width: 50 }} onClick={() => handleSort("decay_status")}>衰变{getSortIndicator("decay_status")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("ind_calculated_at")}>指标计算{getSortIndicator("ind_calculated_at")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 110 }} onClick={() => handleSort("cache_status")}>因子值缓存{getSortIndicator("cache_status")}</th>
+                <th style={{ ...thStyle, width: 90 }}>远端同步</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("cache_start_date")}>缓存开始{getSortIndicator("cache_start_date")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("cache_end_date")}>缓存结束{getSortIndicator("cache_end_date")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 120 }} onClick={() => handleSort("cache_computed_at")}>缓存计算{getSortIndicator("cache_computed_at")}</th>
@@ -2760,6 +2895,7 @@ export default function FactorList({
                 const cacheTargetStart = cacheStartDate || cacheContext?.trainStart;
                 const cacheTargetEnd = cacheEndDate || cacheContext?.backtestEnd;
                 const cacheCoverageOk = factorCacheCoversRequestedWindow(f, cacheTargetStart, cacheTargetEnd);
+                const remoteSyncStatus = remoteFactorStatusByName[f.factor_name];
 
                 return (
                   <React.Fragment key={rowKey}>
@@ -2929,6 +3065,25 @@ export default function FactorList({
                           )
                         )}
                       </td>
+                      <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
+                        {remoteSyncStatus ? (
+                          <span
+                            title={`本地: ${remoteSyncStatus.local_date_range || "-"}\n远端: ${remoteSyncStatus.remote_date_range || "-"}\n节点: ${selectedRemoteNode?.display_name || selectedRemoteNode?.node_id || "-"}`}
+                            style={{
+                              padding: "2px 6px",
+                              borderRadius: 4,
+                              fontSize: 10,
+                              fontWeight: 600,
+                              background: remoteSyncStatus.status === "synced" ? "#d1fae5" : remoteSyncStatus.status === "stale" ? "#fee2e2" : "#fef3c7",
+                              color: remoteSyncStatus.status === "synced" ? "#059669" : remoteSyncStatus.status === "stale" ? "#dc2626" : "#d97706",
+                            }}
+                          >
+                            {remoteSyncStatus.status === "synced" ? "已同步" : remoteSyncStatus.status === "stale" ? "远端过期" : "未同步"}
+                          </span>
+                        ) : (
+                          <span style={{ color: "#d1d5db", fontSize: 10 }}>-</span>
+                        )}
+                      </td>
                       <td style={{ ...tdStyle, fontSize: 10, color: f.cache_start_date ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }}>
                         {f.cache_start_date || "-"}
                       </td>
@@ -2992,7 +3147,7 @@ export default function FactorList({
 
                       return (
                       <tr style={{ borderBottom: "1px solid #f3f4f6" }}>
-        <td colSpan={22} style={{ padding: "0 10px 10px 10px" }}>
+        <td colSpan={23} style={{ padding: "0 10px 10px 10px" }}>
                           <div style={{
                             background: isSelection ? "#eff6ff" : "#faf5ff", borderRadius: 8, padding: "10px 14px",
                             fontSize: 12, lineHeight: 1.7, color: "#374151",

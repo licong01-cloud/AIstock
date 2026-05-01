@@ -259,6 +259,7 @@ def test_qe_prepare_factors_default_window_uses_current_signal_end_and_records_c
     assert "'window_backtest_end': TEST_END" in script
     assert "entry.get('window_train_start')" in script
     assert "open(FACTOR_CACHE_META, 'r', encoding='utf-8')" in script
+    assert "os.makedirs(FACTOR_CACHE_SINGLE_DIR, exist_ok=True)" in script
     assert "os.fdopen(tmp_fd, 'w', encoding='utf-8')" in script
 
 

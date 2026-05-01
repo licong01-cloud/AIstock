@@ -3633,6 +3633,14 @@ class FactorCacheComputeRequest(BaseModel):
     resume_task_id: Optional[str] = Field(None, description="从历史任务恢复未完成因子")
     retry_failed_only: bool = Field(False, description="恢复历史任务时仅重试失败因子")
     strict_backtest_data: bool = Field(True, description="严格使用 QE 默认历史 factor_data_dir 数据（用于全局因子值缓存）")
+    auto_sync_remote: bool = Field(True, description="本地缓存计算成功后自动同步到远端执行节点")
+
+
+class FactorCacheRemoteSyncRequest(BaseModel):
+    node_id: Optional[str] = Field(None, description="远端节点 ID；空=同步所有远端节点")
+    factor_names: Optional[List[str]] = Field(None, description="仅同步指定因子；空=同步全部有效本地缓存")
+    force: bool = Field(False, description="强制同步，即使远端 meta 看起来已一致")
+    configure_default_dir: bool = Field(True, description="当节点 factor_cache_dir 为空时写入默认远端缓存目录")
 
 
 @router.post("/factor-cache/compute", summary="触发因子值计算（WSL后台任务）")
@@ -3763,6 +3771,7 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         "incremental": req.incremental,
         "resume_task_id": req.resume_task_id,
         "retry_failed_only": req.retry_failed_only,
+        "auto_sync_remote": req.auto_sync_remote,
         "experiment_id": req.experiment_id,
         "strict_backtest_data": req.strict_backtest_data,
         "data_source_mode": "backtest_factor_data_dir" if req.strict_backtest_data else "unspecified",
@@ -3791,6 +3800,26 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
             _active_cache_tasks[task_id]["status"] = "completed" if proc.returncode == 0 else "failed"
             _active_cache_tasks[task_id]["finished_at"] = datetime.now().isoformat()
             _invalidate_cache_meta()
+            if proc.returncode == 0 and req.auto_sync_remote:
+                try:
+                    from ..services.quantevolver.factor_cache_remote_sync_service import (
+                        FactorCacheRemoteSyncService,
+                    )
+
+                    sync_factors = list(req.factor_names or factors_code.keys())
+                    _active_cache_tasks[task_id]["remote_sync_status"] = "running"
+                    sync_result = FactorCacheRemoteSyncService().sync_to_all_remote_nodes(
+                        sync_factors,
+                        force=req.force,
+                    )
+                    _active_cache_tasks[task_id]["remote_sync_status"] = (
+                        "completed" if sync_result.get("ok") else "failed"
+                    )
+                    _active_cache_tasks[task_id]["remote_sync_result"] = sync_result
+                except Exception as sync_exc:
+                    _active_cache_tasks[task_id]["remote_sync_status"] = "failed"
+                    _active_cache_tasks[task_id]["remote_sync_error"] = str(sync_exc)
+                    logger.exception("远端因子缓存自动同步失败 task_id=%s", task_id)
         except Exception as e:
             _active_cache_tasks[task_id]["status"] = "error"
             _active_cache_tasks[task_id]["error"] = str(e)
@@ -3805,6 +3834,7 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         "window_train_start": resolved_start,
         "window_backtest_end": resolved_end,
         "factor_data_dir": factor_data_dir,
+        "auto_sync_remote": req.auto_sync_remote,
     }
 
 
@@ -3849,6 +3879,48 @@ def factor_cache_compute_status(task_id: str):
 @router.get("/factor-cache/active-tasks", summary="当前所有缓存任务")
 def factor_cache_active_tasks():
     return {"ok": True, "tasks": list(_active_cache_tasks.values())}
+
+
+@router.get("/factor-cache/remote-stats", summary="远端因子值缓存同步统计")
+def factor_cache_remote_stats(node_id: Optional[str] = Query(None, description="选中的远端节点 ID")):
+    try:
+        from ..services.quantevolver.factor_cache_remote_sync_service import (
+            FactorCacheRemoteSyncService,
+        )
+
+        return FactorCacheRemoteSyncService().get_stats(node_id=node_id)
+    except Exception as e:
+        logger.exception("获取远端因子缓存统计失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/factor-cache/sync-to-node", summary="增量同步因子值缓存到远端节点")
+def factor_cache_sync_to_node(req: FactorCacheRemoteSyncRequest):
+    try:
+        from ..services.quantevolver.factor_cache_remote_sync_service import (
+            FactorCacheRemoteSyncService,
+        )
+
+        svc = FactorCacheRemoteSyncService()
+        if req.node_id:
+            job = svc.sync_to_node(
+                req.node_id,
+                req.factor_names,
+                force=req.force,
+                configure_default_dir=req.configure_default_dir,
+            )
+            return {"ok": job.get("status") == "completed", "job": job}
+        result = svc.sync_to_all_remote_nodes(
+            req.factor_names,
+            force=req.force,
+            configure_default_dir=req.configure_default_dir,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("远端因子缓存同步失败")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/factor-cache/all", summary="一键清空所有因子值缓存")

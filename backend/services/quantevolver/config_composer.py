@@ -253,7 +253,8 @@ class ConfigComposer:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT workspace_base, factor_data_dir, qlib_data_path, "
-                    "       qlib_minute_path, qlib_rdagent_root, factor_cache_dir "
+                    "       qlib_minute_path, qlib_rdagent_root, factor_cache_dir, "
+                    "       api_base_url, ssh_user "
                     "FROM infra.compute_nodes WHERE node_id = %s",
                     (node_id,),
                 )
@@ -271,13 +272,22 @@ class ConfigComposer:
             missing.append("qlib_rdagent_root")
         if missing:
             raise ValueError(f"节点 {node_id} 缺少必要路径配置: {', '.join(missing)}，请在节点管理中补全")
+        factor_cache_dir = row[5]
+        if not factor_cache_dir:
+            from urllib.parse import urlparse
+
+            host = (urlparse(row[6] or "").hostname or "").lower()
+            ssh_user = (row[7] or "").strip()
+            if host not in {"", "127.0.0.1", "localhost", "::1"} and ssh_user:
+                factor_cache_dir = f"/home/{ssh_user}/aistock_cache/factor_values"
+
         return {
             "workspace_base": row[0],
             "factor_data_dir": row[1],
             "qlib_data_path": row[2],
             "qlib_minute_path": row[3],
             "qlib_rdagent_root": row[4],
-            "factor_cache_dir": row[5],
+            "factor_cache_dir": factor_cache_dir,
         }
 
     def _generate_unique_experiment_id(self) -> str:
@@ -2893,6 +2903,7 @@ class ConfigComposer:
         lines.append("    if not FACTOR_CACHE_SINGLE_DIR:")
         lines.append("        return")
         lines.append("    try:")
+        lines.append("        os.makedirs(FACTOR_CACHE_SINGLE_DIR, exist_ok=True)")
         lines.append("        cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet')")
 
         lines.append("        code_hash = hashlib.sha256(factor_code.encode()).hexdigest()[:16]")
