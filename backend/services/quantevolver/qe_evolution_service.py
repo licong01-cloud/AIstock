@@ -4754,7 +4754,8 @@ class AutoEvolutionScheduler:
         node_id: Optional[str] = None,
         node_parallelism: Optional[Dict[str, int]] = None,
     ) -> Dict[str, Any]:
-        lock_conn = get_conn()
+        lock_cm = get_conn()
+        lock_conn = lock_cm.__enter__()
         try:
             self._acquire_custom_evo_mutation_lock(lock_conn, task_id)
             with get_conn() as conn:
@@ -4826,8 +4827,10 @@ class AutoEvolutionScheduler:
                 "message": f"Custom evolution Loop {loop_index} rerun queued.",
             }
         finally:
-            self._release_custom_evo_mutation_lock(lock_conn, task_id)
-            lock_conn.close()
+            try:
+                self._release_custom_evo_mutation_lock(lock_conn, task_id)
+            finally:
+                lock_cm.__exit__(None, None, None)
 
     async def append_custom_evo_loops(
         self,
@@ -4840,7 +4843,8 @@ class AutoEvolutionScheduler:
     ) -> Dict[str, Any]:
         if not loops_config:
             raise ValueError("append_custom_evo_loops requires at least one loop config")
-        lock_conn = get_conn()
+        lock_cm = get_conn()
+        lock_conn = lock_cm.__enter__()
         try:
             self._acquire_custom_evo_mutation_lock(lock_conn, task_id)
             with get_conn() as conn:
@@ -4920,8 +4924,10 @@ class AutoEvolutionScheduler:
                 "message": f"Appended {len(new_loop_indexes)} custom evolution loops.",
             }
         finally:
-            self._release_custom_evo_mutation_lock(lock_conn, task_id)
-            lock_conn.close()
+            try:
+                self._release_custom_evo_mutation_lock(lock_conn, task_id)
+            finally:
+                lock_cm.__exit__(None, None, None)
 
     async def _wait_and_process_custom_evo_loop(self, task_id: str, loop_index: int, loop_id: str) -> None:
         max_wait = 14400
