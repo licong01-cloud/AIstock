@@ -574,6 +574,12 @@ export default function FactorList({
   }, [fetchCacheStats, fetchCacheTasks]);
 
   const actualSelectedFactors = mode === "selection" ? selectedFactors : localSelectedFactors;
+  const selectedRatingRule = ratingRules.find(rule => rule.rule_version === selectedRatingVersion);
+  const selectedRatingRuleExecutable = Boolean(
+    selectedRatingRule
+      && selectedRatingRule.status !== "archived"
+      && selectedRatingRule.rule_version.toLowerCase().startsWith("v2")
+  );
 
   function toggleSelect(key: string) {
     const next = new Set<string>(actualSelectedFactors);
@@ -1546,8 +1552,12 @@ export default function FactorList({
                     style={{ padding: "6px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", minWidth: 240 }}
                   >
                     {ratingRules.map(rule => (
-                      <option key={rule.rule_version} value={rule.rule_version}>
-                        {rule.rule_version} · {rule.version_name}
+                      <option
+                        key={rule.rule_version}
+                        value={rule.rule_version}
+                        disabled={rule.status === "archived" || !rule.rule_version.toLowerCase().startsWith("v2")}
+                      >
+                        {rule.rule_version} · {rule.version_name} · {rule.status === "archived" ? "已归档/不可执行" : rule.status}
                       </option>
                     ))}
                   </select>
@@ -1570,8 +1580,9 @@ export default function FactorList({
                         alert(`激活规则失败: ${e?.message || "未知错误"}`);
                       }
                     }}
-                    disabled={!selectedRatingVersion || selectedRatingVersion === activeRatingVersion}
-                    style={{ padding: "6px 12px", fontSize: 12, borderRadius: 6, border: "1px solid #7c3aed", background: "#fff", color: "#7c3aed", fontWeight: 600, cursor: !selectedRatingVersion || selectedRatingVersion === activeRatingVersion ? "not-allowed" : "pointer", opacity: !selectedRatingVersion || selectedRatingVersion === activeRatingVersion ? 0.5 : 1 }}
+                    disabled={!selectedRatingVersion || selectedRatingVersion === activeRatingVersion || !selectedRatingRuleExecutable}
+                    title={!selectedRatingRuleExecutable ? "归档或非 v2 规则不可激活/执行" : undefined}
+                    style={{ padding: "6px 12px", fontSize: 12, borderRadius: 6, border: "1px solid #7c3aed", background: "#fff", color: "#7c3aed", fontWeight: 600, cursor: !selectedRatingVersion || selectedRatingVersion === activeRatingVersion || !selectedRatingRuleExecutable ? "not-allowed" : "pointer", opacity: !selectedRatingVersion || selectedRatingVersion === activeRatingVersion || !selectedRatingRuleExecutable ? 0.5 : 1 }}
                   >
                     设为激活版本
                   </button>

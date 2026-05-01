@@ -104,7 +104,15 @@ class FactorRatingService:
                     rule_dir = self.RULES_ROOT / version
                     readme_path = rule_dir / "README.md"
                     description_md = readme_path.read_text(encoding="utf-8") if readme_path.exists() else (item.get("description") or "")
-                    status = "active" if version == active_version else (item.get("status") or ("default" if version == default_version else "draft"))
+                    raw_status = str(item.get("status") or "").strip().lower()
+                    if raw_status == "archived":
+                        status = "archived"
+                    elif version == active_version:
+                        status = "active"
+                    elif version == default_version:
+                        status = "default"
+                    else:
+                        status = raw_status or "draft"
                     version_name = item.get("label") or item.get("version_name") or version
                     cur.execute(
                         """
@@ -115,7 +123,10 @@ class FactorRatingService:
                             status = EXCLUDED.status,
                             rule_file_path = EXCLUDED.rule_file_path,
                             description_md = EXCLUDED.description_md,
-                            activated_at = CASE WHEN EXCLUDED.status = 'active' THEN NOW() ELSE qe_rating_rule_versions.activated_at END
+                            activated_at = CASE
+                                WHEN EXCLUDED.status = 'active' THEN COALESCE(qe_rating_rule_versions.activated_at, NOW())
+                                ELSE NULL
+                            END
                         """,
                         (version, version_name, status, str(rule_dir), description_md, status),
                     )
@@ -145,9 +156,12 @@ class FactorRatingService:
             }
             for row in rows
         ]
-        active = next((item["rule_version"] for item in items if item["status"] == "active"), None)
-        default = next((item["rule_version"] for item in items if item["status"] in {"active", "default"}), None)
-        return {"rules": items, "active_version": active, "default_version": default or active}
+        active_items = [item for item in items if item["status"] == "active"]
+        if len(active_items) > 1:
+            versions = ", ".join(item["rule_version"] for item in active_items)
+            raise RuntimeError(f"multiple active factor rating rule versions are not allowed: {versions}")
+        active = active_items[0]["rule_version"] if active_items else None
+        return {"rules": items, "active_version": active, "default_version": active}
 
     def get_rule_detail(self, version: str) -> Dict[str, Any]:
         self.sync_rule_versions()
@@ -178,15 +192,18 @@ class FactorRatingService:
     def activate_rule_version(self, version: str) -> Dict[str, Any]:
         self.sync_rule_versions(force=True)
         detail = self.get_rule_detail(version)
+        self._ensure_rule_executable(detail, require_active=False)
         index = self._read_index()
         index["active_version"] = version
-        if not index.get("default_version"):
-            index["default_version"] = version
+        index["default_version"] = version
         self._write_index(index)
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("UPDATE qe_rating_rule_versions SET status = CASE WHEN rule_version = %s THEN 'active' ELSE 'draft' END", (version,))
-                cur.execute("UPDATE qe_rating_rule_versions SET activated_at = NOW() WHERE rule_version = %s", (version,))
+                cur.execute(
+                    "UPDATE qe_rating_rule_versions SET status = CASE WHEN rule_version = %s THEN 'active' ELSE 'draft' END, "
+                    "activated_at = CASE WHEN rule_version = %s THEN NOW() ELSE NULL END",
+                    (version, version),
+                )
         return {"ok": True, "rule_version": version, "version_name": detail["version_name"]}
 
     def list_runs(self, limit: int = 20) -> List[Dict[str, Any]]:
@@ -314,6 +331,7 @@ class FactorRatingService:
         if triggered_from != "ui_toolbar":
             raise ValueError("正式评级只能由 UI 工具栏触发")
         rule = self.get_rule_detail(rule_version)
+        self._ensure_rule_executable(rule, require_active=True)
         run_id = str(uuid.uuid4())
         self._insert_run(run_id, rule_version, scope_type, scope_payload, triggered_from)
 
@@ -499,9 +517,22 @@ class FactorRatingService:
             return False
         return str(rule_version).lower().startswith("v2")
 
+    def _ensure_rule_executable(self, rule: Dict[str, Any], *, require_active: bool) -> None:
+        version = str(rule.get("rule_version") or "")
+        status = str(rule.get("status") or "").lower()
+        if status == "archived":
+            raise ValueError(f"factor rating rule {version} is archived and cannot be executed")
+        if require_active and status != "active":
+            raise ValueError(f"factor rating rule {version} is not active: status={status or 'unknown'}")
+        if not self._is_v2_rule(version):
+            raise ValueError(f"only v2 factor rating rules are executable; got {version}")
+
     def _grade_factor(self, factor: Dict[str, Any], rule: Dict[str, Any], *, enable_llm_audit: bool = True) -> Dict[str, Any]:
         if self._is_v2_rule(rule.get("rule_version")):
             return self._grade_factor_v2(factor, rule, enable_llm_audit=enable_llm_audit)
+        raise ValueError(f"only v2 factor rating rules are executable; got {rule.get('rule_version')}")
+
+    def _grade_factor_v1_archived(self, factor: Dict[str, Any], rule: Dict[str, Any], *, enable_llm_audit: bool = True) -> Dict[str, Any]:
         factor_name = factor["factor_name"]
         factor_source = factor["source"]
         metrics_by_window = self._fetch_metrics_by_window(factor_name)
@@ -989,6 +1020,7 @@ class FactorRatingService:
         factor_catalog_id = factor["id"]
 
         metrics_by_window = self._fetch_metrics_by_window(factor_name)
+        self._validate_v2_metrics_by_window(factor_name, metrics_by_window)
         full_metrics = metrics_by_window.get("full") or {}
         classification_meta = self._fetch_classification_meta_v2(factor_name, factor_source)
         monthly_agg = self._fetch_monthly_ic_latest(factor_name)
@@ -1091,6 +1123,36 @@ class FactorRatingService:
             "snapshot_date": snapshot_date,
         }
 
+    @staticmethod
+    def _require_non_null(record: Dict[str, Any], required: List[str], *, context: str) -> None:
+        missing = [key for key in required if record.get(key) is None]
+        if missing:
+            raise RuntimeError(f"{context} missing required fields: {', '.join(missing)}")
+
+    def _validate_v2_metrics_by_window(self, factor_name: str, metrics_by_window: Dict[str, Dict[str, Any]]) -> None:
+        required_windows = ("full", "out_sample", "recent_6m", "recent_3m")
+        missing_windows = [window for window in required_windows if not metrics_by_window.get(window)]
+        if missing_windows:
+            raise RuntimeError(
+                f"qe_eval_v2 metrics missing required windows for {factor_name}: {', '.join(missing_windows)}"
+            )
+        self._require_non_null(
+            metrics_by_window["full"],
+            [
+                "rank_ic_1d",
+                "rank_ic_5d",
+                "rank_ic_10d",
+                "rank_ic_20d",
+                "coverage",
+                "n_trading_days",
+                "turnover",
+                "top_excess_annual_return",
+                "top_excess_sharpe",
+                "group_return_monotonicity",
+            ],
+            context=f"qe_eval_v2 full metrics for {factor_name}",
+        )
+
     def _fetch_classification_meta_v2(self, factor_name: str, factor_source: str) -> Dict[str, Any]:
         try:
             with get_conn() as conn:
@@ -1111,11 +1173,10 @@ class FactorRatingService:
                     )
                     row = cur.fetchone()
         except Exception as e:  # noqa: BLE001
-            logger.warning("classification_v2 读取失败 (%s): %s", factor_name, e)
-            row = None
+            raise RuntimeError(f"classification_v2 read failed for {factor_name}: {e}") from e
         if not row:
-            return {}
-        return {
+            raise RuntimeError(f"classification_v2 row missing for {factor_name} source={factor_source}")
+        meta = {
             "category": row[0],
             "factor_dimension": row[1],
             "holding_period_class": row[2],
@@ -1131,6 +1192,22 @@ class FactorRatingService:
             "intra_cluster_max_corr": row[12],
             "representative_score": row[13],
         }
+        self._require_non_null(
+            meta,
+            [
+                "category",
+                "factor_dimension",
+                "holding_period_class",
+                "data_source_group",
+                "linearity",
+                "ts_info_density",
+                "signal_mechanism",
+                "sector_exposure_corr",
+                "cross_horizon_consistency",
+            ],
+            context=f"classification_v2 for {factor_name}",
+        )
+        return meta
 
     def _fetch_monthly_ic_latest(self, factor_name: str) -> Dict[str, Any]:
         try:
@@ -1148,15 +1225,20 @@ class FactorRatingService:
                     )
                     row = cur.fetchone()
         except Exception as e:  # noqa: BLE001
-            logger.warning("monthly_ic 读取失败 (%s): %s", factor_name, e)
-            row = None
+            raise RuntimeError(f"monthly_ic read failed for {factor_name}: {e}") from e
         if not row:
-            return {}
-        return {
+            raise RuntimeError(f"monthly_ic row missing for {factor_name}")
+        monthly = {
             "sign_consistency_12m": row[0],
             "trend_slope_12m": row[1],
             "oos_is_ratio": row[2],
         }
+        self._require_non_null(
+            monthly,
+            ["sign_consistency_12m", "oos_is_ratio"],
+            context=f"monthly_ic latest for {factor_name}",
+        )
+        return monthly
 
     def _fetch_is_dedup_primary(self, factor_catalog_id: int) -> bool:
         try:
@@ -1167,10 +1249,10 @@ class FactorRatingService:
                         (factor_catalog_id,),
                     )
                     row = cur.fetchone()
-        except Exception:
-            row = None
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"dedup primary status read failed for factor_catalog_id={factor_catalog_id}: {e}") from e
         if row is None or row[0] is None:
-            return True
+            raise RuntimeError(f"dedup primary status missing for factor_catalog_id={factor_catalog_id}")
         return bool(row[0])
 
     @staticmethod

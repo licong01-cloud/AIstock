@@ -6,13 +6,13 @@
       "version": "v1.0.0",
       "label": "AIstock Multi-Alpha Daily Production Grade v1",
       "status": "archived",
-      "description": "面向 AIstock 日频、多 Alpha、低换手生产场景的唯一正式评级规则。"
+      "description": "Archived legacy rating rule. It is kept for audit display only and must not execute."
     },
     {
       "version": "v2.0.0",
-      "label": "AIstock Multi-Alpha Production Grade v2 — Direction-Aware + Horizon-Argmax",
+      "label": "AIstock Multi-Alpha Production Grade v2 - Direction-Aware + Horizon-Argmax",
       "status": "active",
-      "description": "修复方向性 bug / horizon 等权稀释 / multi_alpha_fitness 字段存在性打分；新增 overfit_gate / horizon-tiered hard_gates / dedup_suppression 联动。"
+      "description": "Active production rule with direction-aware scoring, horizon argmax, overfit gates, horizon-tiered hard gates, and dedup suppression."
     }
   ]
 }

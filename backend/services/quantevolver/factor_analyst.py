@@ -591,8 +591,8 @@ def _get_official_grade(factor_name: str) -> Optional[str]:
                 """, (factor_name,))
                 row = cur.fetchone()
                 return row[0] if row else None
-    except Exception:
-        return None
+    except Exception as exc:
+        raise RuntimeError(f"official rating lookup failed for {factor_name}: {exc}") from exc
 
 
 _ACTIVE_RATING_JOIN_SQL = """
@@ -1281,10 +1281,12 @@ class FactorAnalyst:
         category, classification_reason = _classify_by_rules(
             factor_name, code_text=code_text, expression=expression)
         if not category:
-            category = "TECH"
-            classification_reason = f"默认分类(source={factor_source})"
+            raise ValueError(
+                f"factor classification failed for {factor_name} source={factor_source}: "
+                "no rule or LLM category matched; refusing default TECH fallback"
+            )
         else:
-            classification_reason = f"规则分类: {classification_reason}"
+            classification_reason = f"rule classification: {classification_reason}"
 
         grade = official_grade or "N/A"
         grade_reason = f"[正式评级] {official_grade or '未评级'} | 指标参考: IC={ic}, Sharpe={sharpe}, AnnRet={ann_ret}"

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -11,6 +14,7 @@ PRODUCTION_ROOTS = (
     REPO_ROOT / "backend" / "services",
 )
 QUANTEVOLVER_FRONTEND_ROOT = REPO_ROOT / "frontend" / "src" / "app" / "quantevolver"
+FACTOR_RULE_INDEX = REPO_ROOT / "backend" / "rating_rules" / "factor" / "index.json"
 
 
 def _production_python_files() -> list[Path]:
@@ -68,6 +72,61 @@ def test_cleanup_and_deletion_do_not_pin_fixed_rating_rule_version() -> None:
         text = path.read_text(encoding="utf-8")
         assert "rule_version = 'v2.0.0'" not in text
         assert 'rule_version = "v2.0.0"' not in text
+
+
+def test_factor_rating_rule_index_archives_v1_and_defaults_to_v2() -> None:
+    data = json.loads(FACTOR_RULE_INDEX.read_text(encoding="utf-8"))
+    versions = {item["version"]: item for item in data["versions"]}
+
+    assert data["active_version"] == "v2.0.0"
+    assert data["default_version"] == "v2.0.0"
+    assert versions["v2.0.0"]["status"] == "active"
+    assert versions["v1.0.0"]["status"] == "archived"
+
+
+def test_factor_rating_service_rejects_non_v2_rule_execution() -> None:
+    from backend.services.quantevolver.factor_rating_service import FactorRatingService
+
+    svc = FactorRatingService()
+    with pytest.raises(ValueError, match="only v2 factor rating rules are executable"):
+        svc._grade_factor(
+            {"id": 1, "factor_name": "dummy_factor", "source": "manual"},
+            {"rule_version": "v1.0.0", "spec": {}, "grade_bands": {}},
+            enable_llm_audit=False,
+        )
+
+
+def test_factor_analyst_does_not_default_unknown_category_to_tech() -> None:
+    text = (REPO_ROOT / "backend" / "services" / "quantevolver" / "factor_analyst.py").read_text(
+        encoding="utf-8"
+    )
+    assert "refusing default TECH fallback" in text
+    assert 'category = "TECH"\n            classification_reason' not in text
+
+
+def test_factor_analyst_rule_only_unknown_category_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.services.quantevolver import factor_analyst as module
+
+    monkeypatch.setattr(module, "_get_official_grade", lambda factor_name: None)
+    monkeypatch.setattr(module, "_classify_by_rules", lambda *args, **kwargs: (None, "no rule match"))
+    monkeypatch.setattr(
+        module.FactorAnalyst,
+        "_get_factor_info",
+        lambda self, factor_name, factor_source: {"expression": "unknown_expr", "code_text": "value = close"},
+    )
+    monkeypatch.setattr(module.FactorAnalyst, "_get_independent_metrics", lambda self, factor_name: {})
+    monkeypatch.setattr(module.FactorAnalyst, "_get_multi_window_metrics", lambda self, factor_name: {})
+
+    analyst = module.FactorAnalyst()
+    with pytest.raises(ValueError, match="refusing default TECH fallback"):
+        analyst.analyze_single_factor("unknown_factor_without_rule", "manual", use_llm=False)
+
+
+def test_quantevolver_ui_marks_archived_rating_rules_non_executable() -> None:
+    text = (QUANTEVOLVER_FRONTEND_ROOT / "components" / "FactorList.tsx").read_text(encoding="utf-8")
+    assert 'rule.status === "archived"' in text
+    assert "已归档/不可执行" in text
+    assert "归档或非 v2 规则不可激活/执行" in text
 
 
 def test_production_runtime_code_has_no_local_path_or_secret_fallbacks() -> None:
