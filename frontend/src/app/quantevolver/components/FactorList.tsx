@@ -2689,7 +2689,6 @@ export default function FactorList({
                 <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("grade")}>评级{getSortIndicator("grade")}</th>
                 <th style={{ ...thStyle, width: 50 }}>状态</th>
                 <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("ind_ic")}>IC(独立){getSortIndicator("ind_ic")}</th>
-                <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("ind_rank_ic")}>RankIC(独立){getSortIndicator("ind_rank_ic")}</th>
                 <th style={{ ...thStyle, cursor: "pointer" }} title="按 1D 独立 Rank IC 排序" onClick={() => handleSort("ind_rank_ic_1d")}>RIC 1D{getSortIndicator("ind_rank_ic_1d")}</th>
                 <th style={{ ...thStyle, cursor: "pointer" }} title="按 5D 独立 Rank IC 排序" onClick={() => handleSort("ind_rank_ic_5d")}>RIC 5D{getSortIndicator("ind_rank_ic_5d")}</th>
                 <th style={{ ...thStyle, cursor: "pointer" }} title="按 10D 独立 Rank IC 排序" onClick={() => handleSort("ind_rank_ic_10d")}>RIC 10D{getSortIndicator("ind_rank_ic_10d")}</th>
@@ -2824,14 +2823,6 @@ export default function FactorList({
                           style={{ color: f.ind_ic != null ? ((f.ind_ic ?? 0) > 0 ? "#059669" : "#dc2626") : "#9ca3af" }}
                         >
                           {f.ind_ic != null ? f.ind_ic.toFixed(4) : "-"}
-                        </span>
-                      </td>
-                      <td style={tdStyle}>
-                        <span
-                          title={f.ind_rank_ic != null ? `独立 Rank IC: ${f.ind_rank_ic.toFixed(4)}` : undefined}
-                          style={{ color: f.ind_rank_ic != null ? ((f.ind_rank_ic ?? 0) > 0 ? "#059669" : "#dc2626") : "#9ca3af" }}
-                        >
-                          {f.ind_rank_ic != null ? f.ind_rank_ic.toFixed(4) : "-"}
                         </span>
                       </td>
                       {horizonRankIc.map(item => (
