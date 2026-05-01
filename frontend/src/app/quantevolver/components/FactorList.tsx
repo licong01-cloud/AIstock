@@ -440,7 +440,7 @@ export default function FactorList({
   const [cacheWorkers, setCacheWorkers] = useState(4);
   const [cacheBusy, setCacheBusy] = useState(false);
   const [cacheStartDate, setCacheStartDate] = useState(cacheContext?.trainStart || "2018-08-01");
-  const [cacheEndDate, setCacheEndDate] = useState(cacheContext?.backtestEnd || "2026-04-03");
+  const [cacheEndDate, setCacheEndDate] = useState(cacheContext?.backtestEnd || "2026-04-28");
   const [cacheCoverageFilter, setCacheCoverageFilter] = useState("all");
   const [cacheIncremental, setCacheIncremental] = useState(false);
   const [cacheTasks, setCacheTasks] = useState<CacheTask[]>([]);
