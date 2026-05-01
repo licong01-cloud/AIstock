@@ -147,6 +147,7 @@ They should be executed manually from the UI after the operator confirms the imp
 - `npm exec tsc -- --noEmit` in `frontend` -> passed.
 - `conda run -n AIstock python -m nox -s l0` -> passed; existing MEDIUM guardrail findings remain in Paper v2 tests and are outside this factor qe_eval_v2 change scope.
 - Synthetic in-memory `_compute_factor_metrics_impl` smoke with 160 business days and 20 instruments -> all five eval windows returned `ok`, `coverage_full = 1.0`; expected NumPy warnings were emitted for warm-up/terminal all-NaN slices.
+- Real UI validation on dev ports `8012/3012`: selected snapshot `20260410` and factor `WVMA5` from `alpha158`, clicked the selected-factor metrics button, backend inserted 5 rows successfully; DB before/after comparison showed max absolute difference `0.0` and mismatch count `0` for every field except `coverage`, `calculated_at`, and `calc_batch_id`. Coverage changed from old raw-density values to PIT coverage as expected.
 - Static scans confirmed official Quantevolver metric paths no longer import `rdagent.app.factor_metrics`; `scripts/quick_ic_screen.py` remains a non-official diagnostic script and still imports the RD-Agent reader.
 - Full-library independent metric calculation, full-library classification, and full-library official rating were not executed.
 
