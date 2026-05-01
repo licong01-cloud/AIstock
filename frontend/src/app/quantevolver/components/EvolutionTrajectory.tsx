@@ -8,6 +8,9 @@ const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 
 interface EvolutionTrajectoryProps {
   taskId: string | null;
+  taskType?: string;
+  evolutionMode?: string;
+  sourceType?: string;
 }
 
 /**
@@ -22,7 +25,12 @@ function extractMetric(metrics: any, ...keys: string[]): number | null {
   return null;
 }
 
-export default React.memo(function EvolutionTrajectory({ taskId }: EvolutionTrajectoryProps) {
+export default React.memo(function EvolutionTrajectory({
+  taskId,
+  taskType,
+  evolutionMode,
+  sourceType,
+}: EvolutionTrajectoryProps) {
   const [rawData, setRawData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -129,6 +137,9 @@ export default React.memo(function EvolutionTrajectory({ taskId }: EvolutionTraj
 
   if (!processedData) return null;
   const data = processedData;
+  const normalizedMode = evolutionMode || "auto";
+  const normalizedType = taskType || sourceType || "evolution";
+  const showDimensionStats = normalizedType === "evolution" && normalizedMode === "auto";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
@@ -215,8 +226,8 @@ export default React.memo(function EvolutionTrajectory({ taskId }: EvolutionTraj
         </div>
       )}
 
-      {/* Dimension heatmap */}
-      {Object.keys(data.dimension_stats).length > 0 && (
+      {/* Dimension exploration stats are meaningful only for automatic evolution. */}
+      {showDimensionStats && Object.keys(data.dimension_stats).length > 0 && (
         <div style={{
           backgroundColor: "#fff", borderRadius: 8,
           border: "1px solid #e2e8f0", padding: 16, minWidth: 0, overflow: "hidden",

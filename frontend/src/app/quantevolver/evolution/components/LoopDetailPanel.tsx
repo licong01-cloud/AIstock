@@ -45,6 +45,9 @@ interface TaskInfo {
   execution_algo?: string;
   unfilled_handler?: string;
   enable_sector_hmm?: boolean;
+  task_type?: string;
+  source_type?: string;
+  evolution_mode?: string;
 }
 
 interface LoopDetailPanelProps {
@@ -179,7 +182,12 @@ export default React.memo(function LoopDetailPanel({
 
       {rightPanelView === "trajectory" ? (
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflowY: "auto", padding: "24px", backgroundColor: "#fafaf9", display: "flex", flexDirection: "column", gap: "16px" }}>
-          <EvolutionTrajectory taskId={activeTaskId} />
+          <EvolutionTrajectory
+            taskId={activeTaskId}
+            taskType={activeTask?.task_type || taskType}
+            evolutionMode={activeTask?.evolution_mode}
+            sourceType={activeTask?.source_type}
+          />
           {loops && loops.length > 0 && (
             <LoopMetricsComparison
               loops={loops}
