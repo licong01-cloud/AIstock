@@ -156,12 +156,13 @@ export default function LoopMetricsComparison({
       </div>
 
       <div style={{ overflowX: "auto", border: "1px solid #e5e7eb", borderRadius: "6px", backgroundColor: "#fff" }}>
-        <table style={{ width: "100%", minWidth: "1480px", borderCollapse: "collapse", fontSize: "13px" }}>
+        <table style={{ width: "100%", minWidth: "1700px", borderCollapse: "collapse", fontSize: "13px" }}>
           <thead>
             <tr style={{ backgroundColor: "#f1f5f9", borderBottom: "2px solid #e5e7eb" }}>
               <th style={thStyle}>Loop</th>
               <th style={thStyle}>SOTA</th>
               <th style={thStyle}>动作</th>
+              <th style={thStyle}>Loop说明</th>
               <th style={thStyle}>模型</th>
               <th style={thStyle}>周期</th>
               <th style={thStyle}>HMM / 快照</th>
@@ -231,6 +232,12 @@ export default function LoopMetricsComparison({
                     </span>
                   </td>
                   <td style={tdStyle}>{loop.action_type || diagnostics.model.modelId || "-"}</td>
+                  <td
+                    title={diagnostics.comment.fullText}
+                    style={{ ...tdStyle, minWidth: "220px", maxWidth: "320px", whiteSpace: "normal", lineHeight: 1.45, color: "#334155" }}
+                  >
+                    {diagnostics.comment.source === "fallback" ? "-" : diagnostics.comment.shortText}
+                  </td>
                   <td style={tdStyle}>
                     <div style={{ fontFamily: "monospace", fontWeight: 700, color: "#334155" }}>
                       {formatShortText(model.modelId || model.modelType, 22)}

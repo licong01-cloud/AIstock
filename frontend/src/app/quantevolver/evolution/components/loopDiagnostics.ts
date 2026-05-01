@@ -191,6 +191,9 @@ function pickCommentText(loop: LoopLike): LoopComment {
   const action = loop.action_type || cfg?.action_type || "initial";
 
   const sources: Array<{ source: string; value: any }> = [
+    { source: "config.label", value: cfg?.label },
+    { source: "config.loop_description", value: cfg?.loop_description ?? cfg?.loop_desc ?? cfg?.loop_note },
+    { source: "config.comment", value: cfg?.comment ?? cfg?.note ?? cfg?.description },
     { source: "direction.reason", value: agent?.direction?.reason },
     { source: "direction.rationale", value: agent?.direction?.rationale },
     { source: "direction.summary", value: agent?.direction?.summary },
@@ -200,8 +203,6 @@ function pickCommentText(loop: LoopLike): LoopComment {
     { source: "researcher.summary", value: agent?.researcher?.summary },
     { source: "evaluator.reason", value: agent?.evaluator?.reason },
     { source: "evaluator.summary", value: agent?.evaluator?.summary },
-    { source: "config.comment", value: cfg?.comment ?? cfg?.note ?? cfg?.description },
-    { source: "config.label", value: cfg?.label },
   ];
 
   for (const item of sources) {
