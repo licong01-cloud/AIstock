@@ -2791,8 +2791,8 @@ class ConfigComposer:
         4. 合并所有因子结果为 combined_factors_df.parquet
         """
         # 提取缓存窗口（用于全周期缓存命中判断）
-        train_start = "2018-08-01"
-        test_end = "2026-04-28"
+        train_start = RDAGENT_DEFAULT_DATA_SPLIT["train_start"]
+        test_end = QE_DEFAULT_SIGNAL_END
         if data_split:
             train_start = data_split.get("train_start", train_start)
             test_end = data_split.get("test_end", test_end)
@@ -2853,8 +2853,10 @@ class ConfigComposer:
         lines.append("        return None")
         lines.append("    code_hash = hashlib.sha256(factor_code.encode()).hexdigest()[:16]")
         lines.append("    try:")
-        lines.append("        meta = _json.load(open(FACTOR_CACHE_META, 'r'))")
-        lines.append("    except Exception:")
+        lines.append("        with open(FACTOR_CACHE_META, 'r', encoding='utf-8') as _meta_f:")
+        lines.append("            meta = _json.load(_meta_f)")
+        lines.append("    except Exception as e:")
+        lines.append("        logger.warning(f'  {factor_name}: cache meta read failed: {e}')")
         lines.append("        return None")
         lines.append("    entry = meta.get('factors', {}).get(factor_name, {})")
         lines.append("    cached_hash = entry.get('source_hash_raw')")
@@ -2865,10 +2867,14 @@ class ConfigComposer:
         lines.append("    if '~' not in cached_range:")
         lines.append("        return None")
         lines.append("    c_start, c_end = cached_range.split('~')")
-        lines.append("    # 允许时序因子 lookback 缺口：缓存起始日比 train_start 晚 60 日历天内视为正常")
+        lines.append("    # 允许时序因子 lookback/warm-up 缺口：优先使用缓存记录的请求窗口判断。")
         lines.append("    _LOOKBACK_TOLERANCE_DAYS = 60")
         lines.append("    _ts = pd.Timestamp(TRAIN_START)")
-        lines.append("    _gap_ok = (pd.Timestamp(c_start) - _ts).days <= _LOOKBACK_TOLERANCE_DAYS if c_start > TRAIN_START else True")
+        lines.append("    _window_start = entry.get('window_train_start')")
+        lines.append("    if _window_start:")
+        lines.append("        _gap_ok = pd.Timestamp(_window_start) <= _ts")
+        lines.append("    else:")
+        lines.append("        _gap_ok = (pd.Timestamp(c_start) - _ts).days <= _LOOKBACK_TOLERANCE_DAYS if c_start > TRAIN_START else True")
         lines.append("    if (not _gap_ok) or c_end < TEST_END:")
         lines.append("        logger.info(f'  {factor_name}: cache date insufficient ({cached_range} vs {TRAIN_START}~{TEST_END})')")
         lines.append("        return None")
@@ -2899,9 +2905,11 @@ class ConfigComposer:
         lines.append("        meta = {}")
         lines.append("        if os.path.exists(FACTOR_CACHE_META):")
         lines.append("            try:")
-        lines.append("                meta = _json.load(open(FACTOR_CACHE_META, 'r'))")
-        lines.append("            except Exception:")
-        lines.append("                pass")
+        lines.append("                with open(FACTOR_CACHE_META, 'r', encoding='utf-8') as _meta_f:")
+        lines.append("                    meta = _json.load(_meta_f)")
+        lines.append("            except Exception as e:")
+        lines.append("                logger.warning(f'  {factor_name}: cache meta read failed before write, skip cache write: {e}')")
+        lines.append("                return")
         lines.append("        factors = meta.get('factors', {})")
         lines.append("        dates = result_df.index.get_level_values(0)")
         lines.append("        d_min = str(dates.min().date())")
@@ -2912,11 +2920,13 @@ class ConfigComposer:
         lines.append("            'date_range': f'{d_min}~{d_max}',")
         lines.append("            'as_of_date': d_max,")
         lines.append("            'source_hash_raw': code_hash,")
+        lines.append("            'window_train_start': TRAIN_START,")
+        lines.append("            'window_backtest_end': TEST_END,")
         lines.append("        }")
         lines.append("        meta['factors'] = factors")
         lines.append("        tmp_fd, tmp_path = _tmpf.mkstemp(dir=os.path.dirname(FACTOR_CACHE_META), suffix='.json')")
 
-        lines.append("        with os.fdopen(tmp_fd, 'w') as f:")
+        lines.append("        with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:")
         lines.append("            _json.dump(meta, f, indent=2, ensure_ascii=False)")
         lines.append("        os.replace(tmp_path, FACTOR_CACHE_META)")
         lines.append("        logger.info(f'  {factor_name}: cache WRITTEN ({len(result_df)} rows, {d_min}~{d_max}, window={TRAIN_START}~{TEST_END})')")

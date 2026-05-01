@@ -8,6 +8,28 @@ import IcSeriesChart from "./charts/IcSeriesChart";
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const FACTOR_CACHE_DEFAULT_START = "2018-08-01";
 const FACTOR_CACHE_DEFAULT_END = "2026-04-28";
+const FACTOR_CACHE_WARMUP_TOLERANCE_DAYS = 60;
+
+type FactorCacheCoverageInput = {
+  cache_date_range?: string | null;
+  cache_end_date?: string | null;
+  cache_window_train_start?: string | null;
+};
+
+function factorCacheCoversRequestedWindow(
+  factor: FactorCacheCoverageInput,
+  targetStart?: string | null,
+  targetEnd?: string | null,
+): boolean {
+  if (!targetStart || !targetEnd || !factor.cache_date_range?.includes("~")) return true;
+  const [cacheStart, cacheEndFromRange] = factor.cache_date_range.split("~");
+  const cacheEnd = factor.cache_end_date || cacheEndFromRange;
+  if (!cacheEnd || cacheEnd < targetEnd) return false;
+  if (factor.cache_window_train_start && factor.cache_window_train_start <= targetStart) return true;
+  if (cacheStart <= targetStart) return true;
+  const gapDays = Math.round((new Date(cacheStart).getTime() - new Date(targetStart).getTime()) / 86400000);
+  return gapDays <= FACTOR_CACHE_WARMUP_TOLERANCE_DAYS;
+}
 
 async function fetchJsonOrThrow(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
@@ -110,6 +132,8 @@ type Factor = {
   cache_end_date?: string | null;
   cache_computed_at?: string | null;
   cache_as_of_date?: string | null;
+  cache_window_train_start?: string | null;
+  cache_window_backtest_end?: string | null;
   cache_source?: string | null;
   cache_source_label?: string | null;
   cache_data_source_mode?: string | null;
@@ -182,6 +206,8 @@ export type MergedFactor = {
   cache_end_date?: string | null;
   cache_computed_at?: string | null;
   cache_as_of_date?: string | null;
+  cache_window_train_start?: string | null;
+  cache_window_backtest_end?: string | null;
   cache_source?: string | null;
   cache_source_label?: string | null;
   cache_data_source_mode?: string | null;
@@ -848,6 +874,8 @@ export default function FactorList({
         cache_end_date: f.cache_end_date ?? null,
         cache_computed_at: f.cache_computed_at ?? null,
         cache_as_of_date: f.cache_as_of_date ?? null,
+        cache_window_train_start: f.cache_window_train_start ?? null,
+        cache_window_backtest_end: f.cache_window_backtest_end ?? null,
         cache_source: f.cache_source ?? null,
         cache_source_label: f.cache_source_label ?? null,
         cache_data_source_mode: f.cache_data_source_mode ?? null,
@@ -871,8 +899,7 @@ export default function FactorList({
         const s = cacheStartDate || cacheContext?.trainStart;
         const e = cacheEndDate || cacheContext?.backtestEnd;
         if (s && e && f.cache_date_range?.includes("~")) {
-          const [cs, ce] = f.cache_date_range.split("~");
-          if (cs <= s && ce >= e) return 3; // full match
+          if (factorCacheCoversRequestedWindow(f, s, e)) return 3; // full match including warm-up window
           return 2; // partial
         }
         return 3; // has cache, no context to judge
@@ -2727,8 +2754,12 @@ export default function FactorList({
                 const cacheTitleSuffix = [
                   cacheSourceLabel ? `来源: ${cacheSourceLabel}` : null,
                   f.cache_data_source_mode ? `数据模式: ${f.cache_data_source_mode}` : null,
+                  f.cache_window_train_start || f.cache_window_backtest_end ? `请求窗口: ${f.cache_window_train_start || "-"} ~ ${f.cache_window_backtest_end || "-"}` : null,
                   f.cache_as_of_date ? `截至: ${f.cache_as_of_date}` : null,
                 ].filter(Boolean).join("\n");
+                const cacheTargetStart = cacheStartDate || cacheContext?.trainStart;
+                const cacheTargetEnd = cacheEndDate || cacheContext?.backtestEnd;
+                const cacheCoverageOk = factorCacheCoversRequestedWindow(f, cacheTargetStart, cacheTargetEnd);
 
                 return (
                   <React.Fragment key={rowKey}>
@@ -2876,34 +2907,14 @@ export default function FactorList({
                           f.cache_hash_match === false ? (
                             <span title={`源码已变更，缓存失效\n${f.cache_date_range}${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#fee2e2", color: "#dc2626" }}>✗ hash不匹配</span>
                           ) : (
-                            <span title={`${f.cache_date_range} (${f.cache_size_mb} MB)\n计算时间: ${f.cache_computed_at || "-"}${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: (() => {
-                              const s = cacheStartDate || cacheContext?.trainStart;
-                              const e = cacheEndDate || cacheContext?.backtestEnd;
-                              if (!s || !e || !f.cache_date_range?.includes("~")) return "#d1fae5";
-                              const [cs, ce] = f.cache_date_range.split("~");
-                              const startGapDays = cs > s ? Math.round((new Date(cs).getTime() - new Date(s).getTime()) / 86400000) : 0;
-                              const coverageOk = startGapDays <= 60 && ce >= e;
-                              return coverageOk ? "#d1fae5" : "#fef3c7";
-                            })(), color: (() => {
-                              const s = cacheStartDate || cacheContext?.trainStart;
-                              const e = cacheEndDate || cacheContext?.backtestEnd;
-                              if (!s || !e || !f.cache_date_range?.includes("~")) return "#059669";
-                              const [cs, ce] = f.cache_date_range.split("~");
-                              const startGapDays = cs > s ? Math.round((new Date(cs).getTime() - new Date(s).getTime()) / 86400000) : 0;
-                              const coverageOk = startGapDays <= 60 && ce >= e;
-                              return coverageOk ? "#059669" : "#d97706";
-                            })() }}>
+                            <span title={`${f.cache_date_range} (${f.cache_size_mb} MB)\n计算时间: ${f.cache_computed_at || "-"}${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: cacheCoverageOk ? "#d1fae5" : "#fef3c7", color: cacheCoverageOk ? "#059669" : "#d97706" }}>
                               {(() => {
-                                const s = cacheStartDate || cacheContext?.trainStart;
-                                const e = cacheEndDate || cacheContext?.backtestEnd;
-                                if (!s || !e || !f.cache_date_range?.includes("~")) {
+                                if (!cacheTargetStart || !cacheTargetEnd || !f.cache_date_range?.includes("~")) {
                                   const prefix = `✓ ${f.cache_date_range?.split("~")[0]?.slice(0, 7) || "已缓存"}~${f.cache_date_range?.split("~")[1]?.slice(0, 7) || ""}`;
                                   return cacheSourceLabel ? `${prefix} · ${cacheSourceLabel}` : prefix;
                                 }
                                 const [cs, ce] = f.cache_date_range.split("~");
-                                const startGapDays = cs > s ? Math.round((new Date(cs).getTime() - new Date(s).getTime()) / 86400000) : 0;
-                                const coverageOk = startGapDays <= 60 && ce >= e;
-                                const prefix = coverageOk
+                                const prefix = cacheCoverageOk
                                   ? `✓ ${cs.slice(0, 7)}~${ce.slice(0, 7)}`
                                   : `△ ${cs.slice(0, 7)}~${ce.slice(0, 7)}`;
                                 return cacheSourceLabel ? `${prefix} · ${cacheSourceLabel}` : prefix;

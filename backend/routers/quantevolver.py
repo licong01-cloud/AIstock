@@ -45,6 +45,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import httpx
+from backend.services.quantevolver.factor_cache_coverage import (
+    DEFAULT_WARMUP_TOLERANCE_DAYS,
+    factor_cache_covers_window,
+)
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -664,21 +668,17 @@ def list_factors(
         def _covers_target_range(row: Dict[str, Any]) -> bool:
             if not row.get("has_cache") or row.get("cache_hash_match") is False:
                 return False
-            c_start = row.get("cache_start_date")
-            c_end = row.get("cache_end_date")
-            if not c_start or not c_end:
-                return False
-            if cache_start_date and c_start > cache_start_date:
-                try:
-                    # 与回测加载器一致：允许时序因子 lookback 导致起点晚 60 天内。
-                    gap = (datetime.strptime(c_start, "%Y-%m-%d") - datetime.strptime(cache_start_date, "%Y-%m-%d")).days
-                    if gap > 60:
-                        return False
-                except Exception:
-                    return False
-            if cache_end_date and c_end < cache_end_date:
-                return False
-            return True
+            covered, _ = factor_cache_covers_window(
+                cache_start_date=row.get("cache_start_date"),
+                cache_end_date=row.get("cache_end_date"),
+                target_start=cache_start_date,
+                target_end=cache_end_date,
+                entry={
+                    "window_train_start": row.get("cache_window_train_start"),
+                    "window_backtest_end": row.get("cache_window_backtest_end"),
+                },
+            )
+            return covered
 
         try:
             # 先标记缓存文件与元数据；hash 校验稍后补充。
@@ -3355,24 +3355,19 @@ def _factor_cache_candidate_covers(
     target_start: Optional[str] = None,
     target_end: Optional[str] = None,
     *,
-    max_start_gap_days: int = 60,
+    max_start_gap_days: int = DEFAULT_WARMUP_TOLERANCE_DAYS,
 ) -> bool:
     if not candidate.get("valid_cache"):
         return False
-    c_start = candidate.get("cache_start_date")
-    c_end = candidate.get("cache_end_date")
-    if not c_start or not c_end:
-        return False
-    if target_start and c_start > target_start:
-        try:
-            gap = (datetime.strptime(c_start, "%Y-%m-%d") - datetime.strptime(target_start, "%Y-%m-%d")).days
-        except Exception:
-            return False
-        if gap > max_start_gap_days:
-            return False
-    if target_end and c_end < target_end:
-        return False
-    return True
+    covered, _ = factor_cache_covers_window(
+        cache_start_date=candidate.get("cache_start_date"),
+        cache_end_date=candidate.get("cache_end_date"),
+        target_start=target_start,
+        target_end=target_end,
+        entry=candidate.get("entry") or {},
+        max_start_gap_days=max_start_gap_days,
+    )
+    return covered
 
 
 def _collect_factor_cache_candidates(

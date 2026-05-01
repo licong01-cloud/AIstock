@@ -3,6 +3,12 @@ import json
 import pytest
 
 from backend.routers import quantevolver as qe_router
+from backend.services.quantevolver.config_composer import (
+    ConfigComposer,
+    QE_DEFAULT_SIGNAL_END,
+    RDAGENT_DEFAULT_DATA_SPLIT,
+)
+from scripts import backfill_factor_cache
 
 
 def test_collect_factor_cache_wsl_db_env_maps_tdx_and_pg_aliases() -> None:
@@ -149,6 +155,111 @@ def test_factor_cache_prefers_realtime_valid_cache_over_backtest_error(tmp_path)
     assert selected["cache_start_date"] == "2018-08-07"
     assert selected["cache_end_date"] == "2026-04-10"
     assert selected["cache_status"] == "ok"
+
+
+def test_factor_cache_covers_recorded_window_even_with_long_warmup(tmp_path) -> None:
+    qe_router._invalidate_cache_meta()
+    specs = _cache_source_specs(tmp_path)
+    backtest_root = tmp_path / "factor_values"
+    _write_cache_meta(
+        backtest_root,
+        {
+            "LongWarmupFactor": {
+                "status": "ok",
+                "computed_at": "2026-05-01T08:21:46",
+                "date_range": "2018-12-31~2026-04-28",
+                "as_of_date": "2026-04-28",
+                "window_train_start": "2018-08-01",
+                "window_backtest_end": "2026-04-28",
+                "rows": 100,
+            }
+        },
+    )
+    (backtest_root / "single" / "LongWarmupFactor.parquet").write_bytes(b"PAR1")
+
+    selected = qe_router._choose_best_factor_cache_candidate(
+        qe_router._collect_factor_cache_candidates("LongWarmupFactor", source_specs=specs),
+        "2018-08-01",
+        "2026-04-28",
+    )
+
+    assert selected is not None
+    assert qe_router._factor_cache_candidate_covers(selected, "2018-08-01", "2026-04-28")
+
+
+def test_factor_cache_backfill_skips_recorded_warmup_window(monkeypatch, tmp_path) -> None:
+    single_dir = tmp_path / "single"
+    single_dir.mkdir()
+    monkeypatch.setattr(backfill_factor_cache, "SINGLE_DIR", single_dir)
+    (single_dir / "LongWarmupFactor.parquet").write_bytes(b"PAR1")
+
+    plan = backfill_factor_cache.plan_factor_action(
+        "LongWarmupFactor",
+        "2018-08-01",
+        "2026-04-28",
+        {
+            "factors": {
+                "LongWarmupFactor": {
+                    "date_range": "2018-12-31~2026-04-28",
+                    "window_train_start": "2018-08-01",
+                    "window_backtest_end": "2026-04-28",
+                }
+            }
+        },
+        incremental=True,
+        force=False,
+    )
+
+    assert plan["action"] == "skip"
+    assert plan["reason"] == "covered_warmup_window"
+
+
+def test_factor_cache_backfill_extends_forward_after_warmup(monkeypatch, tmp_path) -> None:
+    single_dir = tmp_path / "single"
+    single_dir.mkdir()
+    monkeypatch.setattr(backfill_factor_cache, "SINGLE_DIR", single_dir)
+    (single_dir / "LongWarmupFactor.parquet").write_bytes(b"PAR1")
+
+    plan = backfill_factor_cache.plan_factor_action(
+        "LongWarmupFactor",
+        "2018-08-01",
+        "2026-04-28",
+        {
+            "factors": {
+                "LongWarmupFactor": {
+                    "date_range": "2018-12-31~2026-04-10",
+                    "window_train_start": "2018-08-01",
+                    "window_backtest_end": "2026-04-10",
+                }
+            }
+        },
+        incremental=True,
+        force=False,
+    )
+
+    assert plan["action"] == "extend_forward"
+
+
+def test_qe_prepare_factors_default_window_uses_current_signal_end_and_records_cache_window() -> None:
+    code = (
+        "def calculate_DemoFactor(instruments, start_date, end_date):\n"
+        "    import pandas as pd\n"
+        "    return pd.DataFrame(index=pd.MultiIndex.from_arrays([[], []], names=['datetime', 'instrument']), columns=['DemoFactor'])\n"
+    )
+    script = ConfigComposer()._compose_prepare_factors(
+        [{"factor_name": "DemoFactor", "code_text": code}],
+        factor_data_dir="/tmp/factor_data",
+        data_split=dict(RDAGENT_DEFAULT_DATA_SPLIT),
+    )
+
+    assert script is not None
+    assert f"TEST_END = '{QE_DEFAULT_SIGNAL_END}'" in script
+    assert "TEST_END = '2026-03-10'" not in script
+    assert "'window_train_start': TRAIN_START" in script
+    assert "'window_backtest_end': TEST_END" in script
+    assert "entry.get('window_train_start')" in script
+    assert "open(FACTOR_CACHE_META, 'r', encoding='utf-8')" in script
+    assert "os.fdopen(tmp_fd, 'w', encoding='utf-8')" in script
 
 
 def test_factor_cache_uses_error_only_when_no_valid_cache_exists(tmp_path) -> None:

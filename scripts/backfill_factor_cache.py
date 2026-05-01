@@ -35,6 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from backend.services.quantevolver.config_composer import ConfigComposer
+from backend.services.quantevolver.factor_cache_coverage import factor_cache_covers_window
 from backend.services.quantevolver.factor_value_pipeline import FactorComputeResult
 
 logging.basicConfig(
@@ -227,16 +228,25 @@ def plan_factor_action(
     except Exception as e:
         return {"action": "full_rebuild", "reason": f"parse_error: {e}", "entry": entry}
 
-    if cached_start <= target_start and cached_end >= target_end:
+    start_ok, start_reason = factor_cache_covers_window(
+        cache_start_date=cached_start,
+        cache_end_date=cached_end,
+        target_start=target_start,
+        target_end=None,
+        entry=entry,
+    )
+    end_ok = cached_end >= target_end
+
+    if start_ok and end_ok:
         return {
             "action": "skip",
-            "reason": "covered",
+            "reason": "covered" if start_reason != "covered_by_recorded_window" else "covered_warmup_window",
             "cached_start": cached_start,
             "cached_end": cached_end,
             "entry": entry,
         }
 
-    if incremental and cached_start <= target_start and cached_end < target_end:
+    if incremental and start_ok and not end_ok:
         return {
             "action": "extend_forward",
             "reason": f"need_later ({cached_end} < {target_end})",
@@ -245,7 +255,7 @@ def plan_factor_action(
             "entry": entry,
         }
 
-    if cached_start > target_start:
+    if not start_ok:
         return {
             "action": "full_rebuild",
             "reason": f"need_earlier ({cached_start} > {target_start})",
