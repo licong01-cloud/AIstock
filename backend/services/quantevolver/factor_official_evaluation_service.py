@@ -633,9 +633,9 @@ class FactorOfficialEvaluationService:
         calc_batch_id = str(__import__("uuid").uuid4())
 
         try:
-            from rdagent.app.factor_metrics.engine import (
-                prepare_shared_context,
+            from .qe_eval_v2_metric_engine import (
                 compute_single_factor_metrics,
+                prepare_shared_context,
             )
             qlib_bin_path = self._resolve_qlib_bin_path()
             # 从快照 meta 获取日期范围

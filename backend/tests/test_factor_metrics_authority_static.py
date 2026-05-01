@@ -19,6 +19,12 @@ FACTOR_RULE_INDEX = REPO_ROOT / "backend" / "rating_rules" / "factor" / "index.j
 
 def _production_python_files() -> list[Path]:
     rel_roots = [root.relative_to(REPO_ROOT).as_posix() for root in PRODUCTION_ROOTS]
+    discovered = {
+        path
+        for root in PRODUCTION_ROOTS
+        for path in root.rglob("*.py")
+        if "__pycache__" not in path.parts
+    }
     try:
         tracked = subprocess.check_output(
             ["git", "ls-files", "--", *rel_roots],
@@ -26,18 +32,16 @@ def _production_python_files() -> list[Path]:
             text=True,
             encoding="utf-8",
         ).splitlines()
-        return sorted(
+        discovered.update(
             REPO_ROOT / rel
             for rel in tracked
             if rel.endswith(".py") and "__pycache__" not in Path(rel).parts
         )
+        return sorted(discovered)
     except Exception:
         pass
 
-    files: list[Path] = []
-    for root in PRODUCTION_ROOTS:
-        files.extend(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)
-    return sorted(files)
+    return sorted(discovered)
 
 
 def test_production_factor_metrics_reads_are_calc_engine_scoped() -> None:
@@ -122,6 +126,17 @@ def test_factor_analyst_rule_only_unknown_category_fails_fast(monkeypatch: pytes
         analyst.analyze_single_factor("unknown_factor_without_rule", "manual", use_llm=False)
 
 
+def test_factor_analyst_classification_writes_fail_on_catalog_or_duplicate_conflict() -> None:
+    text = (REPO_ROOT / "backend" / "services" / "quantevolver" / "factor_analyst.py").read_text(
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    assert "factor classification write failed: catalog row missing" in text
+    assert "duplicate factor classification rows for factor_catalog_id" in text
+    assert "manual cleanup is required before writing classification" in text
+
+
 def test_quantevolver_ui_marks_archived_rating_rules_non_executable() -> None:
     text = (QUANTEVOLVER_FRONTEND_ROOT / "components" / "FactorList.tsx").read_text(encoding="utf-8")
     assert 'rule.status === "archived"' in text
@@ -203,3 +218,92 @@ def test_quantevolver_ui_does_not_reference_legacy_factor_metric_fields() -> Non
                     break
 
     assert not bad_locations, "Quantevolver UI uses legacy factor fields: " + ", ".join(bad_locations)
+
+
+def test_official_qe_eval_v2_metric_paths_do_not_import_rdagent_factor_metrics() -> None:
+    """AIstock official qe_eval_v2 metrics must be self-contained, not RD-Agent-owned."""
+    banned = "rdagent.app.factor_metrics"
+    bad_locations: list[str] = []
+
+    checked_paths = [
+        path for path in _production_python_files()
+        if "quantevolver" in path.relative_to(REPO_ROOT).as_posix()
+    ]
+    checked_paths.append(REPO_ROOT / "scripts" / "compute_factor_metrics_unified.py")
+
+    for path in sorted(set(checked_paths)):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if banned in text:
+            bad_locations.append(path.relative_to(REPO_ROOT).as_posix())
+
+    assert not bad_locations, "Official qe_eval_v2 path imports RD-Agent factor metrics: " + ", ".join(bad_locations)
+
+
+def test_compute_factor_metrics_unified_bootstraps_repo_and_uses_qe_eval_v2_engine() -> None:
+    text = (REPO_ROOT / "scripts" / "compute_factor_metrics_unified.py").read_text(
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    assert "REPO_ROOT = Path(__file__).resolve().parents[1]" in text
+    assert "sys.path.insert(0, str(REPO_ROOT))" in text
+    assert "backend.services.quantevolver.qe_eval_v2_metric_engine" in text
+    assert "rdagent.app.factor_metrics" not in text
+
+
+def test_qe_eval_v2_pit_coverage_excludes_only_full_series_warmup_and_suspension() -> None:
+    from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
+
+    factor_values = engine.np.array(
+        [
+            [engine.np.nan, engine.np.nan],
+            [engine.np.nan, 1.0],
+            [2.0, engine.np.nan],
+            [engine.np.nan, 3.0],
+            [4.0, 5.0],
+        ],
+        dtype=float,
+    )
+    market_valid = engine.np.ones_like(factor_values, dtype=bool)
+    suspended = engine.np.zeros_like(factor_values, dtype=bool)
+    suspended[4, 0] = True
+
+    non_warmup = engine._post_first_finite_mask(factor_values)
+    coverage = engine._pit_coverage_from_masks(
+        factor_values,
+        market_valid,
+        suspended,
+        non_warmup,
+    )
+
+    assert coverage == pytest.approx(4 / 6)
+
+    recent_slice = slice(3, 5)
+    recent_coverage = engine._pit_coverage_from_masks(
+        factor_values[recent_slice],
+        market_valid[recent_slice],
+        engine.np.zeros_like(factor_values[recent_slice], dtype=bool),
+        non_warmup[recent_slice],
+    )
+
+    assert recent_coverage == pytest.approx(3 / 4)
+
+
+def test_qe_eval_v2_metric_engine_reports_authority_metadata() -> None:
+    from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
+
+    assert "rdagent.app.factor_metrics" not in (
+        REPO_ROOT / "backend" / "services" / "quantevolver" / "qe_eval_v2_metric_engine.py"
+    ).read_text(encoding="utf-8")
+
+    context = {
+        "coverage_semantics": "pit_listed_tradable_non_warmup_v1",
+        "calc_engine": "qe_eval_v2",
+    }
+    assert context["calc_engine"] == "qe_eval_v2"
+    assert engine._pit_coverage_from_masks(
+        engine.np.array([[1.0]]),
+        engine.np.array([[True]]),
+        engine.np.array([[False]]),
+        engine.np.array([[True]]),
+    ) == pytest.approx(1.0)

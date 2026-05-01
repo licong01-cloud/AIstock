@@ -63,19 +63,19 @@ No neutral defaults, empty dictionaries, implicit primary dedup status, or fake 
 
 Rule-only classification must not silently classify unknown factors as `TECH`. If no rule or LLM output produces a category, the classification operation fails with an explicit error. The unified pipeline must treat that as Step A failure and skip Step B rating for that factor.
 
-## Still To Implement In Later Phases
+## Implemented Follow-up - 2026-05-01
 
 ### AIstock-owned qe_eval_v2 Metrics Kernel
 
-- Move the official metric calculation kernel into AIstock-owned code under the `qe_eval_v2` authority boundary.
-- Keep RD-Agent native files untouched; do not delete `rdagent.app.factor_metrics.engine`.
-- Replace runtime imports of `rdagent.app.factor_metrics.engine.compute_single_factor_metrics` in official AIstock metric calculation.
-- Add parity tests that compare the migrated AIstock kernel against the current RD-Agent/Qlib metric outputs on a small audited sample.
-- Add a static guard that prevents official metric paths from importing `rdagent.app.factor_metrics`.
+- Added `backend/services/quantevolver/qe_eval_v2_metric_engine.py` as the AIstock-owned official independent metrics kernel.
+- Added `backend/services/quantevolver/qe_eval_v2_qlib_reader.py` as the local Qlib close-price reader used by the AIstock-owned kernel.
+- `backend/services/quantevolver/factor_official_evaluation_service.py` now imports `prepare_shared_context` and `compute_single_factor_metrics` from the AIstock-owned kernel.
+- `scripts/compute_factor_metrics_unified.py` now bootstraps the AIstock repository root onto `sys.path` and imports `backend.services.quantevolver.qe_eval_v2_metric_engine` instead of `rdagent.app.factor_metrics.engine`.
+- RD-Agent native files are untouched and remain available for RD-Agent's own runtime. AIstock official metric paths are guarded by tests against importing `rdagent.app.factor_metrics`.
 
 ### PIT Coverage Semantics
 
-Keep the existing `aistock_factor_metrics.coverage` column but redefine its meaning:
+The existing `aistock_factor_metrics.coverage` column is redefined as:
 
 ```text
 coverage = finite_factor_value_count / pit_eligible_non_warmup_sample_count
@@ -91,12 +91,20 @@ The denominator must include only point-in-time eligible samples:
 
 The numerator counts only finite factor values. NaN, inf, missing, and calculation failures remain invalid values. This coverage is intended to measure real factor data availability for tradable PIT samples, not raw matrix density across never-listed or unavailable securities.
 
+Implementation details:
+
+- The official kernel reports `coverage_semantics = 'pit_listed_tradable_non_warmup_v1'`.
+- Listed/trading eligibility is derived from the aligned close-price and forward-return matrices.
+- Suspension exclusion is loaded from `market.suspend_d` by default. If that official source cannot be read, metric preparation fails explicitly.
+- Rolling-window warm-up is detected on the full factor time series per instrument, then sliced into each evaluation window. A NaN appearing after the first finite value remains a real missing value and is counted against coverage.
+- Non-official isolated tests may pass `load_suspend_d=False`; official UI/API flows keep the fail-fast default.
+
 ### Legacy Classification Field Cleanup
 
-- Stop exposing `qe_factor_classification.grade`, `ic_value`, `sharpe_value`, and `ann_ret_value` as normal business fields.
-- If backward compatibility requires returning them, they must be named `legacy_*` and excluded from sorting/filtering/prompts.
-- Inventory scripts that still read or write those legacy fields and classify them as production, migration, diagnostic, or deprecated.
-- Production paths must read official ratings and official metrics instead.
+- `FactorAnalyst._upsert_classification` writes `NULL` to legacy metric mirror fields `ic_value`, `sharpe_value`, and `ann_ret_value`; official metric values remain in `aistock_factor_metrics`.
+- UI-facing factor-list code reads production grade/score from `qe_factor_official_ratings`.
+- Backward-compatible classification fields are exposed only as `legacy_*` where still needed for audit display, and are excluded from sorting/filtering/prompts.
+- Static tests prevent Quantevolver UI paths from reading legacy classification rating fields as authority fields.
 
 ### Duplicate Classification Rows
 
@@ -106,6 +114,20 @@ Current data contains two duplicate classification rows by `factor_catalog_id`, 
 - merge useful metadata if needed;
 - delete the duplicate row;
 - add a guard to prevent future one-catalog-to-many classification rows.
+
+Implementation guard:
+
+- New classification writes require an exact `aistock_factor_catalog` row for `(factor_name, factor_source)`.
+- If another `qe_factor_classification` row already maps to the same `factor_catalog_id`, the write fails with an explicit duplicate-row error and requires manual cleanup.
+- No historical duplicate rows are deleted by Codex in this phase.
+
+## Remaining Manual / Later Work
+
+### Parity Audit Against RD-Agent Metric Outputs
+
+- The new AIstock kernel is copied from the current RD-Agent metric implementation and then changed only for authority imports, PIT coverage semantics, and fail-fast source ownership.
+- A small in-memory coverage test exists, but a real DB/Qlib parity audit comparing old RD-Agent metric output versus the AIstock-owned kernel on a fixed audited factor sample still remains a later manual/diagnostic task.
+- That parity audit must not modify RD-Agent assets or StrategyPackage/QE artifacts.
 
 ### Full-Library Operations
 
@@ -117,6 +139,16 @@ The following operations are intentionally not executed by Codex in this phase:
 - full-library deletion/cleanup decisions.
 
 They should be executed manually from the UI after the operator confirms the implementation and desired run scope.
+
+## Validation Completed - 2026-05-01
+
+- `conda run -n AIstock python -m py_compile backend/services/quantevolver/qe_eval_v2_metric_engine.py backend/services/quantevolver/qe_eval_v2_qlib_reader.py backend/services/quantevolver/factor_official_evaluation_service.py backend/services/quantevolver/factor_analyst.py scripts/compute_factor_metrics_unified.py backend/tests/test_factor_metrics_authority_static.py`
+- `conda run -n AIstock pytest backend/tests/test_manual_factor_service_wsl_output.py backend/tests/test_factor_cache_wsl_env.py backend/tests/test_factor_metrics_authority_static.py -q -p no:cacheprovider` -> 22 passed.
+- `npm exec tsc -- --noEmit` in `frontend` -> passed.
+- `conda run -n AIstock python -m nox -s l0` -> passed; existing MEDIUM guardrail findings remain in Paper v2 tests and are outside this factor qe_eval_v2 change scope.
+- Synthetic in-memory `_compute_factor_metrics_impl` smoke with 160 business days and 20 instruments -> all five eval windows returned `ok`, `coverage_full = 1.0`; expected NumPy warnings were emitted for warm-up/terminal all-NaN slices.
+- Static scans confirmed official Quantevolver metric paths no longer import `rdagent.app.factor_metrics`; `scripts/quick_ic_screen.py` remains a non-official diagnostic script and still imports the RD-Agent reader.
+- Full-library independent metric calculation, full-library classification, and full-library official rating were not executed.
 
 ## Validation Requirements
 

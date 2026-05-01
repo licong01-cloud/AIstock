@@ -2076,16 +2076,29 @@ class FactorAnalyst:
                 """, (kwargs["factor_name"], kwargs["factor_source"]))
                 row = cur.fetchone()
                 if not row:
-                    # 尝试不限 source 匹配
-                    cur.execute("""
-                        SELECT id FROM aistock_factor_catalog
-                        WHERE factor_name = %s ORDER BY id LIMIT 1
-                    """, (kwargs["factor_name"],))
-                    row = cur.fetchone()
-                if not row:
-                    logger.warning(f"因子 {kwargs['factor_name']} 未在 catalog 中找到，跳过分类写入")
-                    return
+                    raise RuntimeError(
+                        f"factor classification write failed: catalog row missing for "
+                        f"{kwargs['factor_name']} source={kwargs['factor_source']}"
+                    )
                 factor_catalog_id = row[0]
+
+                cur.execute("""
+                    SELECT id, factor_name, factor_source
+                    FROM qe_factor_classification
+                    WHERE factor_catalog_id = %s
+                      AND NOT (factor_name = %s AND factor_source = %s)
+                    ORDER BY id
+                    LIMIT 5
+                """, (factor_catalog_id, kwargs["factor_name"], kwargs["factor_source"]))
+                conflicts = cur.fetchall()
+                if conflicts:
+                    conflict_text = ", ".join(
+                        f"id={row[0]} {row[1]} source={row[2]}" for row in conflicts
+                    )
+                    raise RuntimeError(
+                        f"duplicate factor classification rows for factor_catalog_id={factor_catalog_id}: "
+                        f"{conflict_text}; manual cleanup is required before writing classification"
+                    )
 
                 cur.execute("""
                     INSERT INTO qe_factor_classification

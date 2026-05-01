@@ -33,6 +33,10 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 import numpy as np
 import pandas as pd
 
@@ -218,7 +222,7 @@ def compute_metrics(parquet_path: Path) -> dict:
     """调用 engine 计算全部独立指标。"""
     try:
         # 动态 import engine（需要 rdagent 在 PYTHONPATH 中）
-        from rdagent.app.factor_metrics.engine import compute_all_factors_metrics
+        from backend.services.quantevolver.qe_eval_v2_metric_engine import compute_all_factors_metrics
 
         result = compute_all_factors_metrics(
             parquet_path=parquet_path,
@@ -309,9 +313,9 @@ def _emit_locked(obj: dict):
 
 def _main_stream(workspace: Path, factor_names: list, data_date: str | None):
     """流式模式：每完成一个因子立即输出结果行。"""
-    from rdagent.app.factor_metrics.engine import (
-        prepare_shared_context,
+    from backend.services.quantevolver.qe_eval_v2_metric_engine import (
         compute_single_factor_metrics,
+        prepare_shared_context,
     )
 
     logger.info(f"[stream] Workspace: {workspace}, Factors: {factor_names}")
