@@ -406,6 +406,53 @@ def test_remote_stock_pool_sync_resolves_instrument_name(monkeypatch):
     assert any("filtered_pool_20260426.txt" in part for cmd in calls for part in cmd)
 
 
+def test_remote_stock_pool_sync_derives_missing_ssh_user_from_node_paths(monkeypatch):
+    calls = []
+
+    class Result:
+        returncode = 0
+        stderr = b""
+        stdout = b"abc123\n"
+
+    def fake_run(cmd, timeout, check, capture_output):
+        calls.append(cmd)
+        return Result()
+
+    monkeypatch.setenv("AISTOCK_WSL_DISTRO", "Ubuntu-Test")
+    monkeypatch.setattr("backend.services.quantevolver.stock_pool_sync.subprocess.run", fake_run)
+
+    result = sync_stock_pool_to_remote_node(
+        "/home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt",
+        {
+            "node_id": "rdagent-node1",
+            "api_base_url": "http://192.168.50.215:9000",
+            "workspace_config": {
+                "qlib_data_path": "/home/lc999/data/qlib_bin",
+                "workspace_base": "/home/lc999/projects/RD-Agent-main/qe_workspace",
+            },
+        },
+    )
+
+    assert result["status"] == "synced"
+    assert result["remote_path"] == "/home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt"
+    assert any("lc999@192.168.50.215" in str(part) for cmd in calls for part in cmd)
+
+
+def test_remote_stock_pool_sync_rejects_ambiguous_derived_ssh_user(monkeypatch):
+    monkeypatch.setenv("AISTOCK_WSL_DISTRO", "Ubuntu-Test")
+
+    with pytest.raises(RuntimeError, match="multiple users"):
+        sync_stock_pool_to_remote_node(
+            "/home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt",
+            {
+                "node_id": "rdagent-node1",
+                "api_base_url": "http://192.168.50.215:9000",
+                "qlib_data_path": "/home/lc999/data/qlib_bin",
+                "workspace_base": "/home/other/projects/RD-Agent-main/qe_workspace",
+            },
+        )
+
+
 def test_remote_stock_pool_sync_requires_explicit_wsl_distro(monkeypatch):
     monkeypatch.delenv("AISTOCK_WSL_DISTRO", raising=False)
     monkeypatch.delenv("QLIB_WSL_DISTRO", raising=False)

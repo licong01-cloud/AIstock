@@ -328,14 +328,15 @@ export default function EvolutionDashboard() {
 
   useEffect(() => {
     setCustomEvoNodeParallelism(prev => {
-      const next: Record<string, number> = {};
+      const keepExistingTaskNodes = customEvoFormMode === "rerun" || customEvoFormMode === "append";
+      const next: Record<string, number> = keepExistingTaskNodes ? { ...prev } : {};
       for (const nodeId of customEvoResolvedNodeIds) {
         const raw = prev[nodeId] ?? 1;
         next[nodeId] = Math.min(4, Math.max(1, Number(raw) || 1));
       }
       return next;
     });
-  }, [customEvoResolvedNodeIds]);
+  }, [customEvoResolvedNodeIds, customEvoFormMode]);
 
   const resetCustomEvoFormState = (mode: CustomEvoFormMode = "create") => {
     setCustomEvoFormMode(mode);

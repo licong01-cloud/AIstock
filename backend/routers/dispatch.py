@@ -45,6 +45,7 @@ class NodeCreateRequest(BaseModel):
     qlib_minute_path: Optional[str] = Field(None, description="Qlib 分钟线数据目录（Linux 路径）")
     qlib_rdagent_root: Optional[str] = Field(None, description="RDAgent 代码根目录（Linux 路径）")
     callback_url: Optional[str] = Field(None, description="Loop 完成回调地址（自动检测）")
+    ssh_user: Optional[str] = Field(None, description="SSH user for filtered_pool sync")
 
 
 class NodeUpdateRequest(BaseModel):
@@ -61,6 +62,7 @@ class NodeUpdateRequest(BaseModel):
     qlib_minute_path: Optional[str] = None
     qlib_rdagent_root: Optional[str] = None
     callback_url: Optional[str] = None
+    ssh_user: Optional[str] = None
 
 
 class QEEvolutionConfig(BaseModel):

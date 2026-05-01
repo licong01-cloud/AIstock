@@ -4462,13 +4462,14 @@ class AutoEvolutionScheduler:
         lock_conn = get_conn()
         try:
             self._acquire_custom_evo_mutation_lock(lock_conn, task_id)
-            cleanup_result = await self.delete_custom_evo_loop_result(task_id, loop_index)
             with get_conn() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute("SELECT * FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                     task = cur.fetchone()
                     if not task:
-                        raise ValueError(f"custom_evo task not found after cleanup: {task_id}")
+                        raise ValueError(f"custom_evo task not found: {task_id}")
+                    if task.get("task_type") != "custom_evo":
+                        raise ValueError(f"task {task_id} is not a custom_evo task")
                     strategy_config = self._parse_custom_evo_strategy_config(task.get("strategy_evo_config"), task_id=task_id)
                     replaced = False
                     next_loops: List[Dict[str, Any]] = []
@@ -4488,11 +4489,15 @@ class AutoEvolutionScheduler:
                         node_id if node_id is not None else task.get("node_id"),
                         node_parallelism,
                     )
+
+            cleanup_result = await self.delete_custom_evo_loop_result(task_id, loop_index)
+            with get_conn() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    current_loop = max(int(cfg.get("loop_index") or 0) for cfg in resolved_loops)
                     strategy_config["loops"] = resolved_loops
                     strategy_config["engine_mode"] = "unified"
                     strategy_config["node_parallelism"] = full_node_parallelism
                     strategy_config["node_resolution_policy"] = "loop1_inherit_v1"
-                    current_loop = max(int(cfg.get("loop_index") or 0) for cfg in resolved_loops)
                     cur.execute(
                         """
                         UPDATE qe_evolution_tasks

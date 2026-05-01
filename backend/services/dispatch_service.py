@@ -260,8 +260,9 @@ class DispatchService:
                         (node_id, display_name, api_base_url, gpu_model, gpu_vram_mb,
                          capabilities, grafana_dashboard_url, prometheus_target,
                          workspace_base, factor_data_dir, qlib_data_path,
-                         qlib_minute_path, qlib_rdagent_root, callback_url)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         qlib_minute_path, qlib_rdagent_root, callback_url,
+                         ssh_user)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING *
                 """, (
                     data["node_id"], data["display_name"], data["api_base_url"],
@@ -271,6 +272,7 @@ class DispatchService:
                     data.get("workspace_base"), data.get("factor_data_dir"),
                     data.get("qlib_data_path"), data.get("qlib_minute_path"),
                     data.get("qlib_rdagent_root"), data.get("callback_url"),
+                    data.get("ssh_user"),
                 ))
                 return dict(cur.fetchone())
 
@@ -280,6 +282,7 @@ class DispatchService:
             "capabilities", "grafana_dashboard_url", "prometheus_target",
             "workspace_base", "factor_data_dir", "qlib_data_path",
             "qlib_minute_path", "qlib_rdagent_root", "callback_url",
+            "ssh_user",
         }
         sets = []
         vals = []

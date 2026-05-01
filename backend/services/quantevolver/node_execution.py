@@ -47,7 +47,8 @@ def get_compute_node(node_id: str) -> dict[str, Any] | None:
                 """
                 SELECT node_id, display_name, api_base_url, gpu_model, gpu_vram_mb,
                        status, callback_url, workspace_base, factor_data_dir,
-                       qlib_data_path, qlib_minute_path, qlib_rdagent_root
+                       qlib_data_path, qlib_minute_path, qlib_rdagent_root,
+                       ssh_user
                 FROM infra.compute_nodes
                 WHERE node_id = %s
                 """,
@@ -182,6 +183,9 @@ async def preflight_qe_node(node_id: str) -> dict[str, Any]:
             {"node_id": node_id, "missing": missing},
         )
 
+    for key in required:
+        if not node.get(key) and workspace_config.get(key):
+            node[key] = workspace_config[key]
     node["workspace_config"] = workspace_config
     return node
 

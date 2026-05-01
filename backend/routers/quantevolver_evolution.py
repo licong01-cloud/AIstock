@@ -307,6 +307,13 @@ def _normalize_qe_execution_algo_for_request(execution_algo: Optional[str], cont
         raise HTTPException(status_code=400, detail=f"{context}: {e}") from e
 
 
+def _model_to_dict(model: BaseModel) -> Dict[str, Any]:
+    """Support Pydantic v1/v2 without deprecation warnings."""
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()
+
+
 def _sync_stock_pool_to_remote(stock_pool_path: str, node: dict):
     """Synchronize one filtered_pool file to a remote node, fail-fast on any problem."""
     from ..services.quantevolver.stock_pool_sync import sync_stock_pool_to_remote_node
@@ -1231,6 +1238,7 @@ async def _prepare_custom_evo_loop_configs(
     request_node_id: Optional[str],
     node_parallelism_payload: Optional[Dict[str, int]],
     assigned_loop_indexes: Optional[List[int]] = None,
+    node_parallelism_scope_node_ids: Optional[set[str]] = None,
 ) -> tuple[List[Dict[str, Any]], str, Dict[str, int]]:
     """Validate custom_evo loop payloads and resolve execution nodes fail-fast."""
     if assigned_loop_indexes and len(assigned_loop_indexes) != len(loops):
@@ -1299,7 +1307,7 @@ async def _prepare_custom_evo_loop_configs(
 
     loops_config: List[Dict[str, Any]] = []
     for pos, loop_cfg in enumerate(loops, start=1):
-        cfg_dict = loop_cfg.dict()
+        cfg_dict = _model_to_dict(loop_cfg)
         _reject_nested_runtime_flags(
             cfg_dict.get("strategy_params"),
             f"custom_loop[{pos}].strategy_params",
@@ -1319,8 +1327,9 @@ async def _prepare_custom_evo_loop_configs(
             loops_config,
             request_node_id,
         )
+        parallelism_scope = node_parallelism_scope_node_ids or selected_node_ids
         node_parallelism = normalize_node_parallelism(
-            selected_node_ids,
+            parallelism_scope,
             node_parallelism_payload,
         )
         node_rows = await preflight_qe_nodes(selected_node_ids)
@@ -1343,6 +1352,45 @@ async def _prepare_custom_evo_loop_configs(
             _sync_stock_pool_to_remote(stock_pool, node)
 
     return loops_config, loop1_node_id, node_parallelism
+
+
+def _resolve_custom_evo_node_scope(
+    loops_config: List[Dict[str, Any]],
+    request_node_id: Optional[str],
+) -> set[str]:
+    """Resolve the full post-mutation node set without touching remote nodes."""
+    if not loops_config:
+        return set()
+    try:
+        _resolved, _loop1_node_id, selected_node_ids = resolve_custom_loop_nodes(
+            [dict(loop_cfg) for loop_cfg in loops_config],
+            request_node_id,
+        )
+        return selected_node_ids
+    except QENodePreflightError as e:
+        raise HTTPException(status_code=400, detail=e.to_detail()) from e
+
+
+def _filter_node_parallelism_for_scope(
+    node_parallelism: Optional[Dict[str, int]],
+    node_scope: set[str],
+) -> Optional[Dict[str, int]]:
+    """Drop stale UI parallelism entries for nodes no longer used by any Loop."""
+    if not node_parallelism:
+        return node_parallelism
+    normalized_scope = {str(node_id).strip() for node_id in node_scope if str(node_id or "").strip()}
+    filtered = {
+        str(node_id).strip(): value
+        for node_id, value in node_parallelism.items()
+        if str(node_id).strip() in normalized_scope
+    }
+    ignored = sorted(set(str(node_id).strip() for node_id in node_parallelism) - set(filtered))
+    if ignored:
+        logger.warning(
+            "Ignoring node_parallelism for nodes not used by custom_evo loop configs: %s",
+            ignored,
+        )
+    return filtered
 
 @router.post("/custom-tasks", summary="Create custom evolution task")
 async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, background_tasks: BackgroundTasks):
@@ -1433,11 +1481,29 @@ async def rerun_custom_evo_loop(
             )
         existing_config = await scheduler.get_custom_evo_editable_config(task_id)
         request_node_id = (req.node_id or "").strip() or existing_config.get("node_id")
+        replacement_scope_cfg = _model_to_dict(req.loop)
+        replacement_scope_cfg["loop_index"] = loop_index
+        existing_loops = [dict(cfg) for cfg in (existing_config.get("loops") or [])]
+        full_scope_loops: List[Dict[str, Any]] = []
+        replaced = False
+        for cfg in existing_loops:
+            if int(cfg.get("loop_index") or 0) == loop_index:
+                full_scope_loops.append(dict(replacement_scope_cfg))
+                replaced = True
+            else:
+                full_scope_loops.append(dict(cfg))
+        if not full_scope_loops:
+            full_scope_loops = [dict(replacement_scope_cfg)]
+        elif not replaced:
+            full_scope_loops.append(dict(replacement_scope_cfg))
+        full_node_scope = _resolve_custom_evo_node_scope(full_scope_loops, request_node_id)
+        scoped_node_parallelism = _filter_node_parallelism_for_scope(req.node_parallelism, full_node_scope)
         loops_config, _loop1_node_id, node_parallelism = await _prepare_custom_evo_loop_configs(
             [req.loop],
             request_node_id=request_node_id,
-            node_parallelism_payload=req.node_parallelism,
+            node_parallelism_payload=scoped_node_parallelism,
             assigned_loop_indexes=[loop_index],
+            node_parallelism_scope_node_ids=full_node_scope,
         )
         result = await scheduler.rerun_custom_evo_loop(
             task_id=task_id,
@@ -1476,10 +1542,18 @@ async def append_custom_evo_loops(
             )
         existing_config = await scheduler.get_custom_evo_editable_config(task_id)
         request_node_id = (req.node_id or "").strip() or existing_config.get("node_id")
+        full_scope_loops = [
+            dict(cfg) for cfg in (existing_config.get("loops") or [])
+        ] + [
+            _model_to_dict(loop) for loop in req.loops
+        ]
+        full_node_scope = _resolve_custom_evo_node_scope(full_scope_loops, request_node_id)
+        scoped_node_parallelism = _filter_node_parallelism_for_scope(req.node_parallelism, full_node_scope)
         loops_config, _loop1_node_id, node_parallelism = await _prepare_custom_evo_loop_configs(
             req.loops,
             request_node_id=request_node_id,
-            node_parallelism_payload=req.node_parallelism,
+            node_parallelism_payload=scoped_node_parallelism,
+            node_parallelism_scope_node_ids=full_node_scope,
         )
         result = await scheduler.append_custom_evo_loops(
             task_id=task_id,

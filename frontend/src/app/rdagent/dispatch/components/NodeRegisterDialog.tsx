@@ -19,6 +19,7 @@ export default function NodeRegisterDialog({
     gpu_vram_mb: "",
     grafana_dashboard_url: "",
     prometheus_target: "",
+    ssh_user: "",
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -39,6 +40,7 @@ export default function NodeRegisterDialog({
           gpu_vram_mb: form.gpu_vram_mb ? parseInt(form.gpu_vram_mb) : null,
           grafana_dashboard_url: form.grafana_dashboard_url || null,
           prometheus_target: form.prometheus_target || null,
+          ssh_user: form.ssh_user || null,
           capabilities: ["fin_factor", "fin_model", "fin_quant", "fin_factor_report", "qe_evolution"],
         }),
       });
@@ -97,6 +99,15 @@ export default function NodeRegisterDialog({
               placeholder="http://192.168.x.x:9000"
               value={form.api_base_url}
               onChange={e => setForm(f => ({ ...f, api_base_url: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: "#6b7280", marginBottom: 4, display: "block" }}>SSH User <span style={{ color: "#9ca3af" }}>(optional)</span></label>
+            <input
+              style={fieldStyle}
+              placeholder="lc999"
+              value={form.ssh_user}
+              onChange={e => setForm(f => ({ ...f, ssh_user: e.target.value }))}
             />
           </div>
           <div style={{ display: "flex", gap: 12 }}>

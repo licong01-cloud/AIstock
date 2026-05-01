@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shlex
 import subprocess
 from typing import Any
@@ -22,6 +23,16 @@ except ImportError:  # tests may import backend/services as a top-level package
 logger = logging.getLogger("aistock.quantevolver.stock_pool_sync")
 
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_LINUX_USER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
+_LINUX_PATH_KEYS = (
+    "qlib_data_path",
+    "qlib_minute_path",
+    "workspace_base",
+    "factor_data_dir",
+    "qlib_rdagent_root",
+)
+
+
 def _wsl_distro() -> str:
     distro = os.getenv("AISTOCK_WSL_DISTRO") or os.getenv("QLIB_WSL_DISTRO") or ""
     distro = distro.strip()
@@ -57,6 +68,70 @@ def _node_host(api_base_url: str | None) -> str:
         return ""
     parsed = urlparse(api_base_url if "://" in api_base_url else f"http://{api_base_url}")
     return parsed.hostname or ""
+
+
+def _validate_linux_user(node_id: str, ssh_user: str, *, source: str) -> str:
+    user = str(ssh_user or "").strip()
+    if not user:
+        return ""
+    if not _LINUX_USER_RE.fullmatch(user):
+        raise RuntimeError(
+            f"node {node_id} has invalid ssh_user from {source}: {user!r}; "
+            "cannot sync stock_pool"
+        )
+    return user
+
+
+def _linux_home_user(path_value: Any) -> str | None:
+    path = str(path_value or "").strip()
+    if not path.startswith("/home/"):
+        return None
+    parts = path.split("/")
+    return parts[2] if len(parts) > 2 and parts[2] else None
+
+
+def _node_path(node: dict[str, Any], key: str) -> str:
+    value = str(node.get(key) or "").strip()
+    if value:
+        return value
+    workspace_config = node.get("workspace_config")
+    if isinstance(workspace_config, dict):
+        return str(workspace_config.get(key) or "").strip()
+    return ""
+
+
+def _resolve_ssh_user(node: dict[str, Any], *, purpose: str) -> str:
+    """Resolve SSH user explicitly, or derive it from unambiguous /home/<user> paths."""
+    node_id = str(node.get("node_id") or "<unknown>")
+    explicit = _validate_linux_user(node_id, str(node.get("ssh_user") or ""), source="ssh_user")
+    if explicit:
+        return explicit
+
+    derived: dict[str, str] = {}
+    for key in _LINUX_PATH_KEYS:
+        user = _linux_home_user(_node_path(node, key))
+        if user:
+            derived[key] = _validate_linux_user(node_id, user, source=key)
+
+    users = {user for user in derived.values() if user}
+    if len(users) == 1:
+        user = next(iter(users))
+        logger.warning(
+            "node %s missing ssh_user; derived ssh_user=%s from Linux home paths for %s",
+            node_id,
+            user,
+            purpose,
+        )
+        return user
+    if len(users) > 1:
+        raise RuntimeError(
+            f"node {node_id} missing ssh_user and Linux paths imply multiple users "
+            f"{sorted(users)} from {derived}; cannot {purpose}"
+        )
+    raise RuntimeError(
+        f"node {node_id} missing ssh_user and no /home/<user> node path is available; "
+        f"set infra.compute_nodes.ssh_user or configure node paths under /home/<user>; cannot {purpose}"
+    )
 
 
 def _run_checked(cmd: list[str], *, timeout: int, error_prefix: str) -> subprocess.CompletedProcess:
@@ -107,16 +182,14 @@ def sync_stock_pool_to_remote_node(stock_pool_path: str, node: dict[str, Any]) -
             "sha256": _wsl_sha256(local_stock_pool_path),
         }
 
-    remote_qlib_data = node.get("qlib_data_path") or ""
+    remote_qlib_data = _node_path(node, "qlib_data_path")
     if not remote_qlib_data:
         raise RuntimeError(f"node {node_id} missing qlib_data_path; cannot sync stock_pool")
 
+    ssh_user = _resolve_ssh_user(node, purpose="sync stock_pool")
     _assert_wsl_file_exists(local_stock_pool_path)
     local_sha256 = _wsl_sha256(local_stock_pool_path)
 
-    ssh_user = node.get("ssh_user") or ""
-    if not ssh_user:
-        raise RuntimeError(f"node {node_id} missing ssh_user; cannot sync stock_pool")
     ssh_target = f"{ssh_user}@{host}"
     remote_instruments_dir = f"{remote_qlib_data.rstrip('/')}/instruments"
     remote_path = f"{remote_instruments_dir}/{os.path.basename(local_stock_pool_path)}"
@@ -172,13 +245,11 @@ def sync_all_filtered_pools_to_remote_node(node: dict[str, Any]) -> dict[str, st
     if host in _LOCAL_HOSTS:
         return {"status": "skipped", "reason": "local_node", "node_id": str(node_id), "host": host}
 
-    remote_qlib_data = node.get("qlib_data_path") or ""
+    remote_qlib_data = _node_path(node, "qlib_data_path")
     if not remote_qlib_data:
         raise RuntimeError(f"node {node_id} missing qlib_data_path; cannot sync filtered pools")
 
-    ssh_user = node.get("ssh_user") or ""
-    if not ssh_user:
-        raise RuntimeError(f"node {node_id} missing ssh_user; cannot sync filtered pools")
+    ssh_user = _resolve_ssh_user(node, purpose="sync filtered pools")
     ssh_target = f"{ssh_user}@{host}"
     remote_instruments_dir = f"{remote_qlib_data.rstrip('/')}/instruments"
     local_qlib_data = os.getenv("QLIB_DATA_PATH_WSL", "").strip().rstrip("/")
