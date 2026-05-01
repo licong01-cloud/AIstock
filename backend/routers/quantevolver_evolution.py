@@ -25,6 +25,7 @@ from ..services.quantevolver.qe_evolution_service import (
 )
 from ..services.quantevolver.factor_value_loader import FactorValueLoader
 from ..services.quantevolver.correlation_engine import CorrelationEngine, CorrelationResult
+from ..services.quantevolver import correlation_compute_service as _correlation_compute_service
 from ..db.pg_pool import get_conn
 from psycopg2.extras import RealDictCursor, execute_values
 
@@ -2565,6 +2566,12 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 logger.info("已执行内存清理: _single_cache.clear() + gc.collect()")
             except Exception as e:
                 logger.warning(f"内存清理异常: {e}")
+
+
+# 相关性本地计算的权威实现放在独立 service 中；router 只负责 API/dispatch。
+# 这样 WSL runner 不再需要导入本 router，也不会被 QE evolution 顶层 import 变化影响。
+_run_correlation_compute_local = _correlation_compute_service.run_correlation_compute_local
+set_correlation_event_emitter = _correlation_compute_service.set_correlation_event_emitter
 
 
 def _env_truthy(key: str) -> bool:
