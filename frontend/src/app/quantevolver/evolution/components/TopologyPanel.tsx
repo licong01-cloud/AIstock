@@ -24,6 +24,7 @@ interface TopologyPanelProps {
   activeLoopIndex: number | null;
   onSelectLoop: (index: number) => void;
   onRetryLoop?: (taskId: string, loopIndex: number) => void;
+  onRerunLoop?: (taskId: string, loopIndex: number) => void;
   taskType?: string;
   evolutionMode?: string;
   sourceType?: string;
@@ -49,9 +50,10 @@ const headerStyle: React.CSSProperties = {
   alignItems: "center",
 };
 
-export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSelectLoop, onRetryLoop, taskType, evolutionMode, sourceType }: TopologyPanelProps) {
+export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSelectLoop, onRetryLoop, onRerunLoop, taskType, evolutionMode, sourceType }: TopologyPanelProps) {
   const [expandedFactors, setExpandedFactors] = useState<Set<number>>(new Set());
   const showAction = (taskType || sourceType || "evolution") === "evolution" && (evolutionMode || "auto") === "auto";
+  const isCustomEvo = taskType === "custom_evo" || sourceType === "custom_evo";
 
   const sotaFactorSet = React.useMemo(() => {
     const sotaLoop = loops.find(l => l.is_sota);
@@ -139,6 +141,15 @@ export default React.memo(function TopologyPanel({ loops, activeLoopIndex, onSel
                       {loop.is_sota && <span style={{ fontSize: "10px", color: "#d97706", backgroundColor: "#fef3c7", padding: "2px 6px", borderRadius: "4px" }}>SOTA</span>}
                       {loop.status === "running" && <span style={{ fontSize: "10px", color: "#3b82f6", backgroundColor: "#dbeafe", padding: "2px 6px", borderRadius: "4px" }}>运行中</span>}
                       {(loop.status === "failed" || loop.status === "cancelled") && <span style={{ fontSize: "10px", color: "#ef4444", backgroundColor: "#fef2f2", padding: "2px 6px", borderRadius: "4px" }}>{loop.status === "failed" ? "失败" : "已取消"}</span>}
+                      {isCustomEvo && onRerunLoop && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onRerunLoop(loop.task_id, loop.loop_index); }}
+                          style={{ fontSize: "10px", color: "#2563eb", backgroundColor: "#eff6ff", padding: "2px 8px", borderRadius: "4px", border: "1px solid #bfdbfe", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px", fontWeight: 600 }}
+                          title="编辑完整 Loop 配置，删除旧结果后重新运行"
+                        >
+                          <RotateCcw size={10} /> 重新运行
+                        </button>
+                      )}
                       {(loop.status === "failed" || loop.status === "cancelled") && onRetryLoop && (
                         <button
                           onClick={(e) => { e.stopPropagation(); onRetryLoop(loop.task_id, loop.loop_index); }}

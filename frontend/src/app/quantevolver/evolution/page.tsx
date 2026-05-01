@@ -77,6 +77,9 @@ interface Task {
   label_horizon?: number;
   stock_pool?: string;
   factor_blacklist?: string[];
+  strategy_evo_config?: Record<string, any>;
+  strategy_evo_execution_mode?: string;
+  node_id?: string;
 }
 
 export default function EvolutionDashboard() {
@@ -176,6 +179,7 @@ export default function EvolutionDashboard() {
   const [additionalFactorKeys, setAdditionalFactorKeys] = useState<Set<string>>(new Set());
 
   // ── 自定义演进 (custom_evo) 状态 ──
+  type CustomEvoFormMode = "create" | "clone" | "rerun" | "append";
   type CustomEvoLoopConfig = {
     label: string;
     factor_keys: Set<string>;
@@ -238,6 +242,11 @@ export default function EvolutionDashboard() {
     _source_disable_alpha158: false,
   });
   const [customEvoLoops, setCustomEvoLoops] = useState<CustomEvoLoopConfig[]>([makeDefaultCustomLoop()]);
+  const [customEvoFormMode, setCustomEvoFormMode] = useState<CustomEvoFormMode>("create");
+  const [customEvoTargetTaskId, setCustomEvoTargetTaskId] = useState("");
+  const [customEvoTargetLoopIndex, setCustomEvoTargetLoopIndex] = useState<number | null>(null);
+  const [customEvoCloneSourceTaskId, setCustomEvoCloneSourceTaskId] = useState("");
+  const [customEvoMutationWarning, setCustomEvoMutationWarning] = useState("");
   const [customEvoExecutionMode, setCustomEvoExecutionMode] = useState<string>("serial");
   const [customEvoParallelism, setCustomEvoParallelism] = useState<number>(2);
   const [customEvoNodeId, setCustomEvoNodeId] = useState<string>("");
@@ -293,8 +302,12 @@ export default function EvolutionDashboard() {
     }]);
   };
   const removeCustomEvoLoop = (index: number) => {
-    if (index === 0) return; // 第一个不可删除
-    setCustomEvoLoops(prev => prev.filter((_, i) => i !== index));
+    setCustomEvoLoops(prev => {
+      if (prev.length <= 1) return prev;
+      return prev
+        .filter((_, i) => i !== index)
+        .map((loop, i) => i === 0 ? { ...loop, collapsed: false } : loop);
+    });
   };
 
   const defaultCustomEvoNodeId = customEvoNodeId || "wsl2-5080";
@@ -323,6 +336,109 @@ export default function EvolutionDashboard() {
       return next;
     });
   }, [customEvoResolvedNodeIds]);
+
+  const resetCustomEvoFormState = (mode: CustomEvoFormMode = "create") => {
+    setCustomEvoFormMode(mode);
+    setCustomEvoTargetTaskId("");
+    setCustomEvoTargetLoopIndex(null);
+    setCustomEvoCloneSourceTaskId("");
+    setCustomEvoMutationWarning("");
+    setCustomEvoLoops([makeDefaultCustomLoop()]);
+    setCustomEvoExecutionMode("serial");
+    setCustomEvoParallelism(2);
+    setCustomEvoNodeId("");
+    setCustomEvoNodeParallelism({});
+    setCustomEvoFirstLoopReady(false);
+    setCustomEvoInitSource("manual");
+    setCustomEvoSourceExpId("");
+    setCustomEvoSourceTaskId("");
+    setCustomEvoSourceLoopIdx(-1);
+    setCustomEvoForkLoops([]);
+    setCustomEvoHmmSnapshots({});
+  };
+
+  const parseCustomEvoExecutionMode = (raw?: string) => {
+    if (raw?.startsWith("parallel")) {
+      const n = Number(raw.split("_")[1] || 2);
+      setCustomEvoExecutionMode("parallel");
+      setCustomEvoParallelism([1, 2, 3, 4].includes(n) ? n : 2);
+    } else {
+      setCustomEvoExecutionMode("serial");
+      setCustomEvoParallelism(2);
+    }
+  };
+
+  const customLoopFromServer = (loop: any, collapsed = false): CustomEvoLoopConfig => {
+    const factorKeys = Array.isArray(loop.factor_keys)
+      ? loop.factor_keys
+      : Array.isArray(loop.factor_list)
+        ? loop.factor_list.map((name: string) => `${name}||unknown`)
+        : [];
+    const sourceKeys = Array.isArray(loop.factor_keys) ? loop.factor_keys : factorKeys;
+    return {
+      ...makeDefaultCustomLoop(),
+      label: loop.label || `Loop ${loop.loop_index || ""}`.trim(),
+      factor_keys: new Set(factorKeys),
+      disable_alpha158: !!loop.disable_alpha158,
+      model_id: loop.model_id || "",
+      strategy_id: loop.strategy_id || "",
+      strategy_params: stripRuntimeStrategyFlags(loop.strategy_params || {}),
+      execution_algo: loop.execution_algo || "",
+      execution_algo_params: loop.execution_algo_params || {},
+      enable_sector_hmm: !!loop.enable_sector_hmm,
+      hmm_config_id: loop.hmm_config_id || "",
+      hmm_model_version_id: loop.hmm_model_version_id || "",
+      hmm_signal_preset: loop.hmm_signal_preset || "preset_A",
+      unfilled_handler: loop.unfilled_handler || "",
+      unfilled_handler_params: loop.unfilled_handler_params || {},
+      label_type: loop.label_type || "",
+      label_horizon: ([1, 3, 5, 10, 20].includes(Number(loop.label_horizon || 1)) ? Number(loop.label_horizon || 1) : 1) as 1 | 3 | 5 | 10 | 20,
+      data_split: loop.data_split || null,
+      blacklist_enabled: !!loop.stock_pool,
+      stock_pool: loop.stock_pool || "",
+      filter_suspended_on_signal: !!loop.filter_suspended_on_signal,
+      suspend_filter_strict: loop.suspend_filter_strict !== false,
+      node_id: loop.node_id || "",
+      collapsed,
+      backtest_only: !!loop.backtest_only,
+      model_source_task_id: loop.model_source_task_id || "",
+      model_source_loop_index: loop.model_source_loop_index ?? null,
+      _source_factor_keys: new Set(sourceKeys),
+      _source_disable_alpha158: !!loop.disable_alpha158,
+    };
+  };
+
+  const fetchCustomEvoEditableConfig = async (taskId: string) => {
+    const res = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}/custom-evo-config`);
+    const data = await res.json();
+    if (!res.ok || data.status !== "success") {
+      throw new Error(data.detail || `HTTP ${res.status}`);
+    }
+    return data.data;
+  };
+
+  const applyCustomEvoConfigToForm = (
+    cfg: any,
+    mode: CustomEvoFormMode,
+    loopsToUse: any[],
+    warning = "",
+  ) => {
+    setCustomEvoFormMode(mode);
+    setCustomEvoTargetTaskId(mode === "rerun" || mode === "append" ? cfg.task_id : "");
+    setCustomEvoTargetLoopIndex(null);
+    setCustomEvoCloneSourceTaskId(mode === "clone" ? cfg.task_id : "");
+    setCustomEvoMutationWarning(warning);
+    parseCustomEvoExecutionMode(cfg.execution_mode || "serial");
+    setCustomEvoNodeId(cfg.node_id || "");
+    setCustomEvoNodeParallelism(cfg.node_parallelism || {});
+    setCustomEvoLoops(loopsToUse.map((loop, idx) => customLoopFromServer(loop, idx > 0)));
+    setCustomEvoFirstLoopReady(true);
+    setCustomEvoInitSource("manual");
+    setCustomEvoSourceExpId("");
+    setCustomEvoSourceTaskId("");
+    setCustomEvoSourceLoopIdx(-1);
+    setCustomEvoForkLoops([]);
+  };
 
   // 自定义演进 — 从来源加载配置到第一个 Loop
   // 根据因子名列表查询因子库，返回完整的 "name||source" key 集合
@@ -1042,15 +1158,33 @@ export default function EvolutionDashboard() {
         return;
       }
 
-      // ── custom_evo: 走独立的自定义演进 API ──
+      // custom_evo: create / clone / rerun / append share the same editor
       if (newTask.source_type === "custom_evo") {
-        // 验证
         for (let i = 0; i < customEvoLoops.length; i++) {
           const loop = customEvoLoops[i];
           if (loop.factor_keys.size === 0) { alert(`Loop ${i + 1} 必须选择至少一个因子`); setIsCreating(false); return; }
           if (!loop.model_id) { alert(`Loop ${i + 1} 必须选择一个模型`); setIsCreating(false); return; }
           if (!ensureQeExecutionAlgoSupported(loop.execution_algo, `custom loop ${i + 1}`)) { setIsCreating(false); return; }
         }
+        if (customEvoFormMode === "rerun" && (!customEvoTargetTaskId || customEvoTargetLoopIndex == null)) {
+          alert("重新运行缺少目标任务或 Loop 序号");
+          setIsCreating(false);
+          return;
+        }
+        if (customEvoFormMode === "append" && !customEvoTargetTaskId) {
+          alert("继续演进缺少目标任务");
+          setIsCreating(false);
+          return;
+        }
+        if (customEvoFormMode === "rerun") {
+          const ok = confirm(`确认重新运行 ${customEvoTargetTaskId} Loop ${customEvoTargetLoopIndex}？旧结果会被永久删除且不保留备份。`);
+          if (!ok) { setIsCreating(false); return; }
+        }
+        if (customEvoFormMode === "append" && customEvoMutationWarning) {
+          const ok = confirm(`${customEvoMutationWarning}\n\n继续演进不会自动重跑这些 Loop，确认追加新 Loop 吗？`);
+          if (!ok) { setIsCreating(false); return; }
+        }
+
         const loopsPayload = customEvoLoops.map((loop, i) => ({
           label: loop.label || `Loop ${i + 1}`,
           loop_index: i + 1,
@@ -1080,34 +1214,77 @@ export default function EvolutionDashboard() {
             : (loop.node_id || undefined),
         }));
         const execMode = customEvoExecutionMode === "parallel" ? `parallel_${customEvoParallelism}` : "serial";
-        const res = await fetch(`${API}/quantevolver/evolution/custom-tasks`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            task_name: newTask.task_name,
-            target_desc: newTask.target_desc || "自定义演进任务",
+        let endpoint = `${API}/quantevolver/evolution/custom-tasks`;
+        let body: Record<string, any> = {
+          task_name: newTask.task_name,
+          target_desc: newTask.target_desc || "自定义演进任务",
+          loops: loopsPayload,
+          execution_mode: execMode,
+          node_id: customEvoNodeId || undefined,
+          node_parallelism: customEvoNodeParallelism,
+          engine_mode: "unified",
+          clone_from_task_id: customEvoFormMode === "clone" ? (customEvoCloneSourceTaskId || undefined) : undefined,
+        };
+        if (customEvoFormMode === "rerun") {
+          endpoint = `${API}/quantevolver/evolution/tasks/${customEvoTargetTaskId}/loops/${customEvoTargetLoopIndex}/rerun`;
+          body = {
+            loop: loopsPayload[0],
+            execution_mode: execMode,
+            node_id: customEvoNodeId || undefined,
+            node_parallelism: customEvoNodeParallelism,
+            engine_mode: "unified",
+            confirm_delete_old_result: true,
+          };
+        } else if (customEvoFormMode === "append") {
+          endpoint = `${API}/quantevolver/evolution/tasks/${customEvoTargetTaskId}/custom-loops/append`;
+          body = {
             loops: loopsPayload,
             execution_mode: execMode,
             node_id: customEvoNodeId || undefined,
             node_parallelism: customEvoNodeParallelism,
             engine_mode: "unified",
-          }),
+            ack_failed_loop_warning: true,
+          };
+        }
+
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
         });
+        const data = await res.json();
         if (!res.ok) {
-          const errText = await res.text();
-          alert(`创建失败 (HTTP ${res.status}): ${errText}`);
+          alert(`提交失败 (HTTP ${res.status}): ${data.detail || JSON.stringify(data)}`);
           setIsCreating(false);
           return;
         }
-        const data = await res.json();
         if (data.status === "success") {
-          alert(`自定义演进任务创建成功！共 ${data.total_loops} 个 Loop`);
+          const submittedMode = customEvoFormMode;
+          const submittedTaskId = customEvoTargetTaskId;
+          const submittedLoopIndex = customEvoTargetLoopIndex;
+          const modeMessage = submittedMode === "rerun"
+            ? `Loop ${submittedLoopIndex} 重新运行已提交`
+            : submittedMode === "append"
+              ? `追加 ${data.new_loop_indexes?.length || customEvoLoops.length} 个 Loop`
+              : submittedMode === "clone"
+                ? `克隆任务创建成功，共 ${data.total_loops} 个 Loop`
+                : `自定义演进任务创建成功，共 ${data.total_loops} 个 Loop`;
+          alert(modeMessage);
+          const targetTaskId = submittedMode === "rerun" || submittedMode === "append"
+            ? submittedTaskId
+            : data.task_id;
           setShowCreateTask(false);
-          setCustomEvoLoops([makeDefaultCustomLoop()]);
-          setCustomEvoNodeParallelism({});
-          setCustomEvoFirstLoopReady(false);
+          resetCustomEvoFormState("create");
           fetchTasks();
-          setTimeout(() => setActiveTaskId(data.task_id), 500);
+          if (targetTaskId) {
+            setActiveTaskId(targetTaskId);
+            setTimeout(() => fetchTaskDetail(targetTaskId), 500);
+          }
+          if (submittedMode === "append" && Array.isArray(data.new_loop_indexes) && data.new_loop_indexes.length > 0) {
+            setActiveLoopIndex(data.new_loop_indexes[0]);
+          } else if (submittedMode === "rerun" && submittedLoopIndex != null) {
+            setActiveLoopIndex(submittedLoopIndex);
+          }
         } else {
           alert("创建失败: " + (data.detail || "未知错误"));
         }
@@ -1625,6 +1802,84 @@ export default function EvolutionDashboard() {
     }
   };
 
+  const handleRerunLoop = async (taskId: string, loopIndex: number) => {
+    try {
+      const cfg = await fetchCustomEvoEditableConfig(taskId);
+      const loopCfg = (cfg.loops || []).find((loop: any) => Number(loop.loop_index) === Number(loopIndex));
+      if (!loopCfg) {
+        alert(`未找到 Loop ${loopIndex} 的可编辑配置`);
+        return;
+      }
+      applyCustomEvoConfigToForm(
+        cfg,
+        "rerun",
+        [loopCfg],
+        `重新运行会完全删除 ${taskId} Loop ${loopIndex} 的旧结果，不保留备份。`,
+      );
+      setCustomEvoTargetTaskId(taskId);
+      setCustomEvoTargetLoopIndex(loopIndex);
+      setNewTask(prev => ({
+        ...prev,
+        source_type: "custom_evo",
+        task_name: cfg.task_name || taskId,
+        target_desc: cfg.target_desc || "",
+      }));
+      setShowCreateTask(true);
+    } catch (err: any) {
+      alert(`加载重新运行配置失败: ${err?.message || "网络错误"}`);
+    }
+  };
+
+  const handleContinueCustomEvo = async (task: Task, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    try {
+      const cfg = await fetchCustomEvoEditableConfig(task.task_id);
+      const loopsCfg = [...(cfg.loops || [])].sort((a: any, b: any) => Number(a.loop_index || 0) - Number(b.loop_index || 0));
+      if (loopsCfg.length === 0) {
+        alert("该任务没有可复制的 Loop 配置");
+        return;
+      }
+      const lastLoop = loopsCfg[loopsCfg.length - 1];
+      const failedIndexes = cfg.failed_loop_indexes || [];
+      const warning = failedIndexes.length > 0
+        ? `当前任务存在失败/取消 Loop：${failedIndexes.map((idx: number) => `Loop${idx}`).join(", ")}。`
+        : "";
+      applyCustomEvoConfigToForm(cfg, "append", [{ ...lastLoop, label: `继续方向 ${loopsCfg.length + 1}` }], warning);
+      setCustomEvoTargetTaskId(task.task_id);
+      setNewTask(prev => ({
+        ...prev,
+        source_type: "custom_evo",
+        task_name: task.task_name,
+        target_desc: task.target_desc || "",
+      }));
+      setShowCreateTask(true);
+    } catch (err: any) {
+      alert(`加载继续演进配置失败: ${err?.message || "网络错误"}`);
+    }
+  };
+
+  const handleCloneCustomEvo = async (task: Task, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    try {
+      const cfg = await fetchCustomEvoEditableConfig(task.task_id);
+      const loopsCfg = [...(cfg.loops || [])].sort((a: any, b: any) => Number(a.loop_index || 0) - Number(b.loop_index || 0));
+      if (loopsCfg.length === 0) {
+        alert("该任务没有可克隆的 Loop 配置");
+        return;
+      }
+      applyCustomEvoConfigToForm(cfg, "clone", loopsCfg, "");
+      setNewTask(prev => ({
+        ...prev,
+        source_type: "custom_evo",
+        task_name: `克隆 - ${task.task_name || task.task_id}`,
+        target_desc: `${task.target_desc || ""}${task.target_desc ? "\n" : ""}克隆来源: ${task.task_id}`,
+      }));
+      setShowCreateTask(true);
+    } catch (err: any) {
+      alert(`加载克隆配置失败: ${err?.message || "网络错误"}`);
+    }
+  };
+
   // 删除任务
   const handleDeleteTask = async (taskId: string, taskName: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1681,7 +1936,7 @@ export default function EvolutionDashboard() {
               演进控制中心
             </h2>
             <button
-              onClick={() => { setShowCreateTask(true); fetchSourceExperiments(); fetchSourceTasks(); }}
+              onClick={() => { resetCustomEvoFormState("create"); setShowCreateTask(true); fetchSourceExperiments(); fetchSourceTasks(); }}
               style={{
                 padding: "8px 14px",
                 backgroundColor: "#2563eb",
@@ -1736,7 +1991,7 @@ export default function EvolutionDashboard() {
                     <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "#475569", fontSize: "12px", width: "80px" }}>状态</th>
                     <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "#475569", fontSize: "12px", width: "80px" }}>Loop</th>
                     <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "#475569", fontSize: "12px", width: "130px" }}>创建时间</th>
-                    <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "#475569", fontSize: "12px", width: "120px" }}>操作</th>
+                    <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "#475569", fontSize: "12px", width: "220px" }}>操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1750,6 +2005,8 @@ export default function EvolutionDashboard() {
                     const canStop = task.status === "running";
                     const canResume = ["stopped", "paused", "completed", "failed"].includes(task.status);
                     const canDelete = task.status !== "running";
+                    const isCustomEvoTask = task.task_type === "custom_evo";
+                    const canContinueCustomEvo = isCustomEvoTask && task.status !== "running";
                     const sourceType = task.source_type;
                     return (
                       <React.Fragment key={task.task_id}>
@@ -1789,10 +2046,10 @@ export default function EvolutionDashboard() {
                         <td style={{ padding: "10px 12px", textAlign: "center" }}>
                           <span style={{
                             fontSize: "10px", fontWeight: 700, padding: "2px 8px", borderRadius: "12px",
-                            backgroundColor: sourceType === "fork" ? "#faf5ff" : sourceType === "rdagent_task_sota" ? "#ede9fe" : "#dbeafe",
-                            color: sourceType === "fork" ? "#9333ea" : sourceType === "rdagent_task_sota" ? "#7c3aed" : "#2563eb",
-                          }}>
-                            {sourceType === "fork" ? "分叉" : sourceType === "rdagent_task_sota" ? "RDAgent" : "QE实验"}
+                             backgroundColor: isCustomEvoTask ? "#e0e7ff" : sourceType === "fork" ? "#faf5ff" : sourceType === "rdagent_task_sota" ? "#ede9fe" : "#dbeafe",
+                             color: isCustomEvoTask ? "#4338ca" : sourceType === "fork" ? "#9333ea" : sourceType === "rdagent_task_sota" ? "#7c3aed" : "#2563eb",
+                           }}>
+                             {isCustomEvoTask ? "自定义" : sourceType === "fork" ? "分叉" : sourceType === "rdagent_task_sota" ? "RDAgent" : "QE实验"}
                           </span>
                         </td>
                         <td style={{ padding: "10px 12px", textAlign: "center" }}>
@@ -1830,6 +2087,20 @@ export default function EvolutionDashboard() {
                                 title="恢复演进"
                                 style={{ padding: "4px 8px", border: "1px solid #86efac", borderRadius: "4px", backgroundColor: "#fff", color: "#16a34a", fontSize: "11px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}>
                                 <RotateCcw size={11} /> 恢复
+                              </button>
+                            )}
+                            {canContinueCustomEvo && (
+                              <button onClick={(e) => handleContinueCustomEvo(task, e)}
+                                title="在原自定义演进任务中追加新的 Loop"
+                                style={{ padding: "4px 8px", border: "1px solid #f59e0b", borderRadius: "4px", backgroundColor: "#fffbeb", color: "#b45309", fontSize: "11px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}>
+                                <GitMerge size={11} /> 继续
+                              </button>
+                            )}
+                            {isCustomEvoTask && (
+                              <button onClick={(e) => handleCloneCustomEvo(task, e)}
+                                title="克隆该自定义演进任务的所有 Loop 配置"
+                                style={{ padding: "4px 8px", border: "1px solid #818cf8", borderRadius: "4px", backgroundColor: "#eef2ff", color: "#4338ca", fontSize: "11px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}>
+                                <Copy size={11} /> 克隆
                               </button>
                             )}
                             {canDelete && (
@@ -1924,12 +2195,16 @@ export default function EvolutionDashboard() {
                             <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setCloneFromTask(task);
-                                  setShowCreateTask(true);
-                                  fetchSourceExperiments();
-                                  fetchSourceTasks();
+                                  if (isCustomEvoTask) {
+                                    handleCloneCustomEvo(task, e);
+                                  } else {
+                                    setCloneFromTask(task);
+                                    setShowCreateTask(true);
+                                    fetchSourceExperiments();
+                                    fetchSourceTasks();
+                                  }
                                 }}
-                                title="基于此配置新建演进任务"
+                                title={isCustomEvoTask ? "克隆全部自定义 Loop 配置新建任务" : "基于此配置新建演进任务"}
                                 style={{
                                   flexShrink: 0, display: "flex", alignItems: "center", gap: "4px",
                                   padding: "6px 12px", borderRadius: "6px", border: "1px solid #3b82f6",
@@ -1937,7 +2212,7 @@ export default function EvolutionDashboard() {
                                   fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
                                 }}
                               >
-                                <Copy size={12} /> 基于此配置新建
+                                <Copy size={12} /> {isCustomEvoTask ? "克隆自定义任务" : "基于此配置新建"}
                               </button>
                           </td>
                         </tr>
@@ -2003,6 +2278,7 @@ export default function EvolutionDashboard() {
           activeLoopIndex={activeLoopIndex}
           onSelectLoop={handleSelectLoop}
           onRetryLoop={handleRetryLoop}
+          onRerunLoop={handleRerunLoop}
           taskType={tasks.find(t => t.task_id === activeTaskId)?.task_type}
           evolutionMode={tasks.find(t => t.task_id === activeTaskId)?.evolution_mode}
           sourceType={tasks.find(t => t.task_id === activeTaskId)?.source_type}
@@ -2042,7 +2318,7 @@ export default function EvolutionDashboard() {
           }}>
             <h2 style={{ margin: "0 0 20px", fontSize: "18px", color: "#1e293b", display: "flex", alignItems: "center", gap: "8px" }}>
               <Play size={20} color="#3b82f6" />
-              新建演进任务
+              {customEvoFormMode === "rerun" ? `重新运行 Loop ${customEvoTargetLoopIndex ?? ""}` : customEvoFormMode === "append" ? "继续自定义演进" : customEvoFormMode === "clone" ? "克隆自定义演进任务" : "新建演进任务"}
             </h2>
 
             <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -2052,11 +2328,19 @@ export default function EvolutionDashboard() {
                   type="text"
                   value={newTask.task_name}
                   onChange={e => setNewTask({...newTask, task_name: e.target.value})}
-                  placeholder="例如: Alpha158-基于XGBoost的演进"
+                  placeholder="例如：Alpha158-去基线XGBoost实验"
                   style={{ width: "100%", padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "14px", boxSizing: "border-box" }}
                 />
               </div>
+              {customEvoFormMode !== "create" && (
+                <div style={{ padding: "10px 12px", borderRadius: "8px", border: "1px solid #bfdbfe", backgroundColor: "#eff6ff", color: "#1d4ed8", fontSize: "13px", fontWeight: 600 }}>
+                  {customEvoFormMode === "rerun" && `重新运行目标：${customEvoTargetTaskId} / Loop ${customEvoTargetLoopIndex}，旧结果会永久删除。`}
+                  {customEvoFormMode === "append" && `继续演进目标：${customEvoTargetTaskId}，新增 Loop 会追加到原任务。`}
+                  {customEvoFormMode === "clone" && `克隆来源：${customEvoCloneSourceTaskId}，只复制配置，不复制结果。`}
+                </div>
+              )}
 
+              {customEvoFormMode === "create" && (<>
               {/* 来源类型选择 */}
               <div>
                 <label style={{ display: "block", fontSize: "13px", fontWeight: 600, color: "#475569", marginBottom: "6px" }}>来源类型</label>
@@ -2088,17 +2372,7 @@ export default function EvolutionDashboard() {
                         if (opt.value === "custom_evo") {
                           fetchSourceExperiments();
                           fetchSourceTasks();
-                          setCustomEvoLoops([makeDefaultCustomLoop()]);
-                          setCustomEvoFirstLoopReady(false);
-                          setCustomEvoInitSource("manual");
-                          setCustomEvoSourceExpId("");
-                          setCustomEvoSourceTaskId("");
-                          setCustomEvoSourceLoopIdx(-1);
-                          setCustomEvoForkLoops([]);
-                          setCustomEvoExecutionMode("serial");
-                          setCustomEvoParallelism(2);
-                          setCustomEvoNodeId("");
-                          setCustomEvoNodeParallelism({});
+                          resetCustomEvoFormState("create");
                         }
                       }}
                       style={{
@@ -2111,6 +2385,7 @@ export default function EvolutionDashboard() {
                   ))}
                 </div>
               </div>
+              </>)}
 
               {newTask.source_type !== "custom_evo" && (<>{newTask.source_type === "qe_experiment" ? (
                 <div>
@@ -3061,6 +3336,7 @@ export default function EvolutionDashboard() {
               </div>
 
               {/* 初始配置来源（快速填充） */}
+              {customEvoFormMode !== "rerun" && customEvoFormMode !== "append" && (
               <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", padding: "12px", backgroundColor: "#f8fafc" }}>
                 <div style={{ fontSize: "13px", fontWeight: 700, color: "#334155", marginBottom: "8px" }}>初始配置来源（可选，用于快速填充第一个 Loop）</div>
                 <div style={{ display: "flex", gap: "6px", marginBottom: "8px" }}>
@@ -3138,6 +3414,7 @@ export default function EvolutionDashboard() {
                   </div>
                 )}
               </div>
+              )}
 
               {/* ── Loop 配置区 ── */}
               {customEvoLoops.map((loop, loopIdx) => (
@@ -3147,7 +3424,7 @@ export default function EvolutionDashboard() {
                     onClick={() => { if (loopIdx > 0) updateCustomEvoLoop(loopIdx, { collapsed: !loop.collapsed }); }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                       <span style={{ fontSize: "14px", fontWeight: 700, color: loopIdx === 0 ? "#7c3aed" : "#334155" }}>
-                        {loopIdx === 0 ? "Loop 1（基准配置）" : `Loop ${loopIdx + 1}`}
+                        {loopIdx === 0 ? `Loop ${customEvoFormMode === "rerun" && customEvoTargetLoopIndex ? customEvoTargetLoopIndex : 1}${customEvoFormMode === "rerun" ? "（重新运行）" : "（基准配置）"}` : `Loop ${loopIdx + 1}`}
                       </span>
                       <input type="text" value={loop.label} onChange={e => { e.stopPropagation(); updateCustomEvoLoop(loopIdx, { label: e.target.value }); }} onClick={e => e.stopPropagation()} placeholder="标签（可选）" style={{ padding: "3px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px", width: "160px" }} />
                       {loopIdx > 0 && <span style={{ fontSize: "11px", color: "#94a3b8" }}>
@@ -3156,7 +3433,7 @@ export default function EvolutionDashboard() {
                     </div>
                     <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                       {loopIdx > 0 && <span style={{ fontSize: "12px", color: "#94a3b8" }}>{loop.collapsed ? "▼" : "▲"}</span>}
-                      {loopIdx > 0 && <button onClick={e => { e.stopPropagation(); removeCustomEvoLoop(loopIdx); }} style={{ padding: "3px 8px", backgroundColor: "#fee2e2", color: "#dc2626", border: "none", borderRadius: "4px", fontSize: "11px", cursor: "pointer" }}>删除</button>}
+                      {customEvoLoops.length > 1 && <button onClick={e => { e.stopPropagation(); removeCustomEvoLoop(loopIdx); }} style={{ padding: "3px 8px", backgroundColor: "#fee2e2", color: "#dc2626", border: "none", borderRadius: "4px", fontSize: "11px", cursor: "pointer" }}>删除</button>}
                     </div>
                   </div>
 
@@ -3412,9 +3689,13 @@ export default function EvolutionDashboard() {
 
               {/* 添加 Loop + 执行设置 */}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <button onClick={addCustomEvoLoop} style={{ padding: "8px 16px", backgroundColor: "#8b5cf6", color: "#fff", border: "none", borderRadius: "6px", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
-                  + 添加 Loop（继承 Loop 1 配置）
-                </button>
+                {customEvoFormMode !== "rerun" ? (
+                  <button onClick={addCustomEvoLoop} style={{ padding: "8px 16px", backgroundColor: "#8b5cf6", color: "#fff", border: "none", borderRadius: "6px", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
+                    + 添加 Loop（继承 Loop 1 配置）
+                  </button>
+                ) : (
+                  <span style={{ fontSize: "12px", color: "#b45309", fontWeight: 600 }}>重新运行模式只允许编辑当前单个 Loop</span>
+                )}
                 <span style={{ fontSize: "12px", color: "#94a3b8" }}>共 {customEvoLoops.length} 个 Loop</span>
               </div>
 
@@ -3502,7 +3783,15 @@ export default function EvolutionDashboard() {
                 disabled={isCreating}
                 style={{ padding: "8px 16px", backgroundColor: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", fontSize: "14px", fontWeight: 600, cursor: isCreating ? "not-allowed" : "pointer", opacity: isCreating ? 0.7 : 1 }}
               >
-                {isCreating ? "创建中..." : (newTask.source_type === "custom_evo" ? `创建自定义演进 (${customEvoLoops.length} Loops)` : "创建并启动演进")}
+                {isCreating ? "提交中..." : (newTask.source_type === "custom_evo"
+                  ? (customEvoFormMode === "rerun"
+                    ? `确认重新运行 Loop ${customEvoTargetLoopIndex ?? ""}`
+                    : customEvoFormMode === "append"
+                      ? `追加并运行 ${customEvoLoops.length} 个 Loop`
+                      : customEvoFormMode === "clone"
+                        ? `克隆创建 (${customEvoLoops.length} Loops)`
+                        : `创建自定义演进 (${customEvoLoops.length} Loops)`)
+                  : "创建并启动演进")}
               </button>
             </div>
           </div>

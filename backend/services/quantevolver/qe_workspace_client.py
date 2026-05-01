@@ -295,3 +295,27 @@ class QEWorkspaceClient:
         except httpx.HTTPError as e:
             logger.error(f"Failed to cleanup workspace for task {task_id}: {str(e)}")
             raise
+
+    async def cleanup_loop_workspace(self, task_id: str, loop_id: str) -> bool:
+        """
+        Delete one Loop workspace only. Rerun must not use task-level cleanup,
+        otherwise sibling custom_evo loops would lose their artifacts.
+        """
+        rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
+        url = f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}"
+        try:
+            response = await self.client.delete(url)
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict) and payload.get("ok") is False:
+                raise RuntimeError(f"Loop cleanup returned ok=false: {payload}")
+            return True
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise RuntimeError(
+                    "RD-Agent QE workspace API does not expose loop-level cleanup "
+                    f"or the loop path is unavailable: {task_id}/{rdagent_loop_id}"
+                ) from e
+            raise RuntimeError(f"Failed to cleanup loop workspace {task_id}/{rdagent_loop_id}: {e}") from e
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"Failed to cleanup loop workspace {task_id}/{rdagent_loop_id}: {e}") from e

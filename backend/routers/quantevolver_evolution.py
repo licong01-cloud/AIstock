@@ -1204,6 +1204,146 @@ class CustomEvolutionCreateRequest(BaseModel):
     node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism, default 1, max 4")
     engine_mode: str = Field("unified", description="引擎模式: only unified is supported")
 
+    clone_from_task_id: Optional[str] = Field(None, description="Optional source custom_evo task id for clone provenance")
+
+
+class CustomEvoLoopRerunRequest(BaseModel):
+    loop: CustomEvoLoopConfig = Field(..., description="Replacement config for the target Loop")
+    execution_mode: str = Field("serial", description="serial / parallel_N")
+    node_id: Optional[str] = Field(None, description="Default execution node for this mutation")
+    node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism")
+    engine_mode: str = Field("unified", description="Only unified is supported")
+    confirm_delete_old_result: bool = Field(False, description="Must be true because rerun deletes old results")
+
+
+class CustomEvoAppendRequest(BaseModel):
+    loops: List[CustomEvoLoopConfig] = Field(..., description="New Loop configs to append", min_length=1)
+    execution_mode: str = Field("serial", description="serial / parallel_N")
+    node_id: Optional[str] = Field(None, description="Default execution node for appended loops")
+    node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism")
+    engine_mode: str = Field("unified", description="Only unified is supported")
+    ack_failed_loop_warning: bool = Field(False, description="Caller acknowledged existing failed/cancelled loops")
+
+
+async def _prepare_custom_evo_loop_configs(
+    loops: List[CustomEvoLoopConfig],
+    *,
+    request_node_id: Optional[str],
+    node_parallelism_payload: Optional[Dict[str, int]],
+    assigned_loop_indexes: Optional[List[int]] = None,
+) -> tuple[List[Dict[str, Any]], str, Dict[str, int]]:
+    """Validate custom_evo loop payloads and resolve execution nodes fail-fast."""
+    if assigned_loop_indexes and len(assigned_loop_indexes) != len(loops):
+        raise HTTPException(status_code=400, detail="assigned_loop_indexes length must match loops length")
+
+    loop_source_horizons: Dict[int, int] = {}
+    for pos, loop_cfg in enumerate(loops, start=1):
+        try:
+            loop_label_horizon = normalize_label_horizon(loop_cfg.label_horizon)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Loop {pos}: {e}") from e
+        if not loop_cfg.factor_keys:
+            raise HTTPException(status_code=400, detail=f"Loop {pos}: factor_keys is required")
+        if not loop_cfg.model_id:
+            raise HTTPException(status_code=400, detail=f"Loop {pos}: model_id is required")
+        if loop_cfg.enable_sector_hmm and not loop_cfg.hmm_model_version_id:
+            raise HTTPException(status_code=400, detail=f"Loop {pos}: hmm_model_version_id is required when HMM is enabled")
+        if loop_cfg.backtest_only:
+            if not loop_cfg.model_source_task_id or loop_cfg.model_source_loop_index is None:
+                raise HTTPException(status_code=400, detail=f"Loop {pos}: backtest-only requires model_source")
+            try:
+                source_label_horizon = scheduler._get_source_loop_label_horizon(
+                    loop_cfg.model_source_task_id,
+                    loop_cfg.model_source_loop_index,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Loop {pos}: {e}") from e
+            loop_source_horizons[pos] = source_label_horizon
+            if loop_label_horizon != source_label_horizon:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Loop {pos}: backtest-only label_horizon={loop_label_horizon} does not match "
+                        f"source model label_horizon={source_label_horizon}"
+                    ),
+                )
+            source_factors = _get_source_loop_factors(
+                loop_cfg.model_source_task_id,
+                loop_cfg.model_source_loop_index,
+            )
+            if source_factors is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Loop {pos}: source loop factors cannot be read; backtest-only is not allowed",
+                )
+            current_factors = sorted(k.split("||")[0] for k in loop_cfg.factor_keys)
+            if current_factors != sorted(source_factors):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Loop {pos}: backtest-only requires the same factor list as the source model",
+                )
+            source_disable_alpha158 = _get_source_loop_disable_alpha158(
+                loop_cfg.model_source_task_id,
+                loop_cfg.model_source_loop_index,
+            )
+            if source_disable_alpha158 is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Loop {pos}: source Alpha158 baseline setting cannot be read; backtest-only is not allowed",
+                )
+            if bool(loop_cfg.disable_alpha158) != bool(source_disable_alpha158):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Loop {pos}: backtest-only requires the same Alpha158 baseline setting as the source model",
+                )
+
+    loops_config: List[Dict[str, Any]] = []
+    for pos, loop_cfg in enumerate(loops, start=1):
+        cfg_dict = loop_cfg.dict()
+        _reject_nested_runtime_flags(
+            cfg_dict.get("strategy_params"),
+            f"custom_loop[{pos}].strategy_params",
+        )
+        cfg_dict["loop_index"] = assigned_loop_indexes[pos - 1] if assigned_loop_indexes else pos
+        cfg_dict["execution_algo"] = _normalize_qe_execution_algo_for_request(
+            cfg_dict.get("execution_algo"),
+            f"custom_loop[{pos}].execution_algo",
+        )
+        cfg_dict["label_horizon"] = normalize_label_horizon(loop_cfg.label_horizon)
+        if loop_cfg.backtest_only and pos in loop_source_horizons:
+            cfg_dict["source_label_horizon"] = loop_source_horizons[pos]
+        loops_config.append(cfg_dict)
+
+    try:
+        loops_config, loop1_node_id, selected_node_ids = resolve_custom_loop_nodes(
+            loops_config,
+            request_node_id,
+        )
+        node_parallelism = normalize_node_parallelism(
+            selected_node_ids,
+            node_parallelism_payload,
+        )
+        node_rows = await preflight_qe_nodes(selected_node_ids)
+    except QENodePreflightError as e:
+        raise HTTPException(status_code=400, detail=e.to_detail()) from e
+
+    for cfg_dict in loops_config:
+        stock_pool = cfg_dict.get("stock_pool")
+        if stock_pool and "filtered_pool" in stock_pool:
+            node = node_rows.get(cfg_dict["node_id"]) or get_compute_node(cfg_dict["node_id"])
+            if not node:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error_code": "QE_NODE_NOT_FOUND",
+                        "message": f"Node {cfg_dict['node_id']} does not exist.",
+                        "context": {"node_id": cfg_dict["node_id"]},
+                    },
+                )
+            _sync_stock_pool_to_remote(stock_pool, node)
+
+    return loops_config, loop1_node_id, node_parallelism
+
 @router.post("/custom-tasks", summary="Create custom evolution task")
 async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, background_tasks: BackgroundTasks):
     """Create a custom_evo task with explicit per-loop execution nodes."""
@@ -1219,111 +1359,11 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
                 detail="QE legacy execution engine has been removed; only engine_mode='unified' is supported.",
             )
 
-        loop_source_horizons: Dict[int, int] = {}
-        for i, loop_cfg in enumerate(req.loops, start=1):
-            try:
-                loop_label_horizon = normalize_label_horizon(loop_cfg.label_horizon)
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=f"Loop {i}: {e}") from e
-            if not loop_cfg.factor_keys:
-                raise HTTPException(status_code=400, detail=f"Loop {i}: factor_keys is required")
-            if not loop_cfg.model_id:
-                raise HTTPException(status_code=400, detail=f"Loop {i}: model_id is required")
-            if loop_cfg.enable_sector_hmm and not loop_cfg.hmm_model_version_id:
-                raise HTTPException(status_code=400, detail=f"Loop {i}: hmm_model_version_id is required when HMM is enabled")
-            if loop_cfg.backtest_only:
-                if not loop_cfg.model_source_task_id or loop_cfg.model_source_loop_index is None:
-                    raise HTTPException(status_code=400, detail=f"Loop {i}: backtest-only requires model_source")
-                try:
-                    source_label_horizon = scheduler._get_source_loop_label_horizon(
-                        loop_cfg.model_source_task_id,
-                        loop_cfg.model_source_loop_index,
-                    )
-                except ValueError as e:
-                    raise HTTPException(status_code=400, detail=f"Loop {i}: {e}") from e
-                loop_source_horizons[i] = source_label_horizon
-                if loop_label_horizon != source_label_horizon:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"Loop {i}: backtest-only label_horizon={loop_label_horizon} does not match "
-                            f"source model label_horizon={source_label_horizon}"
-                        ),
-                    )
-                source_factors = _get_source_loop_factors(
-                    loop_cfg.model_source_task_id,
-                    loop_cfg.model_source_loop_index,
-                )
-                if source_factors is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Loop {i}: source loop factors cannot be read; backtest-only is not allowed",
-                    )
-                current_factors = sorted(k.split("||")[0] for k in loop_cfg.factor_keys)
-                if current_factors != sorted(source_factors):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Loop {i}: backtest-only requires the same factor list as the source model",
-                    )
-                source_disable_alpha158 = _get_source_loop_disable_alpha158(
-                    loop_cfg.model_source_task_id,
-                    loop_cfg.model_source_loop_index,
-                )
-                if source_disable_alpha158 is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Loop {i}: source Alpha158 baseline setting cannot be read; backtest-only is not allowed",
-                    )
-                if bool(loop_cfg.disable_alpha158) != bool(source_disable_alpha158):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Loop {i}: backtest-only requires the same Alpha158 baseline setting as the source model",
-                    )
-
-        loops_config = []
-        for i, loop_cfg in enumerate(req.loops, start=1):
-            cfg_dict = loop_cfg.dict()
-            _reject_nested_runtime_flags(
-                cfg_dict.get("strategy_params"),
-                f"custom_loop[{i}].strategy_params",
-            )
-            cfg_dict["loop_index"] = i
-            cfg_dict["execution_algo"] = _normalize_qe_execution_algo_for_request(
-                cfg_dict.get("execution_algo"),
-                f"custom_loop[{i}].execution_algo",
-            )
-            cfg_dict["label_horizon"] = normalize_label_horizon(loop_cfg.label_horizon)
-            if loop_cfg.backtest_only and i in loop_source_horizons:
-                cfg_dict["source_label_horizon"] = loop_source_horizons[i]
-            loops_config.append(cfg_dict)
-
-        try:
-            loops_config, loop1_node_id, selected_node_ids = resolve_custom_loop_nodes(
-                loops_config,
-                req.node_id,
-            )
-            node_parallelism = normalize_node_parallelism(
-                selected_node_ids,
-                req.node_parallelism,
-            )
-            node_rows = await preflight_qe_nodes(selected_node_ids)
-        except QENodePreflightError as e:
-            raise HTTPException(status_code=400, detail=e.to_detail()) from e
-
-        for cfg_dict in loops_config:
-            stock_pool = cfg_dict.get("stock_pool")
-            if stock_pool and "filtered_pool" in stock_pool:
-                node = node_rows.get(cfg_dict["node_id"]) or get_compute_node(cfg_dict["node_id"])
-                if not node:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error_code": "QE_NODE_NOT_FOUND",
-                            "message": f"Node {cfg_dict['node_id']} does not exist.",
-                            "context": {"node_id": cfg_dict["node_id"]},
-                        },
-                    )
-                _sync_stock_pool_to_remote(stock_pool, node)
+        loops_config, loop1_node_id, node_parallelism = await _prepare_custom_evo_loop_configs(
+            req.loops,
+            request_node_id=req.node_id,
+            node_parallelism_payload=req.node_parallelism,
+        )
 
         new_task_id = await scheduler.create_custom_evo_task(
             task_name=req.task_name,
@@ -1333,6 +1373,7 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             node_id=loop1_node_id,
             node_parallelism=node_parallelism,
             engine_mode="unified",
+            clone_from_task_id=req.clone_from_task_id,
         )
 
         return {
@@ -1353,6 +1394,109 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to create custom evolution task: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}/custom-evo-config", summary="Get editable custom evolution config")
+async def get_custom_evo_config(task_id: str):
+    try:
+        data = await scheduler.get_custom_evo_editable_config(task_id)
+        return {"status": "success", "data": data}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to read custom_evo config for {task_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/tasks/{task_id}/loops/{loop_index}/rerun", summary="Rerun a custom_evo Loop with full editable config")
+async def rerun_custom_evo_loop(
+    task_id: str,
+    loop_index: int,
+    req: CustomEvoLoopRerunRequest,
+    background_tasks: BackgroundTasks,
+):
+    try:
+        try:
+            ensure_qe_label_horizon_schema()
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+        if (req.engine_mode or "unified") != "unified":
+            raise HTTPException(
+                status_code=400,
+                detail="QE legacy execution engine has been removed; only engine_mode='unified' is supported.",
+            )
+        if not req.confirm_delete_old_result:
+            raise HTTPException(
+                status_code=400,
+                detail="confirm_delete_old_result must be true because rerun permanently deletes old Loop results.",
+            )
+        existing_config = await scheduler.get_custom_evo_editable_config(task_id)
+        request_node_id = (req.node_id or "").strip() or existing_config.get("node_id")
+        loops_config, _loop1_node_id, node_parallelism = await _prepare_custom_evo_loop_configs(
+            [req.loop],
+            request_node_id=request_node_id,
+            node_parallelism_payload=req.node_parallelism,
+            assigned_loop_indexes=[loop_index],
+        )
+        result = await scheduler.rerun_custom_evo_loop(
+            task_id=task_id,
+            loop_index=loop_index,
+            loop_config=loops_config[0],
+            execution_mode=req.execution_mode or "serial",
+            node_id=request_node_id,
+            node_parallelism=node_parallelism,
+        )
+        background_tasks.add_task(scheduler.submit_custom_evo_selected_loops, task_id, [loop_index])
+        return {"status": "success", **result}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to rerun custom_evo loop {task_id}/Loop{loop_index}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/tasks/{task_id}/custom-loops/append", summary="Append custom_evo Loops to an existing task")
+async def append_custom_evo_loops(
+    task_id: str,
+    req: CustomEvoAppendRequest,
+    background_tasks: BackgroundTasks,
+):
+    try:
+        try:
+            ensure_qe_label_horizon_schema()
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+        if (req.engine_mode or "unified") != "unified":
+            raise HTTPException(
+                status_code=400,
+                detail="QE legacy execution engine has been removed; only engine_mode='unified' is supported.",
+            )
+        existing_config = await scheduler.get_custom_evo_editable_config(task_id)
+        request_node_id = (req.node_id or "").strip() or existing_config.get("node_id")
+        loops_config, _loop1_node_id, node_parallelism = await _prepare_custom_evo_loop_configs(
+            req.loops,
+            request_node_id=request_node_id,
+            node_parallelism_payload=req.node_parallelism,
+        )
+        result = await scheduler.append_custom_evo_loops(
+            task_id=task_id,
+            loops_config=loops_config,
+            execution_mode=req.execution_mode or "serial",
+            node_id=request_node_id,
+            node_parallelism=node_parallelism,
+            ack_failed_loop_warning=req.ack_failed_loop_warning,
+        )
+        background_tasks.add_task(scheduler.submit_custom_evo_selected_loops, task_id, result["new_loop_indexes"])
+        return {"status": "success", **result}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to append custom_evo loops for {task_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/tasks/{task_id}/logs", summary="获取实时的任务运行及 Agent 思考日志流 (SSE)")
