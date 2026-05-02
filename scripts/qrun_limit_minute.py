@@ -520,6 +520,23 @@ def _run_train_only(config: dict, experiment_name: str):
     print("[INFO] Train-only completed: model trained, pred.pkl generated")
 
 
+def _load_backtest_only_model_from_loose_params(mlruns_dir: Path):
+    """Load a model from bare params.pkl archives when MLflow metadata is absent."""
+    if not mlruns_dir.exists():
+        return None, None
+    params_files = sorted(
+        mlruns_dir.glob("**/params.pkl"),
+        key=lambda p: p.stat().st_mtime,
+    )
+    for params_path in reversed(params_files):
+        try:
+            with params_path.open("rb") as f:
+                return pickle.load(f), params_path
+        except Exception as exc:
+            print(f"[WARN] Failed to load loose params.pkl {params_path}: {exc}")
+    return None, None
+
+
 def _run_backtest_only(config: dict, experiment_name: str):
     """从已有 mlruns 加载训练好的模型，只执行信号生成 + 回测。
 
@@ -534,35 +551,48 @@ def _run_backtest_only(config: dict, experiment_name: str):
     task_config = config.get("task")
 
     # 查找已有的 experiment 和 recorder
-    exp = R.get_exp(experiment_name=experiment_name)
-    recorders = exp.list_recorders()
+    try:
+        exp = R.get_exp(experiment_name=experiment_name)
+        recorders = exp.list_recorders()
+    except Exception as exc:
+        print(f"[WARN] Backtest-only: MLflow metadata unavailable, trying loose params.pkl: {exc}")
+        recorders = {}
     if not recorders:
-        raise RuntimeError(
-            f"Backtest-only: experiment '{experiment_name}' 中没有已有的 recorder。"
-            f"需要先执行完整训练。"
-        )
+        model, params_path = _load_backtest_only_model_from_loose_params(Path("mlruns"))
+        if model is None:
+            raise RuntimeError(
+                f"Backtest-only: experiment '{experiment_name}' 中没有已有的 recorder，"
+                f"且 mlruns 下没有可加载的 params.pkl。需要先执行完整训练。"
+            )
+        rec_id = str(params_path)
+        print(f"[INFO] Loaded trained model from loose params.pkl {params_path}")
+    else:
+        # 从所有 recorders 中找到包含 params.pkl 的那个（跳过未完成的训练 run）
+        recorder = None
+        rec_id = None
+        for rid in reversed(list(recorders.keys())):
+            r = recorders[rid]
+            try:
+                obj = r.load_object("params.pkl")
+                if obj is not None:
+                    recorder = r
+                    rec_id = rid
+                    model = obj
+                    break
+            except Exception:
+                continue
 
-    # 从所有 recorders 中找到包含 params.pkl 的那个（跳过未完成的训练 run）
-    recorder = None
-    rec_id = None
-    for rid in reversed(list(recorders.keys())):
-        r = recorders[rid]
-        try:
-            obj = r.load_object("params.pkl")
-            if obj is not None:
-                recorder = r
-                rec_id = rid
-                model = obj
-                break
-        except Exception:
-            continue
-
-    if recorder is None:
-        raise RuntimeError(
-            "Backtest-only: 所有 recorder 中均未找到 params.pkl，模型训练未完成。"
-            "无法跳过训练。"
-        )
-    print(f"[INFO] Loaded trained model from recorder {rec_id}")
+        if recorder is None:
+            model, params_path = _load_backtest_only_model_from_loose_params(Path("mlruns"))
+            if model is None:
+                raise RuntimeError(
+                    "Backtest-only: 所有 recorder 中均未找到 params.pkl，"
+                    "且 mlruns 下没有可加载的 params.pkl。无法跳过训练。"
+                )
+            rec_id = str(params_path)
+            print(f"[INFO] Loaded trained model from loose params.pkl {params_path}")
+        else:
+            print(f"[INFO] Loaded trained model from recorder {rec_id}")
 
     # 重建 dataset（从配置重新初始化，不需要训练数据）
     dataset: Dataset = init_instance_by_config(task_config["dataset"], accept_types=Dataset)

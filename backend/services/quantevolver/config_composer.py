@@ -456,6 +456,55 @@ class ConfigComposer:
                 return candidate
         return None
 
+    @classmethod
+    def _resolve_strategy_dependency_code(
+        cls,
+        module_name: str,
+        allowed_external_modules: set[str],
+    ) -> str | None:
+        """Resolve dependency source from AIstock-owned files or strategy catalog.
+
+        Some catalog strategies, for example ``score_weighted_topk_v2``, import
+        a base strategy that is stored in ``aistock_strategy_catalog`` rather
+        than as an AIstock-local file.  Reading it from the DB keeps generation
+        remote-safe: Windows never probes RD-Agent/WSL worker workspaces.
+        """
+        dep_path = cls._resolve_strategy_dependency_path(module_name, allowed_external_modules)
+        if dep_path is not None:
+            return dep_path.read_text(encoding="utf-8")
+
+        if module_name not in allowed_external_modules:
+            return None
+
+        relpath = f"{module_name}.py"
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT source_code
+                        FROM aistock_strategy_catalog
+                        WHERE source_code_relpath = %s
+                          AND source_code IS NOT NULL
+                          AND source_code <> ''
+                        ORDER BY updated_at DESC NULLS LAST,
+                                 created_at DESC NULLS LAST
+                        LIMIT 1
+                        """,
+                        (relpath,),
+                    )
+                    row = cur.fetchone()
+        except Exception as exc:
+            logger.debug(
+                "QE strategy dependency catalog lookup skipped for %s: %s",
+                module_name,
+                exc,
+            )
+            return None
+        if not row:
+            return None
+        return row[0]
+
     @staticmethod
     def _normalize_execution_algo(execution_algo: Optional[str]) -> str:
         """Return the exact QE execution algo or raise; never silently fallback."""
@@ -1416,10 +1465,11 @@ class ConfigComposer:
                 m = _re.match(r'^(\s*)from\s+\.(\w+)\s+import\s+(.+)$', s)
                 if m:
                     indent, mod, imps = m.group(1), m.group(2), m.group(3)
-                    dep = self._resolve_strategy_dependency_path(mod, _STRATEGY_DEP_WHITELIST)
-                    if dep is not None and mod not in collected:
+                    dep_code = self._resolve_strategy_dependency_code(mod, _STRATEGY_DEP_WHITELIST)
+                    if dep_code is None and mod in _STRATEGY_DEP_WHITELIST:
+                        raise ValueError(f"策略依赖文件缺失，无法打包到 QE loop payload: {mod}.py")
+                    if dep_code is not None and mod not in collected:
                         collected.add(mod)
-                        dep_code = dep.read_text(encoding="utf-8")
                         dep_code = _resolve_deps(dep_code, collected)
                         deps_dict[f"{mod}.py"] = dep_code
                     out_lines.append(f"{indent}from {mod} import {imps}")
@@ -1428,10 +1478,11 @@ class ConfigComposer:
                 m2 = _re.match(r'^(\s*)from\s+(\w+)\s+import\s+(.+)$', s)
                 if m2:
                     indent, mod, imps = m2.group(1), m2.group(2), m2.group(3)
-                    dep = self._resolve_strategy_dependency_path(mod, _STRATEGY_DEP_WHITELIST)
-                    if dep is not None and mod not in collected:
+                    dep_code = self._resolve_strategy_dependency_code(mod, _STRATEGY_DEP_WHITELIST)
+                    if dep_code is None and mod in _STRATEGY_DEP_WHITELIST:
+                        raise ValueError(f"策略依赖文件缺失，无法打包到 QE loop payload: {mod}.py")
+                    if dep_code is not None and mod not in collected:
                         collected.add(mod)
-                        dep_code = dep.read_text(encoding="utf-8")
                         dep_code = _resolve_deps(dep_code, collected)
                         deps_dict[f"{mod}.py"] = dep_code
                     out_lines.append(ln)
@@ -3968,10 +4019,11 @@ model_cls = {nn_class_name}
                 m = _re.match(r'^(\s*)from\s+\.(\w+)\s+import\s+(.+)$', s)
                 if m:
                     indent, mod, imps = m.group(1), m.group(2), m.group(3)
-                    dep = self._resolve_strategy_dependency_path(mod, _STRATEGY_DEP_WHITELIST)
-                    if dep is not None and mod not in copied:
+                    dep_code = self._resolve_strategy_dependency_code(mod, _STRATEGY_DEP_WHITELIST)
+                    if dep_code is None and mod in _STRATEGY_DEP_WHITELIST:
+                        raise ValueError(f"策略依赖文件缺失，无法写入 QE 实验目录: {mod}.py")
+                    if dep_code is not None and mod not in copied:
                         copied.add(mod)
-                        dep_code = dep.read_text(encoding="utf-8")
                         dep_code = _copy_deps_recursive(dep_code, copied)
                         (exp_dir / f"{mod}.py").write_text(dep_code, encoding="utf-8")
                         logger.info(f"复制策略依赖文件: {mod}.py")
@@ -3981,10 +4033,11 @@ model_cls = {nn_class_name}
                 m2 = _re.match(r'^(\s*)from\s+(\w+)\s+import\s+(.+)$', s)
                 if m2:
                     indent, mod, imps = m2.group(1), m2.group(2), m2.group(3)
-                    dep = self._resolve_strategy_dependency_path(mod, _STRATEGY_DEP_WHITELIST)
-                    if dep is not None and mod not in copied:
+                    dep_code = self._resolve_strategy_dependency_code(mod, _STRATEGY_DEP_WHITELIST)
+                    if dep_code is None and mod in _STRATEGY_DEP_WHITELIST:
+                        raise ValueError(f"策略依赖文件缺失，无法写入 QE 实验目录: {mod}.py")
+                    if dep_code is not None and mod not in copied:
                         copied.add(mod)
-                        dep_code = dep.read_text(encoding="utf-8")
                         dep_code = _copy_deps_recursive(dep_code, copied)
                         (exp_dir / f"{mod}.py").write_text(dep_code, encoding="utf-8")
                         logger.info(f"复制策略依赖文件: {mod}.py")

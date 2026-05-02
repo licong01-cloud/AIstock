@@ -4,6 +4,7 @@ import os
 import asyncio
 import uuid
 import threading
+import base64
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -309,6 +310,40 @@ class AutoEvolutionScheduler:
 
     def _get_workspace_client_for_loop(self, task_id: str, loop_id_or_index: str | int) -> QEWorkspaceClient:
         return self._get_workspace_client_for_node_id(self._get_loop_node_id(task_id, loop_id_or_index))
+
+    async def _build_backtest_only_model_payload(
+        self,
+        source_client: QEWorkspaceClient,
+        source_task_id: str,
+        source_loop_index: int,
+        *,
+        reason: str,
+    ) -> tuple[Dict[str, Any], Dict[str, str]]:
+        """Package reusable model params through the QE node API for backtest-only runs."""
+        source_loop = f"Loop{source_loop_index}"
+        mlruns_tar = await source_client.download_mlruns_params(source_task_id, source_loop)
+        if not mlruns_tar:
+            raise RuntimeError(
+                f"{reason} missing source model params: {source_task_id}/{source_loop}"
+            )
+        model_source = {
+            "source_task_id": source_task_id,
+            "source_loop": source_loop,
+            # Reuse the existing node contract: when true, the API extracts the
+            # packaged mlruns tar from experiment_files instead of probing links.
+            "cross_node": True,
+        }
+        extra_experiment_files = {
+            "mlruns_params.tar.gz.b64": base64.b64encode(mlruns_tar).decode("ascii")
+        }
+        logger.info(
+            "%s packaged source model params via node API: source=%s/%s bytes=%s",
+            reason,
+            source_task_id,
+            source_loop,
+            len(mlruns_tar),
+        )
+        return model_source, extra_experiment_files
 
     def _get_callback_url_for_node(self, node_id: Optional[str]) -> Optional[str]:
         with get_conn() as conn:
@@ -2921,17 +2956,19 @@ class AutoEvolutionScheduler:
         # backtest-only; auto preserves the old artifact-based behavior.
         retry_mode_name = requested_retry_mode
         retry_model_source = None
+        retry_extra_experiment_files = None
         if requested_retry_mode in (
             QE_LOOP_RETRY_MODE_AUTO,
             QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
         ):
             try:
-                await client.download_mlruns_params(task_id, loop_id)
+                retry_model_source, retry_extra_experiment_files = await self._build_backtest_only_model_payload(
+                    client,
+                    task_id,
+                    loop_index,
+                    reason="retry backtest-only",
+                )
                 retry_mode_name = QE_LOOP_RETRY_MODE_BACKTEST_ONLY
-                retry_model_source = {
-                    "source_task_id": task_id,
-                    "source_loop": f"Loop{loop_index}",
-                }
                 logger.info(
                     "Retry loop %s: params.pkl verified on node %s, using backtest-only mode "
                     "(requested=%s)",
@@ -3019,6 +3056,7 @@ class AutoEvolutionScheduler:
                 node_id=effective_node_id,
                 callback_url=self._get_callback_url_for_node(effective_node_id),
                 model_source=retry_model_source,
+                extra_experiment_files=retry_extra_experiment_files,
             )
             retry_mode = BacktestMode.BACKTEST_ONLY if retry_mode_name == "backtest_only" else BacktestMode.FULL_TRAIN
             result = await executor.submit(cfg, ctx, mode=retry_mode)
@@ -3998,7 +4036,6 @@ class AutoEvolutionScheduler:
             from .config_composer import ConfigComposer
             from .executors.backtest import BacktestExecutor, BacktestMode
             from .executors.base import ExecutionContext
-            import base64
 
             experiment_name = f"{task_id}/{loop_id}"
             cfg = build_config_from_strategy_evo_loop(
@@ -4043,14 +4080,12 @@ class AutoEvolutionScheduler:
                 )
                 if source_node_id and source_node_id not in self._node_clients:
                     self._node_clients[source_node_id] = source_client
-                mlruns_tar = await source_client.download_mlruns_params(source_task_id, f"Loop{source_loop_idx}")
-                if not mlruns_tar:
-                    raise RuntimeError(
-                        f"cross-node strategy evolution missing source model params: {source_task_id}/Loop{source_loop_idx}"
-                    )
-                extra_experiment_files["mlruns_params.tar.gz.b64"] = base64.b64encode(mlruns_tar).decode("ascii")
-                model_source["cross_node"] = True
-                logger.info(f"cross-node mlruns sync completed: {len(mlruns_tar)} bytes")
+                model_source, extra_experiment_files = await self._build_backtest_only_model_payload(
+                    source_client,
+                    source_task_id,
+                    int(source_loop_idx),
+                    reason="cross-node strategy evolution",
+                )
 
             client = self._get_workspace_client_for_task(task_id)
             executor = BacktestExecutor(ConfigComposer(), client)
@@ -5325,20 +5360,13 @@ class AutoEvolutionScheduler:
                     int(cfg.model_source_loop_index),
                 )
                 if source_node_id != effective_node_id:
-                    import base64
-
                     source_client = self._get_workspace_client_for_node_id(source_node_id)
-                    mlruns_tar = await source_client.download_mlruns_params(
+                    model_source, extra_experiment_files = await self._build_backtest_only_model_payload(
+                        source_client,
                         cfg.model_source_task_id,
-                        f"Loop{cfg.model_source_loop_index}",
+                        int(cfg.model_source_loop_index),
+                        reason="cross-node custom evolution",
                     )
-                    if not mlruns_tar:
-                        raise RuntimeError(
-                            "cross-node custom evolution missing source model params: "
-                            f"{cfg.model_source_task_id}/Loop{cfg.model_source_loop_index}"
-                        )
-                    extra_experiment_files["mlruns_params.tar.gz.b64"] = base64.b64encode(mlruns_tar).decode("ascii")
-                    model_source["cross_node"] = True
 
                 ctx = ExecutionContext(
                     task_id=task_id,

@@ -174,7 +174,8 @@ def _label_horizon_from_model_params(config: dict[str, Any] | None) -> Any:
     if isinstance(model_params, str):
         try:
             model_params = json.loads(model_params)
-        except Exception:
+        except Exception as exc:
+            logger.debug("invalid model_params JSON while resolving label_horizon: %s", exc)
             return None
     if not isinstance(model_params, dict):
         return None
@@ -512,7 +513,15 @@ def build_config_from_custom_evo_loop(
     build_custom_params() ordering.
     """
     factor_keys: list[str] = loop_config.get("factor_keys") or []
-    factor_names: list[str] = [k.split("||")[0] for k in factor_keys]
+    if factor_keys:
+        factor_names: list[str] = [k.split("||")[0] for k in factor_keys]
+    else:
+        factor_names = list(
+            loop_config.get("factor_names")
+            or loop_config.get("factor_list")
+            or task.get("factor_list")
+            or []
+        )
     disable_alpha158: bool = bool(loop_config.get("disable_alpha158", False))
 
     strategy_params: dict[str, Any] = dict(

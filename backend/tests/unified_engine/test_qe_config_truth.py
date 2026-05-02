@@ -1,10 +1,13 @@
 
 import json
 import sys
+import asyncio
+import base64
 from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from unittest.mock import AsyncMock
 
 from backend.routers.quantevolver_evolution import (
     EvolutionLoopRetryRequest,
@@ -20,12 +23,16 @@ from backend.services.quantevolver.config_composer import (
     RDAGENT_DEFAULT_DATA_SPLIT,
 )
 from backend.services.quantevolver.qe_evolution_service import (
+    AutoEvolutionScheduler,
     QE_LOOP_RETRY_MODE_AUTO,
     QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
     QE_LOOP_RETRY_MODE_FULL_TRAIN,
     normalize_qe_loop_retry_mode,
 )
-from backend.services.quantevolver.experiment_config_builders import build_config_from_retry_loop
+from backend.services.quantevolver.experiment_config_builders import (
+    build_config_from_custom_evo_loop,
+    build_config_from_retry_loop,
+)
 from backend.services.quantevolver.stock_pool_sync import (
     inject_stock_pool_install_command,
     prepare_stock_pool_loop_payload,
@@ -141,6 +148,56 @@ def test_strategy_dependency_env_rejects_linux_worker_root(monkeypatch):
 
     with pytest.raises(ValueError, match="Linux/WSL paths are forbidden"):
         ConfigComposer._strategy_dependency_roots()
+
+
+def test_strategy_dependency_can_be_loaded_from_strategy_catalog(monkeypatch):
+    import backend.services.quantevolver.config_composer as composer_module
+
+    class FakeCursor:
+        description = [("source_code",)]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, _sql, params):
+            assert params == ("score_weighted_strategy.py",)
+
+        def fetchone(self):
+            return ("class ScoreWeightedTopkStrategy(object):\n    pass\n",)
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(
+        ConfigComposer,
+        "_resolve_strategy_dependency_path",
+        classmethod(lambda cls, module_name, allowed_external_modules: None),
+    )
+    monkeypatch.setattr(composer_module, "get_conn", lambda: FakeConn())
+
+    strategy_content, deps = ConfigComposer()._build_strategy_py_content(
+        {
+            "strategy_id": "score_weighted_topk_v2",
+            "source_code": (
+                "from score_weighted_strategy import ScoreWeightedTopkStrategy\n\n"
+                "class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):\n"
+                "    pass\n"
+            ),
+        }
+    )
+
+    assert "from score_weighted_strategy import ScoreWeightedTopkStrategy" in strategy_content
+    assert deps["score_weighted_strategy.py"].startswith("class ScoreWeightedTopkStrategy")
 
 
 def test_qe_template_root_rejects_linux_worker_path(monkeypatch):
@@ -391,6 +448,30 @@ def test_retry_loop_preserves_loop_specific_execution_and_hold_config():
     assert cfg.label_horizon == 5
 
 
+def test_custom_evo_builder_accepts_persisted_factor_list():
+    cfg = build_config_from_custom_evo_loop(
+        {
+            "factor_list": ["alpha_a", "alpha_b"],
+            "model_id": "model_lgbm_v1",
+            "strategy_id": "score_weighted_topk_v2",
+            "data_split": {},
+            "stock_pool": "filtered_pool_20260502",
+            "label_horizon": 10,
+            "source_label_horizon": 10,
+            "backtest_only": True,
+            "model_source_task_id": "qe_source",
+            "model_source_loop_index": 26,
+        },
+        {"node_id": "wsl2-5080"},
+        experiment_name="custom-retry",
+    )
+
+    assert cfg.factor_names == ["alpha_a", "alpha_b"]
+    assert cfg.backtest_only is True
+    assert cfg.model_source_task_id == "qe_source"
+    assert cfg.model_source_loop_index == 26
+
+
 def test_qe_loop_retry_mode_normalization():
     assert EvolutionLoopRetryRequest().retry_mode == QE_LOOP_RETRY_MODE_AUTO
     assert normalize_qe_loop_retry_mode(None) == QE_LOOP_RETRY_MODE_AUTO
@@ -402,6 +483,45 @@ def test_qe_loop_retry_mode_normalization():
 
     with pytest.raises(ValueError, match="Invalid retry mode"):
         normalize_qe_loop_retry_mode("invalid")
+
+
+def test_backtest_only_model_payload_uses_node_api_archive():
+    client = AsyncMock()
+    client.download_mlruns_params.return_value = b"tar-bytes"
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+
+    model_source, extra_files = asyncio.get_event_loop().run_until_complete(
+        scheduler._build_backtest_only_model_payload(
+            client,
+            "qe_source",
+            26,
+            reason="unit-test backtest-only",
+        )
+    )
+
+    assert model_source == {
+        "source_task_id": "qe_source",
+        "source_loop": "Loop26",
+        "cross_node": True,
+    }
+    assert base64.b64decode(extra_files["mlruns_params.tar.gz.b64"]) == b"tar-bytes"
+    client.download_mlruns_params.assert_awaited_once_with("qe_source", "Loop26")
+
+
+def test_backtest_only_model_payload_fails_without_params():
+    client = AsyncMock()
+    client.download_mlruns_params.return_value = b""
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+
+    with pytest.raises(RuntimeError, match="missing source model params"):
+        asyncio.get_event_loop().run_until_complete(
+            scheduler._build_backtest_only_model_payload(
+                client,
+                "qe_source",
+                1,
+                reason="unit-test backtest-only",
+            )
+        )
 
 
 def test_suspend_filter_wraps_topk_strategy():
