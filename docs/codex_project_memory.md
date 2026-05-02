@@ -523,6 +523,22 @@ Important directories:
 - Validation expanded to 20 backend tests plus a real PostgreSQL synthetic outbox/archive_job state-machine smoke. Synthetic validation rows were cleaned up, and final data-quality smoke confirmed 27/27 managed tables, 458/458 commented columns, `pending_outbox_count=0`, and empty `archive_job_status_counts`.
 - Validation record: `tests/aistock_validation/history/qe_archive/20260502_162657_l3_qe-archive-realtime-warehouse-validation.md`. Production backend 8001 was not restarted; no QE/RD-Agent worker workspace assets were accessed or modified.
 
+## QE Archive Manual Payload Service Foundation - 2026-05-02
+
+- Added manual/dry-run archive payload processing via `backend/services/qe_archive/payload_extractor.py` and `backend/services/qe_archive/archive_service.py`. This phase accepts already-collected QE loop/experiment payloads only; it is not wired into QE webhooks, FastAPI startup, or any scheduler.
+- The extractor normalizes reproducibility-critical config, ordered factor list/hash, data context, daily invalidity (`research_valid=false` when daily without authoritative limit/suspend), account absolute return fields, scalar metrics, IC/RankIC/return/drawdown/training curves, factor rows, reproducibility manifest, and raw payload snapshots.
+- Repository support now includes `run_source`, `run_data_context`, `run_account_summary`, `run_curve`, and `run_factor` writes in addition to the existing run/config/repro/metric/raw/artifact/outbox/job writes.
+- Validation expanded to 23 backend tests plus a real PostgreSQL synthetic archive-service write/cleanup smoke. The synthetic payload wrote run/config/repro/data_context/account/metric/curve/factor/raw rows, then deleting the synthetic `qe_archive.run` row cascaded cleanup. Final data-quality smoke showed `run_count=0`, `pending_outbox_count=0`, and no archive jobs.
+- Validation record: `tests/aistock_validation/history/qe_archive/20260502_164341_l3_qe-archive-realtime-warehouse-validation.md`. Production backend 8001 was not restarted; no QE/RD-Agent worker workspace assets were accessed or modified.
+
+## QE Archive Source Assembler / Backfill Dry-Run - 2026-05-02
+
+- Added `backend/services/qe_archive/source_assembler.py` to assemble archive payloads from existing public DB rows in `qe_experiments`, `qe_evolution_loops`, and `qe_evolution_tasks`. It is read-only against source QE tables and intentionally omits legacy worker artifact path metadata.
+- Added manual CLI `scripts/qe_archive_backfill.py`. Default mode is dry-run; write mode requires both `--write` and `--confirm-write QE_ARCHIVE_WRITE`. This CLI is not scheduled and is not imported by FastAPI runtime.
+- Archive service writes now replace raw payload rows for the same run/payload types via `replace_raw_payloads`, avoiding duplicate raw payload rows during repeated confirmed backfill runs.
+- Validation expanded to 25 backend tests plus real DB dry-run preview: `python scripts/qe_archive_backfill.py --source all --limit 1` processed one completed experiment and one completed loop with `written=false`. Final data-quality smoke still showed `run_count=0`, `pending_outbox_count=0`, and empty `archive_job_status_counts`.
+- Validation record: `tests/aistock_validation/history/qe_archive/20260502_171206_l3_qe-archive-realtime-warehouse-validation.md`. Production backend 8001 was not restarted; no QE/RD-Agent worker workspace assets were accessed or modified.
+
 
 ## QE P0/P1 Existing Artifact Audit Extension - 2026-05-02
 
@@ -531,6 +547,15 @@ Important directories:
 - New key evidence: full warning minute audit classified 1,642 Qlib `$close=None` warnings as 1,123 DB daily+minute+limit present/not suspended, 484 suspend/no DB price, and 35 suspend_d + daily present + minute missing; 300 actual-trade price samples had max DB-vs-Qlib close/limit diff <= 0.000007.
 - V25 aggregate evidence remains strong: 1min/1day `value` and `deal_amount` aggregate with zero diff across Loop19-28, active dates have 240/241 minute rows and no bad minute dates. Exact V25 child-order branch replay is still not provable from current artifacts because plan/no-fill/tail-substitute event rows are not persisted.
 - Dynamic truncation expanded from the initial two-factor sample to top feature-importance factors on representative Loop19/22/26; all audited factor/date rows matched after PIT truncation with zero mismatches.
+
+## QE P0/P1 Existing Artifact Follow-up Audit - 2026-05-02
+
+- Added read-only QE audit tools `scripts/qe_close_none_root_cause_audit.py` and `scripts/qe_tail_window_risk_audit.py`; copied both into the `qe-evolution-diagnostics` skill and documented their usage. These tools only read existing artifacts/DB/Qlib bin and do not rerun QE or add strategy logging.
+- Follow-up synthesis for `qe_20260501_011054_c90a` Loop19-28 is recorded at `docs/analysis/P0_P1_qe_20260501_011054_c90a_loop19_28_existing_artifact_followup_20260502.md`; the earlier full synthesis was updated with the follow-up summary.
+- Close-none root-cause audit showed the 35 daily-present/minute-missing rows are confirmed suspension/no-trade rows: all have `suspend_d` `suspend_type=S`, daily `volume_hand=0`, and DB minute count 0.
+- Close-none root-cause audit showed the 1,123 DB-present/not-suspended warnings are Qlib minute feature coverage gaps: DB daily/minute/limit rows exist, Qlib day close and instrument membership exist, Qlib 1min calendar rows exist, but Qlib 1min `$close` is null for every minute.
+- Tail-window audit for Loop24/25/27 found high tail activity on some days, but same-day tail-ratio/return Spearman correlation is weak (0.0171 to 0.0712), so existing artifacts do not support tail activity as a mechanical return driver.
+- Dynamic PIT truncation now covers top-12 feature-importance factors on Loop19/22/26: 36/36 factor-loop checks, 501,495 compared rows, zero mismatches. This lowers leakage risk for top-priority factors but is not a full proof for every generated factor.
 
 
 ## Codex Git Commit Requirement - 2026-05-02

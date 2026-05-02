@@ -1,0 +1,4 @@
+﻿# QE archive local artifacts
+# Keep this directory structure, but do not commit experiment artifacts.
+artifacts/**
+!artifacts/.gitkeep

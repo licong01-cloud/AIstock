@@ -292,6 +292,143 @@ def qe_read_l3(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def qe_archive_backend(session: nox.Session) -> None:
+    """Run QE archive backend/schema regression tests without starting services."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/db/init_qe_archive_schema.py",
+        "backend/services/qe_archive",
+        "scripts/qe_archive_backfill.py",
+        "scripts/qe_archive_data_quality_smoke.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/test_qe_archive_schema.py",
+        "backend/tests/test_qe_archive_repository_static.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def qe_archive_data_quality(session: nox.Session) -> None:
+    """Run read-only QE archive DB metadata and schema smoke checks."""
+    args = [
+        "scripts/qe_archive_data_quality_smoke.py",
+        "--output",
+        "tmp/qe_archive_data_quality_smoke.json",
+    ]
+    if session.posargs:
+        args.extend(session.posargs)
+    session.run("python", *args, env=_env(), external=True)
+
+
+@nox.session(venv_backend="none")
+def qe_archive_ui(session: nox.Session) -> None:
+    """Run QE archive UI E2E tests on dev ports when UI tests exist."""
+    test_dir = ROOT / "frontend" / "tests" / "qe-archive"
+    if not test_dir.exists():
+        session.skip("QE archive UI tests are not implemented yet.")
+    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8011")
+    frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3011")
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        backend_port,
+        frontend_port,
+        external=True,
+    )
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "services",
+        "--backend-port",
+        backend_port,
+        "--skip-tdx",
+        external=True,
+    )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "npm",
+            "exec",
+            "tsc",
+            "--",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run(
+            "npm",
+            "run",
+            "test:e2e",
+            "--",
+            "tests/qe-archive",
+            env=_env(
+                {
+                    "BACKEND_PORT": backend_port,
+                    "FRONTEND_PORT": frontend_port,
+                    "QE_ARCHIVE_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+                    "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+@nox.session(venv_backend="none")
+def qe_archive_l3(session: nox.Session) -> None:
+    """Run the QE archive local validation suite, keeping production QE untouched."""
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "record",
+        "--module",
+        "qe_archive",
+        "--level",
+        "L3",
+        "--title",
+        "QE archive realtime warehouse validation",
+        external=True,
+    )
+    quick_validate = _codex_quick_validate_script()
+    if not quick_validate.exists():
+        session.error(f"Missing Codex skill validator: {quick_validate}")
+    session.run("python", str(quick_validate), ".codex/skills/verify-aistock-feature", external=True)
+    session.run(
+        "python",
+        ".codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py",
+        "backend/db/init_qe_archive_schema.py",
+        "backend/services/qe_archive",
+        "backend/tests/test_qe_archive_schema.py",
+        "backend/tests/test_qe_archive_repository_static.py",
+        "scripts/qe_archive_backfill.py",
+        "scripts/qe_archive_data_quality_smoke.py",
+        "tests/aistock_validation/modules/qe_archive.md",
+        "docs/architecture/qe_realtime_experiment_warehouse_detailed_design_20260502.md",
+        "noxfile.py",
+        "--fail-on",
+        "HIGH",
+        external=True,
+    )
+    session.notify("qe_archive_backend")
+    session.notify("qe_archive_data_quality")
+    if os.environ.get("QE_ARCHIVE_L3_SKIP_UI") != "1":
+        session.notify("qe_archive_ui")
+
+
+@nox.session(venv_backend="none")
 def paper_v2_live(session: nox.Session) -> None:
     """Run Paper v2 catch-up-to-live validation against dev backend and TDX."""
     backend_port = os.environ.get("BACKEND_PORT", "8012")
