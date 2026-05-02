@@ -4,14 +4,9 @@ import os
 import asyncio
 import uuid
 import threading
-import shutil
-import subprocess
-import re
-import shlex
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from urllib.parse import urlparse
 import aiofiles
 from psycopg2.extras import RealDictCursor
 from ...db.pg_pool import get_conn
@@ -26,6 +21,10 @@ from .node_execution import (
     preflight_qe_node,
     resolve_custom_loop_nodes,
     resolve_default_qe_node_id,
+)
+from ..strategy_package.workspace_policy import (
+    remove_aistock_artifact_tree,
+    unlink_aistock_artifact_files,
 )
 
 logger = logging.getLogger(__name__)
@@ -3113,15 +3112,20 @@ class AutoEvolutionScheduler:
                 task_id,
             )
 
-        # 6. 清理文件系统上的实验目录
-        import shutil
-        from .config_composer import QE_WORKSPACE_WIN, QE_EXPERIMENTS_ROOT
+        # 6. Clean AIstock-owned local artifacts only; worker workspace cleanup is API-only.
+        from .config_composer import QE_EXPERIMENTS_ROOT
+
+        local_cleanup_roots = [QE_EXPERIMENTS_ROOT, Path(SOTA_ASSETS_DIR)]
 
         async def _remove_tree_with_log_stream_retry(dir_path: Path) -> bool:
             for attempt in range(3):
                 try:
-                    shutil.rmtree(dir_path, ignore_errors=False)
-                    return True
+                    return remove_aistock_artifact_tree(
+                        dir_path,
+                        purpose=f"QE evolution task local artifact cleanup: {task_id}",
+                        allowed_roots=local_cleanup_roots,
+                        ignore_errors=False,
+                    )
                 except PermissionError:
                     if attempt == 2:
                         raise
@@ -3132,25 +3136,25 @@ class AutoEvolutionScheduler:
 
         cleaned_dirs = []
         for dir_path in [
-            QE_WORKSPACE_WIN / task_id,       # WSL backtest workspace
             QE_EXPERIMENTS_ROOT / task_id,    # AIstock-side experiment copy
             Path(SOTA_ASSETS_DIR) / task_id,  # SOTA assets + log stream cache
         ]:
-            if dir_path.exists() and dir_path.is_dir():
-                if await _remove_tree_with_log_stream_retry(dir_path):
-                    cleaned_dirs.append(str(dir_path))
-                    logger.info(f"Cleaned experiment directory: {dir_path}")
+            if await _remove_tree_with_log_stream_retry(dir_path):
+                cleaned_dirs.append(str(dir_path))
+                logger.info(f"Cleaned local AIstock artifact directory: {dir_path}")
 
-        # 6b. 清理 Optuna study 文件
+        # 6b. Clean local Optuna study files under the AIstock-owned SOTA root.
         try:
-            optuna_dir = Path(SOTA_ASSETS_DIR) / "optuna_studies"
-            if optuna_dir.exists():
-                for f in optuna_dir.glob(f"{task_id}_*.db"):
-                    f.unlink(missing_ok=True)
-                    logger.info(f"已清理 Optuna study: {f}")
+            optuna_deleted = unlink_aistock_artifact_files(
+                Path(SOTA_ASSETS_DIR) / "optuna_studies",
+                f"{task_id}_*.db",
+                purpose=f"QE evolution task Optuna study cleanup: {task_id}",
+                allowed_roots=[Path(SOTA_ASSETS_DIR)],
+            )
+            if optuna_deleted:
+                logger.info("Cleaned %s Optuna study file(s) for task %s", optuna_deleted, task_id)
         except Exception as e:
             logger.warning(f"Optuna study cleanup failed for {task_id}: {e}")
-
         deleted_counts["cleaned_dirs"] = len(cleaned_dirs)
 
         logger.info(f"Task {task_id} ({task['task_name']}) deleted. Counts: {deleted_counts}")
@@ -3215,7 +3219,8 @@ class AutoEvolutionScheduler:
         def parse_payload(text: str) -> Optional[Dict[str, Any]]:
             try:
                 payload = json.loads(text)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Skipping non-JSON QE log payload for task %s: %s", task_id, exc)
                 return None
             return payload if isinstance(payload, dict) else None
 
@@ -4654,185 +4659,23 @@ class AutoEvolutionScheduler:
             logger.error("Failed to release custom_evo mutation lock for %s: %s", task_id, exc)
 
     def _cleanup_local_custom_evo_loop_dirs(self, task_id: str, loop_index: int) -> List[str]:
-        from .config_composer import QE_WORKSPACE_WIN, QE_EXPERIMENTS_ROOT
+        from .config_composer import QE_EXPERIMENTS_ROOT
 
         loop_name = f"Loop{loop_index}"
-        roots = [
-            QE_WORKSPACE_WIN / task_id,
-            QE_EXPERIMENTS_ROOT / task_id,
-            Path(SOTA_ASSETS_DIR) / task_id,
+        cleanup_roots = [QE_EXPERIMENTS_ROOT, Path(SOTA_ASSETS_DIR)]
+        targets = [
+            QE_EXPERIMENTS_ROOT / task_id / loop_name,
+            Path(SOTA_ASSETS_DIR) / task_id / loop_name,
         ]
         cleaned: List[str] = []
-        for root in roots:
-            root_resolved = root.resolve()
-            target = (root / loop_name).resolve()
-            try:
-                target.relative_to(root_resolved)
-            except ValueError as exc:
-                raise RuntimeError(f"Refusing to remove path outside loop cleanup root: {target}") from exc
-            if target.exists():
-                if not target.is_dir():
-                    raise RuntimeError(f"Loop cleanup target is not a directory: {target}")
-                shutil.rmtree(target)
+        for target in targets:
+            if remove_aistock_artifact_tree(
+                target,
+                purpose=f"QE custom_evo local loop artifact cleanup: {task_id}/{loop_name}",
+                allowed_roots=cleanup_roots,
+            ):
                 cleaned.append(str(target))
         return cleaned
-
-    def _get_compute_node_for_loop_cleanup(self, node_id: Optional[str]) -> Dict[str, Any]:
-        effective_node_id = node_id or resolve_default_qe_node_id()
-        with get_conn() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    SELECT node_id, api_base_url, ssh_user, workspace_base
-                    FROM infra.compute_nodes
-                    WHERE node_id = %s
-                    """,
-                    (effective_node_id,),
-                )
-                row = cur.fetchone()
-        if not row:
-            raise RuntimeError(f"Cannot cleanup loop workspace: compute node not found: {effective_node_id}")
-        node = dict(row)
-        if not str(node.get("workspace_base") or "").strip():
-            raise RuntimeError(
-                f"Cannot cleanup loop workspace on node {effective_node_id}: workspace_base is not configured"
-            )
-        return node
-
-    @staticmethod
-    def _is_local_api_base(api_base_url: Optional[str]) -> bool:
-        host = (urlparse(str(api_base_url or "")).hostname or "").lower()
-        return host in {"127.0.0.1", "localhost", "::1"}
-
-    @staticmethod
-    def _node_workspace_to_windows_path(workspace_base: str) -> Path:
-        text = str(workspace_base or "").strip().replace("\\", "/")
-        if len(text) >= 2 and text[1] == ":":
-            return Path(text)
-        parts = text.split("/")
-        if len(parts) >= 4 and parts[1] == "mnt" and len(parts[2]) == 1:
-            drive = parts[2].upper() + ":"
-            return Path(drive + "/" + "/".join(parts[3:]))
-        raise RuntimeError(
-            "Local loop cleanup requires a Windows path or a /mnt/<drive>/... WSL path; "
-            f"got workspace_base={workspace_base!r}"
-        )
-
-    @staticmethod
-    def _resolve_loop_cleanup_ssh_user(node: Dict[str, Any]) -> str:
-        user = str(node.get("ssh_user") or "").strip()
-        if not user:
-            workspace_base = str(node.get("workspace_base") or "").strip()
-            parts = workspace_base.split("/")
-            if len(parts) > 2 and parts[1] == "home" and parts[2]:
-                user = parts[2]
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}", user or ""):
-            raise RuntimeError(
-                f"Cannot cleanup remote loop workspace on node {node.get('node_id')}: "
-                "ssh_user is missing or invalid"
-            )
-        return user
-
-    @staticmethod
-    def _remove_loop_dir_under_root(workspace_root: Path, task_id: str, loop_name: str) -> Dict[str, Any]:
-        root = workspace_root.resolve()
-        task_root = (root / task_id).resolve()
-        target = (task_root / loop_name).resolve()
-        try:
-            task_root.relative_to(root)
-            target.relative_to(task_root)
-        except ValueError as exc:
-            raise RuntimeError(f"Refusing to cleanup loop path outside workspace root: {target}") from exc
-        if not target.exists():
-            return {"ok": True, "existed": False, "path": str(target)}
-        if not target.is_dir():
-            raise RuntimeError(f"Loop cleanup target is not a directory: {target}")
-        shutil.rmtree(target)
-        return {"ok": True, "existed": True, "path": str(target)}
-
-    def _cleanup_remote_loop_workspace_via_ssh(
-        self,
-        node: Dict[str, Any],
-        task_id: str,
-        loop_name: str,
-    ) -> Dict[str, Any]:
-        api_base_url = str(node.get("api_base_url") or "")
-        host = urlparse(api_base_url).hostname
-        if not host:
-            raise RuntimeError(f"Cannot cleanup remote loop workspace: invalid api_base_url={api_base_url!r}")
-        ssh_user = self._resolve_loop_cleanup_ssh_user(node)
-        ssh_target = f"{ssh_user}@{host}"
-        workspace_base = str(node.get("workspace_base") or "").strip()
-        script = (
-            "from pathlib import Path\n"
-            "import shutil, sys\n"
-            "root = Path(sys.argv[1]).resolve()\n"
-            "task_root = (root / sys.argv[2]).resolve()\n"
-            "target = (task_root / sys.argv[3]).resolve()\n"
-            "task_root.relative_to(root)\n"
-            "target.relative_to(task_root)\n"
-            "if target.exists():\n"
-            "    if not target.is_dir():\n"
-            "        raise RuntimeError(f'loop cleanup target is not a directory: {target}')\n"
-            "    shutil.rmtree(target)\n"
-            "    print('existed=True')\n"
-            "else:\n"
-            "    print('existed=False')\n"
-        )
-        remote_cmd = " ".join(
-            [
-                "python3",
-                "-c",
-                shlex.quote(script),
-                shlex.quote(workspace_base),
-                shlex.quote(task_id),
-                shlex.quote(loop_name),
-            ]
-        )
-        result = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", ssh_target, remote_cmd],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"Remote loop workspace cleanup via ssh failed on {node.get('node_id')} "
-                f"({ssh_target}): {result.stderr.strip() or result.stdout.strip()}"
-            )
-        return {
-            "ok": True,
-            "method": "node_filesystem_ssh",
-            "node_id": node.get("node_id"),
-            "workspace_base": workspace_base,
-            "existed": "existed=True" in result.stdout,
-        }
-
-    def _cleanup_loop_workspace_via_node_filesystem(
-        self,
-        node_id: Optional[str],
-        task_id: str,
-        loop_name: str,
-        *,
-        reason: str,
-    ) -> Dict[str, Any]:
-        node = self._get_compute_node_for_loop_cleanup(node_id)
-        if self._is_local_api_base(node.get("api_base_url")):
-            workspace_root = self._node_workspace_to_windows_path(str(node.get("workspace_base") or ""))
-            result = self._remove_loop_dir_under_root(workspace_root, task_id, loop_name)
-            result.update(
-                {
-                    "method": "node_filesystem_local",
-                    "node_id": node.get("node_id"),
-                    "workspace_base": node.get("workspace_base"),
-                    "reason": reason,
-                }
-            )
-            return result
-        result = self._cleanup_remote_loop_workspace_via_ssh(node, task_id, loop_name)
-        result["reason"] = reason
-        return result
 
     async def delete_custom_evo_loop_result(self, task_id: str, loop_index: int) -> Dict[str, Any]:
         loop_db_id = f"{task_id}_Loop{loop_index}"
@@ -4873,19 +4716,17 @@ class AutoEvolutionScheduler:
                 "node_id": old_node_id,
             }
         except QELoopWorkspaceCleanupUnavailable as exc:
-            logger.warning(
+            logger.error(
                 "Loop-level RD-Agent cleanup unavailable for %s/%s on node %s; "
-                "falling back to node filesystem cleanup.",
+                "direct node filesystem fallback is disabled.",
                 task_id,
                 loop_name,
                 old_node_id,
             )
-            remote_cleanup = self._cleanup_loop_workspace_via_node_filesystem(
-                old_node_id,
-                task_id,
-                loop_name,
-                reason=str(exc),
-            )
+            raise RuntimeError(
+                "RD-Agent node API must expose loop-level cleanup before this "
+                "custom_evo loop can be deleted; direct worker filesystem cleanup is forbidden"
+            ) from exc
         cleaned_dirs = self._cleanup_local_custom_evo_loop_dirs(task_id, loop_index)
 
         deleted_counts: Dict[str, int] = {}

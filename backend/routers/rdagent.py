@@ -31,6 +31,7 @@ from ..services.rdagent_selection_service import build_loop_selection
 from ..services.rdagent_task_sync_service import rdagent_task_sync_service  # reload trigger
 from ..services.rdagent_candidate_service import get_candidate_service
 from ..services.quantevolver.factor_official_evaluation_service import CALC_ENGINE
+from ..services.strategy_package.workspace_policy import remove_aistock_artifact_tree
 
 from ..inference_engine import InferenceEngine
 
@@ -556,7 +557,8 @@ def get_task_sota_details(task_id: str) -> Dict[str, Any]:
 def _try_parse_json_text(txt: str) -> Optional[Dict[str, Any]]:
     try:
         return json.loads(txt)
-    except Exception:
+    except Exception as exc:
+        logging.debug("Skipping non-JSON RD-Agent manifest text: %s", exc)
         return None
 
 
@@ -572,7 +574,8 @@ def _first_int(v: Any) -> Optional[int]:
         if not s:
             return None
         return int(float(s))
-    except Exception:
+    except Exception as exc:
+        logging.debug("Unable to parse integer from RD-Agent manifest value %r: %s", v, exc)
         return None
 
 
@@ -1267,7 +1270,6 @@ def delete_task(task_id: str) -> Dict[str, Any]:
 
     远端无文件时仍继续清理本地DB和dispatch日志。
     """
-    import shutil
 
     candidate_service = get_candidate_service()
     remote_warning = None
@@ -1281,10 +1283,14 @@ def delete_task(task_id: str) -> Dict[str, Any]:
         remote_warning = f"远端节点不可达: {e}"
 
     # 2. 删除 AIstock 本地 dispatch 日志
-    dispatch_dir = Path(__file__).resolve().parents[2] / "dispatch_logs" / task_id
+    dispatch_root = Path(__file__).resolve().parents[2] / "dispatch_logs"
+    dispatch_dir = dispatch_root / task_id
     dispatch_deleted = False
-    if dispatch_dir.exists() and dispatch_dir.is_dir():
-        shutil.rmtree(dispatch_dir)
+    if remove_aistock_artifact_tree(
+        dispatch_dir,
+        purpose=f"RD-Agent local dispatch log cleanup: {task_id}",
+        allowed_roots=[dispatch_root],
+    ):
         dispatch_deleted = True
 
     # 3. 清理 DB 缓存

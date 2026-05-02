@@ -1,5 +1,5 @@
 import asyncio
-import subprocess
+import inspect
 
 import pytest
 
@@ -130,8 +130,8 @@ def test_append_custom_evo_loops_uses_get_conn_context_manager_for_lock(monkeypa
     assert any("pg_advisory_unlock" in sql for sql in state["sql"])
 
 
-def test_delete_custom_evo_loop_result_uses_filesystem_cleanup_when_api_route_missing(monkeypatch):
-    _patch_fake_db(monkeypatch)
+def test_delete_custom_evo_loop_result_fails_fast_when_api_route_missing(monkeypatch):
+    state = _patch_fake_db(monkeypatch)
     scheduler = qes.AutoEvolutionScheduler.__new__(qes.AutoEvolutionScheduler)
 
     class MissingCleanupClient:
@@ -139,125 +139,60 @@ def test_delete_custom_evo_loop_result_uses_filesystem_cleanup_when_api_route_mi
             raise QELoopWorkspaceCleanupUnavailable(f"missing endpoint: {task_id}/{loop_name}")
 
     monkeypatch.setattr(scheduler, "_get_workspace_client_for_node_id", lambda node_id: MissingCleanupClient())
-    monkeypatch.setattr(scheduler, "_cleanup_local_custom_evo_loop_dirs", lambda task_id, loop_index: [])
-    monkeypatch.setattr(
-        scheduler,
-        "_cleanup_loop_workspace_via_node_filesystem",
-        lambda node_id, task_id, loop_name, reason: {
-            "ok": True,
-            "method": "node_filesystem_local",
-            "node_id": node_id,
-            "existed": False,
-            "reason": reason,
-        },
-    )
 
-    result = asyncio.run(scheduler.delete_custom_evo_loop_result("task-a", 2))
+    def fail_local_cleanup(task_id, loop_index):
+        raise AssertionError("local cleanup must not run when node API cleanup is unavailable")
 
-    assert result["remote_cleanup"]["method"] == "node_filesystem_local"
-    assert result["remote_cleanup"]["node_id"] == "node-b"
-    assert "missing endpoint" in result["remote_cleanup"]["reason"]
+    monkeypatch.setattr(scheduler, "_cleanup_local_custom_evo_loop_dirs", fail_local_cleanup)
+
+    with pytest.raises(RuntimeError, match="node API"):
+        asyncio.run(scheduler.delete_custom_evo_loop_result("task-a", 2))
+
+    assert not any(sql.startswith("DELETE") for sql in state["sql"])
 
 
-def test_local_node_filesystem_loop_cleanup_deletes_only_target_loop(tmp_path, monkeypatch):
+def test_local_custom_evo_loop_cleanup_skips_worker_workspace(tmp_path, monkeypatch):
     scheduler = qes.AutoEvolutionScheduler.__new__(qes.AutoEvolutionScheduler)
-    workspace = tmp_path / "qe_workspace"
-    target = workspace / "task-a" / "Loop2"
-    sibling = workspace / "task-a" / "Loop1"
-    target.mkdir(parents=True)
-    sibling.mkdir(parents=True)
-    (target / "run.log").write_text("old", encoding="utf-8")
-    (sibling / "run.log").write_text("keep", encoding="utf-8")
+    worker_root = tmp_path / "worker_qe_workspace"
+    experiments_root = tmp_path / "qe_experiments"
+    sota_root = tmp_path / "qe_sota_assets"
 
-    monkeypatch.setattr(
-        scheduler,
-        "_get_compute_node_for_loop_cleanup",
-        lambda node_id: {
-            "node_id": "wsl2-5080",
-            "api_base_url": "http://127.0.0.1:9000",
-            "workspace_base": str(workspace),
-        },
-    )
+    worker_loop = worker_root / "task-a" / "Loop2"
+    exp_loop = experiments_root / "task-a" / "Loop2"
+    sota_loop = sota_root / "task-a" / "Loop2"
+    for path in [worker_loop, exp_loop, sota_loop]:
+        path.mkdir(parents=True)
+        (path / "run.log").write_text("old", encoding="utf-8")
 
-    result = scheduler._cleanup_loop_workspace_via_node_filesystem(
-        "wsl2-5080",
-        "task-a",
-        "Loop2",
-        reason="api cleanup unavailable",
-    )
+    monkeypatch.setenv("QE_WORKSPACE_WIN", str(worker_root))
+    from backend.services.quantevolver import config_composer
 
-    assert result["method"] == "node_filesystem_local"
-    assert result["existed"] is True
-    assert not target.exists()
-    assert sibling.exists()
+    monkeypatch.setattr(config_composer, "QE_EXPERIMENTS_ROOT", experiments_root)
+    monkeypatch.setattr(qes, "SOTA_ASSETS_DIR", str(sota_root))
+
+    cleaned = scheduler._cleanup_local_custom_evo_loop_dirs("task-a", 2)
+
+    assert worker_loop.exists(), "worker workspace must not be touched from Windows"
+    assert not exp_loop.exists()
+    assert not sota_loop.exists()
+    assert str(worker_root) not in "\n".join(cleaned)
 
 
-def test_remote_node_filesystem_loop_cleanup_uses_ssh_and_reports_success(monkeypatch):
-    scheduler = qes.AutoEvolutionScheduler.__new__(qes.AutoEvolutionScheduler)
-    captured = {}
+def test_custom_evo_cleanup_has_no_direct_node_filesystem_fallbacks() -> None:
+    source = inspect.getsource(qes.AutoEvolutionScheduler)
 
-    monkeypatch.setattr(
-        scheduler,
-        "_get_compute_node_for_loop_cleanup",
-        lambda node_id: {
-            "node_id": "rdagent-node1",
-            "api_base_url": "http://192.168.50.215:9000",
-            "ssh_user": "lc999",
-            "workspace_base": "/home/lc999/projects/RD-Agent-main/qe_workspace",
-        },
-    )
-
-    def fake_run(cmd, **kwargs):
-        captured["cmd"] = cmd
-        captured["kwargs"] = kwargs
-        return subprocess.CompletedProcess(cmd, 0, stdout="existed=True\n", stderr="")
-
-    monkeypatch.setattr(qes.subprocess, "run", fake_run)
-
-    result = scheduler._cleanup_loop_workspace_via_node_filesystem(
-        "rdagent-node1",
-        "task-a",
-        "Loop15",
-        reason="api cleanup unavailable",
-    )
-
-    assert result["method"] == "node_filesystem_ssh"
-    assert result["node_id"] == "rdagent-node1"
-    assert result["existed"] is True
-    assert captured["cmd"][:5] == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
-    assert captured["cmd"][5] == "lc999@192.168.50.215"
-    assert "python3 -c" in captured["cmd"][6]
-    assert "/home/lc999/projects/RD-Agent-main/qe_workspace" in captured["cmd"][6]
-    assert "Loop15" in captured["cmd"][6]
-    assert captured["kwargs"]["check"] is False
+    assert "_cleanup_loop_workspace_via_node_filesystem" not in source
+    assert "_node_workspace_to_windows_path" not in source
+    assert "_remove_loop_dir_under_root" not in source
+    assert "node_filesystem_local" not in source
+    assert "node_filesystem_ssh" not in source
+    assert "subprocess.run" not in source
 
 
-def test_remote_node_filesystem_loop_cleanup_fails_fast_on_ssh_error(monkeypatch):
-    scheduler = qes.AutoEvolutionScheduler.__new__(qes.AutoEvolutionScheduler)
+def test_evolution_delete_task_no_worker_workspace_direct_cleanup() -> None:
+    source = inspect.getsource(qes.AutoEvolutionScheduler.delete_task)
 
-    monkeypatch.setattr(
-        scheduler,
-        "_get_compute_node_for_loop_cleanup",
-        lambda node_id: {
-            "node_id": "rdagent-node1",
-            "api_base_url": "http://192.168.50.215:9000",
-            "ssh_user": "lc999",
-            "workspace_base": "/home/lc999/projects/RD-Agent-main/qe_workspace",
-        },
-    )
-
-    def fake_run(cmd, **kwargs):
-        return subprocess.CompletedProcess(cmd, 255, stdout="", stderr="Permission denied")
-
-    monkeypatch.setattr(qes.subprocess, "run", fake_run)
-
-    with pytest.raises(RuntimeError) as exc:
-        scheduler._cleanup_loop_workspace_via_node_filesystem(
-            "rdagent-node1",
-            "task-a",
-            "Loop15",
-            reason="api cleanup unavailable",
-        )
-
-    assert "Remote loop workspace cleanup via ssh failed" in str(exc.value)
-    assert "Permission denied" in str(exc.value)
+    assert "QE_WORKSPACE_WIN" not in source
+    assert "RDAGENT_WORKSPACE_WIN" not in source
+    assert "cleanup_task_workspace" in source
+    assert "remove_aistock_artifact_tree" in source

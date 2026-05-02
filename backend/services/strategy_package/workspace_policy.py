@@ -8,6 +8,7 @@ workspace path recorded in QE/RD-Agent metadata.
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Iterable
 
@@ -116,3 +117,85 @@ def ensure_aistock_artifact_path(
             },
         )
     return candidate
+
+
+def ensure_aistock_cleanup_target(
+    path: Path | str,
+    *,
+    purpose: str,
+    allowed_roots: Iterable[Path | str],
+) -> Path:
+    """Validate that a destructive cleanup target is under explicit local roots."""
+    candidate = Path(path)
+    ensure_not_forbidden_worker_workspace_path(candidate, purpose=purpose)
+    resolved_candidate = _resolve_for_policy(candidate)
+
+    resolved_roots: list[Path] = []
+    for root_item in allowed_roots:
+        root = Path(root_item)
+        ensure_not_forbidden_worker_workspace_path(root, purpose=f"{purpose} root")
+        resolved_root = _resolve_for_policy(root)
+        resolved_roots.append(resolved_root)
+        if resolved_candidate == resolved_root:
+            raise StrategyPackageValidationError(
+                "cleanup target must not be the artifact root itself",
+                context={"path": str(candidate), "purpose": purpose, "root": str(root)},
+            )
+        if resolved_root in resolved_candidate.parents:
+            return candidate
+
+    raise StrategyPackageValidationError(
+        "cleanup target must be under an explicit AIstock-owned artifact root",
+        context={
+            "path": str(candidate),
+            "purpose": purpose,
+            "allowed_roots": [str(root) for root in resolved_roots],
+        },
+    )
+
+
+def remove_aistock_artifact_tree(
+    path: Path | str,
+    *,
+    purpose: str,
+    allowed_roots: Iterable[Path | str],
+    ignore_errors: bool = False,
+) -> bool:
+    """Remove a local AIstock-owned directory after explicit path-policy checks."""
+    target = ensure_aistock_cleanup_target(path, purpose=purpose, allowed_roots=allowed_roots)
+    if not target.exists():
+        return False
+    if not target.is_dir():
+        raise StrategyPackageValidationError(
+            "cleanup target must be a directory",
+            context={"path": str(target), "purpose": purpose},
+        )
+    shutil.rmtree(target, ignore_errors=ignore_errors)
+    return True
+
+
+def unlink_aistock_artifact_files(
+    root: Path | str,
+    pattern: str,
+    *,
+    purpose: str,
+    allowed_roots: Iterable[Path | str],
+    missing_ok: bool = True,
+) -> int:
+    """Delete files matching a pattern under a validated local AIstock-owned root."""
+    root_path = ensure_aistock_cleanup_target(root, purpose=f"{purpose} root", allowed_roots=allowed_roots)
+    if not root_path.exists():
+        return 0
+    if not root_path.is_dir():
+        raise StrategyPackageValidationError(
+            "cleanup file root must be a directory",
+            context={"path": str(root_path), "purpose": purpose},
+        )
+
+    deleted = 0
+    for file_path in root_path.glob(pattern):
+        target = ensure_aistock_cleanup_target(file_path, purpose=purpose, allowed_roots=[root_path])
+        if target.is_file():
+            target.unlink(missing_ok=missing_ok)
+            deleted += 1
+    return deleted

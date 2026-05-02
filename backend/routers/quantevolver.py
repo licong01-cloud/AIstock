@@ -7079,31 +7079,44 @@ async def delete_experiment(
             errors.append(f"查询多Alpha节点失败: {e}")
             logger.warning(f"Failed to query multi-alpha nodes for {experiment_id}: {e}")
 
-    # 2b. 清理本地文件系统（workspace、实验副本、SOTA 资产、Optuna study）
-    import shutil
-    from pathlib import Path
-    from ..services.quantevolver.config_composer import QE_WORKSPACE_WIN, QE_EXPERIMENTS_ROOT
-    sota_dir = os.environ.get("QE_SOTA_ASSETS_DIR", str(AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_sota_assets"))
+    # 2b. Clean AIstock-owned local artifacts only. Worker workspaces are cleaned via node API above.
+    from ..services.quantevolver.config_composer import QE_EXPERIMENTS_ROOT
+    from ..services.strategy_package.workspace_policy import (
+        remove_aistock_artifact_tree,
+        unlink_aistock_artifact_files,
+    )
+
+    sota_dir = Path(os.environ.get("QE_SOTA_ASSETS_DIR", str(AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_sota_assets")))
+    local_cleanup_roots = [QE_EXPERIMENTS_ROOT, sota_dir]
+    cleaned_dirs: list[str] = []
     for dir_path in [
-        QE_WORKSPACE_WIN / experiment_id,
         QE_EXPERIMENTS_ROOT / experiment_id,
-        Path(sota_dir) / experiment_id,
+        sota_dir / experiment_id,
     ]:
         try:
-            if dir_path.exists() and dir_path.is_dir():
-                shutil.rmtree(dir_path, ignore_errors=True)
-                logger.info(f"已清理本地实验目录: {dir_path}")
+            if remove_aistock_artifact_tree(
+                dir_path,
+                purpose=f"QE experiment local artifact cleanup: {experiment_id}",
+                allowed_roots=local_cleanup_roots,
+                ignore_errors=True,
+            ):
+                cleaned_dirs.append(str(dir_path))
+                logger.info(f"Cleaned local AIstock experiment directory: {dir_path}")
         except Exception as e:
-            errors.append(f"本地目录清理失败({dir_path}): {e}")
-    # 清理 Optuna study 文件
+            errors.append(f"local AIstock artifact cleanup failed ({dir_path}): {e}")
+    # Clean local Optuna study files under the AIstock-owned SOTA root.
+    optuna_deleted = 0
     try:
-        optuna_dir = Path(sota_dir) / "optuna_studies"
-        if optuna_dir.exists():
-            for f in optuna_dir.glob(f"{experiment_id}_*.db"):
-                f.unlink(missing_ok=True)
-                logger.info(f"已清理 Optuna study: {f}")
+        optuna_deleted = unlink_aistock_artifact_files(
+            sota_dir / "optuna_studies",
+            f"{experiment_id}_*.db",
+            purpose=f"QE experiment Optuna study cleanup: {experiment_id}",
+            allowed_roots=[sota_dir],
+        )
+        if optuna_deleted:
+            logger.info("Cleaned %s Optuna study file(s) for experiment %s", optuna_deleted, experiment_id)
     except Exception as e:
-        errors.append(f"Optuna study清理失败: {e}")
+        errors.append(f"Optuna study cleanup failed: {e}")
 
     # 3. 清理DB记录（事务内，按外键依赖顺序删除）
     with get_conn() as conn:
@@ -7151,6 +7164,11 @@ async def delete_experiment(
     return {
         "ok": True,
         "experiment_id": experiment_id,
+        "worker_workspace_cleanup_mode": "node_api_only" if cleanup_workspace else "skipped",
+        "local_cleanup": {
+            "cleaned_dirs": cleaned_dirs,
+            "optuna_files_deleted": optuna_deleted,
+        },
         "warnings": errors if errors else None,
     }
 
