@@ -82,6 +82,8 @@ Important directories:
 - Distinguish research, paper trading, and real execution paths. Do not assume live-trading safety.
 - Prefer small, reviewable changes with tests or clear manual verification steps.
 - For project-wide searches, prefer rg / rg --files.
+- Database schema standard: every new DB table and every new DB column created or modified by Codex must have explicit PostgreSQL `COMMENT ON TABLE` / `COMMENT ON COLUMN` metadata in the reviewed DDL or migration. Comments should be program-readable, describe business semantics, and mention units/source/quality semantics when relevant. Add tests or a review check to prevent uncommented fields.
+- QE production isolation standard: while building the QE archive and future QE automation, new ingestion, archive, optimizer, or agent code must not affect the current QE production runtime by default. Runtime hooks must be disabled by default or explicitly gated, no production backend `8001` restart unless the user asks, and validation should use dev ports only.
 
 ## Known Current Workspace Notes
 
@@ -218,6 +220,12 @@ Important directories:
 - Correction: QE backtest `pred.pkl` artifacts are not authoritative current selection data. They are diagnostic/backtest-only (`metadata.source_type=qe_mlruns_pred_pkl_v1`, `authority_scope=diagnostic_backtest_only`) and `StrategyPackageRuntime` rejects them for Selection Center/Paper v2.
 - Authoritative `/selection-artifacts/generate` now runs live/latest-data QE model inference: it reconstructs a temporary StrategyPackage inference workspace, recomputes factors from DB-backed current data, applies the saved QE LGB model in WSL/Qlib, persists `source_type=live_qe_model_inference_v1`, and records model/factor/runtime trace metadata.
 - Strategy Package API keeps `/selection-artifacts/generate-diagnostic-backtest` for explicit diagnostics from QE `pred.pkl`; this endpoint is intentionally separate and its output is not accepted by authoritative runtime.
+
+## QE Analysis Documentation Update - 2026-05-02
+
+- Store all future QE/quant analysis documents under `docs/analysis`; use fixed-width aligned text tables for user-facing table output.
+- For `qe_20260501_011054_c90a`, Loop19+ current-scope audits exclude capital-size/capacity/impact assumptions until a dedicated capital experiment exists.
+- Added read-only P0 audit tooling at `scripts/qe_loop_p0_audit.py` and mirrored it into the `qe-evolution-diagnostics` skill for future reuse. It recomputes IC/RankIC from `pred.pkl`/`label.pkl`, validates Qlib signal artifacts, report/account return consistency, label-horizon date gaps, top-bucket conversion, yearly segments, and static future-leakage risk.
 
 ## HMM Three-Version Comparison Update - 2026-04-27
 
@@ -443,6 +451,20 @@ Important directories:
 - StrategyPackage `enable-paper` now validates package identity/hash/status only. It no longer validates the manifest-embedded historical minute execution runtime asset because Paper v2 execution is selected through separate backtest-validated execution policy rows. Explicitly selected/default execution policies still fail fast on missing runtime assets at portfolio/session entry.
 - Validated on dev ports 8011/3011 only: targeted backend pytest 33 passed, full Trading Core/StrategyPackage/Paper v2/Selection pytest 152 passed, TypeScript passed, `nox -s paper_v2_ui` passed with 12 UI tests, and `nox -s l0` passed with no HIGH findings. Production 8001 was not restarted by Codex.
 
+## Codex Response Formatting Preference - 2026-04-30
+
+- User requires all future tables in Codex responses to have visibly aligned column titles and content widths. Prefer fixed-width tables in fenced code blocks or otherwise ensure column widths align before responding.
+
+## Analysis Documentation Directory - 2026-05-02
+
+- User requires all future analysis-class documents produced by Codex in this repository to be stored under `docs/analysis` (`F:\Dev\AIstock\docs\analysis`). Do not place new analysis reports elsewhere unless the user explicitly requests a different path.
+- The QE no-alpha label-horizon root-cause analysis for `qe_20260501_201036_b699` is recorded at `docs/analysis/qe_20260501_201036_b699_no_alpha_label_horizon_root_cause_20260502.md`.
+
+## Architecture Design Documentation Directory - 2026-05-02
+
+- User requires all future design方案 / architecture design / implementation design documents produced by Codex in this repository to be stored under `docs/architecture` (`F:\Dev\AIstock\docs\architecture`). Do not place new design documents elsewhere unless the user explicitly requests a different path.
+- QE real-time experiment warehouse top-level design is recorded at `docs/architecture/qe_realtime_experiment_warehouse_top_level_design_20260502.md`.
+
 ## QE Worker Workspace Access Red Line - 2026-05-02
 
 - Treat WSL QE/RD-Agent runtime as an independent Linux compute node, equivalent to a remote machine. Windows-side AIstock services must not assume the Linux worker workspace is locally reachable through `F:\...`, `/mnt/f/...` path conversion, `\\wsl$`, or any other filesystem shortcut.
@@ -450,3 +472,67 @@ Important directories:
 - QE artifact access from AIstock must go through node APIs such as `QEWorkspaceClient`, Results API endpoints, explicit SSH/node cleanup commands, DB-cached summaries, or a controlled AIstock-local artifact store populated by an explicit sync/download step. Local cache reads are allowed only when the cache is clearly owned by AIstock and is not the worker workspace path.
 - User-facing APIs and pages must never return 500 because optional QE workspace artifacts are inaccessible from Windows. Optional artifact enrichment must be best-effort, catch filesystem/network errors, and report artifact unavailable instead of failing the main task/detail response.
 - Future QE/backend/StrategyPackage/Paper changes must audit direct `Path.exists/glob/rglob/open/read_pickle/shutil` access to `QE_WORKSPACE_WIN`, `RDAGENT_WORKSPACE_WIN`, normalized `/mnt/... -> drive:` paths, and DB `workspace_path`. If the access targets worker artifacts, replace it with node API or explicit artifact sync; do not add new exceptions.
+
+## QE Archive Design Confirmations - 2026-05-02
+
+- QE archive artifacts should use the AIstock repo-root path `qe_archive/artifacts` (`F:\Dev\AIstock\qe_archive\artifacts`) as the long-term artifact store entry, not `rdagent_assets/qe_archive/artifacts`.
+- QE daily-frequency backtests without authoritative limit-up/limit-down and suspension handling must be archived as `research_valid=false` and excluded from default leaderboards, optimizer warm-start samples, and effective research rankings.
+- QE archive model/factor importance analysis must cover all model families used in experiments. LSTM/deep models are in scope from the first implementation phase via model-agnostic attribution and deep-model attribution; tree-model native importance is not sufficient by itself.
+- LLM agents may read controlled, audited, read-only QE archive aggregate views/tools to propose candidates in future phases; implementation details remain a later design task.
+
+## QE Realtime Experiment Warehouse Detailed Design - 2026-05-02
+
+- QE realtime experiment warehouse detailed design is recorded at `docs/architecture/qe_realtime_experiment_warehouse_detailed_design_20260502.md`.
+- The detailed design preserves the confirmed decisions: new `qe_archive` schema, artifact root `qe_archive/artifacts`, default exclusion of daily backtests without authoritative limit/suspend handling, single first-version `score_total` with sub-scores retained, all-model/LSTM attribution support, Optuna/custom-evolution near-term tuning, and future audited read-only LLM agent interfaces.
+
+## QE Loop19+ Backtest Truth Audit Update - 2026-05-02
+
+- Added read-only QE audit tooling for Loop19+ under `scripts/`: `qe_execution_truth_audit.py`, `qe_price_tradability_audit.py`, `qe_strategy_code_evidence_audit.py`, and `qe_factor_dynamic_truncation_audit.py`; copied the same tools into the `qe-evolution-diagnostics` skill.
+- Current synthesis for `qe_20260501_011054_c90a` Loop19-28 is recorded at `docs/analysis/P0_P1_qe_20260501_011054_c90a_loop19_28_backtest_truth_synthesis_20260502.md`.
+- Cost interpretation for nested minute QE: report `cost`/`total_cost` can be zero because inner executor `generate_portfolio_metrics=false` prevents cost metric accumulation, while Qlib source shows `Exchange.deal_order` computes cost and `Position.update_order` subtracts cost from cash. Treat this as a metric-recording gap unless a dedicated no-cost rerun proves NAV ignored costs; do not double-subtract post-hoc cost overlays from NAV.
+- V25/tail substitute traceability: aggregate day/minute indicator consistency is verifiable from current artifacts, but exact per-order V25 plan/no-fill/tail-substitute branch execution is not reconstructable until plan and branch events are persisted.
+
+## QE Archive Phase 1 Implementation - 2026-05-02
+
+- Started the QE realtime experiment warehouse implementation with explicit schema bootstrap `backend/db/init_qe_archive_schema.py`, service package `backend/services/qe_archive`, and targeted tests `backend/tests/test_qe_archive_schema.py` plus `backend/tests/test_qe_archive_repository_static.py`.
+- Applied local DB bootstrap for `qe_archive_v1_20260502`; verification showed 27 `qe_archive` tables and the expected schema version row.
+- The first schema contract records reproducibility-critical experiment/loop configuration via `run_config` (`canonical_config`, `raw_config`, `config_sha256`, factor list/hash, config provenance, capture-complete flag, missing config items) and `run_reproducibility_manifest` (hashes, environment/package versions, source config paths, artifact manifest, missing items, reproducibility level).
+- Phase 1 repository methods support idempotent run/config/repro manifest writes, raw payload inserts, outbox event inserts, metric batch replacement, and artifact manifest writes. Runtime webhook hooks, artifact parsers, historical backfill, aggregate views, and UI are still pending later phases.
+- Validation record: `tests/aistock_validation/history/qe/20260502_153630_l1_qe-archive-phase1-schema-repository.md`. Production backend 8001 was not restarted; no QE/RD-Agent worker workspace assets were modified.
+
+## QE Archive Comments / Production-Safe Next Step - 2026-05-02
+
+- `backend/db/init_qe_archive_schema.py` now generates PostgreSQL `COMMENT ON SCHEMA`, `COMMENT ON TABLE`, and `COMMENT ON COLUMN` statements for the managed `qe_archive` schema. Verification showed 27/27 tables and 458/458 columns have non-empty comments in the local database.
+- The QE archive schema test now enforces comment coverage for every managed table and column, matching the new DB schema standard in the engineering rules.
+- Added `backend/services/qe_archive/event_capture.py` as a disabled-by-default foundation for future outbox ingestion. It is not wired into QE routers/webhooks yet and writes only when `QE_ARCHIVE_EVENT_CAPTURE_ENABLED` or an explicit test constructor enables it.
+- Validation record: `tests/aistock_validation/history/qe/20260502_155009_l1_qe-archive-comments-and-disabled-event-capture.md`. Production backend 8001 was not restarted; current QE production runtime behavior was not changed.
+
+## QE Archive Validation Pipeline - 2026-05-02
+
+- Introduced Paper v2-style validation entry points for QE archive development in `noxfile.py`: `qe_archive_backend`, `qe_archive_data_quality`, `qe_archive_ui`, and `qe_archive_l3`.
+- Added read-only DB smoke `scripts/qe_archive_data_quality_smoke.py`, which checks managed `qe_archive` table existence, schema version, table comments, column comments, run count, and pending outbox count without starting services or mutating QE state.
+- Added test matrix `tests/aistock_validation/modules/qe_archive.md`. Future QE archive backend workflow, artifact/parser, API, and UI phases must add/extend tests in this matrix and preserve default production isolation.
+- `qe_archive_l3` now runs guardrail scan + backend tests + DB smoke, with UI explicitly skipped by `QE_ARCHIVE_L3_SKIP_UI=1` until QE archive UI exists. Validation passed with 15 backend tests and 27 table / 458 column comment coverage.
+- Validation record: `tests/aistock_validation/history/qe_archive/20260502_160746_l3_qe-archive-realtime-warehouse-validation.md`. Production backend 8001 was not restarted and no current QE production runtime hook was enabled.
+
+## QE Archive Outbox Worker Foundation - 2026-05-02
+
+- Added disabled-by-default QE archive outbox worker foundation in `backend/services/qe_archive/worker.py`, exported from `backend/services/qe_archive/__init__.py`. It only processes events when explicitly enabled through `QE_ARCHIVE_WORKER_ENABLED` or a test constructor.
+- Repository support now includes outbox claim/complete/fail transitions and archive job create/complete/fail transitions. The worker records archive jobs, completes outbox events on handler success, and marks jobs/outbox retry state on handler failure.
+- The worker is intentionally not wired into FastAPI startup, schedulers, or QE webhook paths. Current QE production runtime behavior remains unchanged unless a future explicit integration phase enables event capture/worker flags.
+- Validation expanded to 20 backend tests plus a real PostgreSQL synthetic outbox/archive_job state-machine smoke. Synthetic validation rows were cleaned up, and final data-quality smoke confirmed 27/27 managed tables, 458/458 commented columns, `pending_outbox_count=0`, and empty `archive_job_status_counts`.
+- Validation record: `tests/aistock_validation/history/qe_archive/20260502_162657_l3_qe-archive-realtime-warehouse-validation.md`. Production backend 8001 was not restarted; no QE/RD-Agent worker workspace assets were accessed or modified.
+
+
+## QE P0/P1 Existing Artifact Audit Extension - 2026-05-02
+
+- Added read-only QE audit tools `scripts/qe_v25_existing_artifact_audit.py` and `scripts/qe_factor_importance_selector.py`; copied both into the `qe-evolution-diagnostics` skill and documented the P0/P1 command sequence.
+- Ran Loop19-28 existing-artifact audits for `qe_20260501_011054_c90a` without rerunning QE: IC/RankIC/label horizon/top bucket/year segments, execution truth, strategy-code evidence, full-minute price/tradability, V25 minute distribution/replay readiness, factor-importance selection, and targeted dynamic truncation on top factors.
+- New key evidence: full warning minute audit classified 1,642 Qlib `$close=None` warnings as 1,123 DB daily+minute+limit present/not suspended, 484 suspend/no DB price, and 35 suspend_d + daily present + minute missing; 300 actual-trade price samples had max DB-vs-Qlib close/limit diff <= 0.000007.
+- V25 aggregate evidence remains strong: 1min/1day `value` and `deal_amount` aggregate with zero diff across Loop19-28, active dates have 240/241 minute rows and no bad minute dates. Exact V25 child-order branch replay is still not provable from current artifacts because plan/no-fill/tail-substitute event rows are not persisted.
+- Dynamic truncation expanded from the initial two-factor sample to top feature-importance factors on representative Loop19/22/26; all audited factor/date rows matched after PIT truncation with zero mismatches.
+
+
+## Codex Git Commit Requirement - 2026-05-02
+
+- User requires Codex to commit every future code/documentation modification to GitHub after completing and validating the work. Commit only the files changed for the current task and do not include unrelated dirty-worktree changes.
