@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 
 from ..db.pg_pool import get_conn
 from .rdagent_results_api_client import RDAgentResultsApiClient
+from .strategy_package.workspace_policy import ensure_aistock_artifact_path
 
 logger = logging.getLogger("aistock.rdagent_model_catalog_sync")
 
@@ -30,6 +31,18 @@ JsonDict = Dict[str, Any]
 
 # 初始化 API 客户端
 _rdagent_client = RDAgentResultsApiClient()
+
+
+def _rdagent_task_assets_root() -> Path:
+    return Path(__file__).resolve().parents[2] / "rdagent_assets" / "rdagent_tasks"
+
+
+def _ensure_local_task_dir(task_dir: str, *, purpose: str) -> Path:
+    return ensure_aistock_artifact_path(
+        Path(task_dir),
+        purpose=purpose,
+        extra_roots=[_rdagent_task_assets_root()],
+    )
 
 
 @dataclass
@@ -55,7 +68,10 @@ def _save_model_code_to_file(
 
     返回相对于rdagent_assets的路径。
     """
-    task_dir_path = Path(task_dir)
+    task_dir_path = _ensure_local_task_dir(
+        task_dir,
+        purpose=f"RD-Agent model catalog source-code sync: loop_{loop_id}",
+    )
     models_dir = task_dir_path / "models" / f"loop_{loop_id}"
     models_dir.mkdir(parents=True, exist_ok=True)
 

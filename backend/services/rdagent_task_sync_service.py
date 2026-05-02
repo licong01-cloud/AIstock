@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from ..data_service import xtquant_adapter
 from ..db.pg_pool import get_conn
+from .strategy_package.workspace_policy import ensure_aistock_artifact_path, ensure_not_forbidden_worker_workspace_path
 from .rdagent_results_api_client import RDAgentResultsApiClient
 
 
@@ -164,11 +165,9 @@ def _ensure_task_catalog_table() -> None:
 def _normalize_workspace_path(ws_path: Optional[str]) -> Optional[str]:
     if not ws_path:
         return None
-    p = str(ws_path).replace("\\", "/")
-    parts = p.split("/", 3)
-    if len(parts) == 4 and parts[0] == "" and parts[1] == "mnt" and len(parts[2]) == 1:
-        p = f"{parts[2].upper()}:/" + parts[3]
-    return p
+    # Preserve worker-side Linux paths as remote metadata.  Converting /mnt/...
+    # into a Windows path would make FastAPI treat a remote worker path as local.
+    return str(ws_path).replace("\\", "/")
 
 class TaskSyncResult(BaseModel):
     ok: bool
@@ -728,7 +727,8 @@ class RDAgentTaskSyncService:
             di = row.get("sync_diagnostics")
             if isinstance(di, str):
                 row["sync_diagnostics"] = json.loads(di)
-        except Exception:
+        except Exception as exc:
+            logger.debug("Skipping malformed RD-Agent task diagnostics for %s: %s", tid, exc)
             pass
         return {"ok": True, "task": row}
 
@@ -742,13 +742,21 @@ class RDAgentTaskSyncService:
         mp = row.get("manifest_path")
         if not mp:
             return {"ok": False, "error": "manifest_path_missing"}
-        p = Path(str(mp))
+        try:
+            p = ensure_aistock_artifact_path(
+                Path(str(mp)),
+                purpose=f"RD-Agent local manifest read: {tid}",
+                extra_roots=[self.assets_root],
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"manifest_path_forbidden: {exc}"}
         if not p.exists() or not p.is_file():
             return {"ok": False, "error": f"manifest_not_found: {p}"}
         return {"ok": True, "content": p.read_text(encoding="utf-8", errors="ignore"), "manifest_path": str(p)}
 
     def audit_local_task_assets(self, *, limit: int = 5000) -> Dict[str, Any]:
         task_root = self.assets_root
+        ensure_not_forbidden_worker_workspace_path(task_root, purpose="RD-Agent local task asset audit root")
         if not task_root.exists() or not task_root.is_dir():
             return {"ok": False, "error": f"task_root_not_found: {task_root}"}
         dirs = [p for p in task_root.iterdir() if p.is_dir() and not p.name.startswith(".")]
@@ -764,14 +772,36 @@ class RDAgentTaskSyncService:
             if mp.exists() and mp.is_file():
                 try:
                     manifest_obj = json.loads(mp.read_text(encoding="utf-8", errors="ignore"))
-                except Exception:
+                except Exception as exc:
+                    logger.debug("Skipping malformed RD-Agent task manifest during audit: %s (%s)", mp, exc)
                     manifest_obj = {}
             primary_assets = manifest_obj.get("primary_assets") if isinstance(manifest_obj, dict) else None
             primary_assets = primary_assets if isinstance(primary_assets, dict) else {}
             factor_rel = primary_assets.get("factor_entry_relpath")
             model_rel = primary_assets.get("model_weight_relpath")
-            factor_abs = (d / str(factor_rel)).resolve() if factor_rel else None
-            model_abs = (d / str(model_rel)).resolve() if model_rel else None
+            try:
+                factor_abs = (
+                    ensure_aistock_artifact_path(
+                        d / str(factor_rel),
+                        purpose=f"RD-Agent local factor asset audit: {d.name}",
+                        extra_roots=[d],
+                    ).resolve()
+                    if factor_rel
+                    else None
+                )
+                model_abs = (
+                    ensure_aistock_artifact_path(
+                        d / str(model_rel),
+                        purpose=f"RD-Agent local model asset audit: {d.name}",
+                        extra_roots=[d],
+                    ).resolve()
+                    if model_rel
+                    else None
+                )
+            except Exception as exc:
+                rec["policy_error"] = str(exc)
+                factor_abs = None
+                model_abs = None
             factor_ok = bool(factor_abs and factor_abs.exists() and factor_abs.is_file())
             model_ok = bool(model_abs and model_abs.exists() and model_abs.is_file())
             rec["primary_assets"] = {"factor_entry_relpath": factor_rel, "model_weight_relpath": model_rel}

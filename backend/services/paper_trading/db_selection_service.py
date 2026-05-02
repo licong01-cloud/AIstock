@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import hashlib
+import re
 import threading
 import time
 import uuid
@@ -30,8 +32,37 @@ from ...inference_engine import (
     predict_scores,
     save_signals_to_db,
 )
+from ..strategy_package.live_inference import QEExperimentRuntimeAssetResolver
+from ..strategy_package.workspace_policy import ensure_not_forbidden_worker_workspace_path
 
 logger = logging.getLogger("aistock.paper_trading.db_selection")
+
+
+def _safe_cache_component(value: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "").strip())
+    return text or "unknown"
+
+
+def _prepare_qe_runtime_workspace_for_db_selection(experiment_id: str) -> Tuple[Path, Dict[str, Any]]:
+    """Materialize QE runtime assets through the node API, never DB workspace_path."""
+    cache_root = (
+        Path(__file__).resolve().parents[3]
+        / "rdagent_assets"
+        / "strategy_package_runtime"
+        / "legacy_db_selection"
+    )
+    resolver = QEExperimentRuntimeAssetResolver(cache_root=cache_root)
+    source = resolver.load_source(experiment_id)
+    digest = hashlib.sha256(
+        f"{experiment_id}:{source.qe_task_id}:{source.qe_loop_id}:{source.execution_node_id}".encode("utf-8")
+    ).hexdigest()
+    prepared = resolver.prepare_workspace(
+        package_id=f"legacy_db_selection_{_safe_cache_component(experiment_id)}",
+        manifest_sha256=digest,
+        source=source,
+    )
+    manifest = json.loads(prepared.manifest_path.read_text(encoding="utf-8"))
+    return prepared.workspace_path, manifest
 
 
 # ============================================================
@@ -111,6 +142,11 @@ def _load_factor_code(factor_name: str) -> str:
     if code_text:
         return code_text
 
+    if code_path:
+        ensure_not_forbidden_worker_workspace_path(
+            code_path,
+            purpose=f"paper trading transformed factor code path: {factor_name}",
+        )
     if code_path and os.path.isfile(code_path):
         with open(code_path, "r", encoding="utf-8") as f:
             return f.read()
@@ -301,31 +337,16 @@ def check_factor_readiness(
                 "message": f"Task 资产目录不存在: {task_dir}",
             }
     elif signal_source in ("qe_experiment", "qe_evolution"):
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT workspace_path FROM qe_experiments WHERE experiment_id = %s",
-                    (signal_source_id,),
-                )
-                row = cur.fetchone()
-        if not row or not row[0]:
+        try:
+            task_dir, manifest = _prepare_qe_runtime_workspace_for_db_selection(signal_source_id)
+        except Exception as exc:
             return {
                 "ready": False,
                 "total_dynamic": 0,
                 "transformed": [],
                 "not_transformed": [],
                 "missing": [],
-                "message": f"实验 {signal_source_id} 不存在或无 workspace",
-            }
-        task_dir = Path(row[0])
-        if not task_dir.exists():
-            return {
-                "ready": False,
-                "total_dynamic": 0,
-                "transformed": [],
-                "not_transformed": [],
-                "missing": [],
-                "message": f"实验工作目录不存在: {task_dir}",
+                "message": f"QE runtime assets unavailable via node API: {exc}",
             }
     else:
         return {
@@ -342,8 +363,6 @@ def check_factor_readiness(
     try:
         if signal_source == "rdagent_task":
             manifest = engine._load_task_manifest(signal_source_id)
-        else:
-            manifest = engine._load_experiment_manifest(str(task_dir))
     except Exception as exc:
         return {
             "ready": False,
@@ -471,18 +490,7 @@ def build_db_selection(
         if not task_dir.exists():
             raise RuntimeError(f"Task 资产目录不存在: {task_dir}")
     elif signal_source in ("qe_experiment", "qe_evolution"):
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT workspace_path FROM qe_experiments WHERE experiment_id = %s",
-                    (signal_source_id,),
-                )
-                row = cur.fetchone()
-        if not row or not row[0]:
-            raise RuntimeError(f"实验 {signal_source_id} 不存在或无 workspace")
-        task_dir = Path(row[0])
-        if not task_dir.exists():
-            raise RuntimeError(f"实验工作目录不存在: {task_dir}")
+        task_dir, manifest = _prepare_qe_runtime_workspace_for_db_selection(signal_source_id)
     else:
         raise ValueError(f"未知信号来源: {signal_source}")
 
@@ -492,8 +500,6 @@ def build_db_selection(
     engine = InferenceEngine()
     if signal_source == "rdagent_task":
         manifest = engine._load_task_manifest(signal_source_id)
-    else:
-        manifest = engine._load_experiment_manifest(str(task_dir))
 
     if not manifest:
         raise RuntimeError(f"未找到 manifest: {task_dir}")

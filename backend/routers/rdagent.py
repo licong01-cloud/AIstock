@@ -31,7 +31,10 @@ from ..services.rdagent_selection_service import build_loop_selection
 from ..services.rdagent_task_sync_service import rdagent_task_sync_service  # reload trigger
 from ..services.rdagent_candidate_service import get_candidate_service
 from ..services.quantevolver.factor_official_evaluation_service import CALC_ENGINE
-from ..services.strategy_package.workspace_policy import remove_aistock_artifact_tree
+from ..services.strategy_package.workspace_policy import (
+    ensure_aistock_artifact_path,
+    remove_aistock_artifact_tree,
+)
 
 from ..inference_engine import InferenceEngine
 
@@ -627,18 +630,46 @@ def _derive_task_run_and_loop_from_manifest(task_manifest: Dict[str, Any]) -> Di
 
 
 def _get_local_task_assets_status(*, manifest_path: Optional[str], manifest_obj: Dict[str, Any]) -> Dict[str, Any]:
-    mp = Path(str(manifest_path)).resolve() if manifest_path else None
+    assets_root = Path(__file__).resolve().parents[2] / "rdagent_assets" / "rdagent_tasks"
+    policy_error = None
+    try:
+        mp = (
+            ensure_aistock_artifact_path(
+                Path(str(manifest_path)),
+                purpose="RD-Agent local task manifest status",
+                extra_roots=[assets_root],
+            ).resolve()
+            if manifest_path
+            else None
+        )
+    except Exception as exc:
+        mp = None
+        policy_error = str(exc)
     task_dir = mp.parent if mp and mp.exists() else None
 
     primary_assets = manifest_obj.get("primary_assets") if isinstance(manifest_obj.get("primary_assets"), dict) else {}
     factor_rel = primary_assets.get("factor_entry_relpath")
     model_rel = primary_assets.get("model_weight_relpath")
 
-    factor_abs = (task_dir / str(factor_rel)).resolve() if task_dir and factor_rel else None
-    model_abs = (task_dir / str(model_rel)).resolve() if task_dir and model_rel else None
+    def _safe_child(rel_path: Any, purpose: str) -> Optional[Path]:
+        if not task_dir or not rel_path:
+            return None
+        try:
+            return ensure_aistock_artifact_path(
+                task_dir / str(rel_path),
+                purpose=purpose,
+                extra_roots=[task_dir],
+            ).resolve()
+        except Exception as exc:
+            logger.debug("RD-Agent local task asset status refused path %s: %s", rel_path, exc)
+            return None
+
+    factor_abs = _safe_child(factor_rel, "RD-Agent local task factor asset status")
+    model_abs = _safe_child(model_rel, "RD-Agent local task model asset status")
 
     return {
         "task_dir": str(task_dir) if task_dir else None,
+        "policy_error": policy_error,
         "primary_assets": {"factor_entry_relpath": factor_rel, "model_weight_relpath": model_rel},
         "factor_entry": {
             "path": str(factor_abs) if factor_abs else None,

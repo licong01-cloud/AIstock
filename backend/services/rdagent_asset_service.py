@@ -14,14 +14,18 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from .rdagent_results_api_client import RDAgentResultsApiClient
+from .strategy_package.workspace_policy import ensure_aistock_artifact_path, ensure_not_forbidden_worker_workspace_path
 
 logger = logging.getLogger("aistock.rdagent_asset")
 
 class RDAgentAssetService:
     def __init__(self, base_dir: Optional[str] = None):
         # 默认存储路径: <repo_root>/rdagent_assets (或环境变量指定)
-        self.base_dir = Path(base_dir or os.getenv("RDAGENT_ASSETS_DIR") or "rdagent_assets").resolve()
+        default_base_dir = Path(__file__).resolve().parents[2] / "rdagent_assets"
+        self.base_dir = Path(base_dir or os.getenv("RDAGENT_ASSETS_DIR") or default_base_dir).resolve()
         self.bundles_dir = self.base_dir / "production_bundles"
+        ensure_not_forbidden_worker_workspace_path(self.base_dir, purpose="RD-Agent asset bundle base_dir")
+        ensure_aistock_artifact_path(self.bundles_dir, purpose="RD-Agent asset bundle cache")
         self._ensure_dirs()
         self.client = RDAgentResultsApiClient()
 

@@ -26,10 +26,23 @@ import requests
 
 from ..db.pg_pool import get_conn
 from .rdagent_results_api_client import RDAgentResultsApiClient
+from .strategy_package.workspace_policy import ensure_aistock_artifact_path
 
 logger = logging.getLogger("aistock.factor_catalog_sync")
 
 JsonDict = Dict[str, Any]
+
+
+def _rdagent_task_assets_root() -> Path:
+    return Path(__file__).resolve().parents[2] / "rdagent_assets" / "rdagent_tasks"
+
+
+def _ensure_local_task_dir(task_dir: str, *, purpose: str) -> Path:
+    return ensure_aistock_artifact_path(
+        Path(task_dir),
+        purpose=purpose,
+        extra_roots=[_rdagent_task_assets_root()],
+    )
 
 
 def _normalize_factor_name_static(name: str) -> str:
@@ -295,6 +308,10 @@ def sync_factors_from_task(
         anchor_resp: sota_factor_anchor API 返回数据
         task_dir: AIstock 侧 task 资产目录路径
     """
+    task_dir_path = _ensure_local_task_dir(
+        task_dir,
+        purpose=f"RD-Agent factor catalog task sync: {task_id}",
+    )
     sota_factor_names = v2_preview_data.get("sota_factors", [])
     if not sota_factor_names:
         return FactorSyncResult(
@@ -433,11 +450,11 @@ def sync_factors_from_task(
             # task_dir/factors/{fname}.py 是 task 同步时保存的原始完整源代码文件
             full_code_from_file: str = ""
             asset_path_value: str = ""
-            if task_dir:
-                factor_file = Path(task_dir) / "factors" / f"{fname}.py"
+            if task_dir_path:
+                factor_file = task_dir_path / "factors" / f"{fname}.py"
                 if not factor_file.exists():
                     # 模糊匹配：parquet 名可能是英文，文件名可能是中文（含英文括号）
-                    factors_dir = Path(task_dir) / "factors"
+                    factors_dir = task_dir_path / "factors"
                     if factors_dir.exists():
                         normalized = _normalize_factor_name_static(fname)
                         candidates = [f for f in factors_dir.glob("*.py")
@@ -452,7 +469,7 @@ def sync_factors_from_task(
                     # task_dir 结构: {aistock_root}/rdagent_assets/rdagent_tasks/{task_id}
                     # 所以需要 parent.parent.parent 才能得到 aistock_root
                     try:
-                        aistock_root = Path(task_dir).parent.parent.parent
+                        aistock_root = task_dir_path.parent.parent.parent
                         asset_path_value = factor_file.relative_to(aistock_root).as_posix()
                     except ValueError:
                         asset_path_value = str(factor_file)
@@ -608,6 +625,11 @@ def sync_factors_from_loop(
         loop_factors_data: RDAgent API /v2/{task_id}/loops/{loop_id}/factors 响应
         task_dir: AIstock 侧 task 资产目录路径 (可选)
     """
+    task_dir_path = (
+        _ensure_local_task_dir(task_dir, purpose=f"RD-Agent factor catalog loop sync: {task_id}/{loop_id}")
+        if task_dir
+        else None
+    )
     errors: List[str] = []
     factors = loop_factors_data.get("factors", {})
     loop_metrics = loop_factors_data.get("loop_metrics", {})
@@ -672,13 +694,13 @@ def sync_factors_from_loop(
             # 保存因子代码文件到 task_dir (如果提供)
             code_text_value = code_for_factor or None
             asset_path_value = None
-            if task_dir and code_for_factor:
-                factors_dir = Path(task_dir) / "factors"
+            if task_dir_path and code_for_factor:
+                factors_dir = task_dir_path / "factors"
                 factors_dir.mkdir(parents=True, exist_ok=True)
                 factor_file = factors_dir / f"{fname}.py"
                 factor_file.write_text(code_for_factor, encoding="utf-8")
                 try:
-                    aistock_root = Path(task_dir).parent.parent.parent
+                    aistock_root = task_dir_path.parent.parent.parent
                     asset_path_value = factor_file.relative_to(aistock_root).as_posix()
                 except ValueError:
                     asset_path_value = str(factor_file)

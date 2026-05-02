@@ -178,6 +178,10 @@ class RDAgentResultsApiClient:
         timeout = 10.0 if quick else 180.0
         return self._task_get_json(f"/tasks/{task_id}/workspaces", params=params, timeout=timeout)
 
+    def get_task_complete_assets(self, task_id: str) -> dict:
+        """Fetch complete task assets through the RD-Agent node API."""
+        return self._task_get_json(f"/tasks/{task_id}/complete_assets", timeout=300.0)
+
     def delete_task_remote(self, task_id: str) -> dict:
         """DELETE /tasks/{task_id} — 删除 task log + workspace + scheduler log"""
         url = f"{self.base_url}/tasks/{task_id}"

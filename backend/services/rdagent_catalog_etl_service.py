@@ -743,23 +743,28 @@ def _build_loop_payload_from_scan(data: JsonDict) -> JsonDict:
     if not isinstance(results, list):
         return {"loops": []}
 
-    def _extract_model_type(workspace_path: Optional[str]) -> tuple[Optional[str], Optional[str]]:
-        if not workspace_path:
-            return None, None
-        ws_norm = _normalize_workspace_path(workspace_path)
-        if not ws_norm:
-            return None, None
-        meta_path = (Path(ws_norm) / "model_meta.json").resolve()
-        if not meta_path.exists() or not meta_path.is_file():
-            return None, None
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8", errors="ignore"))
-        except Exception:
-            return None, str(meta_path)
-        model_type = None
-        if isinstance(meta, dict):
-            model_type = meta.get("model_type") or meta.get("model_conf", {}).get("class")
-        return (str(model_type) if model_type else None, str(meta_path))
+    def _extract_model_type(loop: JsonDict) -> tuple[Optional[str], Optional[str]]:
+        """Read model metadata only from the API payload, never from workspace_path."""
+        candidates: list[Any] = [
+            loop.get("model_type"),
+            loop.get("model_class"),
+        ]
+        for key in ("model_weight", "model", "model_config", "model_meta"):
+            value = loop.get(key)
+            if isinstance(value, dict):
+                candidates.extend(
+                    [
+                        value.get("model_type"),
+                        value.get("model_class"),
+                        value.get("class"),
+                        value.get("model_conf", {}).get("class") if isinstance(value.get("model_conf"), dict) else None,
+                    ]
+                )
+
+        model_type = next((str(item) for item in candidates if item), None)
+        paths = loop.get("paths") if isinstance(loop.get("paths"), dict) else {}
+        model_meta_path = loop.get("model_meta_path") or paths.get("model_meta")
+        return model_type, str(model_meta_path) if model_meta_path else None
 
     loops: list[dict[str, Any]] = []
     for task in results:
@@ -786,7 +791,7 @@ def _build_loop_payload_from_scan(data: JsonDict) -> JsonDict:
             factor_names = [f.get("factor_name") for f in factors if f.get("factor_name")]
             workspace_path = loop.get("workspace_path")
             workspace_path_norm = _normalize_workspace_path(workspace_path) if workspace_path else None
-            model_type, model_meta_path = _extract_model_type(workspace_path_norm or workspace_path)
+            model_type, model_meta_path = _extract_model_type(loop)
 
             loops.append(
                 {

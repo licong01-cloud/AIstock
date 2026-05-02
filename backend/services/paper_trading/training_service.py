@@ -15,6 +15,7 @@ from typing import Any, Dict, Generator, List, Optional
 import yaml
 
 from ...db.pg_pool import get_conn
+from ..strategy_package.workspace_policy import ensure_not_forbidden_worker_workspace_path
 
 logger = logging.getLogger("aistock.paper_trading.training")
 
@@ -366,13 +367,17 @@ class TrainingService:
 
     @staticmethod
     def _load_source_config(params: Dict[str, Any]) -> str:
-        """从源组合读取 conf_sota_factors_model.yaml."""
+        """Load retraining source config without reading worker workspaces."""
         config_path = params.get("source_config_path")
-        if config_path and os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                return f.read()
+        if config_path:
+            ensure_not_forbidden_worker_workspace_path(
+                config_path,
+                purpose="paper trading training source_config_path",
+            )
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    return f.read()
 
-        # 尝试从模型目录读取
         source = params.get("signal_source")
         source_id = params.get("signal_source_id")
         loop_id = params.get("signal_loop_id")
@@ -381,22 +386,42 @@ class TrainingService:
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT workspace_path FROM aistock_model_catalog WHERE task_run_id = %s AND loop_id = %s LIMIT 1",
+                        """
+                        SELECT asset_bundle_id, workspace_id, workspace_path
+                        FROM aistock_model_catalog
+                        WHERE task_run_id = %s AND loop_id = %s
+                        LIMIT 1
+                        """,
                         (source_id, loop_id),
                     )
                     row = cur.fetchone()
-            if row and row[0]:
-                ws_path = row[0]
-                # 尝试多个配置文件位置
-                for candidate in [
-                    os.path.join(ws_path, "conf_sota_factors_model.yaml"),
-                    os.path.join(ws_path, "conf.yaml"),
-                ]:
-                    if os.path.exists(candidate):
-                        with open(candidate, "r", encoding="utf-8") as f:
-                            return f.read()
+            if row:
+                asset_bundle_id, workspace_id, workspace_path = row
+                if asset_bundle_id and workspace_id:
+                    from ..rdagent_asset_service import rdagent_asset_service
 
-        raise FileNotFoundError(f"无法找到源配置文件: source={source} id={source_id}")
+                    if rdagent_asset_service.download_and_extract_bundle(str(asset_bundle_id)):
+                        files = rdagent_asset_service.get_strategy_files(str(asset_bundle_id), str(workspace_id))
+                        config_yaml = files.get("config_yaml") if isinstance(files, dict) else None
+                        if config_yaml:
+                            ensure_not_forbidden_worker_workspace_path(
+                                config_yaml,
+                                purpose="paper trading training asset-bundle config",
+                            )
+                            if os.path.exists(config_yaml):
+                                with open(config_yaml, "r", encoding="utf-8") as f:
+                                    return f.read()
+                if workspace_path:
+                    ensure_not_forbidden_worker_workspace_path(
+                        workspace_path,
+                        purpose="paper trading training RD-Agent workspace_path metadata",
+                    )
+                    raise FileNotFoundError(
+                        "RD-Agent workspace_path is remote metadata only; "
+                        "source config must come from source_config_path or an API-synced asset bundle"
+                    )
+
+        raise FileNotFoundError(f"Unable to find source config: source={source} id={source_id}")
 
 
 def _sse_format(event: str, data: str) -> str:

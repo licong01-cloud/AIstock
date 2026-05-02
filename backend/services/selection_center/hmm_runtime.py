@@ -16,6 +16,7 @@ from typing import Any, Protocol
 
 from backend.services.selection_center.models import SelectionCandidate
 from backend.services.selection_center.runtime_profile import RuntimeHMMProfile
+from backend.services.strategy_package.workspace_policy import ensure_not_forbidden_worker_workspace_path
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
 
 
@@ -303,9 +304,7 @@ def _resolve_local_path(raw_path: str, *, base_dir: Path | None = None) -> Path 
     text = str(raw_path or "").strip()
     if not text:
         return None
-    if text.startswith("/mnt/") and len(text) > 6 and text[6] == "/":
-        drive = text[5].upper()
-        text = f"{drive}:{text[6:]}"
+    ensure_not_forbidden_worker_workspace_path(text, purpose="selection center HMM artifact path")
     path = Path(text)
     if not path.is_absolute() and base_dir is not None:
         path = base_dir / path

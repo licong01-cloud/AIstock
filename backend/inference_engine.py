@@ -1040,7 +1040,8 @@ class InferenceEngine:
         - primary_assets: factor_entry_relpath, model_weight_relpath
         - assets: factor_order等
         """
-        manifest_path = Path(workspace_path) / "manifest.json"
+        task_dir = _validate_qe_runtime_workspace_path(workspace_path)
+        manifest_path = task_dir / "manifest.json"
         if manifest_path.exists():
             try:
                 with open(manifest_path, "r", encoding="utf-8") as f:

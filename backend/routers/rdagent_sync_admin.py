@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import os
-import subprocess
-from pathlib import PurePosixPath
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body
 
+from ..services.rdagent_results_api_client import RDAgentResultsApiClient
 from ..services.rdagent_http_sync_service import SyncMode, get_sync_status, run_full_sync, trigger_rdagent_materialize_and_sync
 
 
@@ -61,90 +59,12 @@ def sync_materialize(
     return trigger_rdagent_materialize_and_sync(node_id=node_id)
 
 
-@router.get("/tasks/{task_id}/complete_assets", summary="获取TASK的完整资产")
-def get_task_complete_assets(task_id: str) -> Dict[str, Any]:
-    """获取TASK的完整资产（SOTA因子、因子代码、模型权重、特征序列）
+@router.get("/tasks/{task_id}/complete_assets", summary="Get complete RD-Agent task assets")
+def get_task_complete_assets(task_id: str, node_id: Optional[str] = None) -> Dict[str, Any]:
+    """Proxy complete-assets retrieval through the RD-Agent node API.
 
-    这是新的统一API端点，复用验证脚本的成功逻辑，确保数据完整性和一致性。
-
-    返回结构：
-    {
-        "ok": true/false,
-        "task_id": "xxx",
-        "session_info": {...},
-        "sota_factors": {...},
-        "factor_codes": [...],
-        "model_weight": {...},
-        "feature_sequence": {...},
-        "validation": {...}
-    }
+    Windows-side FastAPI must not shell into WSL or inspect the worker
+    filesystem directly; WSL and remote Linux nodes are both external workers.
     """
-    try:
-        import subprocess
-        import json
-
-        # 使用WSL中的conda rdagent-gpu环境执行脚本文件
-        rdagent_root = os.getenv("QLIB_RDAGENT_ROOT_WSL", "").strip()
-        python_path = os.getenv("QLIB_WSL_PYTHON", "").strip()
-        if not rdagent_root or not python_path:
-            return {
-                "ok": False,
-                "task_id": task_id,
-                "error": "QLIB_RDAGENT_ROOT_WSL and QLIB_WSL_PYTHON are required",
-            }
-        script_path = str(PurePosixPath(rdagent_root) / "debug_tools" / "wsl_extract_task_assets.py")
-
-        result = subprocess.run(
-            ['wsl', python_path, script_path, task_id],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            timeout=120
-        )
-
-        if result.returncode == 0:
-            # 检查stdout是否为空
-            if not result.stdout:
-                return {
-                    "ok": False,
-                    "task_id": task_id,
-                    "error": "WSL命令执行成功但无输出",
-                    "returncode": result.returncode,
-                    "stderr": result.stderr[:1000] if result.stderr else "无错误输出"
-                }
-
-            # 解析JSON输出
-            try:
-                return json.loads(result.stdout)
-            except json.JSONDecodeError as e:
-                return {
-                    "ok": False,
-                    "task_id": task_id,
-                    "error": f"JSON解析失败: {str(e)}",
-                    "stdout": result.stdout[:1000],
-                    "stderr": result.stderr[:1000] if result.stderr else ""
-                }
-        else:
-            return {
-                "ok": False,
-                "task_id": task_id,
-                "error": "WSL执行失败",
-                "returncode": result.returncode,
-                "stderr": result.stderr[:1000] if result.stderr else ""
-            }
-
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False,
-            "task_id": task_id,
-            "error": "WSL执行超时（>120秒）"
-        }
-    except Exception as e:
-        import traceback
-        return {
-            "ok": False,
-            "task_id": task_id,
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        }
+    client = RDAgentResultsApiClient.for_node(node_id) if node_id else RDAgentResultsApiClient()
+    return client.get_task_complete_assets(task_id)

@@ -1,10 +1,10 @@
-﻿# QE Read-Path Validation Matrix
+﻿# QE Read And Cleanup Validation Matrix
 
-This matrix covers QuantEvolver / QE read-only experiment data access. It is the first step toward full QE automation and intentionally excludes experiment creation, dispatch, retry, rerun, resume, fork, append, delete, and worker workspace cleanup until the user explicitly approves those phases.
+This matrix covers QuantEvolver / QE read-only experiment data access plus the cleanup flows that have been explicitly approved and remediated. It intentionally excludes experiment creation, dispatch/scheduling, retry, rerun, resume, fork, and append until the user explicitly approves those phases.
 
 ## Business Goal
 
-QE experiment pages must display accurate task, loop, and metric data obtained through supported backend APIs, without Windows-side direct access to WSL/RD-Agent worker workspaces.
+QE experiment pages must display accurate task, loop, and metric data obtained through supported backend APIs, and destructive cleanup flows must remove worker artifacts through node APIs only. Windows-side FastAPI code must not directly read, scan, copy, mutate, or delete WSL/RD-Agent worker workspaces.
 
 ## Red Lines
 
@@ -19,7 +19,8 @@ QE experiment pages must display accurate task, loop, and metric data obtained t
 
 - Scan QE router/service/frontend test paths for hardcoded WSL/Windows workspace access, secrets, silent fallback, and protected asset changes.
 - Confirm changed files do not modify QE/RD-Agent `mlruns`, model weights, HMM snapshots, StrategyPackage frozen manifests, or worker workspace assets.
-- Confirm this read-path rollout does not change create/dispatch/retry/delete code.
+- Confirm read-path changes do not change create/dispatch/retry/resume code.
+- Confirm cleanup-path changes use node APIs for worker workspaces and guarded AIstock-owned roots for local artifacts.
 
 ## Backend L1/L2
 
@@ -32,6 +33,34 @@ QE experiment pages must display accurate task, loop, and metric data obtained t
 - Experiment analysis/evolution-context uses DB-cached metadata/results and must not dereference `workspace_path`.
 - Artifact-unavailable states are explicit and actionable when added by later phases.
 
+## Read/Catalog Integration L1/L2
+
+These checks cover non-create, non-retry, non-resume paths remediated after the initial QE read and cleanup phases.
+
+- Legacy Paper Trading DB selection for `qe_experiment` and `qe_evolution` materializes QE runtime assets through `QEExperimentRuntimeAssetResolver`; it must not query `qe_experiments.workspace_path` or call `_load_experiment_manifest` on DB paths.
+- `InferenceEngine._load_experiment_manifest` accepts only AIstock-owned runtime caches and refuses worker paths even if an old caller passes `workspace_path`.
+- Transformed factor file fallbacks in DB selection refuse worker paths before `os.path.isfile` or `open`.
+- Legacy Paper Trading retraining source-config loading may read explicit local configs or API-synced asset bundles only; RD-Agent `workspace_path` is remote metadata and must not be scanned for `conf*.yaml`.
+- RD-Agent task manifest text, task selection asset status, and local asset audit read only guarded AIstock-owned `rdagent_assets/rdagent_tasks` cache files; worker manifest paths return explicit policy errors.
+- RD-Agent production bundle cache must stay under AIstock-owned artifact roots and must refuse worker base directories before extracting or reading bundle files.
+- RD-Agent factor/model catalog sync writes or reads source files only below the guarded task cache and refuses worker `task_dir` inputs.
+- RD-Agent catalog ETL treats `workspace_path` as remote metadata only; it must not convert `/mnt/...` to Windows paths or read `model_meta.json` from a worker workspace.
+- RD-Agent sync admin `/tasks/{task_id}/complete_assets` proxies the RD-Agent node API; it must not run `wsl`, `subprocess`, or WSL-only helper scripts.
+- Selection Center HMM runtime must not convert `/mnt/...` model/coefficient artifact paths into Windows paths; remote worker paths fail fast instead of being read locally.
+
+## Cleanup L1/L2
+
+Cleanup validation must use mocked DB/API clients and test-owned temporary directories unless the user explicitly authorizes a real destructive test.
+
+- QE experiment delete calls `QEWorkspaceClient.cleanup_task_workspace` for the default node and assigned multi-alpha nodes.
+- QE experiment delete must not import or dereference `QE_WORKSPACE_WIN`, `RDAGENT_WORKSPACE_WIN`, DB `workspace_path`, `/mnt/...` conversions, or WSL UNC paths.
+- QE experiment delete may remove only AIstock-owned local artifacts under `QE_EXPERIMENTS_ROOT` and `QE_SOTA_ASSETS_DIR`, and may remove Optuna study files only under the SOTA root.
+- QE evolution task delete captures `node_id` before DB deletion, calls node API cleanup for worker workspace, and removes only AIstock-owned local artifact dirs.
+- QE custom_evo loop delete/rerun cleanup calls loop-level node API; if the API is unavailable, it must fail fast before local cleanup or DB deletion.
+- RD-Agent task delete calls `delete_task_on_node` for remote worker cleanup, then removes only guarded local `dispatch_logs/{task_id}` and mocked/authorized DB rows.
+- Local cleanup helpers must refuse worker roots, root-directory deletion, and path traversal; they must leave simulated worker dirs intact in tests.
+- Benign parse failures in touched cleanup/read helpers must be logged before returning unavailable/None states.
+
 ## API L2
 
 Read-only probes against the dev backend must validate:
@@ -42,6 +71,21 @@ Read-only probes against the dev backend must validate:
 - `/api/v1/quantevolver/experiments/{experiment_id}/enhanced-metrics` returns the expected DB/node enhanced fields (`summary`, IC series, return curves, all-stocks/diagnostics when present).
 - `/api/v1/quantevolver/experiments/{experiment_id}/logs/tail` returns node-sourced terminal tail metadata (`log_source=qe_workspace_api`, `node_id`, logs or explicit unavailable reason).
 - No response returns unexpected HTTP 5xx.
+
+## Cleanup API L2
+
+Destructive API probes must not run against production or real active tasks. Use one of:
+
+- Unit/router tests with mocked DB and node API clients.
+- A dedicated disposable task/experiment created for validation only.
+- A dry-run endpoint when available.
+
+Required assertions:
+
+- Worker cleanup mode is observable as node-API-only or explicit fail-fast.
+- Local cleanup result lists only AIstock-owned artifact paths.
+- DB delete statements are executed only after required remote cleanup preconditions pass.
+- Missing node cleanup capability returns an actionable failure and does not silently delete local/DB state.
 
 ## UI L3
 
@@ -79,6 +123,13 @@ $env:QE_API_BASE='http://127.0.0.1:8011/api/v1'
 $env:NEXT_PUBLIC_API_BASE='http://127.0.0.1:8011/api/v1'
 $env:QE_READ_TASK_ID='qe_20260414_173338_d1c5'
 python -m nox -s qe_read_l3
+
+# Cleanup validation uses mocked destructive dependencies.
+python -m pytest backend/tests/unified_engine/test_qe_cleanup_path_policy.py backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py -q
+python -m pytest backend/tests/unified_engine/test_qe_evolution_read_paths.py backend/tests/unified_engine/test_qe_experiment_read_paths.py backend/tests/unified_engine/test_qe_log_stream_lifecycle.py backend/tests/unified_engine/test_qe_stop_task.py backend/tests/unified_engine/test_qe_cleanup_path_policy.py backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py -q
+
+# Remaining non-create/retry/resume worker workspace boundary checks.
+python -m pytest backend/tests/unified_engine/test_worker_workspace_policy_remaining_paths.py -q
 ```
 
 ## Evidence
