@@ -2,8 +2,18 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from backend.routers import qe_archive as qe_archive_router
 from backend.services.qe_archive.archive_service import QEArchiveService
+from backend.services.qe_archive.backfill_service import (
+    QEArchiveBackfillOptions,
+    QEArchiveBackfillService,
+    WRITE_CONFIRM_TEXT,
+)
 from backend.services.qe_archive.models import (
     ArchiveJobRecord,
     ClaimedOutboxEvent,
@@ -15,6 +25,7 @@ from backend.services.qe_archive.models import (
 )
 from backend.services.qe_archive.event_capture import QEArchiveEventCapture
 from backend.services.qe_archive.payload_extractor import QEArchivePayloadExtractor
+from backend.services.qe_archive.realtime_ingestion import QEArchiveRealtimeIngestion
 from backend.services.qe_archive.repository import QEArchiveRepository
 from backend.services.qe_archive.source_assembler import QEArchiveSourceAssembler
 from backend.services.qe_archive.worker import ArchiveWorkerEventResult, QEArchiveWorker
@@ -25,12 +36,15 @@ QE_ARCHIVE_FILES = (
     REPO_ROOT / "backend" / "db" / "init_qe_archive_schema.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "__init__.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "archive_service.py",
+    REPO_ROOT / "backend" / "services" / "qe_archive" / "backfill_service.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "event_capture.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "models.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "payload_extractor.py",
+    REPO_ROOT / "backend" / "services" / "qe_archive" / "realtime_ingestion.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "repository.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "source_assembler.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "worker.py",
+    REPO_ROOT / "backend" / "routers" / "qe_archive.py",
     REPO_ROOT / "scripts" / "qe_archive_backfill.py",
 )
 
@@ -107,6 +121,8 @@ def test_repository_exposes_phase_one_write_methods() -> None:
         "create_archive_job",
         "complete_archive_job",
         "fail_archive_job",
+        "get_archive_summary",
+        "get_run_quality_summary",
     )
 
     for method_name in expected_methods:
@@ -381,6 +397,179 @@ def test_source_assembler_builds_loop_payload_for_archive_service() -> None:
     assert extracted.data_contexts[0].backtest_start.isoformat() == "2025-01-02"
     assert extracted.data_contexts[0].backtest_end.isoformat() == "2025-01-02"
     assert any(curve.curve_key == "drawdown_series" for curve in extracted.curves)
+
+
+def test_backfill_service_requires_confirmation_for_writes() -> None:
+    service = QEArchiveBackfillService(
+        assembler=SimpleNamespace(),
+        archive_service=SimpleNamespace(),
+        repository=SimpleNamespace(),
+    )
+
+    try:
+        service.process_backfill(QEArchiveBackfillOptions(source="loop", write=True))
+    except ValueError as exc:
+        assert WRITE_CONFIRM_TEXT in str(exc)
+    else:
+        raise AssertionError("write mode must require explicit confirmation text")
+
+
+def test_backfill_service_processes_explicit_loop_ids_without_manual_script() -> None:
+    class FakeAssembler:
+        def __init__(self) -> None:
+            self.loop_ids: list[str] = []
+
+        def assemble_loop_payload(self, *, loop_id=None, task_id=None, loop_index=None):  # type: ignore[no-untyped-def]
+            self.loop_ids.append(loop_id)
+            return {
+                "source_system": "qe_evolution",
+                "source_id": "task_1",
+                "source_sub_id": loop_id,
+            }
+
+    class FakeArchiveService:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def process_payload(self, payload, *, event_type, source_system, source_id, source_sub_id, dry_run):  # type: ignore[no-untyped-def]
+            self.calls.append(
+                {
+                    "payload": payload,
+                    "event_type": event_type,
+                    "source_system": source_system,
+                    "source_id": source_id,
+                    "source_sub_id": source_sub_id,
+                    "dry_run": dry_run,
+                }
+            )
+            return SimpleNamespace(
+                run_id=f"run_{source_sub_id}",
+                stats={"written": not dry_run, "metric_count": 3},
+            )
+
+    class FakeRepository:
+        def get_archive_summary(self):  # type: ignore[no-untyped-def]
+            return {"run_count": 1, "pending_outbox_count": 0}
+
+        def get_run_quality_summary(self, run_id):  # type: ignore[no-untyped-def]
+            return {
+                "run_id": run_id,
+                "exists": True,
+                "metric_count": 3,
+                "curve_count": 4,
+                "factor_count_rows": 2,
+                "account_summary_count": 1,
+            }
+
+    assembler = FakeAssembler()
+    archive_service = FakeArchiveService()
+    result = QEArchiveBackfillService(
+        assembler=assembler,  # type: ignore[arg-type]
+        archive_service=archive_service,  # type: ignore[arg-type]
+        repository=FakeRepository(),  # type: ignore[arg-type]
+    ).process_backfill(
+        QEArchiveBackfillOptions(
+            source="loop",
+            loop_ids=["loop_a", "loop_a", "loop_b"],
+            write=True,
+            confirm_write=WRITE_CONFIRM_TEXT,
+            min_metrics=1,
+            min_curves=1,
+            min_factors=1,
+            require_account_summary=True,
+        )
+    )
+
+    assert assembler.loop_ids == ["loop_a", "loop_b"]
+    assert result["processed_count"] == 2
+    assert result["write_enabled"] is True
+    assert result["archive_summary"] == {"run_count": 1, "pending_outbox_count": 0}
+    assert [call["dry_run"] for call in archive_service.calls] == [False, False]
+    assert result["results"][0]["quality"]["passed"] is True
+
+
+def test_realtime_ingestion_is_disabled_by_default_and_does_not_archive() -> None:
+    class FakeBackfillService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def archive_loop_completed(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            return {"unexpected": True}
+
+    service = FakeBackfillService()
+    ingestion = QEArchiveRealtimeIngestion(service=service, enabled=False)  # type: ignore[arg-type]
+
+    result = ingestion.archive_loop_completed(task_id="task_1", loop_id="task_1_Loop1")
+
+    assert result == {"archived": False, "skipped_reason": "disabled"}
+    assert service.calls == 0
+
+
+def test_realtime_ingestion_enabled_calls_backfill_service() -> None:
+    class FakeBackfillService:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        def archive_experiment_completed(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.kwargs = kwargs
+            return {"processed_count": 1}
+
+    service = FakeBackfillService()
+    ingestion = QEArchiveRealtimeIngestion(service=service, enabled=True)  # type: ignore[arg-type]
+
+    result = ingestion.archive_experiment_completed(experiment_id="qe_exp_1")
+
+    assert result == {"processed_count": 1}
+    assert service.kwargs == {"experiment_id": "qe_exp_1"}
+
+
+def test_qe_archive_backfill_api_requires_confirmation(monkeypatch) -> None:
+    class FakeService:
+        called = False
+
+        def process_backfill(self, options):  # type: ignore[no-untyped-def]
+            self.called = True
+            return {}
+
+    fake = FakeService()
+    monkeypatch.setattr(qe_archive_router, "get_backfill_service", lambda: fake)
+    app = FastAPI()
+    app.include_router(qe_archive_router.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/qe-archive/backfill",
+        json={"source": "loop", "loop_ids": ["loop_1"], "write": True},
+    )
+
+    assert response.status_code == 400
+    assert WRITE_CONFIRM_TEXT in response.json()["detail"]
+    assert fake.called is False
+
+
+def test_qe_archive_backfill_api_returns_service_report(monkeypatch) -> None:
+    class FakeService:
+        def process_backfill(self, options):  # type: ignore[no-untyped-def]
+            assert options.loop_ids == ["loop_1"]
+            assert options.write is False
+            return {"processed_count": 1, "results": [{"run_id": "run_loop_1"}]}
+
+    monkeypatch.setattr(qe_archive_router, "get_backfill_service", lambda: FakeService())
+    app = FastAPI()
+    app.include_router(qe_archive_router.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/qe-archive/backfill",
+        json={"source": "loop", "loop_ids": ["loop_1"], "write": False},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "success"
+    assert body["data"]["processed_count"] == 1
+    assert body["data"]["results"][0]["run_id"] == "run_loop_1"
 
 
 def test_event_capture_is_disabled_by_default_and_does_not_write(monkeypatch) -> None:

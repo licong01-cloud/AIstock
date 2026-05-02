@@ -763,6 +763,109 @@ class QEArchiveRepository:
                     (error, self._adapt_value("stats", stats) if stats is not None else None, job_id),
                 )
 
+    def get_archive_summary(self) -> dict[str, Any]:
+        """Return a compact warehouse health summary for API consumers."""
+
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM qe_archive.run")
+                run_count = int(cur.fetchone()[0])
+                cur.execute(
+                    """
+                    SELECT research_valid, COUNT(*)
+                    FROM qe_archive.run
+                    GROUP BY research_valid
+                    ORDER BY research_valid
+                    """
+                )
+                research_valid_counts = {str(row[0]).lower(): int(row[1]) for row in cur.fetchall()}
+                cur.execute("SELECT COUNT(*) FROM qe_archive.outbox_event WHERE status = 'pending'")
+                pending_outbox_count = int(cur.fetchone()[0])
+                cur.execute(
+                    """
+                    SELECT status, COUNT(*)
+                    FROM qe_archive.archive_job
+                    GROUP BY status
+                    ORDER BY status
+                    """
+                )
+                archive_job_status_counts = {str(status): int(count) for status, count in cur.fetchall()}
+        return {
+            "run_count": run_count,
+            "research_valid_counts": research_valid_counts,
+            "pending_outbox_count": pending_outbox_count,
+            "archive_job_status_counts": archive_job_status_counts,
+        }
+
+    def get_run_quality_summary(self, run_id: str) -> dict[str, Any]:
+        """Return row-count based completeness checks for one archived run."""
+
+        count_tables = {
+            "source_count": "run_source",
+            "data_context_count": "run_data_context",
+            "account_summary_count": "run_account_summary",
+            "metric_count": "run_metric",
+            "curve_count": "run_curve",
+            "factor_count_rows": "run_factor",
+            "artifact_count": "run_artifact",
+            "raw_payload_count": "raw_payload",
+            "priority_score_count": "run_priority_score",
+        }
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT run_id, source_system, run_type, status, research_valid,
+                           invalid_reason, freq, label_horizon, factor_count,
+                           completed_at, archived_at
+                    FROM qe_archive.run
+                    WHERE run_id = %s
+                    """,
+                    (run_id,),
+                )
+                run_row = cur.fetchone()
+                if not run_row:
+                    return {"run_id": run_id, "exists": False}
+                run_columns = [desc[0] for desc in cur.description or []]
+                run_detail = dict(zip(run_columns, run_row))
+
+                cur.execute(
+                    """
+                    SELECT config_capture_complete, jsonb_array_length(missing_config_items)
+                    FROM qe_archive.run_config
+                    WHERE run_id = %s
+                    """,
+                    (run_id,),
+                )
+                config_row = cur.fetchone()
+
+                cur.execute(
+                    """
+                    SELECT reproducibility_level, verification_status, jsonb_array_length(missing_items)
+                    FROM qe_archive.run_reproducibility_manifest
+                    WHERE run_id = %s
+                    """,
+                    (run_id,),
+                )
+                manifest_row = cur.fetchone()
+
+                counts: dict[str, int] = {}
+                for key, table in count_tables.items():
+                    cur.execute(f"SELECT COUNT(*) FROM qe_archive.{table} WHERE run_id = %s", (run_id,))
+                    counts[key] = int(cur.fetchone()[0])
+
+        return {
+            "run_id": run_id,
+            "exists": True,
+            **run_detail,
+            "config_capture_complete": config_row[0] if config_row else None,
+            "missing_config_item_count": int(config_row[1]) if config_row else None,
+            "reproducibility_level": manifest_row[0] if manifest_row else None,
+            "manifest_verification_status": manifest_row[1] if manifest_row else None,
+            "manifest_missing_item_count": int(manifest_row[2]) if manifest_row else None,
+            **counts,
+        }
+
     def upsert_metric_batch(
         self,
         metrics: Sequence[MetricRecord | Mapping[str, Any]],

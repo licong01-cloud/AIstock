@@ -587,6 +587,14 @@ Important directories:
 - Re-running the same confirmed write batch proved idempotency: final data-quality smoke still showed `run_count=11`, `pending_outbox_count=0`, and empty `archive_job_status_counts`.
 - Validation record: `tests/aistock_validation/history/qe_archive/20260502_182707_l3_qe-archive-realtime-warehouse-validation.md`. `qe_archive_backend`, `qe_archive_data_quality`, and `qe_archive_l3` passed; QE archive UI remains skipped through `QE_ARCHIVE_L3_SKIP_UI=1` until implemented.
 
+## QE Archive API Backfill / Realtime Hook Foundation - 2026-05-02
+
+- Added backend API router `backend/routers/qe_archive.py` under `/api/v1/qe-archive`, registered in `backend/main.py`. The API exposes `/health`, `/backfill`, and `/runs/{run_id}/quality`.
+- Added `backend/services/qe_archive/backfill_service.py` so historical experiment/loop补录 can be triggered through API instead of hand-running `scripts/qe_archive_backfill.py`. API write mode requires `confirm_write=QE_ARCHIVE_WRITE` and can validate minimum metric/curve/factor/account row counts after writing.
+- Added `backend/services/qe_archive/realtime_ingestion.py` and best-effort QE completion hooks in `backend/services/quantevolver/qe_evolution_service.py` plus single-experiment status sync in `backend/routers/quantevolver.py`. Realtime archive ingestion is disabled by default through `QE_ARCHIVE_REALTIME_ENABLED`; when enabled it writes after source QE DB completion succeeds and catches/logs archive failures without changing QE loop/experiment status.
+- API smoke with FastAPI `TestClient` proved dry-run, confirmed write, run quality, and warehouse health endpoints against local DB using existing run `qear_run_c2b3a64b30929794faf91e65`; local archive remains `run_count=11`, `pending_outbox_count=0`.
+- Validation record: `tests/aistock_validation/history/qe_archive/20260502_195907_l3_qe-archive-realtime-warehouse-validation.md`. `qe_archive_backend`, `qe_archive_data_quality`, and `qe_archive_l3` passed with 31 backend tests; production backend `8001` was not restarted.
+
 ## QE Qlib Minute OHLCV/Factor Gap Diagnosis - 2026-05-02
 
 - Added read-only Qlib minute gap diagnosis script `scripts/qe_qlib_minute_gap_diagnosis.py` and copied it into the `qe-evolution-diagnostics` skill as Additional Tool L. It consumes existing close-none and price/tradability audit JSON, inspects `/home/lc999/data/qlib_minute_bin` 1min bin files directly, and compares affected dates to current DB minute coverage without rerunning QE or mutating data.

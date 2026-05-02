@@ -140,6 +140,22 @@ class AutoEvolutionScheduler:
         self._active_log_stream_counts: Dict[str, int] = {}
         self._log_stream_stop_requested: set[str] = set()
 
+    def _archive_completed_loop_best_effort(self, task_id: str, loop_id: str, loop_index: int | None = None) -> None:
+        """Best-effort archive hook; archive failures must not affect QE status."""
+
+        try:
+            from backend.services.qe_archive.realtime_ingestion import safe_archive_loop_completed
+
+            safe_archive_loop_completed(task_id=task_id, loop_id=loop_id, loop_index=loop_index)
+        except Exception as exc:  # pragma: no cover - defensive isolation.
+            logger.warning(
+                "QE archive realtime hook failed without changing QE status: task=%s loop=%s error=%s",
+                task_id,
+                loop_id,
+                exc,
+                exc_info=True,
+            )
+
     def _ensure_log_stream_state(self) -> None:
         """Initialize log-stream bookkeeping for tests that construct via __new__."""
         if not hasattr(self, "_log_stream_lock"):
@@ -2059,6 +2075,8 @@ class AutoEvolutionScheduler:
                 conn.commit()
 
             # Optuna 反馈：param_tune 方向时将 IC 反馈给 Optuna
+            self._archive_completed_loop_best_effort(task_id, evolution_loop_db_id, loop_index)
+
             if decided_action_type == "param_tune":
                 _optuna_trial = next_config_draft.get("_optuna_trial") if next_config_draft else None
                 if _optuna_trial is not None:
@@ -4354,6 +4372,8 @@ class AutoEvolutionScheduler:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute("SELECT current_loop, max_loops FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                     task_row = cur.fetchone()
+
+            self._archive_completed_loop_best_effort(task_id, evolution_loop_db_id, loop_index)
 
             current_loop = task_row.get("current_loop", 0) if task_row else 0
             max_loops = task_row.get("max_loops", 0) if task_row else 0

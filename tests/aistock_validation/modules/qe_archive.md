@@ -48,13 +48,15 @@ Current required coverage:
 - Manual archive service writes run/source/config/repro/data_context/account/metric/curve/factor/raw_payload rows only when `dry_run=false`.
 - DB source assembler can build payloads from `qe_experiments` and `qe_evolution_loops` without reading worker artifact paths.
 - Manual backfill CLI defaults to dry-run and requires `--write --confirm-write QE_ARCHIVE_WRITE` before inserting archive rows.
+- Backend API `/api/v1/qe-archive/backfill` supports dry-run and confirmed-write historical backfill, requires `confirm_write=QE_ARCHIVE_WRITE` for writes, and can validate run-level row counts after writing.
+- QE completion-time realtime ingestion hook is disabled by default through `QE_ARCHIVE_REALTIME_ENABLED`; when enabled, it performs best-effort archive writes after source QE DB completion succeeds and must not change QE loop/experiment status on archive failure.
 - Confirmed backfill runs must pass run-level data-quality checks for run/config/source/context/account/metric/curve/factor/raw-payload row counts.
 - Data-quality smoke verifies DB schema version, table existence, table comments, column comments, and pending outbox count.
 
 Future backend workflow coverage:
 
-- QE single experiment completion -> outbox event -> archive job -> run/config/data/metric/raw payload rows.
-- QE evolution loop completion -> outbox event -> archive job -> run/config/data/metric/raw payload rows.
+- QE single experiment completion -> gated realtime archive hook or outbox event -> archive job/write -> run/config/data/metric/raw payload rows.
+- QE evolution loop completion -> gated realtime archive hook or outbox event -> archive job/write -> run/config/data/metric/raw payload rows.
 - Failed/interrupted experiments are archived for audit without being ranked as valid research samples.
 - Daily-frequency backtests without authoritative limit/suspend handling are archived with `research_valid=false`.
 - Archive retry and failure states are visible in `archive_job` and do not affect QE source status.
@@ -72,6 +74,9 @@ Future required coverage:
 
 Future required coverage when APIs are added:
 
+- Backfill API can preview and write historical experiment/loop rows without shell-script execution.
+- Backfill API rejects write requests without explicit confirmation text.
+- Run quality API returns account/metric/curve/factor/raw-payload completeness for a selected run.
 - List runs with default `research_valid=true` filtering.
 - Run detail returns config, metrics, account summary, curves, factor list, artifact manifest, and reproducibility status.
 - Archive job status endpoints show pending/running/failed/completed states with retry context.

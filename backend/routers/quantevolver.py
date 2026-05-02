@@ -5803,6 +5803,23 @@ def _update_experiment_with_metrics(experiment_id: str, metrics: dict):
                 WHERE experiment_id = %s
             """, [json.dumps(save_metrics, default=str)] + col_vals + [experiment_id])
         conn.commit()
+    _archive_experiment_best_effort(experiment_id)
+
+
+def _archive_experiment_best_effort(experiment_id: str) -> None:
+    """Best-effort QE archive hook; never changes experiment status."""
+
+    try:
+        from ..services.qe_archive.realtime_ingestion import safe_archive_experiment_completed
+
+        safe_archive_experiment_completed(experiment_id=experiment_id)
+    except Exception as exc:  # pragma: no cover - defensive isolation.
+        logger.warning(
+            "QE archive realtime experiment hook failed without changing QE status: experiment=%s error=%s",
+            experiment_id,
+            exc,
+            exc_info=True,
+        )
 
 
 def _tail_text_lines(text: str, max_lines: int = QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES) -> list[str]:
@@ -6549,6 +6566,7 @@ async def get_experiment_run_status(experiment_id: str):
                         fresh_multi_alpha_status["stage"] = "completed"
                         fresh_multi_alpha_status["artifact_status"] = "ready"
                         result["multi_alpha"] = fresh_multi_alpha_status
+                        _archive_experiment_best_effort(experiment_id)
                     except Exception as me:
                         error_msg = f"Multi-Alpha result collection failed: {me}"
                         logger.error(f"Multi-Alpha result collection failed: {experiment_id}: {me}", exc_info=True)
