@@ -539,6 +539,14 @@ Important directories:
 - Validation expanded to 25 backend tests plus real DB dry-run preview: `python scripts/qe_archive_backfill.py --source all --limit 1` processed one completed experiment and one completed loop with `written=false`. Final data-quality smoke still showed `run_count=0`, `pending_outbox_count=0`, and empty `archive_job_status_counts`.
 - Validation record: `tests/aistock_validation/history/qe_archive/20260502_171206_l3_qe-archive-realtime-warehouse-validation.md`. Production backend 8001 was not restarted; no QE/RD-Agent worker workspace assets were accessed or modified.
 
+## QE Archive First Confirmed Backfill Write - 2026-05-02
+
+- Extended `scripts/qe_archive_data_quality_smoke.py` with optional run-level validation (`--run-id`, minimum metric/curve/factor thresholds, and account-summary requirement) while preserving read-only behavior.
+- Improved `backend/services/qe_archive/payload_extractor.py` to infer `backtest_start` and `backtest_end` from enhanced return-curve dates when a source QE loop config does not explicitly store the backtest window. This allows reproducibility completeness for cached enhanced-metrics loops without reading worker files.
+- Confirmed-wrote the first real loop through the manual CLI only: `qe_20260501_011054_c90a_Loop11` archived as `qear_run_6aad101d9e6e31f629230a4c` using `--write --confirm-write QE_ARCHIVE_WRITE`. Re-running the same command kept counts stable, proving idempotent replacement semantics for metrics/curves/factors/raw payloads.
+- Run-level smoke confirmed the archived loop has `config_capture_complete=true`, `reproducibility_level=full`, 1 source row, 1 data context, 1 account summary, 81 metrics, 3,489 curves, 57 factor rows, 3 raw payload rows, and zero failures/warnings.
+- Validation record: `tests/aistock_validation/history/qe_archive/20260502_174513_l3_qe-archive-realtime-warehouse-validation.md`. Production backend 8001 was not restarted; no QE/RD-Agent worker workspace assets were accessed or modified. Broad historical backfill, artifact manifests/parsers, API/UI consumers, and webhook/worker integration remain future phases.
+
 
 ## QE P0/P1 Existing Artifact Audit Extension - 2026-05-02
 
@@ -556,6 +564,14 @@ Important directories:
 - Close-none root-cause audit showed the 1,123 DB-present/not-suspended warnings are Qlib minute feature coverage gaps: DB daily/minute/limit rows exist, Qlib day close and instrument membership exist, Qlib 1min calendar rows exist, but Qlib 1min `$close` is null for every minute.
 - Tail-window audit for Loop24/25/27 found high tail activity on some days, but same-day tail-ratio/return Spearman correlation is weak (0.0171 to 0.0712), so existing artifacts do not support tail activity as a mechanical return driver.
 - Dynamic PIT truncation now covers top-12 feature-importance factors on Loop19/22/26: 36/36 factor-loop checks, 501,495 compared rows, zero mismatches. This lowers leakage risk for top-priority factors but is not a full proof for every generated factor.
+
+## QE Backtest Data Accuracy Materiality Audit - 2026-05-02
+
+- Added read-only materiality audit tool `scripts/qe_backtest_accuracy_materiality_audit.py`; copied it into the `qe-evolution-diagnostics` skill. It consumes existing P0/P1 JSON artifacts, persisted reports, and run logs only; it does not rerun QE, mutate workspaces, or add strategy logging.
+- Materiality report for `qe_20260501_011054_c90a` Loop19-28 is recorded at `docs/analysis/P0_qe_20260501_011054_c90a_loop19_28_backtest_data_accuracy_materiality_20260502.md`.
+- Current answer for Loop19-28 data accuracy: no NAV/account/position/IC/RankIC/V25 aggregate calculation-chain error has been found. Numerical gates passed: IC/RankIC max diff 0, report return/account max diff 1.11e-16, position/report account/cash diff 0, stock-value diff 1.19e-7, V25 1day/1min value max diff 6.71e-8, deal_amount max diff 4.66e-8, report NaN/Inf count 0.
+- The remaining proven warning is Qlib 1min minute coverage: 1,123 DB-present/not-suspended warnings all had Qlib 1min `$close` all-null. Materiality from run logs: 326 total ScoreWeighted invalid-price skips, 107 DB-present coverage-gap skips, 21,842 derived buy rows, total invalid skips 1.49% of buy rows, DB-present coverage-gap skips 0.49% of buy rows.
+- Until Loop1-18 full_train reruns complete, continue data-accuracy validation only; do not start model/factor optimization synthesis.
 
 
 ## Codex Git Commit Requirement - 2026-05-02

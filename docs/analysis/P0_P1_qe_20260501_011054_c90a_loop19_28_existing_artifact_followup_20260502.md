@@ -156,3 +156,33 @@ docs/analysis/P0_qe_20260501_011054_c90a_loop19_28_close_none_root_cause_2026050
 docs/analysis/P1_qe_20260501_011054_c90a_loop24_25_27_tail_window_risk_20260502.md                    tail-window risk report
 docs/analysis/P1_qe_20260501_011054_c90a_loop19_22_26_dynamic_truncation_top12_remaining_20260502.md  remaining top-12 PIT report
 ```
+
+
+## Backtest Data Accuracy Materiality Update
+
+Additional document: `docs/analysis/P0_qe_20260501_011054_c90a_loop19_28_backtest_data_accuracy_materiality_20260502.md`.
+
+```text
+Gate                     Status  Evidence
+-----------------------  ------  ---------------------------------------------------------------------------------------------
+SignalMetricRecompute    PASS    IC max diff=0.000e+00, RankIC max diff=0.000e+00
+ReportReturnAccount      PASS    return/account max diff=1.110e-16
+PositionReportReconcile  PASS    account=0.000e+00, cash=0.000e+00, stock=1.192e-07
+V25DayMinuteAggregate    PASS    value=6.706e-08, deal_amount=4.657e-08, bad_dates=0
+ReportNaNInf             PASS    nan=0, inf=0
+QlibMinuteCoverage       WARN    DB-present warnings=1123, Qlib 1min all-null=1123, invalid DB-present skips=107
+```
+
+Materiality interpretation:
+
+```text
+Metric                  Value  Meaning
+----------------------  -----  ------------------------------------------
+InvalidPriceSkips       326    all ScoreWeighted invalid-price skip lines
+InvalidDBPresentSkips   107    DB minute exists, Qlib 1min close all-null
+DerivedBuyTrades        21842  stock_trades derived buy rows
+InvalidSkipVsBuys       1.49%  all invalid skips / derived buy rows
+InvalidDBPresentVsBuys  0.49%  coverage-gap skips / derived buy rows
+```
+
+Conclusion: no NAV/account/position/IC/RankIC/V25 aggregate calculation error has been found. The remaining proven issue is a Qlib 1min data-coverage warning that skipped a small number of planned buys; it does not currently prove return overstatement or report-calculation error.

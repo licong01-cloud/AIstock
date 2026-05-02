@@ -162,3 +162,20 @@ Updated interpretation:
 - The 1123 DB-present/not-suspended `$close=None` warnings are explained by Qlib 1min feature coverage: 240 minute index rows exist but `$close` is null for every minute, while DB minute data and Qlib day close exist.
 - Tail-window activity in Loop24/25/27 is not proven to be the return driver; same-day tail-ratio/return Spearman is weak.
 - Dynamic PIT truncation now covers the top-12 importance factors on Loop19/22/26 with 0 mismatches; remaining lower-priority factors are still not fully recomputed.
+
+
+## 9. Data Accuracy Materiality Update 2026-05-02
+
+Additional document: `docs/analysis/P0_qe_20260501_011054_c90a_loop19_28_backtest_data_accuracy_materiality_20260502.md`.
+
+```text
+Metric                  Value  Meaning
+----------------------  -----  ------------------------------------------
+InvalidPriceSkips       326    all ScoreWeighted invalid-price skip lines
+InvalidDBPresentSkips   107    DB minute exists, Qlib 1min close all-null
+DerivedBuyTrades        21842  stock_trades derived buy rows
+InvalidSkipVsBuys       1.49%  all invalid skips / derived buy rows
+InvalidDBPresentVsBuys  0.49%  coverage-gap skips / derived buy rows
+```
+
+Updated answer: audited Loop19-28 artifacts show no NAV/account/position/IC/RankIC/V25 aggregate calculation error. The Qlib 1min coverage gap remains a real data warning, but the observed DB-present invalid-price skips are 0.49% of derived buy rows and do not currently prove return overstatement.
