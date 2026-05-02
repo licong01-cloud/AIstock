@@ -44,6 +44,7 @@
 | L0 guardrails | No high-risk path/secret/fallback/asset finding | `scan_quality_guardrails.py --fail-on HIGH ...` returned 0 findings; `git diff --check` returned no errors | PASS |
 | Backend tests | Factor-cache policy and QE read/cleanup regressions pass | Focused factor-cache policy: 6 passed; expanded QE matrix: 57 passed | PASS |
 | API flow | Existing dev QE API remains readable without 5xx | `GET /quantevolver/evolution/tasks`: status success, 50 tasks, 3 running/processing; selected detail returned status success and 2 loop records | PASS |
+| Node API readiness | Production node service was checked read-only without restart | `GET http://127.0.0.1:9000/api/v1/qe_workspace/factor-cache/meta` returned 404, so node-side endpoint deployment remains pending and no direct-directory fallback is allowed | INFO |
 | UI E2E | No UI regression expected for backend-only policy slice | No frontend files changed; API smoke verified QE data remains observable | NOT RUN |
 | Asset safety | No protected asset modified silently | Only source/tests/matrix/history changed; tests used temp directories and fake node API | PASS |
 
@@ -65,6 +66,8 @@ git diff --check -- backend/services/quantevolver/factor_cache_remote_sync_servi
 $base='http://127.0.0.1:8011/api/v1'
 Invoke-RestMethod -Uri "$base/quantevolver/evolution/tasks" -Method Get -TimeoutSec 20
 Invoke-RestMethod -Uri "$base/quantevolver/evolution/tasks/{first_task_id}" -Method Get -TimeoutSec 20
+
+Invoke-WebRequest -Uri "http://127.0.0.1:9000/api/v1/qe_workspace/factor-cache/meta" -Method Get -TimeoutSec 5
 ```
 
 ## Evidence
@@ -72,6 +75,7 @@ Invoke-RestMethod -Uri "$base/quantevolver/evolution/tasks/{first_task_id}" -Met
 - API calls:
 - `GET http://127.0.0.1:8011/api/v1/quantevolver/evolution/tasks` -> `status=success`, `task_count=50`, `running_or_processing=3`, first task `qe_20260502_193154_17a2`, first status `failed`.
 - `GET http://127.0.0.1:8011/api/v1/quantevolver/evolution/tasks/qe_20260502_193154_17a2` -> `status=success`, `detail_loop_count=2`, task status `failed`.
+- `GET http://127.0.0.1:9000/api/v1/qe_workspace/factor-cache/meta` -> `404 Not Found`; this was read-only and did not restart or mutate the production node service.
 - DB checks:
 - No direct DB writes in tests. The modified service no longer writes inferred default remote cache directories from Windows.
 - Log files:
@@ -96,7 +100,7 @@ Invoke-RestMethod -Uri "$base/quantevolver/evolution/tasks/{first_task_id}" -Met
 
 - Final status: PASS
 - Remaining risks:
-- The WSL/RD-Agent production node service must expose compatible factor-cache APIs for live remote sync. This run intentionally did not restart or mutate service `9000`, so endpoint availability was validated with fake node API tests, not against production.
+- The WSL/RD-Agent production node service must expose compatible factor-cache APIs for live remote sync. A read-only check against service `9000` currently returns 404, so live remote sync will fail fast until the node service is deployed with these endpoints; no fallback to direct worker-directory access is allowed.
 - Existing dev backend `8011` was not restarted, so its running process may still contain the pre-change implementation until the next dev/prod reload.
 - QE creation/config composition and task execution paths remain out of scope.
 - Need production backend restart: no
