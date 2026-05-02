@@ -48,6 +48,7 @@ Current required coverage:
 - Manual archive service writes run/source/config/repro/data_context/account/metric/curve/factor/raw_payload rows only when `dry_run=false`.
 - DB source assembler can build payloads from `qe_experiments` and `qe_evolution_loops` without reading worker artifact paths.
 - Manual backfill CLI defaults to dry-run and requires `--write --confirm-write QE_ARCHIVE_WRITE` before inserting archive rows.
+- Confirmed backfill runs must pass run-level data-quality checks for run/config/source/context/account/metric/curve/factor/raw-payload row counts.
 - Data-quality smoke verifies DB schema version, table existence, table comments, column comments, and pending outbox count.
 
 Future backend workflow coverage:

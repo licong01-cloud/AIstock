@@ -249,6 +249,11 @@ class QEArchivePayloadExtractor:
         backtest = _section(data, config, "backtest_config", "backtest")
         split = _section(data, config, "data_split", "split")
         execution = _section(data, config, "execution_config", "execution", "executor")
+        enhanced = _ensure_mapping(metrics.get("enhanced_metrics") or {})
+        return_curves = _ensure_mapping(enhanced.get("return_curves") or {})
+        curve_dates = _as_list(return_curves.get("dates") or enhanced.get("return_dates") or enhanced.get("dates"))
+        inferred_backtest_start = _as_date(curve_dates[0]) if curve_dates else None
+        inferred_backtest_end = _as_date(curve_dates[-1]) if curve_dates else None
         explicit_limit_suspend = _as_bool(context.get("limit_suspend_authoritative"))
         if explicit_limit_suspend is None:
             explicit_limit_suspend = _as_bool(data.get("limit_suspend_authoritative"))
@@ -270,8 +275,8 @@ class QEArchivePayloadExtractor:
             valid_end=_as_date(_first_value(split, ("valid_end", "validation_end")) or data.get("valid_end")),
             test_start=_as_date(_first_value(split, ("test_start",)) or data.get("test_start")),
             test_end=_as_date(_first_value(split, ("test_end",)) or data.get("test_end")),
-            backtest_start=_as_date(_first_value(context, ("backtest_start", "start_time", "start_date")) or _first_value(backtest, ("start_time", "start_date", "backtest_start")) or data.get("backtest_start")),
-            backtest_end=_as_date(_first_value(context, ("backtest_end", "end_time", "end_date")) or _first_value(backtest, ("end_time", "end_date", "backtest_end")) or data.get("backtest_end")),
+            backtest_start=_as_date(_first_value(context, ("backtest_start", "start_time", "start_date")) or _first_value(backtest, ("start_time", "start_date", "backtest_start")) or data.get("backtest_start")) or inferred_backtest_start,
+            backtest_end=_as_date(_first_value(context, ("backtest_end", "end_time", "end_date")) or _first_value(backtest, ("end_time", "end_date", "backtest_end")) or data.get("backtest_end")) or inferred_backtest_end,
             label_horizon=_as_int(_first_value(context, ("label_horizon", "horizon")) or data.get("label_horizon") or config.get("label_horizon")),
             qlib_provider_uri=_optional_str(context.get("qlib_provider_uri") or config.get("provider_uri")),
             qlib_dataset_version=_optional_str(context.get("qlib_dataset_version") or data.get("qlib_dataset_version")),

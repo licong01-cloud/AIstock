@@ -347,7 +347,6 @@ def test_source_assembler_builds_loop_payload_for_archive_service() -> None:
                 "factor_list": ["factor_a"],
                 "runtime_flags": {"label_horizon": 3},
                 "model_type": "LSTM",
-                "backtest": {"start_time": "2025-01-01", "end_time": "2025-12-31"},
             },
             "metrics_json": {
                 "IC": 0.042,
@@ -379,6 +378,8 @@ def test_source_assembler_builds_loop_payload_for_archive_service() -> None:
     assert payload["config"]["data_context"]["freq"] == "day"
     assert extracted.run.research_valid is False
     assert extracted.config.config_capture_complete is True
+    assert extracted.data_contexts[0].backtest_start.isoformat() == "2025-01-02"
+    assert extracted.data_contexts[0].backtest_end.isoformat() == "2025-01-02"
     assert any(curve.curve_key == "drawdown_series" for curve in extracted.curves)
 
 
