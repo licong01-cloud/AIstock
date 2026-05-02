@@ -48,43 +48,30 @@ class QEFeedbackService:
     def generate_feedback(
         self,
         experiment_id: str,
-        experiment_dir: str | Path,
+        experiment_dir: str | Path | None = None,
+        experiment_record: Optional[Dict[str, Any]] = None,
         llm_analysis_text: Optional[str] = None,
     ) -> QEFeedback:
         """
-        生成实验反馈
-        
-        Args:
-            experiment_id: 实验ID
-            experiment_dir: 实验目录
-            llm_analysis_text: 前端已有的LLM分析文本（如果有）
-            
-        Returns:
-            QEFeedback对象
+        Generate experiment feedback from DB-cached QE results.
+
+        experiment_dir is retained for backward compatibility only. Request-time
+        callers must pass experiment_record/DB data and must not read worker
+        workspace files directly from Windows.
         """
-        exp_dir = Path(experiment_dir)
+        record = experiment_record or self._load_experiment_record(experiment_id)
+        trace = self._build_trace_from_record(experiment_id, record)
+        results = self._read_experiment_results_from_record(record)
 
-        # 读取轨迹文件
-        trace_path = exp_dir / "qe_trace.json"
-        trace = None
-        if trace_path.exists():
-            trace = QETrace.from_json_file(str(trace_path))
-
-        # 读取实验结果
-        results = self._read_experiment_results(exp_dir)
-
-        # 获取SOTA比较
         sota_comparison = None
         is_new_sota = False
         if trace and trace.sota_results:
             sota_comparison = self._compare_with_sota(results, trace.sota_results)
-            # 判断是否为新的SOTA
             current_return = results.get("performance", {}).get("annualized_return", 0)
             sota_return = trace.sota_results.get("performance", {}).get("annualized_return", 0)
             if current_return and (not sota_return or current_return > sota_return):
                 is_new_sota = True
 
-        # 如果有前端传入的LLM分析，解析它
         if llm_analysis_text:
             feedback = self._parse_llm_analysis(
                 analysis_text=llm_analysis_text,
@@ -93,7 +80,6 @@ class QEFeedbackService:
                 is_new_sota=is_new_sota,
             )
         else:
-            # 生成默认反馈
             feedback = QEFeedback(
                 observations=self._generate_observations(results),
                 configuration_evaluation=self._evaluate_configuration(results),
@@ -105,68 +91,151 @@ class QEFeedbackService:
                 experiment_id=experiment_id,
             )
 
-        # 更新轨迹文件
-        if trace:
-            self._update_trace_with_feedback(trace_path, trace, feedback, results, is_new_sota)
-
-        # 保存反馈到数据库
         self._save_feedback_to_db(experiment_id, feedback)
-
         return feedback
 
-    def _read_experiment_results(self, exp_dir: Path) -> Dict[str, Any]:
-        """读取实验结果"""
+    @staticmethod
+    def _parse_jsonish(value: Any) -> Any:
+        if isinstance(value, (dict, list)):
+            return value
+        if isinstance(value, str) and value.strip():
+            try:
+                return json.loads(value)
+            except Exception:
+                return None
+        return value
+
+    @staticmethod
+    def _first_number(*values: Any) -> float | None:
+        for value in values:
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _load_experiment_record(self, experiment_id: str) -> Dict[str, Any]:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM qe_experiments WHERE experiment_id = %s", (experiment_id,))
+                row = cur.fetchone()
+                if not row:
+                    return {}
+                cols = [desc[0] for desc in cur.description]
+                return dict(zip(cols, row))
+
+    def _record_configuration(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        factor_names = self._parse_jsonish(record.get("factor_names")) or []
+        custom_params = self._parse_jsonish(record.get("custom_params")) or {}
+        if isinstance(factor_names, str):
+            factor_names = [factor_names]
+        if not isinstance(factor_names, list):
+            factor_names = []
+        if not isinstance(custom_params, dict):
+            custom_params = {}
+        return {
+            "factors": factor_names,
+            "model_id": record.get("model_id"),
+            "strategy_id": record.get("strategy_id"),
+            "strategy_params": custom_params.get("strategy_params", {}),
+            "custom_params": custom_params,
+        }
+
+    def _build_trace_from_record(self, experiment_id: str, record: Optional[Dict[str, Any]]) -> Optional[QETrace]:
+        if not record:
+            return None
+        loop_index = int(record.get("loop_index") or 1)
+        trace = QETrace(trace_id=str(record.get("parent_experiment_id") or experiment_id))
+        loop = QELoopRecord(
+            loop_id=loop_index,
+            configuration=self._record_configuration(record),
+            results=self._read_experiment_results_from_record(record),
+            is_new_sota=bool(record.get("is_sota")),
+        )
+        trace.add_loop(loop)
+        if loop.is_new_sota:
+            trace.sota_loop_id = loop.loop_id
+            trace.sota_results = loop.results
+            trace.sota_config = loop.configuration
+        return trace
+
+    def _read_experiment_results_from_record(self, record: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Read experiment results from qe_experiments/result_metrics only."""
         results = {
             "signal_quality": {},
             "performance": {},
             "win_rates": {},
             "trading": {},
         }
+        if not record:
+            return results
 
-        # 读取qlib_results.json
-        json_path = exp_dir / "qlib_results.json"
-        if json_path.exists():
-            try:
-                with open(json_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+        metrics = self._parse_jsonish(record.get("result_metrics")) or {}
+        if not isinstance(metrics, dict):
+            metrics = {}
+        enhanced = metrics.get("enhanced_metrics") if isinstance(metrics.get("enhanced_metrics"), dict) else {}
+        summary = metrics.get("summary") if isinstance(metrics.get("summary"), dict) else {}
+        enhanced_summary = enhanced.get("summary") if isinstance(enhanced.get("summary"), dict) else {}
+        daily_stats = metrics.get("daily_win_stats") if isinstance(metrics.get("daily_win_stats"), dict) else {}
+        stock_stats = metrics.get("stock_trade_stats") if isinstance(metrics.get("stock_trade_stats"), dict) else {}
 
-                # 提取信号质量
-                summary = data.get("summary", {})
-                results["signal_quality"] = {
-                    "IC": summary.get("IC"),
-                    "ICIR": summary.get("ICIR"),
-                    "Rank_IC": summary.get("Rank_IC"),
-                    "Rank_ICIR": summary.get("Rank_ICIR"),
-                }
+        def metric(*keys: str) -> Any:
+            for container in (summary, enhanced_summary, metrics):
+                for key in keys:
+                    value = container.get(key)
+                    if value is not None:
+                        return value
+            return None
 
-                # 提取绩效指标
-                results["performance"] = {
-                    "annualized_return": summary.get("excess_return_with_cost_annualized"),
-                    "information_ratio": summary.get("excess_return_with_cost_IR"),
-                    "max_drawdown": summary.get("excess_return_with_cost_max_drawdown"),
-                    "sharpe_ratio": data.get("daily_win_stats", {}).get("sharpe_ratio"),
-                    "calmar_ratio": data.get("calmar_ratio"),
-                }
+        results["signal_quality"] = {
+            "IC": self._first_number(record.get("ic"), metric("IC", "ic")),
+            "ICIR": self._first_number(record.get("icir"), metric("ICIR", "icir")),
+            "Rank_IC": self._first_number(record.get("rank_ic"), metric("Rank_IC", "rank_ic", "Rank IC")),
+            "Rank_ICIR": self._first_number(record.get("rank_icir"), metric("Rank_ICIR", "rank_icir")),
+        }
 
-                # 提取胜率
-                daily_stats = data.get("daily_win_stats", {})
-                stock_stats = data.get("stock_trade_stats", {})
-                results["win_rates"] = {
-                    "daily_win_rate": daily_stats.get("daily_win_rate"),
-                    "weekly_win_rate": daily_stats.get("weekly_win_rate"),
-                    "stock_win_rate": stock_stats.get("stock_win_rate"),
-                }
+        results["performance"] = {
+            "annualized_return": self._first_number(
+                record.get("annualized_return"),
+                metric(
+                    "excess_return_with_cost_annualized",
+                    "annualized_return",
+                    "1day.excess_return_with_cost.annualized_return",
+                ),
+            ),
+            "information_ratio": self._first_number(
+                record.get("information_ratio"),
+                metric(
+                    "excess_return_with_cost_IR",
+                    "information_ratio",
+                    "1day.excess_return_with_cost.information_ratio",
+                ),
+            ),
+            "max_drawdown": self._first_number(
+                record.get("max_drawdown"),
+                metric(
+                    "excess_return_with_cost_max_drawdown",
+                    "max_drawdown",
+                    "1day.excess_return_with_cost.max_drawdown",
+                ),
+            ),
+            "sharpe_ratio": self._first_number(daily_stats.get("sharpe_ratio"), metric("sharpe_ratio")),
+            "calmar_ratio": self._first_number(metrics.get("calmar_ratio"), metric("calmar_ratio")),
+        }
 
-                # 提取交易统计
-                results["trading"] = {
-                    "total_trades": stock_stats.get("total_trades"),
-                    "profit_loss_ratio": stock_stats.get("profit_loss_ratio"),
-                    "avg_turnover": daily_stats.get("avg_turnover"),
-                }
+        results["win_rates"] = {
+            "daily_win_rate": self._first_number(daily_stats.get("daily_win_rate"), metric("daily_win_rate")),
+            "weekly_win_rate": self._first_number(daily_stats.get("weekly_win_rate"), metric("weekly_win_rate")),
+            "stock_win_rate": self._first_number(stock_stats.get("stock_win_rate"), metric("stock_win_rate")),
+        }
 
-            except Exception as e:
-                logger.error(f"读取实验结果失败: {e}")
-
+        results["trading"] = {
+            "total_trades": self._first_number(stock_stats.get("total_trades"), metric("total_trades")),
+            "profit_loss_ratio": self._first_number(stock_stats.get("profit_loss_ratio"), metric("profit_loss_ratio")),
+            "avg_turnover": self._first_number(daily_stats.get("avg_turnover"), metric("avg_turnover")),
+        }
         return results
 
     def _compare_with_sota(
@@ -462,28 +531,20 @@ class QEFeedbackService:
     def build_next_loop_context(
         self,
         experiment_id: str,
-        experiment_dir: str | Path,
+        experiment_dir: str | Path | None = None,
+        experiment_record: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        构建下一轮LOOP的LLM上下文
-        
-        包含历史轨迹、因子库、策略库、模型库等信息
+        Build the next-loop LLM context from DB-cached QE metadata/results.
+
+        experiment_dir is retained for backward compatibility only and is not
+        dereferenced in request paths.
         """
-        exp_dir = Path(experiment_dir)
+        record = experiment_record or self._load_experiment_record(experiment_id)
+        trace = self._build_trace_from_record(experiment_id, record)
 
-        # 读取轨迹
-        trace_path = exp_dir / "qe_trace.json"
-        trace = None
-        if trace_path.exists():
-            trace = QETrace.from_json_file(str(trace_path))
-
-        # 获取因子目录
         factor_catalog = self._get_factor_catalog()
-
-        # 获取策略目录
         strategy_catalog = self._get_strategy_catalog()
-
-        # 获取模型目录
         model_catalog = self._get_model_catalog()
 
         if trace:
@@ -493,13 +554,12 @@ class QEFeedbackService:
                 strategy_catalog=strategy_catalog,
                 model_catalog=model_catalog,
             )
-        else:
-            return {
-                "error": "No trace found",
-                "factor_catalog": factor_catalog,
-                "strategy_catalog": strategy_catalog,
-                "model_catalog": model_catalog,
-            }
+        return {
+            "error": "No DB trace found",
+            "factor_catalog": factor_catalog,
+            "strategy_catalog": strategy_catalog,
+            "model_catalog": model_catalog,
+        }
 
     def _get_factor_catalog(self, min_ic: float = 0.0, limit: int = 50) -> List[Dict]:
         """获取因子目录"""

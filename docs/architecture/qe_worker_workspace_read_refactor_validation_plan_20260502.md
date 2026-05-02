@@ -120,6 +120,13 @@ Rules:
 - Do not read `run.log` or `qlib_results_enhanced.json` from worker workspace via Windows paths.
 - Surface artifact unavailability clearly in API/UI.
 
+Implementation status (2026-05-02):
+
+- `experiments/{experiment_id}/enhanced-metrics` now returns DB-cached enhanced details first and otherwise calls `QEWorkspaceClient.for_node(...).get_enhanced_metrics(...)`.
+- `experiments/{experiment_id}/logs/tail` now reads terminal `run.log` through the QE node workspace file API and returns `log_source=qe_workspace_api`, `node_id`, and explicit artifact-unavailable context.
+- `experiments/{experiment_id}/logs` no longer falls back to Windows local `run.log`; live-stream failures can only fall back to the same QE node API tail.
+- The experiment detail UI no longer issues guessed `/evolution/tasks/{experiment_id}/loops/{experiment_id}_Loop1/enhanced-metrics` fallback requests; the backend experiment endpoint owns DB/node resolution.
+
 ### Phase 3 - Experiment Analysis And Evolution Context
 
 Target APIs:
@@ -132,6 +139,11 @@ Rules:
 - Prefer DB-persisted metrics and loop records.
 - Use node API only when artifact content is required.
 - Do not read `workspace_path/qlib_results.json` from Windows request paths.
+
+Implementation status (2026-05-02):
+
+- Experiment analysis and evolution-context request paths now pass DB experiment records into `QEFeedbackService`.
+- `QEFeedbackService` derives feedback/context from `qe_experiments.result_metrics`, metric columns, and DB metadata; `experiment_dir` is retained only for backward signature compatibility and is not dereferenced in request paths.
 
 ### Phase 4 - StrategyPackage / Selection / Paper QE Artifact Consumption
 

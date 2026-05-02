@@ -3467,7 +3467,7 @@ def _read_file_from_path(path_str: Optional[str]) -> Tuple[Optional[str], Option
         if not p.exists() or not p.is_file():
             return None, str(p), f"file not found: {p}"
         return p.read_text(encoding="utf-8"), str(p), None
-    except Exception as e:
+    except (OSError, UnicodeDecodeError, ValueError) as e:
         return None, path_str, str(e)
 
 
@@ -5383,7 +5383,7 @@ def get_factor_realtime_code(factor_name: str, source: str = "rdagent_task_sync"
                 with open(abs_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 return content, abs_path, None
-            except Exception as e:
+            except (OSError, UnicodeDecodeError) as e:
                 return None, abs_path, str(e)
 
         # 从文件系统读取改造后代码（权威数据源）
@@ -5529,13 +5529,11 @@ def analyze_experiment_results(experiment_id: str, req: Optional[ExperimentAnaly
         if not exp_record:
             raise HTTPException(status_code=404, detail=f"实验 {experiment_id} 不存在")
         
-        exp_dir = exp_record.get("experiment_dir") or exp_record.get("workspace_path")
-        
         # 生成反馈
         feedback_svc = QEFeedbackService()
         feedback = feedback_svc.generate_feedback(
             experiment_id=experiment_id,
-            experiment_dir=exp_dir,
+            experiment_record=exp_record,
             llm_analysis_text=req.llm_analysis_text if req else None,
         )
         
@@ -5568,13 +5566,11 @@ def get_evolution_context(experiment_id: str):
         if not exp_record:
             raise HTTPException(status_code=404, detail=f"实验 {experiment_id} 不存在")
         
-        exp_dir = exp_record.get("experiment_dir") or exp_record.get("workspace_path")
-        
         # 构建上下文
         feedback_svc = QEFeedbackService()
         context = feedback_svc.build_next_loop_context(
             experiment_id=experiment_id,
-            experiment_dir=exp_dir,
+            experiment_record=exp_record,
         )
         
         return {
@@ -5809,173 +5805,91 @@ def _update_experiment_with_metrics(experiment_id: str, metrics: dict):
         conn.commit()
 
 
-def _candidate_enhanced_metric_files(
+def _tail_text_lines(text: str, max_lines: int = QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES) -> list[str]:
+    """Return a bounded tail from text fetched through the QE node API."""
+    limit = max(1, min(int(max_lines or QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES), 5000))
+    return str(text or "").splitlines()[-limit:]
+
+
+def _workspace_file_payload_to_text(payload: Any) -> str:
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("content", "text", "data", "logs"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return "\n".join(str(item) for item in value)
+            if isinstance(value, str):
+                return value
+        return json.dumps(payload, ensure_ascii=False, default=str)
+    return "" if payload is None else str(payload)
+
+
+async def _load_experiment_node_log_tail(
     *,
     qe_task_id: str | None,
     qe_loop_id: str | None,
-    workspace_path: str | None = None,
-) -> list[Path]:
-    """Return local qlib_results_enhanced.json candidates in authoritative order."""
-    candidates: list[Path] = []
-    if workspace_path:
-        ws = _wsl_to_win_path(str(workspace_path)) or Path(str(workspace_path))
-        candidates.extend([
-            ws / "qlib_results_enhanced.json",
-            ws / str(qe_loop_id or "Loop1") / "qlib_results_enhanced.json",
-        ])
-    if qe_task_id:
-        try:
-            from ..services.quantevolver.config_composer import QE_WORKSPACE_WIN
-            task_root = QE_WORKSPACE_WIN / str(qe_task_id)
-            candidates.extend([
-                task_root / "qlib_results_enhanced.json",
-                task_root / str(qe_loop_id or "Loop1") / "qlib_results_enhanced.json",
-            ])
-        except Exception:
-            pass
-
-    seen: set[str] = set()
-    unique: list[Path] = []
-    for candidate in candidates:
-        key = str(candidate)
-        if key not in seen:
-            unique.append(candidate)
-            seen.add(key)
-    return unique
-
-
-def _load_local_enhanced_metrics_payload(
-    *,
-    qe_task_id: str | None,
-    qe_loop_id: str | None,
-    workspace_path: str | None = None,
-) -> dict:
-    """Load local enhanced metrics if the artifact exists.
-
-    This is not a fallback success path: the function only returns when the
-    actual artifact exists and parses as a JSON object. Missing or malformed
-    artifacts are surfaced to the caller.
-    """
-    parse_errors: list[str] = []
-    for candidate in _candidate_enhanced_metric_files(
-        qe_task_id=qe_task_id,
-        qe_loop_id=qe_loop_id,
-        workspace_path=workspace_path,
-    ):
-        if not candidate.exists():
-            continue
-        try:
-            with candidate.open("r", encoding="utf-8") as f:
-                payload = json.load(f)
-            if not isinstance(payload, dict) or not payload:
-                raise RuntimeError(f"enhanced metrics JSON is empty or invalid: {candidate}")
-            return payload
-        except Exception as exc:
-            parse_errors.append(f"{candidate}: {exc}")
-    if parse_errors:
-        raise RuntimeError("; ".join(parse_errors))
-    return {}
-
-
-def _wsl_to_win_path(path: str | None) -> Path | None:
-    if not path:
-        return None
-    raw = str(path).replace("\\", "/")
-    if raw.startswith("/mnt/") and len(raw) > 6:
-        drive = raw[5].upper()
-        return Path(f"{drive}:/{raw[7:]}")
-    return Path(raw)
-
-
-def _candidate_run_log_files(
-    *,
-    qe_task_id: str | None,
-    qe_loop_id: str | None,
-    workspace_path: str | None = None,
-) -> list[Path]:
-    candidates: list[Path] = []
-    loop_id = str(qe_loop_id or "Loop1")
-    ws = _wsl_to_win_path(workspace_path)
-    if ws:
-        candidates.extend([ws / loop_id / "run.log", ws / "run.log"])
-    if qe_task_id:
-        try:
-            from ..services.quantevolver.config_composer import QE_WORKSPACE_WIN
-            task_root = QE_WORKSPACE_WIN / str(qe_task_id)
-            candidates.extend([task_root / loop_id / "run.log", task_root / "run.log"])
-        except Exception:
-            pass
-    seen: set[str] = set()
-    unique: list[Path] = []
-    for candidate in candidates:
-        key = str(candidate)
-        if key not in seen:
-            unique.append(candidate)
-            seen.add(key)
-    return unique
-
-
-def _read_text_tail_lines(path: Path, max_lines: int = QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES) -> list[str]:
-    """Read the tail of a log without loading unbounded historical output."""
-    if max_lines <= 0 or not path.exists() or not path.is_file():
-        return []
-    chunk_size = 8192
-    data = b""
-    with path.open("rb") as f:
-        f.seek(0, os.SEEK_END)
-        pos = f.tell()
-        while pos > 0 and data.count(b"\n") <= max_lines:
-            read_size = min(chunk_size, pos)
-            pos -= read_size
-            f.seek(pos)
-            data = f.read(read_size) + data
-    return data.decode("utf-8", errors="replace").splitlines()[-max_lines:]
-
-
-def _load_experiment_local_log_tail(
-    *,
-    qe_task_id: str | None,
-    qe_loop_id: str | None,
-    workspace_path: str | None,
+    execution_node_id: str,
     tail_lines: int = QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES,
-) -> tuple[Path | None, list[str]]:
-    limit = max(1, min(int(tail_lines or QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES), 5000))
-    for path in _candidate_run_log_files(
-        qe_task_id=qe_task_id,
-        qe_loop_id=qe_loop_id,
-        workspace_path=workspace_path,
-    ):
-        if path.exists():
-            return path, _read_text_tail_lines(path, limit)
-    return None, []
+) -> tuple[dict[str, Any], list[str]]:
+    source = {
+        "log_source": "qe_workspace_api",
+        "node_id": execution_node_id,
+        "artifact": "run.log",
+        "artifact_unavailable": False,
+    }
+    if not qe_task_id or not qe_loop_id:
+        source["artifact_unavailable"] = True
+        source["artifact_error"] = "experiment is missing qe_task_id or qe_loop_id"
+        return source, []
+
+    try:
+        from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
+
+        async with QEWorkspaceClient.for_node(execution_node_id) as client:
+            payload = await client.get_workspace_file(qe_task_id, qe_loop_id, "run.log")
+        return source, _tail_text_lines(_workspace_file_payload_to_text(payload), tail_lines)
+    except Exception as exc:
+        source["artifact_unavailable"] = True
+        source["artifact_error"] = str(exc)
+        logger.info(
+            "QE node run.log tail unavailable: task=%s loop=%s node=%s error=%s",
+            qe_task_id,
+            qe_loop_id,
+            execution_node_id,
+            exc,
+        )
+        return source, []
 
 
-async def _stream_experiment_local_log_tail(
+async def _stream_experiment_node_log_tail(
     *,
     experiment_id: str,
     experiment_status: str | None,
     qe_task_id: str | None,
     qe_loop_id: str | None,
-    workspace_path: str | None,
+    execution_node_id: str,
     tail_lines: int = QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES,
 ):
-    path, lines = _load_experiment_local_log_tail(
+    source, lines = await _load_experiment_node_log_tail(
         qe_task_id=qe_task_id,
         qe_loop_id=qe_loop_id,
-        workspace_path=workspace_path,
+        execution_node_id=execution_node_id,
         tail_lines=tail_lines,
     )
     yield (
         "data: [System] Experiment "
-        f"{experiment_id} is terminal ({experiment_status}); showing local log tail only.\n\n"
+        f"{experiment_id} is terminal ({experiment_status}); showing QE node log tail only.\n\n"
     )
-    if path:
-        yield f"data: [System] Log source: {path}\n\n"
+    if source.get("artifact_unavailable"):
+        yield f"data: [System] QE node run.log tail unavailable: {source.get('artifact_error')}\n\n"
+    else:
+        yield f"data: [System] Log source: QE node {execution_node_id} run.log via API.\n\n"
     if lines:
         for log_line in lines:
             yield f"data: {log_line}\n\n"
     else:
-        yield "data: [System] No local run.log tail is available.\n\n"
+        yield "data: [System] No QE node run.log tail is available.\n\n"
     yield f"data: [System] AIstock authoritative final status: {experiment_status}\n\n"
 
 
@@ -6008,11 +5922,13 @@ def _parse_qe_custom_params(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
     if isinstance(value, str) and value.strip():
+        parsed: Any = None
         try:
             parsed = json.loads(value)
-            return dict(parsed) if isinstance(parsed, dict) else {}
-        except Exception:
-            return {}
+        except json.JSONDecodeError as e:
+            logger.warning("忽略无法解析的 QE custom_params JSON: %s", e)
+        if isinstance(parsed, dict):
+            return dict(parsed)
     return {}
 
 
@@ -6700,13 +6616,13 @@ async def get_experiment_logs_tail(
     experiment_id: str,
     tail: int = Query(QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES, ge=1, le=5000),
 ):
-    """Return local run.log tail without opening the RD-Agent live log stream."""
+    """Return a QE node run.log tail without opening the live log stream."""
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT qe_task_id, qe_loop_id, status, workspace_path
+                    SELECT qe_task_id, qe_loop_id, status, custom_params
                     FROM qe_experiments
                     WHERE experiment_id = %s
                     """,
@@ -6715,12 +6631,14 @@ async def get_experiment_logs_tail(
                 row = cur.fetchone()
                 if not row:
                     raise HTTPException(status_code=404, detail="Experiment not found")
-                qe_task_id, qe_loop_id, db_status, workspace_path = row
+                qe_task_id, qe_loop_id, db_status, custom_params = row
 
-        path, lines = _load_experiment_local_log_tail(
+        params = _parse_qe_custom_params(custom_params)
+        execution_node_id = params.get("execution_node_id") or params.get("node_id") or resolve_default_qe_node_id()
+        source, lines = await _load_experiment_node_log_tail(
             qe_task_id=qe_task_id,
             qe_loop_id=qe_loop_id,
-            workspace_path=workspace_path,
+            execution_node_id=execution_node_id,
             tail_lines=tail,
         )
         return {
@@ -6729,7 +6647,7 @@ async def get_experiment_logs_tail(
                 "experiment_id": experiment_id,
                 "experiment_status": db_status,
                 "terminal": str(db_status or "").lower() in QE_EXPERIMENT_LOG_TERMINAL_STATUSES,
-                "log_path": str(path) if path else None,
+                **source,
                 "logs": lines,
             },
         }
@@ -6748,7 +6666,7 @@ async def stream_experiment_logs(experiment_id: str):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT qe_task_id, qe_loop_id, status, workspace_path, custom_params
+                    SELECT qe_task_id, qe_loop_id, status, custom_params
                     FROM qe_experiments
                     WHERE experiment_id = %s
                     """,
@@ -6757,19 +6675,23 @@ async def stream_experiment_logs(experiment_id: str):
                 row = cur.fetchone()
                 if not row:
                     raise HTTPException(status_code=404, detail="?????")
-                qe_task_id, qe_loop_id, db_status, workspace_path, custom_params = row
+                qe_task_id, qe_loop_id, db_status, custom_params = row
 
         if not qe_task_id:
             raise HTTPException(status_code=400, detail="?????????????")
 
+        params = _parse_qe_custom_params(custom_params)
+        node_id = params.get("execution_node_id") or params.get("node_id")
+        execution_node_id = node_id or resolve_default_qe_node_id()
+
         if str(db_status or "").lower() in QE_EXPERIMENT_LOG_TERMINAL_STATUSES:
             return StreamingResponse(
-                _stream_experiment_local_log_tail(
+                _stream_experiment_node_log_tail(
                     experiment_id=experiment_id,
                     experiment_status=db_status,
                     qe_task_id=qe_task_id,
                     qe_loop_id=qe_loop_id,
-                    workspace_path=workspace_path,
+                    execution_node_id=execution_node_id,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -6780,15 +6702,22 @@ async def stream_experiment_logs(experiment_id: str):
 
         from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
 
-        node_id = None
-        if isinstance(custom_params, str):
-            try:
-                custom_params = json.loads(custom_params)
-            except Exception:
-                custom_params = {}
-        if isinstance(custom_params, dict):
-            node_id = custom_params.get("execution_node_id") or custom_params.get("node_id")
-        client = QEWorkspaceClient.for_node(node_id) if node_id else QEWorkspaceClient()
+        try:
+            client = QEWorkspaceClient.for_node(execution_node_id)
+        except Exception as node_err:
+            node_error = str(node_err)
+            async def unavailable_node_generator():
+                yield f"data: [ERROR] QE execution node unavailable for log stream: {node_error}\n\n"
+                yield f"data: [System] AIstock authoritative status: {db_status}\n\n"
+
+            return StreamingResponse(
+                unavailable_node_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
 
         async def event_generator():
             streamed_any = False
@@ -6810,22 +6739,24 @@ async def stream_experiment_logs(experiment_id: str):
                         for sub in raw.split("\n"):
                             yield f"data: {sub}\n\n"
             except Exception as e:
-                local_logs = [
-                    path
-                    for path in _candidate_run_log_files(
+                if not streamed_any:
+                    source, tail_lines = await _load_experiment_node_log_tail(
                         qe_task_id=qe_task_id,
                         qe_loop_id=qe_loop_id,
-                        workspace_path=workspace_path,
+                        execution_node_id=execution_node_id,
+                        tail_lines=QE_EXPERIMENT_LOG_TAIL_DEFAULT_LINES,
                     )
-                    if path.exists()
-                ]
-                if local_logs and not streamed_any:
-                    yield f"data: [WARN] RD-Agent log stream unavailable, reading local run.log: {e}\n\n"
-                    try:
-                        for log_line in local_logs[0].read_text(encoding="utf-8", errors="replace").splitlines():
+                    if tail_lines:
+                        yield f"data: [WARN] RD-Agent live log stream unavailable, showing QE node run.log tail via API: {e}\n\n"
+                        for log_line in tail_lines:
                             yield f"data: {log_line}\n\n"
-                    except Exception as local_err:
-                        yield f"data: [ERROR] local run.log read failed: {local_err}\n\n"
+                    elif source.get("artifact_unavailable"):
+                        yield (
+                            "data: [ERROR] log stream disconnected and QE node run.log tail unavailable: "
+                            f"{e}; tail_error={source.get('artifact_error')}\n\n"
+                        )
+                    else:
+                        yield f"data: [ERROR] log stream disconnected and QE node run.log tail is empty: {e}\n\n"
                 else:
                     yield f"data: [ERROR] log stream disconnected: {e}\n\n"
             finally:
@@ -6861,6 +6792,49 @@ async def get_experiment_enhanced_metrics(experiment_id: str):
     def _flatten_enhanced_payload(data: dict | None) -> dict:
         if not isinstance(data, dict):
             return {}
+
+        def _normalized_summary(summary: Any) -> Any:
+            if not isinstance(summary, dict):
+                return summary
+            normalized = dict(summary)
+            aliases = {
+                "ic": ("IC",),
+                "icir": ("ICIR",),
+                "rank_ic": ("Rank_IC", "Rank IC"),
+                "rank_icir": ("Rank_ICIR", "Rank ICIR"),
+                "annualized_return": (
+                    "excess_return_with_cost_annualized",
+                    "1day.excess_return_with_cost.annualized_return",
+                ),
+                "max_drawdown": (
+                    "excess_return_with_cost_max_drawdown",
+                    "1day.excess_return_with_cost.max_drawdown",
+                ),
+                "information_ratio": (
+                    "excess_return_with_cost_IR",
+                    "1day.excess_return_with_cost.information_ratio",
+                ),
+                "annualized_return_no_cost": (
+                    "excess_return_without_cost_annualized",
+                    "1day.excess_return_without_cost.annualized_return",
+                ),
+                "max_drawdown_no_cost": (
+                    "excess_return_without_cost_max_drawdown",
+                    "1day.excess_return_without_cost.max_drawdown",
+                ),
+                "information_ratio_no_cost": (
+                    "excess_return_without_cost_IR",
+                    "1day.excess_return_without_cost.information_ratio",
+                ),
+            }
+            for canonical, source_keys in aliases.items():
+                if normalized.get(canonical) is not None:
+                    continue
+                for source_key in source_keys:
+                    if normalized.get(source_key) is not None:
+                        normalized[canonical] = normalized[source_key]
+                        break
+            return normalized
 
         flat: dict[str, Any] = {}
         top_level_series_keys = [
@@ -6899,7 +6873,7 @@ async def get_experiment_enhanced_metrics(experiment_id: str):
             flat["overfit_ratio"] = td.get("overfit_ratio")
             flat["convergence_ratio"] = td.get("convergence_ratio")
         if "summary" in data:
-            flat["summary"] = data["summary"]
+            flat["summary"] = _normalized_summary(data["summary"])
 
         passthrough_keys = [
             "top_stocks", "bottom_stocks", "stock_trades",
@@ -6923,12 +6897,13 @@ async def get_experiment_enhanced_metrics(experiment_id: str):
     def _parse_jsonish(value: Any) -> Any:
         if isinstance(value, (dict, list)):
             return value
+        parsed: Any = None
         if isinstance(value, str):
             try:
-                return json.loads(value)
-            except Exception:
-                return None
-        return None
+                parsed = json.loads(value)
+            except json.JSONDecodeError as e:
+                logger.warning("忽略无法解析的 QE result_metrics JSON: %s", e)
+        return parsed
 
     def _extract_cached_enhanced(result_metrics_raw: Any) -> dict:
         result_metrics = _parse_jsonish(result_metrics_raw) or {}
@@ -6973,17 +6948,16 @@ async def get_experiment_enhanced_metrics(experiment_id: str):
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT qe_loop_id, qe_task_id, result_metrics, workspace_path, custom_params FROM qe_experiments WHERE experiment_id = %s",
+                    "SELECT qe_loop_id, qe_task_id, result_metrics, custom_params FROM qe_experiments WHERE experiment_id = %s",
                     (experiment_id,),
                 )
                 row = cur.fetchone()
                 if not row:
                     raise HTTPException(status_code=404, detail="实验不存在")
                 if len(row) >= 4:
-                    qe_loop_id, qe_task_id, result_metrics_raw, workspace_path, custom_params_raw = row[:5]
+                    qe_loop_id, qe_task_id, result_metrics_raw, custom_params_raw = row[:4]
                 else:
                     qe_loop_id, qe_task_id, result_metrics_raw = row
-                    workspace_path = None
                     custom_params_raw = None
 
         custom_params = _parse_qe_custom_params(custom_params_raw)
@@ -6993,19 +6967,7 @@ async def get_experiment_enhanced_metrics(experiment_id: str):
         if _has_enhanced_detail(cached_flat):
             return cached_flat
 
-        if not recorded_execution_node_id:
-            local_payload = _load_local_enhanced_metrics_payload(
-                qe_task_id=qe_task_id,
-                qe_loop_id=qe_loop_id,
-                workspace_path=workspace_path,
-            )
-            local_flat = _flatten_enhanced_payload(local_payload)
-            if local_flat:
-                if cached_flat.get("summary") and not local_flat.get("summary"):
-                    local_flat["summary"] = cached_flat["summary"]
-                return local_flat
-
-        if not qe_loop_id:
+        if not qe_task_id or not qe_loop_id:
             raise HTTPException(status_code=404, detail="增强指标不可用")
 
         from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
@@ -7026,6 +6988,13 @@ async def get_experiment_enhanced_metrics(experiment_id: str):
         raise HTTPException(status_code=status, detail=str(e))
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"RDAgent 服务不可达: {e}")
+    except RuntimeError as e:
+        message = str(e)
+        if "404" in message or "not found" in message.lower():
+            raise HTTPException(status_code=404, detail="增强指标文件尚未生成")
+        raise HTTPException(status_code=502, detail=f"RDAgent 增强指标读取失败: {message}")
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=f"QE 执行节点不可用: {e}")
     except Exception as e:
         logger.exception(f"获取增强指标失败: {experiment_id}")
         raise HTTPException(status_code=500, detail=str(e))

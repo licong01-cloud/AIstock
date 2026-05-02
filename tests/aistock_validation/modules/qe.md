@@ -27,6 +27,9 @@ QE experiment pages must display accurate task, loop, and metric data obtained t
 - Task detail does not scan `mlruns` or optional position pickle files from local paths.
 - Task detail does not write DB updates merely to enrich optional position statistics.
 - Loop metrics remain exactly the DB/API values; missing optional position summary is not fabricated.
+- Single experiment enhanced-metrics reads DB-cached details first, then QE node API, and never falls back to Windows/WSL workspace paths.
+- Single experiment terminal log tail reads `run.log` through QE node API only; unavailable logs are explicit and never read from `workspace_path`.
+- Experiment analysis/evolution-context uses DB-cached metadata/results and must not dereference `workspace_path`.
 - Artifact-unavailable states are explicit and actionable when added by later phases.
 
 ## API L2
@@ -36,6 +39,8 @@ Read-only probes against the dev backend must validate:
 - `/api/v1/quantevolver/evolution/tasks` returns task rows.
 - `/api/v1/quantevolver/evolution/tasks/{task_id}` returns the selected task detail.
 - The selected task detail contains the expected task id, status, current/max loop counts, loop count, loop indexes, loop statuses, and numeric metrics when present.
+- `/api/v1/quantevolver/experiments/{experiment_id}/enhanced-metrics` returns the expected DB/node enhanced fields (`summary`, IC series, return curves, all-stocks/diagnostics when present).
+- `/api/v1/quantevolver/experiments/{experiment_id}/logs/tail` returns node-sourced terminal tail metadata (`log_source=qe_workspace_api`, `node_id`, logs or explicit unavailable reason).
 - No response returns unexpected HTTP 5xx.
 
 ## UI L3
@@ -48,6 +53,9 @@ Playwright must:
 - Verify current/max loop count and loop cards/details are visible.
 - Compare visible loop labels and numeric metric chips with API data where metrics exist.
 - Verify a controlled no-active-task page state shows manual refresh mode and does not issue extra task-list/detail requests after the old 60s polling window.
+- Open `/quantevolver/experiments/{experiment_id}` and compare visible metric cards, stock rows, and chart presence against the enhanced-metrics API payload.
+- Verify the experiment detail page no longer issues guessed `/evolution/tasks/{experiment_id}/loops/{experiment_id}_Loop1/enhanced-metrics` fallback requests.
+- Verify terminal log UI wording says QE/node log tail and does not expose "local run.log" as the data source.
 - Fail on `pageerror`, console error, request failure, or unexpected API 4xx/5xx.
 
 ## First Read-Only Command Targets

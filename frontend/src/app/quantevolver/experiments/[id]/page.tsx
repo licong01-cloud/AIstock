@@ -50,30 +50,25 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
       .then(r => r.ok ? r.json() : null)
       .catch(() => null);
 
-    // 尝试从 DB 获取 enhanced-metrics
+    // Enhanced metrics are fetched through the experiment endpoint only. The backend
+    // resolves DB cache first and then QE node API, so the UI does not issue
+    // guessed task/loop fallback requests that may 404.
     const fetchEnhancedFromDB = fetch(`${API}/quantevolver/experiments/${experimentId}/enhanced-metrics`)
       .then(r => r.ok ? r.json() : null)
       .catch(() => null);
 
-    // Fallback: 从 RDAgent 直接获取（独立实验 = task_id/Loop1）
-    const fetchEnhancedFromRDAgent = fetch(`${API}/quantevolver/evolution/tasks/${experimentId}/loops/${experimentId}_Loop1/enhanced-metrics`)
-      .then(r => r.ok ? r.json() : null)
-      .catch(() => null);
-
-    Promise.all([fetchExperiment, fetchEnhancedFromDB, fetchEnhancedFromRDAgent])
-      .then(([expRes, enhDbRes, enhRdRes]) => {
-        // 实验基础信息
+    Promise.all([fetchExperiment, fetchEnhancedFromDB])
+      .then(([expRes, enhDbRes]) => {
+        // ʵ�������Ϣ
         if (expRes?.status === "success" && expRes?.data) {
           setExperiment(expRes.data);
         } else if (expRes?.experiment) {
           setExperiment(expRes.experiment);
         } else {
-          // DB 中没有，构造最小实验对象
+          // DB ��û�У�������Сʵ�����
           setExperiment({ experiment_id: experimentId, experiment_name: experimentId, status: "standalone" });
         }
 
-        // Enhanced metrics: 优先 DB（已展平），fallback RDAgent（嵌套需展平）
-        // 后端 /enhanced-metrics 端点返回已展平数据（dates/ic_series/top_stocks 在顶层，无 status/data 包装）
         const hasData = (v: any) => v != null && (!Array.isArray(v) || v.length > 0);
         const enhancedDataKeys = [
           "dates", "return_dates", "ic_series", "rank_ic_series",
@@ -88,37 +83,9 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
           enhancedDataKeys.some(k => hasData(obj[k]));
 
         if (isValidFlat(enhDbRes)) {
-          // DB 端点返回的已展平数据，直接使用
           setEnhanced(enhDbRes);
         } else {
-          // Fallback: RDAgent 返回嵌套结构，需要展平
-          const raw = (enhRdRes?.status === "success" && enhRdRes?.data)
-            ? enhRdRes.data
-            : enhRdRes;
-
-          if (raw && typeof raw === "object" && (raw.top_stocks || raw.ic_diagnostics)) {
-            const flat: any = {};
-            // 展平 ic_diagnostics（含 dates/ic_series 等）
-            if (raw.ic_diagnostics) {
-              Object.assign(flat, raw.ic_diagnostics);
-            }
-            // return_curves 的 dates 可能不同于 IC 的 dates
-            if (raw.return_curves) {
-              const { dates: rcDates, ...rcRest } = raw.return_curves;
-              Object.assign(flat, rcRest);
-              flat.return_dates = rcDates;
-            }
-            if (raw.training_diagnostics) {
-              Object.assign(flat, raw.training_diagnostics);
-            }
-            // 顶层字段直接复制
-            for (const k of ["top_stocks", "bottom_stocks", "all_stocks", "stock_trades", "trade_diagnostics", "prediction_diagnostics", "factor_analysis", "absolute_returns", "summary"]) {
-              if (raw[k]) flat[k] = raw[k];
-            }
-            setEnhanced(flat);
-          } else {
-            setEnhancedError("增强指标不可用（DB 和 RDAgent 均未返回数据）");
-          }
+          setEnhancedError("增强指标不可用（DB 缓存和 QE 节点 API 均未返回可显示数据）");
         }
       })
       .catch(e => setError(String(e?.message ?? "加载失败，请重试")))
@@ -143,7 +110,20 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
 
   const exp = experiment;
   const em = enhanced;
-  const summary = em?.summary ?? {};
+  const rawSummary = em?.summary ?? {};
+  const summary = {
+    ...rawSummary,
+    ic: rawSummary.ic ?? rawSummary.IC,
+    icir: rawSummary.icir ?? rawSummary.ICIR,
+    rank_ic: rawSummary.rank_ic ?? rawSummary.Rank_IC ?? rawSummary["Rank IC"],
+    rank_icir: rawSummary.rank_icir ?? rawSummary.Rank_ICIR ?? rawSummary["Rank ICIR"],
+    annualized_return: rawSummary.annualized_return ?? rawSummary.excess_return_with_cost_annualized ?? rawSummary["1day.excess_return_with_cost.annualized_return"],
+    max_drawdown: rawSummary.max_drawdown ?? rawSummary.excess_return_with_cost_max_drawdown ?? rawSummary["1day.excess_return_with_cost.max_drawdown"],
+    information_ratio: rawSummary.information_ratio ?? rawSummary.excess_return_with_cost_IR ?? rawSummary["1day.excess_return_with_cost.information_ratio"],
+    annualized_return_no_cost: rawSummary.annualized_return_no_cost ?? rawSummary.excess_return_without_cost_annualized ?? rawSummary["1day.excess_return_without_cost.annualized_return"],
+    max_drawdown_no_cost: rawSummary.max_drawdown_no_cost ?? rawSummary.excess_return_without_cost_max_drawdown ?? rawSummary["1day.excess_return_without_cost.max_drawdown"],
+    information_ratio_no_cost: rawSummary.information_ratio_no_cost ?? rawSummary.excess_return_without_cost_IR ?? rawSummary["1day.excess_return_without_cost.information_ratio"],
+  };
   const td = em?.trade_diagnostics ?? {};
 
   const fmtPct = (v: number | null | undefined) => v != null ? (v * 100).toFixed(2) + "%" : "-";

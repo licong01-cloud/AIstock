@@ -179,6 +179,8 @@ def qe_read_backend(session: nox.Session) -> None:
     _run_pytest(
         session,
         "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
+        "backend/tests/unified_engine/test_qe_experiment_read_paths.py",
+        "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -227,6 +229,7 @@ def qe_read_ui(session: nox.Session) -> None:
             "test:e2e",
             "--",
             "tests/qe/qe-evolution-read-only.spec.ts",
+            "tests/qe/qe-experiment-read-only.spec.ts",
             env=_env(
                 {
                     "BACKEND_PORT": backend_port,
@@ -235,6 +238,7 @@ def qe_read_ui(session: nox.Session) -> None:
                     "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
                     "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
                     "QE_READ_TASK_ID": os.environ.get("QE_READ_TASK_ID", "qe_20260414_173338_d1c5"),
+                    "QE_READ_EXPERIMENT_ID": os.environ.get("QE_READ_EXPERIMENT_ID", "qe_20260501_011054_c90a_L1"),
                 }
             ),
             external=True,
@@ -266,9 +270,15 @@ def qe_read_l3(session: nox.Session) -> None:
         "python",
         ".codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py",
         "backend/routers/quantevolver_evolution.py",
+        "backend/routers/quantevolver.py",
         "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
+        "backend/tests/unified_engine/test_qe_experiment_read_paths.py",
+        "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
         "frontend/src/app/quantevolver/evolution/page.tsx",
+        "frontend/src/app/quantevolver/experiments/[id]/page.tsx",
+        "frontend/src/app/quantevolver/components/useExperimentSSE.ts",
         "frontend/tests/qe/qe-evolution-read-only.spec.ts",
+        "frontend/tests/qe/qe-experiment-read-only.spec.ts",
         "tests/aistock_validation/modules/qe.md",
         "docs/architecture/qe_worker_workspace_read_refactor_validation_plan_20260502.md",
         "noxfile.py",

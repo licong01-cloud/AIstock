@@ -311,7 +311,7 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
           eventSourceRef.current?.close();
           eventSourceRef.current = null;
           setRunStatus(status === "completed" ? "completed" : status === "interrupted" ? "interrupted" : "failed");
-          setRunLogs([`[System] 实验已是终态(${status})，只读取本地 run.log 尾部，不打开实时日志流...`]);
+          setRunLogs([`[System] 实验已是终态(${status})，只读取 QE 节点日志尾部，不打开实时日志流...`]);
           fetch(`${API}/quantevolver/experiments/${experimentId}/logs/tail?tail=300`)
             .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
             .then(tailData => {
@@ -319,11 +319,11 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
               const payload = tailData?.data || tailData;
               const lines = Array.isArray(payload?.logs) ? payload.logs : [];
               if (lines.length) lines.forEach((line: string) => appendLog(line));
-              else appendLog("[System] 未找到本地 run.log 尾部内容");
+              else appendLog("[System] 未找到 QE 节点日志尾部内容");
               appendLog(`[System] 最终状态: ${payload?.experiment_status || status}，未连接 RDAgent 实时日志流`);
             })
             .catch(e => {
-              if (!abortRef.current) appendLog(`[Error] 读取本地日志尾部失败: ${e?.message || e}`);
+              if (!abortRef.current) appendLog(`[Error] 读取 QE 节点日志尾部失败: ${e?.message || e}`);
             });
           return;
         }
