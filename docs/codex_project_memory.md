@@ -615,6 +615,23 @@ Important directories:
 - Important distinction: prior Codex work only diagnosed/documented the gap and did not modify Qlib bin files; the historical `dump_limit_price_minute_bins.py` overlay filled only `prev_close/up_limit_price/down_limit_price`, leaving `open/high/low/close/volume/amount/factor` missing in the affected official minute bin offsets.
 - Any future repair must be dry-run first, then backed up, then patch all required fields consistently; do not patch only `close.1min.bin`, do not fill zeros/defaults, and fail fast on DB row, factor, offset, field-file, or checksum mismatch.
 
+## QE Qlib Minute Bin Repair Dry-Run Verification - 2026-05-02
+
+- Added dry-run repair planner `scripts/qe_qlib_minute_bin_repair.py` in the repo. It was not kept in the QE experiment-analysis skill per user direction.
+- Scan confirmed 9,655 DB-present stock-date gaps across 2,696 stocks and 7 dates (`2025-07-08` through `2025-07-16`), with `open/high/low/close/volume/amount/factor/limit_up/limit_down` all missing for the affected Qlib offsets. Dry-run patch plan contains 9,655 records, 24,264 unique field files, zero skipped records, and file hashes.
+- Initial DB-max-adj factor validation failed for 33 stocks because current DB max `adj_factor` differs from the denominator embedded in the official Qlib minute bin. The verifier now infers each stock's official factor denominator from adjacent non-null Qlib `$factor` plus DB `adj_factor`, reports DB/Qlib denominator drift explicitly, and never silently falls back to current DB max.
+- Final read-only verify-plan passed: 9,655 records, 2,696 stocks, 84,628 adjacent factor samples, 0 failures, 0 warnings. It found 33 stocks where current DB max adj differs from the official inferred denominator, planned missing-date factor range `0.6711399555~1.0`, and stable denominators for every checked stock.
+- Evidence files: `docs/analysis/P0_qlib_minute_bin_direct_repair_dry_run_summary_20260502.md`, `docs/analysis/P0_qlib_minute_bin_gap_scan_20260502.md`, `docs/analysis/P0_qlib_minute_bin_patch_plan_dry_run_20260502.md`, `docs/analysis/P0_qlib_minute_bin_patch_plan_verify_20260502.md`, and `docs/analysis/P0_qlib_minute_bin_factor_basis_20260502.csv`. JSON plan/verify artifacts are local dry-run outputs and are ignored by git by default.
+
+## QE Qlib Minute Bin Direct Repair Applied - 2026-05-02
+
+- User clarified that minute-bin repair should not be added to the QE experiment-analysis skill, so the temporary skill additions were removed. The repo script remains `scripts/qe_qlib_minute_bin_repair.py`.
+- Added and executed the explicit write command `apply-plan`, guarded by confirmation text `APPLY_Q_LIB_MINUTE_BIN_REPAIR`. It validates pre-apply calendar/file SHA256 hashes, uses inferred official factor denominators, validates DB minute timestamps against the Qlib 1min calendar, applies atomic field-file rewrites, and readbacks every patched offset.
+- Applied the repair to `/home/lc999/data/qlib_minute_bin`: 9,655 stock-date records, 2,696 stocks, 24,264 field files, 20,854,800 float32 values. Readback max absolute difference was 0.0.
+- Backup was created before writes at `/home/lc999/data/qlib_minute_bin_backup_direct_repair_20260502_` with 24,264 files and 12,962,997,064 bytes; manifest is `/home/lc999/data/qlib_minute_bin_backup_direct_repair_20260502_/backup_manifest.json`.
+- Post-repair scan confirmed `patchable_candidates=0` and no missing patch fields for the same 9,655 DB-present stock-date pairs. Post-repair verify-plan passed with 0 failures / 0 warnings and 94,283 adjacent factor samples.
+- Repair evidence files: `docs/analysis/P0_qlib_minute_bin_repair_apply_20260502.md`, `docs/analysis/P0_qlib_minute_bin_post_repair_scan_20260502.md`, `docs/analysis/P0_qlib_minute_bin_post_repair_verify_20260502.md`, and `docs/analysis/P0_qlib_minute_bin_direct_repair_dry_run_summary_20260502.md`.
+
 ## QE Archive Durable Outbox / UI Update - 2026-05-02
 
 - QE archive realtime ingestion now defaults to durable outbox mode when `QE_ARCHIVE_REALTIME_ENABLED` is explicitly enabled. Disabled mode still performs no writes; `QE_ARCHIVE_REALTIME_MODE=direct` is retained only for diagnostic/rollback direct archive writes.
