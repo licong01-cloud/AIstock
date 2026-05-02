@@ -608,3 +608,9 @@ Important directories:
 - Historical production record shows `/home/lc999/data/qlib_minute_bin` was an old full-market minute base (`2024-01-02~2026-03-19`) plus incremental append to `2026-04-28`; the proven gaps are in `2025-07-08~2025-07-16`, so they were inherited from the old historical base snapshot rather than produced by the 2026-03-20+ append.
 - Retained 10-stock candidate CSV/bin under `qlib_minute_validation/full_factor_minute_chain_20260428_candidate` proves current DB plus export logic can produce valid 2025-07 rows for affected sample stocks such as `000063.SZ` and `000651.SZ`, while the official production minute bin has all-null `close/factor` for the same stock-date offsets.
 - Official full-market production CSV/log/backup (`qlib_minute_prod/csv`, `qlib_minute_full/csv`, `/home/lc999/data/qlib_minute_bin_backup_20260429_205315`) was not found locally, so do not claim an exact operational cause such as interrupted export/copy; the proven cause is an incomplete production OHLCV/factor minute bin snapshot.
+
+## QE Qlib Minute Bin Direct Repair Plan - 2026-05-02
+
+- Direct-repair implementation plan is recorded at `docs/architecture/qlib_minute_bin_direct_repair_plan_20260502.md`.
+- Important distinction: prior Codex work only diagnosed/documented the gap and did not modify Qlib bin files; the historical `dump_limit_price_minute_bins.py` overlay filled only `prev_close/up_limit_price/down_limit_price`, leaving `open/high/low/close/volume/amount/factor` missing in the affected official minute bin offsets.
+- Any future repair must be dry-run first, then backed up, then patch all required fields consistently; do not patch only `close.1min.bin`, do not fill zeros/defaults, and fail fast on DB row, factor, offset, field-file, or checksum mismatch.
