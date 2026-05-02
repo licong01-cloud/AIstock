@@ -65,163 +65,6 @@ def _position_metric_missing(enhanced_metrics: Dict[str, Any]) -> bool:
     )
 
 
-def _install_qlib_position_pickle_stub() -> None:
-    """Allow reading Qlib Position pickle snapshots on machines without qlib installed."""
-    import sys
-    import types
-
-    if "qlib.backtest.position" in sys.modules:
-        return
-
-    qlib_mod = sys.modules.setdefault("qlib", types.ModuleType("qlib"))
-    backtest_mod = sys.modules.setdefault("qlib.backtest", types.ModuleType("qlib.backtest"))
-    position_mod = types.ModuleType("qlib.backtest.position")
-
-    class Position:  # noqa: D401 - pickle placeholder only
-        pass
-
-    Position.__module__ = "qlib.backtest.position"
-    position_mod.Position = Position
-    setattr(qlib_mod, "backtest", backtest_mod)
-    setattr(backtest_mod, "position", position_mod)
-    sys.modules["qlib.backtest.position"] = position_mod
-
-
-def _to_float(value: Any) -> Optional[float]:
-    import math
-
-    if value is None:
-        return None
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    return numeric if math.isfinite(numeric) else None
-
-
-def _load_pickle_with_qlib_stub(path: Path) -> Any:
-    import pickle
-
-    try:
-        with path.open("rb") as f:
-            return pickle.load(f)
-    except ModuleNotFoundError as exc:
-        if "qlib" not in str(exc) and not getattr(exc, "name", "").startswith("qlib"):
-            raise
-        _install_qlib_position_pickle_stub()
-        with path.open("rb") as f:
-            return pickle.load(f)
-
-
-def _find_positions_pickle(task_id: str, loop_id: str, loop_index: Optional[int]) -> Optional[Path]:
-    loop_name = f"Loop{loop_index}" if loop_index is not None else loop_id
-    candidates: List[Path] = []
-
-    env_workspace = os.getenv("QE_WORKSPACE_WIN")
-    if env_workspace:
-        candidates.append(Path(env_workspace))
-
-    try:
-        from ..services.quantevolver.config_composer import QE_WORKSPACE_WIN
-
-        candidates.append(Path(QE_WORKSPACE_WIN))
-    except Exception:
-        pass
-
-    legacy_workspace = os.getenv("RDAGENT_WORKSPACE_WIN")
-    if legacy_workspace:
-        candidates.append(Path(legacy_workspace))
-
-    candidates.append(Path(_PROJECT_ROOT) / "rdagent_assets" / "qe_workspace")
-
-    seen = set()
-    for base in candidates:
-        if not base:
-            continue
-        try:
-            base = base.resolve()
-        except Exception:
-            continue
-        if base in seen:
-            continue
-        seen.add(base)
-        loop_dir = base / task_id / loop_name
-        if not loop_dir.exists():
-            continue
-        direct = loop_dir / "mlruns"
-        search_root = direct if direct.exists() else loop_dir
-        matches = list(search_root.rglob("positions_normal_1day.pkl"))
-        if matches:
-            return matches[0]
-    return None
-
-
-def _compute_position_summary_from_pickle(path: Path) -> Optional[Dict[str, Any]]:
-    positions = _load_pickle_with_qlib_stub(path)
-    if not isinstance(positions, dict) or not positions:
-        return None
-
-    counts: List[int] = []
-    final_cash = None
-    final_total = None
-    final_stock_value = None
-    final_stock_count = None
-
-    for snapshot in positions.values():
-        position_map = getattr(snapshot, "position", None)
-        if position_map is None and isinstance(snapshot, dict):
-            position_map = snapshot.get("position", snapshot)
-        if not isinstance(position_map, dict):
-            continue
-
-        stock_count = 0
-        stock_value = 0.0
-        for sid, item in position_map.items():
-            if sid in ("cash", "now_account_value"):
-                continue
-            amount = _to_float(item.get("amount")) if isinstance(item, dict) else None
-            if amount is not None and amount <= 0:
-                continue
-            stock_count += 1
-            if isinstance(item, dict):
-                price = _to_float(item.get("price"))
-                if amount is not None and price is not None:
-                    stock_value += amount * price
-
-        counts.append(stock_count)
-        final_cash = _to_float(position_map.get("cash"))
-        final_total = _to_float(position_map.get("now_account_value"))
-        final_stock_count = stock_count
-        if stock_value > 0:
-            final_stock_value = stock_value
-
-    if not counts:
-        return None
-
-    sorted_counts = sorted(counts)
-    p95_idx = int(round((len(sorted_counts) - 1) * 0.95))
-    if final_stock_value is None and final_cash is not None and final_total is not None:
-        final_stock_value = final_total - final_cash
-
-    summary: Dict[str, Any] = {
-        "position_count_min": int(min(counts)),
-        "position_count_avg": float(sum(counts) / len(counts)),
-        "position_count_max": int(max(counts)),
-        "position_count_p95": float(sorted_counts[p95_idx]),
-        "final_stock_count": int(final_stock_count or 0),
-        "position_count_days": len(counts),
-        "position_summary_source": str(path),
-    }
-    if final_cash is not None:
-        summary["final_cash"] = final_cash
-    if final_stock_value is not None:
-        summary["final_stock_value"] = final_stock_value
-    if final_total is not None:
-        summary["final_total_value"] = final_total
-    if final_cash is not None and final_total:
-        summary["final_cash_ratio"] = final_cash / final_total
-    return summary
-
 
 def _augment_enhanced_metrics_with_positions(
     task_id: str,
@@ -232,24 +75,14 @@ def _augment_enhanced_metrics_with_positions(
     if not isinstance(enhanced_metrics, dict) or not _position_metric_missing(enhanced_metrics):
         return enhanced_metrics, False
 
-    path = _find_positions_pickle(task_id, loop_id, loop_index)
-    if not path:
-        return enhanced_metrics, False
-
-    try:
-        summary = _compute_position_summary_from_pickle(path)
-    except Exception as exc:
-        logger.warning("Failed to compute QE position summary from %s: %s", path, exc)
-        return enhanced_metrics, False
-    if not summary:
-        return enhanced_metrics, False
-
-    data = dict(enhanced_metrics)
-    data["position_summary"] = {**data.get("position_summary", {}), **summary}
-    data["holding_audit"] = {**data.get("holding_audit", {}), **summary}
-    data["absolute_returns"] = {**data.get("absolute_returns", {}), **summary}
-    return data, True
-
+    logger.debug(
+        "Skipping local QE position enrichment for %s/%s(loop_index=%s); "
+        "worker artifacts must be provided by DB cache or node API",
+        task_id,
+        loop_id,
+        loop_index,
+    )
+    return enhanced_metrics, False
 
 def _cache_loop_enhanced_metrics(task_id: str, loop_id: str, metrics_json: Dict[str, Any]) -> None:
     with get_conn() as conn:
@@ -765,15 +598,6 @@ async def get_evolution_task_detail(task_id: str):
                 continue
             metrics["enhanced_metrics"] = enhanced
             loop["metrics_json"] = metrics
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """UPDATE qe_evolution_loops
-                           SET metrics_json = %s::jsonb, updated_at = NOW()
-                           WHERE loop_id = %s""",
-                        (json.dumps(metrics, ensure_ascii=False), loop.get("loop_id")),
-                    )
-                conn.commit()
         return {"status": "success", "data": detail}
     except HTTPException:
         raise

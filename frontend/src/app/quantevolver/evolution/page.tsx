@@ -31,6 +31,7 @@ const TERMINAL_LOG_STATUSES = new Set([
   "paused",
   "stopped",
 ]);
+const ACTIVE_POLL_STATUSES = new Set(["running", "processing"]);
 
 // 模块级样式常量 — 避免每次渲染重新创建对象
 const cardStyle: React.CSSProperties = {
@@ -668,9 +669,12 @@ export default function EvolutionDashboard() {
     }
   }, []);
 
-  // 动态轮询: 有 running 任务 10s，否则 60s
+  // 动态轮询: 仅当存在 active 任务时自动刷新；无 running/processing 时完全停止自动轮询
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const hasRunningTask = useMemo(() => tasks.some(t => t.status === "running"), [tasks]);
+  const hasRunningTask = useMemo(
+    () => tasks.some(t => ACTIVE_POLL_STATUSES.has(String(t.status || "").toLowerCase())),
+    [tasks]
+  );
 
   useEffect(() => {
     fetchTasks();
@@ -678,8 +682,9 @@ export default function EvolutionDashboard() {
 
   useEffect(() => {
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-    const delay = hasRunningTask ? 10_000 : 60_000;
-    pollIntervalRef.current = setInterval(fetchTasks, delay);
+    pollIntervalRef.current = null;
+    if (!hasRunningTask) return;
+    pollIntervalRef.current = setInterval(fetchTasks, 10_000);
     return () => { if (pollIntervalRef.current) clearInterval(pollIntervalRef.current); };
   }, [hasRunningTask, fetchTasks]);
 
@@ -796,17 +801,27 @@ export default function EvolutionDashboard() {
     }
   }, []); // 无状态依赖，避免无限循环
 
-  // 监听 Task 选中切换（仅依赖 activeTaskId，避免无限循环）
+  // 监听 Task 选中切换；终态任务只做一次详情/日志尾部读取，避免空闲时后台轮询
   const activeTaskIdRef = useRef<string | null>(null);
+  const lastSelectedTaskIdRef = useRef<string | null>(null);
+  const selectedTaskStatus = useMemo(() => {
+    if (!activeTaskId) return null;
+    return String(tasks.find(t => t.task_id === activeTaskId)?.status || "").toLowerCase() || null;
+  }, [activeTaskId, tasks]);
+
   useEffect(() => {
     if (activeTaskId) {
+      const taskChanged = lastSelectedTaskIdRef.current !== activeTaskId;
+      lastSelectedTaskIdRef.current = activeTaskId;
       activeTaskIdRef.current = activeTaskId;
-      autoSelectLoopRef.current = true; // 切换任务时允许自动选中 loop
-      setActiveLoopIndex(null);
+      if (taskChanged) {
+        autoSelectLoopRef.current = true; // 切换任务时允许自动选中 loop
+        setActiveLoopIndex(null);
+      }
       fetchTaskDetail(activeTaskId);
 
       const selectedTask = tasks.find(t => t.task_id === activeTaskId);
-      const selectedStatus = selectedTask?.status?.toLowerCase();
+      const selectedStatus = selectedTaskStatus || selectedTask?.status?.toLowerCase();
 
       // 连接 SSE 日志流
       if (eventSourceRef.current) {
@@ -829,11 +844,16 @@ export default function EvolutionDashboard() {
           .catch(e => {
             if (!cancelled) appendLogs([`[Error] 读取本地日志尾部失败: ${e?.message || e}`]);
           });
-        const detailInterval = setInterval(() => fetchTaskDetail(activeTaskId), 60000);
         return () => {
           cancelled = true;
           activeTaskIdRef.current = null;
-          clearInterval(detailInterval);
+        };
+      }
+
+      if (!selectedStatus || !ACTIVE_POLL_STATUSES.has(selectedStatus)) {
+        appendLogs([`[System] 任务 ${activeTaskId} 当前状态${selectedStatus ? `=${selectedStatus}` : "未知"}，仅加载一次详情，不打开实时日志流或详情轮询。`]);
+        return () => {
+          activeTaskIdRef.current = null;
         };
       }
 
@@ -939,10 +959,8 @@ export default function EvolutionDashboard() {
 
       eventSourceRef.current = sse;
 
-      // 定时刷新任务详情（更新 loop 列表），但不重建 SSE
-      // 仅当选中任务为 running 时才定时刷新，否则依赖手动刷新
-      const detailDelay = selectedTask?.status === "running" ? 15000 : 60000;
-      const detailInterval = setInterval(() => fetchTaskDetail(activeTaskId), detailDelay);
+      // 定时刷新任务详情（更新 loop 列表），但不重建 SSE；仅 running/processing 自动刷新
+      const detailInterval = setInterval(() => fetchTaskDetail(activeTaskId), 15000);
       return () => {
         activeTaskIdRef.current = null; // 标记已清理，阻止旧 reconnect timer
         clearInterval(detailInterval);
@@ -954,6 +972,7 @@ export default function EvolutionDashboard() {
     }
 
     return () => {
+      lastSelectedTaskIdRef.current = null;
       activeTaskIdRef.current = null;
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
@@ -961,7 +980,7 @@ export default function EvolutionDashboard() {
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTaskId]);
+  }, [activeTaskId, selectedTaskStatus]);
 
   // 获取可用的 RDAgent source tasks
   const fetchSourceTasks = useCallback(async () => {
@@ -1974,7 +1993,7 @@ export default function EvolutionDashboard() {
               <RefreshCw size={12} />
               刷新
               <span style={{ fontSize: "10px", color: "#94a3b8", fontWeight: 400 }}>
-                {hasRunningTask ? "10s" : "60s"}
+                {hasRunningTask ? "运行中10s" : "手动"}
               </span>
             </button>
           </div>

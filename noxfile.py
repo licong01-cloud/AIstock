@@ -174,6 +174,114 @@ def paper_v2_l3(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def qe_read_backend(session: nox.Session) -> None:
+    """Run QE read-path backend regression tests only."""
+    _run_pytest(
+        session,
+        "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def qe_read_ui(session: nox.Session) -> None:
+    """Run QE read-only UI E2E tests on dev ports only."""
+    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8011")
+    frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3011")
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        backend_port,
+        frontend_port,
+        external=True,
+    )
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "services",
+        "--backend-port",
+        backend_port,
+        "--skip-tdx",
+        external=True,
+    )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "npm",
+            "exec",
+            "tsc",
+            "--",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run(
+            "npm",
+            "run",
+            "test:e2e",
+            "--",
+            "tests/qe/qe-evolution-read-only.spec.ts",
+            env=_env(
+                {
+                    "BACKEND_PORT": backend_port,
+                    "FRONTEND_PORT": frontend_port,
+                    "QE_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+                    "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                    "QE_READ_TASK_ID": os.environ.get("QE_READ_TASK_ID", "qe_20260414_173338_d1c5"),
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+@nox.session(venv_backend="none")
+def qe_read_l3(session: nox.Session) -> None:
+    """Run the QE read-only L3 local validation suite."""
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "record",
+        "--module",
+        "qe",
+        "--level",
+        "L3",
+        "--title",
+        "QE read-only workspace access regression",
+        external=True,
+    )
+    quick_validate = _codex_quick_validate_script()
+    if not quick_validate.exists():
+        session.error(f"Missing Codex skill validator: {quick_validate}")
+    session.run("python", str(quick_validate), ".codex/skills/verify-aistock-feature", external=True)
+    session.run(
+        "python",
+        ".codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py",
+        "backend/routers/quantevolver_evolution.py",
+        "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
+        "frontend/src/app/quantevolver/evolution/page.tsx",
+        "frontend/tests/qe/qe-evolution-read-only.spec.ts",
+        "tests/aistock_validation/modules/qe.md",
+        "docs/architecture/qe_worker_workspace_read_refactor_validation_plan_20260502.md",
+        "noxfile.py",
+        "--fail-on",
+        "HIGH",
+        external=True,
+    )
+    session.notify("qe_read_backend")
+    if os.environ.get("QE_READ_L3_SKIP_UI") != "1":
+        session.notify("qe_read_ui")
+
+
+@nox.session(venv_backend="none")
 def paper_v2_live(session: nox.Session) -> None:
     """Run Paper v2 catch-up-to-live validation against dev backend and TDX."""
     backend_port = os.environ.get("BACKEND_PORT", "8012")
