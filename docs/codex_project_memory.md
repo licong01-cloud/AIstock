@@ -648,3 +648,12 @@ Important directories:
 - The `/qe-archive` UI now shows selectable pending candidates, "select all pending", dry-run preview, confirmed "写入数仓", and a fixed quality gate explanation. Minimum metrics/curves/factors are post-write completeness checks, not data collection filters.
 - Updated QE archive validation matrix and detailed design to make candidate-list backfill part of the first-stage workflow. Production backend `8001` was not restarted; realtime ingestion remains disabled unless explicitly enabled.
 - Validation record: `tests/aistock_validation/history/qe_archive/20260503_000218_l3_qe-archive-realtime-warehouse-validation.md`. `qe_archive_backend`, `qe_archive_data_quality`, `qe_archive_ui`, and full `qe_archive_l3` passed with mocked UI APIs; DB smoke still shows 27/27 managed tables, 458/458 commented columns, `run_count=11`, and `pending_outbox_count=0`.
+
+
+## QE Archive Symbol/Trade Structured Extraction - 2026-05-03
+
+- QE archive Phase 2 now extracts structured stock-level and trade-level data from already collected DB/API payloads only; no direct QE/RD-Agent worker workspace file access is introduced.
+- `QEArchivePayloadExtractor` maps enhanced `all_stocks`/`top_stocks`/`bottom_stocks` into `qe_archive.run_symbol_summary`, `stock_trades` into `qe_archive.run_trade`, and parser/trade/execution diagnostics into `qe_archive.run_execution_event`.
+- Repository quality summaries, data-quality smoke, API responses, and `/qe-archive` UI quality panel now expose `symbol_summary_count`, `trade_count`, and `execution_event_count`.
+- Live dev validation on ports `8011`/`3011` re-ran API confirmed backfill for task `qe_20260502_131502_9b54`; 4 loops passed quality gates and sample run `qear_run_61fe6f6dccabca49b1228033` stored 792 symbol summaries, 4,322 trades, and 3 execution events.
+- Production backend `8001` was not restarted; realtime ingestion remains feature-flagged/disabled by default unless explicitly enabled.

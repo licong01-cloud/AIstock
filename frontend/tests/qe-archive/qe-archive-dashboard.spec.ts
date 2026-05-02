@@ -120,15 +120,45 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
             event_type: "qe.loop.completed",
             source_id: "qe_task_demo",
             source_sub_id: "qe_task_demo_Loop1",
-            quality: body.write ? { passed: true, metric_count: 81, curve_count: 3489, factor_count_rows: 57 } : undefined,
-            stats: { metrics_written: 81, curves_written: 3489, factors_written: 57 },
+            quality: body.write ? {
+              passed: true,
+              metric_count: 81,
+              curve_count: 3489,
+              factor_count_rows: 57,
+              symbol_summary_count: 1310,
+              trade_count: 4100,
+              execution_event_count: 2,
+            } : undefined,
+            stats: {
+              metrics_written: 81,
+              curves_written: 3489,
+              factors_written: 57,
+              symbol_summary_count: 1310,
+              trade_count: 4100,
+              execution_event_count: 2,
+            },
           }, {
             run_id: "qear_run_demo2",
             event_type: "qe.loop.completed",
             source_id: "qe_task_demo",
             source_sub_id: "qe_task_demo_Loop2",
-            quality: body.write ? { passed: true, metric_count: 82, curve_count: 3490, factor_count_rows: 57 } : undefined,
-            stats: { metrics_written: 82, curves_written: 3490, factors_written: 57 },
+            quality: body.write ? {
+              passed: true,
+              metric_count: 82,
+              curve_count: 3490,
+              factor_count_rows: 57,
+              symbol_summary_count: 1310,
+              trade_count: 4200,
+              execution_event_count: 2,
+            } : undefined,
+            stats: {
+              metrics_written: 82,
+              curves_written: 3490,
+              factors_written: 57,
+              symbol_summary_count: 1310,
+              trade_count: 4200,
+              execution_event_count: 2,
+            },
           }],
         },
       });
@@ -163,6 +193,9 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
           metric_count: 81,
           curve_count: 3489,
           factor_count_rows: 57,
+          symbol_summary_count: 1310,
+          trade_count: 4100,
+          execution_event_count: 2,
           artifact_count: 0,
           raw_payload_count: 3,
           priority_score_count: 0,
@@ -183,6 +216,7 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
   await page.getByRole("button", { name: /dry-run/i }).click();
   await expect(page.getByText("qear_run_demo").first()).toBeVisible();
   await expect(page.getByText(/metrics 81/)).toBeVisible();
+  await expect(page.getByText(/symbols 1310/).first()).toBeVisible();
 
   await page.getByPlaceholder("QE_ARCHIVE_WRITE").fill("QE_ARCHIVE_WRITE");
   await page.getByRole("button", { name: "写入数仓" }).click();
@@ -197,6 +231,9 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
   await page.getByRole("button", { name: /查询质量/ }).click();
   await expect(page.getByText("full")).toBeVisible();
   await expect(page.getByText(/3K|3\.49K/)).toBeVisible();
+  await expect(page.getByText("股票汇总")).toBeVisible();
+  await expect(page.getByText("交易明细")).toBeVisible();
+  await expect(page.getByText(/4K|4,100/)).toBeVisible();
 
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);

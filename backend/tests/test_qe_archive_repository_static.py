@@ -119,6 +119,9 @@ def test_repository_exposes_phase_one_write_methods() -> None:
         "upsert_metric_batch",
         "replace_run_curves",
         "replace_run_factors",
+        "replace_run_symbol_summaries",
+        "replace_run_trades",
+        "replace_run_execution_events",
         "upsert_artifact_manifest",
         "claim_outbox_events",
         "complete_outbox_event",
@@ -197,6 +200,52 @@ def _sample_qe_payload() -> dict:
                     "cumulative_excess_with_cost": [0.01, 0.015],
                     "drawdown_series": [0.0, -0.01],
                 },
+                "all_stocks": [
+                    {
+                        "code": "000001.SZ",
+                        "profit": 1200.5,
+                        "profit_pct": 0.12,
+                        "avg_cost": 10.0,
+                        "last_price": 11.2,
+                        "holding_days": 5,
+                        "first_date": "2025-01-02",
+                        "last_date": "2025-01-08",
+                    },
+                    {
+                        "code": "000002.SZ",
+                        "profit": -300.0,
+                        "profit_pct": -0.03,
+                        "avg_cost": 20.0,
+                        "last_price": 19.4,
+                        "holding_days": 3,
+                        "first_date": "2025-01-03",
+                        "last_date": "2025-01-06",
+                    },
+                ],
+                "top_stocks": [
+                    {
+                        "code": "000001.SZ",
+                        "profit": 1200.5,
+                        "profit_pct": 0.12,
+                    }
+                ],
+                "bottom_stocks": [
+                    {
+                        "code": "000002.SZ",
+                        "profit": -300.0,
+                        "profit_pct": -0.03,
+                    }
+                ],
+                "stock_trades": {
+                    "000001.SZ": [
+                        {"date": "2025-01-02", "type": "buy", "price": 10.0, "amount": 100000.0, "pnl": None},
+                        {"date": "2025-01-08", "type": "sell", "price": 11.2, "amount": 112000.0, "pnl": 12000.0},
+                    ]
+                },
+                "trade_diagnostics": {
+                    "avg_turnover": 0.2,
+                    "daily_trade_count_avg": 4.5,
+                },
                 "training_diagnostics": {
                     "train_loss_curve": [0.9, 0.7],
                     "val_loss_curve": [1.0, 0.8],
@@ -234,6 +283,18 @@ def test_payload_extractor_captures_reproducible_config_metrics_account_and_curv
     curve_keys = {curve.curve_key for curve in extracted.curves}
     assert {"ic_series", "rank_ic_series", "cumulative_excess_with_cost", "drawdown_series", "train_loss_curve", "val_loss_curve"}.issubset(curve_keys)
     assert [factor.factor_name for factor in extracted.factors] == ["alpha_001", "alpha_002"]
+    assert len(extracted.symbol_summaries) == 4
+    assert extracted.symbol_summaries[0].symbol == "000001.SZ"
+    assert extracted.symbol_summaries[0].source_list == "all_stocks"
+    assert len(extracted.trades) == 2
+    assert extracted.trades[0].symbol == "000001.SZ"
+    assert extracted.trades[0].side == "buy"
+    assert extracted.trades[0].trade_uid is not None
+    assert extracted.trades[0].source_payload_path == "enhanced_metrics.stock_trades.000001.SZ[0]"
+    assert len(extracted.execution_events) >= 2
+    assert extracted.stats["symbol_summary_count"] == 4
+    assert extracted.stats["trade_count"] == 2
+    assert extracted.stats["execution_event_count"] >= 2
     assert {payload.payload_type for payload in extracted.raw_payloads} == {
         "qe_completion_payload",
         "qe_metrics_payload",
@@ -259,6 +320,8 @@ def test_archive_service_dry_run_does_not_write() -> None:
     assert result.stats["written"] is False
     assert result.stats["metric_count"] >= 6
     assert result.stats["curve_count"] >= 8
+    assert result.stats["symbol_summary_count"] == 4
+    assert result.stats["trade_count"] == 2
 
 
 def test_archive_service_write_calls_repository_without_runtime_hooks() -> None:
@@ -295,6 +358,15 @@ def test_archive_service_write_calls_repository_without_runtime_hooks() -> None:
         def replace_run_factors(self, run_id, factors):  # type: ignore[no-untyped-def]
             self.calls.append(("replace_run_factors", list(factors)))
 
+        def replace_run_symbol_summaries(self, run_id, summaries):  # type: ignore[no-untyped-def]
+            self.calls.append(("replace_run_symbol_summaries", list(summaries)))
+
+        def replace_run_trades(self, run_id, trades):  # type: ignore[no-untyped-def]
+            self.calls.append(("replace_run_trades", list(trades)))
+
+        def replace_run_execution_events(self, run_id, events):  # type: ignore[no-untyped-def]
+            self.calls.append(("replace_run_execution_events", list(events)))
+
         def replace_raw_payloads(self, run_id, raw_payloads):  # type: ignore[no-untyped-def]
             self.calls.append(("replace_raw_payloads", list(raw_payloads)))
 
@@ -321,7 +393,16 @@ def test_archive_service_write_calls_repository_without_runtime_hooks() -> None:
     assert "upsert_metric_batch" in call_names
     assert "replace_run_curves" in call_names
     assert "replace_run_factors" in call_names
+    assert "replace_run_symbol_summaries" in call_names
+    assert "replace_run_trades" in call_names
+    assert "replace_run_execution_events" in call_names
     assert call_names.count("replace_raw_payloads") == 1
+    symbol_call = repository.calls[call_names.index("replace_run_symbol_summaries")]
+    trade_call = repository.calls[call_names.index("replace_run_trades")]
+    event_call = repository.calls[call_names.index("replace_run_execution_events")]
+    assert len(symbol_call[1]) == 4
+    assert len(trade_call[1]) == 2
+    assert len(event_call[1]) >= 2
     raw_payload_call = repository.calls[call_names.index("replace_raw_payloads")]
     assert len(raw_payload_call[1]) == 3
 

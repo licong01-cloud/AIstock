@@ -98,6 +98,9 @@ function formatStats(stats: unknown): string {
     ["metrics", record.metrics_written ?? record.metric_count],
     ["curves", record.curves_written ?? record.curve_count],
     ["factors", record.factors_written ?? record.factor_count],
+    ["symbols", record.symbol_summaries_written ?? record.symbol_summary_count],
+    ["trades", record.trades_written ?? record.trade_count],
+    ["events", record.execution_events_written ?? record.execution_event_count],
     ["raw", record.raw_payloads_written ?? record.raw_payload_count],
   ]
     .filter(([, value]) => value !== undefined && value !== null)
@@ -118,6 +121,9 @@ function QualityPanel({ quality }: { quality: RunQuality | null }) {
     { name: "数据上下文", value: quality.data_context_count },
     { name: "账户摘要", value: quality.account_summary_count },
     { name: "因子参与记录", value: quality.factor_count_rows },
+    { name: "股票汇总", value: quality.symbol_summary_count },
+    { name: "交易明细", value: quality.trade_count },
+    { name: "执行事件", value: quality.execution_event_count },
     { name: "原始 payload", value: quality.raw_payload_count },
     { name: "artifact manifest", value: quality.artifact_count },
     { name: "优先级分数", value: quality.priority_score_count },

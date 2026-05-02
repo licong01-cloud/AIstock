@@ -12,6 +12,7 @@ from .models import (
     AccountSummaryRecord,
     CurveRecord,
     DataContextRecord,
+    ExecutionEventRecord,
     MetricRecord,
     QEArchiveRun,
     RawPayloadRecord,
@@ -19,6 +20,8 @@ from .models import (
     RunConfigRecord,
     RunFactorRecord,
     RunSourceRecord,
+    SymbolSummaryRecord,
+    TradeRecord,
     build_factor_set_hash,
     sha256_json,
 )
@@ -39,6 +42,9 @@ class ExtractedArchivePayload:
     metrics: list[MetricRecord]
     curves: list[CurveRecord]
     factors: list[RunFactorRecord]
+    symbol_summaries: list[SymbolSummaryRecord]
+    trades: list[TradeRecord]
+    execution_events: list[ExecutionEventRecord]
     raw_payloads: list[RawPayloadRecord]
     stats: dict[str, Any]
 
@@ -165,6 +171,16 @@ class QEArchivePayloadExtractor:
         metric_records = self._extract_metrics(run_id, metrics, enhanced)
         curves = self._extract_curves(run_id, enhanced)
         factor_records = self._extract_factors(run_id, factor_items)
+        symbol_summaries = self._extract_symbol_summaries(run_id, enhanced, metrics)
+        trades = self._extract_trades(run_id, enhanced, metrics)
+        execution_events = self._extract_execution_events(
+            run_id,
+            data,
+            metrics,
+            enhanced,
+            symbol_summary_count=len(symbol_summaries),
+            trade_count=len(trades),
+        )
         raw_payloads = self._raw_payloads(run_id, source_system, source_id, data, metrics, enhanced)
 
         manifest_json = {
@@ -178,6 +194,9 @@ class QEArchivePayloadExtractor:
             "factor_count": len(factor_list),
             "metric_count": len(metric_records),
             "curve_count": len(curves),
+            "symbol_summary_count": len(symbol_summaries),
+            "trade_count": len(trades),
+            "execution_event_count": len(execution_events),
             "raw_payload_sha256": sha256_json(data),
         }
         manifest = ReproducibilityManifestRecord(
@@ -227,12 +246,18 @@ class QEArchivePayloadExtractor:
             metrics=metric_records,
             curves=curves,
             factors=factor_records,
+            symbol_summaries=symbol_summaries,
+            trades=trades,
+            execution_events=execution_events,
             raw_payloads=raw_payloads,
             stats={
                 "missing_items": missing_items,
                 "factor_count": len(factor_records),
                 "metric_count": len(metric_records),
                 "curve_count": len(curves),
+                "symbol_summary_count": len(symbol_summaries),
+                "trade_count": len(trades),
+                "execution_event_count": len(execution_events),
                 "raw_payload_count": len(raw_payloads),
                 "research_valid": research_valid,
             },
@@ -445,6 +470,153 @@ class QEArchivePayloadExtractor:
                     records.append(RunFactorRecord(run_id=run_id, factor_name=name, factor_order=idx))
         return records
 
+    def _extract_symbol_summaries(
+        self,
+        run_id: str,
+        enhanced: Mapping[str, Any],
+        metrics: Mapping[str, Any],
+    ) -> list[SymbolSummaryRecord]:
+        enhanced_metrics = _ensure_mapping(metrics.get("enhanced_metrics") or {})
+        sources = [enhanced, enhanced_metrics, metrics]
+        records: list[SymbolSummaryRecord] = []
+        for source_list in ("all_stocks", "top_stocks", "bottom_stocks"):
+            value = _first_non_empty_value(sources, source_list)
+            for idx, symbol, item in _iter_symbol_rows(value):
+                records.append(
+                    SymbolSummaryRecord(
+                        run_id=run_id,
+                        symbol=symbol,
+                        source_list=source_list,
+                        profit=_as_float(_first_value(item, ("profit", "pnl", "total_profit", "return_value"))),
+                        profit_pct=_as_float(_first_value(item, ("profit_pct", "return_pct", "return", "pct"))),
+                        avg_cost=_as_float(_first_value(item, ("avg_cost", "average_cost", "cost"))),
+                        last_price=_as_float(_first_value(item, ("last_price", "price", "close"))),
+                        holding_days=_as_int(_first_value(item, ("holding_days", "hold_days", "days"))),
+                        first_date=_as_date(_first_value(item, ("first_date", "start_date", "buy_date", "entry_date"))),
+                        last_date=_as_date(_first_value(item, ("last_date", "end_date", "sell_date", "exit_date"))),
+                        rank_in_list=idx + 1,
+                        metadata={
+                            "source_payload_path": f"enhanced_metrics.{source_list}[{idx}]",
+                            "source_keys": sorted(str(key) for key in item.keys()),
+                            "raw": dict(item),
+                        },
+                    )
+                )
+        deduped: dict[tuple[str, str], SymbolSummaryRecord] = {}
+        for record in records:
+            deduped.setdefault((record.source_list, record.symbol), record)
+        return list(deduped.values())
+
+    def _extract_trades(
+        self,
+        run_id: str,
+        enhanced: Mapping[str, Any],
+        metrics: Mapping[str, Any],
+    ) -> list[TradeRecord]:
+        enhanced_metrics = _ensure_mapping(metrics.get("enhanced_metrics") or {})
+        sources = [enhanced, enhanced_metrics, metrics]
+        source_key, value = _first_named_non_empty_value(
+            sources,
+            ("stock_trades", "trades", "trade_records", "trade_details"),
+        )
+        if not source_key:
+            return []
+
+        records: list[TradeRecord] = []
+        for idx, symbol, item, path_suffix in _iter_trade_rows(value):
+            source_payload_path = f"enhanced_metrics.{source_key}{path_suffix}"
+            quantity = _as_float(_first_value(item, ("quantity", "qty", "shares", "volume", "vol")))
+            amount = _as_float(_first_value(item, ("amount", "trade_amount", "value", "cash", "money")))
+            raw_uid = _optional_str(_first_value(item, ("trade_uid", "trade_id", "id", "fill_id")))
+            records.append(
+                TradeRecord(
+                    run_id=run_id,
+                    trade_uid=raw_uid
+                    or f"qear_trd_{sha256_json({'run_id': run_id, 'source_payload_path': source_payload_path, 'idx': idx, 'record': item})[:24]}",
+                    order_uid=_optional_str(_first_value(item, ("order_uid", "order_id"))),
+                    trade_date=_as_date(_first_value(item, ("trade_date", "date", "datetime", "ts", "time"))),
+                    ts=_as_datetime(_first_value(item, ("ts", "datetime", "time"))),
+                    symbol=symbol,
+                    side=_normalize_side(_first_value(item, ("side", "type", "action", "direction"))),
+                    price=_as_float(_first_value(item, ("price", "trade_price", "fill_price", "deal_price"))),
+                    quantity=quantity,
+                    amount=amount,
+                    commission=_as_float(_first_value(item, ("commission", "fee", "cost"))),
+                    tax=_as_float(_first_value(item, ("tax", "stamp_tax"))),
+                    slippage=_as_float(_first_value(item, ("slippage", "slippage_cost"))),
+                    pnl=_as_float(_first_value(item, ("pnl", "profit", "realized_pnl"))),
+                    source_payload_path=source_payload_path,
+                    metadata={
+                        "source_keys": sorted(str(key) for key in item.keys()),
+                        "amount_semantics": "source_reported_amount_without_quantity"
+                        if amount is not None and quantity is None
+                        else "source_reported",
+                        "raw": dict(item),
+                    },
+                )
+            )
+        return records
+
+    def _extract_execution_events(
+        self,
+        run_id: str,
+        data: Mapping[str, Any],
+        metrics: Mapping[str, Any],
+        enhanced: Mapping[str, Any],
+        *,
+        symbol_summary_count: int,
+        trade_count: int,
+    ) -> list[ExecutionEventRecord]:
+        event_ts = (
+            _as_datetime(data.get("completed_at"))
+            or _as_datetime(data.get("finished_at"))
+            or _as_datetime(data.get("source_updated_at"))
+            or datetime.now(timezone.utc)
+        )
+        records: list[ExecutionEventRecord] = []
+        if symbol_summary_count or trade_count:
+            records.append(
+                ExecutionEventRecord(
+                    run_id=run_id,
+                    event_ts=event_ts,
+                    event_type="archive_parser.structured_payload_extracted",
+                    severity="info",
+                    message="Structured symbol and trade data extracted from already archived QE payloads.",
+                    metadata={
+                        "symbol_summary_count": symbol_summary_count,
+                        "trade_count": trade_count,
+                        "source_fields": ["all_stocks", "top_stocks", "bottom_stocks", "stock_trades"],
+                    },
+                )
+            )
+
+        trade_diagnostics = _ensure_mapping(enhanced.get("trade_diagnostics") or metrics.get("trade_diagnostics") or {})
+        if trade_diagnostics:
+            records.append(
+                ExecutionEventRecord(
+                    run_id=run_id,
+                    event_ts=event_ts,
+                    event_type="source.trade_diagnostics",
+                    severity="info",
+                    message="Trade diagnostics captured from enhanced metrics payload.",
+                    metadata=dict(trade_diagnostics),
+                )
+            )
+
+        execution_trace = _ensure_mapping(metrics.get("execution_trace") or data.get("execution_trace") or {})
+        if execution_trace:
+            records.append(
+                ExecutionEventRecord(
+                    run_id=run_id,
+                    event_ts=event_ts,
+                    event_type="source.execution_trace",
+                    severity="info",
+                    message="Execution trace metadata captured from QE metrics payload.",
+                    metadata=dict(execution_trace),
+                )
+            )
+        return records
+
     def _raw_payloads(
         self,
         run_id: str,
@@ -603,6 +775,25 @@ def _first_value(mapping: Mapping[str, Any], keys: Sequence[str]) -> Any:
     return None
 
 
+def _first_non_empty_value(sources: Sequence[Mapping[str, Any]], key: str) -> Any:
+    for source in sources:
+        value = source.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _first_named_non_empty_value(
+    sources: Sequence[Mapping[str, Any]],
+    keys: Sequence[str],
+) -> tuple[str | None, Any]:
+    for key in keys:
+        value = _first_non_empty_value(sources, key)
+        if value not in (None, "", [], {}):
+            return key, value
+    return None, None
+
+
 def _section(data: Mapping[str, Any], config: Mapping[str, Any], *keys: str) -> dict[str, Any]:
     for source in (data, config):
         for key in keys:
@@ -626,6 +817,89 @@ def _extract_factor_items(data: Mapping[str, Any], config: Mapping[str, Any]) ->
         if isinstance(value, (list, tuple)):
             return list(value)
     return []
+
+
+def _iter_symbol_rows(value: Any) -> list[tuple[int, str, dict[str, Any]]]:
+    rows: list[tuple[int, str, dict[str, Any]]] = []
+    if isinstance(value, Mapping):
+        iterable = list(value.items())
+        for idx, (symbol_key, item) in enumerate(iterable):
+            if isinstance(item, Mapping):
+                record = dict(item)
+            else:
+                record = {"value": item}
+            symbol = _symbol_from_record(record, fallback=symbol_key)
+            if symbol:
+                rows.append((idx, symbol, record))
+        return rows
+    for idx, item in enumerate(_as_list(value)):
+        if not isinstance(item, Mapping):
+            continue
+        record = dict(item)
+        symbol = _symbol_from_record(record)
+        if symbol:
+            rows.append((idx, symbol, record))
+    return rows
+
+
+def _iter_trade_rows(value: Any) -> list[tuple[int, str, dict[str, Any], str]]:
+    rows: list[tuple[int, str, dict[str, Any], str]] = []
+    if isinstance(value, Mapping):
+        ordinal = 0
+        for symbol_key, trades in value.items():
+            symbol = _optional_str(symbol_key)
+            if isinstance(trades, Mapping):
+                trades_iter = [trades]
+            else:
+                trades_iter = _as_list(trades)
+            for idx, item in enumerate(trades_iter):
+                if not isinstance(item, Mapping):
+                    continue
+                record = dict(item)
+                trade_symbol = _symbol_from_record(record, fallback=symbol)
+                if not trade_symbol:
+                    continue
+                rows.append((ordinal, trade_symbol, record, f".{trade_symbol}[{idx}]"))
+                ordinal += 1
+        return rows
+    for idx, item in enumerate(_as_list(value)):
+        if not isinstance(item, Mapping):
+            continue
+        record = dict(item)
+        symbol = _symbol_from_record(record)
+        if symbol:
+            rows.append((idx, symbol, record, f"[{idx}]"))
+    return rows
+
+
+def _symbol_from_record(record: Mapping[str, Any], fallback: Any = None) -> str | None:
+    return _optional_str(
+        _first_value(record, ("symbol", "code", "stock", "stock_code", "instrument", "ticker"))
+        or fallback
+    )
+
+
+def _normalize_side(value: Any) -> str | None:
+    text = _optional_str(value)
+    if not text:
+        return None
+    lowered = text.lower()
+    aliases = {
+        "buy": "buy",
+        "b": "buy",
+        "long": "buy",
+        "open_long": "buy",
+        "买": "buy",
+        "买入": "buy",
+        "sell": "sell",
+        "s": "sell",
+        "short": "sell",
+        "close": "sell",
+        "close_long": "sell",
+        "卖": "sell",
+        "卖出": "sell",
+    }
+    return aliases.get(lowered, lowered)
 
 
 def _factor_display_value(item: Any) -> Any:

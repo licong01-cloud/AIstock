@@ -161,6 +161,9 @@ export type RunQuality = {
   metric_count?: number;
   curve_count?: number;
   factor_count_rows?: number;
+  symbol_summary_count?: number;
+  trade_count?: number;
+  execution_event_count?: number;
   artifact_count?: number;
   raw_payload_count?: number;
   priority_score_count?: number;

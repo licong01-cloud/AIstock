@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field, is_dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import PurePath
 from typing import Any, Mapping, MutableMapping, Sequence
@@ -333,6 +333,76 @@ class CurveRecord:
     value_num: float | None = None
     value_json: Mapping[str, Any] | Sequence[Any] | None = None
     source_key: str | None = None
+
+
+@dataclass
+class SymbolSummaryRecord:
+    run_id: str
+    symbol: str
+    source_list: str = "all_stocks"
+    profit: float | None = None
+    profit_pct: float | None = None
+    avg_cost: float | None = None
+    last_price: float | None = None
+    holding_days: int | None = None
+    first_date: date | None = None
+    last_date: date | None = None
+    rank_in_list: int | None = None
+    metadata: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        self.metadata = _json_map(self.metadata)
+
+
+@dataclass
+class TradeRecord:
+    run_id: str
+    symbol: str
+    trade_uid: str | None = None
+    order_uid: str | None = None
+    trade_date: date | None = None
+    ts: datetime | None = None
+    side: str | None = None
+    price: float | None = None
+    quantity: float | None = None
+    amount: float | None = None
+    commission: float | None = None
+    tax: float | None = None
+    slippage: float | None = None
+    pnl: float | None = None
+    source_payload_path: str | None = None
+    metadata: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        self.metadata = _json_map(self.metadata)
+        if not self.trade_uid:
+            fingerprint = {
+                "run_id": self.run_id,
+                "symbol": self.symbol,
+                "trade_date": self.trade_date,
+                "ts": self.ts,
+                "side": self.side,
+                "price": self.price,
+                "quantity": self.quantity,
+                "amount": self.amount,
+                "source_payload_path": self.source_payload_path,
+            }
+            self.trade_uid = f"qear_trd_{sha256_json(fingerprint)[:24]}"
+
+
+@dataclass
+class ExecutionEventRecord:
+    run_id: str
+    event_type: str
+    event_ts: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    trade_date: date | None = None
+    symbol: str | None = None
+    severity: str = "info"
+    message: str | None = None
+    metadata: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        self.metadata = _json_map(self.metadata)
 
 
 @dataclass

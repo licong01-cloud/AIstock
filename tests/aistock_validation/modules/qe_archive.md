@@ -44,8 +44,8 @@ Current required coverage:
 - Worker creates `archive_job`, completes outbox events on success, and marks job/outbox retry state on handler failure.
 - Reproducibility config contract includes canonical config, raw config, config hash, factor list/hash, config provenance, missing config items, environment hashes, package versions, and reproducibility level.
 - Payload extractor/service dry-run captures already-collected loop/experiment payloads without repository writes by default.
-- Payload extractor maps ordered factors, data context, daily invalidity, account summary, scalar metrics, IC/return/training curves, factor rows, and raw payload snapshots.
-- Manual archive service writes run/source/config/repro/data_context/account/metric/curve/factor/raw_payload rows only when `dry_run=false`.
+- Payload extractor maps ordered factors, data context, daily invalidity, account summary, scalar metrics, IC/return/training curves, factor rows, all/top/bottom symbol summaries, stock trade records, execution/parser events, and raw payload snapshots.
+- Manual archive service writes run/source/config/repro/data_context/account/metric/curve/factor/symbol_summary/trade/execution_event/raw_payload rows only when `dry_run=false`.
 - DB source assembler can build payloads from `qe_experiments` and `qe_evolution_loops` without reading worker artifact paths.
 - Manual backfill CLI defaults to dry-run and requires `--write --confirm-write QE_ARCHIVE_WRITE` before inserting archive rows.
 - Backend API `/api/v1/qe-archive/backfill` supports dry-run and confirmed-write historical backfill, requires `confirm_write=QE_ARCHIVE_WRITE` for writes, and can validate run-level row counts after writing.
@@ -55,7 +55,7 @@ Current required coverage:
 - Direct realtime archive writes are only allowed through explicit `QE_ARCHIVE_REALTIME_MODE=direct` rollback/diagnostic mode and must remain covered by tests.
 - API worker `/api/v1/qe-archive/worker/run-once` processes a bounded outbox batch only with `confirm_run=QE_ARCHIVE_WORKER_RUN`; it is not a scheduler and must not auto-start at FastAPI startup.
 - API `/api/v1/qe-archive/outbox` and `/api/v1/qe-archive/jobs` expose recent queue/job state for UI monitoring.
-- Confirmed backfill runs must pass run-level data-quality checks for run/config/source/context/account/metric/curve/factor/raw-payload row counts.
+- Confirmed backfill runs must pass run-level data-quality checks for run/config/source/context/account/metric/curve/factor/symbol/trade/event/raw-payload row counts.
 - Data-quality smoke verifies DB schema version, table existence, table comments, column comments, and pending outbox count.
 
 Future backend workflow coverage:
@@ -70,7 +70,7 @@ Future backend workflow coverage:
 
 Future required coverage:
 
-- Enhanced metrics extraction covers account summary, absolute returns, curves, all/top/bottom symbols, trades, positions, and diagnostics.
+- Enhanced metrics extraction currently covers account summary, absolute returns, curves, all/top/bottom symbols, `stock_trades`, trade diagnostics, execution trace events, and raw payload snapshots; positions reconstructed from non-structured artifacts remain future parser work.
 - Artifact manifests store hash, size, content type, storage tier, source node id, collection status, and parser status.
 - Artifact download/parsing failures are explicit archive warnings or job failures, not fake empty success.
 - Large artifacts remain outside PostgreSQL, under AIstock-owned artifact storage.
@@ -81,7 +81,7 @@ Future required coverage when APIs are added:
 
 - Backfill API can preview and write historical experiment/loop rows without shell-script execution.
 - Backfill API rejects write requests without explicit confirmation text.
-- Run quality API returns account/metric/curve/factor/raw-payload completeness for a selected run.
+- Run quality API returns account/metric/curve/factor/symbol/trade/execution-event/raw-payload completeness for a selected run.
 - List runs with default `research_valid=true` filtering.
 - Run detail returns config, metrics, account summary, curves, factor list, artifact manifest, and reproducibility status.
 - Archive job status endpoints show pending/running/failed/completed states with retry context.

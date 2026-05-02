@@ -15,6 +15,7 @@ from .models import (
     ClaimedOutboxEvent,
     CurveRecord,
     DataContextRecord,
+    ExecutionEventRecord,
     MetricRecord,
     OutboxEventRecord,
     RawPayloadRecord,
@@ -22,6 +23,8 @@ from .models import (
     RunFactorRecord,
     RunConfigRecord,
     RunSourceRecord,
+    SymbolSummaryRecord,
+    TradeRecord,
     canonical_json_dumps,
     normalize_json,
     sha256_json,
@@ -244,6 +247,51 @@ FACTOR_COLUMNS = (
     "independent_metrics_snapshot",
     "official_rating_snapshot",
     "correlation_cluster",
+)
+
+SYMBOL_SUMMARY_COLUMNS = (
+    "run_id",
+    "symbol",
+    "source_list",
+    "profit",
+    "profit_pct",
+    "avg_cost",
+    "last_price",
+    "holding_days",
+    "first_date",
+    "last_date",
+    "rank_in_list",
+    "metadata",
+)
+
+TRADE_COLUMNS = (
+    "run_id",
+    "trade_uid",
+    "order_uid",
+    "trade_date",
+    "ts",
+    "symbol",
+    "side",
+    "price",
+    "quantity",
+    "amount",
+    "commission",
+    "tax",
+    "slippage",
+    "pnl",
+    "source_payload_path",
+    "metadata",
+)
+
+EXECUTION_EVENT_COLUMNS = (
+    "run_id",
+    "event_ts",
+    "trade_date",
+    "symbol",
+    "event_type",
+    "severity",
+    "message",
+    "metadata",
 )
 
 
@@ -872,6 +920,9 @@ class QEArchiveRepository:
             "metric_count": "run_metric",
             "curve_count": "run_curve",
             "factor_count_rows": "run_factor",
+            "symbol_summary_count": "run_symbol_summary",
+            "trade_count": "run_trade",
+            "execution_event_count": "run_execution_event",
             "artifact_count": "run_artifact",
             "raw_payload_count": "raw_payload",
             "priority_score_count": "run_priority_score",
@@ -997,6 +1048,87 @@ class QEArchiveRepository:
                 ]
                 sql = f"""
                     INSERT INTO qe_archive.run_factor ({", ".join(FACTOR_COLUMNS)})
+                    VALUES %s
+                """
+                execute_values(cur, sql, rows, page_size=1000)
+        return len(records)
+
+    def replace_run_symbol_summaries(
+        self,
+        run_id: str,
+        summaries: Sequence[SymbolSummaryRecord | Mapping[str, Any]],
+    ) -> int:
+        records = [self._prepare_record(summary, SYMBOL_SUMMARY_COLUMNS) for summary in summaries]
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM qe_archive.run_symbol_summary WHERE run_id = %s", (run_id,))
+                if not records:
+                    return 0
+                for record in records:
+                    record["run_id"] = run_id
+                    self._require(record, ("run_id", "symbol", "source_list"))
+                rows = [
+                    tuple(self._adapt_value(col, record.get(col)) for col in SYMBOL_SUMMARY_COLUMNS)
+                    for record in records
+                ]
+                sql = f"""
+                    INSERT INTO qe_archive.run_symbol_summary ({", ".join(SYMBOL_SUMMARY_COLUMNS)})
+                    VALUES %s
+                    ON CONFLICT (run_id, source_list, symbol) DO UPDATE SET
+                        profit = EXCLUDED.profit,
+                        profit_pct = EXCLUDED.profit_pct,
+                        avg_cost = EXCLUDED.avg_cost,
+                        last_price = EXCLUDED.last_price,
+                        holding_days = EXCLUDED.holding_days,
+                        first_date = EXCLUDED.first_date,
+                        last_date = EXCLUDED.last_date,
+                        rank_in_list = EXCLUDED.rank_in_list,
+                        metadata = EXCLUDED.metadata
+                """
+                execute_values(cur, sql, rows, page_size=1000)
+        return len(records)
+
+    def replace_run_trades(self, run_id: str, trades: Sequence[TradeRecord | Mapping[str, Any]]) -> int:
+        records = [self._prepare_record(trade, TRADE_COLUMNS) for trade in trades]
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM qe_archive.run_trade WHERE run_id = %s", (run_id,))
+                if not records:
+                    return 0
+                for record in records:
+                    record["run_id"] = run_id
+                    self._require(record, ("run_id", "symbol"))
+                rows = [
+                    tuple(self._adapt_value(col, record.get(col)) for col in TRADE_COLUMNS)
+                    for record in records
+                ]
+                sql = f"""
+                    INSERT INTO qe_archive.run_trade ({", ".join(TRADE_COLUMNS)})
+                    VALUES %s
+                """
+                execute_values(cur, sql, rows, page_size=1000)
+        return len(records)
+
+    def replace_run_execution_events(
+        self,
+        run_id: str,
+        events: Sequence[ExecutionEventRecord | Mapping[str, Any]],
+    ) -> int:
+        records = [self._prepare_record(event, EXECUTION_EVENT_COLUMNS) for event in events]
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM qe_archive.run_execution_event WHERE run_id = %s", (run_id,))
+                if not records:
+                    return 0
+                for record in records:
+                    record["run_id"] = run_id
+                    self._require(record, ("run_id", "event_ts", "event_type", "severity"))
+                rows = [
+                    tuple(self._adapt_value(col, record.get(col)) for col in EXECUTION_EVENT_COLUMNS)
+                    for record in records
+                ]
+                sql = f"""
+                    INSERT INTO qe_archive.run_execution_event ({", ".join(EXECUTION_EVENT_COLUMNS)})
                     VALUES %s
                 """
                 execute_values(cur, sql, rows, page_size=1000)

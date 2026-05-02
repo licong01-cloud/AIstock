@@ -2097,3 +2097,41 @@ python -m nox -s qe_archive_l3            # L3 local suite, UI not implemented y
 - ?????? realtime outbox ?????direct ???worker service handler?worker API confirmation?
 - UI ???? `frontend/tests/qe-archive/qe-archive-dashboard.spec.ts`??? mocked QE Archive API ?? dashboard/backfill/worker/quality ????????? `8001`?
 - `nox -s qe_archive_ui` ?? `QE_ARCHIVE_UI_MOCK_API=1`???? dev backend ??? UI route/type/E2E ???live API ?????? `8011/8012` dev backend?
+
+## 24. Symbol and Trade Structured Archive Implementation (2026-05-03)
+
+This phase moves stock-level and trade-level data that already exists in QE DB/API payloads from raw JSONB into queryable structured tables. The implementation still follows the hard red line: it does not directly read WSL or remote worker files. Input data is limited to `qe_evolution_loops.metrics_json`, `qe_experiments.result_metrics`, and payloads that the archive service has already obtained through DB/API paths.
+
+### 24.1 Confirmed Collectable Fields
+
+A read-only audit of 16 archived runs and 48 `qe_archive.raw_payload` rows confirmed these stable enhanced-metrics fields:
+
+- `all_stocks`: about 700 to 1300 symbol summary rows per run, with `code`, `profit`, `profit_pct`, `avg_cost`, `last_price`, `holding_days`, `first_date`, and `last_date`.
+- `top_stocks` / `bottom_stocks`: 10 best/worst symbol summary rows per run, with the same field family as `all_stocks`.
+- `stock_trades`: symbol-keyed trade lists. Current source fields are `date`, `type`, `price`, `amount`, and `pnl`. No reliable `quantity` or `shares` field is present, so `amount` is stored as source-reported amount and quantity is not inferred.
+- `trade_diagnostics` and `execution_trace`: stored as execution/parser events for later data-quality and execution-lineage analysis.
+
+### 24.2 Structured Write Rules
+
+- `all_stocks`, `top_stocks`, and `bottom_stocks` are written to `qe_archive.run_symbol_summary` with unique key `(run_id, source_list, symbol)`, `rank_in_list`, and small-row raw metadata.
+- `stock_trades` is written to `qe_archive.run_trade` with deterministic `trade_uid`, `symbol`, `side`, `trade_date`, `price`, `amount`, `pnl`, `source_payload_path`, and raw trade metadata. Missing `quantity` is left null rather than fabricated.
+- Parser summary, `trade_diagnostics`, and `execution_trace` are written to `qe_archive.run_execution_event`.
+- `get_run_quality_summary()`, the data-quality smoke, API responses, and the UI quality panel now expose `symbol_summary_count`, `trade_count`, and `execution_event_count`.
+- Confirmed backfill and realtime worker paths reuse the same `QEArchiveService`, so historical and realtime structured writes have the same semantics.
+
+### 24.3 8011/3011 Validation Sample
+
+The dev backend `8011` and frontend `3011` were restarted to load this code. Production backend `8001` was not restarted. The already archived task `qe_20260502_131502_9b54` was reprocessed through API confirmed backfill:
+
+```text
+POST http://127.0.0.1:8011/api/v1/qe-archive/backfill
+source=task, task_ids=[qe_20260502_131502_9b54], write=true, confirm_write=QE_ARCHIVE_WRITE
+```
+
+All 4 loops passed quality gates. Sample run `qear_run_61fe6f6dccabca49b1228033` stored `metric_count=67`, `curve_count=3489`, `factor_count_rows=57`, `symbol_summary_count=792`, `trade_count=4322`, `execution_event_count=3`, and `raw_payload_count=3`.
+
+### 24.4 Remaining Work
+
+- Current payloads do not contain full structured daily/minute position snapshots. Future artifact parsers must collect them through node APIs or AIstock-owned artifact copies before writing `run_position`.
+- Current trade payloads do not provide authoritative `quantity`, `shares`, `commission`, `tax`, or `slippage`; these fields remain null until a later order/fill artifact parser supplies them.
+- Factor weight trends and feature importance remain reserved for `run_factor_importance` and `run_model_training_metric`; this phase only structures the stock/trade/event data already present in current payloads.

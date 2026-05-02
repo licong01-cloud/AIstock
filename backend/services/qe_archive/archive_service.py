@@ -63,6 +63,9 @@ class QEArchiveService:
                 "dry_run": dry_run,
                 "data_context_count": len(extracted.data_contexts),
                 "account_summary_count": 1 if extracted.account_summary else 0,
+                "symbol_summary_count": len(extracted.symbol_summaries),
+                "trade_count": len(extracted.trades),
+                "execution_event_count": len(extracted.execution_events),
                 "raw_payload_count": len(extracted.raw_payloads),
             }
         )
@@ -93,4 +96,7 @@ class QEArchiveService:
         repo.upsert_metric_batch(extracted.metrics, replace_existing=True)
         repo.replace_run_curves(run_id, extracted.curves)
         repo.replace_run_factors(run_id, extracted.factors)
+        repo.replace_run_symbol_summaries(run_id, extracted.symbol_summaries)
+        repo.replace_run_trades(run_id, extracted.trades)
+        repo.replace_run_execution_events(run_id, extracted.execution_events)
         repo.replace_raw_payloads(run_id, extracted.raw_payloads)
