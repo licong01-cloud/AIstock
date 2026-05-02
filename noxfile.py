@@ -338,6 +338,7 @@ def qe_archive_ui(session: nox.Session) -> None:
         session.skip("QE archive UI tests are not implemented yet.")
     backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8011")
     frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3011")
+    mock_api = os.environ.get("QE_ARCHIVE_UI_MOCK_API") == "1"
     session.run(
         "python",
         "scripts/aistock_validate.py",
@@ -347,15 +348,16 @@ def qe_archive_ui(session: nox.Session) -> None:
         frontend_port,
         external=True,
     )
-    session.run(
-        "python",
-        "scripts/aistock_validate.py",
-        "services",
-        "--backend-port",
-        backend_port,
-        "--skip-tdx",
-        external=True,
-    )
+    if not mock_api:
+        session.run(
+            "python",
+            "scripts/aistock_validate.py",
+            "services",
+            "--backend-port",
+            backend_port,
+            "--skip-tdx",
+            external=True,
+        )
     old_cwd = Path.cwd()
     os.chdir(ROOT / "frontend")
     try:
@@ -379,6 +381,7 @@ def qe_archive_ui(session: nox.Session) -> None:
                 {
                     "BACKEND_PORT": backend_port,
                     "FRONTEND_PORT": frontend_port,
+                    "QE_ARCHIVE_UI_MOCK_API": "1" if mock_api else "0",
                     "QE_ARCHIVE_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
                     "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
                     "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
@@ -421,6 +424,9 @@ def qe_archive_l3(session: nox.Session) -> None:
         "backend/tests/test_qe_archive_repository_static.py",
         "scripts/qe_archive_backfill.py",
         "scripts/qe_archive_data_quality_smoke.py",
+        "frontend/src/app/qe-archive",
+        "frontend/src/lib/qe-archive",
+        "frontend/tests/qe-archive",
         "tests/aistock_validation/modules/qe_archive.md",
         "docs/architecture/qe_realtime_experiment_warehouse_detailed_design_20260502.md",
         "noxfile.py",

@@ -49,7 +49,10 @@ Current required coverage:
 - DB source assembler can build payloads from `qe_experiments` and `qe_evolution_loops` without reading worker artifact paths.
 - Manual backfill CLI defaults to dry-run and requires `--write --confirm-write QE_ARCHIVE_WRITE` before inserting archive rows.
 - Backend API `/api/v1/qe-archive/backfill` supports dry-run and confirmed-write historical backfill, requires `confirm_write=QE_ARCHIVE_WRITE` for writes, and can validate run-level row counts after writing.
-- QE completion-time realtime ingestion hook is disabled by default through `QE_ARCHIVE_REALTIME_ENABLED`; when enabled, it performs best-effort archive writes after source QE DB completion succeeds and must not change QE loop/experiment status on archive failure.
+- QE completion-time realtime ingestion hook is disabled by default through `QE_ARCHIVE_REALTIME_ENABLED`; when enabled, default mode enqueues durable outbox events and must not change QE loop/experiment status on archive failure.
+- Direct realtime archive writes are only allowed through explicit `QE_ARCHIVE_REALTIME_MODE=direct` rollback/diagnostic mode and must remain covered by tests.
+- API worker `/api/v1/qe-archive/worker/run-once` processes a bounded outbox batch only with `confirm_run=QE_ARCHIVE_WORKER_RUN`; it is not a scheduler and must not auto-start at FastAPI startup.
+- API `/api/v1/qe-archive/outbox` and `/api/v1/qe-archive/jobs` expose recent queue/job state for UI monitoring.
 - Confirmed backfill runs must pass run-level data-quality checks for run/config/source/context/account/metric/curve/factor/raw-payload row counts.
 - Data-quality smoke verifies DB schema version, table existence, table comments, column comments, and pending outbox count.
 
@@ -84,25 +87,33 @@ Future required coverage when APIs are added:
 
 ## UI L3
 
-Future required coverage when UI is added:
+Current required coverage:
 
 - Dashboard shows archive health, ingestion lag, failed jobs, and invalid-run counts.
-- Run detail shows readable Chinese labels for config, metrics, reproducibility, and missing items.
+- Backfill panel supports dry-run first and confirmed write with `QE_ARCHIVE_WRITE`.
+- Worker panel supports one-shot confirmed outbox processing with `QE_ARCHIVE_WORKER_RUN`.
+- Run quality lookup shows readable Chinese labels for config, metrics, reproducibility, and missing items.
+- The first UI E2E uses mocked QE archive APIs to validate dashboard/backfill/worker/quality interactions without requiring production backend `8001`.
+- UI fails tests on page errors, console errors, request failures, and unexpected HTTP 4xx/5xx.
+
+Future UI coverage:
+
 - Charts render return/drawdown/IC/RankIC/training curves from `qe_archive`.
 - Factor participation pages show per-factor experiment history and metric distributions.
 - Model trial pages show hyperparameters, objective values, score components, and training curves.
-- UI fails tests on page errors, console errors, request failures, and unexpected HTTP 4xx/5xx.
 
 ## Nox Entry Points
 
 ```powershell
 python -m nox -s qe_archive_backend
 python -m nox -s qe_archive_data_quality
+$env:QE_ARCHIVE_UI_MOCK_API='1'
+python -m nox -s qe_archive_ui
 $env:QE_ARCHIVE_L3_SKIP_UI='1'
 python -m nox -s qe_archive_l3
 ```
 
-When QE archive UI tests are implemented, remove `QE_ARCHIVE_L3_SKIP_UI=1` and require `qe_archive_ui` in the L3 suite.
+For full UI L3 without a live dev backend, set `QE_ARCHIVE_UI_MOCK_API=1`; for live API validation, start a dev backend on `8011`/`8012` and leave the mock flag unset.
 
 ## Evidence
 

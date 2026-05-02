@@ -12,9 +12,13 @@ import os
 from typing import Any
 
 from .backfill_service import QEArchiveBackfillService
+from .event_capture import QEArchiveEventCapture
 
 
 QE_ARCHIVE_REALTIME_ENABLED_ENV = "QE_ARCHIVE_REALTIME_ENABLED"
+QE_ARCHIVE_REALTIME_MODE_ENV = "QE_ARCHIVE_REALTIME_MODE"
+REALTIME_MODE_OUTBOX = "outbox"
+REALTIME_MODE_DIRECT = "direct"
 logger = logging.getLogger("aistock.qe_archive.realtime_ingestion")
 
 
@@ -23,22 +27,38 @@ def _env_truthy(value: str | None) -> bool:
 
 
 class QEArchiveRealtimeIngestion:
-    """Small facade for completion-time archive writes."""
+    """Small facade for completion-time archive ingestion.
+
+    The safe default for enabled runtime hooks is durable outbox capture. Direct
+    archive writes remain available only for explicit rollback/diagnostic use.
+    """
 
     def __init__(
         self,
         *,
         service: QEArchiveBackfillService | None = None,
+        event_capture: QEArchiveEventCapture | None = None,
         enabled: bool | None = None,
+        mode: str | None = None,
     ) -> None:
         self._service = service or QEArchiveBackfillService()
+        self._event_capture = event_capture or QEArchiveEventCapture(enabled=True)
         self._enabled = enabled
+        self._mode = mode
 
     @property
     def enabled(self) -> bool:
         if self._enabled is not None:
             return self._enabled
         return _env_truthy(os.getenv(QE_ARCHIVE_REALTIME_ENABLED_ENV))
+
+    @property
+    def mode(self) -> str:
+        value = self._mode if self._mode is not None else os.getenv(QE_ARCHIVE_REALTIME_MODE_ENV)
+        normalized = (value or REALTIME_MODE_OUTBOX).strip().lower()
+        if normalized in {REALTIME_MODE_OUTBOX, REALTIME_MODE_DIRECT}:
+            return normalized
+        return REALTIME_MODE_OUTBOX
 
     def archive_loop_completed(
         self,
@@ -49,6 +69,14 @@ class QEArchiveRealtimeIngestion:
     ) -> dict[str, Any]:
         if not self.enabled:
             return {"archived": False, "skipped_reason": "disabled"}
+        if self.mode == REALTIME_MODE_OUTBOX:
+            result = self._event_capture.enqueue_loop_completed_result(
+                task_id=task_id,
+                loop_id=loop_id,
+                loop_index=loop_index,
+                payload={"capture_reason": "qe_loop_completed_hook"},
+            )
+            return {"archived": False, "queued": bool(result.get("inserted")), "mode": self.mode, **result}
         return self._service.archive_loop_completed(
             task_id=task_id,
             loop_id=loop_id,
@@ -58,6 +86,12 @@ class QEArchiveRealtimeIngestion:
     def archive_experiment_completed(self, *, experiment_id: str) -> dict[str, Any]:
         if not self.enabled:
             return {"archived": False, "skipped_reason": "disabled"}
+        if self.mode == REALTIME_MODE_OUTBOX:
+            result = self._event_capture.enqueue_experiment_completed_result(
+                experiment_id=experiment_id,
+                payload={"capture_reason": "qe_experiment_completed_hook"},
+            )
+            return {"archived": False, "queued": bool(result.get("inserted")), "mode": self.mode, **result}
         return self._service.archive_experiment_completed(experiment_id=experiment_id)
 
 

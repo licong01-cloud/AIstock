@@ -29,6 +29,10 @@ from backend.services.qe_archive.realtime_ingestion import QEArchiveRealtimeInge
 from backend.services.qe_archive.repository import QEArchiveRepository
 from backend.services.qe_archive.source_assembler import QEArchiveSourceAssembler
 from backend.services.qe_archive.worker import ArchiveWorkerEventResult, QEArchiveWorker
+from backend.services.qe_archive.worker_service import (
+    QEArchiveWorkerService,
+    WORKER_CONFIRM_TEXT,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -44,6 +48,7 @@ QE_ARCHIVE_FILES = (
     REPO_ROOT / "backend" / "services" / "qe_archive" / "repository.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "source_assembler.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "worker.py",
+    REPO_ROOT / "backend" / "services" / "qe_archive" / "worker_service.py",
     REPO_ROOT / "backend" / "routers" / "qe_archive.py",
     REPO_ROOT / "scripts" / "qe_archive_backfill.py",
 )
@@ -121,6 +126,8 @@ def test_repository_exposes_phase_one_write_methods() -> None:
         "create_archive_job",
         "complete_archive_job",
         "fail_archive_job",
+        "list_outbox_events",
+        "list_archive_jobs",
         "get_archive_summary",
         "get_run_quality_summary",
     )
@@ -506,7 +513,44 @@ def test_realtime_ingestion_is_disabled_by_default_and_does_not_archive() -> Non
     assert service.calls == 0
 
 
-def test_realtime_ingestion_enabled_calls_backfill_service() -> None:
+def test_realtime_ingestion_enabled_queues_outbox_by_default() -> None:
+    class FakeEventCapture:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        def enqueue_experiment_completed_result(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.kwargs = kwargs
+            return {
+                "inserted": True,
+                "event_id": "qear_evt_1",
+                "event_type": "qe.experiment.completed",
+                "source_id": "qe_exp_1",
+            }
+
+    class FakeBackfillService:
+        def archive_experiment_completed(self, **kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("default realtime mode should enqueue outbox instead of direct archive write")
+
+    capture = FakeEventCapture()
+    ingestion = QEArchiveRealtimeIngestion(
+        service=FakeBackfillService(),  # type: ignore[arg-type]
+        event_capture=capture,  # type: ignore[arg-type]
+        enabled=True,
+    )
+
+    result = ingestion.archive_experiment_completed(experiment_id="qe_exp_1")
+
+    assert result["archived"] is False
+    assert result["queued"] is True
+    assert result["mode"] == "outbox"
+    assert result["event_id"] == "qear_evt_1"
+    assert capture.kwargs == {
+        "experiment_id": "qe_exp_1",
+        "payload": {"capture_reason": "qe_experiment_completed_hook"},
+    }
+
+
+def test_realtime_ingestion_direct_mode_calls_backfill_service() -> None:
     class FakeBackfillService:
         def __init__(self) -> None:
             self.kwargs = None
@@ -516,7 +560,7 @@ def test_realtime_ingestion_enabled_calls_backfill_service() -> None:
             return {"processed_count": 1}
 
     service = FakeBackfillService()
-    ingestion = QEArchiveRealtimeIngestion(service=service, enabled=True)  # type: ignore[arg-type]
+    ingestion = QEArchiveRealtimeIngestion(service=service, enabled=True, mode="direct")  # type: ignore[arg-type]
 
     result = ingestion.archive_experiment_completed(experiment_id="qe_exp_1")
 
@@ -787,6 +831,110 @@ def test_worker_handler_exception_fails_job_and_retries_outbox() -> None:
     assert repository.failed_event[0] == "evt_2"
     assert "RuntimeError: archive failed" in repository.failed_event[1]
     assert repository.failed_event[2:] == (7, 3)
+
+
+def test_worker_service_archives_loop_outbox_event_through_backfill_handler() -> None:
+    event = ClaimedOutboxEvent(
+        event_id="evt_loop",
+        event_type="qe.loop.completed",
+        source_system="qe",
+        source_id="task_1",
+        source_sub_id="loop_1",
+        payload={"loop_index": 2},
+    )
+
+    class FakeRepository:
+        def __init__(self) -> None:
+            self.completed_events: list[str] = []
+            self.completed_jobs: list[tuple[str, str | None, dict]] = []
+
+        def claim_outbox_events(self, **kwargs):  # type: ignore[no-untyped-def]
+            assert kwargs["event_types"] == ("qe.loop.completed", "qe.experiment.completed")
+            return [event]
+
+        def create_archive_job(self, job):  # type: ignore[no-untyped-def]
+            assert job.event_id == "evt_loop"
+            return "job_loop"
+
+        def complete_archive_job(self, job_id, *, run_id=None, stats=None):  # type: ignore[no-untyped-def]
+            self.completed_jobs.append((job_id, run_id, dict(stats or {})))
+
+        def complete_outbox_event(self, event_id):  # type: ignore[no-untyped-def]
+            self.completed_events.append(event_id)
+
+        def fail_archive_job(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("should not fail job")
+
+        def fail_outbox_event(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("should not retry outbox")
+
+    class FakeBackfillService:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        def archive_loop_completed(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.kwargs = kwargs
+            return {
+                "processed_count": 1,
+                "results": [{"run_id": "run_loop_1", "quality": {"passed": True}}],
+            }
+
+    repository = FakeRepository()
+    backfill_service = FakeBackfillService()
+    result = QEArchiveWorkerService(
+        repository=repository,  # type: ignore[arg-type]
+        backfill_service=backfill_service,  # type: ignore[arg-type]
+        enabled=True,
+    ).run_once(limit=1)
+
+    assert result["claimed"] == 1
+    assert result["completed"] == 1
+    assert result["failed"] == 0
+    assert backfill_service.kwargs == {"task_id": "task_1", "loop_id": "loop_1", "loop_index": 2}
+    assert repository.completed_events == ["evt_loop"]
+    assert repository.completed_jobs[0][0] == "job_loop"
+    assert repository.completed_jobs[0][1] == "run_loop_1"
+
+
+def test_qe_archive_worker_api_requires_confirmation(monkeypatch) -> None:
+    class FakeWorkerService:
+        called = False
+
+        def run_once(self, *, limit):  # type: ignore[no-untyped-def]
+            self.called = True
+            return {"claimed": limit}
+
+    fake = FakeWorkerService()
+    monkeypatch.setattr(qe_archive_router, "get_worker_service", lambda **kwargs: fake)
+    app = FastAPI()
+    app.include_router(qe_archive_router.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    response = client.post("/api/v1/qe-archive/worker/run-once", json={"limit": 1})
+
+    assert response.status_code == 400
+    assert WORKER_CONFIRM_TEXT in response.json()["detail"]
+    assert fake.called is False
+
+
+def test_qe_archive_worker_api_returns_worker_report(monkeypatch) -> None:
+    class FakeWorkerService:
+        def run_once(self, *, limit):  # type: ignore[no-untyped-def]
+            assert limit == 3
+            return {"claimed": 3, "completed": 2, "failed": 1, "skipped_reason": None}
+
+    monkeypatch.setattr(qe_archive_router, "get_worker_service", lambda **kwargs: FakeWorkerService())
+    app = FastAPI()
+    app.include_router(qe_archive_router.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/qe-archive/worker/run-once",
+        json={"limit": 3, "confirm_run": WORKER_CONFIRM_TEXT},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["completed"] == 2
 
 
 def test_qe_archive_implementation_does_not_read_worker_workspace_paths() -> None:

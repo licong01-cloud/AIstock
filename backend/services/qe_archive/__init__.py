@@ -39,6 +39,7 @@ from .worker import (
     ArchiveWorkerRunResult,
     QEArchiveWorker,
 )
+from .worker_service import QEArchiveWorkerService, SUPPORTED_WORKER_EVENT_TYPES, WORKER_CONFIRM_TEXT
 
 __all__ = [
     "AccountSummaryRecord",
@@ -59,6 +60,7 @@ __all__ = [
     "QEArchiveService",
     "QEArchiveSourceAssembler",
     "QEArchiveWorker",
+    "QEArchiveWorkerService",
     "ArchiveWorkerEventResult",
     "ArchiveWorkerRunResult",
     "ArchiveJobRecord",
@@ -71,6 +73,8 @@ __all__ = [
     "RunConfigRecord",
     "RunSourceRecord",
     "WRITE_CONFIRM_TEXT",
+    "WORKER_CONFIRM_TEXT",
+    "SUPPORTED_WORKER_EVENT_TYPES",
     "build_config_sha256",
     "build_factor_set_hash",
     "canonical_json_dumps",

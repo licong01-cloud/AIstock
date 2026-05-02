@@ -763,6 +763,58 @@ class QEArchiveRepository:
                     (error, self._adapt_value("stats", stats) if stats is not None else None, job_id),
                 )
 
+    def list_outbox_events(self, *, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        """Return recent outbox events for UI/API monitoring."""
+
+        limit = max(1, min(int(limit or 50), 500))
+        params: list[Any] = []
+        status_filter = ""
+        if status:
+            status_filter = "WHERE status = %s"
+            params.append(status)
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT event_id, event_type, source_system, source_id, source_sub_id,
+                           status, retry_count, next_retry_at, locked_by, locked_at,
+                           error_message, created_at, updated_at, payload
+                    FROM qe_archive.outbox_event
+                    {status_filter}
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
+    def list_archive_jobs(self, *, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        """Return recent archive worker jobs for UI/API monitoring."""
+
+        limit = max(1, min(int(limit or 50), 500))
+        params: list[Any] = []
+        status_filter = ""
+        if status:
+            status_filter = "WHERE status = %s"
+            params.append(status)
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT job_id, event_id, run_id, job_type, status, level,
+                           started_at, completed_at, retry_count, error_message,
+                           stats, created_at, updated_at
+                    FROM qe_archive.archive_job
+                    {status_filter}
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
     def get_archive_summary(self) -> dict[str, Any]:
         """Return a compact warehouse health summary for API consumers."""
 
@@ -784,17 +836,30 @@ class QEArchiveRepository:
                 cur.execute(
                     """
                     SELECT status, COUNT(*)
+                    FROM qe_archive.outbox_event
+                    GROUP BY status
+                    ORDER BY status
+                    """
+                )
+                outbox_status_counts = {str(status): int(count) for status, count in cur.fetchall()}
+                cur.execute(
+                    """
+                    SELECT status, COUNT(*)
                     FROM qe_archive.archive_job
                     GROUP BY status
                     ORDER BY status
                     """
                 )
                 archive_job_status_counts = {str(status): int(count) for status, count in cur.fetchall()}
+                cur.execute("SELECT MAX(archived_at) FROM qe_archive.run")
+                latest_archived_at = cur.fetchone()[0]
         return {
             "run_count": run_count,
             "research_valid_counts": research_valid_counts,
             "pending_outbox_count": pending_outbox_count,
+            "outbox_status_counts": outbox_status_counts,
             "archive_job_status_counts": archive_job_status_counts,
+            "latest_archived_at": latest_archived_at,
         }
 
     def get_run_quality_summary(self, run_id: str) -> dict[str, Any]:

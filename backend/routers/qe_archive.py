@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.services.qe_archive.backfill_service import (
@@ -13,6 +13,7 @@ from backend.services.qe_archive.backfill_service import (
     WRITE_CONFIRM_TEXT,
 )
 from backend.services.qe_archive.repository import QEArchiveRepository
+from backend.services.qe_archive.worker_service import QEArchiveWorkerService, WORKER_CONFIRM_TEXT
 
 
 router = APIRouter(prefix="/qe-archive", tags=["qe-archive"])
@@ -38,8 +39,18 @@ class QEArchiveBackfillRequest(BaseModel):
     require_account_summary: bool = False
 
 
+class QEArchiveWorkerRunRequest(BaseModel):
+    limit: int = Field(10, ge=1, le=100)
+    worker_id: str = Field("qe_archive_api_worker", min_length=1, max_length=128)
+    confirm_run: str = ""
+
+
 def get_backfill_service() -> QEArchiveBackfillService:
     return QEArchiveBackfillService()
+
+
+def get_worker_service(*, worker_id: str, enabled: bool) -> QEArchiveWorkerService:
+    return QEArchiveWorkerService(worker_id=worker_id, enabled=enabled)
 
 
 @router.get("/health", summary="QE archive warehouse health")
@@ -47,6 +58,28 @@ def get_qe_archive_health():
     return {
         "status": "success",
         "data": QEArchiveRepository().get_archive_summary(),
+    }
+
+
+@router.get("/outbox", summary="Recent QE archive outbox events")
+def list_qe_archive_outbox(
+    status: str | None = Query(None, description="Optional outbox status filter."),
+    limit: int = Query(50, ge=1, le=500),
+):
+    return {
+        "status": "success",
+        "data": QEArchiveRepository().list_outbox_events(status=status, limit=limit),
+    }
+
+
+@router.get("/jobs", summary="Recent QE archive worker jobs")
+def list_qe_archive_jobs(
+    status: str | None = Query(None, description="Optional archive job status filter."),
+    limit: int = Query(50, ge=1, le=500),
+):
+    return {
+        "status": "success",
+        "data": QEArchiveRepository().list_archive_jobs(status=status, limit=limit),
     }
 
 
@@ -83,6 +116,21 @@ def run_qe_archive_backfill(request: QEArchiveBackfillRequest):
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/worker/run-once", summary="Process QE archive outbox once")
+def run_qe_archive_worker_once(request: QEArchiveWorkerRunRequest):
+    """Run one confirmed archive worker batch without enabling a scheduler."""
+
+    if request.confirm_run != WORKER_CONFIRM_TEXT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"worker run requires confirm_run={WORKER_CONFIRM_TEXT}",
+        )
+    return {
+        "status": "success",
+        "data": get_worker_service(worker_id=request.worker_id, enabled=True).run_once(limit=request.limit),
+    }
 
 
 @router.get("/runs/{run_id}/quality", summary="QE archive run quality summary")

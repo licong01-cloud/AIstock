@@ -614,3 +614,11 @@ Important directories:
 - Direct-repair implementation plan is recorded at `docs/architecture/qlib_minute_bin_direct_repair_plan_20260502.md`.
 - Important distinction: prior Codex work only diagnosed/documented the gap and did not modify Qlib bin files; the historical `dump_limit_price_minute_bins.py` overlay filled only `prev_close/up_limit_price/down_limit_price`, leaving `open/high/low/close/volume/amount/factor` missing in the affected official minute bin offsets.
 - Any future repair must be dry-run first, then backed up, then patch all required fields consistently; do not patch only `close.1min.bin`, do not fill zeros/defaults, and fail fast on DB row, factor, offset, field-file, or checksum mismatch.
+
+## QE Archive Durable Outbox / UI Update - 2026-05-02
+
+- QE archive realtime ingestion now defaults to durable outbox mode when `QE_ARCHIVE_REALTIME_ENABLED` is explicitly enabled. Disabled mode still performs no writes; `QE_ARCHIVE_REALTIME_MODE=direct` is retained only for diagnostic/rollback direct archive writes.
+- Added API-facing one-shot worker service and endpoint `/api/v1/qe-archive/worker/run-once`, requiring `confirm_run=QE_ARCHIVE_WORKER_RUN`; no scheduler/startup worker is registered. Added `/outbox` and `/jobs` read APIs for queue/job monitoring.
+- Added first QE Archive frontend route `/qe-archive` plus API client, sidebar entry, dry-run/write backfill panel, worker run-once panel, warehouse health, recent outbox/job tables, and run quality lookup. UI uses readable Chinese business labels and not raw JSON as the primary operator view.
+- Added mocked Playwright E2E for QE Archive UI and `QE_ARCHIVE_UI_MOCK_API=1` support in `qe_archive_ui`, allowing UI route/workflow validation without restarting or depending on production backend `8001`.
+- Validation record: `tests/aistock_validation/history/qe_archive/20260502_231049_l3_qe-archive-realtime-warehouse-validation.md`. `qe_archive_backend`, `qe_archive_data_quality`, `qe_archive_ui` with mocked API, and full `qe_archive_l3` passed; local DB still has 27/27 managed tables, 458/458 commented columns, `run_count=11`, and `pending_outbox_count=0`.

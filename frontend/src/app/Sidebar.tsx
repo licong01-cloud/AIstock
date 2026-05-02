@@ -24,6 +24,7 @@ const NAV_GROUPS: {
       { href: "/quantevolver/execution-algorithms", label: "⚡ 执行算法库" },
       { href: "/quantevolver/compose", label: "🔧 组合配置" },
       { href: "/quantevolver/experiments", label: "🧪 实验历史" },
+      { href: "/qe-archive", label: "🗄️ QE 实验数仓" },
       { href: "/quantevolver/evolution", label: "🔁 自动演进" },
       { href: "/quantevolver/multi-alpha/diagnostics", label: "🔮 多Alpha 诊断" },
       { href: "/quantevolver/multi-alpha/evolve-wizard", label: "🧬 多Alpha 演进" },

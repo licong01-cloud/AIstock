@@ -47,12 +47,29 @@ class QEArchiveEventCapture:
         loop_index: int | None = None,
         payload: Mapping[str, Any] | None = None,
     ) -> bool:
+        return bool(
+            self.enqueue_loop_completed_result(
+                task_id=task_id,
+                loop_id=loop_id,
+                loop_index=loop_index,
+                payload=payload,
+            ).get("inserted")
+        )
+
+    def enqueue_loop_completed_result(
+        self,
+        *,
+        task_id: str,
+        loop_id: str,
+        loop_index: int | None = None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         event_payload = dict(payload or {})
         event_payload.setdefault("task_id", task_id)
         event_payload.setdefault("loop_id", loop_id)
         if loop_index is not None:
             event_payload.setdefault("loop_index", loop_index)
-        return self._insert_event(
+        return self._insert_event_result(
             event_type="qe.loop.completed",
             source_system="qe",
             source_id=task_id,
@@ -66,9 +83,22 @@ class QEArchiveEventCapture:
         experiment_id: str,
         payload: Mapping[str, Any] | None = None,
     ) -> bool:
+        return bool(
+            self.enqueue_experiment_completed_result(
+                experiment_id=experiment_id,
+                payload=payload,
+            ).get("inserted")
+        )
+
+    def enqueue_experiment_completed_result(
+        self,
+        *,
+        experiment_id: str,
+        payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         event_payload = dict(payload or {})
         event_payload.setdefault("experiment_id", experiment_id)
-        return self._insert_event(
+        return self._insert_event_result(
             event_type="qe.experiment.completed",
             source_system="qe",
             source_id=experiment_id,
@@ -76,7 +106,7 @@ class QEArchiveEventCapture:
             payload=event_payload,
         )
 
-    def _insert_event(
+    def _insert_event_result(
         self,
         *,
         event_type: str,
@@ -84,15 +114,23 @@ class QEArchiveEventCapture:
         source_id: str,
         source_sub_id: str | None,
         payload: Mapping[str, Any],
-    ) -> bool:
-        if not self.enabled:
-            return False
-        return self._repository.insert_outbox_event(
-            OutboxEventRecord(
-                event_type=event_type,
-                source_system=source_system,
-                source_id=source_id,
-                source_sub_id=source_sub_id,
-                payload=payload,
-            )
+    ) -> dict[str, Any]:
+        event = OutboxEventRecord(
+            event_type=event_type,
+            source_system=source_system,
+            source_id=source_id,
+            source_sub_id=source_sub_id,
+            payload=payload,
         )
+        if not self.enabled:
+            return {"inserted": False, "skipped_reason": "disabled", "event_id": event.event_id}
+        inserted = self._repository.insert_outbox_event(event)
+        return {
+            "inserted": inserted,
+            "event_id": event.event_id,
+            "event_type": event.event_type,
+            "source_system": event.source_system,
+            "source_id": event.source_id,
+            "source_sub_id": event.source_sub_id,
+            "duplicate": not inserted,
+        }
