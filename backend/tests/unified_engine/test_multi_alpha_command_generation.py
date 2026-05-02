@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
+from backend.services.quantevolver import config_composer as config_composer_module
 from backend.services.quantevolver.config_composer import ConfigComposer
 from backend.services.quantevolver.meta_model import MetaModelCombiner
 from backend.services.quantevolver.multi_alpha_engine import MultiAlphaEngine
@@ -127,8 +128,11 @@ class TestConfigComposerCommandGeneration:
             use_custom_model=False,
             backtest_freq="1min",
         )
+        expected_factor_cache = composer._windows_to_wsl_path(
+            str(config_composer_module.FACTOR_CACHE_ROOT_WIN)
+        )
 
-        assert any("/mnt/f/Dev/AIstock/rdagent_assets/factor_values" in line for line in env_lines)
+        assert any(expected_factor_cache in line for line in env_lines)
         assert all(not part.startswith("cd ") for part in core_parts)
         assert "python prepare_factors.py" in core_parts
         assert ". ./.factor_env" in core_parts
@@ -146,7 +150,7 @@ class TestConfigComposerCommandGeneration:
         assert '/opt/conda/etc/profile.d/conda.sh' in chain
         assert 'conda activate "${QLIB_WSL_CONDA_ENV:-rdagent-gpu}"' in chain
 
-    def test_hmm_precompute_uses_robust_conda_activate_chain(self):
+    def test_hmm_missing_local_coefficients_fails_without_subprocess(self):
         composer = ConfigComposer()
         strategy_params = {
             "sector_hmm_model_path": "F:/tmp/models.json",
@@ -155,41 +159,36 @@ class TestConfigComposerCommandGeneration:
         }
         data_split = {"test_start": "2024-01-01", "backtest_end": "2024-01-31"}
 
-        with patch("subprocess.run") as mock_run, patch.dict("os.environ", {"TDX_DB_PASSWORD": "secret"}, clear=False):
-            mock_run.side_effect = [
-                SimpleNamespace(returncode=1, stdout="", stderr=""),
-                SimpleNamespace(returncode=0, stdout="10.0.0.1\n", stderr=""),
-                SimpleNamespace(
-                    returncode=0,
-                    stdout='{"daily_coefficients": {"2024-01-02": {"801010.SI": 1.05}}, "stock_sector_map": {"000001.SZ": "801010.SI"}, "sector_count": 1}',
-                    stderr="",
-                ),
-            ]
+        with patch("subprocess.run") as mock_run:
+            with pytest.raises(RuntimeError, match="must not invoke WSL"):
+                composer._precompute_hmm_coefficients(strategy_params, data_split)
+            mock_run.assert_not_called()
 
-            composer._precompute_hmm_coefficients(strategy_params, data_split)
+    def test_hmm_precompute_rejects_empty_local_coefficients(self, tmp_path, monkeypatch):
+        import json
+        import backend.services.quantevolver.config_composer as composer_module
 
-            cmd = mock_run.call_args_list[-1].args[0][3]
-            assert '[ -n "${QLIB_WSL_CONDA_SH:-}" ]' in cmd
-            assert '$HOME/miniconda3/etc/profile.d/conda.sh' in cmd
-            assert 'conda activate "${QLIB_WSL_CONDA_ENV:-rdagent-gpu}"' in cmd
-
-    def test_hmm_precompute_rejects_empty_coefficients(self):
         composer = ConfigComposer()
+        project_root = tmp_path / "project"
+        model_path = project_root / "backend" / "data" / "hmm_models" / "snap" / "models.json"
+        model_path.parent.mkdir(parents=True)
+        model_path.write_text("{}", encoding="utf-8")
+        coeff_path = model_path.parent / "coefficients_preset_A_2024-01-01_2024-01-31.json"
+        coeff_path.write_text(
+            json.dumps({"daily_coefficients": {}, "stock_sector_map": {}, "sector_count": 0}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(composer_module, "AISTOCK_PROJECT_ROOT", project_root)
         strategy_params = {
-            "sector_hmm_model_path": "F:/tmp/models.json",
+            "sector_hmm_model_path": str(model_path),
             "hmm_signal_preset": "preset_A",
         }
         data_split = {"test_start": "2024-01-01", "backtest_end": "2024-01-31"}
 
-        with patch("subprocess.run") as mock_run, patch.dict("os.environ", {"TDX_DB_PASSWORD": "secret"}, clear=False):
-            mock_run.side_effect = [
-                SimpleNamespace(returncode=1, stdout="", stderr=""),
-                SimpleNamespace(returncode=0, stdout="10.0.0.1\n", stderr=""),
-                SimpleNamespace(returncode=0, stdout='{"daily_coefficients": {}, "stock_sector_map": {}, "sector_count": 0}', stderr=""),
-            ]
-
+        with patch("subprocess.run") as mock_run:
             with pytest.raises(RuntimeError, match="daily_coefficients"):
                 composer._precompute_hmm_coefficients(strategy_params, data_split)
+            mock_run.assert_not_called()
 
     def test_hmm_precompute_strict_config_rejects_unapproved_window(self):
         composer = ConfigComposer()
@@ -235,10 +234,9 @@ class TestConfigComposerCommandGeneration:
         data_split = {"test_start": "2024-07-01", "backtest_end": "2026-03-03"}
 
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="missing")
-            with pytest.raises(RuntimeError, match="预生成系数文件"):
+            with pytest.raises(RuntimeError, match="must not invoke WSL"):
                 composer._precompute_hmm_coefficients(strategy_params, data_split)
-            assert mock_run.call_count == 1
+            mock_run.assert_not_called()
 
     def test_generate_auto_wsl_command_keeps_legacy_cd_prefix(self):
         composer = ConfigComposer()

@@ -1,6 +1,6 @@
 ﻿# QE Read And Cleanup Validation Matrix
 
-This matrix covers QuantEvolver / QE read-only experiment data access plus the cleanup flows that have been explicitly approved and remediated. It intentionally excludes experiment creation, dispatch/scheduling, retry, rerun, resume, fork, and append until the user explicitly approves those phases.
+This matrix covers QuantEvolver / QE read-only experiment data access, cleanup flows, and the approved creation/execution mutation paths that must not directly access WSL/RD-Agent worker filesystems.
 
 ## Business Goal
 
@@ -49,6 +49,9 @@ These checks cover non-create, non-retry, non-resume paths remediated after the 
 - RD-Agent sync admin `/tasks/{task_id}/complete_assets` proxies the RD-Agent node API; it must not run `wsl`, `subprocess`, or WSL-only helper scripts.
 - QE factor-cache remote sync must communicate through execution-node factor-cache APIs only; it must not shell out to WSL, SSH, rsync, or directly create/read remote cache directories.
 - QE filtered stock-pool delivery for create/custom_evo/fork flows must use AIstock-owned local `stock_pools` cache plus QE workspace loop payloads; it must not shell out to WSL, SSH, scp, or directly create/read remote instruments directories from Windows.
+- QE experiment generation/regeneration, retry, fork/clone, custom_evo rerun/append, and cross-node backtest-only submission must package files through API/payload flows; they must not copy to `QE_WORKSPACE_WIN`, read `RDAGENT_FACTOR_TEMPLATE_WIN` from a Linux/WSL path, or dynamically run WSL HMM precompute from Windows.
+- QE generation local roots (`QE_EXPERIMENTS_ROOT`, `QE_PROGRAMS_WIN`, `FACTOR_CACHE_ROOT_WIN`) must resolve to guarded AIstock-owned caches or bundled templates; legacy worker paths in env are ignored or rejected before any local read/write.
+- HMM-enabled QE generation/retry/clone must use a precomputed local artifact or node-sourced loop artifact; missing coefficients fail fast instead of invoking WSL or converting `/mnt/...` to Windows paths.
 - Selection Center HMM runtime must not convert `/mnt/...` model/coefficient artifact paths into Windows paths; remote worker paths fail fast instead of being read locally.
 - StrategyPackage execution model resolver must reject `/mnt/...` and WSL/worker model paths; it must not translate worker paths into Windows drive paths or probe them locally.
 
@@ -137,6 +140,8 @@ python -m pytest backend/tests/unified_engine/test_worker_workspace_policy_remai
 python -m pytest backend/tests/unified_engine/test_factor_cache_remote_sync_policy.py -q
 python -m pytest backend/tests/unified_engine/test_qe_config_truth.py -k "stock_pool" -q
 python -m pytest backend/tests/unified_engine/test_backtest_executor.py -k "stock_pool" -q
+python -m pytest backend/tests/unified_engine/test_qe_config_truth.py -k "workspace_direct_access or hmm" -q
+python -m pytest backend/tests/unified_engine/test_custom_evo_mutation_routes.py backend/tests/unified_engine/test_backtest_executor.py -q
 ```
 
 ## Evidence

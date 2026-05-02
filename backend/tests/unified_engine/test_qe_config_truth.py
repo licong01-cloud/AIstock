@@ -62,7 +62,7 @@ def test_remote_stock_pool_sync_has_no_direct_worker_directory_commands():
     assert "_run_checked" not in source
 
 
-def test_hmm_coefficients_read_local_artifact_before_legacy_fallback(monkeypatch, tmp_path):
+def test_hmm_coefficients_read_local_artifact_without_legacy_wsl_fallback(monkeypatch, tmp_path):
     import backend.services.quantevolver.config_composer as composer_module
     from unittest.mock import patch
 
@@ -94,6 +94,70 @@ def test_hmm_coefficients_read_local_artifact_before_legacy_fallback(monkeypatch
 
     payload = json.loads(result)
     assert payload["daily_coefficients"]["2024-07-01"]["801010.SI"] == 1.0
+
+
+def test_hmm_linux_worker_model_path_is_not_converted_to_windows(monkeypatch):
+    from unittest.mock import patch
+
+    linux_worker_model_path = "/".join(
+        ["", "mnt", "worker", "AIstock", "backend", "data", "hmm_models", "snap", "models.json"]
+    )
+    with patch("subprocess.run") as mock_run:
+        with pytest.raises(RuntimeError, match="must not invoke WSL"):
+            ConfigComposer()._precompute_hmm_coefficients(
+                {
+                    "sector_hmm_model_path": linux_worker_model_path,
+                    "hmm_signal_preset": "preset_A",
+                },
+                {"test_start": "2024-07-01", "backtest_end": "2026-04-27"},
+            )
+        mock_run.assert_not_called()
+
+
+def test_qe_generation_code_has_no_windows_worker_workspace_direct_access():
+    import inspect
+    import backend.services.quantevolver.config_composer as composer_module
+
+    source = Path(composer_module.__file__).read_text(encoding="utf-8")
+    assert "QE_WORKSPACE_WIN" not in source
+    assert "QE_WORKSPACE_WIN.parent" not in source
+    for fn in (
+        ConfigComposer.compose_experiment,
+        ConfigComposer.regenerate_experiment,
+        ConfigComposer._build_strategy_py_content,
+        ConfigComposer._write_custom_strategy,
+        ConfigComposer._precompute_hmm_coefficients,
+        ConfigComposer._api_sync_experiment_files,
+        ConfigComposer._get_read_exp_res_content,
+    ):
+        fn_source = inspect.getsource(fn)
+        assert "QE_WORKSPACE_WIN" not in fn_source
+        assert "subprocess.run" not in fn_source
+        assert '["wsl"' not in fn_source
+
+
+def test_strategy_dependency_env_rejects_linux_worker_root(monkeypatch):
+    monkeypatch.setenv("RDAGENT_FACTOR_TEMPLATE_WIN", "/home/lc999/RD-Agent-main/rdagent/scenarios/qlib")
+
+    with pytest.raises(ValueError, match="Linux/WSL paths are forbidden"):
+        ConfigComposer._strategy_dependency_roots()
+
+
+def test_qe_template_root_rejects_linux_worker_path(monkeypatch):
+    import backend.services.quantevolver.config_composer as composer_module
+
+    linux_worker_root = Path("/".join(["", "mnt", "worker", "qe_programs"]))
+    monkeypatch.setattr(composer_module, "QE_PROGRAMS_WIN", linux_worker_root)
+
+    with pytest.raises(Exception, match="direct worker workspace path access is forbidden"):
+        ConfigComposer()._get_read_exp_res_content()
+
+
+def test_qe_api_sync_rejects_worker_experiment_dir_before_http():
+    linux_worker_dir = Path("/".join(["", "mnt", "worker", "qe_workspace", "exp-a"]))
+
+    with pytest.raises(Exception, match="direct worker workspace path access is forbidden"):
+        ConfigComposer()._api_sync_experiment_files("exp-a", linux_worker_dir)
 
 
 def test_qe_default_split_uses_safe_backtest_end_20260427():

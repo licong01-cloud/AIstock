@@ -31,6 +31,9 @@ def default_aistock_artifact_roots() -> list[Path]:
         root / "rdagent_assets" / "factor_values",
         root / "rdagent_assets" / "factor_values_realtime",
         root / "rdagent_assets" / "qe_factors",
+        root / "rdagent_assets" / "qe_experiments",
+        root / "rdagent_assets" / "qe_programs",
+        root / "rdagent_assets" / "qe_strategies",
         root / "stock_pools",
         root / "backend" / "data" / "hmm_models",
         root / "qe_archive",
@@ -85,6 +88,8 @@ def is_forbidden_worker_workspace_path(path: Path | str) -> bool:
     if normalized.startswith("//wsl$") or normalized.startswith("//wsl.localhost"):
         return True
     if normalized.startswith("/mnt/") or "/mnt/" in normalized:
+        return True
+    if "/qe_workspace" in normalized or "/rdagent_workspace" in normalized:
         return True
 
     candidate = Path(raw)

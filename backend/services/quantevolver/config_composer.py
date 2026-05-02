@@ -22,7 +22,10 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ...db.pg_pool import get_conn
-from ..strategy_package.workspace_policy import ensure_aistock_artifact_path
+from ..strategy_package.workspace_policy import (
+    ensure_aistock_artifact_path,
+    ensure_not_forbidden_worker_workspace_path,
+)
 from .experiment_config import normalize_label_horizon
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
@@ -42,32 +45,67 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(os.getenv(name, str(default)))
 
 
-# QE runtime paths must come from environment/configuration or repo-local artifact roots.
-QE_WORKSPACE_WIN = _env_path(
-    "QE_WORKSPACE_WIN",
-    AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_workspace",
-)
-QE_WORKSPACE_WSL = os.getenv("QE_WORKSPACE_WSL", _win_to_wsl_guess(QE_WORKSPACE_WIN))
+def _safe_artifact_root(name: str, default: Path, *, purpose: str) -> Path:
+    """Resolve a local AIstock artifact root and reject worker/workspace paths."""
+    raw_value = os.getenv(name)
+    candidate = Path(raw_value) if raw_value else default
+    try:
+        return ensure_aistock_artifact_path(
+            candidate,
+            purpose=purpose,
+            extra_roots=[default],
+        )
+    except Exception:
+        if not raw_value:
+            raise
+        logger.warning(
+            "%s points outside AIstock local artifact roots and will be ignored: %s",
+            name,
+            raw_value,
+        )
+        return ensure_aistock_artifact_path(
+            default,
+            purpose=purpose,
+            extra_roots=[default],
+        )
 
-QE_PROGRAMS_WIN = _env_path(
+
+# QE workspace is a node-side path. Windows-side code must use node
+# APIs/payloads instead of dereferencing worker files directly.
+_DEFAULT_QE_WORKSPACE_LOCAL = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_workspace"
+QE_WORKSPACE_WSL = os.getenv("QE_WORKSPACE_WSL", _win_to_wsl_guess(_DEFAULT_QE_WORKSPACE_LOCAL))
+
+QE_PROGRAMS_WIN = _safe_artifact_root(
     "QE_PROGRAMS_WIN",
     AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_programs",
+    purpose="QE program/template local root",
 )
+BUNDLED_QE_TEMPLATE_ROOT = Path(__file__).resolve().parent / "templates"
 QE_PROGRAMS_WSL = os.getenv("QE_PROGRAMS_WSL", _win_to_wsl_guess(QE_PROGRAMS_WIN))
 
-QE_EXPERIMENTS_ROOT = _env_path(
+QE_EXPERIMENTS_ROOT = _safe_artifact_root(
     "QE_EXPERIMENTS_ROOT",
     AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_experiments",
+    purpose="QE experiment local artifact root",
 )
-FACTOR_CACHE_ROOT_WIN = _env_path(
+FACTOR_CACHE_ROOT_WIN = _safe_artifact_root(
     "FACTOR_CACHE_ROOT_WIN",
     AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values",
+    purpose="QE factor-cache local artifact root",
 )
 
 RDAGENT_FACTOR_DATA_WSL = os.getenv("RDAGENT_FACTOR_DATA_WSL", "").strip()
 QLIB_DATA_PATH_WSL = os.getenv("QLIB_DATA_PATH_WSL", "").strip()
 QLIB_MINUTE_PATH_WSL = os.getenv("QLIB_MINUTE_PATH_WSL", "").strip()
 RDAGENT_CODE_ROOT_WSL = os.getenv("QLIB_RDAGENT_ROOT_WSL", "").strip()
+
+
+def _qe_experiment_dir(experiment_name: str) -> Path:
+    return ensure_aistock_artifact_path(
+        QE_EXPERIMENTS_ROOT / experiment_name,
+        purpose=f"QE experiment local artifact directory: {experiment_name}",
+        extra_roots=[QE_EXPERIMENTS_ROOT],
+    )
 
 # QE/RDAgent default data split.
 #
@@ -123,14 +161,15 @@ SUPPORTED_QE_EXECUTION_ALGOS = {
 DEFAULT_QE_EXECUTION_ALGO = "TWAP"
 SUSPEND_FILTER_FILE = "qe_suspend_filter.json"
 PRECOMPUTED_HMM_COEFF_JSON_PARAM = "_precomputed_hmm_coefficients_json"
-RDAGENT_FACTOR_TEMPLATE_WIN = Path(os.getenv(
-    "RDAGENT_FACTOR_TEMPLATE_WIN",
-    str(QE_WORKSPACE_WIN.parent / "rdagent" / "scenarios" / "qlib" / "experiment" / "factor_template"),
-))
+QE_LOCAL_STRATEGY_ROOTS = [
+    AISTOCK_PROJECT_ROOT / "backend" / "rebalance_strategies",
+    AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_strategies",
+    AISTOCK_PROJECT_ROOT / "scripts",
+]
 AUTHORITATIVE_QE_HELPER_ASSETS = {
-    # V25 is a strategy/model asset. The framework may copy it into a workspace,
-    # but must not treat a divergent local script copy as the asset authority.
-    "tail_twap_v25_strategy.py": RDAGENT_FACTOR_TEMPLATE_WIN / "tail_twap_v25_strategy.py",
+    # V25 is a strategy/model asset. Keep the authority in the AIstock repo
+    # instead of probing an RDAgent/WSL workspace from Windows.
+    "tail_twap_v25_strategy.py": AISTOCK_PROJECT_ROOT / "scripts" / "tail_twap_v25_strategy.py",
 }
 
 
@@ -378,6 +417,44 @@ class ConfigComposer:
                     f"sha256={authoritative_hash}. Refusing to copy a divergent strategy asset."
                 )
         return authoritative_path
+
+    @staticmethod
+    def _strategy_dependency_roots() -> list[Path]:
+        roots = list(QE_LOCAL_STRATEGY_ROOTS)
+        env_root = os.getenv("RDAGENT_FACTOR_TEMPLATE_WIN")
+        if env_root:
+            candidate = Path(env_root)
+            ensure_not_forbidden_worker_workspace_path(
+                candidate,
+                purpose="QE strategy dependency source root",
+            )
+            raw = str(env_root).replace("\\", "/")
+            if raw.startswith("/") or raw.startswith("//"):
+                raise ValueError(
+                    "RDAGENT_FACTOR_TEMPLATE_WIN must point to an AIstock-local directory; "
+                    f"Linux/WSL paths are forbidden: {env_root}"
+                )
+            roots.append(candidate)
+        return roots
+
+    @classmethod
+    def _resolve_strategy_dependency_path(
+        cls,
+        module_name: str,
+        allowed_external_modules: set[str],
+    ) -> Path | None:
+        """Resolve strategy dependencies from AIstock-local code roots only."""
+        for root in cls._strategy_dependency_roots():
+            if root.name == "scripts" and module_name not in allowed_external_modules:
+                continue
+            candidate = root / f"{module_name}.py"
+            ensure_not_forbidden_worker_workspace_path(
+                candidate,
+                purpose=f"QE strategy dependency {module_name}",
+            )
+            if candidate.exists():
+                return candidate
+        return None
 
     @staticmethod
     def _normalize_execution_algo(execution_algo: Optional[str]) -> str:
@@ -732,7 +809,7 @@ class ConfigComposer:
         experiment_name = experiment_id  # 两者统一
 
         # 创建实验目录（在 AIstock 侧本地保存一份）
-        exp_dir = QE_EXPERIMENTS_ROOT / experiment_name
+        exp_dir = _qe_experiment_dir(experiment_name)
         exp_dir.mkdir(parents=True, exist_ok=True)
 
         # 通过API在RDAgent侧创建实验工作区并链接数据文件
@@ -919,10 +996,6 @@ class ConfigComposer:
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
-                # 同时复制到 qe_workspace（实际执行目录，qrun_limit_minute.py 从此目录加载）
-                ws_dir = QE_WORKSPACE_WIN / experiment_name
-                if ws_dir.exists():
-                    shutil.copy2(bench_src, ws_dir / "benchmark_sh000300.parquet")
         for helper_name in ("qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
             helper_src = scripts_dir / helper_name
             if helper_src.exists():
@@ -934,9 +1007,9 @@ class ConfigComposer:
         # benchmark parquet 也复制到日线实验的 qe_workspace（qrun_limit.py 同样需要）
         bench_src = scripts_dir / "benchmark_sh000300.parquet"
         if bench_src.exists():
-            ws_dir = QE_WORKSPACE_WIN / experiment_name
-            if ws_dir.exists() and not (ws_dir / "benchmark_sh000300.parquet").exists():
-                shutil.copy2(bench_src, ws_dir / "benchmark_sh000300.parquet")
+            local_benchmark = exp_dir / "benchmark_sh000300.parquet"
+            if not local_benchmark.exists():
+                shutil.copy2(bench_src, local_benchmark)
 
         # 如果模型使用自定义源码，写入实验目录（model.py + model_cls导出）
         if model_info and model_info.get("code_text"):
@@ -1328,11 +1401,8 @@ class ConfigComposer:
 
         # 处理相对导入：读取依赖文件，转换为本地导入
         import re as _re
-        strategy_pkg_dir = Path(__file__).parent.parent / "rebalance_strategies"
-        # factor_template 目录：score_weighted_strategy.py 等策略基类所在位置
-        _rdagent_root = QE_WORKSPACE_WIN.parent
-        factor_template_dir = _rdagent_root / "rdagent" / "scenarios" / "qlib" / "experiment" / "factor_template"
-        # 只允许复制策略类文件，避免误复制 qrun_limit.py / read_exp_res.py 等运行时文件
+        # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
+        # RDAgent/WSL worker workspace 或误复制运行时文件。
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
                                    "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "close_execution_strategy", "qe_suspend_filter", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
         deps_dict: Dict[str, str] = {}
@@ -1346,11 +1416,8 @@ class ConfigComposer:
                 m = _re.match(r'^(\s*)from\s+\.(\w+)\s+import\s+(.+)$', s)
                 if m:
                     indent, mod, imps = m.group(1), m.group(2), m.group(3)
-                    # 先查 rebalance_strategies，再查 factor_template（仅白名单模块）
-                    dep = strategy_pkg_dir / f"{mod}.py"
-                    if not dep.exists() and mod in _STRATEGY_DEP_WHITELIST:
-                        dep = factor_template_dir / f"{mod}.py"
-                    if dep.exists() and mod not in collected:
+                    dep = self._resolve_strategy_dependency_path(mod, _STRATEGY_DEP_WHITELIST)
+                    if dep is not None and mod not in collected:
                         collected.add(mod)
                         dep_code = dep.read_text(encoding="utf-8")
                         dep_code = _resolve_deps(dep_code, collected)
@@ -1361,11 +1428,8 @@ class ConfigComposer:
                 m2 = _re.match(r'^(\s*)from\s+(\w+)\s+import\s+(.+)$', s)
                 if m2:
                     indent, mod, imps = m2.group(1), m2.group(2), m2.group(3)
-                    # 先查 rebalance_strategies，再查 factor_template（仅白名单模块）
-                    dep = strategy_pkg_dir / f"{mod}.py"
-                    if not dep.exists() and mod in _STRATEGY_DEP_WHITELIST:
-                        dep = factor_template_dir / f"{mod}.py"
-                    if dep.exists() and mod not in collected:
+                    dep = self._resolve_strategy_dependency_path(mod, _STRATEGY_DEP_WHITELIST)
+                    if dep is not None and mod not in collected:
                         collected.add(mod)
                         dep_code = dep.read_text(encoding="utf-8")
                         dep_code = _resolve_deps(dep_code, collected)
@@ -1438,7 +1502,11 @@ class ConfigComposer:
         if not exp_record:
             return {"ok": False, "error": f"实验 {experiment_id} 不存在"}
 
-        exp_dir = Path(exp_record.get("experiment_dir", ""))
+        exp_dir = ensure_aistock_artifact_path(
+            Path(exp_record.get("experiment_dir", "")),
+            purpose=f"QE result sync local artifact directory: {experiment_id}",
+            extra_roots=[QE_EXPERIMENTS_ROOT],
+        )
         if not exp_dir.exists():
             return {"ok": False, "error": f"实验目录不存在: {exp_dir}"}
 
@@ -1675,7 +1743,7 @@ class ConfigComposer:
                 raise ValueError(f"custom_params JSON 解析失败: {custom_params!r}") from e
 
         # 创建实验目录 (本地)
-        exp_dir = QE_EXPERIMENTS_ROOT / experiment_name
+        exp_dir = _qe_experiment_dir(experiment_name)
         exp_dir.mkdir(parents=True, exist_ok=True)
 
         # 默认数据划分
@@ -1808,10 +1876,6 @@ class ConfigComposer:
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
-                # 同时复制到 qe_workspace（实际执行目录）
-                ws_dir = QE_WORKSPACE_WIN / experiment_name
-                if ws_dir.exists():
-                    shutil.copy2(bench_src, ws_dir / "benchmark_sh000300.parquet")
         for helper_name in ("qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
             helper_src = scripts_dir / helper_name
             if helper_src.exists():
@@ -1822,9 +1886,9 @@ class ConfigComposer:
         # benchmark parquet 也复制到日线实验的 qe_workspace
         bench_src = scripts_dir / "benchmark_sh000300.parquet"
         if bench_src.exists():
-            ws_dir = QE_WORKSPACE_WIN / experiment_name
-            if ws_dir.exists() and not (ws_dir / "benchmark_sh000300.parquet").exists():
-                shutil.copy2(bench_src, ws_dir / "benchmark_sh000300.parquet")
+            local_benchmark = exp_dir / "benchmark_sh000300.parquet"
+            if not local_benchmark.exists():
+                shutil.copy2(bench_src, local_benchmark)
 
         # 如果模型使用自定义源码
         if model_info and model_info.get("code_text"):
@@ -3419,12 +3483,10 @@ class ConfigComposer:
         if not text:
             return None
         normalized = text.replace("\\", "/")
+        if normalized.startswith("/") or normalized.startswith("//"):
+            return None
         if len(normalized) >= 2 and normalized[1] == ":":
             return Path(normalized)
-        if normalized.startswith("/mnt/"):
-            parts = normalized.split("/")
-            if len(parts) >= 4 and len(parts[2]) == 1:
-                return Path(f"{parts[2].upper()}:/{'/'.join(parts[3:])}")
         candidate = Path(text)
         return candidate if candidate.is_absolute() else None
 
@@ -3629,6 +3691,11 @@ python read_exp_res.py
         此方法额外通过HTTP API同步一份，确保独立部署场景下也能正常工作。
         若API同步失败则抛错中断，避免RDAgent侧缺文件导致实验执行失败。
         """
+        exp_dir = ensure_aistock_artifact_path(
+            exp_dir,
+            purpose=f"QE experiment local files for API sync: {experiment_name}",
+            extra_roots=[QE_EXPERIMENTS_ROOT],
+        )
         try:
             from .qe_file_sync_client import QEFileSyncClient
             client = QEFileSyncClient()
@@ -3755,14 +3822,13 @@ model_cls = {nn_class_name}
     ) -> str:
         """获取 HMM 行业热度系数 JSON 字符串.
 
-        优先读取训练时预生成的系数文件（毫秒级），文件不存在时走 WSL 子进程实时计算。
+        只读取训练时预生成的本地系数文件，或使用调用方注入的预计算 JSON。
+        文件不存在时 fail-fast；Windows FastAPI 不再启动 WSL 子进程或读取 worker 路径。
         系数文件命名: coefficients_{preset}_{test_start}_{backtest_end}.json
         存放在 model_path 同级目录。
 
         Raises ValueError/RuntimeError on any failure — no silent fallback.
         """
-        import subprocess
-
         model_path = strategy_params.get("sector_hmm_model_path")
         if not model_path:
             raise ValueError("enable_sector_hmm=True 但未提供 sector_hmm_model_path")
@@ -3773,14 +3839,6 @@ model_cls = {nn_class_name}
             raise ValueError(f"data_split 缺少 test_start 或 backtest_end: {data_split}")
 
         preset_key = strategy_params.get("hmm_signal_preset", "preset_A")
-        presets = strategy_params.get("hmm_signal_presets", {})
-        preset_coeffs = None
-        if preset_key and preset_key in presets:
-            day_coeffs = presets[preset_key].get("coefficients", {})
-            preset_coeffs = day_coeffs.get("1") or next(iter(day_coeffs.values()), None)
-        if not preset_coeffs:
-            preset_coeffs = {"trending": 1.05, "neutral": 1.00, "fading": 0.96}
-
         hmm_config_json = strategy_params.get("hmm_config_json")
         if isinstance(hmm_config_json, str) and hmm_config_json.strip():
             hmm_config_json = json.loads(hmm_config_json)
@@ -3853,6 +3911,7 @@ model_cls = {nn_class_name}
         if local_coeff_text:
             data = json.loads(local_coeff_text)
             if "daily_coefficients" in data and "stock_sector_map" in data:
+                self._validate_hmm_coefficients_json(local_coeff_text)
                 logger.info(
                     f"HMM 系数文件本地命中: {coeff_filename} "
                     f"({data.get('sector_count', '?')} 行业, "
@@ -3860,120 +3919,17 @@ model_cls = {nn_class_name}
                 )
                 return local_coeff_text
 
-        # Legacy fallback for older local development nodes.  Current cross-node
-        # custom_evo flows should hit the AIstock-local coefficient file above and
-        # ship it through experiment_files instead of probing node filesystems.
-        if not model_path.startswith("/"):
-            mp = model_path.replace("\\", "/")
-            if len(mp) >= 2 and mp[1] == ":":
-                model_path = f"/mnt/{mp[0].lower()}{mp[2:]}"
-            else:
-                raise ValueError(f"无法识别的 model_path 格式: {model_path}")
-            logger.debug("HMM model_path converted for legacy local fallback: %s", model_path)
-
-        model_dir = model_path.rsplit("/", 1)[0]
-        coeff_path = f"{model_dir}/{coeff_filename}"
-        read_result = subprocess.run(
-            ["wsl", "bash", "-c", f"cat '{coeff_path}'"],
-            capture_output=True, text=True, timeout=10,
-            encoding="utf-8", errors="replace",
+        searched_path = (
+            str(local_model_path.parent / coeff_filename)
+            if local_model_path is not None
+            else f"{model_path}/{coeff_filename}"
         )
-        if read_result.returncode == 0 and read_result.stdout.strip():
-            data = json.loads(read_result.stdout)
-            if "daily_coefficients" in data and "stock_sector_map" in data:
-                logger.info(
-                    f"HMM 系数文件命中: {coeff_filename} "
-                    f"({data.get('sector_count', '?')} 行业, "
-                    f"{len(data['daily_coefficients'])} 天)"
-                )
-                return read_result.stdout.strip()
-        if strict_no_leakage:
-            raise RuntimeError(
-                "strict_no_leakage HMM 必须命中预生成系数文件，禁止实时回退生成以避免未来信息泄漏: "
-                f"{coeff_path}"
-            )
-
-        # ── 文件未命中 → WSL 子进程实时预计算 ──
-        logger.info(f"HMM 系数文件未命中: {coeff_path}，启动实时预计算")
-
-        # WSL 中访问 Windows 主机 DB
-        db_params = {
-            "db_host": os.getenv("TDX_DB_HOST", "127.0.0.1"),
-            "db_port": int(os.getenv("TDX_DB_PORT", "5432")),
-            "db_name": os.getenv("TDX_DB_NAME", "aistock"),
-            "db_user": os.getenv("TDX_DB_USER", "postgres"),
-            "db_password": os.environ["TDX_DB_PASSWORD"],
-        }
-        if db_params["db_host"] in ("127.0.0.1", "localhost"):
-            try:
-                _res = subprocess.run(
-                    ["wsl", "bash", "-c",
-                     "sed -n 's/^nameserver //p' /etc/resolv.conf | head -1"],
-                    capture_output=True, text=True, timeout=5,
-                    encoding="utf-8", errors="replace",
-                )
-                wsl_host_ip = _res.stdout.strip()
-                if wsl_host_ip:
-                    db_params["db_host"] = wsl_host_ip
-            except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
-                logger.debug("WSL host IP detection failed (non-critical): %s", e)
-
-        stdin_params = {
-            "model_path": model_path,
-            "test_start": test_start,
-            "backtest_end": backtest_end,
-            "preset_coeffs": preset_coeffs,
-            "preset_key": preset_key,
-            **db_params,
-        }
-        if hmm_config_json:
-            stdin_params["config_json"] = hmm_config_json
-
-        _script_abs = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts", "precompute_hmm_coefficients.py")
+        raise RuntimeError(
+            "HMM coefficients must be provided as a precomputed AIstock-local artifact "
+            "or via _precomputed_hmm_coefficients_json; Windows FastAPI must not invoke "
+            "WSL or probe worker paths during QE generation/retry/clone flows. "
+            f"missing={searched_path}"
         )
-        _mp = _script_abs.replace("\\", "/")
-        wsl_script = f"/mnt/{_mp[0].lower()}{_mp[2:]}" if len(_mp) >= 2 and _mp[1] == ":" else _mp
-        wsl_cmd = (
-            f"{self._build_conda_activate_chain()} && "
-            f"python {wsl_script} --output-path '{coeff_path}'"
-        )
-
-        logger.info(
-            f"HMM 预计算: model={model_path}, "
-            f"日期={test_start}~{backtest_end}, preset={preset_key}"
-        )
-
-        proc = subprocess.run(
-            ["wsl", "bash", "-c", wsl_cmd],
-            input=json.dumps(stdin_params, ensure_ascii=False),
-            capture_output=True, text=True, timeout=300,
-            encoding="utf-8", errors="replace",
-        )
-
-        if proc.stderr:
-            for line in proc.stderr.strip().splitlines():
-                logger.info(f"[HMM-WSL] {line}")
-
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"WSL HMM 预计算失败 (exit={proc.returncode}):\n{proc.stderr}"
-            )
-
-        stdout = proc.stdout.strip()
-        if not stdout:
-            raise RuntimeError("WSL HMM 预计算返回空结果")
-
-        result = json.loads(stdout)
-        self._validate_hmm_coefficients_json(stdout)
-
-        logger.info(
-            f"HMM 预计算完成并已缓存到文件: {coeff_filename}, "
-            f"{result.get('sector_count', '?')} 行业, "
-            f"{len(result['daily_coefficients'])} 天"
-        )
-
-        return stdout
 
     def _write_custom_strategy(self, exp_dir: Path, strategy_info: Dict) -> None:
         """将自定义策略源码写入实验目录的 custom_strategy.py。
@@ -3998,11 +3954,8 @@ model_cls = {nn_class_name}
         
         # 处理相对导入：递归复制依赖文件到实验目录，将相对导入转为本地导入
         import re as _re
-        strategy_pkg_dir = Path(__file__).parent.parent / "rebalance_strategies"
-        # factor_template 目录：score_weighted_strategy.py 等策略基类所在位置
-        _rdagent_root = QE_WORKSPACE_WIN.parent
-        factor_template_dir = _rdagent_root / "rdagent" / "scenarios" / "qlib" / "experiment" / "factor_template"
-        # 只允许复制策略类文件，避免误复制 qrun_limit.py / read_exp_res.py 等运行时文件
+        # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
+        # RDAgent/WSL worker workspace 或误复制运行时文件。
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
                                    "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "close_execution_strategy", "qe_suspend_filter", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
 
@@ -4015,11 +3968,8 @@ model_cls = {nn_class_name}
                 m = _re.match(r'^(\s*)from\s+\.(\w+)\s+import\s+(.+)$', s)
                 if m:
                     indent, mod, imps = m.group(1), m.group(2), m.group(3)
-                    # 先查 rebalance_strategies，再查 factor_template（仅白名单模块）
-                    dep = strategy_pkg_dir / f"{mod}.py"
-                    if not dep.exists() and mod in _STRATEGY_DEP_WHITELIST:
-                        dep = factor_template_dir / f"{mod}.py"
-                    if dep.exists() and mod not in copied:
+                    dep = self._resolve_strategy_dependency_path(mod, _STRATEGY_DEP_WHITELIST)
+                    if dep is not None and mod not in copied:
                         copied.add(mod)
                         dep_code = dep.read_text(encoding="utf-8")
                         dep_code = _copy_deps_recursive(dep_code, copied)
@@ -4031,11 +3981,8 @@ model_cls = {nn_class_name}
                 m2 = _re.match(r'^(\s*)from\s+(\w+)\s+import\s+(.+)$', s)
                 if m2:
                     indent, mod, imps = m2.group(1), m2.group(2), m2.group(3)
-                    # 先查 rebalance_strategies，再查 factor_template（仅白名单模块）
-                    dep = strategy_pkg_dir / f"{mod}.py"
-                    if not dep.exists() and mod in _STRATEGY_DEP_WHITELIST:
-                        dep = factor_template_dir / f"{mod}.py"
-                    if dep.exists() and mod not in copied:
+                    dep = self._resolve_strategy_dependency_path(mod, _STRATEGY_DEP_WHITELIST)
+                    if dep is not None and mod not in copied:
                         copied.add(mod)
                         dep_code = dep.read_text(encoding="utf-8")
                         dep_code = _copy_deps_recursive(dep_code, copied)
@@ -4289,7 +4236,15 @@ model_cls = {nn_class_name}
         模板文件维护在 QE 专用程序目录中，不再内嵌于本文件。
         这样 Phase 3 增强的诊断提取功能可以直接生效。
         """
-        template_path = QE_PROGRAMS_WIN / "templates" / "read_exp_res.py"
+        candidate_paths = [
+            ensure_aistock_artifact_path(
+                QE_PROGRAMS_WIN / "templates" / "read_exp_res.py",
+                purpose="QE read_exp_res.py local template",
+                extra_roots=[QE_PROGRAMS_WIN],
+            ),
+            BUNDLED_QE_TEMPLATE_ROOT / "read_exp_res.py",
+        ]
+        template_path = next((path for path in candidate_paths if path.exists()), candidate_paths[0])
         try:
             return template_path.read_text(encoding="utf-8")
         except FileNotFoundError:
