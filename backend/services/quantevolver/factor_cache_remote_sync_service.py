@@ -1,27 +1,28 @@
 """Remote synchronization for QE factor-value cache.
 
 The local cache under rdagent_assets/factor_values is the authority.  Remote
-nodes receive rsync copies for acceleration only; QE must still recompute on a
-cache miss.
+nodes receive cache copies for acceleration only; QE must still recompute on a
+cache miss.  Remote writes are performed through the execution-node API only:
+Windows-side code must never shell out into worker directories.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
-import shlex
-import subprocess
-import tempfile
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
-from urllib.parse import urlparse
+from typing import Any, Callable, Dict, Iterable, List, Optional
+from urllib.parse import quote
 
 from psycopg2.extras import RealDictCursor
+import requests
 
 from ...db.pg_pool import get_conn
+from ..strategy_package.workspace_policy import ensure_aistock_artifact_path
+from ..trading_core.errors import StrategyPackageValidationError
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -35,13 +36,6 @@ REMOTE_JOBS_PATH = REMOTE_SYNC_DIR / "jobs.ndjson"
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _win_to_wsl(path: Path | str) -> str:
-    text = str(path).replace("\\", "/")
-    if len(text) >= 2 and text[1] == ":":
-        return f"/mnt/{text[0].lower()}{text[2:]}"
-    return text
 
 
 def _sha256_file(path: Path) -> str:
@@ -65,33 +59,24 @@ def _save_json(path: Path, payload: Dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def _run_wsl_bash(script: str, timeout_s: int) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["wsl", "bash", "-lc", script],
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=timeout_s,
-        check=False,
-    )
+def _safe_factor_file_name(factor_name: str) -> str:
+    text = str(factor_name or "").strip()
+    if (
+        not text
+        or text in {".", ".."}
+        or "/" in text
+        or "\\" in text
+        or Path(text).name != text
+    ):
+        raise StrategyPackageValidationError(
+            "factor cache name must be a single safe path segment",
+            context={"factor_name": str(factor_name)},
+        )
+    return f"{text}.parquet"
 
 
-def _remote_host(api_base_url: str) -> Optional[str]:
-    parsed = urlparse(api_base_url or "")
-    host = parsed.hostname
-    if not host:
-        return None
-    return host
-
-
-def _is_local_host(host: Optional[str]) -> bool:
-    return str(host or "").lower() in {"", "127.0.0.1", "localhost", "::1"}
-
-
-def _default_remote_cache_dir(ssh_user: str) -> str:
-    return f"/home/{ssh_user}/aistock_cache/factor_values"
+class FactorCacheNodeApiUnavailable(RuntimeError):
+    """Raised when a node does not expose the required factor-cache API."""
 
 
 @dataclass(frozen=True)
@@ -99,30 +84,146 @@ class RemoteCacheNode:
     node_id: str
     display_name: Optional[str]
     api_base_url: str
-    ssh_user: str
-    host: str
     factor_cache_dir: Optional[str]
     status: Optional[str]
 
     @property
-    def ssh_target(self) -> str:
-        return f"{self.ssh_user}@{self.host}"
+    def cache_dir_param(self) -> Optional[str]:
+        return str(self.factor_cache_dir).strip() if self.factor_cache_dir else None
 
     @property
     def resolved_cache_dir(self) -> str:
-        return self.factor_cache_dir or _default_remote_cache_dir(self.ssh_user)
+        return self.cache_dir_param or "node-api-default"
+
+
+class FactorCacheNodeApiClient:
+    """HTTP-only client for execution-node factor-cache operations."""
+
+    def __init__(self, api_base_url: str, timeout_s: float = 60.0):
+        self.api_base_url = str(api_base_url or "").rstrip("/")
+        self.timeout_s = float(timeout_s)
+        if not self.api_base_url:
+            raise FactorCacheNodeApiUnavailable("node api_base_url is empty")
+
+    def _url(self, path: str) -> str:
+        return f"{self.api_base_url}/api/v1/qe_workspace/factor-cache/{path.lstrip('/')}"
+
+    @staticmethod
+    def _params(cache_dir: Optional[str]) -> Dict[str, str]:
+        return {"cache_dir": cache_dir} if cache_dir else {}
+
+    @staticmethod
+    def _raise_api_unavailable(exc: requests.exceptions.HTTPError, url: str) -> None:
+        response = exc.response
+        status = response.status_code if response is not None else "?"
+        if status == 404:
+            raise FactorCacheNodeApiUnavailable(
+                "node factor-cache API is unavailable; direct worker directory access is forbidden"
+            ) from exc
+        body = ""
+        try:
+            body = response.text[:300] if response is not None else ""
+        except Exception:
+            body = ""
+        raise RuntimeError(f"node factor-cache API HTTP {status}: {url} {body}") from exc
+
+    def get_meta(self, *, cache_dir: Optional[str]) -> Dict[str, Any]:
+        url = self._url("meta")
+        try:
+            resp = requests.get(url, params=self._params(cache_dir), timeout=self.timeout_s)
+            resp.raise_for_status()
+            payload = resp.json()
+        except requests.exceptions.HTTPError as exc:
+            self._raise_api_unavailable(exc, url)
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(f"node factor-cache meta request failed: {exc}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"node factor-cache meta response is invalid: {exc}") from exc
+
+        if isinstance(payload, dict) and isinstance(payload.get("meta"), dict):
+            return payload["meta"]
+        if isinstance(payload, dict) and isinstance(payload.get("factors"), dict):
+            return payload
+        raise RuntimeError(f"node factor-cache meta response missing factors: {payload}")
+
+    def factor_exists(self, *, factor_name: str, cache_dir: Optional[str]) -> bool:
+        url = self._url(f"factors/{quote(str(factor_name), safe='')}/status")
+        try:
+            resp = requests.get(url, params=self._params(cache_dir), timeout=self.timeout_s)
+            resp.raise_for_status()
+            payload = resp.json()
+        except requests.exceptions.HTTPError as exc:
+            self._raise_api_unavailable(exc, url)
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(f"node factor-cache status request failed: {exc}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"node factor-cache status response is invalid: {exc}") from exc
+        return bool(isinstance(payload, dict) and payload.get("exists") is True)
+
+    def upload_sync_bundle(
+        self,
+        *,
+        cache_dir: Optional[str],
+        factor_files: Dict[str, Path],
+        merged_meta: Dict[str, Any],
+        timeout_s: int,
+    ) -> Dict[str, Any]:
+        url = self._url("sync")
+        data = {
+            "meta_json": json.dumps(merged_meta, ensure_ascii=False),
+            "factor_names_json": json.dumps(list(factor_files.keys()), ensure_ascii=False),
+        }
+        if cache_dir:
+            data["cache_dir"] = cache_dir
+
+        try:
+            with ExitStack() as stack:
+                files = []
+                for factor_name, path in factor_files.items():
+                    files.append(
+                        (
+                            "parquet_files",
+                            (
+                                _safe_factor_file_name(factor_name),
+                                stack.enter_context(path.open("rb")),
+                                "application/octet-stream",
+                            ),
+                        )
+                    )
+                resp = requests.post(url, data=data, files=files, timeout=timeout_s)
+            resp.raise_for_status()
+            payload = resp.json()
+        except requests.exceptions.HTTPError as exc:
+            self._raise_api_unavailable(exc, url)
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(f"node factor-cache sync request failed: {exc}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"node factor-cache sync response is invalid: {exc}") from exc
+
+        if isinstance(payload, dict) and payload.get("ok") is False:
+            raise RuntimeError(f"node factor-cache sync returned ok=false: {payload}")
+        return payload if isinstance(payload, dict) else {"ok": True, "payload": payload}
 
 
 class FactorCacheRemoteSyncService:
-    """Synchronize local factor cache to remote QE nodes through rsync/ssh."""
+    """Synchronize local factor cache to remote QE nodes through node APIs."""
 
-    def __init__(self, local_cache_root: Path = LOCAL_CACHE_ROOT):
+    def __init__(
+        self,
+        local_cache_root: Path = LOCAL_CACHE_ROOT,
+        node_api_client_factory: Optional[Callable[[RemoteCacheNode, int], FactorCacheNodeApiClient]] = None,
+    ):
         self.local_cache_root = Path(local_cache_root)
+        ensure_aistock_artifact_path(self.local_cache_root, purpose="QE factor-cache local root")
         self.local_single_dir = self.local_cache_root / "single"
         self.local_meta_path = self.local_cache_root / "_meta.json"
         self.sync_dir = self.local_cache_root / "_remote_sync"
         self.status_path = self.sync_dir / "status.json"
         self.jobs_path = self.sync_dir / "jobs.ndjson"
+        ensure_aistock_artifact_path(self.sync_dir, purpose="QE factor-cache sync state directory")
+        self._node_api_client_factory = node_api_client_factory or (
+            lambda node, timeout_s: FactorCacheNodeApiClient(node.api_base_url, timeout_s=timeout_s)
+        )
 
     # ------------------------------------------------------------------
     # Node and metadata helpers
@@ -133,7 +234,7 @@ class FactorCacheRemoteSyncService:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT node_id, display_name, api_base_url, ssh_user,
+                    SELECT node_id, display_name, api_base_url,
                            factor_cache_dir, status
                     FROM infra.compute_nodes
                     ORDER BY node_id
@@ -143,17 +244,14 @@ class FactorCacheRemoteSyncService:
 
         nodes: List[RemoteCacheNode] = []
         for row in rows:
-            host = _remote_host(str(row.get("api_base_url") or ""))
-            ssh_user = str(row.get("ssh_user") or "").strip()
-            if _is_local_host(host) or not ssh_user:
+            api_base_url = str(row.get("api_base_url") or "").strip()
+            if not api_base_url:
                 continue
             nodes.append(
                 RemoteCacheNode(
                     node_id=str(row["node_id"]),
                     display_name=row.get("display_name"),
-                    api_base_url=str(row.get("api_base_url") or ""),
-                    ssh_user=ssh_user,
-                    host=str(host),
+                    api_base_url=api_base_url,
                     factor_cache_dir=row.get("factor_cache_dir"),
                     status=row.get("status"),
                 )
@@ -168,26 +266,14 @@ class FactorCacheRemoteSyncService:
         raise ValueError(f"Remote factor-cache node not found or not sync-capable: {node_id}")
 
     def _configure_default_dir_if_needed(self, node: RemoteCacheNode) -> RemoteCacheNode:
-        if node.factor_cache_dir:
-            return node
-        resolved = node.resolved_cache_dir
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE infra.compute_nodes
-                    SET factor_cache_dir = %s
-                    WHERE node_id = %s AND factor_cache_dir IS NULL
-                    """,
-                    (resolved, node.node_id),
-                )
+        # API-only sync does not invent or write remote filesystem paths from the
+        # Windows side.  When factor_cache_dir is absent the node API chooses its
+        # own server-side default.
         return RemoteCacheNode(
             node_id=node.node_id,
             display_name=node.display_name,
             api_base_url=node.api_base_url,
-            ssh_user=node.ssh_user,
-            host=node.host,
-            factor_cache_dir=resolved,
+            factor_cache_dir=node.factor_cache_dir,
             status=node.status,
         )
 
@@ -205,35 +291,27 @@ class FactorCacheRemoteSyncService:
                 continue
             if not entry.get("date_range"):
                 continue
-            parquet = self.local_single_dir / f"{name}.parquet"
+            parquet = self._local_parquet_path(name)
             if not parquet.exists():
                 continue
             result[name] = entry
         return result
 
-    def _remote_meta(self, node: RemoteCacheNode, timeout_s: int = 20) -> Dict[str, Any]:
-        remote_meta = f"{node.resolved_cache_dir.rstrip('/')}/_meta.json"
-        script = (
-            "ssh -o BatchMode=yes -o ConnectTimeout=8 "
-            f"{shlex.quote(node.ssh_target)} "
-            f"{shlex.quote(f'test -f {shlex.quote(remote_meta)} && cat {shlex.quote(remote_meta)} || echo {{\\\"factors\\\":{{}}}}')}"
-        )
-        proc = _run_wsl_bash(script, timeout_s=timeout_s)
-        if proc.returncode != 0:
-            raise RuntimeError((proc.stderr or proc.stdout or "ssh remote meta read failed").strip())
-        text = (proc.stdout or "").strip()
-        if not text:
-            return {"factors": {}}
-        return json.loads(text)
+    def _local_parquet_path(self, factor_name: str) -> Path:
+        path = self.local_single_dir / _safe_factor_file_name(factor_name)
+        return ensure_aistock_artifact_path(path, purpose="QE factor-cache local parquet")
 
-    def _remote_file_exists(self, node: RemoteCacheNode, remote_path: str, timeout_s: int = 10) -> bool:
-        script = (
-            "ssh -o BatchMode=yes -o ConnectTimeout=8 "
-            f"{shlex.quote(node.ssh_target)} "
-            f"{shlex.quote(f'test -f {shlex.quote(remote_path)}')}"
+    def _node_api_client(self, node: RemoteCacheNode, timeout_s: int) -> FactorCacheNodeApiClient:
+        return self._node_api_client_factory(node, timeout_s)
+
+    def _remote_meta(self, node: RemoteCacheNode, timeout_s: int = 20) -> Dict[str, Any]:
+        return self._node_api_client(node, timeout_s).get_meta(cache_dir=node.cache_dir_param)
+
+    def _remote_file_exists(self, node: RemoteCacheNode, factor_name: str, timeout_s: int = 10) -> bool:
+        return self._node_api_client(node, timeout_s).factor_exists(
+            factor_name=factor_name,
+            cache_dir=node.cache_dir_param,
         )
-        proc = _run_wsl_bash(script, timeout_s=timeout_s)
-        return proc.returncode == 0
 
     # ------------------------------------------------------------------
     # Stats and plan
@@ -258,20 +336,18 @@ class FactorCacheRemoteSyncService:
         local_entries = self._local_factor_entries(factor_names)
         remote_meta = self._remote_meta(node)
         remote_factors = remote_meta.get("factors") or {}
-        remote_root = node.resolved_cache_dir.rstrip("/")
 
         sync_items: List[Dict[str, Any]] = []
         skipped_items: List[Dict[str, Any]] = []
         local_missing: List[Dict[str, Any]] = []
         for name, local_entry in sorted(local_entries.items()):
-            local_parquet = self.local_single_dir / f"{name}.parquet"
+            local_parquet = self._local_parquet_path(name)
             if not local_parquet.exists():
                 local_missing.append({"factor_name": name, "reason": "local_parquet_missing"})
                 continue
             remote_entry = remote_factors.get(name) or {}
-            remote_parquet = f"{remote_root}/single/{name}.parquet"
             meta_match = isinstance(remote_entry, dict) and self._entry_matches(local_entry, remote_entry)
-            if not force and meta_match and self._remote_file_exists(node, remote_parquet):
+            if not force and meta_match and self._remote_file_exists(node, name):
                 skipped_items.append(
                     {
                         "factor_name": name,
@@ -308,7 +384,7 @@ class FactorCacheRemoteSyncService:
 
     def get_stats(self, node_id: Optional[str] = None, include_factor_status: bool = True) -> Dict[str, Any]:
         local_entries = self._local_factor_entries()
-        local_size = sum((self.local_single_dir / f"{name}.parquet").stat().st_size for name in local_entries)
+        local_size = sum(self._local_parquet_path(name).stat().st_size for name in local_entries)
         nodes = self.list_remote_nodes()
         selected_node_id = node_id or (nodes[0].node_id if nodes else None)
         remote_nodes: List[Dict[str, Any]] = []
@@ -319,11 +395,10 @@ class FactorCacheRemoteSyncService:
                 "node_id": node.node_id,
                 "display_name": node.display_name,
                 "status": node.status,
-                "host": node.host,
-                "ssh_user": node.ssh_user,
                 "factor_cache_dir": node.factor_cache_dir,
                 "resolved_factor_cache_dir": node.resolved_cache_dir,
                 "configured": bool(node.factor_cache_dir),
+                "sync_transport": "node_api",
             }
             try:
                 remote_meta = self._remote_meta(node)
@@ -421,7 +496,7 @@ class FactorCacheRemoteSyncService:
         }
         try:
             if sync_items:
-                self._run_rsync(node, sync_items, plan["remote_meta"], timeout_s=timeout_s)
+                self._sync_via_node_api(node, sync_items, plan["remote_meta"], timeout_s=timeout_s)
             job["status"] = "completed"
         except Exception as exc:
             job["status"] = "failed"
@@ -452,7 +527,7 @@ class FactorCacheRemoteSyncService:
         ok = all(job.get("status") == "completed" for job in jobs)
         return {"ok": ok, "jobs": jobs}
 
-    def _run_rsync(
+    def _sync_via_node_api(
         self,
         node: RemoteCacheNode,
         sync_items: List[Dict[str, Any]],
@@ -460,71 +535,37 @@ class FactorCacheRemoteSyncService:
         *,
         timeout_s: int,
     ) -> None:
-        remote_root = node.resolved_cache_dir.rstrip("/")
-        mkdir_cmd = (
-            "ssh -o BatchMode=yes -o ConnectTimeout=8 "
-            f"{shlex.quote(node.ssh_target)} "
-            f"{shlex.quote(f'mkdir -p {shlex.quote(remote_root)}/single')}"
+        local_meta = self.load_local_meta()
+        merged_meta = dict(remote_meta or {})
+        merged_factors = dict(merged_meta.get("factors") or {})
+        local_factors = local_meta.get("factors") or {}
+        factor_files: Dict[str, Path] = {}
+        for item in sync_items:
+            name = item["factor_name"]
+            if name not in local_factors:
+                raise RuntimeError(f"local factor meta missing: {name}")
+            path = self._local_parquet_path(name)
+            if not path.exists():
+                raise RuntimeError(f"local factor parquet missing: {name}")
+            merged_factors[name] = local_factors[name]
+            factor_files[name] = path
+
+        merged_meta["factors"] = merged_factors
+        merged_meta["as_of_date"] = local_meta.get("as_of_date") or merged_meta.get("as_of_date")
+        merged_meta["_last_remote_sync"] = {
+            "synced_at": _now_iso(),
+            "source": "AIstock",
+            "factor_count": len(sync_items),
+            "local_meta_sha256": _sha256_file(self.local_meta_path) if self.local_meta_path.exists() else None,
+            "transport": "node_api",
+        }
+
+        self._node_api_client(node, timeout_s).upload_sync_bundle(
+            cache_dir=node.cache_dir_param,
+            factor_files=factor_files,
+            merged_meta=merged_meta,
+            timeout_s=timeout_s,
         )
-        proc = _run_wsl_bash(mkdir_cmd, timeout_s=30)
-        if proc.returncode != 0:
-            raise RuntimeError((proc.stderr or proc.stdout or "remote mkdir failed").strip())
-
-        with tempfile.TemporaryDirectory(prefix="factor_cache_sync_") as tmpdir:
-            tmp_path = Path(tmpdir)
-            files_from = tmp_path / "files.txt"
-            files_from.write_text(
-                "".join(f"{item['factor_name']}.parquet\n" for item in sync_items),
-                encoding="utf-8",
-            )
-            src_single_wsl = _win_to_wsl(self.local_single_dir) + "/"
-            files_from_wsl = _win_to_wsl(files_from)
-            rsync_cmd = (
-                "rsync -az --partial --files-from="
-                f"{shlex.quote(files_from_wsl)} "
-                f"{shlex.quote(src_single_wsl)} "
-                f"{shlex.quote(node.ssh_target)}:{shlex.quote(remote_root + '/single/')}"
-            )
-            proc = _run_wsl_bash(rsync_cmd, timeout_s=timeout_s)
-            if proc.returncode != 0:
-                raise RuntimeError((proc.stderr or proc.stdout or "rsync parquet failed").strip())
-
-            local_meta = self.load_local_meta()
-            merged_meta = dict(remote_meta or {})
-            merged_factors = dict(merged_meta.get("factors") or {})
-            local_factors = local_meta.get("factors") or {}
-            for item in sync_items:
-                name = item["factor_name"]
-                merged_factors[name] = local_factors[name]
-            merged_meta["factors"] = merged_factors
-            merged_meta["as_of_date"] = local_meta.get("as_of_date") or merged_meta.get("as_of_date")
-            merged_meta["_last_remote_sync"] = {
-                "synced_at": _now_iso(),
-                "source": "AIstock",
-                "factor_count": len(sync_items),
-                "local_meta_sha256": _sha256_file(self.local_meta_path) if self.local_meta_path.exists() else None,
-            }
-            meta_tmp = tmp_path / "_meta.json"
-            meta_tmp.write_text(json.dumps(merged_meta, ensure_ascii=False, indent=2), encoding="utf-8")
-            remote_tmp = f"{remote_root}/_meta.json.tmp"
-            meta_rsync_cmd = (
-                "rsync -az --partial "
-                f"{shlex.quote(_win_to_wsl(meta_tmp))} "
-                f"{shlex.quote(node.ssh_target)}:{shlex.quote(remote_tmp)}"
-            )
-            proc = _run_wsl_bash(meta_rsync_cmd, timeout_s=60)
-            if proc.returncode != 0:
-                raise RuntimeError((proc.stderr or proc.stdout or "rsync meta failed").strip())
-            remote_meta_final = f"{remote_root}/_meta.json"
-            mv_inner = f"mv {shlex.quote(remote_tmp)} {shlex.quote(remote_meta_final)}"
-            mv_cmd = (
-                "ssh -o BatchMode=yes -o ConnectTimeout=8 "
-                f"{shlex.quote(node.ssh_target)} "
-                f"{shlex.quote(mv_inner)}"
-            )
-            proc = _run_wsl_bash(mv_cmd, timeout_s=30)
-            if proc.returncode != 0:
-                raise RuntimeError((proc.stderr or proc.stdout or "remote meta mv failed").strip())
 
     def _record_job(self, job: Dict[str, Any]) -> None:
         self.sync_dir.mkdir(parents=True, exist_ok=True)

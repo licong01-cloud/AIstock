@@ -28,6 +28,8 @@ def default_aistock_artifact_roots() -> list[Path]:
         root / "rdagent_assets" / "rdagent_tasks",
         root / "rdagent_assets" / "production_bundles",
         root / "rdagent_assets" / "model_cache",
+        root / "rdagent_assets" / "factor_values",
+        root / "rdagent_assets" / "factor_values_realtime",
         root / "rdagent_assets" / "qe_factors",
         root / "qe_archive",
     ]
