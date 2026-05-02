@@ -49,6 +49,8 @@ Current required coverage:
 - DB source assembler can build payloads from `qe_experiments` and `qe_evolution_loops` without reading worker artifact paths.
 - Manual backfill CLI defaults to dry-run and requires `--write --confirm-write QE_ARCHIVE_WRITE` before inserting archive rows.
 - Backend API `/api/v1/qe-archive/backfill` supports dry-run and confirmed-write historical backfill, requires `confirm_write=QE_ARCHIVE_WRITE` for writes, and can validate run-level row counts after writing.
+- Backend API `/api/v1/qe-archive/backfill-candidates` returns selectable historical candidates from QE evolution tasks and single experiments, including type, description, loop counts, archived/pending counts, model/label/factor metadata, status, and execution timestamps.
+- Backfill requests with `task_ids` expand each selected evolution task into all matching completed/terminal loops, so selecting one task in UI archives all runs under that experiment rather than one loop only.
 - QE completion-time realtime ingestion hook is disabled by default through `QE_ARCHIVE_REALTIME_ENABLED`; when enabled, default mode enqueues durable outbox events and must not change QE loop/experiment status on archive failure.
 - Direct realtime archive writes are only allowed through explicit `QE_ARCHIVE_REALTIME_MODE=direct` rollback/diagnostic mode and must remain covered by tests.
 - API worker `/api/v1/qe-archive/worker/run-once` processes a bounded outbox batch only with `confirm_run=QE_ARCHIVE_WORKER_RUN`; it is not a scheduler and must not auto-start at FastAPI startup.
@@ -90,7 +92,8 @@ Future required coverage when APIs are added:
 Current required coverage:
 
 - Dashboard shows archive health, ingestion lag, failed jobs, and invalid-run counts.
-- Backfill panel supports dry-run first and confirmed write with `QE_ARCHIVE_WRITE`.
+- Backfill panel lists selectable QE experiments/tasks not fully archived, supports "select all pending", dry-run first, and confirmed write with `QE_ARCHIVE_WRITE`.
+- UI must explain that minimum metrics/curves/factors are fixed post-write quality gates, not filters that reduce the collected data scope.
 - Worker panel supports one-shot confirmed outbox processing with `QE_ARCHIVE_WORKER_RUN`.
 - Run quality lookup shows readable Chinese labels for config, metrics, reproducibility, and missing items.
 - The first UI E2E uses mocked QE archive APIs to validate dashboard/backfill/worker/quality interactions without requiring production backend `8001`.

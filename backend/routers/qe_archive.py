@@ -20,11 +20,12 @@ router = APIRouter(prefix="/qe-archive", tags=["qe-archive"])
 
 
 class QEArchiveBackfillRequest(BaseModel):
-    source: Literal["experiment", "loop", "all"] = Field(
+    source: Literal["experiment", "loop", "task", "all"] = Field(
         "loop",
         description="Source rows to backfill when explicit ids are not provided.",
     )
     experiment_ids: list[str] = Field(default_factory=list)
+    task_ids: list[str] = Field(default_factory=list)
     loop_ids: list[str] = Field(default_factory=list)
     task_id: str | None = None
     loop_index: int | None = Field(None, ge=1)
@@ -72,6 +73,22 @@ def list_qe_archive_outbox(
     }
 
 
+@router.get("/backfill-candidates", summary="QE archive historical backfill candidates")
+def list_qe_archive_backfill_candidates(
+    status: str = Query("completed", description="QE source status filter: completed, terminal, or all."),
+    limit: int = Query(100, ge=1, le=500),
+    include_archived: bool = Query(False, description="Include source rows already fully archived."),
+):
+    return {
+        "status": "success",
+        "data": get_backfill_service().list_backfill_candidates(
+            status=status,
+            limit=limit,
+            include_archived=include_archived,
+        ),
+    }
+
+
 @router.get("/jobs", summary="Recent QE archive worker jobs")
 def list_qe_archive_jobs(
     status: str | None = Query(None, description="Optional archive job status filter."),
@@ -97,6 +114,7 @@ def run_qe_archive_backfill(request: QEArchiveBackfillRequest):
         options = QEArchiveBackfillOptions(
             source=request.source,
             experiment_ids=request.experiment_ids,
+            task_ids=request.task_ids,
             loop_ids=request.loop_ids,
             task_id=request.task_id,
             loop_index=request.loop_index,

@@ -63,21 +63,72 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
       });
     }
 
-    if (method === "POST" && url.includes("/backfill")) {
+    if (url.includes("/backfill-candidates")) {
       return response({
         status: "success",
         data: {
-          dry_run: true,
-          write_enabled: false,
-          source: "loop",
           status: "completed",
-          processed_count: 1,
+          include_archived: false,
+          count: 1,
+          candidates: [{
+            candidate_id: "task:qe_task_demo",
+            candidate_type: "evolution_task",
+            source: "task",
+            task_id: "qe_task_demo",
+            display_name: "demo evolution",
+            description: "demo target",
+            status: "completed",
+            experiment_type: "custom_evolution",
+            loop_count: 2,
+            selected_run_count: 2,
+            archived_run_count: 0,
+            pending_run_count: 2,
+            is_fully_archived: false,
+            model_id: "LSTM",
+            label_horizon: 5,
+            started_at: "2026-05-02T20:00:00+08:00",
+            completed_at: "2026-05-02T20:10:00+08:00",
+          }],
+        },
+      });
+    }
+
+    if (method === "POST" && url.includes("/backfill")) {
+      const body = route.request().postDataJSON() as {
+        task_ids?: string[];
+        experiment_ids?: string[];
+        write?: boolean;
+        min_metrics?: number;
+        min_curves?: number;
+        min_factors?: number;
+      };
+      expect(body.task_ids).toEqual(["qe_task_demo"]);
+      expect(body.experiment_ids || []).toEqual([]);
+      expect(body.min_metrics).toBe(60);
+      expect(body.min_curves).toBe(3000);
+      expect(body.min_factors).toBe(1);
+      return response({
+        status: "success",
+        data: {
+          dry_run: !body.write,
+          write_enabled: Boolean(body.write),
+          source: "all",
+          status: "completed",
+          processed_count: 2,
           results: [{
             run_id: "qear_run_demo",
             event_type: "qe.loop.completed",
             source_id: "qe_task_demo",
             source_sub_id: "qe_task_demo_Loop1",
+            quality: body.write ? { passed: true, metric_count: 81, curve_count: 3489, factor_count_rows: 57 } : undefined,
             stats: { metrics_written: 81, curves_written: 3489, factors_written: 57 },
+          }, {
+            run_id: "qear_run_demo2",
+            event_type: "qe.loop.completed",
+            source_id: "qe_task_demo",
+            source_sub_id: "qe_task_demo_Loop2",
+            quality: body.write ? { passed: true, metric_count: 82, curve_count: 3490, factor_count_rows: 57 } : undefined,
+            stats: { metrics_written: 82, curves_written: 3490, factors_written: 57 },
           }],
         },
       });
@@ -124,12 +175,18 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
 
   await page.goto("/qe-archive");
   await expect(page.getByText("QE Archive Warehouse")).toBeVisible();
+  await expect(page.getByText("demo evolution")).toBeVisible();
   await expect(page.getByText("qear_evt_demo")).toBeVisible();
   await expect(page.getByText("qear_job_demo")).toBeVisible();
 
+  await page.getByRole("button", { name: "选择全部待入库" }).click();
   await page.getByRole("button", { name: /dry-run/i }).click();
   await expect(page.getByText("qear_run_demo").first()).toBeVisible();
   await expect(page.getByText(/metrics 81/)).toBeVisible();
+
+  await page.getByPlaceholder("QE_ARCHIVE_WRITE").fill("QE_ARCHIVE_WRITE");
+  await page.getByRole("button", { name: "写入数仓" }).click();
+  await expect(page.getByText("已通过").first()).toBeVisible();
 
   await page.getByPlaceholder("QE_ARCHIVE_WORKER_RUN").fill("QE_ARCHIVE_WORKER_RUN");
   await page.getByRole("button", { name: /Outbox/i }).click();

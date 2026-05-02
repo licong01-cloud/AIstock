@@ -57,8 +57,9 @@ export type ArchiveJob = {
 };
 
 export type BackfillRequest = {
-  source: "experiment" | "loop" | "all";
+  source: "experiment" | "loop" | "task" | "all";
   experiment_ids?: string[];
+  task_ids?: string[];
   loop_ids?: string[];
   task_id?: string | null;
   loop_index?: number | null;
@@ -71,6 +72,41 @@ export type BackfillRequest = {
   min_curves?: number;
   min_factors?: number;
   require_account_summary?: boolean;
+};
+
+export type BackfillCandidate = {
+  candidate_id: string;
+  candidate_type: "evolution_task" | "single_experiment";
+  source: "task" | "experiment";
+  task_id?: string | null;
+  experiment_id?: string | null;
+  display_name?: string | null;
+  description?: string | null;
+  status?: string | null;
+  experiment_type?: string | null;
+  loop_count?: number;
+  selected_run_count?: number;
+  archived_run_count?: number;
+  pending_run_count?: number;
+  is_fully_archived?: boolean;
+  node_id?: string | null;
+  model_id?: string | null;
+  model_catalog_id?: number | null;
+  strategy_id?: string | null;
+  factor_count?: number | null;
+  label_horizon?: number | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  updated_at?: string | null;
+  archive_action?: string | null;
+};
+
+export type BackfillCandidateReport = {
+  status: string;
+  include_archived: boolean;
+  count: number;
+  candidates: BackfillCandidate[];
 };
 
 export type BackfillResultItem = {
@@ -184,6 +220,15 @@ export const qeArchiveApi = {
     if (status) qs.set("status", status);
     const response = await apiFetch<{ status: string; data: ArchiveJob[] }>(`/qe-archive/jobs?${qs.toString()}`);
     return response.data || [];
+  },
+  async backfillCandidates(payload: { limit?: number; status?: string; include_archived?: boolean } = {}): Promise<BackfillCandidateReport> {
+    const qs = new URLSearchParams({
+      limit: String(payload.limit ?? 100),
+      status: payload.status || "completed",
+      include_archived: payload.include_archived ? "true" : "false",
+    });
+    const response = await apiFetch<{ status: string; data: BackfillCandidateReport }>(`/qe-archive/backfill-candidates?${qs.toString()}`);
+    return response.data;
   },
   async backfill(payload: BackfillRequest): Promise<BackfillReport> {
     const response = await apiFetch<{ status: string; data: BackfillReport }>("/qe-archive/backfill", body(payload));

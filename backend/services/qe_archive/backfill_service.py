@@ -16,13 +16,14 @@ from .source_assembler import QEArchiveSourceAssembler
 
 
 WRITE_CONFIRM_TEXT = "QE_ARCHIVE_WRITE"
-SUPPORTED_SOURCES = {"experiment", "loop", "all"}
+SUPPORTED_SOURCES = {"experiment", "loop", "task", "all"}
 
 
 @dataclass(frozen=True)
 class QEArchiveBackfillOptions:
     source: str = "loop"
     experiment_ids: Sequence[str] = ()
+    task_ids: Sequence[str] = ()
     loop_ids: Sequence[str] = ()
     task_id: str | None = None
     loop_index: int | None = None
@@ -73,6 +74,25 @@ class QEArchiveBackfillService:
             "archive_summary": self._repository.get_archive_summary() if options.write else None,
         }
 
+    def list_backfill_candidates(
+        self,
+        *,
+        status: str = "completed",
+        limit: int = 100,
+        include_archived: bool = False,
+    ) -> dict[str, Any]:
+        candidates = self._assembler.list_backfill_candidates(
+            status=status,
+            limit=limit,
+            include_archived=include_archived,
+        )
+        return {
+            "status": status,
+            "include_archived": include_archived,
+            "count": len(candidates),
+            "candidates": candidates,
+        }
+
     def archive_loop_completed(
         self,
         *,
@@ -118,6 +138,16 @@ class QEArchiveBackfillService:
             payload = self._assembler.assemble_experiment_payload(experiment_id)
             candidates.append({"event_type": "qe.experiment.completed", "payload": payload})
 
+        task_ids = _dedupe_non_empty(options.task_ids)
+        if task_ids:
+            for ref in self._assembler.list_loop_refs_for_tasks(task_ids, status=options.status):
+                payload = self._assembler.assemble_loop_payload(
+                    loop_id=ref.get("loop_id"),
+                    task_id=ref.get("task_id"),
+                    loop_index=ref.get("loop_index"),
+                )
+                candidates.append({"event_type": "qe.loop.completed", "payload": payload})
+
         for loop_id in _dedupe_non_empty(options.loop_ids):
             payload = self._assembler.assemble_loop_payload(loop_id=loop_id)
             candidates.append({"event_type": "qe.loop.completed", "payload": payload})
@@ -139,6 +169,23 @@ class QEArchiveBackfillService:
                 candidates.append({"event_type": "qe.experiment.completed", "payload": payload})
         if source in {"loop", "all"}:
             for ref in self._assembler.list_loop_refs(status=options.status, limit=limit):
+                payload = self._assembler.assemble_loop_payload(
+                    loop_id=ref.get("loop_id"),
+                    task_id=ref.get("task_id"),
+                    loop_index=ref.get("loop_index"),
+                )
+                candidates.append({"event_type": "qe.loop.completed", "payload": payload})
+        if source == "task":
+            candidate_task_ids = [
+                str(row["task_id"])
+                for row in self._assembler.list_backfill_candidates(
+                    status=options.status,
+                    limit=limit,
+                    include_archived=False,
+                )
+                if row.get("candidate_type") == "evolution_task" and row.get("task_id")
+            ]
+            for ref in self._assembler.list_loop_refs_for_tasks(candidate_task_ids, status=options.status):
                 payload = self._assembler.assemble_loop_payload(
                     loop_id=ref.get("loop_id"),
                     task_id=ref.get("task_id"),

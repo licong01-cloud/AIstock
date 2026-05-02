@@ -1492,7 +1492,15 @@ Level C 不阻塞 Level A/B，可异步延迟执行
 
 `scanner.py` 补偿 webhook 丢失、backend reload、worker 停机导致的漏归档。扫描 completed / failed / interrupted 且未入仓的 `qe_experiments` 与 `qe_evolution_loops`，生成 outbox event。
 
-`backfill.py` 负责历史 dry-run inventory、补录计划、缺失清单、分批创建 outbox event 或直接调用 archive service，并输出补录报告到 `qe_archive/artifacts/backfill/...`。
+`backfill.py` / `backfill_service.py` 负责历史 dry-run inventory、补录计划、缺失清单、分批创建 outbox event 或直接调用 archive service，并输出补录报告到 `qe_archive/artifacts/backfill/...`。
+
+第一阶段 UI 补录不再要求人工粘贴 ID。`source_assembler.py` 必须从现有 QE 公共数据库表生成候选清单：
+
+- evolution task 候选：按 `qe_evolution_tasks` 聚合其 loop，展示任务类型、说明、总 loop 数、符合状态的 loop 数、已入库/待入库数、模型、label horizon、开始/结束时间。
+- single experiment 候选：展示单次实验类型、说明、因子数量、模型、状态、执行时间、是否已入库。
+- 选择一个 evolution task 后，后端 `task_ids` 必须展开为该任务下所有符合状态的 loop，并逐个写入 `qe_archive.run` 及其配置、指标、曲线、因子、raw payload 等结构化数据。
+- 补录 UI 的“最少指标 / 最少曲线 / 最少因子”是写入后的质量门槛，默认固定为第一阶段校验值；它们不得作为采集范围开关，也不得让用户误以为只采集最少数据。
+- 对于当前可从 DB payload 解析的数据，补录必须尽量全量写入；artifact 深度解析或远端 worker 文件拉取仍按后续 artifact collector 阶段执行，不允许 UI 隐式直接读取 worker workspace。
 
 ## 8. 实时入仓流程
 
@@ -1703,15 +1711,24 @@ GET  /api/v1/qe-archive/factors/{factor_name}/history
 GET  /api/v1/qe-archive/models/{model_family}/trials
 GET  /api/v1/qe-archive/compare?run_ids=...
 GET  /api/v1/qe-archive/archive-jobs
-POST /api/v1/qe-archive/backfill/dry-run
-POST /api/v1/qe-archive/backfill/execute
+GET  /api/v1/qe-archive/backfill-candidates
+POST /api/v1/qe-archive/backfill
 POST /api/v1/qe-archive/recompute-scores
 ```
+
+当前已落地的第一阶段 API 包括：
+
+- `GET /api/v1/qe-archive/health`：数仓摘要、入库 run 数、research_valid 计数、pending outbox、job 状态。
+- `GET /api/v1/qe-archive/backfill-candidates`：补录候选列表；支持 `status=completed|terminal|all`、`limit`、`include_archived`。
+- `POST /api/v1/qe-archive/backfill`：dry-run 或 confirmed write；写入必须带 `confirm_write=QE_ARCHIVE_WRITE`；支持 `experiment_ids`、`loop_ids`、`task_ids`。
+- `GET /api/v1/qe-archive/runs/{run_id}/quality`：run 级配置、来源、账户摘要、指标、曲线、因子、raw payload 完整性。
+- `GET /api/v1/qe-archive/outbox`、`GET /api/v1/qe-archive/jobs`、`POST /api/v1/qe-archive/worker/run-once`：默认不常驻 worker 的队列监控和一次性处理入口。
 
 ### 11.3 前端图表能力
 
 第一阶段支持：
 
+- 历史补录候选页：展示未完整入库的 QE 演进任务和单次实验，支持多选、选择全部待入库、dry-run 预览、确认写入数仓。
 - 实时排行榜：score_total、收益、回撤、Rank IC、模型、因子数、有效性。
 - run 详情：配置、指标、曲线、因子列表、artifact manifest。
 - run 对比：多 run 指标雷达图/柱状图/曲线对比。

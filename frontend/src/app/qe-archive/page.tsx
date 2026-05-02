@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -11,6 +12,7 @@ import {
   API_BASE,
   type ArchiveJob,
   type ArchiveSummary,
+  type BackfillCandidate,
   type BackfillReport,
   type OutboxEvent,
   type RunQuality,
@@ -20,15 +22,12 @@ import {
 
 const WRITE_CONFIRM_TEXT = "QE_ARCHIVE_WRITE";
 const WORKER_CONFIRM_TEXT = "QE_ARCHIVE_WORKER_RUN";
-
-type BackfillSource = "experiment" | "loop" | "all";
-
-function splitIds(value: string): string[] {
-  return value
-    .split(/[\n,;\s]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
+const QUALITY_GATE = {
+  min_metrics: 60,
+  min_curves: 3000,
+  min_factors: 1,
+  require_account_summary: true,
+};
 
 function n(value: unknown): number {
   const parsed = Number(value || 0);
@@ -42,6 +41,15 @@ function formatDateTime(value: unknown): string {
 
 function statusCounts(counts?: Record<string, number>): { status: string; count: number }[] {
   return Object.entries(counts || {}).map(([status, count]) => ({ status, count }));
+}
+
+function candidateTypeLabel(candidate: BackfillCandidate): string {
+  if (candidate.candidate_type === "evolution_task") return "演进任务";
+  return "单次实验";
+}
+
+function candidatePrimaryId(candidate: BackfillCandidate): string {
+  return String(candidate.task_id || candidate.experiment_id || "-");
 }
 
 function StatusCountStrip({ counts, empty }: { counts?: Record<string, number>; empty: string }) {
@@ -59,23 +67,23 @@ function StatusCountStrip({ counts, empty }: { counts?: Record<string, number>; 
 }
 
 function ReportSummary({ report }: { report: BackfillReport | null }) {
-  if (!report) return <div className="pv2-help">尚未执行补录预览或写入。</div>;
+  if (!report) return <div className="pv2-help">请选择候选实验并先执行 dry-run 预览，确认后再写入数仓。</div>;
   const rows = report.results || [];
   return (
     <div className="pv2-readable-list">
       <div className="pv2-grid pv2-grid-4">
-        <MetricCard label="处理对象" value={formatCompact(report.processed_count || 0, 0)} hint={report.dry_run ? "dry-run 仅预览" : "已确认写入"} tone={report.write_enabled ? "success" : "info"} />
-        <MetricCard label="来源" value={report.source || "-"} hint={`状态过滤 ${report.status || "completed"}`} />
-        <MetricCard label="模式" value={report.write_enabled ? "写入" : "预览"} hint={report.write_enabled ? "已要求写确认" : "不会改数据库"} tone={report.write_enabled ? "warning" : "neutral"} />
-        <MetricCard label="返回 run" value={formatCompact(rows.length, 0)} hint="每个 loop/experiment 一行" />
+        <MetricCard label="处理数量" value={formatCompact(report.processed_count || 0, 0)} hint={report.dry_run ? "dry-run 预览" : "已写入数仓"} tone={report.write_enabled ? "success" : "info"} />
+        <MetricCard label="来源" value={report.source || "-"} hint={`状态筛选 ${report.status || "completed"}`} />
+        <MetricCard label="模式" value={report.write_enabled ? "写入" : "预览"} hint={report.write_enabled ? "已触发持久化" : "未写数据库"} tone={report.write_enabled ? "warning" : "neutral"} />
+        <MetricCard label="涉及 run" value={formatCompact(rows.length, 0)} hint="展开 loop/experiment 后的数量" />
       </div>
       <PaperTable
-        rows={rows.slice(0, 20)}
+        rows={rows.slice(0, 40)}
         empty="暂无补录结果"
         columns={[
           { key: "run", header: "归档 Run", render: (row) => <span className="pv2-mono">{shortHash(row.run_id)}</span> },
           { key: "source", header: "来源", render: (row) => <><div>{row.event_type || "-"}</div><div className="pv2-muted pv2-mono">{row.source_sub_id || row.source_id || "-"}</div></> },
-          { key: "stats", header: "采集概况", render: (row) => <span>{formatStats(row.stats)}</span> },
+          { key: "stats", header: "写入统计", render: (row) => <span>{formatStats(row.stats)}</span> },
           { key: "quality", header: "质量", render: (row) => row.quality ? <><StatusBadge status={row.quality.passed ? "PASSED" : "FAILED"} /><div className="pv2-muted">指标 {row.quality.metric_count || 0} / 曲线 {row.quality.curve_count || 0} / 因子 {row.quality.factor_count_rows || 0}</div></> : <span className="pv2-muted">dry-run</span> },
         ]}
       />
@@ -94,11 +102,11 @@ function formatStats(stats: unknown): string {
   ]
     .filter(([, value]) => value !== undefined && value !== null)
     .map(([key, value]) => `${key} ${value}`);
-  return parts.length ? parts.join(" / ") : "已生成归档负载";
+  return parts.length ? parts.join(" / ") : "无可写统计";
 }
 
 function QualityPanel({ quality }: { quality: RunQuality | null }) {
-  if (!quality) return <div className="pv2-help">输入 run_id 后可核对配置、可复现性、指标、曲线、因子与原始 payload 行数。</div>;
+  if (!quality) return <div className="pv2-help">输入 run_id 后查询该实验是否已完整保存配置、指标、曲线、因子和 raw payload。</div>;
   const checks = [
     { label: "配置完整", value: quality.config_capture_complete ? "是" : "否", tone: quality.config_capture_complete ? "success" as const : "warning" as const },
     { label: "可复现等级", value: quality.reproducibility_level || "-", tone: quality.reproducibility_level === "full" ? "success" as const : "warning" as const },
@@ -112,7 +120,7 @@ function QualityPanel({ quality }: { quality: RunQuality | null }) {
     { name: "因子参与记录", value: quality.factor_count_rows },
     { name: "原始 payload", value: quality.raw_payload_count },
     { name: "artifact manifest", value: quality.artifact_count },
-    { name: "优先级评分", value: quality.priority_score_count },
+    { name: "优先级分数", value: quality.priority_score_count },
   ];
   return (
     <div className="pv2-readable-list">
@@ -132,8 +140,8 @@ function QualityPanel({ quality }: { quality: RunQuality | null }) {
         rows={rowCounts}
         empty="暂无质量计数"
         columns={[
-          { key: "name", header: "检查项", render: (row) => row.name },
-          { key: "value", header: "行数", render: (row) => formatCompact(row.value || 0, 0) },
+          { key: "name", header: "数据项", render: (row) => row.name },
+          { key: "value", header: "数量", render: (row) => formatCompact(row.value || 0, 0) },
         ]}
       />
     </div>
@@ -144,18 +152,13 @@ export default function QEArchivePage() {
   const [summary, setSummary] = useState<ArchiveSummary | null>(null);
   const [outbox, setOutbox] = useState<OutboxEvent[]>([]);
   const [jobs, setJobs] = useState<ArchiveJob[]>([]);
+  const [candidates, setCandidates] = useState<BackfillCandidate[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [candidateLimit, setCandidateLimit] = useState(100);
+  const [candidateStatus, setCandidateStatus] = useState("completed");
+  const [includeArchived, setIncludeArchived] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [source, setSource] = useState<BackfillSource>("loop");
-  const [loopIds, setLoopIds] = useState("");
-  const [experimentIds, setExperimentIds] = useState("");
-  const [taskId, setTaskId] = useState("");
-  const [loopIndex, setLoopIndex] = useState("");
-  const [limit, setLimit] = useState(20);
-  const [minMetrics, setMinMetrics] = useState(60);
-  const [minCurves, setMinCurves] = useState(3000);
-  const [minFactors, setMinFactors] = useState(1);
-  const [requireAccount, setRequireAccount] = useState(true);
   const [writeConfirm, setWriteConfirm] = useState("");
   const [backfillReport, setBackfillReport] = useState<BackfillReport | null>(null);
   const [backfillBusy, setBackfillBusy] = useState(false);
@@ -171,20 +174,23 @@ export default function QEArchivePage() {
     setLoading(true);
     setError(null);
     try {
-      const [nextSummary, nextOutbox, nextJobs] = await Promise.all([
+      const [nextSummary, nextOutbox, nextJobs, nextCandidates] = await Promise.all([
         qeArchiveApi.health(),
         qeArchiveApi.outbox(30),
         qeArchiveApi.jobs(30),
+        qeArchiveApi.backfillCandidates({ limit: candidateLimit, status: candidateStatus, include_archived: includeArchived }),
       ]);
       setSummary(nextSummary);
       setOutbox(nextOutbox);
       setJobs(nextJobs);
+      setCandidates(nextCandidates.candidates || []);
+      setSelectedIds((previous) => new Set([...previous].filter((id) => (nextCandidates.candidates || []).some((item) => item.candidate_id === id))));
     } catch (err) {
       setError(err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [candidateLimit, candidateStatus, includeArchived]);
 
   useEffect(() => {
     void load();
@@ -198,26 +204,42 @@ export default function QEArchivePage() {
 
   const latestRows = useMemo(() => outbox.slice(0, 12), [outbox]);
   const latestJobs = useMemo(() => jobs.slice(0, 12), [jobs]);
+  const selectedCandidates = useMemo(() => candidates.filter((item) => selectedIds.has(item.candidate_id)), [candidates, selectedIds]);
+  const selectedTaskIds = selectedCandidates.filter((item) => item.candidate_type === "evolution_task" && item.task_id).map((item) => String(item.task_id));
+  const selectedExperimentIds = selectedCandidates.filter((item) => item.candidate_type === "single_experiment" && item.experiment_id).map((item) => String(item.experiment_id));
+  const selectedRunCount = selectedCandidates.reduce((sum, item) => sum + n(item.selected_run_count), 0);
+  const pendingCandidateCount = candidates.filter((item) => n(item.pending_run_count) > 0).length;
+
+  function toggleCandidate(candidateId: string) {
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(candidateId)) next.delete(candidateId);
+      else next.add(candidateId);
+      return next;
+    });
+  }
+
+  function selectPendingCandidates() {
+    setSelectedIds(new Set(candidates.filter((item) => n(item.pending_run_count) > 0).map((item) => item.candidate_id)));
+  }
 
   async function runBackfill(write: boolean) {
+    if (!selectedCandidates.length) {
+      setError(new Error("请先在候选列表中选择需要写入数仓的 QE 实验或任务。"));
+      return;
+    }
     setBackfillBusy(true);
     setError(null);
     try {
       const report = await qeArchiveApi.backfill({
-        source,
-        loop_ids: splitIds(loopIds),
-        experiment_ids: splitIds(experimentIds),
-        task_id: taskId.trim() || null,
-        loop_index: loopIndex.trim() ? Number(loopIndex) : null,
-        status: "completed",
-        limit,
+        source: "all",
+        task_ids: selectedTaskIds,
+        experiment_ids: selectedExperimentIds,
+        status: candidateStatus,
         write,
         confirm_write: write ? writeConfirm : "",
         validate_after_write: true,
-        min_metrics: minMetrics,
-        min_curves: minCurves,
-        min_factors: minFactors,
-        require_account_summary: requireAccount,
+        ...QUALITY_GATE,
       });
       setBackfillReport(report);
       if (write) await load();
@@ -264,13 +286,13 @@ export default function QEArchivePage() {
             <div className="pv2-kicker">QE Archive Warehouse</div>
             <h1>QE 实验实时数仓</h1>
             <p>
-              面向每个实验和每个 loop 的配置、因子列表、回测指标、曲线、账户摘要与可复现性核对。当前页面只通过
-              <span className="pv2-mono"> {API_BASE}/qe-archive </span> API 操作，不启动生产 8001 之外的新服务。
+              从数据库列出尚未完整入库的 QE 实验或演进任务，选中后可将其所有可解析配置、指标、曲线、因子和原始 payload 写入数仓。
+              <span className="pv2-mono"> {API_BASE}/qe-archive </span> API；不会重启或影响生产 8001。
             </p>
           </div>
           <div className="pv2-row-actions">
             <button className="pv2-button-primary" onClick={() => void load()} disabled={loading} type="button">
-              {loading ? "刷新中" : "刷新数仓状态"}
+              {loading ? "刷新中" : "刷新候选"}
             </button>
           </div>
         </div>
@@ -280,41 +302,81 @@ export default function QEArchivePage() {
 
       <div className="pv2-grid pv2-grid-4">
         <MetricCard label="归档 Run" value={formatCompact(summary?.run_count || 0, 0)} hint={`有效 ${formatCompact(validRuns, 0)} / 无效 ${formatCompact(invalidRuns, 0)}`} tone="info" />
-        <MetricCard label="待处理 Outbox" value={formatCompact(pendingOutbox, 0)} hint="loop/experiment 完成后先进入 outbox" tone={pendingOutbox > 0 ? "warning" : "success"} />
-        <MetricCard label="Worker 完成" value={formatCompact(completedJobs, 0)} hint={`失败 ${formatCompact(failedJobs, 0)}`} tone={failedJobs > 0 ? "danger" : "success"} />
-        <MetricCard label="最新归档" value={formatDateTime(summary?.latest_archived_at).slice(0, 10)} hint={formatDateTime(summary?.latest_archived_at)} />
+        <MetricCard label="待处理 Outbox" value={formatCompact(pendingOutbox, 0)} hint="loop/experiment 完成后进入 outbox" tone={pendingOutbox > 0 ? "warning" : "success"} />
+        <MetricCard label="待补录候选" value={formatCompact(pendingCandidateCount, 0)} hint={`当前 ${formatCompact(candidates.length, 0)} 条`} tone={pendingCandidateCount > 0 ? "warning" : "success"} />
+        <MetricCard label="最近归档" value={formatDateTime(summary?.latest_archived_at).slice(0, 10)} hint={formatDateTime(summary?.latest_archived_at)} />
       </div>
+
+      <SectionCard title="历史补录候选列表" eyebrow="select experiments / archive all loops">
+        <div className="pv2-form-grid">
+          <label className="pv2-field">
+            <span>候选状态</span>
+            <select className="pv2-select" value={candidateStatus} onChange={(event) => setCandidateStatus(event.target.value)}>
+              <option value="completed">仅 completed</option>
+              <option value="terminal">终态 completed/failed/interrupted/cancelled</option>
+              <option value="all">全部状态</option>
+            </select>
+          </label>
+          <label className="pv2-field">
+            <span>显示上限</span>
+            <input className="pv2-input" type="number" min={1} max={500} value={candidateLimit} onChange={(event) => setCandidateLimit(Number(event.target.value))} />
+          </label>
+          <label className="pv2-field">
+            <span>已入库项</span>
+            <select className="pv2-select" value={includeArchived ? "yes" : "no"} onChange={(event) => setIncludeArchived(event.target.value === "yes")}>
+              <option value="no">隐藏已完整入库</option>
+              <option value="yes">显示已完整入库</option>
+            </select>
+          </label>
+        </div>
+        <div className="pv2-row-actions" style={{ marginTop: 12, marginBottom: 12 }}>
+          <button className="pv2-button" type="button" onClick={selectPendingCandidates}>选择全部待入库</button>
+          <button className="pv2-button-ghost" type="button" onClick={() => setSelectedIds(new Set())}>清空选择</button>
+          <span className="pv2-help">已选择 {selectedCandidates.length} 个候选，预计展开 {selectedRunCount} 个 run；演进任务会自动包含其全部符合状态的 loop。</span>
+        </div>
+        <PaperTable
+          rows={candidates}
+          empty="暂无可补录的 QE 实验"
+          columns={[
+            { key: "select", header: "选择", render: (row) => <input type="checkbox" checked={selectedIds.has(row.candidate_id)} onChange={() => toggleCandidate(row.candidate_id)} aria-label={`选择 ${row.display_name || row.candidate_id}`} /> },
+            { key: "type", header: "实验类型", render: (row) => <><div>{candidateTypeLabel(row)}</div><div className="pv2-muted">{row.experiment_type || "-"}</div></> },
+            { key: "name", header: "实验说明", render: (row) => <><div>{row.display_name || "-"}</div><div className="pv2-muted pv2-mono">{shortHash(candidatePrimaryId(row))}</div><div className="pv2-muted">{row.description || "-"}</div></> },
+            { key: "loops", header: "Loop / 入库", render: (row) => <><div>{formatNumber(row.archived_run_count || 0, 0)} / {formatNumber(row.selected_run_count || 0, 0)}</div><div className="pv2-muted">总 loop {formatNumber(row.loop_count || 0, 0)}，待入库 {formatNumber(row.pending_run_count || 0, 0)}</div></> },
+            { key: "status", header: "状态", render: (row) => <><StatusBadge status={row.status} /><div className="pv2-muted">{row.is_fully_archived ? "已完整入库" : "待入库"}</div></> },
+            { key: "meta", header: "模型/因子", render: (row) => <><div>{row.model_id || row.model_catalog_id || "-"}</div><div className="pv2-muted">horizon {row.label_horizon ?? "-"} / 因子 {row.factor_count ?? "-"}</div></> },
+            { key: "time", header: "执行时间", render: (row) => <><div>开始 {formatDateTime(row.started_at || row.created_at)}</div><div className="pv2-muted">结束 {formatDateTime(row.completed_at || row.updated_at)}</div></> },
+          ]}
+        />
+        <div className="pv2-readable-panel" style={{ marginTop: 12 }}>
+          <div className="pv2-readable-table">
+            <div className="pv2-readable-row"><div className="pv2-readable-key">全部数据录入</div><div className="pv2-readable-value">写入配置、参数、因子列表、账户摘要、指标、曲线、原始 payload；演进任务会按 loop 展开逐个入库。</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">质量阈值说明</div><div className="pv2-readable-value">最少 {QUALITY_GATE.min_metrics} 个指标、{QUALITY_GATE.min_curves} 条曲线、{QUALITY_GATE.min_factors} 条因子记录是写入后的完整性校验，不是采集范围开关。</div></div>
+          </div>
+        </div>
+        <div className="pv2-form-grid" style={{ marginTop: 12 }}>
+          <label className="pv2-field">
+            <span>写入确认</span>
+            <input className="pv2-input" value={writeConfirm} onChange={(event) => setWriteConfirm(event.target.value)} placeholder={WRITE_CONFIRM_TEXT} />
+          </label>
+          <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button" type="button" onClick={() => void runBackfill(false)} disabled={backfillBusy || selectedCandidates.length === 0}>dry-run 预览选中项</button></div>
+          <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button-danger" type="button" onClick={() => void runBackfill(true)} disabled={backfillBusy || selectedCandidates.length === 0 || writeConfirm !== WRITE_CONFIRM_TEXT}>写入数仓</button></div>
+        </div>
+        <div style={{ marginTop: 16 }}><ReportSummary report={backfillReport} /></div>
+      </SectionCard>
 
       <div className="pv2-grid pv2-grid-2">
         <SectionCard title="实时入库队列" eyebrow="outbox / job status">
           <div className="pv2-readable-list">
-            <div>
-              <div className="pv2-label">Outbox 状态</div>
-              <StatusCountStrip counts={summary?.outbox_status_counts} empty="暂无 outbox 事件" />
-            </div>
-            <div>
-              <div className="pv2-label">Worker Job 状态</div>
-              <StatusCountStrip counts={summary?.archive_job_status_counts} empty="暂无 worker job" />
-            </div>
+            <div><div className="pv2-label">Outbox 状态</div><StatusCountStrip counts={summary?.outbox_status_counts} empty="暂无 outbox 事件" /></div>
+            <div><div className="pv2-label">Worker Job 状态</div><StatusCountStrip counts={summary?.archive_job_status_counts} empty="暂无 worker job" /></div>
           </div>
         </SectionCard>
 
         <SectionCard title="手动处理队列" eyebrow="safe one-shot worker">
           <div className="pv2-form-grid">
-            <label className="pv2-field">
-              <span>处理条数</span>
-              <input className="pv2-input" type="number" min={1} max={100} value={workerLimit} onChange={(event) => setWorkerLimit(Number(event.target.value))} />
-            </label>
-            <label className="pv2-field">
-              <span>确认文本</span>
-              <input className="pv2-input" value={workerConfirm} onChange={(event) => setWorkerConfirm(event.target.value)} placeholder={WORKER_CONFIRM_TEXT} />
-            </label>
-            <div className="pv2-field">
-              <span>&nbsp;</span>
-              <button className="pv2-button-primary" type="button" onClick={() => void runWorkerOnce()} disabled={workerBusy || workerConfirm !== WORKER_CONFIRM_TEXT}>
-                {workerBusy ? "处理中" : "处理一次 Outbox"}
-              </button>
-            </div>
+            <label className="pv2-field"><span>处理条数</span><input className="pv2-input" type="number" min={1} max={100} value={workerLimit} onChange={(event) => setWorkerLimit(Number(event.target.value))} /></label>
+            <label className="pv2-field"><span>确认文本</span><input className="pv2-input" value={workerConfirm} onChange={(event) => setWorkerConfirm(event.target.value)} placeholder={WORKER_CONFIRM_TEXT} /></label>
+            <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button-primary" type="button" onClick={() => void runWorkerOnce()} disabled={workerBusy || workerConfirm !== WORKER_CONFIRM_TEXT}>{workerBusy ? "处理中" : "处理一次 Outbox"}</button></div>
           </div>
           {workerReport ? (
             <div className="pv2-grid pv2-grid-3" style={{ marginTop: 12 }}>
@@ -325,57 +387,6 @@ export default function QEArchivePage() {
           ) : <div className="pv2-help">Worker 不会常驻运行；每次处理都需要确认文本。</div>}
         </SectionCard>
       </div>
-
-      <SectionCard title="历史补录 API" eyebrow="dry-run first / confirmed write">
-        <div className="pv2-form-grid">
-          <label className="pv2-field">
-            <span>补录来源</span>
-            <select className="pv2-select" value={source} onChange={(event) => setSource(event.target.value as BackfillSource)}>
-              <option value="loop">QE Loop</option>
-              <option value="experiment">单次实验</option>
-              <option value="all">实验 + Loop</option>
-            </select>
-          </label>
-          <label className="pv2-field">
-            <span>自动扫描上限</span>
-            <input className="pv2-input" type="number" min={1} max={500} value={limit} onChange={(event) => setLimit(Number(event.target.value))} />
-          </label>
-          <label className="pv2-field">
-            <span>写入确认</span>
-            <input className="pv2-input" value={writeConfirm} onChange={(event) => setWriteConfirm(event.target.value)} placeholder={WRITE_CONFIRM_TEXT} />
-          </label>
-        </div>
-        <div className="pv2-form-grid" style={{ marginTop: 12 }}>
-          <label className="pv2-field">
-            <span>Loop IDs</span>
-            <textarea className="pv2-textarea" value={loopIds} onChange={(event) => setLoopIds(event.target.value)} placeholder="每行一个 loop_id，可留空按 completed 自动扫描" />
-          </label>
-          <label className="pv2-field">
-            <span>Experiment IDs</span>
-            <textarea className="pv2-textarea" value={experimentIds} onChange={(event) => setExperimentIds(event.target.value)} placeholder="每行一个 experiment_id" />
-          </label>
-          <div className="pv2-readable-list">
-            <label className="pv2-field">
-              <span>Task ID + Loop Index</span>
-              <input className="pv2-input" value={taskId} onChange={(event) => setTaskId(event.target.value)} placeholder="可选 task_id" />
-              <input className="pv2-input" value={loopIndex} onChange={(event) => setLoopIndex(event.target.value)} placeholder="可选 loop_index" />
-            </label>
-            <div className="pv2-grid pv2-grid-3">
-              <label className="pv2-field"><span>最少指标</span><input className="pv2-input" type="number" value={minMetrics} onChange={(event) => setMinMetrics(Number(event.target.value))} /></label>
-              <label className="pv2-field"><span>最少曲线</span><input className="pv2-input" type="number" value={minCurves} onChange={(event) => setMinCurves(Number(event.target.value))} /></label>
-              <label className="pv2-field"><span>最少因子</span><input className="pv2-input" type="number" value={minFactors} onChange={(event) => setMinFactors(Number(event.target.value))} /></label>
-            </div>
-            <label className="pv2-chip" style={{ width: "fit-content" }}>
-              <input type="checkbox" checked={requireAccount} onChange={(event) => setRequireAccount(event.target.checked)} /> 要求账户摘要
-            </label>
-          </div>
-        </div>
-        <div className="pv2-row-actions" style={{ marginTop: 12 }}>
-          <button className="pv2-button" type="button" onClick={() => void runBackfill(false)} disabled={backfillBusy}>先 dry-run 预览</button>
-          <button className="pv2-button-danger" type="button" onClick={() => void runBackfill(true)} disabled={backfillBusy || writeConfirm !== WRITE_CONFIRM_TEXT}>确认写入数仓</button>
-        </div>
-        <div style={{ marginTop: 16 }}><ReportSummary report={backfillReport} /></div>
-      </SectionCard>
 
       <div className="pv2-grid pv2-grid-2">
         <SectionCard title="Run 质量核对" eyebrow="config / metrics / curves / factors">

@@ -622,3 +622,11 @@ Important directories:
 - Added first QE Archive frontend route `/qe-archive` plus API client, sidebar entry, dry-run/write backfill panel, worker run-once panel, warehouse health, recent outbox/job tables, and run quality lookup. UI uses readable Chinese business labels and not raw JSON as the primary operator view.
 - Added mocked Playwright E2E for QE Archive UI and `QE_ARCHIVE_UI_MOCK_API=1` support in `qe_archive_ui`, allowing UI route/workflow validation without restarting or depending on production backend `8001`.
 - Validation record: `tests/aistock_validation/history/qe_archive/20260502_231049_l3_qe-archive-realtime-warehouse-validation.md`. `qe_archive_backend`, `qe_archive_data_quality`, `qe_archive_ui` with mocked API, and full `qe_archive_l3` passed; local DB still has 27/27 managed tables, 458/458 commented columns, `run_count=11`, and `pending_outbox_count=0`.
+
+## QE Archive Candidate-List Backfill UI - 2026-05-03
+
+- Added API/UI support for historical backfill candidate lists: `/api/v1/qe-archive/backfill-candidates` lists QE evolution tasks and single experiments with type, description, loop counts, archived/pending counts, model/label/factor metadata, status, and execution timestamps.
+- Backfill now accepts `task_ids`; selecting one QE evolution task expands to all matching loops and archives every loop through the existing archive service. This preserves idempotent archive writes and avoids manual shell scripts for historical backfill.
+- The `/qe-archive` UI now shows selectable pending candidates, "select all pending", dry-run preview, confirmed "写入数仓", and a fixed quality gate explanation. Minimum metrics/curves/factors are post-write completeness checks, not data collection filters.
+- Updated QE archive validation matrix and detailed design to make candidate-list backfill part of the first-stage workflow. Production backend `8001` was not restarted; realtime ingestion remains disabled unless explicitly enabled.
+- Validation record: `tests/aistock_validation/history/qe_archive/20260503_000218_l3_qe-archive-realtime-warehouse-validation.md`. `qe_archive_backend`, `qe_archive_data_quality`, `qe_archive_ui`, and full `qe_archive_l3` passed with mocked UI APIs; DB smoke still shows 27/27 managed tables, 458/458 commented columns, `run_count=11`, and `pending_outbox_count=0`.

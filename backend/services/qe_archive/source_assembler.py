@@ -90,6 +90,8 @@ TASK_COLUMNS = (
     "factor_blacklist",
 )
 
+TERMINAL_STATUSES = ("completed", "failed", "interrupted", "cancelled")
+
 
 class QEArchiveSourceAssembler:
     """Build archive-service payloads from existing QE DB records."""
@@ -143,6 +145,63 @@ class QEArchiveSourceAssembler:
                     {"task_id": row[0], "loop_id": row[1], "loop_index": row[2]}
                     for row in cur.fetchall()
                 ]
+
+    def list_loop_refs_for_tasks(
+        self,
+        task_ids: Sequence[str],
+        *,
+        status: str = "completed",
+    ) -> list[dict[str, Any]]:
+        task_ids = _dedupe_non_empty(task_ids)
+        if not task_ids:
+            return []
+
+        status_filter, params = _status_filter_sql("status", status)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT task_id, loop_id, loop_index
+                    FROM qe_evolution_loops
+                    WHERE task_id = ANY(%s)
+                      {status_filter}
+                    ORDER BY task_id ASC, loop_index ASC NULLS LAST, updated_at ASC NULLS LAST
+                    """,
+                    [task_ids, *params],
+                )
+                return [
+                    {"task_id": row[0], "loop_id": row[1], "loop_index": row[2]}
+                    for row in cur.fetchall()
+                ]
+
+    def list_backfill_candidates(
+        self,
+        *,
+        status: str = "completed",
+        limit: int = 100,
+        include_archived: bool = False,
+    ) -> list[dict[str, Any]]:
+        """List QE source experiments/tasks with archive coverage for UI selection."""
+
+        limit = max(1, min(int(limit or 100), 500))
+        candidates = self._list_evolution_task_candidates(
+            status=status,
+            limit=limit,
+            include_archived=include_archived,
+        )
+        remaining = max(1, limit - len(candidates))
+        candidates.extend(
+            self._list_single_experiment_candidates(
+                status=status,
+                limit=remaining,
+                include_archived=include_archived,
+            )
+        )
+        return sorted(
+            candidates,
+            key=lambda row: str(row.get("sort_time") or ""),
+            reverse=True,
+        )[:limit]
 
     def assemble_experiment_payload(self, experiment_id: str) -> dict[str, Any]:
         with self._connection_provider() as conn:
@@ -203,6 +262,200 @@ class QEArchiveSourceAssembler:
         loop_row = {key.removeprefix("loop__"): value for key, value in joined.items() if key.startswith("loop__")}
         task_row = {key.removeprefix("task__"): value for key, value in joined.items() if key.startswith("task__")}
         return self.build_loop_payload(loop_row, task_row)
+
+    def _list_evolution_task_candidates(
+        self,
+        *,
+        status: str,
+        limit: int,
+        include_archived: bool,
+    ) -> list[dict[str, Any]]:
+        status_filter, status_params = _status_filter_sql("l.status", status)
+        having_filter = "" if include_archived else "AND COUNT(DISTINCT l.loop_id) > COUNT(DISTINCT r.loop_id)"
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                task_available = self._available_columns(cur, "qe_evolution_tasks")
+                optional_cols = ("evolution_mode", "task_type", "node_id", "label_horizon", "model_id", "model_catalog_id", "strategy_id")
+                optional_select = [
+                    f"t.{col}" if col in task_available else f"NULL AS {col}"
+                    for col in optional_cols
+                ]
+                group_cols = [
+                    "t.task_id",
+                    "t.task_name",
+                    "t.target_desc",
+                    "t.status",
+                    "t.max_loops",
+                    "t.current_loop",
+                    "t.created_at",
+                    "t.updated_at",
+                    *(f"t.{col}" for col in optional_cols if col in task_available),
+                ]
+                cur.execute(
+                    f"""
+                    SELECT
+                        t.task_id,
+                        t.task_name,
+                        t.target_desc,
+                        t.status,
+                        t.max_loops,
+                        t.current_loop,
+                        {", ".join(optional_select)},
+                        t.created_at,
+                        t.updated_at,
+                        COUNT(DISTINCT all_l.loop_id) AS loop_count,
+                        COUNT(DISTINCT l.loop_id) AS selected_loop_count,
+                        COUNT(DISTINCT r.loop_id) AS archived_loop_count,
+                        MIN(l.created_at) AS first_loop_created_at,
+                        MAX(l.updated_at) AS latest_loop_updated_at
+                    FROM qe_evolution_tasks t
+                    LEFT JOIN qe_evolution_loops all_l ON all_l.task_id = t.task_id
+                    LEFT JOIN qe_evolution_loops l ON l.task_id = t.task_id {status_filter}
+                    LEFT JOIN qe_archive.run r
+                      ON r.task_id = t.task_id
+                     AND r.loop_id = l.loop_id
+                    GROUP BY {", ".join(group_cols)}
+                    HAVING COUNT(DISTINCT l.loop_id) > 0
+                       {having_filter}
+                    ORDER BY COALESCE(MAX(l.updated_at), t.updated_at, t.created_at) DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    [*status_params, limit],
+                )
+                rows = self._fetch_dicts(cur)
+
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            selected = int(row.get("selected_loop_count") or 0)
+            archived = int(row.get("archived_loop_count") or 0)
+            pending = max(0, selected - archived)
+            result.append(
+                {
+                    "candidate_id": f"task:{row.get('task_id')}",
+                    "candidate_type": "evolution_task",
+                    "source": "task",
+                    "task_id": row.get("task_id"),
+                    "experiment_id": None,
+                    "display_name": row.get("task_name") or row.get("task_id"),
+                    "description": row.get("target_desc"),
+                    "status": row.get("status"),
+                    "experiment_type": row.get("task_type") or row.get("evolution_mode") or "evolution",
+                    "loop_count": int(row.get("loop_count") or 0),
+                    "selected_run_count": selected,
+                    "archived_run_count": archived,
+                    "pending_run_count": pending,
+                    "is_fully_archived": pending == 0,
+                    "node_id": row.get("node_id"),
+                    "model_id": row.get("model_id"),
+                    "model_catalog_id": row.get("model_catalog_id"),
+                    "strategy_id": row.get("strategy_id"),
+                    "label_horizon": row.get("label_horizon"),
+                    "created_at": _jsonable(row.get("created_at")),
+                    "started_at": _jsonable(row.get("first_loop_created_at")),
+                    "completed_at": _jsonable(row.get("latest_loop_updated_at")),
+                    "updated_at": _jsonable(row.get("updated_at")),
+                    "sort_time": _jsonable(row.get("latest_loop_updated_at") or row.get("updated_at") or row.get("created_at")),
+                    "archive_action": "archive_all_completed_loops",
+                }
+            )
+        return result
+
+    def _list_single_experiment_candidates(
+        self,
+        *,
+        status: str,
+        limit: int,
+        include_archived: bool,
+    ) -> list[dict[str, Any]]:
+        archive_filter = "" if include_archived else "AND r.run_id IS NULL"
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                available = self._available_columns(cur, "qe_experiments")
+                if "experiment_id" not in available:
+                    return []
+
+                optional_cols = (
+                    "experiment_name",
+                    "status",
+                    "model_id",
+                    "model_catalog_id",
+                    "strategy_id",
+                    "factor_names",
+                    "alpha_mode",
+                    "created_at",
+                    "started_at",
+                    "completed_at",
+                    "updated_at",
+                )
+                optional_select = [
+                    f"e.{col}" if col in available else f"NULL AS {col}"
+                    for col in optional_cols
+                ]
+                source_filters = []
+                if "is_evolution_loop" in available:
+                    source_filters.append("COALESCE(e.is_evolution_loop, FALSE) = FALSE")
+                if "parent_experiment_id" in available:
+                    source_filters.append("e.parent_experiment_id IS NULL")
+                source_filter_sql = " AND ".join(source_filters) or "TRUE"
+                status_filter, status_params = (
+                    _status_filter_sql("e.status", status) if "status" in available else ("", [])
+                )
+                order_exprs = [
+                    f"e.{col}" if col in available else "NULL"
+                    for col in ("completed_at", "updated_at", "created_at")
+                ]
+                cur.execute(
+                    f"""
+                    SELECT
+                        e.experiment_id,
+                        {", ".join(optional_select)},
+                        r.run_id AS archived_run_id
+                    FROM qe_experiments e
+                    LEFT JOIN qe_archive.run r ON r.experiment_id = e.experiment_id
+                    WHERE {source_filter_sql}
+                      {status_filter}
+                      {archive_filter}
+                    ORDER BY COALESCE({", ".join(order_exprs)}) DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    [*status_params, limit],
+                )
+                rows = self._fetch_dicts(cur)
+
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            archived = 1 if row.get("archived_run_id") else 0
+            pending = 0 if archived else 1
+            result.append(
+                {
+                    "candidate_id": f"experiment:{row.get('experiment_id')}",
+                    "candidate_type": "single_experiment",
+                    "source": "experiment",
+                    "task_id": None,
+                    "experiment_id": row.get("experiment_id"),
+                    "display_name": row.get("experiment_name") or row.get("experiment_id"),
+                    "description": row.get("experiment_name"),
+                    "status": row.get("status"),
+                    "experiment_type": row.get("alpha_mode") or "single_experiment",
+                    "loop_count": 0,
+                    "selected_run_count": 1,
+                    "archived_run_count": archived,
+                    "pending_run_count": pending,
+                    "is_fully_archived": pending == 0,
+                    "node_id": None,
+                    "model_id": row.get("model_id"),
+                    "model_catalog_id": row.get("model_catalog_id"),
+                    "strategy_id": row.get("strategy_id"),
+                    "factor_count": len(_ensure_list(row.get("factor_names"))),
+                    "created_at": _jsonable(row.get("created_at")),
+                    "started_at": _jsonable(row.get("started_at")),
+                    "completed_at": _jsonable(row.get("completed_at")),
+                    "updated_at": _jsonable(row.get("updated_at")),
+                    "sort_time": _jsonable(row.get("completed_at") or row.get("updated_at") or row.get("created_at")),
+                    "archive_action": "archive_single_experiment",
+                }
+            )
+        return result
 
     @staticmethod
     def build_experiment_payload(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -379,6 +632,14 @@ class QEArchiveSourceAssembler:
                 return candidate
         return candidates[-1]
 
+    @staticmethod
+    def _fetch_dicts(cur: Any) -> list[dict[str, Any]]:
+        rows = cur.fetchall()
+        if not rows:
+            return []
+        columns = [desc[0] for desc in cur.description or []]
+        return [dict(zip(columns, row)) for row in rows]
+
 
 def _ensure_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
@@ -391,6 +652,27 @@ def _ensure_mapping(value: Any) -> dict[str, Any]:
         if isinstance(parsed, Mapping):
             return dict(parsed)
     return {}
+
+
+def _dedupe_non_empty(values: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values or []:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _status_filter_sql(column: str, status: str) -> tuple[str, list[Any]]:
+    normalized = (status or "completed").strip().lower()
+    if normalized in {"all", "*"}:
+        return "", []
+    if normalized == "terminal":
+        return f"AND {column} = ANY(%s)", [list(TERMINAL_STATUSES)]
+    return f"AND {column} = %s", [normalized]
 
 
 def _ensure_list(value: Any) -> list[Any]:
