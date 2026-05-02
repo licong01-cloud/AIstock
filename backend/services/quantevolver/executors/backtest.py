@@ -64,10 +64,11 @@ class BacktestExecutor(BaseExecutor):
         # 1. 构建 custom_params（配置层唯一注入点）
         custom_params = config.build_custom_params()
         strategy_params = config.build_strategy_params()
+        stock_pool_payload = None
         if ctx.node_id:
-            from ..stock_pool_sync import sync_stock_pool_to_compute_node_by_id
+            from ..stock_pool_sync import prepare_stock_pool_loop_payload_for_compute_node_by_id
 
-            sync_stock_pool_to_compute_node_by_id(
+            stock_pool_payload = prepare_stock_pool_loop_payload_for_compute_node_by_id(
                 ctx.node_id,
                 custom_params.get("stock_pool"),
             )
@@ -87,12 +88,28 @@ class BacktestExecutor(BaseExecutor):
             node_id=ctx.node_id,
         )
 
-        experiment_files: dict[str, str] = compose_res.get("experiment_files", {})
+        experiment_files: dict[str, str] = dict(compose_res.get("experiment_files", {}) or {})
         wsl_command: str = compose_res.get("wsl_command", "")
         if not wsl_command:
             raise ValueError(
                 f"compose_experiment_in_memory returned empty wsl_command for "
                 f"task={ctx.task_id} loop={ctx.loop_index}"
+            )
+
+        if stock_pool_payload:
+            from ..stock_pool_sync import inject_stock_pool_install_command
+
+            stock_pool_files = stock_pool_payload.get("experiment_files") or {}
+            duplicate_keys = set(experiment_files).intersection(stock_pool_files)
+            if duplicate_keys:
+                raise ValueError(
+                    "stock_pool files would overwrite generated files: "
+                    f"{sorted(duplicate_keys)}"
+                )
+            experiment_files.update(stock_pool_files)
+            wsl_command = inject_stock_pool_install_command(
+                wsl_command,
+                stock_pool_payload.get("install_command"),
             )
 
         if ctx.extra_experiment_files:

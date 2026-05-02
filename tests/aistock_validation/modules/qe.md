@@ -48,6 +48,7 @@ These checks cover non-create, non-retry, non-resume paths remediated after the 
 - RD-Agent catalog ETL treats `workspace_path` as remote metadata only; it must not convert `/mnt/...` to Windows paths or read `model_meta.json` from a worker workspace.
 - RD-Agent sync admin `/tasks/{task_id}/complete_assets` proxies the RD-Agent node API; it must not run `wsl`, `subprocess`, or WSL-only helper scripts.
 - QE factor-cache remote sync must communicate through execution-node factor-cache APIs only; it must not shell out to WSL, SSH, rsync, or directly create/read remote cache directories.
+- QE filtered stock-pool delivery for create/custom_evo/fork flows must use AIstock-owned local `stock_pools` cache plus QE workspace loop payloads; it must not shell out to WSL, SSH, scp, or directly create/read remote instruments directories from Windows.
 - Selection Center HMM runtime must not convert `/mnt/...` model/coefficient artifact paths into Windows paths; remote worker paths fail fast instead of being read locally.
 - StrategyPackage execution model resolver must reject `/mnt/...` and WSL/worker model paths; it must not translate worker paths into Windows drive paths or probe them locally.
 
@@ -134,6 +135,8 @@ python -m pytest backend/tests/unified_engine/test_qe_evolution_read_paths.py ba
 # Remaining non-create/retry/resume worker workspace boundary checks.
 python -m pytest backend/tests/unified_engine/test_worker_workspace_policy_remaining_paths.py -q
 python -m pytest backend/tests/unified_engine/test_factor_cache_remote_sync_policy.py -q
+python -m pytest backend/tests/unified_engine/test_qe_config_truth.py -k "stock_pool" -q
+python -m pytest backend/tests/unified_engine/test_backtest_executor.py -k "stock_pool" -q
 ```
 
 ## Evidence

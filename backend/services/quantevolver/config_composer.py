@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ...db.pg_pool import get_conn
+from ..strategy_package.workspace_policy import ensure_aistock_artifact_path
 from .experiment_config import normalize_label_horizon
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
@@ -3412,6 +3413,22 @@ class ConfigComposer:
         return path
 
     @staticmethod
+    def _local_hmm_artifact_path(path_text: str) -> Optional[Path]:
+        """Resolve AIstock-local HMM artifact paths without probing worker filesystems."""
+        text = str(path_text or "").strip()
+        if not text:
+            return None
+        normalized = text.replace("\\", "/")
+        if len(normalized) >= 2 and normalized[1] == ":":
+            return Path(normalized)
+        if normalized.startswith("/mnt/"):
+            parts = normalized.split("/")
+            if len(parts) >= 4 and len(parts[2]) == 1:
+                return Path(f"{parts[2].upper()}:/{'/'.join(parts[3:])}")
+        candidate = Path(text)
+        return candidate if candidate.is_absolute() else None
+
+    @staticmethod
     def _build_conda_activate_chain(default_env: str = "rdagent-gpu") -> str:
         """构造稳健的 conda 初始化命令。
 
@@ -3789,19 +3806,8 @@ model_cls = {nn_class_name}
                 except Exception as exc:
                     logger.warning("HMM config_json 自动解析失败，将仅使用预生成文件: %s", exc)
 
-        # Windows 路径自动转 WSL 路径
-        if not model_path.startswith("/"):
-            mp = model_path.replace("\\", "/")
-            if len(mp) >= 2 and mp[1] == ":":
-                model_path = f"/mnt/{mp[0].lower()}{mp[2:]}"
-            else:
-                raise ValueError(f"无法识别的 model_path 格式: {model_path}")
-            logger.info(f"HMM model_path 自动转换为 WSL 路径: {model_path}")
-
         # ── 优先读取训练时预生成的系数文件 ──
-        model_dir = model_path.rsplit("/", 1)[0]
         coeff_filename = f"coefficients_{preset_key}_{test_start}_{backtest_end}.json"
-        coeff_path = f"{model_dir}/{coeff_filename}"
         strict_no_leakage = False
         if hmm_config_json:
             strict_value = hmm_config_json.get("strict_no_leakage")
@@ -3831,6 +3837,42 @@ model_cls = {nn_class_name}
                     f"preset={preset_key}, test_start={test_start}, backtest_end={backtest_end}"
                 )
 
+        local_model_path = self._local_hmm_artifact_path(str(model_path))
+        local_coeff_text = ""
+        if local_model_path is not None:
+            try:
+                coeff_local_path = ensure_aistock_artifact_path(
+                    local_model_path.parent / coeff_filename,
+                    purpose="QE HMM coefficient artifact",
+                    extra_roots=[AISTOCK_PROJECT_ROOT / "backend" / "data" / "hmm_models"],
+                )
+                if coeff_local_path.exists() and coeff_local_path.is_file():
+                    local_coeff_text = coeff_local_path.read_text(encoding="utf-8").strip()
+            except Exception as exc:
+                logger.debug("HMM local coefficient lookup skipped: %s", exc)
+        if local_coeff_text:
+            data = json.loads(local_coeff_text)
+            if "daily_coefficients" in data and "stock_sector_map" in data:
+                logger.info(
+                    f"HMM 系数文件本地命中: {coeff_filename} "
+                    f"({data.get('sector_count', '?')} 行业, "
+                    f"{len(data['daily_coefficients'])} 天)"
+                )
+                return local_coeff_text
+
+        # Legacy fallback for older local development nodes.  Current cross-node
+        # custom_evo flows should hit the AIstock-local coefficient file above and
+        # ship it through experiment_files instead of probing node filesystems.
+        if not model_path.startswith("/"):
+            mp = model_path.replace("\\", "/")
+            if len(mp) >= 2 and mp[1] == ":":
+                model_path = f"/mnt/{mp[0].lower()}{mp[2:]}"
+            else:
+                raise ValueError(f"无法识别的 model_path 格式: {model_path}")
+            logger.debug("HMM model_path converted for legacy local fallback: %s", model_path)
+
+        model_dir = model_path.rsplit("/", 1)[0]
+        coeff_path = f"{model_dir}/{coeff_filename}"
         read_result = subprocess.run(
             ["wsl", "bash", "-c", f"cat '{coeff_path}'"],
             capture_output=True, text=True, timeout=10,

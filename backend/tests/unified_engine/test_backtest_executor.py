@@ -8,18 +8,14 @@ import pytest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch, call
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from services.quantevolver.experiment_config import ExperimentConfig, HmmConfig
-from services.quantevolver.experiment_config_builders import (
+from backend.services.quantevolver.experiment_config import ExperimentConfig, HmmConfig
+from backend.services.quantevolver.experiment_config_builders import (
     build_config_from_evolution_loop,
     build_config_from_strategy_evo_loop,
     build_config_from_custom_evo_loop,
 )
-from services.quantevolver.executors.base import ExecutionContext
-from services.quantevolver.executors.backtest import BacktestExecutor, BacktestMode
+from backend.services.quantevolver.executors.base import ExecutionContext
+from backend.services.quantevolver.executors.backtest import BacktestExecutor, BacktestMode
 from tests.fixtures.sample_configs import (
     EVOLUTION_CONFIG_MINIMAL,
     EVOLUTION_TASK_MINIMAL,
@@ -220,10 +216,17 @@ class TestBacktestExecutorBasic:
         assert cp["unfilled_backup_depth"] == 3
 
     def test_path2_hmm_in_custom_params_for_all_auto_loops(self):
-        cfg = build_config_from_evolution_loop(
-            EVOLUTION_CONFIG_MINIMAL, EVOLUTION_TASK_WITH_HMM,
-            experiment_name="task_001/Loop2",
-        )
+        with patch(
+            "backend.services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
+            return_value=HMM_SNAPSHOT["model_path"],
+        ), patch(
+            "backend.services.quantevolver.experiment_config_builders._resolve_hmm_config_json",
+            return_value=None,
+        ):
+            cfg = build_config_from_evolution_loop(
+                EVOLUTION_CONFIG_MINIMAL, EVOLUTION_TASK_WITH_HMM,
+                experiment_name="task_001/Loop2",
+            )
         ctx = make_ctx(task_id="task_001", loop_index=2, experiment_name="task_001/Loop2")
         compose_call = self._run_and_get_compose_call(cfg, ctx)
         cp = compose_call.kwargs["custom_params"]
@@ -257,8 +260,11 @@ class TestBacktestExecutorBasic:
     def test_path3_with_hmm(self):
         """Path 3 + HMM: sector_hmm_model_path 注入到 custom_params"""
         with patch(
-            "services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
+            "backend.services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
             return_value=HMM_SNAPSHOT["model_path"],
+        ), patch(
+            "backend.services.quantevolver.experiment_config_builders._resolve_hmm_config_json",
+            return_value=None,
         ):
             cfg = build_config_from_strategy_evo_loop(
                 STRATEGY_EVO_BASE_CONFIG, STRATEGY_EVO_LOOP_WITH_HMM, STRATEGY_EVO_TASK,
@@ -290,8 +296,11 @@ class TestBacktestExecutorBasic:
     def test_path4_compose_params_full(self):
         """Path 4: submit_custom_evo_loop — 完整配置，验证所有参数注入"""
         with patch(
-            "services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
+            "backend.services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
             return_value=HMM_SNAPSHOT["model_path"],
+        ), patch(
+            "backend.services.quantevolver.experiment_config_builders._resolve_hmm_config_json",
+            return_value=None,
         ):
             cfg = build_config_from_custom_evo_loop(
                 CUSTOM_EVO_LOOP_FULL, CUSTOM_EVO_TASK,
@@ -375,3 +384,33 @@ class TestWorkspaceClientParams:
 
         compose_kwargs = composer.compose_experiment_in_memory.call_args.kwargs
         assert compose_kwargs["node_id"] == "node_215"
+
+    def test_stock_pool_file_packaged_through_loop_payload(self):
+        composer = make_mock_composer(
+            "cd /home/node/qe_workspace/task/Loop1 && python qrun_limit_minute.py conf.yaml"
+        )
+        client = make_mock_client()
+        executor = BacktestExecutor(composer, client)
+        cfg = ExperimentConfig(
+            factor_names=["f1"],
+            model_id="lgbm",
+            stock_pool="filtered_pool_x",
+        )
+        ctx = make_ctx(node_id="rdagent-node1")
+
+        with patch(
+            "backend.services.quantevolver.stock_pool_sync.prepare_stock_pool_loop_payload_for_compute_node_by_id",
+            return_value={
+                "experiment_files": {"filtered_pool_x.txt": "000001.SZ\t2018-01-01\t2026-05-02\n"},
+                "install_command": "test -f filtered_pool_x.txt",
+            },
+        ):
+            result = asyncio.get_event_loop().run_until_complete(executor.submit(cfg, ctx))
+
+        args, _kwargs = client.create_and_run_loop.call_args
+        assert args[3]["filtered_pool_x.txt"].startswith("000001.SZ")
+        assert args[4].startswith(
+            "cd /home/node/qe_workspace/task/Loop1 && test -f filtered_pool_x.txt &&"
+        )
+        assert result.experiment_files["filtered_pool_x.txt"].startswith("000001.SZ")
+        assert result.wsl_command == args[4]

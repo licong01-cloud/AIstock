@@ -1,87 +1,45 @@
-"""Remote stock-pool synchronization helpers for QE runs.
+"""Stock-pool delivery helpers for QE execution nodes.
 
-Filtered instrument pools are generated in the local WSL qlib data directory.
-When a QE run is submitted to a remote RDAgent node, the same file must exist in
-the remote node's qlib instruments directory before Qlib starts.  These helpers
-fail fast instead of letting the remote run silently fall back or fail later.
+The Windows FastAPI process must not create, probe, or copy files inside an
+execution node filesystem.  Filtered pools are read only from the AIstock-owned
+local ``stock_pools`` cache, then delivered as normal loop ``experiment_files``
+through the QE workspace API.  The node-side loop command installs the file into
+its own Qlib instruments directory before ``qrun`` starts.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
 import shlex
-import subprocess
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 try:
     from ...db.pg_pool import get_conn
+    from ..strategy_package.workspace_policy import ensure_aistock_artifact_path
 except ImportError:  # tests may import backend/services as a top-level package
     from backend.db.pg_pool import get_conn
+    from backend.services.strategy_package.workspace_policy import ensure_aistock_artifact_path
 
 logger = logging.getLogger("aistock.quantevolver.stock_pool_sync")
 
-_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
-_LINUX_USER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
-_LINUX_PATH_KEYS = (
-    "qlib_data_path",
-    "qlib_minute_path",
-    "workspace_base",
-    "factor_data_dir",
-    "qlib_rdagent_root",
-)
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_STOCK_POOL_ROOT = PROJECT_ROOT / "stock_pools"
+_FILTERED_POOL_RE = re.compile(r"^filtered_pool_[A-Za-z0-9_.-]+(?:\.txt)?$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_SSH_CONNECT_TIMEOUT_SECONDS = 10
-_SSH_COMMAND_TIMEOUT_SECONDS = 30
-_SCP_TRANSFER_TIMEOUT_SECONDS = 60
-_SSH_OPTIONS = [
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    f"ConnectTimeout={_SSH_CONNECT_TIMEOUT_SECONDS}",
-    "-o",
-    "ConnectionAttempts=1",
-    "-o",
-    "StrictHostKeyChecking=accept-new",
-    "-o",
-    "NumberOfPasswordPrompts=0",
-    "-o",
-    "ServerAliveInterval=5",
-    "-o",
-    "ServerAliveCountMax=2",
-]
-_SCP_OPTIONS = " ".join(shlex.quote(part) for part in _SSH_OPTIONS)
-
-
-def _wsl_distro() -> str:
-    distro = os.getenv("AISTOCK_WSL_DISTRO") or os.getenv("QLIB_WSL_DISTRO") or ""
-    distro = distro.strip()
-    if not distro:
-        raise RuntimeError("AISTOCK_WSL_DISTRO or QLIB_WSL_DISTRO is required for stock_pool WSL access")
-    return distro
-
-
-def _wsl_bash_command(script: str) -> list[str]:
-    return ["wsl", "-d", _wsl_distro(), "--", "bash", "-lc", script]
+_LINUX_ABS_PATH_RE = re.compile(r"^/[A-Za-z0-9_./:@%+=,-]+$")
 
 
 def is_filtered_stock_pool(stock_pool_path: str | None) -> bool:
     return bool(stock_pool_path and "filtered_pool" in str(stock_pool_path))
 
 
-def _resolve_local_stock_pool_path(stock_pool_path: str) -> str:
-    """Resolve a Qlib instrument name to the authoritative local WSL file path."""
-    value = str(stock_pool_path).strip()
-    if not value:
-        raise RuntimeError("stock_pool path is empty")
-    if "/" in value or "\\" in value:
-        return value.replace("\\", "/")
-    filename = value if value.endswith(".txt") else f"{value}.txt"
-    qlib_data_path = os.getenv("QLIB_DATA_PATH_WSL", "").strip().rstrip("/")
-    if not qlib_data_path:
-        raise RuntimeError("QLIB_DATA_PATH_WSL is required to resolve local stock_pool paths")
-    return f"{qlib_data_path}/instruments/{filename}"
+def _stock_pool_root() -> Path:
+    raw = os.getenv("STOCK_POOL_OUTPUT_DIR")
+    return Path(raw) if raw else DEFAULT_STOCK_POOL_ROOT
 
 
 def _node_host(api_base_url: str | None) -> str:
@@ -89,26 +47,6 @@ def _node_host(api_base_url: str | None) -> str:
         return ""
     parsed = urlparse(api_base_url if "://" in api_base_url else f"http://{api_base_url}")
     return parsed.hostname or ""
-
-
-def _validate_linux_user(node_id: str, ssh_user: str, *, source: str) -> str:
-    user = str(ssh_user or "").strip()
-    if not user:
-        return ""
-    if not _LINUX_USER_RE.fullmatch(user):
-        raise RuntimeError(
-            f"node {node_id} has invalid ssh_user from {source}: {user!r}; "
-            "cannot sync stock_pool"
-        )
-    return user
-
-
-def _linux_home_user(path_value: Any) -> str | None:
-    path = str(path_value or "").strip()
-    if not path.startswith("/home/"):
-        return None
-    parts = path.split("/")
-    return parts[2] if len(parts) > 2 and parts[2] else None
 
 
 def _node_path(node: dict[str, Any], key: str) -> str:
@@ -121,219 +59,169 @@ def _node_path(node: dict[str, Any], key: str) -> str:
     return ""
 
 
-def _resolve_ssh_user(node: dict[str, Any], *, purpose: str) -> str:
-    """Resolve SSH user explicitly, or derive it from unambiguous /home/<user> paths."""
-    node_id = str(node.get("node_id") or "<unknown>")
-    explicit = _validate_linux_user(node_id, str(node.get("ssh_user") or ""), source="ssh_user")
-    if explicit:
-        return explicit
-
-    derived: dict[str, str] = {}
-    for key in _LINUX_PATH_KEYS:
-        user = _linux_home_user(_node_path(node, key))
-        if user:
-            derived[key] = _validate_linux_user(node_id, user, source=key)
-
-    users = {user for user in derived.values() if user}
-    if len(users) == 1:
-        user = next(iter(users))
-        logger.warning(
-            "node %s missing ssh_user; derived ssh_user=%s from Linux home paths for %s",
-            node_id,
-            user,
-            purpose,
-        )
-        return user
-    if len(users) > 1:
+def _safe_stock_pool_filename(stock_pool_path: str) -> str:
+    value = str(stock_pool_path or "").strip()
+    if not value:
+        raise RuntimeError("stock_pool path is empty")
+    normalized = value.replace("\\", "/")
+    filename = normalized.rsplit("/", 1)[-1]
+    if not filename.endswith(".txt"):
+        filename = f"{filename}.txt"
+    if not _FILTERED_POOL_RE.fullmatch(filename) or Path(filename).name != filename:
         raise RuntimeError(
-            f"node {node_id} missing ssh_user and Linux paths imply multiple users "
-            f"{sorted(users)} from {derived}; cannot {purpose}"
+            "stock_pool must be a filtered_pool file name or metadata path ending in filtered_pool_*.txt"
         )
-    raise RuntimeError(
-        f"node {node_id} missing ssh_user and no /home/<user> node path is available; "
-        f"set infra.compute_nodes.ssh_user or configure node paths under /home/<user>; cannot {purpose}"
+    return filename
+
+
+def _resolve_local_stock_pool_path(stock_pool_path: str) -> Path:
+    """Resolve caller metadata to an AIstock-owned local stock-pool cache file.
+
+    Historical callers may pass a Linux instruments path.  That path is treated
+    only as metadata: Windows never probes it; only the safe basename is used.
+    """
+    filename = _safe_stock_pool_filename(stock_pool_path)
+    root = _stock_pool_root()
+    raw = str(stock_pool_path or "").strip()
+    normalized = raw.replace("\\", "/")
+
+    # Accept an explicit local file only when it is under an AIstock artifact root.
+    if (":" in raw or raw.startswith(".")) and normalized.rsplit("/", 1)[-1] == filename:
+        explicit = Path(raw)
+        if explicit.is_absolute() or explicit.exists():
+            return ensure_aistock_artifact_path(
+                explicit,
+                purpose="QE filtered stock-pool local source",
+                extra_roots=[root],
+            )
+
+    return ensure_aistock_artifact_path(
+        root / filename,
+        purpose="QE filtered stock-pool local source",
+        extra_roots=[root],
     )
 
 
-def _safe_cmd_for_error(cmd: list[str]) -> str:
-    return " ".join(shlex.quote(str(part)) for part in cmd)
+def _sha256_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
 
 
-def _run_checked(cmd: list[str], *, timeout: int, error_prefix: str) -> subprocess.CompletedProcess:
-    try:
-        result = subprocess.run(cmd, timeout=timeout, check=False, capture_output=True)
-    except subprocess.TimeoutExpired as exc:
+def _read_stock_pool_payload(stock_pool_path: str) -> tuple[Path, str, str, str]:
+    local_path = _resolve_local_stock_pool_path(stock_pool_path)
+    if not local_path.exists() or not local_path.is_file():
         raise RuntimeError(
-            f"{error_prefix}: command timed out after {timeout}s: {_safe_cmd_for_error(cmd)}"
-        ) from exc
-    if result.returncode != 0:
-        stderr = result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
-        stdout = result.stdout.decode("utf-8", errors="replace") if result.stdout else ""
-        detail = stderr.strip() or stdout.strip()
-        raise RuntimeError(
-            f"{error_prefix}: {detail or 'command failed without output'}; "
-            f"command={_safe_cmd_for_error(cmd)}"
+            "local filtered stock_pool cache file is missing; generate the pool before submitting QE: "
+            f"{local_path}"
         )
-    return result
-
-
-def _ssh_command(ssh_target: str, remote_command: str) -> list[str]:
-    return ["ssh", *_SSH_OPTIONS, ssh_target, remote_command]
-
-
-def _extract_sha256(output: bytes, *, context: str) -> str:
-    """Parse sha256sum output into the exact 64-hex digest and reject anything invalid."""
-    text = output.decode("utf-8", errors="replace").strip()
-    digest = text.split()[0] if text else ""
+    payload = local_path.read_bytes()
+    digest = _sha256_bytes(payload)
     if not _SHA256_RE.fullmatch(digest):
-        raise RuntimeError(f"invalid sha256 output for {context}: {text!r}")
-    return digest
+        raise RuntimeError(f"invalid local stock_pool sha256 for {local_path}: {digest}")
+    try:
+        content = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(f"stock_pool file must be UTF-8 text: {local_path}") from exc
+    return local_path, local_path.name, content, digest
 
 
-def _assert_wsl_file_exists(stock_pool_path: str) -> None:
-    _run_checked(
-        _wsl_bash_command(f"test -f {shlex.quote(stock_pool_path)}"),
-        timeout=10,
-        error_prefix=f"stock_pool file does not exist in WSL: {stock_pool_path}",
-    )
-
-
-def _wsl_sha256(stock_pool_path: str) -> str:
-    result = _run_checked(
-        _wsl_bash_command(f"sha256sum {shlex.quote(stock_pool_path)}"),
-        timeout=10,
-        error_prefix=f"failed to checksum WSL stock_pool file: {stock_pool_path}",
-    )
-    return _extract_sha256(result.stdout, context=f"local stock_pool {stock_pool_path}")
-
-
-def sync_stock_pool_to_remote_node(stock_pool_path: str, node: dict[str, Any]) -> dict[str, str]:
-    """Copy one filtered_pool file to a remote node's qlib instruments directory."""
-    if not is_filtered_stock_pool(stock_pool_path):
-        return {"status": "skipped", "reason": "not_filtered_pool"}
-
-    local_stock_pool_path = _resolve_local_stock_pool_path(stock_pool_path)
-    node_id = node.get("node_id") or "<unknown>"
-    host = _node_host(node.get("api_base_url"))
-    if not host:
-        raise RuntimeError(f"node {node_id} missing api_base_url; cannot sync stock_pool")
-    if host in _LOCAL_HOSTS:
-        _assert_wsl_file_exists(local_stock_pool_path)
-        return {
-            "status": "skipped",
-            "reason": "local_node",
-            "node_id": str(node_id),
-            "host": host,
-            "local_path": local_stock_pool_path,
-            "sha256": _wsl_sha256(local_stock_pool_path),
-        }
-
-    remote_qlib_data = _node_path(node, "qlib_data_path")
-    if not remote_qlib_data:
-        raise RuntimeError(f"node {node_id} missing qlib_data_path; cannot sync stock_pool")
-
-    ssh_user = _resolve_ssh_user(node, purpose="sync stock_pool")
-    _assert_wsl_file_exists(local_stock_pool_path)
-    local_sha256 = _wsl_sha256(local_stock_pool_path)
-
-    ssh_target = f"{ssh_user}@{host}"
-    remote_instruments_dir = f"{remote_qlib_data.rstrip('/')}/instruments"
-    remote_path = f"{remote_instruments_dir}/{os.path.basename(local_stock_pool_path)}"
-
-    _run_checked(
-        _ssh_command(ssh_target, f"mkdir -p -- {shlex.quote(remote_instruments_dir)}"),
-        timeout=_SSH_COMMAND_TIMEOUT_SECONDS,
-        error_prefix=f"failed to create remote instruments dir {ssh_target}:{remote_instruments_dir}",
-    )
-
-    _run_checked(
-        _wsl_bash_command(
-            f"scp {_SCP_OPTIONS} "
-            f"{shlex.quote(local_stock_pool_path)} "
-            f"{shlex.quote(f'{ssh_target}:{remote_instruments_dir}/')}"
-        ),
-        timeout=_SCP_TRANSFER_TIMEOUT_SECONDS,
-        error_prefix=f"failed to sync stock_pool {local_stock_pool_path} -> {ssh_target}:{remote_instruments_dir}/",
-    )
-    remote_result = _run_checked(
-        _ssh_command(ssh_target, f"sha256sum {shlex.quote(remote_path)}"),
-        timeout=_SSH_COMMAND_TIMEOUT_SECONDS,
-        error_prefix=f"failed to checksum remote stock_pool {ssh_target}:{remote_path}",
-    )
-    remote_checksum = _extract_sha256(
-        remote_result.stdout,
-        context=f"remote stock_pool {ssh_target}:{remote_path}",
-    )
-    if remote_checksum != local_sha256:
+def _remote_instruments_dir(node: dict[str, Any]) -> str:
+    node_id = str(node.get("node_id") or "<unknown>")
+    qlib_data = _node_path(node, "qlib_data_path")
+    if not qlib_data:
+        raise RuntimeError(f"node {node_id} missing qlib_data_path; cannot install stock_pool")
+    qlib_data = qlib_data.rstrip("/")
+    if not qlib_data.startswith("/") or "\x00" in qlib_data or not _LINUX_ABS_PATH_RE.fullmatch(qlib_data):
         raise RuntimeError(
-            f"stock_pool checksum mismatch after sync: local={local_sha256} "
-            f"remote={remote_checksum} path={ssh_target}:{remote_path}"
+            f"node {node_id} has invalid qlib_data_path for stock_pool install: {qlib_data!r}"
         )
+    return f"{qlib_data}/instruments"
+
+
+def build_stock_pool_install_command(*, filename: str, remote_instruments_dir: str, expected_sha256: str) -> str:
+    """Build the node-side shell fragment that installs a packaged pool file."""
+    if not _FILTERED_POOL_RE.fullmatch(filename) or Path(filename).name != filename:
+        raise RuntimeError(f"unsafe stock_pool filename for install command: {filename!r}")
+    if not _SHA256_RE.fullmatch(expected_sha256):
+        raise RuntimeError(f"invalid stock_pool sha256 for install command: {expected_sha256!r}")
+    dest = f"{remote_instruments_dir.rstrip('/')}/{filename}"
+    src_q = shlex.quote(filename)
+    dir_q = shlex.quote(remote_instruments_dir.rstrip("/"))
+    dest_q = shlex.quote(dest)
+    sha_q = shlex.quote(expected_sha256)
+    return " && ".join(
+        [
+            f"test -f {src_q}",
+            f"actual_sha=\"$(sha256sum {src_q} | cut -d ' ' -f 1)\"",
+            (
+                f"[ \"$actual_sha\" = {sha_q} ] || "
+                f"{{ echo 'stock_pool source checksum mismatch' >&2; exit 1; }}"
+            ),
+            f"mkdir -p {dir_q}",
+            f"cp -f {src_q} {dest_q}",
+            f"final_sha=\"$(sha256sum {dest_q} | cut -d ' ' -f 1)\"",
+            (
+                f"[ \"$final_sha\" = {sha_q} ] || "
+                f"{{ echo 'stock_pool installed checksum mismatch' >&2; exit 1; }}"
+            ),
+        ]
+    )
+
+
+def inject_stock_pool_install_command(execution_command: str, install_command: str | None) -> str:
+    """Insert node-side stock-pool installation after the initial ``cd`` command."""
+    command = str(execution_command or "").strip()
+    if not install_command:
+        return command
+    if not command:
+        raise RuntimeError("cannot inject stock_pool install command into an empty execution command")
+    first, sep, rest = command.partition(" && ")
+    if sep and first.strip().startswith("cd ") and rest.strip():
+        return f"{first} && {install_command} && {rest}"
+    return f"{install_command} && {command}"
+
+
+def prepare_stock_pool_loop_payload(stock_pool_path: str | None, node: dict[str, Any]) -> dict[str, Any] | None:
+    """Prepare stock-pool file content and node-side install command for a loop."""
+    if not is_filtered_stock_pool(stock_pool_path):
+        return None
+    node_id = str(node.get("node_id") or "<unknown>")
+    if not str(node.get("api_base_url") or "").strip():
+        raise RuntimeError(f"node {node_id} missing api_base_url; cannot package stock_pool")
+    local_path, filename, content, digest = _read_stock_pool_payload(str(stock_pool_path))
+    instruments_dir = _remote_instruments_dir(node)
+    remote_path = f"{instruments_dir.rstrip('/')}/{filename}"
+    install_command = build_stock_pool_install_command(
+        filename=filename,
+        remote_instruments_dir=instruments_dir,
+        expected_sha256=digest,
+    )
     logger.info(
-        "synced stock_pool %s -> %s:%s/ sha256=%s",
-        os.path.basename(local_stock_pool_path),
-        ssh_target,
-        remote_instruments_dir,
-        local_sha256,
+        "prepared stock_pool %s for node %s via loop payload sha256=%s",
+        filename,
+        node_id,
+        digest,
     )
     return {
-        "status": "synced",
-        "node_id": str(node_id),
-        "host": host,
+        "status": "packaged",
+        "sync_transport": "loop_payload_api",
+        "node_id": node_id,
+        "host": _node_host(node.get("api_base_url")),
+        "instrument_name": filename[:-4],
+        "filename": filename,
+        "local_path": str(local_path),
         "remote_path": remote_path,
-        "local_path": local_stock_pool_path,
-        "sha256": local_sha256,
+        "sha256": digest,
+        "experiment_files": {filename: content},
+        "install_command": install_command,
     }
 
 
-def sync_all_filtered_pools_to_remote_node(node: dict[str, Any]) -> dict[str, str]:
-    """Copy all local filtered_pool_*.txt files to a remote node."""
-    node_id = node.get("node_id") or "<unknown>"
-    host = _node_host(node.get("api_base_url"))
-    if not host:
-        raise RuntimeError(f"node {node_id} missing api_base_url; cannot sync filtered pools")
-    if host in _LOCAL_HOSTS:
-        return {"status": "skipped", "reason": "local_node", "node_id": str(node_id), "host": host}
-
-    remote_qlib_data = _node_path(node, "qlib_data_path")
-    if not remote_qlib_data:
-        raise RuntimeError(f"node {node_id} missing qlib_data_path; cannot sync filtered pools")
-
-    ssh_user = _resolve_ssh_user(node, purpose="sync filtered pools")
-    ssh_target = f"{ssh_user}@{host}"
-    remote_instruments_dir = f"{remote_qlib_data.rstrip('/')}/instruments"
-    local_qlib_data = os.getenv("QLIB_DATA_PATH_WSL", "").strip().rstrip("/")
-    if not local_qlib_data:
-        raise RuntimeError("QLIB_DATA_PATH_WSL is required to sync filtered pools")
-    local_instruments_dir = f"{local_qlib_data}/instruments"
-
-    _run_checked(
-        _ssh_command(ssh_target, f"mkdir -p -- {shlex.quote(remote_instruments_dir)}"),
-        timeout=_SSH_COMMAND_TIMEOUT_SECONDS,
-        error_prefix=f"failed to create remote instruments dir {ssh_target}:{remote_instruments_dir}",
-    )
-    _run_checked(
-        _wsl_bash_command(
-            f"scp {_SCP_OPTIONS} "
-            f"{shlex.quote(local_instruments_dir)}/filtered_pool_*.txt "
-            f"{shlex.quote(f'{ssh_target}:{remote_instruments_dir}/')}"
-        ),
-        timeout=_SCP_TRANSFER_TIMEOUT_SECONDS,
-        error_prefix=f"failed to sync filtered_pool files -> {ssh_target}:{remote_instruments_dir}/",
-    )
-    logger.info("synced all filtered_pool files -> %s:%s/", ssh_target, remote_instruments_dir)
-    return {"status": "synced", "node_id": str(node_id), "host": host, "remote_dir": remote_instruments_dir}
-
-
-def sync_stock_pool_to_compute_node_by_id(node_id: str | None, stock_pool_path: str | None) -> dict[str, str] | None:
-    """Resolve a compute node and sync the filtered pool if needed."""
-    if not node_id or not is_filtered_stock_pool(stock_pool_path):
-        return None
+def _compute_node_by_id(node_id: str) -> dict[str, Any]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT node_id, api_base_url, ssh_user, qlib_data_path
+                SELECT node_id, api_base_url, qlib_data_path
                 FROM infra.compute_nodes
                 WHERE node_id = %s
                 """,
@@ -342,10 +230,50 @@ def sync_stock_pool_to_compute_node_by_id(node_id: str | None, stock_pool_path: 
             row = cur.fetchone()
     if not row:
         raise RuntimeError(f"compute node does not exist: {node_id}")
-    node = {
+    return {
         "node_id": row[0],
         "api_base_url": row[1],
-        "ssh_user": row[2],
-        "qlib_data_path": row[3],
+        "qlib_data_path": row[2],
     }
-    return sync_stock_pool_to_remote_node(str(stock_pool_path), node)
+
+
+def prepare_stock_pool_loop_payload_for_compute_node_by_id(
+    node_id: str | None,
+    stock_pool_path: str | None,
+) -> dict[str, Any] | None:
+    if not node_id or not is_filtered_stock_pool(stock_pool_path):
+        return None
+    return prepare_stock_pool_loop_payload(str(stock_pool_path), _compute_node_by_id(str(node_id)))
+
+
+def sync_stock_pool_to_remote_node(stock_pool_path: str, node: dict[str, Any]) -> dict[str, Any]:
+    """Compatibility wrapper: validate/package metadata without remote file access."""
+    payload = prepare_stock_pool_loop_payload(stock_pool_path, node)
+    if payload is None:
+        return {"status": "skipped", "reason": "not_filtered_pool"}
+    return {key: value for key, value in payload.items() if key not in {"experiment_files", "install_command"}}
+
+
+def sync_all_filtered_pools_to_remote_node(node: dict[str, Any]) -> dict[str, Any]:
+    """Validate all local filtered pools for a node; delivery remains per loop payload."""
+    root = ensure_aistock_artifact_path(
+        _stock_pool_root(),
+        purpose="QE filtered stock-pool local root",
+        extra_roots=[_stock_pool_root()],
+    )
+    files = sorted(root.glob("filtered_pool_*.txt")) if root.exists() else []
+    validated = [sync_stock_pool_to_remote_node(path.name, node) for path in files]
+    return {
+        "status": "validated",
+        "sync_transport": "loop_payload_api",
+        "node_id": str(node.get("node_id") or "<unknown>"),
+        "count": len(validated),
+        "items": validated,
+    }
+
+
+def sync_stock_pool_to_compute_node_by_id(node_id: str | None, stock_pool_path: str | None) -> dict[str, Any] | None:
+    """Backward-compatible preflight entry point used before task creation."""
+    if not node_id or not is_filtered_stock_pool(stock_pool_path):
+        return None
+    return sync_stock_pool_to_remote_node(str(stock_pool_path), _compute_node_by_id(str(node_id)))

@@ -31,6 +31,8 @@ def default_aistock_artifact_roots() -> list[Path]:
         root / "rdagent_assets" / "factor_values",
         root / "rdagent_assets" / "factor_values_realtime",
         root / "rdagent_assets" / "qe_factors",
+        root / "stock_pools",
+        root / "backend" / "data" / "hmm_models",
         root / "qe_archive",
     ]
 

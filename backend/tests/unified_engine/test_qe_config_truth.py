@@ -1,6 +1,6 @@
 
+import json
 import sys
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -26,7 +26,11 @@ from backend.services.quantevolver.qe_evolution_service import (
     normalize_qe_loop_retry_mode,
 )
 from backend.services.quantevolver.experiment_config_builders import build_config_from_retry_loop
-from backend.services.quantevolver.stock_pool_sync import sync_stock_pool_to_remote_node
+from backend.services.quantevolver.stock_pool_sync import (
+    inject_stock_pool_install_command,
+    prepare_stock_pool_loop_payload,
+    sync_stock_pool_to_remote_node,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
@@ -46,7 +50,50 @@ DATA_SPLIT = {
     "backtest_end": "2021-12-31",
 }
 
-TEST_SHA256 = "3b4ad5e17e49166df13840f453619a87cafaa70dda129daafee8adf0fca4e1b5"
+
+def test_remote_stock_pool_sync_has_no_direct_worker_directory_commands():
+    import backend.services.quantevolver.stock_pool_sync as stock_pool_sync_module
+
+    source = Path(stock_pool_sync_module.__file__).read_text(encoding="utf-8")
+    assert "subprocess" not in source
+    assert "wsl" not in source.lower()
+    assert "ssh" not in source.lower()
+    assert "scp" not in source.lower()
+    assert "_run_checked" not in source
+
+
+def test_hmm_coefficients_read_local_artifact_before_legacy_fallback(monkeypatch, tmp_path):
+    import backend.services.quantevolver.config_composer as composer_module
+    from unittest.mock import patch
+
+    project_root = tmp_path / "project"
+    model_path = project_root / "backend" / "data" / "hmm_models" / "snap" / "models.json"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_text("{}", encoding="utf-8")
+    coeff_path = model_path.parent / "coefficients_preset_A_2024-07-01_2026-04-27.json"
+    coeff_path.write_text(
+        json.dumps(
+            {
+                "sector_count": 1,
+                "daily_coefficients": {"2024-07-01": {"801010.SI": 1.0}},
+                "stock_sector_map": {"000001.SZ": "801010.SI"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(composer_module, "AISTOCK_PROJECT_ROOT", project_root)
+
+    with patch("subprocess.run", side_effect=AssertionError("legacy fallback must not run")):
+        result = ConfigComposer()._precompute_hmm_coefficients(
+            {
+                "sector_hmm_model_path": str(model_path),
+                "hmm_signal_preset": "preset_A",
+            },
+            {"test_start": "2024-07-01", "backtest_end": "2026-04-27"},
+        )
+
+    payload = json.loads(result)
+    assert payload["daily_coefficients"]["2024-07-01"]["801010.SI"] == 1.0
 
 
 def test_qe_default_split_uses_safe_backtest_end_20260427():
@@ -357,144 +404,100 @@ def test_qe_suspend_filter_symbol_aliases_and_strict_missing_date(tmp_path):
         filt.suspended_symbols("2024-01-03")
 
 
-def test_remote_stock_pool_sync_local_node_checks_file_and_checksum(monkeypatch):
-    calls = []
+def _write_stock_pool(root: Path, filename: str = "filtered_pool_x.txt") -> tuple[Path, str]:
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / filename
+    path.write_text("000001.SZ\t2018-01-01\t2026-05-02\n", encoding="utf-8")
+    import hashlib
 
-    class Result:
-        returncode = 0
-        stderr = b""
-        stdout = f"{TEST_SHA256}  /home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt\n".encode()
-
-    def fake_run(cmd, timeout, check, capture_output):
-        calls.append(cmd)
-        return Result()
-
-    monkeypatch.setenv("AISTOCK_WSL_DISTRO", "Ubuntu-Test")
-    monkeypatch.setattr("backend.services.quantevolver.stock_pool_sync.subprocess.run", fake_run)
-    result = sync_stock_pool_to_remote_node(
-        "/home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt",
-        {"node_id": "wsl2-5080", "api_base_url": "http://127.0.0.1:9000"},
-    )
-
-    assert result["status"] == "skipped"
-    assert result["reason"] == "local_node"
-    assert result["sha256"] == TEST_SHA256
-    assert any("test -f" in part for cmd in calls for part in cmd)
-    assert all("Ubuntu" not in cmd for call in calls for cmd in call if cmd != "Ubuntu-Test")
-    assert any("Ubuntu-Test" in cmd for call in calls for cmd in call)
+    return path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_remote_stock_pool_sync_resolves_instrument_name(monkeypatch):
-    calls = []
-
-    class Result:
-        returncode = 0
-        stderr = b""
-        stdout = f"{TEST_SHA256}  /home/lc999/data/qlib_bin/instruments/filtered_pool_20260426.txt\n".encode()
-
-    def fake_run(cmd, timeout, check, capture_output):
-        calls.append(cmd)
-        return Result()
-
-    monkeypatch.setenv("AISTOCK_WSL_DISTRO", "Ubuntu-Test")
-    monkeypatch.setenv("QLIB_DATA_PATH_WSL", "/home/lc999/data/qlib_bin")
-    monkeypatch.setattr("backend.services.quantevolver.stock_pool_sync.subprocess.run", fake_run)
-    result = sync_stock_pool_to_remote_node(
-        "filtered_pool_20260426",
-        {"node_id": "wsl2-5080", "api_base_url": "http://127.0.0.1:9000"},
-    )
-
-    assert result["status"] == "skipped"
-    assert result["local_path"] == "/home/lc999/data/qlib_bin/instruments/filtered_pool_20260426.txt"
-    assert any("filtered_pool_20260426.txt" in part for cmd in calls for part in cmd)
-
-
-def test_remote_stock_pool_sync_derives_missing_ssh_user_from_node_paths(monkeypatch):
-    calls = []
-
-    class Result:
-        returncode = 0
-        stderr = b""
-        stdout = f"{TEST_SHA256}  /home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt\n".encode()
-
-    def fake_run(cmd, timeout, check, capture_output):
-        calls.append(cmd)
-        return Result()
-
-    monkeypatch.setenv("AISTOCK_WSL_DISTRO", "Ubuntu-Test")
-    monkeypatch.setattr("backend.services.quantevolver.stock_pool_sync.subprocess.run", fake_run)
+def test_remote_stock_pool_sync_uses_local_cache_and_loop_payload_for_localhost(monkeypatch, tmp_path):
+    pool_root = tmp_path / "stock_pools"
+    path, digest = _write_stock_pool(pool_root)
+    monkeypatch.setenv("STOCK_POOL_OUTPUT_DIR", str(pool_root))
+    monkeypatch.setenv("AISTOCK_SAFE_ARTIFACT_ROOTS", str(pool_root))
 
     result = sync_stock_pool_to_remote_node(
         "/home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt",
         {
-            "node_id": "rdagent-node1",
-            "api_base_url": "http://192.168.50.215:9000",
-            "workspace_config": {
-                "qlib_data_path": "/home/lc999/data/qlib_bin",
-                "workspace_base": "/home/lc999/projects/RD-Agent-main/qe_workspace",
-            },
+            "node_id": "wsl2-5080",
+            "api_base_url": "http://127.0.0.1:9000",
+            "qlib_data_path": "/home/lc999/data/qlib_bin",
         },
     )
 
-    assert result["status"] == "synced"
+    assert result["status"] == "packaged"
+    assert result["sync_transport"] == "loop_payload_api"
+    assert result["sha256"] == digest
+    assert result["local_path"] == str(path)
     assert result["remote_path"] == "/home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt"
-    assert any("lc999@192.168.50.215" in str(part) for cmd in calls for part in cmd)
-    ssh_calls = [cmd for cmd in calls if cmd and cmd[0] == "ssh"]
-    assert ssh_calls
-    assert all("BatchMode=yes" in cmd for cmd in ssh_calls)
-    assert all("ConnectTimeout=10" in cmd for cmd in ssh_calls)
-    assert all("StrictHostKeyChecking=accept-new" in cmd for cmd in ssh_calls)
-    assert all("NumberOfPasswordPrompts=0" in cmd for cmd in ssh_calls)
-    scp_commands = [part for cmd in calls for part in cmd if isinstance(part, str) and part.startswith("scp ")]
-    assert scp_commands
-    assert all("BatchMode=yes" in cmd for cmd in scp_commands)
-    assert all("ConnectionAttempts=1" in cmd for cmd in scp_commands)
-    assert all("StrictHostKeyChecking=accept-new" in cmd for cmd in scp_commands)
-    assert all("NumberOfPasswordPrompts=0" in cmd for cmd in scp_commands)
 
 
-def test_remote_stock_pool_sync_timeout_error_is_actionable(monkeypatch):
-    from backend.services.quantevolver import stock_pool_sync
+def test_remote_stock_pool_sync_resolves_instrument_name_from_local_cache(monkeypatch, tmp_path):
+    pool_root = tmp_path / "stock_pools"
+    path, digest = _write_stock_pool(pool_root, "filtered_pool_20260426.txt")
+    monkeypatch.setenv("STOCK_POOL_OUTPUT_DIR", str(pool_root))
+    monkeypatch.setenv("AISTOCK_SAFE_ARTIFACT_ROOTS", str(pool_root))
 
-    def fake_run(cmd, timeout, check, capture_output):
-        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+    result = sync_stock_pool_to_remote_node(
+        "filtered_pool_20260426",
+        {
+            "node_id": "rdagent-node1",
+            "api_base_url": "http://192.168.50.215:9000",
+            "qlib_data_path": "/home/lc999/data/qlib_bin",
+        },
+    )
 
-    monkeypatch.setattr(stock_pool_sync.subprocess, "run", fake_run)
-
-    with pytest.raises(RuntimeError) as exc:
-        stock_pool_sync._run_checked(
-            ["ssh", "lc999@192.168.50.215", "mkdir", "-p", "/home/lc999/data/qlib_bin/instruments"],
-            timeout=10,
-            error_prefix="failed to create remote instruments dir",
-        )
-
-    message = str(exc.value)
-    assert "command timed out after 10s" in message
-    assert "failed to create remote instruments dir" in message
-    assert "lc999@192.168.50.215" in message
+    assert result["filename"] == "filtered_pool_20260426.txt"
+    assert result["local_path"] == str(path)
+    assert result["sha256"] == digest
 
 
-def test_remote_stock_pool_sync_rejects_ambiguous_derived_ssh_user(monkeypatch):
-    monkeypatch.setenv("AISTOCK_WSL_DISTRO", "Ubuntu-Test")
+def test_remote_stock_pool_prepare_payload_includes_file_and_install_command(monkeypatch, tmp_path):
+    pool_root = tmp_path / "stock_pools"
+    _path, digest = _write_stock_pool(pool_root)
+    monkeypatch.setenv("STOCK_POOL_OUTPUT_DIR", str(pool_root))
+    monkeypatch.setenv("AISTOCK_SAFE_ARTIFACT_ROOTS", str(pool_root))
 
-    with pytest.raises(RuntimeError, match="multiple users"):
+    payload = prepare_stock_pool_loop_payload(
+        "filtered_pool_x",
+        {
+            "node_id": "rdagent-node1",
+            "api_base_url": "http://192.168.50.215:9000",
+            "workspace_config": {"qlib_data_path": "/home/lc999/data/qlib_bin"},
+        },
+    )
+
+    assert payload is not None
+    assert payload["experiment_files"]["filtered_pool_x.txt"].startswith("000001.SZ")
+    assert "mkdir -p /home/lc999/data/qlib_bin/instruments" in payload["install_command"]
+    assert "filtered_pool_x.txt" in payload["install_command"]
+    assert digest in payload["install_command"]
+
+
+def test_remote_stock_pool_install_command_is_injected_after_cd():
+    command = inject_stock_pool_install_command(
+        "cd /home/node/qe_workspace/task/Loop1 && conda activate env && python qrun_limit_minute.py conf.yaml",
+        "test -f filtered_pool_x.txt",
+    )
+
+    assert command.startswith("cd /home/node/qe_workspace/task/Loop1 && test -f filtered_pool_x.txt &&")
+    assert "conda activate env && python qrun_limit_minute.py conf.yaml" in command
+
+
+def test_remote_stock_pool_sync_fails_fast_when_local_cache_missing(monkeypatch, tmp_path):
+    pool_root = tmp_path / "stock_pools"
+    monkeypatch.setenv("STOCK_POOL_OUTPUT_DIR", str(pool_root))
+    monkeypatch.setenv("AISTOCK_SAFE_ARTIFACT_ROOTS", str(pool_root))
+
+    with pytest.raises(RuntimeError, match="local filtered stock_pool cache file is missing"):
         sync_stock_pool_to_remote_node(
-            "/home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt",
+            "filtered_pool_missing",
             {
                 "node_id": "rdagent-node1",
                 "api_base_url": "http://192.168.50.215:9000",
                 "qlib_data_path": "/home/lc999/data/qlib_bin",
-                "workspace_base": "/home/other/projects/RD-Agent-main/qe_workspace",
             },
-        )
-
-
-def test_remote_stock_pool_sync_requires_explicit_wsl_distro(monkeypatch):
-    monkeypatch.delenv("AISTOCK_WSL_DISTRO", raising=False)
-    monkeypatch.delenv("QLIB_WSL_DISTRO", raising=False)
-
-    with pytest.raises(RuntimeError, match="AISTOCK_WSL_DISTRO"):
-        sync_stock_pool_to_remote_node(
-            "/home/lc999/data/qlib_bin/instruments/filtered_pool_x.txt",
-            {"node_id": "wsl2-5080", "api_base_url": "http://127.0.0.1:9000"},
         )
