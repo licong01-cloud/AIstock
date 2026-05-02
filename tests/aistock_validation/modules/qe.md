@@ -63,6 +63,8 @@ These checks cover non-create, non-retry, non-resume paths remediated after the 
 Cleanup validation must use mocked DB/API clients and test-owned temporary directories unless the user explicitly authorizes a real destructive test.
 
 - QE experiment delete calls `QEWorkspaceClient.cleanup_task_workspace` for the default node and assigned multi-alpha nodes.
+- QE experiment delete resolves the real worker workspace id from `qe_experiments.qe_task_id` / `qe_evolution_tasks.task_id`; `experiment_id` is only a legacy fallback and must not be the only cleanup key.
+- Deleting a child evolution Loop calls `QEWorkspaceClient.cleanup_loop_workspace(qe_task_id, qe_loop_id)` and must not delete the parent task workspace or sibling Loop records.
 - QE experiment delete must not import or dereference `QE_WORKSPACE_WIN`, `RDAGENT_WORKSPACE_WIN`, DB `workspace_path`, `/mnt/...` conversions, or WSL UNC paths.
 - QE experiment delete may remove only AIstock-owned local artifacts under `QE_EXPERIMENTS_ROOT` and `QE_SOTA_ASSETS_DIR`, and may remove Optuna study files only under the SOTA root.
 - QE evolution task delete captures `node_id` before DB deletion, calls node API cleanup for worker workspace, and removes only AIstock-owned local artifact dirs.
@@ -95,6 +97,7 @@ Required assertions:
 - Worker cleanup mode is observable as node-API-only or explicit fail-fast.
 - Local cleanup result lists only AIstock-owned artifact paths.
 - DB delete statements are executed only after required remote cleanup preconditions pass.
+- If node workspace cleanup fails, the experiment delete endpoint returns an actionable failure before deleting DB rows or AIstock-owned local caches.
 - Missing node cleanup capability returns an actionable failure and does not silently delete local/DB state.
 
 ## UI L3

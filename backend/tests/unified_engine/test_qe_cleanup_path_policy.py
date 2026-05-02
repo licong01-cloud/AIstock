@@ -18,6 +18,7 @@ def test_qe_experiment_delete_uses_node_api_and_local_cleanup_policy() -> None:
     assert "QE_WORKSPACE_WIN" not in segment
     assert "RDAGENT_WORKSPACE_WIN" not in segment
     assert "cleanup_task_workspace" in segment
+    assert "cleanup_loop_workspace" in segment
     assert "remove_aistock_artifact_tree" in segment
     assert "unlink_aistock_artifact_files" in segment
     assert "worker_workspace_cleanup_mode" in segment
@@ -111,6 +112,8 @@ class _FakeDeleteCursor:
         self.state = state
         self.sql = ""
         self.rowcount = 1
+        self.description = []
+        self._rows = []
 
     def __enter__(self):
         return self
@@ -121,16 +124,68 @@ class _FakeDeleteCursor:
     def execute(self, sql, params=None):
         self.sql = " ".join(str(sql).split())
         self.state["sql"].append(self.sql)
+        self.state.setdefault("params", []).append(params)
+        self.description = []
+        self._rows = []
+
+        if "SELECT experiment_id, status, qe_task_id" in self.sql and "WHERE experiment_id = %s" in self.sql:
+            cols = [
+                "experiment_id",
+                "status",
+                "qe_task_id",
+                "qe_loop_id",
+                "loop_index",
+                "parent_experiment_id",
+                "is_evolution_loop",
+                "custom_params",
+            ]
+            self.description = [(col,) for col in cols]
+            row = self.state.get("experiment_row") or {
+                "experiment_id": "qe_cleanup_unit",
+                "status": "completed",
+                "qe_task_id": "qe_cleanup_unit",
+                "qe_loop_id": "Loop1",
+                "loop_index": 1,
+                "parent_experiment_id": None,
+                "is_evolution_loop": False,
+                "custom_params": None,
+            }
+            self._rows = [tuple(row.get(col) for col in cols)]
+        elif "SELECT experiment_id, status, qe_task_id" in self.sql and "WHERE parent_experiment_id = %s" in self.sql:
+            cols = [
+                "experiment_id",
+                "status",
+                "qe_task_id",
+                "qe_loop_id",
+                "loop_index",
+                "parent_experiment_id",
+                "is_evolution_loop",
+                "custom_params",
+            ]
+            self.description = [(col,) for col in cols]
+            rows = self.state.get("child_rows", [])
+            self._rows = [tuple(row.get(col) for col in cols) for row in rows]
+        elif "SELECT task_id, status, node_id, base_experiment_id" in self.sql:
+            cols = ["task_id", "status", "node_id", "base_experiment_id"]
+            self.description = [(col,) for col in cols]
+            rows = self.state.get("task_rows", [])
+            self._rows = [tuple(row.get(col) for col in cols) for row in rows]
+        elif "SELECT loop_id, task_id, loop_index, status, node_id, experiment_id" in self.sql:
+            cols = ["loop_id", "task_id", "loop_index", "status", "node_id", "experiment_id"]
+            self.description = [(col,) for col in cols]
+            rows = self.state.get("loop_rows", [])
+            self._rows = [tuple(row.get(col) for col in cols) for row in rows]
+        elif "SELECT parent_experiment_id, assigned_node_id, qe_loop_id" in self.sql:
+            cols = ["parent_experiment_id", "assigned_node_id", "qe_loop_id"]
+            self.description = [(col,) for col in cols]
+            rows = self.state.get("group_rows", [{"parent_experiment_id": "qe_cleanup_unit", "assigned_node_id": "node-b", "qe_loop_id": "Loop1"}])
+            self._rows = [tuple(row.get(col) for col in cols) for row in rows]
 
     def fetchone(self):
-        if "SELECT status FROM qe_experiments" in self.sql:
-            return ("completed",)
-        return None
+        return self._rows[0] if self._rows else None
 
     def fetchall(self):
-        if "SELECT DISTINCT assigned_node_id" in self.sql:
-            return [("node-b",)]
-        return []
+        return list(self._rows)
 
 
 def test_qe_experiment_delete_cleans_local_assets_without_worker_workspace(tmp_path, monkeypatch) -> None:
@@ -157,8 +212,23 @@ def test_qe_experiment_delete_cleans_local_assets_without_worker_workspace(tmp_p
     monkeypatch.setenv("QE_WORKSPACE_WIN", str(worker_root))
     monkeypatch.setenv("QE_SOTA_ASSETS_DIR", str(sota_root))
     monkeypatch.setattr(config_composer, "QE_EXPERIMENTS_ROOT", experiments_root)
+    monkeypatch.setattr(qe_router, "resolve_default_qe_node_id", lambda: "default")
 
-    db_state = {"sql": [], "commits": 0}
+    db_state = {
+        "sql": [],
+        "commits": 0,
+        "experiment_row": {
+            "experiment_id": experiment_id,
+            "status": "completed",
+            "qe_task_id": experiment_id,
+            "qe_loop_id": "Loop1",
+            "loop_index": 1,
+            "parent_experiment_id": None,
+            "is_evolution_loop": False,
+            "custom_params": None,
+        },
+        "group_rows": [{"parent_experiment_id": experiment_id, "assigned_node_id": "node-b", "qe_loop_id": "Loop1"}],
+    }
     monkeypatch.setattr(qe_router, "get_conn", lambda: _FakeDeleteConn(db_state))
 
     cleanup_calls = []
@@ -181,6 +251,9 @@ def test_qe_experiment_delete_cleans_local_assets_without_worker_workspace(tmp_p
             cleanup_calls.append((self.node_id, task_id))
             return True
 
+        async def cleanup_loop_workspace(self, task_id, loop_id):
+            raise AssertionError("parent/single experiment deletion must use task-level cleanup")
+
     monkeypatch.setattr(workspace_client_module, "QEWorkspaceClient", FakeWorkspaceClient)
 
     result = asyncio.run(qe_router.delete_experiment(experiment_id))
@@ -194,6 +267,227 @@ def test_qe_experiment_delete_cleans_local_assets_without_worker_workspace(tmp_p
     assert not sota_dir.exists()
     assert not (optuna_dir / f"{experiment_id}_study.db").exists()
     assert any(sql.startswith("DELETE FROM qe_experiments") for sql in db_state["sql"])
+
+
+def test_qe_experiment_delete_uses_qe_task_id_for_worker_workspace(tmp_path, monkeypatch) -> None:
+    import asyncio
+
+    from backend.services.quantevolver import config_composer
+    import backend.services.quantevolver.qe_workspace_client as workspace_client_module
+
+    experiment_id = "hist_parent"
+    actual_task_id = "qe_actual_task"
+    experiments_root = tmp_path / "qe_experiments"
+    sota_root = tmp_path / "qe_sota_assets"
+    (experiments_root / actual_task_id).mkdir(parents=True)
+    (sota_root / actual_task_id).mkdir(parents=True)
+
+    monkeypatch.setenv("QE_SOTA_ASSETS_DIR", str(sota_root))
+    monkeypatch.setattr(config_composer, "QE_EXPERIMENTS_ROOT", experiments_root)
+    monkeypatch.setattr(qe_router, "resolve_default_qe_node_id", lambda: "default")
+
+    db_state = {
+        "sql": [],
+        "commits": 0,
+        "experiment_row": {
+            "experiment_id": experiment_id,
+            "status": "completed",
+            "qe_task_id": actual_task_id,
+            "qe_loop_id": "Loop1",
+            "loop_index": 1,
+            "parent_experiment_id": None,
+            "is_evolution_loop": False,
+            "custom_params": {"execution_node_id": "node-a"},
+        },
+        "child_rows": [
+            {
+                "experiment_id": f"{actual_task_id}_L2",
+                "status": "completed",
+                "qe_task_id": actual_task_id,
+                "qe_loop_id": "Loop2",
+                "loop_index": 2,
+                "parent_experiment_id": experiment_id,
+                "is_evolution_loop": True,
+                "custom_params": None,
+            }
+        ],
+        "group_rows": [{"parent_experiment_id": experiment_id, "assigned_node_id": "node-b", "qe_loop_id": "Loop2"}],
+    }
+    monkeypatch.setattr(qe_router, "get_conn", lambda: _FakeDeleteConn(db_state))
+
+    cleanup_calls = []
+
+    class FakeWorkspaceClient:
+        def __init__(self, node_id):
+            self.node_id = node_id
+
+        @classmethod
+        def for_node(cls, node_id):
+            return cls(node_id)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            return False
+
+        async def cleanup_task_workspace(self, task_id):
+            cleanup_calls.append((self.node_id, task_id))
+            return True
+
+        async def cleanup_loop_workspace(self, task_id, loop_id):
+            raise AssertionError("parent deletion must use task-level cleanup")
+
+    monkeypatch.setattr(workspace_client_module, "QEWorkspaceClient", FakeWorkspaceClient)
+
+    result = asyncio.run(qe_router.delete_experiment(experiment_id))
+
+    assert result["ok"] is True
+    assert ("node-a", actual_task_id) in cleanup_calls
+    assert ("node-b", actual_task_id) in cleanup_calls
+    assert any(item.get("task_id") == actual_task_id for item in result["worker_cleanup_results"])
+    assert not (experiments_root / actual_task_id).exists()
+    assert any("DELETE FROM qe_evolution_tasks" in sql for sql in db_state["sql"])
+
+
+def test_qe_child_loop_delete_uses_loop_api_and_keeps_task_record(monkeypatch, tmp_path) -> None:
+    import asyncio
+
+    from backend.services.quantevolver import config_composer
+    import backend.services.quantevolver.qe_workspace_client as workspace_client_module
+
+    experiment_id = "qe_actual_task_L3"
+    actual_task_id = "qe_actual_task"
+    experiments_root = tmp_path / "qe_experiments"
+    sota_root = tmp_path / "qe_sota_assets"
+    monkeypatch.setenv("QE_SOTA_ASSETS_DIR", str(sota_root))
+    monkeypatch.setattr(config_composer, "QE_EXPERIMENTS_ROOT", experiments_root)
+    monkeypatch.setattr(qe_router, "resolve_default_qe_node_id", lambda: "default")
+
+    db_state = {
+        "sql": [],
+        "commits": 0,
+        "experiment_row": {
+            "experiment_id": experiment_id,
+            "status": "failed",
+            "qe_task_id": actual_task_id,
+            "qe_loop_id": "Loop3",
+            "loop_index": 3,
+            "parent_experiment_id": "hist_parent",
+            "is_evolution_loop": True,
+            "custom_params": {"execution_node_id": "node-a"},
+        },
+        "child_rows": [],
+        "task_rows": [{"task_id": actual_task_id, "status": "failed", "node_id": "node-a", "base_experiment_id": "hist_parent"}],
+        "loop_rows": [
+            {
+                "loop_id": f"{actual_task_id}_Loop3",
+                "task_id": actual_task_id,
+                "loop_index": 3,
+                "status": "failed",
+                "node_id": "node-a",
+                "experiment_id": experiment_id,
+            }
+        ],
+        "group_rows": [{"parent_experiment_id": "hist_parent", "assigned_node_id": "node-b", "qe_loop_id": "Loop3"}],
+    }
+    monkeypatch.setattr(qe_router, "get_conn", lambda: _FakeDeleteConn(db_state))
+
+    loop_cleanup_calls = []
+    task_cleanup_calls = []
+
+    class FakeWorkspaceClient:
+        def __init__(self, node_id):
+            self.node_id = node_id
+
+        @classmethod
+        def for_node(cls, node_id):
+            return cls(node_id)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            return False
+
+        async def cleanup_task_workspace(self, task_id):
+            task_cleanup_calls.append((self.node_id, task_id))
+            return True
+
+        async def cleanup_loop_workspace(self, task_id, loop_id):
+            loop_cleanup_calls.append((self.node_id, task_id, loop_id))
+            return True
+
+    monkeypatch.setattr(workspace_client_module, "QEWorkspaceClient", FakeWorkspaceClient)
+
+    result = asyncio.run(qe_router.delete_experiment(experiment_id))
+
+    assert result["ok"] is True
+    assert task_cleanup_calls == []
+    assert ("node-a", actual_task_id, "Loop3") in loop_cleanup_calls
+    assert all(call[2] == "Loop3" for call in loop_cleanup_calls)
+    assert not any("DELETE FROM qe_evolution_tasks" in sql for sql in db_state["sql"])
+    assert any("DELETE FROM qe_evolution_loops" in sql for sql in db_state["sql"])
+
+
+def test_qe_experiment_delete_fails_before_db_delete_when_node_cleanup_fails(tmp_path, monkeypatch) -> None:
+    import asyncio
+
+    from backend.services.quantevolver import config_composer
+    import backend.services.quantevolver.qe_workspace_client as workspace_client_module
+
+    experiment_id = "qe_cleanup_failfast"
+    experiments_root = tmp_path / "qe_experiments"
+    sota_root = tmp_path / "qe_sota_assets"
+    local_dir = experiments_root / experiment_id
+    local_dir.mkdir(parents=True)
+    monkeypatch.setenv("QE_SOTA_ASSETS_DIR", str(sota_root))
+    monkeypatch.setattr(config_composer, "QE_EXPERIMENTS_ROOT", experiments_root)
+    monkeypatch.setattr(qe_router, "resolve_default_qe_node_id", lambda: "default")
+
+    db_state = {
+        "sql": [],
+        "commits": 0,
+        "experiment_row": {
+            "experiment_id": experiment_id,
+            "status": "completed",
+            "qe_task_id": experiment_id,
+            "qe_loop_id": "Loop1",
+            "loop_index": 1,
+            "parent_experiment_id": None,
+            "is_evolution_loop": False,
+            "custom_params": None,
+        },
+        "group_rows": [],
+    }
+    monkeypatch.setattr(qe_router, "get_conn", lambda: _FakeDeleteConn(db_state))
+
+    class FailingWorkspaceClient:
+        @classmethod
+        def for_node(cls, node_id):
+            return cls()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            return False
+
+        async def cleanup_task_workspace(self, task_id):
+            raise RuntimeError("node api down")
+
+        async def cleanup_loop_workspace(self, task_id, loop_id):
+            raise RuntimeError("node api down")
+
+    monkeypatch.setattr(workspace_client_module, "QEWorkspaceClient", FailingWorkspaceClient)
+
+    with pytest.raises(qe_router.HTTPException) as exc_info:
+        asyncio.run(qe_router.delete_experiment(experiment_id))
+
+    assert exc_info.value.status_code == 502
+    assert local_dir.exists(), "local cache must not be removed when worker cleanup fails"
+    assert not any(sql.startswith("DELETE FROM qe_experiments") for sql in db_state["sql"])
+    assert db_state["commits"] == 0
 
 class _FakeRDAgentConn:
     def __init__(self, state):

@@ -7038,6 +7038,57 @@ async def stop_multi_alpha_experiment(experiment_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+_QE_DELETE_ACTIVE_STATUSES = {"running", "processing", "queued", "submitted"}
+
+
+def _cursor_row_to_dict(cur: Any, row: Any) -> dict[str, Any] | None:
+    """Convert psycopg/fake cursor rows without requiring RealDictCursor."""
+    if row is None:
+        return None
+    if isinstance(row, Mapping):
+        return dict(row)
+    description = getattr(cur, "description", None) or []
+    names: list[str] = []
+    for desc in description:
+        if isinstance(desc, (tuple, list)):
+            names.append(str(desc[0]))
+        else:
+            name = getattr(desc, "name", None)
+            if name:
+                names.append(str(name))
+    if not names:
+        return {}
+    return {names[i]: row[i] for i in range(min(len(names), len(row)))}
+
+
+def _fetchone_dict(cur: Any) -> dict[str, Any] | None:
+    return _cursor_row_to_dict(cur, cur.fetchone())
+
+
+def _fetchall_dicts(cur: Any) -> list[dict[str, Any]]:
+    return [row for row in (_cursor_row_to_dict(cur, raw) for raw in cur.fetchall()) if row is not None]
+
+
+def _safe_qe_workspace_id(value: Any, *, field_name: str) -> str | None:
+    """Validate task/loop ids before sending them as node-API path parts."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text in {".", ".."} or "/" in text or "\\" in text or "\x00" in text:
+        raise HTTPException(
+            status_code=500,
+            detail=f"QE实验记录包含非法{field_name}，拒绝清理workspace: {text!r}",
+        )
+    return text
+
+
+def _append_unique(values: list[str], value: Any, *, field_name: str) -> str | None:
+    normalized = _safe_qe_workspace_id(value, field_name=field_name)
+    if normalized and normalized not in values:
+        values.append(normalized)
+    return normalized
+
+
 @router.delete("/experiments/{experiment_id}")
 async def delete_experiment(
     experiment_id: str,
@@ -7046,56 +7097,251 @@ async def delete_experiment(
     """删除QE实验及其所有关联数据"""
     from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
 
-    # 1. 检查实验存在且非运行中
+    normalized_experiment_id = _safe_qe_workspace_id(experiment_id, field_name="experiment_id")
+    if not normalized_experiment_id:
+        raise HTTPException(status_code=400, detail="experiment_id不能为空")
+
+    selected_exp: dict[str, Any] | None = None
+    child_experiments: list[dict[str, Any]] = []
+    related_tasks: list[dict[str, Any]] = []
+    related_loops: list[dict[str, Any]] = []
+    multi_alpha_groups: list[dict[str, Any]] = []
+
+    # 1. 读取删除范围并检查实验存在且非运行中
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT status FROM qe_experiments WHERE experiment_id = %s",
+                """
+                SELECT experiment_id, status, qe_task_id, qe_loop_id, loop_index,
+                       parent_experiment_id, is_evolution_loop, custom_params
+                FROM qe_experiments
+                WHERE experiment_id = %s
+                """,
                 (experiment_id,),
             )
-            row = cur.fetchone()
-            if not row:
+            selected_exp = _fetchone_dict(cur)
+            if not selected_exp:
                 raise HTTPException(status_code=404, detail="实验不存在")
-            if row[0] == "running":
+            selected_status = str(selected_exp.get("status") or "").lower()
+            if selected_status in _QE_DELETE_ACTIVE_STATUSES:
                 raise HTTPException(status_code=409, detail="实验正在运行中，请先停止")
 
-    errors = []
+            cur.execute(
+                """
+                SELECT experiment_id, status, qe_task_id, qe_loop_id, loop_index,
+                       parent_experiment_id, is_evolution_loop, custom_params
+                FROM qe_experiments
+                WHERE parent_experiment_id = %s
+                """,
+                (experiment_id,),
+            )
+            child_experiments = _fetchall_dicts(cur)
 
-    # 2. 清理WSL侧workspace（主节点 + 所有从节点）
+            active_children = [
+                row.get("experiment_id")
+                for row in child_experiments
+                if str(row.get("status") or "").lower() in _QE_DELETE_ACTIVE_STATUSES
+            ]
+            if active_children:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"存在运行中的子实验，拒绝删除: {', '.join(map(str, active_children))}",
+                )
+
+            candidate_task_ids: list[str] = []
+            candidate_experiment_ids: list[str] = []
+            _append_unique(candidate_experiment_ids, experiment_id, field_name="experiment_id")
+            _append_unique(candidate_task_ids, experiment_id, field_name="experiment_id")
+            _append_unique(candidate_task_ids, selected_exp.get("qe_task_id"), field_name="qe_task_id")
+            for child in child_experiments:
+                _append_unique(candidate_experiment_ids, child.get("experiment_id"), field_name="experiment_id")
+                _append_unique(candidate_task_ids, child.get("qe_task_id"), field_name="qe_task_id")
+
+            cur.execute(
+                """
+                SELECT task_id, status, node_id, base_experiment_id
+                FROM qe_evolution_tasks
+                WHERE base_experiment_id = ANY(%s::text[])
+                   OR task_id = ANY(%s::text[])
+                """,
+                (candidate_experiment_ids, candidate_task_ids),
+            )
+            related_tasks = _fetchall_dicts(cur)
+            for task in related_tasks:
+                _append_unique(candidate_task_ids, task.get("task_id"), field_name="task_id")
+
+            active_tasks = [
+                row.get("task_id")
+                for row in related_tasks
+                if str(row.get("status") or "").lower() in _QE_DELETE_ACTIVE_STATUSES
+            ]
+            if active_tasks:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"存在运行中的演进任务，拒绝删除: {', '.join(map(str, active_tasks))}",
+                )
+
+            cur.execute(
+                """
+                SELECT loop_id, task_id, loop_index, status, node_id, experiment_id
+                FROM qe_evolution_loops
+                WHERE experiment_id = ANY(%s::text[])
+                   OR task_id = ANY(%s::text[])
+                """,
+                (candidate_experiment_ids, candidate_task_ids),
+            )
+            related_loops = _fetchall_dicts(cur)
+            active_loops = [
+                row.get("loop_id")
+                for row in related_loops
+                if str(row.get("status") or "").lower() in _QE_DELETE_ACTIVE_STATUSES
+            ]
+            if active_loops:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"存在运行中的Loop，拒绝删除: {', '.join(map(str, active_loops))}",
+                )
+
+            group_parent_ids = list(candidate_experiment_ids)
+            parent_id = selected_exp.get("parent_experiment_id")
+            if parent_id:
+                _append_unique(group_parent_ids, parent_id, field_name="parent_experiment_id")
+            cur.execute(
+                """
+                SELECT parent_experiment_id, assigned_node_id, qe_loop_id
+                FROM qe_multi_alpha_groups
+                WHERE parent_experiment_id = ANY(%s::text[])
+                  AND assigned_node_id IS NOT NULL
+                """,
+                (group_parent_ids,),
+            )
+            multi_alpha_groups = _fetchall_dicts(cur)
+
+    assert selected_exp is not None  # for type checkers
+    default_node_id = resolve_default_qe_node_id()
+    selected_is_child_loop = bool(selected_exp.get("parent_experiment_id") or selected_exp.get("is_evolution_loop")) and not child_experiments
+
+    experiment_ids_to_delete: list[str] = []
+    task_ids_to_delete_db: list[str] = []
+    local_artifact_ids: list[str] = []
+    task_nodes: dict[str, set[str]] = {}
+    loop_nodes: dict[tuple[str, str], set[str]] = {}
+
+    def add_local_id(value: Any, field_name: str = "experiment_id") -> None:
+        _append_unique(local_artifact_ids, value, field_name=field_name)
+
+    def add_task_node(
+        task_id_value: Any,
+        node_id_value: Any = None,
+        *,
+        field_name: str = "task_id",
+        allow_default_node: bool = True,
+    ) -> str | None:
+        task_id_norm = _append_unique(local_artifact_ids, task_id_value, field_name=field_name)
+        if not task_id_norm:
+            return None
+        node_text = str(node_id_value or "").strip()
+        if not node_text and not allow_default_node:
+            return task_id_norm
+        node_norm = node_text or default_node_id
+        task_nodes.setdefault(task_id_norm, set()).add(node_norm)
+        return task_id_norm
+
+    def add_loop_node(task_id_value: Any, loop_id_value: Any, node_id_value: Any = None) -> None:
+        task_id_norm = _safe_qe_workspace_id(task_id_value, field_name="qe_task_id")
+        loop_id_norm = _safe_qe_workspace_id(loop_id_value, field_name="qe_loop_id")
+        if not task_id_norm or not loop_id_norm:
+            return
+        if loop_id_norm.startswith(task_id_norm + "_"):
+            loop_id_norm = loop_id_norm[len(task_id_norm) + 1:]
+        node_norm = str(node_id_value or "").strip() or default_node_id
+        loop_nodes.setdefault((task_id_norm, loop_id_norm), set()).add(node_norm)
+        add_local_id(task_id_norm, "qe_task_id")
+
+    selected_node = _get_recorded_experiment_node(selected_exp)
+    selected_qe_task_id = selected_exp.get("qe_task_id")
+
+    if selected_is_child_loop:
+        task_id_for_loop = _safe_qe_workspace_id(selected_qe_task_id, field_name="qe_task_id")
+        loop_id_for_loop = _safe_qe_workspace_id(selected_exp.get("qe_loop_id"), field_name="qe_loop_id")
+        if not task_id_for_loop or not loop_id_for_loop:
+            raise HTTPException(
+                status_code=500,
+                detail="QE子实验缺少qe_task_id/qe_loop_id，无法通过节点API清理Loop workspace，数据库记录未删除",
+            )
+        _append_unique(experiment_ids_to_delete, experiment_id, field_name="experiment_id")
+        add_local_id(experiment_id, "experiment_id")
+        add_local_id(task_id_for_loop, "qe_task_id")
+        add_loop_node(task_id_for_loop, loop_id_for_loop, selected_node)
+        for loop in related_loops:
+            if loop.get("experiment_id") == experiment_id:
+                add_loop_node(loop.get("task_id") or task_id_for_loop, loop.get("loop_id") or loop_id_for_loop, loop.get("node_id"))
+        for task in related_tasks:
+            if task.get("task_id") == task_id_for_loop:
+                add_loop_node(task_id_for_loop, loop_id_for_loop, task.get("node_id"))
+        for group in multi_alpha_groups:
+            if str(group.get("qe_loop_id") or "") == str(loop_id_for_loop):
+                add_loop_node(task_id_for_loop, loop_id_for_loop, group.get("assigned_node_id"))
+    else:
+        all_experiments = [selected_exp] + child_experiments
+        for exp in all_experiments:
+            _append_unique(experiment_ids_to_delete, exp.get("experiment_id"), field_name="experiment_id")
+            add_local_id(exp.get("experiment_id"), "experiment_id")
+            node_id = _get_recorded_experiment_node(exp)
+            add_task_node(
+                exp.get("qe_task_id") or exp.get("experiment_id"),
+                node_id,
+                field_name="qe_task_id",
+                allow_default_node=exp is selected_exp,
+            )
+
+        # Legacy rows may have the workspace named by experiment_id rather than qe_task_id.
+        add_task_node(experiment_id, selected_node, field_name="experiment_id")
+        for task in related_tasks:
+            task_id = add_task_node(task.get("task_id"), task.get("node_id"), field_name="task_id")
+            if task_id and task_id not in task_ids_to_delete_db:
+                task_ids_to_delete_db.append(task_id)
+        for loop in related_loops:
+            add_task_node(loop.get("task_id"), loop.get("node_id"), field_name="task_id", allow_default_node=False)
+        for group in multi_alpha_groups:
+            add_task_node(selected_qe_task_id or experiment_id, group.get("assigned_node_id"), field_name="qe_task_id")
+
+        for task_id in list(task_nodes):
+            if task_id not in task_ids_to_delete_db:
+                task_ids_to_delete_db.append(task_id)
+
+    cleanup_results: list[dict[str, Any]] = []
+
+    # 2. 清理QE执行节点workspace。只走节点API；失败时在DB删除前 fail-fast。
     if cleanup_workspace:
-        # 主节点清理
         try:
-            async with QEWorkspaceClient() as client:
-                await client.cleanup_task_workspace(experiment_id)
-        except Exception as e:
-            errors.append(f"主节点workspace清理失败: {e}")
-            logger.warning(f"Workspace cleanup failed for {experiment_id}: {e}")
-
-        # 多Alpha从节点清理：查询所有分配过的节点
-        try:
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """SELECT DISTINCT assigned_node_id
-                           FROM qe_multi_alpha_groups
-                           WHERE parent_experiment_id = %s
-                             AND assigned_node_id IS NOT NULL""",
-                        (experiment_id,),
-                    )
-                    remote_nodes = [r[0] for r in cur.fetchall()]
-
-            for node_id in remote_nodes:
-                try:
+            for (task_id, loop_id), nodes in sorted(loop_nodes.items()):
+                for node_id in sorted(nodes):
                     client = QEWorkspaceClient.for_node(node_id)
                     async with client:
-                        await client.cleanup_task_workspace(experiment_id)
-                    logger.info(f"已清理远端节点 {node_id} 的workspace: {experiment_id}")
-                except Exception as e:
-                    errors.append(f"远端节点 {node_id} workspace清理失败: {e}")
-                    logger.warning(f"Remote workspace cleanup failed for {node_id}/{experiment_id}: {e}")
+                        await client.cleanup_loop_workspace(task_id, loop_id)
+                    cleanup_results.append(
+                        {"scope": "loop", "node_id": node_id, "task_id": task_id, "loop_id": loop_id}
+                    )
+                    logger.info("已通过节点API清理QE Loop workspace: node=%s task=%s loop=%s", node_id, task_id, loop_id)
+            for task_id, nodes in sorted(task_nodes.items()):
+                for node_id in sorted(nodes):
+                    client = QEWorkspaceClient.for_node(node_id)
+                    async with client:
+                        await client.cleanup_task_workspace(task_id)
+                    cleanup_results.append({"scope": "task", "node_id": node_id, "task_id": task_id})
+                    logger.info("已通过节点API清理QE task workspace: node=%s task=%s", node_id, task_id)
+        except HTTPException:
+            raise
         except Exception as e:
-            errors.append(f"查询多Alpha节点失败: {e}")
-            logger.warning(f"Failed to query multi-alpha nodes for {experiment_id}: {e}")
+            logger.exception("QE workspace cleanup failed before DB delete: experiment=%s", experiment_id)
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "QE workspace清理失败，数据库记录和本地AIstock缓存未删除；"
+                    f"请确认执行节点API可用后重试。原始错误: {e}"
+                ),
+            ) from e
 
     # 2b. Clean AIstock-owned local artifacts only. Worker workspaces are cleaned via node API above.
     from ..services.quantevolver.config_composer import QE_EXPERIMENTS_ROOT
@@ -7107,75 +7353,78 @@ async def delete_experiment(
     sota_dir = Path(os.environ.get("QE_SOTA_ASSETS_DIR", str(AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_sota_assets")))
     local_cleanup_roots = [QE_EXPERIMENTS_ROOT, sota_dir]
     cleaned_dirs: list[str] = []
-    for dir_path in [
-        QE_EXPERIMENTS_ROOT / experiment_id,
-        sota_dir / experiment_id,
-    ]:
-        try:
-            if remove_aistock_artifact_tree(
-                dir_path,
-                purpose=f"QE experiment local artifact cleanup: {experiment_id}",
-                allowed_roots=local_cleanup_roots,
-                ignore_errors=True,
-            ):
-                cleaned_dirs.append(str(dir_path))
-                logger.info(f"Cleaned local AIstock experiment directory: {dir_path}")
-        except Exception as e:
-            errors.append(f"local AIstock artifact cleanup failed ({dir_path}): {e}")
+    local_cleanup_errors: list[str] = []
+    for artifact_id in local_artifact_ids or [experiment_id]:
+        for dir_path in [QE_EXPERIMENTS_ROOT / artifact_id, sota_dir / artifact_id]:
+            try:
+                if remove_aistock_artifact_tree(
+                    dir_path,
+                    purpose=f"QE experiment local artifact cleanup: {experiment_id}",
+                    allowed_roots=local_cleanup_roots,
+                    ignore_errors=True,
+                ):
+                    cleaned_dirs.append(str(dir_path))
+                    logger.info(f"Cleaned local AIstock experiment directory: {dir_path}")
+            except Exception as e:
+                local_cleanup_errors.append(f"local AIstock artifact cleanup failed ({dir_path}): {e}")
     # Clean local Optuna study files under the AIstock-owned SOTA root.
     optuna_deleted = 0
     try:
-        optuna_deleted = unlink_aistock_artifact_files(
-            sota_dir / "optuna_studies",
-            f"{experiment_id}_*.db",
-            purpose=f"QE experiment Optuna study cleanup: {experiment_id}",
-            allowed_roots=[sota_dir],
-        )
+        for artifact_id in local_artifact_ids or [experiment_id]:
+            optuna_deleted += unlink_aistock_artifact_files(
+                sota_dir / "optuna_studies",
+                f"{artifact_id}_*.db",
+                purpose=f"QE experiment Optuna study cleanup: {experiment_id}",
+                allowed_roots=[sota_dir],
+            )
         if optuna_deleted:
             logger.info("Cleaned %s Optuna study file(s) for experiment %s", optuna_deleted, experiment_id)
     except Exception as e:
-        errors.append(f"Optuna study cleanup failed: {e}")
+        local_cleanup_errors.append(f"Optuna study cleanup failed: {e}")
+
+    if local_cleanup_errors:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "本地AIstock缓存清理失败，数据库记录未删除",
+                "errors": local_cleanup_errors,
+                "worker_cleanup_results": cleanup_results,
+            },
+        )
 
     # 3. 清理DB记录（事务内，按外键依赖顺序删除）
     with get_conn() as conn:
         with conn.cursor() as cur:
             # 删除多Alpha组记录
             cur.execute(
-                "DELETE FROM qe_multi_alpha_groups WHERE parent_experiment_id = %s",
-                (experiment_id,),
+                "DELETE FROM qe_multi_alpha_groups WHERE parent_experiment_id = ANY(%s::text[])",
+                (experiment_ids_to_delete,),
             )
             # 删除演进循环记录（引用 qe_evolution_tasks + qe_experiments）
             cur.execute(
-                "DELETE FROM qe_evolution_loops WHERE experiment_id = %s OR experiment_id IN (SELECT experiment_id FROM qe_experiments WHERE parent_experiment_id = %s)",
-                (experiment_id, experiment_id),
+                "DELETE FROM qe_evolution_loops WHERE experiment_id = ANY(%s::text[]) OR task_id = ANY(%s::text[])",
+                (experiment_ids_to_delete, task_ids_to_delete_db),
             )
-            cur.execute(
-                "DELETE FROM qe_evolution_loops WHERE task_id IN (SELECT task_id FROM qe_evolution_tasks WHERE base_experiment_id = %s)",
-                (experiment_id,),
-            )
-            # 删除演进任务记录（base_experiment_id 引用 qe_experiments）
-            cur.execute(
-                "DELETE FROM qe_evolution_tasks WHERE base_experiment_id = %s",
-                (experiment_id,),
-            )
-            cur.execute(
-                "DELETE FROM qe_evolution_tasks WHERE task_id = %s",
-                (experiment_id,),
-            )
+            if not selected_is_child_loop:
+                # 删除演进任务记录（base_experiment_id 引用 qe_experiments）
+                cur.execute(
+                    "DELETE FROM qe_evolution_tasks WHERE base_experiment_id = ANY(%s::text[]) OR task_id = ANY(%s::text[])",
+                    (experiment_ids_to_delete, task_ids_to_delete_db),
+                )
             # 删除因子实验指标（主实验 + 子Loop）
             cur.execute(
-                "DELETE FROM qe_factor_experiment_metrics WHERE experiment_id = %s OR experiment_id IN (SELECT experiment_id FROM qe_experiments WHERE parent_experiment_id = %s)",
-                (experiment_id, experiment_id),
+                "DELETE FROM qe_factor_experiment_metrics WHERE experiment_id = ANY(%s::text[])",
+                (experiment_ids_to_delete,),
             )
             # 删除所有子Loop实验记录
             cur.execute(
-                "DELETE FROM qe_experiments WHERE parent_experiment_id = %s",
-                (experiment_id,),
+                "DELETE FROM qe_experiments WHERE parent_experiment_id = ANY(%s::text[])",
+                (experiment_ids_to_delete,),
             )
             # 删除主实验记录
             cur.execute(
-                "DELETE FROM qe_experiments WHERE experiment_id = %s",
-                (experiment_id,),
+                "DELETE FROM qe_experiments WHERE experiment_id = ANY(%s::text[])",
+                (experiment_ids_to_delete,),
             )
         conn.commit()
 
@@ -7183,11 +7432,12 @@ async def delete_experiment(
         "ok": True,
         "experiment_id": experiment_id,
         "worker_workspace_cleanup_mode": "node_api_only" if cleanup_workspace else "skipped",
+        "worker_cleanup_results": cleanup_results,
         "local_cleanup": {
             "cleaned_dirs": cleaned_dirs,
             "optuna_files_deleted": optuna_deleted,
         },
-        "warnings": errors if errors else None,
+        "deleted_experiment_ids": experiment_ids_to_delete,
     }
 
 
