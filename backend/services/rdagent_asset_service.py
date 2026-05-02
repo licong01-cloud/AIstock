@@ -15,6 +15,7 @@ from typing import Dict, Optional
 
 from .rdagent_results_api_client import RDAgentResultsApiClient
 from .strategy_package.workspace_policy import ensure_aistock_artifact_path, ensure_not_forbidden_worker_workspace_path
+from .trading_core.errors import StrategyPackageValidationError
 
 logger = logging.getLogger("aistock.rdagent_asset")
 
@@ -34,7 +35,58 @@ class RDAgentAssetService:
 
     def get_bundle_path(self, asset_bundle_id: str) -> Path:
         """获取资产包本地存放路径"""
-        return self.bundles_dir / asset_bundle_id
+        safe_id = self._safe_bundle_id(asset_bundle_id)
+        return self._child_path(self.bundles_dir, safe_id, purpose="RD-Agent asset bundle directory")
+
+    @staticmethod
+    def _safe_bundle_id(asset_bundle_id: str) -> str:
+        text = str(asset_bundle_id or "").strip()
+        if (
+            not text
+            or text in {".", ".."}
+            or "/" in text
+            or "\\" in text
+            or Path(text).name != text
+        ):
+            raise StrategyPackageValidationError(
+                "asset bundle id must be a single safe path segment",
+                context={"asset_bundle_id": str(asset_bundle_id)},
+            )
+        return text
+
+    @staticmethod
+    def _ensure_under_root(path: Path, root: Path, *, purpose: str) -> Path:
+        ensure_not_forbidden_worker_workspace_path(path, purpose=purpose)
+        resolved_path = path.resolve(strict=False)
+        resolved_root = root.resolve(strict=False)
+        if resolved_path == resolved_root or resolved_root in resolved_path.parents:
+            return resolved_path
+        raise StrategyPackageValidationError(
+            "asset bundle path must stay under the local bundle root",
+            context={"path": str(path), "root": str(root), "purpose": purpose},
+        )
+
+    def _child_path(self, root: Path, rel_path: str, *, purpose: str) -> Path:
+        return self._ensure_under_root(root / str(rel_path), root, purpose=purpose)
+
+    def _safe_extract_zip(self, zip_ref: zipfile.ZipFile, target_dir: Path) -> None:
+        target_root = self._ensure_under_root(
+            target_dir,
+            self.bundles_dir,
+            purpose="RD-Agent asset bundle extract target",
+        )
+        for member in zip_ref.infolist():
+            member_path = self._child_path(
+                target_root,
+                member.filename,
+                purpose="RD-Agent asset bundle zip member",
+            )
+            if member.is_dir():
+                member_path.mkdir(parents=True, exist_ok=True)
+                continue
+            member_path.parent.mkdir(parents=True, exist_ok=True)
+            with zip_ref.open(member) as source, member_path.open("wb") as target:
+                shutil.copyfileobj(source, target)
 
     def is_bundle_available(self, asset_bundle_id: str) -> bool:
         """检查资产包是否已在本地解压可用"""
@@ -48,7 +100,8 @@ class RDAgentAssetService:
             logger.info(f"资产包 {asset_bundle_id} 已存在，跳过下载。")
             return True
 
-        target_zip = self.base_dir / f"{asset_bundle_id}.zip"
+        safe_id = self._safe_bundle_id(asset_bundle_id)
+        target_zip = self._child_path(self.bundles_dir, f"{safe_id}.zip", purpose="RD-Agent asset bundle download zip")
         target_dir = self.get_bundle_path(asset_bundle_id)
 
         try:
@@ -60,18 +113,28 @@ class RDAgentAssetService:
 
             # 2. 解压
             with zipfile.ZipFile(target_zip, 'r') as zip_ref:
-                zip_ref.extractall(target_dir)
+                self._safe_extract_zip(zip_ref, target_dir)
             
             logger.info(f"成功同步并解压资产包: {asset_bundle_id}")
             return True
         except Exception as e:
             logger.error(f"处理资产包 {asset_bundle_id} 失败: {e}")
             if target_dir.exists():
-                shutil.rmtree(target_dir)
+                shutil.rmtree(
+                    self._ensure_under_root(
+                        target_dir,
+                        self.bundles_dir,
+                        purpose="RD-Agent asset bundle failed extract cleanup",
+                    )
+                )
             return False
         finally:
             if target_zip.exists():
-                os.remove(target_zip)
+                self._ensure_under_root(
+                    target_zip,
+                    self.bundles_dir,
+                    purpose="RD-Agent asset bundle temporary zip cleanup",
+                ).unlink()
 
     def get_strategy_files(self, asset_bundle_id: str, workspace_id: str) -> Dict[str, str]:
         """获取资产包内指定 Workspace 的物理文件路径映射
@@ -111,9 +174,9 @@ class RDAgentAssetService:
                     f"资产包 {asset_bundle_id} manifest.primary_assets 缺少 factor_entry_relpath 或 model_weight_relpath"
                 )
 
-            factor_path = (bundle_path / str(factor_rel)).resolve()
-            model_path = (bundle_path / str(model_rel)).resolve()
-            config_path = (bundle_path / str(config_rel)).resolve() if config_rel else None
+            factor_path = self._child_path(bundle_path, str(factor_rel), purpose="RD-Agent manifest factor path")
+            model_path = self._child_path(bundle_path, str(model_rel), purpose="RD-Agent manifest model path")
+            config_path = self._child_path(bundle_path, str(config_rel), purpose="RD-Agent manifest config path") if config_rel else None
 
             # manifest 是权威索引，但在某些本地/迁移场景下，bundle 可能缺失 workspaces 目录。
             # 为避免直接中断，若 manifest 指向文件缺失，则回退到兼容性扫描逻辑。
@@ -138,7 +201,7 @@ class RDAgentAssetService:
                 " ; fallback to heuristic scan"
             )
 
-        ws_path = bundle_path / workspace_id
+        ws_path = self._child_path(bundle_path, str(workspace_id), purpose="RD-Agent bundle workspace path")
 
         if not ws_path.exists():
             # 兼容性检查 1: 如果资产包结构不含 workspace_id，则直接使用根目录

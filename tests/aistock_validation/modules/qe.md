@@ -43,10 +43,12 @@ These checks cover non-create, non-retry, non-resume paths remediated after the 
 - Legacy Paper Trading retraining source-config loading may read explicit local configs or API-synced asset bundles only; RD-Agent `workspace_path` is remote metadata and must not be scanned for `conf*.yaml`.
 - RD-Agent task manifest text, task selection asset status, and local asset audit read only guarded AIstock-owned `rdagent_assets/rdagent_tasks` cache files; worker manifest paths return explicit policy errors.
 - RD-Agent production bundle cache must stay under AIstock-owned artifact roots and must refuse worker base directories before extracting or reading bundle files.
+- RD-Agent production bundle cache must reject path traversal in bundle ids, downloaded zip members, workspace ids, and manifest relative paths before any local read/write/extract operation.
 - RD-Agent factor/model catalog sync writes or reads source files only below the guarded task cache and refuses worker `task_dir` inputs.
 - RD-Agent catalog ETL treats `workspace_path` as remote metadata only; it must not convert `/mnt/...` to Windows paths or read `model_meta.json` from a worker workspace.
 - RD-Agent sync admin `/tasks/{task_id}/complete_assets` proxies the RD-Agent node API; it must not run `wsl`, `subprocess`, or WSL-only helper scripts.
 - Selection Center HMM runtime must not convert `/mnt/...` model/coefficient artifact paths into Windows paths; remote worker paths fail fast instead of being read locally.
+- StrategyPackage execution model resolver must reject `/mnt/...` and WSL/worker model paths; it must not translate worker paths into Windows drive paths or probe them locally.
 
 ## Cleanup L1/L2
 

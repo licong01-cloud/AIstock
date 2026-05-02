@@ -10,7 +10,7 @@ from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package import model_asset_resolver as resolver_module
 from backend.services.strategy_package.model_asset_resolver import ModelAssetResolver
 from backend.services.strategy_package.validators import StrategyPackageValidator
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -110,13 +110,19 @@ def test_model_asset_resolver_does_not_probe_wsl_unc_paths_on_windows(monkeypatc
     assert all("\\\\wsl" not in item.lower() for item in candidates)
 
 
-def test_model_asset_resolver_keeps_wsl_mount_to_windows_translation(monkeypatch, workspace_tmp) -> None:
+def test_model_asset_resolver_refuses_wsl_mount_translation(monkeypatch, workspace_tmp) -> None:
     monkeypatch.setattr(resolver_module.os, "name", "nt")
     resolver = ModelAssetResolver(cache_root=workspace_tmp / "cache")
 
-    candidates = resolver._candidate_paths("/mnt/f/Dev/AIstock/model.pt")
+    with pytest.raises(StrategyPackageValidationError, match="direct worker workspace"):
+        resolver._candidate_paths("/mnt/f/worker_models/model.pt")
 
-    assert Path("F:\\Dev\\AIstock\\model.pt") in candidates
+
+def test_model_asset_resolver_fails_fast_on_worker_model_path(workspace_tmp) -> None:
+    manifest = make_v24_manifest("/mnt/f/worker_models/v24_plan_net.pt")
+
+    with pytest.raises(DataUnavailableError, match="worker workspace path"):
+        ModelAssetResolver(cache_root=workspace_tmp / "cache").resolve_manifest_assets(manifest)
 
 
 def test_model_asset_resolver_copies_all_v25_model_assets(workspace_tmp) -> None:

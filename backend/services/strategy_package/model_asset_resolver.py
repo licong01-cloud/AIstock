@@ -18,13 +18,15 @@ from pathlib import Path
 from typing import Any
 
 from backend.services.trading_core.execution_algo_capabilities import required_runtime_asset_keys
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
 
 from .manifest import freeze_manifest
 from .models import StrategyPackageManifest
+from .workspace_policy import ensure_not_forbidden_worker_workspace_path
 
 
-DEFAULT_MODEL_CACHE_ROOT = Path("rdagent_assets") / "model_cache" / "execution"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_MODEL_CACHE_ROOT = PROJECT_ROOT / "rdagent_assets" / "model_cache" / "execution"
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,7 @@ class ModelAssetResolver:
     def __init__(self, cache_root: Path | str | None = None) -> None:
         root = cache_root or os.getenv("AISTOCK_MODEL_CACHE_DIR") or DEFAULT_MODEL_CACHE_ROOT
         self.cache_root = Path(root)
+        ensure_not_forbidden_worker_workspace_path(self.cache_root, purpose="StrategyPackage model asset cache root")
 
     def resolve_manifest_assets(
         self,
@@ -127,6 +130,12 @@ class ModelAssetResolver:
                     "config_key": config_key,
                 },
             )
+        self._ensure_not_worker_path(
+            original_path,
+            package_id=manifest.package_id,
+            algo_code=algo_code,
+            config_key=config_key,
+        )
 
         local_path = Path(original_path)
         if self._is_existing_file(local_path):
@@ -329,24 +338,33 @@ class ModelAssetResolver:
             return False
 
     def _candidate_paths(self, original_path: str) -> list[Path]:
-        candidates: list[Path] = [Path(original_path)]
-
-        if os.name == "nt":
-            translated = self._translate_wsl_mount_path(original_path)
-            if translated is not None:
-                candidates.append(translated)
-
-        return list(dict.fromkeys(candidates))
+        ensure_not_forbidden_worker_workspace_path(original_path, purpose="StrategyPackage model asset source path")
+        return [Path(original_path)]
 
     @staticmethod
-    def _translate_wsl_mount_path(original_path: str) -> Path | None:
-        # Convert WSL mount paths back to Windows drive paths.
-        parts = original_path.replace("\\", "/").split("/")
-        if len(parts) >= 4 and parts[1] == "mnt" and len(parts[2]) == 1:
-            drive = parts[2].upper()
-            tail = "\\".join(parts[3:])
-            return Path(f"{drive}:\\{tail}")
-        return None
+    def _ensure_not_worker_path(
+        original_path: str,
+        *,
+        package_id: str,
+        algo_code: str,
+        config_key: str,
+    ) -> None:
+        try:
+            ensure_not_forbidden_worker_workspace_path(
+                original_path,
+                purpose="StrategyPackage model asset source path",
+            )
+        except StrategyPackageValidationError as exc:
+            raise DataUnavailableError(
+                f"{algo_code} {config_key} points to a worker workspace path",
+                context={
+                    "package_id": package_id,
+                    "algo_code": algo_code,
+                    "config_key": config_key,
+                    "asset_path": original_path,
+                    "policy": "direct worker workspace paths are forbidden",
+                },
+            ) from exc
 
     def _cache_destination(self, algo_code: str, original_path: str) -> Path:
         digest = hashlib.sha256(original_path.encode("utf-8")).hexdigest()[:16]

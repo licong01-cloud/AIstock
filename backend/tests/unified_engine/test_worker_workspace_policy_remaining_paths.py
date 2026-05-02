@@ -1,4 +1,5 @@
 ﻿import json
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -177,6 +178,67 @@ def test_rdagent_asset_service_refuses_worker_bundle_base_dir(tmp_path, monkeypa
 
     with pytest.raises(StrategyPackageValidationError, match="direct worker workspace"):
         RDAgentAssetService(base_dir=str(worker_root))
+
+
+def _test_owned_bundle_service(tmp_path, monkeypatch) -> RDAgentAssetService:
+    base_dir = tmp_path / "rdagent_assets"
+    monkeypatch.setenv("AISTOCK_SAFE_ARTIFACT_ROOTS", str(base_dir / "production_bundles"))
+    return RDAgentAssetService(base_dir=str(base_dir))
+
+
+def test_rdagent_asset_service_refuses_bundle_id_path_traversal(tmp_path, monkeypatch) -> None:
+    service = _test_owned_bundle_service(tmp_path, monkeypatch)
+
+    with pytest.raises(StrategyPackageValidationError, match="single safe path segment"):
+        service.get_bundle_path("../escape")
+
+
+def test_rdagent_asset_service_refuses_zip_slip_members(tmp_path, monkeypatch) -> None:
+    service = _test_owned_bundle_service(tmp_path, monkeypatch)
+    zip_path = tmp_path / "bad_bundle.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("../escape.txt", "should not be written")
+
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        with pytest.raises(StrategyPackageValidationError, match="local bundle root"):
+            service._safe_extract_zip(archive, service.get_bundle_path("bundle-a"))
+
+    assert not (service.bundles_dir / "escape.txt").exists()
+    assert not (tmp_path / "escape.txt").exists()
+
+
+def test_rdagent_asset_service_refuses_manifest_relpath_traversal(tmp_path, monkeypatch) -> None:
+    service = _test_owned_bundle_service(tmp_path, monkeypatch)
+    bundle_path = service.get_bundle_path("bundle-a")
+    bundle_path.mkdir(parents=True)
+    (bundle_path / "weights").mkdir()
+    (bundle_path / "weights" / "model.pkl").write_bytes(b"model")
+    (bundle_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "primary_workspace_id": "ws-1",
+                "primary_assets": {
+                    "factor_entry_relpath": "../escape.py",
+                    "model_weight_relpath": "weights/model.pkl",
+                    "config_relpath": None,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(StrategyPackageValidationError, match="local bundle root"):
+        service.get_strategy_files("bundle-a", "ws-1")
+
+
+def test_rdagent_asset_service_refuses_workspace_id_path_traversal(tmp_path, monkeypatch) -> None:
+    service = _test_owned_bundle_service(tmp_path, monkeypatch)
+    bundle_path = service.get_bundle_path("bundle-a")
+    bundle_path.mkdir(parents=True)
+
+    with pytest.raises(StrategyPackageValidationError, match="local bundle root"):
+        service.get_strategy_files("bundle-a", "../escape")
 
 
 def test_rdagent_workspace_path_normalization_preserves_remote_metadata() -> None:
