@@ -9,6 +9,14 @@ from typing import Optional
 import pandas as pd
 
 
+_LABEL_FIELDS = {
+    "close": "$close",
+    "open": "$open",
+    "vwap": "$vwap",
+}
+_ALLOWED_LABEL_HORIZONS = {1, 3, 5, 10, 20}
+
+
 class DynamicFactorsOnlyLoader:
     """仅加载动态因子 parquet 的数据加载器（QE 专用版本）。
     
@@ -16,7 +24,7 @@ class DynamicFactorsOnlyLoader:
     与 StaticDataLoader 不同，此类忽略 instruments 参数，
     直接加载 parquet 中所有数据，避免 KeyError: 'all' 错误。
     
-    同时从 QLib provider 加载 label 数据（Ref($close, -2) / Ref($close, -1) - 1），
+    同时从 QLib provider 按 label_type / label_horizon 加载 label 数据，
     确保返回的 DataFrame 包含 feature 和 label 列。
     """
     
@@ -24,9 +32,44 @@ class DynamicFactorsOnlyLoader:
         self,
         dynamic_path: str,
         enforce_instrument_format: bool = True,
+        label_type: str = "close",
+        label_horizon: int = 1,
     ) -> None:
         self.dynamic_path = dynamic_path
         self.enforce_instrument_format = bool(enforce_instrument_format)
+        self.label_type = self._normalize_label_type(label_type)
+        self.label_horizon = self._normalize_label_horizon(label_horizon)
+        self.label_expr = self.build_label_expr(self.label_type, self.label_horizon)
+
+    @staticmethod
+    def _normalize_label_type(label_type: str) -> str:
+        value = str(label_type or "close").strip().lower()
+        if value not in _LABEL_FIELDS:
+            raise ValueError(
+                f"label_type={label_type!r} invalid, must be one of {sorted(_LABEL_FIELDS)}"
+            )
+        return value
+
+    @staticmethod
+    def _normalize_label_horizon(label_horizon: int) -> int:
+        try:
+            value = int(label_horizon)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"label_horizon={label_horizon!r} invalid, must be one of {sorted(_ALLOWED_LABEL_HORIZONS)}"
+            ) from exc
+        if value not in _ALLOWED_LABEL_HORIZONS:
+            raise ValueError(
+                f"label_horizon={label_horizon!r} invalid, must be one of {sorted(_ALLOWED_LABEL_HORIZONS)}"
+            )
+        return value
+
+    @classmethod
+    def build_label_expr(cls, label_type: str = "close", label_horizon: int = 1) -> str:
+        label_type = cls._normalize_label_type(label_type)
+        label_horizon = cls._normalize_label_horizon(label_horizon)
+        label_field = _LABEL_FIELDS[label_type]
+        return f"Ref({label_field}, -{label_horizon + 1}) / Ref({label_field}, -1) - 1"
     
     @staticmethod
     def _ensure_datetime_instrument_index(df: pd.DataFrame) -> pd.DataFrame:
@@ -137,9 +180,8 @@ class DynamicFactorsOnlyLoader:
             # 获取所有唯一的 instruments
             unique_instruments = df.index.get_level_values("instrument").unique().tolist()
             
-            # 使用 QLib 的 D.features 加载 label
-            # Ref($close, -2) / Ref($close, -1) - 1 表示未来1日收益率
-            label_expr = "(Ref($close, -2) / Ref($close, -1) - 1)"
+            # 使用 QLib 的 D.features 加载与配置一致的训练 label
+            label_expr = f"({self.label_expr})"
             
             label_df = D.features(
                 instruments=unique_instruments,
@@ -182,8 +224,10 @@ class DynamicFactorsOnlyLoader:
             df = df.join(label_df, how='left')
             
         except Exception as e:
-            # 如果加载 label 失败，记录警告但不中断
-            import warnings
-            warnings.warn(f"Failed to load label data from QLib provider: {e}. Continuing without labels.", stacklevel=2)
+            raise RuntimeError(
+                "Failed to load label data from QLib provider for "
+                f"label_type={self.label_type!r}, label_horizon={self.label_horizon}, "
+                f"label_expr={self.label_expr!r}"
+            ) from e
         
         return df.sort_index()

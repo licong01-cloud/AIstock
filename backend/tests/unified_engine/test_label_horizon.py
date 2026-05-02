@@ -6,6 +6,7 @@ from backend.services.quantevolver.experiment_config_builders import (
     build_config_from_custom_evo_loop,
     build_config_from_strategy_evo_loop,
 )
+from backend.services.quantevolver.qe_custom_loaders import DynamicFactorsOnlyLoader
 from backend.services.quantevolver.qe_evolution_service import AutoEvolutionScheduler
 
 
@@ -85,6 +86,39 @@ def test_config_composer_uses_horizon_aware_formula():
     )
 
     assert 'label: ["Ref($vwap, -21) / Ref($vwap, -1) - 1"]' in yaml_text
+
+
+def test_dynamic_factors_only_loader_builds_horizon_aware_label():
+    assert (
+        DynamicFactorsOnlyLoader.build_label_expr("close", 10)
+        == "Ref($close, -11) / Ref($close, -1) - 1"
+    )
+    assert (
+        DynamicFactorsOnlyLoader.build_label_expr("vwap", 20)
+        == "Ref($vwap, -21) / Ref($vwap, -1) - 1"
+    )
+
+
+def test_config_composer_passes_no_alpha_label_horizon_to_dynamic_loader():
+    yaml_text = ConfigComposer()._compose_conf_yaml(
+        factors_info=[],
+        model_info=None,
+        strategy_info=None,
+        data_split=DATA_SPLIT,
+        custom_params={
+            "label_type": "vwap",
+            "label_horizon": 10,
+        },
+        has_custom_factors=True,
+        has_alpha158=False,
+        disable_alpha158=True,
+        backtest_freq="day",
+        execution_algo="CLOSE_PRICE",
+    )
+
+    assert "class: DynamicFactorsOnlyLoader" in yaml_text
+    assert 'label_type: "vwap"' in yaml_text
+    assert "label_horizon: 10" in yaml_text
 
 
 def test_config_composer_does_not_pass_blacklist_metadata_to_strategy():

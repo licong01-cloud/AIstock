@@ -2528,6 +2528,8 @@ class ConfigComposer:
             lines.append("        module_path: qe_custom_loaders")
             lines.append("        kwargs:")
             lines.append('            dynamic_path: "combined_factors_df.parquet"')
+            lines.append(f'            label_type: "{_label_type}"')
+            lines.append(f"            label_horizon: {_label_horizon}")
             lines.append("    infer_processors:")
             lines.append("        - class: RobustZScoreNorm")
             lines.append("          kwargs:")
