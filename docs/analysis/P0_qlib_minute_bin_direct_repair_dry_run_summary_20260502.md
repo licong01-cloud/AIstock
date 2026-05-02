@@ -140,3 +140,17 @@ PostScanMarkdown             docs/analysis/P0_qlib_minute_bin_post_repair_scan_2
 PostVerifyMarkdown           docs/analysis/P0_qlib_minute_bin_post_repair_verify_20260502.md
 PostFactorBasisCSV           docs/analysis/P0_qlib_minute_bin_post_repair_factor_basis_20260502.csv
 ```
+
+## Limit Flag Basis Check
+
+写入 `limit_up/limit_down` 前，使用 gap 前后相邻非空 Qlib minute bin 与 DB 原始分钟价格 / `market.stk_limit` 做了口径验证。结果证明官方现有 `limit_up/limit_down` 使用未复权 raw close 与未复权涨跌停价比较，不是用复权价，也不是必须 open/low/close 全部一字封板才标记。
+
+```text
+Metric                       Value
+---------------------------  ------------------------------------------------------------
+AdjacentStockDateChecked     75431
+LimitUpCloseOnlyMatched      all checked rows
+LimitDownCloseOnlyMatched    all checked rows
+ComparedPriceBasis           raw close_li / 1000 vs raw up_limit/down_limit
+OneWordLimitBasis            not official for current minute bin
+```
