@@ -577,3 +577,12 @@ Important directories:
 ## Codex Git Commit Requirement - 2026-05-02
 
 - User requires Codex to commit every future code/documentation modification to GitHub after completing and validating the work. Commit only the files changed for the current task and do not include unrelated dirty-worktree changes.
+
+## QE Archive Small-Batch Historical Backfill - 2026-05-02
+
+- Expanded the QE archive historical backfill from the first single-loop confirmed write to a small trusted batch using only the manual CLI and local PostgreSQL `qe_archive` schema; no production FastAPI `8001` restart and no QE runtime hook/worker integration were performed.
+- Dry-run previewed 20 recent completed QE evolution loops: 12 were `research_valid=true`, 8 were excluded from the confirmed write batch, and no missing items were reported by the extractor dry-run stats.
+- Confirmed-wrote 10 additional valid 1min evolution loops: `qe_20260501_011054_c90a` Loop7/8/9/10/12/13 and `qe_20260502_131502_9b54` Loop1/2/3/4. Together with the earlier Loop11 write, local archive `run_count=11`.
+- Each newly written run passed run-level data-quality smoke with `config_capture_complete=true`, `reproducibility_level=full`, `research_valid=true`, account summary present, at least 60 scalar metrics, at least 3,000 curve rows, and 57 factor rows. Label horizon coverage in the batch includes 5 and 10.
+- Re-running the same confirmed write batch proved idempotency: final data-quality smoke still showed `run_count=11`, `pending_outbox_count=0`, and empty `archive_job_status_counts`.
+- Validation record: `tests/aistock_validation/history/qe_archive/20260502_182707_l3_qe-archive-realtime-warehouse-validation.md`. `qe_archive_backend`, `qe_archive_data_quality`, and `qe_archive_l3` passed; QE archive UI remains skipped through `QE_ARCHIVE_L3_SKIP_UI=1` until implemented.
