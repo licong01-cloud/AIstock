@@ -59,6 +59,14 @@ def test_qe_single_experiment_builds_package() -> None:
     assert manifest.minute_execution_policy.algo_code == "TWAP"
     assert manifest.minute_execution_policy.fallback_algo_code is None
     assert manifest.package_status == PackageStatus.BACKTEST_APPROVED
+    assert {check.check_name for check in manifest.asset_checks} >= {
+        "factor_names_present",
+        "qe_task_loop_present",
+        "backtest_metrics_present",
+        "runtime_assets_api_only",
+    }
+    assert "workspace_exists" not in {check.check_name for check in manifest.asset_checks}
+    assert "minute_runner_exists" not in {check.check_name for check in manifest.asset_checks}
     assert manifest.manifest_sha256
     StrategyPackageValidator().validate_for_paper_trading(manifest)
 

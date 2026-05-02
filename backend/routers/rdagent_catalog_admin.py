@@ -5,9 +5,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from ..db.pg_pool import get_conn
+from ..services.quantevolver.node_execution import resolve_default_qe_node_id
+from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
 from ..services.rdagent_asset_service import rdagent_asset_service
 from ..services.rdagent_results_api_client import RDAgentResultsApiClient
 
@@ -1139,19 +1141,15 @@ def list_loops(
 
     return {"total": total, "items": items}
 
-
-@router.get("/loops/{task_run_id}/{loop_id}/files/{file_path:path}", summary="访问 loop workspace 内的文件 (图片/JSON)")
-def get_loop_file(task_run_id: str, loop_id: int, file_path: str):
-    """根据 task_run_id 和 loop_id 定位 workspace 并返回指定文件.
-    
-    主要用于在前端展示回测曲线图片 (ret_curve.png) 和读取 feedback.json 等.
-    """
+@router.get("/loops/{task_run_id}/{loop_id}/files/{file_path:path}", summary="Serve loop workspace file via node API")
+async def get_loop_file(task_run_id: str, loop_id: int, file_path: str):
+    """Serve loop files through the execution-node API, never local workspace paths."""
     row = None
     with get_conn() as conn:
         with conn.cursor() as cur:
             try:
                 sql = """
-                    SELECT workspace_id, workspace_path, raw_payload FROM aistock_loop_catalog
+                    SELECT workspace_id, raw_payload, node_id FROM aistock_loop_catalog
                     WHERE task_run_id = %s AND loop_id = %s
                 """
                 cur.execute(sql, (task_run_id, loop_id))
@@ -1164,43 +1162,42 @@ def get_loop_file(task_run_id: str, loop_id: int, file_path: str):
                 cur.execute(sql_fallback, (task_run_id, loop_id))
                 fb = cur.fetchone()
                 if fb:
-                    row = (fb[0], None, fb[1])
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Loop 记录不存在")
-    
-    # 路径转换 (处理 WSL/Windows 差异)
-    from .rdagent import _normalize_workspace_path
-    
-    raw_ws_path = row[1]
-    raw_payload = row[2] if len(row) > 2 else None
-    if not raw_ws_path and isinstance(raw_payload, dict):
-        raw_ws_path = raw_payload.get("workspace_path")
-    if not raw_ws_path:
-        raise HTTPException(status_code=404, detail="该 Loop 记录未记录 workspace_path，无法访问文件")
-        
-    ws_path = _normalize_workspace_path(raw_ws_path)
-    
-    abs_path = (Path(ws_path) / file_path).resolve()
-    if not abs_path.exists():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
-    
-    # 安全性检查: 确保文件在 workspace 目录下
-    if not str(abs_path).startswith(str(Path(ws_path).resolve())):
-        raise HTTPException(status_code=403, detail="禁止访问 workspace 以外的文件")
+                    row = (fb[0], fb[1], None)
 
-    if abs_path.suffix.lower() in [".png", ".jpg", ".jpeg", ".svg"]:
-        return FileResponse(abs_path)
-    
-    # JSON 或文本文件
+    if not row:
+        raise HTTPException(status_code=404, detail="Loop record does not exist")
+
+    raw_payload = row[1] if len(row) > 1 else None
+    node_id = row[2] if len(row) > 2 else None
+    if isinstance(raw_payload, dict):
+        node_id = node_id or raw_payload.get("node_id") or raw_payload.get("execution_node_id")
+    node_id = str(node_id or resolve_default_qe_node_id()).strip()
+    loop_tag = f"Loop{int(loop_id)}"
+    safe_file_path = str(file_path or "").strip().replace("\\", "/")
+    if not safe_file_path or safe_file_path.startswith("/") or ".." in safe_file_path.split("/"):
+        raise HTTPException(status_code=403, detail="invalid workspace file path")
+
+    suffix = Path(safe_file_path).suffix.lower()
+    media_types = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".svg": "image/svg+xml",
+    }
     try:
-        content = abs_path.read_text(encoding="utf-8")
-        if abs_path.suffix.lower() == ".json":
+        async with QEWorkspaceClient.for_node(node_id) as client:
+            if suffix in media_types:
+                content = await client.download_workspace_file_bytes(task_run_id, loop_tag, safe_file_path)
+                return Response(content=content, media_type=media_types[suffix])
+            payload = await client.get_workspace_file(task_run_id, loop_tag, safe_file_path)
+        if suffix == ".json" and isinstance(payload, str):
             import json
-            return json.loads(content)
-        return content
+            return json.loads(payload)
+        return payload
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"读取文件失败: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"node API file read failed: {str(e)}")
 
 
 @router.post("/reinit-database", summary="重新初始化数据库结构")

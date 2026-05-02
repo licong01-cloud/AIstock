@@ -2,6 +2,7 @@
 
 import json
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -578,6 +579,66 @@ data_handler_config:
     payload = json.loads(prepared.factor_order_path.read_text(encoding="utf-8"))
     assert payload["dynamic_factor_source"] == "qe_static_dataloader"
     assert payload["qe_experiment_factor_name_count"] == 1
+
+
+def test_live_inference_load_source_materializes_via_node_api_not_db_workspace(tmp_path, monkeypatch) -> None:
+    class Cursor:
+        description = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, *_args, **_kwargs):
+            return None
+
+        def fetchone(self):
+            return {
+                "experiment_id": "qe_node_only",
+                "status": "completed",
+                "qe_task_id": "qe_task_node",
+                "qe_loop_id": "Loop3",
+                "factor_names": ["factor_a"],
+                "custom_params": {"execution_node_id": "node-1"},
+                "data_split": {},
+            }
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def cursor(self, *_args, **_kwargs):
+            return Cursor()
+
+    def fake_materialize(self, **kwargs):
+        assert kwargs["execution_node_id"] == "node-1"
+        return tmp_path / "node_api_cache"
+
+    monkeypatch.setattr(QEExperimentRuntimeAssetResolver, "_materialize_runtime_source_from_node", fake_materialize)
+
+    resolver = QEExperimentRuntimeAssetResolver(conn_factory=lambda: Conn(), cache_root=tmp_path / "runtime")
+    source = resolver.load_source("qe_node_only")
+
+    assert source.asset_workspace_path == tmp_path / "node_api_cache"
+    assert source.db_workspace_path == Path()
+    assert source.qe_task_id == "qe_task_node"
+    assert source.qe_loop_id == "Loop3"
+    assert source.execution_node_id == "node-1"
+
+
+def test_selection_artifact_diagnostic_requires_explicit_source_path_without_workspace_scan() -> None:
+    service = StrategyPackageSelectionArtifactService(
+        package_repository=InMemoryStrategyPackageRepository(),
+        artifact_repository=InMemorySelectionScoreArtifactRepository(),
+    )
+
+    with pytest.raises(DataUnavailableError, match="source_path"):
+        service._resolve_prediction_path("qe_no_direct_workspace", source_path=None)
 
 
 def test_selection_center_intersection() -> None:

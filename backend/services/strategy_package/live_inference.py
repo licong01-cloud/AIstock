@@ -9,16 +9,20 @@ current DB data window and applying the saved QE model.
 from __future__ import annotations
 
 import ast
+import asyncio
+import io
 import json
 import math
 import os
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from threading import Thread
 from typing import Any, Callable, Iterator
 
 import pandas as pd
@@ -27,7 +31,11 @@ import yaml
 
 from backend.db.pg_pool import get_conn
 from backend.infra.wsl_qlib_runner import win_to_wsl_path
+from backend.services.quantevolver.node_execution import resolve_default_qe_node_id
+from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+
+from .workspace_policy import ensure_not_forbidden_worker_workspace_path
 
 ConnFactory = Callable[[], Iterator[Any]]
 
@@ -45,6 +53,9 @@ class QEExperimentRuntimeSource:
     factor_names: list[str]
     custom_params: dict[str, Any]
     data_split: dict[str, Any]
+    qe_task_id: str | None = None
+    qe_loop_id: str | None = None
+    execution_node_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +107,52 @@ def _safe_name(value: str) -> str:
 
 def _date_to_datetime(value: date) -> datetime:
     return datetime.combine(value, datetime.min.time())
+
+
+def _run_async_blocking(factory: Callable[[], Any]) -> Any:
+    """Run a coroutine factory from sync service code, including event-loop threads."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(factory())
+
+    result: dict[str, Any] = {}
+
+    def _target() -> None:
+        try:
+            result["value"] = asyncio.run(factory())
+        except BaseException as exc:  # pragma: no cover - re-raised below
+            result["error"] = exc
+
+    thread = Thread(target=_target, daemon=True)
+    thread.start()
+    thread.join()
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
+def _safe_cache_component(value: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "").strip())
+    return text or "unknown"
+
+
+def _remote_relpath(value: str) -> str:
+    text = str(value or "").strip().replace("\\", "/")
+    if not text:
+        raise StrategyPackageValidationError("remote workspace file path is empty")
+    if ":" in text:
+        raise StrategyPackageValidationError(
+            "absolute or drive-qualified QE workspace paths are not allowed",
+            context={"path": value},
+        )
+    pure = PurePosixPath(text)
+    if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
+        raise StrategyPackageValidationError(
+            "QE workspace file path must be a safe relative path",
+            context={"path": value},
+        )
+    return str(pure)
 
 
 def _score_rows_from_frame(df_scores: pd.DataFrame, expected_date: date) -> list[dict[str, Any]]:
@@ -176,8 +233,8 @@ class QEExperimentRuntimeAssetResolver:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT experiment_id, status, workspace_path, factor_names,
-                           custom_params, data_split
+                    SELECT experiment_id, status, qe_task_id, qe_loop_id,
+                           factor_names, custom_params, data_split
                     FROM qe_experiments
                     WHERE experiment_id = %s
                     """,
@@ -207,15 +264,37 @@ class QEExperimentRuntimeAssetResolver:
         if not isinstance(data_split, dict):
             raise StrategyPackageValidationError("QE experiment data_split must be an object")
 
-        db_workspace = Path(str(row.get("workspace_path") or ""))
-        asset_workspace = self._resolve_asset_workspace(experiment_id, db_workspace)
+        qe_task_id = str(row.get("qe_task_id") or experiment_id).strip()
+        qe_loop_id = str(row.get("qe_loop_id") or "").strip()
+        if not qe_task_id or not qe_loop_id:
+            raise DataUnavailableError(
+                "QE experiment is missing qe_task_id/qe_loop_id for node API runtime asset resolution",
+                context={"experiment_id": experiment_id, "qe_task_id": qe_task_id or None, "qe_loop_id": qe_loop_id or None},
+            )
+        execution_node_id = str(
+            custom_params.get("execution_node_id")
+            or custom_params.get("node_id")
+            or resolve_default_qe_node_id()
+        ).strip()
+        asset_workspace = self._materialize_runtime_source_from_node(
+            experiment_id=experiment_id,
+            qe_task_id=qe_task_id,
+            qe_loop_id=qe_loop_id,
+            execution_node_id=execution_node_id,
+            factor_names=[str(item) for item in factor_names],
+            custom_params=custom_params,
+            data_split=data_split,
+        )
         return QEExperimentRuntimeSource(
             experiment_id=experiment_id,
-            db_workspace_path=db_workspace,
+            db_workspace_path=Path(),
             asset_workspace_path=asset_workspace,
             factor_names=[str(item) for item in factor_names],
             custom_params=custom_params,
             data_split=data_split,
+            qe_task_id=qe_task_id,
+            qe_loop_id=qe_loop_id,
+            execution_node_id=execution_node_id,
         )
 
     def prepare_workspace(
@@ -243,9 +322,7 @@ class QEExperimentRuntimeAssetResolver:
 
         cache_key = manifest_sha256[:16] if manifest_sha256 else "unfrozen_manifest"
         workspace_path = self.cache_root / package_id / cache_key
-        if workspace_path.exists():
-            shutil.rmtree(workspace_path)
-        workspace_path.mkdir(parents=True, exist_ok=True)
+        self._reset_cache_dir(workspace_path)
         (workspace_path / "model").mkdir(parents=True, exist_ok=True)
 
         model_dest = workspace_path / "model" / "params.pkl"
@@ -303,6 +380,10 @@ class QEExperimentRuntimeAssetResolver:
                     "diagnostics": {
                         "qe_experiment_id": source.experiment_id,
                         "source_workspace_path": str(source.asset_workspace_path),
+                        "source_workspace_type": "aistock_node_api_cache",
+                        "qe_task_id": source.qe_task_id,
+                        "qe_loop_id": source.qe_loop_id,
+                        "execution_node_id": source.execution_node_id,
                         "factor_source_dir": str(factor_source_dir),
                         "model_source_path": str(model_source_path),
                         "model_candidate_count": model_candidate_count,
@@ -329,34 +410,149 @@ class QEExperimentRuntimeAssetResolver:
             model_candidate_count=model_candidate_count,
         )
 
-    def _resolve_asset_workspace(self, experiment_id: str, db_workspace: Path) -> Path:
-        candidates: list[Path] = []
-        if db_workspace:
-            candidates.append(db_workspace)
-        qe_workspace_root = str(os.getenv("QE_WORKSPACE_WIN") or "").strip()
-        if qe_workspace_root:
-            candidates.append(Path(qe_workspace_root) / experiment_id)
-        existing = [candidate for candidate in candidates if candidate.exists() and candidate.is_dir()]
-        for candidate in existing:
-            if any(candidate.glob("**/artifacts/params.pkl")):
-                return candidate
-        if existing:
-            return existing[0]
-        raise DataUnavailableError(
-            "QE runtime asset workspace is missing",
-            context={
-                "experiment_id": experiment_id,
-                "db_workspace_path": str(db_workspace),
-                "qe_workspace_win": qe_workspace_root or None,
-                "checked_candidates": [str(item) for item in candidates],
-            },
+    def _materialize_runtime_source_from_node(
+        self,
+        *,
+        experiment_id: str,
+        qe_task_id: str,
+        qe_loop_id: str,
+        execution_node_id: str,
+        factor_names: list[str],
+        custom_params: dict[str, Any],
+        data_split: dict[str, Any],
+    ) -> Path:
+        source_dir = (
+            self.cache_root
+            / "_qe_node_sources"
+            / _safe_cache_component(experiment_id)
+            / _safe_cache_component(execution_node_id)
+            / _safe_cache_component(qe_task_id)
+            / _safe_cache_component(qe_loop_id)
         )
+        self._reset_cache_dir(source_dir)
+
+        async def _download() -> Path:
+            async with QEWorkspaceClient.for_node(execution_node_id) as client:
+                await self._download_workspace_file(client, qe_task_id, qe_loop_id, "conf.yaml", source_dir / "conf.yaml")
+
+                temp_source = QEExperimentRuntimeSource(
+                    experiment_id=experiment_id,
+                    db_workspace_path=Path(),
+                    asset_workspace_path=source_dir,
+                    factor_names=factor_names,
+                    custom_params=custom_params,
+                    data_split=data_split,
+                    qe_task_id=qe_task_id,
+                    qe_loop_id=qe_loop_id,
+                    execution_node_id=execution_node_id,
+                )
+                conf_path = source_dir / "conf.yaml"
+                static_paths = self._find_static_loader_configs(yaml.safe_load(conf_path.read_text(encoding="utf-8")) or {})
+                for raw_path in static_paths:
+                    if isinstance(raw_path, str) and raw_path.strip():
+                        rel_path = _remote_relpath(raw_path)
+                        await self._download_workspace_file(client, qe_task_id, qe_loop_id, rel_path, source_dir / rel_path)
+
+                static_factor_names = self._extract_static_loader_feature_names(
+                    source=temp_source,
+                    conf_path=conf_path,
+                )
+                required_factor_names = sorted(set(factor_names) | set(static_factor_names))
+                for factor_name in required_factor_names:
+                    rel_path = _remote_relpath(f"factors/{factor_name}.py")
+                    await self._download_workspace_file(
+                        client,
+                        qe_task_id,
+                        qe_loop_id,
+                        rel_path,
+                        source_dir / rel_path,
+                    )
+
+                params_tar = await client.download_mlruns_params(qe_task_id, qe_loop_id)
+                if not params_tar:
+                    raise DataUnavailableError(
+                        "QE node API returned an empty mlruns params archive",
+                        context={"experiment_id": experiment_id, "qe_task_id": qe_task_id, "qe_loop_id": qe_loop_id},
+                    )
+                self._extract_mlruns_params_archive(params_tar, source_dir)
+            return source_dir
+
+        try:
+            return _run_async_blocking(_download)
+        except StrategyPackageValidationError:
+            raise
+        except DataUnavailableError:
+            raise
+        except Exception as exc:
+            raise DataUnavailableError(
+                "failed to materialize QE runtime assets through the node API",
+                context={
+                    "experiment_id": experiment_id,
+                    "qe_task_id": qe_task_id,
+                    "qe_loop_id": qe_loop_id,
+                    "execution_node_id": execution_node_id,
+                    "cache_dir": str(source_dir),
+                    "error": str(exc),
+                },
+            ) from exc
+
+    def _reset_cache_dir(self, path: Path) -> None:
+        cache_root = self.cache_root.resolve(strict=False)
+        target = path.resolve(strict=False)
+        if target == cache_root or cache_root not in target.parents:
+            raise StrategyPackageValidationError(
+                "refusing to reset a path outside the StrategyPackage runtime cache",
+                context={"path": str(path), "cache_root": str(self.cache_root)},
+            )
+        if path.exists():
+            shutil.rmtree(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+    async def _download_workspace_file(
+        self,
+        client: QEWorkspaceClient,
+        task_id: str,
+        loop_id: str,
+        rel_path: str,
+        target_path: Path,
+    ) -> None:
+        rel_path = _remote_relpath(rel_path)
+        target = target_path.resolve(strict=False)
+        cache_root = self.cache_root.resolve(strict=False)
+        if cache_root not in target.parents:
+            raise StrategyPackageValidationError(
+                "refusing to write QE runtime asset outside the StrategyPackage runtime cache",
+                context={"target_path": str(target_path), "cache_root": str(self.cache_root)},
+            )
+        data = await client.download_workspace_file_bytes(task_id, loop_id, rel_path)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(data)
+
+    def _extract_mlruns_params_archive(self, payload: bytes, dest_dir: Path) -> None:
+        dest_root = dest_dir.resolve(strict=False)
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+            members = archive.getmembers()
+            for member in members:
+                if member.issym() or member.islnk():
+                    raise StrategyPackageValidationError(
+                        "QE mlruns params archive must not contain links",
+                        context={"member": member.name},
+                    )
+                target = (dest_dir / member.name).resolve(strict=False)
+                if target != dest_root and dest_root not in target.parents:
+                    raise StrategyPackageValidationError(
+                        "QE mlruns params archive contains an unsafe path",
+                        context={"member": member.name},
+                    )
+            archive.extractall(dest_dir)
+        if not any(dest_dir.glob("**/artifacts/params.pkl")):
+            raise DataUnavailableError(
+                "QE mlruns params archive does not contain artifacts/params.pkl",
+                context={"dest_dir": str(dest_dir)},
+            )
 
     def _resolve_conf_path(self, source: QEExperimentRuntimeSource) -> Path:
-        candidates = [
-            source.db_workspace_path / "conf.yaml",
-            source.asset_workspace_path / "conf.yaml",
-        ]
+        candidates = [source.asset_workspace_path / "conf.yaml"]
         for path in candidates:
             if path.exists() and path.is_file():
                 return path
@@ -419,9 +615,13 @@ class QEExperimentRuntimeAssetResolver:
             path = Path(config)
             candidates = [path] if path.is_absolute() else [
                 source.asset_workspace_path / path,
-                source.db_workspace_path / path,
                 conf_path.parent / path,
             ]
+            for candidate in candidates:
+                ensure_not_forbidden_worker_workspace_path(
+                    candidate,
+                    purpose="live inference StaticDataLoader config",
+                )
             resolved = next((candidate for candidate in candidates if candidate.exists() and candidate.is_file()), None)
             if resolved is None:
                 missing_paths.append(config)
@@ -533,10 +733,7 @@ class QEExperimentRuntimeAssetResolver:
         return []
 
     def _resolve_factor_source_dir(self, source: QEExperimentRuntimeSource) -> Path:
-        candidates = [
-            source.db_workspace_path / "factors",
-            source.asset_workspace_path / "factors",
-        ]
+        candidates = [source.asset_workspace_path / "factors"]
         for candidate in candidates:
             if candidate.exists() and candidate.is_dir():
                 return candidate
@@ -573,6 +770,7 @@ class QEExperimentRuntimeAssetResolver:
         explicit = artifact_config.get("model_params_path")
         if explicit:
             path = Path(str(explicit))
+            ensure_not_forbidden_worker_workspace_path(path, purpose="live inference explicit model_params_path")
             if not path.exists() or not path.is_file():
                 raise DataUnavailableError(
                     "explicit model_params_path does not exist for live inference",
@@ -581,9 +779,9 @@ class QEExperimentRuntimeAssetResolver:
             return path, 1
 
         candidates: list[Path] = []
-        for root in [source.asset_workspace_path, source.db_workspace_path]:
-            if root.exists():
-                candidates.extend(root.glob("**/artifacts/params.pkl"))
+        root = source.asset_workspace_path
+        if root.exists():
+            candidates.extend(root.glob("**/artifacts/params.pkl"))
         unique: dict[str, Path] = {}
         for candidate in candidates:
             if candidate.exists() and candidate.is_file():
@@ -595,7 +793,6 @@ class QEExperimentRuntimeAssetResolver:
                 context={
                     "experiment_id": source.experiment_id,
                     "asset_workspace_path": str(source.asset_workspace_path),
-                    "db_workspace_path": str(source.db_workspace_path),
                 },
             )
         candidates.sort(key=lambda item: (item.stat().st_mtime, str(item).lower()), reverse=True)

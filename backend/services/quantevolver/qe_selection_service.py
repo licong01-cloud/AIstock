@@ -13,16 +13,21 @@ QE实验选股服务
 from __future__ import annotations
 
 import logging
+import hashlib
 import os
 import uuid
 from datetime import datetime, time as dtime
 from typing import Any, Dict, List, Optional, Tuple
+
+import pandas as pd
 
 from ...db.pg_pool import get_conn
 from ...inference_engine import InferenceEngine
 from ...data_service.api import get_history_window, get_realtime_snapshot, DataSourceError
 from ...data_service import timescaledb_adapter
 from ...core.data_source_manager_impl import data_source_manager
+from ..strategy_package.live_inference import QEExperimentRuntimeAssetResolver
+from ..trading_core.errors import TradingCoreError
 
 logger = logging.getLogger("aistock.qe_selection")
 
@@ -108,6 +113,30 @@ def _load_topk_signals(*, strategy_id: str, version_tag: str, trade_date: dateti
     ]
 
 
+def _topk_rows_from_scores(df_scores: Any, *, k: int) -> List[Dict[str, Any]]:
+    if df_scores is None or getattr(df_scores, "empty", True):
+        raise ValueError("QE experiment inference returned no scores")
+    if isinstance(df_scores, pd.Series):
+        df_scores = df_scores.to_frame(name="score")
+    if "score" not in df_scores.columns:
+        if len(df_scores.columns) == 1:
+            df_scores = df_scores.rename(columns={df_scores.columns[0]: "score"})
+        else:
+            raise ValueError(f"QE experiment inference output is missing score column: {list(df_scores.columns)}")
+    if not isinstance(df_scores.index, pd.MultiIndex) or "instrument" not in df_scores.index.names:
+        raise ValueError("QE experiment inference output must use MultiIndex containing instrument")
+    frame = df_scores.reset_index()
+    frame["symbol"] = frame["instrument"].astype(str)
+    frame["score"] = pd.to_numeric(frame["score"], errors="coerce")
+    frame = frame.dropna(subset=["score"]).sort_values(["score", "symbol"], ascending=[False, True]).head(k)
+    rows: List[Dict[str, Any]] = []
+    for rank, item in enumerate(frame.itertuples(index=False), start=1):
+        rows.append({"symbol": str(item.symbol), "rank": rank, "score": float(item.score)})
+    if not rows:
+        raise ValueError("QE experiment inference produced no valid ranked scores")
+    return rows
+
+
 def _tdx_name(symbol: str) -> Optional[str]:
     """通过TDX获取股票名称（复用TASK选股逻辑）"""
     base = data_source_manager._convert_from_ts_code(symbol) if "." in str(symbol) else str(symbol)
@@ -117,7 +146,8 @@ def _tdx_name(symbol: str) -> Optional[str]:
     try:
         nm = data_source_manager._search_name_via_tdx(base)
         return (nm or None)
-    except Exception:
+    except Exception as exc:
+        logger.debug("TDX name lookup failed for %s: %s", symbol, exc)
         return None
 
 
@@ -129,7 +159,8 @@ def _fallback_name(symbol: str) -> Optional[str]:
             nm = info.get("name")
             if isinstance(nm, str) and nm.strip():
                 return nm.strip()
-    except Exception:
+    except Exception as exc:
+        logger.debug("stock basic fallback name lookup failed for %s: %s", symbol, exc)
         return None
     return None
 
@@ -140,7 +171,8 @@ def _compute_pct(close: Optional[float], pre_close: Optional[float]) -> Optional
         return None
     try:
         return (float(close) - float(pre_close)) / float(pre_close) * 100.0
-    except Exception:
+    except Exception as exc:
+        logger.debug("pct_change calculation failed close=%s pre_close=%s: %s", close, pre_close, exc)
         return None
 
 
@@ -228,7 +260,7 @@ def build_experiment_selection(
             cur.execute("""
                 SELECT experiment_id, experiment_name, status, 
                        factor_names, model_id, strategy_id,
-                       workspace_path, result_metrics, created_at
+                       result_metrics, created_at
                 FROM qe_experiments
                 WHERE experiment_id = %s
             """, [experiment_id])
@@ -255,39 +287,46 @@ def build_experiment_selection(
 
     factor_names = exp["factor_names"] or []
     model_id = exp["model_id"]
-    workspace_path = exp["workspace_path"]
 
     if not factor_names:
-        raise ValueError("实验没有因子配置")
-
-    if not workspace_path or not os.path.exists(workspace_path):
-        raise ValueError(f"实验工作目录不存在: {workspace_path}")
+        raise ValueError("QE experiment has no factor configuration")
 
     logger.info(
         "qe_experiment_config_loaded"
         f" experiment_id={experiment_id}"
         f" factors={len(factor_names)}"
         f" model_id={model_id}"
-        f" workspace={workspace_path}"
+        " runtime_assets=node_api_cache"
     )
 
-    # 4. 使用InferenceEngine进行推理（完全参考TASK选股）
-    # 注意：这里使用experiment_id作为标识，而不是task_run_id+loop_id
+    # Materialize QE runtime assets through the node API into an AIstock-owned cache.
     engine = InferenceEngine()
+    try:
+        resolver = QEExperimentRuntimeAssetResolver()
+        source = resolver.load_source(experiment_id)
+        prepared = resolver.prepare_workspace(
+            package_id=f"qe_selection_{experiment_id}",
+            manifest_sha256=hashlib.sha256(experiment_id.encode("utf-8")).hexdigest(),
+            source=source,
+            runtime_config={},
+        )
+    except TradingCoreError as exc:
+        raise ValueError(f"{exc.message}: {exc.context}") from exc
+
     logger.info(
         "qe_experiment_infer_call"
         f" experiment_id={experiment_id}"
         f" trade_date={effective_date.date()}"
         f" cutoff_date={c_date.date() if c_date else None}"
+        f" runtime_workspace={prepared.workspace_path}"
     )
-    
-    # 调用推理引擎（使用实盘数据）
-    engine.run_inference(
+
+    df_scores = engine.run_inference(
         strategy_id="",
         version_tag="replay",
         trade_date=effective_date,
-        experiment_id=experiment_id,  # 传递experiment_id而非task_run_id
-        workspace_path=workspace_path,  # 传递workspace路径
+        experiment_id="qe_experiment_selection",
+        workspace_path=str(prepared.workspace_path),
         cutoff_date=c_date,
     )
     
@@ -354,9 +393,8 @@ def build_experiment_selection(
             )
 
     # 8. 加载TopK信号（复用TASK选股逻辑）
-    strategy_id = _deterministic_strategy_id_for_experiment(experiment_id)
     t1 = datetime.now()
-    rows = _load_topk_signals(strategy_id=strategy_id, version_tag="replay", trade_date=as_of, k=top_k)
+    rows = _topk_rows_from_scores(df_scores, k=top_k)
     logger.info(
         "qe_experiment_topk_loaded"
         f" as_of={as_of.date()}"

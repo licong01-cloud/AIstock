@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import psycopg2.extras
@@ -157,7 +156,7 @@ class QEExperimentSourceResolver:
                     SELECT experiment_id, experiment_name, status, alpha_mode,
                            qe_task_id, qe_loop_id, factor_names, model_id,
                            strategy_id, data_split, custom_params, result_metrics,
-                           workspace_path, created_at, completed_at
+                           created_at, completed_at
                     FROM qe_experiments
                     WHERE experiment_id = %s
                     """,
@@ -186,7 +185,7 @@ class QEExperimentSourceResolver:
                     SELECT experiment_id, experiment_name, status, alpha_mode,
                            qe_task_id, qe_loop_id, factor_names, model_id,
                            strategy_id, data_split, custom_params, result_metrics,
-                           workspace_path, created_at, completed_at
+                           created_at, completed_at
                     FROM qe_experiments
                     WHERE qe_task_id = %s
                       AND qe_loop_id = %s
@@ -505,42 +504,35 @@ class QEExperimentSourceResolver:
         record: dict[str, Any],
         factor_names: list[Any],
     ) -> list[AssetCheck]:
-        workspace_path = record.get("workspace_path")
+        qe_task_id = str(record.get("qe_task_id") or "").strip()
+        qe_loop_id = str(record.get("qe_loop_id") or "").strip()
+        metrics = _parse_jsonish(record.get("result_metrics")) or {}
         checks = [
             AssetCheck(
                 check_name="factor_names_present",
                 passed=bool(factor_names),
                 message="factor_names must be present",
                 context={"factor_count": len(factor_names)},
+            ),
+            AssetCheck(
+                check_name="qe_task_loop_present",
+                passed=bool(qe_task_id and qe_loop_id),
+                message="qe_task_id and qe_loop_id are required to resolve runtime assets through the node API",
+                context={"qe_task_id": qe_task_id or None, "qe_loop_id": qe_loop_id or None},
+            ),
+            AssetCheck(
+                check_name="backtest_metrics_present",
+                passed=bool(metrics),
+                message="result_metrics must be present",
+                context={"metric_keys": sorted(str(key) for key in metrics.keys())[:30] if isinstance(metrics, dict) else []},
+            ),
+            AssetCheck(
+                check_name="runtime_assets_api_only",
+                passed=bool(qe_task_id and qe_loop_id),
+                message="QE runtime assets are resolved through the execution-node API/cache; workspace_path is not inspected",
+                context={"workspace_path_inspected": False},
             )
         ]
-        if workspace_path:
-            path = Path(str(workspace_path))
-            checks.append(
-                AssetCheck(
-                    check_name="workspace_exists",
-                    passed=path.exists(),
-                    message="workspace_path must exist",
-                    context={"workspace_path": str(path)},
-                )
-            )
-            minute_runner = path / "qrun_limit_minute.py"
-            checks.append(
-                AssetCheck(
-                    check_name="minute_runner_exists",
-                    passed=minute_runner.exists(),
-                    message="qrun_limit_minute.py must exist in QE workspace",
-                    context={"path": str(minute_runner)},
-                )
-            )
-        else:
-            checks.append(
-                AssetCheck(
-                    check_name="workspace_exists",
-                    passed=False,
-                    message="workspace_path is required for package validation",
-                )
-            )
         return checks
 
 

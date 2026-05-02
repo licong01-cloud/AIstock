@@ -35,6 +35,7 @@ from .live_inference import (
 )
 from .models import SelectionScoreArtifactStatus
 from .repository import StrategyPackageRepository
+from .workspace_policy import ensure_not_forbidden_worker_workspace_path
 
 ConnFactory = Callable[[], Iterator[Any]]
 
@@ -559,74 +560,18 @@ class StrategyPackageSelectionArtifactService:
     def _resolve_prediction_path(self, experiment_id: str, *, source_path: str | None) -> Path:
         if source_path:
             path = Path(source_path)
+            ensure_not_forbidden_worker_workspace_path(path, purpose="diagnostic QE prediction source_path")
             if not path.exists() or not path.is_file():
                 raise DataUnavailableError(
                     "selection artifact source_path does not exist",
                     context={"experiment_id": experiment_id, "source_path": str(path)},
                 )
             return path
-        workspace = self._load_qe_workspace_path(experiment_id)
-        candidates = sorted(
-            (Path(workspace)).glob("mlruns/**/artifacts/pred.pkl"),
-            key=lambda item: str(item).lower(),
+        raise DataUnavailableError(
+            "diagnostic QE pred.pkl generation requires an explicit AIstock-local source_path; "
+            "automatic worker workspace scanning is disabled",
+            context={"experiment_id": experiment_id, "source_path_required": True},
         )
-        if not candidates:
-            qe_workspace_root = str(os.getenv("QE_WORKSPACE_WIN") or "").strip()
-            qe_workspace = Path(qe_workspace_root) / experiment_id if qe_workspace_root else None
-            if qe_workspace is not None and qe_workspace.exists():
-                candidates = sorted(
-                    qe_workspace.glob("mlruns/**/artifacts/pred.pkl"),
-                    key=lambda item: str(item).lower(),
-                )
-        if not candidates:
-            raise DataUnavailableError(
-                "QE prediction artifact pred.pkl is missing",
-                context={
-                    "experiment_id": experiment_id,
-                    "workspace_path": workspace,
-                    "qe_workspace_win": str(os.getenv("QE_WORKSPACE_WIN") or ""),
-                },
-            )
-        by_digest: dict[str, Path] = {}
-        for path in candidates:
-            by_digest.setdefault(self._file_sha256(path), path)
-        if len(by_digest) > 1:
-            by_frame_digest: dict[str, Path] = {}
-            for path in candidates:
-                by_frame_digest.setdefault(self._prediction_frame_sha256(path), path)
-            if len(by_frame_digest) == 1:
-                candidates.sort(key=lambda item: (item.stat().st_mtime, str(item).lower()), reverse=True)
-                return candidates[0]
-            raise StrategyPackageValidationError(
-                "multiple distinct QE prediction artifacts found; source_path is required",
-                context={
-                    "experiment_id": experiment_id,
-                    "workspace_path": workspace,
-                    "prediction_paths": [str(path) for path in candidates],
-                },
-            )
-        return next(iter(by_digest.values()))
-
-    def _load_qe_workspace_path(self, experiment_id: str) -> str:
-        with self._conn_factory() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT workspace_path FROM qe_experiments WHERE experiment_id = %s",
-                    (experiment_id,),
-                )
-                row = cur.fetchone()
-        if not row or not row[0]:
-            raise DataUnavailableError(
-                "QE experiment workspace_path is missing",
-                context={"experiment_id": experiment_id},
-            )
-        path = str(row[0])
-        if not Path(path).exists():
-            raise DataUnavailableError(
-                "QE experiment workspace_path does not exist",
-                context={"experiment_id": experiment_id, "workspace_path": path},
-            )
-        return path
 
     @staticmethod
     def _file_sha256(path: Path) -> str:

@@ -33,12 +33,27 @@ from .data_service.preprocessor import (
     check_data_window_sufficient,
 )
 from .services.factor_validator import FactorValidator
+from .services.strategy_package.workspace_policy import (
+    ensure_not_forbidden_worker_workspace_path,
+    is_under_allowed_artifact_root,
+)
 
 logger = logging.getLogger("aistock.inference")
 LAST_STRICT_FEATURE_FILTER: dict[str, Any] | None = None
 
 def _strict_inference_enabled() -> bool:
     return str(os.environ.get("AISTOCK_STRICT_INFERENCE", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _validate_qe_runtime_workspace_path(workspace_path: str) -> Path:
+    path = Path(workspace_path)
+    ensure_not_forbidden_worker_workspace_path(path, purpose="InferenceEngine QE experiment workspace_path")
+    if not is_under_allowed_artifact_root(path, extra_roots=[Path.cwd() / "rdagent_assets" / "strategy_package_runtime"]):
+        raise ValueError(
+            "QE experiment inference workspace_path must be an AIstock-owned runtime cache; "
+            "direct QE/RD-Agent worker workspace paths are forbidden"
+        )
+    return path
 
 
 def _drop_invalid_feature_rows_for_strict(X: pd.DataFrame) -> pd.DataFrame:
@@ -1144,7 +1159,7 @@ class InferenceEngine:
         
         支持两种模式：
         1. TASK选股模式：使用task_run_id + loop_id，从rdagent_assets加载
-        2. QE实验选股模式：使用experiment_id + workspace_path，从实验工作目录加载
+        2. QE experiment selection mode: experiment_id + AIstock-owned runtime cache workspace_path.
         """
         target_date = trade_date
         if cutoff_date and target_date.date() > cutoff_date.date():
@@ -1166,10 +1181,10 @@ class InferenceEngine:
         if experiment_id and workspace_path:
             # QE实验选股模式：从实验工作目录加载
             task_id = experiment_id
-            manifest = self._load_experiment_manifest(workspace_path)
+            task_dir = _validate_qe_runtime_workspace_path(workspace_path)
+            manifest = self._load_experiment_manifest(str(task_dir))
             if not manifest:
                 raise ValueError(f"未找到实验资产 manifest: {experiment_id} at {workspace_path}")
-            task_dir = Path(workspace_path)
         else:
             # TASK选股模式：从rdagent_assets加载
             task_id = task_run_id or strategy_id
