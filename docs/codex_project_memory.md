@@ -689,3 +689,11 @@ Important directories:
 - Dynamic PUP strict 0.10 (`5a3183b6-39bc-45dd-8b3d-d2027c476e62`) and 0.075 (`8ef81e6b-263d-4acd-93ff-4a20526b2d13`) are soft-disabled under `sector_hmm_disabled_ineffective_20260502`; keep them for traceability but do not re-add to QE selection without a new validation reason.
 - QE-selectable test candidates are `HMM_TEST_old_covfix_primary_b020_p005__qe20260502`, `HMM_TEST_hyb_old_primary_turnover_flow_core_c70__qe20260502`, and `HMM_TEST_sf_turnover_fast_q20_b010_p005__qe20260502`; all are precomputed-only, `preset_A`, default QE window `2024-07-01` to `2026-04-27`, and still require full QE shadow-loop validation.
 - Current old-covfix baseline does not use z-score normalization (`zscore=false`, no `zscore_mean/std` in `models.json`), but uses relative observation features rather than raw prices/index levels. Next HMM optimization should compare train-only zscore, winsor+zscore, robust zscore, and sector cross-sectional rank variants without modifying raw daily/minute data.
+
+## Stock Pool / Universe Export Design Note - 2026-05-04
+
+- Overview document: `docs/analysis/stock_pool_universe_export_overview_20260504.md`.
+- User explicitly excluded all historical legacy selection paths and old paper-trading paths from future stock-pool retrofits; only QE main paths and Paper Trading v2/Selection Center should be adapted.
+- Future target rule: feature data and stock-pool eligibility must be separated. Qlib Bin and H5/parquet should preserve real SH/SZ historical facts and must not delete an entire stock history because of future ST, pause, or delisting events. BJ/BSE remains excluded from QE stock exports.
+- Buy/sell eligibility should be represented by PIT universe spans/masks. Qlib uses `instruments/*.txt` multi-segment start/end ranges; H5/parquet must use a companion `universe_spans` / `tradable_mask` or a loader that enforces instruments. Do not create multiple H5 copies per stock pool as the long-term architecture.
+- Until the unified `StockPoolResolver` and H5/no-alpha loader filtering exist, closest-to-target QE backtests should prefer Alpha158 or NestedDataLoader through Qlib Bin plus explicit `stock_pool`. Do not treat no-alpha/H5-direct results as authoritative unless the parquet input is explicitly prefiltered to the same PIT universe.
