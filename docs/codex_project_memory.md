@@ -84,6 +84,7 @@ Important directories:
 - For project-wide searches, prefer rg / rg --files.
 - Database schema standard: every new DB table and every new DB column created or modified by Codex must have explicit PostgreSQL `COMMENT ON TABLE` / `COMMENT ON COLUMN` metadata in the reviewed DDL or migration. Comments should be program-readable, describe business semantics, and mention units/source/quality semantics when relevant. Add tests or a review check to prevent uncommented fields.
 - QE production isolation standard: while building the QE archive and future QE automation, new ingestion, archive, optimizer, or agent code must not affect the current QE production runtime by default. Runtime hooks must be disabled by default or explicitly gated, no production backend `8001` restart unless the user asks, and validation should use dev ports only.
+- Testing standard: future high-risk AIstock features must define tests at design time, include appropriate L0-L5 validation, produce run records, and enforce coverage gates for new/changed code. Backend Python coverage should include line and branch coverage; QE data completeness, warehouse/archive, trading execution, cost/ledger, HMM, and cleanup gates are high-risk modules that need explicit unit/integration/business-oracle tests in addition to UI E2E.
 
 ## Known Current Workspace Notes
 
@@ -464,6 +465,8 @@ Important directories:
 
 - User requires all future design方案 / architecture design / implementation design documents produced by Codex in this repository to be stored under `docs/architecture` (`F:\Dev\AIstock\docs\architecture`). Do not place new design documents elsewhere unless the user explicitly requests a different path.
 - QE real-time experiment warehouse top-level design is recorded at `docs/architecture/qe_realtime_experiment_warehouse_top_level_design_20260502.md`.
+- QE experiment data completeness pre-warehouse design is recorded at `docs/architecture/qe_experiment_data_completeness_prewarehouse_plan_20260503.md`; it establishes that QE DB may duplicate non-large operational data for generation/retry/recovery/UI, while the future warehouse must keep independent long-term storage because QE workspace and QE DB records may be cleaned after verified archival.
+- AIstock automated testing, coverage, observability, and version-gate design is recorded at `docs/architecture/aistock_automated_testing_coverage_observability_design_20260504.md`; it adds coverage gates, QE/warehouse test matrices, test management UI direction, and L0-L5 quality pipeline requirements.
 
 ## QE Worker Workspace Access Red Line - 2026-05-02
 
