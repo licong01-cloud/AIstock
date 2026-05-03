@@ -665,3 +665,9 @@ Important directories:
 - Exporter now fails fast on missing factor/limit fields, records explicit prev_close repair counts, filters pre-listing minute rows by `stock_basic.list_date`, uses `1min` as the Qlib frequency, and prevents incremental stock exports from extending qfq `basis_end` because that would diverge from a full rebuild.
 - `688766.SH` exposed a valid edge: zero-volume minute dates had `stk_limit.up_limit/down_limit` but null `pre_close`; missing `prev_close` is now filled only from the previous valid daily close and counted in `previous_daily_prev_close_filled_rows`.
 - UI `frontend/src/app/qlib/page.tsx` supports selecting `stock_minute`; validation evidence is documented in `docs/analysis/P0_qlib_authoritative_bin_export_tool_and_validation_20260503.md` and `tests/aistock_validation/history/qlib_data/20260503_052234_l4_qlib-authoritative-minute-bin-export-validation-20260503.md`.
+
+## QE/V25 Price Basis Contract - 2026-05-03
+
+- Locked the execution price basis: `market.stk_limit.pre_close`, `up_limit`, and `down_limit` are raw/unadjusted RMB prices; V25/Paper v2 limit checks, P0 checks, and open-gap/gap-ratio calculations must also use raw prices.
+- Qlib stock `open/high/low/close` remain adjusted for Qlib compatibility, so any Qlib execution adapter must compute `raw_price = adjusted_price / $factor` before comparing with raw `prev_close/up_limit/down_limit`; missing or invalid `$factor` on an otherwise valid bar is fail-fast, never `factor=1` fallback.
+- Real-data verification for `/home/lc999/data/qlib_minute_authoritative_full_20260428` is documented in `docs/analysis/P0_price_basis_alignment_up_limit_prev_close_open_gap_20260503.md`: 5 stocks, 15 stock-dates, 3,600 DB minute rows, 43,200 checked field values, and zero DB-vs-Qlib errors when using the full snapshot `basis_end=2026-04-28`.
