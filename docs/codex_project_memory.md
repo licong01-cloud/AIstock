@@ -678,3 +678,11 @@ Important directories:
 - Authoritative bin stock export defaults to exclude ST and delisted/paused listings, always requires `stock_basic.list_status = 'L'`, and enforces `IPO_FILTER_DAYS=365` via `list_date + 365 days <= end`.
 - The Qlib UI keeps BJ disabled and no longer sends `bj` in H5/bin/data-check payloads.
 - Existing `/home/lc999/data/qlib_minute_authoritative_full_20260428` is invalid under this rule: meta has `exchanges=["bj","sh","sz"]`, `exclude_st=false`, `exclude_delisted_or_paused=false`, and instruments contain 310 BJ entries. Regenerate it with the fixed exporter rather than editing metadata only.
+
+## HMM Training Current Status - 2026-05-03
+
+- Latest HMM training/registry continuation document: `docs/analysis/hmm_training_current_status_20260503.md`. Read this first before updating HMM models, HMM QE selectable versions, or HMM normalization/preprocessing.
+- Current retained effective baseline is `HMM_COVFIX_w3_raw_same_params__n3_diag_rw3_nozscore` with config `b99c907b-873a-4173-a4ee-5eab266f8c49` and snapshot `bbec3863-fb67-445f-938e-66f092d18696`.
+- Dynamic PUP strict 0.10 (`5a3183b6-39bc-45dd-8b3d-d2027c476e62`) and 0.075 (`8ef81e6b-263d-4acd-93ff-4a20526b2d13`) are soft-disabled under `sector_hmm_disabled_ineffective_20260502`; keep them for traceability but do not re-add to QE selection without a new validation reason.
+- QE-selectable test candidates are `HMM_TEST_old_covfix_primary_b020_p005__qe20260502`, `HMM_TEST_hyb_old_primary_turnover_flow_core_c70__qe20260502`, and `HMM_TEST_sf_turnover_fast_q20_b010_p005__qe20260502`; all are precomputed-only, `preset_A`, default QE window `2024-07-01` to `2026-04-27`, and still require full QE shadow-loop validation.
+- Current old-covfix baseline does not use z-score normalization (`zscore=false`, no `zscore_mean/std` in `models.json`), but uses relative observation features rather than raw prices/index levels. Next HMM optimization should compare train-only zscore, winsor+zscore, robust zscore, and sector cross-sectional rank variants without modifying raw daily/minute data.
