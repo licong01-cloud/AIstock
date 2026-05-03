@@ -1,0 +1,98 @@
+{
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "plan",
+      "path": "docs/architecture/qe_data_completeness_phase1_development_plan_20260504.md",
+      "sha256": "eec6c1a461d771798709e2b17dab8e5a67f9c7a6e201ddaccc0303eb65170f32",
+      "size_bytes": 4736
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "module_matrix",
+      "path": "tests/aistock_validation/modules/qe_data_completeness.md",
+      "sha256": "cec4f31a93e06b6bb03ec63308267f15602a25c2b9e314d8ef9ec4d6f8a55769",
+      "size_bytes": 2545
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "contract",
+      "path": "backend/services/quantevolver/completion_contract.py",
+      "sha256": "647a07324d893e522cf9f3cb5ad1660a199bd680f588ee1d410eab66d2abcea0",
+      "size_bytes": 8299
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "validation_tool",
+      "path": "scripts/aistock_validate.py",
+      "sha256": "183599eebd3c49fa58dcc2a207e769f4b875d12225b012564afa0ac34696dc95",
+      "size_bytes": 12141
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "noxfile",
+      "path": "noxfile.py",
+      "sha256": "e28d7b40eae8e6b4e85a7252aa1343f1bb825b42a022e48a19128401c4e898ec",
+      "size_bytes": 16716
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "tests/aistock_validation/history/qe_data_completeness/20260504_015036_l3_qe-data-completeness-contract-and-validation-metadata.md",
+      "sha256": "59df3224d058ec2415d087084712d076a7e3be645eaa88e20cc8183cc21a6600",
+      "size_bytes": 6797
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "tests/aistock_validation/history/qe_data_completeness/20260504_015036_l3_qe-data-completeness-contract-and-validation-metadata.json",
+      "sha256": "2878d2cc4285eee4db8b1ea529e77bbf39d402c43c2107e3e688b7a61642a03f",
+      "size_bytes": 3802
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "smoke_json",
+      "path": "tmp/qe_archive_data_quality_smoke.json",
+      "sha256": "3c2e8ed42f82dd50dde942caa3c762518e1844403486563bbb78aaf5077738fc",
+      "size_bytes": 506
+    }
+  ],
+  "generated_at": "2026-05-04T01:52:07",
+  "git_commit": "6225a7d",
+  "level": "L3",
+  "missing": [],
+  "missing_count": 0,
+  "module": "qe_data_completeness",
+  "operator": "lc999",
+  "run_id": "20260504_015036_l3_qe-data-completeness-contract-and-validation-metadata",
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "QE data completeness contract and validation metadata"
+}

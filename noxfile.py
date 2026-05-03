@@ -55,6 +55,9 @@ def l0(session: nox.Session) -> None:
         "scripts/aistock_validate.py",
         "scripts/aistock_data_quality_smoke.py",
         "scripts/paper_v2_live_validation.py",
+        "backend/services/quantevolver/completion_contract.py",
+        "backend/tests/test_aistock_validate_metadata.py",
+        "backend/tests/unified_engine/test_qe_completion_contract.py",
         "backend/tests/paper_trading_v2",
         "backend/tests/selection_center",
         "backend/tests/strategy_package",
@@ -302,6 +305,7 @@ def qe_archive_backend(session: nox.Session) -> None:
         "backend/routers/qe_archive.py",
         "backend/routers/quantevolver.py",
         "backend/services/qe_archive",
+        "backend/services/quantevolver/completion_contract.py",
         "backend/services/quantevolver/qe_evolution_service.py",
         "scripts/qe_archive_backfill.py",
         "scripts/qe_archive_data_quality_smoke.py",
@@ -311,6 +315,28 @@ def qe_archive_backend(session: nox.Session) -> None:
         session,
         "backend/tests/test_qe_archive_schema.py",
         "backend/tests/test_qe_archive_repository_static.py",
+        "backend/tests/unified_engine/test_qe_completion_contract.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def qe_data_contract_backend(session: nox.Session) -> None:
+    """Run validation-tool metadata and QE completion contract tests."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "scripts/aistock_validate.py",
+        "backend/services/quantevolver/completion_contract.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/test_aistock_validate_metadata.py",
+        "backend/tests/unified_engine/test_qe_completion_contract.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -419,11 +445,16 @@ def qe_archive_l3(session: nox.Session) -> None:
         "backend/routers/qe_archive.py",
         "backend/routers/quantevolver.py",
         "backend/services/qe_archive",
+        "backend/services/quantevolver/completion_contract.py",
         "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_qe_archive_schema.py",
         "backend/tests/test_qe_archive_repository_static.py",
+        "backend/tests/unified_engine/test_qe_completion_contract.py",
+        "docs/architecture/qe_data_completeness_phase1_development_plan_20260504.md",
         "scripts/qe_archive_backfill.py",
         "scripts/qe_archive_data_quality_smoke.py",
+        "scripts/aistock_validate.py",
         "frontend/src/app/qe-archive",
         "frontend/src/lib/qe-archive",
         "frontend/tests/qe-archive",
