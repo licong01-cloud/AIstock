@@ -1,6 +1,9 @@
 import asyncio
 import inspect
 import json
+from pathlib import Path
+
+import pytest
 
 from backend.services.quantevolver import qe_evolution_service as qes
 
@@ -174,3 +177,161 @@ def test_delete_task_captures_node_id_before_db_record_deletion():
     assert "status, node_id FROM qe_evolution_tasks" in source
     assert "task_node_id = task.get(\"node_id\")" in source
     assert "self._get_workspace_client_for_node_id(task_node_id)" in source
+
+
+class _FakeEvolutionDeleteConn:
+    def __init__(self, state):
+        self.state = state
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+    def cursor(self, *args, **kwargs):
+        return _FakeEvolutionDeleteCursor(self.state)
+
+    def commit(self):
+        self.state["events"].append("db_commit")
+        self.state["commits"] += 1
+
+
+class _FakeEvolutionDeleteCursor:
+    def __init__(self, state):
+        self.state = state
+        self.rowcount = 1
+        self._rows = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+    def execute(self, sql, params=None):
+        normalized = " ".join(str(sql).split())
+        self.state["sql"].append(normalized)
+        self._rows = []
+        if normalized.startswith("SELECT task_id, task_name, status, node_id FROM qe_evolution_tasks"):
+            self._rows = [self.state["task_row"]]
+        elif normalized.startswith("SELECT task_id, task_name FROM qe_evolution_tasks"):
+            self._rows = self.state.get("dependent_forks", [])
+        elif normalized.startswith("SELECT experiment_id FROM qe_experiments"):
+            self._rows = [{"experiment_id": eid} for eid in self.state.get("sub_experiment_ids", [])]
+        elif normalized.startswith("DELETE "):
+            self.state["events"].append("db_delete")
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+
+def test_delete_task_removes_local_sota_log_cache_after_node_api(tmp_path, monkeypatch):
+    from backend.services.quantevolver import config_composer
+
+    task_id = "qe_delete_unit"
+    experiments_root = tmp_path / "qe_experiments"
+    sota_root = tmp_path / "qe_sota_assets"
+    experiment_dir = experiments_root / task_id
+    sota_task_dir = sota_root / task_id
+    log_path = sota_task_dir / "logs" / "evolution.log"
+    optuna_dir = sota_root / "optuna_studies"
+    log_path.parent.mkdir(parents=True)
+    experiment_dir.mkdir(parents=True)
+    optuna_dir.mkdir(parents=True)
+    log_path.write_text("old log\n", encoding="utf-8")
+    (experiment_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    (optuna_dir / f"{task_id}_study.db").write_text("db", encoding="utf-8")
+
+    monkeypatch.setattr(qes, "SOTA_ASSETS_DIR", str(sota_root))
+    monkeypatch.setattr(config_composer, "QE_EXPERIMENTS_ROOT", experiments_root)
+
+    state = {
+        "sql": [],
+        "events": [],
+        "commits": 0,
+        "task_row": {"task_id": task_id, "task_name": "delete unit", "status": "failed", "node_id": "node-a"},
+        "sub_experiment_ids": [f"{task_id}_Loop1"],
+    }
+    monkeypatch.setattr(qes, "get_conn", lambda: _FakeEvolutionDeleteConn(state))
+
+    class FakeWorkspaceClient:
+        async def cleanup_task_workspace(self, cleanup_task_id):
+            state["events"].append("node_cleanup")
+            assert cleanup_task_id == task_id
+            return True
+
+    scheduler = qes.AutoEvolutionScheduler.__new__(qes.AutoEvolutionScheduler)
+    scheduler._get_workspace_client_for_node_id = lambda node_id: FakeWorkspaceClient()
+
+    result = asyncio.run(scheduler.delete_task(task_id))
+
+    assert result["deleted_counts"]["cleaned_dirs"] == 2
+    assert result["deleted_counts"]["optuna_files_deleted"] == 1
+    assert state["events"].index("node_cleanup") < state["events"].index("db_delete")
+    assert state["commits"] == 1
+    assert not experiment_dir.exists()
+    assert not sota_task_dir.exists()
+    assert not (optuna_dir / f"{task_id}_study.db").exists()
+
+
+def test_delete_task_fails_before_local_and_db_delete_when_log_stream_is_still_open(tmp_path, monkeypatch):
+    from backend.services.quantevolver import config_composer
+
+    task_id = "qe_stream_open"
+    experiments_root = tmp_path / "qe_experiments"
+    sota_root = tmp_path / "qe_sota_assets"
+    experiment_dir = experiments_root / task_id
+    sota_task_dir = sota_root / task_id
+    experiment_dir.mkdir(parents=True)
+    sota_task_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(qes, "SOTA_ASSETS_DIR", str(sota_root))
+    monkeypatch.setattr(config_composer, "QE_EXPERIMENTS_ROOT", experiments_root)
+
+    state = {
+        "sql": [],
+        "events": [],
+        "commits": 0,
+        "task_row": {"task_id": task_id, "task_name": "stream open", "status": "failed", "node_id": "node-a"},
+        "sub_experiment_ids": [],
+    }
+    monkeypatch.setattr(qes, "get_conn", lambda: _FakeEvolutionDeleteConn(state))
+
+    class FakeWorkspaceClient:
+        async def cleanup_task_workspace(self, cleanup_task_id):
+            state["events"].append("node_cleanup")
+            return True
+
+    async def still_open(*args, **kwargs):
+        return 1
+
+    scheduler = qes.AutoEvolutionScheduler.__new__(qes.AutoEvolutionScheduler)
+    scheduler._get_workspace_client_for_node_id = lambda node_id: FakeWorkspaceClient()
+    scheduler._wait_for_log_streams_closed = still_open
+
+    with pytest.raises(RuntimeError, match=task_id):
+        asyncio.run(scheduler.delete_task(task_id))
+
+    assert "node_cleanup" in state["events"]
+    assert not any(sql.startswith("DELETE ") for sql in state["sql"])
+    assert state["commits"] == 0
+    assert experiment_dir.exists()
+    assert sota_task_dir.exists()
+
+
+def test_frontend_log_stream_requires_expanded_log_panel():
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (repo_root / "frontend" / "src" / "app" / "quantevolver" / "evolution" / "page.tsx").read_text(encoding="utf-8")
+    log_effect = source[
+        source.index("Log files are touched only after the operator expands the log panel."):
+        source.index("const fetchSourceTasks = useCallback")
+    ]
+
+    assert "const [logsCollapsed, setLogsCollapsed] = useState(true);" in source
+    assert "if (!activeTaskId || logsCollapsed)" in log_effect
+    assert log_effect.index("if (!activeTaskId || logsCollapsed)") < log_effect.index("new EventSource")
+    assert log_effect.index("if (!activeTaskId || logsCollapsed)") < log_effect.index("/logs/tail?tail=200")

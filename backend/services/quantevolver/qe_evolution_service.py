@@ -412,10 +412,10 @@ class AutoEvolutionScheduler:
         with self._log_stream_lock:
             return self._active_log_stream_counts.get(task_id, 0)
 
-    async def _wait_for_log_streams_closed(self, task_id: str, timeout_seconds: float = 2.0) -> int:
+    async def _wait_for_log_streams_closed(self, task_id: str, timeout_seconds: float = 10.0) -> int:
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         while self._active_log_stream_count(task_id) > 0 and asyncio.get_running_loop().time() < deadline:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
         return self._active_log_stream_count(task_id)
 
     def _get_callback_url_for_task(self, task_id: str) -> Optional[str]:
@@ -3084,97 +3084,66 @@ class AutoEvolutionScheduler:
 
     async def delete_task(self, task_id: str) -> Dict[str, Any]:
         """
-        删除演进任务及其所有关联数据。
-        包括: 演进Loops(CASCADE)、SOTA注册(CASCADE)、Loop因子/模型记录(CASCADE)、
-              子实验(qe_experiments)、因子实验指标(qe_factor_experiment_metrics)。
-        运行中的任务不允许删除。
+        Delete an evolution task, its DB records, remote worker workspace, and local AIstock caches.
+        Running tasks must be stopped before deletion.
         """
         task_node_id: Optional[str] = None
+        task: Dict[str, Any]
+        dependent_forks: List[Dict[str, Any]] = []
+        sub_experiment_ids: List[str] = []
+
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # 1. 验证任务存在且非运行中
+                # Block new log streams before any destructive cleanup starts.
                 cur.execute("SELECT task_id, task_name, status, node_id FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                 task = cur.fetchone()
                 if not task:
                     raise ValueError(f"任务不存在: {task_id}")
                 if task["status"] == "running":
-                    raise ValueError("运行中的任务不允许删除，请先停止任务")
+                    raise ValueError("运行中的任务不能删除，请先停止任务")
                 task_node_id = task.get("node_id")
                 self._request_stop_log_streams(task_id)
 
-                # 1b. 检查是否有 fork task 依赖此 task 的演进历史
                 cur.execute(
                     "SELECT task_id, task_name FROM qe_evolution_tasks "
                     "WHERE fork_from_task_id = %s AND inherit_history = TRUE",
                     (task_id,),
                 )
                 dependent_forks = cur.fetchall()
-                if dependent_forks:
-                    # 清除依赖（降级为不继承历史），而非阻止删除
-                    fork_ids = [f["task_id"] for f in dependent_forks]
-                    cur.execute(
-                        "UPDATE qe_evolution_tasks SET inherit_history = FALSE "
-                        "WHERE fork_from_task_id = %s AND inherit_history = TRUE",
-                        (task_id,),
-                    )
-                    logger.warning(
-                        f"源任务 {task_id} 被删除，{len(fork_ids)} 个 fork task 的 inherit_history 已降级为 FALSE: {fork_ids}"
-                    )
 
-                # 2. 收集该任务关联的所有子实验 ID (qe_experiments 中 qe_task_id = task_id)
                 cur.execute(
                     "SELECT experiment_id FROM qe_experiments WHERE qe_task_id = %s",
                     (task_id,),
                 )
                 sub_experiment_ids = [r["experiment_id"] for r in cur.fetchall()]
 
-                deleted_counts = {}
-
-                # 3. 删除 qe_factor_experiment_metrics (子实验的因子指标)
-                if sub_experiment_ids:
-                    cur.execute(
-                        "DELETE FROM qe_factor_experiment_metrics WHERE experiment_id = ANY(%s)",
-                        (sub_experiment_ids,),
-                    )
-                    deleted_counts["qe_factor_experiment_metrics"] = cur.rowcount
-
-                # 4. 删除 qe_evolution_tasks (CASCADE 自动清理 loops, sota_registry, loop_factor/model_records)
-                cur.execute("DELETE FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
-                deleted_counts["qe_evolution_tasks"] = cur.rowcount
-
-                # 5. 删除子实验 (qe_experiments 中 qe_task_id = task_id)
-                if sub_experiment_ids:
-                    cur.execute(
-                        "DELETE FROM qe_experiments WHERE experiment_id = ANY(%s)",
-                        (sub_experiment_ids,),
-                    )
-                    deleted_counts["qe_experiments"] = cur.rowcount
-
-            conn.commit()
-
-        # 5b. 清理远端 WSL workspace（如果任务在远端节点执行）
+        # Worker workspaces must be cleaned through the QE node API only.
         try:
             client = self._get_workspace_client_for_node_id(task_node_id)
             await client.cleanup_task_workspace(task_id)
-            logger.info(f"已清理远端 workspace: {task_id}")
+            logger.info("Cleaned remote QE workspace through node API: %s", task_id)
         except Exception as e:
-            logger.warning(f"远端 workspace 清理失败（非致命）: {task_id}: {e}")
+            logger.exception("QE evolution task remote workspace cleanup failed before DB delete: %s", task_id)
+            raise RuntimeError(
+                "QE执行节点workspace清理失败，数据库记录和本地SOTA缓存未删除；"
+                f"请确认执行节点API可用后重试。原始错误: {e}"
+            ) from e
 
-        remaining_streams = await self._wait_for_log_streams_closed(task_id, timeout_seconds=2.0)
+        remaining_streams = await self._wait_for_log_streams_closed(task_id, timeout_seconds=10.0)
         if remaining_streams:
-            logger.warning(
-                "Proceeding with delete while %s log stream(s) are still closing for task %s",
-                remaining_streams,
-                task_id,
+            raise RuntimeError(
+                f"任务 {task_id} 仍有 {remaining_streams} 个日志流未关闭；"
+                "本地SOTA日志缓存和数据库记录未删除。请关闭日志面板后重试。"
             )
 
-        # 6. Clean AIstock-owned local artifacts only; worker workspace cleanup is API-only.
+        # Clean AIstock-owned local artifacts only; worker workspace cleanup is API-only.
         from .config_composer import QE_EXPERIMENTS_ROOT
 
         local_cleanup_roots = [QE_EXPERIMENTS_ROOT, Path(SOTA_ASSETS_DIR)]
 
         async def _remove_tree_with_log_stream_retry(dir_path: Path) -> bool:
-            for attempt in range(3):
+            last_error: Optional[BaseException] = None
+            for attempt in range(5):
                 try:
                     return remove_aistock_artifact_tree(
                         dir_path,
@@ -3182,12 +3151,20 @@ class AutoEvolutionScheduler:
                         allowed_roots=local_cleanup_roots,
                         ignore_errors=False,
                     )
-                except PermissionError:
-                    if attempt == 2:
-                        raise
+                except PermissionError as exc:
+                    last_error = exc
                     self._request_stop_log_streams(task_id)
-                    await self._wait_for_log_streams_closed(task_id, timeout_seconds=2.0)
-                    await asyncio.sleep(0.2)
+                    await self._wait_for_log_streams_closed(task_id, timeout_seconds=5.0)
+                    logger.warning(
+                        "Local artifact cleanup hit a locked file for task %s path=%s attempt=%s/5: %s",
+                        task_id,
+                        dir_path,
+                        attempt + 1,
+                        exc,
+                    )
+                    await asyncio.sleep(0.25 * (attempt + 1))
+            if last_error:
+                raise last_error
             return False
 
         cleaned_dirs = []
@@ -3197,23 +3174,58 @@ class AutoEvolutionScheduler:
         ]:
             if await _remove_tree_with_log_stream_retry(dir_path):
                 cleaned_dirs.append(str(dir_path))
-                logger.info(f"Cleaned local AIstock artifact directory: {dir_path}")
+                logger.info("Cleaned local AIstock artifact directory: %s", dir_path)
 
-        # 6b. Clean local Optuna study files under the AIstock-owned SOTA root.
-        try:
-            optuna_deleted = unlink_aistock_artifact_files(
-                Path(SOTA_ASSETS_DIR) / "optuna_studies",
-                f"{task_id}_*.db",
-                purpose=f"QE evolution task Optuna study cleanup: {task_id}",
-                allowed_roots=[Path(SOTA_ASSETS_DIR)],
-            )
-            if optuna_deleted:
-                logger.info("Cleaned %s Optuna study file(s) for task %s", optuna_deleted, task_id)
-        except Exception as e:
-            logger.warning(f"Optuna study cleanup failed for {task_id}: {e}")
+        optuna_deleted = unlink_aistock_artifact_files(
+            Path(SOTA_ASSETS_DIR) / "optuna_studies",
+            f"{task_id}_*.db",
+            purpose=f"QE evolution task Optuna study cleanup: {task_id}",
+            allowed_roots=[Path(SOTA_ASSETS_DIR)],
+        )
+        if optuna_deleted:
+            logger.info("Cleaned %s Optuna study file(s) for task %s", optuna_deleted, task_id)
+
+        # Delete DB records only after remote and local cleanup have succeeded.
+        deleted_counts: Dict[str, Any] = {}
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if dependent_forks:
+                    fork_ids = [f["task_id"] for f in dependent_forks]
+                    cur.execute(
+                        "UPDATE qe_evolution_tasks SET inherit_history = FALSE "
+                        "WHERE fork_from_task_id = %s AND inherit_history = TRUE",
+                        (task_id,),
+                    )
+                    logger.warning(
+                        "Source task %s was deleted; inherit_history disabled for %s fork task(s): %s",
+                        task_id,
+                        len(fork_ids),
+                        fork_ids,
+                    )
+
+                if sub_experiment_ids:
+                    cur.execute(
+                        "DELETE FROM qe_factor_experiment_metrics WHERE experiment_id = ANY(%s)",
+                        (sub_experiment_ids,),
+                    )
+                    deleted_counts["qe_factor_experiment_metrics"] = cur.rowcount
+
+                cur.execute("DELETE FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                deleted_counts["qe_evolution_tasks"] = cur.rowcount
+
+                if sub_experiment_ids:
+                    cur.execute(
+                        "DELETE FROM qe_experiments WHERE experiment_id = ANY(%s)",
+                        (sub_experiment_ids,),
+                    )
+                    deleted_counts["qe_experiments"] = cur.rowcount
+
+            conn.commit()
+
         deleted_counts["cleaned_dirs"] = len(cleaned_dirs)
+        deleted_counts["optuna_files_deleted"] = optuna_deleted
 
-        logger.info(f"Task {task_id} ({task['task_name']}) deleted. Counts: {deleted_counts}")
+        logger.info("Task %s (%s) deleted. Counts: %s", task_id, task["task_name"], deleted_counts)
         return {
             "task_id": task_id,
             "task_name": task["task_name"],

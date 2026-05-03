@@ -7361,7 +7361,7 @@ async def delete_experiment(
                     dir_path,
                     purpose=f"QE experiment local artifact cleanup: {experiment_id}",
                     allowed_roots=local_cleanup_roots,
-                    ignore_errors=True,
+                    ignore_errors=False,
                 ):
                     cleaned_dirs.append(str(dir_path))
                     logger.info(f"Cleaned local AIstock experiment directory: {dir_path}")
