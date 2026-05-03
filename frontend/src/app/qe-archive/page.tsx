@@ -168,7 +168,9 @@ export default function QEArchivePage() {
   const [archivedRuns, setArchivedRuns] = useState<ArchivedRunListItem[]>([]);
   const [candidates, setCandidates] = useState<BackfillCandidate[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [candidateLimit, setCandidateLimit] = useState(100);
+  const [candidatePage, setCandidatePage] = useState(1);
+  const [candidatePageSize, setCandidatePageSize] = useState(20);
+  const [candidateHasMore, setCandidateHasMore] = useState(false);
   const [candidateStatus, setCandidateStatus] = useState("completed");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -188,25 +190,24 @@ export default function QEArchivePage() {
     setLoading(true);
     setError(null);
     try {
-      const [nextSummary, nextOutbox, nextJobs, nextRuns, nextCandidates] = await Promise.all([
+      const [nextSummary, nextOutbox, nextJobs, nextCandidates] = await Promise.all([
         qeArchiveApi.health(),
         qeArchiveApi.outbox(30),
         qeArchiveApi.jobs(30),
-        qeArchiveApi.runs({ limit: 100 }),
-        qeArchiveApi.backfillCandidates({ limit: candidateLimit, status: candidateStatus, include_archived: includeArchived }),
+        qeArchiveApi.backfillCandidates({ page: candidatePage, page_size: candidatePageSize, status: candidateStatus, include_archived: includeArchived }),
       ]);
       setSummary(nextSummary);
       setOutbox(nextOutbox);
       setJobs(nextJobs);
-      setArchivedRuns(nextRuns);
       setCandidates(nextCandidates.candidates || []);
+      setCandidateHasMore(Boolean(nextCandidates.has_more));
       setSelectedIds((previous) => new Set([...previous].filter((id) => (nextCandidates.candidates || []).some((item) => item.candidate_id === id))));
     } catch (err) {
       setError(err);
     } finally {
       setLoading(false);
     }
-  }, [candidateLimit, candidateStatus, includeArchived]);
+  }, [candidatePage, candidatePageSize, candidateStatus, includeArchived]);
 
   useEffect(() => {
     void load();
@@ -220,11 +221,30 @@ export default function QEArchivePage() {
 
   const latestRows = useMemo(() => outbox.slice(0, 12), [outbox]);
   const latestJobs = useMemo(() => jobs.slice(0, 12), [jobs]);
+  const jobRunOptions = useMemo<ArchivedRunListItem[]>(
+    () => jobs
+      .filter((job) => job.run_id)
+      .map((job) => ({
+        run_id: String(job.run_id),
+        run_type: job.job_type,
+        status: job.status,
+        archived_at: job.completed_at || job.updated_at || job.created_at,
+      })),
+    [jobs],
+  );
+  const qualityRunOptions = archivedRuns.length ? archivedRuns : jobRunOptions;
   const selectedCandidates = useMemo(() => candidates.filter((item) => selectedIds.has(item.candidate_id)), [candidates, selectedIds]);
   const selectedTaskIds = selectedCandidates.filter((item) => item.candidate_type === "evolution_task" && item.task_id).map((item) => String(item.task_id));
   const selectedExperimentIds = selectedCandidates.filter((item) => item.candidate_type === "single_experiment" && item.experiment_id).map((item) => String(item.experiment_id));
   const selectedRunCount = selectedCandidates.reduce((sum, item) => sum + n(item.pending_run_count), 0);
   const pendingCandidateCount = candidates.filter((item) => n(item.pending_run_count) > 0).length;
+  const writeDisabledReason = backfillBusy
+    ? "补录处理中"
+    : selectedCandidates.length === 0
+      ? "请先选择待入库候选"
+      : writeConfirm !== WRITE_CONFIRM_TEXT
+        ? `请先填入确认文本 ${WRITE_CONFIRM_TEXT}`
+        : "";
 
   function toggleCandidate(candidateId: string) {
     setSelectedIds((previous) => {
@@ -281,6 +301,19 @@ export default function QEArchivePage() {
     }
   }
 
+  async function loadArchivedRuns() {
+    setQualityBusy(true);
+    setError(null);
+    try {
+      setArchivedRuns(await qeArchiveApi.runs({ limit: 100 }));
+    } catch (err) {
+      setArchivedRuns([]);
+      setError(err);
+    } finally {
+      setQualityBusy(false);
+    }
+  }
+
   async function lookupQuality() {
     const runId = qualityRunId.trim();
     if (!runId) return;
@@ -328,7 +361,7 @@ export default function QEArchivePage() {
         <div className="pv2-form-grid">
           <label className="pv2-field">
             <span>候选状态</span>
-            <select className="pv2-select" value={candidateStatus} onChange={(event) => setCandidateStatus(event.target.value)}>
+            <select className="pv2-select" value={candidateStatus} onChange={(event) => { setCandidateStatus(event.target.value); setCandidatePage(1); }}>
               <option value="completed">仅 completed</option>
               <option value="terminal">终态 completed/failed/interrupted/cancelled</option>
               <option value="all">全部状态</option>
@@ -336,11 +369,11 @@ export default function QEArchivePage() {
           </label>
           <label className="pv2-field">
             <span>显示上限</span>
-            <input className="pv2-input" type="number" min={1} max={500} value={candidateLimit} onChange={(event) => setCandidateLimit(Number(event.target.value))} />
+            <input className="pv2-input" type="number" min={1} max={500} value={candidatePageSize} onChange={(event) => { setCandidatePageSize(Math.max(1, Math.min(500, Number(event.target.value) || 20))); setCandidatePage(1); }} />
           </label>
           <label className="pv2-field">
             <span>已入库项</span>
-            <select className="pv2-select" value={includeArchived ? "yes" : "no"} onChange={(event) => setIncludeArchived(event.target.value === "yes")}>
+            <select className="pv2-select" value={includeArchived ? "yes" : "no"} onChange={(event) => { setIncludeArchived(event.target.value === "yes"); setCandidatePage(1); }}>
               <option value="no">隐藏已完整入库</option>
               <option value="yes">显示已完整入库</option>
             </select>
@@ -350,6 +383,11 @@ export default function QEArchivePage() {
           <button className="pv2-button" type="button" onClick={selectPendingCandidates}>选择全部待入库</button>
           <button className="pv2-button-ghost" type="button" onClick={() => setSelectedIds(new Set())}>清空选择</button>
           <span className="pv2-help">已选择 {selectedCandidates.length} 个候选，预计展开 {selectedRunCount} 个 run；演进任务会自动包含其全部符合状态的 loop。</span>
+        </div>
+        <div className="pv2-row-actions" style={{ marginTop: 8, marginBottom: 12 }}>
+          <button className="pv2-button-ghost" type="button" aria-label="previous candidate page" onClick={() => setCandidatePage((page) => Math.max(1, page - 1))} disabled={candidatePage <= 1 || loading}>上一页</button>
+          <span className="pv2-help" aria-label="candidate pagination status">第 {candidatePage} 页，每页 {candidatePageSize} 条，本页 {candidates.length} 条{candidateHasMore ? "，还有下一页" : "，已到末页"}</span>
+          <button className="pv2-button-ghost" type="button" aria-label="next candidate page" onClick={() => setCandidatePage((page) => page + 1)} disabled={!candidateHasMore || loading}>下一页</button>
         </div>
         <PaperTable
           rows={candidates}
@@ -375,9 +413,11 @@ export default function QEArchivePage() {
             <span>写入确认</span>
             <input className="pv2-input" value={writeConfirm} onChange={(event) => setWriteConfirm(event.target.value)} placeholder={WRITE_CONFIRM_TEXT} />
           </label>
+          <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button-ghost" type="button" aria-label="fill archive write confirm" onClick={() => setWriteConfirm(WRITE_CONFIRM_TEXT)}>填入确认文本</button></div>
           <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button" type="button" onClick={() => void runBackfill(false)} disabled={backfillBusy || selectedCandidates.length === 0}>dry-run 预览选中项</button></div>
-          <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button-danger" type="button" onClick={() => void runBackfill(true)} disabled={backfillBusy || selectedCandidates.length === 0 || writeConfirm !== WRITE_CONFIRM_TEXT}>写入数仓</button></div>
+          <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button-danger" type="button" aria-label="write selected candidates to archive" onClick={() => void runBackfill(true)} disabled={Boolean(writeDisabledReason)}>写入数仓</button></div>
         </div>
+        {writeDisabledReason ? <div className="pv2-help" aria-label="archive write disabled reason">{writeDisabledReason}</div> : <div className="pv2-help">已满足正式入库条件，点击“写入数仓”会执行 confirmed write。</div>}
         <div style={{ marginTop: 16 }}><ReportSummary report={backfillReport} /></div>
       </SectionCard>
 
@@ -412,7 +452,7 @@ export default function QEArchivePage() {
               <span>最近入库 Run</span>
               <select className="pv2-select" value={qualityRunId} onChange={(event) => setQualityRunId(event.target.value)} aria-label="Select archived run for quality">
                 <option value="">选择已入库 Run</option>
-                {archivedRuns.map((run) => (
+                {qualityRunOptions.map((run) => (
                   <option key={run.run_id} value={run.run_id}>{runListLabel(run)}</option>
                 ))}
               </select>
@@ -421,7 +461,8 @@ export default function QEArchivePage() {
               <span>Run ID</span>
               <input className="pv2-input" value={qualityRunId} onChange={(event) => setQualityRunId(event.target.value)} placeholder="qear_run_..." />
             </label>
-            <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button" type="button" onClick={() => void lookupQuality()} disabled={qualityBusy || !qualityRunId.trim()}>{qualityBusy ? "查询中" : "查询质量"}</button></div>
+            <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button" type="button" aria-label="check run quality" onClick={() => void lookupQuality()} disabled={qualityBusy || !qualityRunId.trim()}>{qualityBusy ? "查询中" : "查询质量"}</button></div>
+            <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button-ghost" type="button" aria-label="refresh run list" onClick={() => void loadArchivedRuns()} disabled={qualityBusy}>{qualityBusy ? "刷新中" : "刷新Run列表"}</button></div>
           </div>
           <QualityPanel quality={quality} />
         </SectionCard>

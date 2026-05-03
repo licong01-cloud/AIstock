@@ -218,29 +218,32 @@ class QEArchiveSourceAssembler:
         *,
         status: str = "completed",
         limit: int = 100,
+        offset: int = 0,
         include_archived: bool = False,
     ) -> list[dict[str, Any]]:
         """List QE source experiments/tasks with archive coverage for UI selection."""
 
         limit = max(1, min(int(limit or 100), 500))
+        offset = max(0, int(offset or 0))
+        fetch_limit = max(limit, min(offset + limit, 500))
         candidates = self._list_evolution_task_candidates(
             status=status,
-            limit=limit,
+            limit=fetch_limit,
             include_archived=include_archived,
         )
-        remaining = max(1, limit - len(candidates))
         candidates.extend(
             self._list_single_experiment_candidates(
                 status=status,
-                limit=remaining,
+                limit=fetch_limit,
                 include_archived=include_archived,
             )
         )
-        return sorted(
+        sorted_candidates = sorted(
             candidates,
             key=lambda row: str(row.get("sort_time") or ""),
             reverse=True,
-        )[:limit]
+        )
+        return sorted_candidates[offset:offset + limit]
 
     def assemble_experiment_payload(self, experiment_id: str) -> dict[str, Any]:
         with self._connection_provider() as conn:

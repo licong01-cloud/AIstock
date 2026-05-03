@@ -133,7 +133,11 @@ export type ArchivedRunListItem = {
 export type BackfillCandidateReport = {
   status: string;
   include_archived: boolean;
+  page?: number;
+  page_size?: number;
+  offset?: number;
   count: number;
+  has_more?: boolean;
   candidates: BackfillCandidate[];
 };
 
@@ -260,9 +264,10 @@ export const qeArchiveApi = {
     const response = await apiFetch<{ status: string; data: ArchivedRunListItem[] }>(`/qe-archive/runs?${qs.toString()}`);
     return response.data || [];
   },
-  async backfillCandidates(payload: { limit?: number; status?: string; include_archived?: boolean } = {}): Promise<BackfillCandidateReport> {
+  async backfillCandidates(payload: { limit?: number; page?: number; page_size?: number; status?: string; include_archived?: boolean } = {}): Promise<BackfillCandidateReport> {
     const qs = new URLSearchParams({
-      limit: String(payload.limit ?? 100),
+      page: String(payload.page ?? 1),
+      page_size: String(payload.page_size ?? payload.limit ?? 20),
       status: payload.status || "completed",
       include_archived: payload.include_archived ? "true" : "false",
     });

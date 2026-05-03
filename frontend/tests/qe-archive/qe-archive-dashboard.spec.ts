@@ -90,12 +90,19 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
     }
 
     if (url.includes("/backfill-candidates")) {
+      const parsedUrl = new URL(url);
+      const pageNumber = Number(parsedUrl.searchParams.get("page") || "1");
+      const pageSize = Number(parsedUrl.searchParams.get("page_size") || "20");
+      expect(pageSize).toBe(20);
       return response({
         status: "success",
         data: {
           status: "completed",
           include_archived: false,
+          page: pageNumber,
+          page_size: pageSize,
           count: 1,
+          has_more: pageNumber < 2,
           candidates: [{
             candidate_id: "task:qe_task_demo",
             candidate_type: "evolution_task",
@@ -217,6 +224,11 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
   await expect(page.getByText("demo evolution")).toBeVisible();
   await expect(page.getByText("qear_evt_demo")).toBeVisible();
   await expect(page.getByText("qear_job_demo")).toBeVisible();
+  await expect(page.getByLabel("candidate pagination status")).toContainText("1");
+  await page.getByLabel("next candidate page").click();
+  await expect(page.getByLabel("candidate pagination status")).toContainText("2");
+  await page.getByLabel("previous candidate page").click();
+  await expect(page.getByLabel("candidate pagination status")).toContainText("1");
 
   await page.getByRole("button", { name: "选择全部待入库" }).click();
   await page.getByRole("button", { name: /dry-run/i }).click();
@@ -224,8 +236,9 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
   await expect(page.getByText(/metrics 81/)).toBeVisible();
   await expect(page.getByText(/symbols 1310/).first()).toBeVisible();
 
-  await page.getByPlaceholder("QE_ARCHIVE_WRITE").fill("QE_ARCHIVE_WRITE");
-  await page.getByRole("button", { name: "写入数仓" }).click();
+  await expect(page.getByLabel("archive write disabled reason")).toContainText("QE_ARCHIVE_WRITE");
+  await page.getByLabel("fill archive write confirm").click();
+  await page.getByLabel("write selected candidates to archive").click();
   await expect(page.getByText("已通过").first()).toBeVisible();
 
   await page.getByPlaceholder("QE_ARCHIVE_WORKER_RUN").fill("QE_ARCHIVE_WORKER_RUN");
@@ -234,7 +247,7 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
   await expect(page.getByText("Completed", { exact: true })).toBeVisible();
 
   await page.getByLabel("Select archived run for quality").selectOption("qear_run_demo");
-  await page.getByRole("button", { name: /查询质量/ }).click();
+  await page.getByLabel("check run quality").click();
   await expect(page.getByText("full")).toBeVisible();
   await expect(page.getByText(/3K|3\.49K/)).toBeVisible();
   await expect(page.getByText("股票汇总")).toBeVisible();

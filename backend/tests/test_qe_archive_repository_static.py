@@ -622,6 +622,37 @@ def test_backfill_service_task_ids_expand_to_unarchived_completed_loops_by_defau
     assert [item["source_sub_id"] for item in result["results"]] == ["loop_3"]
 
 
+def test_backfill_service_candidate_listing_uses_page_and_page_size() -> None:
+    class FakeAssembler:
+        def list_backfill_candidates(self, *, status, limit, offset, include_archived):  # type: ignore[no-untyped-def]
+            assert status == "completed"
+            assert limit == 21
+            assert offset == 20
+            assert include_archived is False
+            return [
+                {
+                    "candidate_id": f"task:task_{idx}",
+                    "candidate_type": "evolution_task",
+                    "task_id": f"task_{idx}",
+                    "pending_run_count": 1,
+                }
+                for idx in range(21)
+            ]
+
+    result = QEArchiveBackfillService(
+        assembler=FakeAssembler(),  # type: ignore[arg-type]
+        archive_service=SimpleNamespace(),
+        repository=SimpleNamespace(),
+    ).list_backfill_candidates(status="completed", page=2, page_size=20, include_archived=False)
+
+    assert result["page"] == 2
+    assert result["page_size"] == 20
+    assert result["offset"] == 20
+    assert result["count"] == 20
+    assert result["has_more"] is True
+    assert len(result["candidates"]) == 20
+
+
 def test_realtime_ingestion_is_disabled_by_default_and_does_not_archive() -> None:
     class FakeBackfillService:
         def __init__(self) -> None:
@@ -746,12 +777,17 @@ def test_qe_archive_backfill_api_returns_service_report(monkeypatch) -> None:
 
 def test_qe_archive_backfill_candidates_api_returns_selectable_sources(monkeypatch) -> None:
     class FakeService:
-        def list_backfill_candidates(self, *, status, limit, include_archived):  # type: ignore[no-untyped-def]
+        def list_backfill_candidates(self, *, status, limit, page, page_size, include_archived):  # type: ignore[no-untyped-def]
             assert status == "completed"
             assert limit == 50
+            assert page == 2
+            assert page_size == 50
             assert include_archived is False
             return {
                 "status": status,
+                "page": page,
+                "page_size": page_size,
+                "has_more": False,
                 "count": 1,
                 "candidates": [
                     {
@@ -770,10 +806,12 @@ def test_qe_archive_backfill_candidates_api_returns_selectable_sources(monkeypat
     app.include_router(qe_archive_router.router, prefix="/api/v1")
     client = TestClient(app)
 
-    response = client.get("/api/v1/qe-archive/backfill-candidates?limit=50")
+    response = client.get("/api/v1/qe-archive/backfill-candidates?page=2&page_size=50")
 
     assert response.status_code == 200
     data = response.json()["data"]
+    assert data["page"] == 2
+    assert data["page_size"] == 50
     assert data["count"] == 1
     assert data["candidates"][0]["candidate_id"] == "task:task_1"
 

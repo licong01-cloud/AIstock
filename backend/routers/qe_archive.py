@@ -84,14 +84,18 @@ def list_qe_archive_outbox(
 @router.get("/backfill-candidates", summary="QE archive historical backfill candidates")
 def list_qe_archive_backfill_candidates(
     status: str = Query("completed", description="QE source status filter: completed, terminal, or all."),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int | None = Query(None, ge=1, le=500, description="Legacy page size alias; page_size takes precedence."),
+    page: int = Query(1, ge=1, description="1-based candidate page number."),
+    page_size: int = Query(20, ge=1, le=500, description="Candidate rows per page."),
     include_archived: bool = Query(False, description="Include source rows already fully archived."),
 ):
     return {
         "status": "success",
         "data": get_backfill_service().list_backfill_candidates(
             status=status,
-            limit=limit,
+            limit=page_size if limit is None else limit,
+            page=page,
+            page_size=page_size if limit is None else limit,
             include_archived=include_archived,
         ),
     }

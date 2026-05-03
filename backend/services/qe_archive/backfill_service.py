@@ -79,19 +79,31 @@ class QEArchiveBackfillService:
         self,
         *,
         status: str = "completed",
-        limit: int = 100,
+        limit: int = 20,
+        page: int = 1,
+        page_size: int | None = None,
         include_archived: bool = False,
     ) -> dict[str, Any]:
+        effective_page_size = max(1, min(int(page_size or limit or 20), 500))
+        effective_page = max(1, int(page or 1))
+        offset = (effective_page - 1) * effective_page_size
         candidates = self._assembler.list_backfill_candidates(
             status=status,
-            limit=limit,
+            limit=effective_page_size + 1,
+            offset=offset,
             include_archived=include_archived,
         )
+        has_more = len(candidates) > effective_page_size
+        page_candidates = candidates[:effective_page_size]
         return {
             "status": status,
             "include_archived": include_archived,
-            "count": len(candidates),
-            "candidates": candidates,
+            "page": effective_page,
+            "page_size": effective_page_size,
+            "offset": offset,
+            "count": len(page_candidates),
+            "has_more": has_more,
+            "candidates": page_candidates,
         }
 
     def archive_loop_completed(
