@@ -165,7 +165,7 @@ def get_h5_universe(end: date, limit: int | None = None) -> pd.DataFrame:
               SELECT 1
               FROM market.stock_st st
               WHERE st.ts_code = s.ts_code
-                AND st.ann_date < %(end)s
+                AND st.ann_date <= %(end)s
           )
         ORDER BY s.ts_code
     """
@@ -412,21 +412,16 @@ def load_limit_data(codes: list[str], start: date, end: date) -> pd.DataFrame:
 
 def write_stock_csv_for_bin(daily_norm: pd.DataFrame, official: pd.DataFrame, csv_dir: Path, start: date, end: date) -> dict:
     csv_dir.mkdir(parents=True, exist_ok=True)
-    official = official.copy()
-    official["start"] = pd.to_datetime(official["start"]).dt.date
-    official["end"] = pd.to_datetime(official["end"]).dt.date
-    start_map = dict(zip(official["instrument"], official["start"]))
-    codes = official["instrument"].tolist()
+    # Keep full post-listing feature history in bin files. IPO-365 eligibility
+    # is expressed by instruments/all.txt, not by deleting feature rows.
+    codes = sorted(str(value) for value in daily_norm.index.get_level_values("instrument").unique())
     limits = load_limit_data(codes, start, end)
 
     df = daily_norm.reset_index()
     df["date_obj"] = pd.to_datetime(df["datetime"]).dt.date
     df["symbol"] = df["instrument"].astype(str)
-    df = df[df["symbol"].isin(start_map)].copy()
-    df["effective_start"] = df["symbol"].map(start_map)
-    df = df[df["date_obj"] >= df["effective_start"]].copy()
     if df.empty:
-        raise RuntimeError("No official-universe daily rows available for bin CSV")
+        raise RuntimeError("No daily rows available for bin CSV")
 
     df = df.merge(limits, left_on=["date_obj", "symbol"], right_on=["date", "symbol"], how="left")
     raw_close = pd.to_numeric(df["close"], errors="coerce") / pd.to_numeric(df["factor"], errors="coerce")
@@ -762,8 +757,8 @@ def main() -> int:
         exclude_st=True,
         exclude_delisted_or_paused=True,
         ipo_filter_days=IPO_FILTER_DAYS,
-        h5_ipo_mode="all_txt_only",
-        bin_ipo_mode="data_clipped_to_list_date_plus_365",
+        h5_ipo_mode="data_full_all_txt_only",
+        bin_ipo_mode="feature_bins_full_history_all_txt_only",
         index_codes=index_codes,
     )
 
@@ -805,6 +800,7 @@ def main() -> int:
     if official.empty:
         raise RuntimeError("Official IPO-filtered universe is empty")
     official.to_csv(snapshot_dir / "metadata" / "official_universe.csv", index=False)
+    write_official_all_txt(official, snapshot_dir / "instruments" / "all.txt", ",")
     logging.info("Official IPO-filtered universe: %s instruments", len(official))
 
     bin_stats = {}

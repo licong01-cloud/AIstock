@@ -705,3 +705,11 @@ Important directories:
 - Added QE completion payload and artifact manifest contract at `backend/services/quantevolver/completion_contract.py`. It validates complete vs partial collection status, required sections, artifact manifest trace fields, sha256 format, and rejects raw WSL/remote worker workspace artifact URIs without wiring any production QE hook.
 - Added `qe_data_contract_backend` nox session plus tests `backend/tests/test_aistock_validate_metadata.py` and `backend/tests/unified_engine/test_qe_completion_contract.py`; validation passed with targeted pytest 11 tests, `qe_data_contract_backend` 11 tests, targeted L0 0 findings, `qe_archive_backend` 46 tests, and read-only `qe_archive_data_quality` smoke with 27/27 tables and 458/458 commented columns.
 - Validation evidence is recorded at `tests/aistock_validation/history/qe_data_completeness/20260504_015036_l3_qe-data-completeness-contract-and-validation-metadata.md` with JSON metadata and evidence manifest. Production backend `8001` and remote worker APIs were not restarted.
+
+## Qlib H5 + Daily Bin Candidate Export - 2026-05-04
+
+- Candidate export document: `docs/analysis/qlib_h5_daily_bin_current_candidate_export_20260504.md`.
+- Generated non-production H5 snapshot `F:/Dev/AIstock/qlib_snapshots/qlib_20260430_shsz_current_candidate` and daily Qlib Bin snapshot `F:/Dev/AIstock/qlib_bin/qlib_bin_20260430_shsz_current_candidate`; production WSL `/home/lc999/data/qlib_bin` was not replaced.
+- Current transition rules: SH/SZ only, ST `ann_date <= 2026-04-30` excluded, stock_basic D/P excluded, IPO 365D enforced via `instruments/all.txt`, feature rows kept as full post-listing history.
+- Export counts: H5 feature universe 4,664, official all.txt 4,583, daily rows 7,264,909, daily bin CSV rows 7,264,909, static_factors rows 7,264,601 with 112 columns.
+- Validation report: `reports/qlib_candidate_export/qlib_20260430_shsz_current_candidate_daily_validate_20260504.json`. H5/all.txt policy passed, Qlib `D.features` daily Bin values matched H5+DB `stk_limit` expectations on 2026-04-30 and 2025-07-10 under float32 storage tolerance; limit prices and limit flags matched exactly. Minute Bin was not regenerated in this candidate export.
