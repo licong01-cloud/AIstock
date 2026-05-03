@@ -234,7 +234,7 @@ export default function QlibPage() {
   const [snapshotId, setSnapshotId] = useState<string>("qlib_export_" + new Date().toISOString().slice(0, 10).replace(/-/g, ""));
   const [exSh, setExSh] = useState<boolean>(true);
   const [exSz, setExSz] = useState<boolean>(true);
-  const [exBj, setExBj] = useState<boolean>(true);
+  const [exBj, setExBj] = useState<boolean>(false);
   const [excludeSt, setExcludeSt] = useState<boolean>(true);
   const [excludeDelistedOrPaused, setExcludeDelistedOrPaused] = useState<boolean>(true);
   const [start, setStart] = useState<string>("2025-11-01");
@@ -442,7 +442,6 @@ export default function QlibPage() {
     const exchanges: string[] = [];
     if (exSh) exchanges.push("sh");
     if (exSz) exchanges.push("sz");
-    if (exBj) exchanges.push("bj");
 
     const datasets = Array.from(selectedDatasets);
 
@@ -663,7 +662,6 @@ export default function QlibPage() {
       const exchanges: string[] = [];
       if (exSh) exchanges.push("sh");
       if (exSz) exchanges.push("sz");
-      if (exBj) exchanges.push("bj");
       const resp = await backendRequest<DataCheckResponse>("POST", "/api/v1/qlib/data/check", {
         start, end,
         exchanges: exchanges.length > 0 ? exchanges : undefined,
@@ -857,8 +855,8 @@ export default function QlibPage() {
                   <span className="text-sm">深交所 (SZ)</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" checked={exBj} onChange={(e) => setExBj(e.target.checked)} />
-                  <span className="text-sm">北交所 (BJ)</span>
+                  <input type="checkbox" checked={exBj} disabled onChange={() => setExBj(false)} />
+                  <span className="text-sm text-gray-400">北交所 (BJ，固定排除)</span>
                 </label>
               </div>
             </div>
@@ -962,7 +960,6 @@ export default function QlibPage() {
                 const exchanges: string[] = [];
                 if (exSh) exchanges.push("sh");
                 if (exSz) exchanges.push("sz");
-                if (exBj) exchanges.push("bj");
 
                 const payload: Record<string, any> = {
                   snapshot_id: binSnapshotId.trim(),
@@ -1121,8 +1118,8 @@ export default function QlibPage() {
                       <span>深交所 (SZ)</span>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer">
-                      <input type="checkbox" checked={exBj} onChange={(e) => setExBj(e.target.checked)} />
-                      <span>北交所 (BJ)</span>
+                      <input type="checkbox" checked={exBj} disabled onChange={() => setExBj(false)} />
+                      <span className="text-gray-400">北交所 (BJ，固定排除)</span>
                     </label>
                   </div>
                 </div>

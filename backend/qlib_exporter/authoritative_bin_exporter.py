@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from ..db.pg_pool import get_conn
+from .config import IPO_FILTER_DAYS
 
 
 PRICE_UNIT_DIVISOR = 1000.0
@@ -59,8 +60,9 @@ class StockUniverseConfig:
     start: date
     end: date
     exchanges: Sequence[str] | None = None
-    exclude_st: bool = False
-    exclude_delisted_or_paused: bool = False
+    exclude_st: bool = True
+    exclude_delisted_or_paused: bool = True
+    min_listed_days: int = IPO_FILTER_DAYS
     ts_codes: Sequence[str] | None = None
 
 
@@ -83,23 +85,39 @@ class CsvExportSummary:
     generated_at: str
 
 
-def _normalize_exchanges(exchanges: Sequence[str] | None) -> list[str]:
+STOCK_EXPORT_EXCHANGES = ("sh", "sz")
+EXCLUDED_STOCK_EXPORT_EXCHANGES = {"bj"}
+
+
+def normalize_stock_export_exchanges(exchanges: Sequence[str] | None) -> list[str]:
+    """Normalize authoritative stock-export exchanges and reject BSE/BJ stocks."""
+
     if not exchanges:
-        return ["sh", "sz"]
+        return list(STOCK_EXPORT_EXCHANGES)
     normalized = []
     for item in exchanges:
         value = str(item or "").strip().lower()
         if value:
             normalized.append(value)
-    return sorted(set(normalized))
+    requested = sorted(set(normalized))
+    if not requested:
+        return list(STOCK_EXPORT_EXCHANGES)
+    if EXCLUDED_STOCK_EXPORT_EXCHANGES.intersection(requested):
+        raise ValueError("BJ/BSE stocks are excluded from AIstock QE/Qlib stock exports; use sh/sz only")
+    unsupported = sorted(set(requested) - set(STOCK_EXPORT_EXCHANGES))
+    if unsupported:
+        raise ValueError(f"unsupported exchange(s) for stock export: {', '.join(unsupported)}")
+    return requested
+
+
+def _normalize_exchanges(exchanges: Sequence[str] | None) -> list[str]:
+    return normalize_stock_export_exchanges(exchanges)
 
 
 def _exchange_sql_values(exchanges: Sequence[str] | None) -> list[str]:
-    mapping = {"sh": "SSE", "sz": "SZSE", "bj": "BSE"}
+    mapping = {"sh": "SSE", "sz": "SZSE"}
     values = []
     for item in _normalize_exchanges(exchanges):
-        if item not in mapping:
-            raise ValueError(f"unsupported exchange: {item}")
         values.append(mapping[item])
     return values
 
@@ -117,22 +135,83 @@ def _clean_ts_codes(ts_codes: Iterable[str]) -> list[str]:
     return out
 
 
+def _is_bj_ts_code(code: str) -> bool:
+    value = str(code or "").strip().upper()
+    return value.endswith(".BJ") or value.startswith("BJ")
+
+
+def _reject_bj_ts_codes(ts_codes: Sequence[str]) -> None:
+    bj_codes = [code for code in ts_codes if _is_bj_ts_code(code)]
+    if bj_codes:
+        sample = ", ".join(bj_codes[:5])
+        raise ValueError(f"BJ/BSE stocks are excluded from AIstock QE/Qlib stock exports; invalid codes: {sample}")
+
+
+def _resolve_explicit_stock_universe(config: StockUniverseConfig, codes: Sequence[str]) -> list[str]:
+    exchange_values = _exchange_sql_values(config.exchanges)
+    conditions = [
+        "s.ts_code = ANY(%(codes)s)",
+        "s.exchange = ANY(%(exchanges)s)",
+        "s.list_date IS NOT NULL",
+        "s.list_date + (%(min_listed_days)s * INTERVAL '1 day') <= %(end)s",
+        "s.list_status = 'L'",
+    ]
+    params: dict[str, Any] = {
+        "codes": list(codes),
+        "exchanges": exchange_values,
+        "end": config.end,
+        "min_listed_days": config.min_listed_days,
+    }
+    if config.exclude_st:
+        conditions.append(
+            """
+            NOT EXISTS (
+                SELECT 1
+                FROM market.stock_st st
+                WHERE st.ts_code = s.ts_code
+                  AND st.ann_date <= %(end)s
+            )
+            """
+        )
+    sql = f"""
+        SELECT s.ts_code
+        FROM market.stock_basic s
+        WHERE {' AND '.join(conditions)}
+        ORDER BY s.ts_code
+    """
+    with get_conn() as conn:
+        df = pd.read_sql(sql, conn, params=params)
+    allowed = _clean_ts_codes(df["ts_code"].tolist()) if not df.empty else []
+    missing = [code for code in codes if code not in set(allowed)]
+    if missing:
+        sample = ", ".join(missing[:5])
+        raise ValueError(f"explicit ts_codes include stocks outside the eligible SH/SZ QE export universe: {sample}")
+    return allowed
+
+
 def resolve_stock_universe(config: StockUniverseConfig) -> list[str]:
     """Resolve the export universe from stock_basic using explicit, reproducible filters."""
 
+    if config.min_listed_days < 0:
+        raise ValueError("min_listed_days must be >= 0")
+
     if config.ts_codes:
-        return _clean_ts_codes(config.ts_codes)
+        codes = _clean_ts_codes(config.ts_codes)
+        _reject_bj_ts_codes(codes)
+        return _resolve_explicit_stock_universe(config, codes)
 
     exchange_values = _exchange_sql_values(config.exchanges)
     conditions = [
         "s.exchange = ANY(%(exchanges)s)",
         "s.list_date IS NOT NULL",
-        "s.list_date <= %(end)s",
+        "s.list_date + (%(min_listed_days)s * INTERVAL '1 day') <= %(end)s",
+        "s.list_status = 'L'",
     ]
-    params: dict[str, Any] = {"exchanges": exchange_values, "end": config.end}
-
-    if config.exclude_delisted_or_paused:
-        conditions.append("s.list_status = 'L'")
+    params: dict[str, Any] = {
+        "exchanges": exchange_values,
+        "end": config.end,
+        "min_listed_days": config.min_listed_days,
+    }
 
     if config.exclude_st:
         conditions.append(
@@ -529,8 +608,8 @@ def export_stock_minute_csv(
     end: date,
     csv_root: Path,
     exchanges: Sequence[str] | None = None,
-    exclude_st: bool = False,
-    exclude_delisted_or_paused: bool = False,
+    exclude_st: bool = True,
+    exclude_delisted_or_paused: bool = True,
     ts_codes: Sequence[str] | None = None,
     basis_start: date | None = None,
     basis_end: date | None = None,
@@ -623,8 +702,8 @@ def export_stock_minute_csv_chunked(
     end: date,
     csv_root: Path,
     exchanges: Sequence[str] | None = None,
-    exclude_st: bool = False,
-    exclude_delisted_or_paused: bool = False,
+    exclude_st: bool = True,
+    exclude_delisted_or_paused: bool = True,
     ts_codes: Sequence[str] | None = None,
     basis_start: date | None = None,
     basis_end: date | None = None,
@@ -886,8 +965,8 @@ def export_stock_daily_csv(
     end: date,
     csv_root: Path,
     exchanges: Sequence[str] | None = None,
-    exclude_st: bool = False,
-    exclude_delisted_or_paused: bool = False,
+    exclude_st: bool = True,
+    exclude_delisted_or_paused: bool = True,
     ts_codes: Sequence[str] | None = None,
     basis_start: date | None = None,
     basis_end: date | None = None,
@@ -983,8 +1062,10 @@ def write_bin_meta(
         "start": start.isoformat() if start else None,
         "end": end.isoformat(),
         "exchanges": _normalize_exchanges(exchanges),
-        "exclude_st": exclude_st,
-        "exclude_delisted_or_paused": exclude_delisted_or_paused,
+        "exclude_st": bool(exclude_st),
+        "exclude_delisted_or_paused": True,
+        "exclude_bj": True,
+        "min_listed_days": IPO_FILTER_DAYS,
         "freq_types": list(freq_types),
         "last_end_dates": last_end_dates,
         "export_mode": "authoritative_aistock_dump_bin",
@@ -1118,8 +1199,8 @@ def validate_minute_bin_against_db(
     start: date,
     end: date,
     exchanges: Sequence[str] | None = None,
-    exclude_st: bool = False,
-    exclude_delisted_or_paused: bool = False,
+    exclude_st: bool = True,
+    exclude_delisted_or_paused: bool = True,
     ts_codes: Sequence[str] | None = None,
     fields: Sequence[str] | None = None,
     basis_start: date | None = None,
@@ -1330,8 +1411,8 @@ def validate_daily_bin_against_db(
     start: date,
     end: date,
     exchanges: Sequence[str] | None = None,
-    exclude_st: bool = False,
-    exclude_delisted_or_paused: bool = False,
+    exclude_st: bool = True,
+    exclude_delisted_or_paused: bool = True,
     ts_codes: Sequence[str] | None = None,
     fields: Sequence[str] | None = None,
     basis_start: date | None = None,

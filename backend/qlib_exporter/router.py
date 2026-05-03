@@ -30,6 +30,7 @@ from .config import (
     DAILY_RAW_TABLE,
     FIELD_MAPPING_DB_DAILY,
     FIELD_MAPPING_DB_MINUTE,
+    IPO_FILTER_DAYS,
     MINUTE_QFQ_TABLE,
     MONEYFLOW_TS_TABLE,
     QLIB_MARKET,
@@ -53,6 +54,7 @@ from .authoritative_bin_exporter import (
     MINUTE_FREQ_QLIB,
     export_stock_daily_csv,
     export_stock_minute_csv_chunked,
+    normalize_stock_export_exchanges,
 )
 
 
@@ -69,14 +71,14 @@ class DailySnapshotRequest(BaseModel):
     )
     exchanges: Optional[List[str]] = Field(
         None,
-        description="可选，按交易所过滤：支持 'sh', 'sz', 'bj'；为空表示不过滤（全市场）",
+        description="可选，按交易所过滤：支持 'sh', 'sz'；北交所固定排除；为空默认 SH/SZ",
     )
     exclude_st: bool = Field(
-        False,
+        True,
         description="是否排除所有在 stock_st 中出现过的股票（曾经 / 当前 ST）",
     )
     exclude_delisted_or_paused: bool = Field(
-        False,
+        True,
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
 
@@ -123,14 +125,14 @@ class MoneyflowSnapshotRequest(BaseModel):
     end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
     exchanges: Optional[List[str]] = Field(
         None,
-        description="可选，按交易所过滤：支持 'sh', 'sz', 'bj'；为空表示不过滤（全市场）",
+        description="可选，按交易所过滤：支持 'sh', 'sz'；北交所固定排除；为空默认 SH/SZ",
     )
     exclude_st: bool = Field(
-        False,
+        True,
         description="是否排除所有在 stock_st 中出现过的股票（曾经 / 当前 ST）",
     )
     exclude_delisted_or_paused: bool = Field(
-        False,
+        True,
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
 
@@ -253,14 +255,14 @@ class DailyBasicSnapshotRequest(BaseModel):
     end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
     exchanges: Optional[List[str]] = Field(
         None,
-        description="可选，按交易所过滤：支持 'sh', 'sz', 'bj'；为空表示不过滤（全市场）",
+        description="可选，按交易所过滤：支持 'sh', 'sz'；北交所固定排除；为空默认 SH/SZ",
     )
     exclude_st: bool = Field(
-        False,
+        True,
         description="是否排除所有在 stock_st 中出现过的股票（曾经 / 当前 ST）",
     )
     exclude_delisted_or_paused: bool = Field(
-        False,
+        True,
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
 
@@ -374,14 +376,14 @@ class BakBasicSnapshotRequest(BaseModel):
     end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
     exchanges: Optional[List[str]] = Field(
         None,
-        description="可选，按交易所过滤：支持 'sh', 'sz', 'bj'；为空表示不过滤（全市场）",
+        description="可选，按交易所过滤：支持 'sh', 'sz'；北交所固定排除；为空默认 SH/SZ",
     )
     exclude_st: bool = Field(
-        False,
+        True,
         description="是否排除所有在 stock_st 中出现过的股票（曾经 / 当前 ST）",
     )
     exclude_delisted_or_paused: bool = Field(
-        False,
+        True,
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
 
@@ -466,8 +468,8 @@ class MarginDetailSnapshotRequest(BaseModel):
     start: date = Field(..., description="开始日期，YYYY-MM-DD")
     end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
     exchanges: Optional[List[str]] = Field(None, description="可选，按交易所过滤")
-    exclude_st: bool = Field(False, description="是否排除 ST 股票")
-    exclude_delisted_or_paused: bool = Field(False, description="是否排除退市或暂停上市股票")
+    exclude_st: bool = Field(True, description="是否排除 ST 股票")
+    exclude_delisted_or_paused: bool = Field(True, description="是否排除退市或暂停上市股票")
 
     @field_validator("snapshot_id")
     @classmethod
@@ -536,14 +538,14 @@ class CyqPerfSnapshotRequest(BaseModel):
     end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
     exchanges: Optional[List[str]] = Field(
         None,
-        description="可选，按交易所过滤：支持 'sh', 'sz', 'bj'；为空表示不过滤（全市场）",
+        description="可选，按交易所过滤：支持 'sh', 'sz'；北交所固定排除；为空默认 SH/SZ",
     )
     exclude_st: bool = Field(
-        False,
+        True,
         description="是否排除所有在 stock_st 中出现过的股票（曾经 / 当前 ST）",
     )
     exclude_delisted_or_paused: bool = Field(
-        False,
+        True,
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
 
@@ -664,18 +666,18 @@ class BinExportRequest(BaseModel):
     )
     exchanges: Optional[List[str]] = Field(
         None,
-        description="可选，交易所过滤：sh, sz, bj；为空表示全市场",
+        description="可选，交易所过滤：sh, sz；为空表示全市场",
     )
     run_health_check: bool = Field(
         True,
         description="是否在 dump_bin 后运行 check_data_health.py",
     )
     exclude_st: bool = Field(
-        False,
+        True,
         description="是否排除所有在 stock_st 中出现过的股票（曾经 / 当前 ST）",
     )
     exclude_delisted_or_paused: bool = Field(
-        False,
+        True,
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
 
@@ -731,13 +733,17 @@ def _export_daily_to_csv_for_dump_bin(
     csv_root = os.getenv("QLIB_CSV_ROOT_WIN")
     if not csv_root:
         raise HTTPException(status_code=500, detail="missing env QLIB_CSV_ROOT_WIN")
+    try:
+        stock_exchanges = normalize_stock_export_exchanges(exchanges)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     summary = export_stock_daily_csv(
         snapshot_id=snapshot_id,
         start=start,
         end=end,
         csv_root=Path(csv_root),
-        exchanges=list(exchanges) if exchanges else None,
+        exchanges=stock_exchanges,
         exclude_st=exclude_st,
         exclude_delisted_or_paused=exclude_delisted_or_paused,
         basis_start=basis_start,
@@ -765,6 +771,10 @@ def _export_minute_to_csv_for_dump_bin(
     csv_root = os.getenv("QLIB_CSV_ROOT_WIN")
     if not csv_root:
         raise HTTPException(status_code=500, detail="missing env QLIB_CSV_ROOT_WIN")
+    try:
+        stock_exchanges = normalize_stock_export_exchanges(exchanges)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     dump_freq = MINUTE_FREQ_QLIB if freq in {"1m", "1min"} else freq
     if dump_freq != MINUTE_FREQ_QLIB:
@@ -775,7 +785,7 @@ def _export_minute_to_csv_for_dump_bin(
         start=start,
         end=end,
         csv_root=Path(csv_root),
-        exchanges=list(exchanges) if exchanges else None,
+        exchanges=stock_exchanges,
         exclude_st=exclude_st,
         exclude_delisted_or_paused=exclude_delisted_or_paused,
         basis_start=basis_start,
@@ -868,13 +878,18 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
     - 1m：使用分钟线宽表 CSV（当前仅实现 1m，5m/15m 预留）
     """
 
+    try:
+        stock_exchanges = normalize_stock_export_exchanges(body.exchanges)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     # 1. 导出 CSV（根据 freq 分支）
     if body.freq == "day":
         csv_dir = _export_daily_to_csv_for_dump_bin(
             snapshot_id=body.snapshot_id,
             start=body.start,
             end=body.end,
-            exchanges=body.exchanges,
+            exchanges=stock_exchanges,
             exclude_st=body.exclude_st,
             exclude_delisted_or_paused=body.exclude_delisted_or_paused,
         )
@@ -884,7 +899,7 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
             snapshot_id=body.snapshot_id,
             start=body.start,
             end=body.end,
-            exchanges=body.exchanges,
+            exchanges=stock_exchanges,
             exclude_st=body.exclude_st,
             exclude_delisted_or_paused=body.exclude_delisted_or_paused,
             freq="1min",
@@ -967,9 +982,11 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
         "end": body.end.isoformat(),
         "basis_start": body.start.isoformat(),
         "basis_end": body.end.isoformat(),
-        "exchanges": list(body.exchanges) if body.exchanges else None,
+        "exchanges": stock_exchanges,
         "exclude_st": body.exclude_st,
-        "exclude_delisted_or_paused": body.exclude_delisted_or_paused,
+        "exclude_delisted_or_paused": True,
+        "exclude_bj": True,
+        "min_listed_days": IPO_FILTER_DAYS,
         "run_health_check": body.run_health_check,
         "freq_types": [
             "daily" if dump_freq == "day" else dump_freq,
@@ -1524,14 +1541,14 @@ class MinuteSnapshotRequest(BaseModel):
     )
     exchanges: Optional[List[str]] = Field(
         None,
-        description="可选，按交易所过滤：支持 'sh', 'sz', 'bj'；为空表示不过滤（全市场）",
+        description="可选，按交易所过滤：支持 'sh', 'sz'；北交所固定排除；为空默认 SH/SZ",
     )
     exclude_st: bool = Field(
-        False,
+        True,
         description="是否排除所有在 stock_st 中出现过的股票（曾经 / 当前 ST）",
     )
     exclude_delisted_or_paused: bool = Field(
-        False,
+        True,
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
     freq: str = Field("1m", description="分钟线频率，当前固定为 1m")
@@ -1786,14 +1803,14 @@ class IncrementalExportRequest(BaseModel):
     end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
     exchanges: Optional[List[str]] = Field(
         None,
-        description="可选，交易所过滤（仅分钟线有效）：sh, sz, bj",
+        description="可选，交易所过滤（仅分钟线有效）：sh, sz",
     )
     exclude_st: bool = Field(
-        False,
+        True,
         description="是否排除所有在 stock_st 中出现过的股票（仅分钟线有效）",
     )
     exclude_delisted_or_paused: bool = Field(
-        False,
+        True,
         description="是否排除退市或当前暂停上市股票（仅分钟线有效；stock_basic.list_status in ('D','P')）",
     )
 
@@ -1858,8 +1875,8 @@ class SectorDataSnapshotRequest(BaseModel):
     start: date = Field(..., description="开始日期，YYYY-MM-DD")
     end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
     exchanges: Optional[List[str]] = Field(None, description="可选，交易所过滤")
-    exclude_st: bool = Field(False)
-    exclude_delisted_or_paused: bool = Field(False)
+    exclude_st: bool = Field(True)
+    exclude_delisted_or_paused: bool = Field(True)
 
     @field_validator("snapshot_id")
     @classmethod
@@ -2099,8 +2116,8 @@ class UnifiedBinExportRequest(BaseModel):
     start: date = Field(..., description="开始日期")
     end: date = Field(..., description="结束日期")
     exchanges: Optional[List[str]] = Field(None, description="交易所过滤")
-    exclude_st: bool = Field(False)
-    exclude_delisted_or_paused: bool = Field(False)
+    exclude_st: bool = Field(True)
+    exclude_delisted_or_paused: bool = Field(True)
     run_health_check: bool = Field(True)
     index_codes: Optional[List[str]] = Field(None, description="指数代码列表，如 ['000300.SH']")
     index_data_source: Literal["tushare", "tdx"] = Field("tushare")
@@ -2122,10 +2139,15 @@ class UnifiedBinExportResponse(BaseModel):
 @router.post("/api/v1/qlib/bin/unified_export", response_model=UnifiedBinExportResponse)
 async def unified_bin_export(body: UnifiedBinExportRequest) -> UnifiedBinExportResponse:
     """一键导出股票日线 bin + 指数 bin。"""
+    try:
+        stock_exchanges = normalize_stock_export_exchanges(body.exchanges)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     # 1. 导出股票日线
     csv_dir = _export_daily_to_csv_for_dump_bin(
         snapshot_id=body.snapshot_id, start=body.start, end=body.end,
-        exchanges=body.exchanges,
+        exchanges=stock_exchanges,
         exclude_st=body.exclude_st,
         exclude_delisted_or_paused=body.exclude_delisted_or_paused,
     )
@@ -2210,9 +2232,11 @@ async def unified_bin_export(body: UnifiedBinExportRequest) -> UnifiedBinExportR
         meta = {
             "snapshot_id": body.snapshot_id,
             "start": body.start.isoformat(), "end": body.end.isoformat(),
-            "exchanges": list(body.exchanges) if body.exchanges else None,
+            "exchanges": stock_exchanges,
             "exclude_st": body.exclude_st,
-            "exclude_delisted_or_paused": body.exclude_delisted_or_paused,
+            "exclude_delisted_or_paused": True,
+            "exclude_bj": True,
+            "min_listed_days": IPO_FILTER_DAYS,
             "freq_types": ["daily"],
             "index_codes": body.index_codes or [],
         }
@@ -2255,8 +2279,8 @@ class UnifiedBinExportRequestV2(BaseModel):
     end: date = Field(..., description="截止日期")
     datasets: List[str] = Field(..., description='数据集列表，如 ["stock_daily", "000300.SH"]')
     exchanges: Optional[List[str]] = Field(None, description="交易所过滤")
-    exclude_st: bool = Field(False)
-    exclude_delisted_or_paused: bool = Field(False)
+    exclude_st: bool = Field(True)
+    exclude_delisted_or_paused: bool = Field(True)
     run_health_check: bool = Field(True)
     index_data_source: Literal["tushare", "tdx"] = Field("tushare")
 
@@ -2436,6 +2460,13 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
     steps: List[BinDatasetStepResult] = []
     last_end_dates: Dict[str, str] = meta.get("last_end_dates", {})
     has_stock_dataset = any(ds in body.datasets for ds in ("stock_daily", "stock_minute"))
+    stock_exchanges: Optional[List[str]] = None
+    if has_stock_dataset:
+        try:
+            stock_exchanges = normalize_stock_export_exchanges(body.exchanges)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
     stock_basis_start: Optional[date] = None
     stock_basis_end: Optional[date] = None
     if has_stock_dataset:
@@ -2463,7 +2494,7 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                 else:
                     csv_dir = _export_daily_to_csv_for_dump_bin(
                         snapshot_id=body.snapshot_id, start=inc_start, end=body.end,
-                        exchanges=body.exchanges,
+                        exchanges=stock_exchanges,
                         exclude_st=body.exclude_st,
                         exclude_delisted_or_paused=body.exclude_delisted_or_paused,
                         basis_start=stock_basis_start,
@@ -2488,7 +2519,7 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                 assert body.start is not None
                 csv_dir = _export_daily_to_csv_for_dump_bin(
                     snapshot_id=body.snapshot_id, start=body.start, end=body.end,
-                    exchanges=body.exchanges,
+                    exchanges=stock_exchanges,
                     exclude_st=body.exclude_st,
                     exclude_delisted_or_paused=body.exclude_delisted_or_paused,
                     basis_start=stock_basis_start,
@@ -2533,7 +2564,7 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                 else:
                     csv_dir = _export_minute_to_csv_for_dump_bin(
                         snapshot_id=body.snapshot_id, start=inc_start, end=body.end,
-                        exchanges=body.exchanges,
+                        exchanges=stock_exchanges,
                         exclude_st=body.exclude_st,
                         exclude_delisted_or_paused=body.exclude_delisted_or_paused,
                         freq=MINUTE_FREQ_QLIB,
@@ -2558,7 +2589,7 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                 assert body.start is not None
                 csv_dir = _export_minute_to_csv_for_dump_bin(
                     snapshot_id=body.snapshot_id, start=body.start, end=body.end,
-                    exchanges=body.exchanges,
+                    exchanges=stock_exchanges,
                     exclude_st=body.exclude_st,
                     exclude_delisted_or_paused=body.exclude_delisted_or_paused,
                     freq=MINUTE_FREQ_QLIB,
@@ -2697,8 +2728,11 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
     meta_update = {
         "snapshot_id": body.snapshot_id,
         "end": body.end.isoformat(),
-        "exchanges": list(body.exchanges) if body.exchanges else None,
+        "exchanges": stock_exchanges if has_stock_dataset else (list(body.exchanges) if body.exchanges else None),
         "exclude_st": body.exclude_st,
+        "exclude_delisted_or_paused": True,
+        "exclude_bj": bool(has_stock_dataset),
+        "min_listed_days": IPO_FILTER_DAYS if has_stock_dataset else None,
         "freq_types": sorted(freq_types),
         "index_codes": index_datasets,
         "last_end_dates": last_end_dates,
@@ -3029,22 +3063,21 @@ async def check_database_data(body: DataCheckRequest) -> DataCheckResponse:
         from datetime import date as date_type
         import pandas as pd
         
-        # 获取股票列表
+        # Build the checked stock universe with the same SH/SZ-only export rule.
+        normalized_exchanges = set(normalize_stock_export_exchanges(body.exchanges))
         if body.ts_codes:
             codes = body.ts_codes
+            if any(str(code).strip().upper().endswith(".BJ") or str(code).strip().upper().startswith("BJ") for code in codes):
+                raise HTTPException(status_code=400, detail="BJ/BSE stocks are excluded from AIstock stock data exports; use sh/sz only")
         else:
             codes = _db_reader.get_all_ts_codes()
-            # 按交易所过滤
-            if body.exchanges:
-                normalized = {e.strip().lower() for e in body.exchanges}
-                def match_exchange(code: str) -> bool:
-                    uc = code.upper()
-                    if uc.endswith(".SH"): return "sh" in normalized
-                    if uc.endswith(".SZ"): return "sz" in normalized
-                    if uc.endswith(".BJ"): return "bj" in normalized
-                    return True
-                codes = [c for c in codes if match_exchange(c)]
-        
+            def match_exchange(code: str) -> bool:
+                uc = code.upper()
+                if uc.endswith(".SH"): return "sh" in normalized_exchanges
+                if uc.endswith(".SZ"): return "sz" in normalized_exchanges
+                if uc.endswith(".BJ"): return False
+                return False
+            codes = [c for c in codes if match_exchange(c)]
         issues = []
         
         # 加载少量数据进行检查

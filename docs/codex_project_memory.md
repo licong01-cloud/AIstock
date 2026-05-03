@@ -671,3 +671,10 @@ Important directories:
 - Locked the execution price basis: `market.stk_limit.pre_close`, `up_limit`, and `down_limit` are raw/unadjusted RMB prices; V25/Paper v2 limit checks, P0 checks, and open-gap/gap-ratio calculations must also use raw prices.
 - Qlib stock `open/high/low/close` remain adjusted for Qlib compatibility, so any Qlib execution adapter must compute `raw_price = adjusted_price / $factor` before comparing with raw `prev_close/up_limit/down_limit`; missing or invalid `$factor` on an otherwise valid bar is fail-fast, never `factor=1` fallback.
 - Real-data verification for `/home/lc999/data/qlib_minute_authoritative_full_20260428` is documented in `docs/analysis/P0_price_basis_alignment_up_limit_prev_close_open_gap_20260503.md`: 5 stocks, 15 stock-dates, 3,600 DB minute rows, 43,200 checked field values, and zero DB-vs-Qlib errors when using the full snapshot `basis_end=2026-04-28`.
+
+## Qlib Stock Universe Export Rule Update - 2026-05-03
+
+- AIstock Qlib stock exports for QE must use SH/SZ only; BJ/BSE stocks are fixed excluded and should fail fast if requested.
+- Authoritative bin stock export defaults to exclude ST and delisted/paused listings, always requires `stock_basic.list_status = 'L'`, and enforces `IPO_FILTER_DAYS=365` via `list_date + 365 days <= end`.
+- The Qlib UI keeps BJ disabled and no longer sends `bj` in H5/bin/data-check payloads.
+- Existing `/home/lc999/data/qlib_minute_authoritative_full_20260428` is invalid under this rule: meta has `exchanges=["bj","sh","sz"]`, `exclude_st=false`, `exclude_delisted_or_paused=false`, and instruments contain 310 BJ entries. Regenerate it with the fixed exporter rather than editing metadata only.

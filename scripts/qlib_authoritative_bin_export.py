@@ -20,6 +20,7 @@ from backend.qlib_exporter.authoritative_bin_exporter import (  # noqa: E402
     export_stock_daily_csv,
     export_stock_minute_csv,
     export_stock_minute_csv_chunked,
+    normalize_stock_export_exchanges,
     validate_daily_bin_against_db,
     validate_minute_bin_against_db,
     write_bin_meta,
@@ -122,10 +123,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--csv-root", default=str(PROJECT_ROOT / "qlib_csv"))
     parser.add_argument("--bin-root", default=str(PROJECT_ROOT / "qlib_bin"))
     parser.add_argument("--reports-dir", default=str(PROJECT_ROOT / "reports" / "qlib_authoritative_export"))
-    parser.add_argument("--exchanges", default="sh,sz", help="comma-separated: sh,sz,bj")
+    parser.add_argument("--exchanges", default="sh,sz", help="comma-separated: sh,sz; bj/BSE is rejected for stock exports")
     parser.add_argument("--codes", default=None, help="optional comma-separated explicit stock codes")
-    parser.add_argument("--exclude-st", action="store_true")
-    parser.add_argument("--exclude-delisted-or-paused", action="store_true")
+    parser.add_argument("--exclude-st", action=argparse.BooleanOptionalAction, default=True, help="Exclude all ST stocks; default: true")
+    parser.add_argument("--exclude-delisted-or-paused", action=argparse.BooleanOptionalAction, default=True, help="Exclude delisted or paused listings; default: true")
     parser.add_argument("--strict-limit", action="store_true", default=True)
     parser.add_argument("--no-strict-limit", action="store_false", dest="strict_limit")
     parser.add_argument("--validate-values", action="store_true", default=True)
@@ -157,7 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     reports_dir = Path(args.reports_dir)
     reports_dir.mkdir(parents=True, exist_ok=True)
     bin_dir = bin_root / args.snapshot_id
-    exchanges = parse_csv_list(args.exchanges)
+    exchanges = normalize_stock_export_exchanges(parse_csv_list(args.exchanges))
     codes = parse_csv_list(args.codes)
 
     result: dict = {

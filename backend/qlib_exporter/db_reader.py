@@ -65,6 +65,21 @@ class DBReader:
             return f"{up[2:]}.{up[:2]}"
         return up
 
+    def _normalize_stock_export_exchanges(self, exchanges: Optional[List[str]]) -> set[str]:
+        """AIstock stock data exports are SH/SZ only; BJ/BSE must fail fast."""
+
+        if not exchanges:
+            return {"sh", "sz"}
+        normalized = {e.strip().lower() for e in exchanges if e and e.strip()}
+        if not normalized:
+            return {"sh", "sz"}
+        if "bj" in normalized:
+            raise ValueError("BJ/BSE stocks are excluded from AIstock stock data exports; use sh/sz only")
+        unsupported = normalized - {"sh", "sz"}
+        if unsupported:
+            raise ValueError(f"unsupported exchange(s) for stock data export: {', '.join(sorted(unsupported))}")
+        return normalized
+
     def load_daily_basic_panel(
         self,
         *,
@@ -90,14 +105,12 @@ class DBReader:
         # 构建交易所过滤条件
         exchange_conds = []
         if exchanges:
-            normalized = {e.strip().lower() for e in exchanges if e and e.strip()}
+            normalized = self._normalize_stock_export_exchanges(exchanges)
             if normalized:
                 if "sh" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
                 if "sz" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
-                if "bj" in normalized:
-                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
         else:
             # 默认只包含SH/SZ
             exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
@@ -201,14 +214,12 @@ class DBReader:
         # 构建交易所过滤条件
         exchange_conds = []
         if exchanges:
-            normalized = {e.strip().lower() for e in exchanges if e.strip()}
+            normalized = self._normalize_stock_export_exchanges(exchanges)
             if normalized:
                 if "sh" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
                 if "sz" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
-                if "bj" in normalized:
-                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
         else:
             # 默认只包含SH/SZ
             exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
@@ -258,14 +269,12 @@ class DBReader:
         # 构建交易所过滤条件
         exchange_conds = []
         if exchanges:
-            normalized = {e.strip().lower() for e in exchanges if e.strip()}
+            normalized = self._normalize_stock_export_exchanges(exchanges)
             if normalized:
                 if "sh" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
                 if "sz" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
-                if "bj" in normalized:
-                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
         else:
             # 默认只包含SH/SZ
             exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
@@ -316,14 +325,12 @@ class DBReader:
         # 构建交易所过滤条件
         exchange_conds = []
         if exchanges:
-            normalized = {e.strip().lower() for e in exchanges if e.strip()}
+            normalized = self._normalize_stock_export_exchanges(exchanges)
             if normalized:
                 if "sh" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
                 if "sz" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
-                if "bj" in normalized:
-                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
         else:
             # 默认只包含SH/SZ
             exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
@@ -384,18 +391,14 @@ class DBReader:
         )
 
         # 按交易所过滤（基于 ts_code 后缀 .SH / .SZ / .BJ；兼容 SHxxxxxx 形式）
-        if exchanges:
-            normalized = {e.strip().lower() for e in exchanges if e and e.strip()}
-            exchange_conds: list[str] = []
-            if normalized:
-                if "sh" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.SH' OR ts_code LIKE 'SH%')")
-                if "sz" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.SZ' OR ts_code LIKE 'SZ%')")
-                if "bj" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.BJ' OR ts_code LIKE 'BJ%')")
-            if exchange_conds:
-                conditions.append("(" + " OR ".join(exchange_conds) + ")")
+        normalized = self._normalize_stock_export_exchanges(exchanges)
+        exchange_conds: list[str] = []
+        if "sh" in normalized:
+            exchange_conds.append("(ts_code LIKE '%.SH' OR ts_code LIKE 'SH%')")
+        if "sz" in normalized:
+            exchange_conds.append("(ts_code LIKE '%.SZ' OR ts_code LIKE 'SZ%')")
+        if exchange_conds:
+            conditions.append("(" + " OR ".join(exchange_conds) + ")")
 
         if exclude_st:
             conditions.append(f"ts_code NOT IN (SELECT DISTINCT ts_code FROM market.stock_st WHERE ann_date < '{end.isoformat()}')")
@@ -1173,7 +1176,7 @@ class DBReader:
         """加载全部股票的 Qlib 格式分钟线数据。
 
         过滤规则与日线的 ``load_qlib_daily_data_all`` 保持一致，包括：
-        - 按交易所筛选（sh/sz/bj）
+        - 按交易所筛选（sh/sz）
         - 可选排除 ST 股票
         - 可选排除退市或当前暂停上市股票
         """
@@ -1237,14 +1240,12 @@ class DBReader:
         # 构建交易所过滤条件
         exchange_conds = []
         if exchanges:
-            normalized = {e.strip().lower() for e in exchanges if e and e.strip()}
+            normalized = self._normalize_stock_export_exchanges(exchanges)
             if normalized:
                 if "sh" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
                 if "sz" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
-                if "bj" in normalized:
-                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
         else:
             # 默认只包含SH/SZ
             exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
@@ -1401,14 +1402,12 @@ class DBReader:
         """
         exchange_conds = []
         if exchanges:
-            normalized = {e.strip().lower() for e in exchanges if e and e.strip()}
+            normalized = self._normalize_stock_export_exchanges(exchanges)
             if normalized:
                 if "sh" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
                 if "sz" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
-                if "bj" in normalized:
-                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
         else:
             exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
 
@@ -1492,18 +1491,14 @@ class DBReader:
             f"trade_date <= '{end.isoformat()}'",
         ]
 
-        if exchanges:
-            normalized = {e.strip().lower() for e in exchanges if e.strip()}
-            exchange_conds: list[str] = []
-            if normalized:
-                if "sh" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.SH' OR ts_code LIKE 'SH%')")
-                if "sz" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.SZ' OR ts_code LIKE 'SZ%')")
-                if "bj" in normalized:
-                    exchange_conds.append("(ts_code LIKE '%.BJ' OR ts_code LIKE 'BJ%')")
-            if exchange_conds:
-                conditions.append("(" + " OR ".join(exchange_conds) + ")")
+        normalized = self._normalize_stock_export_exchanges(exchanges)
+        exchange_conds: list[str] = []
+        if "sh" in normalized:
+            exchange_conds.append("(ts_code LIKE '%.SH' OR ts_code LIKE 'SH%')")
+        if "sz" in normalized:
+            exchange_conds.append("(ts_code LIKE '%.SZ' OR ts_code LIKE 'SZ%')")
+        if exchange_conds:
+            conditions.append("(" + " OR ".join(exchange_conds) + ")")
 
         if exclude_st:
             conditions.append(
@@ -1549,19 +1544,13 @@ class DBReader:
         conditions: list[str] = []
 
         # 交易所过滤
-        if exchanges:
-            normalized = {e.strip().lower() for e in exchanges if e.strip()}
-        else:
-            # 默认只导出 SH / SZ，不包含 BJ
-            normalized = {"sh", "sz"}
+        normalized = self._normalize_stock_export_exchanges(exchanges)
 
         exchange_conds: list[str] = []
         if "sh" in normalized:
             exchange_conds.append("ts_code LIKE '%.SH'")
         if "sz" in normalized:
             exchange_conds.append("ts_code LIKE '%.SZ'")
-        if "bj" in normalized:
-            exchange_conds.append("ts_code LIKE '%.BJ'")
         if exchange_conds:
             conditions.append("(" + " OR ".join(exchange_conds) + ")")
 
@@ -1862,14 +1851,12 @@ class DBReader:
         # 构建交易所过滤条件
         exchange_conds = []
         if exchanges:
-            normalized = {e.strip().lower() for e in exchanges if e and e.strip()}
+            normalized = self._normalize_stock_export_exchanges(exchanges)
             if normalized:
                 if "sh" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
                 if "sz" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
-                if "bj" in normalized:
-                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
         else:
             # 默认只包含SH/SZ
             exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
@@ -2014,14 +2001,12 @@ class DBReader:
         # 构建交易所过滤条件
         exchange_conds = []
         if exchanges:
-            normalized = {e.strip().lower() for e in exchanges if e and e.strip()}
+            normalized = self._normalize_stock_export_exchanges(exchanges)
             if normalized:
                 if "sh" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
                 if "sz" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
-                if "bj" in normalized:
-                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
         else:
             # 默认只包含SH/SZ
             exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
@@ -2114,14 +2099,12 @@ class DBReader:
         """
         exchange_conds = []
         if exchanges:
-            normalized = {e.strip().lower() for e in exchanges if e and e.strip()}
+            normalized = self._normalize_stock_export_exchanges(exchanges)
             if normalized:
                 if "sh" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE 'SH%')")
                 if "sz" in normalized:
                     exchange_conds.append("(s.ts_code LIKE '%.SZ' OR s.ts_code LIKE 'SZ%')")
-                if "bj" in normalized:
-                    exchange_conds.append("(s.ts_code LIKE '%.BJ' OR s.ts_code LIKE 'BJ%')")
         else:
             exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
 
