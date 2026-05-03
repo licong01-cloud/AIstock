@@ -657,3 +657,11 @@ Important directories:
 - Repository quality summaries, data-quality smoke, API responses, and `/qe-archive` UI quality panel now expose `symbol_summary_count`, `trade_count`, and `execution_event_count`.
 - Live dev validation on ports `8011`/`3011` re-ran API confirmed backfill for task `qe_20260502_131502_9b54`; 4 loops passed quality gates and sample run `qear_run_61fe6f6dccabca49b1228033` stored 792 symbol summaries, 4,322 trades, and 3 execution events.
 - Production backend `8001` was not restarted; realtime ingestion remains feature-flagged/disabled by default unless explicitly enabled.
+
+## Qlib Authoritative Minute Bin Export Update - 2026-05-03
+
+- Added authoritative DB -> per-stock CSV -> `dump_bin.py` tooling for Qlib stock daily and 1min minute bins with QE/V25 fields: OHLCV, volume, amount, factor, prev_close, up/down limit prices, and limit flags.
+- Full authoritative minute snapshot `qlib_minute_authoritative_full_20260428` was generated under `/home/lc999/data/qlib_minute_authoritative_full_20260428`: 5,515 instruments, 700,457,459 CSV rows, 66,180 feature bin files, 134,807 1min calendar rows, and 0 CSV-vs-bin coverage errors.
+- Exporter now fails fast on missing factor/limit fields, records explicit prev_close repair counts, filters pre-listing minute rows by `stock_basic.list_date`, uses `1min` as the Qlib frequency, and prevents incremental stock exports from extending qfq `basis_end` because that would diverge from a full rebuild.
+- `688766.SH` exposed a valid edge: zero-volume minute dates had `stk_limit.up_limit/down_limit` but null `pre_close`; missing `prev_close` is now filled only from the previous valid daily close and counted in `previous_daily_prev_close_filled_rows`.
+- UI `frontend/src/app/qlib/page.tsx` supports selecting `stock_minute`; validation evidence is documented in `docs/analysis/P0_qlib_authoritative_bin_export_tool_and_validation_20260503.md` and `tests/aistock_validation/history/qlib_data/20260503_052234_l4_qlib-authoritative-minute-bin-export-validation-20260503.md`.

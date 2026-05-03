@@ -49,6 +49,11 @@ from .exporter import (
 from .field_map_service import export_field_map_for_snapshot
 from .data_quality import DataReporter, DataValidator
 from .db_reader import DBReader
+from .authoritative_bin_exporter import (
+    MINUTE_FREQ_QLIB,
+    export_stock_daily_csv,
+    export_stock_minute_csv_chunked,
+)
 
 
 router = APIRouter()
@@ -653,7 +658,7 @@ class BinExportRequest(BaseModel):
     snapshot_id: str = Field(..., description="bin Snapshot ID，作为 CSV/bin 目录名")
     start: date = Field(..., description="开始日期，YYYY-MM-DD")
     end: date = Field(..., description="结束日期（含），YYYY-MM-DD")
-    freq: Literal["day", "1m", "5m", "15m"] = Field(
+    freq: Literal["day", "1m", "1min", "5m", "15m"] = Field(
         "day",
         description="导出频率：日线 day 或分钟线 1m/5m/15m（当前仅实现 day 和 1m）",
     )
@@ -718,111 +723,29 @@ def _export_daily_to_csv_for_dump_bin(
     *,
     exclude_st: bool,
     exclude_delisted_or_paused: bool,
+    basis_start: Optional[date] = None,
+    basis_end: Optional[date] = None,
 ) -> Path:
-    """从 DB 导出日线宽表为 CSV，供 dump_bin.py 使用。
-
-    CSV 结构：date,symbol,open,high,low,close,volume,amount
-    """
+    """Export authoritative per-stock daily CSV files for Qlib dump_bin.py."""
 
     csv_root = os.getenv("QLIB_CSV_ROOT_WIN")
     if not csv_root:
-        raise HTTPException(status_code=500, detail="缺少环境变量 QLIB_CSV_ROOT_WIN")
+        raise HTTPException(status_code=500, detail="missing env QLIB_CSV_ROOT_WIN")
 
-    csv_root_path = Path(csv_root)
-    csv_dir = csv_root_path / snapshot_id
-    csv_dir.mkdir(parents=True, exist_ok=True)
-
-    df = _db_reader.load_qlib_daily_data_all(
+    summary = export_stock_daily_csv(
+        snapshot_id=snapshot_id,
         start=start,
         end=end,
+        csv_root=Path(csv_root),
         exchanges=list(exchanges) if exchanges else None,
-        use_tushare_adj=True,
         exclude_st=exclude_st,
         exclude_delisted_or_paused=exclude_delisted_or_paused,
+        basis_start=basis_start,
+        basis_end=basis_end,
+        strict_limit=True,
+        overwrite_csv=True,
     )
-
-    if df.empty:
-        raise HTTPException(status_code=400, detail="指定区间内无可导出的日线数据（可能被过滤条件排除）")
-
-    # 将 Qlib 宽表转换成 dump_bin.py 期望的 CSV 结构
-    df_reset = df.reset_index()
-    # datetime -> date (YYYY-MM-DD), instrument -> symbol
-    df_reset["date"] = df_reset["datetime"].dt.date.astype(str)
-    # 直接使用 instrument 作为 symbol，instrument 已统一为 ts_code（例如 000001.SZ / 600000.SH）
-    df_reset["symbol"] = df_reset["instrument"].astype(str)
-
-    # 映射列名
-    rename_cols = {}
-    if "$open" in df_reset.columns:
-        rename_cols["$open"] = "open"
-    elif "open" in df_reset.columns:
-        rename_cols["open"] = "open"
-
-    if "$high" in df_reset.columns:
-        rename_cols["$high"] = "high"
-    elif "high" in df_reset.columns:
-        rename_cols["high"] = "high"
-
-    if "$low" in df_reset.columns:
-        rename_cols["$low"] = "low"
-    elif "low" in df_reset.columns:
-        rename_cols["low"] = "low"
-
-    if "$close" in df_reset.columns:
-        rename_cols["$close"] = "close"
-    elif "close" in df_reset.columns:
-        rename_cols["close"] = "close"
-
-    if "$volume" in df_reset.columns:
-        rename_cols["$volume"] = "volume"
-    elif "volume" in df_reset.columns:
-        rename_cols["volume"] = "volume"
-
-    if "$amount" in df_reset.columns:
-        rename_cols["$amount"] = "amount"
-    elif "amount" in df_reset.columns:
-        rename_cols["amount"] = "amount"
-
-    if "$factor" in df_reset.columns:
-        rename_cols["$factor"] = "factor"
-    elif "factor" in df_reset.columns:
-        rename_cols["factor"] = "factor"
-
-    df_reset = df_reset.rename(columns=rename_cols)
-
-    csv_cols = [
-        "date",
-        "symbol",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "amount",
-        "factor",
-    ]
-
-    # 缺列兜底：一律用 NaN（禁止用 0）
-    for col in csv_cols:
-        if col not in df_reset.columns:
-            df_reset[col] = float("nan")
-
-    if df_reset["factor"].isna().all():
-        raise HTTPException(
-            status_code=400,
-            detail="bin 导出失败：factor 列为空或全为 NaN（请检查复权因子 adj_factor / 数据加载逻辑）",
-        )
-    df_csv = df_reset[csv_cols]
-
-    # 为兼容 dump_bin.py dump_all 的行为，这里按 symbol 拆分为多个文件：每只股票一个 CSV。
-    # DumpDataAll 会把每个文件名视为一个 instrument（忽略列内的 symbol 字段），
-    # 因此必须避免只生成 daily_all.csv，否则会得到单一标的 DAILY_ALL。
-    for symbol, g in df_csv.groupby("symbol"):
-        # 使用 ts_code 作为文件名，例如 000001.SZ.csv / 600000.SH.csv
-        csv_path = csv_dir / f"{symbol}.csv"
-        g.to_csv(csv_path, index=False)
-
-    return csv_dir
+    return Path(summary.csv_dir)
 
 
 def _export_minute_to_csv_for_dump_bin(
@@ -833,125 +756,36 @@ def _export_minute_to_csv_for_dump_bin(
     *,
     exclude_st: bool,
     exclude_delisted_or_paused: bool,
-    freq: str = "1m",
+    freq: str = "1min",
+    basis_start: Optional[date] = None,
+    basis_end: Optional[date] = None,
 ) -> Path:
-    """从 DB 导出分钟线宽表为 CSV，供 dump_bin.py 使用。
-
-    CSV 结构：date,symbol,open,high,low,close,volume,amount
-
-    注意：
-    - date 使用高频格式 "YYYY-MM-DD HH:MM:SS"（上海时间）
-    - symbol 使用 Qlib instrument，例如 SH600000
-    """
+    """Export authoritative per-stock 1min CSV files for Qlib dump_bin.py."""
 
     csv_root = os.getenv("QLIB_CSV_ROOT_WIN")
     if not csv_root:
-        raise HTTPException(status_code=500, detail="缺少环境变量 QLIB_CSV_ROOT_WIN")
+        raise HTTPException(status_code=500, detail="missing env QLIB_CSV_ROOT_WIN")
 
-    csv_root_path = Path(csv_root)
-    # 为不同频率预留独立子目录，避免与日线 CSV 混在一起
-    csv_dir = csv_root_path / snapshot_id / f"minute_{freq}"
-    csv_dir.mkdir(parents=True, exist_ok=True)
+    dump_freq = MINUTE_FREQ_QLIB if freq in {"1m", "1min"} else freq
+    if dump_freq != MINUTE_FREQ_QLIB:
+        raise HTTPException(status_code=400, detail=f"unsupported minute freq for authoritative export: {freq}")
 
-    df = _db_reader.load_qlib_minute_data_all(
+    summary = export_stock_minute_csv_chunked(
+        snapshot_id=snapshot_id,
         start=start,
         end=end,
+        csv_root=Path(csv_root),
         exchanges=list(exchanges) if exchanges else None,
-        use_tushare_adj=True,
         exclude_st=exclude_st,
         exclude_delisted_or_paused=exclude_delisted_or_paused,
-        freq=freq,
+        basis_start=basis_start,
+        basis_end=basis_end,
+        strict_limit=True,
+        code_batch_size=100,
+        chunk_months=3,
+        overwrite_csv=True,
     )
-
-    if df.empty:
-        raise HTTPException(status_code=400, detail="指定区间内无可导出的分钟线数据（可能被过滤条件排除）")
-
-    # 将 Qlib 宽表转换成 dump_bin.py 期望的 CSV 结构
-    df_reset = df.reset_index()
-    # datetime -> date (YYYY-MM-DD HH:MM:SS), instrument -> symbol
-    df_reset["date"] = df_reset["datetime"].dt.strftime("%Y-%m-%d %H:%M:%S")
-    # 直接使用 instrument 作为 symbol，instrument 已统一为 ts_code（例如 000001.SZ / 600000.SH）
-    df_reset["symbol"] = df_reset["instrument"].astype(str)
-
-    rename_cols: Dict[str, str] = {}
-    if "$open" in df_reset.columns:
-        rename_cols["$open"] = "open"
-    elif "open" in df_reset.columns:
-        rename_cols["open"] = "open"
-
-    if "$high" in df_reset.columns:
-        rename_cols["$high"] = "high"
-    elif "high" in df_reset.columns:
-        rename_cols["high"] = "high"
-
-    if "$low" in df_reset.columns:
-        rename_cols["$low"] = "low"
-    elif "low" in df_reset.columns:
-        rename_cols["low"] = "low"
-
-    if "$close" in df_reset.columns:
-        rename_cols["$close"] = "close"
-    elif "close" in df_reset.columns:
-        rename_cols["close"] = "close"
-
-    if "$volume" in df_reset.columns:
-        rename_cols["$volume"] = "volume"
-    elif "volume" in df_reset.columns:
-        rename_cols["volume"] = "volume"
-
-    if "$amount" in df_reset.columns:
-        rename_cols["$amount"] = "amount"
-    elif "amount" in df_reset.columns:
-        rename_cols["amount"] = "amount"
-
-    if "$factor" in df_reset.columns:
-        rename_cols["$factor"] = "factor"
-    elif "factor" in df_reset.columns:
-        rename_cols["factor"] = "factor"
-
-
-    if "$limit_up" in df_reset.columns:
-        rename_cols["$limit_up"] = "limit_up"
-    elif "limit_up" in df_reset.columns:
-        rename_cols["limit_up"] = "limit_up"
-
-    if "$limit_down" in df_reset.columns:
-        rename_cols["$limit_down"] = "limit_down"
-    elif "limit_down" in df_reset.columns:
-        rename_cols["limit_down"] = "limit_down"
-
-    df_reset = df_reset.rename(columns=rename_cols)
-
-    csv_cols = [
-        "date",
-        "symbol",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "amount",
-        "factor",
-        "limit_up",
-        "limit_down",
-    ]
-
-    # 缺列兜底：一律用 NaN（禁止用 0）
-    for col in csv_cols:
-        if col not in df_reset.columns:
-            df_reset[col] = float("nan")
-
-    if df_reset["factor"].isna().all():
-        raise HTTPException(
-            status_code=400,
-            detail="bin 导出失败：factor 列为空或全为 NaN（请检查复权因子 adj_factor / 数据加载逻辑）",
-        )
-    df_csv = df_reset[csv_cols]
-
-    csv_path = csv_dir / f"minute_{freq}_all.csv"
-    df_csv.to_csv(csv_path, index=False)
-
-    return csv_dir
+    return Path(summary.csv_dir)
 
 
 def _export_index_to_csv_for_dump_bin(
@@ -1011,12 +845,13 @@ def _export_index_to_csv_for_dump_bin(
         "amount",
     ]
 
-    # 缺列兜底：一律用 NaN（禁止用 0）
-    for col in csv_cols:
-        if col not in df_csv.columns:
-            df_csv[col] = float("nan")
-
+    missing_cols = [col for col in csv_cols if col not in df_csv.columns]
+    if missing_cols:
+        raise HTTPException(status_code=400, detail=f"index CSV missing required columns: {missing_cols}")
     df_csv = df_csv[csv_cols]
+    if df_csv.isna().any().any():
+        bad_cols = [col for col in csv_cols if df_csv[col].isna().any()]
+        raise HTTPException(status_code=400, detail=f"index CSV has null required columns: {bad_cols}")
 
     csv_path = csv_dir / f"{index_code}.csv"
     df_csv.to_csv(csv_path, index=False)
@@ -1044,7 +879,7 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
             exclude_delisted_or_paused=body.exclude_delisted_or_paused,
         )
         dump_freq = "day"
-    elif body.freq == "1m":
+    elif body.freq in {"1m", "1min"}:
         csv_dir = _export_minute_to_csv_for_dump_bin(
             snapshot_id=body.snapshot_id,
             start=body.start,
@@ -1052,9 +887,9 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
             exchanges=body.exchanges,
             exclude_st=body.exclude_st,
             exclude_delisted_or_paused=body.exclude_delisted_or_paused,
-            freq="1m",
+            freq="1min",
         )
-        dump_freq = "1m"
+        dump_freq = MINUTE_FREQ_QLIB
     else:
         # 预留 5m/15m，将来有 DB 数据后再实现
         raise HTTPException(status_code=400, detail=f"暂不支持的 freq: {body.freq}（目前仅支持 'day' 和 '1m'）")
@@ -1123,26 +958,28 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
         stdout_check = check_res.stdout
         stderr_check = check_res.stderr
 
-    # 5. 写出一次导出的 meta 信息，便于后续在 /api/v1/qlib/bin/exports 中展示
-    try:
-      meta = {
-          "snapshot_id": body.snapshot_id,
-          "start": body.start.isoformat(),
-          "end": body.end.isoformat(),
-          "exchanges": list(body.exchanges) if body.exchanges else None,
-          "exclude_st": body.exclude_st,
-          "exclude_delisted_or_paused": body.exclude_delisted_or_paused,
-          "run_health_check": body.run_health_check,
-          # 根据导出频率标记数据类型，方便前端展示（日K / 分钟K）
-          "freq_types": [
-              "daily" if dump_freq == "day" else dump_freq,
-          ],
-      }
-      meta_path = bin_dir / "meta_export.json"
-      meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-      # meta 写入失败不影响主流程
-      pass
+    # 5. 写出一次导出的 meta 信息，便于后续在 /api/v1/qlib/bin/exports 中展示。
+    # meta 写入失败必须暴露给调用方，避免后续增量导出基于缺失元数据运行。
+    dataset_key = "stock_daily" if dump_freq == "day" else f"stock_minute_{dump_freq}"
+    meta = {
+        "snapshot_id": body.snapshot_id,
+        "start": body.start.isoformat(),
+        "end": body.end.isoformat(),
+        "basis_start": body.start.isoformat(),
+        "basis_end": body.end.isoformat(),
+        "exchanges": list(body.exchanges) if body.exchanges else None,
+        "exclude_st": body.exclude_st,
+        "exclude_delisted_or_paused": body.exclude_delisted_or_paused,
+        "run_health_check": body.run_health_check,
+        "freq_types": [
+            "daily" if dump_freq == "day" else dump_freq,
+        ],
+        "last_end_dates": {
+            dataset_key: body.end.isoformat(),
+        },
+    }
+    meta_path = bin_dir / "meta_export.json"
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return BinExportResponse(
         snapshot_id=body.snapshot_id,
@@ -2474,6 +2311,46 @@ def _get_incremental_start(meta: dict, dataset_key: str) -> Optional[date]:
     return last_end + timedelta(days=1)
 
 
+def _resolve_stock_qfq_basis(
+    *,
+    meta: dict,
+    mode: str,
+    start: Optional[date],
+    end: date,
+) -> tuple[date, date]:
+    """Resolve the qfq denominator window for stock day/1min bin export.
+
+    dump_update cannot rewrite all historical factor-scaled OHLCV values. For
+    stock datasets, extending beyond the original basis_end could make an
+    incremental snapshot differ from a full authoritative rebuild, so this path
+    fails fast instead of silently producing mixed qfq bases.
+    """
+
+    if mode == "full":
+        if start is None:
+            raise HTTPException(status_code=400, detail="full stock bin export requires start")
+        return start, end
+
+    basis_start_raw = meta.get("basis_start") or meta.get("start")
+    basis_end_raw = meta.get("basis_end") or meta.get("end")
+    if not basis_start_raw or not basis_end_raw:
+        raise HTTPException(
+            status_code=400,
+            detail="incremental stock bin export requires meta_export.json basis_start/basis_end; run a full export first",
+        )
+    basis_start = date.fromisoformat(str(basis_start_raw))
+    basis_end = date.fromisoformat(str(basis_end_raw))
+    if end > basis_end:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "incremental stock bin export would extend qfq basis_end and can differ from a full rebuild; "
+                "run full export for stock_daily/stock_minute"
+            ),
+        )
+    return basis_start, basis_end
+
+
 def _update_index_instruments(bin_dir: Path, index_code: str, start_str: str, end_str: str) -> None:
     """将指数条目合并写入 instruments/index.txt（保留已有条目）。"""
     instruments_dir = bin_dir / "instruments"
@@ -2558,6 +2435,16 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
 
     steps: List[BinDatasetStepResult] = []
     last_end_dates: Dict[str, str] = meta.get("last_end_dates", {})
+    has_stock_dataset = any(ds in body.datasets for ds in ("stock_daily", "stock_minute"))
+    stock_basis_start: Optional[date] = None
+    stock_basis_end: Optional[date] = None
+    if has_stock_dataset:
+        stock_basis_start, stock_basis_end = _resolve_stock_qfq_basis(
+            meta=meta,
+            mode=body.mode,
+            start=body.start,
+            end=body.end,
+        )
 
     # ──────────────────────────────────────────────────────
     # 步骤 1：stock_daily
@@ -2579,6 +2466,8 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                         exchanges=body.exchanges,
                         exclude_st=body.exclude_st,
                         exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+                        basis_start=stock_basis_start,
+                        basis_end=stock_basis_end,
                     )
                     csv_dir_wsl = win_to_wsl_path(str(csv_dir))
                     dump_args = [
@@ -2602,6 +2491,8 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                     exchanges=body.exchanges,
                     exclude_st=body.exclude_st,
                     exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+                    basis_start=stock_basis_start,
+                    basis_end=stock_basis_end,
                 )
                 csv_dir_wsl = win_to_wsl_path(str(csv_dir))
                 dump_args = [
@@ -2627,7 +2518,75 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
     # ──────────────────────────────────────────────────────
     # 步骤 2：逐个指数
     # ──────────────────────────────────────────────────────
-    index_datasets = [ds for ds in body.datasets if ds != "stock_daily"]
+    if "stock_minute" in body.datasets:
+        try:
+            dataset_key = f"stock_minute_{MINUTE_FREQ_QLIB}"
+            if body.mode == "incremental":
+                inc_start = _get_incremental_start(meta, dataset_key)
+                if inc_start is None:
+                    raise HTTPException(status_code=400, detail=f"澧為噺妯″紡涓?meta 涓己灏?{dataset_key} 鐨?last_end_dates 璁板綍")
+                if inc_start > body.end:
+                    steps.append(BinDatasetStepResult(
+                        dataset="stock_minute", ok=True, rows=0,
+                        mode_used="dump_update",
+                    ))
+                else:
+                    csv_dir = _export_minute_to_csv_for_dump_bin(
+                        snapshot_id=body.snapshot_id, start=inc_start, end=body.end,
+                        exchanges=body.exchanges,
+                        exclude_st=body.exclude_st,
+                        exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+                        freq=MINUTE_FREQ_QLIB,
+                        basis_start=stock_basis_start,
+                        basis_end=stock_basis_end,
+                    )
+                    csv_dir_wsl = win_to_wsl_path(str(csv_dir))
+                    dump_args = [
+                        "dump_update", "--data_path", csv_dir_wsl, "--qlib_dir", bin_dir_wsl,
+                        "--freq", MINUTE_FREQ_QLIB, "--date_field_name", "date",
+                        "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
+                    ]
+                    dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
+                    steps.append(BinDatasetStepResult(
+                        dataset="stock_minute", ok=dump_res.ok,
+                        stdout=dump_res.stdout, stderr=dump_res.stderr,
+                        mode_used="dump_update",
+                    ))
+                    if dump_res.ok:
+                        last_end_dates[dataset_key] = body.end.isoformat()
+            else:
+                assert body.start is not None
+                csv_dir = _export_minute_to_csv_for_dump_bin(
+                    snapshot_id=body.snapshot_id, start=body.start, end=body.end,
+                    exchanges=body.exchanges,
+                    exclude_st=body.exclude_st,
+                    exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+                    freq=MINUTE_FREQ_QLIB,
+                    basis_start=stock_basis_start,
+                    basis_end=stock_basis_end,
+                )
+                csv_dir_wsl = win_to_wsl_path(str(csv_dir))
+                dump_args = [
+                    "dump_all", "--data_path", csv_dir_wsl, "--qlib_dir", bin_dir_wsl,
+                    "--freq", MINUTE_FREQ_QLIB, "--date_field_name", "date",
+                    "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
+                ]
+                dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
+                steps.append(BinDatasetStepResult(
+                    dataset="stock_minute", ok=dump_res.ok,
+                    stdout=dump_res.stdout, stderr=dump_res.stderr,
+                    mode_used="dump_all",
+                ))
+                if dump_res.ok:
+                    last_end_dates[dataset_key] = body.end.isoformat()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            steps.append(BinDatasetStepResult(
+                dataset="stock_minute", ok=False, error=str(exc),
+            ))
+
+    index_datasets = [ds for ds in body.datasets if ds not in {"stock_daily", "stock_minute"}]
     for idx_code in index_datasets:
         dataset_key = f"index_{idx_code}"
         try:
@@ -2708,24 +2667,50 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
     stdout_check: Optional[str] = None
     stderr_check: Optional[str] = None
     if body.run_health_check:
-        check_args = ["--qlib_dir", bin_dir_wsl, "--freq", "day"]
-        check_res = run_qlib_script_in_wsl("check_data_health.py", check_args)
-        check_ok = check_res.ok
-        stdout_check = check_res.stdout
-        stderr_check = check_res.stderr
+        check_freqs: list[str] = []
+        if "stock_daily" in body.datasets or index_datasets:
+            check_freqs.append("day")
+        if "stock_minute" in body.datasets:
+            check_freqs.append(MINUTE_FREQ_QLIB)
+        check_outputs: list[str] = []
+        check_errors: list[str] = []
+        check_results: list[bool] = []
+        for check_freq in check_freqs:
+            check_args = ["--qlib_dir", bin_dir_wsl, "--freq", check_freq]
+            check_res = run_qlib_script_in_wsl("check_data_health.py", check_args)
+            check_results.append(check_res.ok)
+            check_outputs.append(f"===== check_data_health freq={check_freq} =====\n{check_res.stdout}")
+            check_errors.append(f"===== check_data_health freq={check_freq} =====\n{check_res.stderr}")
+        check_ok = all(check_results) if check_results else None
+        stdout_check = "\n".join(check_outputs) if check_outputs else None
+        stderr_check = "\n".join(check_errors) if check_errors else None
 
     # ──────────────────────────────────────────────────────
     # 步骤 4：更新 meta_export.json
     # ──────────────────────────────────────────────────────
+    freq_types = set(meta.get("freq_types", []))
+    if "stock_daily" in body.datasets or index_datasets:
+        freq_types.add("daily")
+    if "stock_minute" in body.datasets:
+        freq_types.add(MINUTE_FREQ_QLIB)
+
     meta_update = {
         "snapshot_id": body.snapshot_id,
         "end": body.end.isoformat(),
         "exchanges": list(body.exchanges) if body.exchanges else None,
         "exclude_st": body.exclude_st,
-        "freq_types": ["daily"],
+        "freq_types": sorted(freq_types),
         "index_codes": index_datasets,
         "last_end_dates": last_end_dates,
     }
+    if stock_basis_start is not None and stock_basis_end is not None:
+        meta_update["basis_start"] = stock_basis_start.isoformat()
+        meta_update["basis_end"] = stock_basis_end.isoformat()
+    else:
+        if "basis_start" in meta:
+            meta_update["basis_start"] = meta["basis_start"]
+        if "basis_end" in meta:
+            meta_update["basis_end"] = meta["basis_end"]
     if body.mode == "full" and body.start is not None:
         meta_update["start"] = body.start.isoformat()
     elif "start" in meta:

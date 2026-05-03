@@ -1055,6 +1055,20 @@ export default function QlibPage() {
                       }} />
                     <span>股票日线 (features/*.day.bin)</span>
                   </label>
+                  <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input type="checkbox" checked={binSelectedDatasets.has("stock_minute")}
+                      onChange={() => {
+                        setBinSelectedDatasets(prev => {
+                          const next = new Set(prev);
+                          if (next.has("stock_minute")) next.delete("stock_minute"); else next.add("stock_minute");
+                          return next;
+                        });
+                      }} />
+                    <span>股票分钟线 1min (含 QE/V25 执行字段)</span>
+                  </label>
+                  <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded px-2 py-1">
+                    分钟线会按每只股票导出 CSV 后调用 Qlib dump_bin.py，字段包含 open/high/low/close/volume/amount/factor/prev_close/涨跌停价/涨跌停标记；缺失复权或涨跌停数据会直接失败。
+                  </p>
                   <div className="text-xs text-gray-400 font-medium mt-2">── 指数 ──</div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1">
                     {BIN_INDEX_OPTIONS.map(({ code, label }) => (
@@ -1168,13 +1182,17 @@ export default function QlibPage() {
                         const isExpanded = binExpandedSteps.has(step.dataset);
                         const datasetLabel = step.dataset === "stock_daily"
                           ? "股票日线"
-                          : (BIN_INDEX_OPTIONS.find(o => o.code === step.dataset)?.label || step.dataset);
+                          : step.dataset === "stock_minute"
+                            ? "股票分钟线 1min"
+                            : (BIN_INDEX_OPTIONS.find(o => o.code === step.dataset)?.label || step.dataset);
                         return (
                           <div key={i}>
                             <div className="flex items-center gap-2">
                               <span>{step.ok ? "\u2705" : "\u274c"}</span>
-                              <span className="font-medium">{step.dataset === "stock_daily" ? "股票日线" : step.dataset}</span>
-                              {datasetLabel !== step.dataset && step.dataset !== "stock_daily" && (
+                              <span className="font-medium">
+                                {step.dataset === "stock_daily" ? "股票日线" : step.dataset === "stock_minute" ? "股票分钟线 1min" : step.dataset}
+                              </span>
+                              {datasetLabel !== step.dataset && step.dataset !== "stock_daily" && step.dataset !== "stock_minute" && (
                                 <span className="text-xs text-gray-500">{datasetLabel}</span>
                               )}
                               <span className="text-xs text-gray-500">— {step.mode_used || "?"}</span>
