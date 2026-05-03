@@ -968,8 +968,8 @@ export default function QlibPage() {
                   datasets: Array.from(binSelectedDatasets),
                   exchanges: exchanges.length > 0 ? exchanges : undefined,
                   run_health_check: binRunHealthCheck,
-                  exclude_st: excludeSt,
-                  exclude_delisted_or_paused: excludeDelistedOrPaused,
+                  exclude_st: true,
+                  exclude_delisted_or_paused: true,
                   index_data_source: indexDataSource,
                 };
                 if (binExportMode === "full") {
@@ -1127,12 +1127,12 @@ export default function QlibPage() {
                   <label className="block text-sm font-medium mb-2">样本过滤</label>
                   <div className="flex flex-col gap-1 text-sm text-gray-700">
                     <label className="flex items-center gap-2 cursor-pointer">
-                      <input type="checkbox" checked={excludeSt} onChange={(e) => setExcludeSt(e.target.checked)} />
+                      <input type="checkbox" checked={true} disabled onChange={() => setExcludeSt(true)} />
                       <span>排除 ST</span>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer">
-                      <input type="checkbox" checked={excludeDelistedOrPaused}
-                        onChange={(e) => setExcludeDelistedOrPaused(e.target.checked)} />
+                      <input type="checkbox" checked={true} disabled
+                        onChange={() => setExcludeDelistedOrPaused(true)} />
                       <span>排除退市/停牌</span>
                     </label>
                   </div>

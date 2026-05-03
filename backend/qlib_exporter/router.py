@@ -55,6 +55,7 @@ from .authoritative_bin_exporter import (
     export_stock_daily_csv,
     export_stock_minute_csv_chunked,
     normalize_stock_export_exchanges,
+    rewrite_stock_all_txt_for_ipo_filter,
 )
 
 
@@ -737,6 +738,11 @@ def _export_daily_to_csv_for_dump_bin(
         stock_exchanges = normalize_stock_export_exchanges(exchanges)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    if not exclude_st or not exclude_delisted_or_paused:
+        raise HTTPException(
+            status_code=400,
+            detail="authoritative stock bin export requires excluding ST and delisted/paused stocks",
+        )
 
     summary = export_stock_daily_csv(
         snapshot_id=snapshot_id,
@@ -775,6 +781,11 @@ def _export_minute_to_csv_for_dump_bin(
         stock_exchanges = normalize_stock_export_exchanges(exchanges)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    if not exclude_st or not exclude_delisted_or_paused:
+        raise HTTPException(
+            status_code=400,
+            detail="authoritative stock bin export requires excluding ST and delisted/paused stocks",
+        )
 
     dump_freq = MINUTE_FREQ_QLIB if freq in {"1m", "1min"} else freq
     if dump_freq != MINUTE_FREQ_QLIB:
@@ -955,6 +966,12 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
     ]
 
     dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
+    ipo_all_txt_summary: Optional[Dict[str, Any]] = None
+    if dump_res.ok:
+        try:
+            ipo_all_txt_summary = rewrite_stock_all_txt_for_ipo_filter(bin_dir=bin_dir)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to rewrite stock instruments/all.txt IPO filter: {exc}") from exc
 
     check_ok: Optional[bool] = None
     stdout_check: Optional[str] = None
@@ -987,6 +1004,10 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
         "exclude_delisted_or_paused": True,
         "exclude_bj": True,
         "min_listed_days": IPO_FILTER_DAYS,
+        "ipo_filter_mode": "instruments_all_txt",
+        "bin_contains_pre_ipo_filter_data": True,
+        "stock_universe_min_listed_days_prefilter": False,
+        "ipo_all_txt_rewrite": ipo_all_txt_summary,
         "run_health_check": body.run_health_check,
         "freq_types": [
             "daily" if dump_freq == "day" else dump_freq,
@@ -2168,6 +2189,12 @@ async def unified_bin_export(body: UnifiedBinExportRequest) -> UnifiedBinExportR
         "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
     ]
     dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
+    ipo_all_txt_summary: Optional[Dict[str, Any]] = None
+    if dump_res.ok:
+        try:
+            ipo_all_txt_summary = rewrite_stock_all_txt_for_ipo_filter(bin_dir=bin_dir)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to rewrite stock instruments/all.txt IPO filter: {exc}") from exc
 
     # 2. 导出指数（dump_bin 会覆盖 instruments/all.txt，需要先备份再还原，并将指数写入 index.txt）
     index_results = []
@@ -2237,6 +2264,10 @@ async def unified_bin_export(body: UnifiedBinExportRequest) -> UnifiedBinExportR
             "exclude_delisted_or_paused": True,
             "exclude_bj": True,
             "min_listed_days": IPO_FILTER_DAYS,
+            "ipo_filter_mode": "instruments_all_txt",
+            "bin_contains_pre_ipo_filter_data": True,
+            "stock_universe_min_listed_days_prefilter": False,
+            "ipo_all_txt_rewrite": ipo_all_txt_summary,
             "freq_types": ["daily"],
             "index_codes": body.index_codes or [],
         }
@@ -2375,6 +2406,23 @@ def _resolve_stock_qfq_basis(
     return basis_start, basis_end
 
 
+def _finalize_stock_dump_result(dump_res: Any, bin_dir: Path) -> tuple[bool, Optional[str], Optional[str], Optional[dict]]:
+    """Rewrite stock all.txt IPO eligibility after dump_bin and return step status."""
+
+    if not dump_res.ok:
+        return False, dump_res.stdout, None, None
+    try:
+        summary = rewrite_stock_all_txt_for_ipo_filter(bin_dir=bin_dir)
+    except Exception as exc:
+        return False, dump_res.stdout, f"failed to rewrite stock instruments/all.txt IPO filter: {exc}", None
+    stdout = (dump_res.stdout or "") + "\n[AIstock IPO all.txt rewrite]\n" + json.dumps(
+        summary,
+        ensure_ascii=False,
+        indent=2,
+    )
+    return True, stdout, None, summary
+
+
 def _update_index_instruments(bin_dir: Path, index_code: str, start_str: str, end_str: str) -> None:
     """将指数条目合并写入 instruments/index.txt（保留已有条目）。"""
     instruments_dir = bin_dir / "instruments"
@@ -2507,12 +2555,14 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                         "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
                     ]
                     dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
+                    step_ok, step_stdout, step_error, _ = _finalize_stock_dump_result(dump_res, bin_dir)
                     steps.append(BinDatasetStepResult(
-                        dataset="stock_daily", ok=dump_res.ok,
-                        stdout=dump_res.stdout, stderr=dump_res.stderr,
+                        dataset="stock_daily", ok=step_ok,
+                        error=step_error,
+                        stdout=step_stdout, stderr=dump_res.stderr,
                         mode_used="dump_update",
                     ))
-                    if dump_res.ok:
+                    if step_ok:
                         last_end_dates["stock_daily"] = body.end.isoformat()
             else:
                 # full 模式
@@ -2532,12 +2582,14 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                     "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
                 ]
                 dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
+                step_ok, step_stdout, step_error, _ = _finalize_stock_dump_result(dump_res, bin_dir)
                 steps.append(BinDatasetStepResult(
-                    dataset="stock_daily", ok=dump_res.ok,
-                    stdout=dump_res.stdout, stderr=dump_res.stderr,
+                    dataset="stock_daily", ok=step_ok,
+                    error=step_error,
+                    stdout=step_stdout, stderr=dump_res.stderr,
                     mode_used="dump_all",
                 ))
-                if dump_res.ok:
+                if step_ok:
                     last_end_dates["stock_daily"] = body.end.isoformat()
         except HTTPException:
             raise
@@ -2578,12 +2630,14 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                         "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
                     ]
                     dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
+                    step_ok, step_stdout, step_error, _ = _finalize_stock_dump_result(dump_res, bin_dir)
                     steps.append(BinDatasetStepResult(
-                        dataset="stock_minute", ok=dump_res.ok,
-                        stdout=dump_res.stdout, stderr=dump_res.stderr,
+                        dataset="stock_minute", ok=step_ok,
+                        error=step_error,
+                        stdout=step_stdout, stderr=dump_res.stderr,
                         mode_used="dump_update",
                     ))
-                    if dump_res.ok:
+                    if step_ok:
                         last_end_dates[dataset_key] = body.end.isoformat()
             else:
                 assert body.start is not None
@@ -2603,12 +2657,14 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                     "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
                 ]
                 dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
+                step_ok, step_stdout, step_error, _ = _finalize_stock_dump_result(dump_res, bin_dir)
                 steps.append(BinDatasetStepResult(
-                    dataset="stock_minute", ok=dump_res.ok,
-                    stdout=dump_res.stdout, stderr=dump_res.stderr,
+                    dataset="stock_minute", ok=step_ok,
+                    error=step_error,
+                    stdout=step_stdout, stderr=dump_res.stderr,
                     mode_used="dump_all",
                 ))
-                if dump_res.ok:
+                if step_ok:
                     last_end_dates[dataset_key] = body.end.isoformat()
         except HTTPException:
             raise
@@ -2733,6 +2789,9 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
         "exclude_delisted_or_paused": True,
         "exclude_bj": bool(has_stock_dataset),
         "min_listed_days": IPO_FILTER_DAYS if has_stock_dataset else None,
+        "ipo_filter_mode": "instruments_all_txt" if has_stock_dataset else None,
+        "bin_contains_pre_ipo_filter_data": bool(has_stock_dataset),
+        "stock_universe_min_listed_days_prefilter": False if has_stock_dataset else None,
         "freq_types": sorted(freq_types),
         "index_codes": index_datasets,
         "last_end_dates": last_end_dates,

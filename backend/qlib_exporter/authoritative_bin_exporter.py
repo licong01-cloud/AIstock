@@ -62,6 +62,9 @@ class StockUniverseConfig:
     exchanges: Sequence[str] | None = None
     exclude_st: bool = True
     exclude_delisted_or_paused: bool = True
+    # IPO listing-age is intentionally not applied to exported feature bins.
+    # It is applied only to instruments/all.txt so newly listed stocks keep
+    # their full post-listing history while remaining ineligible before T+365.
     min_listed_days: int = IPO_FILTER_DAYS
     ts_codes: Sequence[str] | None = None
 
@@ -147,20 +150,26 @@ def _reject_bj_ts_codes(ts_codes: Sequence[str]) -> None:
         raise ValueError(f"BJ/BSE stocks are excluded from AIstock QE/Qlib stock exports; invalid codes: {sample}")
 
 
+def _enforce_stock_export_policy(config: StockUniverseConfig) -> None:
+    if not config.exclude_st:
+        raise ValueError("authoritative QE/Qlib stock exports must exclude all stocks that have ST records")
+    if not config.exclude_delisted_or_paused:
+        raise ValueError("authoritative QE/Qlib stock exports must exclude delisted or paused listings")
+
+
 def _resolve_explicit_stock_universe(config: StockUniverseConfig, codes: Sequence[str]) -> list[str]:
     exchange_values = _exchange_sql_values(config.exchanges)
     conditions = [
         "s.ts_code = ANY(%(codes)s)",
         "s.exchange = ANY(%(exchanges)s)",
         "s.list_date IS NOT NULL",
-        "s.list_date + (%(min_listed_days)s * INTERVAL '1 day') <= %(end)s",
+        "s.list_date <= %(end)s",
         "s.list_status = 'L'",
     ]
     params: dict[str, Any] = {
         "codes": list(codes),
         "exchanges": exchange_values,
         "end": config.end,
-        "min_listed_days": config.min_listed_days,
     }
     if config.exclude_st:
         conditions.append(
@@ -194,6 +203,7 @@ def resolve_stock_universe(config: StockUniverseConfig) -> list[str]:
 
     if config.min_listed_days < 0:
         raise ValueError("min_listed_days must be >= 0")
+    _enforce_stock_export_policy(config)
 
     if config.ts_codes:
         codes = _clean_ts_codes(config.ts_codes)
@@ -204,13 +214,12 @@ def resolve_stock_universe(config: StockUniverseConfig) -> list[str]:
     conditions = [
         "s.exchange = ANY(%(exchanges)s)",
         "s.list_date IS NOT NULL",
-        "s.list_date + (%(min_listed_days)s * INTERVAL '1 day') <= %(end)s",
+        "s.list_date <= %(end)s",
         "s.list_status = 'L'",
     ]
     params: dict[str, Any] = {
         "exchanges": exchange_values,
         "end": config.end,
-        "min_listed_days": config.min_listed_days,
     }
 
     if config.exclude_st:
@@ -234,6 +243,151 @@ def resolve_stock_universe(config: StockUniverseConfig) -> list[str]:
     with get_conn() as conn:
         df = pd.read_sql(sql, conn, params=params)
     return _clean_ts_codes(df["ts_code"].tolist())
+
+
+def _instrument_symbol_to_ts_code(symbol: str) -> str:
+    value = str(symbol or "").strip()
+    upper = value.upper()
+    if "." in upper:
+        return upper
+    lower = value.lower()
+    if len(lower) == 8 and lower[:2] in {"sh", "sz", "bj"}:
+        return f"{lower[2:].upper()}.{lower[:2].upper()}"
+    if len(lower) == 8 and lower[-2:] in {"sh", "sz", "bj"}:
+        return f"{lower[:6].upper()}.{lower[-2:].upper()}"
+    return upper
+
+
+def _split_instrument_line(raw: str) -> tuple[str, str, str]:
+    text = raw.strip()
+    if not text:
+        raise ValueError("empty instrument line")
+    if "\t" in text:
+        parts = [part.strip() for part in text.split("\t") if part.strip()]
+    elif "," in text:
+        parts = [part.strip() for part in text.split(",") if part.strip()]
+    else:
+        parts = text.split()
+        if len(parts) >= 5:
+            parts = [parts[0], f"{parts[1]} {parts[2]}", f"{parts[3]} {parts[4]}"]
+    if len(parts) < 3:
+        raise ValueError(f"invalid Qlib instrument line: {raw!r}")
+    return parts[0], parts[1], parts[2]
+
+
+def _date_prefix(value: str) -> date:
+    try:
+        return date.fromisoformat(str(value).strip()[:10])
+    except ValueError as exc:
+        raise ValueError(f"invalid instrument date value: {value!r}") from exc
+
+
+def _format_instrument_start(original_start: str, effective_start: date) -> str:
+    original_start = str(original_start).strip()
+    if _date_prefix(original_start) == effective_start:
+        return original_start
+    suffix = original_start[10:] if len(original_start) > 10 else ""
+    return f"{effective_start.isoformat()}{suffix}"
+
+
+def _load_stock_list_dates(ts_codes: Sequence[str]) -> dict[str, date]:
+    clean_codes = _clean_ts_codes(ts_codes)
+    if not clean_codes:
+        return {}
+    sql = """
+        SELECT ts_code, list_date
+        FROM market.stock_basic
+        WHERE ts_code = ANY(%(codes)s)
+    """
+    with get_conn() as conn:
+        df = pd.read_sql(sql, conn, params={"codes": clean_codes})
+    if df.empty:
+        raise RuntimeError("no stock_basic rows found for instruments/all.txt rewrite")
+    df["ts_code"] = df["ts_code"].astype(str).str.upper()
+    df["list_date"] = pd.to_datetime(df["list_date"], errors="coerce").dt.date
+    missing_date = df.loc[df["list_date"].isna(), "ts_code"].tolist()
+    if missing_date:
+        sample = ", ".join(missing_date[:5])
+        raise RuntimeError(f"stock_basic.list_date is missing for all.txt instruments: {sample}")
+    mapping = dict(zip(df["ts_code"], df["list_date"]))
+    missing = [code for code in clean_codes if code not in mapping]
+    if missing:
+        sample = ", ".join(missing[:5])
+        raise RuntimeError(f"stock_basic rows are missing for all.txt instruments: {sample}")
+    return mapping
+
+
+def rewrite_stock_all_txt_for_ipo_filter(
+    *,
+    bin_dir: Path,
+    min_listed_days: int = IPO_FILTER_DAYS,
+) -> dict[str, Any]:
+    """Apply IPO eligibility to instruments/all.txt without deleting feature bins.
+
+    Exported bin files retain the full post-listing history for every eligible
+    SH/SZ non-ST active stock. Qlib's tradable universe is controlled by
+    instruments/all.txt, where each stock starts at max(data_start,
+    list_date + min_listed_days). Stocks still younger than the threshold by
+    the dataset end are omitted from all.txt, while their feature bins remain.
+    """
+
+    if min_listed_days < 0:
+        raise ValueError("min_listed_days must be >= 0")
+    all_txt = bin_dir / "instruments" / "all.txt"
+    if not all_txt.exists():
+        raise FileNotFoundError(all_txt)
+
+    raw_lines = [line for line in all_txt.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not raw_lines:
+        raise RuntimeError(f"empty instruments/all.txt: {all_txt}")
+
+    parsed: list[tuple[str, str, str, str]] = []
+    ts_codes: list[str] = []
+    for raw in raw_lines:
+        symbol, start_value, end_value = _split_instrument_line(raw)
+        ts_code = _instrument_symbol_to_ts_code(symbol)
+        _reject_bj_ts_codes([ts_code])
+        parsed.append((symbol, start_value, end_value, ts_code))
+        ts_codes.append(ts_code)
+
+    list_dates = _load_stock_list_dates(ts_codes)
+    kept_lines: list[str] = []
+    skipped: list[dict[str, str]] = []
+    for symbol, start_value, end_value, ts_code in parsed:
+        data_start = _date_prefix(start_value)
+        data_end = _date_prefix(end_value)
+        ipo_start = list_dates[ts_code] + timedelta(days=min_listed_days)
+        effective_start = max(data_start, ipo_start)
+        if effective_start > data_end:
+            skipped.append(
+                {
+                    "symbol": symbol,
+                    "ts_code": ts_code,
+                    "list_date": list_dates[ts_code].isoformat(),
+                    "ipo_start": ipo_start.isoformat(),
+                    "data_end": data_end.isoformat(),
+                }
+            )
+            continue
+        kept_lines.append(f"{symbol}\t{_format_instrument_start(start_value, effective_start)}\t{end_value}")
+
+    if not kept_lines:
+        raise RuntimeError("IPO all.txt rewrite would remove every stock; refusing to write empty universe")
+
+    all_txt.write_text("\n".join(kept_lines) + "\n", encoding="utf-8")
+    summary = {
+        "path": str(all_txt),
+        "mode": "instruments_all_txt",
+        "min_listed_days": int(min_listed_days),
+        "input_rows": len(raw_lines),
+        "output_rows": len(kept_lines),
+        "skipped_ipo_rows": len(skipped),
+        "sample_skipped": skipped[:20],
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    summary_path = all_txt.parent / "all_ipo_filter_summary.json"
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary
 
 
 def _load_adj_factors(code: str, basis_start: date, basis_end: date) -> pd.DataFrame:
@@ -1066,6 +1220,9 @@ def write_bin_meta(
         "exclude_delisted_or_paused": True,
         "exclude_bj": True,
         "min_listed_days": IPO_FILTER_DAYS,
+        "ipo_filter_mode": "instruments_all_txt",
+        "bin_contains_pre_ipo_filter_data": True,
+        "stock_universe_min_listed_days_prefilter": False,
         "freq_types": list(freq_types),
         "last_end_dates": last_end_dates,
         "export_mode": "authoritative_aistock_dump_bin",

@@ -21,6 +21,7 @@ from backend.qlib_exporter.authoritative_bin_exporter import (  # noqa: E402
     export_stock_minute_csv,
     export_stock_minute_csv_chunked,
     normalize_stock_export_exchanges,
+    rewrite_stock_all_txt_for_ipo_filter,
     validate_daily_bin_against_db,
     validate_minute_bin_against_db,
     write_bin_meta,
@@ -257,6 +258,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(dump["stdout"])
             print(dump["stderr"], file=sys.stderr)
             return 2
+        ipo_all_txt_summary = rewrite_stock_all_txt_for_ipo_filter(bin_dir=bin_dir)
+        result["ipo_all_txt_rewrite"] = ipo_all_txt_summary
         write_bin_meta(
             bin_dir=bin_dir,
             snapshot_id=args.snapshot_id,
@@ -272,6 +275,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "basis_end": basis_end.isoformat(),
                 "csv_dir": str(csv_dir),
                 "tool": "scripts/qlib_authoritative_bin_export.py",
+                "ipo_all_txt_rewrite": ipo_all_txt_summary,
             },
         )
 
