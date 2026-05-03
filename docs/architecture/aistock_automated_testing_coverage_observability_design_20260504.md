@@ -1,7 +1,7 @@
 ﻿# AIstock 自动化测试流水线、覆盖率与可观测管理系统设计
 
 > 日期：2026-05-04  
-> 状态：顶层设计草案 v1.0，待评审确认  
+> 状态：顶层设计草案 v1.1，待评审确认；本版明确基于现有 nox / aistock_validate / Playwright / 数据质量 smoke / run record 体系演进，不从 0 重建  
 > 文档位置：`docs/architecture/aistock_automated_testing_coverage_observability_design_20260504.md`  
 > 适用范围：AIstock 全仓库，重点覆盖 QE 数据完整性、未来 QE 数仓、Paper Trading v2、Selection Center、StrategyPackage、HMM、Qlib 数据链路、前端 UI 与 API。  
 > 边界：本文设计自动化测试流水线、覆盖率门禁、测试可观测 UI 与版本管理体系；不直接修改测试代码或运行生产服务。
@@ -10,13 +10,16 @@
 
 AIstock 后续需要一套“本地权威、结果导向、可观测、可管理、可复用、可版本化”的自动化测试流水线系统。它不能只等同于 `pytest` 或 Playwright，而应成为研发流程、质量门禁、版本发布和历史证据管理的一部分。
 
+本版设计的关键修正是：自动化流水线必须在已有成果上成熟化，而不是另起炉灶。现有 `noxfile.py` 已经是本地统一执行入口；`scripts/aistock_validate.py` 已经承担端口、服务探测和 run record 创建；`tests/aistock_validation` 已经有测试等级、模块矩阵和历史证据；Paper v2、QE read、QE archive 已经有 L3 级 nox session；Playwright、数据质量 smoke、guardrail scan 已经具备可复用骨架。未来测试中心 UI、覆盖率、版本门禁和调度能力都应包装和增强这些入口，而不是替代它们。
+
 核心结论：
 
 1. 当前仓库已经有 `noxfile.py`、`scripts/aistock_validate.py`、`tests/aistock_validation`、Paper v2 / QE / QE archive 的若干 L3 流水线雏形，也已有 Playwright 依赖和部分 E2E 用例。
-2. 当前未观察到统一的仓库级 coverage 阈值门禁；`noxfile.py` 中的 backend 测试主要运行 `pytest -q -p no:cacheprovider`，没有强制 `pytest-cov` / branch coverage / diff coverage。
-3. 后续所有高风险功能，尤其是 QE 数据采集、数仓、入仓清理、交易执行、成本核对、HMM、Paper v2，都必须在设计阶段同时定义测试用例和 coverage gate。
-4. 覆盖率不是唯一质量指标，但必须成为基础门禁：没有合理覆盖率的代码不得宣称“已通过全流程验证”。
-5. 未来应建设专门的测试流水线系统和 UI：管理测试目录、测试用例、测试计划、执行记录、覆盖率趋势、失败分析、证据 artifact、版本发布候选和回归矩阵。
+2. 现阶段要把这些雏形升级为成熟流水线：统一 session 命名、统一 JSON run metadata、统一 evidence manifest、统一 coverage gate、统一测试矩阵引用、统一失败分类。
+3. 当前未观察到统一的仓库级 coverage 阈值门禁；`noxfile.py` 中的 backend 测试主要运行 `pytest -q -p no:cacheprovider`，没有强制 `pytest-cov` / branch coverage / diff coverage。
+4. 后续所有高风险功能，尤其是 QE 数据采集、数仓、入仓清理、交易执行、成本核对、HMM、Paper v2，都必须在设计阶段同时定义测试用例和 coverage gate。
+5. 覆盖率不是唯一质量指标，但必须成为基础门禁：没有合理覆盖率的代码不得宣称“已通过全流程验证”。
+6. 未来应建设专门的测试流水线系统和 UI：管理测试目录、测试用例、测试计划、执行记录、覆盖率趋势、失败分析、证据 artifact、版本发布候选和回归矩阵；UI 只调度受控 nox/aistock_validate 计划，不直接执行任意 shell。
 
 目标形态：
 
@@ -42,8 +45,41 @@ AIstock 后续需要一套“本地权威、结果导向、可观测、可管理
 | 前端 E2E | `frontend/package.json` 有 `test:e2e`，Playwright 依赖存在 | 可继续扩展 |
 | 开发端口隔离 | QE/Paper v2 文档和 nox session 使用 8011/8012、3011/3012 | 符合生产隔离要求 |
 | 静态红线扫描 | `.codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py` 被 L0/L3 调用 | 已有基础 |
+| 前端 Playwright | `frontend/playwright.config.ts`、`frontend/tests/paper-v2`、`frontend/tests/qe`、`frontend/tests/qe-archive` | 已有统一 E2E 配置和模块用例目录 |
+| 前端 TypeScript 检查 | `noxfile.py` 的 QE/QE archive UI session 会执行 `npm exec tsc -- --noEmit --incremental false` | 已在 UI 链路中作为类型门禁使用 |
+| 数据质量 smoke | `scripts/aistock_data_quality_smoke.py`、`scripts/qe_archive_data_quality_smoke.py` | 已有业务数据 oracle 雏形 |
+| 测试等级定义 | `tests/aistock_validation/catalog/test_levels.md` | 已定义 L0-L5，本设计应继承其语义 |
+| run record 模板 | `tests/aistock_validation/templates/test_run_record.md` | 已有人工/自动证据模板，后续扩展 JSON metadata |
+| QE archive 模块矩阵 | `tests/aistock_validation/modules/qe_archive.md` | 已经详细列出生产隔离、后端/API/UI/数据质量覆盖项 |
+| Paper v2 模块矩阵 | `tests/aistock_validation/modules/paper_v2_selection_center.md` | 已有 backend/API/UI/business oracle/data quality/live validation 分层 |
 
-### 2.2 主要缺口
+### 2.2 当前可直接复用的程序入口
+
+以下入口是后续成熟流水线的“权威执行层”，应优先扩展，不应绕过：
+
+| 类型 | 当前入口 | 当前能力 | 后续增强方式 |
+|---|---|---|---|
+| L0 静态门禁 | `python -m nox -s l0` | 校验 Codex skill、执行 guardrail scan、默认扫描 Paper v2/Selection 相关路径 | 增加 coverage 配置检查、secret baseline、DB comment 检查、模块参数化扫描 |
+| Paper v2 后端 | `python -m nox -s paper_v2_backend` | 跑 `backend/tests/paper_trading_v2`、`selection_center`、`strategy_package` | 加 `pytest-cov`、高风险模块阈值、失败分类 JSON |
+| Paper v2 数据质量 | `python -m nox -s paper_v2_data_quality` | 调用 `scripts/aistock_data_quality_smoke.py` 输出 JSON | 接入统一 evidence manifest、严格/宽松 scope 标准化 |
+| Paper v2 UI | `python -m nox -s paper_v2_ui` | 探测端口/服务，执行 `frontend/tests/paper-v2` Playwright | 标准化 console/page/request failure 采集，写入结构化 run step |
+| Paper v2 L3 | `python -m nox -s paper_v2_l3` | 创建 run record，串联 L0/backend/data_quality/UI | 升级为模块成熟流水线模板，供 QE/数仓复制 |
+| QE read 后端 | `python -m nox -s qe_read_backend` | 验证 QE 只读路径和 workspace 红线相关测试 | 扩展到 QE 数据完整性 parser/config/cost 测试 |
+| QE read UI | `python -m nox -s qe_read_ui` | 8011/3011 开发端口下执行 QE read-only Playwright | 加 loop 详情指标完整性和空值解释 oracle |
+| QE read L3 | `python -m nox -s qe_read_l3` | 创建 QE run record，执行 guardrail、backend、UI | 成为 QE 数据采集/UI 一致性 L3 的基础 |
+| QE archive 后端 | `python -m nox -s qe_archive_backend` | compileall + schema/repository static tests | 扩展 API、补录、outbox、worker、质量核对 coverage |
+| QE archive 数据质量 | `python -m nox -s qe_archive_data_quality` | 检查 `qe_archive` schema/table/column comment、run count、outbox | 加 run-level completeness、source cleanup simulation、artifact hash 检查 |
+| QE archive UI | `python -m nox -s qe_archive_ui` | 已支持 mock API 或 live dev API 的 Playwright 入口 | 用于 backfill 列表、dry-run、正式入仓、质量核对 UI 验证 |
+| QE archive L3 | `python -m nox -s qe_archive_l3` | 创建 run record，执行 guardrail/backend/data_quality/UI | 成为未来 QE 数仓全流程 L3/L4 主入口 |
+| Paper v2 live | `python -m nox -s paper_v2_live` | 交易时段 catch-up-to-live 验证 | 作为 L4/L5 受控可选门禁，不应默认阻塞非实时研发 |
+| 通用记录 | `python scripts/aistock_validate.py record` | 根据模板创建 Markdown run record | 扩展为同时写 JSON metadata、step、coverage、evidence manifest |
+| 端口/服务探测 | `python scripts/aistock_validate.py ports/services` | 检查 8011/8012/3011/3012/TDX 服务状态 | 增加环境快照、生产端口保护、服务版本 hash |
+
+当前成熟化路线应采用“nox 编排 + aistock_validate 元数据 + 模块矩阵 + 历史 evidence”的模式。测试中心 UI 后续只调用这些受控计划，例如 `paper_v2_l3`、`qe_archive_l3`、`qe_data_completeness_l3`，不直接拼接任意命令。
+
+### 2.3 主要缺口
+
+
 
 | 缺口 | 风险 | 设计要求 |
 |---|---|---|
@@ -152,53 +188,113 @@ AIstock 后续需要一套“本地权威、结果导向、可观测、可管理
 | QE-DQ-011 | UI data fidelity | L3/UI | UI 详情指标、持仓、成本、配置与 API/DB oracle 一致 |
 | QE-DQ-012 | cleanup gate | L2/L4 | archive completeness 未通过时禁止清理 QE 源数据 |
 
-## 6. 测试流水线系统架构
+## 6. 基于现有程序的成熟流水线架构
 
-未来专门测试系统建议包含以下模块：
+未来专门测试系统不是替代当前脚本，而是在现有执行层之上增加“计划、调度、元数据、可观测、门禁、版本”的管理层。推荐架构如下：
 
 ```text
-Test Management UI
-  -> Test Catalog / Case Matrix / Run History / Coverage Dashboard / Release Gates
+Test Management UI / Validation API
+  -> 读取 tests/aistock_validation/catalog + modules + history
+  -> 选择受控测试计划：l0 / paper_v2_l3 / qe_read_l3 / qe_archive_l3 / qe_data_completeness_l3 / L5
+  -> 写入 test_plan / test_run / test_run_step / evidence manifest
         |
         v
-Validation API
-  -> run scheduler / environment manager / evidence manager / coverage service / quality gate engine
+现有权威执行层，不替代
+  -> noxfile.py sessions
+  -> scripts/aistock_validate.py record / ports / services / future run-json
+  -> pytest / pytest-cov / Playwright / data-quality smoke / guardrail scan
         |
         v
-Execution Layer
-  -> nox sessions / pytest / Playwright / data quality smoke / static scans
-        |
-        v
-Evidence Store
-  -> run record / coverage json+xml+html / screenshots / traces / logs / DB smoke output / artifact hashes
+现有证据目录 + 后续结构化存储
+  -> tests/aistock_validation/history/<module>/*.md
+  -> tmp/*_smoke.json
+  -> tmp/playwright-report / tmp/playwright-results
+  -> future JSON run metadata / coverage html+xml+json / evidence manifest
 ```
 
-### 6.1 UI 能力
+### 6.1 分层职责
 
-| 页面 | 功能 |
-|---|---|
-| 测试总览 | 最近运行、通过率、失败率、覆盖率趋势、关键模块健康度 |
-| 测试用例库 | 模块、层级、用例、业务 oracle、关联设计文档、关联代码路径 |
-| 运行计划 | 选择模块和层级，配置端口、数据样本、dry-run、是否启动 UI |
-| 运行详情 | 命令、环境、耗时、失败、截图、trace、日志、coverage、质量门禁 |
-| 覆盖率看板 | 总覆盖、diff coverage、branch coverage、高风险模块覆盖率、趋势 |
-| 失败分析 | flaky 标记、失败分类、首次失败版本、复测结果、责任模块 |
-| 发布候选 | L5 门禁状态、变更列表、覆盖率、残余风险、是否允许发布/提交 |
-| 版本历史 | 每次提交/版本对应测试结果和回归矩阵 |
+| 层级 | 基于现有资产 | 未来增强 | 不能做的事 |
+|---|---|---|---|
+| 测试定义层 | `tests/aistock_validation/catalog/test_levels.md`、`tests/aistock_validation/modules/*.md` | 增加机器可读 YAML/JSON case catalog，与 Markdown 双向引用 | 不把测试用例只写在 UI 数据库里，导致仓库不可复现 |
+| 编排层 | `noxfile.py` | 增加 coverage session、L4/L5 session、受影响模块选择、统一 step 输出 | 不新建一套绕过 nox 的隐式执行器 |
+| 辅助命令层 | `scripts/aistock_validate.py` | 从 record/ports/services 扩展到 run metadata、service snapshot、evidence manifest、release gate | 不让 UI 拼接任意 shell 或绕过端口保护 |
+| 后端测试层 | `backend/tests/*` + pytest | 引入 pytest-cov、branch coverage、diff coverage、模块阈值 | 不用 L3/UI 替代 parser/config/cost/ledger 单元测试 |
+| 前端测试层 | `frontend/playwright.config.ts`、`frontend/tests/*`、`npm run test:e2e` | 增加组件/状态测试、统一错误监听 fixture、UI path coverage | 不把 Playwright 当成代码覆盖率门禁的唯一来源 |
+| 数据质量层 | `scripts/aistock_data_quality_smoke.py`、`scripts/qe_archive_data_quality_smoke.py` | 扩展成模块化 business oracle，输出 JSON 可入库 | 不把 DB smoke 简化成“服务返回 200” |
+| 证据层 | `tests/aistock_validation/history/*`、`tmp/*` | Markdown + JSON 双写，关联 git commit、coverage、trace、DB/API evidence | 不允许口头报告替代 run record |
+| UI 管理层 | 暂未实现 | 查询/触发受控计划、展示趋势、失败、coverage、artifact | 不直接接管业务服务，不自动重启生产 8001 |
 
-### 6.2 后端数据模型概念
+### 6.2 当前 nox session 的模板化方向
 
-后续若实现测试管理系统，建议保存：
+现有 session 已经形成三类模板，后续新增模块应复制模板而不是自由发挥：
 
-- `test_case`：用例定义、模块、层级、oracle、数据需求、owner、状态。
-- `test_plan`：一次运行计划，包含选择的用例、环境、端口、数据样本。
-- `test_run`：一次执行实例，包含 git commit、started/finished、status、duration、trigger。
-- `test_run_step`：每个命令/阶段的结果。
-- `test_evidence`：coverage、trace、screenshot、log、json report 的 manifest。
-- `coverage_snapshot`：line/branch/diff coverage、模块阈值、失败原因。
-- `quality_gate_result`：红线、数据质量、DB comment、asset safety、release gate。
+| 模板 | 现有样板 | 标准步骤 | 适用模块 |
+|---|---|---|---|
+| 后端回归模板 | `paper_v2_backend`、`qe_archive_backend` | compileall 可选 -> targeted pytest -> pytest-cov -> JSON summary | service/repository/parser/schema/API |
+| 数据质量模板 | `paper_v2_data_quality`、`qe_archive_data_quality` | read-only DB smoke -> JSON output -> fail/warn 分类 -> evidence manifest | ledger、archive、market data、Qlib、QE completeness |
+| UI E2E 模板 | `paper_v2_ui`、`qe_read_ui`、`qe_archive_ui` | ports -> services -> tsc -> Playwright -> report/trace | 所有用户路径和回归 UI |
+| L3 串联模板 | `paper_v2_l3`、`qe_read_l3`、`qe_archive_l3` | record -> guardrail -> backend -> data_quality -> UI 可选 | 模块全流程回归 |
+| Live/L4 模板 | `paper_v2_live` | service probe -> isolated business validation -> strict result oracle | 交易时段、跨模块、受控长流程 |
 
-所有新增表/字段后续必须添加 PostgreSQL comment，遵守项目 DB 注释规范。
+新增 `qe_data_completeness_l3`、`qe_archive_independence_l4`、`release_candidate_l5` 时，应复用这些模板：先创建 run record，再执行 guardrail，再执行 targeted backend/coverage，再执行数据质量，再执行 UI/API/DB 业务 oracle。
+
+### 6.3 `scripts/aistock_validate.py` 的演进接口
+
+当前 `aistock_validate.py` 已有 `record`、`ports`、`services` 三个子命令。后续建议在不破坏现有用法的前提下扩展：
+
+| 子命令 | 状态 | 建议能力 |
+|---|---|---|
+| `record` | 已有 | 保留 Markdown 输出；新增 `--json-out` 或默认旁路写 `*.json`，记录 git、operator、module、level、title、start/end |
+| `ports` | 已有 | 增加 `--forbid-production 8001` 默认保护、端口 owner 探测、dev service reuse 说明 |
+| `services` | 已有 | 增加 `/health`、`/openapi.json`、版本/commit、router 可用性、可选 TDX/QE worker mock 探测 |
+| `run` | 未来新增 | 按计划名调用受控 nox session，写 step start/end/status，不接受任意 shell |
+| `evidence` | 未来新增 | 收集 coverage、Playwright report、smoke JSON、DB smoke output、artifact hash，生成 evidence manifest |
+| `coverage` | 未来新增 | 解析 coverage XML/JSON，执行模块阈值和 diff coverage gate |
+| `release-gate` | 未来新增 | 汇总 L0-L5、coverage、data quality、asset safety、残余风险，生成发布候选报告 |
+
+这样可以逐步把现有 Markdown run record 升级成机器可读流水线，而无需推翻当前目录和 nox 入口。
+
+### 6.4 测试管理 UI 的边界
+
+未来测试管理 UI 只做“可观测、可管理、可复用、可版本化”，不做不受控执行：
+
+| 页面 | 基于现有数据 | MVP 能力 | 成熟能力 |
+|---|---|---|---|
+| 测试总览 | `tests/aistock_validation/history`、future JSON metadata | 最近运行、通过率、失败列表 | 趋势、模块健康度、flaky、阻塞风险 |
+| 测试用例库 | `tests/aistock_validation/modules/*.md` | 展示模块矩阵和命令 | YAML/JSON case catalog、设计文档反链 |
+| 运行计划 | nox session allowlist | 选择 `l0`/模块 L3/数据质量 smoke | 参数化计划、依赖关系、受影响模块推荐 |
+| 运行详情 | run record、coverage、smoke JSON、Playwright report | 命令、耗时、失败、trace 链接 | step 级日志、失败分类、重跑建议 |
+| 覆盖率看板 | future pytest-cov/Vitest reports | 展示 line/branch/diff coverage | 模块阈值、趋势、未覆盖高风险分支 |
+| 发布候选 | L5 run record | 显示是否满足门禁 | 版本对比、残余风险签收、发布证据包 |
+
+安全边界：UI 必须通过 allowlist 计划触发后端；默认禁止生产端口 `8001` 重启；涉及交易时段、live validation、数据清理、归档写入的测试必须二次确认并显示影响范围。
+
+### 6.5 证据结构化标准
+
+在保留现有 Markdown 的同时，每次 run 应逐步生成机器可读 JSON：
+
+```json
+{
+  "schema_version": "aistock_validation_run_v1",
+  "module": "qe_archive",
+  "level": "L3",
+  "git_commit": "...",
+  "started_at": "...",
+  "finished_at": "...",
+  "status": "passed|failed|partial|skipped",
+  "environment": {"backend_port": 8011, "frontend_port": 3011, "tdx_port": 19080},
+  "steps": [
+    {"name": "l0", "command": "python -m nox -s l0", "status": "passed", "duration_seconds": 0}
+  ],
+  "coverage": {"line": null, "branch": null, "diff_line": null, "diff_branch": null},
+  "quality_gates": [],
+  "evidence": [],
+  "residual_risks": []
+}
+```
+
+该 JSON 后续可以入库并驱动测试管理 UI；Markdown 继续作为人类可读审计记录。
 
 ## 7. 版本管理与发布门禁
 
@@ -225,38 +321,72 @@ Evidence Store
 | 文档 | 设计、测试、残余风险、操作说明更新 |
 | 残余风险 | 所有跳过项明确记录，不允许隐性跳过 |
 
-## 8. 推荐落地阶段
+## 8. 基于现有成果的落地阶段
 
-### Phase 0 - Coverage baseline
+落地路线不从 0 开始，而是把现有 `noxfile.py`、`scripts/aistock_validate.py`、模块矩阵、历史 run record、Playwright、数据质量 smoke 逐步产品化。
 
-- 检查当前 pytest/Playwright/nox 覆盖能力。
-- 引入 coverage 配置设计：`.coveragerc` 或 `pyproject.toml` 的 coverage section。
-- 先记录全仓库 baseline，不阻断历史代码。
-- 对新增/修改代码启用 diff coverage gate。
+### Phase 0 - 现有资产基线盘点与冻结
 
-### Phase 1 - QE 数据完整性 coverage gate
+- 将当前 nox session、模块矩阵、Playwright 用例、数据质量 smoke、run record 模板登记为测试平台 v0 基线。
+- 明确 `noxfile.py` 是权威执行入口，测试中心 UI 只能调度 allowlist session。
+- 为每个现有 session 补充 owner、模块、层级、是否需要 dev backend/frontend、是否允许跳过 UI、是否读写 DB、是否可在交易时段运行。
+- 输出 `tests/aistock_validation/catalog` 机器可读补充文件，例如 `sessions.json` 或 `sessions.yaml`。
 
-- 为 QE effective config、completion payload、manifest、cost reconcile、execution events、cleanup gate 建 L1/L2 测试。
-- 在 `noxfile.py` 预留 `qe_data_completeness_backend`、`qe_data_completeness_l3`、`qe_data_completeness_coverage`。
-- 所有 QE 数据完整性代码必须输出 coverage report。
+验收：无需新增业务测试，就能从文档/JSON 列出当前所有可执行计划、命令、环境变量、证据输出位置和生产隔离要求。
 
-### Phase 2 - 测试结果结构化
+### Phase 1 - Run metadata 与 evidence manifest
 
-- 扩展 `scripts/aistock_validate.py`，统一写 JSON run metadata。
-- 将 markdown run record 与机器可读 JSON 绑定。
-- 保存 coverage snapshot、quality gate result、evidence manifest。
+- 扩展 `scripts/aistock_validate.py record`，在现有 Markdown 旁边生成 JSON run metadata。
+- 为 nox L3 session 增加统一 step 记录：l0/backend/data_quality/ui/coverage/release_gate。
+- 统一收集 `tmp/*_smoke.json`、Playwright report/trace、coverage report、DB smoke output、guardrail result。
+- 保留现有 `tests/aistock_validation/history/<module>/*.md`，不迁移历史文件；新 JSON 与 Markdown 同目录或 `tmp/validation_runs` 双写。
 
-### Phase 3 - 测试管理 UI MVP
+验收：执行一次 `paper_v2_l3` 或 `qe_archive_l3` 后，除 Markdown 外还能得到机器可读 JSON，UI/后端未来可直接解析。
 
-- 新增测试中心 UI：运行历史、coverage dashboard、失败详情、模块矩阵。
-- 支持选择模块运行 nox session，先本地手动触发，后续再调度。
-- 只管理测试，不自动修改生产服务。
+### Phase 2 - Coverage gate 接入现有 nox backend session
 
-### Phase 4 - Release candidate gate
+- 在 `paper_v2_backend`、`qe_archive_backend`、未来 `qe_data_completeness_backend` 中接入 `pytest-cov`，先记录 baseline，不阻断历史全仓低覆盖。
+- 对新增/修改代码启用 diff coverage gate；高风险模块先从 80% line / 70% branch 开始。
+- 增加 coverage 解析命令到 `aistock_validate.py coverage`，输出 coverage snapshot JSON。
+- 前端先保留 TypeScript + Playwright；新增 Vitest/Testing Library 时只覆盖新组件和状态工具，避免一次性重构全前端测试框架。
 
-- 支持 L5 发布候选报告。
-- 将 coverage、L3/L4、数据质量、资产安全、DB comment、文档完整性纳入统一评分。
-- 支持版本对比和质量趋势。
+验收：任意高风险后端变更的 run record 中必须有 coverage snapshot；如果 coverage 不达标，L3/L5 显示 `coverage_gate_failed`。
+
+### Phase 3 - 数据质量 smoke 模块化
+
+- 将 `scripts/aistock_data_quality_smoke.py` 和 `scripts/qe_archive_data_quality_smoke.py` 抽象成可复用结构：check result、PASS/WARN/FAIL、strict scope、JSON output、residual risk。
+- 为 QE 数据完整性增加 smoke：effective config 完整率、required metrics、artifact manifest、成本对账、source cleanup independence。
+- 为 Qlib/market data 增加 smoke：交易日覆盖、分钟数据覆盖、suspend/limit/pre_close freshness、研究有效性标记。
+- 数据质量 smoke 仍默认只读；任何写入型修复必须单独确认，不进入默认 L3。
+
+验收：L3 不只验证 API 200，而能输出业务质量报告，例如 ledger 一致性、archive completeness、QE required field coverage。
+
+### Phase 4 - 测试中心 UI MVP
+
+- UI 首先读取现有 Markdown/JSON run record，不要求先建设复杂调度器。
+- 提供测试总览、模块矩阵、运行历史、运行详情、coverage 看板、数据质量报告、Playwright trace 链接。
+- 触发测试时只允许选择 allowlist nox session；初期可生成命令供人工复制执行，成熟后再由后端受控执行。
+- 所有运行必须显示端口、环境变量、生产隔离状态和是否会写 DB/触发归档。
+
+验收：用户可以在 UI 查看 `paper_v2_l3`、`qe_read_l3`、`qe_archive_l3` 历史证据和失败原因，并能按模块/日期/commit 查询。
+
+### Phase 5 - L4/L5 发布候选门禁
+
+- 基于现有 L3 session 组合 L4：QE 数据采集 -> QE archive -> source cleanup simulation -> Paper/Selection 只读消费。
+- 新增 `release_candidate_l5` nox session，串联 L0、受影响模块 backend/coverage/data_quality/UI、资产安全、DB comment 检查、残余风险汇总。
+- 版本候选报告引用已有 history run record 和新 JSON metadata，不重复手工整理。
+- Live/交易时段测试作为可选强门禁：例如 `paper_v2_live -- --require-live-bars`，只在需要验证实时链路时执行。
+
+验收：准备提交或发布前，能自动生成一份 L5 报告，说明通过/失败、覆盖率、数据质量、资产安全、需要生产重启与否、残余风险。
+
+### Phase 6 - 长期治理
+
+- 定期清理 flaky test、失效历史样本、过时矩阵项；所有跳过项必须有 owner 和到期时间。
+- 将测试管理 UI 的数据模型持久化；新增表/字段必须遵守 PostgreSQL comment 规范。
+- 支持版本趋势：覆盖率趋势、失败热区、模块健康度、数据质量趋势、回归耗时趋势。
+- 支持 LLM agent 只读查询测试历史和失败模式，但不得让 agent 直接执行未授权命令。
+
+验收：测试平台成为研发过程的固定入口，而不是某次任务临时脚本集合。
 
 ## 9. 专家补充建议
 
