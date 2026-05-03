@@ -863,6 +863,80 @@ class QEArchiveRepository:
                 )
                 return self._fetch_dicts(cur)
 
+    def list_runs(
+        self,
+        *,
+        status: str | None = None,
+        run_type: str | None = None,
+        search: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return recent archived runs for selection-oriented UI/API consumers."""
+
+        limit = max(1, min(int(limit or 100), 500))
+        params: list[Any] = []
+        filters: list[str] = []
+        if status and status not in {"all", "*"}:
+            filters.append("r.status = %s")
+            params.append(status)
+        if run_type and run_type not in {"all", "*"}:
+            filters.append("r.run_type = %s")
+            params.append(run_type)
+        if search:
+            params.append(f"%{search}%")
+            filters.append(
+                """
+                (
+                    r.run_id ILIKE %s
+                    OR r.logical_experiment_id ILIKE %s
+                    OR r.experiment_id ILIKE %s
+                    OR r.task_id ILIKE %s
+                    OR r.loop_id ILIKE %s
+                )
+                """
+            )
+            params.extend([params[-1]] * 4)
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.append(limit)
+
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        r.run_id,
+                        r.source_system,
+                        r.run_type,
+                        r.status,
+                        r.research_valid,
+                        r.invalid_reason,
+                        r.logical_experiment_id,
+                        r.experiment_id,
+                        r.task_id,
+                        r.loop_id,
+                        r.loop_index,
+                        r.node_id,
+                        r.model_type,
+                        r.model_catalog_id,
+                        r.factor_count,
+                        r.freq,
+                        r.label_horizon,
+                        r.completed_at,
+                        r.archived_at,
+                        (SELECT COUNT(*) FROM qe_archive.run_metric m WHERE m.run_id = r.run_id) AS metric_count,
+                        (SELECT COUNT(*) FROM qe_archive.run_curve c WHERE c.run_id = r.run_id) AS curve_count,
+                        (SELECT COUNT(*) FROM qe_archive.run_factor f WHERE f.run_id = r.run_id) AS factor_count_rows,
+                        (SELECT COUNT(*) FROM qe_archive.run_symbol_summary s WHERE s.run_id = r.run_id) AS symbol_summary_count,
+                        (SELECT COUNT(*) FROM qe_archive.run_trade t WHERE t.run_id = r.run_id) AS trade_count
+                    FROM qe_archive.run r
+                    {where_sql}
+                    ORDER BY r.archived_at DESC NULLS LAST, r.completed_at DESC NULLS LAST, r.updated_at DESC
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
     def get_archive_summary(self) -> dict[str, Any]:
         """Return a compact warehouse health summary for API consumers."""
 

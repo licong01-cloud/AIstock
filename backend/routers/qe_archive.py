@@ -31,6 +31,10 @@ class QEArchiveBackfillRequest(BaseModel):
     loop_index: int | None = Field(None, ge=1)
     status: str = "completed"
     limit: int = Field(20, ge=1, le=500)
+    include_archived: bool = Field(
+        False,
+        description="When false, task/source expansion archives only loops or experiments not already in qe_archive.",
+    )
     write: bool = False
     confirm_write: str = ""
     validate_after_write: bool = True
@@ -50,6 +54,10 @@ def get_backfill_service() -> QEArchiveBackfillService:
     return QEArchiveBackfillService()
 
 
+def get_repository() -> QEArchiveRepository:
+    return QEArchiveRepository()
+
+
 def get_worker_service(*, worker_id: str, enabled: bool) -> QEArchiveWorkerService:
     return QEArchiveWorkerService(worker_id=worker_id, enabled=enabled)
 
@@ -58,7 +66,7 @@ def get_worker_service(*, worker_id: str, enabled: bool) -> QEArchiveWorkerServi
 def get_qe_archive_health():
     return {
         "status": "success",
-        "data": QEArchiveRepository().get_archive_summary(),
+        "data": get_repository().get_archive_summary(),
     }
 
 
@@ -69,7 +77,7 @@ def list_qe_archive_outbox(
 ):
     return {
         "status": "success",
-        "data": QEArchiveRepository().list_outbox_events(status=status, limit=limit),
+        "data": get_repository().list_outbox_events(status=status, limit=limit),
     }
 
 
@@ -96,7 +104,25 @@ def list_qe_archive_jobs(
 ):
     return {
         "status": "success",
-        "data": QEArchiveRepository().list_archive_jobs(status=status, limit=limit),
+        "data": get_repository().list_archive_jobs(status=status, limit=limit),
+    }
+
+
+@router.get("/runs", summary="Recent archived QE runs")
+def list_qe_archive_runs(
+    status: str | None = Query(None, description="Optional archived source status filter."),
+    run_type: str | None = Query(None, description="Optional run_type filter, e.g. evolution_loop."),
+    search: str | None = Query(None, description="Optional run/task/loop/experiment id substring."),
+    limit: int = Query(100, ge=1, le=500),
+):
+    return {
+        "status": "success",
+        "data": get_repository().list_runs(
+            status=status,
+            run_type=run_type,
+            search=search,
+            limit=limit,
+        ),
     }
 
 
@@ -120,6 +146,7 @@ def run_qe_archive_backfill(request: QEArchiveBackfillRequest):
             loop_index=request.loop_index,
             status=request.status,
             limit=request.limit,
+            include_archived=request.include_archived,
             write=request.write,
             confirm_write=request.confirm_write,
             validate_after_write=request.validate_after_write,
@@ -153,7 +180,7 @@ def run_qe_archive_worker_once(request: QEArchiveWorkerRunRequest):
 
 @router.get("/runs/{run_id}/quality", summary="QE archive run quality summary")
 def get_qe_archive_run_quality(run_id: str):
-    quality = QEArchiveRepository().get_run_quality_summary(run_id)
+    quality = get_repository().get_run_quality_summary(run_id)
     if not quality.get("exists"):
         raise HTTPException(status_code=404, detail=f"run_id not found: {run_id}")
     return {"status": "success", "data": quality}

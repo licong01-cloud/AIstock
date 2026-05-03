@@ -63,6 +63,32 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
       });
     }
 
+    if (new URL(url).pathname.endsWith("/api/v1/qe-archive/runs")) {
+      return response({
+        status: "success",
+        data: [{
+          run_id: "qear_run_demo",
+          source_system: "qe",
+          run_type: "evolution_loop",
+          status: "completed",
+          research_valid: true,
+          task_id: "qe_task_demo",
+          loop_id: "qe_task_demo_Loop3",
+          loop_index: 3,
+          model_type: "LSTM",
+          factor_count: 57,
+          freq: "1min",
+          label_horizon: 5,
+          archived_at: "2026-05-02T20:03:00+08:00",
+          metric_count: 81,
+          curve_count: 3489,
+          factor_count_rows: 57,
+          symbol_summary_count: 1310,
+          trade_count: 4100,
+        }],
+      });
+    }
+
     if (url.includes("/backfill-candidates")) {
       return response({
         status: "success",
@@ -79,10 +105,10 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
             description: "demo target",
             status: "completed",
             experiment_type: "custom_evolution",
-            loop_count: 2,
-            selected_run_count: 2,
-            archived_run_count: 0,
-            pending_run_count: 2,
+            loop_count: 3,
+            selected_run_count: 3,
+            archived_run_count: 2,
+            pending_run_count: 1,
             is_fully_archived: false,
             model_id: "LSTM",
             label_horizon: 5,
@@ -101,9 +127,11 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
         min_metrics?: number;
         min_curves?: number;
         min_factors?: number;
+        include_archived?: boolean;
       };
       expect(body.task_ids).toEqual(["qe_task_demo"]);
       expect(body.experiment_ids || []).toEqual([]);
+      expect(body.include_archived).toBe(false);
       expect(body.min_metrics).toBe(60);
       expect(body.min_curves).toBe(3000);
       expect(body.min_factors).toBe(1);
@@ -114,12 +142,12 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
           write_enabled: Boolean(body.write),
           source: "all",
           status: "completed",
-          processed_count: 2,
+          processed_count: 1,
           results: [{
             run_id: "qear_run_demo",
             event_type: "qe.loop.completed",
             source_id: "qe_task_demo",
-            source_sub_id: "qe_task_demo_Loop1",
+            source_sub_id: "qe_task_demo_Loop3",
             quality: body.write ? {
               passed: true,
               metric_count: 81,
@@ -135,28 +163,6 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
               factors_written: 57,
               symbol_summary_count: 1310,
               trade_count: 4100,
-              execution_event_count: 2,
-            },
-          }, {
-            run_id: "qear_run_demo2",
-            event_type: "qe.loop.completed",
-            source_id: "qe_task_demo",
-            source_sub_id: "qe_task_demo_Loop2",
-            quality: body.write ? {
-              passed: true,
-              metric_count: 82,
-              curve_count: 3490,
-              factor_count_rows: 57,
-              symbol_summary_count: 1310,
-              trade_count: 4200,
-              execution_event_count: 2,
-            } : undefined,
-            stats: {
-              metrics_written: 82,
-              curves_written: 3490,
-              factors_written: 57,
-              symbol_summary_count: 1310,
-              trade_count: 4200,
               execution_event_count: 2,
             },
           }],
@@ -227,7 +233,7 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
   await expect(page.getByText("Claimed")).toBeVisible();
   await expect(page.getByText("Completed", { exact: true })).toBeVisible();
 
-  await page.getByPlaceholder("qear_run_...").fill("qear_run_demo");
+  await page.getByLabel("Select archived run for quality").selectOption("qear_run_demo");
   await page.getByRole("button", { name: /查询质量/ }).click();
   await expect(page.getByText("full")).toBeVisible();
   await expect(page.getByText(/3K|3\.49K/)).toBeVisible();

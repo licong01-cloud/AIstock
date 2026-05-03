@@ -104,20 +104,29 @@ class QEArchiveSourceAssembler:
         *,
         status: str = "completed",
         limit: int = 20,
+        include_archived: bool = False,
     ) -> list[str]:
         limit = max(1, min(int(limit), 500))
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
                 order_col = self._preferred_existing_column(cur, "qe_experiments", ("completed_at", "updated_at", "created_at"))
+                archive_filter = (
+                    ""
+                    if include_archived
+                    else "AND NOT EXISTS (SELECT 1 FROM qe_archive.run r WHERE r.experiment_id = e.experiment_id)"
+                )
+                status_filter, status_params = _status_filter_sql("e.status", status)
                 cur.execute(
                     f"""
-                    SELECT experiment_id
-                    FROM qe_experiments
-                    WHERE status = %s
-                    ORDER BY {order_col} DESC NULLS LAST
+                    SELECT e.experiment_id
+                    FROM qe_experiments e
+                    WHERE TRUE
+                      {status_filter}
+                      {archive_filter}
+                    ORDER BY e.{order_col} DESC NULLS LAST
                     LIMIT %s
                     """,
-                    (status, limit),
+                    [*status_params, limit],
                 )
                 return [str(row[0]) for row in cur.fetchall()]
 
@@ -126,20 +135,36 @@ class QEArchiveSourceAssembler:
         *,
         status: str = "completed",
         limit: int = 20,
+        include_archived: bool = False,
     ) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit), 500))
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
                 order_col = self._preferred_existing_column(cur, "qe_evolution_loops", ("updated_at", "created_at"))
+                archive_filter = (
+                    ""
+                    if include_archived
+                    else """
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM qe_archive.run r
+                          WHERE r.task_id = l.task_id
+                            AND r.loop_id = l.loop_id
+                      )
+                    """
+                )
+                status_filter, status_params = _status_filter_sql("l.status", status)
                 cur.execute(
                     f"""
-                    SELECT task_id, loop_id, loop_index
-                    FROM qe_evolution_loops
-                    WHERE status = %s
-                    ORDER BY {order_col} DESC NULLS LAST
+                    SELECT l.task_id, l.loop_id, l.loop_index
+                    FROM qe_evolution_loops l
+                    WHERE TRUE
+                      {status_filter}
+                      {archive_filter}
+                    ORDER BY l.{order_col} DESC NULLS LAST
                     LIMIT %s
                     """,
-                    (status, limit),
+                    [*status_params, limit],
                 )
                 return [
                     {"task_id": row[0], "loop_id": row[1], "loop_index": row[2]}
@@ -151,21 +176,35 @@ class QEArchiveSourceAssembler:
         task_ids: Sequence[str],
         *,
         status: str = "completed",
+        include_archived: bool = False,
     ) -> list[dict[str, Any]]:
         task_ids = _dedupe_non_empty(task_ids)
         if not task_ids:
             return []
 
-        status_filter, params = _status_filter_sql("status", status)
+        status_filter, params = _status_filter_sql("l.status", status)
+        archive_filter = (
+            ""
+            if include_archived
+            else """
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM qe_archive.run r
+                          WHERE r.task_id = l.task_id
+                            AND r.loop_id = l.loop_id
+                      )
+            """
+        )
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT task_id, loop_id, loop_index
-                    FROM qe_evolution_loops
-                    WHERE task_id = ANY(%s)
+                    SELECT l.task_id, l.loop_id, l.loop_index
+                    FROM qe_evolution_loops l
+                    WHERE l.task_id = ANY(%s)
                       {status_filter}
-                    ORDER BY task_id ASC, loop_index ASC NULLS LAST, updated_at ASC NULLS LAST
+                      {archive_filter}
+                    ORDER BY l.task_id ASC, l.loop_index ASC NULLS LAST, l.updated_at ASC NULLS LAST
                     """,
                     [task_ids, *params],
                 )

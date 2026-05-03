@@ -11,6 +11,7 @@ import { formatCompact, formatNumber, shortHash } from "@/lib/paper-v2/format";
 import {
   API_BASE,
   type ArchiveJob,
+  type ArchivedRunListItem,
   type ArchiveSummary,
   type BackfillCandidate,
   type BackfillReport,
@@ -50,6 +51,12 @@ function candidateTypeLabel(candidate: BackfillCandidate): string {
 
 function candidatePrimaryId(candidate: BackfillCandidate): string {
   return String(candidate.task_id || candidate.experiment_id || "-");
+}
+
+function runListLabel(run: ArchivedRunListItem): string {
+  const source = run.loop_id || run.experiment_id || run.task_id || run.logical_experiment_id || run.run_id;
+  const loop = run.loop_index ? ` Loop${run.loop_index}` : "";
+  return `${shortHash(run.run_id)} | ${run.run_type || "-"} | ${source || "-"}${loop}`;
 }
 
 function StatusCountStrip({ counts, empty }: { counts?: Record<string, number>; empty: string }) {
@@ -158,6 +165,7 @@ export default function QEArchivePage() {
   const [summary, setSummary] = useState<ArchiveSummary | null>(null);
   const [outbox, setOutbox] = useState<OutboxEvent[]>([]);
   const [jobs, setJobs] = useState<ArchiveJob[]>([]);
+  const [archivedRuns, setArchivedRuns] = useState<ArchivedRunListItem[]>([]);
   const [candidates, setCandidates] = useState<BackfillCandidate[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [candidateLimit, setCandidateLimit] = useState(100);
@@ -180,15 +188,17 @@ export default function QEArchivePage() {
     setLoading(true);
     setError(null);
     try {
-      const [nextSummary, nextOutbox, nextJobs, nextCandidates] = await Promise.all([
+      const [nextSummary, nextOutbox, nextJobs, nextRuns, nextCandidates] = await Promise.all([
         qeArchiveApi.health(),
         qeArchiveApi.outbox(30),
         qeArchiveApi.jobs(30),
+        qeArchiveApi.runs({ limit: 100 }),
         qeArchiveApi.backfillCandidates({ limit: candidateLimit, status: candidateStatus, include_archived: includeArchived }),
       ]);
       setSummary(nextSummary);
       setOutbox(nextOutbox);
       setJobs(nextJobs);
+      setArchivedRuns(nextRuns);
       setCandidates(nextCandidates.candidates || []);
       setSelectedIds((previous) => new Set([...previous].filter((id) => (nextCandidates.candidates || []).some((item) => item.candidate_id === id))));
     } catch (err) {
@@ -213,7 +223,7 @@ export default function QEArchivePage() {
   const selectedCandidates = useMemo(() => candidates.filter((item) => selectedIds.has(item.candidate_id)), [candidates, selectedIds]);
   const selectedTaskIds = selectedCandidates.filter((item) => item.candidate_type === "evolution_task" && item.task_id).map((item) => String(item.task_id));
   const selectedExperimentIds = selectedCandidates.filter((item) => item.candidate_type === "single_experiment" && item.experiment_id).map((item) => String(item.experiment_id));
-  const selectedRunCount = selectedCandidates.reduce((sum, item) => sum + n(item.selected_run_count), 0);
+  const selectedRunCount = selectedCandidates.reduce((sum, item) => sum + n(item.pending_run_count), 0);
   const pendingCandidateCount = candidates.filter((item) => n(item.pending_run_count) > 0).length;
 
   function toggleCandidate(candidateId: string) {
@@ -242,6 +252,7 @@ export default function QEArchivePage() {
         task_ids: selectedTaskIds,
         experiment_ids: selectedExperimentIds,
         status: candidateStatus,
+        include_archived: false,
         write,
         confirm_write: write ? writeConfirm : "",
         validate_after_write: true,
@@ -344,7 +355,7 @@ export default function QEArchivePage() {
           rows={candidates}
           empty="暂无可补录的 QE 实验"
           columns={[
-            { key: "select", header: "选择", render: (row) => <input type="checkbox" checked={selectedIds.has(row.candidate_id)} onChange={() => toggleCandidate(row.candidate_id)} aria-label={`选择 ${row.display_name || row.candidate_id}`} /> },
+            { key: "select", header: "选择", render: (row) => <input type="checkbox" checked={selectedIds.has(row.candidate_id)} disabled={n(row.pending_run_count) === 0} onChange={() => toggleCandidate(row.candidate_id)} aria-label={`选择 ${row.display_name || row.candidate_id}`} /> },
             { key: "type", header: "实验类型", render: (row) => <><div>{candidateTypeLabel(row)}</div><div className="pv2-muted">{row.experiment_type || "-"}</div></> },
             { key: "name", header: "实验说明", render: (row) => <><div>{row.display_name || "-"}</div><div className="pv2-muted pv2-mono">{shortHash(candidatePrimaryId(row))}</div><div className="pv2-muted">{row.description || "-"}</div></> },
             { key: "loops", header: "Loop / 入库", render: (row) => <><div>{formatNumber(row.archived_run_count || 0, 0)} / {formatNumber(row.selected_run_count || 0, 0)}</div><div className="pv2-muted">总 loop {formatNumber(row.loop_count || 0, 0)}，待入库 {formatNumber(row.pending_run_count || 0, 0)}</div></> },
@@ -396,9 +407,21 @@ export default function QEArchivePage() {
 
       <div className="pv2-grid pv2-grid-2">
         <SectionCard title="Run 质量核对" eyebrow="config / metrics / curves / factors">
-          <div className="pv2-row-actions" style={{ marginBottom: 12 }}>
-            <input className="pv2-input" value={qualityRunId} onChange={(event) => setQualityRunId(event.target.value)} placeholder="qear_run_..." />
-            <button className="pv2-button" type="button" onClick={() => void lookupQuality()} disabled={qualityBusy || !qualityRunId.trim()}>{qualityBusy ? "查询中" : "查询质量"}</button>
+          <div className="pv2-form-grid" style={{ marginBottom: 12 }}>
+            <label className="pv2-field">
+              <span>最近入库 Run</span>
+              <select className="pv2-select" value={qualityRunId} onChange={(event) => setQualityRunId(event.target.value)} aria-label="Select archived run for quality">
+                <option value="">选择已入库 Run</option>
+                {archivedRuns.map((run) => (
+                  <option key={run.run_id} value={run.run_id}>{runListLabel(run)}</option>
+                ))}
+              </select>
+            </label>
+            <label className="pv2-field">
+              <span>Run ID</span>
+              <input className="pv2-input" value={qualityRunId} onChange={(event) => setQualityRunId(event.target.value)} placeholder="qear_run_..." />
+            </label>
+            <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button" type="button" onClick={() => void lookupQuality()} disabled={qualityBusy || !qualityRunId.trim()}>{qualityBusy ? "查询中" : "查询质量"}</button></div>
           </div>
           <QualityPanel quality={quality} />
         </SectionCard>

@@ -65,6 +65,7 @@ export type BackfillRequest = {
   loop_index?: number | null;
   status?: string;
   limit?: number;
+  include_archived?: boolean;
   write?: boolean;
   confirm_write?: string;
   validate_after_write?: boolean;
@@ -100,6 +101,33 @@ export type BackfillCandidate = {
   completed_at?: string | null;
   updated_at?: string | null;
   archive_action?: string | null;
+};
+
+export type ArchivedRunListItem = {
+  run_id: string;
+  source_system?: string | null;
+  run_type?: string | null;
+  status?: string | null;
+  research_valid?: boolean | null;
+  invalid_reason?: string | null;
+  logical_experiment_id?: string | null;
+  experiment_id?: string | null;
+  task_id?: string | null;
+  loop_id?: string | null;
+  loop_index?: number | null;
+  node_id?: string | null;
+  model_type?: string | null;
+  model_catalog_id?: number | null;
+  factor_count?: number | null;
+  freq?: string | null;
+  label_horizon?: number | null;
+  completed_at?: string | null;
+  archived_at?: string | null;
+  metric_count?: number;
+  curve_count?: number;
+  factor_count_rows?: number;
+  symbol_summary_count?: number;
+  trade_count?: number;
 };
 
 export type BackfillCandidateReport = {
@@ -222,6 +250,14 @@ export const qeArchiveApi = {
     const qs = new URLSearchParams({ limit: String(limit) });
     if (status) qs.set("status", status);
     const response = await apiFetch<{ status: string; data: ArchiveJob[] }>(`/qe-archive/jobs?${qs.toString()}`);
+    return response.data || [];
+  },
+  async runs(payload: { limit?: number; status?: string; run_type?: string; search?: string } = {}): Promise<ArchivedRunListItem[]> {
+    const qs = new URLSearchParams({ limit: String(payload.limit ?? 100) });
+    if (payload.status) qs.set("status", payload.status);
+    if (payload.run_type) qs.set("run_type", payload.run_type);
+    if (payload.search) qs.set("search", payload.search);
+    const response = await apiFetch<{ status: string; data: ArchivedRunListItem[] }>(`/qe-archive/runs?${qs.toString()}`);
     return response.data || [];
   },
   async backfillCandidates(payload: { limit?: number; status?: string; include_archived?: boolean } = {}): Promise<BackfillCandidateReport> {

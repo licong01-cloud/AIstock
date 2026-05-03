@@ -131,6 +131,7 @@ def test_repository_exposes_phase_one_write_methods() -> None:
         "fail_archive_job",
         "list_outbox_events",
         "list_archive_jobs",
+        "list_runs",
         "get_archive_summary",
         "get_run_quality_summary",
     )
@@ -576,18 +577,18 @@ def test_backfill_service_processes_explicit_loop_ids_without_manual_script() ->
     assert result["results"][0]["quality"]["passed"] is True
 
 
-def test_backfill_service_task_ids_expand_to_all_completed_loops() -> None:
+def test_backfill_service_task_ids_expand_to_unarchived_completed_loops_by_default() -> None:
     class FakeAssembler:
         def __init__(self) -> None:
             self.task_ids: list[str] = []
             self.loop_ids: list[str] = []
 
-        def list_loop_refs_for_tasks(self, task_ids, *, status):  # type: ignore[no-untyped-def]
+        def list_loop_refs_for_tasks(self, task_ids, *, status, include_archived):  # type: ignore[no-untyped-def]
             self.task_ids = list(task_ids)
             assert status == "completed"
+            assert include_archived is False
             return [
-                {"task_id": "task_1", "loop_id": "loop_1", "loop_index": 1},
-                {"task_id": "task_1", "loop_id": "loop_2", "loop_index": 2},
+                {"task_id": "task_1", "loop_id": "loop_3", "loop_index": 3},
             ]
 
         def assemble_loop_payload(self, *, loop_id=None, task_id=None, loop_index=None):  # type: ignore[no-untyped-def]
@@ -616,9 +617,9 @@ def test_backfill_service_task_ids_expand_to_all_completed_loops() -> None:
     )
 
     assert assembler.task_ids == ["task_1"]
-    assert assembler.loop_ids == ["loop_1", "loop_2"]
-    assert result["processed_count"] == 2
-    assert [item["source_sub_id"] for item in result["results"]] == ["loop_1", "loop_2"]
+    assert assembler.loop_ids == ["loop_3"]
+    assert result["processed_count"] == 1
+    assert [item["source_sub_id"] for item in result["results"]] == ["loop_3"]
 
 
 def test_realtime_ingestion_is_disabled_by_default_and_does_not_archive() -> None:
@@ -722,6 +723,7 @@ def test_qe_archive_backfill_api_returns_service_report(monkeypatch) -> None:
     class FakeService:
         def process_backfill(self, options):  # type: ignore[no-untyped-def]
             assert options.loop_ids == ["loop_1"]
+            assert options.include_archived is False
             assert options.write is False
             return {"processed_count": 1, "results": [{"run_id": "run_loop_1"}]}
 
@@ -732,7 +734,7 @@ def test_qe_archive_backfill_api_returns_service_report(monkeypatch) -> None:
 
     response = client.post(
         "/api/v1/qe-archive/backfill",
-        json={"source": "loop", "loop_ids": ["loop_1"], "write": False},
+        json={"source": "loop", "loop_ids": ["loop_1"], "write": False, "include_archived": False},
     )
 
     assert response.status_code == 200
@@ -774,6 +776,37 @@ def test_qe_archive_backfill_candidates_api_returns_selectable_sources(monkeypat
     data = response.json()["data"]
     assert data["count"] == 1
     assert data["candidates"][0]["candidate_id"] == "task:task_1"
+
+
+def test_qe_archive_runs_api_returns_selectable_quality_sources(monkeypatch) -> None:
+    class FakeRepository:
+        def list_runs(self, *, status, run_type, search, limit):  # type: ignore[no-untyped-def]
+            assert status == "completed"
+            assert run_type is None
+            assert search == "task_1"
+            assert limit == 25
+            return [
+                {
+                    "run_id": "qear_run_1",
+                    "task_id": "task_1",
+                    "loop_id": "loop_3",
+                    "run_type": "evolution_loop",
+                    "status": "completed",
+                    "metric_count": 80,
+                }
+            ]
+
+    monkeypatch.setattr(qe_archive_router, "get_repository", lambda: FakeRepository())
+    app = FastAPI()
+    app.include_router(qe_archive_router.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    response = client.get("/api/v1/qe-archive/runs?status=completed&search=task_1&limit=25")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data[0]["run_id"] == "qear_run_1"
+    assert data[0]["loop_id"] == "loop_3"
 
 
 def test_event_capture_is_disabled_by_default_and_does_not_write(monkeypatch) -> None:
