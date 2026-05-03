@@ -6,10 +6,52 @@
 
 - 当前唯一确认对 QE 有正向收益的主线是 old covfix：`HMM_COVFIX_w3_raw_same_params__n3_diag_rw3_nozscore`。
 - 最新 dynamic PUP strict 0.10 / 0.075 两个版本已验证收益不佳，已从 `sector_hmm` 可选列表下架，但保留历史 DB 记录和模型资产用于追溯。
-- 已新增 3 个 QE shadow loop 候选进入 HMM/QE 可选列表，均基于 old covfix 模型或板块因子 overlay 的离线 coefficient artifact，尚未完成完整 QE 回测验证。
+- 已新增 3 个 QE shadow loop 候选（2026-05-02）和 5 个 old covfix 系数 remap 候选（2026-05-04）进入 HMM/QE 可选列表；5 个 remap 候选只复制 old covfix `models.json` 并重映射预计算系数，没有重新训练。
 - 当前 old covfix 主线没有做传统 z-score 归一化；它使用相对化观测量（收益率、超额收益、成交量占比、涨停占比、资金流占比等），不是直接使用股票价格、行业指数点位或成交额绝对值。
 - 原始日线/分钟线数据层不应归一化；HMM 训练输入层后续应系统验证 train-only z-score、winsor+zscore、robust zscore、板块横截面 rank/zscore 等版本。
 - 仅修改 HMM registry / DB 记录 / HMM 模型资产时，生产 FastAPI 后端 `8001` 不需要重启；前端刷新页面即可重新读取可选列表。
+
+## 2026-05-04 old covfix remap 候选注册
+
+本次新增 5 个只读预计算候选，目的是在已验证最佳的 old covfix 基线上做系数强弱 ablation，而不是替换 HMM 训练逻辑。source coefficient 状态解释如下：
+
+```text
+source coeff < 1.0   fading
+source coeff = 1.0   neutral
+source coeff > 1.0   trending
+```
+
+新增 QE 可选项：
+
+```text
+Config ID                             Snapshot ID                            名称
+------------------------------------  ------------------------------------  --------------------------------------------------------------
+ce4952c1-4b0d-46a7-81f2-ae1d4a249555  6ea64754-003d-48d8-ad9e-d0e7857716c8  HMM_TEST_old_covfix_penalty_only_f096_b000__qe20260504
+82a40d27-0e96-48a1-882a-4d182a58b931  377a8447-ee26-44a8-8ead-7338f525e0f2  HMM_TEST_old_covfix_boost_only_p105__qe20260504
+22d53160-7195-4e69-86ec-76c19c615a69  5a8ce90e-50bb-4fbd-8cd8-e3b95c9dffa0  HMM_TEST_old_covfix_penalty094_boost103__qe20260504
+ea0db9d3-69bf-489e-aa55-c74b6340e68d  afa6acd9-f766-4394-970e-451d1a39bb06  HMM_TEST_old_covfix_penalty095_boost104__qe20260504
+518ddf2d-e4a0-4bf0-8572-7cea429e27d5  8ddb5d29-8097-4aef-b110-f2f94f54ca4b  HMM_TEST_old_covfix_penalty095_boost106__qe20260504
+```
+
+系数映射：
+
+```text
+名称后缀                         fading  neutral  trending  用途
+-------------------------------  ------  -------  --------  ----------------------------------------------
+penalty_only_f096_b000           0.96    1.00     1.00      保留风险惩罚，去掉趋势增强
+boost_only_p105                  1.00    1.00     1.05      保留趋势增强，去掉风险惩罚
+penalty094_boost103              0.94    1.00     1.03      强惩罚 + 软增强
+penalty095_boost104              0.95    1.00     1.04      中惩罚 + 中增强
+penalty095_boost106              0.95    1.00     1.06      中惩罚 + 偏强增强
+```
+
+验证状态：
+
+- `model_train_configs.model_type='sector_hmm'` 可查到 9 个 QE 可选 HMM：old covfix 1 个、2026-05-02 候选 3 个、2026-05-04 remap 候选 5 个。
+- 5 个新增 snapshot 均为 `completed`，`sector_count=131`，每个都有 `models.json` 和 `coefficients_preset_A_2024-07-01_2026-04-27.json`。
+- 5 个新增 coefficient artifact 都覆盖 442 个交易日、首尾日 131 个行业、`stock_sector_map=5847`。
+- `ConfigComposer._resolve_hmm_coefficients_json` 已对 5 个 snapshot 做 fail-fast 本地解析验证，均能命中预计算 artifact。
+- 生产后端 `8001` 未重启；`/api/v1/hmm-training/configs?model_type=sector_hmm` 和 snapshots API 已确认可返回 5 个新增候选。
 
 ## QE 对比基线
 
@@ -38,6 +80,11 @@ L4    duplicate of L3                    45.76%    -16.52%   1.9877   0.0787  0.
 角色        Config ID                             Snapshot ID                            名称
 ----------  ------------------------------------  ------------------------------------  -------------------------------------------------------------
 保留基线    b99c907b-873a-4173-a4ee-5eab266f8c49  bbec3863-fb67-445f-938e-66f092d18696  HMM_COVFIX_w3_raw_same_params__n3_diag_rw3_nozscore
+待测候选    ce4952c1-4b0d-46a7-81f2-ae1d4a249555  6ea64754-003d-48d8-ad9e-d0e7857716c8  HMM_TEST_old_covfix_penalty_only_f096_b000__qe20260504
+待测候选    82a40d27-0e96-48a1-882a-4d182a58b931  377a8447-ee26-44a8-8ead-7338f525e0f2  HMM_TEST_old_covfix_boost_only_p105__qe20260504
+待测候选    22d53160-7195-4e69-86ec-76c19c615a69  5a8ce90e-50bb-4fbd-8cd8-e3b95c9dffa0  HMM_TEST_old_covfix_penalty094_boost103__qe20260504
+待测候选    ea0db9d3-69bf-489e-aa55-c74b6340e68d  afa6acd9-f766-4394-970e-451d1a39bb06  HMM_TEST_old_covfix_penalty095_boost104__qe20260504
+待测候选    518ddf2d-e4a0-4bf0-8572-7cea429e27d5  8ddb5d29-8097-4aef-b110-f2f94f54ca4b  HMM_TEST_old_covfix_penalty095_boost106__qe20260504
 待测候选    90e2771e-3245-45c0-b8ad-471b10b24391  89753fae-0c3c-4c75-9282-c20d7d833ffa  HMM_TEST_old_covfix_primary_b020_p005__qe20260502
 待测候选    14fd8dd6-896d-4a7d-b8be-ec6a7cf44c95  78a4ecf7-4cca-4b67-af66-3d59573587eb  HMM_TEST_hyb_old_primary_turnover_flow_core_c70__qe20260502
 待测候选    94ba4a64-998d-4897-ace2-f0fe06133935  28335a3c-64d8-4ce8-944e-25e48a68f77c  HMM_TEST_sf_turnover_fast_q20_b010_p005__qe20260502
@@ -62,9 +109,14 @@ Config ID                             Snapshot ID                            名
 HMM_TEST_old_covfix_primary_b020_p005__qe20260502                old covfix 方向不变，只把系数映射弱化为 trending=1.020 / fading=0.995
 HMM_TEST_hyb_old_primary_turnover_flow_core_c70__qe20260502      old covfix primary + 高 RankIC 板块 turnover/flow 因子确认，当前主推荐候选
 HMM_TEST_sf_turnover_fast_q20_b010_p005__qe20260502              纯板块因子 ablation，用于判断 sector factor 本身是否有增益
+HMM_TEST_old_covfix_penalty_only_f096_b000__qe20260504           old covfix 状态不变，trending 从 1.05 降到 1.00，只验证 fading=0.96 的保护是否贡献收益
+HMM_TEST_old_covfix_boost_only_p105__qe20260504                  old covfix 状态不变，fading 从 0.96 升到 1.00，只验证 trending=1.05 是否贡献收益
+HMM_TEST_old_covfix_penalty094_boost103__qe20260504              old covfix 状态不变，增强风险惩罚到 0.94，同时把趋势增强降到 1.03
+HMM_TEST_old_covfix_penalty095_boost104__qe20260504              old covfix 状态不变，中等风险惩罚 0.95 + 中等趋势增强 1.04
+HMM_TEST_old_covfix_penalty095_boost106__qe20260504              old covfix 状态不变，中等风险惩罚 0.95 + 偏强趋势增强 1.06
 ```
 
-三者都只支持：
+上述待测候选都只支持：
 
 ```text
 preset       preset_A
@@ -100,6 +152,11 @@ old covfix  backend/data/hmm_models/b99c907b-873a-4173-a4ee-5eab266f8c49/2026-04
 候选 1      backend/data/hmm_models/90e2771e-3245-45c0-b8ad-471b10b24391/2026-05-02/models.json
 候选 2      backend/data/hmm_models/14fd8dd6-896d-4a7d-b8be-ec6a7cf44c95/2026-05-02/models.json
 候选 3      backend/data/hmm_models/94ba4a64-998d-4897-ace2-f0fe06133935/2026-05-02/models.json
+remap 1     backend/data/hmm_models/ce4952c1-4b0d-46a7-81f2-ae1d4a249555/2026-05-04/models.json
+remap 2     backend/data/hmm_models/82a40d27-0e96-48a1-882a-4d182a58b931/2026-05-04/models.json
+remap 3     backend/data/hmm_models/22d53160-7195-4e69-86ec-76c19c615a69/2026-05-04/models.json
+remap 4     backend/data/hmm_models/ea0db9d3-69bf-489e-aa55-c74b6340e68d/2026-05-04/models.json
+remap 5     backend/data/hmm_models/518ddf2d-e4a0-4bf0-8572-7cea429e27d5/2026-05-04/models.json
 下架 0.10   backend/data/hmm_models/5a3183b6-39bc-45dd-8b3d-d2027c476e62/2026-04-29/models.json
 下架 0.075  backend/data/hmm_models/8ef81e6b-263d-4acd-93ff-4a20526b2d13/2026-04-29/models.json
 ```
@@ -113,6 +170,8 @@ old covfix  backend/data/hmm_models/b99c907b-873a-4173-a4ee-5eab266f8c49/2026-04
 -------------------------------------------------------------------------------------  ------------------------------------------------------------
 .codex_tmp/hmm_registry_updates/hmm_registry_update_before_20260502_193953.json         注册/下架前 DB 备份
 .codex_tmp/hmm_registry_updates/register_hmm_qe_candidates_20260502.py                  本次本地注册脚本，未进入 git，供人工追溯
+scripts/register_hmm_remap_qe_candidates_20260504.py                                    2026-05-04 old covfix remap 候选注册脚本，不内嵌 DB 密码
+.codex_tmp/hmm_registry_updates/hmm_remap_registry_result_20260504_005555.json           2026-05-04 注册结果本地证据
 ```
 
 `.codex_tmp` 是本地临时目录，不应作为长期唯一证据；长期结论以本文档和 DB 当前状态为准。
@@ -226,8 +285,9 @@ docs/analysis/hmm_training_current_status_20260503.md                           
 ```text
 优先级  动作
 ------  --------------------------------------------------------------------------------------------------
-P0      用当前 3 个待测候选 + old covfix + no-HMM 做 QE shadow loop 完整对比，确认是否真实超过旧最佳版本
+P0      用当前 3 个 2026-05-02 待测候选 + 5 个 2026-05-04 remap 候选 + old covfix + no-HMM 做 QE shadow loop 完整对比，确认是否真实超过旧最佳版本
 P0      不要删除 old covfix；它是当前唯一确认有效 HMM 基线
+P0      sector-factor 不建议直接替代 old covfix；若要继续，应作为 old covfix/remap 的二阶段 gating/confirmation 做增量验证
 P1      新增 old covfix + train-only zscore 版本，验证 zscore 是否提升而不是直接替换生产基线
 P1      新增 winsor+zscore / robust zscore 版本，重点处理资金流和涨停占比尖峰
 P1      针对 volume_ratio 测试 rolling z 或 cross-sectional rank，减少大行业规模暴露
