@@ -355,6 +355,7 @@ class AutoEvolutionScheduler:
             full_url_env="AISTOCK_QE_EVOLUTION_LOOP_CALLBACK_URL",
             node_id=node_id,
             node_callback_url=row.get("callback_url") if row else None,
+            require_env_base=True,
         )
 
     def _get_task_status(self, task_id: str) -> Optional[str]:
@@ -434,6 +435,7 @@ class AutoEvolutionScheduler:
             full_url_env="AISTOCK_QE_EVOLUTION_LOOP_CALLBACK_URL",
             node_id=row.get("node_id") if row else None,
             node_callback_url=row.get("callback_url") if row else None,
+            require_env_base=True,
         )
         
     async def create_task(

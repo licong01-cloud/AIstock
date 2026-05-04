@@ -13,6 +13,11 @@
 
 import os
 import psycopg2
+from urllib.parse import urlparse
+
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 os.environ.setdefault("TDX_DB_HOST", "127.0.0.1")
 os.environ.setdefault("TDX_DB_PORT", "5432")
@@ -157,20 +162,27 @@ def run_migration():
         cur.execute(f"UPDATE {table} SET node_id = 'wsl2-5080' WHERE node_id IS NULL")
         print(f"  回填 {table}.node_id = 'wsl2-5080' — 完成 ({cur.rowcount} 行)")
 
-    # ── 7. 初始节点数据（含路径配置 + callback_url） ──
-    import socket
-    def _detect_callback_url(port: int = 8000) -> str:
-        """自动检测本机局域网 IP，拼接端口生成 callback_url。"""
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return f"http://{ip}:{port}"
-        except Exception:
-            return f"http://127.0.0.1:{port}"
+    # 7. Seed compute nodes with callback_url from environment.
+    def _callback_url_from_env() -> str:
+        """Read the AIstock callback base URL from .env/os.environ and fail fast if missing."""
+        env_names = (
+            "AISTOCK_QE_CALLBACK_BASE_URL",
+            "AISTOCK_BACKEND_CALLBACK_BASE_URL",
+            "AISTOCK_BACKEND_BASE_URL",
+        )
+        for name in env_names:
+            value = (os.environ.get(name) or "").strip().rstrip("/")
+            if value:
+                parsed = urlparse(value)
+                if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                    raise RuntimeError(f"{name} must be an absolute http(s) URL, got: {value!r}")
+                return value
+        raise RuntimeError(
+            "Compute-node callback_url must come from .env; set "
+            "AISTOCK_QE_CALLBACK_BASE_URL or AISTOCK_BACKEND_CALLBACK_BASE_URL."
+        )
 
-    callback_url = _detect_callback_url()
+    callback_url = _callback_url_from_env()
     cur.execute("""
         INSERT INTO infra.compute_nodes (
             node_id, display_name, api_base_url, gpu_model, gpu_vram_mb,

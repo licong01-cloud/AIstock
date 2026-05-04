@@ -64,10 +64,11 @@ class TestMultiAlphaRolloutGate:
 
 
 class TestQELoopCallbackUrls:
-    def test_wsl_qe_callback_uses_concrete_8001_endpoint_not_node_base(self):
+    def test_wsl_qe_callback_uses_env_endpoint_not_node_base(self):
         with patch.dict("os.environ", {
             "AISTOCK_QE_LOOP_CALLBACK_URL": "",
-            "AISTOCK_QE_CALLBACK_BASE_URL": "",
+            "AISTOCK_QE_CALLBACK_BASE_URL": "http://127.0.0.1:8001",
+            "AISTOCK_QE_CALLBACK_BASE_URL_WSL2_5080": "",
             "AISTOCK_BACKEND_CALLBACK_BASE_URL": "",
             "AISTOCK_BACKEND_BASE_URL": "",
         }):
@@ -78,31 +79,61 @@ class TestQELoopCallbackUrls:
 
         assert url == "http://127.0.0.1:8001/api/v1/quantevolver/webhook/loop-completed"
 
-    def test_remote_qe_callback_expands_compute_node_base(self):
+    def test_remote_qe_callback_uses_env_base_over_stale_node_base(self):
         with patch.dict("os.environ", {
             "AISTOCK_QE_LOOP_CALLBACK_URL": "",
-            "AISTOCK_QE_CALLBACK_BASE_URL": "",
+            "AISTOCK_QE_CALLBACK_BASE_URL": "http://192.168.50.14:8001",
+            "AISTOCK_QE_CALLBACK_BASE_URL_RDAGENT_NODE1": "",
             "AISTOCK_BACKEND_CALLBACK_BASE_URL": "",
             "AISTOCK_BACKEND_BASE_URL": "",
         }):
             url = quantevolver_router._resolve_qe_experiment_callback_url(
                 "rdagent-node1",
-                "http://192.168.50.10:8001",
+                "http://192.168.50.14:8000",
             )
 
-        assert url == "http://192.168.50.10:8001/api/v1/quantevolver/webhook/loop-completed"
+        assert url == "http://192.168.50.14:8001/api/v1/quantevolver/webhook/loop-completed"
 
-    def test_remote_qe_callback_rejects_localhost_without_override(self):
+    def test_node_specific_env_base_overrides_global_base(self):
+        with patch.dict("os.environ", {
+            "AISTOCK_QE_CALLBACK_BASE_URL": "http://192.168.50.14:8001",
+            "AISTOCK_QE_CALLBACK_BASE_URL_RDAGENT_NODE1": "http://192.168.50.99:8001",
+        }):
+            url = build_aistock_callback_url(
+                endpoint_path="/api/v1/quantevolver/evolution/webhook/loop-completed",
+                node_id="rdagent-node1",
+                node_callback_url="http://192.168.50.14:8000",
+                require_env_base=True,
+            )
+
+        assert url == "http://192.168.50.99:8001/api/v1/quantevolver/evolution/webhook/loop-completed"
+
+    def test_qe_callback_requires_env_base_when_not_overridden(self):
         with patch.dict("os.environ", {
             "AISTOCK_QE_LOOP_CALLBACK_URL": "",
             "AISTOCK_QE_CALLBACK_BASE_URL": "",
+            "AISTOCK_QE_CALLBACK_BASE_URL_RDAGENT_NODE1": "",
             "AISTOCK_BACKEND_CALLBACK_BASE_URL": "",
             "AISTOCK_BACKEND_BASE_URL": "",
         }):
-            with pytest.raises(ValueError, match="Remote QE callback URL"):
+            with pytest.raises(ValueError, match="QE callback base URL must be configured"):
                 quantevolver_router._resolve_qe_experiment_callback_url(
                     "rdagent-node1",
-                    "http://127.0.0.1:8001",
+                    "http://192.168.50.14:8001",
+                )
+
+    def test_remote_qe_callback_rejects_localhost_env(self):
+        with patch.dict("os.environ", {
+            "AISTOCK_QE_LOOP_CALLBACK_URL": "",
+            "AISTOCK_QE_CALLBACK_BASE_URL": "http://127.0.0.1:8001",
+            "AISTOCK_QE_CALLBACK_BASE_URL_RDAGENT_NODE1": "",
+            "AISTOCK_BACKEND_CALLBACK_BASE_URL": "",
+            "AISTOCK_BACKEND_BASE_URL": "",
+        }):
+            with pytest.raises(ValueError, match="localhost is not allowed"):
+                quantevolver_router._resolve_qe_experiment_callback_url(
+                    "rdagent-node1",
+                    "http://192.168.50.14:8001",
                 )
 
     def test_full_callback_override_is_preserved(self):

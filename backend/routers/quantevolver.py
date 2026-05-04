@@ -5932,6 +5932,7 @@ def _resolve_qe_experiment_callback_url(
         full_url_env="AISTOCK_QE_LOOP_CALLBACK_URL",
         node_id=node_id,
         node_callback_url=node_callback_url,
+        require_env_base=True,
     )
 
 

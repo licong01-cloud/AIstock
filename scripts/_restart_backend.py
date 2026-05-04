@@ -1,14 +1,26 @@
-"""Kill the running backend and restart it using conda."""
-import subprocess, time, sys, os
+"""Kill the running backend and restart it using the project .env bind settings."""
 
-# Find the backend process by port 8001
+from pathlib import Path
+import os
+import subprocess
+import time
+
+from dotenv import load_dotenv
+
+backend_dir = Path(__file__).resolve().parents[1]
+load_dotenv(backend_dir / ".env", override=True)
+
+backend_host = os.environ["NEXT_APP_HOST"]
+backend_port = os.environ["NEXT_APP_PORT"]
+
+# Find the backend process by configured port.
 result2 = subprocess.run(
     ['netstat', '-ano'],
     capture_output=True, text=True
 )
 for line in result2.stdout.strip().split('\n'):
-    if ':8001' in line and 'LISTEN' in line:
-        print(f"Port 8001 listener: {line.strip()}")
+    if f':{backend_port}' in line and 'LISTEN' in line:
+        print(f"Port {backend_port} listener: {line.strip()}")
         pid = line.strip().split()[-1]
         print(f"PID: {pid}")
         # Kill it
@@ -17,15 +29,17 @@ for line in result2.stdout.strip().split('\n'):
         time.sleep(2)
         break
 else:
-    print("No process listening on port 8001")
+    print(f"No process listening on port {backend_port}")
 
-# Restart using conda
-backend_dir = r"f:\Dev\AIstock"
+# Restart using conda.
 print("\nStarting backend with conda...")
-cmd = 'conda activate AIstock && uvicorn backend.main:app --host 127.0.0.1 --port 8001'
+cmd = (
+    "conda activate AIstock && "
+    f"uvicorn backend.main:app --host {backend_host} --port {backend_port}"
+)
 proc = subprocess.Popen(
     ['cmd', '/c', cmd],
-    cwd=backend_dir,
+    cwd=str(backend_dir),
     stdout=subprocess.PIPE,
     stderr=subprocess.STDOUT,
     text=True,
