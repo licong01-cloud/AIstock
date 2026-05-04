@@ -103,7 +103,7 @@ export default function PaperV2OverviewPage() {
       <div className="pv2-grid pv2-grid-4">
         <MetricCard label="可用策略包" value={readyPackages} hint={`共 ${packages.length} 个策略包`} tone="success" />
         <MetricCard label="可选策略包" value={selectable.length} hint={`${staleModels} 个模型过期提醒`} tone={staleModels ? "warning" : "success"} />
-        <MetricCard label="活跃组合" value={activeTotal} hint="READY / RUNNING / PAUSED，可筛选分页" tone="info" />
+        <MetricCard label="运行/暂停组合" value={activeTotal} hint="RUNNING / PAUSED，READY 显示为未就绪" tone="info" />
         <MetricCard label="本页阻断错误" value={blockingErrors} hint="当前页 fail-fast 问题" tone={blockingErrors ? "danger" : "success"} />
       </div>
 
@@ -118,7 +118,7 @@ export default function PaperV2OverviewPage() {
         </div>
       </SectionCard>
 
-      <SectionCard title="正在运行模拟盘监控" eyebrow="资金 / 持仓 / 交易 / 收益" action={<Link className="pv2-button-primary" href="/paper-v2/running">打开运行监控</Link>}>
+      <SectionCard title="运行/追赶模拟盘监控" eyebrow="资金 / 持仓 / 交易 / 收益" action={<Link className="pv2-button-primary" href="/paper-v2/running">打开运行监控</Link>}>
         <NoticePanel title="已改为单接口聚合" tone="info">
           总览不再按组合扇出 runs/errors/snapshots 请求；当前表格由 /paper-v2/running-summary 一次性返回，并在数据库侧分页、排序和筛选。
         </NoticePanel>
@@ -136,7 +136,7 @@ export default function PaperV2OverviewPage() {
         />
       </SectionCard>
 
-      <SectionCard title="活跃模拟组合" eyebrow={loading ? "加载中" : `${pageStart}-${pageEnd} / ${pagination?.total || 0} 个组合`} action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
+      <SectionCard title="运行/暂停模拟组合" eyebrow={loading ? "加载中" : `${pageStart}-${pageEnd} / ${pagination?.total || 0} 个组合`} action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
         <div className="pv2-card pv2-filter-card">
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>状态筛选</label><select className="pv2-select" value={statusFilter} onChange={(event) => resetPage(() => setStatusFilter(event.target.value))}>{RUNNING_STATUS_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>

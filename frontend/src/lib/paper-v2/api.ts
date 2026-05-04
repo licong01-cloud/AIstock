@@ -372,6 +372,10 @@ export const paperV2Api = {
     const data = await apiFetch<{ session: PaperSession }>(`/paper-v2/sessions/${sessionId}/${action}`, { method: "POST" });
     return data.session;
   },
+  async switchSessionMode(sessionId: string, payload: JsonObject): Promise<PaperSession> {
+    const data = await apiFetch<{ session: PaperSession }>(`/paper-v2/sessions/${sessionId}/switch-mode`, body(payload));
+    return data.session;
+  },
   async schedulerStatus(): Promise<PaperSchedulerStatus> {
     const data = await apiFetch<{ scheduler: PaperSchedulerStatus }>("/paper-v2/session-scheduler/status");
     return data.scheduler;

@@ -12,6 +12,7 @@ from backend.services.paper_trading_v2.models import (
     PaperSessionMode,
     PaperSessionPhase,
     PaperSessionStatus,
+    PortfolioStatus,
 )
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
@@ -234,6 +235,51 @@ def test_live_session_injects_previous_trading_day_selection_cutoff() -> None:
 
     assert config["selection_artifact_config"]["cutoff_date"] == "2024-01-03"
     assert config["paper_v2_session"]["selection_cutoff_date"] == "2024-01-03"
+
+
+def test_catchup_replay_end_includes_current_day_only_after_close() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo(data_source=MinuteDataSource.DB_HISTORICAL)
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.CATCHUP_THEN_LIVE,
+        start_date=date(2024, 1, 2),
+        historical_data_source=MinuteDataSource.DB_HISTORICAL,
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+
+    assert PaperTradingLiveMinuteExecutor._catchup_replay_end(
+        session=session,
+        as_of_time=datetime(2024, 1, 4, 10, 0),
+    ) == date(2024, 1, 3)
+    assert PaperTradingLiveMinuteExecutor._catchup_replay_end(
+        session=session,
+        as_of_time=datetime(2024, 1, 4, 16, 0),
+    ) == date(2024, 1, 4)
+
+
+def test_live_waiting_next_day_keeps_portfolio_running_for_active_session() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo()
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 3),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeLiveMarket([]),
+    )
+
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 16, 0),
+    )
+
+    assert progress.session.status == PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY
+    assert paper_repo.get_portfolio(portfolio_id).status == PortfolioStatus.RUNNING
 
 
 def test_catchup_then_live_replays_previous_days_and_processes_current_live_bar() -> None:

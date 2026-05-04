@@ -119,7 +119,7 @@ class PaperTradingLiveMinuteExecutor:
                 "CATCHUP_THEN_LIVE currently requires DB_HISTORICAL for the historical catch-up role",
                 context={"session_id": session.session_id, "historical_data_source": str(session.historical_data_source)},
             )
-        replay_end = self._catchup_replay_end(session=session, as_of_date=as_of_time.date())
+        replay_end = self._catchup_replay_end(session=session, as_of_time=as_of_time)
         completed_days = {
             item.trade_date
             for item in self.repository.list_session_days(session.session_id)
@@ -191,6 +191,12 @@ class PaperTradingLiveMinuteExecutor:
             raise SessionConfigError(
                 "live Paper v2 sessions require TDX_REALTIME live_data_source",
                 context={"session_id": session.session_id, "live_data_source": str(session.live_data_source)},
+            )
+        portfolio = self.repository.get_portfolio(session.portfolio_id)
+        if portfolio.status not in {PortfolioStatus.READY, PortfolioStatus.RUNNING}:
+            raise InvalidStateTransitionError(
+                "paper v2 portfolio must be READY/RUNNING before live session tick",
+                context={"portfolio_id": portfolio.portfolio_id, "status": portfolio.status.value},
             )
         if session.start_date > as_of_time.date():
             updated = self._save_waiting_next_day(
@@ -426,7 +432,7 @@ class PaperTradingLiveMinuteExecutor:
                 context={"trade_date": trade_date.isoformat(), "position_count": len(current_positions), "nav": snapshot.nav},
             )
             succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
-            self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.READY)
+            self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.RUNNING)
             self.repository.update_session_status(
                 session.session_id,
                 status=PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
@@ -707,7 +713,7 @@ class PaperTradingLiveMinuteExecutor:
             },
         )
         self.repository.update_run_status(run, RunStatus.SUCCEEDED)
-        self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.READY)
+        self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.RUNNING)
         self.repository.update_session_status(
             session.session_id,
             status=PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
@@ -765,6 +771,7 @@ class PaperTradingLiveMinuteExecutor:
             message=message,
             context=context,
         )
+        self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
         return self.repository.update_session_status(
             session.session_id,
             status=PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
@@ -899,9 +906,10 @@ class PaperTradingLiveMinuteExecutor:
         return max(values) if values else None
 
     @staticmethod
-    def _catchup_replay_end(*, session: PaperTradingSession, as_of_date: date) -> date | None:
+    def _catchup_replay_end(*, session: PaperTradingSession, as_of_time: datetime) -> date | None:
+        as_of_date = as_of_time.date()
         replay_end = session.end_date or as_of_date
-        if replay_end >= as_of_date:
+        if replay_end >= as_of_date and as_of_time.time() < MARKET_CLOSE:
             replay_end = as_of_date.fromordinal(as_of_date.toordinal() - 1)
         if replay_end < session.start_date:
             return None

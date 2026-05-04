@@ -10,13 +10,13 @@ export type RunningPortfolioSummary = {
   latestPositions: JsonObject[];
 };
 
-export const ACTIVE_RUNNING_STATUSES = ["READY", "RUNNING", "PAUSED"];
+export const ACTIVE_RUNNING_STATUSES = ["RUNNING", "PAUSED"];
 
 export const RUNNING_STATUS_OPTIONS = [
-  { value: "ACTIVE", label: "全部活跃" },
-  { value: "READY", label: "READY" },
-  { value: "RUNNING", label: "RUNNING" },
-  { value: "PAUSED", label: "PAUSED" },
+  { value: "ACTIVE", label: "运行/暂停" },
+  { value: "READY", label: "未就绪（READY）" },
+  { value: "RUNNING", label: "运行中（RUNNING）" },
+  { value: "PAUSED", label: "已暂停（PAUSED）" },
   { value: "FAILED", label: "FAILED" },
   { value: "COMPLETED", label: "COMPLETED" },
   { value: "RETIRED", label: "RETIRED" },
@@ -92,6 +92,30 @@ export function packageName(portfolio: PaperPortfolio): string {
 
 export function packageSource(portfolio: PaperPortfolio): string {
   return String(portfolio.frozen_manifest?.["source_id"] || portfolio.frozen_manifest?.["run_id"] || portfolio.package_id || "-");
+}
+
+export function runningScenario(row: RunningPortfolioSummary): { label: string; hint: string } {
+  const status = String(row.portfolio.status || "").toUpperCase();
+  const session = row.latestSession;
+  const mode = String(session?.mode || "").toUpperCase();
+  const sessionStatus = String(session?.status || "").toUpperCase();
+  const phase = String(session?.phase || "").toLowerCase();
+  if (status === "READY") {
+    return { label: "未就绪/未运行", hint: "READY 不代表正在运行，需要启动历史追赶或实时会话" };
+  }
+  if (mode === "REPLAY_ONLY") {
+    return { label: "仅历史追赶", hint: sessionStatus === "SUCCEEDED" ? "追赶完成后停止" : "只处理历史分钟线，不会自动切实时" };
+  }
+  if (mode === "CATCHUP_THEN_LIVE" && phase.includes("historical")) {
+    return { label: "历史追赶中", hint: "追赶至最新可回放日后自动进入实时行情" };
+  }
+  if (mode === "CATCHUP_THEN_LIVE") {
+    return { label: "追赶后实时", hint: "已进入实时阶段或等待下一交易日" };
+  }
+  if (mode === "LIVE_ONLY") {
+    return { label: "完全实时运行", hint: "直接使用 TDX 实时分钟线" };
+  }
+  return { label: "无运行会话", hint: "没有可追踪的 replay/live session" };
 }
 
 export function statusFilterToStatuses(statusFilter: string): string[] {

@@ -320,13 +320,7 @@ def test_paper_trading_day_runner_persists_full_day_path() -> None:
         package_repository=package_repo,
         repository=paper_repo,
     ).running_summary(limit=10)
-    assert len(running_summary) == 1
-    assert running_summary[0]["portfolio"].portfolio_id == portfolio.portfolio_id
-    assert running_summary[0]["latest_run"]["run_id"] == result.run.run_id
-    assert running_summary[0]["latest_snapshot"]["nav"] == paper_repo.snapshots[result.run.run_id].nav
-    assert running_summary[0]["counts"]["orders"] == 1
-    assert running_summary[0]["counts"]["fills"] == len(paper_repo.fills[result.run.run_id])
-    assert running_summary[0]["counts"]["errors"] == 0
+    assert running_summary == []
     running_page = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -344,6 +338,11 @@ def test_paper_trading_day_runner_persists_full_day_path() -> None:
     assert running_page["pagination"]["total"] == 1
     assert running_page["pagination"]["page_size"] == 20
     assert running_page["summaries"][0]["portfolio"].portfolio_id == portfolio.portfolio_id
+    assert running_page["summaries"][0]["latest_run"]["run_id"] == result.run.run_id
+    assert running_page["summaries"][0]["latest_snapshot"]["nav"] == paper_repo.snapshots[result.run.run_id].nav
+    assert running_page["summaries"][0]["counts"]["orders"] == 1
+    assert running_page["summaries"][0]["counts"]["fills"] == len(paper_repo.fills[result.run.run_id])
+    assert running_page["summaries"][0]["counts"]["errors"] == 0
     assert paper_repo.list_runs(portfolio.portfolio_id)[0]["run_id"] == result.run.run_id
     event_types = [
         item["event_type"]

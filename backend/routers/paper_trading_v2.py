@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from backend.db.pg_pool import get_conn
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.paper_trading_v2.market_data import MinuteDataSource, TradeCalendarProvider
 from backend.services.paper_trading_v2.live_dashboard import PaperTradingLiveDashboardService
 from backend.services.paper_trading_v2.readiness import PaperTradingReadinessService
 from backend.services.paper_trading_v2.replay import PaperTradingHistoricalReplay
@@ -95,6 +95,27 @@ class CreateSessionRequest(BaseModel):
     confirm_reset: bool = False
     confirm_text: str | None = None
     created_by: str | None = None
+
+
+class SwitchSessionModeRequest(BaseModel):
+    target_mode: PaperSessionMode
+    start_date: date
+    end_date: date | None = None
+    historical_data_source: MinuteDataSource | None = None
+    live_data_source: MinuteDataSource | None = None
+    runtime_config: dict[str, Any] = Field(default_factory=dict)
+    rerun_policy: Literal["reject_existing", "reset_portfolio"] = "reject_existing"
+    auto_switch_to_live: bool = False
+    confirm_reset: bool = False
+    confirm_text: str | None = None
+    created_by: str | None = None
+
+
+def _session_service_for_mutation() -> PaperTradingSessionService:
+    return PaperTradingSessionService(
+        calendar_provider=TradeCalendarProvider(),
+        enforce_non_trading_window=True,
+    )
 
 
 class TickSessionRequest(BaseModel):
@@ -210,6 +231,7 @@ def get_trading_day_defaults(
 @router.post("/portfolios")
 def create_portfolio(req: CreatePortfolioRequest) -> dict[str, Any]:
     try:
+        _session_service_for_mutation().require_non_trading_operation_window(action="create_portfolio")
         portfolio = PaperTradingV2PortfolioService().create_portfolio(
             package_id=req.package_id,
             portfolio_name=req.portfolio_name,
@@ -281,6 +303,10 @@ def get_portfolio(portfolio_id: str) -> dict[str, Any]:
 @router.post("/portfolios/{portfolio_id}/pause")
 def pause_portfolio(portfolio_id: str) -> dict[str, Any]:
     try:
+        _session_service_for_mutation().require_non_trading_operation_window(
+            action="pause_portfolio",
+            portfolio_id=portfolio_id,
+        )
         portfolio = PaperTradingV2PortfolioService().pause_portfolio(portfolio_id)
         return {"ok": True, "portfolio": portfolio.model_dump(mode="json")}
     except TradingCoreError as exc:
@@ -290,6 +316,10 @@ def pause_portfolio(portfolio_id: str) -> dict[str, Any]:
 @router.post("/portfolios/{portfolio_id}/resume")
 def resume_portfolio(portfolio_id: str) -> dict[str, Any]:
     try:
+        _session_service_for_mutation().require_non_trading_operation_window(
+            action="resume_portfolio",
+            portfolio_id=portfolio_id,
+        )
         portfolio = PaperTradingV2PortfolioService().resume_portfolio(portfolio_id)
         return {"ok": True, "portfolio": portfolio.model_dump(mode="json")}
     except TradingCoreError as exc:
@@ -299,6 +329,10 @@ def resume_portfolio(portfolio_id: str) -> dict[str, Any]:
 @router.post("/portfolios/{portfolio_id}/complete")
 def complete_portfolio(portfolio_id: str) -> dict[str, Any]:
     try:
+        _session_service_for_mutation().require_non_trading_operation_window(
+            action="complete_portfolio",
+            portfolio_id=portfolio_id,
+        )
         portfolio = PaperTradingV2PortfolioService().complete_portfolio(portfolio_id)
         return {"ok": True, "portfolio": portfolio.model_dump(mode="json")}
     except TradingCoreError as exc:
@@ -308,6 +342,10 @@ def complete_portfolio(portfolio_id: str) -> dict[str, Any]:
 @router.post("/portfolios/{portfolio_id}/retire")
 def retire_portfolio(portfolio_id: str) -> dict[str, Any]:
     try:
+        _session_service_for_mutation().require_non_trading_operation_window(
+            action="retire_portfolio",
+            portfolio_id=portfolio_id,
+        )
         portfolio = PaperTradingV2PortfolioService().retire_portfolio(portfolio_id)
         return {"ok": True, "portfolio": portfolio.model_dump(mode="json")}
     except TradingCoreError as exc:
@@ -504,9 +542,31 @@ def replay_portfolio(portfolio_id: str, req: ReplayRequest) -> dict[str, Any]:
 @router.post("/portfolios/{portfolio_id}/sessions")
 def create_portfolio_session(portfolio_id: str, req: CreateSessionRequest) -> dict[str, Any]:
     try:
-        session = PaperTradingSessionService().create_session(
+        session = _session_service_for_mutation().create_session(
             portfolio_id=portfolio_id,
             mode=req.mode,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            historical_data_source=req.historical_data_source,
+            live_data_source=req.live_data_source,
+            runtime_config=req.runtime_config,
+            rerun_policy=req.rerun_policy,
+            auto_switch_to_live=req.auto_switch_to_live,
+            confirm_reset=req.confirm_reset,
+            confirm_text=req.confirm_text,
+            created_by=req.created_by,
+        )
+        return {"ok": True, "session": session.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/sessions/{session_id}/switch-mode")
+def switch_trade_session_mode(session_id: str, req: SwitchSessionModeRequest) -> dict[str, Any]:
+    try:
+        session = _session_service_for_mutation().switch_session_mode(
+            session_id=session_id,
+            target_mode=req.target_mode,
             start_date=req.start_date,
             end_date=req.end_date,
             historical_data_source=req.historical_data_source,
@@ -633,7 +693,7 @@ def tick_trade_session(session_id: str, req: TickSessionRequest | None = None) -
 @router.post("/sessions/{session_id}/pause")
 def pause_trade_session(session_id: str) -> dict[str, Any]:
     try:
-        session = PaperTradingSessionService().pause(session_id)
+        session = _session_service_for_mutation().pause(session_id)
         return {"ok": True, "session": session.model_dump(mode="json")}
     except TradingCoreError as exc:
         _raise_http(exc)
@@ -642,7 +702,7 @@ def pause_trade_session(session_id: str) -> dict[str, Any]:
 @router.post("/sessions/{session_id}/resume")
 def resume_trade_session(session_id: str) -> dict[str, Any]:
     try:
-        session = PaperTradingSessionService().resume(session_id)
+        session = _session_service_for_mutation().resume(session_id)
         return {"ok": True, "session": session.model_dump(mode="json")}
     except TradingCoreError as exc:
         _raise_http(exc)
@@ -651,7 +711,7 @@ def resume_trade_session(session_id: str) -> dict[str, Any]:
 @router.post("/sessions/{session_id}/stop")
 def stop_trade_session(session_id: str) -> dict[str, Any]:
     try:
-        session = PaperTradingSessionService().stop(session_id)
+        session = _session_service_for_mutation().stop(session_id)
         return {"ok": True, "session": session.model_dump(mode="json")}
     except TradingCoreError as exc:
         _raise_http(exc)

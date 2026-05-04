@@ -9,8 +9,9 @@ created.
 from __future__ import annotations
 
 import threading
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from backend.services.trading_core.errors import (
     DataUnavailableError,
@@ -26,7 +27,7 @@ from backend.services.trading_core.execution_algo_capabilities import (
     require_execution_algo_supports_mode,
 )
 
-from .market_data import MinuteDataSource
+from .market_data import MinuteDataSource, TradeCalendarProvider
 from .models import (
     PaperReplayResult,
     PaperSessionDay,
@@ -45,6 +46,9 @@ from .service import PaperTradingV2PortfolioService
 
 SUPPORTED_HISTORICAL_SESSION_SOURCES = {MinuteDataSource.DB_HISTORICAL}
 SUPPORTED_LIVE_SESSION_SOURCES = {MinuteDataSource.TDX_REALTIME}
+SESSION_STATE_CHANGE_BLOCK_START = time(9, 15)
+SESSION_STATE_CHANGE_BLOCK_END = time(15, 0)
+SESSION_STATE_CHANGE_TZ = ZoneInfo("Asia/Shanghai")
 TERMINAL_SESSION_STATUSES = {
     PaperSessionStatus.SUCCEEDED,
     PaperSessionStatus.FAILED,
@@ -89,8 +93,12 @@ class PaperTradingSessionService:
         self,
         *,
         repository: PaperTradingV2Repository | Any | None = None,
+        calendar_provider: TradeCalendarProvider | Any | None = None,
+        enforce_non_trading_window: bool = False,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
+        self.calendar_provider = calendar_provider
+        self.enforce_non_trading_window = enforce_non_trading_window
 
     def create_session(
         self,
@@ -107,7 +115,13 @@ class PaperTradingSessionService:
         confirm_reset: bool = False,
         confirm_text: str | None = None,
         created_by: str | None = None,
+        as_of_time: datetime | None = None,
     ) -> PaperTradingSession:
+        self._require_non_trading_operation_window(
+            action="create_session",
+            portfolio_id=portfolio_id,
+            as_of_time=as_of_time,
+        )
         portfolio = self.repository.get_portfolio(portfolio_id)
         if portfolio.status != PortfolioStatus.READY:
             raise InvalidStateTransitionError(
@@ -215,6 +229,104 @@ class PaperTradingSessionService:
         )
         return saved
 
+    def switch_session_mode(
+        self,
+        *,
+        session_id: str,
+        target_mode: PaperSessionMode | str,
+        start_date: date,
+        end_date: date | None = None,
+        historical_data_source: MinuteDataSource | str | None = None,
+        live_data_source: MinuteDataSource | str | None = None,
+        runtime_config: dict[str, Any] | None = None,
+        rerun_policy: Literal["reject_existing", "reset_portfolio"] = "reject_existing",
+        auto_switch_to_live: bool = False,
+        confirm_reset: bool = False,
+        confirm_text: str | None = None,
+        created_by: str | None = None,
+        as_of_time: datetime | None = None,
+    ) -> PaperTradingSession:
+        target = self._parse_mode(target_mode)
+        self._require_non_trading_operation_window(
+            action="switch_session_mode",
+            session_id=session_id,
+            as_of_time=as_of_time,
+        )
+        current = self.repository.get_session(session_id)
+        if current.status in TERMINAL_SESSION_STATUSES:
+            raise InvalidStateTransitionError(
+                "terminal paper v2 session cannot be switched",
+                context={"session_id": session_id, "status": current.status.value},
+            )
+        if current.mode == target:
+            raise InvalidStateTransitionError(
+                "paper v2 session is already using the requested mode",
+                context={"session_id": session_id, "mode": current.mode.value},
+            )
+        portfolio = self.repository.get_portfolio(current.portfolio_id)
+        if portfolio.status not in {PortfolioStatus.READY, PortfolioStatus.RUNNING, PortfolioStatus.PAUSED}:
+            raise InvalidStateTransitionError(
+                "paper v2 session mode switch requires an operable portfolio state",
+                context={
+                    "session_id": session_id,
+                    "portfolio_id": portfolio.portfolio_id,
+                    "portfolio_status": portfolio.status.value,
+                },
+            )
+        if self._has_running_run(portfolio.portfolio_id):
+            raise InvalidStateTransitionError(
+                "paper v2 session mode cannot be switched while a run is still RUNNING",
+                context={
+                    "session_id": session_id,
+                    "portfolio_id": portfolio.portfolio_id,
+                    "target_mode": target.value,
+                    "reason": "wait until the active run is finalized before switching the session mode",
+                },
+            )
+        stopped = self.repository.update_session_status(
+            session_id,
+            status=PaperSessionStatus.STOPPED,
+            completed_at=as_of_time or datetime.now(UTC),
+        )
+        self.repository.save_session_event(
+            session_id=session_id,
+            event_type="SESSION_MODE_SWITCH_STOPPED_SOURCE",
+            message="paper v2 session stopped before switching operation mode",
+            context={
+                "source_mode": current.mode.value,
+                "target_mode": target.value,
+                "created_by": created_by,
+            },
+        )
+        if portfolio.status in {PortfolioStatus.RUNNING, PortfolioStatus.PAUSED}:
+            self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.READY)
+        new_session = self.create_session(
+            portfolio_id=stopped.portfolio_id,
+            mode=target,
+            start_date=start_date,
+            end_date=end_date,
+            historical_data_source=historical_data_source,
+            live_data_source=live_data_source,
+            runtime_config=runtime_config,
+            rerun_policy=rerun_policy,
+            auto_switch_to_live=auto_switch_to_live,
+            confirm_reset=confirm_reset,
+            confirm_text=confirm_text,
+            created_by=created_by,
+            as_of_time=as_of_time,
+        )
+        self.repository.save_session_event(
+            session_id=new_session.session_id,
+            event_type="SESSION_MODE_SWITCH_CREATED_TARGET",
+            message="paper v2 session created from mode switch",
+            context={
+                "source_session_id": session_id,
+                "source_mode": current.mode.value,
+                "target_mode": new_session.mode.value,
+            },
+        )
+        return new_session
+
     def get_session(self, session_id: str) -> PaperTradingSession:
         return self.repository.get_session(session_id)
 
@@ -293,7 +405,23 @@ class PaperTradingSessionService:
             events=self.repository.list_session_events(session_id, limit=event_limit),
         )
 
+    def require_non_trading_operation_window(
+        self,
+        *,
+        action: str,
+        portfolio_id: str | None = None,
+        session_id: str | None = None,
+        as_of_time: datetime | None = None,
+    ) -> None:
+        self._require_non_trading_operation_window(
+            action=action,
+            portfolio_id=portfolio_id,
+            session_id=session_id,
+            as_of_time=as_of_time,
+        )
+
     def pause(self, session_id: str) -> PaperTradingSession:
+        self._require_non_trading_operation_window(action="pause_session", session_id=session_id)
         session = self.repository.get_session(session_id)
         if session.status in TERMINAL_SESSION_STATUSES:
             raise InvalidStateTransitionError(
@@ -309,6 +437,7 @@ class PaperTradingSessionService:
         return paused
 
     def resume(self, session_id: str) -> PaperTradingSession:
+        self._require_non_trading_operation_window(action="resume_session", session_id=session_id)
         session = self.repository.get_session(session_id)
         if session.status != PaperSessionStatus.PAUSED:
             raise InvalidStateTransitionError(
@@ -326,6 +455,7 @@ class PaperTradingSessionService:
         return resumed
 
     def stop(self, session_id: str) -> PaperTradingSession:
+        self._require_non_trading_operation_window(action="stop_session", session_id=session_id)
         session = self.repository.get_session(session_id)
         if session.status in {PaperSessionStatus.SUCCEEDED, PaperSessionStatus.FAILED, PaperSessionStatus.STOPPED}:
             return session
@@ -339,7 +469,64 @@ class PaperTradingSessionService:
             event_type="SESSION_STOPPED",
             message="paper v2 trade session stopped without deleting persisted artifacts",
         )
+        portfolio = self.repository.get_portfolio(session.portfolio_id)
+        if portfolio.status in {PortfolioStatus.RUNNING, PortfolioStatus.PAUSED} and not self._has_running_run(portfolio.portfolio_id):
+            self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.READY)
         return stopped
+
+    def _require_non_trading_operation_window(
+        self,
+        *,
+        action: str,
+        portfolio_id: str | None = None,
+        session_id: str | None = None,
+        as_of_time: datetime | None = None,
+    ) -> None:
+        if not self.enforce_non_trading_window:
+            return
+        now = self._operation_time(as_of_time)
+        if not self._is_trading_day_for_operation(now.date()):
+            return
+        if SESSION_STATE_CHANGE_BLOCK_START <= now.time() <= SESSION_STATE_CHANGE_BLOCK_END:
+            raise InvalidStateTransitionError(
+                "paper v2 session state changes are blocked during A-share trading hours",
+                context={
+                    "action": action,
+                    "portfolio_id": portfolio_id,
+                    "session_id": session_id,
+                    "as_of_time": now.isoformat(),
+                    "timezone": "Asia/Shanghai",
+                    "blocked_window": {
+                        "start": SESSION_STATE_CHANGE_BLOCK_START.isoformat(),
+                        "end": SESSION_STATE_CHANGE_BLOCK_END.isoformat(),
+                    },
+                    "reason": "change session mode/state before open, after close, or on a non-trading day",
+                },
+            )
+
+    @staticmethod
+    def _operation_time(as_of_time: datetime | None) -> datetime:
+        value = as_of_time or datetime.now(SESSION_STATE_CHANGE_TZ)
+        if value.tzinfo is None:
+            return value.replace(tzinfo=SESSION_STATE_CHANGE_TZ)
+        return value.astimezone(SESSION_STATE_CHANGE_TZ)
+
+    def _is_trading_day_for_operation(self, trade_date: date) -> bool:
+        if self.calendar_provider is not None:
+            try:
+                self.calendar_provider.ensure_trading_day(trade_date)
+                return True
+            except DataUnavailableError:
+                return False
+            except Exception:
+                return trade_date.weekday() < 5
+        return trade_date.weekday() < 5
+
+    def _has_running_run(self, portfolio_id: str) -> bool:
+        try:
+            return any(str(row.get("status") or "").upper() == "RUNNING" for row in self.repository.list_runs(portfolio_id, limit=10_000))
+        except Exception:
+            return True
 
     @staticmethod
     def _portfolio_policy_context(execution_policy: dict[str, Any], *, portfolio_id: str) -> dict[str, Any]:

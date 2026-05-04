@@ -53,15 +53,15 @@ export function asText(value: unknown): string {
 
 export function statusTone(status: unknown): "success" | "danger" | "warning" | "info" | "neutral" {
   const s = String(status || "").toUpperCase();
-  if (["READY", "PASSED", "SUCCEEDED", "SUCCESS", "COMPLETED", "PAPER_ENABLED", "SELECTION_ENABLED", "ACTIVE", "CURRENT", "FILLED", "ALL_TRADED"].includes(s)) return "success";
+  if (["PASSED", "SUCCEEDED", "SUCCESS", "COMPLETED", "PAPER_ENABLED", "SELECTION_ENABLED", "ACTIVE", "CURRENT", "FILLED", "ALL_TRADED"].includes(s)) return "success";
   if (["FAILED", "ERROR", "REJECTED", "PAPER_FAILED", "BLOCKED", "CANCELED", "CANCELLED", "EXPIRED"].includes(s)) return "danger";
-  if (["STALE", "STALE_WARNING", "WARNING", "PENDING", "DRAFT", "RETRAINING", "RUNNING", "PAUSED", "PARTIALLY_FILLED", "PARTIAL_FILLED", "NEW", "SUBMITTED"].includes(s)) return "warning";
-  if (["UNSUPPORTED", "NOT_RUN", "NO_DATA"].includes(s)) return "info";
+  if (["STALE", "STALE_WARNING", "WARNING", "PENDING", "DRAFT", "RETRAINING", "RUNNING", "PAUSED", "PREFLIGHTING", "REPLAYING", "CATCHING_UP", "SWITCHING_TO_LIVE", "LIVE_RUNNING", "LIVE_WAITING_FOR_BAR", "PARTIALLY_FILLED", "PARTIAL_FILLED", "NEW", "SUBMITTED"].includes(s)) return "warning";
+  if (["READY", "CREATED", "STOPPED", "LIVE_WAITING_NEXT_TRADING_DAY", "UNSUPPORTED", "NOT_RUN", "NO_DATA"].includes(s)) return "info";
   return "neutral";
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  READY: "就绪",
+  READY: "未就绪",
   PASSED: "已通过",
   SUCCEEDED: "成功",
   SUCCESS: "成功",
@@ -83,6 +83,24 @@ const STATUS_LABELS: Record<string, string> = {
   RETRAINING: "重训练中",
   RUNNING: "运行中",
   PAUSED: "已暂停",
+  CREATED: "已创建",
+  PREFLIGHTING: "预检查中",
+  REPLAYING: "历史回放中",
+  CATCHING_UP: "历史追赶中",
+  SWITCHING_TO_LIVE: "切换实时中",
+  LIVE_RUNNING: "实时运行中",
+  LIVE_WAITING_FOR_BAR: "等待实时分钟线",
+  LIVE_WAITING_NEXT_TRADING_DAY: "等待下一交易日",
+  STOPPING: "停止中",
+  STOPPED: "已停止",
+  REPLAY_ONLY: "仅历史追赶",
+  CATCHUP_THEN_LIVE: "追赶后自动实时",
+  LIVE_ONLY: "完全实时运行",
+  HISTORICAL_REPLAY: "历史追赶",
+  CURRENT_DAY_CATCHUP: "当日追赶",
+  LIVE_INTRADAY: "实时日内",
+  DAY_FINALIZATION: "收盘结算",
+  WAITING_NEXT_DAY: "等待下一交易日",
   UNSUPPORTED: "不支持",
   NOT_RUN: "未运行",
   NO_DATA: "无数据",

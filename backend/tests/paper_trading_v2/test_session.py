@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -8,9 +8,11 @@ from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.paper_trading_v2.models import (
     PaperReplayDayResult,
     PaperReplayResult,
+    PaperRun,
     PaperSessionProgress,
     PaperSessionMode,
     PaperSessionStatus,
+    PortfolioStatus,
 )
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
@@ -19,7 +21,13 @@ from backend.services.paper_trading_v2.session import PaperTradingSessionRunner,
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
-from backend.services.trading_core.errors import SessionAlreadyRunningError, SessionConfigError, SessionSourceUnsupportedError
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    InvalidStateTransitionError,
+    SessionAlreadyRunningError,
+    SessionConfigError,
+    SessionSourceUnsupportedError,
+)
 from backend.services.trading_core.models import RunStatus
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
@@ -94,6 +102,15 @@ class FakeLiveExecutor:
             status=PaperSessionStatus.LIVE_WAITING_FOR_BAR,
         )
         return PaperSessionProgress(session=updated, day_count=0, events=self.repo.list_session_events(session.session_id))
+
+
+class FakeTradingCalendar:
+    def __init__(self, *, trading_day: bool = True) -> None:
+        self.trading_day = trading_day
+
+    def ensure_trading_day(self, trade_date: date) -> None:
+        if not self.trading_day:
+            raise DataUnavailableError("not trading day", context={"trade_date": trade_date.isoformat()})
 
 
 def test_replay_only_session_create_tick_and_progress() -> None:
@@ -256,6 +273,130 @@ def test_replay_auto_switch_normalizes_to_catchup_session() -> None:
 
     assert session.mode == PaperSessionMode.CATCHUP_THEN_LIVE
     assert session.runtime_config["paper_v2_session"]["auto_switch_to_live"] is True
+
+
+def test_session_mutation_guard_blocks_trading_hours_when_enabled() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
+    service = PaperTradingSessionService(
+        repository=paper_repo,
+        calendar_provider=FakeTradingCalendar(trading_day=True),
+        enforce_non_trading_window=True,
+    )
+
+    with pytest.raises(InvalidStateTransitionError, match="trading hours"):
+        service.create_session(
+            portfolio_id=portfolio.portfolio_id,
+            mode=PaperSessionMode.REPLAY_ONLY,
+            start_date=date(2024, 1, 2),
+            end_date=date(2024, 1, 3),
+            historical_data_source=MinuteDataSource.DB_HISTORICAL,
+            as_of_time=datetime(2024, 1, 2, 10, 0),
+        )
+
+    session = service.create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.REPLAY_ONLY,
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        historical_data_source=MinuteDataSource.DB_HISTORICAL,
+        as_of_time=datetime(2024, 1, 2, 16, 0),
+    )
+    assert session.status == PaperSessionStatus.CREATED
+
+
+def test_switch_session_mode_stops_source_and_creates_target_after_close() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
+    service = PaperTradingSessionService(
+        repository=paper_repo,
+        calendar_provider=FakeTradingCalendar(trading_day=True),
+        enforce_non_trading_window=True,
+    )
+    source = service.create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.REPLAY_ONLY,
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        historical_data_source=MinuteDataSource.DB_HISTORICAL,
+        as_of_time=datetime(2024, 1, 2, 16, 0),
+    )
+
+    target = service.switch_session_mode(
+        session_id=source.session_id,
+        target_mode=PaperSessionMode.CATCHUP_THEN_LIVE,
+        start_date=date(2024, 1, 4),
+        historical_data_source=MinuteDataSource.DB_HISTORICAL,
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        as_of_time=datetime(2024, 1, 2, 16, 5),
+        created_by="unit_test",
+    )
+
+    assert paper_repo.get_session(source.session_id).status == PaperSessionStatus.STOPPED
+    assert target.mode == PaperSessionMode.CATCHUP_THEN_LIVE
+    event_types = [event["event_type"] for event in paper_repo.list_session_events(target.session_id)]
+    assert "SESSION_MODE_SWITCH_CREATED_TARGET" in event_types
+
+
+def test_switch_session_mode_rejects_running_run_without_stopping_source() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
+    service = PaperTradingSessionService(
+        repository=paper_repo,
+        calendar_provider=FakeTradingCalendar(trading_day=True),
+        enforce_non_trading_window=True,
+    )
+    source = service.create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.CATCHUP_THEN_LIVE,
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        historical_data_source=MinuteDataSource.DB_HISTORICAL,
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        as_of_time=datetime(2024, 1, 2, 16, 0),
+    )
+    paper_repo.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.RUNNING)
+    paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio.portfolio_id,
+            trade_date=date(2024, 1, 4),
+            status=RunStatus.RUNNING,
+            data_source=MinuteDataSource.TDX_REALTIME,
+        )
+    )
+
+    with pytest.raises(InvalidStateTransitionError, match="still RUNNING"):
+        service.switch_session_mode(
+            session_id=source.session_id,
+            target_mode=PaperSessionMode.LIVE_ONLY,
+            start_date=date(2024, 1, 4),
+            live_data_source=MinuteDataSource.TDX_REALTIME,
+            runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+            as_of_time=datetime(2024, 1, 2, 16, 5),
+        )
+
+    assert paper_repo.get_session(source.session_id).status == PaperSessionStatus.CREATED
+
+
+def test_stop_session_resets_running_portfolio_when_no_run_is_active() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
+    service = PaperTradingSessionService(
+        repository=paper_repo,
+        calendar_provider=FakeTradingCalendar(trading_day=False),
+        enforce_non_trading_window=True,
+    )
+    session = service.create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        as_of_time=datetime(2024, 1, 2, 16, 0),
+    )
+    paper_repo.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.RUNNING)
+
+    stopped = service.stop(session.session_id)
+
+    assert stopped.status == PaperSessionStatus.STOPPED
+    assert paper_repo.get_portfolio(portfolio.portfolio_id).status == PortfolioStatus.READY
 
 
 def test_session_capabilities_expose_only_real_startable_modes() -> None:

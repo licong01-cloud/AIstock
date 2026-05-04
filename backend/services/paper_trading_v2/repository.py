@@ -40,7 +40,6 @@ from .models import (
 ConnFactory = Callable[[], Iterator[Any]]
 
 RUNNING_SUMMARY_ACTIVE_STATUSES = (
-    PortfolioStatus.READY.value,
     PortfolioStatus.RUNNING.value,
     PortfolioStatus.PAUSED.value,
 )
