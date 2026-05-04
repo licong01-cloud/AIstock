@@ -13,7 +13,7 @@ from typing import Any, Iterable
 import yaml
 
 
-DEFAULT_CATALOG = Path("docs/standards/aistock_development_standard_v1.0_20260504.yaml")
+DEFAULT_CATALOG = Path("docs/standards/aistock_development_standard_v1.1_20260504.yaml")
 SEVERITY_RANK = {"P3": 1, "P2": 2, "P1": 3, "P0": 4, "NONE": 99}
 
 
@@ -23,7 +23,9 @@ class CompiledRule:
     title: str
     severity: str
     category: str
+    checker_type: str
     patterns: tuple[Any, ...]
+    checker_options: dict[str, Any]
     include_globs: tuple[str, ...]
     exclude_globs: tuple[str, ...]
     remediation: str
@@ -83,8 +85,15 @@ def compile_rules(catalog: dict[str, Any]) -> list[CompiledRule]:
         if not raw_rule.get("enabled", True):
             continue
         checker = raw_rule.get("checker") or {}
-        if checker.get("type") != "regex":
+        checker_type = str(checker.get("type") or "")
+        if checker_type not in {"regex", "path_regex", "regex_and_python_loop_contains"}:
             continue
+        checker_options: dict[str, Any] = {}
+        if checker_type == "regex_and_python_loop_contains":
+            checker_options["loop_patterns"] = tuple(
+                re.compile(pattern, re.MULTILINE) for pattern in _as_tuple(checker.get("loop_patterns"))
+            )
+            checker_options["max_following_lines"] = int(checker.get("max_following_lines") or 8)
         applies_to = raw_rule.get("applies_to") or {}
         compiled.append(
             CompiledRule(
@@ -92,7 +101,9 @@ def compile_rules(catalog: dict[str, Any]) -> list[CompiledRule]:
                 title=str(raw_rule.get("title") or raw_rule["rule_id"]),
                 severity=str(raw_rule.get("severity") or "P3"),
                 category=str(raw_rule.get("category") or "general"),
+                checker_type=checker_type,
                 patterns=tuple(re.compile(pattern, re.MULTILINE) for pattern in _as_tuple(checker.get("patterns"))),
+                checker_options=checker_options,
                 include_globs=_as_tuple(applies_to.get("include_globs") or ["**/*"]),
                 exclude_globs=_as_tuple(applies_to.get("exclude_globs")),
                 remediation=str(raw_rule.get("remediation") or "Review and fix according to AIstock development standards."),
@@ -110,7 +121,13 @@ def _path_key(path: Path, root: Path) -> str:
 
 
 def _matches(path_key: str, patterns: Iterable[str]) -> bool:
-    return any(fnmatch.fnmatchcase(path_key, pattern) for pattern in patterns)
+    for pattern in patterns:
+        if fnmatch.fnmatchcase(path_key, pattern):
+            return True
+        # Treat ** as zero-or-more path segments for repository glob ergonomics.
+        if "/**/" in pattern and fnmatch.fnmatchcase(path_key, pattern.replace("/**/", "/")):
+            return True
+    return False
 
 
 def _is_text_file(path: Path, suffixes: set[str]) -> bool:
@@ -121,6 +138,10 @@ def _skip_path(path: Path, skip_parts: set[str]) -> bool:
     normalized = path.as_posix()
     parts = set(path.parts)
     return any(part in parts or part in normalized for part in skip_parts)
+
+
+def _indent_width(line: str) -> int:
+    return len(line) - len(line.lstrip(" \t"))
 
 
 def _git_output(args: list[str], root: Path) -> str:
@@ -165,28 +186,84 @@ def scan_files(files: Iterable[Path], rules: Iterable[CompiledRule], root: Path)
     findings: list[Finding] = []
     for file_path in files:
         path_key = _path_key(file_path, root)
-        text = file_path.read_text(encoding="utf-8", errors="ignore")
         for rule in rules:
             if not _matches(path_key, rule.include_globs) or _matches(path_key, rule.exclude_globs):
                 continue
-            for pattern in rule.patterns:
-                for match in pattern.finditer(text):
-                    line = text.count("\n", 0, match.start()) + 1
-                    fingerprint = hashlib.sha256(f"{rule.rule_id}:{path_key}:{line}".encode("utf-8")).hexdigest()[:16]
-                    findings.append(
-                        Finding(
-                            rule_id=rule.rule_id,
-                            title=rule.title,
-                            severity=rule.severity,
-                            category=rule.category,
-                            file=path_key,
-                            line=line,
-                            message=rule.title,
-                            remediation=rule.remediation,
-                            baseline_policy=rule.baseline_policy,
-                            fingerprint=fingerprint,
+            if rule.checker_type == "path_regex":
+                for pattern in rule.patterns:
+                    if pattern.search(path_key):
+                        fingerprint = hashlib.sha256(f"{rule.rule_id}:{path_key}:1".encode("utf-8")).hexdigest()[:16]
+                        findings.append(
+                            Finding(
+                                rule_id=rule.rule_id,
+                                title=rule.title,
+                                severity=rule.severity,
+                                category=rule.category,
+                                file=path_key,
+                                line=1,
+                                message=rule.title,
+                                remediation=rule.remediation,
+                                baseline_policy=rule.baseline_policy,
+                                fingerprint=fingerprint,
+                            )
                         )
-                    )
+                continue
+            text = file_path.read_text(encoding="utf-8", errors="ignore")
+            if rule.checker_type in {"regex", "regex_and_python_loop_contains"}:
+                for pattern in rule.patterns:
+                    for match in pattern.finditer(text):
+                        line = text.count("\n", 0, match.start()) + 1
+                        fingerprint = hashlib.sha256(f"{rule.rule_id}:{path_key}:{line}".encode("utf-8")).hexdigest()[:16]
+                        findings.append(
+                            Finding(
+                                rule_id=rule.rule_id,
+                                title=rule.title,
+                                severity=rule.severity,
+                                category=rule.category,
+                                file=path_key,
+                                line=line,
+                                message=rule.title,
+                                remediation=rule.remediation,
+                                baseline_policy=rule.baseline_policy,
+                                fingerprint=fingerprint,
+                            )
+                        )
+            if rule.checker_type == "regex_and_python_loop_contains":
+                max_following_lines = int(rule.checker_options.get("max_following_lines") or 8)
+                loop_patterns = rule.checker_options.get("loop_patterns") or ()
+                lines = text.splitlines()
+                for index, line_text in enumerate(lines):
+                    stripped = line_text.lstrip(" \t")
+                    if not stripped.startswith("for "):
+                        continue
+                    loop_indent = _indent_width(line_text)
+                    end = min(len(lines), index + max_following_lines + 2)
+                    for inner_index in range(index + 1, end):
+                        inner_line = lines[inner_index]
+                        if not inner_line.strip():
+                            continue
+                        if _indent_width(inner_line) <= loop_indent:
+                            break
+                        if any(pattern.search(inner_line) for pattern in loop_patterns):
+                            line = inner_index + 1
+                            fingerprint = hashlib.sha256(
+                                f"{rule.rule_id}:{path_key}:{line}".encode("utf-8")
+                            ).hexdigest()[:16]
+                            findings.append(
+                                Finding(
+                                    rule_id=rule.rule_id,
+                                    title=rule.title,
+                                    severity=rule.severity,
+                                    category=rule.category,
+                                    file=path_key,
+                                    line=line,
+                                    message=rule.title,
+                                    remediation=rule.remediation,
+                                    baseline_policy=rule.baseline_policy,
+                                    fingerprint=fingerprint,
+                                )
+                            )
+                            break
     return findings
 
 

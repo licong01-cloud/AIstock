@@ -4,7 +4,7 @@
 > 状态：详细实施方案 v1.1，补充开发提交、夜间任务、Bug 管理与 Codex/Claude 修复闭环
 > 文档位置：`docs/architecture/aistock_internal_validation_center_implementation_plan_20260504.md`
 > 依赖顶层设计：`docs/architecture/aistock_automated_testing_coverage_observability_design_20260504.md`
-> 依赖开发规范：`docs/standards/aistock_development_standard_v1.0_20260504.md`；Guardrail 落地设计：`docs/architecture/aistock_development_standards_and_guardrails_20260504.md`
+> 依赖开发规范：`docs/standards/aistock_development_standard_v1.1_20260504.md`；Guardrail 落地设计：`docs/architecture/aistock_development_standards_and_guardrails_20260504.md`
 > 适用范围：AIstock 仓库内的 FastAPI backend、Next.js frontend、QE 数据完整性、QE archive/未来数仓、Paper Trading v2、Selection Center、HMM、Qlib 数据链路与本地发布候选验证。
 > 明确边界：本方案只设计 AIstock 内置自动化测试流水线；不创建独立微服务；不重启生产 `8001`；不重启远端机 API；不接入任意 shell 执行；不直接执行长耗时真实实验。
 
@@ -34,7 +34,7 @@ AIstock 自动化测试流水线应在现有成果上成熟化，而不是从 0 
 6. **设计阶段必须写测试用例**：未来所有架构和开发方案都必须包含测试矩阵、oracle、自动化路径、证据路径和覆盖率要求；没有测试设计的方案不能进入实现。
 7. **提交分层**：非长耗时、非交易时段依赖功能，必须在相关流水线通过后再提交和推送；长耗时/市场依赖功能先通过快速门禁，进入 nightly/L4/L5 后台验证，未通过前不得标记为完成或进入生产开关。
 8. **Bug 闭环机器可读**：Bug 的权威生命周期建议以 GitHub Issues 为主，Validation Center DB/JSON 作为本地索引和证据缓存；Codex/Claude 通过 GitHub CLI/API 或 Validation API 读取上下文、修复、回写状态和验证证据。
-9. **开发规范直接进入流水线**：使用 `docs/standards/aistock_development_standard_v1.0_20260504.yaml` 和全仓只读 baseline scan，先阻断 changed-files 的 P0/P1 新违规，再逐步治理历史技术债。
+9. **开发规范直接进入流水线**：使用 `docs/standards/aistock_development_standard_v1.1_20260504.yaml` 和全仓只读 baseline scan，先阻断 changed-files 的 P0/P1 新违规，再逐步治理历史技术债。
 
 ## 2. Phase 0 文档发现与允许使用的现有能力
 
@@ -584,7 +584,7 @@ Agent 修复流程：
 
 按最小风险、最大复用的顺序推进：
 
-1. **Development guardrail baseline**：新增 `docs/standards/aistock_development_standard_v1.0_20260504.yaml`，扩展/新增 guardrail scanner，执行全仓只读 baseline scan，生成 `docs/analysis/aistock_guardrail_baseline_YYYYMMDD.md`；changed-files P0/P1 新违规开始阻断。
+1. **Development guardrail baseline**：新增 `docs/standards/aistock_development_standard_v1.1_20260504.yaml`，扩展/新增 guardrail scanner，执行全仓只读 baseline scan，生成 `docs/analysis/aistock_guardrail_baseline_YYYYMMDD.md`；changed-files P0/P1 新违规在规则校准后接入阻断。
 2. **Coverage baseline**：补 `pytest-cov`、`aistock_validate.py coverage`、`qe_data_contract_backend` coverage 输出和测试。
 3. **Plan catalog**：新增 `test_plans.yaml` 和 catalog parser，先不接 UI 执行。
 4. **Read-only validation API**：实现 plans/runs/detail/summary，读取现有历史、coverage、guardrail quality gates。
@@ -649,7 +649,7 @@ npm run test:e2e -- tests/validation-center
 当以下条件满足时，可以认为 AIstock 内置自动化测试流水线第一版可用：
 
 - `qe_data_contract_backend`、`qe_archive_backend`、`paper_v2_backend` 至少一个高风险模块已接入真实 coverage。
-- `docs/standards/aistock_development_standard_v1.0_20260504.yaml` 和全仓 baseline scan 已完成，changed-files 中新增 P0/P1 规范违规会阻断 L0。
+- `docs/standards/aistock_development_standard_v1.1_20260504.yaml` 和全仓 baseline scan 已完成；changed-files 中新增 P0/P1 规范违规已完成校准并接入 L0 阻断。
 - `aistock_validate.py` 可以生成 run metadata、coverage snapshot、evidence manifest，并可被后端/UI 读取。
 - Validation Center API 能展示测试计划、历史 run、run 详情、coverage、evidence、失败门禁。
 - Validation Center UI 能以 mocked API 和 dev API 两种方式通过 E2E。

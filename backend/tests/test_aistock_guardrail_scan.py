@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = ROOT / "scripts" / "aistock_guardrail_scan.py"
-CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_development_standard_v1.0_20260504.yaml"
+CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_development_standard_v1.1_20260504.yaml"
 
 
 def _load_module():
@@ -29,6 +29,7 @@ def test_catalog_loads_and_compiles_regex_rules() -> None:
     rule_ids = {rule.rule_id for rule in rules}
     assert "ARCH-WSL-001" in rule_ids
     assert "ERR-FALLBACK-001" in rule_ids
+    assert "MEMORY-DATAFRAME-001" in rule_ids
     assert "DB-COMMENT-001" not in rule_ids  # external checker, not regex scanner scope
 
 
@@ -39,8 +40,8 @@ def test_catalog_references_current_human_readable_standard() -> None:
     standard_path = ROOT / catalog["source_standard"]
     standard_text = standard_path.read_text(encoding="utf-8")
 
-    assert catalog["source_version"] == "1.0"
-    assert standard_path.name == "aistock_development_standard_v1.0_20260504.md"
+    assert catalog["source_version"] == "1.1"
+    assert standard_path.name == "aistock_development_standard_v1.1_20260504.md"
     for rule in catalog["rules"]:
         if not rule.get("enabled", True):
             continue
@@ -86,6 +87,53 @@ def test_scanner_respects_rule_exclude_globs_for_tests(tmp_path: Path) -> None:
     findings = scanner.scan_files([test_file], rules=rules, root=tmp_path)
 
     assert not any(finding.rule_id == "ERR-FALLBACK-001" for finding in findings)
+
+
+def test_scanner_detects_root_pollution_by_path(tmp_path: Path) -> None:
+    scanner = _load_module()
+    root_script = tmp_path / "one_off_debug.py"
+    root_script.write_text("print('debug')\n", encoding="utf-8")
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    rules = scanner.compile_rules(catalog)
+    findings = scanner.scan_files([root_script], rules=rules, root=tmp_path)
+
+    assert any(finding.rule_id == "ROOT-POLLUTION-001" for finding in findings)
+
+
+def test_scanner_allows_debug_tools_one_off_scripts(tmp_path: Path) -> None:
+    scanner = _load_module()
+    debug_script = tmp_path / "debug_tools" / "qe" / "20260504_issue" / "one_off_debug.py"
+    debug_script.parent.mkdir(parents=True)
+    debug_script.write_text("print('debug')\n", encoding="utf-8")
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    rules = scanner.compile_rules(catalog)
+    findings = scanner.scan_files([debug_script], rules=rules, root=tmp_path)
+
+    assert not any(finding.rule_id == "ROOT-POLLUTION-001" for finding in findings)
+
+
+def test_scanner_detects_concat_inside_loop_without_backtracking(tmp_path: Path) -> None:
+    scanner = _load_module()
+    runtime_file = tmp_path / "scripts" / "build_large_dataset.py"
+    runtime_file.parent.mkdir(parents=True)
+    runtime_file.write_text(
+        "import pandas as pd\n\n"
+        "def build(parts):\n"
+        "    out = pd.DataFrame()\n"
+        "    for part in parts:\n"
+        "        frame = load(part)\n"
+        "        out = pd.concat([out, frame])\n"
+        "    return out\n",
+        encoding="utf-8",
+    )
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    rules = scanner.compile_rules(catalog)
+    findings = scanner.scan_files([runtime_file], rules=rules, root=tmp_path)
+
+    assert any(finding.rule_id == "MEMORY-DATAFRAME-001" for finding in findings)
 
 
 def test_git_changed_files_uses_utf8_for_unicode_paths(tmp_path: Path, monkeypatch) -> None:
