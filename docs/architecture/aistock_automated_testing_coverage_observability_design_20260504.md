@@ -1,7 +1,7 @@
-﻿# AIstock 自动化测试流水线、覆盖率与可观测管理系统设计
+# AIstock 自动化测试流水线、覆盖率与可观测管理系统设计
 
 > 日期：2026-05-04  
-> 状态：顶层设计草案 v1.1，待评审确认；本版明确基于现有 nox / aistock_validate / Playwright / 数据质量 smoke / run record 体系演进，不从 0 重建  
+> Status: top-level design draft v1.2; adds Paper v2 coverage gaps, pass-scope semantics, positive business gates, and read-only Validation Center observability.
 > 文档位置：`docs/architecture/aistock_automated_testing_coverage_observability_design_20260504.md`  
 > 适用范围：AIstock 全仓库，重点覆盖 QE 数据完整性、未来 QE 数仓、Paper Trading v2、Selection Center、StrategyPackage、HMM、Qlib 数据链路、前端 UI 与 API。  
 > 边界：本文设计自动化测试流水线、覆盖率门禁、测试可观测 UI 与版本管理体系；不直接修改测试代码或运行生产服务。
@@ -23,6 +23,7 @@ AIstock 后续需要一套“本地权威、结果导向、可观测、可管理
 7. 流水线失败必须进入缺陷闭环：短任务失败阻止提交完成，长耗时/市场依赖任务通过 nightly/L4/L5 生成或更新 Bug；Bug 以 GitHub Issues 为权威记录，以 Validation Center DB/JSON 作为本地索引和 UI 查询缓存，并为 Codex/Claude 提供机器可读修复上下文。
 8. 开发规范必须成为 L0 质量门禁：先建立全仓只读 guardrail baseline，再对新增/修改代码阻断 P0/P1 新违规，历史问题按模块治理。
 9. 阶段化实施不是简化版实现：第一阶段必须完成稳定 contract、数据结构、失败语义、证据格式、测试用例和扩展接口，只限制接入范围，不降低字段完整性或以后续补字段为代价快速上线。
+10. Paper v2 proof gaps show that test volume is not the same as business proof; future run metadata must include `pass_scope` and `business_assertion`, and L3/L4/L5 must include real asset samples, positive success paths, and high-volume pagination/performance samples.
 
 目标形态：
 
@@ -111,6 +112,44 @@ AIstock 后续需要一套“本地权威、结果导向、可观测、可管理
 - L3/L4 证明“业务链路真实可用”；L1/L2 证明“代码分支被合理测试”。两者不能互相替代。
 - 高频交易/回测/清理/归档等高风险逻辑必须有 L1/L2 覆盖，不能只靠 UI 点击。
 - 每个失败都应有结构化失败类型：code_error、data_error、contract_error、env_error、asset_error、ui_error、coverage_gate_failed。
+
+### 3.1 Pass scope and business assertions
+
+Every run record must answer exactly what this run proved. To prevent mock UI, API reachability, fail-fast checks, or old evidence from being misreported as real business success, machine-readable metadata should add:
+
+```yaml
+pass_scope:
+  level: L0|L1|L2|L3|L4|L5
+  real_backend: true|false
+  real_database: true|false
+  real_node_api: true|false
+  real_frontend_click: true|false
+  writes_business_state: true|false
+  positive_business_success: true|false
+  negative_failfast_only: true|false
+  mock_api_used: true|false
+  production_8001_touched: false
+
+business_assertion:
+  can_user_complete_operation: true|false
+  operation_name: string
+  evidence:
+    ui: string
+    api: string
+    db: string
+    logs: string
+  unresolved_blockers:
+    - string
+```
+
+Gate semantics:
+
+- `mock_api_used=true` proves only interaction/display behavior and must not be reported as real business availability.
+- `negative_failfast_only=true` proves missing-data safety, not the positive user workflow.
+- `positive_business_success=true` requires an API/DB/UI/log or asset evidence chain; missing links must be listed in `unresolved_blockers`.
+- StrategyPackage, Selection Center, Paper v2, QE runtime contract, HMM, archive/cleanup, and trading-adjacent changes must rerun relevant paths on the current commit. Historical L3/L4 records are reference evidence only.
+
+The first read-only API phase must expose these fields when present. When absent, the UI/API should show the success scope as not recorded or not proven, rather than infer it.
 
 ## 4. 覆盖率策略
 
@@ -292,6 +331,8 @@ Test Management UI / Validation API
     {"name": "l0", "command": "python -m nox -s l0", "status": "passed", "duration_seconds": 0}
   ],
   "coverage": {"line": null, "branch": null, "diff_line": null, "diff_branch": null},
+  "pass_scope": null,
+  "business_assertion": null,
   "quality_gates": [],
   "evidence": [],
   "residual_risks": []
@@ -420,6 +461,7 @@ Test Management UI / Validation API
 
 - `docs/architecture/aistock_testing_version_management_system_design_20260429.md`：已有测试与版本管理顶层思路；本文补充覆盖率、可观测 UI、QE/数仓专项测试和质量门禁。
 - `docs/architecture/aistock_internal_validation_center_implementation_plan_20260504.md`：本文的落地实施方案，明确 AIstock 内置 Validation Center 的后端/API/UI、coverage、allowlist、长耗时测试和分阶段研发任务。
+- `docs/architecture/aistock_automation_test_coverage_gap_requirements_20260504.md`: Future requirement input for Paper v2/Selection/StrategyPackage/QE proof gaps. It requires later designs to cover positive business success, real asset samples, `pass_scope`, and `business_assertion`; it does not replace the project development standard.
 - `docs/standards/aistock_development_standard_v1.1_20260504.md`：当前人类可读项目开发规范源；同版本机器规则为 `docs/standards/aistock_development_standard_v1.1_20260504.yaml`。
 - `docs/architecture/aistock_development_standards_and_guardrails_20260504.md`：开发规范 Guardrail 落地设计，说明如何把 `docs/standards` 中的规范源和机器 YAML 接入 baseline scan、changed-files 阻断、agent/MCP 安全边界和历史技术债治理。
 - `docs/architecture/qe_experiment_data_completeness_prewarehouse_plan_20260503.md`：QE 数据完整性前置改造方案，本文为其提供测试与覆盖率约束。

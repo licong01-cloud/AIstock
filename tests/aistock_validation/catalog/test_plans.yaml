@@ -1,0 +1,149 @@
+schema_version: aistock_validation_plans_v1
+plans:
+  - plan_key: l0
+    title: L0 static guardrail gate
+    module: validation_center
+    level: L0
+    command_key: nox_l0
+    nox_session: l0
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    max_duration_seconds: 300
+    evidence_kinds: [guardrail]
+  - plan_key: validation_coverage_backend
+    title: Validation coverage contract backend tests
+    module: validation_center
+    level: L2
+    command_key: nox_validation_coverage_backend
+    nox_session: validation_coverage_backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    max_duration_seconds: 300
+    evidence_kinds: [pytest, coverage]
+    coverage_required: true
+  - plan_key: validation_center_backend
+    title: Validation Center read-only API backend tests
+    module: validation_center
+    level: L2
+    command_key: nox_validation_center_backend
+    nox_session: validation_center_backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    max_duration_seconds: 300
+    evidence_kinds: [pytest, coverage]
+    coverage_required: true
+  - plan_key: qe_data_contract_backend
+    title: QE data completeness contract backend tests
+    module: qe_data_completeness
+    level: L2
+    command_key: nox_qe_data_contract_backend
+    nox_session: qe_data_contract_backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    max_duration_seconds: 300
+    evidence_kinds: [pytest]
+    coverage_required: true
+  - plan_key: qe_archive_data_quality
+    title: QE archive read-only data quality smoke
+    module: qe_archive
+    level: L2
+    command_key: nox_qe_archive_data_quality
+    nox_session: qe_archive_data_quality
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    max_duration_seconds: 180
+    evidence_kinds: [db_smoke]
+  - plan_key: qe_archive_l3
+    title: QE archive local L3 validation
+    module: qe_archive
+    level: L3
+    command_key: nox_qe_archive_l3
+    nox_session: qe_archive_l3
+    enabled: true
+    requires_backend: true
+    requires_frontend: true
+    allowed_backend_ports: [8011]
+    allowed_frontend_ports: [3011]
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    max_duration_seconds: 900
+    evidence_kinds: [pytest, db_smoke, playwright]
+  - plan_key: qe_read_l3
+    title: QE read-only local L3 validation
+    module: qe
+    level: L3
+    command_key: nox_qe_read_l3
+    nox_session: qe_read_l3
+    enabled: true
+    requires_backend: true
+    requires_frontend: true
+    allowed_backend_ports: [8011]
+    allowed_frontend_ports: [3011]
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    max_duration_seconds: 900
+    evidence_kinds: [pytest, playwright]
+  - plan_key: paper_v2_backend
+    title: Paper v2 backend regression
+    module: paper_v2_selection_center
+    level: L2
+    command_key: nox_paper_v2_backend
+    nox_session: paper_v2_backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    max_duration_seconds: 600
+    evidence_kinds: [pytest]
+  - plan_key: paper_v2_l3
+    title: Paper v2 and Selection Center local L3 validation
+    module: paper_v2_selection_center
+    level: L3
+    command_key: nox_paper_v2_l3
+    nox_session: paper_v2_l3
+    enabled: true
+    requires_backend: true
+    requires_frontend: true
+    allowed_backend_ports: [8012]
+    allowed_frontend_ports: [3012]
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    max_duration_seconds: 1200
+    evidence_kinds: [pytest, db_smoke, playwright]

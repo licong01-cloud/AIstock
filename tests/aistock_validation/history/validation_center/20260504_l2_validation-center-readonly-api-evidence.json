@@ -1,0 +1,143 @@
+{
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "router",
+      "path": "backend/routers/validation.py",
+      "sha256": "2d9a9ec5cc33e17ae83a7facd93a51307fcdf10a29e503d90b045f22602c056d",
+      "size_bytes": 5865
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "service",
+      "path": "backend/services/validation/history_store.py",
+      "sha256": "fef035ff780d9a182c2fed1d29f6a7a1b6bf47da6e8ef9313ccfe494eba5b16d",
+      "size_bytes": 19035
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "catalog_service",
+      "path": "backend/services/validation/plan_catalog.py",
+      "sha256": "a935ba7d7c0f333aed746c74e257064a6520c249a5303c1d3a6dbf6611b28bf6",
+      "size_bytes": 6920
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "models",
+      "path": "backend/services/validation/models.py",
+      "sha256": "26474f2570d93d9ee98f68be1f6712184a07c4ffe9c4dda6244b128b891914c5",
+      "size_bytes": 365
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "api_test",
+      "path": "backend/tests/test_validation_center_api.py",
+      "sha256": "a0ebee669e3d21addf9af6a96e91e81a8e393c955a8ea9c40c24ddae276aaddc",
+      "size_bytes": 10624
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "plan_catalog",
+      "path": "tests/aistock_validation/catalog/test_plans.yaml",
+      "sha256": "028973d3f510c602cc989dc49e93745c3771f8f5f1b89a27091b1c4296e7ec26",
+      "size_bytes": 4549
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "module_matrix",
+      "path": "tests/aistock_validation/modules/validation_center.md",
+      "sha256": "acc32df5b3f3d24e1c0ea84a248f05533e8f7ce15f9656887f089c17505d6bdf",
+      "size_bytes": 5096
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "test_levels",
+      "path": "tests/aistock_validation/catalog/test_levels.md",
+      "sha256": "502620f40be90f9826fe198967663bd094308f4d67fe50be9243841f9921e6a3",
+      "size_bytes": 2651
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "design",
+      "path": "docs/architecture/aistock_internal_validation_center_implementation_plan_20260504.md",
+      "sha256": "37921d88718d1c8224b055fdbe13d8dbb09092ea0f41bf8ef4fcdf84152f3d85",
+      "size_bytes": 52802
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "top_design",
+      "path": "docs/architecture/aistock_automated_testing_coverage_observability_design_20260504.md",
+      "sha256": "ab2cef59e48ed9a28fbe424565378c591d7c096d97d9c3dd227f2e74770dead6",
+      "size_bytes": 36317
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "noxfile",
+      "path": "noxfile.py",
+      "sha256": "52299fa58672d8c2ecece96b8f01c3b01e5b9c32f662e3c134a65a2a9d3db09d",
+      "size_bytes": 20130
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l2_validation-center-readonly-api-validation.md",
+      "sha256": "d3735055fb3676485e619ef9690db6295b5b179cf2f238953caf38d25e9b403b",
+      "size_bytes": 6792
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "coverage",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l2_validation-center-readonly-api-snapshot.json",
+      "sha256": "fc18fd9211263600e78b4b2ec12afcc9ecc660cfec7f4e60fb107b083cad567b",
+      "size_bytes": 14708
+    }
+  ],
+  "generated_at": "2026-05-04T16:59:33",
+  "git_commit": "fea6f57",
+  "level": "L2",
+  "missing": [],
+  "missing_count": 0,
+  "module": "validation_center",
+  "operator": "lc999",
+  "run_id": "20260504_l2_validation-center-readonly-api-validation",
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "Validation Center read-only API first-stage complete loop"
+}

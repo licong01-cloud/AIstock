@@ -1,7 +1,7 @@
 # AIstock 内置自动化测试流水线实施方案
 
 > 日期：2026-05-04
-> 状态：详细实施方案 v1.2，补充标准/基线优先、遗留问题治理闭环与 Codex/Claude 修复协议
+> Status: detailed implementation plan v1.3; integrates Paper v2 coverage gaps, pass-scope semantics, positive business assertions, and the read-only API first-stage loop.
 > 文档位置：`docs/architecture/aistock_internal_validation_center_implementation_plan_20260504.md`
 > 依赖顶层设计：`docs/architecture/aistock_automated_testing_coverage_observability_design_20260504.md`
 > 依赖开发规范：`docs/standards/aistock_development_standard_v1.1_20260504.md`；Guardrail 落地设计：`docs/architecture/aistock_development_standards_and_guardrails_20260504.md`
@@ -35,6 +35,7 @@ AIstock 自动化测试流水线应在现有成果上成熟化，而不是从 0 
 7. **提交分层**：非长耗时、非交易时段依赖功能，必须在相关流水线通过后再提交和推送；长耗时/市场依赖功能先通过快速门禁，进入 nightly/L4/L5 后台验证，未通过前不得标记为完成或进入生产开关。
 8. **Bug 闭环机器可读**：Bug 的权威生命周期建议以 GitHub Issues 为主，Validation Center DB/JSON 作为本地索引和证据缓存；Codex/Claude 通过 GitHub CLI/API 或 Validation API 读取上下文、修复、回写状态和验证证据。
 9. **开发规范直接进入流水线**：使用 `docs/standards/aistock_development_standard_v1.1_20260504.yaml` 和全仓只读 baseline scan，先阻断 changed-files 的 P0/P1 新违规，再逐步治理历史技术债。
+10. Pass-scope semantics must be machine-readable: future run metadata must include `pass_scope` and `business_assertion` so mock UI, fail-fast checks, real API/DB/UI success, and cross-module asset proof cannot be confused.
 
 ## 2. Phase 0 文档发现与允许使用的现有能力
 
@@ -44,18 +45,19 @@ AIstock 自动化测试流水线应在现有成果上成熟化，而不是从 0 
 |---|---|
 | `docs/codex_project_memory.md` | 项目规则、生产隔离、DB comment 规范、QE 数据完整性进展、测试标准。 |
 | `docs/architecture/aistock_automated_testing_coverage_observability_design_20260504.md` | 顶层自动化测试、覆盖率、可观测 UI、L0-L5 分层和成熟化路线。 |
+| `docs/architecture/aistock_automation_test_coverage_gap_requirements_20260504.md` | Future requirement input for Paper v2/Selection/StrategyPackage/QE proof gaps, real asset samples, `pass_scope`, `business_assertion`, positive business success gates, and performance samples. |
 | `docs/architecture/qe_data_completeness_phase1_development_plan_20260504.md` | QE completion contract、artifact manifest、run metadata/evidence 第一阶段边界。 |
 | `tests/aistock_validation/catalog/test_levels.md` | 当前 L0-L5 测试等级定义。 |
 | `tests/aistock_validation/modules/qe_data_completeness.md` | QE 数据完整性第一阶段验证矩阵。 |
 | `tests/aistock_validation/modules/qe_archive.md` | QE archive 的生产隔离、后端/API/UI/数据质量矩阵。 |
 | `tests/aistock_validation/templates/test_run_record.md` | 当前 Markdown run record 模板。 |
-| `scripts/aistock_validate.py` | 当前已有 `record`、`evidence`、`ports`、`services` 子命令；JSON metadata/evidence manifest 已实现；coverage 子命令尚未实现。 |
+| `scripts/aistock_validate.py` | Provides `record`, `evidence`, `coverage`, `ports`, and `services`; JSON metadata, evidence manifests, coverage snapshots, and coverage gates now have a first-stage complete loop. |
 | `noxfile.py` | 当前已有 `l0`、`paper_v2_backend`、`paper_v2_data_quality`、`paper_v2_ui`、`paper_v2_l3`、`qe_read_backend`、`qe_read_ui`、`qe_read_l3`、`qe_archive_backend`、`qe_data_contract_backend`、`qe_archive_data_quality`、`qe_archive_ui`、`qe_archive_l3`、`paper_v2_live`。 |
 | `backend/main.py` | 当前通过 `app.include_router(..., prefix="/api/v1")` 注册业务 router；新增 validation router 应复用该模式。 |
 | `backend/routers/qe_archive.py` | 现有 FastAPI router + Pydantic request/response 模式、分页参数、confirm text 写入保护、质量查询样板。 |
 | `frontend/src/app/qe-archive/page.tsx` 与 `frontend/src/lib/qe-archive/api.ts` | 现有内部工具页、API client、分页、dry-run/confirm、quality panel 的 UI 样板。 |
 | `frontend/package.json` 与 `frontend/playwright.config.ts` | 当前前端以 Playwright E2E 和 `tsc --noEmit` 为主要验证入口，尚无独立组件覆盖率门禁。 |
-| `requirements-dev.txt` | 当前有 `nox`、`pytest-html`、`semgrep`，未看到 `pytest-cov`，下一阶段需补充或在环境中验证。 |
+| `requirements-dev.txt` | Includes `pytest-cov` and `coverage`; future backend sessions should be migrated to the same coverage-gate contract. |
 | GitHub Issues 官方文档 | Issues 支持 labels、assignees、milestones、Projects 等计划跟踪能力，适合作为 Bug 生命周期的仓库级权威记录。 |
 | GitHub issue forms 官方文档 | Issue form 可用 YAML 结构化采集缺陷描述、触发条件、影响范围、复现步骤、日志和验证命令。 |
 | GitHub REST Issues API 官方文档 | Codex/Claude 或流水线可通过 API 创建、更新、评论、关闭 issue，并同步 labels/state/assignee。 |
@@ -85,6 +87,19 @@ AIstock 自动化测试流水线应在现有成果上成熟化，而不是从 0 
 | 可以重启远端机 API | 明确禁止，远端 API 只作为后续实验被动依赖。 |
 | 可以直接读取 WSL/远端 workspace 文件 | QE/RD-Agent 红线：必须通过 API 或 AIstock-owned artifact store。 |
 | 覆盖率已经统计 | 当前 metadata 字段存在但值为空，尚无 `pytest-cov` 门禁。 |
+
+### 2.4 Paper v2 gap requirements reserved for future stages
+
+`docs/architecture/aistock_automation_test_coverage_gap_requirements_20260504.md` is not extra implementation scope for the current read-only API phase, but it is now a required design input for later Validation Center contracts, UI, and test plans:
+
+- **Do not mix pass claims**: L0/L1/L2, mock UI, and fail-fast tests prove only their own scope. A real business path requires real backend, real DB, real UI clicks, required node API or owned asset cache, and consistent business writes.
+- **Record `pass_scope`**: future run metadata should capture `real_backend`, `real_database`, `real_node_api`, `real_frontend_click`, `writes_business_state`, `positive_business_success`, `negative_failfast_only`, `mock_api_used`, and `production_8001_touched`.
+- **Record `business_assertion`**: the operation name, whether the user can complete it, UI/API/DB/log evidence, and unresolved blockers must be machine-readable. Missing positive evidence must not be displayed as feature completion.
+- **Build a real sample registry**: complete minute QE runs, historical QE runs missing StaticDataLoader parquet, missing model params, missing factor source, >=120 active Paper v2 portfolios, and HMM complete/missing coefficient samples should be used in future L3/L4/L5 suites.
+- **Require current-commit evidence**: historical L3/L4 records are reference only. High-risk changes must rerun relevant paths on the current commit, dev ports, DB state, and controlled assets.
+- **Add positive success gates**: StrategyPackage -> Selection Center -> Paper v2, QE runtime contract persistence, and running-summary pagination/filter/sort/performance need positive success validation, not only fail-fast validation.
+
+The current phase only reserves read-only fields and query semantics. It does not start production services, write business state, or change Paper v2/QE runtime behavior.
 
 ## 3. 目标架构
 
@@ -242,8 +257,8 @@ plans:
 
 | 文件/目录 | 变更 |
 |---|---|
-| `requirements-dev.txt` | 增加 `pytest-cov`，如采用 diff coverage 再增加 `diff-cover`。 |
-| `scripts/aistock_validate.py` | 新增 `coverage` 子命令，解析 coverage JSON/XML，输出 coverage snapshot，并可更新 run metadata。 |
+| `requirements-dev.txt` | Includes `pytest-cov` and `coverage`; future backend sessions should be migrated to the same coverage-gate contract. |
+| `scripts/aistock_validate.py` | Provides `record`, `evidence`, `coverage`, `ports`, and `services`; JSON metadata, evidence manifests, coverage snapshots, and coverage gates now have a first-stage complete loop. |
 | `noxfile.py` | 新增 `_run_pytest_with_coverage()` helper；先接入 `qe_data_contract_backend`，再推广到 `qe_archive_backend`、`paper_v2_backend`。 |
 | `tests/aistock_validation/catalog/test_plans.yaml` | 新增机器可读 allowlist。 |
 | `backend/tests/test_aistock_validate_coverage.py` | 覆盖 coverage parser、threshold、metadata update、缺报告失败。 |

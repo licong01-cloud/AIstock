@@ -59,6 +59,7 @@ def l0(session: nox.Session) -> None:
         "backend/services/quantevolver/completion_contract.py",
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
+        "backend/tests/test_validation_center_api.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
         "backend/tests/paper_trading_v2",
         "backend/tests/selection_center",
@@ -369,6 +370,63 @@ def validation_coverage_backend(session: nox.Session) -> None:
         str(coverage_snapshot),
         "--line-threshold",
         "70",
+        "--branch-threshold",
+        "55",
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def validation_center_backend(session: nox.Session) -> None:
+    """Run Validation Center read-only API and contract tests."""
+    coverage_dir = ROOT / "tmp" / "validation" / "coverage"
+    coverage_dir.mkdir(parents=True, exist_ok=True)
+    coverage_xml = coverage_dir / "validation_center_backend.xml"
+    coverage_json = coverage_dir / "validation_center_backend.json"
+    coverage_snapshot = coverage_dir / "validation_center_backend_snapshot.json"
+    session.run(
+        sys.executable,
+        "-m",
+        "compileall",
+        "backend/routers/validation.py",
+        "backend/services/validation",
+        "scripts/aistock_validate.py",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "-m",
+        "pytest",
+        "backend/tests/test_validation_center_api.py",
+        "backend/tests/test_aistock_validate_metadata.py",
+        "backend/tests/test_aistock_validate_coverage.py",
+        "--cov=backend.services.validation",
+        "--cov=backend.routers.validation",
+        "--cov-branch",
+        f"--cov-report=xml:{coverage_xml}",
+        f"--cov-report=json:{coverage_json}",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        env=_env(),
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validate.py",
+        "coverage",
+        "--module",
+        "validation_center",
+        "--level",
+        "L2",
+        "--title",
+        "Validation Center read-only API",
+        "--coverage-xml",
+        str(coverage_xml),
+        "--output",
+        str(coverage_snapshot),
+        "--line-threshold",
+        "75",
         "--branch-threshold",
         "55",
         external=True,

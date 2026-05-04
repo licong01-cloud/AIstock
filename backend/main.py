@@ -47,6 +47,7 @@ from .routers import (
     strategy_packages,
     selection_center,
     paper_trading_v2,
+    validation,
     rdagent,
     rdagent_catalog_admin,
     rdagent_llm_config,
@@ -88,7 +89,8 @@ def _install_safe_print_and_logging() -> None:
                     self.stream = sys.__stderr__
                     return super().emit(record)
                 except Exception:
-                    return None
+                    self.handleError(record)
+                    return
 
     try:
         if getattr(builtins, "_AISTOCK_ORIGINAL_PRINT", None) is None:
@@ -475,6 +477,7 @@ def create_app() -> FastAPI:
     app.include_router(strategy_packages.router, prefix="/api/v1")
     app.include_router(selection_center.router, prefix="/api/v1")
     app.include_router(paper_trading_v2.router, prefix="/api/v1")
+    app.include_router(validation.router, prefix="/api/v1")
     app.include_router(hmm_training.router, prefix="/api/v1")
     app.include_router(llm_config.router)
     app.include_router(paper_trading.router, prefix="/api/v1")

@@ -32,6 +32,7 @@ Required coverage for the first-stage complete loop:
 
 ```powershell
 python -m nox -s validation_coverage_backend
+python -m nox -s validation_center_backend
 python -m nox -s qe_data_contract_backend
 python -m nox -s l0 -- scripts/aistock_validate.py backend/tests/test_aistock_validate_metadata.py backend/tests/test_aistock_validate_coverage.py noxfile.py tests/aistock_validation/modules/validation_center.md
 ```
@@ -46,3 +47,28 @@ Every implementation run should create a record under `tests/aistock_validation/
 - Guardrail result.
 - Production impact statement.
 - Bugs found, fixes, reruns, and residual risks.
+
+
+## Future Gap Requirements From Paper v2 Incidents
+
+`docs/architecture/aistock_automation_test_coverage_gap_requirements_20260504.md` is a future-stage requirement input, not extra implementation scope for the current read-only API step. Validation Center contracts must still reserve these semantics now:
+
+- `pass_scope` distinguishes L0/L1/L2/mock/fail-fast/current-commit/real-business proof.
+- `business_assertion` records whether a user can complete a named operation and which UI/API/DB/log evidence proves it.
+- Mock UI evidence cannot be displayed as real business success.
+- Negative fail-fast evidence cannot replace a positive StrategyPackage/Selection/Paper v2 success path.
+- Historical L3 evidence is reference only; high-risk modules must rerun relevant paths on the current commit.
+- Future sample registry must include complete minute QE, historical QE with missing StaticDataLoader parquet, missing model params/factor source, large Paper v2 portfolio list, and HMM coefficient complete/missing samples.
+
+## L2 Read-only API Contract
+
+The first read-only API loop must expose validation history without executing commands, writing DB rows, or starting services:
+
+- `GET /api/v1/validation/health` returns read-only storage status.
+- `GET /api/v1/validation/plans` and `/plans/{plan_key}` read the allowlist catalog and reject unsafe command keys or production backend ports.
+- `GET /api/v1/validation/runs` supports pagination plus module/level/status/search filters.
+- `GET /api/v1/validation/runs/{run_id}` returns Markdown path/text, metadata, coverage/evidence links, and optional `pass_scope` / `business_assertion` if present.
+- `GET /api/v1/validation/coverage` and `/coverage/{snapshot_id}` expose coverage snapshots with explicit missing/parse-error states.
+- `GET /api/v1/validation/evidence` and `/evidence/{manifest_id}` expose evidence manifests with `missing_count`.
+- `GET /api/v1/validation/summary` provides a lightweight module/status/coverage summary.
+- Missing metadata, missing coverage, missing evidence, and malformed JSON must be explicit fields; the API must not fake success.
