@@ -1,0 +1,78 @@
+{
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "generated_at": "2026-05-04T12:58:19.954569+00:00",
+  "module": "development_guardrails",
+  "level": "L0",
+  "title": "Runner evidence for guardrail_changed_files",
+  "run_id": "development-guardrails_20260504_125819_l0_guardrail-changed-files_505ca58a_runner-validation__f97d2cc132",
+  "git_commit": "4c74924",
+  "operator": "runner_smoke",
+  "runner_job_id": "valjob_20260504_125819_505ca58a",
+  "evidence": [
+    {
+      "kind": "run_metadata",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-validation.json",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 4781,
+      "child_count": null,
+      "sha256": "3ede811dcec0c368f533e99b168326b65975a000d2ae1076c385fd2f5ea85f41"
+    },
+    {
+      "kind": "run_record",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-validation.md",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 1253,
+      "child_count": null,
+      "sha256": "89d59cd4bc0f337a763dc3f5f980cbd1f36bcef8e575c5aa92afe205b7947ff2"
+    },
+    {
+      "kind": "runner_job",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-runner-job.json",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 2725,
+      "child_count": null,
+      "sha256": "f10027973b1811661b0e134316a7851a34e680e0238fc59906978c37fab486ac"
+    },
+    {
+      "kind": "runner_log",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-runner-log.txt",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 459,
+      "child_count": null,
+      "sha256": "83a4952d656a31d81b965c5e5c0b0a4192fa889e8ec8ef53ec3e6e04bbeab98c"
+    },
+    {
+      "kind": "runner_evidence",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-runner-evidence.json",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 2428,
+      "child_count": null,
+      "sha256": "56c62ac519409b0fb5637a5b2dbf33379b5c6a1083e71e79d885e74585808b0c"
+    },
+    {
+      "kind": "guardrail_json",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-guardrail-json.json",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 555,
+      "child_count": null,
+      "sha256": "bbdefb7e80d233c521bd4ae8a9e31e42e84cc48a9573ee69c5690abc4e0385fe"
+    },
+    {
+      "kind": "guardrail_md",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-guardrail-md.txt",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 800,
+      "child_count": null,
+      "sha256": "e92ff4b9728b31867bce8a4b60185ac3b953dd4ef694b9dfe7d90600331977a0"
+    }
+  ],
+  "missing_count": 0,
+  "missing": []
+}

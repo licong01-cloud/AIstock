@@ -1,0 +1,381 @@
+{
+  "api_base": "http://127.0.0.1:8012/api/v1",
+  "counts": {
+    "bugs": 0,
+    "coverage": 4,
+    "evidence": 13,
+    "executions": 2,
+    "findings": 1823,
+    "health": {
+      "bug_count": 0,
+      "finding_count": 1823,
+      "run_count": 102,
+      "runner_job_count": 2
+    },
+    "plan_count": 10,
+    "runs": 102,
+    "summary": {
+      "coverage_snapshot_count": 4,
+      "evidence_manifest_count": 13,
+      "plan_count": 10,
+      "quality": {
+        "bug_count": 0,
+        "finding_count": 1823
+      },
+      "run_count": 102,
+      "runner": {
+        "allowed_command_type": "nox_session_allowlist_only",
+        "arbitrary_shell_allowed": false,
+        "archive_enabled": true,
+        "execution_root": "tmp/validation/runner/jobs",
+        "exists": true,
+        "history_root": "tests/aistock_validation/history",
+        "job_count": 2,
+        "jobs_by_status": {
+          "passed": 2
+        },
+        "mode": "controlled_execution",
+        "production_8001_touched": false
+      }
+    }
+  },
+  "endpoint_count": 18,
+  "endpoints": [
+    {
+      "data_keys": [
+        "history",
+        "mode",
+        "plan_catalog",
+        "production_8001_touched",
+        "quality",
+        "runner",
+        "status"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/health",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "coverage_snapshot_count",
+        "evidence_manifest_count",
+        "history_root",
+        "latest_coverage",
+        "latest_runs",
+        "modules",
+        "plan_count",
+        "quality",
+        "run_count",
+        "runner",
+        "runs_by_status"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/summary",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "catalog_path",
+        "missing",
+        "plans",
+        "schema_version"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/plans",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "has_more",
+        "items",
+        "page",
+        "page_size",
+        "total"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/runs?page=1&page_size=5",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "business_assertion",
+        "coverage",
+        "coverage_missing",
+        "coverage_snapshot",
+        "coverage_snapshot_id",
+        "evidence_manifest",
+        "evidence_manifest_id",
+        "evidence_missing",
+        "finished_at",
+        "git_commit",
+        "level",
+        "markdown_path",
+        "markdown_text",
+        "metadata",
+        "metadata_missing",
+        "metadata_parse_error",
+        "metadata_path",
+        "module",
+        "module_slug",
+        "operator",
+        "parse_error",
+        "pass_scope",
+        "quality_gates",
+        "run_id",
+        "source_type",
+        "started_at",
+        "status",
+        "success_scope_recorded",
+        "title"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/runs/validation_center_20260504_l3_validation-center-quality-registry-validation__2421cca357",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "has_more",
+        "items",
+        "page",
+        "page_size",
+        "total"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/coverage?page=1&page_size=5",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "snapshot",
+        "summary"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/coverage/validation_center_20260504_l3_validation-center-runner-auto-archive-snapshot__b14293f11c",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "has_more",
+        "items",
+        "page",
+        "page_size",
+        "total"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/evidence?page=1&page_size=5",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "manifest",
+        "summary"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/evidence/validation_center_20260504_l3_validation-center-runner-auto-archive-evidence__6e7543fc90",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "has_more",
+        "items",
+        "page",
+        "page_size",
+        "total"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/executions?page=1&page_size=5",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "arbitrary_shell_allowed",
+        "archive",
+        "backend_port",
+        "command",
+        "command_key",
+        "cwd",
+        "error",
+        "evidence_path",
+        "finished_at",
+        "frontend_port",
+        "job_id",
+        "level",
+        "log_path",
+        "module",
+        "nox_session",
+        "plan_key",
+        "production_8001_touched",
+        "requested_at",
+        "requested_by",
+        "return_code",
+        "schema_version",
+        "started_at",
+        "status",
+        "timeout_seconds",
+        "title",
+        "writes_artifacts",
+        "writes_business_state",
+        "writes_database"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/executions/valjob_20260504_125819_505ca58a",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "archive_path",
+        "content",
+        "exists",
+        "job_id",
+        "path",
+        "sha256",
+        "size_bytes",
+        "tail_lines",
+        "truncated"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/executions/valjob_20260504_125819_505ca58a/log?tail_lines=50",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "job",
+        "job_id",
+        "runner_evidence",
+        "runner_evidence_path",
+        "standard_evidence",
+        "standard_evidence_path"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/executions/valjob_20260504_125819_505ca58a/evidence",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "by_module",
+        "by_severity",
+        "by_source_type",
+        "by_status",
+        "finding_count",
+        "latest_findings",
+        "parse_errors"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/findings/summary",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "has_more",
+        "items",
+        "page",
+        "page_size",
+        "total"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/findings?page=1&page_size=5",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "agent_context",
+        "allowed_write_scope",
+        "baseline_policy",
+        "category",
+        "description",
+        "evidence_uri",
+        "file_path",
+        "finding_id",
+        "fingerprint",
+        "first_seen_at",
+        "last_seen_at",
+        "line",
+        "linked_issue",
+        "module",
+        "owner",
+        "remediation",
+        "required_verification",
+        "rule_id",
+        "severity",
+        "source_schema",
+        "source_type",
+        "status",
+        "title"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/findings/guardrail_c0434600d86fc06f",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "bug_count",
+        "by_module",
+        "by_severity",
+        "by_status",
+        "latest_bugs",
+        "parse_errors"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/bugs/summary",
+      "status_code": 200
+    },
+    {
+      "data_keys": [
+        "has_more",
+        "items",
+        "page",
+        "page_size",
+        "total"
+      ],
+      "error": null,
+      "method": "GET",
+      "ok": true,
+      "path": "/validation/bugs?page=1&page_size=5",
+      "status_code": 200
+    }
+  ],
+  "failure_count": 0,
+  "failures": [],
+  "finished_at": "2026-05-04T20:58:37",
+  "output_path": "tmp/validation/validation_center/readonly_smoke.json",
+  "production_8001_touched": false,
+  "read_only": true,
+  "schema_version": "aistock_validation_center_readonly_smoke_v1",
+  "started_at": "2026-05-04T20:58:35",
+  "status": "passed",
+  "write_methods_sent": []
+}

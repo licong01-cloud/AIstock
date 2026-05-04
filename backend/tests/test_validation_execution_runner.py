@@ -107,6 +107,9 @@ def test_runner_executes_allowlisted_plan_and_writes_evidence(tmp_path: Path) ->
             + "\n",
             encoding="utf-8",
         )
+        guardrail_md = cwd / "tmp" / "validation" / "guardrails" / "l0_paths.md"
+        guardrail_md.parent.mkdir(parents=True, exist_ok=True)
+        guardrail_md.write_text("# Guardrail details\n", encoding="utf-8")
         return RunnerResult(return_code=0, output="fake nox ok\n")
 
     history_root = tmp_path / "history"
@@ -144,6 +147,7 @@ def test_runner_executes_allowlisted_plan_and_writes_evidence(tmp_path: Path) ->
     assert archive["run_id"]
     assert archive["run_record_path"].endswith("-validation.md")
     assert archive["coverage_snapshot_path"].endswith("-coverage-snapshot.json")
+    assert any(path.endswith("-guardrail-md.txt") for path in archive["artifact_paths"])
     metadata_path = Path(archive["metadata_path"])
     run_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert run_metadata["schema_version"] == RUN_SCHEMA
@@ -158,6 +162,10 @@ def test_runner_executes_allowlisted_plan_and_writes_evidence(tmp_path: Path) ->
     assert runner.list_jobs(page=1, page_size=20, plan_key="l0")["total"] == 1
     assert "fake nox ok" in runner.get_job_log(job["job_id"], tail_lines=10)["content"]
     assert runner.get_job_evidence(job["job_id"])["standard_evidence"]["schema_version"] == EVIDENCE_SCHEMA
+    evidence_path.unlink()
+    archived_evidence = runner.get_job_evidence(job["job_id"])
+    assert archived_evidence["runner_evidence"]["schema_version"] == "aistock_validation_runner_evidence_v1"
+    assert archived_evidence["runner_evidence_path"] == archive["runner_evidence_archive_path"]
     assert runner.get_job(job["job_id"])["status"] == "passed"
     assert runner.get_job("../not_a_job") is None
 
@@ -185,6 +193,32 @@ def test_runner_archives_failed_job(tmp_path: Path) -> None:
     metadata = json.loads(Path(job["archive"]["metadata_path"]).read_text(encoding="utf-8"))
     assert metadata["status"] == "failed"
     assert metadata["business_assertion"]["can_user_complete_operation"] is False
+
+
+def test_runner_marks_executor_exception_failed_and_archives(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+
+    def failing_executor(_command, _env, _cwd, _timeout_seconds):
+        raise RuntimeError("boom")
+
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=tmp_path,
+        executor=failing_executor,
+        run_inline=True,
+    )
+
+    job = runner.start_job(plan_key="l0", requested_by="pytest", timeout_seconds=30)
+
+    assert job["status"] == "failed"
+    assert "RuntimeError: boom" in job["error"]
+    assert job["archive"]["status"] == "archived"
+    assert "validation runner executor error: RuntimeError: boom" in runner.get_job_log(job["job_id"])["content"]
+    metadata = json.loads(Path(job["archive"]["metadata_path"]).read_text(encoding="utf-8"))
+    assert metadata["status"] == "failed"
 
 
 def test_runner_rejects_non_runner_plan_and_forbidden_port(tmp_path: Path) -> None:

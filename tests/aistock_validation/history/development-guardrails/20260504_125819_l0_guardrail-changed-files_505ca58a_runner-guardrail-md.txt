@@ -1,0 +1,36 @@
+# AIstock Guardrail Baseline Scan
+
+- Generated at: 2026-05-04T12:58:19.857785+00:00
+- Mode: `staged_only`
+- Files scanned: 0
+- Total findings: 0
+
+## Summary By Baseline Status
+
+| Status | Count |
+|---|---:|
+
+## Summary By Severity
+
+| Severity | Count |
+|---|---:|
+| P0 | 0 |
+| P1 | 0 |
+| P2 | 0 |
+| P3 | 0 |
+
+## Summary By Rule
+
+| Rule | Count |
+|---|---:|
+
+## Interpretation
+
+This is a read-only baseline report. It does not mean all historical findings must be fixed immediately.
+New or changed P0/P1 findings should be blocked after the changed-files gate is enabled.
+Historical findings should be triaged by module and burned down with regression tests.
+
+## First 0 Findings
+
+| Severity | Status | Rule | File | Line | Remediation |
+|---|---|---|---|---:|---|

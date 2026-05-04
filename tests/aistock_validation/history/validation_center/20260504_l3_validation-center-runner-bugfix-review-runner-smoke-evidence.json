@@ -1,0 +1,44 @@
+{
+  "environment": {
+    "backend_port": "8012",
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "script",
+      "path": "scripts/validation_center_runner_smoke.py",
+      "sha256": "3b27b3ebded432e1f350c7c6cca2894096caf512f2ac843a621e7a16af518779",
+      "size_bytes": 11183
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "smoke_json",
+      "path": "tmp/validation/validation_center/runner_smoke.json",
+      "sha256": "b4b11d98fbbfe7433f61463530b35e8b3c1718f6a52d9a56f2faaabb725563de",
+      "size_bytes": 28891
+    }
+  ],
+  "generated_at": "2026-05-04T20:58:20",
+  "git_commit": "4c74924",
+  "level": "L3",
+  "missing": [],
+  "missing_count": 0,
+  "module": "validation_center",
+  "operator": "lc999",
+  "run_id": null,
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "Validation Center controlled runner live smoke"
+}

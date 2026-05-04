@@ -150,6 +150,14 @@ def _write_history(history_root: Path) -> dict[str, Path]:
     malformed = module_dir / "20260504_122000_l1_malformed.md"
     malformed.write_text("# Malformed Metadata\n", encoding="utf-8")
     malformed.with_suffix(".json").write_text("{bad json", encoding="utf-8")
+    (module_dir / "20260504_l3_validation-center-controlled-runner-l0-guardrail.md").write_text(
+        "# Guardrail Artifact\n\nThis is evidence, not a run record.\n",
+        encoding="utf-8",
+    )
+    (module_dir / "20260504_120402_l0_guardrail-changed-files_runner-guardrail-md.md").write_text(
+        "# Runner Guardrail Artifact\n\nThis copied artifact must not appear as a run.\n",
+        encoding="utf-8",
+    )
     return {"run_md": run_md, "markdown_only": markdown_only, "malformed": malformed}
 
 
@@ -289,6 +297,9 @@ def test_runs_list_and_detail_preserve_success_scope(client: TestClient) -> None
     assert response.status_code == 200
     runs = response.json()["data"]
     assert runs["total"] == 3
+    titles = {item["title"] for item in runs["items"]}
+    assert "Guardrail Artifact" not in titles
+    assert "Runner Guardrail Artifact" not in titles
     valid_run = next(item for item in runs["items"] if item["title"] == "Validation API Run")
     assert valid_run["status"] == "passed"
     assert valid_run["success_scope_recorded"] is True

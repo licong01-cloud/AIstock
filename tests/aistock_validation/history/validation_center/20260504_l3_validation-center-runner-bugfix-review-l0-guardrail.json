@@ -1,0 +1,58 @@
+{
+  "schema_version": "aistock_guardrail_scan_result_v1",
+  "generated_at": "2026-05-04T13:05:03.221738+00:00",
+  "mode": "paths",
+  "files_scanned": 21,
+  "baseline": {
+    "baseline_json": "tmp/validation/guardrails/baseline_20260504.json",
+    "fail_new_only": true
+  },
+  "gate": {
+    "fail_on_severity": "P1",
+    "blocking_count": 0,
+    "status": "passed"
+  },
+  "summary": {
+    "total_findings": 2,
+    "by_severity": {
+      "P2": 2
+    },
+    "by_rule": {
+      "ALGO-COMPLEXITY-001": 2
+    },
+    "by_category": {
+      "performance_memory": 2
+    },
+    "by_baseline_status": {
+      "new": 2
+    }
+  },
+  "findings": [
+    {
+      "rule_id": "ALGO-COMPLEXITY-001",
+      "title": "High-dimensional quant loops and large joins need complexity review",
+      "severity": "P2",
+      "category": "performance_memory",
+      "file": "backend/services/validation/execution_runner.py",
+      "line": 254,
+      "message": "High-dimensional quant loops and large joins need complexity review",
+      "remediation": "Document row-count bounds, join keys, row-explosion risk, and batching/vectorization strategy for large quant workloads.",
+      "baseline_policy": "warn_new_only",
+      "fingerprint": "600d32ce91de16bc",
+      "baseline_status": "new"
+    },
+    {
+      "rule_id": "ALGO-COMPLEXITY-001",
+      "title": "High-dimensional quant loops and large joins need complexity review",
+      "severity": "P2",
+      "category": "performance_memory",
+      "file": "backend/services/validation/execution_runner.py",
+      "line": 665,
+      "message": "High-dimensional quant loops and large joins need complexity review",
+      "remediation": "Document row-count bounds, join keys, row-explosion risk, and batching/vectorization strategy for large quant workloads.",
+      "baseline_policy": "warn_new_only",
+      "fingerprint": "35d294935a589e7e",
+      "baseline_status": "new"
+    }
+  ]
+}

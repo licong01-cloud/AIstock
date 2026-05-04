@@ -1,0 +1,106 @@
+{
+  "schema_version": "aistock_validation_run_v1",
+  "module": "validation_center",
+  "module_slug": "validation_center",
+  "level": "L3",
+  "title": "Validation Center Runner Bugfix Code Review",
+  "status": "passed",
+  "git_commit": "4c74924",
+  "operator": "Codex",
+  "started_at": "2026-05-04T20:40:00+08:00",
+  "finished_at": "2026-05-04T21:05:00+08:00",
+  "coverage": {
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "status": "passed",
+    "snapshot_path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-bugfix-review-snapshot.json",
+    "line_percent": 80.92,
+    "branch_percent": 64.4
+  },
+  "quality_gates": [
+    {
+      "metric": "code_review",
+      "status": "passed",
+      "actual": "Reviewed runner archive, history discovery, log/evidence detail, smoke, API, and UI contracts",
+      "threshold": "bugs fixed or documented"
+    },
+    {
+      "metric": "targeted_backend_pytest",
+      "status": "passed",
+      "actual": "22 passed",
+      "threshold": "all tests pass"
+    },
+    {
+      "metric": "validation_center_backend_nox",
+      "status": "passed",
+      "actual": "32 passed; line=80.92; branch=64.4",
+      "threshold": "line>=75; branch>=55; all tests pass"
+    },
+    {
+      "metric": "validation_center_ui_nox",
+      "status": "passed",
+      "actual": "TypeScript passed; Playwright 1 passed",
+      "threshold": "all tests pass"
+    },
+    {
+      "metric": "validation_center_runner_smoke_nox",
+      "status": "passed",
+      "actual": "endpoints=6; failures=0; archive_status=archived; artifacts=['tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-guardrail-json.json', 'tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-guardrail-md.txt']",
+      "threshold": "archive_status=archived; failures=0; guardrail md archived as txt"
+    },
+    {
+      "metric": "validation_center_live_readonly_nox",
+      "status": "passed",
+      "actual": "endpoints=18; failures=0; write_methods_sent=[]",
+      "threshold": "GET-only; failures=0; production_8001_touched=false"
+    },
+    {
+      "metric": "production_isolation",
+      "status": "passed",
+      "actual": "temporary backend 8012 only; 8001 not restarted or probed; 8012 stopped and verified free",
+      "threshold": "no production impact"
+    },
+    {
+      "metric": "l0_guardrail",
+      "status": "passed",
+      "actual": "targeted nox l0 passed; 2 P2 complexity review findings; blocking=0",
+      "threshold": "no blocking P1/P0 new findings"
+    }
+  ],
+  "pass_scope": {
+    "level": "L3",
+    "real_backend": true,
+    "real_database": false,
+    "real_node_api": false,
+    "real_frontend_click": true,
+    "writes_business_state": false,
+    "positive_business_success": false,
+    "negative_failfast_only": false,
+    "mock_api_used": true,
+    "controlled_runner_post_enabled": true,
+    "runner_archive_verified": true,
+    "runner_exception_handling_verified": true,
+    "runner_evidence_archive_fallback_verified": true,
+    "run_history_artifact_filter_verified": true,
+    "arbitrary_shell_allowed": false,
+    "production_8001_touched": false,
+    "current_commit_evidence": true
+  },
+  "business_assertion": {
+    "can_user_complete_operation": true,
+    "operation_name": "Review and fix Validation Center runner archival correctness without touching production services",
+    "evidence": {
+      "api_tests": "backend/tests/test_validation_execution_runner.py",
+      "history_tests": "backend/tests/test_validation_center_api.py",
+      "runner_live_smoke": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-bugfix-review-runner-smoke.json",
+      "readonly_live_smoke": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-bugfix-review-readonly-smoke.json",
+      "coverage": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-bugfix-review-snapshot.json",
+      "archived_runner_run_id": "development-guardrails_20260504_125819_l0_guardrail-changed-files_505ca58a_runner-validation__f97d2cc132",
+      "archived_runner_run_record": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-validation.md",
+      "l0_guardrail": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-bugfix-review-l0-guardrail.json"
+    },
+    "unresolved_blockers": [
+      "This bugfix validates Validation Center runner infrastructure, not QE/Paper trading business success.",
+      "Existing historical .md evidence artifacts remain in git for traceability but are ignored by run-history discovery."
+    ]
+  }
+}

@@ -24,6 +24,9 @@ EVIDENCE_SCHEMA_VERSION = "aistock_validation_runner_evidence_v1"
 JOB_ID_RE = re.compile(r"^valjob_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}$")
 MAX_LOG_BYTES = 512 * 1024
 MAX_LOG_TAIL_LINES = 2000
+ARTIFACT_KIND_SUFFIXES = {
+    "guardrail_md": ".txt",
+}
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,15 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _read_tail_bytes(path: Path, max_bytes: int) -> tuple[bytes, bool]:
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        if size > max_bytes:
+            handle.seek(-max_bytes, os.SEEK_END)
+            return handle.read(max_bytes), True
+        return handle.read(), False
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -235,10 +247,7 @@ class ValidationExecutionRunner:
                 "sha256": None,
             }
         safe_tail = max(1, min(int(tail_lines), MAX_LOG_TAIL_LINES))
-        raw = path.read_bytes()
-        truncated_bytes = len(raw) > MAX_LOG_BYTES
-        if truncated_bytes:
-            raw = raw[-MAX_LOG_BYTES:]
+        raw, truncated_bytes = _read_tail_bytes(path, MAX_LOG_BYTES)
         text = raw.decode("utf-8", errors="replace")
         lines = text.splitlines()
         truncated_lines = len(lines) > safe_tail
@@ -263,7 +272,12 @@ class ValidationExecutionRunner:
         job = self.get_job(job_id)
         if job is None:
             return None
-        runner_evidence = _read_json(self._evidence_path(job_id))
+        runner_evidence_path = self._evidence_path(job_id)
+        if not runner_evidence_path.exists():
+            archived_runner_evidence_path = self._archive_path_from_job(job, "runner_evidence_archive_path")
+            if archived_runner_evidence_path and archived_runner_evidence_path.exists():
+                runner_evidence_path = archived_runner_evidence_path
+        runner_evidence = _read_json(runner_evidence_path)
         standard_evidence_path = self._archive_path_from_job(job, "evidence_manifest_path")
         standard_evidence = _read_json(standard_evidence_path) if standard_evidence_path else None
         return {
@@ -271,7 +285,7 @@ class ValidationExecutionRunner:
             "job": job,
             "runner_evidence": runner_evidence,
             "standard_evidence": standard_evidence,
-            "runner_evidence_path": _repo_path(self._evidence_path(job_id)),
+            "runner_evidence_path": _repo_path(runner_evidence_path),
             "standard_evidence_path": _repo_path(standard_evidence_path) if standard_evidence_path else None,
         }
 
@@ -404,7 +418,15 @@ class ValidationExecutionRunner:
         job["status"] = "running"
         job["started_at"] = _now_iso()
         self._write_job(job)
-        result = self.executor(command, env, self.repo_root, timeout)
+        executor_error: str | None = None
+        try:
+            result = self.executor(command, env, self.repo_root, timeout)
+        except Exception as exc:
+            executor_error = f"{type(exc).__name__}: {exc}"
+            result = RunnerResult(
+                return_code=None,
+                output=f"validation runner executor error: {executor_error}\n",
+            )
         log_path = self._log_path(job_id)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(result.output, encoding="utf-8")
@@ -418,7 +440,11 @@ class ValidationExecutionRunner:
             job["status"] = "passed"
         else:
             job["status"] = "failed"
-            job["error"] = f"nox session exited with return_code={result.return_code}"
+            job["error"] = (
+                f"validation runner executor raised: {executor_error}"
+                if executor_error
+                else f"nox session exited with return_code={result.return_code}"
+            )
         try:
             if self.archive_enabled:
                 job = self._archive_job(job)
@@ -488,7 +514,7 @@ class ValidationExecutionRunner:
                 payload = _read_json(source)
                 if not payload or payload.get("schema_version") != COVERAGE_SCHEMA:
                     continue
-            suffix = source.suffix or ".artifact"
+            suffix = ARTIFACT_KIND_SUFFIXES.get(kind, source.suffix or ".artifact")
             target = self.history_root / _safe_slug(job.get("module"), default="validation") / f"{base_stem}-{_safe_slug(kind)}{suffix}"
             _copy_if_exists(source, target)
             copied.append({"kind": kind, "source_path": _repo_path(source), "path": _repo_path(target)})

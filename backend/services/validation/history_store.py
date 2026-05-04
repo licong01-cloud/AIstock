@@ -16,6 +16,10 @@ COVERAGE_SCHEMA = "aistock_validation_coverage_snapshot_v1"
 EVIDENCE_SCHEMA = "aistock_validation_evidence_manifest_v1"
 MAX_JSON_BYTES = 8 * 1024 * 1024
 MAX_MARKDOWN_BYTES = 512 * 1024
+ARTIFACT_MARKDOWN_SUFFIXES = (
+    "-guardrail-md.md",
+    "-l0-guardrail.md",
+)
 
 
 class ValidationHistoryStore:
@@ -198,7 +202,16 @@ class ValidationHistoryStore:
     def _markdown_files(self) -> list[Path]:
         if not self.history_root.exists():
             return []
-        return sorted(path for path in self.history_root.rglob("*.md") if path.is_file())
+        return sorted(
+            path
+            for path in self.history_root.rglob("*.md")
+            if path.is_file() and self._is_run_markdown(path)
+        )
+
+    @staticmethod
+    def _is_run_markdown(path: Path) -> bool:
+        name = path.name.lower()
+        return not any(name.endswith(suffix) for suffix in ARTIFACT_MARKDOWN_SUFFIXES)
 
     def _json_files(self) -> list[Path]:
         if not self.history_root.exists():

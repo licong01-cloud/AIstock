@@ -1,0 +1,107 @@
+{
+  "schema_version": "aistock_validation_run_v1",
+  "module": "development_guardrails",
+  "module_slug": "development-guardrails",
+  "level": "L0",
+  "title": "Runner guardrail_changed_files passed",
+  "status": "passed",
+  "git_commit": "4c74924",
+  "operator": "runner_smoke",
+  "started_at": "2026-05-04T12:58:19.473055+00:00",
+  "finished_at": "2026-05-04T12:58:19.885853+00:00",
+  "runner_job_id": "valjob_20260504_125819_505ca58a",
+  "runner_plan_key": "guardrail_changed_files",
+  "runner_nox_session": "guardrail_changed_files",
+  "runner_archive": {
+    "status": "archived",
+    "run_id": "development-guardrails_20260504_125819_l0_guardrail-changed-files_505ca58a_runner-validation__f97d2cc132",
+    "run_record_path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-validation.md",
+    "metadata_path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-validation.json",
+    "evidence_manifest_path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-evidence.json",
+    "runner_job_archive_path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-runner-job.json",
+    "runner_log_archive_path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-runner-log.txt",
+    "runner_evidence_archive_path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-runner-evidence.json",
+    "coverage_snapshot_path": null,
+    "artifact_paths": [
+      "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-guardrail-json.json",
+      "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-guardrail-md.txt"
+    ]
+  },
+  "coverage": {
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "status": "not_collected",
+    "line": null,
+    "branch": null,
+    "diff_line": null,
+    "diff_branch": null,
+    "snapshot_path": null,
+    "quality_gates": []
+  },
+  "quality_gates": [
+    {
+      "metric": "runner_return_code",
+      "status": "passed",
+      "actual": 0,
+      "threshold": 0
+    },
+    {
+      "metric": "production_8001_touched",
+      "status": "passed",
+      "actual": false,
+      "threshold": false
+    },
+    {
+      "metric": "arbitrary_shell_allowed",
+      "status": "passed",
+      "actual": false,
+      "threshold": false
+    },
+    {
+      "metric": "runner_archive",
+      "status": "passed",
+      "actual": "archived",
+      "threshold": "archived"
+    }
+  ],
+  "pass_scope": {
+    "level": "L0",
+    "real_backend": false,
+    "real_database": false,
+    "real_node_api": false,
+    "real_frontend_click": false,
+    "writes_business_state": false,
+    "positive_business_success": false,
+    "negative_failfast_only": false,
+    "mock_api_used": false,
+    "controlled_runner_post_enabled": true,
+    "arbitrary_shell_allowed": false,
+    "production_8001_touched": false,
+    "current_commit_evidence": true
+  },
+  "business_assertion": {
+    "can_user_complete_operation": true,
+    "operation_name": "Run allowlisted validation plan guardrail_changed_files",
+    "evidence": {
+      "runner_job": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-runner-job.json",
+      "runner_log": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-runner-log.txt",
+      "evidence_manifest": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-evidence.json",
+      "coverage_snapshot": null
+    },
+    "unresolved_blockers": [
+      "This runner proof validates the test plan execution infrastructure, not a trading business success path."
+    ]
+  },
+  "evidence": [
+    {
+      "kind": "guardrail_json",
+      "source_path": "tmp/validation/guardrails/changed_files.json",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-guardrail-json.json"
+    },
+    {
+      "kind": "guardrail_md",
+      "source_path": "tmp/validation/guardrails/changed_files.md",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-guardrail-md.txt"
+    }
+  ],
+  "residual_risks": []
+}

@@ -1,0 +1,233 @@
+{
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "run_metadata",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-bugfix-review-validation.json",
+      "sha256": "71a6d5d162d26da64bb3788025a5ff0ee2b05c0ceb9a130e9d0e73c0afcc3d5e",
+      "size_bytes": 4924
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "run_record",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-bugfix-review-validation.md",
+      "sha256": "99ba045ed6bc64d289ad7b28a6eaf5d834b6ee970ff5b5bb51e4846e6ac0f513",
+      "size_bytes": 6872
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "readonly_smoke",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-bugfix-review-readonly-smoke.json",
+      "sha256": "fe8a9fa6a3888d35d9dbf262b3f0e8c3c7f764019d2be210a6acb0b857f11e31",
+      "size_bytes": 8987
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "runner_smoke_evidence",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-bugfix-review-runner-smoke-evidence.json",
+      "sha256": "40869eef5d0a9c169ef88af4c90e1dc740936499812a28a413f399685eebc4d4",
+      "size_bytes": 1289
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "readonly_smoke_evidence",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-bugfix-review-readonly-smoke-evidence.json",
+      "sha256": "841a6e1a75d5589883b09b9d5a41cb8bfd0dc97ec4fe0143ff26b4b3eb90af60",
+      "size_bytes": 1288
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "l0_guardrail_json",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-bugfix-review-l0-guardrail.json",
+      "sha256": "2af33451053346a6769c1001b5e84194d6f03413b229cc97b723431377186a14",
+      "size_bytes": 1965
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "l0_guardrail_md",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-bugfix-review-l0-guardrail.md",
+      "sha256": "8bdc478d3cbcd0facdfc01eafb0502987ee81e3ee24db0dba96da8a65d052fd1",
+      "size_bytes": 1283
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "archived_runner_run_record",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-validation.md",
+      "sha256": "89d59cd4bc0f337a763dc3f5f980cbd1f36bcef8e575c5aa92afe205b7947ff2",
+      "size_bytes": 1253
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "archived_runner_metadata",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-validation.json",
+      "sha256": "3ede811dcec0c368f533e99b168326b65975a000d2ae1076c385fd2f5ea85f41",
+      "size_bytes": 4781
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "archived_runner_evidence",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-evidence.json",
+      "sha256": "bdf1931b92e2ab6c0b1a916d7542165a57b9d6e71fa08361944772bdb3e8e9a0",
+      "size_bytes": 3208
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "archived_runner_job",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-runner-job.json",
+      "sha256": "f10027973b1811661b0e134316a7851a34e680e0238fc59906978c37fab486ac",
+      "size_bytes": 2725
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "archived_runner_log",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-runner-log.txt",
+      "sha256": "83a4952d656a31d81b965c5e5c0b0a4192fa889e8ec8ef53ec3e6e04bbeab98c",
+      "size_bytes": 459
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "archived_runner_runner_evidence",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-runner-evidence.json",
+      "sha256": "56c62ac519409b0fb5637a5b2dbf33379b5c6a1083e71e79d885e74585808b0c",
+      "size_bytes": 2428
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "archived_runner_guardrail_json",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-guardrail-json.json",
+      "sha256": "bbdefb7e80d233c521bd4ae8a9e31e42e84cc48a9573ee69c5690abc4e0385fe",
+      "size_bytes": 555
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "archived_runner_guardrail_txt",
+      "path": "tests/aistock_validation/history/development-guardrails/20260504_125819_l0_guardrail-changed-files_505ca58a_runner-guardrail-md.txt",
+      "sha256": "e92ff4b9728b31867bce8a4b60185ac3b953dd4ef694b9dfe7d90600331977a0",
+      "size_bytes": 800
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "runner_service",
+      "path": "backend/services/validation/execution_runner.py",
+      "sha256": "6d4cfe16e6a433a3219836af77c01ef457b350e2cf7d24ee59f5339b76748c03",
+      "size_bytes": 35888
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "history_store",
+      "path": "backend/services/validation/history_store.py",
+      "sha256": "b16edaeb2eed69869713ac05e585b2beba8137a9514af7080e353eca0639d652",
+      "size_bytes": 19802
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "backend_api",
+      "path": "backend/routers/validation.py",
+      "sha256": "a6e92a4d891d6b1511be2f310763ba227bc45dedda02ea9fe4d8446ead8cf9fc",
+      "size_bytes": 13604
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "backend_tests",
+      "path": "backend/tests/test_validation_execution_runner.py",
+      "sha256": "25ff0eb28c783fd2bd805664ac59c9f7c1bc2204be87582bdf31b15f6f5aba50",
+      "size_bytes": 12714
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "backend_api_tests",
+      "path": "backend/tests/test_validation_center_api.py",
+      "sha256": "2c3649bffae26d8ecab1d0bb5268a4e8a2945290c77e26b457084b1448fa260d",
+      "size_bytes": 16949
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "module_contract",
+      "path": "tests/aistock_validation/modules/validation_center.md",
+      "sha256": "a5aeadd5191ca14f9a504f1f9643ad3b2e38b435eea8165c03f480ae3550c534",
+      "size_bytes": 15235
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "coverage",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-bugfix-review-snapshot.json",
+      "sha256": "14fcb5a324a6e9c604130e17fec77fa07cdfe15091dd872608a4f1e5577e7aa2",
+      "size_bytes": 46455
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "smoke_json",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-bugfix-review-runner-smoke.json",
+      "sha256": "b4b11d98fbbfe7433f61463530b35e8b3c1718f6a52d9a56f2faaabb725563de",
+      "size_bytes": 28891
+    }
+  ],
+  "generated_at": "2026-05-04T21:05:56",
+  "git_commit": "4c74924",
+  "level": "L3",
+  "missing": [],
+  "missing_count": 0,
+  "module": "validation_center",
+  "operator": "lc999",
+  "run_id": "validation-center-runner-bugfix-review-20260504",
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "Validation Center runner bugfix code review"
+}

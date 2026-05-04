@@ -1,0 +1,4 @@
+nox > Running session guardrail_changed_files
+nox > python scripts/aistock_guardrail_scan.py --staged-only --baseline-json tmp/validation/guardrails/baseline_20260504.json --fail-new-only --fail-on-severity P1 --output-json tmp/validation/guardrails/changed_files.json --summary-md tmp/validation/guardrails/changed_files.md
+Guardrail scan completed: mode=staged_only, files=0, findings=0, blocking=0
+nox > Session guardrail_changed_files was successful.
