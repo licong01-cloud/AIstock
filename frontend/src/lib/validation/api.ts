@@ -1,0 +1,278 @@
+export type JsonObject = Record<string, unknown>;
+
+export type ValidationPage<T> = {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+};
+
+export type ValidationEnvelope<T> = {
+  status: string;
+  data: T;
+};
+
+export type ValidationHealth = {
+  status?: string;
+  mode?: string;
+  history?: {
+    mode?: string;
+    history_root?: string;
+    exists?: boolean;
+    run_count?: number;
+    coverage_snapshot_count?: number;
+    evidence_manifest_count?: number;
+  };
+  plan_catalog?: {
+    catalog_path?: string;
+    missing?: boolean;
+    plan_count?: number;
+  };
+  production_8001_touched?: boolean;
+};
+
+export type ValidationPlan = JsonObject & {
+  plan_key: string;
+  title?: string;
+  module?: string;
+  level?: string;
+  command_key?: string;
+  nox_session?: string;
+  enabled?: boolean;
+  requires_backend?: boolean;
+  requires_frontend?: boolean;
+  allowed_backend_ports?: number[];
+  allowed_frontend_ports?: number[];
+  writes_database?: boolean;
+  writes_artifacts?: boolean;
+  writes_business_state?: boolean;
+};
+
+export type ValidationPlanCatalog = {
+  catalog_path?: string;
+  missing?: boolean;
+  plans: ValidationPlan[];
+};
+
+export type ValidationPassScope = JsonObject & {
+  level?: string;
+  real_backend?: boolean;
+  real_database?: boolean;
+  real_node_api?: boolean;
+  real_frontend_click?: boolean;
+  writes_business_state?: boolean;
+  positive_business_success?: boolean;
+  negative_failfast_only?: boolean;
+  mock_api_used?: boolean;
+  production_8001_touched?: boolean;
+};
+
+export type ValidationBusinessAssertion = JsonObject & {
+  can_user_complete_operation?: boolean;
+  operation_name?: string;
+  evidence?: JsonObject;
+  unresolved_blockers?: string[];
+};
+
+export type ValidationCoverageSummary = JsonObject & {
+  snapshot_id: string;
+  schema_version?: string;
+  module?: string;
+  level?: string;
+  title?: string;
+  run_id?: string | null;
+  generated_at?: string;
+  git_commit?: string;
+  status?: string;
+  snapshot_path?: string;
+  totals?: JsonObject;
+  diff?: JsonObject;
+  quality_gates?: JsonObject[];
+  failed_gates?: JsonObject[];
+};
+
+export type ValidationEvidenceSummary = JsonObject & {
+  manifest_id: string;
+  schema_version?: string;
+  module?: string;
+  level?: string;
+  title?: string;
+  run_id?: string | null;
+  generated_at?: string;
+  git_commit?: string;
+  manifest_path?: string;
+  missing_count?: number;
+  evidence_count?: number;
+  missing?: unknown[];
+};
+
+export type ValidationRunSummary = JsonObject & {
+  run_id: string;
+  module?: string;
+  module_slug?: string;
+  level?: string;
+  title?: string;
+  status?: string;
+  git_commit?: string | null;
+  operator?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  markdown_path?: string;
+  metadata_path?: string | null;
+  metadata_missing?: boolean;
+  metadata_parse_error?: string | null;
+  source_type?: string;
+  coverage?: JsonObject | null;
+  coverage_snapshot_id?: string | null;
+  coverage_missing?: boolean;
+  evidence_manifest_id?: string | null;
+  evidence_missing?: boolean;
+  pass_scope?: ValidationPassScope | null;
+  business_assertion?: ValidationBusinessAssertion | null;
+  success_scope_recorded?: boolean;
+  quality_gates?: JsonObject[];
+  parse_error?: string | null;
+};
+
+export type ValidationRunDetail = ValidationRunSummary & {
+  markdown_text?: string | null;
+  metadata?: JsonObject | null;
+  coverage_snapshot?: ValidationCoverageSummary | null;
+  evidence_manifest?: ValidationEvidenceSummary | null;
+};
+
+export type ValidationCoverageDetail = {
+  summary: ValidationCoverageSummary;
+  snapshot: JsonObject;
+};
+
+export type ValidationEvidenceDetail = {
+  summary: ValidationEvidenceSummary;
+  manifest: JsonObject;
+};
+
+export type ValidationSummary = {
+  history_root?: string;
+  run_count?: number;
+  coverage_snapshot_count?: number;
+  evidence_manifest_count?: number;
+  plan_count?: number;
+  runs_by_status?: Record<string, number>;
+  modules?: Array<JsonObject & { module?: string; run_count?: number; latest_run?: ValidationRunSummary }>;
+  latest_runs?: ValidationRunSummary[];
+  latest_coverage?: ValidationCoverageSummary | null;
+};
+
+export type ValidationRunQuery = {
+  module?: string;
+  level?: string;
+  status?: string;
+  search?: string;
+  include_markdown_only?: boolean;
+  page?: number;
+  page_size?: number;
+};
+
+export type ValidationListQuery = {
+  module?: string;
+  status?: string;
+  page?: number;
+  page_size?: number;
+};
+
+const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1").replace(/\/+$/, "");
+
+export class ValidationApiError extends Error {
+  status: number;
+  raw: unknown;
+
+  constructor(message: string, status: number, raw: unknown) {
+    super(message);
+    this.name = "ValidationApiError";
+    this.status = status;
+    this.raw = raw;
+  }
+}
+
+function isObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function errorMessage(payload: unknown, status: number): string {
+  if (isObject(payload)) {
+    if (typeof payload.detail === "string") return payload.detail;
+    if (isObject(payload.detail)) {
+      const detail = payload.detail;
+      if (typeof detail.message === "string") return detail.message;
+      return JSON.stringify(detail);
+    }
+    if (typeof payload.message === "string") return payload.message;
+    if (typeof payload.error === "string") return payload.error;
+  }
+  return `HTTP ${status}`;
+}
+
+function appendQuery(path: string, params: Record<string, string | number | boolean | undefined | null>): string {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === "") continue;
+    qs.set(key, String(value));
+  }
+  const query = qs.toString();
+  return query ? `${path}?${query}` : path;
+}
+
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers || {}),
+    },
+  });
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) as unknown : {};
+  if (!response.ok) throw new ValidationApiError(errorMessage(payload, response.status), response.status, payload);
+  return payload as T;
+}
+
+async function unwrap<T>(path: string): Promise<T> {
+  const response = await apiFetch<ValidationEnvelope<T>>(path);
+  return response.data;
+}
+
+export const validationApi = {
+  health(): Promise<ValidationHealth> {
+    return unwrap<ValidationHealth>("/validation/health");
+  },
+  plans(): Promise<ValidationPlanCatalog> {
+    return unwrap<ValidationPlanCatalog>("/validation/plans");
+  },
+  plan(planKey: string): Promise<ValidationPlan> {
+    return unwrap<ValidationPlan>(`/validation/plans/${encodeURIComponent(planKey)}`);
+  },
+  runs(query: ValidationRunQuery = {}): Promise<ValidationPage<ValidationRunSummary>> {
+    return unwrap<ValidationPage<ValidationRunSummary>>(appendQuery("/validation/runs", query));
+  },
+  run(runId: string): Promise<ValidationRunDetail> {
+    return unwrap<ValidationRunDetail>(`/validation/runs/${encodeURIComponent(runId)}`);
+  },
+  coverage(query: ValidationListQuery = {}): Promise<ValidationPage<ValidationCoverageSummary>> {
+    return unwrap<ValidationPage<ValidationCoverageSummary>>(appendQuery("/validation/coverage", query));
+  },
+  coverageDetail(snapshotId: string): Promise<ValidationCoverageDetail> {
+    return unwrap<ValidationCoverageDetail>(`/validation/coverage/${encodeURIComponent(snapshotId)}`);
+  },
+  evidence(query: Omit<ValidationListQuery, "status"> = {}): Promise<ValidationPage<ValidationEvidenceSummary>> {
+    return unwrap<ValidationPage<ValidationEvidenceSummary>>(appendQuery("/validation/evidence", query));
+  },
+  evidenceDetail(manifestId: string): Promise<ValidationEvidenceDetail> {
+    return unwrap<ValidationEvidenceDetail>(`/validation/evidence/${encodeURIComponent(manifestId)}`);
+  },
+  summary(): Promise<ValidationSummary> {
+    return unwrap<ValidationSummary>("/validation/summary");
+  },
+};
+
+export { API_BASE };

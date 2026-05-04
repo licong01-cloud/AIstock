@@ -65,6 +65,9 @@ def l0(session: nox.Session) -> None:
         "backend/tests/selection_center",
         "backend/tests/strategy_package",
         "frontend/playwright.config.ts",
+        "frontend/src/app/validation-center",
+        "frontend/src/lib/validation",
+        "frontend/tests/validation-center",
         "frontend/tests/paper-v2",
     ]
     quick_validate = _codex_quick_validate_script()
@@ -431,6 +434,53 @@ def validation_center_backend(session: nox.Session) -> None:
         "55",
         external=True,
     )
+
+
+@nox.session(venv_backend="none")
+def validation_center_ui(session: nox.Session) -> None:
+    """Run Validation Center read-only UI checks on dev ports with mocked APIs."""
+    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8011")
+    frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3011")
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        backend_port,
+        frontend_port,
+        external=True,
+    )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "npm",
+            "exec",
+            "tsc",
+            "--",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run(
+            "npm",
+            "run",
+            "test:e2e",
+            "--",
+            "tests/validation-center",
+            env=_env(
+                {
+                    "BACKEND_PORT": backend_port,
+                    "FRONTEND_PORT": frontend_port,
+                    "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
 
 
 @nox.session(venv_backend="none")

@@ -1,0 +1,51 @@
+{
+  "schema_version": "aistock_validation_run_v1",
+  "module": "validation_center",
+  "module_slug": "validation_center",
+  "level": "L3",
+  "title": "Validation Center Read-only UI First-stage Complete Loop",
+  "status": "passed",
+  "git_commit": "a4bcf5d",
+  "operator": "Codex",
+  "started_at": "2026-05-04T17:20:00+08:00",
+  "finished_at": "2026-05-04T17:31:00+08:00",
+  "coverage": {
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "status": "not_collected",
+    "reason": "Frontend TypeScript UI coverage is not collected in this stage; backend coverage remains tracked by validation_center_backend."
+  },
+  "quality_gates": [
+    { "metric": "typescript", "status": "passed", "actual": "npm exec tsc -- --noEmit --incremental false", "threshold": "must pass" },
+    { "metric": "playwright_mock_ui", "status": "passed", "actual": "1 passed", "threshold": "all tests pass" },
+    { "metric": "nox_validation_center_ui", "status": "passed", "actual": "session successful", "threshold": "must pass" },
+    { "metric": "nox_validation_center_backend", "status": "passed", "actual": "18 passed; line=84.99; branch=71.74", "threshold": "line>=75; branch>=55" },
+    { "metric": "l0_high_guardrail", "status": "passed", "actual": "0 high findings", "threshold": "no high findings" }
+  ],
+  "pass_scope": {
+    "level": "L3",
+    "real_backend": false,
+    "real_database": false,
+    "real_node_api": false,
+    "real_frontend_click": true,
+    "writes_business_state": false,
+    "positive_business_success": false,
+    "negative_failfast_only": false,
+    "mock_api_used": true,
+    "production_8001_touched": false,
+    "current_commit_evidence": true
+  },
+  "business_assertion": {
+    "can_user_complete_operation": true,
+    "operation_name": "查看 Validation Center 只读历史、覆盖率和证据详情",
+    "evidence": {
+      "ui": "frontend/tests/validation-center/validation-center.spec.ts",
+      "api": "mocked /api/v1/validation/* responses matching read-only backend contract",
+      "db": "not touched",
+      "logs": "nox validation_center_ui and validation_center_backend output"
+    },
+    "unresolved_blockers": [
+      "Controlled execution UI and backend runner are not enabled in this phase.",
+      "Real-backend UI smoke is deferred until the execution boundary is implemented."
+    ]
+  }
+}

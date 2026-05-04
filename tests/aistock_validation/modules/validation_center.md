@@ -33,6 +33,7 @@ Required coverage for the first-stage complete loop:
 ```powershell
 python -m nox -s validation_coverage_backend
 python -m nox -s validation_center_backend
+python -m nox -s validation_center_ui
 python -m nox -s qe_data_contract_backend
 python -m nox -s l0 -- scripts/aistock_validate.py backend/tests/test_aistock_validate_metadata.py backend/tests/test_aistock_validate_coverage.py noxfile.py tests/aistock_validation/modules/validation_center.md
 ```
@@ -72,3 +73,16 @@ The first read-only API loop must expose validation history without executing co
 - `GET /api/v1/validation/evidence` and `/evidence/{manifest_id}` expose evidence manifests with `missing_count`.
 - `GET /api/v1/validation/summary` provides a lightweight module/status/coverage summary.
 - Missing metadata, missing coverage, missing evidence, and malformed JSON must be explicit fields; the API must not fake success.
+
+## L3 Read-only UI Contract
+
+The first read-only UI loop displays validation history without executing tests or writing business state:
+
+- `/validation-center` loads health, summary, plan catalog, run list, coverage list, and evidence list from `/api/v1/validation/*`.
+- The UI must show that controlled execution is disabled; no POST/PUT/PATCH/DELETE request is allowed in this stage.
+- Run history must support module, level, status, search, include-markdown-only, page, and page-size controls.
+- Run detail must display metadata path, coverage/evidence links, quality gates, `pass_scope`, and `business_assertion`.
+- Missing `metadata`, parse errors, missing coverage, missing evidence, and absent success-scope records must be visible warnings.
+- Mock UI evidence must not be presented as real business success; absent `pass_scope` must read as `未记录/未证明`.
+- Coverage and evidence detail panes must be readable business tables, not raw JSON as the primary operator view.
+- UI validation uses Playwright mocked APIs on frontend dev port `3011`/`3012`; it must not restart production backend `8001`.

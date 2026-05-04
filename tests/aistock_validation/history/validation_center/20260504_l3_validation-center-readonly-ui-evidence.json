@@ -1,0 +1,89 @@
+{
+  "environment": {
+    "backend_port": "8011",
+    "frontend_port": "3011",
+    "next_public_api_base": "http://127.0.0.1:8011/api/v1",
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "tsc",
+      "path": "frontend/tsconfig.json",
+      "sha256": "8266e6da86c6e79f8d1a8d20fdf8400bb6823de93ffc3c020c37f2d151e6ffdc",
+      "size_bytes": 869
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "playwright_spec",
+      "path": "frontend/tests/validation-center/validation-center.spec.ts",
+      "sha256": "dbc758cea53e6142ba7d2f4c7b1788383303b514a8b349f277e9a7628f3aef34",
+      "size_bytes": 13917
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "noxfile",
+      "path": "noxfile.py",
+      "sha256": "5768525b7bd506b5658b2f70053177e3f2b453b334ff7758b28254711a99851b",
+      "size_bytes": 21687
+    },
+    {
+      "child_count": 2,
+      "exists": true,
+      "is_dir": true,
+      "kind": "file",
+      "path": "frontend/src/app/validation-center",
+      "sha256": null,
+      "size_bytes": null
+    },
+    {
+      "child_count": 1,
+      "exists": true,
+      "is_dir": true,
+      "kind": "file",
+      "path": "frontend/src/lib/validation",
+      "sha256": null,
+      "size_bytes": null
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "tests/aistock_validation/modules/validation_center.md",
+      "sha256": "8cc4a8f13910fbd42c9dc14853e859c31c9e342491c259b24381c9e907da0068",
+      "size_bytes": 6240
+    },
+    {
+      "child_count": 1,
+      "exists": true,
+      "is_dir": true,
+      "kind": "playwright_report",
+      "path": "tmp/playwright-report",
+      "sha256": null,
+      "size_bytes": null
+    }
+  ],
+  "generated_at": "2026-05-04T17:31:59",
+  "git_commit": "a4bcf5d",
+  "level": "L3",
+  "missing": [],
+  "missing_count": 0,
+  "module": "validation_center",
+  "operator": "lc999",
+  "run_id": null,
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "Validation Center read-only UI"
+}
