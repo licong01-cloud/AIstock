@@ -1,0 +1,142 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from scripts import validation_center_readonly_smoke as smoke
+
+
+def _envelope(data: dict) -> tuple[int, dict, None]:
+    return 200, {"status": "success", "data": data}, None
+
+
+def _page(items: list[dict], *, total: int | None = None) -> dict:
+    return {
+        "items": items,
+        "total": len(items) if total is None else total,
+        "page": 1,
+        "page_size": 5,
+        "has_more": False,
+    }
+
+
+def _route(path: str) -> tuple[int | None, dict | None, str | None]:
+    path_only = path.split("?", 1)[0]
+    routes: dict[str, tuple[int, dict, None]] = {
+        "/validation/health": _envelope(
+            {
+                "mode": "read_only",
+                "history": {"run_count": 1, "coverage_snapshot_count": 1, "evidence_manifest_count": 1},
+                "plan_catalog": {"plan_count": 1},
+                "quality": {"finding_count": 1, "bug_count": 1},
+                "production_8001_touched": False,
+            }
+        ),
+        "/validation/summary": _envelope(
+            {
+                "run_count": 1,
+                "coverage_snapshot_count": 1,
+                "evidence_manifest_count": 1,
+                "plan_count": 1,
+                "quality": {"finding_count": 1, "bug_count": 1},
+            }
+        ),
+        "/validation/plans": _envelope({"plans": [{"plan_key": "validation_center_backend"}]}),
+        "/validation/runs": _envelope(_page([{"run_id": "run_1"}])),
+        "/validation/runs/run_1": _envelope({"run_id": "run_1", "title": "Run"}),
+        "/validation/coverage": _envelope(_page([{"snapshot_id": "cov_1"}])),
+        "/validation/coverage/cov_1": _envelope({"summary": {"snapshot_id": "cov_1"}, "snapshot": {"status": "passed"}}),
+        "/validation/evidence": _envelope(_page([{"manifest_id": "evidence_1"}])),
+        "/validation/evidence/evidence_1": _envelope({"summary": {"manifest_id": "evidence_1"}, "manifest": {"missing_count": 0}}),
+        "/validation/findings/summary": _envelope({"finding_count": 1}),
+        "/validation/findings": _envelope(_page([{"finding_id": "finding_1"}])),
+        "/validation/findings/finding_1": _envelope({"finding_id": "finding_1", "agent_context": {"context_type": "quality_finding"}}),
+        "/validation/bugs/summary": _envelope({"bug_count": 1}),
+        "/validation/bugs": _envelope(_page([{"bug_id": "bug_1"}])),
+        "/validation/bugs/bug_1": _envelope({"bug_id": "bug_1", "agent_context": {"context_type": "bug"}}),
+        "/validation/bugs/bug_1/agent-context": _envelope({"context_type": "bug", "bug_id": "bug_1"}),
+    }
+    if path_only not in routes:
+        return None, None, f"unexpected path: {path}"
+    return routes[path_only]
+
+
+def test_readonly_smoke_passes_with_complete_contract(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(smoke, "_request_json", lambda _api_base, path, *, timeout: _route(path))
+    output = tmp_path / "smoke.json"
+
+    exit_code = smoke.run_smoke(api_base="http://127.0.0.1:8011/api/v1", output=output)
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["schema_version"] == smoke.SCHEMA_VERSION
+    assert payload["status"] == "passed"
+    assert payload["failure_count"] == 0
+    assert payload["production_8001_touched"] is False
+    assert payload["write_methods_sent"] == []
+    assert payload["counts"]["runs"] == 1
+    assert payload["counts"]["bugs"] == 1
+    assert payload["endpoint_count"] >= 14
+
+
+def test_readonly_smoke_blocks_production_8001(tmp_path: Path) -> None:
+    output = tmp_path / "blocked.json"
+
+    exit_code = smoke.run_smoke(api_base="http://127.0.0.1:8001/api/v1", output=output)
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert payload["status"] == "failed"
+    assert "refusing to touch production backend port 8001" in payload["failures"]
+    assert payload["endpoint_count"] == 0
+
+
+def test_readonly_smoke_records_explicit_production_probe(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(smoke, "_request_json", lambda _api_base, path, *, timeout: _route(path))
+    output = tmp_path / "allowed_production.json"
+
+    exit_code = smoke.run_smoke(
+        api_base="http://127.0.0.1:8001/api/v1",
+        output=output,
+        allow_production_8001=True,
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["status"] == "passed"
+    assert payload["production_8001_touched"] is True
+
+
+def test_readonly_smoke_blocks_non_localhost_by_default(tmp_path: Path) -> None:
+    output = tmp_path / "remote.json"
+
+    exit_code = smoke.run_smoke(api_base="http://192.0.2.10:8011/api/v1", output=output)
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert payload["status"] == "failed"
+    assert "refusing to touch non-localhost validation API" in payload["failures"]
+    assert payload["endpoint_count"] == 0
+
+
+def test_readonly_smoke_fails_on_missing_quality(monkeypatch, tmp_path: Path) -> None:
+    def route(path: str):
+        if path == "/validation/health":
+            return _envelope(
+                {
+                    "mode": "read_only",
+                    "history": {},
+                    "plan_catalog": {},
+                    "production_8001_touched": False,
+                }
+            )
+        return _route(path)
+
+    monkeypatch.setattr(smoke, "_request_json", lambda _api_base, path, *, timeout: route(path))
+    output = tmp_path / "missing_quality.json"
+
+    exit_code = smoke.run_smoke(api_base="http://127.0.0.1:8011/api/v1", output=output)
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert "/validation/health quality must be an object" in payload["failures"]

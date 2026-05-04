@@ -1,0 +1,90 @@
+{
+  "schema_version": "aistock_validation_run_v1",
+  "module": "validation_center",
+  "module_slug": "validation_center",
+  "level": "L3",
+  "title": "Validation Center Live Read-only API Smoke",
+  "status": "passed",
+  "git_commit": "00fa444",
+  "operator": "Codex",
+  "started_at": "2026-05-04T18:21:02",
+  "finished_at": "2026-05-04T18:21:03",
+  "markdown_path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-live-readonly-smoke-validation.md",
+  "metadata_path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-live-readonly-smoke-validation.json",
+  "coverage": {
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "status": "passed",
+    "snapshot_path": "tmp/validation/coverage/validation_center_backend_snapshot.json",
+    "line_percent": 80.13,
+    "branch_percent": 64.0
+  },
+  "quality_gates": [
+    {
+      "metric": "backend_pytest",
+      "status": "passed",
+      "actual": "backend targeted smoke tests: 5 passed; validation_center_backend: 24 passed",
+      "threshold": "all tests pass"
+    },
+    {
+      "metric": "backend_coverage",
+      "status": "passed",
+      "actual": "line=80.13; branch=64.00",
+      "threshold": "line>=75; branch>=55"
+    },
+    {
+      "metric": "live_readonly_smoke",
+      "status": "passed",
+      "actual": "endpoint_count=14; failure_count=0; write_methods_sent=[]; production_8001_touched=False",
+      "threshold": "failure_count=0; GET only; production_8001_touched=false"
+    },
+    {
+      "metric": "playwright_mock_ui",
+      "status": "passed",
+      "actual": "validation_center_ui: 1 passed",
+      "threshold": "all tests pass"
+    },
+    {
+      "metric": "l0_high_guardrail",
+      "status": "passed",
+      "actual": "targeted l0 passed; 0 findings",
+      "threshold": "no high findings"
+    }
+  ],
+  "evidence": [
+    "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-live-readonly-smoke-smoke.json",
+    "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-live-readonly-smoke-evidence.json",
+    "tmp/validation/coverage/validation_center_backend_snapshot.json"
+  ],
+  "pass_scope": {
+    "level": "L3",
+    "real_backend": true,
+    "real_database": false,
+    "real_node_api": false,
+    "real_frontend_click": true,
+    "writes_business_state": false,
+    "positive_business_success": false,
+    "negative_failfast_only": false,
+    "mock_api_used": true,
+    "live_api_smoke_used": true,
+    "production_8001_touched": false,
+    "current_commit_evidence": true
+  },
+  "business_assertion": {
+    "can_user_complete_operation": true,
+    "operation_name": "Inspect Validation Center read-only API state from a current dev backend",
+    "evidence": {
+      "api": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-live-readonly-smoke-smoke.json",
+      "ui": "validation_center_ui mocked Playwright regression",
+      "db": "not touched",
+      "logs": "nox validation_center_live_readonly and validation_center_backend output"
+    },
+    "unresolved_blockers": [
+      "Controlled execution runner remains disabled and out of scope.",
+      "This live smoke validates read-only contract shape, not long-running business success."
+    ]
+  },
+  "residual_risks": [
+    "Existing 8011 service did not expose current validation routes and was not restarted.",
+    "Runner, queue, DB-backed bug lifecycle, and GitHub issue write-back are deferred."
+  ]
+}

@@ -34,6 +34,7 @@ Required coverage for the first-stage complete loop:
 python -m nox -s validation_coverage_backend
 python -m nox -s validation_center_backend
 python -m nox -s validation_center_ui
+python -m nox -s validation_center_live_readonly
 python -m nox -s qe_data_contract_backend
 python -m nox -s l0 -- scripts/aistock_validate.py backend/tests/test_aistock_validate_metadata.py backend/tests/test_aistock_validate_coverage.py noxfile.py tests/aistock_validation/modules/validation_center.md
 ```
@@ -112,3 +113,16 @@ The first quality-registry UI loop displays quality findings and bugs as operato
 - Detail panels show finding/Bug fields and `agent_context` in labeled rows, not as raw JSON primary output.
 - The UI must not send POST/PUT/PATCH/DELETE requests in this phase and must keep the controlled execution button disabled.
 - Playwright validation must mock the read-only endpoints, fail on console/page/request/API errors, and verify that agent-context content is visible.
+
+## L3 Live Read-only API Smoke Contract
+
+The live read-only smoke validates that the UI/API contracts work against a running dev backend, without starting services or touching production:
+
+- `nox -s validation_center_live_readonly` probes only a running dev backend on `BACKEND_PORT` (default `8011`) and fails fast if the backend is unavailable.
+- The smoke refuses to probe port `8001` unless explicitly overridden by `--allow-production-8001`, which must not be used for normal development validation.
+- The smoke refuses non-localhost API bases unless explicitly overridden by `--allow-non-localhost`, which must not be used for normal development validation.
+- `scripts/validation_center_readonly_smoke.py` sends only `GET` requests and records `write_methods_sent=[]`.
+- Required endpoints: health, summary, plans, runs, run detail when present, coverage list/detail when present, evidence list/detail when present, findings summary/list/detail when present, bugs summary/list/detail/agent-context when present.
+- The JSON smoke output uses schema `aistock_validation_center_readonly_smoke_v1`, records endpoint status, counts, failures, read-only state, and `production_8001_touched=false` for normal dev runs.
+- Empty run/coverage/evidence/finding/Bug lists are allowed, but endpoint shape and summary counts must remain explicit.
+- This live smoke is an additional L3 proof; mocked UI E2E remains required for deterministic UI regression.

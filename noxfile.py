@@ -54,6 +54,7 @@ def l0(session: nox.Session) -> None:
     scan_paths = session.posargs or [
         "noxfile.py",
         "scripts/aistock_validate.py",
+        "scripts/validation_center_readonly_smoke.py",
         "scripts/aistock_data_quality_smoke.py",
         "scripts/paper_v2_live_validation.py",
         "backend/services/quantevolver/completion_contract.py",
@@ -394,6 +395,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/routers/validation.py",
         "backend/services/validation",
         "scripts/aistock_validate.py",
+        "scripts/validation_center_readonly_smoke.py",
         external=True,
     )
     session.run(
@@ -401,10 +403,12 @@ def validation_center_backend(session: nox.Session) -> None:
         "-m",
         "pytest",
         "backend/tests/test_validation_center_api.py",
+        "backend/tests/test_validation_center_readonly_smoke.py",
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
         "--cov=backend.services.validation",
         "--cov=backend.routers.validation",
+        "--cov=scripts.validation_center_readonly_smoke",
         "--cov-branch",
         f"--cov-report=xml:{coverage_xml}",
         f"--cov-report=json:{coverage_json}",
@@ -481,6 +485,60 @@ def validation_center_ui(session: nox.Session) -> None:
         )
     finally:
         os.chdir(old_cwd)
+
+
+@nox.session(venv_backend="none")
+def validation_center_live_readonly(session: nox.Session) -> None:
+    """Probe a running dev Validation Center API with read-only GET requests only."""
+    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8011")
+    api_base = os.environ.get("VALIDATION_CENTER_API_BASE", f"http://127.0.0.1:{backend_port}/api/v1")
+    output = ROOT / "tmp" / "validation" / "validation_center" / "readonly_smoke.json"
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        backend_port,
+        external=True,
+    )
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "services",
+        "--backend-port",
+        backend_port,
+        "--skip-tdx",
+        external=True,
+    )
+    session.run(
+        "python",
+        "scripts/validation_center_readonly_smoke.py",
+        "--api-base",
+        api_base,
+        "--output",
+        str(output),
+        env=_env({"VALIDATION_CENTER_API_BASE": api_base}),
+        external=True,
+    )
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "evidence",
+        "--module",
+        "validation_center",
+        "--level",
+        "L3",
+        "--title",
+        "Validation Center live read-only API smoke",
+        "--output",
+        "tmp/validation/validation_center/readonly_smoke_evidence.json",
+        "--smoke-json",
+        str(output),
+        "--item",
+        "script=scripts/validation_center_readonly_smoke.py",
+        env=_env({"VALIDATION_CENTER_API_BASE": api_base}),
+        external=True,
+    )
 
 
 @nox.session(venv_backend="none")

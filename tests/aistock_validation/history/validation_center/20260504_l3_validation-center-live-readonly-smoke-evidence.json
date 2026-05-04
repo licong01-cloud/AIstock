@@ -1,0 +1,44 @@
+{
+  "environment": {
+    "backend_port": "8012",
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "script",
+      "path": "scripts/validation_center_readonly_smoke.py",
+      "sha256": "da4e956739a54cda19f79e185ac89bb39c378b14aece4f979d7125dd568c670a",
+      "size_bytes": 15781
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "smoke_json",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-live-readonly-smoke-smoke.json",
+      "sha256": "e7dc584a66fef61c5dadeb2ec4a59c38f37a65813e9fbbb85a214a75448bc7b9",
+      "size_bytes": 6425
+    }
+  ],
+  "generated_at": "2026-05-04T18:24:13",
+  "git_commit": "00fa444",
+  "level": "L3",
+  "missing": [],
+  "missing_count": 0,
+  "module": "validation_center",
+  "operator": "lc999",
+  "run_id": null,
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "Validation Center live read-only API smoke"
+}
