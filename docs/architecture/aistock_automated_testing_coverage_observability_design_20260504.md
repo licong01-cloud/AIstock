@@ -414,6 +414,7 @@ Test Management UI / Validation API
 ## 10. 与现有文档的关系
 
 - `docs/architecture/aistock_testing_version_management_system_design_20260429.md`：已有测试与版本管理顶层思路；本文补充覆盖率、可观测 UI、QE/数仓专项测试和质量门禁。
+- `docs/architecture/aistock_internal_validation_center_implementation_plan_20260504.md`：本文的落地实施方案，明确 AIstock 内置 Validation Center 的后端/API/UI、coverage、allowlist、长耗时测试和分阶段研发任务。
 - `docs/architecture/qe_experiment_data_completeness_prewarehouse_plan_20260503.md`：QE 数据完整性前置改造方案，本文为其提供测试与覆盖率约束。
 - `docs/architecture/qe_worker_workspace_read_refactor_validation_plan_20260502.md`：QE worker workspace 红线验证，本文继承其 dev ports 和 API-only 原则。
 - `tests/aistock_validation/*`：当前测试矩阵和历史记录目录，未来应升级为测试管理系统的数据源之一。
