@@ -379,7 +379,13 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     }
     await expect(page.locator("body")).toContainText("RankIC");
     await expect(page.locator("body")).toContainText("最大回撤");
-    await expect(page.getByRole("link", { name: "从此包启动模拟盘" }).first()).toBeVisible();
+    await expect(page.locator("body")).toContainText("生命周期状态");
+    await expect(page.locator("body")).toContainText("选股能力");
+    await expect(page.locator("body")).toContainText("模拟盘能力");
+    await expect(page.getByText("标记可用于选股").first()).toBeVisible();
+    await expect(page.getByText("标记可用于模拟盘").first()).toBeVisible();
+    await expect(page.getByText("用此包创建模拟组合").first()).toBeVisible();
+    await expect(page.getByText("退役策略包").first()).toBeVisible();
   });
 
   test("Selection Center runs live-data inference, displays history, and imports watchlist items", async ({ page, request }) => {

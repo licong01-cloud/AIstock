@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import ConfirmAction from "@/components/paper-v2/ConfirmAction";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
 import JsonPanel from "@/components/paper-v2/JsonPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
@@ -16,6 +17,60 @@ import type { ExecutionPolicy, JsonObject, QEPackagingSource, StrategyPackage } 
 function metricText(source: QEPackagingSource): string {
   const m = source.metrics_summary || {};
   return `年化 ${formatPercent(m.annual_return)} / IC ${formatPercent(m.ic)} / 回撤 ${formatPercent(m.max_drawdown)}`;
+}
+
+const SELECTION_RUNNABLE_STATUSES = new Set(["BACKTEST_APPROVED", "SELECTION_ENABLED", "PAPER_ENABLED"]);
+const SELECTION_MARKABLE_STATUSES = new Set(["BACKTEST_APPROVED"]);
+const PAPER_MARKABLE_STATUSES = new Set(["BACKTEST_APPROVED", "SELECTION_ENABLED"]);
+
+function packageLifecycleText(status: string): string {
+  const labels: Record<string, string> = {
+    DRAFT: "草稿，尚未完成资产校验",
+    ASSET_VALIDATED: "资产已校验，等待回测批准",
+    BACKTEST_APPROVED: "回测已批准，可进入选股/模拟盘准入",
+    SELECTION_ENABLED: "已标记可用于选股",
+    PAPER_ENABLED: "已标记可用于模拟盘",
+    PAPER_RUNNING: "已有模拟盘运行历史，谨慎新建",
+    PAPER_PASSED: "模拟盘验证通过历史状态",
+    PAPER_FAILED: "模拟盘验证失败历史状态",
+    RETIRED: "已退役，仅保留审计",
+  };
+  return labels[status] || "未知状态，请查看状态事件";
+}
+
+function selectionCapability(status: string): { ok: boolean; title: string; detail: string } {
+  if (status === "RETIRED") {
+    return { ok: false, title: "不可选股", detail: "策略包已退役，不应再进入新的选股流程。" };
+  }
+  if (status === "SELECTION_ENABLED" || status === "PAPER_ENABLED") {
+    return { ok: true, title: "可以选股", detail: "已完成选股准入标记，可进入 Selection Center。" };
+  }
+  if (status === "BACKTEST_APPROVED") {
+    return { ok: true, title: "可以选股", detail: "回测已批准；建议先点击“标记可用于选股”留下状态事件。" };
+  }
+  return { ok: false, title: "不可选股", detail: "需要至少达到 BACKTEST_APPROVED 状态。" };
+}
+
+function paperCapability(
+  status: string,
+  paperReadyPolicyCount: number,
+  policyCount: number,
+): { ok: boolean; title: string; detail: string } {
+  if (status === "RETIRED") {
+    return { ok: false, title: "不可新建模拟盘", detail: "策略包已退役，仅保留历史组合和审计记录。" };
+  }
+  if (status === "PAPER_ENABLED") {
+    const policyText = paperReadyPolicyCount > 0
+      ? `已有 ${paperReadyPolicyCount} 个可用于模拟盘的已验证执行策略。`
+      : policyCount > 0
+        ? "已有执行策略，但尚未启用用于模拟盘；创建时仍会 fail-fast 校验。"
+        : "尚未列出执行策略；创建时会尝试导入并校验 manifest 默认策略。";
+    return { ok: true, title: "可以创建模拟组合", detail: policyText };
+  }
+  if (PAPER_MARKABLE_STATUSES.has(status)) {
+    return { ok: false, title: "未完成模拟盘准入", detail: "先点击“标记可用于模拟盘”，再创建具体模拟组合。" };
+  }
+  return { ok: false, title: "不可新建模拟盘", detail: "需要至少达到 BACKTEST_APPROVED，并完成模拟盘准入。" };
 }
 
 export default function PaperV2PackagesPage() {
@@ -143,6 +198,14 @@ export default function PaperV2PackagesPage() {
   }
 
   const metrics = selected?.metrics_summary || {};
+  const selectedStatus = selected?.package_status || "";
+  const paperReadyPolicies = policies.filter((item) => item.paper_enabled);
+  const canMarkSelection = SELECTION_MARKABLE_STATUSES.has(selectedStatus);
+  const canMarkPaper = PAPER_MARKABLE_STATUSES.has(selectedStatus);
+  const canCreatePortfolio = selectedStatus === "PAPER_ENABLED";
+  const canRetirePackage = Boolean(selected && selectedStatus !== "RETIRED");
+  const selectionState = selectionCapability(selectedStatus);
+  const paperState = paperCapability(selectedStatus, paperReadyPolicies.length, policies.length);
 
   return (
     <main>
@@ -214,15 +277,50 @@ export default function PaperV2PackagesPage() {
           <SectionCard
             title={selected.package_name}
             eyebrow="当前策略包"
-            action={
-              <div className="pv2-row-actions">
-                <button className="pv2-button" onClick={() => transition("enableSelection")} disabled={busy} type="button">启用选股</button>
-                <button className="pv2-button" onClick={() => transition("enablePaper")} disabled={busy} type="button">启用模拟盘</button>
-                <Link className="pv2-button-primary" href={`/paper-v2/portfolios?package_id=${selected.package_id}`}>从此包启动模拟盘</Link>
-                <button className="pv2-button-danger" onClick={() => transition("retire")} disabled={busy} type="button">退役</button>
-              </div>
-            }
           >
+            <div className="pv2-grid pv2-grid-3" style={{ marginBottom: 14 }}>
+              <MetricCard
+                label="生命周期状态"
+                value={selectedStatus || "-"}
+                hint={packageLifecycleText(selectedStatus)}
+                tone={selectedStatus === "RETIRED" ? "danger" : canCreatePortfolio ? "success" : SELECTION_RUNNABLE_STATUSES.has(selectedStatus) ? "info" : "warning"}
+              />
+              <MetricCard
+                label="选股能力"
+                value={selectionState.title}
+                hint={selectionState.detail}
+                tone={selectionState.ok ? "success" : "warning"}
+              />
+              <MetricCard
+                label="模拟盘能力"
+                value={paperState.title}
+                hint={paperState.detail}
+                tone={paperState.ok ? "success" : selectedStatus === "RETIRED" ? "danger" : "warning"}
+              />
+            </div>
+            <div className="pv2-card" style={{ marginBottom: 14, padding: 14 }}>
+              <div className="pv2-eyebrow">下一步操作</div>
+              <div className="pv2-row-actions" style={{ marginTop: 10 }}>
+                <button className="pv2-button" onClick={() => transition("enableSelection")} disabled={busy || !canMarkSelection} type="button">标记可用于选股</button>
+                <button className="pv2-button" onClick={() => transition("enablePaper")} disabled={busy || !canMarkPaper} type="button">标记可用于模拟盘</button>
+                {canCreatePortfolio ? (
+                  <Link className="pv2-button-primary" href={`/paper-v2/portfolios?package_id=${selected.package_id}`}>用此包创建模拟组合</Link>
+                ) : (
+                  <button className="pv2-button-primary" disabled type="button">用此包创建模拟组合</button>
+                )}
+                <ConfirmAction
+                  label="退役策略包"
+                  confirmText={selected.package_id}
+                  onConfirm={() => transition("retire")}
+                  danger
+                  disabled={busy || !canRetirePackage}
+                  testId="strategy-package-retire"
+                />
+              </div>
+              <div className="pv2-help">
+                “标记”只推进策略包准入状态；“创建模拟组合”会进入组合创建页并冻结资金、日期、数据源和执行策略。退役不会删除历史，只会阻止新的准入使用。
+              </div>
+            </div>
             <div className="pv2-grid pv2-grid-3">
               <MetricCard label="年化收益" value={formatPercent(metrics.annual_return)} />
               <MetricCard label="IC" value={formatPercent(metrics.ic)} />
@@ -232,6 +330,7 @@ export default function PaperV2PackagesPage() {
               <span className="pv2-chip">package_id: {shortHash(selected.package_id)}</span>
               <span className="pv2-chip">manifest: {shortHash(selected.manifest_sha256)}</span>
               <span className="pv2-chip">模拟组合数: {selected.paper_portfolio_count || 0}</span>
+              <span className="pv2-chip">执行策略: {policies.length} 个 / 可模拟盘 {paperReadyPolicies.length} 个</span>
             </div>
             <h3>模型状态</h3>
             {modelState ? <JsonPanel value={modelState} /> : <div className="pv2-muted">尚未获取模型状态。</div>}
