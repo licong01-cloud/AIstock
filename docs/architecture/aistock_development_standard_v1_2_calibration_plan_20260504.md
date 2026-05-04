@@ -17,7 +17,50 @@
 4. 把历史遗留垃圾代码和疑似 dead code 纳入生命周期管理，但不自动删除。
 5. 先做规则校准和只读盘点，再更新 active standard v1.2。
 
-## 2. 权威资料取舍原则
+
+## 2. 质量治理总路线
+
+当前已确认的路线是：先完成开发规范和历史 baseline，再建设自动化验证流水线 / Validation Center，最后用流水线逐步修复历史遗留问题。这个顺序本身是质量治理的前置约束，不应跳过。
+
+```text
+开发规范 v1.1 / v1.2 校准
+  -> guardrail baseline + legacy/dead-code inventory + coverage baseline
+  -> Validation Center / nox / aistock_validate 形成可观测、可追溯流水线
+  -> 每个遗留问题按模块拆分修复
+  -> 每次修复必须有复现、回归、证据和提交记录
+```
+
+### 2.1 当前状态
+
+| 项目 | 状态 | 说明 |
+|---|---|---|
+| active standard v1.1 | 已完成 | 人类可读规范和同版本 YAML 已在 `docs/standards/` 生效，v1.0 已归档。 |
+| guardrail scanner 与首批 baseline | 已完成 | 历史违规作为 baseline/backlog，不作为一次性全仓阻断。 |
+| legacy/dead-code inventory 工具与 baseline | 已完成 | 输出是 advisory candidate，不是删除批准清单。 |
+| v1.2 规则校准 | 待实施 | 需要先确认目录例外、误报、硬编码路径语义和新增 Python 规则。 |
+| coverage baseline / coverage gate | 待实施 | 当前 run metadata 已预留 coverage 字段，但还需要真实 `pytest-cov` 采集、解析和阈值策略。 |
+| Validation Center MVP | 待实施 | 先实现只读计划、历史 run、coverage、evidence、guardrail/legacy findings 展示，再考虑受控执行。 |
+
+### 2.2 执行原则
+
+- 历史问题不阻塞流水线建设；流水线建设的目标之一就是把历史问题变成可追踪、可复现、可验收的 backlog。
+- 不在 Validation Center 可验证前启动大规模遗留修复；否则修复质量不可观测，容易引入回归。
+- active v1.1 在 v1.2 人类规范、机器 YAML、测试用例、baseline 和误报校准完成前不被替换。
+- 新增/修改代码必须逐步遵守更严格规则；历史代码先 baseline、分级、分模块治理。
+- 遗留修复必须最小化范围，禁止借修复名义重构无关模块、删除未确认资产或静默改变业务逻辑。
+- 清理候选、guardrail findings、coverage findings 和真实 Bug 最终都应进入统一质量问题闭环，但其处置优先级和阻断策略不同。
+
+### 2.3 后续缺口
+
+下一批工作应优先补齐：
+
+1. `CONFIG-HARDCODE-001` / 绝对路径 / WSL 红线的误报校准和测试样例。
+2. coverage baseline 与 changed-files/diff coverage 的最小可用实现。
+3. Validation Center 只读 API/UI MVP，展示 run metadata、evidence、coverage、guardrail 和 legacy inventory。
+4. 质量问题状态机与 agent-context，为 Codex/Claude 后续修复提供机器可读上下文。
+5. 在流水线可验证后，按 QE/Paper v2/Qlib/data/frontend/root pollution 等模块分批治理历史问题。
+
+## 3. 权威资料取舍原则
 
 参考资料只作为规则来源池，不直接全文搬运：
 
@@ -39,11 +82,11 @@
 - 新代码是否阻断？历史代码如何处理？
 - 是否可自动检测？误报如何豁免？
 
-## 3. `CONFIG-HARDCODE-001` 校准方案
+## 4. `CONFIG-HARDCODE-001` 校准方案
 
 v1.1 已包含硬编码路径和密钥规则，但 v1.2 需要细化，避免与用户明确指定的规范目录和文档示例冲突。
 
-### 3.1 建议拆分语义
+### 4.1 建议拆分语义
 
 | 规则 | 严重级别 | 说明 | 执行策略 |
 |---|---:|---|---|
@@ -51,7 +94,7 @@ v1.1 已包含硬编码路径和密钥规则，但 v1.2 需要细化，避免与
 | `CONFIG-ABS-PATH-001` | P1 | backend/service/scripts 默认值禁止绝对路径，必须来自 config/env/DB/manifest/request。 | 先 `warn_new_only`，校准后 P1 |
 | `ARCH-WSL-001` | P0 | Windows 侧禁止直接读 WSL/远端 workspace。 | `block_new_only`，核心链路立即阻断 |
 
-### 3.2 目录语义
+### 4.2 目录语义
 
 | 目录/文件类型 | 绝对路径策略 |
 |---|---|
@@ -63,7 +106,7 @@ v1.1 已包含硬编码路径和密钥规则，但 v1.2 需要细化，避免与
 | `docs/**` | 允许说明性路径和用户明确指定目录；不作为运行时硬编码违规。 |
 | 配置文件 | 允许 dev-only/local-only 路径，但必须标注用途、环境和是否可提交。 |
 
-### 3.3 推荐写法
+### 4.3 推荐写法
 
 禁止：
 
@@ -95,7 +138,7 @@ worker_file = r"\\wsl$\\Ubuntu\\home\\lc999\\rdagent\\workspace\\result.pkl"
 payload = worker_client.fetch_artifact_manifest(task_id=task_id, loop_index=loop_index)
 ```
 
-## 4. v1.2 建议新增 Python 代码写法规则
+## 5. v1.2 建议新增 Python 代码写法规则
 
 以下规则是候选，不代表立即全部阻断。v1.2 应先写入人类规范并把机器规则设置为 `warn_new_only` 或 `manual_review_only`，再根据误报率决定升级。
 
@@ -115,11 +158,11 @@ payload = worker_client.fetch_artifact_manifest(task_id=task_id, loop_index=loop
 | `PY-PANDAS-MERGE-001` | P2/P1 | 大表 join 行数爆炸、PIT 口径错误。 | 数据/QE 模块 P1 |
 | `PY-TEST-ISOLATION-001` | P1 | 单元测试误连生产端口、远端 API、WSL workspace。 | 新测试阻断 |
 
-## 5. 历史遗留和 dead code 治理规范
+## 6. 历史遗留和 dead code 治理规范
 
 AIstock 历史代码包含探索期脚本、旧页面、旧设计文档、未引用模块和一次性诊断代码。v1.2 应把这类代码纳入生命周期规范。
 
-### 5.1 生命周期状态
+### 6.1 生命周期状态
 
 | 状态 | 含义 | 允许行为 |
 |---|---|---|
@@ -129,7 +172,7 @@ AIstock 历史代码包含探索期脚本、旧页面、旧设计文档、未引
 | `delete_candidate` | 疑似无引用，待确认删除。 | 必须有只读盘点和验证计划。 |
 | `removed` | 已删除。 | 删除 commit 必须有验证证据。 |
 
-### 5.2 删除前检查清单
+### 6.2 删除前检查清单
 
 删除或移动历史代码前必须确认：
 
@@ -140,7 +183,7 @@ AIstock 历史代码包含探索期脚本、旧页面、旧设计文档、未引
 - 是否属于受保护资产、实验 artifact、模型权重、历史 ledger。
 - 是否已有替代路径和回滚方案。
 
-### 5.3 自动化策略
+### 6.3 自动化策略
 
 - 第一阶段只读 inventory，不自动删除。
 - 工具输出 `candidate` 而不是 `dead` 结论。
@@ -148,7 +191,7 @@ AIstock 历史代码包含探索期脚本、旧页面、旧设计文档、未引
 - 删除必须走单独 commit，且只包含清理相关文件。
 - 高风险模块删除必须有 targeted tests 和 import/API smoke。
 
-## 6. 历史 baseline 执行策略
+## 7. 历史 baseline 执行策略
 
 | 问题类型 | 新增/修改代码 | 历史代码 |
 |---|---|---|
@@ -167,7 +210,7 @@ AIstock 历史代码包含探索期脚本、旧页面、旧设计文档、未引
 5. Frontend UI 错误态和 raw JSON。
 6. 根目录污染、历史脚本、历史文档。
 
-## 7. v1.2 测试用例设计
+## 8. v1.2 测试用例设计
 
 规范 v1.2 更新时必须同步增加测试：
 
@@ -184,18 +227,28 @@ AIstock 历史代码包含探索期脚本、旧页面、旧设计文档、未引
 | debug_tools dependency | backend/service import `debug_tools` 触发违规。 |
 | dead-code inventory parser | inventory 输出 schema、confidence、risk 字段。 |
 
-## 8. 实施顺序
+## 9. 实施顺序
+
+已完成基础：
+
+- active v1.1 人类规范与机器 YAML 已生成并归档 v1.0。
+- guardrail scanner、首批 guardrail baseline、legacy/dead-code inventory 工具和 baseline 已完成。
+- 上述 baseline 只用于分级治理和趋势跟踪，不代表立即修复或删除授权。
+
+后续实施顺序：
 
 1. 评审本文档，确认 v1.2 只做校准和生命周期治理，不堆叠全部社区规范。
-2. 生成只读 dead-code / legacy inventory baseline，记录在 `docs/analysis/`。
-3. 校准 `CONFIG-HARDCODE-001` 的目录例外和测试样例。
+2. 校准 `CONFIG-HARDCODE-001`、绝对路径、WSL 红线、`debug_tools/` 例外和测试样例。
+3. 增加 coverage baseline / coverage parsing / coverage gate 的最小实现方案与验证记录。
 4. 起草 `docs/standards/aistock_development_standard_v1.2_YYYYMMDD.md`，归档 v1.1。
 5. 同步生成 `docs/standards/aistock_development_standard_v1.2_YYYYMMDD.yaml`。
-6. 补充 scanner tests 和 targeted guardrail scan。
-7. 重新生成 guardrail baseline。
-8. 评审后再决定是否把 changed-files P0/P1 接入更严格 L0。
+6. 补充 scanner tests、coverage tests、legacy inventory regression 和 targeted guardrail scan。
+7. 重新生成 guardrail/legacy/coverage baseline，并把新增违规与历史 baseline 区分展示。
+8. 建设 Validation Center 只读 API/UI MVP，先展示计划、run、evidence、coverage、guardrail 和 legacy findings。
+9. 评审后再决定是否把 changed-files P0/P1 和 coverage 阈值接入更严格 L0。
+10. 在流水线可验证后，才开始按模块修复历史遗留问题，并要求每个修复都有复现、回归、证据和提交记录。
 
-## 9. 当前不执行
+## 10. 当前不执行
 
 - 不修改 active v1.1 规范正文。
 - 不启用新的阻断规则。

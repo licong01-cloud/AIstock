@@ -1,7 +1,7 @@
 # AIstock 内置自动化测试流水线实施方案
 
 > 日期：2026-05-04
-> 状态：详细实施方案 v1.1，补充开发提交、夜间任务、Bug 管理与 Codex/Claude 修复闭环
+> 状态：详细实施方案 v1.2，补充标准/基线优先、遗留问题治理闭环与 Codex/Claude 修复协议
 > 文档位置：`docs/architecture/aistock_internal_validation_center_implementation_plan_20260504.md`
 > 依赖顶层设计：`docs/architecture/aistock_automated_testing_coverage_observability_design_20260504.md`
 > 依赖开发规范：`docs/standards/aistock_development_standard_v1.1_20260504.md`；Guardrail 落地设计：`docs/architecture/aistock_development_standards_and_guardrails_20260504.md`
@@ -561,6 +561,81 @@ Agent 修复流程：
 - 超时和取消可控。
 - 失败自动去重，避免同一 Bug 每晚重复创建多个 issue。
 - 结果进入 UI 的“夜间任务/待修复 Bug/质量趋势”页面。
+
+
+### 6.7 标准、基线与遗留问题修复闭环
+
+当前确认的质量治理路线是：先完成规范和 baseline，再建设 Validation Center，最后用流水线治理历史问题。因此 Validation Center 不只是测试结果页面，还必须成为历史问题修复的闭环入口。
+
+#### 6.7.1 统一质量问题来源
+
+Validation Center MVP 应预留统一 quality finding 模型，至少覆盖以下来源：
+
+| 来源 | 例子 | 默认处置 |
+|---|---|---|
+| guardrail finding | P0/P1 红线、硬编码路径、静默 fallback、DB comment 缺失 | 新增/修改代码阻断；历史问题进入 baseline/backlog。 |
+| legacy inventory finding | root pollution、疑似 dead code、过期脚本、历史文档待迁移 | 只读 advisory，不自动删除。 |
+| coverage finding | 模块覆盖率不足、diff coverage 不足、branch coverage 缺口 | 新代码逐步阻断；历史模块按风险治理。 |
+| validation failure | pytest、nox、Playwright、data-quality、QE replay 失败 | 生成 Bug 或更新已有 Bug。 |
+| business-oracle finding | QE 指标缺失、成本不一致、归档不独立、交易执行事件缺失 | 按业务风险 P0/P1/P2 分级处理。 |
+
+每条 finding 至少需要 `finding_id`、`source_type`、`module`、`severity`、`fingerprint`、`first_seen_run_id`、`last_seen_run_id`、`evidence_uri`、`status`、`owner`、`allowed_write_scope`、`required_verification` 和 `linked_issue`。
+
+#### 6.7.2 状态机
+
+遗留问题和流水线 Bug 使用同一闭环状态，但允许 baseline 分支：
+
+```text
+detected -> baselined -> triaged -> scoped -> assigned -> fixing
+  -> fix_submitted -> verification_running -> verified -> committed -> closed
+  -> reopened
+
+旁路状态：duplicate / cannot_reproduce / wontfix / environment_issue / data_issue
+```
+
+状态规则：
+
+- `baselined` 表示历史问题已登记，不代表可忽略，也不代表已批准删除或修复。
+- `scoped` 必须明确允许修改的文件范围、禁止修改的范围、复现命令和验收命令。
+- `fix_submitted` 只表示已有候选修复；没有 `verification_run_id` 不得进入 `verified`。
+- `committed` 必须记录 Git commit、提交时间、证据路径和关联 GitHub Issue/PR。
+- `closed` 必须同时满足：复现用例通过、相关回归通过、证据归档、状态同步完成。
+
+#### 6.7.3 Agent 修复协议
+
+给 Codex/Claude 的 `agent-context` 应机器可读，避免 agent 自行猜测修复边界：
+
+| 字段 | 要求 |
+|---|---|
+| `problem_statement` | 人类可读问题描述和业务影响。 |
+| `finding_source` | guardrail / legacy_inventory / coverage / validation_failure / business_oracle。 |
+| `reproduce_command` | 最小复现命令；长耗时场景提供 mock/mini/replay 替代。 |
+| `evidence_uris` | 失败 run、日志摘要、coverage、截图、数据质量报告等证据。 |
+| `allowed_write_scope` | 允许修改的目录/文件；禁止触碰生产配置、远端 API、无关窗口改动。 |
+| `suspected_modules` | 建议检查的 router/service/frontend/test/data path。 |
+| `required_verification` | 必跑 nox/pytest/Playwright/data-quality/guardrail 命令。 |
+| `closure_requirements` | 通过条件、提交要求、是否需要更新 baseline、是否需要 GitHub Issue comment。 |
+
+Agent 可以读取该上下文、提交修复、运行验证、写入事件，但不应拥有任意 shell 执行入口；UI/API 只能调度 allowlist 中的命令或计划。
+
+#### 6.7.4 修复策略边界
+
+- 不在流水线具备复现和验收能力前启动全仓遗留问题修复。
+- 不自动删除 legacy/dead-code 候选；删除必须是单独任务、单独 commit、带引用扫描和回归证据。
+- 不把历史 baseline 的全部问题一次性变成阻断门禁；先阻断 changed-files 新增 P0/P1，再按模块治理历史问题。
+- 不用静默 fallback 让测试通过；如果测试暴露真实业务缺口，应记录 Bug 或补充 contract，而不是伪造成功。
+- 长耗时 QE/回测/训练问题优先使用 golden payload、mock worker、mini backtest、历史 replay 做快验；真实长任务放入 nightly/L4/L5。
+- 每次遗留修复完成后必须更新或复用对应流水线用例，防止同类问题再次进入 main。
+
+#### 6.7.5 对后续开发顺序的约束
+
+后续不应直接进入大规模历史修复。推荐顺序是：
+
+1. 完成 coverage baseline、coverage gate 和 changed-files guardrail 最小闭环。
+2. 完成 Validation Center 只读 API/UI，展示 run、evidence、coverage、guardrail、legacy findings 和 Bug。
+3. 完成 quality finding / bug registry MVP 与 agent-context 输出。
+4. 选一个高价值、低耦合模块试点修复，例如 root pollution 或 QE 数据完整性单一 contract 缺口。
+5. 每个试点修复都必须通过流水线验证并提交证据，然后再扩大治理范围。
 
 ## 7. 后续所有设计文档的测试用例要求
 
