@@ -127,7 +127,7 @@ Existing execution layer
 | 元数据层 | 记录 run metadata、steps、coverage、quality gates、evidence | 是，扩展 `aistock_validate.py`。 |
 | 后端查询层 | 列出 run、查看详情、聚合 coverage/失败/证据 | 是，先只读。 |
 | 后端受控执行层 | 从 allowlist 触发计划、流式日志、取消、超时 | 第二阶段后实现。 |
-| 前端可观测 UI | 显示 run、计划、证据、覆盖率、失败分类 | 是，先只读 MVP。 |
+| 前端可观测 UI | 显示 run、计划、证据、覆盖率、失败分类 | 是，先做只读第一阶段完整闭环。 |
 | 调度层 | 夜间/发布候选/长耗时测试计划 | 后续阶段实现，不影响当前生产。 |
 
 ### 3.3 存储策略
@@ -313,7 +313,7 @@ plans:
 | VAL-API-005 | L2 | `GET /validation/runs/{run_id}` | 返回 Markdown path、metadata、coverage、evidence。 |
 | VAL-API-006 | L2 | 目录中缺 JSON metadata | 降级为 Markdown-only run，标记 `metadata_missing`，不伪造 coverage。 |
 
-### Phase 3 - Validation Center 只读 UI MVP
+### Phase 3 - Validation Center 只读 UI 第一阶段完整闭环
 
 目标：在 AIstock 前端内提供可观测、可管理、可复用的测试中心，但不触发执行。
 
@@ -327,7 +327,7 @@ plans:
 | `frontend/tests/validation-center/validation-center.spec.ts` | Playwright mocked API E2E。 |
 | `frontend/src/app/layout.tsx` 或导航配置 | 增加入口，遵守现有 UI 风格。 |
 
-UI MVP 功能：
+只读 UI 第一阶段功能：
 
 - Run 列表：module、level、status、git commit、开始/结束时间、coverage、失败门禁。
 - Run 详情：steps、commands、coverage、quality gates、evidence manifest、Markdown 证据路径。
@@ -459,7 +459,7 @@ Validation run failed
 
 ### 6.3 Bug 字段与状态机
 
-Bug 最小字段：
+Bug 必备字段：
 
 | 字段 | 含义 |
 |---|---|
@@ -567,9 +567,11 @@ Agent 修复流程：
 
 当前确认的质量治理路线是：先完成规范和 baseline，再建设 Validation Center，最后用流水线治理历史问题。因此 Validation Center 不只是测试结果页面，还必须成为历史问题修复的闭环入口。
 
+这里的阶段化实施不是“最小实现”或“简化版实现”。第一阶段必须是完整闭环：contract、数据结构、失败语义、证据格式、测试用例和扩展接口都按长期目标设计，只是在接入范围上先覆盖 coverage、run metadata、evidence、guardrail/legacy findings 等核心场景。不得为了快速上线而减少必要字段、使用临时 schema、设计临时接口、静默忽略解析失败或把缺口留给后续重构。
+
 #### 6.7.1 统一质量问题来源
 
-Validation Center MVP 应预留统一 quality finding 模型，至少覆盖以下来源：
+Validation Center 第一阶段完整闭环应预留统一 quality finding 模型，至少覆盖以下来源：
 
 | 来源 | 例子 | 默认处置 |
 |---|---|---|
@@ -631,9 +633,9 @@ Agent 可以读取该上下文、提交修复、运行验证、写入事件，�
 
 后续不应直接进入大规模历史修复。推荐顺序是：
 
-1. 完成 coverage baseline、coverage gate 和 changed-files guardrail 最小闭环。
-2. 完成 Validation Center 只读 API/UI，展示 run、evidence、coverage、guardrail、legacy findings 和 Bug。
-3. 完成 quality finding / bug registry MVP 与 agent-context 输出。
+1. 完成 coverage contract、coverage baseline、coverage gate 和 changed-files guardrail 的第一阶段完整闭环。
+2. 完成 Validation Center 只读 API/UI，展示 run、evidence、coverage、guardrail、legacy findings 和 Bug，字段语义必须与后续 DB/UI/agent-context 兼容。
+3. 完成 quality finding / bug registry 第一阶段完整闭环与 agent-context 输出。
 4. 选一个高价值、低耦合模块试点修复，例如 root pollution 或 QE 数据完整性单一 contract 缺口。
 5. 每个试点修复都必须通过流水线验证并提交证据，然后再扩大治理范围。
 
@@ -657,17 +659,19 @@ Agent 可以读取该上下文、提交修复、运行验证、写入事件，�
 
 ## 8. 第一批代码实现建议顺序
 
-按最小风险、最大复用的顺序推进：
+按“完整闭环、范围分期、风险受控、最大复用”的顺序推进：
 
-1. **Development guardrail baseline**：新增 `docs/standards/aistock_development_standard_v1.1_20260504.yaml`，扩展/新增 guardrail scanner，执行全仓只读 baseline scan，生成 `docs/analysis/aistock_guardrail_baseline_YYYYMMDD.md`；changed-files P0/P1 新违规在规则校准后接入阻断。
-2. **Coverage baseline**：补 `pytest-cov`、`aistock_validate.py coverage`、`qe_data_contract_backend` coverage 输出和测试。
-3. **Plan catalog**：新增 `test_plans.yaml` 和 catalog parser，先不接 UI 执行。
-4. **Read-only validation API**：实现 plans/runs/detail/summary，读取现有历史、coverage、guardrail quality gates。
-5. **Read-only Validation Center UI**：显示历史 run、coverage、evidence、guardrail、计划和禁用的执行按钮。
-6. **Bug registry MVP**：实现 Bug issue template、failure fingerprint、bug_report 本地索引、agent-context 只读接口。
-7. **Controlled execution**：只允许 allowlist nox session，增加超时、取消、日志、确认文案。
-8. **Long-run support**：加入 scheduled/nightly/release-only 分类，不默认阻塞开发提交，并支持失败自动创建/更新 Bug。
-9. **DB persistence**：当 JSON history 查询性能或并发执行需要时，再引入 `validation` schema，并同步 comment smoke。
+1. **Development guardrail baseline（已完成）**：v1.1 人类规范、同版本 YAML、scanner 和全仓只读 baseline 已完成；后续只做规则校准和 changed-files 阻断接入。
+2. **Legacy/dead-code inventory baseline（已完成）**：inventory 工具和 baseline 已完成；输出是 advisory finding，不自动删除。
+3. **Coverage 第一阶段完整闭环**：补 `pytest-cov`、`aistock_validate.py coverage`、coverage JSON/XML 解析、coverage evidence、阈值策略和测试；不得使用临时字段或跳过失败语义。
+4. **Plan catalog**：新增 `test_plans.yaml` 和 catalog parser，先不接 UI 执行。
+5. **Read-only validation API**：实现 plans/runs/detail/summary，读取现有历史、coverage、guardrail、legacy inventory 和 evidence。
+6. **Read-only Validation Center UI**：显示历史 run、coverage、evidence、guardrail、legacy findings、Bug 和禁用/只读的执行入口。
+7. **Bug / quality finding registry 第一阶段完整闭环**：实现 GitHub Issue form、failure/finding fingerprint、本地索引、agent-context 只读接口。
+8. **Controlled execution**：只允许 allowlist nox session，增加超时、取消、日志、确认文案和生产隔离检查。
+9. **Long-run support**：加入 scheduled/nightly/release-only 分类，不默认阻塞开发提交，并支持失败自动创建/更新 Bug。
+10. **DB persistence**：当 JSON history 查询性能或并发执行需要时，再引入 `validation` schema，并同步 comment smoke。
+11. **Legacy fix pilot**：流水线可验证后选择单一模块试点修复；每个修复必须关联 finding/Bug、运行验证、归档证据并提交。
 
 ## 9. 开发质量门禁
 

@@ -39,7 +39,7 @@
 | legacy/dead-code inventory 工具与 baseline | 已完成 | 输出是 advisory candidate，不是删除批准清单。 |
 | v1.2 规则校准 | 待实施 | 需要先确认目录例外、误报、硬编码路径语义和新增 Python 规则。 |
 | coverage baseline / coverage gate | 待实施 | 当前 run metadata 已预留 coverage 字段，但还需要真实 `pytest-cov` 采集、解析和阈值策略。 |
-| Validation Center MVP | 待实施 | 先实现只读计划、历史 run、coverage、evidence、guardrail/legacy findings 展示，再考虑受控执行。 |
+| Validation Center 第一阶段完整闭环 | 待实施 | 先实现只读计划、历史 run、coverage、evidence、guardrail/legacy findings 展示，再考虑受控执行；字段语义按长期架构设计。 |
 
 ### 2.2 执行原则
 
@@ -49,14 +49,15 @@
 - 新增/修改代码必须逐步遵守更严格规则；历史代码先 baseline、分级、分模块治理。
 - 遗留修复必须最小化范围，禁止借修复名义重构无关模块、删除未确认资产或静默改变业务逻辑。
 - 清理候选、guardrail findings、coverage findings 和真实 Bug 最终都应进入统一质量问题闭环，但其处置优先级和阻断策略不同。
+- 后续实现不得采用“字段先少存、接口先凑合、后续再补”的简化版；阶段划分只限制接入范围，不降低数据模型、contract、证据链和测试完整性。
 
 ### 2.3 后续缺口
 
 下一批工作应优先补齐：
 
 1. `CONFIG-HARDCODE-001` / 绝对路径 / WSL 红线的误报校准和测试样例。
-2. coverage baseline 与 changed-files/diff coverage 的最小可用实现。
-3. Validation Center 只读 API/UI MVP，展示 run metadata、evidence、coverage、guardrail 和 legacy inventory。
+2. coverage contract、baseline、changed-files/diff coverage 的第一阶段完整闭环实现。
+3. Validation Center 只读 API/UI 第一阶段完整闭环，展示 run metadata、evidence、coverage、guardrail 和 legacy inventory。
 4. 质量问题状态机与 agent-context，为 Codex/Claude 后续修复提供机器可读上下文。
 5. 在流水线可验证后，按 QE/Paper v2/Qlib/data/frontend/root pollution 等模块分批治理历史问题。
 
@@ -239,12 +240,12 @@ AIstock 历史代码包含探索期脚本、旧页面、旧设计文档、未引
 
 1. 评审本文档，确认 v1.2 只做校准和生命周期治理，不堆叠全部社区规范。
 2. 校准 `CONFIG-HARDCODE-001`、绝对路径、WSL 红线、`debug_tools/` 例外和测试样例。
-3. 增加 coverage baseline / coverage parsing / coverage gate 的最小实现方案与验证记录。
+3. 增加 coverage contract / baseline / parsing / gate 的第一阶段完整闭环方案与验证记录，保证数据结构、失败语义和证据格式一次设计到位。
 4. 起草 `docs/standards/aistock_development_standard_v1.2_YYYYMMDD.md`，归档 v1.1。
 5. 同步生成 `docs/standards/aistock_development_standard_v1.2_YYYYMMDD.yaml`。
 6. 补充 scanner tests、coverage tests、legacy inventory regression 和 targeted guardrail scan。
 7. 重新生成 guardrail/legacy/coverage baseline，并把新增违规与历史 baseline 区分展示。
-8. 建设 Validation Center 只读 API/UI MVP，先展示计划、run、evidence、coverage、guardrail 和 legacy findings。
+8. 建设 Validation Center 只读 API/UI 第一阶段完整闭环，先展示计划、run、evidence、coverage、guardrail 和 legacy findings。
 9. 评审后再决定是否把 changed-files P0/P1 和 coverage 阈值接入更严格 L0。
 10. 在流水线可验证后，才开始按模块修复历史遗留问题，并要求每个修复都有复现、回归、证据和提交记录。
 

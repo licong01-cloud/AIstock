@@ -22,6 +22,7 @@ AIstock 后续需要一套“本地权威、结果导向、可观测、可管理
 6. 未来应建设专门的测试流水线系统和 UI：管理测试目录、测试用例、测试计划、执行记录、覆盖率趋势、失败分析、证据 artifact、版本发布候选和回归矩阵；UI 只调度受控 nox/aistock_validate 计划，不直接执行任意 shell。
 7. 流水线失败必须进入缺陷闭环：短任务失败阻止提交完成，长耗时/市场依赖任务通过 nightly/L4/L5 生成或更新 Bug；Bug 以 GitHub Issues 为权威记录，以 Validation Center DB/JSON 作为本地索引和 UI 查询缓存，并为 Codex/Claude 提供机器可读修复上下文。
 8. 开发规范必须成为 L0 质量门禁：先建立全仓只读 guardrail baseline，再对新增/修改代码阻断 P0/P1 新违规，历史问题按模块治理。
+9. 阶段化实施不是简化版实现：第一阶段必须完成稳定 contract、数据结构、失败语义、证据格式、测试用例和扩展接口，只限制接入范围，不降低字段完整性或以后续补字段为代价快速上线。
 
 目标形态：
 
@@ -262,7 +263,7 @@ Test Management UI / Validation API
 
 未来测试管理 UI 只做“可观测、可管理、可复用、可版本化”，不做不受控执行：
 
-| 页面 | 基于现有数据 | MVP 能力 | 成熟能力 |
+| 页面 | 基于现有数据 | 首阶段能力 | 成熟能力 |
 |---|---|---|---|
 | 测试总览 | `tests/aistock_validation/history`、future JSON metadata | 最近运行、通过率、失败列表 | 趋势、模块健康度、flaky、阻塞风险 |
 | 测试用例库 | `tests/aistock_validation/modules/*.md` | 展示模块矩阵和命令 | YAML/JSON case catalog、设计文档反链 |
@@ -365,7 +366,7 @@ Test Management UI / Validation API
 
 验收：L3 不只验证 API 200，而能输出业务质量报告，例如 ledger 一致性、archive completeness、QE required field coverage。
 
-### Phase 4 - 测试中心 UI MVP
+### Phase 4 - 测试中心 UI 第一阶段完整闭环
 
 - UI 首先读取现有 Markdown/JSON run record，不要求先建设复杂调度器。
 - 提供测试总览、模块矩阵、运行历史、运行详情、coverage 看板、数据质量报告、Playwright trace 链接。
