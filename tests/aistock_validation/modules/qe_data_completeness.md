@@ -19,6 +19,7 @@ Current required coverage:
 - `record --history-root` allows tests to isolate generated files outside the repository history tree.
 - `scripts/aistock_validate.py evidence` writes evidence manifests with kind, path, existence, size, directory marker, child count, and sha256 for files.
 - Evidence manifest supports missing evidence reporting and `--fail-missing` fail-fast mode.
+- `scripts/aistock_validate.py coverage` writes first-stage complete coverage snapshots with schema version, totals, file-level lines, diff coverage, threshold gates, failed gates, and explicit failure status.
 - QE completion payload contract accepts complete synthetic payloads with config, metrics, position, holding, execution, cost, training source, factor summary, data quality, and artifact manifest sections.
 - `collection_status=complete` fails validation when required sections are missing.
 - Partial payloads can be parsed and report missing required fields without faking completeness.
@@ -28,7 +29,8 @@ Current required coverage:
 
 ```powershell
 python -m nox -s qe_data_contract_backend
-python -m nox -s l0 -- scripts/aistock_validate.py backend/services/quantevolver/completion_contract.py backend/tests/test_aistock_validate_metadata.py backend/tests/unified_engine/test_qe_completion_contract.py noxfile.py docs/architecture/qe_data_completeness_phase1_development_plan_20260504.md tests/aistock_validation/modules/qe_data_completeness.md
+python -m nox -s validation_coverage_backend
+python -m nox -s l0 -- scripts/aistock_validate.py backend/services/quantevolver/completion_contract.py backend/tests/test_aistock_validate_metadata.py backend/tests/test_aistock_validate_coverage.py backend/tests/unified_engine/test_qe_completion_contract.py noxfile.py docs/architecture/qe_data_completeness_phase1_development_plan_20260504.md tests/aistock_validation/modules/qe_data_completeness.md tests/aistock_validation/modules/validation_center.md
 ```
 
 ## Evidence

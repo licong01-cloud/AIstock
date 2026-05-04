@@ -3,4 +3,6 @@
 #   conda run -n AIstock python -m pip install -r requirements-dev.txt
 nox>=2025.2.9
 pytest-html>=4.1.1
+pytest-cov>=7.0.0
+coverage>=7.10.6
 semgrep>=1.124.0

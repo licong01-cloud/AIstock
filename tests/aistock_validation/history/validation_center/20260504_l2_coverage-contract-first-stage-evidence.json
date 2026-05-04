@@ -1,0 +1,71 @@
+{
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "module_matrix",
+      "path": "tests/aistock_validation/modules/validation_center.md",
+      "sha256": "239b8b1492694f19bb59fa74fe26c80aaf99267a4a1b5e0fee2d8e841f8b9531",
+      "size_bytes": 2857
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "test_file",
+      "path": "backend/tests/test_aistock_validate_coverage.py",
+      "sha256": "35643572a2e1f2d407d99e8f29592cd9b61180be6f70326369ed227e5f321948",
+      "size_bytes": 6301
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "noxfile",
+      "path": "noxfile.py",
+      "sha256": "f46bfb5e5f457bc127631e2cb04a844784b1281b7261d712c5a3ffcb721c0399",
+      "size_bytes": 18342
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "run_record",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l2_coverage-contract-first-stage-validation.md",
+      "sha256": "d2063dd883de82d2a6ef5bc26c59d4643ba31035211e80b0551eaa71ec2c8320",
+      "size_bytes": 6323
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "coverage",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l2_coverage-contract-first-stage-snapshot.json",
+      "sha256": "48297044892306cbe4804d5ae9622063c59b698f9974458cad7d3994b4a5eb16",
+      "size_bytes": 13522
+    }
+  ],
+  "generated_at": "2026-05-04T16:24:22",
+  "git_commit": "b70b66a",
+  "level": "L2",
+  "missing": [],
+  "missing_count": 0,
+  "module": "validation_center",
+  "operator": "lc999",
+  "run_id": null,
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "Coverage Contract First Stage Complete Loop"
+}

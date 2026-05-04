@@ -10,6 +10,7 @@ import socket
 import subprocess
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -18,6 +19,7 @@ TEMPLATE = ROOT / "tests" / "aistock_validation" / "templates" / "test_run_recor
 DEFAULT_HISTORY_ROOT = ROOT / "tests" / "aistock_validation" / "history"
 RUN_METADATA_SCHEMA_VERSION = "aistock_validation_run_v1"
 EVIDENCE_MANIFEST_SCHEMA_VERSION = "aistock_validation_evidence_manifest_v1"
+COVERAGE_SNAPSHOT_SCHEMA_VERSION = "aistock_validation_coverage_snapshot_v1"
 
 
 def _safe_slug(value: str) -> str:
@@ -154,10 +156,14 @@ def cmd_record(args: argparse.Namespace) -> int:
             "metadata_path": _path_for_json(json_file),
             "steps": [],
             "coverage": {
+                "schema_version": COVERAGE_SNAPSHOT_SCHEMA_VERSION,
+                "status": "not_collected",
                 "line": None,
                 "branch": None,
                 "diff_line": None,
                 "diff_branch": None,
+                "snapshot_path": None,
+                "quality_gates": [],
             },
             "quality_gates": [],
             "evidence": [],
@@ -247,6 +253,414 @@ def cmd_evidence(args: argparse.Namespace) -> int:
     return 0
 
 
+def _percent(covered: int | None, valid: int | None) -> float | None:
+    if covered is None or valid is None or valid <= 0:
+        return None
+    return round((covered / valid) * 100, 2)
+
+
+def _normalize_coverage_path(raw_path: str) -> str:
+    path = Path(raw_path)
+    try:
+        if path.is_absolute():
+            return path.resolve().relative_to(ROOT.resolve()).as_posix()
+    except (OSError, RuntimeError, ValueError):
+        pass
+    return raw_path.replace("\\", "/").lstrip("./")
+
+
+def _parse_condition_coverage(value: str | None) -> tuple[int, int] | None:
+    if not value:
+        return None
+    match = re.search(r"\((\d+)\s*/\s*(\d+)\)", value)
+    if not match:
+        return None
+    covered, valid = int(match.group(1)), int(match.group(2))
+    return covered, valid
+
+
+def _new_file_coverage(path: str) -> dict:
+    return {
+        "path": path,
+        "_line_hits": {},
+        "_branch_covered": 0,
+        "_branch_valid": 0,
+    }
+
+
+def _finalize_file_coverage(raw_file: dict) -> dict:
+    line_hits: dict[int, int] = raw_file["_line_hits"]
+    executable_lines = sorted(line_hits)
+    covered_lines = sorted(line for line, hits in line_hits.items() if hits > 0)
+    missing_lines = sorted(line for line, hits in line_hits.items() if hits <= 0)
+    lines_valid = len(executable_lines)
+    lines_covered = len(covered_lines)
+    branch_valid = raw_file["_branch_valid"] or None
+    branch_covered = raw_file["_branch_covered"] if branch_valid is not None else None
+    return {
+        "path": raw_file["path"],
+        "lines_valid": lines_valid,
+        "lines_covered": lines_covered,
+        "line_percent": _percent(lines_covered, lines_valid),
+        "branches_valid": branch_valid,
+        "branches_covered": branch_covered,
+        "branch_percent": _percent(branch_covered, branch_valid),
+        "executable_lines": executable_lines,
+        "covered_lines": covered_lines,
+        "missing_lines": missing_lines,
+    }
+
+
+def _aggregate_coverage_files(files: list[dict]) -> dict:
+    lines_valid = sum(item["lines_valid"] for item in files)
+    lines_covered = sum(item["lines_covered"] for item in files)
+    branch_values = [item for item in files if item["branches_valid"] is not None]
+    branches_valid = sum(item["branches_valid"] for item in branch_values) if branch_values else None
+    branches_covered = (
+        sum(item["branches_covered"] for item in branch_values) if branch_values else None
+    )
+    return {
+        "lines_valid": lines_valid,
+        "lines_covered": lines_covered,
+        "line_percent": _percent(lines_covered, lines_valid),
+        "branches_valid": branches_valid,
+        "branches_covered": branches_covered,
+        "branch_percent": _percent(branches_covered, branches_valid),
+    }
+
+
+def _parse_coverage_xml(path: Path) -> tuple[list[dict], dict]:
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError as exc:
+        raise SystemExit(f"Invalid coverage XML: {path}: {exc}") from exc
+
+    files_by_path: dict[str, dict] = {}
+    for class_node in root.findall(".//class"):
+        filename = class_node.attrib.get("filename")
+        if not filename:
+            continue
+        normalized = _normalize_coverage_path(filename)
+        raw_file = files_by_path.setdefault(normalized, _new_file_coverage(normalized))
+        for line_node in class_node.findall("./lines/line"):
+            number_raw = line_node.attrib.get("number")
+            if not number_raw:
+                continue
+            line_number = int(number_raw)
+            hits = int(line_node.attrib.get("hits", "0"))
+            raw_file["_line_hits"][line_number] = max(
+                hits,
+                raw_file["_line_hits"].get(line_number, 0),
+            )
+            branch_counts = _parse_condition_coverage(line_node.attrib.get("condition-coverage"))
+            if branch_counts:
+                covered, valid = branch_counts
+                raw_file["_branch_covered"] += covered
+                raw_file["_branch_valid"] += valid
+
+    files = [_finalize_file_coverage(raw_file) for raw_file in files_by_path.values()]
+    files.sort(key=lambda item: item["path"])
+    totals = _aggregate_coverage_files(files)
+    return files, totals
+
+
+def _parse_coverage_json(path: Path) -> tuple[list[dict], dict]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Invalid coverage JSON: {path}: {exc}") from exc
+
+    files: list[dict] = []
+    for filename, payload in (data.get("files") or {}).items():
+        normalized = _normalize_coverage_path(filename)
+        executed_lines = set(int(line) for line in payload.get("executed_lines") or [])
+        missing_lines = set(int(line) for line in payload.get("missing_lines") or [])
+        summary = payload.get("summary") or {}
+        if not executed_lines and not missing_lines and summary.get("num_statements"):
+            missing_lines = set(int(line) for line in payload.get("missing_lines") or [])
+        executable_lines = sorted(executed_lines | missing_lines)
+        lines_valid = int(summary.get("num_statements") or len(executable_lines))
+        lines_covered = int(summary.get("covered_lines") or len(executed_lines))
+        branch_valid = summary.get("num_branches")
+        branch_covered = summary.get("covered_branches")
+        branch_valid = int(branch_valid) if branch_valid is not None else None
+        branch_covered = int(branch_covered) if branch_covered is not None else None
+        files.append(
+            {
+                "path": normalized,
+                "lines_valid": lines_valid,
+                "lines_covered": lines_covered,
+                "line_percent": _percent(lines_covered, lines_valid),
+                "branches_valid": branch_valid,
+                "branches_covered": branch_covered,
+                "branch_percent": _percent(branch_covered, branch_valid),
+                "executable_lines": executable_lines,
+                "covered_lines": sorted(executed_lines),
+                "missing_lines": sorted(missing_lines),
+            }
+        )
+
+    files.sort(key=lambda item: item["path"])
+    totals = _aggregate_coverage_files(files)
+    return files, totals
+
+
+def _parse_diff_patch(patch_text: str) -> dict[str, set[int]]:
+    changed_lines: dict[str, set[int]] = {}
+    current_path: str | None = None
+    new_line: int | None = None
+    for raw_line in patch_text.splitlines():
+        if raw_line.startswith("+++ "):
+            path = raw_line[4:].strip()
+            if path == "/dev/null":
+                current_path = None
+            else:
+                current_path = _normalize_coverage_path(re.sub(r"^[ab]/", "", path))
+                changed_lines.setdefault(current_path, set())
+            new_line = None
+            continue
+        if raw_line.startswith("@@ "):
+            match = re.search(r"\+(\d+)(?:,(\d+))?", raw_line)
+            new_line = int(match.group(1)) if match else None
+            continue
+        if current_path is None or new_line is None:
+            continue
+        if raw_line.startswith("+") and not raw_line.startswith("+++"):
+            changed_lines[current_path].add(new_line)
+            new_line += 1
+        elif raw_line.startswith(" ") or raw_line == "":
+            new_line += 1
+        elif raw_line.startswith("-"):
+            continue
+    return {path: lines for path, lines in changed_lines.items() if lines}
+
+
+def _git_diff_patch(base: str, paths: list[str]) -> str:
+    command = ["git", "diff", "--unified=0", base, "--", *paths]
+    return subprocess.check_output(command, cwd=ROOT, text=True, encoding="utf-8")
+
+
+def _find_coverage_file(path: str, files_by_path: dict[str, dict]) -> tuple[dict | None, str]:
+    normalized = _normalize_coverage_path(path)
+    if normalized in files_by_path:
+        return files_by_path[normalized], "exact"
+    suffix_matches = [
+        item
+        for coverage_path, item in files_by_path.items()
+        if coverage_path.endswith(f"/{normalized}") or coverage_path == normalized
+    ]
+    if len(suffix_matches) == 1:
+        return suffix_matches[0], "suffix"
+    return None, "missing"
+
+
+def _calculate_diff_coverage(files: list[dict], changed_lines: dict[str, set[int]]) -> dict:
+    files_by_path = {item["path"]: item for item in files}
+    diff_files: list[dict] = []
+    missing_coverage_files: list[str] = []
+    total_valid = 0
+    total_covered = 0
+    for changed_path, lines in sorted(changed_lines.items()):
+        coverage_file, match_mode = _find_coverage_file(changed_path, files_by_path)
+        if coverage_file is None:
+            missing_coverage_files.append(changed_path)
+            diff_files.append(
+                {
+                    "path": changed_path,
+                    "matched_path": None,
+                    "match_mode": match_mode,
+                    "changed_lines": sorted(lines),
+                    "executable_changed_lines": [],
+                    "covered_changed_lines": [],
+                    "missing_changed_lines": [],
+                    "non_executable_changed_lines": sorted(lines),
+                    "line_percent": None,
+                }
+            )
+            continue
+        executable = set(coverage_file["executable_lines"])
+        covered = set(coverage_file["covered_lines"])
+        executable_changed = sorted(lines & executable)
+        covered_changed = sorted(line for line in executable_changed if line in covered)
+        missing_changed = sorted(line for line in executable_changed if line not in covered)
+        non_executable = sorted(lines - executable)
+        total_valid += len(executable_changed)
+        total_covered += len(covered_changed)
+        diff_files.append(
+            {
+                "path": changed_path,
+                "matched_path": coverage_file["path"],
+                "match_mode": match_mode,
+                "changed_lines": sorted(lines),
+                "executable_changed_lines": executable_changed,
+                "covered_changed_lines": covered_changed,
+                "missing_changed_lines": missing_changed,
+                "non_executable_changed_lines": non_executable,
+                "line_percent": _percent(len(covered_changed), len(executable_changed)),
+            }
+        )
+    return {
+        "enabled": True,
+        "lines_valid": total_valid,
+        "lines_covered": total_covered,
+        "line_percent": _percent(total_covered, total_valid),
+        "files": diff_files,
+        "missing_coverage_files": missing_coverage_files,
+    }
+
+
+def _coverage_gate(metric: str, actual: float | None, threshold: float | None, *, reason: str | None = None) -> dict:
+    if threshold is None:
+        return {
+            "metric": metric,
+            "threshold": None,
+            "actual": actual,
+            "status": "not_configured",
+            "reason": None,
+        }
+    if actual is None:
+        return {
+            "metric": metric,
+            "threshold": threshold,
+            "actual": None,
+            "status": "failed",
+            "reason": reason or "metric unavailable",
+        }
+    status = "passed" if actual >= threshold else "failed"
+    return {
+        "metric": metric,
+        "threshold": threshold,
+        "actual": actual,
+        "status": status,
+        "reason": None if status == "passed" else f"{actual} < {threshold}",
+    }
+
+
+def _validate_percent_threshold(raw_value: float | None, name: str) -> float | None:
+    if raw_value is None:
+        return None
+    if raw_value < 0 or raw_value > 100:
+        raise SystemExit(f"{name} must be between 0 and 100, got {raw_value}")
+    return float(raw_value)
+
+
+def cmd_coverage(args: argparse.Namespace) -> int:
+    if args.coverage_xml:
+        coverage_path = Path(args.coverage_xml).resolve()
+        if not coverage_path.exists():
+            raise SystemExit(f"Coverage input does not exist: {coverage_path}")
+        files, totals = _parse_coverage_xml(coverage_path)
+        source = {"kind": "coverage_xml", "path": _path_for_json(coverage_path)}
+    else:
+        coverage_path = Path(args.coverage_json).resolve()
+        if not coverage_path.exists():
+            raise SystemExit(f"Coverage input does not exist: {coverage_path}")
+        files, totals = _parse_coverage_json(coverage_path)
+        source = {"kind": "coverage_json", "path": _path_for_json(coverage_path)}
+
+    line_threshold = _validate_percent_threshold(args.line_threshold, "--line-threshold")
+    branch_threshold = _validate_percent_threshold(args.branch_threshold, "--branch-threshold")
+    diff_line_threshold = _validate_percent_threshold(
+        args.diff_line_threshold,
+        "--diff-line-threshold",
+    )
+
+    diff = {"enabled": False, "lines_valid": None, "lines_covered": None, "line_percent": None, "files": []}
+    if args.diff_patch:
+        patch_path = Path(args.diff_patch).resolve()
+        if not patch_path.exists():
+            raise SystemExit(f"Diff patch does not exist: {patch_path}")
+        changed_lines = _parse_diff_patch(patch_path.read_text(encoding="utf-8"))
+        diff = _calculate_diff_coverage(files, changed_lines)
+        diff["source"] = {"kind": "diff_patch", "path": _path_for_json(patch_path)}
+    elif args.diff_base:
+        patch_text = _git_diff_patch(args.diff_base, args.diff_path or [])
+        changed_lines = _parse_diff_patch(patch_text)
+        diff = _calculate_diff_coverage(files, changed_lines)
+        diff["source"] = {
+            "kind": "git_diff",
+            "base": args.diff_base,
+            "paths": args.diff_path or [],
+        }
+
+    gates = [
+        _coverage_gate("line", totals["line_percent"], line_threshold),
+        _coverage_gate(
+            "branch",
+            totals["branch_percent"],
+            branch_threshold,
+            reason="branch coverage is unavailable; run pytest with branch coverage enabled",
+        ),
+    ]
+    if diff_line_threshold is not None:
+        if not diff["enabled"]:
+            gates.append(
+                _coverage_gate(
+                    "diff_line",
+                    None,
+                    diff_line_threshold,
+                    reason="diff coverage requested but no diff source was provided",
+                )
+            )
+        elif diff["missing_coverage_files"]:
+            missing_files_text = json.dumps(diff["missing_coverage_files"], ensure_ascii=False)
+            gates.append(
+                _coverage_gate(
+                    "diff_line",
+                    None,
+                    diff_line_threshold,
+                    reason="changed files are missing from coverage: " + missing_files_text,
+                )
+            )
+        elif diff["lines_valid"] == 0:
+            gates.append(
+                {
+                    "metric": "diff_line",
+                    "threshold": diff_line_threshold,
+                    "actual": None,
+                    "status": "skipped",
+                    "reason": "no executable changed lines in diff",
+                }
+            )
+        else:
+            gates.append(_coverage_gate("diff_line", diff["line_percent"], diff_line_threshold))
+
+    failed_gates = [gate for gate in gates if gate["status"] == "failed"]
+    status = "failed" if failed_gates else "passed"
+    output = Path(args.output).resolve()
+    snapshot = {
+        "schema_version": COVERAGE_SNAPSHOT_SCHEMA_VERSION,
+        "generated_at": _now_iso(),
+        "module": args.module,
+        "level": args.level.upper() if args.level else None,
+        "title": args.title,
+        "run_id": args.run_id,
+        "git_commit": _git_commit(),
+        "operator": _operator(),
+        "status": status,
+        "source": source,
+        "output_path": _path_for_json(output),
+        "totals": totals,
+        "diff": diff,
+        "quality_gates": gates,
+        "failed_gates": failed_gates,
+        "files": files,
+    }
+    _write_json(output, snapshot)
+    print(output)
+    print(
+        "coverage: "
+        f"line={totals['line_percent']} "
+        f"branch={totals['branch_percent']} "
+        f"diff_line={diff.get('line_percent')} "
+        f"status={status}"
+    )
+    if failed_gates:
+        for gate in failed_gates:
+            print(f"coverage gate failed: {gate['metric']} - {gate['reason']}")
+    return 1 if failed_gates and not args.no_fail else 0
+
+
 def cmd_ports(args: argparse.Namespace) -> int:
     failed = False
     for raw_port in args.ports:
@@ -315,6 +729,33 @@ def build_parser() -> argparse.ArgumentParser:
     evidence.add_argument("--artifact", action="append", default=[])
     evidence.add_argument("--fail-missing", action="store_true")
     evidence.set_defaults(func=cmd_evidence)
+
+    coverage = sub.add_parser("coverage", help="Parse coverage output and write a gate snapshot.")
+    source_group = coverage.add_mutually_exclusive_group(required=True)
+    source_group.add_argument("--coverage-xml", help="Coverage.py Cobertura XML report.")
+    source_group.add_argument("--coverage-json", help="Coverage.py JSON report.")
+    coverage.add_argument("--module", required=True)
+    coverage.add_argument("--level")
+    coverage.add_argument("--title")
+    coverage.add_argument("--run-id")
+    coverage.add_argument("--output", required=True)
+    coverage.add_argument("--line-threshold", type=float)
+    coverage.add_argument("--branch-threshold", type=float)
+    coverage.add_argument("--diff-line-threshold", type=float)
+    coverage.add_argument("--diff-patch", help="Unified diff patch file for diff coverage.")
+    coverage.add_argument("--diff-base", help="Git base ref for changed-line diff coverage.")
+    coverage.add_argument(
+        "--diff-path",
+        action="append",
+        default=[],
+        help="Restrict git diff coverage to a path; can be repeated.",
+    )
+    coverage.add_argument(
+        "--no-fail",
+        action="store_true",
+        help="Write the snapshot but return zero even when configured coverage gates fail.",
+    )
+    coverage.set_defaults(func=cmd_coverage)
 
     ports = sub.add_parser("ports", help="Check localhost port occupancy.")
     ports.add_argument("--allow-occupied", action="store_true")

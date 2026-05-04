@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import socket
+import sys
 from pathlib import Path
 
 import nox
@@ -57,6 +58,7 @@ def l0(session: nox.Session) -> None:
         "scripts/paper_v2_live_validation.py",
         "backend/services/quantevolver/completion_contract.py",
         "backend/tests/test_aistock_validate_metadata.py",
+        "backend/tests/test_aistock_validate_coverage.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
         "backend/tests/paper_trading_v2",
         "backend/tests/selection_center",
@@ -323,6 +325,57 @@ def qe_archive_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def validation_coverage_backend(session: nox.Session) -> None:
+    """Run validation coverage contract and gate parser tests."""
+    coverage_dir = ROOT / "tmp" / "validation" / "coverage"
+    coverage_dir.mkdir(parents=True, exist_ok=True)
+    coverage_xml = coverage_dir / "validation_coverage_backend.xml"
+    coverage_json = coverage_dir / "validation_coverage_backend.json"
+    coverage_snapshot = coverage_dir / "validation_coverage_backend_snapshot.json"
+    session.run(
+        sys.executable,
+        "-m",
+        "compileall",
+        "scripts/aistock_validate.py",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "-m",
+        "pytest",
+        "backend/tests/test_aistock_validate_metadata.py",
+        "backend/tests/test_aistock_validate_coverage.py",
+        "--cov=scripts.aistock_validate",
+        "--cov-branch",
+        f"--cov-report=xml:{coverage_xml}",
+        f"--cov-report=json:{coverage_json}",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        env=_env(),
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validate.py",
+        "coverage",
+        "--module",
+        "validation_center",
+        "--level",
+        "L2",
+        "--coverage-xml",
+        str(coverage_xml),
+        "--output",
+        str(coverage_snapshot),
+        "--line-threshold",
+        "70",
+        "--branch-threshold",
+        "55",
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def qe_data_contract_backend(session: nox.Session) -> None:
     """Run validation-tool metadata and QE completion contract tests."""
     session.run(
@@ -336,6 +389,7 @@ def qe_data_contract_backend(session: nox.Session) -> None:
     _run_pytest(
         session,
         "backend/tests/test_aistock_validate_metadata.py",
+        "backend/tests/test_aistock_validate_coverage.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
         "-q",
         "-p",

@@ -43,10 +43,14 @@ def test_record_writes_markdown_and_json_metadata(tmp_path, monkeypatch) -> None
     assert metadata["environment"]["frontend_port"] == "3011"
     assert metadata["markdown_path"].endswith("_l3_metadata-smoke.md")
     assert metadata["coverage"] == {
+        "schema_version": aistock_validate.COVERAGE_SNAPSHOT_SCHEMA_VERSION,
+        "status": "not_collected",
         "line": None,
         "branch": None,
         "diff_line": None,
         "diff_branch": None,
+        "snapshot_path": None,
+        "quality_gates": [],
     }
 
 
