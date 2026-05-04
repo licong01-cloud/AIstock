@@ -21,6 +21,7 @@ AIstock 后续需要一套“本地权威、结果导向、可观测、可管理
 5. 覆盖率不是唯一质量指标，但必须成为基础门禁：没有合理覆盖率的代码不得宣称“已通过全流程验证”。
 6. 未来应建设专门的测试流水线系统和 UI：管理测试目录、测试用例、测试计划、执行记录、覆盖率趋势、失败分析、证据 artifact、版本发布候选和回归矩阵；UI 只调度受控 nox/aistock_validate 计划，不直接执行任意 shell。
 7. 流水线失败必须进入缺陷闭环：短任务失败阻止提交完成，长耗时/市场依赖任务通过 nightly/L4/L5 生成或更新 Bug；Bug 以 GitHub Issues 为权威记录，以 Validation Center DB/JSON 作为本地索引和 UI 查询缓存，并为 Codex/Claude 提供机器可读修复上下文。
+8. 开发规范必须成为 L0 质量门禁：先建立全仓只读 guardrail baseline，再对新增/修改代码阻断 P0/P1 新违规，历史问题按模块治理。
 
 目标形态：
 
@@ -85,6 +86,7 @@ AIstock 后续需要一套“本地权威、结果导向、可观测、可管理
 | 缺口 | 风险 | 设计要求 |
 |---|---|---|
 | 无统一 coverage 阈值 | 代码可能只跑通 happy path，边界分支未测 | 引入 coverage 配置、diff coverage 和模块阈值 |
+| 无全仓开发规范 baseline | 无法区分历史技术债和新增违规，规范只能依赖人工记忆 | 建立 `development_guardrails.yaml`、全仓只读 baseline scan、changed-files P0/P1 阻断 |
 | E2E 与单元测试边界不清 | 全靠 Playwright 慢且难定位，全靠单测又缺真实链路 | 分层测试：L1 单元、L2 API/DB、L3 UI/API/DB 链路 |
 | 测试用例与设计文档未强绑定 | 实现后才补测试，容易漏关键场景 | 每份设计文档必须包含验收和测试矩阵 |
 | 测试结果缺统一 UI | run record 分散在 markdown，查询和趋势管理弱 | 建设测试管理 UI 和后端数据模型 |
@@ -329,6 +331,7 @@ Test Management UI / Validation API
 ### Phase 0 - 现有资产基线盘点与冻结
 
 - 将当前 nox session、模块矩阵、Playwright 用例、数据质量 smoke、run record 模板登记为测试平台 v0 基线。
+- 将开发规范和架构红线登记为 `development_guardrails.yaml`，执行一次全仓只读 baseline scan，作为历史技术债治理起点。
 - 明确 `noxfile.py` 是权威执行入口，测试中心 UI 只能调度 allowlist session。
 - 为每个现有 session 补充 owner、模块、层级、是否需要 dev backend/frontend、是否允许跳过 UI、是否读写 DB、是否可在交易时段运行。
 - 输出 `tests/aistock_validation/catalog` 机器可读补充文件，例如 `sessions.json` 或 `sessions.yaml`。
@@ -416,6 +419,7 @@ Test Management UI / Validation API
 
 - `docs/architecture/aistock_testing_version_management_system_design_20260429.md`：已有测试与版本管理顶层思路；本文补充覆盖率、可观测 UI、QE/数仓专项测试和质量门禁。
 - `docs/architecture/aistock_internal_validation_center_implementation_plan_20260504.md`：本文的落地实施方案，明确 AIstock 内置 Validation Center 的后端/API/UI、coverage、allowlist、长耗时测试和分阶段研发任务。
+- `docs/architecture/aistock_development_standards_and_guardrails_20260504.md`：开发规范与 guardrail 框架，定义 P0/P1/P2/P3、全仓 baseline scan、changed-files 阻断、agent/MCP 安全边界和历史技术债治理路径。
 - `docs/architecture/qe_experiment_data_completeness_prewarehouse_plan_20260503.md`：QE 数据完整性前置改造方案，本文为其提供测试与覆盖率约束。
 - `docs/architecture/qe_worker_workspace_read_refactor_validation_plan_20260502.md`：QE worker workspace 红线验证，本文继承其 dev ports 和 API-only 原则。
 - `tests/aistock_validation/*`：当前测试矩阵和历史记录目录，未来应升级为测试管理系统的数据源之一。
