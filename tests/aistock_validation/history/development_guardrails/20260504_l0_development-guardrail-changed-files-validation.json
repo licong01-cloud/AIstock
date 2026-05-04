@@ -1,0 +1,67 @@
+{
+  "schema_version": "aistock_validation_run_v1",
+  "module": "development_guardrails",
+  "module_slug": "development_guardrails",
+  "level": "L0",
+  "title": "Development Guardrail Changed-files Baseline Gate",
+  "status": "passed",
+  "git_commit": "19c10a5",
+  "operator": "Codex",
+  "started_at": "2026-05-04T10:45:37.682358+00:00",
+  "finished_at": "2026-05-04T10:45:37.682358+00:00",
+  "markdown_path": "tests/aistock_validation/history/development_guardrails/20260504_l0_development-guardrail-changed-files-validation.md",
+  "metadata_path": "tests/aistock_validation/history/development_guardrails/20260504_l0_development-guardrail-changed-files-validation.json",
+  "coverage": {
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "status": "not_collected",
+    "line_percent": null,
+    "branch_percent": null,
+    "snapshot_path": null
+  },
+  "quality_gates": [
+    {
+      "metric": "guardrail_staged_files",
+      "status": "passed",
+      "actual": "files=8; total_findings=1; blocking=0",
+      "threshold": "blocking_count=0 for new P0/P1 findings"
+    },
+    {
+      "metric": "baseline_suppression",
+      "status": "passed",
+      "actual": "{\"baseline\": 1}",
+      "threshold": "baseline findings remain visible but do not block when fail_new_only=true"
+    }
+  ],
+  "evidence": [
+    "tests/aistock_validation/history/development_guardrails/20260504_l0_development-guardrail-changed-files-scan.json",
+    "tests/aistock_validation/history/development_guardrails/20260504_l0_development-guardrail-changed-files-evidence.json",
+    "tests/aistock_validation/modules/development_guardrails.md"
+  ],
+  "pass_scope": {
+    "level": "L0",
+    "real_backend": false,
+    "real_database": false,
+    "real_node_api": false,
+    "real_frontend_click": false,
+    "writes_business_state": false,
+    "positive_business_success": false,
+    "negative_failfast_only": false,
+    "mock_api_used": false,
+    "production_8001_touched": false,
+    "current_commit_evidence": true
+  },
+  "business_assertion": {
+    "can_user_complete_operation": true,
+    "operation_name": "Block new P0/P1 development-standard violations while preserving legacy baseline visibility",
+    "evidence": {
+      "guardrail_json": "tests/aistock_validation/history/development_guardrails/20260504_l0_development-guardrail-changed-files-scan.json",
+      "nox": "guardrail_changed_files staged-only run",
+      "db": "not touched",
+      "logs": "nox guardrail_changed_files output"
+    },
+    "unresolved_blockers": [
+      "Full changed-only mode should be used only in single-task workspaces because this repository may have concurrent dirty files.",
+      "Historical baseline burn-down remains a separate backlog."
+    ]
+  }
+}

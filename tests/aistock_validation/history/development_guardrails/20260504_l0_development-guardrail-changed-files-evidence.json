@@ -1,0 +1,71 @@
+{
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "script",
+      "path": "scripts/aistock_guardrail_scan.py",
+      "sha256": "e1f7f96d9f59b7c83d53e55ebefcf0ef9ed9c2a6755c0c0528af78f43ac5559a",
+      "size_bytes": 21954
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "noxfile",
+      "path": "noxfile.py",
+      "sha256": "86e2840fa4bc7616fcd8b4bf2eb9e04ec739ba3d2fa9e7ecc2e972350601b306",
+      "size_bytes": 25513
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "module_matrix",
+      "path": "tests/aistock_validation/modules/development_guardrails.md",
+      "sha256": "6e004deb21ec2a1edf7fde0440e26c71b72f2a8e103ee243342a159011a11765",
+      "size_bytes": 3062
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "tmp/validation/guardrails/changed_files.json",
+      "sha256": "fe76d66811f505b4e9bdbd63e202225b7b8ecad3808283c59762d6ea4fcbf287",
+      "size_bytes": 1295
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "tmp/validation/guardrails/changed_files.md",
+      "sha256": "b068f119237180891685b124ef69d10e8c88dfaa288b2c469dd73ee111b20f08",
+      "size_bytes": 1052
+    }
+  ],
+  "generated_at": "2026-05-04T18:45:52",
+  "git_commit": "19c10a5",
+  "level": "L0",
+  "missing": [],
+  "missing_count": 0,
+  "module": "development_guardrails",
+  "operator": "lc999",
+  "run_id": null,
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "Development guardrail changed-files baseline gate"
+}

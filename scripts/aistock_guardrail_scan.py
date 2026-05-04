@@ -44,6 +44,7 @@ class Finding:
     remediation: str
     baseline_policy: str
     fingerprint: str
+    baseline_status: str = "unclassified"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -57,6 +58,7 @@ class Finding:
             "remediation": self.remediation,
             "baseline_policy": self.baseline_policy,
             "fingerprint": self.fingerprint,
+            "baseline_status": self.baseline_status,
         }
 
 
@@ -167,6 +169,11 @@ def git_changed_files(root: Path) -> list[Path]:
     return [root / name for name in dict.fromkeys(names)]
 
 
+def git_staged_files(root: Path) -> list[Path]:
+    output = _git_output(["git", "diff", "--cached", "--name-only", "--diff-filter=ACMRT"], root)
+    return [root / line.strip() for line in output.splitlines() if line.strip()]
+
+
 def iter_files(paths: Iterable[Path], root: Path, suffixes: set[str], skip_parts: set[str]) -> list[Path]:
     files: list[Path] = []
     for path in paths:
@@ -267,29 +274,115 @@ def scan_files(files: Iterable[Path], rules: Iterable[CompiledRule], root: Path)
     return findings
 
 
+def load_baseline_fingerprints(path: Path | None) -> set[str]:
+    if path is None or not path.exists():
+        return set()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    findings = payload.get("findings") if isinstance(payload, dict) else None
+    if not isinstance(findings, list):
+        raise ValueError(f"Baseline JSON must contain a findings list: {path}")
+    fingerprints: set[str] = set()
+    for finding in findings:
+        if isinstance(finding, dict) and finding.get("fingerprint"):
+            fingerprints.add(str(finding["fingerprint"]))
+    return fingerprints
+
+
+def apply_baseline_status(findings: list[Finding], baseline_fingerprints: set[str]) -> list[Finding]:
+    if not baseline_fingerprints:
+        return [
+            Finding(
+                rule_id=finding.rule_id,
+                title=finding.title,
+                severity=finding.severity,
+                category=finding.category,
+                file=finding.file,
+                line=finding.line,
+                message=finding.message,
+                remediation=finding.remediation,
+                baseline_policy=finding.baseline_policy,
+                fingerprint=finding.fingerprint,
+                baseline_status="new",
+            )
+            for finding in findings
+        ]
+    classified: list[Finding] = []
+    for finding in findings:
+        classified.append(
+            Finding(
+                rule_id=finding.rule_id,
+                title=finding.title,
+                severity=finding.severity,
+                category=finding.category,
+                file=finding.file,
+                line=finding.line,
+                message=finding.message,
+                remediation=finding.remediation,
+                baseline_policy=finding.baseline_policy,
+                fingerprint=finding.fingerprint,
+                baseline_status="baseline" if finding.fingerprint in baseline_fingerprints else "new",
+            )
+        )
+    return classified
+
+
 def summarize(findings: list[Finding]) -> dict[str, Any]:
     by_severity: dict[str, int] = {}
     by_rule: dict[str, int] = {}
     by_category: dict[str, int] = {}
+    by_baseline_status: dict[str, int] = {}
     for finding in findings:
         by_severity[finding.severity] = by_severity.get(finding.severity, 0) + 1
         by_rule[finding.rule_id] = by_rule.get(finding.rule_id, 0) + 1
         by_category[finding.category] = by_category.get(finding.category, 0) + 1
+        by_baseline_status[finding.baseline_status] = by_baseline_status.get(finding.baseline_status, 0) + 1
     return {
         "total_findings": len(findings),
         "by_severity": dict(sorted(by_severity.items(), key=lambda item: item[0])),
         "by_rule": dict(sorted(by_rule.items())),
         "by_category": dict(sorted(by_category.items())),
+        "by_baseline_status": dict(sorted(by_baseline_status.items())),
     }
 
 
-def write_json(path: Path, findings: list[Finding], files_scanned: int, mode: str) -> None:
+def blocking_findings(findings: list[Finding], fail_on_severity: str, *, fail_new_only: bool) -> list[Finding]:
+    if fail_on_severity == "NONE":
+        return []
+    fail_rank = SEVERITY_RANK[fail_on_severity]
+    return [
+        finding
+        for finding in findings
+        if SEVERITY_RANK.get(finding.severity, 0) >= fail_rank
+        and (not fail_new_only or finding.baseline_status != "baseline")
+    ]
+
+
+def write_json(
+    path: Path,
+    findings: list[Finding],
+    files_scanned: int,
+    mode: str,
+    *,
+    baseline_json: str | None = None,
+    fail_on_severity: str = "NONE",
+    fail_new_only: bool = False,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    blocked = blocking_findings(findings, fail_on_severity, fail_new_only=fail_new_only)
     payload = {
         "schema_version": "aistock_guardrail_scan_result_v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": mode,
         "files_scanned": files_scanned,
+        "baseline": {
+            "baseline_json": baseline_json,
+            "fail_new_only": fail_new_only,
+        },
+        "gate": {
+            "fail_on_severity": fail_on_severity,
+            "blocking_count": len(blocked),
+            "status": "failed" if blocked else "passed",
+        },
         "summary": summarize(findings),
         "findings": [finding.to_dict() for finding in findings],
     }
@@ -307,11 +400,22 @@ def write_summary_md(path: Path, findings: list[Finding], files_scanned: int, mo
         f"- Files scanned: {files_scanned}",
         f"- Total findings: {summary['total_findings']}",
         "",
-        "## Summary By Severity",
+        "## Summary By Baseline Status",
         "",
-        "| Severity | Count |",
+        "| Status | Count |",
         "|---|---:|",
     ]
+    for status, count in summary["by_baseline_status"].items():
+        lines.append(f"| `{status}` | {count} |")
+    lines.extend(
+        [
+            "",
+            "## Summary By Severity",
+            "",
+            "| Severity | Count |",
+            "|---|---:|",
+        ]
+    )
     for severity in ("P0", "P1", "P2", "P3"):
         lines.append(f"| {severity} | {summary['by_severity'].get(severity, 0)} |")
     lines.extend(["", "## Summary By Rule", "", "| Rule | Count |", "|---|---:|"])
@@ -328,14 +432,14 @@ def write_summary_md(path: Path, findings: list[Finding], files_scanned: int, mo
             "",
             f"## First {min(max_findings, len(findings))} Findings",
             "",
-            "| Severity | Rule | File | Line | Remediation |",
-            "|---|---|---|---:|---|",
+            "| Severity | Status | Rule | File | Line | Remediation |",
+            "|---|---|---|---|---:|---|",
         ]
     )
     for finding in findings[:max_findings]:
         remediation = finding.remediation.replace("|", "/")
         lines.append(
-            f"| {finding.severity} | `{finding.rule_id}` | `{finding.file}` | {finding.line} | {remediation} |"
+            f"| {finding.severity} | `{finding.baseline_status}` | `{finding.rule_id}` | `{finding.file}` | {finding.line} | {remediation} |"
         )
     if len(findings) > max_findings:
         lines.append("")
@@ -349,6 +453,9 @@ def main() -> int:
     parser.add_argument("--catalog", default=str(DEFAULT_CATALOG), help="Path to the machine-readable development standard YAML.")
     parser.add_argument("--baseline", action="store_true", help="Scan tracked files under catalog roots.")
     parser.add_argument("--changed-only", action="store_true", help="Scan changed and untracked files only.")
+    parser.add_argument("--staged-only", action="store_true", help="Scan staged files only; useful before committing in a dirty workspace.")
+    parser.add_argument("--baseline-json", help="Existing guardrail JSON whose fingerprints are treated as historical baseline.")
+    parser.add_argument("--fail-new-only", action="store_true", help="Do not fail on findings whose fingerprint exists in --baseline-json.")
     parser.add_argument("--output-json", help="Write machine-readable result JSON.")
     parser.add_argument("--summary-md", help="Write human-readable summary Markdown.")
     parser.add_argument("--max-findings-md", type=int, default=200, help="Maximum findings to include in Markdown.")
@@ -363,9 +470,16 @@ def main() -> int:
     skip_parts = set(str(item) for item in scan_config.get("skip_parts", []))
     roots = [str(item) for item in scan_config.get("default_roots", [])]
 
+    selected_modes = sum(bool(value) for value in (args.changed_only, args.staged_only, args.baseline, bool(args.paths)))
+    if selected_modes > 1:
+        raise SystemExit("Choose only one scan mode: paths, --baseline, --changed-only, or --staged-only.")
+
     if args.changed_only:
         mode = "changed_only"
         candidate_paths = git_changed_files(root)
+    elif args.staged_only:
+        mode = "staged_only"
+        candidate_paths = git_staged_files(root)
     elif args.baseline:
         mode = "baseline_tracked"
         candidate_paths = git_tracked_files(root, roots)
@@ -378,20 +492,35 @@ def main() -> int:
 
     files = iter_files(candidate_paths, root=root, suffixes=suffixes, skip_parts=skip_parts)
     findings = scan_files(files, rules=rules, root=root)
+    baseline_path = root / args.baseline_json if args.baseline_json else None
+    baseline_fingerprints = load_baseline_fingerprints(baseline_path)
+    findings = apply_baseline_status(findings, baseline_fingerprints)
+    blocked = blocking_findings(findings, args.fail_on_severity, fail_new_only=args.fail_new_only)
 
     for finding in findings:
-        print(f"{finding.severity} {finding.rule_id} {finding.file}:{finding.line} - {finding.title}")
-    print(f"Guardrail scan completed: mode={mode}, files={len(files)}, findings={len(findings)}")
+        print(
+            f"{finding.severity} {finding.baseline_status} "
+            f"{finding.rule_id} {finding.file}:{finding.line} - {finding.title}"
+        )
+    print(
+        "Guardrail scan completed: "
+        f"mode={mode}, files={len(files)}, findings={len(findings)}, blocking={len(blocked)}"
+    )
 
     if args.output_json:
-        write_json(root / args.output_json, findings=findings, files_scanned=len(files), mode=mode)
+        write_json(
+            root / args.output_json,
+            findings=findings,
+            files_scanned=len(files),
+            mode=mode,
+            baseline_json=args.baseline_json,
+            fail_on_severity=args.fail_on_severity,
+            fail_new_only=args.fail_new_only,
+        )
     if args.summary_md:
         write_summary_md(root / args.summary_md, findings=findings, files_scanned=len(files), mode=mode, max_findings=args.max_findings_md)
 
-    fail_rank = SEVERITY_RANK[args.fail_on_severity]
-    if args.fail_on_severity != "NONE" and any(SEVERITY_RANK.get(finding.severity, 0) >= fail_rank for finding in findings):
-        return 1
-    return 0
+    return 1 if blocked else 0
 
 
 if __name__ == "__main__":

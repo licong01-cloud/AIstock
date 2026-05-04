@@ -48,18 +48,34 @@ def _codex_quick_validate_script() -> Path:
     return codex_home / "skills" / ".system" / "skill-creator" / "scripts" / "quick_validate.py"
 
 
+def _guardrail_baseline_json(session: nox.Session) -> str:
+    baseline_json = os.environ.get(
+        "AISTOCK_GUARDRAIL_BASELINE_JSON",
+        "tmp/validation/guardrails/baseline_20260504.json",
+    )
+    if not (ROOT / baseline_json).exists():
+        session.error(
+            "Missing guardrail baseline JSON. Run "
+            "`python scripts/aistock_guardrail_scan.py --baseline "
+            "--output-json tmp/validation/guardrails/baseline_20260504.json` first."
+        )
+    return baseline_json
+
+
 @nox.session(venv_backend="none")
 def l0(session: nox.Session) -> None:
     """Run local static gates that do not start AIstock services."""
     scan_paths = session.posargs or [
         "noxfile.py",
         "scripts/aistock_validate.py",
+        "scripts/aistock_guardrail_scan.py",
         "scripts/validation_center_readonly_smoke.py",
         "scripts/aistock_data_quality_smoke.py",
         "scripts/paper_v2_live_validation.py",
         "backend/services/quantevolver/completion_contract.py",
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
+        "backend/tests/test_aistock_guardrail_scan.py",
         "backend/tests/test_validation_center_api.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
         "backend/tests/paper_trading_v2",
@@ -70,6 +86,7 @@ def l0(session: nox.Session) -> None:
         "frontend/src/lib/validation",
         "frontend/tests/validation-center",
         "frontend/tests/paper-v2",
+        "tests/aistock_validation/modules/development_guardrails.md",
     ]
     quick_validate = _codex_quick_validate_script()
     if not quick_validate.exists():
@@ -86,6 +103,44 @@ def l0(session: nox.Session) -> None:
         *scan_paths,
         "--fail-on",
         "HIGH",
+        external=True,
+    )
+    session.run(
+        "python",
+        "scripts/aistock_guardrail_scan.py",
+        *scan_paths,
+        "--baseline-json",
+        _guardrail_baseline_json(session),
+        "--fail-new-only",
+        "--fail-on-severity",
+        "P1",
+        "--output-json",
+        "tmp/validation/guardrails/l0_paths.json",
+        "--summary-md",
+        "tmp/validation/guardrails/l0_paths.md",
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def guardrail_changed_files(session: nox.Session) -> None:
+    """Run P0/P1 development-standard guardrails on staged or changed files."""
+    mode_flag = session.posargs[0] if session.posargs else "--staged-only"
+    if mode_flag not in {"--staged-only", "--changed-only"}:
+        session.error("First optional argument must be --staged-only or --changed-only.")
+    session.run(
+        "python",
+        "scripts/aistock_guardrail_scan.py",
+        mode_flag,
+        "--baseline-json",
+        _guardrail_baseline_json(session),
+        "--fail-new-only",
+        "--fail-on-severity",
+        "P1",
+        "--output-json",
+        "tmp/validation/guardrails/changed_files.json",
+        "--summary-md",
+        "tmp/validation/guardrails/changed_files.md",
         external=True,
     )
 

@@ -156,6 +156,67 @@ def test_git_changed_files_uses_utf8_for_unicode_paths(tmp_path: Path, monkeypat
     ]
 
 
+def test_git_staged_files_uses_cached_diff_only(tmp_path: Path, monkeypatch) -> None:
+    scanner = _load_module()
+
+    def fake_check_output(args, **kwargs):
+        assert args[:4] == ["git", "diff", "--cached", "--name-only"]
+        assert kwargs["encoding"] == "utf-8"
+        return "backend/services/new_feature.py\n"
+
+    monkeypatch.setattr(scanner.subprocess, "check_output", fake_check_output)
+
+    paths = scanner.git_staged_files(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in paths] == ["backend/services/new_feature.py"]
+
+
+def test_baseline_status_and_new_only_blocking(tmp_path: Path) -> None:
+    scanner = _load_module()
+    finding = scanner.Finding(
+        rule_id="ERR-FALLBACK-001",
+        title="Broad exception handlers must not return fake success or defaults",
+        severity="P0",
+        category="error_handling",
+        file="backend/services/example.py",
+        line=10,
+        message="Broad exception handlers must not return fake success or defaults",
+        remediation="Fail fast.",
+        baseline_policy="block_new_only",
+        fingerprint="abc123",
+    )
+    baseline_json = tmp_path / "baseline.json"
+    baseline_json.write_text(json.dumps({"findings": [{"fingerprint": "abc123"}]}), encoding="utf-8")
+
+    baseline_fingerprints = scanner.load_baseline_fingerprints(baseline_json)
+    classified = scanner.apply_baseline_status([finding], baseline_fingerprints)
+
+    assert classified[0].baseline_status == "baseline"
+    assert scanner.blocking_findings(classified, "P1", fail_new_only=True) == []
+    assert scanner.blocking_findings(classified, "P1", fail_new_only=False) == classified
+
+
+def test_missing_baseline_marks_findings_as_new() -> None:
+    scanner = _load_module()
+    finding = scanner.Finding(
+        rule_id="ERR-FALLBACK-001",
+        title="Broad exception handlers must not return fake success or defaults",
+        severity="P0",
+        category="error_handling",
+        file="backend/services/example.py",
+        line=10,
+        message="Broad exception handlers must not return fake success or defaults",
+        remediation="Fail fast.",
+        baseline_policy="block_new_only",
+        fingerprint="new123",
+    )
+
+    classified = scanner.apply_baseline_status([finding], set())
+
+    assert classified[0].baseline_status == "new"
+    assert scanner.blocking_findings(classified, "P1", fail_new_only=True) == classified
+
+
 def test_scanner_writes_json_and_markdown_summary(tmp_path: Path) -> None:
     scanner = _load_module()
     runtime_file = tmp_path / "backend" / "services" / "example.py"
@@ -174,12 +235,23 @@ def test_scanner_writes_json_and_markdown_summary(tmp_path: Path) -> None:
     catalog = scanner.load_catalog(CATALOG_PATH)
     rules = scanner.compile_rules(catalog)
     findings = scanner.scan_files([runtime_file], rules=rules, root=tmp_path)
-    scanner.write_json(json_path, findings=findings, files_scanned=1, mode="unit_test")
+    findings = scanner.apply_baseline_status(findings, set())
+    scanner.write_json(
+        json_path,
+        findings=findings,
+        files_scanned=1,
+        mode="unit_test",
+        fail_on_severity="P1",
+        fail_new_only=True,
+    )
     scanner.write_summary_md(md_path, findings=findings, files_scanned=1, mode="unit_test", max_findings=10)
 
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     summary = md_path.read_text(encoding="utf-8")
     assert payload["schema_version"] == "aistock_guardrail_scan_result_v1"
+    assert payload["gate"]["status"] == "failed"
+    assert payload["summary"]["by_baseline_status"]["new"] >= 1
     assert payload["summary"]["total_findings"] >= 1
     assert "AIstock Guardrail Baseline Scan" in summary
+    assert "Summary By Baseline Status" in summary
     assert "ERR-FALLBACK-001" in summary
