@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -10,57 +10,29 @@ import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { paperV2Api } from "@/lib/paper-v2/api";
 import { formatCompact, formatNumber, formatPercent, shortHash } from "@/lib/paper-v2/format";
-import type { JsonObject, PaperPortfolio, PaperRun, PaperSession } from "@/lib/paper-v2/types";
+import {
+  latestSnapshot,
+  n,
+  packageName,
+  packageSource,
+  parseRunningSummaryItem,
+  RUNNING_SEARCH_FIELD_OPTIONS,
+  RUNNING_SORT_OPTIONS,
+  RUNNING_STATUS_OPTIONS,
+  statusFilterToStatuses,
+  totalReturn,
+  type RunningPortfolioSummary,
+} from "@/lib/paper-v2/running-summary";
+import type { JsonObject, RunningSummaryPagination, RunningSummarySortBy, RunningSummarySortDir } from "@/lib/paper-v2/types";
 
-type RunningPortfolioSummary = {
-  portfolio: PaperPortfolio;
-  latestRun?: PaperRun;
-  latestSession?: PaperSession;
-  counts: { orders: number; fills: number; positions: number; errors: number };
-  latestSnapshot?: JsonObject | null;
-  recentSnapshots: JsonObject[];
-  latestPositions: JsonObject[];
-};
-
-function n(value: unknown): number {
+function cashParam(value: string): number | null {
+  if (!value.trim()) return null;
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function isObject(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asRows(value: unknown): JsonObject[] {
-  return Array.isArray(value) ? value.filter(isObject) : [];
-}
-
-function latestSnapshot(row: RunningPortfolioSummary): JsonObject | undefined {
-  return (row.latestSnapshot && isObject(row.latestSnapshot) ? row.latestSnapshot : undefined) || row.recentSnapshots[0];
-}
-
-function latestPositionDate(row: RunningPortfolioSummary): string {
-  return String(row.latestPositions[0]?.trade_date || "-");
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function latestPositions(row: RunningPortfolioSummary): JsonObject[] {
   return row.latestPositions;
-}
-
-function totalReturn(row: RunningPortfolioSummary): number | null {
-  const snapshot = latestSnapshot(row);
-  const nav = n(snapshot?.nav);
-  const initial = n(row.portfolio.initial_cash);
-  if (!nav || !initial) return null;
-  return nav / initial - 1;
-}
-
-function packageName(portfolio: PaperPortfolio): string {
-  return String(portfolio.frozen_manifest?.package_name || portfolio.package_id || "-");
-}
-
-function packageSource(portfolio: PaperPortfolio): string {
-  return String(portfolio.frozen_manifest?.source_id || portfolio.frozen_manifest?.run_id || portfolio.package_id || "-");
 }
 
 function navSeries(row: RunningPortfolioSummary) {
@@ -77,6 +49,16 @@ function navSeries(row: RunningPortfolioSummary) {
 
 export default function PaperV2RunningPage() {
   const [rows, setRows] = useState<RunningPortfolioSummary[]>([]);
+  const [pagination, setPagination] = useState<RunningSummaryPagination | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [statusFilter, setStatusFilter] = useState("ACTIVE");
+  const [sortBy, setSortBy] = useState<RunningSummarySortBy>("latest_run_time");
+  const [sortDir, setSortDir] = useState<RunningSummarySortDir>("desc");
+  const [searchField, setSearchField] = useState("all");
+  const [search, setSearch] = useState("");
+  const [minCash, setMinCash] = useState("");
+  const [maxCash, setMaxCash] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
@@ -84,30 +66,27 @@ export default function PaperV2RunningPage() {
     setLoading(true);
     setError(null);
     try {
-      const summaries = (await paperV2Api.runningSummary(300)).map((item) => {
-        const counts = isObject(item.counts) ? item.counts : {};
-        return {
-          portfolio: item.portfolio as PaperPortfolio,
-          latestRun: isObject(item.latest_run) ? item.latest_run as PaperRun : undefined,
-          latestSession: isObject(item.latest_session) ? item.latest_session as PaperSession : undefined,
-          counts: {
-            orders: n(counts.orders),
-            fills: n(counts.fills),
-            positions: n(counts.positions),
-            errors: n(counts.errors),
-          },
-          latestSnapshot: isObject(item.latest_snapshot) ? item.latest_snapshot : null,
-          recentSnapshots: asRows(item.recent_snapshots),
-          latestPositions: asRows(item.latest_positions),
-        };
+      const pageData = await paperV2Api.runningSummaryPage({
+        page,
+        pageSize,
+        snapshotLimit: 30,
+        positionLimit: 8,
+        statuses: statusFilterToStatuses(statusFilter),
+        sortBy,
+        sortDir,
+        search,
+        searchFields: [searchField],
+        minInitialCash: cashParam(minCash),
+        maxInitialCash: cashParam(maxCash),
       });
-      setRows(summaries);
+      setRows(pageData.summaries.map(parseRunningSummaryItem));
+      setPagination(pageData.pagination);
     } catch (exc) {
       setError(exc);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [maxCash, minCash, page, pageSize, search, searchField, sortBy, sortDir, statusFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -119,24 +98,45 @@ export default function PaperV2RunningPage() {
     return { nav, initial, pnl: nav - initial, returnRate: initial ? nav / initial - 1 : null, errors, fills };
   }, [rows]);
 
+  const totalPages = Math.max(1, pagination?.total_pages || 1);
+  const pageStart = pagination?.total ? (page - 1) * pageSize + 1 : 0;
+  const pageEnd = pagination?.total ? Math.min(page * pageSize, pagination.total) : 0;
+
+  function resetPage(next: () => void) {
+    setPage(1);
+    next();
+  }
+
   return (
     <main>
       <ErrorPanel error={error} title="正在运行模拟盘汇总加载失败" />
       <div className="pv2-grid pv2-grid-4">
-        <MetricCard label="活跃模拟盘" value={rows.length} hint="READY / RUNNING / PAUSED" tone="info" />
-        <MetricCard label="当前总净值" value={formatCompact(totals.nav)} hint={`初始资金 ${formatCompact(totals.initial)}`} tone="success" />
-        <MetricCard label="累计收益" value={formatNumber(totals.pnl, 2)} hint={formatPercent(totals.returnRate)} tone={totals.pnl >= 0 ? "success" : "danger"} />
-        <MetricCard label="阻断错误" value={totals.errors} hint={`${totals.fills} 条成交记录`} tone={totals.errors ? "danger" : "success"} />
+        <MetricCard label="活跃模拟盘" value={pagination?.total ?? rows.length} hint="READY / RUNNING / PAUSED" tone="info" />
+        <MetricCard label="本页总净值" value={formatCompact(totals.nav)} hint={`初始资金 ${formatCompact(totals.initial)}`} tone="success" />
+        <MetricCard label="本页累计收益" value={formatNumber(totals.pnl, 2)} hint={formatPercent(totals.returnRate)} tone={totals.pnl >= 0 ? "success" : "danger"} />
+        <MetricCard label="本页阻断错误" value={totals.errors} hint={`${totals.fills} 条成交记录`} tone={totals.errors ? "danger" : "success"} />
       </div>
 
       <NoticePanel title="模拟盘运行总览" tone="info">
-        本页只读取 Paper Trading v2 已持久化账本、会话、订单、成交、持仓、快照和绩效；不会触发交易、回放、重置或调度动作。
+        本页只读取 Paper Trading v2 已持久化账本、会话、订单、成交、持仓、快照和绩效；不会触发交易、回放、重置或调度动作。分页、排序和筛选在后端数据库侧完成。
       </NoticePanel>
 
-      <SectionCard title="正在运行模拟盘列表" eyebrow={loading ? "加载中" : "点击组合查看完整统计"} action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
+      <SectionCard title="正在运行模拟盘列表" eyebrow={loading ? "加载中" : `${pageStart}-${pageEnd} / ${pagination?.total || 0} 个组合`} action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
+        <div className="pv2-card pv2-filter-card">
+          <div className="pv2-form-grid">
+            <div className="pv2-field"><label>状态筛选</label><select className="pv2-select" value={statusFilter} onChange={(event) => resetPage(() => setStatusFilter(event.target.value))}>{RUNNING_STATUS_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>
+            <div className="pv2-field"><label>排序字段</label><select className="pv2-select" value={sortBy} onChange={(event) => resetPage(() => setSortBy(event.target.value as RunningSummarySortBy))}>{RUNNING_SORT_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>
+            <div className="pv2-field"><label>排序方向</label><select className="pv2-select" value={sortDir} onChange={(event) => resetPage(() => setSortDir(event.target.value as RunningSummarySortDir))}><option value="desc">降序</option><option value="asc">升序</option></select></div>
+            <div className="pv2-field"><label>筛选字段</label><select className="pv2-select" value={searchField} onChange={(event) => resetPage(() => setSearchField(event.target.value))}>{RUNNING_SEARCH_FIELD_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>
+            <div className="pv2-field"><label>字段关键字</label><input className="pv2-input" value={search} placeholder="支持组合ID、策略包、状态、数据源等" onChange={(event) => resetPage(() => setSearch(event.target.value))} /></div>
+            <div className="pv2-field"><label>每页数量</label><select className="pv2-select" value={pageSize} onChange={(event) => resetPage(() => setPageSize(Number(event.target.value)))}><option value={20}>20</option><option value={30}>30</option><option value={50}>50</option></select></div>
+            <div className="pv2-field"><label>初始资金下限</label><input className="pv2-input" type="number" min={0} value={minCash} onChange={(event) => resetPage(() => setMinCash(event.target.value))} /></div>
+            <div className="pv2-field"><label>初始资金上限</label><input className="pv2-input" type="number" min={0} value={maxCash} onChange={(event) => resetPage(() => setMaxCash(event.target.value))} /></div>
+          </div>
+        </div>
         <PaperTable
           rows={rows}
-          empty="暂无 READY / RUNNING / PAUSED 的 Paper v2 模拟盘组合。"
+          empty="暂无符合条件的 READY / RUNNING / PAUSED Paper v2 模拟盘组合。"
           columns={[
             { key: "name", header: "模拟盘", render: (row) => <><Link href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/live-dashboard`}>{row.portfolio.portfolio_name}</Link><br /><span className="pv2-muted pv2-mono">{shortHash(row.portfolio.portfolio_id)}</span></> },
             { key: "package", header: "策略包", render: (row) => <><Link href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/live-dashboard`}>{packageName(row.portfolio)}</Link><br /><span className="pv2-muted">{packageSource(row.portfolio)}</span></> },
@@ -150,6 +150,11 @@ export default function PaperV2RunningPage() {
             { key: "actions", header: "操作", render: (row) => <div className="pv2-row-actions"><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/live-dashboard`}>实时详情</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}`}>统计</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/ledger`}>交易</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/performance`}>收益</Link></div> },
           ]}
         />
+        <div className="pv2-pagination">
+          <button className="pv2-button-ghost" disabled={page <= 1 || loading} onClick={() => setPage((current) => Math.max(1, current - 1))} type="button">上一页</button>
+          <span className="pv2-muted">第 {page} / {totalPages} 页，每页最多 50 个</span>
+          <button className="pv2-button-ghost" disabled={page >= totalPages || loading} onClick={() => setPage((current) => current + 1)} type="button">下一页</button>
+        </div>
       </SectionCard>
 
       <div className="pv2-grid pv2-grid-2">

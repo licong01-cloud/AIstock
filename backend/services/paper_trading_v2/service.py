@@ -174,6 +174,35 @@ class PaperTradingV2PortfolioService:
             position_limit=position_limit,
         )
 
+    def running_summary_page(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        snapshot_limit: int = 30,
+        position_limit: int = 8,
+        statuses: list[str] | None = None,
+        sort_by: str = "latest_run_time",
+        sort_dir: str = "desc",
+        search: str | None = None,
+        search_fields: list[str] | None = None,
+        min_initial_cash: float | None = None,
+        max_initial_cash: float | None = None,
+    ) -> dict[str, Any]:
+        return self.repository.list_running_summaries_page(
+            page=page,
+            page_size=page_size,
+            snapshot_limit=snapshot_limit,
+            position_limit=position_limit,
+            statuses=statuses,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            search=search,
+            search_fields=search_fields,
+            min_initial_cash=min_initial_cash,
+            max_initial_cash=max_initial_cash,
+        )
+
     def get_portfolio(self, portfolio_id: str) -> PaperPortfolio:
         return self.repository.get_portfolio(portfolio_id)
 

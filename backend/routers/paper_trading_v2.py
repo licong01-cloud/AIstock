@@ -236,19 +236,35 @@ def list_portfolios(limit: int = 100) -> dict[str, Any]:
 
 @router.get("/running-summary")
 def list_running_portfolio_summary(
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int | None = Query(default=None, ge=1, le=500),
+    page: int = Query(default=1, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=50),
     snapshot_limit: int = Query(default=30, ge=1, le=240),
     position_limit: int = Query(default=8, ge=1, le=100),
+    status: list[str] | None = Query(default=None),
+    sort_by: str = Query(default="latest_run_time"),
+    sort_dir: str = Query(default="desc"),
+    search: str | None = Query(default=None),
+    search_fields: list[str] | None = Query(default=None),
+    min_initial_cash: float | None = Query(default=None, ge=0),
+    max_initial_cash: float | None = Query(default=None, ge=0),
 ) -> dict[str, Any]:
     try:
-        return {
-            "ok": True,
-            "summaries": PaperTradingV2PortfolioService().running_summary(
-                limit=limit,
-                snapshot_limit=snapshot_limit,
-                position_limit=position_limit,
-            ),
-        }
+        effective_page_size = min(page_size if page_size is not None else (limit or 20), 50)
+        page_data = PaperTradingV2PortfolioService().running_summary_page(
+            page=page,
+            page_size=effective_page_size,
+            snapshot_limit=snapshot_limit,
+            position_limit=position_limit,
+            statuses=status,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            search=search,
+            search_fields=search_fields,
+            min_initial_cash=min_initial_cash,
+            max_initial_cash=max_initial_cash,
+        )
+        return {"ok": True, **page_data}
     except TradingCoreError as exc:
         _raise_http(exc)
 

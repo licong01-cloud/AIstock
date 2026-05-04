@@ -327,6 +327,23 @@ def test_paper_trading_day_runner_persists_full_day_path() -> None:
     assert running_summary[0]["counts"]["orders"] == 1
     assert running_summary[0]["counts"]["fills"] == len(paper_repo.fills[result.run.run_id])
     assert running_summary[0]["counts"]["errors"] == 0
+    running_page = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).running_summary_page(
+        page=1,
+        page_size=20,
+        statuses=["READY"],
+        sort_by="initial_cash",
+        sort_dir="asc",
+        search=portfolio.package_id,
+        search_fields=["package_id"],
+        min_initial_cash=50_000,
+        max_initial_cash=150_000,
+    )
+    assert running_page["pagination"]["total"] == 1
+    assert running_page["pagination"]["page_size"] == 20
+    assert running_page["summaries"][0]["portfolio"].portfolio_id == portfolio.portfolio_id
     assert paper_repo.list_runs(portfolio.portfolio_id)[0]["run_id"] == result.run.run_id
     event_types = [
         item["event_type"]

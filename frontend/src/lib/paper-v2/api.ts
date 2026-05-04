@@ -18,6 +18,9 @@ import type {
   QEPackagingSource,
   ReadinessResult,
   ReplayResult,
+  RunningSummaryResponse,
+  RunningSummarySortBy,
+  RunningSummarySortDir,
   RuntimeConfigActivation,
   RuntimeProfile,
   RuntimeProfileVersion,
@@ -242,6 +245,49 @@ export const paperV2Api = {
     });
     const data = await apiFetch<{ summaries: JsonObject[] }>(`/paper-v2/running-summary?${qs.toString()}`);
     return data.summaries || [];
+  },
+  async runningSummaryPage(params: {
+    page?: number;
+    pageSize?: number;
+    snapshotLimit?: number;
+    positionLimit?: number;
+    statuses?: string[];
+    sortBy?: RunningSummarySortBy | string;
+    sortDir?: RunningSummarySortDir | string;
+    search?: string;
+    searchFields?: string[];
+    minInitialCash?: number | null;
+    maxInitialCash?: number | null;
+  } = {}): Promise<RunningSummaryResponse> {
+    const qs = new URLSearchParams({
+      page: String(params.page || 1),
+      page_size: String(params.pageSize || 20),
+      snapshot_limit: String(params.snapshotLimit || 30),
+      position_limit: String(params.positionLimit || 8),
+      sort_by: params.sortBy || "latest_run_time",
+      sort_dir: params.sortDir || "desc",
+    });
+    for (const status of params.statuses || []) {
+      if (status) qs.append("status", status);
+    }
+    for (const field of params.searchFields || []) {
+      if (field) qs.append("search_fields", field);
+    }
+    if (params.search?.trim()) qs.set("search", params.search.trim());
+    if (params.minInitialCash !== undefined && params.minInitialCash !== null) qs.set("min_initial_cash", String(params.minInitialCash));
+    if (params.maxInitialCash !== undefined && params.maxInitialCash !== null) qs.set("max_initial_cash", String(params.maxInitialCash));
+    const data = await apiFetch<{ summaries: JsonObject[]; pagination?: RunningSummaryResponse["pagination"] }>(`/paper-v2/running-summary?${qs.toString()}`);
+    return {
+      summaries: data.summaries || [],
+      pagination: data.pagination || {
+        page: params.page || 1,
+        page_size: params.pageSize || 20,
+        total: data.summaries?.length || 0,
+        total_pages: 1,
+        sort_by: params.sortBy || "latest_run_time",
+        sort_dir: params.sortDir || "desc",
+      },
+    };
   },
   async createPortfolio(payload: { package_id: string; portfolio_name: string; initial_cash: number; start_date: string; data_source: DataSource; fee_policy?: JsonObject; risk_policy?: JsonObject; execution_policy?: JsonObject }): Promise<PaperPortfolio> {
     const data = await apiFetch<{ portfolio: PaperPortfolio }>("/paper-v2/portfolios", body(payload));

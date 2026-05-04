@@ -39,6 +39,32 @@ from .models import (
 
 ConnFactory = Callable[[], Iterator[Any]]
 
+RUNNING_SUMMARY_ACTIVE_STATUSES = (
+    PortfolioStatus.READY.value,
+    PortfolioStatus.RUNNING.value,
+    PortfolioStatus.PAUSED.value,
+)
+RUNNING_SUMMARY_SORT_COLUMNS = {
+    "portfolio_name": "portfolio_name",
+    "status": "status",
+    "initial_cash": "initial_cash",
+    "latest_run_time": "latest_run_time",
+    "created_at": "created_at",
+    "updated_at": "updated_at",
+}
+RUNNING_SUMMARY_SEARCH_COLUMNS = {
+    "portfolio_name": "p.portfolio_name",
+    "portfolio_id": "p.portfolio_id",
+    "package_id": "p.package_id",
+    "manifest_sha256": "p.manifest_sha256",
+    "status": "p.status",
+    "data_source": "p.data_source",
+    "initial_cash": "p.initial_cash",
+    "latest_run_status": "lr.status",
+    "latest_run_trade_date": "lr.trade_date",
+    "latest_run_time": "COALESCE(lr.started_at, lr.completed_at)",
+}
+
 
 class PaperTradingV2Repository:
     def __init__(self, conn_factory: ConnFactory | None = None) -> None:
@@ -117,6 +143,28 @@ class PaperTradingV2Repository:
         snapshot_limit: int = 30,
         position_limit: int = 8,
     ) -> list[dict[str, Any]]:
+        return self.list_running_summaries_page(
+            page=1,
+            page_size=limit,
+            snapshot_limit=snapshot_limit,
+            position_limit=position_limit,
+        )["summaries"]
+
+    def list_running_summaries_page(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        snapshot_limit: int = 30,
+        position_limit: int = 8,
+        statuses: list[str] | None = None,
+        sort_by: str = "latest_run_time",
+        sort_dir: str = "desc",
+        search: str | None = None,
+        search_fields: list[str] | None = None,
+        min_initial_cash: float | None = None,
+        max_initial_cash: float | None = None,
+    ) -> dict[str, Any]:
         """Return a compact running-portfolio dashboard in one backend call.
 
         The UI used to fan out seven requests per active portfolio, which can
@@ -125,41 +173,168 @@ class PaperTradingV2Repository:
         aggregates them server-side without triggering trading side effects.
         """
 
-        if limit <= 0 or snapshot_limit <= 0 or position_limit <= 0:
+        if page <= 0 or page_size <= 0 or snapshot_limit <= 0 or position_limit <= 0:
             raise DataUnavailableError(
                 "paper v2 running summary limits must be positive",
-                context={"limit": limit, "snapshot_limit": snapshot_limit, "position_limit": position_limit},
+                context={
+                    "page": page,
+                    "page_size": page_size,
+                    "snapshot_limit": snapshot_limit,
+                    "position_limit": position_limit,
+                },
             )
-        active_statuses = [PortfolioStatus.READY.value, PortfolioStatus.RUNNING.value, PortfolioStatus.PAUSED.value]
+        if min_initial_cash is not None and max_initial_cash is not None and min_initial_cash > max_initial_cash:
+            raise DataUnavailableError(
+                "paper v2 running summary initial cash filter is invalid",
+                context={"min_initial_cash": min_initial_cash, "max_initial_cash": max_initial_cash},
+            )
+
+        status_values = [str(item).strip().upper() for item in (statuses or list(RUNNING_SUMMARY_ACTIVE_STATUSES)) if str(item).strip()]
+        invalid_statuses = [item for item in status_values if item not in {status.value for status in PortfolioStatus}]
+        if invalid_statuses:
+            raise DataUnavailableError(
+                "paper v2 running summary status filter is invalid",
+                context={"statuses": statuses, "invalid_statuses": invalid_statuses},
+            )
+        if not status_values:
+            raise DataUnavailableError(
+                "paper v2 running summary requires at least one status",
+                context={"statuses": statuses},
+            )
+
+        normalized_sort_by = str(sort_by or "latest_run_time").strip().lower()
+        if normalized_sort_by not in RUNNING_SUMMARY_SORT_COLUMNS:
+            raise DataUnavailableError(
+                "paper v2 running summary sort field is invalid",
+                context={"sort_by": sort_by, "allowed_sort_fields": sorted(RUNNING_SUMMARY_SORT_COLUMNS)},
+            )
+        normalized_sort_dir = str(sort_dir or "desc").strip().lower()
+        if normalized_sort_dir not in {"asc", "desc"}:
+            raise DataUnavailableError(
+                "paper v2 running summary sort direction is invalid",
+                context={"sort_dir": sort_dir, "allowed_sort_dirs": ["asc", "desc"]},
+            )
+
+        requested_search_fields = [str(item).strip().lower() for item in (search_fields or []) if str(item).strip()]
+        if not requested_search_fields or "all" in requested_search_fields:
+            requested_search_fields = list(RUNNING_SUMMARY_SEARCH_COLUMNS)
+        invalid_search_fields = [field for field in requested_search_fields if field not in RUNNING_SUMMARY_SEARCH_COLUMNS]
+        if invalid_search_fields:
+            raise DataUnavailableError(
+                "paper v2 running summary search field is invalid",
+                context={
+                    "search_fields": search_fields,
+                    "invalid_search_fields": invalid_search_fields,
+                    "allowed_search_fields": sorted(RUNNING_SUMMARY_SEARCH_COLUMNS),
+                },
+            )
+
+        where_clauses = ["p.status = ANY(%s)"]
+        params: list[Any] = [status_values]
+        if min_initial_cash is not None:
+            where_clauses.append("p.initial_cash >= %s")
+            params.append(min_initial_cash)
+        if max_initial_cash is not None:
+            where_clauses.append("p.initial_cash <= %s")
+            params.append(max_initial_cash)
+        normalized_search = str(search or "").strip()
+        if normalized_search:
+            search_like = f"%{normalized_search}%"
+            where_clauses.append(
+                "("
+                + " OR ".join(
+                    f"CAST({RUNNING_SUMMARY_SEARCH_COLUMNS[field]} AS TEXT) ILIKE %s"
+                    for field in requested_search_fields
+                )
+                + ")"
+            )
+            params.extend([search_like] * len(requested_search_fields))
+
+        where_sql = " AND ".join(where_clauses)
+        filtered_cte = f"""
+            WITH latest_run AS (
+                SELECT *
+                FROM (
+                    SELECT r.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY r.portfolio_id
+                               ORDER BY r.started_at DESC NULLS LAST, r.completed_at DESC NULLS LAST, r.run_id DESC
+                           ) AS rn
+                    FROM paper_v2.run r
+                ) ranked_run
+                WHERE rn = 1
+            ),
+            filtered AS (
+                SELECT p.*,
+                       lr.run_id AS latest_run_id,
+                       lr.trade_date AS latest_run_trade_date,
+                       lr.status AS latest_run_status,
+                       lr.data_source AS latest_run_data_source,
+                       lr.runtime_config AS latest_run_runtime_config,
+                       lr.started_at AS latest_run_started_at,
+                       lr.completed_at AS latest_run_completed_at,
+                       lr.error_json AS latest_run_error_json,
+                       COALESCE(lr.started_at, lr.completed_at) AS latest_run_time
+                FROM paper_v2.portfolio p
+                LEFT JOIN latest_run lr ON lr.portfolio_id = p.portfolio_id
+                WHERE {where_sql}
+            )
+        """
+        sort_column = RUNNING_SUMMARY_SORT_COLUMNS[normalized_sort_by]
+        offset = (page - 1) * page_size
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
-                    """
+                    f"{filtered_cte} SELECT COUNT(*) AS total FROM filtered",
+                    tuple(params),
+                )
+                total = int((cur.fetchone() or {}).get("total") or 0)
+                cur.execute(
+                    f"""
+                    {filtered_cte}
                     SELECT *
-                    FROM paper_v2.portfolio
-                    WHERE status = ANY(%s)
-                    ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
-                    LIMIT %s
+                    FROM filtered
+                    ORDER BY {sort_column} {normalized_sort_dir.upper()} NULLS LAST,
+                             created_at DESC NULLS LAST,
+                             portfolio_id ASC
+                    LIMIT %s OFFSET %s
                     """,
-                    (active_statuses, limit),
+                    tuple(params + [page_size, offset]),
                 )
                 portfolio_rows = [dict(row) for row in cur.fetchall()]
                 portfolio_ids = [row["portfolio_id"] for row in portfolio_rows]
                 if not portfolio_ids:
-                    return []
+                    return {
+                        "summaries": [],
+                        "pagination": {
+                            "page": page,
+                            "page_size": page_size,
+                            "total": total,
+                            "total_pages": 0,
+                            "sort_by": normalized_sort_by,
+                            "sort_dir": normalized_sort_dir,
+                            "statuses": status_values,
+                            "search": normalized_search or None,
+                            "search_fields": requested_search_fields,
+                            "min_initial_cash": min_initial_cash,
+                            "max_initial_cash": max_initial_cash,
+                        },
+                    }
 
-                cur.execute(
-                    """
-                    SELECT DISTINCT ON (portfolio_id)
-                           run_id, portfolio_id, trade_date, status, data_source,
-                           runtime_config, started_at, completed_at, error_json
-                    FROM paper_v2.run
-                    WHERE portfolio_id = ANY(%s)
-                    ORDER BY portfolio_id, started_at DESC NULLS LAST, run_id DESC
-                    """,
-                    (portfolio_ids,),
-                )
-                latest_runs = {row["portfolio_id"]: dict(row) for row in cur.fetchall()}
+                latest_runs: dict[str, dict[str, Any]] = {}
+                for row in portfolio_rows:
+                    if row.get("latest_run_id"):
+                        latest_runs[row["portfolio_id"]] = {
+                            "run_id": row["latest_run_id"],
+                            "portfolio_id": row["portfolio_id"],
+                            "trade_date": row["latest_run_trade_date"],
+                            "status": row["latest_run_status"],
+                            "data_source": row["latest_run_data_source"],
+                            "runtime_config": row["latest_run_runtime_config"] or {},
+                            "started_at": row["latest_run_started_at"],
+                            "completed_at": row["latest_run_completed_at"],
+                            "error_json": row["latest_run_error_json"],
+                        }
 
                 cur.execute(
                     """
@@ -287,7 +462,22 @@ class PaperTradingV2Repository:
                     },
                 }
             )
-        return summaries
+        return {
+            "summaries": summaries,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": (total + page_size - 1) // page_size,
+                "sort_by": normalized_sort_by,
+                "sort_dir": normalized_sort_dir,
+                "statuses": status_values,
+                "search": normalized_search or None,
+                "search_fields": requested_search_fields,
+                "min_initial_cash": min_initial_cash,
+                "max_initial_cash": max_initial_cash,
+            },
+        }
 
     def update_portfolio_status(self, portfolio_id: str, status: PortfolioStatus) -> PaperPortfolio:
         with self._conn_factory() as conn:
@@ -1871,9 +2061,37 @@ class InMemoryPaperTradingV2Repository:
         snapshot_limit: int = 30,
         position_limit: int = 8,
     ) -> list[dict[str, Any]]:
+        return self.list_running_summaries_page(
+            page=1,
+            page_size=limit,
+            snapshot_limit=snapshot_limit,
+            position_limit=position_limit,
+        )["summaries"]
+
+    def list_running_summaries_page(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        snapshot_limit: int = 30,
+        position_limit: int = 8,
+        statuses: list[str] | None = None,
+        sort_by: str = "latest_run_time",
+        sort_dir: str = "desc",
+        search: str | None = None,
+        search_fields: list[str] | None = None,
+        min_initial_cash: float | None = None,
+        max_initial_cash: float | None = None,
+    ) -> dict[str, Any]:
+        if page <= 0 or page_size <= 0:
+            raise DataUnavailableError(
+                "paper v2 running summary limits must be positive",
+                context={"page": page, "page_size": page_size},
+            )
         rows: list[dict[str, Any]] = []
-        active = {PortfolioStatus.READY, PortfolioStatus.RUNNING, PortfolioStatus.PAUSED}
-        for portfolio in [item for item in self.list_portfolios(limit=10_000) if item.status in active][:limit]:
+        status_values = {str(item).strip().upper() for item in (statuses or list(RUNNING_SUMMARY_ACTIVE_STATUSES)) if str(item).strip()}
+        active = {PortfolioStatus(status) for status in status_values}
+        for portfolio in [item for item in self.list_portfolios(limit=10_000) if item.status in active]:
             runs = self.list_runs(portfolio.portfolio_id, limit=1)
             sessions = self.list_sessions(portfolio.portfolio_id, limit=1)
             snapshots = self.list_daily_snapshots(portfolio.portfolio_id, limit=snapshot_limit)
@@ -1901,7 +2119,75 @@ class InMemoryPaperTradingV2Repository:
                     "latest_trade_date": latest_trade_date,
                 }
             )
-        return rows
+        if min_initial_cash is not None:
+            rows = [row for row in rows if row["portfolio"].initial_cash >= min_initial_cash]
+        if max_initial_cash is not None:
+            rows = [row for row in rows if row["portfolio"].initial_cash <= max_initial_cash]
+        normalized_search = str(search or "").strip().lower()
+        requested_search_fields = [str(item).strip().lower() for item in (search_fields or []) if str(item).strip()]
+        if not requested_search_fields or "all" in requested_search_fields:
+            requested_search_fields = list(RUNNING_SUMMARY_SEARCH_COLUMNS)
+        if normalized_search:
+            def _field_text(row: dict[str, Any], field: str) -> str:
+                portfolio = row["portfolio"]
+                latest_run = row.get("latest_run") or {}
+                values = {
+                    "portfolio_name": portfolio.portfolio_name,
+                    "portfolio_id": portfolio.portfolio_id,
+                    "package_id": portfolio.package_id,
+                    "manifest_sha256": portfolio.manifest_sha256,
+                    "status": portfolio.status.value,
+                    "data_source": portfolio.data_source.value,
+                    "initial_cash": portfolio.initial_cash,
+                    "latest_run_status": latest_run.get("status"),
+                    "latest_run_trade_date": latest_run.get("trade_date"),
+                    "latest_run_time": latest_run.get("started_at") or latest_run.get("completed_at"),
+                }
+                return str(values.get(field) or "").lower()
+
+            rows = [
+                row
+                for row in rows
+                if any(normalized_search in _field_text(row, field) for field in requested_search_fields)
+            ]
+        normalized_sort_by = str(sort_by or "latest_run_time").strip().lower()
+        normalized_sort_dir = str(sort_dir or "desc").strip().lower()
+
+        def _sort_value(row: dict[str, Any]) -> Any:
+            portfolio = row["portfolio"]
+            latest_run = row.get("latest_run") or {}
+            if normalized_sort_by == "status":
+                return portfolio.status.value
+            if normalized_sort_by == "initial_cash":
+                return portfolio.initial_cash
+            if normalized_sort_by == "portfolio_name":
+                return portfolio.portfolio_name
+            if normalized_sort_by == "created_at":
+                return portfolio.created_at
+            if normalized_sort_by == "updated_at":
+                return portfolio.updated_at
+            return latest_run.get("started_at") or latest_run.get("completed_at") or portfolio.updated_at
+
+        rows.sort(key=_sort_value, reverse=normalized_sort_dir != "asc")
+        total = len(rows)
+        offset = (page - 1) * page_size
+        page_rows = rows[offset:offset + page_size]
+        return {
+            "summaries": page_rows,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": (total + page_size - 1) // page_size,
+                "sort_by": normalized_sort_by,
+                "sort_dir": normalized_sort_dir,
+                "statuses": sorted(status_values),
+                "search": normalized_search or None,
+                "search_fields": requested_search_fields,
+                "min_initial_cash": min_initial_cash,
+                "max_initial_cash": max_initial_cash,
+            },
+        }
 
     def update_portfolio_status(self, portfolio_id: str, status: PortfolioStatus) -> PaperPortfolio:
         portfolio = self.get_portfolio(portfolio_id)

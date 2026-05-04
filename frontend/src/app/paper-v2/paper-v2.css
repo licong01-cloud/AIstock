@@ -106,6 +106,7 @@
 .pv2-field { display: flex; flex-direction: column; gap: 6px; }
 .pv2-field label, .pv2-label { color: var(--pv2-muted); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; }
 .pv2-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.pv2-filter-card { margin-top: 0; padding: 14px; background: rgba(248, 243, 233, 0.78); }
 
 .pv2-table-wrap { overflow: auto; border: 1px solid var(--pv2-line); border-radius: 16px; background: #fffdf8; }
 .pv2-table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 13px; }
@@ -170,6 +171,7 @@
 .pv2-muted { color: var(--pv2-muted); }
 .pv2-mono { font-family: "Cascadia Mono", "Consolas", monospace; font-size: 12px; }
 .pv2-confirm-box { display: grid; gap: 8px; padding: 12px; border: 1px dashed var(--pv2-red); border-radius: 14px; background: #fff1f2; }
+.pv2-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 
 .pv2-sparkline { height: 150px; display: flex; align-items: flex-end; gap: 4px; padding: 12px; border-radius: 16px; background: linear-gradient(180deg, #fffaf1, #ede5d8); overflow-x: auto; }
 .pv2-spark-bar { flex: 0 0 10px; min-height: 8px; border-radius: 999px 999px 0 0; background: linear-gradient(180deg, #0f766e, #99f6e4); box-shadow: 0 4px 12px rgba(15,118,110,0.18); }

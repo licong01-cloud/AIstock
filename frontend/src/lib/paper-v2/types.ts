@@ -197,6 +197,28 @@ export type PaperRun = {
   error?: JsonObject | null;
 };
 
+export type RunningSummarySortBy = "portfolio_name" | "status" | "initial_cash" | "latest_run_time" | "created_at" | "updated_at";
+export type RunningSummarySortDir = "asc" | "desc";
+
+export type RunningSummaryPagination = {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+  sort_by: RunningSummarySortBy | string;
+  sort_dir: RunningSummarySortDir | string;
+  statuses?: string[];
+  search?: string | null;
+  search_fields?: string[];
+  min_initial_cash?: number | null;
+  max_initial_cash?: number | null;
+};
+
+export type RunningSummaryResponse = {
+  summaries: JsonObject[];
+  pagination: RunningSummaryPagination;
+};
+
 export type ReadinessCheck = {
   check_name: string;
   status: string;
