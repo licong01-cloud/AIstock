@@ -1,0 +1,312 @@
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import hashlib
+import json
+import subprocess
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+import yaml
+
+
+DEFAULT_CATALOG = Path("tests/aistock_validation/catalog/development_guardrails.yaml")
+SEVERITY_RANK = {"P3": 1, "P2": 2, "P1": 3, "P0": 4, "NONE": 99}
+
+
+@dataclass(frozen=True)
+class CompiledRule:
+    rule_id: str
+    title: str
+    severity: str
+    category: str
+    patterns: tuple[Any, ...]
+    include_globs: tuple[str, ...]
+    exclude_globs: tuple[str, ...]
+    remediation: str
+    baseline_policy: str
+
+
+@dataclass(frozen=True)
+class Finding:
+    rule_id: str
+    title: str
+    severity: str
+    category: str
+    file: str
+    line: int
+    message: str
+    remediation: str
+    baseline_policy: str
+    fingerprint: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "rule_id": self.rule_id,
+            "title": self.title,
+            "severity": self.severity,
+            "category": self.category,
+            "file": self.file,
+            "line": self.line,
+            "message": self.message,
+            "remediation": self.remediation,
+            "baseline_policy": self.baseline_policy,
+            "fingerprint": self.fingerprint,
+        }
+
+
+def load_catalog(path: Path) -> dict[str, Any]:
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Guardrail catalog must be a mapping: {path}")
+    if data.get("schema_version") != "aistock_development_guardrails_v1":
+        raise ValueError(f"Unsupported guardrail catalog schema: {data.get('schema_version')}")
+    return data
+
+
+def _as_tuple(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    return tuple(str(item) for item in value)
+
+
+def compile_rules(catalog: dict[str, Any]) -> list[CompiledRule]:
+    import re
+
+    compiled: list[CompiledRule] = []
+    for raw_rule in catalog.get("rules", []):
+        if not raw_rule.get("enabled", True):
+            continue
+        checker = raw_rule.get("checker") or {}
+        if checker.get("type") != "regex":
+            continue
+        applies_to = raw_rule.get("applies_to") or {}
+        compiled.append(
+            CompiledRule(
+                rule_id=str(raw_rule["rule_id"]),
+                title=str(raw_rule.get("title") or raw_rule["rule_id"]),
+                severity=str(raw_rule.get("severity") or "P3"),
+                category=str(raw_rule.get("category") or "general"),
+                patterns=tuple(re.compile(pattern, re.MULTILINE) for pattern in _as_tuple(checker.get("patterns"))),
+                include_globs=_as_tuple(applies_to.get("include_globs") or ["**/*"]),
+                exclude_globs=_as_tuple(applies_to.get("exclude_globs")),
+                remediation=str(raw_rule.get("remediation") or "Review and fix according to AIstock development standards."),
+                baseline_policy=str(raw_rule.get("baseline_policy") or "block_new_only"),
+            )
+        )
+    return compiled
+
+
+def _path_key(path: Path, root: Path) -> str:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _matches(path_key: str, patterns: Iterable[str]) -> bool:
+    return any(fnmatch.fnmatchcase(path_key, pattern) for pattern in patterns)
+
+
+def _is_text_file(path: Path, suffixes: set[str]) -> bool:
+    return path.is_file() and path.suffix.lower() in suffixes
+
+
+def _skip_path(path: Path, skip_parts: set[str]) -> bool:
+    normalized = path.as_posix()
+    parts = set(path.parts)
+    return any(part in parts or part in normalized for part in skip_parts)
+
+
+def git_tracked_files(root: Path, roots: Iterable[str]) -> list[Path]:
+    output = subprocess.check_output(["git", "ls-files", *roots], cwd=root, text=True, stderr=subprocess.DEVNULL)
+    return [root / line.strip() for line in output.splitlines() if line.strip()]
+
+
+def git_changed_files(root: Path) -> list[Path]:
+    changed = subprocess.check_output(["git", "diff", "--name-only", "HEAD"], cwd=root, text=True, stderr=subprocess.DEVNULL)
+    untracked = subprocess.check_output(
+        ["git", "ls-files", "--others", "--exclude-standard"], cwd=root, text=True, stderr=subprocess.DEVNULL
+    )
+    names = [line.strip() for line in (changed + "\n" + untracked).splitlines() if line.strip()]
+    return [root / name for name in dict.fromkeys(names)]
+
+
+def iter_files(paths: Iterable[Path], root: Path, suffixes: set[str], skip_parts: set[str]) -> list[Path]:
+    files: list[Path] = []
+    for path in paths:
+        if not path.exists() or _skip_path(path, skip_parts):
+            continue
+        if _is_text_file(path, suffixes):
+            files.append(path)
+            continue
+        if path.is_dir():
+            for child in path.rglob("*"):
+                if not _skip_path(child, skip_parts) and _is_text_file(child, suffixes):
+                    files.append(child)
+    return sorted(set(files), key=lambda item: _path_key(item, root))
+
+
+def scan_files(files: Iterable[Path], rules: Iterable[CompiledRule], root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    for file_path in files:
+        path_key = _path_key(file_path, root)
+        text = file_path.read_text(encoding="utf-8", errors="ignore")
+        for rule in rules:
+            if not _matches(path_key, rule.include_globs) or _matches(path_key, rule.exclude_globs):
+                continue
+            for pattern in rule.patterns:
+                for match in pattern.finditer(text):
+                    line = text.count("\n", 0, match.start()) + 1
+                    fingerprint = hashlib.sha256(f"{rule.rule_id}:{path_key}:{line}".encode("utf-8")).hexdigest()[:16]
+                    findings.append(
+                        Finding(
+                            rule_id=rule.rule_id,
+                            title=rule.title,
+                            severity=rule.severity,
+                            category=rule.category,
+                            file=path_key,
+                            line=line,
+                            message=rule.title,
+                            remediation=rule.remediation,
+                            baseline_policy=rule.baseline_policy,
+                            fingerprint=fingerprint,
+                        )
+                    )
+    return findings
+
+
+def summarize(findings: list[Finding]) -> dict[str, Any]:
+    by_severity: dict[str, int] = {}
+    by_rule: dict[str, int] = {}
+    by_category: dict[str, int] = {}
+    for finding in findings:
+        by_severity[finding.severity] = by_severity.get(finding.severity, 0) + 1
+        by_rule[finding.rule_id] = by_rule.get(finding.rule_id, 0) + 1
+        by_category[finding.category] = by_category.get(finding.category, 0) + 1
+    return {
+        "total_findings": len(findings),
+        "by_severity": dict(sorted(by_severity.items(), key=lambda item: item[0])),
+        "by_rule": dict(sorted(by_rule.items())),
+        "by_category": dict(sorted(by_category.items())),
+    }
+
+
+def write_json(path: Path, findings: list[Finding], files_scanned: int, mode: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": "aistock_guardrail_scan_result_v1",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "mode": mode,
+        "files_scanned": files_scanned,
+        "summary": summarize(findings),
+        "findings": [finding.to_dict() for finding in findings],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def write_summary_md(path: Path, findings: list[Finding], files_scanned: int, mode: str, max_findings: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    summary = summarize(findings)
+    lines = [
+        "# AIstock Guardrail Baseline Scan",
+        "",
+        f"- Generated at: {datetime.now(timezone.utc).isoformat()}",
+        f"- Mode: `{mode}`",
+        f"- Files scanned: {files_scanned}",
+        f"- Total findings: {summary['total_findings']}",
+        "",
+        "## Summary By Severity",
+        "",
+        "| Severity | Count |",
+        "|---|---:|",
+    ]
+    for severity in ("P0", "P1", "P2", "P3"):
+        lines.append(f"| {severity} | {summary['by_severity'].get(severity, 0)} |")
+    lines.extend(["", "## Summary By Rule", "", "| Rule | Count |", "|---|---:|"])
+    for rule_id, count in summary["by_rule"].items():
+        lines.append(f"| `{rule_id}` | {count} |")
+    lines.extend(
+        [
+            "",
+            "## Interpretation",
+            "",
+            "This is a read-only baseline report. It does not mean all historical findings must be fixed immediately.",
+            "New or changed P0/P1 findings should be blocked after the changed-files gate is enabled.",
+            "Historical findings should be triaged by module and burned down with regression tests.",
+            "",
+            f"## First {min(max_findings, len(findings))} Findings",
+            "",
+            "| Severity | Rule | File | Line | Remediation |",
+            "|---|---|---|---:|---|",
+        ]
+    )
+    for finding in findings[:max_findings]:
+        remediation = finding.remediation.replace("|", "/")
+        lines.append(
+            f"| {finding.severity} | `{finding.rule_id}` | `{finding.file}` | {finding.line} | {remediation} |"
+        )
+    if len(findings) > max_findings:
+        lines.append("")
+        lines.append(f"Report truncated to {max_findings} findings. See JSON output for full machine-readable details.")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Scan AIstock development guardrails.")
+    parser.add_argument("paths", nargs="*", help="Files or directories to scan. Defaults to catalog roots.")
+    parser.add_argument("--catalog", default=str(DEFAULT_CATALOG), help="Path to development_guardrails.yaml.")
+    parser.add_argument("--baseline", action="store_true", help="Scan tracked files under catalog roots.")
+    parser.add_argument("--changed-only", action="store_true", help="Scan changed and untracked files only.")
+    parser.add_argument("--output-json", help="Write machine-readable result JSON.")
+    parser.add_argument("--summary-md", help="Write human-readable summary Markdown.")
+    parser.add_argument("--max-findings-md", type=int, default=200, help="Maximum findings to include in Markdown.")
+    parser.add_argument("--fail-on-severity", choices=["P0", "P1", "P2", "P3", "NONE"], default="P0")
+    args = parser.parse_args()
+
+    root = Path.cwd()
+    catalog = load_catalog(root / args.catalog)
+    rules = compile_rules(catalog)
+    scan_config = catalog.get("scan") or {}
+    suffixes = set(str(item).lower() for item in scan_config.get("text_suffixes", []))
+    skip_parts = set(str(item) for item in scan_config.get("skip_parts", []))
+    roots = [str(item) for item in scan_config.get("default_roots", [])]
+
+    if args.changed_only:
+        mode = "changed_only"
+        candidate_paths = git_changed_files(root)
+    elif args.baseline:
+        mode = "baseline_tracked"
+        candidate_paths = git_tracked_files(root, roots)
+    elif args.paths:
+        mode = "paths"
+        candidate_paths = [root / item for item in args.paths]
+    else:
+        mode = "default_roots"
+        candidate_paths = [root / item for item in roots]
+
+    files = iter_files(candidate_paths, root=root, suffixes=suffixes, skip_parts=skip_parts)
+    findings = scan_files(files, rules=rules, root=root)
+
+    for finding in findings:
+        print(f"{finding.severity} {finding.rule_id} {finding.file}:{finding.line} - {finding.title}")
+    print(f"Guardrail scan completed: mode={mode}, files={len(files)}, findings={len(findings)}")
+
+    if args.output_json:
+        write_json(root / args.output_json, findings=findings, files_scanned=len(files), mode=mode)
+    if args.summary_md:
+        write_summary_md(root / args.summary_md, findings=findings, files_scanned=len(files), mode=mode, max_findings=args.max_findings_md)
+
+    fail_rank = SEVERITY_RANK[args.fail_on_severity]
+    if args.fail_on_severity != "NONE" and any(SEVERITY_RANK.get(finding.severity, 0) >= fail_rank for finding in findings):
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

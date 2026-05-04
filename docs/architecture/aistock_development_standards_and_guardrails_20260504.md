@@ -3,7 +3,7 @@
 > 日期：2026-05-04
 > 状态：规范框架设计 v1.1，作为自动化测试流水线、agent 修复、全仓基线治理和后续代码治理的规则源
 > 文档位置：`docs/architecture/aistock_development_standards_and_guardrails_20260504.md`
-> 关联文档：`docs/architecture/aistock_internal_validation_center_implementation_plan_20260504.md`、`docs/architecture/aistock_automated_testing_coverage_observability_design_20260504.md`
+> 关联文档：`docs/architecture/aistock_python_development_standard_20260504.md`、`docs/architecture/aistock_quant_trading_engineering_standard_20260504.md`、`docs/architecture/aistock_internal_validation_center_implementation_plan_20260504.md`、`docs/architecture/aistock_automated_testing_coverage_observability_design_20260504.md`
 > 适用范围：AIstock 全仓库，包括 FastAPI、Next.js、QE/RD-Agent、Paper Trading v2、Qlib 数据链路、HMM、数仓/归档、测试流水线、agent 工具链。
 
 ## 1. 结论
@@ -566,6 +566,15 @@ development standards
 3. 执行一次全仓只读 baseline scan，生成 `docs/analysis/aistock_guardrail_baseline_YYYYMMDD.md`。
 4. `nox -s l0` 开始阻断 changed-files 中的 P0/P1 新违规。
 5. 再进入 coverage gate 和 Validation Center API/UI。
+
+当前第一批已落地内容：
+
+- Python 开发规范 v0：`docs/architecture/aistock_python_development_standard_20260504.md`。
+- 量化与交易系统工程规范 v0：`docs/architecture/aistock_quant_trading_engineering_standard_20260504.md`。
+- 机器可读规则目录：`tests/aistock_validation/catalog/development_guardrails.yaml`。
+- 只读扫描器：`scripts/aistock_guardrail_scan.py`。
+- 扫描器单元测试：`backend/tests/test_aistock_guardrail_scan.py`。
+- 首次全仓 tracked-files baseline：`docs/analysis/aistock_guardrail_baseline_20260504.md`，完整机器 JSON 位于本地 `tmp/validation/guardrails/baseline_20260504.json`，不提交 Git。
 
 ## 13. 与现有流水线的集成顺序
 

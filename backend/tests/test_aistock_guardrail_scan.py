@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_PATH = ROOT / "scripts" / "aistock_guardrail_scan.py"
+CATALOG_PATH = ROOT / "tests" / "aistock_validation" / "catalog" / "development_guardrails.yaml"
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location("aistock_guardrail_scan", SCRIPT_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_catalog_loads_and_compiles_regex_rules() -> None:
+    scanner = _load_module()
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    rules = scanner.compile_rules(catalog)
+
+    rule_ids = {rule.rule_id for rule in rules}
+    assert "ARCH-WSL-001" in rule_ids
+    assert "ERR-FALLBACK-001" in rule_ids
+    assert "DB-COMMENT-001" not in rule_ids  # external checker, not regex scanner scope
+
+
+def test_scanner_detects_silent_fallback_in_runtime_code(tmp_path: Path) -> None:
+    scanner = _load_module()
+    runtime_file = tmp_path / "backend" / "services" / "example.py"
+    runtime_file.parent.mkdir(parents=True)
+    runtime_file.write_text(
+        "def run():\n"
+        "    try:\n"
+        "        do_work()\n"
+        "    except Exception:\n"
+        "        return []\n",
+        encoding="utf-8",
+    )
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    rules = scanner.compile_rules(catalog)
+    findings = scanner.scan_files([runtime_file], rules=rules, root=tmp_path)
+
+    assert any(finding.rule_id == "ERR-FALLBACK-001" for finding in findings)
+
+
+def test_scanner_respects_rule_exclude_globs_for_tests(tmp_path: Path) -> None:
+    scanner = _load_module()
+    test_file = tmp_path / "backend" / "tests" / "test_example.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        "def test_fixture():\n"
+        "    try:\n"
+        "        raise RuntimeError()\n"
+        "    except Exception:\n"
+        "        return []\n",
+        encoding="utf-8",
+    )
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    rules = scanner.compile_rules(catalog)
+    findings = scanner.scan_files([test_file], rules=rules, root=tmp_path)
+
+    assert not any(finding.rule_id == "ERR-FALLBACK-001" for finding in findings)
+
+
+def test_scanner_writes_json_and_markdown_summary(tmp_path: Path) -> None:
+    scanner = _load_module()
+    runtime_file = tmp_path / "backend" / "services" / "example.py"
+    runtime_file.parent.mkdir(parents=True)
+    runtime_file.write_text(
+        "def run():\n"
+        "    try:\n"
+        "        do_work()\n"
+        "    except Exception:\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+    json_path = tmp_path / "result.json"
+    md_path = tmp_path / "summary.md"
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    rules = scanner.compile_rules(catalog)
+    findings = scanner.scan_files([runtime_file], rules=rules, root=tmp_path)
+    scanner.write_json(json_path, findings=findings, files_scanned=1, mode="unit_test")
+    scanner.write_summary_md(md_path, findings=findings, files_scanned=1, mode="unit_test", max_findings=10)
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    summary = md_path.read_text(encoding="utf-8")
+    assert payload["schema_version"] == "aistock_guardrail_scan_result_v1"
+    assert payload["summary"]["total_findings"] >= 1
+    assert "AIstock Guardrail Baseline Scan" in summary
+    assert "ERR-FALLBACK-001" in summary
