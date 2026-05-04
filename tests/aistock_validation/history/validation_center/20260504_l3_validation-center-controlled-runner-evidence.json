@@ -1,0 +1,134 @@
+{
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "run_metadata",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-controlled-runner-validation.json",
+      "sha256": "526af0d68757ebd5a110ebf031031ad161532524330033db17f7927878dc443d",
+      "size_bytes": 3669
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "run_record",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-controlled-runner-validation.md",
+      "sha256": "0bc571ce2381cdd2ee5ad058a48642faf8e865eee3c7287d3050ad8f79ffcd3f",
+      "size_bytes": 8561
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "l0_guardrail_json",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-controlled-runner-l0-guardrail.json",
+      "sha256": "f1602c031291296c90464ead11d8228a87de36cec5e38bce752c0d622d101862",
+      "size_bytes": 3143
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "l0_guardrail_md",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-controlled-runner-l0-guardrail.md",
+      "sha256": "bb455743cd60f0bc4846769133ce9908bffcd827179d6f1c063a8c75aa75f0bc",
+      "size_bytes": 1640
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "runner_service",
+      "path": "backend/services/validation/execution_runner.py",
+      "sha256": "0d7faa4fca2b71cafdba73dfa4dc76f7f7332ec600a1b28ffc3951ecc68b0ec0",
+      "size_bytes": 14557
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "backend_api",
+      "path": "backend/routers/validation.py",
+      "sha256": "61cffa3e538c9d5197c2eb48b5e80cb4966830c5325ab95ab2ca36c25302f339",
+      "size_bytes": 12372
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "backend_tests",
+      "path": "backend/tests/test_validation_execution_runner.py",
+      "sha256": "b148bdecd82d0e50f2bf21978d41037c6e3641c1d553f722573c356a4882adb9",
+      "size_bytes": 7429
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "smoke_script",
+      "path": "scripts/validation_center_readonly_smoke.py",
+      "sha256": "a65b2127314db5b1b5749589b590525e9335425593736c7b3dc407f93ced82c4",
+      "size_bytes": 16732
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "ui_test",
+      "path": "frontend/tests/validation-center/validation-center.spec.ts",
+      "sha256": "05c6f4e0c6c3c6ff1fc02f6afa227a95a8e518cc4c65ebc7060cbb0c70e342b5",
+      "size_bytes": 21586
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "module_contract",
+      "path": "tests/aistock_validation/modules/validation_center.md",
+      "sha256": "695a73268669fc9c602db7aa85fffc0c10d94cff9b63f6a9797b4634ffe323d1",
+      "size_bytes": 12222
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "coverage",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-controlled-runner-snapshot.json",
+      "sha256": "e0a86da030b46469aad83d91405666dd18157d7f4a03501db3dc7ba5ae093ae0",
+      "size_bytes": 35624
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "smoke_json",
+      "path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-controlled-runner-live-smoke.json",
+      "sha256": "4a11d0fe482d2b1082c41bb94acee31de84dcc08504fddf5c72cdb2aa6d2a9a1",
+      "size_bytes": 7173
+    }
+  ],
+  "generated_at": "2026-05-04T19:34:47",
+  "git_commit": "a772c8b",
+  "level": "L3",
+  "missing": [],
+  "missing_count": 0,
+  "module": "validation_center",
+  "operator": "lc999",
+  "run_id": "controlled-runner-20260504",
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "Validation Center controlled runner"
+}

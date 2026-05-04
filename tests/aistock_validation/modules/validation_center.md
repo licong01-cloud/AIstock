@@ -39,6 +39,21 @@ python -m nox -s qe_data_contract_backend
 python -m nox -s l0 -- scripts/aistock_validate.py backend/tests/test_aistock_validate_metadata.py backend/tests/test_aistock_validate_coverage.py noxfile.py tests/aistock_validation/modules/validation_center.md
 ```
 
+## L3 Controlled Runner Contract
+
+The controlled runner is the first execution-capable Validation Center loop. It may start only allowlisted nox sessions and must not become an arbitrary shell.
+
+- Only plans in `tests/aistock_validation/catalog/test_plans.yaml` with `runner_enabled=true` can be started.
+- The backend command shape is fixed to `[sys.executable, "-m", "nox", "-s", plan.nox_session]` with `shell=False`.
+- The runner rejects unknown plans, disabled plans, non-runner plans, plans that write business state, unexpected ports, and backend port `8001`.
+- Plans that require a backend or frontend can use only catalog allowlist ports: backend `8011/8012`, frontend `3011/3012`.
+- Job records use schema `aistock_validation_execution_job_v1` and are stored under `tmp/validation/runner/jobs`.
+- Runner evidence uses schema `aistock_validation_runner_evidence_v1` and links the job record plus execution log.
+- `GET /api/v1/validation/executions` supports pagination; `POST /executions` starts a job; `GET /executions/{job_id}` returns one job or 404.
+- `/health` and `/summary` expose runner mode, execution root, job counts, no arbitrary shell, and `production_8001_touched=false`.
+- The UI shows runner-ready plans, a guarded execute button, submitted job status, logs/evidence paths, and a refreshable execution queue.
+- Tests must cover allowlisted success, rejected unsafe plans, production-port refusal, API list/detail/start, UI POST start, TypeScript, Playwright, coverage, and L0 guardrails.
+
 ## Evidence
 
 Every implementation run should create a record under `tests/aistock_validation/history/validation_center/` with:
@@ -53,7 +68,7 @@ Every implementation run should create a record under `tests/aistock_validation/
 
 ## Future Gap Requirements From Paper v2 Incidents
 
-`docs/architecture/aistock_automation_test_coverage_gap_requirements_20260504.md` is a future-stage requirement input, not extra implementation scope for the current read-only API step. Validation Center contracts must still reserve these semantics now:
+`docs/architecture/aistock_automation_test_coverage_gap_requirements_20260504.md` is a future-stage requirement input, not extra implementation scope for the current Validation Center infrastructure step. Validation Center contracts must still reserve these semantics now:
 
 - `pass_scope` distinguishes L0/L1/L2/mock/fail-fast/current-commit/real-business proof.
 - `business_assertion` records whether a user can complete a named operation and which UI/API/DB/log evidence proves it.
@@ -75,18 +90,20 @@ The first read-only API loop must expose validation history without executing co
 - `GET /api/v1/validation/summary` provides a lightweight module/status/coverage summary.
 - Missing metadata, missing coverage, missing evidence, and malformed JSON must be explicit fields; the API must not fake success.
 
-## L3 Read-only UI Contract
+## L3 Validation Center UI Contract
 
-The first read-only UI loop displays validation history without executing tests or writing business state:
+The Validation Center UI displays validation history and can submit controlled runner jobs without writing business state:
 
 - `/validation-center` loads health, summary, plan catalog, run list, coverage list, and evidence list from `/api/v1/validation/*`.
-- The UI must show that controlled execution is disabled; no POST/PUT/PATCH/DELETE request is allowed in this stage.
+- The UI may send only `POST /api/v1/validation/executions` as a controlled-runner start request; no PUT/PATCH/DELETE request is allowed.
+- The UI must show that execution is `allowlist only`, not arbitrary shell.
 - Run history must support module, level, status, search, include-markdown-only, page, and page-size controls.
 - Run detail must display metadata path, coverage/evidence links, quality gates, `pass_scope`, and `business_assertion`.
 - Missing `metadata`, parse errors, missing coverage, missing evidence, and absent success-scope records must be visible warnings.
 - Mock UI evidence must not be presented as real business success; absent `pass_scope` must read as `未记录/未证明`.
 - Coverage and evidence detail panes must be readable business tables, not raw JSON as the primary operator view.
 - UI validation uses Playwright mocked APIs on frontend dev port `3011`/`3012`; it must not restart production backend `8001`.
+- Runner UI validation must prove the execute button calls the POST endpoint, displays submitted job status, and keeps production `8001` marked untouched.
 
 ## L2 Quality Finding / Bug Registry Contract
 
@@ -111,8 +128,8 @@ The first quality-registry UI loop displays quality findings and bugs as operato
 - Findings table shows source type, severity, status, module, title, file/evidence path, allowed write scope, and required verification count.
 - Bug table shows title, module, severity, status, reproduce command, evidence, GitHub issue link if available, fix commit, and verification run.
 - Detail panels show finding/Bug fields and `agent_context` in labeled rows, not as raw JSON primary output.
-- The UI must not send POST/PUT/PATCH/DELETE requests in this phase and must keep the controlled execution button disabled.
-- Playwright validation must mock the read-only endpoints, fail on console/page/request/API errors, and verify that agent-context content is visible.
+- The UI must not send PUT/PATCH/DELETE requests in this phase; the only allowed write method is controlled-runner `POST /api/v1/validation/executions`.
+- Playwright validation must mock the validation endpoints plus the controlled-runner POST, fail on console/page/request/API errors, and verify that agent-context content is visible.
 
 ## L3 Live Read-only API Smoke Contract
 
@@ -122,7 +139,8 @@ The live read-only smoke validates that the UI/API contracts work against a runn
 - The smoke refuses to probe port `8001` unless explicitly overridden by `--allow-production-8001`, which must not be used for normal development validation.
 - The smoke refuses non-localhost API bases unless explicitly overridden by `--allow-non-localhost`, which must not be used for normal development validation.
 - `scripts/validation_center_readonly_smoke.py` sends only `GET` requests and records `write_methods_sent=[]`.
-- Required endpoints: health, summary, plans, runs, run detail when present, coverage list/detail when present, evidence list/detail when present, findings summary/list/detail when present, bugs summary/list/detail/agent-context when present.
+- Required endpoints: health, summary, plans, runs, run detail when present, coverage list/detail when present, evidence list/detail when present, executions list/detail when present, findings summary/list/detail when present, bugs summary/list/detail/agent-context when present.
+- Health and summary must include runner status objects even though this smoke sends no POST requests.
 - The JSON smoke output uses schema `aistock_validation_center_readonly_smoke_v1`, records endpoint status, counts, failures, read-only state, and `production_8001_touched=false` for normal dev runs.
 - Empty run/coverage/evidence/finding/Bug lists are allowed, but endpoint shape and summary counts must remain explicit.
 - This live smoke is an additional L3 proof; mocked UI E2E remains required for deterministic UI regression.

@@ -6,6 +6,7 @@ const coverageId = "validation_center_coverage_demo__cov123";
 const evidenceId = "validation_center_evidence_demo__evd123";
 const findingId = "guardrail_guardrail_fp_001";
 const bugId = "bug_demo_001";
+const executionJobId = "valjob_20260504_210000_mocked";
 
 const runItems = [
   {
@@ -189,7 +190,36 @@ const bugAgentContext = {
   verification_run_id: null,
 };
 
-test("Validation Center read-only UI uses mocked validation APIs", async ({ page }) => {
+const executionJob = {
+  schema_version: "aistock_validation_execution_job_v1",
+  job_id: executionJobId,
+  status: "passed",
+  plan_key: "validation_center_backend",
+  title: "Validation Center backend contract",
+  module: "validation_center",
+  level: "L2",
+  command_key: "nox_validation_center_backend",
+  nox_session: "validation_center_backend",
+  command: ["python", "-m", "nox", "-s", "validation_center_backend"],
+  requested_by: "ui",
+  requested_at: "2026-05-04T21:00:00+08:00",
+  started_at: "2026-05-04T21:00:01+08:00",
+  finished_at: "2026-05-04T21:00:08+08:00",
+  timeout_seconds: 300,
+  return_code: 0,
+  backend_port: null,
+  frontend_port: null,
+  writes_database: false,
+  writes_artifacts: true,
+  writes_business_state: false,
+  production_8001_touched: false,
+  arbitrary_shell_allowed: false,
+  log_path: "tmp/validation/runner/jobs/valjob_20260504_210000_mocked.log",
+  evidence_path: "tmp/validation/runner/jobs/valjob_20260504_210000_mocked_evidence.json",
+  error: null,
+};
+
+test("Validation Center UI uses mocked APIs and controlled runner POST", async ({ page }) => {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   const requestFailures: string[] = [];
@@ -218,7 +248,8 @@ test("Validation Center read-only UI uses mocked validation APIs", async ({ page
       body: JSON.stringify(data),
     });
 
-    if (method !== "GET") {
+    const isExecutionStart = path.endsWith("/api/v1/validation/executions") && method === "POST";
+    if (method !== "GET" && !isExecutionStart) {
       writeMethods.push(`${method} ${path}`);
       return respond({ detail: "Validation Center UI is read-only" }, 405);
     }
@@ -239,6 +270,16 @@ test("Validation Center read-only UI uses mocked validation APIs", async ({ page
           },
           plan_catalog: { catalog_path: "tests/aistock_validation/catalog/test_plans.yaml", missing: false, plan_count: 2 },
           quality: { mode: "read_only", finding_count: 1, bug_count: 1, parse_errors: [] },
+          runner: {
+            mode: "controlled_execution",
+            execution_root: "tmp/validation/runner/jobs",
+            exists: true,
+            job_count: 1,
+            jobs_by_status: { passed: 1 },
+            allowed_command_type: "nox_session_allowlist_only",
+            arbitrary_shell_allowed: false,
+            production_8001_touched: false,
+          },
           production_8001_touched: false,
         },
       });
@@ -254,6 +295,15 @@ test("Validation Center read-only UI uses mocked validation APIs", async ({ page
           evidence_manifest_count: 1,
           plan_count: 2,
           quality: { finding_count: 1, bug_count: 1 },
+          runner: {
+            mode: "controlled_execution",
+            execution_root: "tmp/validation/runner/jobs",
+            exists: true,
+            job_count: 1,
+            jobs_by_status: { passed: 1 },
+            arbitrary_shell_allowed: false,
+            production_8001_touched: false,
+          },
           runs_by_status: { passed: 1, unknown: 1 },
           modules: [{ module: "validation_center", run_count: 2, latest_run: runItems[0] }],
           latest_runs: runItems,
@@ -284,6 +334,7 @@ test("Validation Center read-only UI uses mocked validation APIs", async ({ page
               writes_database: false,
               writes_artifacts: true,
               writes_business_state: false,
+              runner_enabled: true,
             },
             {
               plan_key: "validation_center_ui",
@@ -300,10 +351,23 @@ test("Validation Center read-only UI uses mocked validation APIs", async ({ page
               writes_database: false,
               writes_artifacts: true,
               writes_business_state: false,
+              runner_enabled: false,
             },
           ],
         },
       });
+    }
+
+    if (path.endsWith("/api/v1/validation/executions") && method === "GET") {
+      return respond({ status: "success", data: { items: [executionJob], total: 1, page: 1, page_size: 10, has_more: false } });
+    }
+
+    if (path.endsWith("/api/v1/validation/executions") && method === "POST") {
+      writeMethods.push(`${method} ${path}`);
+      const payload = JSON.parse(request.postData() || "{}") as { plan_key?: string; backend_port?: number };
+      expect(payload.plan_key).toBe("validation_center_backend");
+      expect(payload.backend_port).toBeUndefined();
+      return respond({ status: "success", data: executionJob });
     }
 
     if (path.endsWith("/api/v1/validation/runs")) {
@@ -403,8 +467,13 @@ test("Validation Center read-only UI uses mocked validation APIs", async ({ page
   await page.goto("/validation-center");
   await expect(page.getByRole("heading", { name: "自动化测试流水线中心" })).toBeVisible();
   await expect(page.getByText("只读 API")).toBeVisible();
-  await expect(page.getByRole("button", { name: "controlled execution disabled" })).toBeDisabled();
+  await expect(page.getByText("受控 Runner：allowlist only")).toBeVisible();
   await expect(page.getByText("Validation Center backend contract")).toBeVisible();
+  await expect(page.getByText("Runner 执行队列")).toBeVisible();
+  await expect(page.getByText("tmp/validation/runner/jobs/valjob_20260504_210000_mocked.log")).toBeVisible();
+  await page.getByRole("button", { name: "run validation plan validation_center_backend" }).click();
+  await expect(page.getByText("Runner 已提交")).toBeVisible();
+  await expect(page.getByText("状态=passed")).toBeVisible();
   await expect(page.getByText("Validation API Run")).toBeVisible();
   await expect(page.getByText("质量发现与 Bug Registry")).toBeVisible();
   await expect(page.getByText("No silent fallback")).toBeVisible();
@@ -443,7 +512,7 @@ test("Validation Center read-only UI uses mocked validation APIs", async ({ page
   await expect(page.getByText("coverage_missing：未发现覆盖率快照").first()).toBeVisible();
 
   await expect(page.getByText("aistock_validation_run_v1")).toHaveCount(0);
-  expect(writeMethods).toEqual([]);
+  expect(writeMethods).toEqual(["POST /api/v1/validation/executions"]);
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);
   expect(requestFailures).toEqual([]);

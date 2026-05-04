@@ -1,0 +1,92 @@
+{
+  "schema_version": "aistock_validation_run_v1",
+  "module": "validation_center",
+  "module_slug": "validation_center",
+  "level": "L3",
+  "title": "Validation Center Controlled Runner First-stage Complete Loop",
+  "status": "passed",
+  "git_commit": "a772c8b",
+  "operator": "Codex",
+  "started_at": "2026-05-04T19:00:00+08:00",
+  "finished_at": "2026-05-04T19:26:00+08:00",
+  "coverage": {
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "status": "passed",
+    "snapshot_path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-controlled-runner-snapshot.json",
+    "line_percent": 81.4,
+    "branch_percent": 65.05
+  },
+  "quality_gates": [
+    {
+      "metric": "compileall",
+      "status": "passed",
+      "actual": "execution_runner, plan_catalog, validation router/tests, readonly smoke script, noxfile compiled",
+      "threshold": "must pass"
+    },
+    {
+      "metric": "targeted_backend_pytest",
+      "status": "passed",
+      "actual": "18 passed",
+      "threshold": "all tests pass"
+    },
+    {
+      "metric": "validation_center_backend_nox",
+      "status": "passed",
+      "actual": "28 passed; line=81.40; branch=65.05",
+      "threshold": "line>=75; branch>=55; all tests pass"
+    },
+    {
+      "metric": "validation_center_ui_nox",
+      "status": "passed",
+      "actual": "TypeScript passed; Playwright 1 passed",
+      "threshold": "all tests pass"
+    },
+    {
+      "metric": "validation_center_live_readonly_nox",
+      "status": "passed",
+      "actual": "temporary backend 8012; endpoints=15; failures=0; write_methods_sent=[]",
+      "threshold": "no failures; production_8001_touched=false"
+    },
+    {
+      "metric": "l0_guardrail",
+      "status": "passed",
+      "actual": "targeted nox l0 passed; 3 medium raw-JSON review findings; 1 baseline noxfile finding; blocking=0",
+      "threshold": "no blocking P1/P0 new findings"
+    },
+    {
+      "metric": "production_isolation",
+      "status": "passed",
+      "actual": "production backend 8001 not restarted or probed; temporary 8012 stopped after smoke",
+      "threshold": "no production 8001 impact"
+    }
+  ],
+  "pass_scope": {
+    "level": "L3",
+    "real_backend": true,
+    "real_database": false,
+    "real_node_api": false,
+    "real_frontend_click": true,
+    "writes_business_state": false,
+    "positive_business_success": false,
+    "negative_failfast_only": false,
+    "mock_api_used": true,
+    "controlled_runner_post_enabled": true,
+    "arbitrary_shell_allowed": false,
+    "production_8001_touched": false,
+    "current_commit_evidence": true
+  },
+  "business_assertion": {
+    "can_user_complete_operation": true,
+    "operation_name": "Start an allowlisted Validation Center nox job and review its queue/log/evidence metadata",
+    "evidence": {
+      "ui": "frontend/tests/validation-center/validation-center.spec.ts",
+      "api": "backend/tests/test_validation_execution_runner.py",
+      "live_api_smoke": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-controlled-runner-live-smoke.json",
+      "coverage": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-controlled-runner-snapshot.json"
+    },
+    "unresolved_blockers": [
+      "The UI E2E POST uses mocked APIs for deterministic validation; backend TestClient covers the real POST contract and live smoke covers read-only endpoints on a temporary backend.",
+      "Long-running QE/Paper business validation remains outside this controlled-runner infrastructure phase."
+    ]
+  }
+}

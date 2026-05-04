@@ -11,8 +11,11 @@ DEFAULT_PLAN_CATALOG_PATH = REPO_ROOT / "tests" / "aistock_validation" / "catalo
 
 ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_l0": "l0",
+    "nox_guardrail_changed_files": "guardrail_changed_files",
     "nox_validation_coverage_backend": "validation_coverage_backend",
     "nox_validation_center_backend": "validation_center_backend",
+    "nox_validation_center_live_readonly": "validation_center_live_readonly",
+    "nox_validation_center_ui": "validation_center_ui",
     "nox_qe_data_contract_backend": "qe_data_contract_backend",
     "nox_qe_archive_backend": "qe_archive_backend",
     "nox_qe_archive_data_quality": "qe_archive_data_quality",
@@ -118,6 +121,7 @@ class ValidationPlanCatalog:
         plan["requires_frontend"] = bool(plan.get("requires_frontend", False))
         plan["requires_node_api"] = bool(plan.get("requires_node_api", False))
         plan["requires_confirmation"] = bool(plan.get("requires_confirmation", False))
+        plan["runner_enabled"] = bool(plan.get("runner_enabled", False))
         plan["mock_api_used"] = bool(plan.get("mock_api_used", False))
         plan["positive_business_success_expected"] = bool(
             plan.get("positive_business_success_expected", False)
@@ -126,6 +130,10 @@ class ValidationPlanCatalog:
         if plan["writes_business_state"] and not plan["requires_confirmation"]:
             raise ValidationCatalogError(
                 f"Validation plan {plan_key} writes business state but does not require confirmation."
+            )
+        if plan["runner_enabled"] and plan["writes_business_state"]:
+            raise ValidationCatalogError(
+                f"Validation plan {plan_key} cannot enable the controlled runner while writing business state."
             )
         return plan
 

@@ -29,6 +29,7 @@ def _route(path: str) -> tuple[int | None, dict | None, str | None]:
                 "history": {"run_count": 1, "coverage_snapshot_count": 1, "evidence_manifest_count": 1},
                 "plan_catalog": {"plan_count": 1},
                 "quality": {"finding_count": 1, "bug_count": 1},
+                "runner": {"job_count": 1, "production_8001_touched": False},
                 "production_8001_touched": False,
             }
         ),
@@ -39,6 +40,7 @@ def _route(path: str) -> tuple[int | None, dict | None, str | None]:
                 "evidence_manifest_count": 1,
                 "plan_count": 1,
                 "quality": {"finding_count": 1, "bug_count": 1},
+                "runner": {"job_count": 1, "jobs_by_status": {"passed": 1}},
             }
         ),
         "/validation/plans": _envelope({"plans": [{"plan_key": "validation_center_backend"}]}),
@@ -48,6 +50,8 @@ def _route(path: str) -> tuple[int | None, dict | None, str | None]:
         "/validation/coverage/cov_1": _envelope({"summary": {"snapshot_id": "cov_1"}, "snapshot": {"status": "passed"}}),
         "/validation/evidence": _envelope(_page([{"manifest_id": "evidence_1"}])),
         "/validation/evidence/evidence_1": _envelope({"summary": {"manifest_id": "evidence_1"}, "manifest": {"missing_count": 0}}),
+        "/validation/executions": _envelope(_page([{"job_id": "valjob_20260504_210000_abcdef12"}])),
+        "/validation/executions/valjob_20260504_210000_abcdef12": _envelope({"job_id": "valjob_20260504_210000_abcdef12", "status": "passed"}),
         "/validation/findings/summary": _envelope({"finding_count": 1}),
         "/validation/findings": _envelope(_page([{"finding_id": "finding_1"}])),
         "/validation/findings/finding_1": _envelope({"finding_id": "finding_1", "agent_context": {"context_type": "quality_finding"}}),
@@ -75,8 +79,9 @@ def test_readonly_smoke_passes_with_complete_contract(monkeypatch, tmp_path: Pat
     assert payload["production_8001_touched"] is False
     assert payload["write_methods_sent"] == []
     assert payload["counts"]["runs"] == 1
+    assert payload["counts"]["executions"] == 1
     assert payload["counts"]["bugs"] == 1
-    assert payload["endpoint_count"] >= 14
+    assert payload["endpoint_count"] >= 16
 
 
 def test_readonly_smoke_blocks_production_8001(tmp_path: Path) -> None:

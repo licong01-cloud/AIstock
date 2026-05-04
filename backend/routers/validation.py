@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
+from backend.services.validation.execution_runner import ValidationExecutionRunner, ValidationRunnerError
 from backend.services.validation.finding_store import ValidationFindingStore
 from backend.services.validation.history_store import ValidationHistoryStore
 from backend.services.validation.models import ValidationResponse
@@ -23,6 +25,19 @@ def get_finding_store() -> ValidationFindingStore:
     return ValidationFindingStore()
 
 
+def get_execution_runner() -> ValidationExecutionRunner:
+    return ValidationExecutionRunner()
+
+
+class ValidationExecutionStartRequest(BaseModel):
+    plan_key: str = Field(..., min_length=1)
+    requested_by: str = Field("operator", min_length=1, max_length=80)
+    backend_port: int | None = None
+    frontend_port: int | None = None
+    timeout_seconds: int | None = Field(None, gt=0)
+    confirm_text: str | None = None
+
+
 def _success(data):
     return ValidationResponse(data=data)
 
@@ -32,6 +47,7 @@ def get_validation_health(
     history_store: ValidationHistoryStore = Depends(get_history_store),
     plan_catalog: ValidationPlanCatalog = Depends(get_plan_catalog),
     finding_store: ValidationFindingStore = Depends(get_finding_store),
+    execution_runner: ValidationExecutionRunner = Depends(get_execution_runner),
 ):
     catalog = _load_catalog_or_500(plan_catalog)
     return _success(
@@ -45,6 +61,7 @@ def get_validation_health(
                 "plan_count": len(catalog["plans"]),
             },
             "quality": finding_store.health(),
+            "runner": execution_runner.health(),
             "production_8001_touched": False,
         }
     )
@@ -261,11 +278,53 @@ def get_validation_bug_agent_context(
     return _success(context)
 
 
+@router.get("/executions", response_model=ValidationResponse, summary="List controlled validation executions")
+def list_validation_executions(
+    status: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    execution_runner: ValidationExecutionRunner = Depends(get_execution_runner),
+):
+    return _success(execution_runner.list_jobs(status=status, page=page, page_size=page_size))
+
+
+@router.get("/executions/{job_id}", response_model=ValidationResponse, summary="Get controlled validation execution")
+def get_validation_execution(
+    job_id: str,
+    execution_runner: ValidationExecutionRunner = Depends(get_execution_runner),
+):
+    job = execution_runner.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"validation execution not found: {job_id}")
+    return _success(job)
+
+
+@router.post("/executions", response_model=ValidationResponse, summary="Start allowlisted validation execution")
+def start_validation_execution(
+    request: ValidationExecutionStartRequest,
+    execution_runner: ValidationExecutionRunner = Depends(get_execution_runner),
+):
+    try:
+        return _success(
+            execution_runner.start_job(
+                plan_key=request.plan_key,
+                requested_by=request.requested_by,
+                backend_port=request.backend_port,
+                frontend_port=request.frontend_port,
+                timeout_seconds=request.timeout_seconds,
+                confirm_text=request.confirm_text,
+            )
+        )
+    except ValidationRunnerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/summary", response_model=ValidationResponse, summary="Validation Center read-only summary")
 def get_validation_summary(
     history_store: ValidationHistoryStore = Depends(get_history_store),
     plan_catalog: ValidationPlanCatalog = Depends(get_plan_catalog),
     finding_store: ValidationFindingStore = Depends(get_finding_store),
+    execution_runner: ValidationExecutionRunner = Depends(get_execution_runner),
 ):
     catalog = _load_catalog_or_500(plan_catalog)
     summary = history_store.summary()
@@ -274,6 +333,7 @@ def get_validation_summary(
         "finding_count": finding_store.finding_summary()["finding_count"],
         "bug_count": finding_store.bug_summary()["bug_count"],
     }
+    summary["runner"] = execution_runner.health()
     return _success(summary)
 
 

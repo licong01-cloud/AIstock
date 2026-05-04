@@ -15,6 +15,7 @@ import {
   type ValidationCoverageSummary,
   type ValidationEvidenceDetail,
   type ValidationEvidenceSummary,
+  type ValidationExecutionJob,
   type ValidationFindingSummary,
   type ValidationHealth,
   type ValidationPage,
@@ -208,6 +209,7 @@ export default function ValidationCenterPage() {
   const [runs, setRuns] = useState<ValidationPage<ValidationRunSummary>>(emptyPage<ValidationRunSummary>());
   const [coverage, setCoverage] = useState<ValidationPage<ValidationCoverageSummary>>(emptyPage<ValidationCoverageSummary>(10));
   const [evidence, setEvidence] = useState<ValidationPage<ValidationEvidenceSummary>>(emptyPage<ValidationEvidenceSummary>(10));
+  const [executions, setExecutions] = useState<ValidationPage<ValidationExecutionJob>>(emptyPage<ValidationExecutionJob>(10));
   const [findings, setFindings] = useState<ValidationPage<ValidationQualityFinding>>(emptyPage<ValidationQualityFinding>());
   const [bugs, setBugs] = useState<ValidationPage<ValidationBug>>(emptyPage<ValidationBug>());
   const [selectedRun, setSelectedRun] = useState<ValidationRunDetail | null>(null);
@@ -219,6 +221,8 @@ export default function ValidationCenterPage() {
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [executionBusy, setExecutionBusy] = useState<string | null>(null);
+  const [executionMessage, setExecutionMessage] = useState<string | null>(null);
   const [filters, setFilters] = useState({ module: "", level: "", status: "", search: "", includeMarkdownOnly: true, page: 1, pageSize: DEFAULT_PAGE_SIZE });
   const [qualityFilters, setQualityFilters] = useState({ findingSource: "", findingSeverity: "", findingStatus: "", findingSearch: "", findingPage: 1, bugSeverity: "", bugStatus: "", bugSearch: "", bugPage: 1, pageSize: DEFAULT_PAGE_SIZE });
 
@@ -226,12 +230,13 @@ export default function ValidationCenterPage() {
     setLoading(true);
     setError(null);
     try {
-      const [healthData, summaryData, planCatalog, coverageData, evidenceData, findingSummaryData, bugSummaryData] = await Promise.all([
+      const [healthData, summaryData, planCatalog, coverageData, evidenceData, executionData, findingSummaryData, bugSummaryData] = await Promise.all([
         validationApi.health(),
         validationApi.summary(),
         validationApi.plans(),
         validationApi.coverage({ page: 1, page_size: 10 }),
         validationApi.evidence({ page: 1, page_size: 10 }),
+        validationApi.executions({ page: 1, page_size: 10 }),
         validationApi.findingSummary(),
         validationApi.bugSummary(),
       ]);
@@ -240,12 +245,22 @@ export default function ValidationCenterPage() {
       setPlans(planCatalog.plans || []);
       setCoverage(coverageData || emptyPage<ValidationCoverageSummary>(10));
       setEvidence(evidenceData || emptyPage<ValidationEvidenceSummary>(10));
+      setExecutions(executionData || emptyPage<ValidationExecutionJob>(10));
       setFindingSummary(findingSummaryData);
       setBugSummary(bugSummaryData);
     } catch (err) {
       setError(errorText(err));
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const loadExecutions = useCallback(async () => {
+    try {
+      const data = await validationApi.executions({ page: 1, page_size: 10 });
+      setExecutions(data || emptyPage<ValidationExecutionJob>(10));
+    } catch (err) {
+      setError(errorText(err));
     }
   }, []);
 
@@ -306,6 +321,7 @@ export default function ValidationCenterPage() {
   useEffect(() => { void loadBugs(); }, [loadBugs]);
 
   const statusCounts = useMemo(() => summary?.runs_by_status || {}, [summary]);
+  const executionCounts = useMemo(() => summary?.runner?.jobs_by_status || health?.runner?.jobs_by_status || {}, [summary, health]);
   const latestCoverageTotals = summary?.latest_coverage?.totals || {};
 
   async function openRun(runId: string) {
@@ -390,6 +406,28 @@ export default function ValidationCenterPage() {
     }));
   }
 
+  async function startExecution(plan: ValidationPlan) {
+    setExecutionBusy(plan.plan_key);
+    setExecutionMessage(null);
+    setError(null);
+    try {
+      const job = await validationApi.startExecution({
+        plan_key: plan.plan_key,
+        requested_by: "ui",
+        backend_port: plan.requires_backend ? plan.allowed_backend_ports?.[0] : undefined,
+        frontend_port: plan.requires_frontend ? plan.allowed_frontend_ports?.[0] : undefined,
+        timeout_seconds: typeof plan.max_duration_seconds === "number" ? plan.max_duration_seconds : undefined,
+      });
+      setExecutionMessage(`已提交 ${plan.plan_key}，job=${compactId(job.job_id, 8)}，状态=${display(job.status)}`);
+      await loadExecutions();
+      await loadStatic();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setExecutionBusy(null);
+    }
+  }
+
   return (
     <main className="pv2-shell">
       <header className="pv2-hero">
@@ -420,15 +458,16 @@ export default function ValidationCenterPage() {
       <SectionCard
         title="测试计划目录"
         eyebrow="allowlisted nox entrypoints"
-        action={<button className="pv2-button-ghost" type="button" disabled aria-label="controlled execution disabled">执行测试（尚未启用）</button>}
+        action={<span className="pv2-chip">受控 Runner：allowlist only</span>}
       >
         <div className="pv2-notice pv2-notice-info">
           <div className="pv2-notice-title">执行边界</div>
-          <div className="pv2-notice-body">UI 当前只展示 allowlist 计划。受控执行、队列、权限确认和 evidence 自动回写会在后续阶段启用。</div>
+          <div className="pv2-notice-body">只允许执行 YAML allowlist 中 `runner_enabled=true` 的 nox session；不开放任意 shell，不允许生产 8001，执行日志和 evidence 写入本地 `tmp/validation/runner/jobs`。</div>
         </div>
+        {executionMessage ? <div className="pv2-notice pv2-notice-success"><div className="pv2-notice-title">Runner 已提交</div><div className="pv2-notice-body">{executionMessage}</div></div> : null}
         <div className="pv2-table-wrap">
           <table className="pv2-table">
-            <thead><tr><th>Plan</th><th>模块/级别</th><th>Nox</th><th>端口</th><th>写入边界</th><th>状态</th></tr></thead>
+            <thead><tr><th>Plan</th><th>模块/级别</th><th>Nox</th><th>端口</th><th>写入边界</th><th>Runner</th><th>操作</th></tr></thead>
             <tbody>
               {plans.length ? plans.map((plan) => (
                 <tr key={plan.plan_key}>
@@ -437,12 +476,54 @@ export default function ValidationCenterPage() {
                   <td><span className="pv2-mono">{display(plan.nox_session || plan.command_key)}</span></td>
                   <td>Backend {display(plan.allowed_backend_ports)}<br />Frontend {display(plan.allowed_frontend_ports)}</td>
                   <td>DB {display(plan.writes_database)} / Artifacts {display(plan.writes_artifacts)} / Business {display(plan.writes_business_state)}</td>
-                  <td><StatusBadge status={plan.enabled ? "READY" : "DISABLED"} /></td>
+                  <td><StatusBadge status={plan.runner_enabled ? "RUNNER_READY" : "READ_ONLY"} /></td>
+                  <td>
+                    <button
+                      aria-label={`run validation plan ${plan.plan_key}`}
+                      className="pv2-link-button"
+                      disabled={!plan.enabled || !plan.runner_enabled || Boolean(executionBusy)}
+                      onClick={() => void startExecution(plan)}
+                      type="button"
+                    >
+                      {executionBusy === plan.plan_key ? "执行中..." : "执行"}
+                    </button>
+                  </td>
                 </tr>
-              )) : <tr><td className="pv2-empty-cell" colSpan={6}>暂无测试计划</td></tr>}
+              )) : <tr><td className="pv2-empty-cell" colSpan={7}>暂无测试计划</td></tr>}
             </tbody>
           </table>
         </div>
+      </SectionCard>
+
+      <SectionCard title="Runner 执行队列" eyebrow="controlled nox jobs / logs / evidence">
+        <div className="pv2-notice pv2-notice-info">
+          <div className="pv2-notice-title">Runner 状态</div>
+          <div className="pv2-notice-body">
+            执行根目录：{display(summary?.runner?.execution_root || health?.runner?.execution_root)}；
+            任意 shell：{display(summary?.runner?.arbitrary_shell_allowed || health?.runner?.arbitrary_shell_allowed)}；
+            生产 8001：{display(summary?.runner?.production_8001_touched || health?.runner?.production_8001_touched)}
+          </div>
+        </div>
+        <div style={{ marginBottom: 12 }}><CountChips counts={executionCounts} /></div>
+        <div className="pv2-table-wrap">
+          <table className="pv2-table">
+            <thead><tr><th>Job</th><th>Plan/Nox</th><th>状态</th><th>时间</th><th>端口</th><th>证据</th><th>错误</th></tr></thead>
+            <tbody>
+              {executions.items.length ? executions.items.map((job) => (
+                <tr key={job.job_id}>
+                  <td><strong>{compactId(job.job_id, 8)}</strong><br /><span className="pv2-muted">{display(job.requested_by)}</span></td>
+                  <td>{display(job.plan_key)}<br /><span className="pv2-muted pv2-mono">{display(job.nox_session)}</span></td>
+                  <td><StatusBadge status={job.status} /><br /><span className="pv2-muted">return={display(job.return_code)}</span></td>
+                  <td>{display(job.started_at || job.requested_at)}<br /><span className="pv2-muted">{display(job.finished_at)}</span></td>
+                  <td>Backend {display(job.backend_port)}<br />Frontend {display(job.frontend_port)}</td>
+                  <td><span className="pv2-muted">{display(job.log_path)}</span><br /><span className="pv2-muted">{display(job.evidence_path)}</span></td>
+                  <td>{display(job.error)}</td>
+                </tr>
+              )) : <tr><td className="pv2-empty-cell" colSpan={7}>暂无 Runner job</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <button className="pv2-button-ghost" type="button" onClick={() => void loadExecutions()}>刷新 Runner 队列</button>
       </SectionCard>
 
       <SectionCard title="Run 历史" eyebrow="filters / pagination / missing states">

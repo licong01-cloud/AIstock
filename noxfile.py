@@ -437,7 +437,7 @@ def validation_coverage_backend(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def validation_center_backend(session: nox.Session) -> None:
-    """Run Validation Center read-only API and contract tests."""
+    """Run Validation Center API, coverage, and controlled-runner contract tests."""
     coverage_dir = ROOT / "tmp" / "validation" / "coverage"
     coverage_dir.mkdir(parents=True, exist_ok=True)
     coverage_xml = coverage_dir / "validation_center_backend.xml"
@@ -459,6 +459,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "pytest",
         "backend/tests/test_validation_center_api.py",
         "backend/tests/test_validation_center_readonly_smoke.py",
+        "backend/tests/test_validation_execution_runner.py",
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
         "--cov=backend.services.validation",
@@ -497,7 +498,7 @@ def validation_center_backend(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def validation_center_ui(session: nox.Session) -> None:
-    """Run Validation Center read-only UI checks on dev ports with mocked APIs."""
+    """Run Validation Center UI checks on dev ports with mocked APIs."""
     backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8011")
     frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3011")
     session.run(

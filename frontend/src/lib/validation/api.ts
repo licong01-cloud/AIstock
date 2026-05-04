@@ -35,6 +35,7 @@ export type ValidationHealth = {
     bug_count?: number;
     parse_errors?: JsonObject[];
   };
+  runner?: ValidationRunnerHealth;
   production_8001_touched?: boolean;
 };
 
@@ -53,6 +54,7 @@ export type ValidationPlan = JsonObject & {
   writes_database?: boolean;
   writes_artifacts?: boolean;
   writes_business_state?: boolean;
+  runner_enabled?: boolean;
 };
 
 export type ValidationPlanCatalog = {
@@ -168,10 +170,67 @@ export type ValidationSummary = {
     finding_count?: number;
     bug_count?: number;
   };
+  runner?: ValidationRunnerHealth;
   runs_by_status?: Record<string, number>;
   modules?: Array<JsonObject & { module?: string; run_count?: number; latest_run?: ValidationRunSummary }>;
   latest_runs?: ValidationRunSummary[];
   latest_coverage?: ValidationCoverageSummary | null;
+};
+
+export type ValidationRunnerHealth = JsonObject & {
+  mode?: string;
+  execution_root?: string;
+  exists?: boolean;
+  job_count?: number;
+  jobs_by_status?: Record<string, number>;
+  allowed_command_type?: string;
+  arbitrary_shell_allowed?: boolean;
+  production_8001_touched?: boolean;
+};
+
+export type ValidationExecutionJob = JsonObject & {
+  schema_version?: string;
+  job_id: string;
+  status?: string;
+  plan_key?: string;
+  title?: string;
+  module?: string;
+  level?: string;
+  command_key?: string;
+  nox_session?: string;
+  command?: string[];
+  cwd?: string;
+  requested_by?: string;
+  requested_at?: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  timeout_seconds?: number;
+  return_code?: number | null;
+  backend_port?: number | null;
+  frontend_port?: number | null;
+  writes_database?: boolean;
+  writes_artifacts?: boolean;
+  writes_business_state?: boolean;
+  production_8001_touched?: boolean;
+  arbitrary_shell_allowed?: boolean;
+  log_path?: string;
+  evidence_path?: string;
+  error?: string | null;
+};
+
+export type ValidationExecutionQuery = {
+  status?: string;
+  page?: number;
+  page_size?: number;
+};
+
+export type ValidationExecutionStartRequest = {
+  plan_key: string;
+  requested_by?: string;
+  backend_port?: number;
+  frontend_port?: number;
+  timeout_seconds?: number;
+  confirm_text?: string;
 };
 
 export type ValidationQualityFinding = JsonObject & {
@@ -410,6 +469,18 @@ export const validationApi = {
   },
   bugAgentContext(bugId: string): Promise<ValidationAgentContext> {
     return unwrap<ValidationAgentContext>(`/validation/bugs/${encodeURIComponent(bugId)}/agent-context`);
+  },
+  executions(query: ValidationExecutionQuery = {}): Promise<ValidationPage<ValidationExecutionJob>> {
+    return unwrap<ValidationPage<ValidationExecutionJob>>(appendQuery("/validation/executions", query));
+  },
+  execution(jobId: string): Promise<ValidationExecutionJob> {
+    return unwrap<ValidationExecutionJob>(`/validation/executions/${encodeURIComponent(jobId)}`);
+  },
+  startExecution(request: ValidationExecutionStartRequest): Promise<ValidationExecutionJob> {
+    return apiFetch<ValidationEnvelope<ValidationExecutionJob>>("/validation/executions", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }).then((response) => response.data);
   },
 };
 

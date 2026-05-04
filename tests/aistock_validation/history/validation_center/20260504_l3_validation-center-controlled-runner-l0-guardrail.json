@@ -1,0 +1,88 @@
+{
+  "schema_version": "aistock_guardrail_scan_result_v1",
+  "generated_at": "2026-05-04T11:31:53.934275+00:00",
+  "mode": "paths",
+  "files_scanned": 19,
+  "baseline": {
+    "baseline_json": "tmp/validation/guardrails/baseline_20260504.json",
+    "fail_new_only": true
+  },
+  "gate": {
+    "fail_on_severity": "P1",
+    "blocking_count": 0,
+    "status": "passed"
+  },
+  "summary": {
+    "total_findings": 4,
+    "by_severity": {
+      "P1": 1,
+      "P2": 3
+    },
+    "by_rule": {
+      "SCRIPT-LOCATION-001": 1,
+      "UI-RAWJSON-001": 3
+    },
+    "by_category": {
+      "frontend": 3,
+      "repository_hygiene": 1
+    },
+    "by_baseline_status": {
+      "baseline": 1,
+      "new": 3
+    }
+  },
+  "findings": [
+    {
+      "rule_id": "UI-RAWJSON-001",
+      "title": "Operator UI must not use raw JSON as the primary business view",
+      "severity": "P2",
+      "category": "frontend",
+      "file": "frontend/src/app/validation-center/page.tsx",
+      "line": 679,
+      "message": "Operator UI must not use raw JSON as the primary business view",
+      "remediation": "Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only.",
+      "baseline_policy": "warn_new_only",
+      "fingerprint": "8005393c403e2e95",
+      "baseline_status": "new"
+    },
+    {
+      "rule_id": "UI-RAWJSON-001",
+      "title": "Operator UI must not use raw JSON as the primary business view",
+      "severity": "P2",
+      "category": "frontend",
+      "file": "frontend/src/lib/validation/api.ts",
+      "line": 384,
+      "message": "Operator UI must not use raw JSON as the primary business view",
+      "remediation": "Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only.",
+      "baseline_policy": "warn_new_only",
+      "fingerprint": "577044df5e1f2884",
+      "baseline_status": "new"
+    },
+    {
+      "rule_id": "UI-RAWJSON-001",
+      "title": "Operator UI must not use raw JSON as the primary business view",
+      "severity": "P2",
+      "category": "frontend",
+      "file": "frontend/src/lib/validation/api.ts",
+      "line": 482,
+      "message": "Operator UI must not use raw JSON as the primary business view",
+      "remediation": "Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only.",
+      "baseline_policy": "warn_new_only",
+      "fingerprint": "f61a7dd3500419bd",
+      "baseline_status": "new"
+    },
+    {
+      "rule_id": "SCRIPT-LOCATION-001",
+      "title": "One-off test and diagnostic scripts belong under debug_tools",
+      "severity": "P1",
+      "category": "repository_hygiene",
+      "file": "noxfile.py",
+      "line": 1,
+      "message": "One-off test and diagnostic scripts belong under debug_tools",
+      "remediation": "Put one-off diagnostics under debug_tools/<module>/<date_or_issue>; reusable business scripts need parameters and tests under scripts.",
+      "baseline_policy": "block_new_only",
+      "fingerprint": "615e024e9692283e",
+      "baseline_status": "baseline"
+    }
+  ]
+}

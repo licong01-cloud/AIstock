@@ -206,10 +206,13 @@ def run_smoke(
             failures.append("/validation/health plan_catalog must be an object")
         if not _is_object(health.get("quality")):
             failures.append("/validation/health quality must be an object")
+        if not _is_object(health.get("runner")):
+            failures.append("/validation/health runner must be an object")
         counts["health"] = {
             "run_count": (health.get("history") or {}).get("run_count") if isinstance(health.get("history"), dict) else None,
             "finding_count": (health.get("quality") or {}).get("finding_count") if isinstance(health.get("quality"), dict) else None,
             "bug_count": (health.get("quality") or {}).get("bug_count") if isinstance(health.get("quality"), dict) else None,
+            "runner_job_count": (health.get("runner") or {}).get("job_count") if isinstance(health.get("runner"), dict) else None,
         }
 
     summary = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/summary", timeout=timeout)), failures)
@@ -219,12 +222,15 @@ def run_smoke(
                 failures.append(f"/validation/summary {key} must be an integer")
         if not _is_object(summary.get("quality")):
             failures.append("/validation/summary quality must be an object")
+        if not _is_object(summary.get("runner")):
+            failures.append("/validation/summary runner must be an object")
         counts["summary"] = {
             "run_count": summary.get("run_count"),
             "coverage_snapshot_count": summary.get("coverage_snapshot_count"),
             "evidence_manifest_count": summary.get("evidence_manifest_count"),
             "plan_count": summary.get("plan_count"),
             "quality": summary.get("quality"),
+            "runner": summary.get("runner"),
         }
 
     plans = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/plans", timeout=timeout)), failures)
@@ -254,6 +260,13 @@ def run_smoke(
         evidence_detail = _extract_data(_append_endpoint(endpoints, _call(api_base, f"/validation/evidence/{_quote(manifest_id)}", timeout=timeout)), failures)
         if evidence_detail and not (_is_object(evidence_detail.get("summary")) and _is_object(evidence_detail.get("manifest"))):
             failures.append("/validation/evidence/{manifest_id} must include summary and manifest objects")
+
+    execution_page = _check_page(api_base, "/validation/executions", "executions", endpoints, failures, counts, timeout, page_size)
+    job_id = _first_id(execution_page or {}, "job_id")
+    if job_id:
+        execution_detail = _extract_data(_append_endpoint(endpoints, _call(api_base, f"/validation/executions/{_quote(job_id)}", timeout=timeout)), failures)
+        if execution_detail and execution_detail.get("job_id") != job_id:
+            failures.append("/validation/executions/{job_id} returned mismatched job_id")
 
     finding_summary = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/findings/summary", timeout=timeout)), failures)
     if finding_summary and not isinstance(finding_summary.get("finding_count"), int):
