@@ -1,0 +1,107 @@
+{
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "backend_store",
+      "path": "backend/services/validation/finding_store.py",
+      "sha256": "482df8b068708c81c96dc04c36d5dfe77cd1cbb5866e45eae1a0e994140197de",
+      "size_bytes": 20211
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "backend_router",
+      "path": "backend/routers/validation.py",
+      "sha256": "68eb765d4e2a3dca9a98cf42189d0b8a689ca009be4fb9a3509db87dbee6440a",
+      "size_bytes": 9871
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "backend_tests",
+      "path": "backend/tests/test_validation_center_api.py",
+      "sha256": "5d6b461f99023daa4b1a100bb7fb46fe437e3c9859fdba41861132eca043c6ab",
+      "size_bytes": 16377
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "frontend_ui",
+      "path": "frontend/src/app/validation-center/page.tsx",
+      "sha256": "0605c32db66cc50187f23301757dcf139a5e3b00314e19702d47f7201ca1b049",
+      "size_bytes": 36645
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "frontend_api",
+      "path": "frontend/src/lib/validation/api.ts",
+      "sha256": "6475d55bf598e2910ce4c5c7b3bb1aacd7d43bb84a051aaa180cf728eae3acdf",
+      "size_bytes": 12491
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "playwright",
+      "path": "frontend/tests/validation-center/validation-center.spec.ts",
+      "sha256": "6d459698b3c12e09fdb4b04eec46fd76387ce6cbb7e3e3fe840e74f14336b038",
+      "size_bytes": 18570
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "matrix",
+      "path": "tests/aistock_validation/modules/validation_center.md",
+      "sha256": "8502426becd28b51ccc17af369ea7d6dcb30d29456606483fa1f7d4cab79c79e",
+      "size_bytes": 8716
+    },
+    {
+      "child_count": 1,
+      "exists": true,
+      "is_dir": true,
+      "kind": "file",
+      "path": "tmp/playwright-report",
+      "sha256": null,
+      "size_bytes": null
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "coverage",
+      "path": "tmp/validation/coverage/validation_center_backend_snapshot.json",
+      "sha256": "b3897a4112a3f673e4469c0d18b3f50ec5a708ea7f9fa4156a3f3dbe87d2973b",
+      "size_bytes": 21846
+    }
+  ],
+  "generated_at": "2026-05-04T17:57:48",
+  "git_commit": "6b84449",
+  "level": "L3",
+  "missing": [],
+  "missing_count": 0,
+  "module": "validation_center",
+  "operator": "lc999",
+  "run_id": null,
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "Validation Center quality finding and bug registry"
+}

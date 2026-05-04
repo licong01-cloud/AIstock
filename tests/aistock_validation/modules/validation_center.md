@@ -86,3 +86,29 @@ The first read-only UI loop displays validation history without executing tests 
 - Mock UI evidence must not be presented as real business success; absent `pass_scope` must read as `未记录/未证明`.
 - Coverage and evidence detail panes must be readable business tables, not raw JSON as the primary operator view.
 - UI validation uses Playwright mocked APIs on frontend dev port `3011`/`3012`; it must not restart production backend `8001`.
+
+## L2 Quality Finding / Bug Registry Contract
+
+The first quality-registry loop exposes guardrail findings, legacy inventory findings, and bug repair context without executing commands or writing business state:
+
+- `GET /api/v1/validation/findings` supports pagination plus source type, module, severity, status, and search filters.
+- `GET /api/v1/validation/findings/{finding_id}` returns a readable finding detail plus machine-readable `agent_context`.
+- `GET /api/v1/validation/findings/summary` returns counts by source type, severity, status, and module.
+- `GET /api/v1/validation/bugs` supports pagination plus module, severity, status, agent, and search filters.
+- `GET /api/v1/validation/bugs/{bug_id}` returns trigger condition, reproduce command, failing run, evidence, fix fields, verification fields, and closure requirements.
+- `GET /api/v1/validation/bugs/{bug_id}/agent-context` returns the repair input for Codex/Claude: problem statement, reproduce command, evidence, allowed write scope, suspected modules, required verification, and closure requirements.
+- `/health` and `/summary` include quality counts and explicit parse errors.
+- The first-stage store is read-only local JSON evidence/index storage; it does not create DB schema and must not touch production port `8001`.
+- Malformed JSON must be surfaced as parse errors; missing quality roots must be explicit and must not be treated as success evidence.
+
+## L3 Quality Registry UI Contract
+
+The first quality-registry UI loop displays quality findings and bugs as operator-readable tables and agent-context panels:
+
+- `/validation-center` loads finding summaries, bug summaries, paginated findings, and paginated bugs from `/api/v1/validation/*`.
+- The UI shows quality finding count and Bug count next to run/coverage metrics.
+- Findings table shows source type, severity, status, module, title, file/evidence path, allowed write scope, and required verification count.
+- Bug table shows title, module, severity, status, reproduce command, evidence, GitHub issue link if available, fix commit, and verification run.
+- Detail panels show finding/Bug fields and `agent_context` in labeled rows, not as raw JSON primary output.
+- The UI must not send POST/PUT/PATCH/DELETE requests in this phase and must keep the controlled execution button disabled.
+- Playwright validation must mock the read-only endpoints, fail on console/page/request/API errors, and verify that agent-context content is visible.

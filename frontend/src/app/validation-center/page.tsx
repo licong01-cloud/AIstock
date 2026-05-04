@@ -7,15 +7,20 @@ import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import {
   type JsonObject,
+  type ValidationAgentContext,
+  type ValidationBug,
+  type ValidationBugSummary,
   type ValidationBusinessAssertion,
   type ValidationCoverageDetail,
   type ValidationCoverageSummary,
   type ValidationEvidenceDetail,
   type ValidationEvidenceSummary,
+  type ValidationFindingSummary,
   type ValidationHealth,
   type ValidationPage,
   type ValidationPassScope,
   type ValidationPlan,
+  type ValidationQualityFinding,
   type ValidationRunDetail,
   type ValidationRunSummary,
   type ValidationSummary,
@@ -23,7 +28,10 @@ import {
 } from "@/lib/validation/api";
 
 const DEFAULT_PAGE_SIZE = 20;
-const EMPTY_PAGE = { items: [], total: 0, page: 1, page_size: DEFAULT_PAGE_SIZE, has_more: false };
+
+function emptyPage<T>(pageSize = DEFAULT_PAGE_SIZE): ValidationPage<T> {
+  return { items: [], total: 0, page: 1, page_size: pageSize, has_more: false };
+}
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -72,7 +80,7 @@ function WarningList({ run }: { run: ValidationRunSummary | ValidationRunDetail 
     run.coverage_missing ? "coverage_missing：未发现覆盖率快照" : null,
     run.evidence_missing ? "evidence_missing：未发现 evidence manifest" : null,
     !run.success_scope_recorded ? "pass_scope / business_assertion 未记录：只能作为历史文本参考，不能当作业务成功证明" : null,
-  ].filter(Boolean);
+  ].filter(Boolean) as string[];
   if (!warnings.length) return <span className="pv2-muted">完整</span>;
   return <div className="pv2-readable-list">{warnings.map((item) => <span className="pv2-badge pv2-badge-warning" key={item}>{item}</span>)}</div>;
 }
@@ -92,9 +100,36 @@ function KeyValuePanel({ rows }: { rows: Array<[string, unknown]> }) {
   );
 }
 
+function BadgeList({ items, empty = "-" }: { items?: Array<string | null | undefined>; empty?: string }) {
+  const validItems = (items || []).filter(Boolean) as string[];
+  if (!validItems.length) return <span className="pv2-muted">{empty}</span>;
+  return <div className="pv2-readable-list">{validItems.map((item) => <span className="pv2-chip" key={item}>{item}</span>)}</div>;
+}
+
+function CountChips({ counts }: { counts?: Record<string, number> }) {
+  const entries = Object.entries(counts || {});
+  if (!entries.length) return <span className="pv2-muted">无统计</span>;
+  return <div className="pv2-chip-row">{entries.map(([key, count]) => <span className="pv2-chip" key={key}>{key}: {count}</span>)}</div>;
+}
+
+function Pagination({ page, label, onPageChange }: { page: ValidationPage<unknown>; label: string; onPageChange: (page: number) => void }) {
+  return (
+    <div className="pv2-pagination" aria-label={label}>
+      <button className="pv2-button-ghost" disabled={page.page <= 1} onClick={() => onPageChange(Math.max(1, page.page - 1))} type="button">上一页</button>
+      <span aria-label={`${label} status`}>第 {page.page} / {pageCount(page)} 页，共 {page.total} 条</span>
+      <button className="pv2-button-ghost" disabled={!page.has_more} onClick={() => onPageChange(page.page + 1)} type="button">下一页</button>
+    </div>
+  );
+}
+
 function PassScopePanel({ passScope, businessAssertion }: { passScope?: ValidationPassScope | null; businessAssertion?: ValidationBusinessAssertion | null }) {
   if (!passScope && !businessAssertion) {
-    return <div className="pv2-notice pv2-notice-warning"><div className="pv2-notice-title">未记录 / 未证明</div><div className="pv2-notice-body">该 run 没有 pass_scope 或 business_assertion，只能说明曾经产生文本记录，不能证明真实业务链路已通过。</div></div>;
+    return (
+      <div className="pv2-notice pv2-notice-warning">
+        <div className="pv2-notice-title">未记录 / 未证明</div>
+        <div className="pv2-notice-body">该 run 没有 pass_scope 或 business_assertion，只能说明曾经产生文本记录，不能证明真实业务链路已通过。</div>
+      </div>
+    );
   }
   const assertionRows: Array<[string, unknown]> = businessAssertion ? [
     ["操作名称", businessAssertion.operation_name],
@@ -146,37 +181,67 @@ function DetailNotice({ detail }: { detail: ValidationRunDetail }) {
   );
 }
 
+function AgentContextPanel({ context }: { context?: ValidationAgentContext | null }) {
+  if (!context) return <p className="pv2-muted">请选择一条 Bug 或质量发现查看 agent-context。</p>;
+  return (
+    <KeyValuePanel rows={[
+      ["context_type", context.context_type],
+      ["问题说明", context.problem_statement],
+      ["复现命令", context.reproduce_command],
+      ["证据", context.evidence_uris],
+      ["允许修改范围", context.allowed_write_scope],
+      ["疑似模块", context.suspected_modules],
+      ["必须验证", context.required_verification],
+      ["关闭条件", context.closure_requirements],
+      ["GitHub Issue", context.github_issue_url],
+      ["verification_run_id", context.verification_run_id],
+    ]} />
+  );
+}
+
 export default function ValidationCenterPage() {
   const [health, setHealth] = useState<ValidationHealth | null>(null);
   const [summary, setSummary] = useState<ValidationSummary | null>(null);
+  const [findingSummary, setFindingSummary] = useState<ValidationFindingSummary | null>(null);
+  const [bugSummary, setBugSummary] = useState<ValidationBugSummary | null>(null);
   const [plans, setPlans] = useState<ValidationPlan[]>([]);
-  const [runs, setRuns] = useState<ValidationPage<ValidationRunSummary>>(EMPTY_PAGE);
-  const [coverage, setCoverage] = useState<ValidationPage<ValidationCoverageSummary>>(EMPTY_PAGE);
-  const [evidence, setEvidence] = useState<ValidationPage<ValidationEvidenceSummary>>(EMPTY_PAGE);
+  const [runs, setRuns] = useState<ValidationPage<ValidationRunSummary>>(emptyPage<ValidationRunSummary>());
+  const [coverage, setCoverage] = useState<ValidationPage<ValidationCoverageSummary>>(emptyPage<ValidationCoverageSummary>(10));
+  const [evidence, setEvidence] = useState<ValidationPage<ValidationEvidenceSummary>>(emptyPage<ValidationEvidenceSummary>(10));
+  const [findings, setFindings] = useState<ValidationPage<ValidationQualityFinding>>(emptyPage<ValidationQualityFinding>());
+  const [bugs, setBugs] = useState<ValidationPage<ValidationBug>>(emptyPage<ValidationBug>());
   const [selectedRun, setSelectedRun] = useState<ValidationRunDetail | null>(null);
   const [selectedCoverage, setSelectedCoverage] = useState<ValidationCoverageDetail | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<ValidationEvidenceDetail | null>(null);
+  const [selectedFinding, setSelectedFinding] = useState<ValidationQualityFinding | null>(null);
+  const [selectedBug, setSelectedBug] = useState<ValidationBug | null>(null);
+  const [selectedAgentContext, setSelectedAgentContext] = useState<ValidationAgentContext | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState({ module: "", level: "", status: "", search: "", includeMarkdownOnly: true, page: 1, pageSize: DEFAULT_PAGE_SIZE });
+  const [qualityFilters, setQualityFilters] = useState({ findingSource: "", findingSeverity: "", findingStatus: "", findingSearch: "", findingPage: 1, bugSeverity: "", bugStatus: "", bugSearch: "", bugPage: 1, pageSize: DEFAULT_PAGE_SIZE });
 
   const loadStatic = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [healthData, summaryData, planCatalog, coverageData, evidenceData] = await Promise.all([
+      const [healthData, summaryData, planCatalog, coverageData, evidenceData, findingSummaryData, bugSummaryData] = await Promise.all([
         validationApi.health(),
         validationApi.summary(),
         validationApi.plans(),
         validationApi.coverage({ page: 1, page_size: 10 }),
         validationApi.evidence({ page: 1, page_size: 10 }),
+        validationApi.findingSummary(),
+        validationApi.bugSummary(),
       ]);
       setHealth(healthData);
       setSummary(summaryData);
       setPlans(planCatalog.plans || []);
-      setCoverage(coverageData || EMPTY_PAGE);
-      setEvidence(evidenceData || EMPTY_PAGE);
+      setCoverage(coverageData || emptyPage<ValidationCoverageSummary>(10));
+      setEvidence(evidenceData || emptyPage<ValidationEvidenceSummary>(10));
+      setFindingSummary(findingSummaryData);
+      setBugSummary(bugSummaryData);
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -196,14 +261,49 @@ export default function ValidationCenterPage() {
         page: filters.page,
         page_size: filters.pageSize,
       });
-      setRuns(data || EMPTY_PAGE);
+      setRuns(data || emptyPage<ValidationRunSummary>());
     } catch (err) {
       setError(errorText(err));
     }
   }, [filters]);
 
+  const loadFindings = useCallback(async () => {
+    setError(null);
+    try {
+      const data = await validationApi.findings({
+        source_type: qualityFilters.findingSource || undefined,
+        severity: qualityFilters.findingSeverity || undefined,
+        status: qualityFilters.findingStatus || undefined,
+        search: qualityFilters.findingSearch || undefined,
+        page: qualityFilters.findingPage,
+        page_size: qualityFilters.pageSize,
+      });
+      setFindings(data || emptyPage<ValidationQualityFinding>());
+    } catch (err) {
+      setError(errorText(err));
+    }
+  }, [qualityFilters]);
+
+  const loadBugs = useCallback(async () => {
+    setError(null);
+    try {
+      const data = await validationApi.bugs({
+        severity: qualityFilters.bugSeverity || undefined,
+        status: qualityFilters.bugStatus || undefined,
+        search: qualityFilters.bugSearch || undefined,
+        page: qualityFilters.bugPage,
+        page_size: qualityFilters.pageSize,
+      });
+      setBugs(data || emptyPage<ValidationBug>());
+    } catch (err) {
+      setError(errorText(err));
+    }
+  }, [qualityFilters]);
+
   useEffect(() => { void loadStatic(); }, [loadStatic]);
   useEffect(() => { void loadRuns(); }, [loadRuns]);
+  useEffect(() => { void loadFindings(); }, [loadFindings]);
+  useEffect(() => { void loadBugs(); }, [loadBugs]);
 
   const statusCounts = useMemo(() => summary?.runs_by_status || {}, [summary]);
   const latestCoverageTotals = summary?.latest_coverage?.totals || {};
@@ -244,8 +344,50 @@ export default function ValidationCenterPage() {
     }
   }
 
+  async function openFinding(findingId: string) {
+    setDetailLoading(true);
+    setError(null);
+    try {
+      const detail = await validationApi.finding(findingId);
+      setSelectedFinding(detail);
+      setSelectedBug(null);
+      setSelectedAgentContext(detail.agent_context || null);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  async function openBug(bugId: string) {
+    setDetailLoading(true);
+    setError(null);
+    try {
+      const [bug, agentContext] = await Promise.all([
+        validationApi.bug(bugId),
+        validationApi.bugAgentContext(bugId),
+      ]);
+      setSelectedBug(bug);
+      setSelectedFinding(null);
+      setSelectedAgentContext(agentContext || bug.agent_context || null);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
   function updateFilter(key: keyof typeof filters, value: string | number | boolean) {
     setFilters((prev) => ({ ...prev, [key]: value, page: key === "page" ? Number(value) : 1 }));
+  }
+
+  function updateQualityFilter(key: keyof typeof qualityFilters, value: string | number) {
+    setQualityFilters((prev) => ({
+      ...prev,
+      [key]: value,
+      findingPage: key === "findingPage" ? Number(value) : key.startsWith("finding") ? 1 : prev.findingPage,
+      bugPage: key === "bugPage" ? Number(value) : key.startsWith("bug") ? 1 : prev.bugPage,
+    }));
   }
 
   return (
@@ -255,24 +397,24 @@ export default function ValidationCenterPage() {
           <div>
             <div className="pv2-kicker">Validation Center / Read Only</div>
             <h1>自动化测试流水线中心</h1>
-            <p>集中查看测试计划、历史 run、覆盖率快照和 evidence manifest。本阶段只读展示，不执行命令、不写数据库、不触碰生产 8001。</p>
+            <p>集中查看测试计划、历史 run、覆盖率快照、evidence manifest、质量发现和 Bug registry。本阶段只读展示，不执行命令、不写数据库、不触碰生产 8001。</p>
           </div>
           <div className="pv2-chip-row">
             <span className="pv2-chip">只读 API</span>
             <span className="pv2-chip">Mock/真实证明边界</span>
-            <span className="pv2-chip">缺失状态显式展示</span>
+            <span className="pv2-chip">质量发现与 Bug 上下文</span>
           </div>
         </div>
       </header>
 
       {error ? <div className="pv2-error-panel"><div className="pv2-error-kicker">Validation Center Error</div><div className="pv2-error-main">{error}</div></div> : null}
-      {loading ? <div className="pv2-notice pv2-notice-info"><div className="pv2-notice-title">加载中</div><div className="pv2-notice-body">正在读取本地验证历史索引。</div></div> : null}
+      {loading ? <div className="pv2-notice pv2-notice-info"><div className="pv2-notice-title">加载中</div><div className="pv2-notice-body">正在读取本地验证历史索引和质量问题索引。</div></div> : null}
 
       <section className="pv2-grid pv2-grid-4">
         <MetricCard label="历史 Run" value={summary?.run_count ?? health?.history?.run_count ?? "-"} hint={health?.history?.history_root || "tests/aistock_validation/history"} tone="info" />
         <MetricCard label="覆盖率快照" value={summary?.coverage_snapshot_count ?? health?.history?.coverage_snapshot_count ?? "-"} hint={`最新行覆盖 ${pct(latestCoverageTotals.line_percent)}`} tone="success" />
-        <MetricCard label="证据 Manifest" value={summary?.evidence_manifest_count ?? health?.history?.evidence_manifest_count ?? "-"} hint="missing_count 显式展示" tone="warning" />
-        <MetricCard label="计划数" value={summary?.plan_count ?? health?.plan_catalog?.plan_count ?? "-"} hint={health?.production_8001_touched ? "异常：触碰 8001" : "production_8001_touched=false"} tone={health?.production_8001_touched ? "danger" : "success"} />
+        <MetricCard label="质量发现" value={findingSummary?.finding_count ?? summary?.quality?.finding_count ?? health?.quality?.finding_count ?? "-"} hint="guardrail / legacy inventory" tone="warning" />
+        <MetricCard label="Bug Registry" value={bugSummary?.bug_count ?? summary?.quality?.bug_count ?? health?.quality?.bug_count ?? "-"} hint={health?.production_8001_touched ? "异常：触碰 8001" : "read_only / agent-context"} tone={health?.production_8001_touched ? "danger" : "success"} />
       </section>
 
       <SectionCard
@@ -282,7 +424,7 @@ export default function ValidationCenterPage() {
       >
         <div className="pv2-notice pv2-notice-info">
           <div className="pv2-notice-title">执行边界</div>
-          <div className="pv2-notice-body">UI 当前只展示 allowlist 计划。受控执行、队列、权限确认和 evidence 自动回写将在后续阶段启用。</div>
+          <div className="pv2-notice-body">UI 当前只展示 allowlist 计划。受控执行、队列、权限确认和 evidence 自动回写会在后续阶段启用。</div>
         </div>
         <div className="pv2-table-wrap">
           <table className="pv2-table">
@@ -312,9 +454,7 @@ export default function ValidationCenterPage() {
           <div className="pv2-field"><label htmlFor="validation-page-size">每页</label><select id="validation-page-size" className="pv2-select" value={filters.pageSize} onChange={(event) => updateFilter("pageSize", Number(event.target.value))}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option><option value={100}>100</option></select></div>
           <label className="pv2-field"><span className="pv2-label">Markdown only</span><span><input checked={filters.includeMarkdownOnly} onChange={(event) => updateFilter("includeMarkdownOnly", event.target.checked)} type="checkbox" /> 包含无 metadata 记录</span></label>
         </div>
-        <div className="pv2-chip-row" style={{ marginBottom: 12 }}>
-          {Object.entries(statusCounts).map(([status, count]) => <span className="pv2-chip" key={status}>{status}: {count}</span>)}
-        </div>
+        <div style={{ marginBottom: 12 }}><CountChips counts={statusCounts} /></div>
         <div className="pv2-table-wrap">
           <table className="pv2-table">
             <thead><tr><th>Run</th><th>模块/级别</th><th>状态</th><th>时间</th><th>证明范围</th><th>缺失项</th><th>操作</th></tr></thead>
@@ -333,10 +473,105 @@ export default function ValidationCenterPage() {
             </tbody>
           </table>
         </div>
-        <div className="pv2-pagination" aria-label="validation run pagination">
-          <button className="pv2-button-ghost" disabled={filters.page <= 1} onClick={() => updateFilter("page", Math.max(1, filters.page - 1))} type="button">上一页</button>
-          <span aria-label="validation run pagination status">第 {runs.page} / {pageCount(runs)} 页，共 {runs.total} 条</span>
-          <button className="pv2-button-ghost" disabled={!runs.has_more} onClick={() => updateFilter("page", filters.page + 1)} type="button">下一页</button>
+        <Pagination page={runs} label="validation run pagination" onPageChange={(page) => updateFilter("page", page)} />
+      </SectionCard>
+
+      <SectionCard title="质量发现与 Bug Registry" eyebrow="guardrail / legacy inventory / bug agent-context">
+        <div className="pv2-grid pv2-grid-2">
+          <div>
+            <div className="pv2-notice pv2-notice-info">
+              <div className="pv2-notice-title">质量发现统计</div>
+              <div className="pv2-notice-body"><CountChips counts={findingSummary?.by_source_type} /></div>
+            </div>
+            <div className="pv2-form-grid pv2-filter-card">
+              <div className="pv2-field"><label htmlFor="finding-source">来源</label><input id="finding-source" className="pv2-input" value={qualityFilters.findingSource} onChange={(event) => updateQualityFilter("findingSource", event.target.value)} placeholder="guardrail" /></div>
+              <div className="pv2-field"><label htmlFor="finding-severity">严重级别</label><input id="finding-severity" className="pv2-input" value={qualityFilters.findingSeverity} onChange={(event) => updateQualityFilter("findingSeverity", event.target.value)} placeholder="P1" /></div>
+              <div className="pv2-field"><label htmlFor="finding-search">搜索</label><input id="finding-search" className="pv2-input" value={qualityFilters.findingSearch} onChange={(event) => updateQualityFilter("findingSearch", event.target.value)} placeholder="规则 / 文件 / fingerprint" /></div>
+            </div>
+            <div className="pv2-table-wrap">
+              <table className="pv2-table">
+                <thead><tr><th>发现</th><th>级别/状态</th><th>模块</th><th>文件/证据</th><th>Agent 边界</th><th>操作</th></tr></thead>
+                <tbody>
+                  {findings.items.length ? findings.items.map((item) => (
+                    <tr key={item.finding_id}>
+                      <td><strong>{item.title || item.finding_id}</strong><br /><span className="pv2-muted pv2-mono">{compactId(item.finding_id)}</span><br /><span className="pv2-muted">{display(item.source_type)}</span></td>
+                      <td><StatusBadge status={item.severity} /><br /><StatusBadge status={item.status} /></td>
+                      <td>{display(item.module)}</td>
+                      <td>{display(item.file_path)}{item.line ? `:${item.line}` : ""}<br /><span className="pv2-muted">{display(item.evidence_uri)}</span></td>
+                      <td><BadgeList items={item.allowed_write_scope} /><span className="pv2-muted">验证 {arrayCount(item.required_verification)} 项</span></td>
+                      <td><button className="pv2-link-button" type="button" onClick={() => void openFinding(item.finding_id)}>查看发现</button></td>
+                    </tr>
+                  )) : <tr><td className="pv2-empty-cell" colSpan={6}>暂无质量发现</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <Pagination page={findings} label="validation finding pagination" onPageChange={(page) => updateQualityFilter("findingPage", page)} />
+          </div>
+
+          <div>
+            <div className="pv2-notice pv2-notice-warning">
+              <div className="pv2-notice-title">Bug 状态统计</div>
+              <div className="pv2-notice-body"><CountChips counts={bugSummary?.by_status} /></div>
+            </div>
+            <div className="pv2-form-grid pv2-filter-card">
+              <div className="pv2-field"><label htmlFor="bug-severity">严重级别</label><input id="bug-severity" className="pv2-input" value={qualityFilters.bugSeverity} onChange={(event) => updateQualityFilter("bugSeverity", event.target.value)} placeholder="P2" /></div>
+              <div className="pv2-field"><label htmlFor="bug-status">状态</label><input id="bug-status" className="pv2-input" value={qualityFilters.bugStatus} onChange={(event) => updateQualityFilter("bugStatus", event.target.value)} placeholder="detected" /></div>
+              <div className="pv2-field"><label htmlFor="bug-search">搜索</label><input id="bug-search" className="pv2-input" value={qualityFilters.bugSearch} onChange={(event) => updateQualityFilter("bugSearch", event.target.value)} placeholder="bug id / 标题" /></div>
+            </div>
+            <div className="pv2-table-wrap">
+              <table className="pv2-table">
+                <thead><tr><th>Bug</th><th>模块/级别</th><th>状态</th><th>复现与证据</th><th>修复状态</th><th>操作</th></tr></thead>
+                <tbody>
+                  {bugs.items.length ? bugs.items.map((bug) => (
+                    <tr key={bug.bug_id}>
+                      <td><strong>{bug.title || bug.bug_id}</strong><br /><span className="pv2-muted pv2-mono">{bug.bug_id}</span></td>
+                      <td>{display(bug.module)}<br /><StatusBadge status={bug.severity} /></td>
+                      <td><StatusBadge status={bug.status} /></td>
+                      <td><span className="pv2-mono">{display(bug.reproduce_command)}</span><br /><BadgeList items={bug.evidence_uris} /></td>
+                      <td>commit {display(bug.fix_commit)}<br />verify {display(bug.verification_run_id)}<br />GitHub {display(bug.github_issue_url)}</td>
+                      <td><button className="pv2-link-button" type="button" onClick={() => void openBug(bug.bug_id)}>查看 Bug</button></td>
+                    </tr>
+                  )) : <tr><td className="pv2-empty-cell" colSpan={6}>暂无 Bug 记录</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <Pagination page={bugs} label="validation bug pagination" onPageChange={(page) => updateQualityFilter("bugPage", page)} />
+          </div>
+        </div>
+
+        <div className="pv2-grid pv2-grid-2" style={{ marginTop: 16 }}>
+          <SectionCard title="质量/Bug 详情" eyebrow="readable detail">
+            {detailLoading ? <p className="pv2-muted">读取详情中...</p> : null}
+            {selectedFinding ? <KeyValuePanel rows={[
+              ["finding_id", selectedFinding.finding_id],
+              ["来源", selectedFinding.source_type],
+              ["规则", selectedFinding.rule_id],
+              ["标题", selectedFinding.title],
+              ["描述", selectedFinding.description],
+              ["文件", selectedFinding.file_path],
+              ["fingerprint", selectedFinding.fingerprint],
+              ["证据", selectedFinding.evidence_uri],
+              ["修复建议", selectedFinding.remediation],
+              ["必须验证", selectedFinding.required_verification],
+            ]} /> : null}
+            {selectedBug ? <KeyValuePanel rows={[
+              ["bug_id", selectedBug.bug_id],
+              ["标题", selectedBug.title],
+              ["描述", selectedBug.description],
+              ["模块", selectedBug.module],
+              ["严重级别", selectedBug.severity],
+              ["状态", selectedBug.status],
+              ["触发条件", selectedBug.trigger_condition],
+              ["失败 run", selectedBug.failing_run_id],
+              ["复现命令", selectedBug.reproduce_command],
+              ["证据", selectedBug.evidence_uris],
+              ["关闭条件", selectedBug.closure_requirements],
+            ]} /> : null}
+            {!selectedFinding && !selectedBug ? <p className="pv2-muted">请选择一条质量发现或 Bug。</p> : null}
+          </SectionCard>
+          <SectionCard title="Agent Context" eyebrow="Codex / Claude repair input">
+            <AgentContextPanel context={selectedAgentContext} />
+          </SectionCard>
         </div>
       </SectionCard>
 

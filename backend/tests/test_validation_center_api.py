@@ -9,6 +9,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.services.validation.finding_store import (
+    BUG_SCHEMA,
+    GUARDRAIL_SCHEMA,
+    LEGACY_SCHEMA,
+    ValidationFindingStore,
+)
 from backend.services.validation.history_store import (
     COVERAGE_SCHEMA,
     EVIDENCE_SCHEMA,
@@ -147,12 +153,91 @@ def _write_history(history_root: Path) -> dict[str, Path]:
     return {"run_md": run_md, "markdown_only": markdown_only, "malformed": malformed}
 
 
+def _write_quality_inputs(tmp_path: Path) -> dict[str, Path]:
+    guardrail_root = tmp_path / "guardrails"
+    legacy_root = tmp_path / "legacy_inventory"
+    bug_root = tmp_path / "bugs"
+    _write_json(
+        guardrail_root / "changed_scan.json",
+        {
+            "schema_version": GUARDRAIL_SCHEMA,
+            "generated_at": "2026-05-04T13:00:00",
+            "mode": "changed_only",
+            "files_scanned": 2,
+            "summary": {"total_findings": 1},
+            "findings": [
+                {
+                    "rule_id": "NO-SILENT-FALLBACK",
+                    "title": "No silent fallback",
+                    "severity": "P1",
+                    "category": "reliability",
+                    "file": "backend/services/demo.py",
+                    "line": 42,
+                    "message": "Exception handler may hide a business failure.",
+                    "remediation": "Fail fast and surface the error.",
+                    "baseline_policy": "block_new_only",
+                    "fingerprint": "guardrail_fp_001",
+                }
+            ],
+        },
+    )
+    _write_json(
+        legacy_root / "inventory.json",
+        {
+            "schema_version": LEGACY_SCHEMA,
+            "generated_at": "2026-05-04T13:05:00",
+            "mode": "paths",
+            "files_scanned": 1,
+            "summary": {"total_items": 1},
+            "items": [
+                {
+                    "path": "scripts/old_debug_probe.py",
+                    "category": "script_lifecycle_review",
+                    "lifecycle_status": "delete_candidate",
+                    "risk": "medium",
+                    "confidence": "medium",
+                    "recommended_action": "move_to_debug_tools_or_remove_after_review",
+                    "signals": ["script_lifecycle_review"],
+                    "references_found": 0,
+                    "reference_examples": [],
+                }
+            ],
+        },
+    )
+    _write_json(
+        bug_root / "bug_demo.json",
+        {
+            "schema_version": BUG_SCHEMA,
+            "bug_id": "bug_demo_001",
+            "title": "Demo validation failure",
+            "description": "A mocked validation failure for registry contract tests.",
+            "module": "validation_center",
+            "severity": "P2",
+            "risk_area": "validation",
+            "status": "detected",
+            "trigger_condition": {"plan_key": "validation_center_backend"},
+            "reproduce_command": "python -m nox -s validation_center_backend",
+            "failing_run_id": "run_failed_demo",
+            "evidence_uris": ["tests/aistock_validation/history/validation_center/demo.md"],
+            "fingerprint": "bug_fp_001",
+            "assigned_agent": "codex",
+            "allowed_write_scope": ["backend/services/validation"],
+            "suspected_modules": ["backend/services/validation"],
+            "required_verification": ["python -m nox -s validation_center_backend"],
+            "closure_requirements": ["verification_run_id required"],
+            "created_at": "2026-05-04T13:10:00",
+        },
+    )
+    return {"guardrail_root": guardrail_root, "legacy_root": legacy_root, "bug_root": bug_root}
+
+
 @pytest.fixture()
 def client(tmp_path) -> TestClient:
     history_root = tmp_path / "history"
     catalog_path = tmp_path / "test_plans.yaml"
     _write_history(history_root)
     _write_catalog(catalog_path)
+    quality_roots = _write_quality_inputs(tmp_path)
 
     app = FastAPI()
     app.include_router(validation.router, prefix="/api/v1")
@@ -161,6 +246,12 @@ def client(tmp_path) -> TestClient:
         repo_root=tmp_path,
     )
     app.dependency_overrides[validation.get_plan_catalog] = lambda: ValidationPlanCatalog(catalog_path)
+    app.dependency_overrides[validation.get_finding_store] = lambda: ValidationFindingStore(
+        repo_root=tmp_path,
+        guardrail_root=quality_roots["guardrail_root"],
+        legacy_root=quality_roots["legacy_root"],
+        bug_root=quality_roots["bug_root"],
+    )
     return TestClient(app)
 
 
@@ -185,6 +276,8 @@ def test_validation_health_and_plans_are_read_only(client: TestClient) -> None:
     assert health["mode"] == "read_only"
     assert health["production_8001_touched"] is False
     assert health["plan_catalog"]["plan_count"] == 1
+    assert health["quality"]["finding_count"] == 2
+    assert health["quality"]["bug_count"] == 1
 
     plans = client.get("/api/v1/validation/plans").json()["data"]["plans"]
     assert plans[0]["plan_key"] == "l0"
@@ -255,4 +348,35 @@ def test_summary_reports_module_counts(client: TestClient) -> None:
     assert summary["coverage_snapshot_count"] == 1
     assert summary["evidence_manifest_count"] == 1
     assert summary["plan_count"] == 1
+    assert summary["quality"]["finding_count"] == 2
+    assert summary["quality"]["bug_count"] == 1
     assert summary["modules"][0]["module"] == "validation_center"
+
+
+def test_quality_findings_and_bug_agent_context(client: TestClient) -> None:
+    findings = client.get("/api/v1/validation/findings", params={"page_size": 20}).json()["data"]
+    assert findings["total"] == 2
+    guardrail = next(item for item in findings["items"] if item["source_type"] == "guardrail")
+    assert guardrail["severity"] == "P1"
+    assert guardrail["status"] == "detected"
+    assert guardrail["allowed_write_scope"] == ["backend/services/demo.py"]
+
+    finding_detail = client.get(f"/api/v1/validation/findings/{guardrail['finding_id']}").json()["data"]
+    assert finding_detail["agent_context"]["context_type"] == "quality_finding"
+    assert "aistock_guardrail_scan.py" in finding_detail["agent_context"]["reproduce_command"]
+
+    finding_summary = client.get("/api/v1/validation/findings/summary").json()["data"]
+    assert finding_summary["by_source_type"]["guardrail"] == 1
+    assert finding_summary["by_source_type"]["legacy_inventory"] == 1
+
+    bugs = client.get("/api/v1/validation/bugs").json()["data"]
+    assert bugs["total"] == 1
+    assert bugs["items"][0]["bug_id"] == "bug_demo_001"
+
+    bug_detail = client.get("/api/v1/validation/bugs/bug_demo_001").json()["data"]
+    assert bug_detail["agent_context"]["context_type"] == "bug"
+    assert bug_detail["agent_context"]["allowed_write_scope"] == ["backend/services/validation"]
+
+    agent_context = client.get("/api/v1/validation/bugs/bug_demo_001/agent-context").json()["data"]
+    assert agent_context["reproduce_command"] == "python -m nox -s validation_center_backend"
+    assert agent_context["closure_requirements"] == ["verification_run_id required"]

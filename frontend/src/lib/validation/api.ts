@@ -29,6 +29,12 @@ export type ValidationHealth = {
     missing?: boolean;
     plan_count?: number;
   };
+  quality?: {
+    mode?: string;
+    finding_count?: number;
+    bug_count?: number;
+    parse_errors?: JsonObject[];
+  };
   production_8001_touched?: boolean;
 };
 
@@ -158,10 +164,109 @@ export type ValidationSummary = {
   coverage_snapshot_count?: number;
   evidence_manifest_count?: number;
   plan_count?: number;
+  quality?: {
+    finding_count?: number;
+    bug_count?: number;
+  };
   runs_by_status?: Record<string, number>;
   modules?: Array<JsonObject & { module?: string; run_count?: number; latest_run?: ValidationRunSummary }>;
   latest_runs?: ValidationRunSummary[];
   latest_coverage?: ValidationCoverageSummary | null;
+};
+
+export type ValidationQualityFinding = JsonObject & {
+  finding_id: string;
+  source_type?: string;
+  source_schema?: string;
+  module?: string;
+  severity?: string;
+  status?: string;
+  title?: string;
+  description?: string;
+  rule_id?: string | null;
+  category?: string | null;
+  file_path?: string | null;
+  line?: number | null;
+  fingerprint?: string;
+  first_seen_at?: string | null;
+  last_seen_at?: string | null;
+  evidence_uri?: string | null;
+  remediation?: string | null;
+  baseline_policy?: string | null;
+  lifecycle_status?: string | null;
+  risk?: string | null;
+  confidence?: string | null;
+  allowed_write_scope?: string[];
+  required_verification?: string[];
+  linked_issue?: string | null;
+  agent_context?: ValidationAgentContext;
+};
+
+export type ValidationBug = JsonObject & {
+  bug_id: string;
+  title?: string;
+  description?: string | null;
+  module?: string;
+  severity?: string;
+  risk_area?: string | null;
+  status?: string;
+  trigger_condition?: JsonObject;
+  reproduce_command?: string | null;
+  failing_run_id?: string | null;
+  evidence_uris?: string[];
+  fingerprint?: string;
+  github_issue_number?: number | null;
+  github_issue_url?: string | null;
+  assigned_agent?: string | null;
+  fix_branch?: string | null;
+  fix_commit?: string | null;
+  verification_run_id?: string | null;
+  first_seen_at?: string | null;
+  last_seen_at?: string | null;
+  allowed_write_scope?: string[];
+  suspected_modules?: string[];
+  required_verification?: string[];
+  closure_requirements?: string[];
+  source_path?: string;
+  agent_context?: ValidationAgentContext;
+};
+
+export type ValidationAgentContext = JsonObject & {
+  schema_version?: string;
+  context_type?: "bug" | "quality_finding" | string;
+  bug_id?: string;
+  finding_id?: string;
+  problem_statement?: string | null;
+  finding_source?: string;
+  severity?: string;
+  status?: string;
+  reproduce_command?: string | null;
+  evidence_uris?: Array<string | null | undefined>;
+  allowed_write_scope?: string[];
+  suspected_modules?: Array<string | null | undefined>;
+  required_verification?: string[];
+  closure_requirements?: string[];
+  github_issue_url?: string | null;
+  verification_run_id?: string | null;
+};
+
+export type ValidationFindingSummary = {
+  finding_count?: number;
+  by_source_type?: Record<string, number>;
+  by_severity?: Record<string, number>;
+  by_status?: Record<string, number>;
+  by_module?: Record<string, number>;
+  latest_findings?: ValidationQualityFinding[];
+  parse_errors?: Array<JsonObject>;
+};
+
+export type ValidationBugSummary = {
+  bug_count?: number;
+  by_severity?: Record<string, number>;
+  by_status?: Record<string, number>;
+  by_module?: Record<string, number>;
+  latest_bugs?: ValidationBug[];
+  parse_errors?: Array<JsonObject>;
 };
 
 export type ValidationRunQuery = {
@@ -179,6 +284,18 @@ export type ValidationListQuery = {
   status?: string;
   page?: number;
   page_size?: number;
+};
+
+export type ValidationFindingQuery = ValidationListQuery & {
+  source_type?: string;
+  severity?: string;
+  search?: string;
+};
+
+export type ValidationBugQuery = ValidationListQuery & {
+  severity?: string;
+  agent?: string;
+  search?: string;
 };
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1").replace(/\/+$/, "");
@@ -272,6 +389,27 @@ export const validationApi = {
   },
   summary(): Promise<ValidationSummary> {
     return unwrap<ValidationSummary>("/validation/summary");
+  },
+  findings(query: ValidationFindingQuery = {}): Promise<ValidationPage<ValidationQualityFinding>> {
+    return unwrap<ValidationPage<ValidationQualityFinding>>(appendQuery("/validation/findings", query));
+  },
+  finding(findingId: string): Promise<ValidationQualityFinding> {
+    return unwrap<ValidationQualityFinding>(`/validation/findings/${encodeURIComponent(findingId)}`);
+  },
+  findingSummary(): Promise<ValidationFindingSummary> {
+    return unwrap<ValidationFindingSummary>("/validation/findings/summary");
+  },
+  bugs(query: ValidationBugQuery = {}): Promise<ValidationPage<ValidationBug>> {
+    return unwrap<ValidationPage<ValidationBug>>(appendQuery("/validation/bugs", query));
+  },
+  bug(bugId: string): Promise<ValidationBug> {
+    return unwrap<ValidationBug>(`/validation/bugs/${encodeURIComponent(bugId)}`);
+  },
+  bugSummary(): Promise<ValidationBugSummary> {
+    return unwrap<ValidationBugSummary>("/validation/bugs/summary");
+  },
+  bugAgentContext(bugId: string): Promise<ValidationAgentContext> {
+    return unwrap<ValidationAgentContext>(`/validation/bugs/${encodeURIComponent(bugId)}/agent-context`);
   },
 };
 

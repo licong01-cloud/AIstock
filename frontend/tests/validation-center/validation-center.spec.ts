@@ -2,9 +2,10 @@ import { expect, test } from "@playwright/test";
 
 const passedRunId = "validation_center_20260504_l2_api__abc123";
 const markdownOnlyRunId = "validation_center_20260504_l1_markdown_only__def456";
-const malformedRunId = "validation_center_20260504_l1_malformed__bad789";
 const coverageId = "validation_center_coverage_demo__cov123";
 const evidenceId = "validation_center_evidence_demo__evd123";
+const findingId = "guardrail_guardrail_fp_001";
+const bugId = "bug_demo_001";
 
 const runItems = [
   {
@@ -77,33 +78,6 @@ const runItems = [
     quality_gates: [],
     parse_error: null,
   },
-  {
-    run_id: malformedRunId,
-    module: "validation_center",
-    module_slug: "validation_center",
-    level: "L1",
-    title: "Malformed Metadata",
-    status: "unknown",
-    git_commit: null,
-    operator: null,
-    started_at: "2026-05-04T10:00:00+08:00",
-    finished_at: null,
-    markdown_path: "tests/aistock_validation/history/validation_center/20260504_l1_malformed.md",
-    metadata_path: "tests/aistock_validation/history/validation_center/20260504_l1_malformed.json",
-    metadata_missing: false,
-    metadata_parse_error: "invalid JSON: Expecting property name enclosed in double quotes",
-    source_type: "markdown_only",
-    coverage: null,
-    coverage_snapshot_id: null,
-    coverage_missing: true,
-    evidence_manifest_id: null,
-    evidence_missing: true,
-    pass_scope: null,
-    business_assertion: null,
-    success_scope_recorded: false,
-    quality_gates: [],
-    parse_error: "invalid JSON: Expecting property name enclosed in double quotes",
-  },
 ];
 
 const coverageSummary = {
@@ -136,6 +110,83 @@ const evidenceSummary = {
   missing_count: 0,
   evidence_count: 3,
   missing: [],
+};
+
+const findingItem = {
+  finding_id: findingId,
+  source_type: "guardrail",
+  source_schema: "aistock_guardrail_scan_result_v1",
+  module: "backend",
+  severity: "P1",
+  status: "detected",
+  title: "No silent fallback",
+  description: "Exception handler may hide a business failure.",
+  rule_id: "NO-SILENT-FALLBACK",
+  category: "reliability",
+  file_path: "backend/services/demo.py",
+  line: 42,
+  fingerprint: "guardrail_fp_001",
+  evidence_uri: "tmp/validation/guardrails/changed_scan.json",
+  allowed_write_scope: ["backend/services/demo.py"],
+  required_verification: [
+    "python scripts/aistock_guardrail_scan.py --changed-only --fail-on-severity P1",
+    "python -m nox -s l0 -- <changed files>",
+  ],
+};
+
+const findingAgentContext = {
+  schema_version: "aistock_validation_agent_context_v1",
+  context_type: "quality_finding",
+  finding_id: findingId,
+  problem_statement: "Exception handler may hide a business failure.",
+  finding_source: "guardrail",
+  severity: "P1",
+  status: "detected",
+  reproduce_command: "python scripts/aistock_guardrail_scan.py backend/services/demo.py --fail-on-severity NONE",
+  evidence_uris: ["tmp/validation/guardrails/changed_scan.json"],
+  allowed_write_scope: ["backend/services/demo.py"],
+  suspected_modules: ["backend", "backend/services/demo.py"],
+  required_verification: ["python -m nox -s l0 -- backend/services/demo.py"],
+  closure_requirements: ["Record a verification run before closing."],
+};
+
+const bugItem = {
+  bug_id: bugId,
+  title: "Demo validation failure",
+  description: "A mocked validation failure for registry UI tests.",
+  module: "validation_center",
+  severity: "P2",
+  risk_area: "validation",
+  status: "detected",
+  trigger_condition: { plan_key: "validation_center_backend" },
+  reproduce_command: "python -m nox -s validation_center_backend",
+  failing_run_id: "run_failed_demo",
+  evidence_uris: ["tests/aistock_validation/history/validation_center/demo.md"],
+  fingerprint: "bug_fp_001",
+  github_issue_url: "https://github.com/example/aistock/issues/1",
+  assigned_agent: "codex",
+  allowed_write_scope: ["backend/services/validation"],
+  suspected_modules: ["backend/services/validation"],
+  required_verification: ["python -m nox -s validation_center_backend"],
+  closure_requirements: ["verification_run_id required"],
+};
+
+const bugAgentContext = {
+  schema_version: "aistock_validation_agent_context_v1",
+  context_type: "bug",
+  bug_id: bugId,
+  problem_statement: "A mocked validation failure for registry UI tests.",
+  finding_source: "validation_failure",
+  severity: "P2",
+  status: "detected",
+  reproduce_command: "python -m nox -s validation_center_backend",
+  evidence_uris: ["tests/aistock_validation/history/validation_center/demo.md"],
+  allowed_write_scope: ["backend/services/validation"],
+  suspected_modules: ["backend/services/validation"],
+  required_verification: ["python -m nox -s validation_center_backend"],
+  closure_requirements: ["verification_run_id required"],
+  github_issue_url: "https://github.com/example/aistock/issues/1",
+  verification_run_id: null,
 };
 
 test("Validation Center read-only UI uses mocked validation APIs", async ({ page }) => {
@@ -182,11 +233,12 @@ test("Validation Center read-only UI uses mocked validation APIs", async ({ page
             mode: "read_only",
             history_root: "tests/aistock_validation/history",
             exists: true,
-            run_count: 3,
+            run_count: 2,
             coverage_snapshot_count: 1,
             evidence_manifest_count: 1,
           },
           plan_catalog: { catalog_path: "tests/aistock_validation/catalog/test_plans.yaml", missing: false, plan_count: 2 },
+          quality: { mode: "read_only", finding_count: 1, bug_count: 1, parse_errors: [] },
           production_8001_touched: false,
         },
       });
@@ -197,12 +249,13 @@ test("Validation Center read-only UI uses mocked validation APIs", async ({ page
         status: "success",
         data: {
           history_root: "tests/aistock_validation/history",
-          run_count: 3,
+          run_count: 2,
           coverage_snapshot_count: 1,
           evidence_manifest_count: 1,
           plan_count: 2,
-          runs_by_status: { passed: 1, unknown: 2 },
-          modules: [{ module: "validation_center", run_count: 3, latest_run: runItems[0] }],
+          quality: { finding_count: 1, bug_count: 1 },
+          runs_by_status: { passed: 1, unknown: 1 },
+          modules: [{ module: "validation_center", run_count: 2, latest_run: runItems[0] }],
           latest_runs: runItems,
           latest_coverage: coverageSummary,
         },
@@ -267,13 +320,7 @@ test("Validation Center read-only UI uses mocked validation APIs", async ({ page
       const start = (pageNumber - 1) * pageSize;
       return respond({
         status: "success",
-        data: {
-          items: items.slice(start, start + pageSize),
-          total: items.length,
-          page: pageNumber,
-          page_size: pageSize,
-          has_more: start + pageSize < items.length,
-        },
+        data: { items: items.slice(start, start + pageSize), total: items.length, page: pageNumber, page_size: pageSize, has_more: start + pageSize < items.length },
       });
     }
 
@@ -301,6 +348,55 @@ test("Validation Center read-only UI uses mocked validation APIs", async ({ page
       return respond({ status: "success", data: { summary: evidenceSummary, manifest: { ...evidenceSummary, evidence: [{ kind: "pytest", path: "backend/tests/test_validation_center_api.py", exists: true }] } } });
     }
 
+    if (path.endsWith("/api/v1/validation/findings/summary")) {
+      return respond({
+        status: "success",
+        data: {
+          finding_count: 1,
+          by_source_type: { guardrail: 1 },
+          by_severity: { P1: 1 },
+          by_status: { detected: 1 },
+          by_module: { backend: 1 },
+          latest_findings: [findingItem],
+          parse_errors: [],
+        },
+      });
+    }
+
+    if (path.endsWith("/api/v1/validation/findings")) {
+      return respond({ status: "success", data: { items: [findingItem], total: 1, page: 1, page_size: 20, has_more: false } });
+    }
+
+    if (path.endsWith(`/api/v1/validation/findings/${findingId}`)) {
+      return respond({ status: "success", data: { ...findingItem, agent_context: findingAgentContext } });
+    }
+
+    if (path.endsWith("/api/v1/validation/bugs/summary")) {
+      return respond({
+        status: "success",
+        data: {
+          bug_count: 1,
+          by_severity: { P2: 1 },
+          by_status: { detected: 1 },
+          by_module: { validation_center: 1 },
+          latest_bugs: [bugItem],
+          parse_errors: [],
+        },
+      });
+    }
+
+    if (path.endsWith("/api/v1/validation/bugs")) {
+      return respond({ status: "success", data: { items: [bugItem], total: 1, page: 1, page_size: 20, has_more: false } });
+    }
+
+    if (path.endsWith(`/api/v1/validation/bugs/${bugId}/agent-context`)) {
+      return respond({ status: "success", data: bugAgentContext });
+    }
+
+    if (path.endsWith(`/api/v1/validation/bugs/${bugId}`)) {
+      return respond({ status: "success", data: { ...bugItem, agent_context: bugAgentContext } });
+    }
+
     return respond({ detail: `unexpected mocked validation route: ${path}` }, 404);
   });
 
@@ -310,7 +406,10 @@ test("Validation Center read-only UI uses mocked validation APIs", async ({ page
   await expect(page.getByRole("button", { name: "controlled execution disabled" })).toBeDisabled();
   await expect(page.getByText("Validation Center backend contract")).toBeVisible();
   await expect(page.getByText("Validation API Run")).toBeVisible();
-  await expect(page.getByLabel("validation run pagination status")).toContainText("共 3 条");
+  await expect(page.getByText("质量发现与 Bug Registry")).toBeVisible();
+  await expect(page.getByText("No silent fallback")).toBeVisible();
+  await expect(page.getByText("Demo validation failure")).toBeVisible();
+  await expect(page.getByLabel("validation run pagination status")).toContainText("共 2 条");
 
   await page.getByRole("button", { name: "查看详情" }).first().click();
   await expect(page.getByText("read validation history")).toBeVisible();
@@ -327,7 +426,16 @@ test("Validation Center read-only UI uses mocked validation APIs", async ({ page
   await expect(page.getByText("evidence_count")).toBeVisible();
   await expect(page.getByText("missing_count", { exact: true })).toBeVisible();
 
-  await page.getByLabel("搜索").fill("Markdown");
+  await page.getByRole("button", { name: "查看发现" }).click();
+  await expect(page.getByText("quality_finding")).toBeVisible();
+  await expect(page.getByText("python scripts/aistock_guardrail_scan.py backend/services/demo.py --fail-on-severity NONE")).toBeVisible();
+
+  await page.getByRole("button", { name: "查看 Bug" }).click();
+  await expect(page.getByText("bug", { exact: true })).toBeVisible();
+  await expect(page.getByText("python -m nox -s validation_center_backend").first()).toBeVisible();
+  await expect(page.getByText("verification_run_id required").first()).toBeVisible();
+
+  await page.locator("#validation-search").fill("Markdown");
   await expect(page.getByText("Markdown Only", { exact: true })).toBeVisible();
   await expect(page.getByText("metadata_missing：缺少 JSON run metadata")).toBeVisible();
   await page.getByRole("button", { name: "查看详情" }).first().click();

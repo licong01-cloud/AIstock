@@ -1,0 +1,78 @@
+{
+  "schema_version": "aistock_validation_run_v1",
+  "module": "validation_center",
+  "module_slug": "validation_center",
+  "level": "L3",
+  "title": "Validation Center Quality Finding / Bug Registry First-stage Complete Loop",
+  "status": "passed",
+  "git_commit": "6b84449",
+  "operator": "Codex",
+  "started_at": "2026-05-04T20:20:00+08:00",
+  "finished_at": "2026-05-04T20:55:00+08:00",
+  "coverage": {
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "status": "passed",
+    "snapshot_path": "tmp/validation/coverage/validation_center_backend_snapshot.json",
+    "line_percent": 83.06,
+    "branch_percent": 67.89
+  },
+  "quality_gates": [
+    {
+      "metric": "backend_pytest",
+      "status": "passed",
+      "actual": "backend/tests/test_validation_center_api.py: 9 passed; validation_center_backend: 19 passed",
+      "threshold": "all tests pass"
+    },
+    {
+      "metric": "backend_coverage",
+      "status": "passed",
+      "actual": "line=83.06; branch=67.89",
+      "threshold": "line>=75; branch>=55"
+    },
+    {
+      "metric": "typescript",
+      "status": "passed",
+      "actual": "npm exec tsc -- --noEmit --incremental false",
+      "threshold": "must pass"
+    },
+    {
+      "metric": "playwright_mock_ui",
+      "status": "passed",
+      "actual": "1 passed",
+      "threshold": "all tests pass"
+    },
+    {
+      "metric": "l0_high_guardrail",
+      "status": "passed",
+      "actual": "0 high findings; 2 medium reviewed",
+      "threshold": "no high findings"
+    }
+  ],
+  "pass_scope": {
+    "level": "L3",
+    "real_backend": false,
+    "real_database": false,
+    "real_node_api": false,
+    "real_frontend_click": true,
+    "writes_business_state": false,
+    "positive_business_success": false,
+    "negative_failfast_only": false,
+    "mock_api_used": true,
+    "production_8001_touched": false,
+    "current_commit_evidence": true
+  },
+  "business_assertion": {
+    "can_user_complete_operation": true,
+    "operation_name": "查看 Validation Center 质量发现、Bug registry 和 agent-context",
+    "evidence": {
+      "ui": "frontend/tests/validation-center/validation-center.spec.ts",
+      "api": "backend/tests/test_validation_center_api.py",
+      "db": "not touched",
+      "logs": "nox validation_center_ui and validation_center_backend output"
+    },
+    "unresolved_blockers": [
+      "Controlled execution UI and backend runner are not enabled in this phase.",
+      "GitHub Issue authoritative write-back and DB-backed Bug lifecycle are deferred."
+    ]
+  }
+}
