@@ -1,0 +1,116 @@
+{
+  "schema_version": "aistock_guardrail_scan_result_v1",
+  "generated_at": "2026-05-04T12:14:01.359043+00:00",
+  "mode": "paths",
+  "files_scanned": 20,
+  "baseline": {
+    "baseline_json": "tmp/validation/guardrails/baseline_20260504.json",
+    "fail_new_only": true
+  },
+  "gate": {
+    "fail_on_severity": "P1",
+    "blocking_count": 0,
+    "status": "passed"
+  },
+  "summary": {
+    "total_findings": 6,
+    "by_severity": {
+      "P1": 1,
+      "P2": 5
+    },
+    "by_rule": {
+      "ALGO-COMPLEXITY-001": 2,
+      "SCRIPT-LOCATION-001": 1,
+      "UI-RAWJSON-001": 3
+    },
+    "by_category": {
+      "frontend": 3,
+      "performance_memory": 2,
+      "repository_hygiene": 1
+    },
+    "by_baseline_status": {
+      "baseline": 1,
+      "new": 5
+    }
+  },
+  "findings": [
+    {
+      "rule_id": "ALGO-COMPLEXITY-001",
+      "title": "High-dimensional quant loops and large joins need complexity review",
+      "severity": "P2",
+      "category": "performance_memory",
+      "file": "backend/services/validation/execution_runner.py",
+      "line": 245,
+      "message": "High-dimensional quant loops and large joins need complexity review",
+      "remediation": "Document row-count bounds, join keys, row-explosion risk, and batching/vectorization strategy for large quant workloads.",
+      "baseline_policy": "warn_new_only",
+      "fingerprint": "fc01cbe047d9cc9f",
+      "baseline_status": "new"
+    },
+    {
+      "rule_id": "ALGO-COMPLEXITY-001",
+      "title": "High-dimensional quant loops and large joins need complexity review",
+      "severity": "P2",
+      "category": "performance_memory",
+      "file": "backend/services/validation/execution_runner.py",
+      "line": 639,
+      "message": "High-dimensional quant loops and large joins need complexity review",
+      "remediation": "Document row-count bounds, join keys, row-explosion risk, and batching/vectorization strategy for large quant workloads.",
+      "baseline_policy": "warn_new_only",
+      "fingerprint": "77572cd28d3f2f54",
+      "baseline_status": "new"
+    },
+    {
+      "rule_id": "UI-RAWJSON-001",
+      "title": "Operator UI must not use raw JSON as the primary business view",
+      "severity": "P2",
+      "category": "frontend",
+      "file": "frontend/src/app/validation-center/page.tsx",
+      "line": 749,
+      "message": "Operator UI must not use raw JSON as the primary business view",
+      "remediation": "Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only.",
+      "baseline_policy": "warn_new_only",
+      "fingerprint": "c9273ff29db97165",
+      "baseline_status": "new"
+    },
+    {
+      "rule_id": "UI-RAWJSON-001",
+      "title": "Operator UI must not use raw JSON as the primary business view",
+      "severity": "P2",
+      "category": "frontend",
+      "file": "frontend/src/lib/validation/api.ts",
+      "line": 417,
+      "message": "Operator UI must not use raw JSON as the primary business view",
+      "remediation": "Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only.",
+      "baseline_policy": "warn_new_only",
+      "fingerprint": "670eb300ae736dc3",
+      "baseline_status": "new"
+    },
+    {
+      "rule_id": "UI-RAWJSON-001",
+      "title": "Operator UI must not use raw JSON as the primary business view",
+      "severity": "P2",
+      "category": "frontend",
+      "file": "frontend/src/lib/validation/api.ts",
+      "line": 521,
+      "message": "Operator UI must not use raw JSON as the primary business view",
+      "remediation": "Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only.",
+      "baseline_policy": "warn_new_only",
+      "fingerprint": "6249ef1ec3a18d85",
+      "baseline_status": "new"
+    },
+    {
+      "rule_id": "SCRIPT-LOCATION-001",
+      "title": "One-off test and diagnostic scripts belong under debug_tools",
+      "severity": "P1",
+      "category": "repository_hygiene",
+      "file": "noxfile.py",
+      "line": 1,
+      "message": "One-off test and diagnostic scripts belong under debug_tools",
+      "remediation": "Put one-off diagnostics under debug_tools/<module>/<date_or_issue>; reusable business scripts need parameters and tests under scripts.",
+      "baseline_policy": "block_new_only",
+      "fingerprint": "615e024e9692283e",
+      "baseline_status": "baseline"
+    }
+  ]
+}

@@ -281,11 +281,21 @@ def get_validation_bug_agent_context(
 @router.get("/executions", response_model=ValidationResponse, summary="List controlled validation executions")
 def list_validation_executions(
     status: str | None = Query(None),
+    plan_key: str | None = Query(None),
+    module: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     execution_runner: ValidationExecutionRunner = Depends(get_execution_runner),
 ):
-    return _success(execution_runner.list_jobs(status=status, page=page, page_size=page_size))
+    return _success(
+        execution_runner.list_jobs(
+            status=status,
+            plan_key=plan_key,
+            module=module,
+            page=page,
+            page_size=page_size,
+        )
+    )
 
 
 @router.get("/executions/{job_id}", response_model=ValidationResponse, summary="Get controlled validation execution")
@@ -297,6 +307,33 @@ def get_validation_execution(
     if job is None:
         raise HTTPException(status_code=404, detail=f"validation execution not found: {job_id}")
     return _success(job)
+
+
+@router.get("/executions/{job_id}/log", response_model=ValidationResponse, summary="Get controlled validation execution log")
+def get_validation_execution_log(
+    job_id: str,
+    tail_lines: int = Query(300, ge=1, le=2000),
+    execution_runner: ValidationExecutionRunner = Depends(get_execution_runner),
+):
+    payload = execution_runner.get_job_log(job_id, tail_lines=tail_lines)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"validation execution not found: {job_id}")
+    return _success(payload)
+
+
+@router.get(
+    "/executions/{job_id}/evidence",
+    response_model=ValidationResponse,
+    summary="Get controlled validation execution evidence",
+)
+def get_validation_execution_evidence(
+    job_id: str,
+    execution_runner: ValidationExecutionRunner = Depends(get_execution_runner),
+):
+    payload = execution_runner.get_job_evidence(job_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"validation execution not found: {job_id}")
+    return _success(payload)
 
 
 @router.post("/executions", response_model=ValidationResponse, summary="Start allowlisted validation execution")

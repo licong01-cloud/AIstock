@@ -35,6 +35,7 @@ python -m nox -s validation_coverage_backend
 python -m nox -s validation_center_backend
 python -m nox -s validation_center_ui
 python -m nox -s validation_center_live_readonly
+python -m nox -s validation_center_runner_smoke
 python -m nox -s qe_data_contract_backend
 python -m nox -s l0 -- scripts/aistock_validate.py backend/tests/test_aistock_validate_metadata.py backend/tests/test_aistock_validate_coverage.py noxfile.py tests/aistock_validation/modules/validation_center.md
 ```
@@ -53,6 +54,23 @@ The controlled runner is the first execution-capable Validation Center loop. It 
 - `/health` and `/summary` expose runner mode, execution root, job counts, no arbitrary shell, and `production_8001_touched=false`.
 - The UI shows runner-ready plans, a guarded execute button, submitted job status, logs/evidence paths, and a refreshable execution queue.
 - Tests must cover allowlisted success, rejected unsafe plans, production-port refusal, API list/detail/start, UI POST start, TypeScript, Playwright, coverage, and L0 guardrails.
+
+## L3 Runner Auto Archive And Detail Contract
+
+Every completed controlled-runner job must create a standard Validation History record so runner evidence does not remain only in transient `tmp/validation/runner/jobs`.
+
+- A job starts with `archive.status=pending` when archive is enabled; after terminal completion it must become `archive.status=archived` or explicit `archive.status=failed`.
+- Archive output lives under `tests/aistock_validation/history/<module>/` and includes Markdown run record, run metadata JSON, standard evidence manifest JSON, runner job JSON, runner log TXT, and runner evidence JSON.
+- Run metadata must use schema `aistock_validation_run_v1`; standard evidence must use schema `aistock_validation_evidence_manifest_v1`; runner evidence remains `aistock_validation_runner_evidence_v1`.
+- The archived run metadata must include runner job id, plan key, nox session, archive paths, quality gates, `pass_scope`, and `business_assertion`.
+- Artifact discovery may copy known coverage, smoke, guardrail, and L0 artifacts from `tmp/validation/*` into the history folder; invalid coverage snapshots must not be treated as valid coverage.
+- Archive failure must not hide the runner result: the job remains terminal with `archive.status=failed` and an error field, and runner evidence is still written.
+- `GET /api/v1/validation/executions` supports `status`, `plan_key`, `module`, `page`, and `page_size` filters.
+- `GET /api/v1/validation/executions/{job_id}/log` returns only the local runner log or its archived copy, supports bounded `tail_lines`, and must reject invalid path-like job ids.
+- `GET /api/v1/validation/executions/{job_id}/evidence` returns runner evidence plus the standard archived evidence manifest when present.
+- The UI runner queue must show archive status/path, support filters and pagination, and expose a detail panel with log tail and evidence summary.
+- `nox -s validation_center_runner_smoke -- 8012` is the live positive smoke for this contract: it may POST only to a running localhost dev backend, must refuse production port `8001`, starts the safe `guardrail_changed_files` allowlisted plan, verifies archive status, reads the archived run by `run_id`, and writes `tmp/validation/validation_center/runner_smoke.json`.
+- The live read-only smoke should be run again after at least one runner job exists so executions detail, log, and evidence endpoints are covered with GET-only proof.
 
 ## Evidence
 

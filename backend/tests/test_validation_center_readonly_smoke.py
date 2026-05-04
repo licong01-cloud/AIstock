@@ -52,6 +52,8 @@ def _route(path: str) -> tuple[int | None, dict | None, str | None]:
         "/validation/evidence/evidence_1": _envelope({"summary": {"manifest_id": "evidence_1"}, "manifest": {"missing_count": 0}}),
         "/validation/executions": _envelope(_page([{"job_id": "valjob_20260504_210000_abcdef12"}])),
         "/validation/executions/valjob_20260504_210000_abcdef12": _envelope({"job_id": "valjob_20260504_210000_abcdef12", "status": "passed"}),
+        "/validation/executions/valjob_20260504_210000_abcdef12/log": _envelope({"job_id": "valjob_20260504_210000_abcdef12", "content": "ok\n"}),
+        "/validation/executions/valjob_20260504_210000_abcdef12/evidence": _envelope({"job_id": "valjob_20260504_210000_abcdef12", "standard_evidence": {}}),
         "/validation/findings/summary": _envelope({"finding_count": 1}),
         "/validation/findings": _envelope(_page([{"finding_id": "finding_1"}])),
         "/validation/findings/finding_1": _envelope({"finding_id": "finding_1", "agent_context": {"context_type": "quality_finding"}}),
@@ -81,7 +83,7 @@ def test_readonly_smoke_passes_with_complete_contract(monkeypatch, tmp_path: Pat
     assert payload["counts"]["runs"] == 1
     assert payload["counts"]["executions"] == 1
     assert payload["counts"]["bugs"] == 1
-    assert payload["endpoint_count"] >= 16
+    assert payload["endpoint_count"] >= 18
 
 
 def test_readonly_smoke_blocks_production_8001(tmp_path: Path) -> None:

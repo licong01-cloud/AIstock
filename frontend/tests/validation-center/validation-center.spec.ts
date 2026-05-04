@@ -216,6 +216,15 @@ const executionJob = {
   arbitrary_shell_allowed: false,
   log_path: "tmp/validation/runner/jobs/valjob_20260504_210000_mocked.log",
   evidence_path: "tmp/validation/runner/jobs/valjob_20260504_210000_mocked_evidence.json",
+  archive: {
+    status: "archived",
+    run_id: "validation_center_runner_archived__run123",
+    run_record_path: "tests/aistock_validation/history/validation_center/20260504_l2_validation-center-backend-runner-validation.md",
+    metadata_path: "tests/aistock_validation/history/validation_center/20260504_l2_validation-center-backend-runner-validation.json",
+    evidence_manifest_path: "tests/aistock_validation/history/validation_center/20260504_l2_validation-center-backend-runner-evidence.json",
+    runner_log_archive_path: "tests/aistock_validation/history/validation_center/20260504_l2_validation-center-backend-runner-log.txt",
+    coverage_snapshot_path: "tests/aistock_validation/history/validation_center/20260504_l2_validation-center-backend-runner-snapshot.json",
+  },
   error: null,
 };
 
@@ -370,6 +379,28 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
       return respond({ status: "success", data: executionJob });
     }
 
+    if (path.endsWith(`/api/v1/validation/executions/${executionJobId}/log`)) {
+      return respond({ status: "success", data: { job_id: executionJobId, exists: true, content: "api runner ok\narchive complete\n", tail_lines: 120, truncated: false } });
+    }
+
+    if (path.endsWith(`/api/v1/validation/executions/${executionJobId}/evidence`)) {
+      return respond({
+        status: "success",
+        data: {
+          job_id: executionJobId,
+          job: executionJob,
+          runner_evidence_path: executionJob.evidence_path,
+          standard_evidence_path: executionJob.archive.evidence_manifest_path,
+          runner_evidence: { schema_version: "aistock_validation_runner_evidence_v1" },
+          standard_evidence: { schema_version: "aistock_validation_evidence_manifest_v1", missing_count: 0 },
+        },
+      });
+    }
+
+    if (path.endsWith(`/api/v1/validation/executions/${executionJobId}`)) {
+      return respond({ status: "success", data: executionJob });
+    }
+
     if (path.endsWith("/api/v1/validation/runs")) {
       const pageNumber = Number(url.searchParams.get("page") || "1");
       const pageSize = Number(url.searchParams.get("page_size") || "20");
@@ -471,9 +502,14 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   await expect(page.getByText("Validation Center backend contract")).toBeVisible();
   await expect(page.getByText("Runner 执行队列")).toBeVisible();
   await expect(page.getByText("tmp/validation/runner/jobs/valjob_20260504_210000_mocked.log")).toBeVisible();
+  await expect(page.getByText("tests/aistock_validation/history/validation_center/20260504_l2_validation-center-backend-runner-validation.md")).toBeVisible();
   await page.getByRole("button", { name: "run validation plan validation_center_backend" }).click();
   await expect(page.getByText("Runner 已提交")).toBeVisible();
   await expect(page.getByText("状态=passed")).toBeVisible();
+  await page.getByRole("button", { name: "Open Runner detail" }).click();
+  await expect(page.getByRole("heading", { name: "Runner Detail" })).toBeVisible();
+  await expect(page.getByText("api runner ok")).toBeVisible();
+  await expect(page.getByText("aistock_validation_evidence_manifest_v1")).toBeVisible();
   await expect(page.getByText("Validation API Run")).toBeVisible();
   await expect(page.getByText("质量发现与 Bug Registry")).toBeVisible();
   await expect(page.getByText("No silent fallback")).toBeVisible();

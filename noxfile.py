@@ -451,6 +451,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/services/validation",
         "scripts/aistock_validate.py",
         "scripts/validation_center_readonly_smoke.py",
+        "scripts/validation_center_runner_smoke.py",
         external=True,
     )
     session.run(
@@ -459,12 +460,14 @@ def validation_center_backend(session: nox.Session) -> None:
         "pytest",
         "backend/tests/test_validation_center_api.py",
         "backend/tests/test_validation_center_readonly_smoke.py",
+        "backend/tests/test_validation_center_runner_smoke.py",
         "backend/tests/test_validation_execution_runner.py",
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
         "--cov=backend.services.validation",
         "--cov=backend.routers.validation",
         "--cov=scripts.validation_center_readonly_smoke",
+        "--cov=scripts.validation_center_runner_smoke",
         "--cov-branch",
         f"--cov-report=xml:{coverage_xml}",
         f"--cov-report=json:{coverage_json}",
@@ -592,6 +595,62 @@ def validation_center_live_readonly(session: nox.Session) -> None:
         str(output),
         "--item",
         "script=scripts/validation_center_readonly_smoke.py",
+        env=_env({"VALIDATION_CENTER_API_BASE": api_base}),
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def validation_center_runner_smoke(session: nox.Session) -> None:
+    """Start one safe allowlisted runner job on a running dev backend and verify archive output."""
+    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8012")
+    api_base = os.environ.get("VALIDATION_CENTER_API_BASE", f"http://127.0.0.1:{backend_port}/api/v1")
+    output = ROOT / "tmp" / "validation" / "validation_center" / "runner_smoke.json"
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        backend_port,
+        external=True,
+    )
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "services",
+        "--backend-port",
+        backend_port,
+        "--skip-tdx",
+        external=True,
+    )
+    session.run(
+        "python",
+        "scripts/validation_center_runner_smoke.py",
+        "--api-base",
+        api_base,
+        "--output",
+        str(output),
+        "--plan-key",
+        "guardrail_changed_files",
+        env=_env({"VALIDATION_CENTER_API_BASE": api_base}),
+        external=True,
+    )
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "evidence",
+        "--module",
+        "validation_center",
+        "--level",
+        "L3",
+        "--title",
+        "Validation Center controlled runner live smoke",
+        "--output",
+        "tmp/validation/validation_center/runner_smoke_evidence.json",
+        "--smoke-json",
+        str(output),
+        "--item",
+        "script=scripts/validation_center_runner_smoke.py",
         env=_env({"VALIDATION_CENTER_API_BASE": api_base}),
         external=True,
     )

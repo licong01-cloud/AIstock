@@ -1,0 +1,50 @@
+{
+  "schema_version": "aistock_validation_execution_job_v1",
+  "job_id": "valjob_20260504_120402_e4e483ae",
+  "status": "passed",
+  "plan_key": "guardrail_changed_files",
+  "title": "Development guardrail staged/changed files gate",
+  "module": "development_guardrails",
+  "level": "L0",
+  "command_key": "nox_guardrail_changed_files",
+  "nox_session": "guardrail_changed_files",
+  "command": [
+    "C:\\Users\\lc999\\miniconda3\\envs\\AIstock\\python.exe",
+    "-m",
+    "nox",
+    "-s",
+    "guardrail_changed_files"
+  ],
+  "cwd": ".",
+  "requested_by": "runner_smoke",
+  "requested_at": "2026-05-04T12:04:02.289073+00:00",
+  "started_at": "2026-05-04T12:04:02.298166+00:00",
+  "finished_at": "2026-05-04T12:04:02.690562+00:00",
+  "timeout_seconds": 120,
+  "return_code": 0,
+  "backend_port": null,
+  "frontend_port": null,
+  "writes_database": false,
+  "writes_artifacts": true,
+  "writes_business_state": false,
+  "production_8001_touched": false,
+  "arbitrary_shell_allowed": false,
+  "log_path": "tmp/validation/runner/jobs/valjob_20260504_120402_e4e483ae.log",
+  "evidence_path": "tmp/validation/runner/jobs/valjob_20260504_120402_e4e483ae_evidence.json",
+  "archive": {
+    "status": "archived",
+    "run_id": "development-guardrails_20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-validation__f264c15350",
+    "run_record_path": "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-validation.md",
+    "metadata_path": "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-validation.json",
+    "evidence_manifest_path": "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-evidence.json",
+    "runner_job_archive_path": "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-runner-job.json",
+    "runner_log_archive_path": "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-runner-log.txt",
+    "runner_evidence_archive_path": "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-runner-evidence.json",
+    "coverage_snapshot_path": null,
+    "artifact_paths": [
+      "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-guardrail-json.json",
+      "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-guardrail-md.md"
+    ]
+  },
+  "error": null
+}

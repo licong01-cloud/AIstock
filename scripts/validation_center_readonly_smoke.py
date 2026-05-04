@@ -267,6 +267,12 @@ def run_smoke(
         execution_detail = _extract_data(_append_endpoint(endpoints, _call(api_base, f"/validation/executions/{_quote(job_id)}", timeout=timeout)), failures)
         if execution_detail and execution_detail.get("job_id") != job_id:
             failures.append("/validation/executions/{job_id} returned mismatched job_id")
+        execution_log = _extract_data(_append_endpoint(endpoints, _call(api_base, f"/validation/executions/{_quote(job_id)}/log?tail_lines=50", timeout=timeout)), failures)
+        if execution_log and execution_log.get("job_id") != job_id:
+            failures.append("/validation/executions/{job_id}/log returned mismatched job_id")
+        execution_evidence = _extract_data(_append_endpoint(endpoints, _call(api_base, f"/validation/executions/{_quote(job_id)}/evidence", timeout=timeout)), failures)
+        if execution_evidence and execution_evidence.get("job_id") != job_id:
+            failures.append("/validation/executions/{job_id}/evidence returned mismatched job_id")
 
     finding_summary = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/findings/summary", timeout=timeout)), failures)
     if finding_summary and not isinstance(finding_summary.get("finding_count"), int):

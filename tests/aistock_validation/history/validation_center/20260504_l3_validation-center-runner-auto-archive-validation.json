@@ -1,0 +1,105 @@
+{
+  "schema_version": "aistock_validation_run_v1",
+  "module": "validation_center",
+  "module_slug": "validation_center",
+  "level": "L3",
+  "title": "Validation Center Runner Auto Archive And Detail Loop",
+  "status": "passed",
+  "git_commit": "06880c9",
+  "operator": "Codex",
+  "started_at": "2026-05-04T19:50:00+08:00",
+  "finished_at": "2026-05-04T20:18:00+08:00",
+  "coverage": {
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "status": "passed",
+    "snapshot_path": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-auto-archive-snapshot.json",
+    "line_percent": 80.67,
+    "branch_percent": 64.11
+  },
+  "quality_gates": [
+    {
+      "metric": "compileall",
+      "status": "passed",
+      "actual": "validation runner/router/tests/smoke/nox compiled",
+      "threshold": "must pass"
+    },
+    {
+      "metric": "targeted_backend_pytest",
+      "status": "passed",
+      "actual": "21 passed",
+      "threshold": "all tests pass"
+    },
+    {
+      "metric": "validation_center_backend_nox",
+      "status": "passed",
+      "actual": "31 passed; line=80.67; branch=64.11",
+      "threshold": "line>=75; branch>=55; all tests pass"
+    },
+    {
+      "metric": "validation_center_ui_nox",
+      "status": "passed",
+      "actual": "TypeScript passed; Playwright 1 passed after detail evidence visibility fix",
+      "threshold": "all tests pass"
+    },
+    {
+      "metric": "validation_center_runner_smoke_nox",
+      "status": "passed",
+      "actual": "endpoints=6; failures=0; archive_status=archived",
+      "threshold": "archive_status=archived; failures=0"
+    },
+    {
+      "metric": "validation_center_live_readonly_nox",
+      "status": "passed",
+      "actual": "endpoints=18; failures=0; write_methods_sent=[]",
+      "threshold": "GET-only; failures=0; production_8001_touched=false"
+    },
+    {
+      "metric": "production_isolation",
+      "status": "passed",
+      "actual": "temporary backend 8012 only; 8001 not restarted or probed; 8012 stopped and verified free",
+      "threshold": "no production impact"
+    },
+    {
+      "metric": "l0_guardrail",
+      "status": "passed",
+      "actual": "targeted nox l0 passed; 5 P2 review findings and 1 baseline P1 noxfile finding; blocking=0",
+      "threshold": "no blocking P1/P0 new findings"
+    }
+  ],
+  "pass_scope": {
+    "level": "L3",
+    "real_backend": true,
+    "real_database": false,
+    "real_node_api": false,
+    "real_frontend_click": true,
+    "writes_business_state": false,
+    "positive_business_success": false,
+    "negative_failfast_only": false,
+    "mock_api_used": true,
+    "controlled_runner_post_enabled": true,
+    "runner_archive_verified": true,
+    "runner_log_detail_verified": true,
+    "runner_evidence_detail_verified": true,
+    "arbitrary_shell_allowed": false,
+    "production_8001_touched": false,
+    "current_commit_evidence": true
+  },
+  "business_assertion": {
+    "can_user_complete_operation": true,
+    "operation_name": "Start a safe allowlisted Validation Center runner job, auto-archive it, and inspect queue/log/evidence details from UI/API",
+    "evidence": {
+      "ui": "frontend/tests/validation-center/validation-center.spec.ts",
+      "api": "backend/tests/test_validation_execution_runner.py",
+      "runner_live_smoke": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-auto-archive-runner-smoke.json",
+      "readonly_live_smoke": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-auto-archive-readonly-smoke.json",
+      "coverage": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-auto-archive-snapshot.json",
+      "archived_runner_run_id": "development-guardrails_20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-validation__f264c15350",
+      "archived_runner_run_record": "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-validation.md",
+      "l0_guardrail": "tests/aistock_validation/history/validation_center/20260504_l3_validation-center-runner-auto-archive-l0-guardrail.json"
+    },
+    "unresolved_blockers": [
+      "This phase validates Validation Center runner infrastructure and archival observability, not a trading/QE business success path.",
+      "Runner cancellation/retry scheduling and DB-backed test management remain later phases."
+    ]
+  }
+}

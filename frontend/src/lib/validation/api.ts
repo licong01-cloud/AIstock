@@ -216,10 +216,22 @@ export type ValidationExecutionJob = JsonObject & {
   log_path?: string;
   evidence_path?: string;
   error?: string | null;
+  archive?: JsonObject & {
+    status?: string;
+    run_id?: string;
+    run_record_path?: string;
+    metadata_path?: string;
+    evidence_manifest_path?: string;
+    runner_log_archive_path?: string;
+    coverage_snapshot_path?: string | null;
+    artifact_paths?: string[];
+  };
 };
 
 export type ValidationExecutionQuery = {
   status?: string;
+  plan_key?: string;
+  module?: string;
   page?: number;
   page_size?: number;
 };
@@ -231,6 +243,27 @@ export type ValidationExecutionStartRequest = {
   frontend_port?: number;
   timeout_seconds?: number;
   confirm_text?: string;
+};
+
+export type ValidationExecutionLog = JsonObject & {
+  job_id: string;
+  exists?: boolean;
+  path?: string;
+  content?: string;
+  tail_lines?: number;
+  truncated?: boolean;
+  size_bytes?: number | null;
+  sha256?: string | null;
+  archive_path?: string | null;
+};
+
+export type ValidationExecutionEvidence = JsonObject & {
+  job_id: string;
+  job?: ValidationExecutionJob;
+  runner_evidence?: JsonObject | null;
+  standard_evidence?: JsonObject | null;
+  runner_evidence_path?: string;
+  standard_evidence_path?: string | null;
 };
 
 export type ValidationQualityFinding = JsonObject & {
@@ -475,6 +508,12 @@ export const validationApi = {
   },
   execution(jobId: string): Promise<ValidationExecutionJob> {
     return unwrap<ValidationExecutionJob>(`/validation/executions/${encodeURIComponent(jobId)}`);
+  },
+  executionLog(jobId: string, tailLines = 300): Promise<ValidationExecutionLog> {
+    return unwrap<ValidationExecutionLog>(appendQuery(`/validation/executions/${encodeURIComponent(jobId)}/log`, { tail_lines: tailLines }));
+  },
+  executionEvidence(jobId: string): Promise<ValidationExecutionEvidence> {
+    return unwrap<ValidationExecutionEvidence>(`/validation/executions/${encodeURIComponent(jobId)}/evidence`);
   },
   startExecution(request: ValidationExecutionStartRequest): Promise<ValidationExecutionJob> {
     return apiFetch<ValidationEnvelope<ValidationExecutionJob>>("/validation/executions", {

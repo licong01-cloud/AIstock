@@ -1,0 +1,43 @@
+{
+  "schema_version": "aistock_validation_runner_evidence_v1",
+  "generated_at": "2026-05-04T12:04:02.695634+00:00",
+  "job_id": "valjob_20260504_120402_e4e483ae",
+  "plan_key": "guardrail_changed_files",
+  "status": "passed",
+  "archive": {
+    "status": "archived",
+    "run_id": "development-guardrails_20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-validation__f264c15350",
+    "run_record_path": "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-validation.md",
+    "metadata_path": "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-validation.json",
+    "evidence_manifest_path": "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-evidence.json",
+    "runner_job_archive_path": "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-runner-job.json",
+    "runner_log_archive_path": "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-runner-log.txt",
+    "runner_evidence_archive_path": "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-runner-evidence.json",
+    "coverage_snapshot_path": null,
+    "artifact_paths": [
+      "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-guardrail-json.json",
+      "tests/aistock_validation/history/development-guardrails/20260504_120402_l0_guardrail-changed-files_e4e483ae_runner-guardrail-md.md"
+    ]
+  },
+  "production_8001_touched": false,
+  "evidence": [
+    {
+      "kind": "job_record",
+      "path": "tmp/validation/runner/jobs/valjob_20260504_120402_e4e483ae.json",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 2724,
+      "child_count": null,
+      "sha256": "12297ba26def9bfd44b19cd1ec2edcc6d3efa6739bba1af6656f3cd14e191bae"
+    },
+    {
+      "kind": "execution_log",
+      "path": "tmp/validation/runner/jobs/valjob_20260504_120402_e4e483ae.log",
+      "exists": true,
+      "is_dir": false,
+      "size_bytes": 459,
+      "child_count": null,
+      "sha256": "83a4952d656a31d81b965c5e5c0b0a4192fa889e8ec8ef53ec3e6e04bbeab98c"
+    }
+  ]
+}

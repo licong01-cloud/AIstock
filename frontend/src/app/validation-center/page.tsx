@@ -15,7 +15,9 @@ import {
   type ValidationCoverageSummary,
   type ValidationEvidenceDetail,
   type ValidationEvidenceSummary,
+  type ValidationExecutionEvidence,
   type ValidationExecutionJob,
+  type ValidationExecutionLog,
   type ValidationFindingSummary,
   type ValidationHealth,
   type ValidationPage,
@@ -210,6 +212,9 @@ export default function ValidationCenterPage() {
   const [coverage, setCoverage] = useState<ValidationPage<ValidationCoverageSummary>>(emptyPage<ValidationCoverageSummary>(10));
   const [evidence, setEvidence] = useState<ValidationPage<ValidationEvidenceSummary>>(emptyPage<ValidationEvidenceSummary>(10));
   const [executions, setExecutions] = useState<ValidationPage<ValidationExecutionJob>>(emptyPage<ValidationExecutionJob>(10));
+  const [selectedExecution, setSelectedExecution] = useState<ValidationExecutionJob | null>(null);
+  const [selectedExecutionLog, setSelectedExecutionLog] = useState<ValidationExecutionLog | null>(null);
+  const [selectedExecutionEvidence, setSelectedExecutionEvidence] = useState<ValidationExecutionEvidence | null>(null);
   const [findings, setFindings] = useState<ValidationPage<ValidationQualityFinding>>(emptyPage<ValidationQualityFinding>());
   const [bugs, setBugs] = useState<ValidationPage<ValidationBug>>(emptyPage<ValidationBug>());
   const [selectedRun, setSelectedRun] = useState<ValidationRunDetail | null>(null);
@@ -223,6 +228,7 @@ export default function ValidationCenterPage() {
   const [error, setError] = useState<string | null>(null);
   const [executionBusy, setExecutionBusy] = useState<string | null>(null);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
+  const [executionFilters, setExecutionFilters] = useState({ status: "", planKey: "", module: "", page: 1, pageSize: 10 });
   const [filters, setFilters] = useState({ module: "", level: "", status: "", search: "", includeMarkdownOnly: true, page: 1, pageSize: DEFAULT_PAGE_SIZE });
   const [qualityFilters, setQualityFilters] = useState({ findingSource: "", findingSeverity: "", findingStatus: "", findingSearch: "", findingPage: 1, bugSeverity: "", bugStatus: "", bugSearch: "", bugPage: 1, pageSize: DEFAULT_PAGE_SIZE });
 
@@ -257,12 +263,18 @@ export default function ValidationCenterPage() {
 
   const loadExecutions = useCallback(async () => {
     try {
-      const data = await validationApi.executions({ page: 1, page_size: 10 });
+      const data = await validationApi.executions({
+        status: executionFilters.status || undefined,
+        plan_key: executionFilters.planKey || undefined,
+        module: executionFilters.module || undefined,
+        page: executionFilters.page,
+        page_size: executionFilters.pageSize,
+      });
       setExecutions(data || emptyPage<ValidationExecutionJob>(10));
     } catch (err) {
       setError(errorText(err));
     }
-  }, []);
+  }, [executionFilters]);
 
   const loadRuns = useCallback(async () => {
     setError(null);
@@ -316,6 +328,7 @@ export default function ValidationCenterPage() {
   }, [qualityFilters]);
 
   useEffect(() => { void loadStatic(); }, [loadStatic]);
+  useEffect(() => { void loadExecutions(); }, [loadExecutions]);
   useEffect(() => { void loadRuns(); }, [loadRuns]);
   useEffect(() => { void loadFindings(); }, [loadFindings]);
   useEffect(() => { void loadBugs(); }, [loadBugs]);
@@ -393,8 +406,31 @@ export default function ValidationCenterPage() {
     }
   }
 
+  async function openExecution(jobId: string) {
+    setDetailLoading(true);
+    setError(null);
+    try {
+      const [job, log, evidenceDetail] = await Promise.all([
+        validationApi.execution(jobId),
+        validationApi.executionLog(jobId, 120),
+        validationApi.executionEvidence(jobId),
+      ]);
+      setSelectedExecution(job);
+      setSelectedExecutionLog(log);
+      setSelectedExecutionEvidence(evidenceDetail);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
   function updateFilter(key: keyof typeof filters, value: string | number | boolean) {
     setFilters((prev) => ({ ...prev, [key]: value, page: key === "page" ? Number(value) : 1 }));
+  }
+
+  function updateExecutionFilter(key: keyof typeof executionFilters, value: string | number) {
+    setExecutionFilters((prev) => ({ ...prev, [key]: value, page: key === "page" ? Number(value) : 1 }));
   }
 
   function updateQualityFilter(key: keyof typeof qualityFilters, value: string | number) {
@@ -505,9 +541,15 @@ export default function ValidationCenterPage() {
           </div>
         </div>
         <div style={{ marginBottom: 12 }}><CountChips counts={executionCounts} /></div>
+        <div className="pv2-form-grid pv2-filter-card">
+          <div className="pv2-field"><label htmlFor="execution-status">Runner Status</label><input id="execution-status" className="pv2-input" value={executionFilters.status} onChange={(event) => updateExecutionFilter("status", event.target.value)} placeholder="passed / failed / running" /></div>
+          <div className="pv2-field"><label htmlFor="execution-plan">Plan Key</label><input id="execution-plan" className="pv2-input" value={executionFilters.planKey} onChange={(event) => updateExecutionFilter("planKey", event.target.value)} placeholder="validation_center_backend" /></div>
+          <div className="pv2-field"><label htmlFor="execution-module">Module</label><input id="execution-module" className="pv2-input" value={executionFilters.module} onChange={(event) => updateExecutionFilter("module", event.target.value)} placeholder="validation_center" /></div>
+          <div className="pv2-field"><label htmlFor="execution-page-size">Page Size</label><select id="execution-page-size" className="pv2-select" value={executionFilters.pageSize} onChange={(event) => updateExecutionFilter("pageSize", Number(event.target.value))}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></div>
+        </div>
         <div className="pv2-table-wrap">
           <table className="pv2-table">
-            <thead><tr><th>Job</th><th>Plan/Nox</th><th>状态</th><th>时间</th><th>端口</th><th>证据</th><th>错误</th></tr></thead>
+            <thead><tr><th>Job</th><th>Plan/Nox</th><th>Status</th><th>Time</th><th>Archive</th><th>Evidence</th><th>Action</th></tr></thead>
             <tbody>
               {executions.items.length ? executions.items.map((job) => (
                 <tr key={job.job_id}>
@@ -515,15 +557,43 @@ export default function ValidationCenterPage() {
                   <td>{display(job.plan_key)}<br /><span className="pv2-muted pv2-mono">{display(job.nox_session)}</span></td>
                   <td><StatusBadge status={job.status} /><br /><span className="pv2-muted">return={display(job.return_code)}</span></td>
                   <td>{display(job.started_at || job.requested_at)}<br /><span className="pv2-muted">{display(job.finished_at)}</span></td>
-                  <td>Backend {display(job.backend_port)}<br />Frontend {display(job.frontend_port)}</td>
-                  <td><span className="pv2-muted">{display(job.log_path)}</span><br /><span className="pv2-muted">{display(job.evidence_path)}</span></td>
-                  <td>{display(job.error)}</td>
+                  <td><StatusBadge status={job.archive?.status || "missing"} /><br /><span className="pv2-muted">{display(job.archive?.run_record_path)}</span></td>
+                  <td><span className="pv2-muted">{display(job.log_path)}</span><br /><span className="pv2-muted">{display(job.archive?.evidence_manifest_path || job.evidence_path)}</span></td>
+                  <td><button className="pv2-link-button" type="button" onClick={() => void openExecution(job.job_id)}>Open Runner detail</button><br /><span className="pv2-muted">{display(job.error)}</span></td>
                 </tr>
-              )) : <tr><td className="pv2-empty-cell" colSpan={7}>暂无 Runner job</td></tr>}
+              )) : <tr><td className="pv2-empty-cell" colSpan={7}>No Runner job</td></tr>}
             </tbody>
           </table>
         </div>
-        <button className="pv2-button-ghost" type="button" onClick={() => void loadExecutions()}>刷新 Runner 队列</button>
+        <Pagination page={executions} label="validation execution pagination" onPageChange={(page) => updateExecutionFilter("page", page)} />
+        <button className="pv2-button-ghost" type="button" onClick={() => void loadExecutions()}>Refresh Runner Queue</button>
+        {selectedExecution ? (
+          <SectionCard title="Runner Detail" eyebrow="log tail / archived run / evidence">
+            <KeyValuePanel rows={[
+              ["job_id", selectedExecution.job_id],
+              ["plan_key", selectedExecution.plan_key],
+              ["status", selectedExecution.status],
+              ["archive_status", selectedExecution.archive?.status],
+              ["archived_run_id", selectedExecution.archive?.run_id],
+              ["run_record_path", selectedExecution.archive?.run_record_path],
+              ["standard_evidence_path", selectedExecutionEvidence?.standard_evidence_path],
+              ["runner_evidence_path", selectedExecutionEvidence?.runner_evidence_path],
+              ["coverage_snapshot_path", selectedExecution.archive?.coverage_snapshot_path],
+            ]} />
+            <details className="pv2-readable-item" open>
+              <summary>Runner log tail</summary>
+              <div className="pv2-readable-value pv2-mono" style={{ whiteSpace: "pre-wrap" }}>{selectedExecutionLog?.content || "No log content"}</div>
+            </details>
+            <details className="pv2-readable-item" open>
+              <summary>Runner evidence summary</summary>
+              <KeyValuePanel rows={[
+                ["runner_evidence_schema", selectedExecutionEvidence?.runner_evidence?.schema_version],
+                ["standard_evidence_schema", selectedExecutionEvidence?.standard_evidence?.schema_version],
+                ["standard_missing_count", selectedExecutionEvidence?.standard_evidence?.missing_count],
+              ]} />
+            </details>
+          </SectionCard>
+        ) : null}
       </SectionCard>
 
       <SectionCard title="Run 历史" eyebrow="filters / pagination / missing states">

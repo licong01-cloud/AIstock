@@ -13,6 +13,7 @@ from backend.services.validation.execution_runner import (
     RunnerResult,
     ValidationExecutionRunner,
 )
+from backend.services.validation.history_store import COVERAGE_SCHEMA, EVIDENCE_SCHEMA, RUN_SCHEMA, ValidationHistoryStore
 from backend.services.validation.plan_catalog import ValidationCatalogError, ValidationPlanCatalog
 
 
@@ -85,14 +86,35 @@ def test_runner_executes_allowlisted_plan_and_writes_evidence(tmp_path: Path) ->
     _write_catalog(catalog_path, runner_enabled=True)
     calls: list[tuple[list[str], dict[str, str], int]] = []
 
-    def fake_executor(command, env, _cwd, timeout_seconds):
+    def fake_executor(command, env, cwd, timeout_seconds):
         calls.append((command, env, timeout_seconds))
+        coverage_path = cwd / "tmp" / "validation" / "coverage" / "l0_snapshot.json"
+        coverage_path.parent.mkdir(parents=True, exist_ok=True)
+        coverage_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": COVERAGE_SCHEMA,
+                    "module": "development_guardrails",
+                    "level": "L0",
+                    "title": "fake coverage",
+                    "status": "passed",
+                    "generated_at": "2026-05-04T12:00:00+00:00",
+                    "totals": {"line_percent": 88.0, "branch_percent": 66.0},
+                    "quality_gates": [],
+                    "failed_gates": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         return RunnerResult(return_code=0, output="fake nox ok\n")
 
+    history_root = tmp_path / "history"
     runner = ValidationExecutionRunner(
         plan_catalog=ValidationPlanCatalog(catalog_path),
         execution_root=tmp_path / "jobs",
-        repo_root=Path.cwd(),
+        history_root=history_root,
+        repo_root=tmp_path,
         executor=fake_executor,
         run_inline=True,
     )
@@ -117,9 +139,52 @@ def test_runner_executes_allowlisted_plan_and_writes_evidence(tmp_path: Path) ->
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     assert evidence["schema_version"] == "aistock_validation_runner_evidence_v1"
     assert evidence["status"] == "passed"
+    assert evidence["archive"]["status"] == "archived"
+    archive = job["archive"]
+    assert archive["run_id"]
+    assert archive["run_record_path"].endswith("-validation.md")
+    assert archive["coverage_snapshot_path"].endswith("-coverage-snapshot.json")
+    metadata_path = Path(archive["metadata_path"])
+    run_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert run_metadata["schema_version"] == RUN_SCHEMA
+    assert run_metadata["status"] == "passed"
+    assert run_metadata["runner_job_id"] == job["job_id"]
+    standard_evidence = json.loads(Path(archive["evidence_manifest_path"]).read_text(encoding="utf-8"))
+    assert standard_evidence["schema_version"] == EVIDENCE_SCHEMA
+    assert standard_evidence["missing_count"] == 0
+    history_runs = ValidationHistoryStore(history_root=history_root, repo_root=tmp_path).list_runs(module="development_guardrails")
+    assert history_runs["total"] == 1
     assert runner.list_jobs(page=1, page_size=20)["total"] == 1
+    assert runner.list_jobs(page=1, page_size=20, plan_key="l0")["total"] == 1
+    assert "fake nox ok" in runner.get_job_log(job["job_id"], tail_lines=10)["content"]
+    assert runner.get_job_evidence(job["job_id"])["standard_evidence"]["schema_version"] == EVIDENCE_SCHEMA
     assert runner.get_job(job["job_id"])["status"] == "passed"
     assert runner.get_job("../not_a_job") is None
+
+
+def test_runner_archives_failed_job(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+
+    def fake_executor(_command, _env, _cwd, _timeout_seconds):
+        return RunnerResult(return_code=7, output="fake failure\n")
+
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=tmp_path,
+        executor=fake_executor,
+        run_inline=True,
+    )
+
+    job = runner.start_job(plan_key="l0", requested_by="pytest", timeout_seconds=30)
+
+    assert job["status"] == "failed"
+    assert job["archive"]["status"] == "archived"
+    metadata = json.loads(Path(job["archive"]["metadata_path"]).read_text(encoding="utf-8"))
+    assert metadata["status"] == "failed"
+    assert metadata["business_assertion"]["can_user_complete_operation"] is False
 
 
 def test_runner_rejects_non_runner_plan_and_forbidden_port(tmp_path: Path) -> None:
@@ -128,7 +193,8 @@ def test_runner_rejects_non_runner_plan_and_forbidden_port(tmp_path: Path) -> No
     runner = ValidationExecutionRunner(
         plan_catalog=ValidationPlanCatalog(catalog_path),
         execution_root=tmp_path / "jobs",
-        repo_root=Path.cwd(),
+        history_root=tmp_path / "history",
+        repo_root=tmp_path,
         run_inline=True,
     )
 
@@ -140,7 +206,8 @@ def test_runner_rejects_non_runner_plan_and_forbidden_port(tmp_path: Path) -> No
     backend_runner = ValidationExecutionRunner(
         plan_catalog=ValidationPlanCatalog(backend_catalog),
         execution_root=tmp_path / "backend_jobs",
-        repo_root=Path.cwd(),
+        history_root=tmp_path / "backend_history",
+        repo_root=tmp_path,
         run_inline=True,
     )
     with pytest.raises(ValueError, match="forbidden production backend port"):
@@ -157,7 +224,8 @@ def test_validation_execution_api_starts_and_lists_job(tmp_path: Path) -> None:
     runner = ValidationExecutionRunner(
         plan_catalog=ValidationPlanCatalog(catalog_path),
         execution_root=tmp_path / "jobs",
-        repo_root=Path.cwd(),
+        history_root=tmp_path / "history",
+        repo_root=tmp_path,
         executor=fake_executor,
         run_inline=True,
     )
@@ -180,6 +248,11 @@ def test_validation_execution_api_starts_and_lists_job(tmp_path: Path) -> None:
     assert listed["total"] == 1
     detail = client.get(f"/api/v1/validation/executions/{job['job_id']}").json()["data"]
     assert detail["job_id"] == job["job_id"]
+    log = client.get(f"/api/v1/validation/executions/{job['job_id']}/log").json()["data"]
+    assert "api runner ok" in log["content"]
+    execution_evidence = client.get(f"/api/v1/validation/executions/{job['job_id']}/evidence").json()["data"]
+    assert execution_evidence["standard_evidence"]["schema_version"] == EVIDENCE_SCHEMA
+    assert client.get("/api/v1/validation/executions/not-a-job/log").status_code == 404
 
     rejected = client.post("/api/v1/validation/executions", json={"plan_key": "missing"})
     assert rejected.status_code == 400

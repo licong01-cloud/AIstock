@@ -1,0 +1,23 @@
+{
+  "schema_version": "aistock_guardrail_scan_result_v1",
+  "generated_at": "2026-05-04T12:04:02.658540+00:00",
+  "mode": "staged_only",
+  "files_scanned": 0,
+  "baseline": {
+    "baseline_json": "tmp/validation/guardrails/baseline_20260504.json",
+    "fail_new_only": true
+  },
+  "gate": {
+    "fail_on_severity": "P1",
+    "blocking_count": 0,
+    "status": "passed"
+  },
+  "summary": {
+    "total_findings": 0,
+    "by_severity": {},
+    "by_rule": {},
+    "by_category": {},
+    "by_baseline_status": {}
+  },
+  "findings": []
+}
