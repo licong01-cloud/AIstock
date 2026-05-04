@@ -741,7 +741,7 @@ Important directories:
 
 ## Development Standards Phase 1 Execution - 2026-05-04
 
-- Added Python standard v0 at `docs/architecture/aistock_python_development_standard_20260504.md` and quant/trading engineering standard v0 at `docs/architecture/aistock_quant_trading_engineering_standard_20260504.md`. They synthesize Python best practices, Qlib Recorder/code standard, and open-source trading-engine patterns into AIstock-specific rules.
+- Canonical project development standard is `docs/architecture/aistock_development_standard_20260504.md`. It intentionally combines Python engineering rules and quant/trading engineering rules into one implementation-facing document, so future developers and agents do not need to reconcile two separate standards.
 - Added machine-readable guardrail catalog `tests/aistock_validation/catalog/development_guardrails.yaml` and scanner `scripts/aistock_guardrail_scan.py`. The scanner supports regex rules, tracked baseline scan, changed-files scan, JSON output, Markdown summary, and severity fail thresholds.
 - Added scanner tests in `backend/tests/test_aistock_guardrail_scan.py`. Verified catalog loading, regex compilation, silent-fallback detection, test-path exclusions, JSON/Markdown output, and compileall.
 - First read-only tracked-files baseline report is `docs/analysis/aistock_guardrail_baseline_20260504.md`; full local JSON is `tmp/validation/guardrails/baseline_20260504.json` and should not be committed. The first baseline scanned 1,033 tracked files and found 563 review findings: P0=229, P1=6, P2=328, P3=0. Treat this as historical baseline, not immediate full-repo blocking.

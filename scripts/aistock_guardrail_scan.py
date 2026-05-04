@@ -123,16 +123,25 @@ def _skip_path(path: Path, skip_parts: set[str]) -> bool:
     return any(part in parts or part in normalized for part in skip_parts)
 
 
+def _git_output(args: list[str], root: Path) -> str:
+    return subprocess.check_output(
+        args,
+        cwd=root,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def git_tracked_files(root: Path, roots: Iterable[str]) -> list[Path]:
-    output = subprocess.check_output(["git", "ls-files", *roots], cwd=root, text=True, stderr=subprocess.DEVNULL)
+    output = _git_output(["git", "ls-files", *roots], root)
     return [root / line.strip() for line in output.splitlines() if line.strip()]
 
 
 def git_changed_files(root: Path) -> list[Path]:
-    changed = subprocess.check_output(["git", "diff", "--name-only", "HEAD"], cwd=root, text=True, stderr=subprocess.DEVNULL)
-    untracked = subprocess.check_output(
-        ["git", "ls-files", "--others", "--exclude-standard"], cwd=root, text=True, stderr=subprocess.DEVNULL
-    )
+    changed = _git_output(["git", "diff", "--name-only", "HEAD"], root)
+    untracked = _git_output(["git", "ls-files", "--others", "--exclude-standard"], root)
     names = [line.strip() for line in (changed + "\n" + untracked).splitlines() if line.strip()]
     return [root / name for name in dict.fromkeys(names)]
 

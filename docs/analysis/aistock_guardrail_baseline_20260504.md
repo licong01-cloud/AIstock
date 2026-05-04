@@ -1,8 +1,8 @@
 # AIstock Guardrail Baseline Scan
 
-- Generated at: 2026-05-04T03:53:56.463141+00:00
+- Generated at: 2026-05-04T04:13:12.782394+00:00
 - Mode: `baseline_tracked`
-- Files scanned: 1033
+- Files scanned: 1041
 - Total findings: 563
 
 ## Summary By Severity

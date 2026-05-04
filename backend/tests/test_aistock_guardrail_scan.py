@@ -72,6 +72,26 @@ def test_scanner_respects_rule_exclude_globs_for_tests(tmp_path: Path) -> None:
     assert not any(finding.rule_id == "ERR-FALLBACK-001" for finding in findings)
 
 
+def test_git_changed_files_uses_utf8_for_unicode_paths(tmp_path: Path, monkeypatch) -> None:
+    scanner = _load_module()
+
+    def fake_check_output(args, **kwargs):
+        assert kwargs["encoding"] == "utf-8"
+        assert kwargs["errors"] == "replace"
+        if args[:3] == ["git", "diff", "--name-only"]:
+            return "docs/分析报告.md\n"
+        return "scripts/测试脚本.py\n"
+
+    monkeypatch.setattr(scanner.subprocess, "check_output", fake_check_output)
+
+    paths = scanner.git_changed_files(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in paths] == [
+        "docs/分析报告.md",
+        "scripts/测试脚本.py",
+    ]
+
+
 def test_scanner_writes_json_and_markdown_summary(tmp_path: Path) -> None:
     scanner = _load_module()
     runtime_file = tmp_path / "backend" / "services" / "example.py"
