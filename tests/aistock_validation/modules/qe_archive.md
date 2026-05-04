@@ -43,10 +43,13 @@ Current required coverage:
 - Worker claims only event types with registered handlers, so unsupported pending events are not consumed accidentally.
 - Worker creates `archive_job`, completes outbox events on success, and marks job/outbox retry state on handler failure.
 - Reproducibility config contract includes canonical config, raw config, config hash, factor list/hash, config provenance, missing config items, environment hashes, package versions, and reproducibility level.
+- QE minute runtime contract is captured in both source write and archive assembly: `runtime_mode=minute`, `bar_freq=1m`, `backtest_freq=1min`, `execution_algo`, `execution_algo_params`, `runtime_contract_version`, and `runtime_contract_source`.
+- Historical QE runtime-contract backfill must default to dry-run, require `--write --confirm-write QE_MINUTE_RUNTIME_CONTRACT_BACKFILL`, and update only rows with explicit minute evidence from `qe_evolution_loops.config_json` or task execution settings; daily/unknown legacy experiments must remain unconverted.
 - Payload extractor/service dry-run captures already-collected loop/experiment payloads without repository writes by default.
 - Payload extractor maps ordered factors, data context, daily invalidity, account summary, scalar metrics, IC/return/training curves, factor rows, all/top/bottom symbol summaries, stock trade records, execution/parser events, and raw payload snapshots.
 - Manual archive service writes run/source/config/repro/data_context/account/metric/curve/factor/symbol_summary/trade/execution_event/raw_payload rows only when `dry_run=false`.
 - DB source assembler can build payloads from `qe_experiments` and `qe_evolution_loops` without reading worker artifact paths.
+- DB source assembler must expose the minute runtime contract in `config.runtime_flags`, `config.execution`, `freq`, and `data_context.freq` for both experiment and loop payloads.
 - Manual backfill CLI defaults to dry-run and requires `--write --confirm-write QE_ARCHIVE_WRITE` before inserting archive rows.
 - Backend API `/api/v1/qe-archive/backfill` supports dry-run and confirmed-write historical backfill, requires `confirm_write=QE_ARCHIVE_WRITE` for writes, and can validate run-level row counts after writing.
 - Backend API `/api/v1/qe-archive/backfill-candidates` returns selectable historical candidates from QE evolution tasks and single experiments, including type, description, loop counts, archived/pending counts, model/label/factor metadata, status, and execution timestamps.

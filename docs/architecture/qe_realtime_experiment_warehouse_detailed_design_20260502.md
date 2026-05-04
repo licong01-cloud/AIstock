@@ -284,6 +284,7 @@ IC 诊断曲线:
   strategy_id, topk, n_drop, hold_thresh,
   initial_cash / initial_capital,
   cost/open_cost/close_cost/min_cost/slippage,
+  runtime_mode, bar_freq, backtest_freq,
   execution_algo, execution_algo_params,
   unfilled_handler, backup depth, minute execution policy,
   HMM config/snapshot/signal_preset。
@@ -300,6 +301,26 @@ IC 诊断曲线:
   qlib recorder id / mlflow run id / artifact uri,
   pred/label/params/portfolio/trade artifact hash。
 ```
+
+### 5.2.1 QE minute runtime contract update (2026-05-04)
+
+New QE generation and loop completion must persist an explicit minute runtime contract into `qe_experiments.custom_params` and loop/archive payloads:
+
+```json
+{
+  "runtime_mode": "minute",
+  "bar_freq": "1m",
+  "backtest_freq": "1min",
+  "execution_algo": "TWAP | V24_PLAN | V25_TWO_STAGE | future minute algo",
+  "execution_algo_params": {},
+  "runtime_contract_version": "qe_minute_runtime_contract_v1",
+  "runtime_contract_source": "config_composer | evolution_loop_config | history_backfill_from_loop_config"
+}
+```
+
+`backtest_freq` and `bar_freq` are derived compatibility/audit fields, not user-selected mode switches. `execution_algo` and `execution_algo_params` remain the variable part of the contract because V25 is not fixed and future minute execution algorithms may be added.
+
+Historical backfill is allowed only when explicit minute evidence exists in `qe_evolution_loops.config_json` or task execution settings. Legacy daily `CLOSE_PRICE` experiments and rows with no minute evidence must stay unconverted and should not enter StrategyPackage/Paper v2 promotion paths.
 
 可复现等级：
 

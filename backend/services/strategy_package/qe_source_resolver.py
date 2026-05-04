@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator
 
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
+from backend.services.quantevolver.runtime_contract import (
+    merge_qe_minute_runtime_contract,
+    parse_json_mapping,
+    runtime_contract_missing,
+)
 from backend.services.trading_core.errors import (
     DataUnavailableError,
     StrategyPackageValidationError,
@@ -94,6 +100,20 @@ def _metric_int(metrics: dict[str, Any], *keys: str) -> int | None:
     return None
 
 
+def _loop_index_from_record(record: dict[str, Any]) -> int | None:
+    raw = record.get("loop_index")
+    if raw not in (None, ""):
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    for value in (record.get("qe_loop_id"), record.get("experiment_id")):
+        match = re.search(r"(?:Loop|_L)(\d+)$", str(value or ""), flags=re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    return None
+
+
 class QEExperimentSourceResolver:
     """Build a strategy package from a completed QE experiment without writes."""
 
@@ -156,7 +176,7 @@ class QEExperimentSourceResolver:
                     SELECT experiment_id, experiment_name, status, alpha_mode,
                            qe_task_id, qe_loop_id, factor_names, model_id,
                            strategy_id, data_split, custom_params, result_metrics,
-                           created_at, completed_at
+                           created_at, completed_at, is_evolution_loop
                     FROM qe_experiments
                     WHERE experiment_id = %s
                     """,
@@ -185,7 +205,7 @@ class QEExperimentSourceResolver:
                     SELECT experiment_id, experiment_name, status, alpha_mode,
                            qe_task_id, qe_loop_id, factor_names, model_id,
                            strategy_id, data_split, custom_params, result_metrics,
-                           created_at, completed_at
+                           created_at, completed_at, is_evolution_loop
                     FROM qe_experiments
                     WHERE qe_task_id = %s
                       AND qe_loop_id = %s
@@ -201,6 +221,77 @@ class QEExperimentSourceResolver:
                 context={"qe_task_id": qe_task_id, "qe_loop_id": qe_loop_id},
             )
         return dict(row)
+
+    def _load_loop_runtime_config(self, record: dict[str, Any]) -> dict[str, Any]:
+        """Load full loop config for legacy qe_experiments rows missing runtime fields."""
+
+        task_id = str(record.get("qe_task_id") or "").strip()
+        qe_loop_id = str(record.get("qe_loop_id") or "").strip()
+        experiment_id = str(record.get("experiment_id") or "").strip()
+        if not task_id and not experiment_id:
+            return {}
+
+        loop_index = _loop_index_from_record(record)
+        task_prefixed_loop_id = f"{task_id}_{qe_loop_id}" if task_id and qe_loop_id else qe_loop_id
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT l.config_json,
+                           t.execution_algo AS task_execution_algo,
+                           t.execution_algo_params AS task_execution_algo_params
+                    FROM qe_evolution_loops l
+                    LEFT JOIN qe_evolution_tasks t ON t.task_id = l.task_id
+                    WHERE l.experiment_id = %s
+                       OR (
+                           l.task_id = %s
+                           AND (
+                               l.loop_id = %s
+                               OR l.loop_id = %s
+                               OR (%s IS NOT NULL AND l.loop_index = %s)
+                           )
+                       )
+                    ORDER BY l.updated_at DESC NULLS LAST, l.created_at DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    (
+                        experiment_id,
+                        task_id,
+                        qe_loop_id,
+                        task_prefixed_loop_id,
+                        loop_index,
+                        loop_index,
+                    ),
+                )
+                row = cur.fetchone()
+        if not row:
+            return {}
+        config = parse_json_mapping(row.get("config_json"))
+        if row.get("task_execution_algo") and not config.get("execution_algo"):
+            config["execution_algo"] = row.get("task_execution_algo")
+        task_params = parse_json_mapping(row.get("task_execution_algo_params"))
+        if task_params and not config.get("execution_algo_params"):
+            config["execution_algo_params"] = task_params
+        return config
+
+    def _effective_custom_params(
+        self,
+        record: dict[str, Any],
+        custom_params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Merge old qe_experiments rows with explicit loop runtime evidence."""
+
+        if not runtime_contract_missing(custom_params):
+            return custom_params
+        loop_config = self._load_loop_runtime_config(record)
+        if not loop_config:
+            return custom_params
+        return merge_qe_minute_runtime_contract(
+            custom_params,
+            config=loop_config,
+            source="strategy_package_loop_config",
+            allow_default_execution_algo=False,
+        )
 
     def _build_manifest(
         self,
@@ -232,6 +323,7 @@ class QEExperimentSourceResolver:
                 "QE experiment custom_params must be an object",
                 context={"experiment_id": experiment_id},
             )
+        custom_params = self._effective_custom_params(record, custom_params)
 
         data_split = _parse_jsonish(record.get("data_split")) or {}
         if not isinstance(data_split, dict):

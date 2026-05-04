@@ -765,3 +765,11 @@ Important directories:
 - Local-data dashboard integration includes init/incremental dropdowns, truncation support, data-stats categorization, row-level fill-to-latest, and daily schedule quick-create at 20:40. A small smoke sync for 2026-04-24..2026-04-30 inserted 119 rows and refreshed `market.data_stats`; no historical full backfill and no H5/Bin/PIT universe export has been run yet.
 - The `add-tushare-dataset` skill was amended to require data dashboard/statistics/one-click update integration and special handling for non-trading-date BY_DATE datasets.
 
+## QE Minute Runtime Contract Write/Backfill - 2026-05-04
+
+- QE experiment generation and loop-completion write paths now persist an explicit minute runtime contract in `qe_experiments.custom_params`: `runtime_mode=minute`, `bar_freq=1m`, `backtest_freq=1min`, `execution_algo`, `execution_algo_params`, `runtime_contract_version=qe_minute_runtime_contract_v1`, and `runtime_contract_source`.
+- `backtest_freq`/`bar_freq` are derived compatibility and audit fields; `execution_algo` and `execution_algo_params` remain the variable runtime policy because V25 is not fixed and future minute execution algorithms may be added.
+- StrategyPackage QE source resolution and QE archive source assembly can enrich older experiment rows from explicit `qe_evolution_loops.config_json` or task execution settings, but they do not silently convert daily `CLOSE_PRICE` or no-evidence historical rows into minute runs.
+- Historical backfill entry point: `scripts/backfill_qe_minute_runtime_contract.py`. It defaults to dry-run and requires `--write --confirm-write QE_MINUTE_RUNTIME_CONTRACT_BACKFILL` for writes.
+- Local DB backfill on 2026-05-04 updated 122 minute-evidence QE rows; follow-up dry-run scanned 455 rows and found 0 remaining updatable rows, with 289 missing rows intentionally skipped for no minute runtime evidence. Target `qe_20260502_231229_0565_L1` now resolves to StrategyPackage with `backtest_freq=1min` and `execution_algo=V25_TWO_STAGE`.
+- New generation smoke used `ConfigComposer.compose_experiment_in_memory(skip_db_save=False)` without running a full QE job; the created row had `backtest_freq=1min`, `runtime_mode=minute`, `bar_freq=1m`, `execution_algo=TWAP`, and a minute runner command, then the synthetic row was deleted after verification.

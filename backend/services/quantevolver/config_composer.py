@@ -27,6 +27,7 @@ from ..strategy_package.workspace_policy import (
     ensure_not_forbidden_worker_workspace_path,
 )
 from .experiment_config import normalize_label_horizon
+from .runtime_contract import merge_qe_minute_runtime_contract
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
 
@@ -930,6 +931,17 @@ class ConfigComposer:
         if _cp.get("unfilled_backup_depth"):
             execution_algo_params["unfilled_backup_depth"] = _cp["unfilled_backup_depth"]
 
+        custom_params = merge_qe_minute_runtime_contract(
+            custom_params,
+            config={"backtest_freq": backtest_freq},
+            execution_algo=execution_algo,
+            execution_algo_params=execution_algo_params,
+            source="config_composer",
+            allow_default_execution_algo=True,
+        )
+        execution_algo = custom_params.get("execution_algo")
+        execution_algo_params = dict(custom_params.get("execution_algo_params") or {})
+
         # HMM 预计算（必须在 conf.yaml 之前，使 hmm_coefficients_file 写入策略 kwargs）
         hmm_json_content: Optional[str] = None
         if _cp.get("enable_sector_hmm"):
@@ -1206,6 +1218,17 @@ class ConfigComposer:
             execution_algo_params["unfilled_trigger_minute"] = _cp["unfilled_trigger_minute"]
         if _cp.get("unfilled_backup_depth"):
             execution_algo_params["unfilled_backup_depth"] = _cp["unfilled_backup_depth"]
+
+        custom_params = merge_qe_minute_runtime_contract(
+            custom_params,
+            config={"backtest_freq": backtest_freq},
+            execution_algo=execution_algo,
+            execution_algo_params=execution_algo_params,
+            source="config_composer_in_memory",
+            allow_default_execution_algo=True,
+        )
+        execution_algo = custom_params.get("execution_algo")
+        execution_algo_params = dict(custom_params.get("execution_algo_params") or {})
 
         # ── 获取路径配置（支持多节点） ──
         rdagent_cfg = self._fetch_workspace_config(node_id)
@@ -2368,6 +2391,10 @@ class ConfigComposer:
             "label_type",   # 训练标签类型：close/open/vwap
             "label_horizon",  # Training label horizon: 1/3/5/10/20d
             "stock_pool",   # 股票池文件路径
+            "runtime_mode",
+            "bar_freq",
+            "runtime_contract_version",
+            "runtime_contract_source",
             "backtest_freq",        # 回测频率（已在上层提取）
             "execution_algo",       # 执行算法（已在上层提取到 inner_strategy）
             "execution_algo_params",  # 执行算法参数（已在上层提取到 inner_strategy）

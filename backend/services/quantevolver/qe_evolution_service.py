@@ -17,6 +17,7 @@ from .qe_workspace_client import QEWorkspaceClient, QELoopWorkspaceCleanupUnavai
 from .qe_evolution_agents import EvolutionAgents, EvolutionFactorAgent, EvolutionModelAgent, AnalystResult
 from .callback_urls import build_aistock_callback_url
 from .experiment_config import DEFAULT_LABEL_HORIZON, normalize_label_horizon
+from .runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_runtime_contract
 from .node_execution import (
     normalize_node_parallelism,
     preflight_qe_node,
@@ -1632,7 +1633,24 @@ class AutoEvolutionScheduler:
                 experiment_name=experiment_name,
             )
             config = dict(config)
-            config["model_params"] = cfg.build_custom_params()
+            loop_model_params = merge_qe_minute_runtime_contract(
+                cfg.build_custom_params(),
+                config=config,
+                execution_algo=cfg.execution_algo,
+                execution_algo_params=cfg.execution_algo_params,
+                source="evolution_loop_config",
+                allow_default_execution_algo=True,
+            )
+            config["model_params"] = loop_model_params
+            runtime_contract = build_qe_minute_runtime_contract(
+                custom_params=loop_model_params,
+                execution_algo=cfg.execution_algo,
+                execution_algo_params=cfg.execution_algo_params,
+                source="evolution_loop_config",
+                allow_default_execution_algo=True,
+            )
+            if runtime_contract:
+                config.update(runtime_contract)
 
             # Persist the loop config for reviewer output and the next evolution loop.
             with get_conn() as conn:
@@ -2039,6 +2057,12 @@ class AutoEvolutionScheduler:
 
             # 更新 action_type 为实际决策的方向
             action_type = decided_action_type
+            experiment_custom_params = merge_qe_minute_runtime_contract(
+                actual_config.get("model_params", {}),
+                config=actual_config,
+                source="evolution_loop_completion",
+                allow_default_execution_algo=False,
+            )
 
             # 更新 LOOP 记录
             with get_conn() as conn:
@@ -2058,7 +2082,8 @@ class AutoEvolutionScheduler:
                             status = EXCLUDED.status,
                             is_sota = EXCLUDED.is_sota,
                             qe_task_id = EXCLUDED.qe_task_id,
-                            qe_loop_id = EXCLUDED.qe_loop_id
+                            qe_loop_id = EXCLUDED.qe_loop_id,
+                            custom_params = EXCLUDED.custom_params
                     """, (
                         experiment_id,
                         f"{task_id} Loop{loop_index}",
@@ -2070,7 +2095,7 @@ class AutoEvolutionScheduler:
                         actual_config.get("model_id"),
                         actual_config.get("strategy_id"),
                         json.dumps(actual_config.get("data_split", {})),
-                        json.dumps(actual_config.get("model_params", {})),
+                        json.dumps(experiment_custom_params),
                         json.dumps(metrics),
                         is_sota,
                     ))
@@ -2487,6 +2512,14 @@ class AutoEvolutionScheduler:
         model_params = self._apply_label_horizon_to_model_params(
             model_params,
             effective_label_horizon,
+        )
+        model_params = merge_qe_minute_runtime_contract(
+            model_params,
+            config=config,
+            execution_algo=effective_execution_algo,
+            execution_algo_params=effective_execution_algo_params,
+            source="fork_base_experiment",
+            allow_default_execution_algo=True,
         )
 
         if not factor_list:
@@ -3859,6 +3892,12 @@ class AutoEvolutionScheduler:
             base_model_params,
             source_label_horizon,
         )
+        base_model_params = merge_qe_minute_runtime_contract(
+            base_model_params,
+            config=config,
+            source="strategy_fork_base_experiment",
+            allow_default_execution_algo=False,
+        )
         for idx, loop_cfg in enumerate(loops_config, start=1):
             loop_horizon = loop_cfg.get("label_horizon")
             if loop_horizon not in (None, ""):
@@ -4059,7 +4098,24 @@ class AutoEvolutionScheduler:
                 experiment_name=experiment_name,
             )
             base_config = dict(base_config)
-            base_config["model_params"] = cfg.build_custom_params()
+            loop_model_params = merge_qe_minute_runtime_contract(
+                cfg.build_custom_params(),
+                config=base_config,
+                execution_algo=cfg.execution_algo,
+                execution_algo_params=cfg.execution_algo_params,
+                source="strategy_evo_loop_config",
+                allow_default_execution_algo=True,
+            )
+            base_config["model_params"] = loop_model_params
+            runtime_contract = build_qe_minute_runtime_contract(
+                custom_params=loop_model_params,
+                execution_algo=cfg.execution_algo,
+                execution_algo_params=cfg.execution_algo_params,
+                source="strategy_evo_loop_config",
+                allow_default_execution_algo=True,
+            )
+            if runtime_contract:
+                base_config.update(runtime_contract)
 
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -4378,6 +4434,12 @@ class AutoEvolutionScheduler:
                 if task_parent_row and task_parent_row.get("base_experiment_id")
                 else task_id
             )
+            experiment_custom_params = merge_qe_minute_runtime_contract(
+                config.get("model_params", {}),
+                config=config,
+                source="strategy_evo_loop_completion",
+                allow_default_execution_algo=False,
+            )
 
             # 更新 LOOP 记录
             with get_conn() as conn:
@@ -4396,7 +4458,8 @@ class AutoEvolutionScheduler:
                             status = EXCLUDED.status,
                             parent_experiment_id = EXCLUDED.parent_experiment_id,
                             qe_task_id = EXCLUDED.qe_task_id,
-                            qe_loop_id = EXCLUDED.qe_loop_id
+                            qe_loop_id = EXCLUDED.qe_loop_id,
+                            custom_params = EXCLUDED.custom_params
                     """, (
                         experiment_id,
                         f"{task_id} 策略回测{loop_index}",
@@ -4404,7 +4467,7 @@ class AutoEvolutionScheduler:
                         json.dumps(config.get("factor_list", [])),
                         config.get("model_id"), config.get("strategy_id"),
                         json.dumps(config.get("data_split", {})),
-                        json.dumps(config.get("model_params", {})),
+                        json.dumps(experiment_custom_params),
                         json.dumps(metrics),
                     ))
 
@@ -4577,6 +4640,14 @@ class AutoEvolutionScheduler:
         first_label_horizon = normalize_label_horizon(first_loop.get("label_horizon"))
         if first_label_horizon != DEFAULT_LABEL_HORIZON:
             first_custom_params["label_horizon"] = first_label_horizon
+        first_custom_params = merge_qe_minute_runtime_contract(
+            first_custom_params,
+            config=first_loop,
+            execution_algo=first_loop.get("execution_algo"),
+            execution_algo_params=first_loop.get("execution_algo_params"),
+            source="custom_evo_base_experiment",
+            allow_default_execution_algo=True,
+        )
 
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -5325,6 +5396,24 @@ class AutoEvolutionScheduler:
                 "node_id": effective_node_id,
                 "execution_node_id": effective_node_id,
             }
+            loop_model_params = merge_qe_minute_runtime_contract(
+                cfg.build_custom_params(),
+                config=config_record,
+                execution_algo=cfg.execution_algo,
+                execution_algo_params=cfg.execution_algo_params,
+                source="custom_evo_loop_config",
+                allow_default_execution_algo=True,
+            )
+            config_record["model_params"] = loop_model_params
+            runtime_contract = build_qe_minute_runtime_contract(
+                custom_params=loop_model_params,
+                execution_algo=cfg.execution_algo,
+                execution_algo_params=cfg.execution_algo_params,
+                source="custom_evo_loop_config",
+                allow_default_execution_algo=True,
+            )
+            if runtime_contract:
+                config_record.update(runtime_contract)
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""

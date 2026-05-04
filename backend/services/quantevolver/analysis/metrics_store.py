@@ -83,6 +83,7 @@ class MetricsStore:
         process_strategy_evo_completed_loop:3145-3166 的 INSERT 逻辑。
         """
         from ....db.pg_pool import get_conn
+        from ..runtime_contract import merge_qe_minute_runtime_contract
         experiment_id = f"{task_id}_L{loop_index}"
         rdagent_loop_id = f"Loop{loop_index}"
         name_suffix = experiment_name_suffix or f"Loop{loop_index}"
@@ -118,6 +119,7 @@ class MetricsStore:
                         is_sota = EXCLUDED.is_sota,
                         qe_task_id = EXCLUDED.qe_task_id,
                         qe_loop_id = EXCLUDED.qe_loop_id,
+                        custom_params = EXCLUDED.custom_params,
                         alpha_mode = EXCLUDED.alpha_mode,
                         multi_alpha_config = EXCLUDED.multi_alpha_config
                 """, (
@@ -131,7 +133,15 @@ class MetricsStore:
                     config.model_id,
                     config.strategy_id,
                     json.dumps(config.data_split or {}),
-                    json.dumps(config.build_custom_params()),
+                    json.dumps(
+                        merge_qe_minute_runtime_contract(
+                            config.build_custom_params(),
+                            execution_algo=config.execution_algo,
+                            execution_algo_params=config.execution_algo_params,
+                            source="metrics_store",
+                            allow_default_execution_algo=True,
+                        )
+                    ),
                     json.dumps(metrics),
                     is_sota,
                     config.alpha_mode or "single",

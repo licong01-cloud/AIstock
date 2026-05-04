@@ -12,6 +12,10 @@ from datetime import date, datetime
 from typing import Any
 
 from backend.db.pg_pool import get_conn
+from backend.services.quantevolver.runtime_contract import (
+    merge_qe_minute_runtime_contract,
+    runtime_contract_missing,
+)
 
 
 ConnectionProvider = Callable[[], Any]
@@ -504,6 +508,13 @@ class QEArchiveSourceAssembler:
         row = dict(row)
         metrics = _ensure_mapping(row.get("result_metrics"))
         custom_params = _ensure_mapping(row.get("custom_params"))
+        if runtime_contract_missing(custom_params):
+            custom_params = merge_qe_minute_runtime_contract(
+                custom_params,
+                config=_ensure_mapping(row.get("result_files")),
+                source="qe_archive_experiment_payload",
+                allow_default_execution_algo=False,
+            )
         data_split = _ensure_mapping(row.get("data_split"))
         factor_names = _ensure_list(row.get("factor_names"))
         freq = _infer_freq(custom_params, _ensure_mapping(row.get("result_files")))
@@ -592,6 +603,15 @@ class QEArchiveSourceAssembler:
         task_id = loop.get("task_id") or task.get("task_id")
         loop_id = loop.get("loop_id")
         runtime_flags = _ensure_mapping(config_json.get("runtime_flags") or config_json.get("custom_params") or {})
+        if runtime_contract_missing(runtime_flags):
+            runtime_flags = merge_qe_minute_runtime_contract(
+                runtime_flags,
+                config=config_json,
+                execution_algo=task.get("execution_algo"),
+                execution_algo_params=task.get("execution_algo_params"),
+                source="qe_archive_loop_payload",
+                allow_default_execution_algo=False,
+            )
         factor_names = _extract_factors_from_config(config_json)
         if not factor_names:
             factor_names = _ensure_list(task.get("base_factor_names"))
@@ -605,7 +625,10 @@ class QEArchiveSourceAssembler:
 
         merged_config = dict(config_json)
         merged_config.setdefault("factor_list", factor_names)
-        merged_config.setdefault("runtime_flags", runtime_flags)
+        merged_config["runtime_flags"] = runtime_flags
+        execution_context = _execution_context(runtime_flags)
+        execution_context.update(_ensure_mapping(merged_config.get("execution")))
+        merged_config["execution"] = execution_context
         merged_config.setdefault("data_context", {})
         data_context = _ensure_mapping(merged_config["data_context"])
         data_context.setdefault("freq", freq)

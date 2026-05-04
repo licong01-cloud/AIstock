@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from typing import Any, Iterator
 
 import pytest
 
@@ -47,6 +49,42 @@ def make_record(*, backtest_freq: str = "1min") -> dict:
     }
 
 
+@contextmanager
+def experiment_with_loop_conn(
+    experiment_record: dict[str, Any],
+    loop_record: dict[str, Any],
+) -> Iterator[Any]:
+    class _Cursor:
+        def __init__(self) -> None:
+            self._query = ""
+
+        def __enter__(self) -> "_Cursor":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def execute(self, query: object, *_args: object, **_kwargs: object) -> None:
+            self._query = str(query)
+
+        def fetchone(self) -> dict[str, Any] | None:
+            if "FROM qe_evolution_loops" in self._query:
+                return loop_record
+            return experiment_record
+
+    class _Conn:
+        def __enter__(self) -> "_Conn":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def cursor(self, *args: object, **kwargs: object) -> _Cursor:
+            return _Cursor()
+
+    yield _Conn()
+
+
 def test_qe_single_experiment_builds_package() -> None:
     record = make_record()
     resolver = QEExperimentSourceResolver(conn_factory=lambda: dict_record_conn(record))
@@ -77,3 +115,31 @@ def test_qe_experiment_rejects_daily_backtest() -> None:
 
     with pytest.raises(UnsupportedFeatureError, match="daily backtest"):
         resolver.build_from_experiment("qe_unit_001")
+
+
+def test_qe_experiment_enriches_runtime_contract_from_loop_config() -> None:
+    record = make_record()
+    record["custom_params"] = {
+        "topk": 50,
+        "n_drop": 5,
+        "stock_pool": "unit_pool",
+    }
+    loop_record = {
+        "config_json": {
+            "execution_algo": "V25_TWO_STAGE",
+            "execution_algo_params": {"early_model_path": "early.pt"},
+            "model_params": {"topk": 50},
+        },
+        "task_execution_algo": None,
+        "task_execution_algo_params": None,
+    }
+    resolver = QEExperimentSourceResolver(
+        conn_factory=lambda: experiment_with_loop_conn(record, loop_record)
+    )
+
+    manifest = resolver.build_from_experiment("qe_unit_001")
+
+    assert manifest.execution_policy.backtest_freq == "1min"
+    assert manifest.minute_execution_policy.algo_code == "V25_TWO_STAGE"
+    assert manifest.minute_execution_policy.algo_config == {"early_model_path": "early.pt"}
+    assert manifest.strategy_config["custom_params"]["runtime_contract_source"] == "strategy_package_loop_config"

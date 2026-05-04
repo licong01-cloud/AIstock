@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any
 
 from ..experiment_config import ExperimentConfig
+from ..runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_runtime_contract
 from .base import BaseExecutor, ExecutionContext, ExecutionResult
 
 logger = logging.getLogger("aistock.quantevolver.executors.backtest")
@@ -134,6 +135,20 @@ class BacktestExecutor(BaseExecutor):
             k: v for k, v in custom_params.items()
             if k != _PRECOMPUTED_HMM_COEFF_JSON_PARAM
         }
+        persisted_model_params = merge_qe_minute_runtime_contract(
+            persisted_model_params,
+            execution_algo=config.execution_algo,
+            execution_algo_params=config.execution_algo_params,
+            source="backtest_executor_model_params",
+            allow_default_execution_algo=True,
+        )
+        runtime_contract = build_qe_minute_runtime_contract(
+            custom_params=persisted_model_params,
+            execution_algo=config.execution_algo,
+            execution_algo_params=config.execution_algo_params,
+            source="backtest_executor_config",
+            allow_default_execution_algo=True,
+        )
         rdagent_config = {
             "factor_list": config.factor_names,
             "model_id": config.model_id,
@@ -141,6 +156,8 @@ class BacktestExecutor(BaseExecutor):
             "data_split": config.data_split,
             "model_params": persisted_model_params,
         }
+        if runtime_contract:
+            rdagent_config.update(runtime_contract)
 
         # 5. 提交到 RDAgent
         job_id = await self.client.create_and_run_loop(
