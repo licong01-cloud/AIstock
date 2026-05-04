@@ -32,7 +32,10 @@ import yaml
 from backend.db.pg_pool import get_conn
 from backend.infra.wsl_qlib_runner import win_to_wsl_path
 from backend.services.quantevolver.node_execution import resolve_default_qe_node_id
-from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
+from backend.services.quantevolver.qe_workspace_client import (
+    QEWorkspaceClient,
+    QEWorkspaceFileNotFound,
+)
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
 
 from .workspace_policy import ensure_not_forbidden_worker_workspace_path
@@ -56,6 +59,27 @@ class QEExperimentRuntimeSource:
     qe_task_id: str | None = None
     qe_loop_id: str | None = None
     execution_node_id: str | None = None
+
+
+@dataclass(frozen=True)
+class StaticLoaderFeatureResolution:
+    factors: list[str]
+    configs: list[str]
+    missing_configs: list[str]
+    unreadable_configs: list[dict[str, str]]
+
+
+@dataclass(frozen=True)
+class FactorOrderResolution:
+    alpha158_factors: list[str]
+    dynamic_factors: list[str]
+    factor_order: list[str]
+    dynamic_factor_source: str
+    static_loader_schema_available: bool
+    static_loader_configs: list[str]
+    static_loader_missing_configs: list[str]
+    static_loader_unreadable_configs: list[dict[str, str]]
+    warnings: list[str]
 
 
 @dataclass(frozen=True)
@@ -313,11 +337,14 @@ class QEExperimentRuntimeAssetResolver:
 
         source_conf = self._resolve_conf_path(source)
         factor_source_dir = self._resolve_factor_source_dir(source)
-        alpha158_factors, dynamic_factors, factor_order = self._build_factor_order(
+        factor_order_resolution = self._build_factor_order(
             source=source,
             conf_path=source_conf,
         )
-        factor_files = self._resolve_factor_files(factor_source_dir, dynamic_factors)
+        factor_files = self._resolve_factor_files(
+            factor_source_dir,
+            factor_order_resolution.dynamic_factors,
+        )
         model_source_path, model_candidate_count = self._resolve_model_params_path(source, artifact_config)
 
         cache_key = manifest_sha256[:16] if manifest_sha256 else "unfrozen_manifest"
@@ -334,14 +361,20 @@ class QEExperimentRuntimeAssetResolver:
                 {
                     "package_id": package_id,
                     "source_experiment_id": source.experiment_id,
-                    "total_factors": len(factor_order),
-                    "alpha158_count": len(alpha158_factors),
-                    "dynamic_count": len(dynamic_factors),
-                    "factor_order": factor_order,
-                    "alpha158_factors": alpha158_factors,
-                    "dynamic_factors": dynamic_factors,
-                    "dynamic_factor_source": "qe_static_dataloader" if dynamic_factors != source.factor_names else "qe_experiments.factor_names",
+                    "total_factors": len(factor_order_resolution.factor_order),
+                    "alpha158_count": len(factor_order_resolution.alpha158_factors),
+                    "dynamic_count": len(factor_order_resolution.dynamic_factors),
+                    "factor_order": factor_order_resolution.factor_order,
+                    "alpha158_factors": factor_order_resolution.alpha158_factors,
+                    "dynamic_factors": factor_order_resolution.dynamic_factors,
+                    "dynamic_factor_source": factor_order_resolution.dynamic_factor_source,
                     "qe_experiment_factor_name_count": len(source.factor_names),
+                    "static_loader_schema_available": factor_order_resolution.static_loader_schema_available,
+                    "static_loader_configs": factor_order_resolution.static_loader_configs,
+                    "static_loader_missing_configs": factor_order_resolution.static_loader_missing_configs,
+                    "static_loader_unreadable_configs": factor_order_resolution.static_loader_unreadable_configs,
+                    "schema_alignment_basis": factor_order_resolution.dynamic_factor_source,
+                    "warnings": factor_order_resolution.warnings,
                     "source": AUTHORITATIVE_SELECTION_SOURCE_TYPE,
                     "is_aligned": True,
                 },
@@ -375,7 +408,7 @@ class QEExperimentRuntimeAssetResolver:
                         "model_weight": "model/params.pkl",
                         "factor_entry": "strategy_package_factor_entry.py",
                         "factor_order": "factor_order.json",
-                        "factors_count": len(factor_order),
+                        "factors_count": len(factor_order_resolution.factor_order),
                     },
                     "diagnostics": {
                         "qe_experiment_id": source.experiment_id,
@@ -403,9 +436,9 @@ class QEExperimentRuntimeAssetResolver:
             model_params_path=model_dest,
             source_workspace_path=source.asset_workspace_path,
             factor_source_dir=factor_source_dir,
-            factor_order=factor_order,
-            alpha158_factors=alpha158_factors,
-            dynamic_factors=dynamic_factors,
+            factor_order=factor_order_resolution.factor_order,
+            alpha158_factors=factor_order_resolution.alpha158_factors,
+            dynamic_factors=factor_order_resolution.dynamic_factors,
             model_source_path=model_source_path,
             model_candidate_count=model_candidate_count,
         )
@@ -447,17 +480,44 @@ class QEExperimentRuntimeAssetResolver:
                     execution_node_id=execution_node_id,
                 )
                 conf_path = source_dir / "conf.yaml"
-                static_paths = self._find_static_loader_configs(yaml.safe_load(conf_path.read_text(encoding="utf-8")) or {})
+                static_paths = self._find_static_loader_configs(
+                    yaml.safe_load(conf_path.read_text(encoding="utf-8")) or {}
+                )
+                seen_static_relpaths: set[str] = set()
                 for raw_path in static_paths:
                     if isinstance(raw_path, str) and raw_path.strip():
                         rel_path = _remote_relpath(raw_path)
-                        await self._download_workspace_file(client, qe_task_id, qe_loop_id, rel_path, source_dir / rel_path)
+                        if rel_path in seen_static_relpaths:
+                            continue
+                        seen_static_relpaths.add(rel_path)
+                        try:
+                            await self._download_workspace_file(
+                                client,
+                                qe_task_id,
+                                qe_loop_id,
+                                rel_path,
+                                source_dir / rel_path,
+                            )
+                        except QEWorkspaceFileNotFound:
+                            # Historical QE workspaces may keep conf.yaml and factors but not the schema parquet.
+                            # Factor order can still be recovered from qe_experiments.factor_names below.
+                            continue
 
-                static_factor_names = self._extract_static_loader_feature_names(
+                static_loader = self._extract_static_loader_feature_names(
                     source=temp_source,
                     conf_path=conf_path,
                 )
-                required_factor_names = sorted(set(factor_names) | set(static_factor_names))
+                if static_loader.unreadable_configs:
+                    raise DataUnavailableError(
+                        "QE StaticDataLoader feature-order artifact is unreadable for live inference",
+                        context={
+                            "experiment_id": experiment_id,
+                            "qe_task_id": qe_task_id,
+                            "qe_loop_id": qe_loop_id,
+                            "unreadable_configs": static_loader.unreadable_configs,
+                        },
+                    )
+                required_factor_names = sorted(set(factor_names) | set(static_loader.factors))
                 for factor_name in required_factor_names:
                     rel_path = _remote_relpath(f"factors/{factor_name}.py")
                     await self._download_workspace_file(
@@ -544,7 +604,10 @@ class QEExperimentRuntimeAssetResolver:
                         "QE mlruns params archive contains an unsafe path",
                         context={"member": member.name},
                     )
-            archive.extractall(dest_dir)
+            try:
+                archive.extractall(dest_dir, filter="data")
+            except TypeError:  # pragma: no cover - compatibility with older Python/tarfile.
+                archive.extractall(dest_dir)
         if not any(dest_dir.glob("**/artifacts/params.pkl")):
             raise DataUnavailableError(
                 "QE mlruns params archive does not contain artifacts/params.pkl",
@@ -566,14 +629,51 @@ class QEExperimentRuntimeAssetResolver:
         *,
         source: QEExperimentRuntimeSource,
         conf_path: Path,
-    ) -> tuple[list[str], list[str], list[str]]:
+    ) -> FactorOrderResolution:
         disable_alpha158 = bool(source.custom_params.get("disable_alpha158"))
         alpha158_factors = [] if disable_alpha158 else self._extract_alpha158_aliases(conf_path)
-        static_loader_factors = self._extract_static_loader_feature_names(
+        static_loader = self._extract_static_loader_feature_names(
             source=source,
             conf_path=conf_path,
         )
-        dynamic_factors = static_loader_factors or list(source.factor_names)
+        warnings: list[str] = []
+        if static_loader.unreadable_configs:
+            raise DataUnavailableError(
+                "QE StaticDataLoader feature-order artifact is unreadable for live inference",
+                context={
+                    "experiment_id": source.experiment_id,
+                    "conf_path": str(conf_path),
+                    "unreadable_configs": static_loader.unreadable_configs,
+                },
+            )
+
+        if static_loader.missing_configs:
+            if not source.factor_names:
+                raise DataUnavailableError(
+                    "QE StaticDataLoader feature-order artifact is unavailable for live inference",
+                    context={
+                        "experiment_id": source.experiment_id,
+                        "conf_path": str(conf_path),
+                        "missing_configs": static_loader.missing_configs,
+                    },
+                )
+            dynamic_factors = list(source.factor_names)
+            dynamic_factor_source = "qe_experiments.factor_names_after_missing_static_loader"
+            warnings.append(
+                "StaticDataLoader schema artifact is missing; recovered dynamic factor order from qe_experiments.factor_names."
+            )
+        elif static_loader.factors:
+            dynamic_factors = static_loader.factors
+            dynamic_factor_source = "qe_static_dataloader"
+        elif static_loader.configs:
+            dynamic_factors = list(source.factor_names)
+            dynamic_factor_source = "qe_experiments.factor_names_after_empty_static_loader"
+            warnings.append(
+                "StaticDataLoader schema artifact exposed no feature columns; recovered dynamic factor order from qe_experiments.factor_names."
+            )
+        else:
+            dynamic_factors = list(source.factor_names)
+            dynamic_factor_source = "qe_experiments.factor_names"
         factor_order = [*alpha158_factors, *dynamic_factors]
         if not factor_order:
             raise StrategyPackageValidationError(
@@ -586,14 +686,27 @@ class QEExperimentRuntimeAssetResolver:
                 "live inference factor_order contains duplicates",
                 context={"experiment_id": source.experiment_id, "duplicates": duplicates},
             )
-        return alpha158_factors, dynamic_factors, factor_order
+        return FactorOrderResolution(
+            alpha158_factors=alpha158_factors,
+            dynamic_factors=dynamic_factors,
+            factor_order=factor_order,
+            dynamic_factor_source=dynamic_factor_source,
+            static_loader_schema_available=bool(static_loader.configs)
+            and not static_loader.missing_configs
+            and not static_loader.unreadable_configs
+            and bool(static_loader.factors),
+            static_loader_configs=static_loader.configs,
+            static_loader_missing_configs=static_loader.missing_configs,
+            static_loader_unreadable_configs=static_loader.unreadable_configs,
+            warnings=warnings,
+        )
 
     def _extract_static_loader_feature_names(
         self,
         *,
         source: QEExperimentRuntimeSource,
         conf_path: Path,
-    ) -> list[str]:
+    ) -> StaticLoaderFeatureResolution:
         try:
             conf = yaml.safe_load(conf_path.read_text(encoding="utf-8")) or {}
         except Exception as exc:
@@ -604,15 +717,27 @@ class QEExperimentRuntimeAssetResolver:
 
         configs = self._find_static_loader_configs(conf)
         if not configs:
-            return []
+            return StaticLoaderFeatureResolution(
+                factors=[],
+                configs=[],
+                missing_configs=[],
+                unreadable_configs=[],
+            )
 
         factors: list[str] = []
+        config_paths: list[str] = []
+        seen_config_paths: set[str] = set()
         missing_paths: list[str] = []
         unreadable_paths: list[dict[str, str]] = []
         for config in configs:
             if not isinstance(config, str) or not config.strip():
                 continue
-            path = Path(config)
+            config_text = config.strip()
+            if config_text in seen_config_paths:
+                continue
+            seen_config_paths.add(config_text)
+            config_paths.append(config_text)
+            path = Path(config_text)
             candidates = [path] if path.is_absolute() else [
                 source.asset_workspace_path / path,
                 conf_path.parent / path,
@@ -624,32 +749,32 @@ class QEExperimentRuntimeAssetResolver:
                 )
             resolved = next((candidate for candidate in candidates if candidate.exists() and candidate.is_file()), None)
             if resolved is None:
-                missing_paths.append(config)
+                missing_paths.append(config_text)
                 continue
             try:
                 factors.extend(self._read_static_feature_columns(resolved))
             except Exception as exc:
                 unreadable_paths.append({"path": str(resolved), "error": str(exc)})
 
-        if missing_paths or unreadable_paths:
-            raise DataUnavailableError(
-                "QE StaticDataLoader feature-order artifact is unavailable for live inference",
-                context={
-                    "experiment_id": source.experiment_id,
-                    "conf_path": str(conf_path),
-                    "missing_configs": missing_paths,
-                    "unreadable_configs": unreadable_paths,
-                },
-            )
         if not factors:
-            return []
+            return StaticLoaderFeatureResolution(
+                factors=[],
+                configs=config_paths,
+                missing_configs=missing_paths,
+                unreadable_configs=unreadable_paths,
+            )
         unique: list[str] = []
         seen: set[str] = set()
         for factor in factors:
             if factor not in seen:
                 unique.append(factor)
                 seen.add(factor)
-        return unique
+        return StaticLoaderFeatureResolution(
+            factors=unique,
+            configs=config_paths,
+            missing_configs=missing_paths,
+            unreadable_configs=unreadable_paths,
+        )
 
     def _find_static_loader_configs(self, node: Any) -> list[Any]:
         configs: list[Any] = []

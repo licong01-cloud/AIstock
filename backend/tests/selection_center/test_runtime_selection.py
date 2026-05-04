@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
+import io
 import json
+import tarfile
 from datetime import date
 from pathlib import Path
 
@@ -32,6 +34,10 @@ from backend.services.strategy_package.live_inference import (
     QEExperimentRuntimeAssetResolver,
     QEExperimentRuntimeSource,
     LiveInferenceResult,
+)
+from backend.services.quantevolver.qe_workspace_client import (
+    QEWorkspaceClient,
+    QEWorkspaceFileNotFound,
 )
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, UnsupportedFeatureError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
@@ -521,7 +527,7 @@ def test_selection_center_pit_mode_resolves_previous_trading_day_and_passes_cuto
 
 
 def test_live_inference_factor_order_uses_static_dataloader_schema(tmp_path) -> None:
-    workspace = tmp_path / "qe_workspace" / "qe_static_schema"
+    workspace = tmp_path / "safe_assets" / "qe_static_schema"
     factors_dir = workspace / "factors"
     artifacts_dir = workspace / "mlruns" / "1" / "artifacts"
     factors_dir.mkdir(parents=True)
@@ -579,6 +585,130 @@ data_handler_config:
     payload = json.loads(prepared.factor_order_path.read_text(encoding="utf-8"))
     assert payload["dynamic_factor_source"] == "qe_static_dataloader"
     assert payload["qe_experiment_factor_name_count"] == 1
+
+
+def test_live_inference_factor_order_falls_back_to_qe_factor_names_when_static_schema_missing(tmp_path) -> None:
+    workspace = tmp_path / "safe_assets" / "qe_missing_static_schema"
+    factors_dir = workspace / "factors"
+    artifacts_dir = workspace / "mlruns" / "1" / "artifacts"
+    factors_dir.mkdir(parents=True)
+    artifacts_dir.mkdir(parents=True)
+    (artifacts_dir / "params.pkl").write_bytes(b"test model placeholder")
+    for factor_name in ["factor_c", "factor_a"]:
+        (factors_dir / f"{factor_name}.py").write_text(
+            "import pandas as pd\n"
+            f"def calculate():\n    return pd.DataFrame({{{factor_name!r}: [1.0]}})\n",
+            encoding="utf-8",
+        )
+    (workspace / "conf.yaml").write_text(
+        """
+data_handler_config:
+  data_loader:
+    class: NestedDataLoader
+    kwargs:
+      dataloader_l:
+        - class: qlib.contrib.data.loader.Alpha158DL
+          kwargs:
+            config:
+              feature:
+                - ["Ref($close, 1) / $close - 1"]
+                - ["ROC1"]
+        - class: qlib.data.dataset.loader.StaticDataLoader
+          kwargs:
+            config: combined_factors_df.parquet
+""",
+        encoding="utf-8",
+    )
+
+    resolver = QEExperimentRuntimeAssetResolver(cache_root=tmp_path / "runtime_cache")
+    source = QEExperimentRuntimeSource(
+        experiment_id="qe_missing_static_schema",
+        db_workspace_path=workspace,
+        asset_workspace_path=workspace,
+        factor_names=["factor_c", "factor_a"],
+        custom_params={},
+        data_split={},
+    )
+
+    prepared = resolver.prepare_workspace(
+        package_id="pkg_missing_static_schema",
+        manifest_sha256="b" * 64,
+        source=source,
+    )
+
+    assert prepared.alpha158_factors == ["ROC1"]
+    assert prepared.dynamic_factors == ["factor_c", "factor_a"]
+    assert prepared.factor_order == ["ROC1", "factor_c", "factor_a"]
+    payload = json.loads(prepared.factor_order_path.read_text(encoding="utf-8"))
+    assert payload["dynamic_factor_source"] == "qe_experiments.factor_names_after_missing_static_loader"
+    assert payload["static_loader_schema_available"] is False
+    assert payload["static_loader_missing_configs"] == ["combined_factors_df.parquet"]
+    assert payload["static_loader_unreadable_configs"] == []
+    assert payload["warnings"]
+
+
+def test_live_inference_materialize_continues_when_node_static_loader_file_is_404(tmp_path, monkeypatch) -> None:
+    conf = """
+data_handler_config:
+  data_loader:
+    class: NestedDataLoader
+    kwargs:
+      dataloader_l:
+        - class: qlib.data.dataset.loader.StaticDataLoader
+          kwargs:
+            config: combined_factors_df.parquet
+"""
+
+    def params_archive() -> bytes:
+        payload = io.BytesIO()
+        with tarfile.open(fileobj=payload, mode="w:gz") as archive:
+            data = b"test model placeholder"
+            info = tarfile.TarInfo("mlruns/1/artifacts/params.pkl")
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+        return payload.getvalue()
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def download_workspace_file_bytes(self, task_id, loop_id, file_path):
+            if file_path == "conf.yaml":
+                return conf.encode("utf-8")
+            if file_path == "combined_factors_df.parquet":
+                raise QEWorkspaceFileNotFound(
+                    task_id,
+                    loop_id,
+                    file_path,
+                    "http://node/files/combined_factors_df.parquet",
+                )
+            if file_path == "factors/factor_a.py":
+                return b"def calculate():\n    return None\n"
+            raise AssertionError(f"unexpected workspace file request: {file_path}")
+
+        async def download_mlruns_params(self, task_id, loop_id):
+            return params_archive()
+
+    monkeypatch.setattr(QEWorkspaceClient, "for_node", staticmethod(lambda _node_id: FakeClient()))
+
+    resolver = QEExperimentRuntimeAssetResolver(cache_root=tmp_path / "runtime_cache")
+    source_dir = resolver._materialize_runtime_source_from_node(
+        experiment_id="qe_node_missing_static",
+        qe_task_id="qe_task_node",
+        qe_loop_id="Loop1",
+        execution_node_id="node-1",
+        factor_names=["factor_a"],
+        custom_params={"disable_alpha158": True},
+        data_split={},
+    )
+
+    assert (source_dir / "conf.yaml").exists()
+    assert not (source_dir / "combined_factors_df.parquet").exists()
+    assert (source_dir / "factors" / "factor_a.py").exists()
+    assert list(source_dir.glob("**/artifacts/params.pkl"))
 
 
 def test_live_inference_load_source_materializes_via_node_api_not_db_workspace(tmp_path, monkeypatch) -> None:

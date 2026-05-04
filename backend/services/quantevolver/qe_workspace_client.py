@@ -12,6 +12,19 @@ class QELoopWorkspaceCleanupUnavailable(RuntimeError):
     """Raised when RD-Agent cannot service loop-scoped workspace cleanup."""
 
 
+class QEWorkspaceFileNotFound(RuntimeError):
+    """Raised when a requested loop-scoped workspace file is missing."""
+
+    def __init__(self, task_id: str, loop_id: str, file_path: str, url: str) -> None:
+        self.task_id = task_id
+        self.loop_id = loop_id
+        self.file_path = file_path
+        self.url = url
+        super().__init__(
+            f"workspace file not found: task={task_id} loop={loop_id} file={file_path} url={url}"
+        )
+
+
 class QEWorkspaceClient:
     """
     专门负责与被物理隔离的 RDAgent 端进行网络交互的客户端
@@ -262,6 +275,12 @@ class QEWorkspaceClient:
             response = await self.client.get(url, timeout=60.0)
             response.raise_for_status()
             return response.content
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise QEWorkspaceFileNotFound(task_id, loop_id, file_path, url) from e
+            raise RuntimeError(
+                f"download workspace file failed: task={task_id} loop={loop_id} file={file_path}: {e}"
+            ) from e
         except httpx.HTTPError as e:
             raise RuntimeError(f"下载 workspace 文件失败: task={task_id} loop={loop_id} file={file_path}: {e}") from e
 
