@@ -13,7 +13,7 @@ from typing import Any, Iterable
 import yaml
 
 
-DEFAULT_CATALOG = Path("tests/aistock_validation/catalog/development_guardrails.yaml")
+DEFAULT_CATALOG = Path("docs/standards/aistock_development_standard_v1.0_20260504.yaml")
 SEVERITY_RANK = {"P3": 1, "P2": 2, "P1": 3, "P0": 4, "NONE": 99}
 
 
@@ -269,7 +269,7 @@ def write_summary_md(path: Path, findings: list[Finding], files_scanned: int, mo
 def main() -> int:
     parser = argparse.ArgumentParser(description="Scan AIstock development guardrails.")
     parser.add_argument("paths", nargs="*", help="Files or directories to scan. Defaults to catalog roots.")
-    parser.add_argument("--catalog", default=str(DEFAULT_CATALOG), help="Path to development_guardrails.yaml.")
+    parser.add_argument("--catalog", default=str(DEFAULT_CATALOG), help="Path to the machine-readable development standard YAML.")
     parser.add_argument("--baseline", action="store_true", help="Scan tracked files under catalog roots.")
     parser.add_argument("--changed-only", action="store_true", help="Scan changed and untracked files only.")
     parser.add_argument("--output-json", help="Write machine-readable result JSON.")

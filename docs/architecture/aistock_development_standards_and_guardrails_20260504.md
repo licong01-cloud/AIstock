@@ -1,14 +1,14 @@
-# AIstock 开发规范与 Guardrail 框架设计
+# AIstock 开发规范自动化落地与 Guardrail 框架设计
 
 > 日期：2026-05-04
-> 状态：规范框架设计 v1.1，作为自动化测试流水线、agent 修复、全仓基线治理和后续代码治理的规则源
+> 状态：Guardrail 落地设计 v1.2；本文不是规范源，规范源是 `docs/standards/aistock_development_standard_v1.0_20260504.md`
 > 文档位置：`docs/architecture/aistock_development_standards_and_guardrails_20260504.md`
-> 关联文档：`docs/architecture/aistock_development_standard_20260504.md`、`docs/architecture/aistock_internal_validation_center_implementation_plan_20260504.md`、`docs/architecture/aistock_automated_testing_coverage_observability_design_20260504.md`
+> 关联文档：`docs/standards/aistock_development_standard_v1.0_20260504.md`、`docs/standards/aistock_development_standard_v1.0_20260504.yaml`、`docs/architecture/aistock_internal_validation_center_implementation_plan_20260504.md`、`docs/architecture/aistock_automated_testing_coverage_observability_design_20260504.md`
 > 适用范围：AIstock 全仓库，包括 FastAPI、Next.js、QE/RD-Agent、Paper Trading v2、Qlib 数据链路、HMM、数仓/归档、测试流水线、agent 工具链。
 
 ## 1. 结论
 
-AIstock 需要把“开发规范”直接纳入自动化测试流水线。流水线不应只验证功能是否跑通，还应验证实现方式是否符合架构红线、数据安全、生产隔离、可复现、可维护和 agent 可治理要求。
+AIstock 需要把 `docs/standards` 中的人类可读规范和机器可读 YAML 直接纳入自动化测试流水线。本文只说明“如何落地规范”，不再重复定义规范正文；如本文与规范源冲突，以 `docs/standards/aistock_development_standard_v1.0_20260504.md` 为准。
 
 核心结论：
 
@@ -16,7 +16,7 @@ AIstock 需要把“开发规范”直接纳入自动化测试流水线。流水
 2. **必须先做全仓基线扫描**：当前代码经历多个开发工具和探索阶段，预期会有大量历史违规；应先只读扫描、建立 baseline，不直接阻断全仓。
 3. **新代码严格、旧代码渐进**：历史问题进入 baseline/backlog；新增或修改代码不允许新增 P0/P1 违规。
 4. **违反规范也是缺陷**：即使功能可运行，只要违反红线或高风险规范，也应记录为 quality defect / architecture defect 并进入修复闭环。
-5. **规范即代码**：建议新增 `tests/aistock_validation/catalog/development_guardrails.yaml` 作为机器可读规则目录，配合 `noxfile.py`、`scripts/aistock_validate.py`、Semgrep、pytest、Playwright 和 DB smoke 执行。
+5. **规范即代码**：`docs/standards/aistock_development_standard_v1.0_20260504.yaml` 是与人类规范同版本的机器可读规则目录，配合 `noxfile.py`、`scripts/aistock_validate.py`、Semgrep、pytest、Playwright 和 DB smoke 执行。
 6. **agent-first**：规范、失败上下文、复现命令、允许修改范围和验证命令都要机器可读，方便 Codex/Claude 修复后回写证据。
 7. **MCP 预留但不前置**：第一阶段优先 repo 内 skill + nox + `aistock_validate.py` + Validation API；MCP 作为中长期统一工具/资源/Prompt 层。
 
@@ -62,11 +62,11 @@ AIstock 需要把“开发规范”直接纳入自动化测试流水线。流水
 ### 4.1 规则来源
 
 ```text
-docs/architecture/aistock_development_standards_and_guardrails_20260504.md
-  -> 人类可读规范、红线、治理路线
+docs/standards/aistock_development_standard_v1.0_20260504.md
+  -> 人类可读规范源，定义红线、工程规范和治理要求
 
-tests/aistock_validation/catalog/development_guardrails.yaml
-  -> 机器可读规则目录：rule_id、severity、scope、checker、baseline_policy
+docs/standards/aistock_development_standard_v1.0_20260504.yaml
+  -> 机器可读同步版本：rule_id、standard_ref、severity、scope、checker、baseline_policy
 
 .codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py
   -> 现有轻量扫描器，先扩展再逐步引入 Semgrep
@@ -81,18 +81,17 @@ scripts/aistock_validate.py
   -> 记录 run metadata、coverage、quality gates、evidence、baseline
 ```
 
-### 4.2 机器可读规则目录建议
+### 4.2 机器可读规则目录
 
-建议后续新增：
-
-`tests/aistock_validation/catalog/development_guardrails.yaml`
-
-示例结构：
+当前机器可读规则目录已经迁移到 `docs/standards/aistock_development_standard_v1.0_20260504.yaml`。每条 enabled rule 必须包含 `standard_ref` 并指向同版本人类规范中的规则锚点。示例结构：
 
 ```yaml
 schema_version: aistock_development_guardrails_v1
+source_standard: docs/standards/aistock_development_standard_v1.0_20260504.md
+source_version: "1.0"
 rules:
   - rule_id: ARCH-WSL-001
+    standard_ref: docs/standards/aistock_development_standard_v1.0_20260504.md#rule-arch-wsl-001
     title: Windows backend must not read WSL or remote worker workspace directly
     severity: P0
     category: architecture
@@ -403,7 +402,7 @@ Phase E: full enforcement
 交付：
 
 - 本文档。
-- `development_guardrails.yaml` 设计。
+- `docs/standards/aistock_development_standard_v1.0_20260504.yaml` 设计。
 - 现有 `scan_quality_guardrails.py` 能映射到 rule_id/severity/category 的计划。
 
 验收：
@@ -530,7 +529,7 @@ MCP 安全限制：
 
 ```text
 development standards
-  -> development_guardrails.yaml
+  -> docs/standards/aistock_development_standard_v1.0_20260504.yaml
   -> guardrail scan / semgrep / pytest / DB smoke / Playwright
   -> nox L0-L5
   -> run metadata quality_gates
@@ -561,7 +560,7 @@ development standards
 
 推荐下一步：
 
-1. 先实现 `development_guardrails.yaml` 的最小规则目录。
+1. 先实现 `docs/standards/aistock_development_standard_v1.0_20260504.yaml` 的最小规则目录。
 2. 扩展现有 `scan_quality_guardrails.py` 或新增 `scripts/aistock_guardrail_scan.py`。
 3. 执行一次全仓只读 baseline scan，生成 `docs/analysis/aistock_guardrail_baseline_YYYYMMDD.md`。
 4. `nox -s l0` 开始阻断 changed-files 中的 P0/P1 新违规。
@@ -569,8 +568,8 @@ development standards
 
 当前第一批已落地内容：
 
-- 项目级开发规范 v0：`docs/architecture/aistock_development_standard_20260504.md`，统一承载 Python 工程规范和量化/交易工程规范。
-- 机器可读规则目录：`tests/aistock_validation/catalog/development_guardrails.yaml`。
+- 项目级开发规范 v1.0：`docs/standards/aistock_development_standard_v1.0_20260504.md`，统一承载 Python 工程规范和量化/交易工程规范。
+- 机器可读规则目录：`docs/standards/aistock_development_standard_v1.0_20260504.yaml`。
 - 只读扫描器：`scripts/aistock_guardrail_scan.py`。
 - 扫描器单元测试：`backend/tests/test_aistock_guardrail_scan.py`。
 - 首次全仓 tracked-files baseline：`docs/analysis/aistock_guardrail_baseline_20260504.md`，完整机器 JSON 位于本地 `tmp/validation/guardrails/baseline_20260504.json`，不提交 Git。
@@ -581,7 +580,7 @@ development standards
 
 | 顺序 | 集成点 | 目标 |
 |---|---|---|
-| 1 | `tests/aistock_validation/catalog/development_guardrails.yaml` | 把红线、严重级别、检查器、baseline 策略机器可读化。 |
+| 1 | `docs/standards/aistock_development_standard_v1.0_20260504.yaml` | 把红线、严重级别、检查器、baseline 策略机器可读化。 |
 | 2 | `scan_quality_guardrails.py` 或 `scripts/aistock_guardrail_scan.py` | 先复用现有轻量扫描器，再逐步引入 Semgrep 结构化规则。 |
 | 3 | `docs/analysis/aistock_guardrail_baseline_YYYYMMDD.md` | 保存全仓只读 baseline 摘要，作为历史技术债治理起点。 |
 | 4 | `nox -s l0` | 对 changed-files 阻断新增 P0/P1，输出 guardrail quality gate。 |

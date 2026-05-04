@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = ROOT / "scripts" / "aistock_guardrail_scan.py"
-CATALOG_PATH = ROOT / "tests" / "aistock_validation" / "catalog" / "development_guardrails.yaml"
+CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_development_standard_v1.0_20260504.yaml"
 
 
 def _load_module():
@@ -30,6 +30,22 @@ def test_catalog_loads_and_compiles_regex_rules() -> None:
     assert "ARCH-WSL-001" in rule_ids
     assert "ERR-FALLBACK-001" in rule_ids
     assert "DB-COMMENT-001" not in rule_ids  # external checker, not regex scanner scope
+
+
+def test_catalog_references_current_human_readable_standard() -> None:
+    scanner = _load_module()
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    standard_path = ROOT / catalog["source_standard"]
+    standard_text = standard_path.read_text(encoding="utf-8")
+
+    assert catalog["source_version"] == "1.0"
+    assert standard_path.name == "aistock_development_standard_v1.0_20260504.md"
+    for rule in catalog["rules"]:
+        if not rule.get("enabled", True):
+            continue
+        assert rule.get("standard_ref", "").startswith(catalog["source_standard"])
+        assert rule["rule_id"] in standard_text
 
 
 def test_scanner_detects_silent_fallback_in_runtime_code(tmp_path: Path) -> None:

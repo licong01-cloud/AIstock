@@ -1,8 +1,8 @@
 # AIstock Guardrail Baseline Scan
 
-- Generated at: 2026-05-04T04:13:12.782394+00:00
+- Generated at: 2026-05-04T04:45:42.076814+00:00
 - Mode: `baseline_tracked`
-- Files scanned: 1041
+- Files scanned: 1039
 - Total findings: 563
 
 ## Summary By Severity
@@ -224,17 +224,17 @@ Historical findings should be triaged by module and burned down with regression 
 | P2 | `UI-RAWJSON-001` | `frontend/src/app/llm/rdagent-config/page.tsx` | 384 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
 | P2 | `UI-RAWJSON-001` | `frontend/src/app/llm/rdagent-config/page.tsx` | 383 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
 | P2 | `UI-RAWJSON-001` | `frontend/src/app/llm/rdagent-config/page.tsx` | 388 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
-| P0 | `PROD-PORT-001` | `frontend/src/app/local-data/page.tsx` | 357 | Use dev ports 8011/8012 and 3011/3012; production restart requires explicit user action. |
-| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 642 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
-| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 678 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
-| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 702 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
-| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 724 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
-| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 809 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
-| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 1402 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
-| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 1431 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
-| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 1452 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
-| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 1471 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
-| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 1508 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
-| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 1872 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
+| P0 | `PROD-PORT-001` | `frontend/src/app/local-data/page.tsx` | 362 | Use dev ports 8011/8012 and 3011/3012; production restart requires explicit user action. |
+| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 648 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
+| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 684 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
+| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 708 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
+| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 730 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
+| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 817 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
+| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 1412 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
+| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 1441 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
+| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 1462 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
+| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 1481 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
+| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 1518 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
+| P2 | `UI-RAWJSON-001` | `frontend/src/app/local-data/page.tsx` | 1882 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
 
 Report truncated to 200 findings. See JSON output for full machine-readable details.

@@ -1,0 +1,234 @@
+schema_version: aistock_development_guardrails_v1
+source_standard: docs/standards/aistock_development_standard_v1.0_20260504.md
+source_version: "1.0"
+updated_at: "2026-05-04"
+rule_sync_policy:
+  authority: human_markdown_standard
+  requirement: Every enabled machine rule must reference a rule section in the human-readable standard.
+  archive_directory: docs/standards/archive
+scan:
+  default_roots:
+    - backend
+    - frontend/src
+    - scripts
+    - noxfile.py
+    - tests/aistock_validation
+    - docs/architecture
+    - docs/standards
+  text_suffixes:
+    - .py
+    - .ts
+    - .tsx
+    - .js
+    - .jsx
+    - .yaml
+    - .yml
+    - .json
+    - .sql
+    - .ps1
+    - .sh
+    - .md
+  skip_parts:
+    - .git
+    - .next
+    - .codex_tmp
+    - .pytest_cache
+    - .mypy_cache
+    - .hypothesis
+    - __pycache__
+    - node_modules
+    - mlruns
+    - catboost_info
+    - qe_archive/artifacts
+    - rdagent_assets
+    - docs/standards/archive
+rules:
+  - rule_id: ARCH-WSL-001
+    standard_ref: docs/standards/aistock_development_standard_v1.0_20260504.md#rule-arch-wsl-001
+    title: Windows backend must not read Linux or remote worker workspace directly
+    severity: P0
+    category: architecture
+    enabled: true
+    applies_to:
+      include_globs:
+        - backend/**/*.py
+        - frontend/src/**/*
+        - scripts/**/*.py
+        - scripts/**/*.ps1
+        - scripts/**/*.sh
+        - noxfile.py
+      exclude_globs:
+        - backend/tests/**
+        - scripts/aistock_guardrail_scan.py
+    checker:
+      type: regex
+      patterns:
+        - '\\{2}wsl(?:\$|\.localhost)'
+        - '/mnt/[a-z]/(?:Dev|home|data)/'
+    baseline_policy: block_new_only
+    remediation: Use worker API or AIstock-owned artifact store with manifest/hash; do not use filesystem shortcuts.
+
+  - rule_id: PROD-PORT-001
+    standard_ref: docs/standards/aistock_development_standard_v1.0_20260504.md#rule-prod-port-001
+    title: Tests and tools must not restart or kill production backend 8001
+    severity: P0
+    category: production_isolation
+    enabled: true
+    applies_to:
+      include_globs:
+        - backend/**/*.py
+        - frontend/src/**/*
+        - scripts/**/*
+        - noxfile.py
+      exclude_globs: []
+    checker:
+      type: regex
+      patterns:
+        - '(?i)(kill|taskkill|stop-process|restart|uvicorn|Start-Process).{0,120}\b8001\b'
+        - '(?i)\b8001\b.{0,120}(kill|taskkill|stop-process|restart|uvicorn|Start-Process)'
+    baseline_policy: block_new_only
+    remediation: Use dev ports 8011/8012 and 3011/3012; production restart requires explicit user action.
+
+  - rule_id: ERR-FALLBACK-001
+    standard_ref: docs/standards/aistock_development_standard_v1.0_20260504.md#rule-err-fallback-001
+    title: Broad exception handlers must not return fake success or defaults
+    severity: P0
+    category: error_handling
+    enabled: true
+    applies_to:
+      include_globs:
+        - backend/**/*.py
+        - scripts/**/*.py
+      exclude_globs:
+        - backend/tests/**
+    checker:
+      type: regex
+      patterns:
+        - 'except\s+Exception[^\n]*:\s*(?:\n\s*){0,4}return\s+(?:\[\]|\{\}|None|True|False|0)(?:\s|$)'
+        - 'except\s+Exception[^\n]*:\s*(?:\n\s*){0,4}pass\b'
+    baseline_policy: block_new_only
+    remediation: Fail fast with structured status/error context; never hide business failure behind an empty/default success.
+
+  - rule_id: TRADING-FALLBACK-001
+    standard_ref: docs/standards/aistock_development_standard_v1.0_20260504.md#rule-trading-fallback-001
+    title: Trading, backtest, and HMM paths must not silently downgrade business logic
+    severity: P0
+    category: trading_safety
+    enabled: true
+    applies_to:
+      include_globs:
+        - backend/**/*.py
+        - scripts/**/*.py
+      exclude_globs: []
+    checker:
+      type: regex
+      patterns:
+        - '(?i)(f[a]llback|downgrade).{0,120}(d[a]ily|day|twap|def[a]ult|neutral)'
+        - '(?i)(missing).{0,120}(d[a]ily f[a]llback|twap f[a]llback|neutral coefficient|def[a]ult)'
+    baseline_policy: block_new_only
+    remediation: Make downgrade explicit, audited, tested, and UI-visible; otherwise fail fast.
+
+  - rule_id: CONFIG-HARDCODE-001
+    standard_ref: docs/standards/aistock_development_standard_v1.0_20260504.md#rule-config-hardcode-001
+    title: Runtime code must not hardcode workstation paths or secrets
+    severity: P1
+    category: config
+    enabled: true
+    applies_to:
+      include_globs:
+        - backend/**/*.py
+        - frontend/src/**/*
+        - scripts/**/*
+        - noxfile.py
+      exclude_globs:
+        - backend/tests/**
+    checker:
+      type: regex
+      patterns:
+        - '[A-Za-z]:\\(?:Users|Dev\\AIstock)'
+        - '(?i)(password|passwd|secret|api[_-]?key|token)\s*[:=]\s*["''][^"'']{8,}'
+    baseline_policy: block_new_only
+    remediation: Move paths/secrets to configuration, environment, DB catalog, or manifest; never commit secrets.
+
+  - rule_id: QE-ARTIFACT-001
+    standard_ref: docs/standards/aistock_development_standard_v1.0_20260504.md#rule-qe-artifact-001
+    title: QE artifacts require durable manifest metadata instead of raw worker paths only
+    severity: P1
+    category: qe_data_completeness
+    enabled: true
+    applies_to:
+      include_globs:
+        - backend/services/quantevolver/**/*.py
+        - backend/services/qe_archive/**/*.py
+        - scripts/**/*.py
+      exclude_globs:
+        - backend/tests/**
+    checker:
+      type: regex
+      patterns:
+        - '(?i)(artifact|result_file|workspace).{0,120}(path|uri).{0,120}(without|missing|no).{0,60}(manifest|sha256|hash)'
+    baseline_policy: block_new_only
+    remediation: Store URI, sha256, size, row_count, schema_version, source, and created_at in artifact manifest.
+
+  - rule_id: UI-RAWJSON-001
+    standard_ref: docs/standards/aistock_development_standard_v1.0_20260504.md#rule-ui-rawjson-001
+    title: Operator UI must not use raw JSON as the primary business view
+    severity: P2
+    category: frontend
+    enabled: true
+    applies_to:
+      include_globs:
+        - frontend/src/**/*.tsx
+        - frontend/src/**/*.ts
+      exclude_globs:
+        - frontend/src/**/*.test.tsx
+        - frontend/src/**/*.spec.tsx
+    checker:
+      type: regex
+      patterns:
+        - 'JSON\.stringify\('
+        - '<pre\b'
+        - 'JsonPanel'
+    baseline_policy: warn_new_only
+    remediation: Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only.
+
+  - rule_id: RESOURCE-TIMEOUT-001
+    standard_ref: docs/standards/aistock_development_standard_v1.0_20260504.md#rule-resource-timeout-001
+    title: External calls and subprocesses need explicit timeout/lifecycle handling
+    severity: P2
+    category: resource
+    enabled: true
+    applies_to:
+      include_globs:
+        - backend/**/*.py
+        - scripts/**/*.py
+      exclude_globs:
+        - backend/tests/**
+    checker:
+      type: regex
+      patterns:
+        - 'requests\.(?:get|post|put|delete|patch)\([^\n)]*$'
+        - 'subprocess\.Popen\('
+    baseline_policy: warn_new_only
+    remediation: Add timeout, cancellation, output capture, and process cleanup.
+
+  - rule_id: DB-COMMENT-001
+    standard_ref: docs/standards/aistock_development_standard_v1.0_20260504.md#rule-db-comment-001
+    title: New PostgreSQL tables and columns require comments
+    severity: P1
+    category: database
+    enabled: true
+    checker:
+      type: external
+      command_key: db_schema_comment_smoke
+    baseline_policy: block_new_and_changed_schema
+    remediation: Add COMMENT ON TABLE/COLUMN with business semantics, unit, source, and quality notes.
+manual_review_controls:
+  - control_id: DOC-LOCATION-001
+    standard_ref: docs/standards/aistock_development_standard_v1.0_20260504.md#15-??????
+    severity: P1
+    title: Standards, architecture designs, analysis reports, and validation evidence must live in their approved directories.
+  - control_id: STD-SYNC-001
+    standard_ref: docs/standards/aistock_development_standard_v1.0_20260504.md#18-???????
+    severity: P1
+    title: Human-readable standard and machine-readable YAML must be updated in the same versioned change.
