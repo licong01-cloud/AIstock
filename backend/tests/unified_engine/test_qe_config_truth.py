@@ -121,6 +121,41 @@ def test_hmm_linux_worker_model_path_is_not_converted_to_windows(monkeypatch):
         mock_run.assert_not_called()
 
 
+def test_hmm_precompute_resolves_hidden_config_for_strict_window():
+    from unittest.mock import MagicMock, patch
+
+    svc = MagicMock()
+    svc.get_snapshot.return_value = {"snapshot_id": "snap_hidden", "config_id": "cfg_hidden"}
+    svc.get_config.return_value = {
+        "config_id": "cfg_hidden",
+        "model_type": "sector_hmm_experimental_stacking_20260504",
+        "config_json": {
+            "strict_no_leakage": True,
+            "coefficient_windows": [
+                {
+                    "preset": "preset_A",
+                    "test_start": "2024-07-01",
+                    "backtest_end": "2026-04-27",
+                    "strict_no_leakage": True,
+                }
+            ],
+        },
+    }
+
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        with pytest.raises(ValueError, match="strict_no_leakage"):
+            ConfigComposer()._precompute_hmm_coefficients(
+                {
+                    "sector_hmm_model_path": "F:/tmp/models.json",
+                    "hmm_signal_preset": "preset_A",
+                    "hmm_model_version_id": "snap_hidden",
+                },
+                {"test_start": "2024-06-28", "backtest_end": "2026-04-27"},
+            )
+
+    svc.get_config.assert_called_once_with("cfg_hidden")
+
+
 def test_qe_generation_code_has_no_windows_worker_workspace_direct_access():
     import inspect
     import backend.services.quantevolver.config_composer as composer_module

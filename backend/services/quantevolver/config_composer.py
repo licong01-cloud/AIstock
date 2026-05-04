@@ -3904,14 +3904,24 @@ model_cls = {nn_class_name}
                     snapshot = hmm_svc.get_snapshot(str(snapshot_id))
                     if snapshot is not None:
                         config_id = snapshot.get("config_id")
-                        for cfg in hmm_svc.list_configs("sector_hmm"):
-                            if cfg.get("config_id") == config_id:
-                                cj = cfg.get("config_json") or {}
-                                if isinstance(cj, str):
-                                    cj = json.loads(cj)
-                                if isinstance(cj, dict):
-                                    hmm_config_json = cj
-                                break
+                        cfg = None
+                        if config_id:
+                            get_config = getattr(hmm_svc, "get_config", None)
+                            if callable(get_config):
+                                cfg = get_config(str(config_id))
+                            else:
+                                private_get_config = getattr(hmm_svc, "_get_config", None)
+                                if callable(private_get_config):
+                                    try:
+                                        cfg = private_get_config(str(config_id))
+                                    except ValueError:
+                                        cfg = None
+                        if cfg:
+                            cj = cfg.get("config_json") or {}
+                            if isinstance(cj, str):
+                                cj = json.loads(cj)
+                            if isinstance(cj, dict):
+                                hmm_config_json = cj
                 except Exception as exc:
                     logger.warning("HMM config_json 自动解析失败，将仅使用预生成文件: %s", exc)
 

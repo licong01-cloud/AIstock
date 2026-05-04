@@ -154,6 +154,26 @@ class HMMTrainingService:
                 rows = cur.fetchall()
         return [dict(r) for r in rows]
 
+    def get_config(self, config_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch one HMM config by id regardless of UI-visible model_type."""
+        sql = """
+            SELECT c.config_id, c.model_type, c.display_name, c.config_json,
+                   c.cron_expression, c.cron_enabled, c.created_at,
+                   COALESCE(s.cnt, 0) AS snapshot_count
+            FROM model_train_configs c
+            LEFT JOIN (
+                SELECT config_id, COUNT(*) AS cnt
+                FROM model_train_snapshots
+                GROUP BY config_id
+            ) s ON s.config_id = c.config_id
+            WHERE c.config_id = %s
+        """
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, (config_id,))
+                row = cur.fetchone()
+        return dict(row) if row else None
+
     @staticmethod
     def _snapshot_display_name(row: Dict[str, Any]) -> str:
         metrics = row.get("metrics_json") or {}

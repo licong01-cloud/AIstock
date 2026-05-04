@@ -59,14 +59,27 @@ def _resolve_hmm_config_json(hmm_model_version_id: str) -> dict[str, Any] | None
     if snapshot is None:
         raise ValueError(f"HMM snapshot {hmm_model_version_id!r} does not exist")
     config_id = snapshot.get("config_id")
-    for cfg in svc.list_configs("sector_hmm"):
-        if cfg.get("config_id") == config_id:
-            cj = cfg.get("config_json") or {}
-            if isinstance(cj, str):
-                cj = json.loads(cj)
-            if not isinstance(cj, dict):
-                raise ValueError(f"HMM config_json for {hmm_model_version_id!r} is not an object")
-            return cj
+    cfg = None
+    if config_id:
+        get_config = getattr(svc, "get_config", None)
+        if callable(get_config):
+            cfg = get_config(config_id)
+        else:
+            # Running dev backends may have an older HMMTrainingService class
+            # loaded while this builder hot-reloads; keep hidden configs usable.
+            private_get_config = getattr(svc, "_get_config", None)
+            if callable(private_get_config):
+                try:
+                    cfg = private_get_config(config_id)
+                except ValueError:
+                    cfg = None
+    if cfg:
+        cj = cfg.get("config_json") or {}
+        if isinstance(cj, str):
+            cj = json.loads(cj)
+        if not isinstance(cj, dict):
+            raise ValueError(f"HMM config_json for {hmm_model_version_id!r} is not an object")
+        return cj
     raise ValueError(f"HMM config for snapshot {hmm_model_version_id!r} was not found")
 
 

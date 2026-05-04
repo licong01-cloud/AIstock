@@ -5,6 +5,7 @@ Level 1 单元测试 — ExperimentConfig + HmmConfig
 验证 build_custom_params() 产出与各路径现有代码完全一致。
 """
 import pytest
+import types
 from unittest.mock import patch, MagicMock
 
 import sys
@@ -15,6 +16,7 @@ from services.quantevolver.experiment_config import ExperimentConfig, HmmConfig
 from services.quantevolver.experiment_config_builders import (
     _build_hmm_config_from_fields,
     _pop_hmm_fields,
+    _resolve_hmm_config_json,
     build_config_from_exp_record,
     build_config_from_evolution_loop,
     build_config_from_strategy_evo_loop,
@@ -401,6 +403,21 @@ class TestBuildConfigFromCustomEvoLoop:
         assert cfg.multi_alpha_config is not None
         assert params["enable_sector_hmm"] is True
         assert params["hmm_model_version_id"] == "hmm_snap_001"
+
+    def test_hmm_config_resolves_hidden_snapshot_config(self):
+        svc = MagicMock()
+        svc.get_snapshot.return_value = {"snapshot_id": "snap_hidden", "config_id": "cfg_hidden"}
+        svc.get_config.return_value = {
+            "config_id": "cfg_hidden",
+            "model_type": "sector_hmm_experimental_stacking_20260504",
+            "config_json": {"runtime_preset": "preset_A", "precomputed_only": True},
+        }
+        fake_module = types.SimpleNamespace(HMMTrainingService=MagicMock(return_value=svc))
+        with patch.dict(sys.modules, {"services.hmm_training_service": fake_module}):
+            cfg_json = _resolve_hmm_config_json("snap_hidden")
+
+        assert cfg_json["runtime_preset"] == "preset_A"
+        svc.get_config.assert_called_once_with("cfg_hidden")
 
 
 class TestBuildConfigFromMultiAlpha:

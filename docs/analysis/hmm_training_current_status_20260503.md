@@ -54,6 +54,58 @@ penalty095_boost106              0.95    1.00     1.06      中惩罚 + 偏强�
 - `ConfigComposer._resolve_hmm_coefficients_json` 已对 5 个 snapshot 做 fail-fast 本地解析验证，均能命中预计算 artifact。
 - 生产后端 `8001` 未重启；`/api/v1/hmm-training/configs?model_type=sector_hmm` 和 snapshots API 已确认可返回 5 个新增候选。
 
+## 2026-05-04 sector-factor gate 与 HMM 输入预处理实验
+
+本轮继续以 `qe_20260502_131502_9b54` Loop1 的非 HMM 设置为固定基线，分别围绕 Loop2 old covfix 与 Loop10 penalty-only 做两条隐藏实验线。生产/QE 默认 HMM 下拉仍只保留 Loop2 与 Loop10 两个 `sector_hmm` 版本；下面候选都注册为 hidden `model_type`，只能通过自定义 QE loop 的 `snapshot_id` 显式引用。
+
+### sector-factor gate / confirmation 候选
+
+hidden `model_type='sector_hmm_experimental_stacking_20260504'`。已创建远端 QE 任务 `qe_20260504_110457_5400`，远端节点 `rdagent-node1`，并行度 4，loop 设置包括 no-HMM、Loop2、Loop10 以及 8 个 sector-factor gate/confirmation 候选。任务创建使用 dev backend `8011`，DB/API 行在 UI 使用的 `8001` 可见；截至 2026-05-04 12:01，Loop1-4 正在远端 V25 分钟线回测中，后续 loop 由任务内并行调度继续提交。
+
+```text
+base  方向                 Snapshot ID                            名称
+----  -------------------  ------------------------------------  ----------------------------------------------------
+L2    boost_confirm        17809fe6-bcaf-487e-9205-d11b47fe08f9  HMM_EXP_L2_sf_boost_confirm_tfcore_c70__qe20260504
+L2    penalty_confirm      9761439e-06d1-4303-a6a7-1a4836c8b3f8  HMM_EXP_L2_sf_penalty_confirm_tfcore_c30__qe20260504
+L2    both_confirm         b45f6571-19b0-4e0a-9a20-ab182e59a68a  HMM_EXP_L2_sf_both_confirm_tfcore_c70c30__qe20260504
+L2    risk_only_overlay    decfdc2c-f395-4cda-aac6-8636c5fcde50  HMM_EXP_L2_sf_risk_only_tfcore_p098_c30__qe20260504
+L10   boost_confirm        040570a9-3a34-4201-8057-42299ec92c3e  HMM_EXP_L10_sf_boost_confirm_tfcore_c70__qe20260504
+L10   penalty_confirm      f405daee-f922-449d-bf37-ca91b2fd9995  HMM_EXP_L10_sf_penalty_confirm_tfcore_c30__qe20260504
+L10   both_confirm         9a5c67d6-3fbc-41ee-93b1-36031ae181ad  HMM_EXP_L10_sf_both_confirm_tfcore_c70c30__qe20260504
+L10   risk_only_overlay    b19d4beb-8e77-4ddc-a30f-d9f07e7fcda2  HMM_EXP_L10_sf_risk_only_tfcore_p098_c30__qe20260504
+```
+
+离线 TopK 替换归因的初步排序显示，L10 `penalty_confirm` / `both_confirm` 对 holdout TopK 替换质量最好，但这仍不是完整分钟线 QE 结论，必须等待 `qe_20260504_110457_5400` 的真实回测结果。
+
+### HMM 输入预处理候选
+
+hidden `model_type='sector_hmm_experimental_preprocess_20260504'`。这些版本不是改原始日线/分钟线数据，而是在 legacy 7 维 HMM observation 层做输入预处理后重新训练 HMM，并为 Loop2 / Loop10 两套 coefficient map 各注册一份预计算 snapshot。2026-05-04 11:55 重新注册后已修正两个可用性问题：DB `model_path` 存为 Windows 可读路径，且 `config_json.coefficient_windows` 明确登记 `preset_A / 2024-07-01 / 2026-04-27`，使 strict-no-leakage QE 解析可以 fail-fast 命中本地 artifact。
+
+```text
+base  预处理模式             Snapshot ID                            名称
+----  ---------------------  ------------------------------------  -------------------------------------------------
+L2    train-only zscore      71e966b4-6f7e-4767-b012-a19798df73bc  HMM_EXP_L2_preproc_train_zscore__qe20260504
+L10   train-only zscore      d2a56dad-b777-4fd6-964a-0420241b444f  HMM_EXP_L10_preproc_train_zscore__qe20260504
+L2    winsor(1/99)+zscore    fef38650-e591-4145-a62f-cfab9e2c10eb  HMM_EXP_L2_preproc_winsor01_zscore__qe20260504
+L10   winsor(1/99)+zscore    acc27436-6e87-43fe-8e25-78261b80d47f  HMM_EXP_L10_preproc_winsor01_zscore__qe20260504
+L2    robust zscore          a72f7e35-b52a-4969-b1e7-1b1ec21270b0  HMM_EXP_L2_preproc_robust_zscore__qe20260504
+L10   robust zscore          d40c97fd-40ff-4ea5-9089-a3650ab26afe  HMM_EXP_L10_preproc_robust_zscore__qe20260504
+L2    sector CS rank         b49a82e1-1fe3-466d-8b70-1632e267c442  HMM_EXP_L2_preproc_sector_cs_rank__qe20260504
+L10   sector CS rank         c5647469-52b0-4d2c-a224-2f3a54b27d18  HMM_EXP_L10_preproc_sector_cs_rank__qe20260504
+L2    sector CS zscore       3b9ef5f6-e16c-4328-be2d-86447542b690  HMM_EXP_L2_preproc_sector_cs_zscore__qe20260504
+L10   sector CS zscore       9ae55e28-0227-48bf-af8c-dcedae275609  HMM_EXP_L10_preproc_sector_cs_zscore__qe20260504
+```
+
+验证状态：
+
+- 10 个 snapshot 均为 `completed`，`sector_count=131`。
+- 每个 snapshot 都有 `models.json` 与 `coefficients_preset_A_2024-07-01_2026-04-27.json`，覆盖 442 个交易日，首尾日 131 个行业，`stock_sector_map=5847`。
+- `ConfigComposer._precompute_hmm_coefficients` 已用 L2 train-zscore snapshot 做真实解析 smoke：strict window 通过，返回 442 天系数。
+- 预处理 QE payload 已生成：`.codex_tmp/hmm_preprocess_custom_evo_payload_dev8011_20260504.json`，13 loops（no-HMM + Loop2 + Loop10 + 10 个预处理候选），远端节点 `rdagent-node1`，并行度 4。
+- 由于 `qe_20260504_110457_5400` 当前 4 个 V25 回测进程已占用约 73/78Gi 内存，未立即叠加启动第二个 p4 任务，避免 swap 污染回测结果；本地延迟提交器 `.codex_tmp/launch_hmm_preprocess_after_sector_task.ps1` 会在 sector-factor 任务所有 loop 不再 `running/not_found` 后自动提交预处理 QE 任务。
+
+离线 TopK 替换归因的初步排序显示，L10 `train_zscore`、L10 `winsor01_zscore`、L10 `sector_cs_rank` 优于 Loop10 baseline；L2 预处理版本暂未在 TopK 归因上超过 Loop2 baseline。最终仍以完整 QE 分钟线回测的年化收益、回撤、Sharpe、换手、交易成本和 TopK 进出归因为准。
+
 ## QE 对比基线
 
 任务：`qe_20260502_131502_9b54`
