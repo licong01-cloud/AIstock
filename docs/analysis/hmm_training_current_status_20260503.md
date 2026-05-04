@@ -6,7 +6,7 @@
 
 - 当前唯一确认对 QE 有正向收益的主线是 old covfix：`HMM_COVFIX_w3_raw_same_params__n3_diag_rw3_nozscore`。
 - 最新 dynamic PUP strict 0.10 / 0.075 两个版本已验证收益不佳，已从 `sector_hmm` 可选列表下架，但保留历史 DB 记录和模型资产用于追溯。
-- 已新增 3 个 QE shadow loop 候选（2026-05-02）和 5 个 old covfix 系数 remap 候选（2026-05-04）进入 HMM/QE 可选列表；5 个 remap 候选只复制 old covfix `models.json` 并重映射预计算系数，没有重新训练。
+- 已新增 3 个 QE shadow loop 候选（2026-05-02）和 5 个 old covfix 系数 remap 候选（2026-05-04）用于验证；验证后 QE 可选列表只保留 Loop2 old covfix 与 Loop10 penalty-only 两个版本，其余测试候选已软下架以避免 UI 混淆。
 - 当前 old covfix 主线没有做传统 z-score 归一化；它使用相对化观测量（收益率、超额收益、成交量占比、涨停占比、资金流占比等），不是直接使用股票价格、行业指数点位或成交额绝对值。
 - 原始日线/分钟线数据层不应归一化；HMM 训练输入层后续应系统验证 train-only z-score、winsor+zscore、robust zscore、板块横截面 rank/zscore 等版本。
 - 仅修改 HMM registry / DB 记录 / HMM 模型资产时，生产 FastAPI 后端 `8001` 不需要重启；前端刷新页面即可重新读取可选列表。
@@ -47,7 +47,8 @@ penalty095_boost106              0.95    1.00     1.06      中惩罚 + 偏强�
 
 验证状态：
 
-- `model_train_configs.model_type='sector_hmm'` 可查到 9 个 QE 可选 HMM：old covfix 1 个、2026-05-02 候选 3 个、2026-05-04 remap 候选 5 个。
+- 2026-05-04 10:25 后，`model_train_configs.model_type='sector_hmm'` 只保留 2 个 QE 可选 HMM：Loop2 old covfix baseline 与 Loop10 penalty-only best。
+- 其余 7 个测试候选已软下架到 `sector_hmm_disabled_superseded_by_loop2_loop10_20260504`，仅保留历史 DB 记录、snapshot 和模型资产。
 - 5 个新增 snapshot 均为 `completed`，`sector_count=131`，每个都有 `models.json` 和 `coefficients_preset_A_2024-07-01_2026-04-27.json`。
 - 5 个新增 coefficient artifact 都覆盖 442 个交易日、首尾日 131 个行业、`stock_sector_map=5847`。
 - `ConfigComposer._resolve_hmm_coefficients_json` 已对 5 个 snapshot 做 fail-fast 本地解析验证，均能命中预计算 artifact。
@@ -80,14 +81,7 @@ L4    duplicate of L3                    45.76%    -16.52%   1.9877   0.0787  0.
 角色        Config ID                             Snapshot ID                            名称
 ----------  ------------------------------------  ------------------------------------  -------------------------------------------------------------
 保留基线    b99c907b-873a-4173-a4ee-5eab266f8c49  bbec3863-fb67-445f-938e-66f092d18696  HMM_COVFIX_w3_raw_same_params__n3_diag_rw3_nozscore
-待测候选    ce4952c1-4b0d-46a7-81f2-ae1d4a249555  6ea64754-003d-48d8-ad9e-d0e7857716c8  HMM_TEST_old_covfix_penalty_only_f096_b000__qe20260504
-待测候选    82a40d27-0e96-48a1-882a-4d182a58b931  377a8447-ee26-44a8-8ead-7338f525e0f2  HMM_TEST_old_covfix_boost_only_p105__qe20260504
-待测候选    22d53160-7195-4e69-86ec-76c19c615a69  5a8ce90e-50bb-4fbd-8cd8-e3b95c9dffa0  HMM_TEST_old_covfix_penalty094_boost103__qe20260504
-待测候选    ea0db9d3-69bf-489e-aa55-c74b6340e68d  afa6acd9-f766-4394-970e-451d1a39bb06  HMM_TEST_old_covfix_penalty095_boost104__qe20260504
-待测候选    518ddf2d-e4a0-4bf0-8572-7cea429e27d5  8ddb5d29-8097-4aef-b110-f2f94f54ca4b  HMM_TEST_old_covfix_penalty095_boost106__qe20260504
-待测候选    90e2771e-3245-45c0-b8ad-471b10b24391  89753fae-0c3c-4c75-9282-c20d7d833ffa  HMM_TEST_old_covfix_primary_b020_p005__qe20260502
-待测候选    14fd8dd6-896d-4a7d-b8be-ec6a7cf44c95  78a4ecf7-4cca-4b67-af66-3d59573587eb  HMM_TEST_hyb_old_primary_turnover_flow_core_c70__qe20260502
-待测候选    94ba4a64-998d-4897-ace2-f0fe06133935  28335a3c-64d8-4ce8-944e-25e48a68f77c  HMM_TEST_sf_turnover_fast_q20_b010_p005__qe20260502
+当前最佳    ce4952c1-4b0d-46a7-81f2-ae1d4a249555  6ea64754-003d-48d8-ad9e-d0e7857716c8  HMM_TEST_old_covfix_penalty_only_f096_b000__qe20260504
 ```
 
 ### 已下架版本（历史保留，不再出现在 QE HMM 可选列表）
@@ -97,6 +91,13 @@ Config ID                             Snapshot ID                            名
 ------------------------------------  ------------------------------------  -----------------------------------------------------------  ----------------------------------------
 5a3183b6-39bc-45dd-8b3d-d2027c476e62  d11dc38e-84f0-4e5c-80e7-42cb5d978d40  HMM_DYNAMIC_PUP_w20_50_conf_0p10_STRICT_DEFAULT__n3_diag       sector_hmm_disabled_ineffective_20260502
 8ef81e6b-263d-4acd-93ff-4a20526b2d13  c1c81aa0-aae2-4942-881c-4baafbd2f160  HMM_DYNAMIC_PUP_w20_50_conf_0p075_STRICT_DEFAULT__n3_diag      sector_hmm_disabled_ineffective_20260502
+82a40d27-0e96-48a1-882a-4d182a58b931  377a8447-ee26-44a8-8ead-7338f525e0f2  HMM_TEST_old_covfix_boost_only_p105__qe20260504                sector_hmm_disabled_superseded_by_loop2_loop10_20260504
+22d53160-7195-4e69-86ec-76c19c615a69  5a8ce90e-50bb-4fbd-8cd8-e3b95c9dffa0  HMM_TEST_old_covfix_penalty094_boost103__qe20260504            sector_hmm_disabled_superseded_by_loop2_loop10_20260504
+ea0db9d3-69bf-489e-aa55-c74b6340e68d  afa6acd9-f766-4394-970e-451d1a39bb06  HMM_TEST_old_covfix_penalty095_boost104__qe20260504            sector_hmm_disabled_superseded_by_loop2_loop10_20260504
+518ddf2d-e4a0-4bf0-8572-7cea429e27d5  8ddb5d29-8097-4aef-b110-f2f94f54ca4b  HMM_TEST_old_covfix_penalty095_boost106__qe20260504            sector_hmm_disabled_superseded_by_loop2_loop10_20260504
+90e2771e-3245-45c0-b8ad-471b10b24391  89753fae-0c3c-4c75-9282-c20d7d833ffa  HMM_TEST_old_covfix_primary_b020_p005__qe20260502              sector_hmm_disabled_superseded_by_loop2_loop10_20260504
+14fd8dd6-896d-4a7d-b8be-ec6a7cf44c95  78a4ecf7-4cca-4b67-af66-3d59573587eb  HMM_TEST_hyb_old_primary_turnover_flow_core_c70__qe20260502    sector_hmm_disabled_superseded_by_loop2_loop10_20260504
+94ba4a64-998d-4897-ace2-f0fe06133935  28335a3c-64d8-4ce8-944e-25e48a68f77c  HMM_TEST_sf_turnover_fast_q20_b010_p005__qe20260502            sector_hmm_disabled_superseded_by_loop2_loop10_20260504
 ```
 
 下架方式是软下架：只改变 DB 中 `model_train_configs.model_type`，不删除历史模型目录和历史 snapshot，避免破坏 QE 历史追溯。
