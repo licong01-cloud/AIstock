@@ -39,13 +39,19 @@ def test_stale_queued_reconciliation_marks_schedule_created_jobs_failed():
     scheduler = TDXScheduler.__new__(TDXScheduler)
     seen = {}
     job_id = uuid.uuid4()
+    schedule_id = uuid.uuid4()
 
     def _fetchall(sql, params=()):
         seen["sql"] = sql
         seen["params"] = params
-        return [{"job_id": job_id}]
+        return [{"job_id": job_id, "schedule_id": str(schedule_id)}]
+
+    def _execute(sql, params=()):
+        seen["schedule_sql"] = sql
+        seen["schedule_params"] = params
 
     scheduler._fetchall = _fetchall
+    scheduler._execute = _execute
 
     count = scheduler._reconcile_stale_queued_ingestion_jobs(
         older_than_minutes=0,
@@ -60,3 +66,6 @@ def test_stale_queued_reconciliation_marks_schedule_created_jobs_failed():
     assert "triggered_by', '') = 'schedule'" in seen["sql"]
     assert seen["params"][2] == "anns_metadata"
     assert seen["params"][4] == "incremental"
+    assert "UPDATE market.ingestion_schedules" in seen["schedule_sql"]
+    assert "last_status = 'failed'" in seen["schedule_sql"]
+    assert seen["schedule_params"] == ("unit_test", str(schedule_id))

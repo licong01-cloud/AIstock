@@ -280,7 +280,6 @@ class TDXScheduler:
         self._lock = threading.RLock()
         self._tracker = _FutureTracker()
         self._delayed_retry_keys: set[str] = set()
-        self._stale_queued_reconciled = False
         DEFAULT_TEST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -548,7 +547,7 @@ class TDXScheduler:
                AND COALESCE(summary->>'triggered_by', '') = 'schedule'
                AND (%s IS NULL OR lower(summary->>'dataset') = %s)
                AND (%s IS NULL OR lower(COALESCE(summary->>'mode', '')) = %s)
-             RETURNING job_id
+             RETURNING job_id, summary->>'schedule_id' AS schedule_id
             """,
             (
                 json.dumps(payload, ensure_ascii=False, default=str),
@@ -566,6 +565,28 @@ class TDXScheduler:
                 count,
                 minutes,
             )
+            for row in rows:
+                schedule_id = row.get("schedule_id")
+                if not schedule_id:
+                    continue
+                try:
+                    uuid.UUID(str(schedule_id))
+                except Exception:
+                    continue
+                try:
+                    self._execute(
+                        """
+                        UPDATE market.ingestion_schedules
+                           SET last_status = 'failed',
+                               last_error = %s,
+                               updated_at = NOW()
+                         WHERE schedule_id = %s
+                           AND last_status = 'queued'
+                        """,
+                        (reason, schedule_id),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    _logger.warning("failed to mark stale schedule %s as failed: %s", schedule_id, exc)
         return count
 
     def _job_update_outcome(self, job_id: uuid.UUID) -> Dict[str, Any]:
@@ -596,12 +617,10 @@ class TDXScheduler:
     # schedule management
     def refresh_schedules(self) -> None:
         """Reload enabled schedules from database and update in-memory jobs."""
-        if not self._stale_queued_reconciled:
-            try:
-                self._reconcile_stale_queued_ingestion_jobs()
-                self._stale_queued_reconciled = True
-            except Exception as exc:  # noqa: BLE001
-                _logger.warning("stale queued ingestion job reconciliation failed: %s", exc)
+        try:
+            self._reconcile_stale_queued_ingestion_jobs()
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("stale queued ingestion job reconciliation failed: %s", exc)
         testing = self._fetchall(
             """
             SELECT schedule_id, enabled, frequency, options
