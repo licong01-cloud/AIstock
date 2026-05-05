@@ -1,0 +1,11 @@
+# V25.1 Small-Cap board+cost-aware execution
+algo_code: V25_1_SMALL_CAP
+description: V25.1 board+cost-aware bucket scheduler over the V25 two-stage plan (small-cap optimised)
+early_model_path: /home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt
+late_model_path: /home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt
+device: cuda
+min_cost: 5.0
+commission_rate: 0.00025
+tolerance_bps: 10.0
+max_buckets: 12
+version: v25_1_small_cap_20260505

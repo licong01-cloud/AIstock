@@ -309,6 +309,84 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
             detail,
         )
 
+    def _minimum_child_order_amount(self, stock_id, direction, unit):
+        """Minimum child-order amount for the legacy V25/Qlib trade unit rule."""
+
+        return float(unit) if unit is not None and unit > 0 else 100.0
+
+    def _buy_below_min_child_order_reason(self, stock_id, direction, unit):
+        return "buy_below_trade_unit"
+
+    def _legalize_child_order_amount(
+        self,
+        stock_id,
+        direction,
+        amount_delta,
+        max_amount,
+        unit,
+        *,
+        is_last_step=False,
+        allow_sell_residual=False,
+        round_by_unit=True,
+    ):
+        """Apply the final child-order sizing rule before constructing Order.
+
+        Subclasses such as V25.1 override this hook with stock-aware exchange
+        board-lot rules. The base implementation intentionally preserves the
+        historical V25 behaviour, including final sell residual cleanup.
+        """
+
+        max_amount = max(float(max_amount), 0.0)
+        amount_delta = min(max(float(amount_delta), 0.0), max_amount)
+        if allow_sell_residual and direction == Order.SELL:
+            return amount_delta
+        if is_last_step and direction == Order.SELL:
+            return amount_delta
+        if not round_by_unit:
+            return amount_delta
+        if unit is not None and unit > 0:
+            return min(np.round(amount_delta / unit) * unit, max_amount)
+        return amount_delta
+
+    def _append_legal_child_order(
+        self,
+        order_list,
+        stock_id,
+        direction,
+        amount_delta,
+        max_amount,
+        unit,
+        trade_start_time,
+        trade_end_time,
+        *,
+        is_last_step=False,
+        allow_sell_residual=False,
+        round_by_unit=True,
+        zero_reason=None,
+    ):
+        amount_delta_target = self._legalize_child_order_amount(
+            stock_id,
+            direction,
+            amount_delta,
+            max_amount,
+            unit,
+            is_last_step=is_last_step,
+            allow_sell_residual=allow_sell_residual,
+            round_by_unit=round_by_unit,
+        )
+        if amount_delta_target > 1e-5:
+            order_list.append(Order(
+                stock_id=stock_id,
+                amount=amount_delta_target,
+                start_time=trade_start_time,
+                end_time=trade_end_time,
+                direction=direction,
+            ))
+            return amount_delta_target
+        if zero_reason:
+            self._record_no_fill_reason(stock_id, zero_reason, trade_start_time)
+        return 0.0
+
     def _generate_plan_for_order(self, stock_id, direction, trade_start_time, trade_end_time):
         open_price_adjusted = self._read_quote_data(stock_id, trade_start_time, trade_end_time, "$open")
         prev_close = self._read_quote_data(stock_id, trade_start_time, trade_end_time, "$prev_close")
@@ -417,20 +495,28 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
                 start_time=order.start_time,
                 end_time=order.end_time,
             )
-            effective_unit = unit if unit is not None and unit > 0 else 100
-            if order.direction == Order.BUY and amount_remain < effective_unit:
-                self._v25_no_fill_reasons[order.stock_id] = "buy_below_trade_unit"
+            minimum_child_amount = self._minimum_child_order_amount(
+                order.stock_id, order.direction, unit
+            )
+            if order.direction == Order.BUY and amount_remain < minimum_child_amount:
+                self._v25_no_fill_reasons[order.stock_id] = self._buy_below_min_child_order_reason(
+                    order.stock_id, order.direction, unit
+                )
                 continue
-            if order.direction == Order.SELL and amount_remain < effective_unit:
+            if order.direction == Order.SELL and amount_remain < minimum_child_amount:
                 # Odd-lot/fractional sell orders are cleanup orders; sending
                 # them immediately avoids wasting V25 slices on sub-lot dust.
-                order_list.append(Order(
-                    stock_id=order.stock_id,
-                    amount=amount_remain,
-                    start_time=trade_start_time,
-                    end_time=trade_end_time,
-                    direction=order.direction,
-                ))
+                self._append_legal_child_order(
+                    order_list,
+                    order.stock_id,
+                    order.direction,
+                    amount_remain,
+                    amount_remain,
+                    unit,
+                    trade_start_time,
+                    trade_end_time,
+                    allow_sell_residual=True,
+                )
                 continue
 
             if order.stock_id not in self._p0_done:
@@ -476,13 +562,18 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
                             trade_start_time,
                             f"price_basis=raw close_raw={close_price:.6f} down_limit_raw={float(limit_down):.6f} factor={factor:.8f}",
                         )
-                        order_list.append(Order(
-                            stock_id=order.stock_id,
-                            amount=amount_remain,
-                            start_time=trade_start_time,
-                            end_time=trade_end_time,
-                            direction=order.direction,
-                        ))
+                        self._append_legal_child_order(
+                            order_list,
+                            order.stock_id,
+                            order.direction,
+                            amount_remain,
+                            amount_remain,
+                            unit,
+                            trade_start_time,
+                            trade_end_time,
+                            round_by_unit=False,
+                            zero_reason="p0_buy_below_min_child_order",
+                        )
                         self._p0_done.add(order.stock_id)
                         continue
                     if order.direction == Order.SELL and _price_at_or_above(close_price, limit_up):
@@ -492,13 +583,19 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
                             trade_start_time,
                             f"price_basis=raw close_raw={close_price:.6f} up_limit_raw={float(limit_up):.6f} factor={factor:.8f}",
                         )
-                        order_list.append(Order(
-                            stock_id=order.stock_id,
-                            amount=amount_remain,
-                            start_time=trade_start_time,
-                            end_time=trade_end_time,
-                            direction=order.direction,
-                        ))
+                        self._append_legal_child_order(
+                            order_list,
+                            order.stock_id,
+                            order.direction,
+                            amount_remain,
+                            amount_remain,
+                            unit,
+                            trade_start_time,
+                            trade_end_time,
+                            allow_sell_residual=True,
+                            round_by_unit=False,
+                            zero_reason="p0_sell_below_min_child_order",
+                        )
                         self._p0_done.add(order.stock_id)
                         continue
                     if order.direction == Order.BUY and _price_at_or_above(close_price, limit_up):
@@ -564,22 +661,18 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
                 amount_delta = amount_remain + self._realloc_extra.get(order.stock_id, 0)
 
             max_amount = amount_remain + self._realloc_extra.get(order.stock_id, 0)
-            if is_last_step and order.direction == Order.SELL:
-                # A-share sells can clear odd-lot/fractional residuals; do not
-                # re-round final liquidation back to the 100-share trade unit.
-                amount_delta_target = min(amount_delta, max_amount)
-            elif unit is not None and unit > 0:
-                amount_delta_target = min(np.round(amount_delta / unit) * unit, max_amount)
-            else:
-                amount_delta_target = min(amount_delta, max_amount)
-            if amount_delta_target > 1e-5:
-                order_list.append(Order(
-                    stock_id=order.stock_id,
-                    amount=amount_delta_target,
-                    start_time=trade_start_time,
-                    end_time=trade_end_time,
-                    direction=order.direction,
-                ))
+            self._append_legal_child_order(
+                order_list,
+                order.stock_id,
+                order.direction,
+                amount_delta,
+                max_amount,
+                unit,
+                trade_start_time,
+                trade_end_time,
+                is_last_step=is_last_step,
+                allow_sell_residual=is_last_step and order.direction == Order.SELL,
+            )
 
         trigger_step = TAIL_START_OFFSET - 1
         if rel_trade_step >= trigger_step and self._unfilled_handler == "TAIL_SUBSTITUTE":
@@ -592,15 +685,17 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
                 remaining_steps = max(end_idx - trade_step + 1, 1)
                 amount_delta_target = extra if is_last_step else extra / remaining_steps
                 unit = self.trade_exchange.get_amount_of_trade_unit(stock_id=sid, start_time=trade_start_time, end_time=trade_end_time)
-                if unit is not None and unit > 0:
-                    amount_delta_target = min(np.round(amount_delta_target / unit) * unit, extra)
-                if amount_delta_target > 1e-5:
-                    order_list.append(Order(
-                        stock_id=sid,
-                        amount=amount_delta_target,
-                        start_time=trade_start_time,
-                        end_time=trade_end_time,
-                        direction=Order.BUY,
-                    ))
+                self._append_legal_child_order(
+                    order_list,
+                    sid,
+                    Order.BUY,
+                    amount_delta_target,
+                    extra,
+                    unit,
+                    trade_start_time,
+                    trade_end_time,
+                    is_last_step=is_last_step,
+                    zero_reason="tail_substitute_buy_below_min_child_order",
+                )
 
         return TradeDecisionWO(order_list=order_list, strategy=self)

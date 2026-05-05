@@ -96,6 +96,15 @@ def _load_v25_module(monkeypatch):
     return importlib.import_module("tail_twap_v25_strategy")
 
 
+def _load_v25_1_module(monkeypatch):
+    _install_import_stubs(monkeypatch)
+    monkeypatch.syspath_prepend(str(SCRIPTS_DIR))
+    sys.modules.pop("tail_twap_strategy", None)
+    sys.modules.pop("tail_twap_v25_strategy", None)
+    sys.modules.pop("tail_twap_v25_1_strategy", None)
+    return importlib.import_module("tail_twap_v25_1_strategy")
+
+
 class _Quote:
     def __init__(self, values):
         self.values = values
@@ -242,3 +251,77 @@ def test_v25_limit_checks_use_raw_price_not_adjusted_price(monkeypatch):
     raw_limit_up_close = module._to_raw_price(12.393847, 0.987557473142882)
     assert raw_limit_up_close == pytest.approx(12.55, abs=1e-4)
     assert module._price_at_or_above(raw_limit_up_close, 12.55)
+
+
+def test_v25_1_star_child_orders_are_not_rounded_by_qlib_trade_unit(monkeypatch):
+    module = _load_v25_1_module(monkeypatch)
+    strategy = object.__new__(module.TailTWAPWithV25_1SmallCapStrategy)
+
+    assert strategy._minimum_child_order_amount("688981.SH", module.Order.BUY, 100) == 200
+    assert strategy._legalize_child_order_amount(
+        "688981.SH", module.Order.BUY, 199, 199, 100
+    ) == 0
+    assert strategy._legalize_child_order_amount(
+        "688981.SH", module.Order.BUY, 200, 200, 100
+    ) == 200
+    assert strategy._legalize_child_order_amount(
+        "688981.SH", module.Order.BUY, 201, 201, 100
+    ) == 201
+    assert strategy._legalize_child_order_amount(
+        "688981.SH", module.Order.BUY, 202, 202, 100
+    ) == 202
+
+
+def test_v25_1_star_sell_residual_and_main_board_rules(monkeypatch):
+    module = _load_v25_1_module(monkeypatch)
+    strategy = object.__new__(module.TailTWAPWithV25_1SmallCapStrategy)
+
+    assert strategy._legalize_child_order_amount(
+        "688981.SH",
+        module.Order.SELL,
+        150,
+        150,
+        100,
+        allow_sell_residual=True,
+    ) == 150
+    assert strategy._legalize_child_order_amount(
+        "688981.SH", module.Order.SELL, 501, 501, 100
+    ) == 501
+    assert strategy._legalize_child_order_amount(
+        "000001.SZ", module.Order.BUY, 99, 99, 100
+    ) == 0
+    assert strategy._legalize_child_order_amount(
+        "000001.SZ", module.Order.BUY, 201, 201, 100
+    ) == 200
+    assert strategy._legalize_child_order_amount(
+        "000001.SZ",
+        module.Order.SELL,
+        250,
+        250,
+        100,
+        allow_sell_residual=True,
+    ) == 200
+
+
+def test_v25_1_empty_buy_schedule_fails_instead_of_falling_back_to_v25(monkeypatch):
+    module = _load_v25_1_module(monkeypatch)
+    strategy = object.__new__(module.TailTWAPWithV25_1SmallCapStrategy)
+    strategy.trade_amount_remain = {"688981.SH": 199}
+    strategy._v25_1_min_cost = 5.0
+    strategy._v25_1_commission_rate = 0.0003
+    strategy._v25_1_tolerance_bps = 10.0
+    strategy._v25_1_max_buckets = 30
+    monkeypatch.setattr(
+        module.TailTWAPWithV25TwoStageStrategy,
+        "_generate_plan_for_order",
+        lambda self, *_args: np.ones(module.TOTAL_LEN) / module.TOTAL_LEN,
+    )
+    strategy._read_quote_data = lambda *_args, **_kwargs: 10.0
+    strategy._require_raw_price = lambda *_args, **_kwargs: (10.0, 1.0)
+
+    with pytest.raises(module._V25MarketNoFill) as exc_info:
+        strategy._generate_plan_for_order(
+            "688981.SH", module.Order.BUY, "2026-05-05 09:30:00", "2026-05-05 09:30:00"
+        )
+
+    assert exc_info.value.reason == "buy_below_board_lot"

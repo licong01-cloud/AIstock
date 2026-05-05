@@ -156,6 +156,16 @@ rules:
     layer: backend_service
     risk_level: high
     ownership_reason: Strategy package manifests and assets bridge research and paper workflows.
+  - rule_id: execution_algos_runtime
+    priority: 80
+    include:
+      - backend/execution_algos/**
+      - configs/execution_algos/**
+    primary_module: paper_v2
+    impact_modules: [qe.core, strategy_package]
+    layer: execution_algo
+    risk_level: critical
+    ownership_reason: Execution algorithms define order sizing and market-state semantics shared by QE and Paper v2.
   - rule_id: hmm_services
     priority: 75
     include:
