@@ -69,6 +69,7 @@ def l0(session: nox.Session) -> None:
         "noxfile.py",
         "scripts/aistock_validate.py",
         "scripts/aistock_guardrail_scan.py",
+        "scripts/aistock_module_ownership_scan.py",
         "scripts/validation_center_readonly_smoke.py",
         "scripts/aistock_data_quality_smoke.py",
         "scripts/paper_v2_live_validation.py",
@@ -79,6 +80,7 @@ def l0(session: nox.Session) -> None:
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
         "backend/tests/test_aistock_guardrail_scan.py",
+        "backend/tests/test_validation_module_ownership.py",
         "backend/tests/test_validation_center_api.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
         "backend/tests/paper_trading_v2",
@@ -89,6 +91,8 @@ def l0(session: nox.Session) -> None:
         "frontend/src/lib/validation",
         "frontend/tests/validation-center",
         "frontend/tests/paper-v2",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
         "tests/aistock_validation/modules/development_guardrails.md",
     ]
     quick_validate = _codex_quick_validate_script()
@@ -462,6 +466,50 @@ def validation_coverage_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def validation_module_registry_l0(session: nox.Session) -> None:
+    """Validate module registry, file ownership rules, and ownership scanner."""
+    scan_paths = [
+        "backend/services/validation/module_registry.py",
+        "backend/services/validation/file_ownership.py",
+        "backend/tests/test_validation_module_ownership.py",
+        "scripts/aistock_module_ownership_scan.py",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "noxfile.py",
+        "backend/services/validation/plan_catalog.py",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+    ]
+    session.run(
+        sys.executable,
+        "-m",
+        "compileall",
+        "backend/services/validation/module_registry.py",
+        "backend/services/validation/file_ownership.py",
+        "scripts/aistock_module_ownership_scan.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/test_validation_module_ownership.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/l0_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/l0_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *scan_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def validation_center_backend(session: nox.Session) -> None:
     """Run Validation Center API, coverage, and controlled-runner contract tests."""
     coverage_dir = ROOT / "tmp" / "validation" / "coverage"
@@ -488,6 +536,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/tests/test_validation_center_readonly_smoke.py",
         "backend/tests/test_validation_center_runner_smoke.py",
         "backend/tests/test_validation_execution_runner.py",
+        "backend/tests/test_validation_module_ownership.py",
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
         "--cov=backend.services.validation",

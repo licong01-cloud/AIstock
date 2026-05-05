@@ -1,0 +1,313 @@
+schema_version: aistock_file_ownership_v1
+rules:
+  - rule_id: validation_catalog_module_quality
+    priority: 120
+    include:
+      - tests/aistock_validation/catalog/module_registry.yaml
+      - tests/aistock_validation/catalog/file_ownership.yaml
+    primary_module: validation.module_quality
+    impact_modules: [validation.guardrails, tests.validation_history]
+    layer: validation_catalog
+    risk_level: high
+    ownership_reason: Module registry and file ownership rules drive commit impact and changed-file guardrails.
+  - rule_id: validation_catalog_test_plans
+    priority: 110
+    include:
+      - tests/aistock_validation/catalog/test_plans.yaml
+      - tests/aistock_validation/catalog/test_levels.md
+    primary_module: validation.runner
+    impact_modules: [validation.center, tests.validation_history]
+    layer: validation_catalog
+    risk_level: high
+    ownership_reason: Test plan allowlists control what Validation Center can execute.
+  - rule_id: validation_history_records
+    priority: 70
+    include:
+      - tests/aistock_validation/history/**
+      - tests/aistock_validation/modules/**
+      - tests/aistock_validation/templates/**
+    primary_module: tests.validation_history
+    impact_modules: [validation.center]
+    layer: validation_history
+    risk_level: medium
+    ownership_reason: Validation evidence and module matrices are read by Validation Center.
+  - rule_id: validation_services
+    priority: 100
+    include:
+      - backend/services/validation/**
+    primary_module: validation.center
+    impact_modules: [validation.runner, validation.coverage, validation.guardrails, validation.module_quality]
+    layer: backend_service
+    risk_level: medium
+    ownership_reason: Validation service layer backs the internal testing and quality UI.
+  - rule_id: validation_router
+    priority: 100
+    include:
+      - backend/routers/validation.py
+    primary_module: validation.center
+    impact_modules: [validation.runner, validation.coverage, validation.module_quality]
+    layer: backend_router
+    risk_level: medium
+    ownership_reason: Validation API routes expose read-only quality and controlled runner endpoints.
+  - rule_id: validation_frontend
+    priority: 100
+    include:
+      - frontend/src/app/validation-center/**
+      - frontend/src/lib/validation/**
+      - frontend/tests/validation-center/**
+    primary_module: validation.center
+    impact_modules: [validation.module_quality]
+    layer: frontend_ui
+    risk_level: medium
+    ownership_reason: Validation Center UI and client code show quality state and pipeline results.
+  - rule_id: validation_scripts
+    priority: 100
+    include:
+      - scripts/aistock_validate.py
+      - scripts/aistock_guardrail_scan.py
+      - scripts/aistock_module_ownership_scan.py
+      - scripts/validation_center_*.py
+    primary_module: validation.guardrails
+    impact_modules: [validation.center, validation.runner, validation.module_quality]
+    layer: script
+    risk_level: high
+    ownership_reason: Validation and guardrail scripts are execution entry points for the local pipeline.
+  - rule_id: noxfile_validation_runner
+    priority: 100
+    include:
+      - noxfile.py
+    primary_module: validation.runner
+    impact_modules: [validation.center, validation.guardrails, validation.module_quality, tests.backend, tests.frontend]
+    layer: test_runner
+    risk_level: high
+    ownership_reason: noxfile.py defines allowlisted local validation sessions.
+  - rule_id: validation_backend_tests
+    priority: 95
+    include:
+      - backend/tests/test_validation*.py
+      - backend/tests/test_aistock_validate_*.py
+      - backend/tests/test_aistock_guardrail_scan.py
+    primary_module: tests.backend
+    impact_modules: [validation.center, validation.runner, validation.coverage, validation.guardrails, validation.module_quality]
+    layer: backend_test
+    risk_level: medium
+    ownership_reason: Backend validation tests protect Validation Center contracts.
+  - rule_id: qe_archive_services
+    priority: 90
+    include:
+      - backend/services/qe_archive/**
+      - backend/routers/qe_archive.py
+    primary_module: qe.archive
+    impact_modules: [qe.data_completeness, qe.enhanced_metrics]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: QE archive code persists and audits experiment data.
+  - rule_id: qe_services
+    priority: 80
+    include:
+      - backend/services/quantevolver/**
+      - backend/routers/quantevolver*.py
+    primary_module: qe.core
+    impact_modules: [qe.single_experiment, qe.custom_evolution, qe.auto_evolution, qe.enhanced_metrics, qe.data_completeness]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: QE service code is shared by single experiments and evolution flows.
+  - rule_id: qe_frontend
+    priority: 80
+    include:
+      - frontend/src/app/quantevolver/**
+      - frontend/src/app/qe-archive/**
+      - frontend/tests/qe/**
+      - frontend/tests/qe-archive/**
+    primary_module: qe.single_experiment
+    impact_modules: [qe.archive, qe.enhanced_metrics, validation.center]
+    layer: frontend_ui
+    risk_level: high
+    ownership_reason: QE UI exposes experiment detail, archive, and enhanced metric workflows.
+  - rule_id: paper_v2_services
+    priority: 80
+    include:
+      - backend/services/paper_trading_v2/**
+      - backend/routers/paper_v2.py
+      - frontend/src/app/paper-v2/**
+      - frontend/tests/paper-v2/**
+    primary_module: paper_v2
+    impact_modules: [selection_center, strategy_package]
+    layer: product_feature
+    risk_level: critical
+    ownership_reason: Paper v2 controls simulated execution, positions, cash, and session state.
+  - rule_id: selection_center_services
+    priority: 80
+    include:
+      - backend/services/selection_center/**
+      - backend/routers/selection_center.py
+    primary_module: selection_center
+    impact_modules: [paper_v2, strategy_package, hmm]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Selection Center produces package-based portfolio candidates.
+  - rule_id: strategy_package_services
+    priority: 80
+    include:
+      - backend/services/strategy_package/**
+      - backend/routers/strategy_package*.py
+    primary_module: strategy_package
+    impact_modules: [paper_v2, selection_center, qe.single_experiment]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Strategy package manifests and assets bridge research and paper workflows.
+  - rule_id: hmm_services
+    priority: 75
+    include:
+      - backend/services/hmm_*.py
+      - backend/routers/hmm*.py
+      - scripts/hmm_*.py
+      - scripts/diagnostics/hmm_*.py
+    primary_module: hmm
+    impact_modules: [qe.core, selection_center, paper_v2]
+    layer: model_runtime
+    risk_level: high
+    ownership_reason: HMM snapshots and coefficients affect model scoring and runtime decisions.
+  - rule_id: qlib_data_pipeline
+    priority: 75
+    include:
+      - backend/qlib_exporter/**
+      - scripts/qlib_*.py
+      - qlib_minute_validation/**
+    primary_module: qlib_data
+    impact_modules: [qe.core, factor_library, paper_v2]
+    layer: data_pipeline
+    risk_level: critical
+    ownership_reason: Qlib datasets are authoritative inputs for research and backtests.
+  - rule_id: local_data_pipeline
+    priority: 70
+    include:
+      - backend/data_service/**
+      - backend/services/*data*.py
+      - backend/routers/local_data*.py
+      - frontend/src/app/local-data/**
+      - frontend/src/app/qlib/**
+    primary_module: local_data
+    impact_modules: [qlib_data, qe.core, paper_v2]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: Local data services define data freshness, quality, and PIT availability.
+  - rule_id: platform_database
+    priority: 70
+    include:
+      - backend/db/**
+      - backend/migrations/**
+    primary_module: platform.db
+    impact_modules: [qe.archive, paper_v2, selection_center, strategy_package, validation.center]
+    layer: database
+    risk_level: high
+    ownership_reason: Database schema and migrations affect persisted business state.
+  - rule_id: platform_api
+    priority: 60
+    include:
+      - backend/main.py
+      - backend/routers/**
+      - backend/services/**
+    exclude:
+      - backend/routers/validation.py
+      - backend/routers/quantevolver*.py
+      - backend/routers/qe_archive.py
+      - backend/routers/paper_v2.py
+      - backend/routers/selection_center.py
+      - backend/routers/strategy_package*.py
+      - backend/routers/hmm*.py
+      - backend/services/validation/**
+      - backend/services/quantevolver/**
+      - backend/services/qe_archive/**
+      - backend/services/paper_trading_v2/**
+      - backend/services/selection_center/**
+      - backend/services/strategy_package/**
+    primary_module: platform.api
+    impact_modules: [platform.db]
+    layer: backend_shared
+    risk_level: high
+    ownership_reason: Shared backend files affect platform API behavior.
+  - rule_id: frontend_common
+    priority: 60
+    include:
+      - frontend/src/components/**
+      - frontend/src/lib/**
+      - frontend/src/app/Sidebar.tsx
+      - frontend/src/app/layout.tsx
+      - frontend/tsconfig.json
+      - frontend/package.json
+      - frontend/playwright*.config.ts
+    exclude:
+      - frontend/src/lib/validation/**
+    primary_module: frontend_common
+    impact_modules: [validation.center]
+    layer: frontend_common
+    risk_level: medium
+    ownership_reason: Shared frontend files affect multiple UI modules.
+  - rule_id: docs_architecture
+    priority: 50
+    include:
+      - docs/architecture/**
+    primary_module: docs.architecture
+    impact_modules: [validation.module_quality]
+    layer: docs
+    risk_level: low
+    ownership_reason: Architecture documents define implementation plans and constraints.
+  - rule_id: docs_standards
+    priority: 50
+    include:
+      - docs/standards/**
+    primary_module: docs.standards
+    impact_modules: [validation.guardrails]
+    layer: docs
+    risk_level: medium
+    ownership_reason: Standards documents define enforced development guardrails.
+  - rule_id: docs_analysis
+    priority: 50
+    include:
+      - docs/analysis/**
+    primary_module: docs.analysis
+    layer: docs
+    risk_level: low
+    ownership_reason: Analysis documents record quant research and experiment findings.
+  - rule_id: docs_operations
+    priority: 50
+    include:
+      - docs/operations/**
+      - docs/operations_*.md
+    primary_module: docs.operations
+    layer: docs
+    risk_level: medium
+    ownership_reason: Operations documents describe runtime and maintenance procedures.
+  - rule_id: debug_tools
+    priority: 50
+    include:
+      - debug_tools/**
+    primary_module: debug_tools
+    layer: diagnostics
+    risk_level: medium
+    ownership_reason: debug_tools contains one-off diagnostics that must not pollute the repository root.
+  - rule_id: backend_tests_default
+    priority: 20
+    include:
+      - backend/tests/**
+    primary_module: tests.backend
+    layer: backend_test
+    risk_level: medium
+    ownership_reason: Backend tests are owned by the test system and secondarily attributed by path-specific rules.
+  - rule_id: frontend_tests_default
+    priority: 20
+    include:
+      - frontend/tests/**
+    primary_module: tests.frontend
+    layer: frontend_test
+    risk_level: medium
+    ownership_reason: Frontend tests are owned by the test system and secondarily attributed by path-specific rules.
+  - rule_id: scripts_default
+    priority: 10
+    include:
+      - scripts/**
+    primary_module: scripts
+    layer: script
+    risk_level: medium
+    ownership_reason: Reusable scripts must have a module-specific rule when they affect high-risk workflows.

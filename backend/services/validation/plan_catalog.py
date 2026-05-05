@@ -13,6 +13,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_l0": "l0",
     "nox_guardrail_changed_files": "guardrail_changed_files",
     "nox_validation_coverage_backend": "validation_coverage_backend",
+    "nox_validation_module_registry_l0": "validation_module_registry_l0",
     "nox_validation_center_backend": "validation_center_backend",
     "nox_validation_center_live_readonly": "validation_center_live_readonly",
     "nox_validation_center_ui": "validation_center_ui",

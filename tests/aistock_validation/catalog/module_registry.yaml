@@ -1,0 +1,313 @@
+schema_version: aistock_module_registry_v1
+modules:
+  - module_id: qe
+    display_name: QE
+    module_type: product_feature
+    risk_level: high
+    description: QuantEvolver experiment, evolution, factor, model, runtime, and archive workflows.
+    ui_routes: [/quantevolver, /qe-archive]
+    api_routes: [/api/v1/quantevolver/*, /api/v1/qe-archive/*]
+    test_plans:
+      required_on_change: [l0]
+      recommended: [qe_read_l3, qe_data_contract_backend, qe_archive_l3]
+  - module_id: qe.core
+    display_name: QE core services
+    parent_module: qe
+    module_type: technical_layer
+    risk_level: high
+    description: Shared QE service layer and runtime contracts.
+    test_plans:
+      required_on_change: [l0, qe_read_l3]
+  - module_id: qe.single_experiment
+    display_name: QE single experiment
+    parent_module: qe
+    module_type: product_feature
+    risk_level: high
+    description: QE one-off experiment creation, execution status, and detail display.
+    ui_routes: [/quantevolver]
+    api_routes: [/api/v1/quantevolver/*]
+    test_plans:
+      required_on_change: [l0, qe_read_l3]
+      recommended: [qe_data_contract_backend]
+  - module_id: qe.custom_evolution
+    display_name: QE custom evolution
+    parent_module: qe
+    module_type: product_feature
+    risk_level: high
+    description: QE user-defined loop evolution and rerun workflows.
+    test_plans:
+      required_on_change: [l0, qe_read_l3]
+  - module_id: qe.auto_evolution
+    display_name: QE auto evolution
+    parent_module: qe
+    module_type: product_feature
+    risk_level: high
+    description: QE automated loop evolution and agent orchestration.
+    test_plans:
+      required_on_change: [l0, qe_read_l3]
+  - module_id: qe.enhanced_metrics
+    display_name: QE enhanced metrics
+    parent_module: qe
+    module_type: data_pipeline
+    risk_level: high
+    description: QE loop result metrics, position audits, trades, and training summaries.
+    test_plans:
+      required_on_change: [l0, qe_data_contract_backend, qe_read_l3]
+  - module_id: qe.data_completeness
+    display_name: QE data completeness
+    parent_module: qe
+    module_type: data_pipeline
+    risk_level: high
+    description: QE completion payload, artifact manifest, config snapshot, and archive source completeness.
+    test_plans:
+      required_on_change: [l0, qe_data_contract_backend]
+  - module_id: qe.archive
+    display_name: QE archive
+    parent_module: qe
+    module_type: data_pipeline
+    risk_level: high
+    description: QE realtime archive, backfill, quality audit, and warehouse source extraction.
+    ui_routes: [/qe-archive]
+    api_routes: [/api/v1/qe-archive/*]
+    test_plans:
+      required_on_change: [l0, qe_archive_l3]
+      recommended: [qe_archive_data_quality]
+  - module_id: paper_v2
+    display_name: Paper Trading v2
+    module_type: product_feature
+    risk_level: critical
+    description: Paper Trading v2 portfolios, sessions, day runner, ledger, and replay.
+    ui_routes: [/paper-v2, /paper-v2/packages, /paper-v2/selection, /paper-v2/portfolios, /paper-v2/model-hmm]
+    api_routes: [/api/v1/paper-v2/*]
+    test_plans:
+      required_on_change: [l0, paper_v2_l3]
+      recommended: [paper_v2_backend]
+  - module_id: selection_center
+    display_name: Selection Center
+    module_type: product_feature
+    risk_level: high
+    description: Package-based selection, fusion, tradability filtering, and HMM-adjusted selection.
+    api_routes: [/api/v1/selection-center/*]
+    test_plans:
+      required_on_change: [l0, paper_v2_backend]
+  - module_id: strategy_package
+    display_name: Strategy Package
+    module_type: product_feature
+    risk_level: high
+    description: Frozen strategy manifests, model assets, selection artifacts, and package lifecycle.
+    api_routes: [/api/v1/strategy-packages/*]
+    test_plans:
+      required_on_change: [l0, paper_v2_backend]
+  - module_id: hmm
+    display_name: HMM
+    module_type: product_feature
+    risk_level: high
+    description: HMM training, snapshots, coefficients, runtime adjustment, and QE/Paper integration.
+    test_plans:
+      required_on_change: [l0]
+  - module_id: factor_library
+    display_name: Factor library
+    module_type: product_feature
+    risk_level: high
+    description: Factor catalog, evaluation metrics, correlation analysis, and factor generation.
+    test_plans:
+      required_on_change: [l0]
+  - module_id: model_library
+    display_name: Model library
+    module_type: product_feature
+    risk_level: high
+    description: Model registry, training artifacts, hyperparameters, and attribution.
+    test_plans:
+      required_on_change: [l0]
+  - module_id: qlib_data
+    display_name: Qlib data
+    module_type: data_pipeline
+    risk_level: critical
+    description: Qlib exporter, bin datasets, PIT universe, and minute data chains.
+    test_plans:
+      required_on_change: [l0]
+  - module_id: local_data
+    display_name: Local data
+    module_type: data_pipeline
+    risk_level: high
+    description: Tushare, TDX, local dataset audit, refresh, and ingestion services.
+    ui_routes: [/local-data, /qlib]
+    test_plans:
+      required_on_change: [l0]
+  - module_id: qmt
+    display_name: QMT
+    module_type: trading_infra
+    risk_level: critical
+    description: QMT client, account, order, and future execution integration.
+    ui_routes: [/qmt]
+    test_plans:
+      required_on_change: [l0]
+  - module_id: rdagent
+    display_name: RD-Agent
+    module_type: product_feature
+    risk_level: high
+    description: RD-Agent task, asset, sync, and generated research integration.
+    ui_routes: [/rdagent, /rd-agent]
+    test_plans:
+      required_on_change: [l0]
+  - module_id: validation
+    display_name: Validation Center
+    module_type: cross_cutting
+    risk_level: medium
+    description: Validation Center, runner, evidence, coverage, guardrails, and module quality cockpit.
+    ui_routes: [/validation-center]
+    api_routes: [/api/v1/validation/*]
+    test_plans:
+      required_on_change: [l0, validation_center_backend]
+      recommended: [validation_center_ui]
+  - module_id: validation.center
+    display_name: Validation Center UI/API
+    parent_module: validation
+    module_type: product_feature
+    risk_level: medium
+    description: Validation Center API, UI, history, findings, and summaries.
+    test_plans:
+      required_on_change: [l0, validation_center_backend]
+      recommended: [validation_center_ui]
+  - module_id: validation.runner
+    display_name: Validation runner
+    parent_module: validation
+    module_type: technical_layer
+    risk_level: high
+    description: Controlled nox runner, plan catalog, execution records, and evidence archive.
+    test_plans:
+      required_on_change: [l0, validation_center_backend]
+  - module_id: validation.coverage
+    display_name: Validation coverage
+    parent_module: validation
+    module_type: technical_layer
+    risk_level: medium
+    description: Coverage snapshots, gates, evidence manifests, and pass-scope metadata.
+    test_plans:
+      required_on_change: [l0, validation_coverage_backend]
+  - module_id: validation.guardrails
+    display_name: Validation guardrails
+    parent_module: validation
+    module_type: cross_cutting
+    risk_level: high
+    description: Development standards guardrails, changed-file gates, and baseline scans.
+    test_plans:
+      required_on_change: [l0, guardrail_changed_files]
+  - module_id: validation.module_quality
+    display_name: Module quality cockpit
+    parent_module: validation
+    module_type: cross_cutting
+    risk_level: high
+    description: Module registry, file ownership, commit impact, workspace dirty status, and quality matrix.
+    test_plans:
+      required_on_change: [l0, validation_module_registry_l0]
+  - module_id: platform
+    display_name: Platform
+    module_type: technical_layer
+    risk_level: high
+    description: Shared backend, API, database, scheduler, config, monitoring, and cross-cutting infrastructure.
+    test_plans:
+      required_on_change: [l0]
+  - module_id: platform.api
+    display_name: Platform API
+    parent_module: platform
+    module_type: technical_layer
+    risk_level: high
+    description: FastAPI app assembly, shared routers, middleware, and API contracts.
+  - module_id: platform.db
+    display_name: Platform database
+    parent_module: platform
+    module_type: technical_layer
+    risk_level: high
+    description: PostgreSQL pools, migrations, schema bootstraps, and DB comments.
+  - module_id: platform.config
+    display_name: Platform config
+    parent_module: platform
+    module_type: technical_layer
+    risk_level: high
+    description: Shared runtime configuration and environment handling.
+  - module_id: platform.scheduler
+    display_name: Platform scheduler
+    parent_module: platform
+    module_type: technical_layer
+    risk_level: high
+    description: Background jobs and scheduled workflows.
+  - module_id: platform.monitoring
+    display_name: Platform monitoring
+    parent_module: platform
+    module_type: technical_layer
+    risk_level: medium
+    description: Prometheus, Grafana, process exporters, and operational observability.
+  - module_id: frontend_common
+    display_name: Frontend common
+    module_type: technical_layer
+    risk_level: medium
+    description: Shared frontend navigation, API clients, UI components, and build configuration.
+  - module_id: docs
+    display_name: Documentation
+    module_type: docs
+    risk_level: low
+    description: Project documentation root.
+  - module_id: docs.architecture
+    display_name: Architecture docs
+    parent_module: docs
+    module_type: docs
+    risk_level: low
+    description: Architecture and implementation design documents.
+  - module_id: docs.standards
+    display_name: Standards docs
+    parent_module: docs
+    module_type: docs
+    risk_level: medium
+    description: Human-readable and machine-readable development standards.
+  - module_id: docs.analysis
+    display_name: Analysis docs
+    parent_module: docs
+    module_type: docs
+    risk_level: low
+    description: Quant analysis, experiment analysis, and research reports.
+  - module_id: docs.operations
+    display_name: Operations docs
+    parent_module: docs
+    module_type: docs
+    risk_level: medium
+    description: Operations, deployment, and runtime procedure documentation.
+  - module_id: debug_tools
+    display_name: Debug tools
+    module_type: diagnostics
+    risk_level: medium
+    description: One-off diagnostics and temporary investigation tools.
+  - module_id: tests
+    display_name: Tests
+    module_type: tests
+    risk_level: medium
+    description: Automated tests, validation evidence, fixtures, and test catalogs.
+  - module_id: tests.backend
+    display_name: Backend tests
+    parent_module: tests
+    module_type: tests
+    risk_level: medium
+    description: Backend pytest suites.
+  - module_id: tests.frontend
+    display_name: Frontend tests
+    parent_module: tests
+    module_type: tests
+    risk_level: medium
+    description: Frontend Playwright and component tests.
+  - module_id: tests.validation_history
+    display_name: Validation history
+    parent_module: tests
+    module_type: tests
+    risk_level: medium
+    description: Validation run records, coverage snapshots, and evidence artifacts.
+  - module_id: tests.fixtures
+    display_name: Test fixtures
+    parent_module: tests
+    module_type: tests
+    risk_level: medium
+    description: Test fixtures and generated validation test data.
+  - module_id: scripts
+    display_name: Scripts
+    module_type: technical_layer
+    risk_level: medium
+    description: Reusable operational, diagnostic, validation, and data scripts.
