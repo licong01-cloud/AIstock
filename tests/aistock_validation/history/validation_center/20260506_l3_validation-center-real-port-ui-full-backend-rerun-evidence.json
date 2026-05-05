@@ -1,0 +1,89 @@
+{
+  "environment": {
+    "backend_port": "8012",
+    "frontend_port": "3012",
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "frontend/tests/validation-center/validation-center-real-port.spec.ts",
+      "sha256": "9b3126d895029ec5dc1ec539b085b6497ddfccdde3f4dde0be99945b6589127d",
+      "size_bytes": 6500
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "frontend/src/app/validation-center/page.tsx",
+      "sha256": "f49cd73ceca5cc5dc4254141430b2b597ffb6d8a3c44e72d6520b79583e8ed8a",
+      "size_bytes": 61339
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "frontend/src/lib/validation/api.ts",
+      "sha256": "8428b29a1546bf974be6a43666483e9b33d74435aa1121ce0a4433dca1c559d5",
+      "size_bytes": 22580
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "backend/services/validation/git_activity_provider.py",
+      "sha256": "6fa75e3148aac5a744b1019be532d595fa99d5d1a2ededd90e2fbfdc8849e798",
+      "size_bytes": 13504
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "backend/services/validation/module_quality.py",
+      "sha256": "27e8bb26e7e26afd2aab9279be38b1d33cfd3e3e74415fc4a6a0c598d9707da5",
+      "size_bytes": 14282
+    },
+    {
+      "child_count": 1,
+      "exists": true,
+      "is_dir": true,
+      "kind": "playwright_report",
+      "path": "tmp/playwright-report",
+      "sha256": null,
+      "size_bytes": null
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "smoke_json",
+      "path": "tmp/validation/validation_center/ui_real_port_smoke.json",
+      "sha256": "6a279292e48af23a2a3348e22ace837d7fdaec00ad0974f78047af28fc38a3bc",
+      "size_bytes": 3100
+    }
+  ],
+  "generated_at": "2026-05-06T00:28:19",
+  "git_commit": "15b7d81",
+  "level": "L3",
+  "missing": [],
+  "missing_count": 0,
+  "module": "validation_center",
+  "operator": "lc999",
+  "run_id": null,
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "Validation Center real-port Git and module quality UI smoke"
+}

@@ -1,0 +1,56 @@
+{
+  "schema_version": "aistock_validation_run_v1",
+  "module": "validation_center",
+  "module_slug": "validation_center",
+  "level": "L3",
+  "level_slug": "l3",
+  "title": "Validation Center Real-port UI Full Backend Rerun",
+  "title_slug": "validation-center-real-port-ui-full-backend-rerun",
+  "git_commit": "15b7d81",
+  "operator": "Codex",
+  "started_at": "2026-05-06T00:30:28+08:00",
+  "finished_at": "2026-05-06T00:30:28+08:00",
+  "status": "passed",
+  "environment": {
+    "backend_port": "8012",
+    "frontend_port": "3012",
+    "next_public_api_base": "http://127.0.0.1:8012/api/v1",
+    "backend_app": "backend.main:app"
+  },
+  "markdown_path": "tests/aistock_validation/history/validation_center/20260506_l3_validation-center-real-port-ui-full-backend-rerun.md",
+  "metadata_path": "tests/aistock_validation/history/validation_center/20260506_l3_validation-center-real-port-ui-full-backend-rerun.json",
+  "quality_gates": [
+    {"name": "full_backend_startup_8012", "status": "passed"},
+    {"name": "validation_center_real_port_ui", "status": "passed"}
+  ],
+  "evidence": [
+    "tests/aistock_validation/history/validation_center/20260506_l3_validation-center-real-port-ui-full-backend-rerun-ui-smoke.json",
+    "tests/aistock_validation/history/validation_center/20260506_l3_validation-center-real-port-ui-full-backend-rerun-evidence.json"
+  ],
+  "pass_scope": {
+    "level": "L3",
+    "real_backend": true,
+    "real_database": false,
+    "real_node_api": false,
+    "real_frontend_click": true,
+    "writes_business_state": false,
+    "positive_business_success": true,
+    "negative_failfast_only": false,
+    "mock_api_used": false,
+    "production_8001_touched": false
+  },
+  "business_assertion": {
+    "can_user_complete_operation": true,
+    "operation_name": "View Validation Center Git workspace, recent commit, and module quality panels against full backend.main",
+    "evidence": {
+      "api": "tmp/validation/validation_center/ui_real_port_smoke.json and copied history smoke JSON",
+      "ui": "Playwright Chromium real-port smoke",
+      "db": "not applicable",
+      "logs": "nox validation_center_real_port_ui output and uvicorn backend.main startup"
+    },
+    "unresolved_blockers": []
+  },
+  "residual_risks": [
+    "This smoke validates Validation Center read/UI observability only; it does not execute long-running QE/Paper/runner write flows."
+  ]
+}
