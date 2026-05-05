@@ -99,8 +99,9 @@ Detailed validation evidence is stored in:
 Key commands passed:
 
 - `python -m py_compile` on changed Paper/StrategyPackage modules.
-- `pytest backend/tests/paper_trading_v2 backend/tests/selection_center backend/tests/strategy_package backend/tests/unified_engine/test_qe_config_truth.py -q -p no:cacheprovider` -> 183 passed.
-- `conda run -n AIstock python -m nox -s paper_v2_backend` -> 138 passed.
-- `conda run -n AIstock python -m nox -s l0` -> successful, blocking guardrail count 0.
+- `pytest backend/tests/selection_center/test_risk_policy.py backend/tests/paper_trading_v2 backend/tests/selection_center backend/tests/strategy_package backend/tests/unified_engine/test_qe_config_truth.py -q -p no:cacheprovider` -> 180 passed after rebase onto `origin/main`.
+- `conda run -n AIstock python -m nox -s paper_v2_backend` -> 137 passed after rebase onto `origin/main`.
+- `conda run -n AIstock python -m nox -s paper_v2_data_quality` -> successful; dataset audit freshness gates passed, with a pre-existing non-strict legacy ledger warning.
+- `conda run -n AIstock python -m nox -s l0` -> successful, blocking guardrail count 0 after generating the local guardrail baseline required by the clean push worktree.
 
 Production backend port `8001` was not restarted.

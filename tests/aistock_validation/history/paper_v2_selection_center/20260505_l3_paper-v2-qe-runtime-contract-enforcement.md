@@ -50,25 +50,59 @@ Result: `70 passed in 1.14s`.
 pytest backend/tests/strategy_package backend/tests/paper_trading_v2 backend/tests/selection_center -q -p no:cacheprovider
 ```
 
-Result: `138 passed in 18.49s`.
+Result before rebase: `138 passed in 18.49s`.
 
 ```powershell
 pytest backend/tests/selection_center/test_risk_policy.py backend/tests/paper_trading_v2 backend/tests/selection_center backend/tests/strategy_package backend/tests/unified_engine/test_qe_config_truth.py -q -p no:cacheprovider
 ```
 
-Result: `183 passed in 20.30s`.
+Result before rebase: `183 passed in 20.30s`.
+
+Re-run after rebasing/cherry-picking onto `origin/main`:
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+$env:PYTHONDONTWRITEBYTECODE='1'
+# TDX_DB_PASSWORD was configured in the local environment for DB-backed tests.
+pytest backend/tests/selection_center/test_risk_policy.py backend/tests/paper_trading_v2 backend/tests/selection_center backend/tests/strategy_package backend/tests/unified_engine/test_qe_config_truth.py -q -p no:cacheprovider
+```
+
+Result: `180 passed in 18.87s`.
 
 ```powershell
 conda run -n AIstock python -m nox -s paper_v2_backend
 ```
 
-Result: successful, `138 passed in 14.53s`.
+Result before rebase: successful, `138 passed in 14.53s`.
+
+Re-run after rebasing/cherry-picking onto `origin/main`:
+
+```powershell
+conda run -n AIstock python -m nox -s paper_v2_backend
+```
+
+Result: successful, `137 passed in 23.61s`.
+
+```powershell
+conda run -n AIstock python -m nox -s paper_v2_data_quality
+```
+
+Result: successful. Paper v2 / Selection Center schema, dataset-refresh audit freshness, package readiness, selection traceability, and Paper run traceability gates passed. The smoke reported a pre-existing non-strict legacy ledger consistency warning and did not fail the gate.
 
 ```powershell
 conda run -n AIstock python -m nox -s l0
 ```
 
-Result: successful. Non-blocking existing guardrail findings were reported for raw-JSON UI and baseline script/complexity checks; blocking count was 0.
+Result before rebase: successful. Non-blocking existing guardrail findings were reported for raw-JSON UI and baseline script/complexity checks; blocking count was 0.
+
+Re-run after rebasing/cherry-picking onto `origin/main`:
+
+```powershell
+python scripts/aistock_guardrail_scan.py --baseline --output-json tmp/validation/guardrails/baseline_20260504.json
+conda run -n AIstock python -m nox -s l0
+```
+
+Result: successful. The clean push worktree needed a local guardrail baseline file first; after generating it, L0 reported only baseline/non-blocking findings and blocking count was 0.
 
 ## Business Outcomes Verified
 
