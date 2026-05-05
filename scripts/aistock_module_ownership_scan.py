@@ -23,7 +23,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "paths",
         nargs="*",
-        help="Optional repo-relative paths to scan. If omitted, tracked repository files are scanned.",
+        help="Optional repo-relative paths to scan. If omitted, tracked repository files are scanned unless a mode flag is used.",
     )
     parser.add_argument(
         "--module-registry",
@@ -43,6 +43,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Include git untracked files when scanning the repository.",
     )
     parser.add_argument(
+        "--changed-only",
+        action="store_true",
+        help="Scan git changed files plus untracked files, excluding deletions.",
+    )
+    parser.add_argument(
+        "--staged-only",
+        action="store_true",
+        help="Scan git staged files, excluding deletions.",
+    )
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=REPO_ROOT,
+        help="Repository root used for git-based scan modes.",
+    )
+    parser.add_argument(
         "--fail-on-unmapped",
         action="store_true",
         help="Exit non-zero if any scanned file is unmapped.",
@@ -60,16 +76,24 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.changed_only and args.staged_only:
+        parser.error("--changed-only and --staged-only are mutually exclusive.")
+    if args.paths and (args.changed_only or args.staged_only):
+        parser.error("Explicit paths cannot be combined with --changed-only or --staged-only.")
     registry = ModuleRegistry(args.module_registry) if args.module_registry else ModuleRegistry()
     catalog = FileOwnershipCatalog(args.file_ownership, module_registry=registry)
     try:
         # Load both catalogs first so schema errors fail before any scan output is written.
         registry.load()
         catalog.load()
-        if args.paths:
+        if args.changed_only:
+            payload = catalog.scan_changed_files(repo_root=args.repo_root)
+        elif args.staged_only:
+            payload = catalog.scan_staged_files(repo_root=args.repo_root)
+        elif args.paths:
             payload = catalog.scan_paths(args.paths)
         else:
-            payload = catalog.scan_repository(repo_root=REPO_ROOT, include_untracked=args.include_untracked)
+            payload = catalog.scan_repository(repo_root=args.repo_root, include_untracked=args.include_untracked)
     except (FileOwnershipError, ModuleRegistryError) as exc:
         print(f"module ownership scan failed: {exc}", file=sys.stderr)
         return 2

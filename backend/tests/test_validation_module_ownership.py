@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,17 @@ rules:
     risk_level: low
 """.lstrip(),
         encoding="utf-8",
+    )
+
+
+def _git(repo_root: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=True,
     )
 
 
@@ -176,6 +188,73 @@ def test_scan_outputs_and_cli_fail_on_unmapped(tmp_path: Path) -> None:
     assert payload["totals"]["mapped_files"] == 1
     assert payload["totals"]["unmapped_files"] == 1
     assert "unknown.py" in summary_md.read_text(encoding="utf-8")
+
+
+def test_changed_only_detects_untracked_unmapped_file(tmp_path: Path) -> None:
+    registry_path = tmp_path / "module_registry.yaml"
+    ownership_path = tmp_path / "file_ownership.yaml"
+    _write_registry(registry_path)
+    _write_ownership(ownership_path)
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "pytest@example.invalid")
+    _git(tmp_path, "config", "user.name", "pytest")
+    tracked_doc = tmp_path / "docs" / "architecture" / "tracked.md"
+    tracked_doc.parent.mkdir(parents=True)
+    tracked_doc.write_text("tracked\n", encoding="utf-8")
+    _git(tmp_path, "add", "docs/architecture/tracked.md", "module_registry.yaml", "file_ownership.yaml")
+    _git(tmp_path, "commit", "-m", "seed")
+    tracked_doc.write_text("changed\n", encoding="utf-8")
+    (tmp_path / "root_debug_probe.py").write_text("print('bad')\n", encoding="utf-8")
+
+    catalog = FileOwnershipCatalog(ownership_path, module_registry=ModuleRegistry(registry_path))
+    payload = catalog.scan_changed_files(repo_root=tmp_path)
+
+    assert payload["source"] == "changed_files"
+    assert payload["totals"]["files"] == 2
+    assert payload["totals"]["mapped_files"] == 1
+    assert payload["totals"]["unmapped_files"] == 1
+    unmapped = next(item for item in payload["items"] if item["ownership_status"] == "unmapped")
+    assert unmapped["path"] == "root_debug_probe.py"
+
+
+def test_staged_only_and_cli_block_unmapped_staged_file(tmp_path: Path) -> None:
+    registry_path = tmp_path / "module_registry.yaml"
+    ownership_path = tmp_path / "file_ownership.yaml"
+    output_json = tmp_path / "staged.json"
+    _write_registry(registry_path)
+    _write_ownership(ownership_path)
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "pytest@example.invalid")
+    _git(tmp_path, "config", "user.name", "pytest")
+    mapped = tmp_path / "backend" / "services" / "validation" / "mapped.py"
+    unmapped = tmp_path / "root_tmp.py"
+    mapped.parent.mkdir(parents=True)
+    mapped.write_text("VALUE = 1\n", encoding="utf-8")
+    unmapped.write_text("VALUE = 2\n", encoding="utf-8")
+    _git(tmp_path, "add", "backend/services/validation/mapped.py", "root_tmp.py")
+
+    catalog = FileOwnershipCatalog(ownership_path, module_registry=ModuleRegistry(registry_path))
+    payload = catalog.scan_staged_files(repo_root=tmp_path)
+    assert payload["source"] == "staged_files"
+    assert payload["totals"]["mapped_files"] == 1
+    assert payload["totals"]["unmapped_files"] == 1
+
+    exit_code = ownership_scan_main(
+        [
+            "--module-registry",
+            str(registry_path),
+            "--file-ownership",
+            str(ownership_path),
+            "--repo-root",
+            str(tmp_path),
+            "--staged-only",
+            "--fail-on-unmapped",
+            "--output-json",
+            str(output_json),
+        ]
+    )
+    assert exit_code == 1
+    assert json.loads(output_json.read_text(encoding="utf-8"))["totals"]["unmapped_files"] == 1
 
 
 def test_write_scan_outputs_accepts_empty_problem_set(tmp_path: Path) -> None:

@@ -150,6 +150,18 @@ def guardrail_changed_files(session: nox.Session) -> None:
         "tmp/validation/guardrails/changed_files.md",
         external=True,
     )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        mode_flag,
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        "--output-json",
+        "tmp/validation/module_ownership/changed_files.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/changed_files.md",
+        external=True,
+    )
 
 
 @nox.session(venv_backend="none")

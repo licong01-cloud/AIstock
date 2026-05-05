@@ -145,6 +145,10 @@ def _git_paths(repo_root: Path, args: list[str]) -> list[str]:
     return [line.strip().replace("\\", "/") for line in output.splitlines() if line.strip()]
 
 
+def _unique_paths(paths: Iterable[str]) -> list[str]:
+    return list(dict.fromkeys(path for path in paths if path))
+
+
 class FileOwnershipCatalog:
     """Read, validate, and apply deterministic file-to-module ownership rules."""
 
@@ -256,6 +260,19 @@ class FileOwnershipCatalog:
         items = [self.match_path(path).to_dict() for path in paths]
         return self._scan_payload(items, source="paths")
 
+    def scan_staged_files(self, *, repo_root: Path | None = None) -> dict[str, Any]:
+        root = Path(repo_root or REPO_ROOT)
+        paths = _git_paths(root, ["diff", "--cached", "--name-only", "--diff-filter=ACMRT"])
+        items = [self.match_path(path).to_dict() for path in _unique_paths(paths)]
+        return self._scan_payload(items, source="staged_files")
+
+    def scan_changed_files(self, *, repo_root: Path | None = None) -> dict[str, Any]:
+        root = Path(repo_root or REPO_ROOT)
+        changed = _git_paths(root, ["diff", "--name-only", "--diff-filter=ACMRT", "HEAD"])
+        untracked = _git_paths(root, ["ls-files", "--others", "--exclude-standard"])
+        items = [self.match_path(path).to_dict() for path in _unique_paths([*changed, *untracked])]
+        return self._scan_payload(items, source="changed_files")
+
     def scan_repository(
         self,
         *,
@@ -269,8 +286,7 @@ class FileOwnershipCatalog:
             paths.extend(_git_paths(root, ["ls-files"]))
         if include_untracked:
             paths.extend(_git_paths(root, ["ls-files", "--others", "--exclude-standard"]))
-        unique_paths = list(dict.fromkeys(paths))
-        items = [self.match_path(path).to_dict() for path in unique_paths]
+        items = [self.match_path(path).to_dict() for path in _unique_paths(paths)]
         return self._scan_payload(items, source="repository")
 
     @staticmethod
