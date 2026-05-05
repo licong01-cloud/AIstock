@@ -19,6 +19,8 @@ import {
   type ValidationExecutionJob,
   type ValidationExecutionLog,
   type ValidationFindingSummary,
+  type ValidationGitBranchStatus,
+  type ValidationGitWorkspaceStatus,
   type ValidationHealth,
   type ValidationPage,
   type ValidationPassScope,
@@ -202,11 +204,108 @@ function AgentContextPanel({ context }: { context?: ValidationAgentContext | nul
   );
 }
 
+function GitWorkspacePanel({ workspaceStatus, branchStatus }: { workspaceStatus?: ValidationGitWorkspaceStatus | null; branchStatus?: ValidationGitBranchStatus | null }) {
+  const summary: NonNullable<ValidationGitWorkspaceStatus["summary"]> = workspaceStatus?.summary || {};
+  const files = workspaceStatus?.files || [];
+  const modules = workspaceStatus?.by_module || [];
+  const aheadCount = branchStatus?.ahead_count ?? workspaceStatus?.ahead_count ?? 0;
+  const behindCount = branchStatus?.behind_count ?? workspaceStatus?.behind_count ?? 0;
+  const warningMessages = [
+    workspaceStatus?.dirty ? "工作区存在未提交文件，提交前需要完成对应流水线验证。" : null,
+    summary.untracked_files ? `存在 ${summary.untracked_files} 个新建未跟踪文件，需要确认模块归属。` : null,
+    summary.unmapped_files ? `存在 ${summary.unmapped_files} 个未归属文件，必须补充 file ownership 规则。` : null,
+    summary.ambiguous_files ? `存在 ${summary.ambiguous_files} 个归属歧义文件，需要收敛模块映射。` : null,
+    summary.conflicted_files ? `存在 ${summary.conflicted_files} 个冲突文件，禁止进入验证/提交。` : null,
+    aheadCount ? `本地未推送 ${aheadCount} 个 commit，请在验证通过后推送 GitHub。` : null,
+    behindCount ? `本地落后远端 ${behindCount} 个 commit，继续开发前需要评估是否同步。` : null,
+  ].filter(Boolean) as string[];
+
+  return (
+    <SectionCard
+      title="Git 工作区状态"
+      eyebrow="changed files / module ownership / commit hygiene"
+      action={<span className={`pv2-badge pv2-badge-${workspaceStatus?.dirty ? "warning" : "success"}`}>{workspaceStatus?.dirty ? "存在未提交修改" : "工作区干净"}</span>}
+    >
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="未提交文件" value={summary.changed_files ?? 0} hint={`分支 ${display(branchStatus?.branch || workspaceStatus?.branch)}`} tone={workspaceStatus?.dirty ? "warning" : "success"} />
+        <MetricCard label="已暂存" value={summary.staged_files ?? 0} hint={`未暂存 ${display(summary.unstaged_files ?? 0)}`} tone="info" />
+        <MetricCard label="新建未跟踪" value={summary.untracked_files ?? 0} hint={`删除 ${display(summary.deleted_files ?? 0)} / 重命名 ${display(summary.renamed_files ?? 0)}`} tone={summary.untracked_files ? "warning" : "neutral"} />
+        <MetricCard label="未归属文件" value={summary.unmapped_files ?? 0} hint={`歧义 ${display(summary.ambiguous_files ?? 0)} / 高危 ${display(summary.critical_risk_files ?? 0)}`} tone={summary.unmapped_files || summary.ambiguous_files ? "danger" : "success"} />
+      </div>
+      <div className="pv2-grid pv2-grid-2" style={{ marginTop: 12 }}>
+        <MetricCard label="本地未推送" value={aheadCount} hint={`upstream ${display(branchStatus?.upstream || workspaceStatus?.upstream)}`} tone={aheadCount ? "warning" : "success"} />
+        <MetricCard label="落后远端" value={behindCount} hint={`HEAD ${display(branchStatus?.short_head_commit || workspaceStatus?.short_head_commit)}`} tone={behindCount ? "warning" : "success"} />
+      </div>
+      {warningMessages.length ? (
+        <div className="pv2-notice pv2-notice-warning" style={{ marginTop: 12 }}>
+          <div className="pv2-notice-title">提交前风险提示</div>
+          <div className="pv2-notice-body"><BadgeList items={warningMessages} /></div>
+        </div>
+      ) : (
+        <div className="pv2-notice pv2-notice-success" style={{ marginTop: 12 }}>
+          <div className="pv2-notice-title">当前工作区无阻塞提示</div>
+          <div className="pv2-notice-body">未发现未跟踪、未归属、冲突或本地未推送风险。</div>
+        </div>
+      )}
+      <div className="pv2-notice pv2-notice-info" style={{ marginTop: 12 }}>
+        <div className="pv2-notice-title">只读 Git 边界</div>
+        <div className="pv2-notice-body">
+          command_mode={display(workspaceStatus?.git_command_mode ?? branchStatus?.git_command_mode)}；
+          arbitrary_shell_allowed={display(workspaceStatus?.arbitrary_shell_allowed ?? branchStatus?.arbitrary_shell_allowed)}；
+          production_8001_touched={display(workspaceStatus?.production_8001_touched ?? branchStatus?.production_8001_touched)}
+        </div>
+      </div>
+      <div className="pv2-grid pv2-grid-2" style={{ marginTop: 16 }}>
+        <div>
+          <h3 className="pv2-subtitle">模块影响</h3>
+          {modules.length ? (
+            <div className="pv2-readable-list">
+              {modules.map((module) => (
+                <div className="pv2-readable-item" key={module.module_id}>
+                  <strong>{module.module_id}</strong>
+                  <span className="pv2-muted">变更 {display(module.changed_file_count)} 个文件</span>
+                  <StatusBadge status={module.max_risk_level || "unknown"} />
+                  <CountChips counts={module.statuses} />
+                </div>
+              ))}
+            </div>
+          ) : <p className="pv2-muted">暂无模块影响。</p>}
+        </div>
+        <div>
+          <h3 className="pv2-subtitle">状态分布</h3>
+          <CountChips counts={workspaceStatus?.by_status} />
+          <div style={{ marginTop: 8 }}><BadgeList items={workspaceStatus?.reason_codes} empty="无 reason code" /></div>
+        </div>
+      </div>
+      <div className="pv2-table-wrap" style={{ marginTop: 16 }}>
+        <table className="pv2-table">
+          <thead><tr><th>状态</th><th>文件</th><th>模块</th><th>风险</th><th>归属</th><th>建议动作</th></tr></thead>
+          <tbody>
+            {files.length ? files.slice(0, 50).map((file) => (
+              <tr key={`${file.status}-${file.path}`}>
+                <td><StatusBadge status={file.status} /><br /><span className="pv2-muted pv2-mono">{display(file.git_xy)}</span></td>
+                <td><span className="pv2-mono">{file.path}</span>{file.old_path ? <><br /><span className="pv2-muted pv2-mono">from {file.old_path}</span></> : null}</td>
+                <td>{display(file.primary_module)}<br /><BadgeList items={file.impact_modules} /></td>
+                <td><StatusBadge status={file.risk_level || "unknown"} /><br /><span className="pv2-muted">{display(file.layer)}</span></td>
+                <td><StatusBadge status={file.ownership_status || "unknown"} /><br /><BadgeList items={file.matched_rule_ids} empty="无匹配规则" /></td>
+                <td>{display(file.recommended_action)}<br /><BadgeList items={file.reason_codes} empty="无 reason code" /></td>
+              </tr>
+            )) : <tr><td className="pv2-empty-cell" colSpan={6}>暂无变更文件。</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {files.length > 50 ? <p className="pv2-muted">当前仅展示前 50 个变更文件；完整列表由后端 API 保留。</p> : null}
+    </SectionCard>
+  );
+}
+
 export default function ValidationCenterPage() {
   const [health, setHealth] = useState<ValidationHealth | null>(null);
   const [summary, setSummary] = useState<ValidationSummary | null>(null);
   const [findingSummary, setFindingSummary] = useState<ValidationFindingSummary | null>(null);
   const [bugSummary, setBugSummary] = useState<ValidationBugSummary | null>(null);
+  const [workspaceStatus, setWorkspaceStatus] = useState<ValidationGitWorkspaceStatus | null>(null);
+  const [branchStatus, setBranchStatus] = useState<ValidationGitBranchStatus | null>(null);
   const [plans, setPlans] = useState<ValidationPlan[]>([]);
   const [runs, setRuns] = useState<ValidationPage<ValidationRunSummary>>(emptyPage<ValidationRunSummary>());
   const [coverage, setCoverage] = useState<ValidationPage<ValidationCoverageSummary>>(emptyPage<ValidationCoverageSummary>(10));
@@ -236,7 +335,7 @@ export default function ValidationCenterPage() {
     setLoading(true);
     setError(null);
     try {
-      const [healthData, summaryData, planCatalog, coverageData, evidenceData, executionData, findingSummaryData, bugSummaryData] = await Promise.all([
+      const [healthData, summaryData, planCatalog, coverageData, evidenceData, executionData, findingSummaryData, bugSummaryData, workspaceData, branchData] = await Promise.all([
         validationApi.health(),
         validationApi.summary(),
         validationApi.plans(),
@@ -245,6 +344,8 @@ export default function ValidationCenterPage() {
         validationApi.executions({ page: 1, page_size: 10 }),
         validationApi.findingSummary(),
         validationApi.bugSummary(),
+        validationApi.workspaceStatus(),
+        validationApi.branchStatus(),
       ]);
       setHealth(healthData);
       setSummary(summaryData);
@@ -254,6 +355,8 @@ export default function ValidationCenterPage() {
       setExecutions(executionData || emptyPage<ValidationExecutionJob>(10));
       setFindingSummary(findingSummaryData);
       setBugSummary(bugSummaryData);
+      setWorkspaceStatus(workspaceData);
+      setBranchStatus(branchData);
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -490,6 +593,8 @@ export default function ValidationCenterPage() {
         <MetricCard label="质量发现" value={findingSummary?.finding_count ?? summary?.quality?.finding_count ?? health?.quality?.finding_count ?? "-"} hint="guardrail / legacy inventory" tone="warning" />
         <MetricCard label="Bug Registry" value={bugSummary?.bug_count ?? summary?.quality?.bug_count ?? health?.quality?.bug_count ?? "-"} hint={health?.production_8001_touched ? "异常：触碰 8001" : "read_only / agent-context"} tone={health?.production_8001_touched ? "danger" : "success"} />
       </section>
+
+      <GitWorkspacePanel workspaceStatus={workspaceStatus} branchStatus={branchStatus} />
 
       <SectionCard
         title="测试计划目录"

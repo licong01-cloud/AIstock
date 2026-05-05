@@ -390,6 +390,83 @@ export type ValidationBugQuery = ValidationListQuery & {
   search?: string;
 };
 
+export type ValidationGitWorkspaceSummary = JsonObject & {
+  changed_files?: number;
+  staged_files?: number;
+  unstaged_files?: number;
+  untracked_files?: number;
+  conflicted_files?: number;
+  deleted_files?: number;
+  renamed_files?: number;
+  unmapped_files?: number;
+  ambiguous_files?: number;
+  critical_risk_files?: number;
+};
+
+export type ValidationGitWorkspaceFile = JsonObject & {
+  path: string;
+  old_path?: string | null;
+  status?: string;
+  git_xy?: string | null;
+  staged?: boolean;
+  unstaged?: boolean;
+  untracked?: boolean;
+  conflicted?: boolean;
+  primary_module?: string | null;
+  impact_modules?: string[];
+  layer?: string | null;
+  risk_level?: string | null;
+  ownership_status?: string;
+  matched_rule_ids?: string[];
+  reason_codes?: string[];
+  recommended_action?: string;
+};
+
+export type ValidationGitWorkspaceModule = JsonObject & {
+  module_id: string;
+  changed_file_count?: number;
+  max_risk_level?: string | null;
+  statuses?: Record<string, number>;
+};
+
+export type ValidationGitWorkspaceStatus = JsonObject & {
+  schema_version?: string;
+  generated_at?: string;
+  repo_root?: string;
+  branch?: string | null;
+  upstream?: string | null;
+  head_commit?: string | null;
+  short_head_commit?: string | null;
+  ahead_count?: number;
+  behind_count?: number;
+  dirty?: boolean;
+  summary?: ValidationGitWorkspaceSummary;
+  by_status?: Record<string, number>;
+  by_module?: ValidationGitWorkspaceModule[];
+  files?: ValidationGitWorkspaceFile[];
+  reason_codes?: string[];
+  git_command_mode?: string;
+  arbitrary_shell_allowed?: boolean;
+  production_8001_touched?: boolean;
+};
+
+export type ValidationGitBranchStatus = JsonObject & {
+  schema_version?: string;
+  generated_at?: string;
+  repo_root?: string;
+  branch?: string | null;
+  detached?: boolean;
+  upstream?: string | null;
+  head_commit?: string | null;
+  short_head_commit?: string | null;
+  ahead_count?: number;
+  behind_count?: number;
+  upstream_known?: boolean;
+  git_command_mode?: string;
+  arbitrary_shell_allowed?: boolean;
+  production_8001_touched?: boolean;
+};
+
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1").replace(/\/+$/, "");
 
 export class ValidationApiError extends Error {
@@ -502,6 +579,12 @@ export const validationApi = {
   },
   bugAgentContext(bugId: string): Promise<ValidationAgentContext> {
     return unwrap<ValidationAgentContext>(`/validation/bugs/${encodeURIComponent(bugId)}/agent-context`);
+  },
+  workspaceStatus(): Promise<ValidationGitWorkspaceStatus> {
+    return unwrap<ValidationGitWorkspaceStatus>("/validation/git/workspace-status");
+  },
+  branchStatus(): Promise<ValidationGitBranchStatus> {
+    return unwrap<ValidationGitBranchStatus>("/validation/git/branch-status");
   },
   executions(query: ValidationExecutionQuery = {}): Promise<ValidationPage<ValidationExecutionJob>> {
     return unwrap<ValidationPage<ValidationExecutionJob>>(appendQuery("/validation/executions", query));

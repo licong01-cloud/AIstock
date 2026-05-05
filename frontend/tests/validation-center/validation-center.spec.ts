@@ -228,6 +228,92 @@ const executionJob = {
   error: null,
 };
 
+const workspaceStatus = {
+  schema_version: "aistock_git_workspace_status_v1",
+  generated_at: "2026-05-05T22:00:00+08:00",
+  repo_root: "F:/Dev/AIstock",
+  branch: "main",
+  upstream: "origin/main",
+  head_commit: "abcdef123456",
+  short_head_commit: "abcdef1",
+  ahead_count: 2,
+  behind_count: 0,
+  dirty: true,
+  summary: {
+    changed_files: 4,
+    staged_files: 1,
+    unstaged_files: 2,
+    untracked_files: 1,
+    conflicted_files: 0,
+    deleted_files: 0,
+    renamed_files: 0,
+    unmapped_files: 1,
+    ambiguous_files: 0,
+    critical_risk_files: 0,
+  },
+  by_status: { staged_modified: 1, unstaged_modified: 2, untracked: 1 },
+  by_module: [
+    { module_id: "validation.center", changed_file_count: 2, max_risk_level: "medium", statuses: { staged_modified: 1 } },
+  ],
+  files: [
+    {
+      path: "frontend/src/app/validation-center/page.tsx",
+      status: "staged_modified",
+      git_xy: "M.",
+      staged: true,
+      unstaged: false,
+      untracked: false,
+      conflicted: false,
+      primary_module: "validation.center",
+      impact_modules: ["validation.module_quality"],
+      layer: "frontend_ui",
+      risk_level: "medium",
+      ownership_status: "mapped",
+      matched_rule_ids: ["validation_frontend"],
+      reason_codes: [],
+      recommended_action: "run_changed_files_guard_and_commit",
+    },
+    {
+      path: "root_tmp.py",
+      status: "untracked",
+      git_xy: "??",
+      staged: false,
+      unstaged: false,
+      untracked: true,
+      conflicted: false,
+      primary_module: null,
+      impact_modules: [],
+      layer: null,
+      risk_level: null,
+      ownership_status: "unmapped",
+      matched_rule_ids: [],
+      reason_codes: ["no_matching_file_ownership_rule", "git_untracked"],
+      recommended_action: "add_file_ownership_mapping_before_commit",
+    },
+  ],
+  reason_codes: ["workspace_dirty", "untracked_files_present", "unmapped_files_present"],
+  git_command_mode: "read_only_allowlist",
+  arbitrary_shell_allowed: false,
+  production_8001_touched: false,
+};
+
+const branchStatus = {
+  schema_version: "aistock_git_branch_status_v1",
+  generated_at: "2026-05-05T22:00:00+08:00",
+  repo_root: "F:/Dev/AIstock",
+  branch: "main",
+  detached: false,
+  upstream: "origin/main",
+  head_commit: "abcdef123456",
+  short_head_commit: "abcdef1",
+  ahead_count: 2,
+  behind_count: 0,
+  upstream_known: true,
+  git_command_mode: "read_only_allowlist",
+  arbitrary_shell_allowed: false,
+  production_8001_touched: false,
+};
+
 test("Validation Center UI uses mocked APIs and controlled runner POST", async ({ page }) => {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
@@ -367,6 +453,14 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
       });
     }
 
+    if (path.endsWith("/api/v1/validation/git/workspace-status")) {
+      return respond({ status: "success", data: workspaceStatus });
+    }
+
+    if (path.endsWith("/api/v1/validation/git/branch-status")) {
+      return respond({ status: "success", data: branchStatus });
+    }
+
     if (path.endsWith("/api/v1/validation/executions") && method === "GET") {
       return respond({ status: "success", data: { items: [executionJob], total: 1, page: 1, page_size: 10, has_more: false } });
     }
@@ -502,6 +596,14 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   await expect(page.getByRole("link", { name: /流水线中心/ })).toHaveAttribute("href", "/validation-center");
   await expect(page.getByRole("heading", { name: "自动化测试流水线中心" })).toBeVisible();
   await expect(page.getByText("只读 API")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Git 工作区状态" })).toBeVisible();
+  await expect(page.getByText("未提交文件", { exact: true })).toBeVisible();
+  await expect(page.getByText("未归属文件", { exact: true })).toBeVisible();
+  await expect(page.getByText("本地未推送", { exact: true })).toBeVisible();
+  await expect(page.getByText("root_tmp.py")).toBeVisible();
+  await expect(page.getByText("validation.center").first()).toBeVisible();
+  await expect(page.getByText("read_only_allowlist").first()).toBeVisible();
+  await expect(page.getByText("add_file_ownership_mapping_before_commit")).toBeVisible();
   await expect(page.getByText("受控 Runner：allowlist only")).toBeVisible();
   await expect(page.getByText("Validation Center backend contract")).toBeVisible();
   await expect(page.getByText("Runner 执行队列")).toBeVisible();
