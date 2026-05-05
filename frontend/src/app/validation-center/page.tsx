@@ -20,8 +20,10 @@ import {
   type ValidationExecutionLog,
   type ValidationFindingSummary,
   type ValidationGitBranchStatus,
+  type ValidationGitCommitActivity,
   type ValidationGitWorkspaceStatus,
   type ValidationHealth,
+  type ValidationModuleQualitySummary,
   type ValidationPage,
   type ValidationPassScope,
   type ValidationPlan,
@@ -299,6 +301,82 @@ function GitWorkspacePanel({ workspaceStatus, branchStatus }: { workspaceStatus?
   );
 }
 
+function GitModuleQualityPanel({ commitActivity, moduleQuality }: { commitActivity?: ValidationGitCommitActivity | null; moduleQuality?: ValidationModuleQualitySummary | null }) {
+  const commitSummary = commitActivity?.summary || {};
+  const qualitySummary = moduleQuality?.summary || {};
+  const modules = (moduleQuality?.modules || []).slice(0, 15);
+  const commits = (commitActivity?.commits || []).slice(0, 10);
+  return (
+    <SectionCard
+      title="模块质量优先级"
+      eyebrow="commit attribution / coverage / findings / bugs"
+      action={<span className="pv2-chip">按文件归属自动聚合</span>}
+    >
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="近期 Commit" value={commitSummary.commit_count ?? 0} hint={`文件变更 ${display(commitSummary.changed_file_count ?? 0)}`} tone="info" />
+        <MetricCard label="需要验证模块" value={qualitySummary.modules_needing_validation ?? 0} hint={`模块总数 ${display(qualitySummary.module_count ?? 0)}`} tone={qualitySummary.modules_needing_validation ? "warning" : "success"} />
+        <MetricCard label="有未提交变更模块" value={qualitySummary.modules_with_workspace_changes ?? 0} hint={`未归属 ${display(qualitySummary.unmapped_workspace_files ?? 0)}`} tone={qualitySummary.unmapped_workspace_files ? "danger" : "warning"} />
+        <MetricCard label="Commit 未归属" value={commitSummary.unmapped_commit_count ?? 0} hint={`歧义 ${display(commitSummary.ambiguous_commit_count ?? 0)}`} tone={commitSummary.unmapped_commit_count ? "danger" : "success"} />
+      </div>
+      <div className="pv2-notice pv2-notice-info" style={{ marginTop: 12 }}>
+        <div className="pv2-notice-title">模块判定规则</div>
+        <div className="pv2-notice-body">
+          每个 commit 和当前工作区文件都按 `tests/aistock_validation/catalog/file_ownership.yaml` 归属模块；
+          新建文件如果没有匹配规则，会进入未归属风险并提升该阶段验证优先级。
+        </div>
+      </div>
+      <div className="pv2-grid pv2-grid-3" style={{ marginTop: 16 }}>
+        <div>
+          <h3 className="pv2-subtitle">按日 Commit</h3>
+          <div className="pv2-chip-row">{(commitActivity?.by_day || []).slice(0, 7).map((item) => <span className="pv2-chip" key={String(item.period)}>{display(item.period)}: {display(item.commit_count)}</span>)}</div>
+        </div>
+        <div>
+          <h3 className="pv2-subtitle">按周 Commit</h3>
+          <div className="pv2-chip-row">{(commitActivity?.by_week || []).slice(0, 6).map((item) => <span className="pv2-chip" key={String(item.period)}>{display(item.period)}: {display(item.commit_count)}</span>)}</div>
+        </div>
+        <div>
+          <h3 className="pv2-subtitle">全局风险</h3>
+          <BadgeList items={moduleQuality?.global_reason_codes} empty="无全局风险" />
+        </div>
+      </div>
+      <div className="pv2-table-wrap" style={{ marginTop: 16 }}>
+        <table className="pv2-table">
+          <thead><tr><th>模块</th><th>优先级</th><th>未提交</th><th>近期 Commit</th><th>覆盖率</th><th>质量问题</th><th>建议测试</th></tr></thead>
+          <tbody>
+            {modules.length ? modules.map((module) => (
+              <tr key={module.module_id}>
+                <td><strong>{module.display_name || module.module_id}</strong><br /><span className="pv2-muted pv2-mono">{module.module_id}</span></td>
+                <td><StatusBadge status={module.priority?.level || "low"} /><br /><span className="pv2-muted">score={display(module.priority?.score)}</span><br /><BadgeList items={module.priority?.reason_codes} /></td>
+                <td>{display(module.workspace?.changed_file_count ?? 0)} 个文件<br /><span className="pv2-muted">staged {display(module.workspace?.staged_file_count ?? 0)} / unstaged {display(module.workspace?.unstaged_file_count ?? 0)}</span></td>
+                <td>{display(module.commits?.commit_count ?? 0)} commits<br /><span className="pv2-muted">{display(module.commits?.latest_commit?.short_hash)} {display(module.commits?.latest_commit?.subject)}</span></td>
+                <td><StatusBadge status={module.coverage?.status || "missing"} /><br /><span className="pv2-muted">Line {pct(module.coverage?.line_percent)} / Branch {pct(module.coverage?.branch_percent)}</span></td>
+                <td>Findings {display(module.quality?.finding_count ?? 0)} / Bugs {display(module.quality?.bug_count ?? 0)}<br /><CountChips counts={module.quality?.by_severity} /></td>
+                <td><BadgeList items={module.test_plans?.required_on_change} /><span className="pv2-muted">推荐：</span><BadgeList items={module.test_plans?.recommended} /></td>
+              </tr>
+            )) : <tr><td className="pv2-empty-cell" colSpan={7}>暂无模块质量聚合数据。</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div className="pv2-table-wrap" style={{ marginTop: 16 }}>
+        <table className="pv2-table">
+          <thead><tr><th>近期 Commit</th><th>时间/作者</th><th>模块</th><th>文件</th><th>归属风险</th></tr></thead>
+          <tbody>
+            {commits.length ? commits.map((commit) => (
+              <tr key={commit.commit_hash}>
+                <td><strong>{display(commit.subject)}</strong><br /><span className="pv2-muted pv2-mono">{display(commit.short_hash || commit.commit_hash)}</span></td>
+                <td>{display(commit.authored_at)}<br /><span className="pv2-muted">{display(commit.author_name)}</span></td>
+                <td><BadgeList items={commit.module_ids} /></td>
+                <td>{display(commit.changed_file_count ?? 0)}<br /><CountChips counts={commit.file_status_counts} /></td>
+                <td>mapped {display(commit.ownership_summary?.mapped ?? 0)} / unmapped {display(commit.ownership_summary?.unmapped ?? 0)}<br /><StatusBadge status={commit.max_risk_level || "unknown"} /></td>
+              </tr>
+            )) : <tr><td className="pv2-empty-cell" colSpan={5}>暂无 commit 数据。</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </SectionCard>
+  );
+}
+
 export default function ValidationCenterPage() {
   const [health, setHealth] = useState<ValidationHealth | null>(null);
   const [summary, setSummary] = useState<ValidationSummary | null>(null);
@@ -306,6 +384,8 @@ export default function ValidationCenterPage() {
   const [bugSummary, setBugSummary] = useState<ValidationBugSummary | null>(null);
   const [workspaceStatus, setWorkspaceStatus] = useState<ValidationGitWorkspaceStatus | null>(null);
   const [branchStatus, setBranchStatus] = useState<ValidationGitBranchStatus | null>(null);
+  const [commitActivity, setCommitActivity] = useState<ValidationGitCommitActivity | null>(null);
+  const [moduleQuality, setModuleQuality] = useState<ValidationModuleQualitySummary | null>(null);
   const [plans, setPlans] = useState<ValidationPlan[]>([]);
   const [runs, setRuns] = useState<ValidationPage<ValidationRunSummary>>(emptyPage<ValidationRunSummary>());
   const [coverage, setCoverage] = useState<ValidationPage<ValidationCoverageSummary>>(emptyPage<ValidationCoverageSummary>(10));
@@ -335,7 +415,7 @@ export default function ValidationCenterPage() {
     setLoading(true);
     setError(null);
     try {
-      const [healthData, summaryData, planCatalog, coverageData, evidenceData, executionData, findingSummaryData, bugSummaryData, workspaceData, branchData] = await Promise.all([
+      const [healthData, summaryData, planCatalog, coverageData, evidenceData, executionData, findingSummaryData, bugSummaryData, workspaceData, branchData, commitData, moduleQualityData] = await Promise.all([
         validationApi.health(),
         validationApi.summary(),
         validationApi.plans(),
@@ -346,6 +426,8 @@ export default function ValidationCenterPage() {
         validationApi.bugSummary(),
         validationApi.workspaceStatus(),
         validationApi.branchStatus(),
+        validationApi.commitActivity(50),
+        validationApi.moduleQualitySummary(50),
       ]);
       setHealth(healthData);
       setSummary(summaryData);
@@ -357,6 +439,8 @@ export default function ValidationCenterPage() {
       setBugSummary(bugSummaryData);
       setWorkspaceStatus(workspaceData);
       setBranchStatus(branchData);
+      setCommitActivity(commitData);
+      setModuleQuality(moduleQualityData);
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -595,6 +679,8 @@ export default function ValidationCenterPage() {
       </section>
 
       <GitWorkspacePanel workspaceStatus={workspaceStatus} branchStatus={branchStatus} />
+
+      <GitModuleQualityPanel commitActivity={commitActivity} moduleQuality={moduleQuality} />
 
       <SectionCard
         title="测试计划目录"

@@ -314,6 +314,182 @@ const branchStatus = {
   production_8001_touched: false,
 };
 
+const commitActivity = {
+  schema_version: "aistock_git_commit_activity_v1",
+  generated_at: "2026-05-05T22:10:00+08:00",
+  repo_root: "F:/Dev/AIstock",
+  branch: "main",
+  upstream: "origin/main",
+  head_commit: "abcdef123456",
+  short_head_commit: "abcdef1",
+  limit: 50,
+  summary: {
+    commit_count: 3,
+    changed_file_count: 9,
+    unmapped_commit_count: 1,
+    ambiguous_commit_count: 0,
+    latest_commit: {
+      commit_hash: "abcdef123456",
+      short_hash: "abcdef1",
+      authored_at: "2026-05-05T22:00:00+08:00",
+      subject: "feat(validation): show git workspace status",
+    },
+  },
+  by_day: [
+    { period: "2026-05-05", commit_count: 2 },
+    { period: "2026-05-04", commit_count: 1 },
+  ],
+  by_week: [{ period: "2026-W19", commit_count: 3 }],
+  by_month: [{ period: "2026-05", commit_count: 3 }],
+  by_module: [
+    {
+      module_id: "validation.center",
+      display_name: "Validation Center",
+      commit_count: 2,
+      changed_file_count: 6,
+      latest_commit: {
+        commit_hash: "abcdef123456",
+        short_hash: "abcdef1",
+        authored_at: "2026-05-05T22:00:00+08:00",
+        subject: "feat(validation): show git workspace status",
+      },
+      max_risk_level: "medium",
+      file_status_counts: { M: 6 },
+      required_test_plans: ["l0", "validation_center_backend"],
+      recommended_test_plans: ["validation_center_ui"],
+    },
+  ],
+  commits: [
+    {
+      commit_hash: "abcdef123456",
+      short_hash: "abcdef1",
+      author_name: "codex",
+      author_email: "codex@example.invalid",
+      authored_at: "2026-05-05T22:00:00+08:00",
+      subject: "feat(validation): show git workspace status",
+      changed_file_count: 3,
+      file_status_counts: { M: 3 },
+      module_ids: ["validation.center"],
+      ownership_summary: { mapped: 3, unmapped: 0, ambiguous: 0 },
+      max_risk_level: "medium",
+      files: [],
+    },
+    {
+      commit_hash: "0123456789ab",
+      short_hash: "0123456",
+      author_name: "codex",
+      authored_at: "2026-05-05T21:30:00+08:00",
+      subject: "feat(validation): expose git workspace status",
+      changed_file_count: 4,
+      file_status_counts: { A: 2, M: 2 },
+      module_ids: ["validation.module_quality"],
+      ownership_summary: { mapped: 3, unmapped: 1, ambiguous: 0 },
+      max_risk_level: "high",
+      files: [],
+    },
+  ],
+  git_command_mode: "read_only_allowlist",
+  arbitrary_shell_allowed: false,
+  production_8001_touched: false,
+};
+
+const moduleQuality = {
+  schema_version: "aistock_validation_module_quality_v1",
+  generated_at: "2026-05-05T22:11:00+08:00",
+  repo_root: "F:/Dev/AIstock",
+  summary: {
+    module_count: 4,
+    modules_with_workspace_changes: 1,
+    modules_with_recent_commits: 2,
+    modules_needing_validation: 2,
+    unmapped_workspace_files: 1,
+    ambiguous_workspace_files: 0,
+    recent_commit_count: 3,
+  },
+  modules: [
+    {
+      module_id: "validation.center",
+      display_name: "Validation Center",
+      parent_module: "validation",
+      module_type: "cross_cutting",
+      registry_risk_level: "high",
+      test_plans: {
+        required_on_change: ["l0", "validation_center_backend"],
+        recommended: ["validation_center_ui"],
+      },
+      workspace: {
+        changed_file_count: 2,
+        staged_file_count: 1,
+        unstaged_file_count: 1,
+        untracked_file_count: 0,
+        max_risk_level: "medium",
+        files: [],
+      },
+      commits: {
+        commit_count: 2,
+        changed_file_count: 6,
+        latest_commit: {
+          short_hash: "abcdef1",
+          subject: "feat(validation): show git workspace status",
+        },
+        max_risk_level: "medium",
+      },
+      coverage: {
+        snapshot_id: "validation_center_snapshot",
+        status: "passed",
+        line_percent: 81.35,
+        branch_percent: 64.35,
+        generated_at: "2026-05-05T22:05:00+08:00",
+      },
+      quality: {
+        finding_count: 2,
+        bug_count: 0,
+        by_severity: { P2: 2 },
+        by_status: { detected: 2 },
+      },
+      priority: {
+        score: 36,
+        level: "high",
+        reason_codes: ["workspace_changed", "recent_commits", "quality_findings"],
+      },
+    },
+    {
+      module_id: "validation.module_quality",
+      display_name: "Module quality cockpit",
+      parent_module: "validation",
+      module_type: "cross_cutting",
+      registry_risk_level: "high",
+      test_plans: {
+        required_on_change: ["l0", "validation_module_registry_l0"],
+        recommended: ["validation_center_ui"],
+      },
+      workspace: {
+        changed_file_count: 0,
+        staged_file_count: 0,
+        unstaged_file_count: 0,
+        untracked_file_count: 0,
+        max_risk_level: null,
+        files: [],
+      },
+      commits: {
+        commit_count: 1,
+        changed_file_count: 3,
+        latest_commit: { short_hash: "0123456", subject: "feat(validation): expose git workspace status" },
+        max_risk_level: "high",
+      },
+      coverage: { status: "missing", line_percent: null, branch_percent: null },
+      quality: { finding_count: 0, bug_count: 0, by_severity: {}, by_status: {} },
+      priority: { score: 18, level: "medium", reason_codes: ["recent_commits"] },
+    },
+  ],
+  workspace_summary: workspaceStatus.summary,
+  commit_summary: commitActivity.summary,
+  global_reason_codes: ["unmapped_workspace_files_present", "modules_need_validation"],
+  git_command_mode: "read_only_allowlist",
+  arbitrary_shell_allowed: false,
+  production_8001_touched: false,
+};
+
 test("Validation Center UI uses mocked APIs and controlled runner POST", async ({ page }) => {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
@@ -461,6 +637,16 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
       return respond({ status: "success", data: branchStatus });
     }
 
+    if (path.endsWith("/api/v1/validation/git/commit-activity")) {
+      expect(Number(url.searchParams.get("limit") || "0")).toBeGreaterThan(0);
+      return respond({ status: "success", data: commitActivity });
+    }
+
+    if (path.endsWith("/api/v1/validation/modules/quality-summary")) {
+      expect(Number(url.searchParams.get("commit_limit") || "0")).toBeGreaterThan(0);
+      return respond({ status: "success", data: moduleQuality });
+    }
+
     if (path.endsWith("/api/v1/validation/executions") && method === "GET") {
       return respond({ status: "success", data: { items: [executionJob], total: 1, page: 1, page_size: 10, has_more: false } });
     }
@@ -604,6 +790,13 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   await expect(page.getByText("validation.center").first()).toBeVisible();
   await expect(page.getByText("read_only_allowlist").first()).toBeVisible();
   await expect(page.getByText("add_file_ownership_mapping_before_commit")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "模块质量优先级" })).toBeVisible();
+  await expect(page.getByText("近期 Commit", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("需要验证模块", { exact: true })).toBeVisible();
+  await expect(page.getByText("按文件归属自动聚合")).toBeVisible();
+  await expect(page.getByText("feat(validation): show git workspace status").first()).toBeVisible();
+  await expect(page.getByText("unmapped_workspace_files_present")).toBeVisible();
+  await expect(page.getByText("validation_module_registry_l0")).toBeVisible();
   await expect(page.getByText("受控 Runner：allowlist only")).toBeVisible();
   await expect(page.getByText("Validation Center backend contract")).toBeVisible();
   await expect(page.getByText("Runner 执行队列")).toBeVisible();
@@ -638,7 +831,7 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   await expect(page.getByText("missing_count", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "查看发现" }).click();
-  await expect(page.getByText("quality_finding")).toBeVisible();
+  await expect(page.getByText("quality_finding", { exact: true })).toBeVisible();
   await expect(page.getByText("python scripts/aistock_guardrail_scan.py backend/services/demo.py --fail-on-severity NONE")).toBeVisible();
 
   await page.getByRole("button", { name: "查看 Bug" }).click();

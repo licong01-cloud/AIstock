@@ -5,9 +5,11 @@ from pydantic import BaseModel, Field
 
 from backend.services.validation.execution_runner import ValidationExecutionRunner, ValidationRunnerError
 from backend.services.validation.finding_store import ValidationFindingStore
+from backend.services.validation.git_activity_provider import GitActivityProviderError, GitCommitActivityProvider
 from backend.services.validation.git_status_provider import GitStatusProviderError, GitWorkspaceStatusProvider
 from backend.services.validation.history_store import ValidationHistoryStore
 from backend.services.validation.models import ValidationResponse
+from backend.services.validation.module_quality import ModuleQualityService
 from backend.services.validation.plan_catalog import ValidationCatalogError, ValidationPlanCatalog
 
 
@@ -32,6 +34,14 @@ def get_execution_runner() -> ValidationExecutionRunner:
 
 def get_git_status_provider() -> GitWorkspaceStatusProvider:
     return GitWorkspaceStatusProvider()
+
+
+def get_git_activity_provider() -> GitCommitActivityProvider:
+    return GitCommitActivityProvider()
+
+
+def get_module_quality_service() -> ModuleQualityService:
+    return ModuleQualityService()
 
 
 class ValidationExecutionStartRequest(BaseModel):
@@ -209,6 +219,36 @@ def get_validation_git_branch_status(
     try:
         return _success(git_status_provider.branch_status())
     except GitStatusProviderError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get(
+    "/git/commit-activity",
+    response_model=ValidationResponse,
+    summary="Get read-only recent git commits mapped to modules",
+)
+def get_validation_git_commit_activity(
+    limit: int = Query(50, ge=1, le=200),
+    git_activity_provider: GitCommitActivityProvider = Depends(get_git_activity_provider),
+):
+    try:
+        return _success(git_activity_provider.commit_activity(limit=limit))
+    except (GitActivityProviderError, GitStatusProviderError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get(
+    "/modules/quality-summary",
+    response_model=ValidationResponse,
+    summary="Get module quality, commit, coverage, and guardrail priority summary",
+)
+def get_validation_module_quality_summary(
+    commit_limit: int = Query(50, ge=1, le=200),
+    module_quality_service: ModuleQualityService = Depends(get_module_quality_service),
+):
+    try:
+        return _success(module_quality_service.module_quality_summary(commit_limit=commit_limit))
+    except (GitActivityProviderError, GitStatusProviderError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

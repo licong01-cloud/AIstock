@@ -467,6 +467,140 @@ export type ValidationGitBranchStatus = JsonObject & {
   production_8001_touched?: boolean;
 };
 
+export type ValidationGitCommitFile = JsonObject & {
+  path: string;
+  old_path?: string | null;
+  change_type?: string;
+  primary_module?: string | null;
+  impact_modules?: string[];
+  layer?: string | null;
+  risk_level?: string | null;
+  ownership_status?: string;
+  matched_rule_ids?: string[];
+  reason_codes?: string[];
+};
+
+export type ValidationGitCommit = JsonObject & {
+  commit_hash: string;
+  short_hash?: string;
+  author_name?: string;
+  author_email?: string;
+  authored_at?: string;
+  subject?: string;
+  changed_file_count?: number;
+  file_status_counts?: Record<string, number>;
+  module_ids?: string[];
+  ownership_summary?: Record<string, number>;
+  max_risk_level?: string | null;
+  files?: ValidationGitCommitFile[];
+};
+
+export type ValidationGitCommitModule = JsonObject & {
+  module_id: string;
+  display_name?: string;
+  commit_count?: number;
+  changed_file_count?: number;
+  latest_commit?: JsonObject | null;
+  max_risk_level?: string | null;
+  file_status_counts?: Record<string, number>;
+  required_test_plans?: string[];
+  recommended_test_plans?: string[];
+};
+
+export type ValidationGitCommitActivity = JsonObject & {
+  schema_version?: string;
+  generated_at?: string;
+  repo_root?: string;
+  branch?: string | null;
+  upstream?: string | null;
+  head_commit?: string | null;
+  short_head_commit?: string | null;
+  limit?: number;
+  summary?: JsonObject & {
+    commit_count?: number;
+    changed_file_count?: number;
+    unmapped_commit_count?: number;
+    ambiguous_commit_count?: number;
+    latest_commit?: ValidationGitCommit | null;
+  };
+  by_day?: Array<JsonObject & { period?: string; commit_count?: number }>;
+  by_week?: Array<JsonObject & { period?: string; commit_count?: number }>;
+  by_month?: Array<JsonObject & { period?: string; commit_count?: number }>;
+  by_module?: ValidationGitCommitModule[];
+  commits?: ValidationGitCommit[];
+  git_command_mode?: string;
+  arbitrary_shell_allowed?: boolean;
+  production_8001_touched?: boolean;
+};
+
+export type ValidationModuleQualityItem = JsonObject & {
+  module_id: string;
+  display_name?: string;
+  parent_module?: string | null;
+  module_type?: string;
+  registry_risk_level?: string;
+  ui_routes?: string[];
+  api_routes?: string[];
+  test_plans?: JsonObject & {
+    required_on_change?: string[];
+    recommended?: string[];
+  };
+  workspace?: JsonObject & {
+    changed_file_count?: number;
+    staged_file_count?: number;
+    unstaged_file_count?: number;
+    untracked_file_count?: number;
+    max_risk_level?: string | null;
+    files?: JsonObject[];
+  };
+  commits?: JsonObject & {
+    commit_count?: number;
+    changed_file_count?: number;
+    latest_commit?: JsonObject | null;
+    max_risk_level?: string | null;
+  };
+  coverage?: JsonObject & {
+    snapshot_id?: string | null;
+    status?: string | null;
+    line_percent?: number | null;
+    branch_percent?: number | null;
+    generated_at?: string | null;
+  };
+  quality?: JsonObject & {
+    finding_count?: number;
+    bug_count?: number;
+    by_severity?: Record<string, number>;
+    by_status?: Record<string, number>;
+  };
+  priority?: JsonObject & {
+    score?: number;
+    level?: string;
+    reason_codes?: string[];
+  };
+};
+
+export type ValidationModuleQualitySummary = JsonObject & {
+  schema_version?: string;
+  generated_at?: string;
+  repo_root?: string;
+  summary?: JsonObject & {
+    module_count?: number;
+    modules_with_workspace_changes?: number;
+    modules_with_recent_commits?: number;
+    modules_needing_validation?: number;
+    unmapped_workspace_files?: number;
+    ambiguous_workspace_files?: number;
+    recent_commit_count?: number;
+  };
+  modules?: ValidationModuleQualityItem[];
+  workspace_summary?: ValidationGitWorkspaceSummary;
+  commit_summary?: ValidationGitCommitActivity["summary"];
+  global_reason_codes?: string[];
+  git_command_mode?: string;
+  arbitrary_shell_allowed?: boolean;
+  production_8001_touched?: boolean;
+};
+
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1").replace(/\/+$/, "");
 
 export class ValidationApiError extends Error {
@@ -585,6 +719,12 @@ export const validationApi = {
   },
   branchStatus(): Promise<ValidationGitBranchStatus> {
     return unwrap<ValidationGitBranchStatus>("/validation/git/branch-status");
+  },
+  commitActivity(limit = 50): Promise<ValidationGitCommitActivity> {
+    return unwrap<ValidationGitCommitActivity>(appendQuery("/validation/git/commit-activity", { limit }));
+  },
+  moduleQualitySummary(commitLimit = 50): Promise<ValidationModuleQualitySummary> {
+    return unwrap<ValidationModuleQualitySummary>(appendQuery("/validation/modules/quality-summary", { commit_limit: commitLimit }));
   },
   executions(query: ValidationExecutionQuery = {}): Promise<ValidationPage<ValidationExecutionJob>> {
     return unwrap<ValidationPage<ValidationExecutionJob>>(appendQuery("/validation/executions", query));

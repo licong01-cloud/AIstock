@@ -549,6 +549,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/tests/test_validation_center_readonly_smoke.py",
         "backend/tests/test_validation_center_runner_smoke.py",
         "backend/tests/test_validation_execution_runner.py",
+        "backend/tests/test_validation_git_activity_provider.py",
         "backend/tests/test_validation_git_status_provider.py",
         "backend/tests/test_validation_module_ownership.py",
         "backend/tests/test_aistock_validate_metadata.py",
