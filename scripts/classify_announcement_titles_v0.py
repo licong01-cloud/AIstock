@@ -1,462 +1,596 @@
-"""Classify announcement titles with AIstock v0 rule taxonomy.
+"""Classify market.anns titles and optionally persist v0 event/risk signals.
 
-The classifier is intentionally title-first and deterministic so the same logic
-can be reused later by backtests and live warning jobs. It produces aggregate
-reports only; it does not mutate database rows.
+This script is intentionally metadata-only: it does not download PDFs and does
+not call an LLM.  It writes deterministic, versioned results so the same output
+can be consumed by historical backtests and future live polling.
 """
+
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import datetime as dt
 import json
-import os
-import re
 import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Pattern, Tuple
+from typing import Any, Iterable, Optional
 
-import psycopg2
+import psycopg2.extras
 from dotenv import load_dotenv
 
 
 ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(ROOT / ".env", override=True)
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-DB_CFG = dict(
-    host=os.getenv("TDX_DB_HOST", "localhost"),
-    port=int(os.getenv("TDX_DB_PORT", "5432")),
-    dbname=os.getenv("TDX_DB_NAME", "aistock"),
-    user=os.getenv("TDX_DB_USER", "postgres"),
-    password=os.getenv("TDX_DB_PASSWORD", ""),
-    application_name="AIstock-announcement-title-classification-v0",
+from backend.db.init_announcement_event_schema import init_announcement_event_schema  # noqa: E402
+from backend.db.pg_pool import get_conn  # noqa: E402
+from backend.services.announcements.title_classifier import (  # noqa: E402
+    ENGINE_NAME,
+    RULES,
+    RULE_VERSION,
+    AnnouncementTitleClassifier,
+    ClassificationResult,
+    EffectiveDateResult,
+    rule_config_hash,
+    rule_config_json,
+    taxonomy_rows,
+    title_hash,
 )
 
 
-@dataclasses.dataclass(frozen=True)
-class Rule:
-    event_type: str
-    risk_level: str
-    action: str
-    needs_llm: str
-    pattern: Pattern[str]
-    description: str
-    exclude: Optional[Pattern[str]] = None
-
-
-def rx(pattern: str) -> Pattern[str]:
-    return re.compile(pattern, re.IGNORECASE)
-
-
-RULES: List[Rule] = [
-    Rule(
-        "risk_warning_removed",
-        "P3_POSITIVE_CANDIDATE",
-        "record_only",
-        "NO",
-        rx(r"(撤销|取消|申请撤销).*(退市风险警示|其他风险警示|风险警示)|摘帽|撤销.*ST"),
-        "Risk-warning removal candidate; do not treat as hard block.",
-    ),
-    Rule(
-        "delisting_or_risk_warning",
-        "P0_BLOCK",
-        "block_buy",
-        "NO",
-        rx(r"(终止上市|强制退市|退市整理期|摘牌|可能被终止上市|退市风险警示|实施其他风险警示|被实施.*风险警示|公司股票.*ST|变更为\*?ST)"),
-        "Hard risk warning or delisting event.",
-    ),
-    Rule(
-        "bankruptcy_restructuring",
-        "P0_BLOCK",
-        "block_buy",
-        "NO",
-        rx(r"(破产|重整|预重整|清算|债权人会议|不能清偿到期债务)"),
-        "Bankruptcy, restructuring, liquidation, or insolvency-related title.",
-    ),
-    Rule(
-        "regulatory_investigation_penalty",
-        "P1_HIGH",
-        "warn_high",
-        "OPTIONAL",
-        rx(r"(立案|调查通知书|涉嫌.*违法|行政处罚|处罚决定|纪律处分|公开谴责|监管措施|监管警示|警示函|市场禁入|移送司法|刑事|拘留|取保候审)"),
-        "Regulatory investigation, penalty, discipline, or criminal/legal enforcement.",
-    ),
-    Rule(
-        "debt_default_overdue",
-        "P1_HIGH",
-        "warn_high",
-        "OPTIONAL",
-        rx(r"(债务逾期|贷款逾期|票据逾期|债券违约|债务违约|未能.*兑付|不能按期.*兑付|本息兑付.*风险|流动性风险)"),
-        "Debt overdue/default or bond repayment risk.",
-    ),
-    Rule(
-        "audit_opinion_internal_control_risk",
-        "P1_HIGH",
-        "warn_high",
-        "OPTIONAL",
-        rx(r"(非标准审计|非无保留意见|保留意见|否定意见|无法表示意见|内部控制.*否定|内部控制.*重大缺陷|财务报告.*重大缺陷|审计报告.*带强调事项)"),
-        "Audit opinion, internal-control, or financial-reporting severe issue.",
-    ),
-    Rule(
-        "capital_occupation_illegal_guarantee",
-        "P1_HIGH",
-        "warn_high",
-        "OPTIONAL",
-        rx(r"(资金占用|占用公司资金|非经营性占用|违规担保|违规对外担保|违规资金往来)"),
-        "Fund occupation or illegal guarantee.",
-    ),
-    Rule(
-        "governance_document_neutral",
-        "P4_NEUTRAL",
-        "discard_or_archive",
-        "NO",
-        rx(r"(公司章程|制度|规则|细则|管理办法|工作办法|议事规则|独立董事制度|董事会.*工作规程|监事会.*工作规程)$"),
-        "Routine governance document.",
-    ),
-    Rule(
-        "inquiry_concern_letter",
-        "P2_REVIEW",
-        "warn_review",
-        "YES",
-        rx(r"(问询函|关注函|监管函|问询函回复|关注函回复|年报问询|审核问询|落实函|反馈意见通知书|行政许可.*反馈意见|审核.*意见)"),
-        "Exchange inquiry/concern/supervision letter or reply; needs context.",
-    ),
-    Rule(
-        "key_personnel_change",
-        "P2_REVIEW",
-        "warn_review",
-        "YES",
-        rx(r"((董事长|总经理|总裁|财务负责人|首席财务官|董事会秘书|董秘).*(辞职|离任|变更|聘任|代行)|高级管理人员.*(辞职|离任))"),
-        "Key executive or finance/disclosure officer change.",
-    ),
-    Rule(
-        "litigation_arbitration_freeze",
-        "P2_REVIEW",
-        "warn_review",
-        "YES",
-        rx(r"(诉讼|仲裁|判决|裁定|执行通知|司法冻结|轮候冻结|股份冻结|查封|拍卖|强制执行)"),
-        "Litigation, arbitration, court execution, freeze, or auction.",
-    ),
-    Rule(
-        "pledge_shareholder_change_reduction",
-        "P2_REVIEW",
-        "warn_review",
-        "YES",
-        rx(r"(质押|解除质押|补充质押|平仓风险|减持|被动减持|权益变动|持股变动|股份转让|协议转让|表决权委托)"),
-        "Pledge, reduction, transfer, or shareholder-rights change.",
-    ),
-    Rule(
-        "control_change_ma_restructuring",
-        "P2_REVIEW",
-        "warn_review",
-        "YES",
-        rx(r"(控制权变更|实际控制人.*变更|重大资产重组|并购重组|发行股份购买资产|购买资产|出售资产|资产出售|资产收购|要约收购|吸收合并|重大交易)"),
-        "Control change, M&A, restructuring, acquisition, or disposal.",
-    ),
-    Rule(
-        "guarantee_financial_assistance_related_party",
-        "P2_REVIEW",
-        "warn_review",
-        "YES",
-        rx(r"(提供担保|对外担保|担保额度|财务资助|关联交易|关联方|资金拆借|委托贷款)"),
-        "Guarantee, financial assistance, related-party transaction, or lending.",
-    ),
-    Rule(
-        "performance_forecast_revision_impairment",
-        "P2_REVIEW",
-        "warn_review",
-        "YES",
-        rx(r"(业绩预告|业绩快报|业绩修正|业绩预告修正|业绩快报修正|亏损|扭亏|预亏|减值准备|资产减值|商誉减值|会计差错|前期会计差错|更正财务|追溯调整)"),
-        "Performance forecast/express, revision, loss, impairment, or accounting correction.",
-    ),
-    Rule(
-        "financing_dilution_debt_instruments",
-        "P2_REVIEW",
-        "warn_review",
-        "YES",
-        rx(r"(向特定对象发行|非公开发行|定增|配股|可转换公司债|可转债|公司债券|短期融资券|中期票据|融资租赁|授信额度|募集资金|资产支持专项计划|资产支持证券|ABS)"),
-        "Financing, dilution, debt instrument, credit line, or proceeds event.",
-    ),
-    Rule(
-        "suspension_resumption",
-        "P2_REVIEW",
-        "warn_review",
-        "NO",
-        rx(r"(停牌|复牌|临时停牌|继续停牌)"),
-        "Suspension/resumption title; tradability must also use suspend_d.",
-    ),
-    Rule(
-        "positive_contract_order_project",
-        "P3_POSITIVE_CANDIDATE",
-        "record_only",
-        "OPTIONAL",
-        rx(r"(中标|预中标|签订.*合同|重大合同|订单|框架协议|战略合作|项目投产|投产|产能|获得.*补助|政府补助|产品获批|注册证|临床试验|专利|新药|一致性评价)"),
-        "Potential positive operating event; alpha use requires validation.",
-    ),
-    Rule(
-        "buyback_increase_holding_dividend",
-        "P3_POSITIVE_CANDIDATE",
-        "record_only",
-        "OPTIONAL",
-        rx(r"(回购|增持|员工持股计划|股权激励|激励计划|股票期权|限制性股票|利润分配|现金分红|权益分派|股份奖励)"),
-        "Buyback, increase holding, employee incentive, or distribution candidate.",
-    ),
-    Rule(
-        "periodic_report_neutral",
-        "P4_NEUTRAL",
-        "discard_or_archive",
-        "NO",
-        rx(r"(年度报告|半年度报告|季度报告|第一季度报告|第三季度报告|摘要|审计报告|财务报告|内部控制评价报告|社会责任报告|ESG报告|环境、社会及治理报告)"),
-        "Periodic report or routine report disclosure.",
-    ),
-    Rule(
-        "meeting_resolution_neutral",
-        "P4_NEUTRAL",
-        "discard_or_archive",
-        "NO",
-        rx(r"(董事会.*决议|监事会.*决议|股东大会|临时股东大会|会议决议|独立董事.*意见|法律意见书|律师事务所.*意见)"),
-        "Meeting, resolution, independent opinion, or legal opinion.",
-    ),
-    Rule(
-        "ipo_refinancing_review_neutral",
-        "P4_NEUTRAL",
-        "discard_or_archive",
-        "NO",
-        rx(r"(招股说明书|上市公告书|上市保荐书|发行保荐书|保荐.*报告|上市委.*会议|注册申请|审核中心|申报稿|上会稿)"),
-        "IPO/refinancing review document; usually not a secondary-market warning.",
-    ),
-    Rule(
-        "routine_correction_supplement_neutral",
-        "P4_NEUTRAL",
-        "discard_or_archive",
-        "NO",
-        rx(r"(更正公告|补充公告|提示性公告|进展公告|公告的更正|公告的补充)$"),
-        "Routine correction/supplement/progress title not caught by risk rules.",
-    ),
-    Rule(
-        "routine_professional_report_neutral",
-        "P4_NEUTRAL",
-        "discard_or_archive",
-        "NO",
-        rx(r"(验资报告|专项报告|核查意见|鉴证报告|审阅报告|评估报告|估值报告|资信评级报告|跟踪评级报告|受托管理事务报告|持续督导.*报告)$"),
-        "Routine professional intermediary report.",
-    ),
-    Rule(
-        "routine_personnel_change_neutral",
-        "P4_NEUTRAL",
-        "discard_or_archive",
-        "NO",
-        rx(r"(补选|选举|换届|聘任|任职|辞职|离任|调整.*董事|调整.*监事|高级管理人员变动)"),
-        "Routine personnel change not caught as key-person risk.",
-    ),
-]
-
-DEFAULT_CLASS = {
-    "event_type": "unclassified_archive",
-    "risk_level": "P4_NEUTRAL",
-    "action": "archive_for_rule_mining",
-    "needs_llm": "SAMPLE_ONLY",
-    "description": "Unclassified by v0 title rules; archive for rule mining and sample-based QA, not automatic LLM.",
-}
-
-
-def classify_title(title: str) -> Dict[str, str]:
-    normalized = re.sub(r"\s+", "", title or "")
-    for rule in RULES:
-        if rule.exclude is not None and rule.exclude.search(normalized):
-            continue
-        if rule.pattern.search(normalized):
-            return {
-                "event_type": rule.event_type,
-                "risk_level": rule.risk_level,
-                "action": rule.action,
-                "needs_llm": rule.needs_llm,
-                "description": rule.description,
-            }
-    return dict(DEFAULT_CLASS)
+SIGNAL_RISK_LEVELS = {"P0_BLOCK", "P1_HIGH", "P2_REVIEW"}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Classify announcement titles from market.anns")
-    parser.add_argument("--start-date", default="2018-08-01")
-    parser.add_argument("--end-date", default="2026-04-30")
-    parser.add_argument("--json-out", default=None)
-    parser.add_argument("--md-out", default=None)
-    parser.add_argument("--sample-per-type", type=int, default=8)
-    parser.add_argument("--progress-every", type=int, default=500000)
+    parser.add_argument("--start-date", default=None, help="Inclusive YYYY-MM-DD announcement date")
+    parser.add_argument("--end-date", default=None, help="Inclusive YYYY-MM-DD announcement date")
+    parser.add_argument("--limit", type=int, default=None, help="Optional max rows for smoke tests")
+    parser.add_argument("--batch-size", type=int, default=5000, help="Read/write batch size")
+    parser.add_argument("--rule-version", default=RULE_VERSION, help="Rule version to write")
+    parser.add_argument("--persist", action="store_true", help="Persist classification rows into DB")
+    parser.add_argument(
+        "--generate-signals",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="When persisting, write ann_risk_signal rows for P0/P1/P2 rows",
+    )
+    parser.add_argument(
+        "--missing-only",
+        action="store_true",
+        help="Only process announcements missing this rule_version in ann_event_classification",
+    )
+    parser.add_argument(
+        "--truncate-version",
+        action="store_true",
+        help="Delete existing rows for the selected date range and rule_version before processing",
+    )
+    parser.add_argument("--json-out", default=None, help="Summary JSON output path")
+    parser.add_argument("--md-out", default=None, help="Summary Markdown output path")
     return parser.parse_args()
 
 
-def output_paths(args: argparse.Namespace) -> Tuple[Path, Path]:
+def parse_date(value: Optional[str]) -> Optional[dt.date]:
+    if not value:
+        return None
+    return dt.date.fromisoformat(value)
+
+
+def default_report_paths() -> tuple[Path, Path]:
     ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    json_path = Path(args.json_out) if args.json_out else ROOT / "reports" / "anns" / f"announcement_title_classification_v0_{ts}.json"
-    md_path = Path(args.md_out) if args.md_out else ROOT / "docs" / "analysis" / f"announcement_title_classification_v0_{ts}.md"
+    report_dir = ROOT / "reports" / "anns"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    return (
+        report_dir / f"announcement_title_classification_v0_{ts}.json",
+        ROOT / "docs" / "analysis" / f"announcement_title_classification_v0_{ts}.md",
+    )
+
+
+def seed_rule_metadata(conn: Any, classifier: AnnouncementTitleClassifier) -> None:
+    with conn.cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            """
+            INSERT INTO market.ann_event_taxonomy
+                (event_type, risk_level, default_action, needs_llm, description)
+            VALUES %s
+            ON CONFLICT (event_type) DO UPDATE SET
+                risk_level = EXCLUDED.risk_level,
+                default_action = EXCLUDED.default_action,
+                needs_llm = EXCLUDED.needs_llm,
+                description = EXCLUDED.description,
+                is_active = TRUE,
+                updated_at = NOW()
+            """,
+            [
+                (
+                    row["event_type"],
+                    row["risk_level"],
+                    row["default_action"],
+                    row["needs_llm"],
+                    row["description"],
+                )
+                for row in taxonomy_rows(classifier.rules)
+            ],
+        )
+        cur.execute(
+            """
+            INSERT INTO market.ann_rule_set
+                (rule_version, engine_name, rule_source, rule_count, config_hash, config, is_active, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, TRUE, NOW())
+            ON CONFLICT (rule_version) DO UPDATE SET
+                engine_name = EXCLUDED.engine_name,
+                rule_source = EXCLUDED.rule_source,
+                rule_count = EXCLUDED.rule_count,
+                config_hash = EXCLUDED.config_hash,
+                config = EXCLUDED.config,
+                is_active = TRUE,
+                updated_at = NOW()
+            """,
+            (
+                classifier.rule_version,
+                ENGINE_NAME,
+                "title_rules_v0_from_local_market_anns",
+                len(classifier.rules),
+                rule_config_hash(classifier.rules),
+                json.dumps(rule_config_json(classifier.rules), ensure_ascii=False),
+            ),
+        )
+
+
+def load_date_bounds(conn: Any, start_date: Optional[dt.date], end_date: Optional[dt.date]) -> tuple[dt.date, dt.date]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT min(ann_date), max(ann_date) FROM market.anns")
+        min_date, max_date = cur.fetchone()
+    if min_date is None or max_date is None:
+        raise RuntimeError("market.anns is empty; cannot classify announcement titles")
+    return start_date or min_date, end_date or max_date
+
+
+def load_trading_days(conn: Any, start_date: dt.date, end_date: dt.date) -> list[dt.date]:
+    calendar_end = end_date + dt.timedelta(days=45)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT cal_date
+              FROM market.trading_calendar
+             WHERE is_trading = TRUE
+               AND cal_date >= %s
+               AND cal_date <= %s
+             ORDER BY cal_date
+            """,
+            (start_date - dt.timedelta(days=5), calendar_end),
+        )
+        rows = [row[0] for row in cur.fetchall()]
+    if not rows:
+        raise RuntimeError("market.trading_calendar has no rows for requested classification range")
+    return rows
+
+
+def delete_existing_range(conn: Any, rule_version: str, start_date: dt.date, end_date: dt.date) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM market.ann_risk_signal s
+             USING market.anns a
+             WHERE s.ann_id = a.id
+               AND s.rule_version = %s
+               AND a.ann_date >= %s
+               AND a.ann_date <= %s
+            """,
+            (rule_version, start_date, end_date),
+        )
+        cur.execute(
+            """
+            DELETE FROM market.ann_event_classification c
+             USING market.anns a
+             WHERE c.ann_id = a.id
+               AND c.rule_version = %s
+               AND a.ann_date >= %s
+               AND a.ann_date <= %s
+            """,
+            (rule_version, start_date, end_date),
+        )
+
+
+def fetch_batch(
+    conn: Any,
+    *,
+    start_date: dt.date,
+    end_date: dt.date,
+    last_id: int,
+    batch_size: int,
+    rule_version: str,
+    missing_only: bool,
+    remaining_limit: Optional[int],
+) -> list[dict[str, Any]]:
+    limit = min(batch_size, remaining_limit) if remaining_limit is not None else batch_size
+    if limit <= 0:
+        return []
+    missing_sql = ""
+    params: list[Any] = [start_date, end_date, last_id]
+    if missing_only:
+        missing_sql = """
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM market.ann_event_classification c
+                WHERE c.ann_id = a.id
+                  AND c.rule_version = %s
+           )
+        """
+        params.append(rule_version)
+    params.append(limit)
+    sql = f"""
+        SELECT a.id, a.ann_date, a.ts_code, a.name, a.title, a.rec_time
+          FROM market.anns a
+         WHERE a.ann_date >= %s
+           AND a.ann_date <= %s
+           AND a.id > %s
+           {missing_sql}
+         ORDER BY a.id
+         LIMIT %s
+    """
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(sql, tuple(params))
+        return [dict(row) for row in cur.fetchall()]
+
+
+def classification_tuple(
+    row: dict[str, Any],
+    result: ClassificationResult,
+    effective: EffectiveDateResult,
+    detail: dict[str, Any],
+) -> tuple[Any, ...]:
+    return (
+        row["id"],
+        row["ts_code"],
+        row["ann_date"],
+        title_hash(row["title"]),
+        result.rule_version,
+        result.event_type,
+        result.risk_level,
+        result.action,
+        result.needs_llm,
+        result.matched_rule,
+        result.matched_text,
+        effective.source_time_quality,
+        effective.effective_trade_date,
+        effective.effective_rule,
+        result.confidence,
+        result.severity_score,
+        json.dumps(detail, ensure_ascii=False, default=str),
+    )
+
+
+def signal_tuple(
+    row: dict[str, Any],
+    result: ClassificationResult,
+    effective: EffectiveDateResult,
+) -> tuple[Any, ...]:
+    evidence = {
+        "ann_id": row["id"],
+        "title": row["title"],
+        "matched_rule": result.matched_rule,
+        "matched_text": result.matched_text,
+        "source_time_quality": effective.source_time_quality,
+        "effective_rule": effective.effective_rule,
+    }
+    reason = f"{result.risk_level} {result.event_type}: {result.description}"
+    return (
+        row["id"],
+        row["ts_code"],
+        row["ann_date"],
+        result.rule_version,
+        result.event_type,
+        result.risk_level,
+        result.action,
+        effective.source_time_quality,
+        effective.effective_trade_date,
+        "ACTIVE",
+        result.severity_score,
+        result.confidence,
+        reason,
+        json.dumps(evidence, ensure_ascii=False, default=str),
+    )
+
+
+def persist_batch(
+    conn: Any,
+    *,
+    classifications: list[tuple[Any, ...]],
+    signals: list[tuple[Any, ...]],
+    processed_ann_ids: list[int],
+    rule_version: str,
+    generate_signals: bool,
+) -> None:
+    with conn.cursor() as cur:
+        if classifications:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO market.ann_event_classification
+                    (
+                        ann_id, ts_code, ann_date, title_hash, rule_version,
+                        event_type, risk_level, action, needs_llm,
+                        matched_rule, matched_text, source_time_quality,
+                        effective_trade_date, effective_rule,
+                        confidence, severity_score, classification_detail
+                    )
+                VALUES %s
+                ON CONFLICT (ann_id, rule_version) DO UPDATE SET
+                    ts_code = EXCLUDED.ts_code,
+                    ann_date = EXCLUDED.ann_date,
+                    title_hash = EXCLUDED.title_hash,
+                    event_type = EXCLUDED.event_type,
+                    risk_level = EXCLUDED.risk_level,
+                    action = EXCLUDED.action,
+                    needs_llm = EXCLUDED.needs_llm,
+                    matched_rule = EXCLUDED.matched_rule,
+                    matched_text = EXCLUDED.matched_text,
+                    source_time_quality = EXCLUDED.source_time_quality,
+                    effective_trade_date = EXCLUDED.effective_trade_date,
+                    effective_rule = EXCLUDED.effective_rule,
+                    confidence = EXCLUDED.confidence,
+                    severity_score = EXCLUDED.severity_score,
+                    classification_detail = EXCLUDED.classification_detail,
+                    classified_at = NOW(),
+                    updated_at = NOW()
+                """,
+                classifications,
+                page_size=1000,
+            )
+
+        if generate_signals and processed_ann_ids:
+            risk_ids = [item[0] for item in signals]
+            if risk_ids:
+                cur.execute(
+                    """
+                    DELETE FROM market.ann_risk_signal
+                     WHERE rule_version = %s
+                       AND ann_id = ANY(%s)
+                       AND NOT (ann_id = ANY(%s))
+                    """,
+                    (rule_version, processed_ann_ids, risk_ids),
+                )
+            else:
+                cur.execute(
+                    """
+                    DELETE FROM market.ann_risk_signal
+                     WHERE rule_version = %s
+                       AND ann_id = ANY(%s)
+                    """,
+                    (rule_version, processed_ann_ids),
+                )
+        if generate_signals and signals:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO market.ann_risk_signal
+                    (
+                        ann_id, ts_code, ann_date, rule_version,
+                        event_type, risk_level, action, source_time_quality,
+                        effective_trade_date, signal_status, severity_score,
+                        confidence, reason, evidence
+                    )
+                VALUES %s
+                ON CONFLICT (ann_id, rule_version) DO UPDATE SET
+                    ts_code = EXCLUDED.ts_code,
+                    ann_date = EXCLUDED.ann_date,
+                    event_type = EXCLUDED.event_type,
+                    risk_level = EXCLUDED.risk_level,
+                    action = EXCLUDED.action,
+                    source_time_quality = EXCLUDED.source_time_quality,
+                    effective_trade_date = EXCLUDED.effective_trade_date,
+                    signal_status = EXCLUDED.signal_status,
+                    severity_score = EXCLUDED.severity_score,
+                    confidence = EXCLUDED.confidence,
+                    reason = EXCLUDED.reason,
+                    evidence = EXCLUDED.evidence,
+                    generated_at = NOW(),
+                    updated_at = NOW()
+                """,
+                signals,
+                page_size=1000,
+            )
+
+
+def sorted_counter(counter: Counter[str]) -> dict[str, int]:
+    return dict(counter.most_common())
+
+
+def write_reports(summary: dict[str, Any], json_path: Path, md_path: Path) -> None:
     json_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.parent.mkdir(parents=True, exist_ok=True)
-    return json_path, md_path
+    json_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+    lines: list[str] = [
+        "# AIstock Announcement Title Classification v0",
+        "",
+        f"- Rule version: `{summary['rule_version']}`",
+        f"- Rows processed: `{summary['processed_rows']}`",
+        f"- Persisted: `{summary['persisted']}`",
+        f"- Risk signals written/touched: `{summary['signal_rows']}`",
+        f"- Date range: `{summary['start_date']}` to `{summary['end_date']}`",
+        "",
+        "## Risk Level Counts",
+        "",
+        "| risk_level | rows |",
+        "| --- | ---: |",
+    ]
+    for key, value in summary["counts_by_risk_level"].items():
+        lines.append(f"| {key} | {value} |")
+    lines.extend(["", "## Event Type Counts", "", "| event_type | rows |", "| --- | ---: |"])
+    for key, value in summary["counts_by_event_type"].items():
+        lines.append(f"| {key} | {value} |")
+    lines.extend(["", "## Engine Interpretation", ""])
+    lines.append("- `P0_BLOCK`: hard risk title; first-stage consumers can forbid new buys without PDF/LLM.")
+    lines.append("- `P1_HIGH`: high-risk warning; PDF/LLM is optional for explanation, not required before warning.")
+    lines.append("- `P2_REVIEW`: review candidate; use later PDF/LLM only when material to positions or risk policy.")
+    lines.append("- `P3_POSITIVE_CANDIDATE`: record-only; positive alpha stays disabled until event-study validation.")
+    lines.append("- `P4_NEUTRAL`: archive or discard for first-stage trading decisions.")
+    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def stream_rows(conn, start_date: str, end_date: str):
-    cur = conn.cursor(name="announcement_title_classification_v0_cursor")
-    cur.itersize = 20000
-    cur.execute(
-        """
-        SELECT ann_date, ts_code, name, title, url, rec_time
-          FROM market.anns
-         WHERE ann_date BETWEEN %s AND %s
-         ORDER BY ann_date, ts_code, title
-        """,
-        (start_date, end_date),
-    )
-    try:
-        for row in cur:
-            yield row
-    finally:
-        cur.close()
-
-
-def run() -> int:
+def main() -> int:
     args = parse_args()
-    json_path, md_path = output_paths(args)
+    if args.batch_size <= 0:
+        raise SystemExit("--batch-size must be positive")
+    if args.limit is not None and args.limit <= 0:
+        raise SystemExit("--limit must be positive when provided")
+
+    load_dotenv(ROOT / ".env", override=True)
+    classifier = AnnouncementTitleClassifier(rule_version=args.rule_version)
+    json_path, md_path = default_report_paths()
+    if args.json_out:
+        json_path = Path(args.json_out)
+    if args.md_out:
+        md_path = Path(args.md_out)
+
+    if args.persist:
+        init_announcement_event_schema()
+
     started = time.time()
+    counts_by_level: Counter[str] = Counter()
+    counts_by_type: Counter[str] = Counter()
+    counts_by_action: Counter[str] = Counter()
+    counts_by_time_quality: Counter[str] = Counter()
+    counts_by_effective_rule: Counter[str] = Counter()
+    counts_by_year_level: dict[str, Counter[str]] = defaultdict(Counter)
+    samples: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
-    conn = psycopg2.connect(**DB_CFG)
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT COUNT(*) FROM market.anns WHERE ann_date BETWEEN %s AND %s",
-                (args.start_date, args.end_date),
+    processed = 0
+    signal_rows = 0
+    last_id = 0
+
+    with get_conn() as conn:
+        start_date, end_date = load_date_bounds(conn, parse_date(args.start_date), parse_date(args.end_date))
+        trading_days = load_trading_days(conn, start_date, end_date)
+        if args.persist:
+            seed_rule_metadata(conn, classifier)
+            if args.truncate_version:
+                delete_existing_range(conn, classifier.rule_version, start_date, end_date)
+
+        while True:
+            remaining_limit = None if args.limit is None else args.limit - processed
+            rows = fetch_batch(
+                conn,
+                start_date=start_date,
+                end_date=end_date,
+                last_id=last_id,
+                batch_size=args.batch_size,
+                rule_version=classifier.rule_version,
+                missing_only=args.missing_only,
+                remaining_limit=remaining_limit,
             )
-            total_rows = int(cur.fetchone()[0])
+            if not rows:
+                break
 
-        counts_by_type: Counter[str] = Counter()
-        counts_by_level: Counter[str] = Counter()
-        counts_by_action: Counter[str] = Counter()
-        counts_by_needs_llm: Counter[str] = Counter()
-        counts_by_year_level: Dict[str, Counter[str]] = defaultdict(Counter)
-        samples: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-        source_counts: Counter[str] = Counter()
+            classification_rows: list[tuple[Any, ...]] = []
+            signal_write_rows: list[tuple[Any, ...]] = []
+            processed_ids: list[int] = []
 
-        processed = 0
-        for ann_date, ts_code, name, title, url, rec_time in stream_rows(conn, args.start_date, args.end_date):
-            result = classify_title(str(title or ""))
-            event_type = result["event_type"]
-            risk_level = result["risk_level"]
-            action = result["action"]
-            needs_llm = result["needs_llm"]
+            for row in rows:
+                last_id = int(row["id"])
+                processed_ids.append(last_id)
+                result = classifier.classify(row["title"])
+                effective = classifier.infer_effective_date(row["ann_date"], row.get("rec_time"), trading_days)
+                detail = {
+                    "engine": ENGINE_NAME,
+                    "rule_version": classifier.rule_version,
+                    "description": result.description,
+                    "title": row["title"],
+                    "rec_time": row.get("rec_time"),
+                }
 
-            counts_by_type[event_type] += 1
-            counts_by_level[risk_level] += 1
-            counts_by_action[action] += 1
-            counts_by_needs_llm[needs_llm] += 1
-            counts_by_year_level[str(ann_date.year)][risk_level] += 1
-            if "eastmoney.com" in str(url or ""):
-                source_counts["eastmoney_url"] += 1
-            elif "cninfo.com.cn" in str(url or ""):
-                source_counts["cninfo_url"] += 1
-            else:
-                source_counts["other_url"] += 1
+                classification_rows.append(classification_tuple(row, result, effective, detail))
+                if result.risk_level in SIGNAL_RISK_LEVELS:
+                    signal_write_rows.append(signal_tuple(row, result, effective))
 
-            if len(samples[event_type]) < args.sample_per_type:
-                samples[event_type].append(
-                    {
-                        "ann_date": ann_date.isoformat(),
-                        "ts_code": ts_code,
-                        "name": name,
-                        "title": title,
-                        "risk_level": risk_level,
-                        "action": action,
-                        "needs_llm": needs_llm,
-                        "rec_time": rec_time.isoformat() if rec_time else None,
-                    }
+                counts_by_level[result.risk_level] += 1
+                counts_by_type[result.event_type] += 1
+                counts_by_action[result.action] += 1
+                counts_by_time_quality[effective.source_time_quality] += 1
+                counts_by_effective_rule[effective.effective_rule] += 1
+                counts_by_year_level[str(row["ann_date"].year)][result.risk_level] += 1
+                if len(samples[result.event_type]) < 5:
+                    samples[result.event_type].append(
+                        {
+                            "ann_id": row["id"],
+                            "ann_date": row["ann_date"],
+                            "ts_code": row["ts_code"],
+                            "title": row["title"],
+                            "risk_level": result.risk_level,
+                            "effective_trade_date": effective.effective_trade_date,
+                        }
+                    )
+
+            if args.persist:
+                persist_batch(
+                    conn,
+                    classifications=classification_rows,
+                    signals=signal_write_rows,
+                    processed_ann_ids=processed_ids,
+                    rule_version=classifier.rule_version,
+                    generate_signals=args.generate_signals,
                 )
 
-            processed += 1
-            if args.progress_every > 0 and processed % args.progress_every == 0:
-                elapsed = time.time() - started
-                print(f"[PROGRESS] {processed}/{total_rows} rows rate={processed / max(elapsed, 1):.0f}/s", flush=True)
+            processed += len(rows)
+            signal_rows += len(signal_write_rows)
+            if processed % max(args.batch_size * 10, 1) == 0:
+                print(
+                    json.dumps(
+                        {
+                            "event": "progress",
+                            "processed": processed,
+                            "last_id": last_id,
+                            "signals": signal_rows,
+                            "elapsed_sec": round(time.time() - started, 1),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
+            if args.limit is not None and processed >= args.limit:
+                break
 
-        rules_payload = [
+    summary = {
+        "rule_version": classifier.rule_version,
+        "rule_count": len(RULES),
+        "rule_config_hash": rule_config_hash(classifier.rules),
+        "processed_rows": processed,
+        "signal_rows": signal_rows,
+        "persisted": bool(args.persist),
+        "generate_signals": bool(args.generate_signals),
+        "missing_only": bool(args.missing_only),
+        "start_date": start_date,
+        "end_date": end_date,
+        "elapsed_sec": round(time.time() - started, 3),
+        "counts_by_risk_level": sorted_counter(counts_by_level),
+        "counts_by_event_type": sorted_counter(counts_by_type),
+        "counts_by_action": sorted_counter(counts_by_action),
+        "counts_by_time_quality": sorted_counter(counts_by_time_quality),
+        "counts_by_effective_rule": sorted_counter(counts_by_effective_rule),
+        "counts_by_year_level": {year: dict(counter) for year, counter in sorted(counts_by_year_level.items())},
+        "samples": {key: value for key, value in samples.items()},
+    }
+    write_reports(summary, json_path, md_path)
+    print(
+        json.dumps(
             {
-                "event_type": r.event_type,
-                "risk_level": r.risk_level,
-                "action": r.action,
-                "needs_llm": r.needs_llm,
-                "pattern": r.pattern.pattern,
-                "description": r.description,
-            }
-            for r in RULES
-        ]
-        summary = {
-            "rule_version": "aistock_announcement_title_rules_v0_20260505",
-            "scope": {"start_date": args.start_date, "end_date": args.end_date},
-            "total_rows": total_rows,
-            "processed_rows": processed,
-            "source_counts": dict(source_counts),
-            "counts_by_event_type": dict(counts_by_type.most_common()),
-            "counts_by_risk_level": dict(counts_by_level.most_common()),
-            "counts_by_action": dict(counts_by_action.most_common()),
-            "counts_by_needs_llm": dict(counts_by_needs_llm.most_common()),
-            "counts_by_year_level": {year: dict(counter) for year, counter in sorted(counts_by_year_level.items())},
-            "samples": samples,
-            "rules": rules_payload,
-            "elapsed_sec": round(time.time() - started, 3),
-        }
-
-        with json_path.open("w", encoding="utf-8") as f:
-            json.dump(summary, f, ensure_ascii=False, indent=2, default=str)
-
-        write_markdown(md_path, summary)
-        print(json.dumps({"json": str(json_path), "markdown": str(md_path), "summary": summary["counts_by_risk_level"]}, ensure_ascii=False), flush=True)
-    finally:
-        conn.close()
+                "json": str(json_path),
+                "markdown": str(md_path),
+                "processed_rows": processed,
+                "signal_rows": signal_rows,
+                "elapsed_sec": summary["elapsed_sec"],
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
     return 0
 
 
-def write_markdown(path: Path, summary: Dict[str, Any]) -> None:
-    lines: List[str] = []
-    lines.append("# AIstock Announcement Title Classification v0")
-    lines.append("")
-    lines.append(f"- Rule version: `{summary['rule_version']}`")
-    lines.append(f"- Scope: `{summary['scope']['start_date']}` to `{summary['scope']['end_date']}`")
-    lines.append(f"- Rows processed: `{summary['processed_rows']:,}`")
-    lines.append(f"- Source URL mix: `{summary['source_counts']}`")
-    lines.append("")
-    lines.append("## Risk Level Counts")
-    lines.append("")
-    lines.append("| risk_level | rows | pct |")
-    lines.append("|---|---:|---:|")
-    total = max(int(summary["processed_rows"]), 1)
-    for key, value in summary["counts_by_risk_level"].items():
-        lines.append(f"| {key} | {value:,} | {value / total:.2%} |")
-    lines.append("")
-    lines.append("## Event Type Counts")
-    lines.append("")
-    lines.append("| event_type | rows | pct |")
-    lines.append("|---|---:|---:|")
-    for key, value in summary["counts_by_event_type"].items():
-        lines.append(f"| {key} | {value:,} | {value / total:.2%} |")
-    lines.append("")
-    lines.append("## Engine Interpretation")
-    lines.append("")
-    lines.append("- `P0_BLOCK`: title alone is enough to block new buys in backtest and live overlay.")
-    lines.append("- `P1_HIGH`: high-risk warning; title can trigger risk reduction/watchlist, PDF/LLM optional for explanation.")
-    lines.append("- `P2_REVIEW`: candidate risk/complex event; keep signal, and use PDF/LLM when position impact is material.")
-    lines.append("- `P3_POSITIVE_CANDIDATE`: record only in phase 1; no positive alpha boost until event-study validation.")
-    lines.append("- `P4_NEUTRAL`: routine archive/discard for warning engine.")
-    lines.append("")
-    lines.append("## Samples")
-    lines.append("")
-    for event_type, rows in summary["samples"].items():
-        lines.append(f"### {event_type}")
-        for row in rows:
-            safe_title = str(row["title"]).replace("|", " ")
-            lines.append(f"- `{row['ann_date']}` `{row['ts_code']}` {safe_title}")
-        lines.append("")
-    path.write_text("\n".join(lines), encoding="utf-8")
-
-
 if __name__ == "__main__":
-    raise SystemExit(run())
+    raise SystemExit(main())
