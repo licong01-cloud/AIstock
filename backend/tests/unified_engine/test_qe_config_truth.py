@@ -61,6 +61,30 @@ DATA_SPLIT = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _stub_execution_algo_catalog(monkeypatch):
+    """Keep config-truth tests independent from the local DB catalog."""
+
+    monkeypatch.setattr(
+        ConfigComposer,
+        "_execution_algo_catalog_entry",
+        classmethod(
+            lambda cls, algo: {
+                "default_config": {
+                    "early_model_path": "early.pt",
+                    "late_model_path": "late.pt",
+                    "device": "cpu",
+                    "min_cost": 5.0,
+                    "commission_rate": 0.000595,
+                    "tolerance_bps": 10.0,
+                    "max_buckets": 30,
+                },
+                "is_enabled": True,
+            }
+        ),
+    )
+
+
 def test_remote_stock_pool_sync_has_no_direct_worker_directory_commands():
     import backend.services.quantevolver.stock_pool_sync as stock_pool_sync_module
 
@@ -352,6 +376,67 @@ def test_v25_execution_algo_generates_v25_inner_strategy():
     assert "late_model_path:" in yaml_text
 
 
+def test_v25_1_execution_algo_generates_v25_1_inner_strategy():
+    yaml_text = _base_yaml(
+        execution_algo="V25_1_SMALL_CAP",
+        execution_algo_params={"device": "cpu"},
+    )
+    inner_strategy = _slice_yaml_between(
+        yaml_text,
+        "            inner_strategy:",
+        "            # qe_execution_trace:",
+    )
+    outer_strategy = _slice_yaml_between(
+        yaml_text,
+        "    strategy:",
+        "    model:",
+    )
+
+    assert "class: TailTWAPWithV25_1SmallCapStrategy" in inner_strategy
+    assert "module_path: tail_twap_v25_1_strategy" in inner_strategy
+    assert "filter_suspended_on_signal: true" in inner_strategy
+    assert "suspend_filter_file: qe_suspend_filter.json" in inner_strategy
+    assert "suspend_filter_strict: true" in inner_strategy
+    assert "class: SuspendFilterTopkDropoutStrategy" not in outer_strategy
+    assert "effective_algo: V25_1_SMALL_CAP" in yaml_text
+    assert "early_model_path:" in yaml_text
+    assert "late_model_path:" in yaml_text
+    assert "min_cost:" in yaml_text
+    assert "commission_rate:" in yaml_text
+    assert "tolerance_bps:" in yaml_text
+    assert "max_buckets:" in yaml_text
+    assert "trade_unit: ~" in yaml_text
+    assert "board_lot_trade_unit: true" in yaml_text
+
+
+def test_v25_1_execution_algo_receives_suspend_artifact_when_signal_filter_enabled():
+    yaml_text = _base_yaml(
+        execution_algo="V25_1_SMALL_CAP",
+        execution_algo_params={"device": "cpu"},
+        custom_params={
+            "filter_suspended_on_signal": True,
+            "suspend_filter_file": "qe_suspend_filter.json",
+            "suspend_filter_strict": True,
+        },
+    )
+
+    inner_strategy = _slice_yaml_between(
+        yaml_text,
+        "            inner_strategy:",
+        "            # qe_execution_trace:",
+    )
+    outer_strategy = _slice_yaml_between(
+        yaml_text,
+        "    strategy:",
+        "    model:",
+    )
+
+    assert "class: TailTWAPWithV25_1SmallCapStrategy" in inner_strategy
+    assert "filter_suspended_on_signal: true" in inner_strategy
+    assert "class: SuspendFilterTopkDropoutStrategy" in outer_strategy
+    assert "filter_suspended_on_signal: true" in outer_strategy
+
+
 def test_qe_exchange_can_receive_wider_quote_universe_codes_for_forced_exit():
     yaml_text = _base_yaml(
         execution_algo="V25_TWO_STAGE",
@@ -621,8 +706,11 @@ def test_execution_algo_unknown_and_vwap_fail_fast():
 def test_backtest_freq_must_match_execution_algo():
     assert ConfigComposer._resolve_backtest_freq("CLOSE_PRICE", {}) == "day"
     assert ConfigComposer._resolve_backtest_freq("V25_TWO_STAGE", {}) == "1min"
+    assert ConfigComposer._resolve_backtest_freq("V25_1_SMALL_CAP", {}) == "1min"
     with pytest.raises(ValueError, match="requires backtest_freq=1min"):
         ConfigComposer._resolve_backtest_freq("V25_TWO_STAGE", {"backtest_freq": "day"})
+    with pytest.raises(ValueError, match="requires backtest_freq=1min"):
+        ConfigComposer._resolve_backtest_freq("V25_1_SMALL_CAP", {"backtest_freq": "day"})
     with pytest.raises(ValueError, match="requires backtest_freq=day"):
         ConfigComposer._resolve_backtest_freq("CLOSE_PRICE", {"backtest_freq": "1min"})
     with pytest.raises(ValueError, match="requires backtest_freq=1min"):

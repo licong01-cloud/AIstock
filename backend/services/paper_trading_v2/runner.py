@@ -155,7 +155,7 @@ class PaperTradingV2Runner:
             trade_date=order_intent.target_trade_date,
             source=data_source,
             min_bars=required_bars,
-            require_day_features=str(manifest.minute_execution_policy.algo_code).strip().upper() == "V25_TWO_STAGE",
+            require_day_features=str(manifest.minute_execution_policy.algo_code).strip().upper() in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"},
         )
         if not market_input.minute_bars:
             raise DataUnavailableError(

@@ -309,12 +309,28 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
             detail,
         )
 
-    def _minimum_child_order_amount(self, stock_id, direction, unit):
+    def _minimum_child_order_amount(
+        self,
+        stock_id,
+        direction,
+        unit,
+        *,
+        trade_start_time=None,
+        trade_end_time=None,
+    ):
         """Minimum child-order amount for the legacy V25/Qlib trade unit rule."""
 
         return float(unit) if unit is not None and unit > 0 else 100.0
 
-    def _buy_below_min_child_order_reason(self, stock_id, direction, unit):
+    def _buy_below_min_child_order_reason(
+        self,
+        stock_id,
+        direction,
+        unit,
+        *,
+        trade_start_time=None,
+        trade_end_time=None,
+    ):
         return "buy_below_trade_unit"
 
     def _legalize_child_order_amount(
@@ -328,6 +344,8 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
         is_last_step=False,
         allow_sell_residual=False,
         round_by_unit=True,
+        trade_start_time=None,
+        trade_end_time=None,
     ):
         """Apply the final child-order sizing rule before constructing Order.
 
@@ -373,6 +391,8 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
             is_last_step=is_last_step,
             allow_sell_residual=allow_sell_residual,
             round_by_unit=round_by_unit,
+            trade_start_time=trade_start_time,
+            trade_end_time=trade_end_time,
         )
         if amount_delta_target > 1e-5:
             order_list.append(Order(
@@ -496,11 +516,19 @@ class TailTWAPWithV25TwoStageStrategy(TailTWAPWithLimitStrategy):
                 end_time=order.end_time,
             )
             minimum_child_amount = self._minimum_child_order_amount(
-                order.stock_id, order.direction, unit
+                order.stock_id,
+                order.direction,
+                unit,
+                trade_start_time=trade_start_time,
+                trade_end_time=trade_end_time,
             )
             if order.direction == Order.BUY and amount_remain < minimum_child_amount:
                 self._v25_no_fill_reasons[order.stock_id] = self._buy_below_min_child_order_reason(
-                    order.stock_id, order.direction, unit
+                    order.stock_id,
+                    order.direction,
+                    unit,
+                    trade_start_time=trade_start_time,
+                    trade_end_time=trade_end_time,
                 )
                 continue
             if order.direction == Order.SELL and amount_remain < minimum_child_amount:

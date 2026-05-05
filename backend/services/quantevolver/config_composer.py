@@ -158,6 +158,7 @@ SUPPORTED_QE_EXECUTION_ALGOS = {
     "CLOSE_PRICE",
     "V24_PLAN",
     "V25_TWO_STAGE",
+    "V25_1_SMALL_CAP",
 }
 DEFAULT_QE_EXECUTION_ALGO = "TWAP"
 SUSPEND_FILTER_FILE = "qe_suspend_filter.json"
@@ -172,6 +173,7 @@ AUTHORITATIVE_QE_HELPER_ASSETS = {
     # V25 is a strategy/model asset. Keep the authority in the AIstock repo
     # instead of probing an RDAgent/WSL workspace from Windows.
     "tail_twap_v25_strategy.py": AISTOCK_PROJECT_ROOT / "scripts" / "tail_twap_v25_strategy.py",
+    "tail_twap_v25_1_strategy.py": AISTOCK_PROJECT_ROOT / "scripts" / "tail_twap_v25_1_strategy.py",
 }
 
 
@@ -620,6 +622,17 @@ class ConfigComposer:
                 "module_path": "tail_twap_v25_strategy",
                 "kwargs": params,
             }
+        if algo == "V25_1_SMALL_CAP":
+            catalog_defaults = cls._execution_algo_catalog_entry(algo)["default_config"]
+            for key, value in catalog_defaults.items():
+                params.setdefault(key, value)
+            return {
+                "requested_algo": execution_algo,
+                "effective_algo": algo,
+                "class": "TailTWAPWithV25_1SmallCapStrategy",
+                "module_path": "tail_twap_v25_1_strategy",
+                "kwargs": params,
+            }
         raise AssertionError(f"unreachable execution algo: {algo}")
 
     @classmethod
@@ -648,7 +661,8 @@ class ConfigComposer:
     def _is_v25_execution(cls, execution_algo: Optional[str]) -> bool:
         return cls._normalize_execution_algo(execution_algo) in {
             "V25_TWO_STAGE",
-                }
+            "V25_1_SMALL_CAP",
+        }
 
     @staticmethod
     def _is_suspend_filter_enabled(custom_params: Optional[Dict[str, Any]]) -> bool:
@@ -1236,7 +1250,7 @@ class ConfigComposer:
             v24_src = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
-            for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
                 helper_src = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_src.exists():
                     shutil.copy2(helper_src, exp_dir / helper_name)
@@ -1244,7 +1258,7 @@ class ConfigComposer:
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
-        for helper_name in ("qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
             helper_src = scripts_dir / helper_name
             if helper_src.exists():
                 shutil.copy2(helper_src, exp_dir / helper_name)
@@ -1543,7 +1557,7 @@ class ConfigComposer:
             v24_path = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_path.exists():
                 experiment_files["tail_twap_v24_strategy.py"] = v24_path.read_text(encoding="utf-8")
-            for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
                 helper_path = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_path.exists():
                     experiment_files[helper_name] = helper_path.read_text(encoding="utf-8")
@@ -1554,7 +1568,7 @@ class ConfigComposer:
                 experiment_files["benchmark_sh000300.parquet.b64"] = base64.b64encode(
                     bench_path.read_bytes()
                 ).decode("ascii")
-        for helper_name in ("qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
             helper_path = scripts_dir / helper_name
             if helper_path.exists():
                 experiment_files[helper_name] = helper_path.read_text(encoding="utf-8")
@@ -1669,7 +1683,7 @@ class ConfigComposer:
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
-                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
+                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "tail_twap_v25_1_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
         deps_dict: Dict[str, str] = {}
 
         def _resolve_deps(code: str, collected: set) -> str:
@@ -2142,14 +2156,14 @@ class ConfigComposer:
             v24_src = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
-            for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
                 helper_src = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_src.exists():
                     shutil.copy2(helper_src, exp_dir / helper_name)
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
-        for helper_name in ("qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
             helper_src = scripts_dir / helper_name
             if helper_src.exists():
                 shutil.copy2(helper_src, exp_dir / helper_name)
@@ -3024,7 +3038,13 @@ class ConfigComposer:
         lines.append("            open_cost: 0.000095")
         lines.append("            close_cost: 0.000595")
         lines.append("            min_cost: 5")
-        lines.append("            trade_unit: 100")
+        if backtest_freq != "day" and algo_cfg["effective_algo"] == "V25_1_SMALL_CAP":
+            lines.append("            # V25.1 legalizes child orders with stock-aware board-lot rules.")
+            lines.append("            # Disable Qlib's global 100-share rounding so STAR 200+1 orders survive.")
+            lines.append("            trade_unit: ~")
+            lines.append("            board_lot_trade_unit: true")
+        else:
+            lines.append("            trade_unit: 100")
         quote_universe_codes = (custom_params or {}).get("quote_universe_codes")
         if quote_universe_codes:
             if isinstance(quote_universe_codes, str):
@@ -4292,7 +4312,7 @@ model_cls = {nn_class_name}
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
-                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
+                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "tail_twap_v25_1_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
 
         def _copy_deps_recursive(code: str, copied: set) -> str:
             """递归处理相对导入：转换为本地导入并复制依赖文件."""

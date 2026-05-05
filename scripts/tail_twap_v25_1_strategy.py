@@ -40,6 +40,7 @@ from tail_twap_v25_strategy import (
     TOTAL_LEN,
     TailTWAPWithV25TwoStageStrategy,
     _V25MarketNoFill,
+    _is_valid_factor,
     _is_valid_price,
 )
 
@@ -264,11 +265,33 @@ class TailTWAPWithV25_1SmallCapStrategy(TailTWAPWithV25TwoStageStrategy):
             self._v25_1_max_buckets,
         )
 
-    def _minimum_child_order_amount(self, stock_id, direction, unit):
+    def _minimum_child_order_amount(
+        self,
+        stock_id,
+        direction,
+        unit,
+        *,
+        trade_start_time=None,
+        trade_end_time=None,
+    ):
         min_qty, _ = _board_lot_rule(stock_id)
-        return float(min_qty)
+        factor = self._child_order_factor(
+            stock_id,
+            unit,
+            trade_start_time=trade_start_time,
+            trade_end_time=trade_end_time,
+        )
+        return float(min_qty) / float(factor)
 
-    def _buy_below_min_child_order_reason(self, stock_id, direction, unit):
+    def _buy_below_min_child_order_reason(
+        self,
+        stock_id,
+        direction,
+        unit,
+        *,
+        trade_start_time=None,
+        trade_end_time=None,
+    ):
         return "buy_below_board_lot"
 
     def _legalize_child_order_amount(
@@ -282,34 +305,71 @@ class TailTWAPWithV25_1SmallCapStrategy(TailTWAPWithV25TwoStageStrategy):
         is_last_step=False,
         allow_sell_residual=False,
         round_by_unit=True,
+        trade_start_time=None,
+        trade_end_time=None,
     ):
         """Apply stock-aware board-lot rules after the parent computes a slice.
 
-        Qlib's global ``trade_unit`` remains 100 for the Exchange, but V25.1
-        must not let that global assumption override STAR-market 200-min/1-share
-        increment rules.
+        Qlib orders use adjusted-share amounts when ``$factor`` is present. The
+        legal board-lot rule, however, is stated in raw shares, so convert the
+        candidate child amount to raw shares, legalize there, then convert back
+        to the adjusted amount that Qlib expects. This also lets V25.1 run with
+        ``exchange_kwargs.trade_unit: null`` so the final Qlib Exchange layer
+        does not re-round STAR-market 200+1 orders back to 100-share lots.
         """
 
         min_qty, increment = _board_lot_rule(stock_id)
         side = "BUY" if direction == Order.BUY else "SELL"
+        factor = self._child_order_factor(
+            stock_id,
+            unit,
+            trade_start_time=trade_start_time,
+            trade_end_time=trade_end_time,
+        )
         max_amount = max(float(max_amount), 0.0)
         amount_delta = min(max(float(amount_delta), 0.0), max_amount)
         if amount_delta <= 1e-5:
             return 0.0
 
-        if side == "SELL" and max_amount < min_qty:
-            if amount_delta >= max_amount - 1e-5 and max_amount > 0:
+        max_raw = max_amount * factor
+        delta_raw = min(amount_delta * factor, max_raw)
+
+        if side == "SELL" and max_raw < min_qty:
+            if delta_raw >= max_raw - 1e-5 and max_raw > 0:
                 return max_amount
 
-        if amount_delta < min_qty:
+        if delta_raw < min_qty:
             return 0.0
 
-        nearest = float(np.round(amount_delta / increment) * increment)
-        if nearest > max_amount + 1e-5:
-            nearest = float((int(max_amount) // increment) * increment)
-        if nearest < min_qty:
+        nearest_raw = float(np.round(delta_raw / increment) * increment)
+        if nearest_raw > max_raw + 1e-5:
+            nearest_raw = float((int(max_raw) // increment) * increment)
+        if nearest_raw < min_qty:
             return 0.0
-        return min(nearest, max_amount)
+        return min(nearest_raw / factor, max_amount)
+
+    def _child_order_factor(
+        self,
+        stock_id,
+        unit,
+        *,
+        trade_start_time=None,
+        trade_end_time=None,
+    ) -> float:
+        """Return the Qlib adjustment factor for child-order amount conversion."""
+
+        if trade_start_time is not None and trade_end_time is not None:
+            factor = self._read_quote_data(
+                stock_id, trade_start_time, trade_end_time, "$factor"
+            )
+            if _is_valid_factor(factor):
+                return float(factor)
+        if unit is not None and unit > 0:
+            # Parent V25 receives Qlib's adjusted trade unit: raw 100 / factor.
+            inferred = 100.0 / float(unit)
+            if _is_valid_factor(inferred):
+                return float(inferred)
+        return 1.0
 
     def _generate_plan_for_order(
         self, stock_id, direction, trade_start_time, trade_end_time
@@ -334,7 +394,7 @@ class TailTWAPWithV25_1SmallCapStrategy(TailTWAPWithV25TwoStageStrategy):
             stock_id, trade_start_time, trade_end_time, "$open"
         )
         try:
-            open_price, _ = self._require_raw_price(
+            open_price, factor = self._require_raw_price(
                 stock_id,
                 trade_start_time,
                 trade_end_time,
@@ -350,9 +410,10 @@ class TailTWAPWithV25_1SmallCapStrategy(TailTWAPWithV25TwoStageStrategy):
             return v25_plan
 
         side = "BUY" if direction == Order.BUY else "SELL"
+        raw_amount_remain = max(int(np.floor(amount_remain * float(factor) + 1e-6)), 0)
         schedule = _build_cost_aware_bucket_schedule(
             plan=v25_plan,
-            total_qty=int(amount_remain),
+            total_qty=raw_amount_remain,
             cur_price=float(open_price),
             stock_id=stock_id,
             min_cost=self._v25_1_min_cost,
@@ -370,10 +431,11 @@ class TailTWAPWithV25_1SmallCapStrategy(TailTWAPWithV25TwoStageStrategy):
             )
             logger.warning(
                 "[TailTWAPv25.1] empty schedule stock=%s side=%s amount_remain=%.2f "
-                "open=%.6f reason=%s order not executable under board rules",
+                "raw_amount_remain=%d open=%.6f reason=%s order not executable under board rules",
                 stock_id,
                 side,
                 amount_remain,
+                raw_amount_remain,
                 float(open_price),
                 reason,
             )
@@ -412,13 +474,15 @@ class TailTWAPWithV25_1SmallCapStrategy(TailTWAPWithV25TwoStageStrategy):
         late_share = float(bucket_plan[EARLY_LEN:].sum())
         logger.info(
             "[TailTWAPv25.1] schedule stock=%s side=%s n_buckets=%d "
-            "scheduled_total=%d amount_remain=%d open=%.6f "
+            "scheduled_total=%d amount_remain=%.6f raw_amount_remain=%d factor=%.8f open=%.6f "
             "early_share=%.4f late_share=%.4f",
             stock_id,
             side,
             len(schedule),
             scheduled_total,
-            int(amount_remain),
+            amount_remain,
+            raw_amount_remain,
+            float(factor),
             float(open_price),
             early_share,
             late_share,

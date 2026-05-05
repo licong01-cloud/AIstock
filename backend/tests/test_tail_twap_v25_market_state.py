@@ -303,6 +303,60 @@ def test_v25_1_star_sell_residual_and_main_board_rules(monkeypatch):
     ) == 200
 
 
+def test_v25_1_child_order_legalization_uses_qlib_factor_when_trade_unit_disabled(monkeypatch):
+    module = _load_v25_1_module(monkeypatch)
+    strategy = object.__new__(module.TailTWAPWithV25_1SmallCapStrategy)
+
+    factor = 0.9845601320266724
+    strategy._read_quote_data = lambda *_args, **_kwargs: factor
+    main_amount = strategy._legalize_child_order_amount(
+        "300750.SZ",
+        module.Order.BUY,
+        107.6,
+        107.6,
+        None,
+        trade_start_time="2026-04-21 09:33:00",
+        trade_end_time="2026-04-21 09:33:59",
+    )
+    assert main_amount * factor == pytest.approx(100.0)
+
+    star_factor = 0.9998064041137695
+    strategy._read_quote_data = lambda *_args, **_kwargs: star_factor
+    star_amount = strategy._legalize_child_order_amount(
+        "689009.SH",
+        module.Order.BUY,
+        203.4 / star_factor,
+        203.4 / star_factor,
+        None,
+        trade_start_time="2026-04-21 09:34:00",
+        trade_end_time="2026-04-21 09:34:59",
+    )
+    assert star_amount * star_factor == pytest.approx(203.0)
+
+
+def test_v25_1_minimum_child_amount_uses_qlib_factor_when_trade_unit_disabled(monkeypatch):
+    module = _load_v25_1_module(monkeypatch)
+    strategy = object.__new__(module.TailTWAPWithV25_1SmallCapStrategy)
+
+    factor = 0.5
+    strategy._read_quote_data = lambda *_args, **_kwargs: factor
+
+    assert strategy._minimum_child_order_amount(
+        "688981.SH",
+        module.Order.BUY,
+        None,
+        trade_start_time="2026-04-21 09:33:00",
+        trade_end_time="2026-04-21 09:33:59",
+    ) == pytest.approx(400.0)
+    assert strategy._minimum_child_order_amount(
+        "000001.SZ",
+        module.Order.BUY,
+        None,
+        trade_start_time="2026-04-21 09:33:00",
+        trade_end_time="2026-04-21 09:33:59",
+    ) == pytest.approx(200.0)
+
+
 def test_v25_1_empty_buy_schedule_fails_instead_of_falling_back_to_v25(monkeypatch):
     module = _load_v25_1_module(monkeypatch)
     strategy = object.__new__(module.TailTWAPWithV25_1SmallCapStrategy)

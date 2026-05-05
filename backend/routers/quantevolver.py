@@ -7487,6 +7487,7 @@ def list_execution_algorithms(
             "CLOSE_PRICE": "close_execution_strategy.CloseExecutionStrategy",
             "V24_PLAN": "tail_twap_v24_strategy.TailTWAPWithV24PlanStrategy",
             "V25_TWO_STAGE": "tail_twap_v25_strategy.TailTWAPWithV25TwoStageStrategy",
+            "V25_1_SMALL_CAP": "tail_twap_v25_1_strategy.TailTWAPWithV25_1SmallCapStrategy",
         }
         for item in items:
             code = str(item.get("algo_code") or "").upper()
