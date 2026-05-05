@@ -11,7 +11,7 @@ import hashlib
 import json
 import math
 import os
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 from uuid import uuid4
@@ -94,7 +94,7 @@ class SelectionScoreArtifact(BaseModel):
     status: SelectionScoreArtifactStatus = SelectionScoreArtifactStatus.SUCCEEDED
     error_json: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("data_source")
     @classmethod

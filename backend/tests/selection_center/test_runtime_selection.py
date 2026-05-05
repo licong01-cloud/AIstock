@@ -711,6 +711,51 @@ data_handler_config:
     assert list(source_dir.glob("**/artifacts/params.pkl"))
 
 
+def test_live_inference_materialize_uses_cached_params_when_node_mlruns_params_404(tmp_path, monkeypatch) -> None:
+    cache_root = tmp_path / "runtime_cache"
+    package_cache = cache_root / "pkg_cached" / "manifest_hash"
+    (package_cache / "model").mkdir(parents=True)
+    (package_cache / "model" / "params.pkl").write_bytes(b"cached model params")
+    (package_cache / "manifest.json").write_text(
+        json.dumps({"diagnostics": {"qe_experiment_id": "qe_cached_params"}}),
+        encoding="utf-8",
+    )
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def download_workspace_file_bytes(self, task_id, loop_id, file_path):
+            if file_path == "conf.yaml":
+                return b"data_handler_config: {}\n"
+            if file_path == "factors/factor_a.py":
+                return b"def calculate():\n    return None\n"
+            raise AssertionError(f"unexpected workspace file request: {file_path}")
+
+        async def download_mlruns_params(self, task_id, loop_id):
+            raise RuntimeError("node mlruns params endpoint returned 404")
+
+    monkeypatch.setattr(QEWorkspaceClient, "for_node", staticmethod(lambda _node_id: FakeClient()))
+
+    resolver = QEExperimentRuntimeAssetResolver(cache_root=cache_root)
+    source_dir = resolver._materialize_runtime_source_from_node(
+        experiment_id="qe_cached_params",
+        qe_task_id="qe_task_node",
+        qe_loop_id="Loop1",
+        execution_node_id="node-1",
+        factor_names=["factor_a"],
+        custom_params={"disable_alpha158": True},
+        data_split={},
+    )
+
+    copied = list(source_dir.glob("**/artifacts/params.pkl"))
+    assert len(copied) == 1
+    assert copied[0].read_bytes() == b"cached model params"
+
+
 def test_live_inference_load_source_materializes_via_node_api_not_db_workspace(tmp_path, monkeypatch) -> None:
     class Cursor:
         description = None

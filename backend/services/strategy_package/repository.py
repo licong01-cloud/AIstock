@@ -6,7 +6,7 @@ column. QE source tables are read-only from this layer.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Iterator
 
 import psycopg2.extras
@@ -46,8 +46,8 @@ class StrategyPackageRecord(BaseModel):
     manifest: StrategyPackageManifest
     manifest_sha256: str
     paper_portfolio_count: int = 0
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def current_manifest(self) -> StrategyPackageManifest:
         return self.manifest.model_copy(update={"package_status": self.package_status})
@@ -61,7 +61,7 @@ class PackageStatusEvent(BaseModel):
     to_status: PackageStatus
     reason: str | None = None
     context: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class StrategyPackageRepository:
@@ -625,7 +625,7 @@ class InMemoryStrategyPackageRepository:
                     context={"package_id": frozen.package_id},
                 )
             return existing
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         record = StrategyPackageRecord(
             package_id=frozen.package_id,
             package_name=frozen.package_name,
@@ -679,7 +679,7 @@ class InMemoryStrategyPackageRepository:
                 "invalid strategy package status transition",
                 context={"package_id": package_id, "from_status": record.package_status.value, "to_status": to_status.value},
             )
-        updated = record.model_copy(update={"package_status": to_status, "updated_at": datetime.now(UTC)})
+        updated = record.model_copy(update={"package_status": to_status, "updated_at": datetime.now(timezone.utc)})
         self.records[package_id] = updated
         self.events.append(
             PackageStatusEvent(
@@ -701,7 +701,7 @@ class InMemoryStrategyPackageRepository:
         updated = record.model_copy(
             update={
                 "paper_portfolio_count": record.paper_portfolio_count + 1,
-                "updated_at": datetime.now(UTC),
+                "updated_at": datetime.now(timezone.utc),
             }
         )
         self.records[package_id] = updated
@@ -745,7 +745,7 @@ class InMemoryStrategyPackageRepository:
         paper_enabled: bool,
     ) -> ValidatedExecutionPolicy:
         policy = self.get_execution_policy(package_id, policy_id)
-        updated = policy.model_copy(update={"paper_enabled": paper_enabled, "updated_at": datetime.now(UTC)})
+        updated = policy.model_copy(update={"paper_enabled": paper_enabled, "updated_at": datetime.now(timezone.utc)})
         self.execution_policies[policy_id] = updated
         return updated
 

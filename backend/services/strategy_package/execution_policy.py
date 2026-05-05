@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import Enum
 from math import isfinite
 from typing import Any
@@ -111,8 +111,8 @@ class ValidatedExecutionPolicy(BaseModel):
     source_backtest_status: str
     validation_status: ExecutionPolicyValidationStatus = ExecutionPolicyValidationStatus.BACKTEST_VALIDATED
     paper_enabled: bool = False
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("package_id", "manifest_sha256", "policy_name", "source_backtest_id", "source_backtest_status")
     @classmethod

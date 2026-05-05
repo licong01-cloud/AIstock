@@ -528,13 +528,26 @@ class QEExperimentRuntimeAssetResolver:
                         source_dir / rel_path,
                     )
 
-                params_tar = await client.download_mlruns_params(qe_task_id, qe_loop_id)
-                if not params_tar:
-                    raise DataUnavailableError(
-                        "QE node API returned an empty mlruns params archive",
-                        context={"experiment_id": experiment_id, "qe_task_id": qe_task_id, "qe_loop_id": qe_loop_id},
-                    )
-                self._extract_mlruns_params_archive(params_tar, source_dir)
+                params_tar: bytes | None = None
+                try:
+                    params_tar = await client.download_mlruns_params(qe_task_id, qe_loop_id)
+                except Exception:
+                    if not self._copy_cached_mlruns_params(
+                        experiment_id=experiment_id,
+                        source_dir=source_dir,
+                    ):
+                        raise
+                if params_tar:
+                    self._extract_mlruns_params_archive(params_tar, source_dir)
+                elif not list(source_dir.glob("**/artifacts/params.pkl")):
+                    if not self._copy_cached_mlruns_params(
+                        experiment_id=experiment_id,
+                        source_dir=source_dir,
+                    ):
+                        raise DataUnavailableError(
+                            "QE node API returned an empty mlruns params archive and no local StrategyPackage cache was available",
+                            context={"experiment_id": experiment_id, "qe_task_id": qe_task_id, "qe_loop_id": qe_loop_id},
+                        )
             return source_dir
 
         try:
@@ -613,6 +626,44 @@ class QEExperimentRuntimeAssetResolver:
                 "QE mlruns params archive does not contain artifacts/params.pkl",
                 context={"dest_dir": str(dest_dir)},
             )
+
+    def _copy_cached_mlruns_params(self, *, experiment_id: str, source_dir: Path) -> bool:
+        """Reuse an AIstock-local StrategyPackage model cache when the node lacks mlruns params."""
+
+        cache_root = self.cache_root.resolve(strict=False)
+        candidates: list[Path] = []
+        for manifest_path in self.cache_root.glob("*/*/manifest.json"):
+            resolved_manifest = manifest_path.resolve(strict=False)
+            if cache_root not in resolved_manifest.parents:
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            diagnostics = manifest.get("diagnostics") if isinstance(manifest, dict) else {}
+            if not isinstance(diagnostics, dict) or str(diagnostics.get("qe_experiment_id") or "") != experiment_id:
+                continue
+            params_path = manifest_path.parent / "model" / "params.pkl"
+            resolved_params = params_path.resolve(strict=False)
+            if cache_root not in resolved_params.parents:
+                continue
+            if params_path.exists() and params_path.is_file():
+                candidates.append(params_path)
+
+        if not candidates:
+            return False
+        candidates.sort(key=lambda item: (item.stat().st_mtime, str(item).lower()), reverse=True)
+        dest = source_dir / "mlruns" / "cached_strategy_package" / "artifacts" / "params.pkl"
+        resolved_dest = dest.resolve(strict=False)
+        resolved_source = source_dir.resolve(strict=False)
+        if resolved_source not in resolved_dest.parents:
+            raise StrategyPackageValidationError(
+                "refusing to copy cached QE params outside the materialized source cache",
+                context={"dest": str(dest), "source_dir": str(source_dir)},
+            )
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(candidates[0], dest)
+        return True
 
     def _resolve_conf_path(self, source: QEExperimentRuntimeSource) -> Path:
         candidates = [source.asset_workspace_path / "conf.yaml"]

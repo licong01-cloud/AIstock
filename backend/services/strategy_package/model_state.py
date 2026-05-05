@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any
 from uuid import uuid4
@@ -41,7 +41,7 @@ class StrategyPackageModelState(BaseModel):
     stale_after_days: int = Field(default=30, gt=0)
     staleness_status: ModelStalenessStatus = ModelStalenessStatus.UNKNOWN
     warning: str | None = None
-    last_checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    last_checked_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("package_id")
@@ -81,8 +81,8 @@ class StrategyPackageModelRetrainJob(BaseModel):
     confirmed: bool = False
     status_reason: str | None = None
     error: dict[str, Any] | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: datetime | None = None
     completed_at: datetime | None = None
 
@@ -97,13 +97,13 @@ class StrategyPackageModelRetrainJob(BaseModel):
 
 def evaluate_model_staleness(state: StrategyPackageModelState, *, as_of_date: date) -> StrategyPackageModelState:
     if state.staleness_status in {ModelStalenessStatus.RETRAINING, ModelStalenessStatus.RETRAIN_FAILED}:
-        return state.model_copy(update={"last_checked_at": datetime.now(UTC)})
+        return state.model_copy(update={"last_checked_at": datetime.now(timezone.utc)})
     if state.active_model_version_id is None and state.last_retrained_at is None:
         return state.model_copy(
             update={
                 "staleness_status": ModelStalenessStatus.STALE_INITIAL_BACKTEST_MODEL,
                 "warning": "strategy package still uses the original backtest model; manual retrain is recommended before paper trading",
-                "last_checked_at": datetime.now(UTC),
+                "last_checked_at": datetime.now(timezone.utc),
             }
         )
     if state.train_end_date is None:
@@ -111,7 +111,7 @@ def evaluate_model_staleness(state: StrategyPackageModelState, *, as_of_date: da
             update={
                 "staleness_status": ModelStalenessStatus.UNKNOWN,
                 "warning": "model training end date is unknown",
-                "last_checked_at": datetime.now(UTC),
+                "last_checked_at": datetime.now(timezone.utc),
             }
         )
     age_days = (as_of_date - state.train_end_date).days
@@ -120,13 +120,13 @@ def evaluate_model_staleness(state: StrategyPackageModelState, *, as_of_date: da
             update={
                 "staleness_status": ModelStalenessStatus.STALE,
                 "warning": f"model training data is {age_days} days old; rolling retrain is recommended",
-                "last_checked_at": datetime.now(UTC),
+                "last_checked_at": datetime.now(timezone.utc),
             }
         )
     return state.model_copy(
         update={
             "staleness_status": ModelStalenessStatus.CURRENT,
             "warning": None,
-            "last_checked_at": datetime.now(UTC),
+            "last_checked_at": datetime.now(timezone.utc),
         }
     )
