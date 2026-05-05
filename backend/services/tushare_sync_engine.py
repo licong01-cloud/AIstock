@@ -21,6 +21,9 @@ from .data_refresh_audit import DataRefreshAuditRepository
 from .tushare_rate_limiter import get_limiter
 from .tushare_dataset_specs import DatasetSpec, QueryMode
 
+PIT_SOURCE_DATASETS = {"stock_basic", "stock_st", "stock_st_events"}
+ZERO_ROW_VALID_DATASETS = {"suspend_d", "stock_st", "stock_st_events"}
+
 
 @dataclass
 class SyncResult:
@@ -286,8 +289,13 @@ class TushareSyncEngine:
         except Exception:
             try:
                 conn.rollback()
-            except Exception:
-                pass
+            except Exception as rollback_exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "%s rollback failed after replace-date error: %s",
+                    spec.name,
+                    rollback_exc,
+                )
             raise
         finally:
             if previous_autocommit is not None:
@@ -295,6 +303,20 @@ class TushareSyncEngine:
 
     def _get_incremental_cursor(self, conn, spec: DatasetSpec) -> Optional[dt.date]:
         """Return max(date_column) from target table, or None if empty."""
+        if spec.incremental_cursor_from_audit:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT MAX(trade_date)
+                      FROM market.dataset_date_refresh_audit
+                     WHERE dataset = %s
+                       AND status = 'success'
+                    """,
+                    (spec.name,),
+                )
+                row = cur.fetchone()
+                if row and row[0] is not None:
+                    return row[0]
         sql = f"SELECT max({spec.date_column}) FROM {spec.target_table}"
         with conn.cursor() as cur:
             cur.execute(sql)
@@ -317,11 +339,22 @@ class TushareSyncEngine:
         for d in days:
             ymd = d.strftime("%Y%m%d")
             try:
-                rows = self._fetch_from_tushare(spec, {"trade_date": ymd})
+                rows = self._fetch_from_tushare(spec, {spec.date_param_name: ymd})
+                if spec.row_limit > 0 and len(rows) >= spec.row_limit:
+                    raise RuntimeError(
+                        f"{spec.name} {spec.date_param_name}={ymd} returned {len(rows)} rows; "
+                        f"row_limit={spec.row_limit} may indicate truncated Tushare data"
+                    )
                 if spec.replace_existing_dates:
                     inserted = self._replace_date_batch(conn, spec, d, rows)
                 else:
                     inserted = self._upsert_batch(conn, spec, rows)
+                if inserted == 0 and spec.name not in ZERO_ROW_VALID_DATASETS:
+                    raise RuntimeError(
+                        f"{spec.name} {spec.date_param_name}={ymd} returned/wrote 0 rows; "
+                        "treating as not ready for audit/self-healing"
+                    )
+                quality_status = "empty_valid" if inserted == 0 else "ok"
                 self._refresh_audit.record_success(
                     dataset=spec.name,
                     trade_date=d,
@@ -329,6 +362,8 @@ class TushareSyncEngine:
                     job_id=str(job_id),
                     data_source="tushare",
                     metadata={"tushare_api": spec.tushare_api, "mode": spec.query_mode.value},
+                    written_rows=inserted,
+                    quality_status=quality_status,
                     conn=conn,
                 )
                 result.inserted_rows += inserted
@@ -344,6 +379,8 @@ class TushareSyncEngine:
                         job_id=str(job_id),
                         data_source="tushare",
                         metadata={"tushare_api": spec.tushare_api, "mode": spec.query_mode.value},
+                        quality_status="empty_invalid" if "0 rows" in str(exc) else "error",
+                        failure_category="empty_invalid" if "0 rows" in str(exc) else "provider_or_persistence_error",
                         conn=conn,
                     )
                 except Exception as audit_exc:
@@ -363,17 +400,24 @@ class TushareSyncEngine:
     def _sync_single_call(
         self, conn, spec: DatasetSpec, job_id: uuid.UUID,
     ) -> SyncResult:
+        param_sets = spec.single_call_param_sets or [{}]
         result = SyncResult(dataset=spec.name, mode="sync", job_id=job_id,
-                            total_batches=1)
-        try:
-            rows = self._fetch_from_tushare(spec, {})
-            inserted = self._upsert_batch(conn, spec, rows)
-            result.inserted_rows = inserted
-            result.success_batches = 1
-        except Exception as exc:
-            result.failed_batches = 1
-            result.error = str(exc)
-            self._log(conn, job_id, "error", f"{spec.name} single_call failed: {exc}")
+                            total_batches=len(param_sets))
+        for params in param_sets:
+            try:
+                rows = self._fetch_from_tushare(spec, params)
+                if spec.row_limit > 0 and len(rows) >= spec.row_limit:
+                    raise RuntimeError(
+                        f"{spec.name} single_call params={params} returned {len(rows)} rows; "
+                        f"row_limit={spec.row_limit} may indicate truncated Tushare data"
+                    )
+                inserted = self._upsert_batch(conn, spec, rows)
+                result.inserted_rows += inserted
+                result.success_batches += 1
+            except Exception as exc:
+                result.failed_batches += 1
+                result.error = str(exc)
+                self._log(conn, job_id, "error", f"{spec.name} single_call params={params} failed: {exc}")
 
         try:
             self._update_progress(conn, job_id, result)
@@ -381,6 +425,93 @@ class TushareSyncEngine:
             import logging
             logging.getLogger(__name__).warning("_sync_single_call: progress update failed for job %s: %s", job_id, exc)
         return result
+
+    def _trading_dates_between(self, conn, start_date: dt.date, end_date: dt.date) -> List[dt.date]:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT cal_date
+                FROM market.trading_calendar
+                WHERE is_trading = TRUE
+                  AND cal_date >= %s
+                  AND cal_date <= %s
+                ORDER BY cal_date
+                """,
+                (start_date, end_date),
+            )
+            return [row[0] for row in cur.fetchall()]
+
+    def _table_row_counts_by_date(
+        self,
+        conn,
+        spec: DatasetSpec,
+        start_date: dt.date,
+        end_date: dt.date,
+    ) -> Dict[dt.date, int]:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT {spec.date_column}::date AS trade_date, COUNT(*)::bigint AS row_count
+                FROM {spec.target_table}
+                WHERE {spec.date_column} >= %s
+                  AND {spec.date_column} < %s
+                GROUP BY {spec.date_column}::date
+                """,
+                (start_date, end_date + dt.timedelta(days=1)),
+            )
+            return {row[0]: int(row[1]) for row in cur.fetchall()}
+
+    def _record_by_code_audit(
+        self,
+        spec: DatasetSpec,
+        start_date: Optional[dt.date],
+        end_date: Optional[dt.date],
+        job_id: uuid.UUID,
+        result: SyncResult,
+    ) -> None:
+        if start_date is None or end_date is None or spec.skip_date_params:
+            return
+        with get_conn() as conn:
+            trading_dates = self._trading_dates_between(conn, start_date, end_date)
+            row_counts = self._table_row_counts_by_date(conn, spec, start_date, end_date)
+            for trade_date in trading_dates:
+                row_count = int(row_counts.get(trade_date, 0))
+                metadata = {
+                    "tushare_api": spec.tushare_api,
+                    "mode": spec.query_mode.value,
+                    "audit_from_target_table": True,
+                }
+                if result.ok and row_count > 0:
+                    self._refresh_audit.record_success(
+                        dataset=spec.name,
+                        trade_date=trade_date,
+                        row_count=row_count,
+                        job_id=str(job_id),
+                        data_source="tushare",
+                        metadata=metadata,
+                        written_rows=row_count,
+                        quality_status="ok",
+                        conn=conn,
+                    )
+                else:
+                    failure_category = "empty_invalid" if row_count <= 0 else "partial_code_failure"
+                    error_message = (
+                        f"{spec.name} {trade_date} has {row_count} rows after BY_CODE sync"
+                        if row_count <= 0
+                        else f"{spec.name} BY_CODE sync had {result.failed_batches} failed code batches"
+                    )
+                    self._refresh_audit.record_failure(
+                        dataset=spec.name,
+                        trade_date=trade_date,
+                        error_message=error_message,
+                        job_id=str(job_id),
+                        data_source="tushare",
+                        metadata=metadata,
+                        written_rows=row_count,
+                        quality_status="empty_invalid" if row_count <= 0 else "error",
+                        failure_category=failure_category,
+                        conn=conn,
+                    )
 
     def _fetch_code_list(self, conn, spec: DatasetSpec) -> List[str]:
         """Fetch ts_code list from DB for BY_CODE mode."""
@@ -467,9 +598,15 @@ class TushareSyncEngine:
                     result = self._sync_by_date(conn, spec, start_date, end_date, job_id)
 
             result.mode = mode
+            post_sync_hook: Optional[Dict[str, Any]] = None
+            if result.ok and spec.name in PIT_SOURCE_DATASETS:
+                post_sync_hook = self._run_stock_universe_pit_post_sync_hook(spec.name)
             status = "success" if result.ok else "failed"
             with get_conn() as conn:
-                self._finish_job(conn, job_id, status, {"stats": result.as_dict()})
+                summary_payload: Dict[str, Any] = {"stats": result.as_dict()}
+                if post_sync_hook is not None:
+                    summary_payload["post_sync_hooks"] = {"stock_universe_pit": post_sync_hook}
+                self._finish_job(conn, job_id, status, summary_payload)
             print(f"[DONE] {spec.name} mode={mode} {result.as_dict()}")
             return result
         except Exception as exc:
@@ -479,6 +616,25 @@ class TushareSyncEngine:
             return SyncResult(
                 dataset=spec.name, mode=mode, job_id=job_id, error=str(exc),
             )
+
+    def _run_stock_universe_pit_post_sync_hook(self, dataset: str) -> Dict[str, Any]:
+        """Mark/rebuild derived ST PIT universe after source-table sync succeeds."""
+
+        try:
+            from .stock_universe_pit_service import StockUniversePitService
+
+            service = StockUniversePitService()
+            marked = service.mark_dirty(
+                reason="tushare_source_sync_success",
+                source_dataset=dataset,
+            )
+            result: Dict[str, Any] = {"marked_dirty": marked}
+            result["ensure"] = service.ensure_st_pit_universe(strict=False)
+            return {"ok": True, **result}
+        except Exception as exc:  # noqa: BLE001
+            # Source sync success must not be turned into a fake failure. The
+            # strict export / paper paths call ensure_st_pit_universe again.
+            return {"ok": False, "error": str(exc), "source_dataset": dataset}
 
     # -- BY_CODE batched (分批连接，避免长时间持有) -------------------------
 
@@ -540,5 +696,13 @@ class TushareSyncEngine:
                 except Exception as exc:
                     import logging
                     logging.getLogger(__name__).warning("_sync_by_code_batched: progress update failed for job %s: %s", job_id, exc)
+
+        try:
+            self._record_by_code_audit(spec, start_date, end_date, job_id, result)
+        except Exception as exc:
+            result.failed_batches += 1
+            result.error = f"refresh audit failed: {exc}"
+            with get_conn() as conn:
+                self._log(conn, job_id, "error", f"{spec.name} BY_CODE refresh audit failed: {exc}")
 
         return result

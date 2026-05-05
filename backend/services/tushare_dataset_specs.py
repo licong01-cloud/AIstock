@@ -26,6 +26,7 @@ class DatasetSpec:
     query_mode: QueryMode
     columns: Dict[str, str]                # {col_name: pg_type}
     api_params: Dict[str, str] = field(default_factory=dict)
+    single_call_param_sets: List[Dict[str, str]] = field(default_factory=list)
     api_field_map: Dict[str, str] = field(default_factory=dict)  # {db_col: tushare_field} when names differ
     batch_sleep: float = 0.2               # seconds between batches
     supports_incremental: bool = True
@@ -36,6 +37,8 @@ class DatasetSpec:
     skip_date_params: bool = False         # True = don't pass start_date/end_date to API
     replace_existing_dates: bool = False   # True = replace one date window instead of append-only upsert
     rate_per_minute: int = 500             # per-API 频率限制，默认 500/min (10000积分)
+    date_param_name: str = "trade_date"    # BY_DATE: API date parameter name
+    incremental_cursor_from_audit: bool = False  # sparse BY_DATE datasets can advance through successful empty-date refreshes
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +142,11 @@ STOCK_BASIC = DatasetSpec(
         "delist_date": "date",
         "is_hs": "text",
     },
-    api_params={"exchange": "", "list_status": "L"},
+    single_call_param_sets=[
+        {"exchange": "", "list_status": "L"},
+        {"exchange": "", "list_status": "D"},
+        {"exchange": "", "list_status": "P"},
+    ],
     supports_incremental=False,
     date_column="list_date",
 )
@@ -162,6 +169,31 @@ STOCK_ST = DatasetSpec(
     date_column="ann_date",
     batch_sleep=0.3,
     rate_per_minute=200,
+)
+
+STOCK_ST_EVENTS = DatasetSpec(
+    name="stock_st_events",
+    tushare_api="st",
+    target_table="market.stock_st_events",
+    primary_keys=["ts_code", "pub_date", "imp_date", "st_type"],
+    query_mode=QueryMode.BY_DATE,
+    columns={
+        "ts_code": "text",
+        "name": "text",
+        "pub_date": "date",
+        "imp_date": "date",
+        "st_type": "text",
+        "st_reason": "text",
+        "st_explain": "text",
+    },
+    api_field_map={"st_type": "st_tpye"},
+    date_column="pub_date",
+    date_param_name="pub_date",
+    batch_sleep=0.3,
+    rate_per_minute=200,
+    row_limit=1000,
+    replace_existing_dates=True,
+    incremental_cursor_from_audit=True,
 )
 
 BAK_BASIC = DatasetSpec(
@@ -354,6 +386,7 @@ DATASET_REGISTRY: Dict[str, DatasetSpec] = {
         INDEX_DAILY,
         STOCK_BASIC,
         STOCK_ST,
+        STOCK_ST_EVENTS,
         BAK_BASIC,
         STK_LIMIT,
         SUSPEND_D,

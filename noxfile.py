@@ -72,7 +72,10 @@ def l0(session: nox.Session) -> None:
         "scripts/validation_center_readonly_smoke.py",
         "scripts/aistock_data_quality_smoke.py",
         "scripts/paper_v2_live_validation.py",
+        "backend/services/audit_backed_data_health.py",
+        "backend/services/data_refresh_audit.py",
         "backend/services/quantevolver/completion_contract.py",
+        "backend/tests/test_dataset_refresh_audit.py",
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
         "backend/tests/test_aistock_guardrail_scan.py",
@@ -172,6 +175,29 @@ def paper_v2_data_quality(session: nox.Session) -> None:
     if session.posargs:
         args.extend(session.posargs)
     session.run("python", *args, env=_env(), external=True)
+
+
+@nox.session(venv_backend="none")
+def local_data_management_audit(session: nox.Session) -> None:
+    """Run local data-management audit schema and repository checks."""
+    _run_pytest(
+        session,
+        "backend/tests/test_dataset_refresh_audit.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        "python",
+        "scripts/aistock_data_quality_smoke.py",
+        "--scope",
+        "local_data_management",
+        "--audit-schema-only",
+        "--output",
+        "tmp/local_data_management_audit_smoke.json",
+        env=_env(),
+        external=True,
+    )
 
 
 @nox.session(venv_backend="none")

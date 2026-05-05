@@ -146,6 +146,8 @@ def seed_dataset(spec: AuditSeedSpec, start_date: date | None, end_date: date | 
                 spec.data_source,
                 "success",
                 int(row_counts.get(trade_date, 0)),
+                int(row_counts.get(trade_date, 0)),
+                "empty_valid" if spec.sparse_ok and int(row_counts.get(trade_date, 0)) == 0 else "ok",
                 psycopg2.extras.Json(
                     {
                         "seeded_from_existing_rows": True,
@@ -162,11 +164,15 @@ def seed_dataset(spec: AuditSeedSpec, start_date: date | None, end_date: date | 
                 cur,
                 """
                 INSERT INTO market.dataset_date_refresh_audit (
-                    dataset, trade_date, data_source, status, row_count, metadata
+                    dataset, trade_date, data_source, status, row_count,
+                    written_rows, quality_status, metadata
                 ) VALUES %s
                 ON CONFLICT (dataset, trade_date, data_source) DO UPDATE SET
                     status = EXCLUDED.status,
                     row_count = EXCLUDED.row_count,
+                    written_rows = EXCLUDED.written_rows,
+                    quality_status = EXCLUDED.quality_status,
+                    failure_category = NULL,
                     refreshed_at = NOW(),
                     error_message = NULL,
                     metadata = EXCLUDED.metadata

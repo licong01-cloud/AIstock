@@ -1,0 +1,71 @@
+{
+  "coverage": {
+    "branch": null,
+    "diff_branch": null,
+    "diff_line": null,
+    "line": null,
+    "quality_gates": [],
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "snapshot_path": null,
+    "status": "not_collected"
+  },
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [],
+  "finished_at": "2026-05-05T13:07:53",
+  "git_commit": "c202b69",
+  "level": "L2",
+  "level_slug": "l2",
+  "markdown_path": "tests/aistock_validation/history/local_data_management/20260505_130051_l2_dataset-refresh-audit-self-healing-implementation.md",
+  "metadata_path": "tests/aistock_validation/history/local_data_management/20260505_130051_l2_dataset-refresh-audit-self-healing-implementation.json",
+  "module": "local_data_management",
+  "module_slug": "local_data_management",
+  "operator": "lc999",
+  "quality_gates": [],
+  "residual_risks": [
+    "No frontend/UI E2E was run for this backend/data-pipeline-only scope.",
+    "Production backend port 8001 was not restarted.",
+    "Existing Paper v2 ledger consistency warning predates this change."
+  ],
+  "schema_version": "aistock_validation_run_v1",
+  "started_at": "2026-05-05T13:00:51",
+  "status": "PASS",
+  "steps": [
+    {
+      "name": "py_compile",
+      "status": "PASS"
+    },
+    {
+      "name": "pytest dataset refresh audit",
+      "status": "PASS"
+    },
+    {
+      "name": "pytest tushare sync + audit",
+      "status": "PASS"
+    },
+    {
+      "name": "local_data_management_audit nox",
+      "status": "PASS"
+    },
+    {
+      "name": "paper_v2_data_quality nox",
+      "status": "PASS_WITH_WARNINGS"
+    },
+    {
+      "name": "scoped l0 nox",
+      "status": "PASS_WITH_P2_NON_BLOCKING_FINDINGS"
+    }
+  ],
+  "title": "Dataset refresh audit self-healing implementation",
+  "title_slug": "dataset-refresh-audit-self-healing-implementation"
+}

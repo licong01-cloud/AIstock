@@ -44,6 +44,20 @@ def _json_load(value: Any) -> Any:
         return {}
 
 
+def _uses_calendar_date_sequence(extra_info: Any) -> bool:
+    info = _json_load(extra_info)
+    if not isinstance(info, dict):
+        return False
+    return str(info.get("date_sequence") or "").strip().lower() in {"calendar", "calendar_day", "natural_day"}
+
+
+def _uses_refresh_audit_cursor(extra_info: Any) -> bool:
+    info = _json_load(extra_info)
+    if not isinstance(info, dict):
+        return False
+    return str(info.get("cursor_source") or "").strip().lower() in {"refresh_audit", "audit"}
+
+
 def _isoformat(value: Optional[dt.datetime]) -> Optional[str]:
     if value is None:
         return None
@@ -299,6 +313,7 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
         "stock_moneyflow_ts",
         "stock_basic",
         "stock_st",
+        "stock_st_events",
         "bak_basic",
         "daily_basic",
         "stk_limit",
@@ -310,6 +325,8 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
         return "tushare"
     if ds in {"sw_index_classify", "sw_index_member", "sw_daily", "sw_sector", "sector_data"}:
         return "tushare"
+    if ds == "anns_metadata":
+        return "eastmoney_cninfo"
     if ds in {"kline_weekly"}:
         return "derived_from_kline_daily_raw"
     if ds.startswith("xtquant_"):
@@ -810,6 +827,7 @@ def _ensure_default_ingestion_schedules() -> List[Dict[str, Any]]:
         #   以避免误触发 Python 版脚本。
         ("stock_moneyflow_ts", "incremental", "daily", True, {}),
         ("kline_weekly", "incremental", "daily", True, {}),
+        ("anns_metadata", "incremental", "1h", True, _anns_metadata_incremental_options()),
     ]
     items: List[Dict[str, Any]] = []
     for ds, md, freq, en, opts in defaults:
@@ -1196,6 +1214,16 @@ def _suspend_d_refresh_options() -> Dict[str, Any]:
     }
 
 
+def _anns_metadata_incremental_options() -> Dict[str, Any]:
+    return {
+        "lookback_days": 2,
+        "source": "eastmoney",
+        "workers": 1,
+        "request_sleep": 0.05,
+        "skip_auto_range": True,
+    }
+
+
 @router.post("/ingestion/schedule/batch-create")
 def batch_create_ingestion_schedules(payload: BatchCreateSchedulesRequest) -> Dict[str, Any]:
     """Batch create/update daily ingestion schedules for multiple datasets."""
@@ -1213,6 +1241,10 @@ def batch_create_ingestion_schedules(payload: BatchCreateSchedulesRequest) -> Di
         if item.dataset == "suspend_d":
             frequency = "1h"
             options.update(_suspend_d_refresh_options())
+            options.pop("at", None)
+        elif item.dataset == "anns_metadata":
+            frequency = "1h"
+            options.update(_anns_metadata_incremental_options())
             options.pop("at", None)
 
         # upsert: find existing or create new
@@ -1247,9 +1279,11 @@ _DAILY_PRESETS = [
     ("adj_factor", "incremental"),
     ("index_daily", "incremental"),
     ("stock_st", "incremental"),
+    ("stock_st_events", "incremental"),
     ("bak_basic", "incremental"),
     ("stk_limit", "incremental"),
     ("suspend_d", "incremental"),
+    ("anns_metadata", "incremental"),
     ("margin_detail", "incremental"),
     ("sw_sector", "incremental"),
     ("sector_data", "incremental"),
@@ -1308,6 +1342,8 @@ def _run_preset(dataset: str, mode: str, triggered_by: str, workers: Optional[in
         opts["workers"] = workers
     if dataset == "suspend_d":
         opts.update(_suspend_d_refresh_options())
+    elif dataset == "anns_metadata":
+        opts.update(_anns_metadata_incremental_options())
     run_id = scheduler.run_ingestion_now(
         dataset=dataset, mode=mode, triggered_by=triggered_by, options=opts,
     )
@@ -1345,6 +1381,32 @@ def get_preset_stats() -> Dict[str, Any]:
         if not cfg:
             entry["current_max_date"] = None
             entry["error"] = "no config"
+            results.append(entry)
+            continue
+        audit_row = _fetchone(
+            """
+            SELECT trade_date, refreshed_at, row_count, written_rows,
+                   expected_rows, coverage_ratio, quality_status,
+                   failure_category, data_source
+            FROM market.dataset_date_refresh_audit
+            WHERE dataset = %s AND status = 'success'
+            ORDER BY trade_date DESC, refreshed_at DESC
+            LIMIT 1
+            """,
+            (stats_key,),
+        )
+        if audit_row:
+            audit_trade_date = audit_row.get("trade_date")
+            entry["current_max_date"] = audit_trade_date.isoformat() if audit_trade_date else None
+            entry["stats_source"] = "refresh_audit"
+            entry["audit_refreshed_at"] = _isoformat(audit_row.get("refreshed_at"))
+            entry["row_count"] = audit_row.get("row_count")
+            entry["written_rows"] = audit_row.get("written_rows")
+            entry["expected_rows"] = audit_row.get("expected_rows")
+            entry["coverage_ratio"] = float(audit_row["coverage_ratio"]) if audit_row.get("coverage_ratio") is not None else None
+            entry["quality_status"] = audit_row.get("quality_status")
+            entry["failure_category"] = audit_row.get("failure_category")
+            entry["data_source"] = audit_row.get("data_source")
             results.append(entry)
             continue
         table_name = str(cfg.get("table_name") or "").strip()
@@ -1502,6 +1564,11 @@ def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="stock_st init requires start_date")
         if mode == "init" and not options.get("end_date"):
             raise HTTPException(status_code=400, detail="stock_st init requires end_date")
+    elif dataset == "stock_st_events":
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="stock_st_events init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="stock_st_events init requires end_date")
     elif dataset == "bak_basic":
         # init: 需要 start_date/end_date；incremental: start_date 可选
         if mode == "init" and not options.get("start_date"):
@@ -1544,6 +1611,24 @@ def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="anns_d init requires start_date")
         if mode == "init" and not options.get("end_date"):
             raise HTTPException(status_code=400, detail="anns_d init requires end_date")
+    elif dataset == "anns_metadata":
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="anns_metadata init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="anns_metadata init requires end_date")
+        if options.get("lookback_days") is not None:
+            try:
+                lookback_days = int(options.get("lookback_days"))
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail=f"anns_metadata invalid lookback_days: {exc}")
+            if lookback_days < 1 or lookback_days > 30:
+                raise HTTPException(status_code=400, detail="anns_metadata lookback_days must be between 1 and 30")
+            options["lookback_days"] = lookback_days
+        if options.get("source") is not None:
+            source = str(options.get("source")).strip().lower()
+            if source not in {"eastmoney", "cninfo", "both"}:
+                raise HTTPException(status_code=400, detail="anns_metadata source must be eastmoney, cninfo or both")
+            options["source"] = source
     elif dataset == "anns_pdf":
         # 公告 PDF 下载任务：通过 download_anns_pdf.py 实现
         # 这里不强制参数，但可以对 limit 做一个简单的范围约束，避免一次性扫描过大规模
@@ -2292,17 +2377,16 @@ def get_data_gaps(
 def get_ingestion_auto_range(
     data_kind: str = Query(..., description=" data_stats_config.data_kind"),
 ) -> Dict[str, Any]:
-    """Calculate start_date and latest_trading_date for incremental catch-up.
+    """Calculate start_date and latest date for incremental catch-up.
 
-    -  data_kind
-    -  start_date: next trading day after max_date, or 1990-01-01 if no data
-    -  latest_trading_date: MAX(cal_date WHERE is_trading)
+    Most market datasets advance by trading day. Event datasets such as
+    stock_st_events use calendar-day pub_date and opt in through
+    data_stats_config.extra_info.date_sequence = 'calendar'.
     """
 
-    # 1) 从 data_stats_config 获取表名和日期列（不再调用 refresh_data_stats 避免超时）
     cfg_rows = _fetchall(
         """
-        SELECT data_kind, table_name, date_column
+        SELECT data_kind, table_name, date_column, extra_info
           FROM market.data_stats_config
          WHERE data_kind = %s AND enabled
         """,
@@ -2313,9 +2397,11 @@ def get_ingestion_auto_range(
     cfg = cfg_rows[0]
     table_name = str(cfg.get("table_name") or "").strip()
     date_column = str(cfg.get("date_column") or "trade_date").strip()
+    extra_info = cfg.get("extra_info")
+    use_calendar_dates = _uses_calendar_date_sequence(extra_info)
+    use_refresh_audit_cursor = _uses_refresh_audit_cursor(extra_info)
 
-    # 2) 直接查询该表的 max_date（使用 statement_timeout 防止大表超时）
-    current_max_date: Optional[dt.date] = None
+    table_max_date: Optional[dt.date] = None
     max_query_failed = False
     try:
         with get_conn() as conn:
@@ -2324,62 +2410,89 @@ def get_ingestion_auto_range(
                 cur.execute(f"SELECT MAX({date_column})::date FROM {table_name}")
                 row = cur.fetchone()
                 if row and row[0]:
-                    current_max_date = row[0]
+                    table_max_date = row[0]
     except Exception as exc:
-        import logging
-        logging.getLogger(__name__).warning(f"[{data_kind}] 查询 MAX({date_column}) from {table_name} 失败: {exc}")
+        logging.getLogger(__name__).warning(
+            "[%s] query MAX(%s) from %s failed: %s",
+            data_kind,
+            date_column,
+            table_name,
+            exc,
+        )
         max_query_failed = True
 
-    # 4) latest_trading_date：仅考虑当前日期及之前的交易日，避免拿到未来计划交易日
-    latest_rows = _fetchall(
-        """
-        SELECT MAX(cal_date) AS latest
-          FROM market.trading_calendar
-         WHERE is_trading = TRUE
-           AND cal_date <= CURRENT_DATE
-        """,
-    )
-    latest_trading_date: Optional[dt.date] = None
-    if latest_rows:
-        latest_trading_date = latest_rows[0].get("latest")
-    if latest_trading_date is None:
-        raise HTTPException(status_code=400, detail="no trading_calendar rows; please sync calendar first")
+    audit_max_date: Optional[dt.date] = None
+    if use_refresh_audit_cursor:
+        audit_rows = _fetchall(
+            """
+            SELECT MAX(trade_date)::date AS mx
+              FROM market.dataset_date_refresh_audit
+             WHERE dataset = %s
+               AND status = 'success'
+            """,
+            (data_kind,),
+        )
+        audit_max_date = audit_rows[0].get("mx") if audit_rows else None
 
-    # 5)  start_date
+    current_max_date = audit_max_date or table_max_date
+
+    if use_calendar_dates:
+        latest_date: Optional[dt.date] = dt.date.today()
+    else:
+        latest_rows = _fetchall(
+            """
+            SELECT MAX(cal_date) AS latest
+              FROM market.trading_calendar
+             WHERE is_trading = TRUE
+               AND cal_date <= CURRENT_DATE
+            """,
+        )
+        latest_date = latest_rows[0].get("latest") if latest_rows else None
+        if latest_date is None:
+            raise HTTPException(status_code=400, detail="no trading_calendar rows; please sync calendar first")
+
+    up_to_date = False
     if current_max_date is None:
         if max_query_failed:
             raise HTTPException(
                 status_code=503,
-                detail=f"[{data_kind}] 无法查询 MAX date，请检查数据库后重试，不要自动全量拉取",
+                detail=f"[{data_kind}] cannot query MAX date; check database before retrying auto catch-up",
             )
         start_date = dt.date(1990, 1, 1)
         has_data = False
     else:
-        next_rows = _fetchall(
-            """
-            SELECT MIN(cal_date) AS next_trading
-              FROM market.trading_calendar
-             WHERE is_trading = TRUE
-               AND cal_date > %s
-            """,
-            (current_max_date,),
-        )
-        next_trading: Optional[dt.date] = None
-        if next_rows:
-            next_trading = next_rows[0].get("next_trading")
-        if next_trading is None:
-            start_date = latest_trading_date
+        up_to_date = current_max_date >= latest_date
+        if up_to_date:
+            start_date = latest_date
+        elif use_calendar_dates:
+            start_date = current_max_date + dt.timedelta(days=1)
         else:
-            start_date = next_trading
+            next_rows = _fetchall(
+                """
+                SELECT MIN(cal_date) AS next_trading
+                  FROM market.trading_calendar
+                 WHERE is_trading = TRUE
+                   AND cal_date > %s
+                """,
+                (current_max_date,),
+            )
+            next_trading: Optional[dt.date] = next_rows[0].get("next_trading") if next_rows else None
+            start_date = latest_date if next_trading is None else next_trading
         has_data = True
 
     return {
         "data_kind": data_kind,
         "table_name": table_name,
         "start_date": start_date.isoformat(),
-        "latest_trading_date": latest_trading_date.isoformat(),
+        "latest_date": latest_date.isoformat(),
+        "latest_trading_date": latest_date.isoformat(),
+        "latest_date_kind": "calendar" if use_calendar_dates else "trading",
         "current_max_date": current_max_date.isoformat() if isinstance(current_max_date, dt.date) else None,
+        "data_max_date": table_max_date.isoformat() if isinstance(table_max_date, dt.date) else None,
+        "cursor_source": "refresh_audit" if audit_max_date else "table",
         "has_data": has_data,
+        "has_cursor": current_max_date is not None,
+        "up_to_date": up_to_date,
     }
 
 

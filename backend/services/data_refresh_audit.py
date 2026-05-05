@@ -25,6 +25,12 @@ class DatasetRefreshStatus:
     job_id: str | None = None
     error_message: str | None = None
     metadata: dict[str, Any] | None = None
+    data_max_at: datetime | None = None
+    written_rows: int | None = None
+    expected_rows: int | None = None
+    coverage_ratio: float | None = None
+    quality_status: str = "unknown"
+    failure_category: str | None = None
 
 
 class DataRefreshAuditRepository:
@@ -46,6 +52,12 @@ class DataRefreshAuditRepository:
         job_id: str | None = None,
         data_source: str = "tushare",
         metadata: dict[str, Any] | None = None,
+        data_max_at: datetime | None = None,
+        written_rows: int | None = None,
+        expected_rows: int | None = None,
+        coverage_ratio: float | None = None,
+        quality_status: str = "ok",
+        failure_category: str | None = None,
         conn: Any | None = None,
     ) -> None:
         self._record(
@@ -57,6 +69,12 @@ class DataRefreshAuditRepository:
             job_id=job_id,
             error_message=None,
             metadata=metadata or {},
+            data_max_at=data_max_at,
+            written_rows=row_count if written_rows is None else written_rows,
+            expected_rows=expected_rows,
+            coverage_ratio=coverage_ratio,
+            quality_status=quality_status,
+            failure_category=failure_category,
             conn=conn,
         )
 
@@ -69,6 +87,12 @@ class DataRefreshAuditRepository:
         job_id: str | None = None,
         data_source: str = "tushare",
         metadata: dict[str, Any] | None = None,
+        data_max_at: datetime | None = None,
+        written_rows: int | None = 0,
+        expected_rows: int | None = None,
+        coverage_ratio: float | None = None,
+        quality_status: str = "error",
+        failure_category: str | None = None,
         conn: Any | None = None,
     ) -> None:
         self._record(
@@ -80,6 +104,12 @@ class DataRefreshAuditRepository:
             job_id=job_id,
             error_message=error_message,
             metadata=metadata or {},
+            data_max_at=data_max_at,
+            written_rows=written_rows,
+            expected_rows=expected_rows,
+            coverage_ratio=coverage_ratio,
+            quality_status=quality_status,
+            failure_category=failure_category,
             conn=conn,
         )
 
@@ -116,6 +146,20 @@ class DataRefreshAuditRepository:
                     "error_message": status.error_message,
                 },
             )
+        if status.quality_status in {"error", "empty_invalid", "low_coverage"}:
+            raise DataUnavailableError(
+                "required dataset refresh quality is not usable",
+                context={
+                    "dataset": dataset,
+                    "trade_date": trade_date.isoformat(),
+                    "data_source": status.data_source,
+                    "status": status.status,
+                    "quality_status": status.quality_status,
+                    "coverage_ratio": status.coverage_ratio,
+                    "failure_category": status.failure_category,
+                    "error_message": status.error_message,
+                },
+            )
         if max_age_minutes is not None:
             cutoff = datetime.now(UTC) - timedelta(minutes=max_age_minutes)
             refreshed_at = status.refreshed_at
@@ -143,7 +187,9 @@ class DataRefreshAuditRepository:
     ) -> DatasetRefreshStatus | None:
         sql = """
             SELECT dataset, trade_date, data_source, status, row_count,
-                   refreshed_at, job_id::text, error_message, metadata
+                   refreshed_at, job_id::text, error_message, metadata,
+                   data_max_at, written_rows, expected_rows, coverage_ratio,
+                   quality_status, failure_category
             FROM market.dataset_date_refresh_audit
             WHERE dataset = %s AND trade_date = %s
         """
@@ -178,6 +224,12 @@ class DataRefreshAuditRepository:
             job_id=row["job_id"],
             error_message=row["error_message"],
             metadata=row["metadata"] or {},
+            data_max_at=row["data_max_at"],
+            written_rows=int(row["written_rows"]) if row["written_rows"] is not None else None,
+            expected_rows=int(row["expected_rows"]) if row["expected_rows"] is not None else None,
+            coverage_ratio=float(row["coverage_ratio"]) if row["coverage_ratio"] is not None else None,
+            quality_status=str(row["quality_status"] or "unknown"),
+            failure_category=row["failure_category"],
         )
 
     def _record(
@@ -191,6 +243,12 @@ class DataRefreshAuditRepository:
         job_id: str | None,
         error_message: str | None,
         metadata: dict[str, Any],
+        data_max_at: datetime | None,
+        written_rows: int | None,
+        expected_rows: int | None,
+        coverage_ratio: float | None,
+        quality_status: str,
+        failure_category: str | None,
         conn: Any | None,
     ) -> None:
         if conn is not None:
@@ -204,6 +262,12 @@ class DataRefreshAuditRepository:
                 job_id=job_id,
                 error_message=error_message,
                 metadata=metadata,
+                data_max_at=data_max_at,
+                written_rows=written_rows,
+                expected_rows=expected_rows,
+                coverage_ratio=coverage_ratio,
+                quality_status=quality_status,
+                failure_category=failure_category,
             )
             return
         with self._conn_factory() as owned_conn:
@@ -217,6 +281,12 @@ class DataRefreshAuditRepository:
                 job_id=job_id,
                 error_message=error_message,
                 metadata=metadata,
+                data_max_at=data_max_at,
+                written_rows=written_rows,
+                expected_rows=expected_rows,
+                coverage_ratio=coverage_ratio,
+                quality_status=quality_status,
+                failure_category=failure_category,
             )
 
     @staticmethod
@@ -231,21 +301,35 @@ class DataRefreshAuditRepository:
         job_id: str | None,
         error_message: str | None,
         metadata: dict[str, Any],
+        data_max_at: datetime | None,
+        written_rows: int | None,
+        expected_rows: int | None,
+        coverage_ratio: float | None,
+        quality_status: str,
+        failure_category: str | None,
     ) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO market.dataset_date_refresh_audit (
                     dataset, trade_date, data_source, job_id, status,
-                    row_count, refreshed_at, error_message, metadata
-                ) VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s, %s)
+                    row_count, refreshed_at, error_message, metadata,
+                    data_max_at, written_rows, expected_rows, coverage_ratio,
+                    quality_status, failure_category
+                ) VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (dataset, trade_date, data_source) DO UPDATE SET
                     job_id = EXCLUDED.job_id,
                     status = EXCLUDED.status,
                     row_count = EXCLUDED.row_count,
                     refreshed_at = EXCLUDED.refreshed_at,
                     error_message = EXCLUDED.error_message,
-                    metadata = EXCLUDED.metadata
+                    metadata = EXCLUDED.metadata,
+                    data_max_at = EXCLUDED.data_max_at,
+                    written_rows = EXCLUDED.written_rows,
+                    expected_rows = EXCLUDED.expected_rows,
+                    coverage_ratio = EXCLUDED.coverage_ratio,
+                    quality_status = EXCLUDED.quality_status,
+                    failure_category = EXCLUDED.failure_category
                 """,
                 (
                     dataset,
@@ -256,5 +340,11 @@ class DataRefreshAuditRepository:
                     int(row_count),
                     error_message,
                     psycopg2.extras.Json(metadata),
+                    data_max_at,
+                    int(written_rows) if written_rows is not None else None,
+                    int(expected_rows) if expected_rows is not None else None,
+                    coverage_ratio,
+                    quality_status,
+                    failure_category,
                 ),
             )

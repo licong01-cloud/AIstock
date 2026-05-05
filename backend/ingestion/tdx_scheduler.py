@@ -41,7 +41,9 @@ from dotenv import load_dotenv
 
 from ..services.tushare_dataset_specs import DATASET_REGISTRY
 from ..services.tushare_sync_engine import TushareSyncEngine
-from ..services.data_completeness import DataCompletenessChecker, DATASET_TABLE_MAP
+from ..services.audit_backed_data_health import AuditBackedDataHealthChecker
+from ..services.data_completeness import DATASET_TABLE_MAP
+from ..services.data_refresh_audit import DataRefreshAuditRepository
 from ..services.data_health_alerter import DataHealthAlerter, classify_retry_alert
 
 _logger = logging.getLogger(__name__)
@@ -109,6 +111,7 @@ DEFAULT_INGEST_TUSHARE_STOCK_ST = ROOT_DIR / "scripts" / "ingest_tushare_stock_s
 DEFAULT_INGEST_TUSHARE_BAK_BASIC = ROOT_DIR / "scripts" / "ingest_tushare_bak_basic.py"
 DEFAULT_INGEST_TUSHARE_DAILY_BASIC = ROOT_DIR / "scripts" / "ingest_tushare_daily_basic.py"
 DEFAULT_INGEST_TUSHARE_ANNS_D = ROOT_DIR / "scripts" / "ingest_tushare_anns_init.py"
+DEFAULT_SYNC_ANNS_METADATA = ROOT_DIR / "scripts" / "sync_anns_metadata_incremental.py"
 DEFAULT_DOWNLOAD_ANNS_PDF = ROOT_DIR / "scripts" / "download_anns_pdf.py"
 DEFAULT_INGEST_TUSHARE_INDEX_BASIC = ROOT_DIR / "scripts" / "ingest_tushare_index_basic.py"
 DEFAULT_INGEST_TUSHARE_INDEX_DAILY = ROOT_DIR / "scripts" / "ingest_tushare_index_daily.py"
@@ -497,7 +500,7 @@ class TDXScheduler:
 
     def _check_dataset_recovered(self, dataset: str) -> Optional[Any]:
         check_dataset = _AUTO_RETRY_CHECK_ALIASES.get(dataset, dataset)
-        checker = DataCompletenessChecker(self._db_cfg)
+        checker = AuditBackedDataHealthChecker(self._db_cfg)
         results = checker.check_datasets([check_dataset])
         if not results:
             return None
@@ -671,58 +674,86 @@ class TDXScheduler:
         return len(rows) > 0
 
     def _compute_auto_range(self, dataset: str) -> Tuple[Optional[dt.date], Optional[dt.date]]:
-        """Return (start_date, end_date) for incremental catch-up, or (None, None) if up-to-date.
+        """Return (start_date, end_date) for incremental catch-up.
 
-        Reuses the same logic as the ``/api/ingestion/auto-range`` endpoint:
-        1. Look up table_name / date_column from ``market.data_stats_config``
-        2. Query MAX(date_column) to find current data boundary
-        3. Query ``market.trading_calendar`` for the latest trading date <= today
-        4. Derive start_date = first trading day after max_date
+        By default, datasets advance by trading day. Event datasets can opt in
+        to calendar-day progression with
+        data_stats_config.extra_info.date_sequence = 'calendar'.
         """
-        # 1) config lookup
         cfg_rows = self._fetchall(
-            "SELECT table_name, date_column FROM market.data_stats_config WHERE data_kind = %s AND enabled",
+            """
+            SELECT table_name, date_column, extra_info
+              FROM market.data_stats_config
+             WHERE data_kind = %s AND enabled
+            """,
             (dataset,),
         )
         if not cfg_rows:
             return None, None
         table_name = str(cfg_rows[0].get("table_name") or "").strip()
         date_column = str(cfg_rows[0].get("date_column") or "trade_date").strip()
+        extra_info = cfg_rows[0].get("extra_info") or {}
+        if isinstance(extra_info, str):
+            try:
+                extra_info = json.loads(extra_info)
+            except Exception:
+                extra_info = {}
+        use_calendar_dates = str((extra_info or {}).get("date_sequence") or "").strip().lower() in {
+            "calendar",
+            "calendar_day",
+            "natural_day",
+        }
+        use_refresh_audit_cursor = str((extra_info or {}).get("cursor_source") or "").strip().lower() in {
+            "refresh_audit",
+            "audit",
+        }
         if not table_name:
             return None, None
 
-        # 2) current max date
         rows = self._fetchall(f"SELECT MAX({date_column})::date AS mx FROM {table_name}")
-        current_max: Optional[dt.date] = None
-        if rows and rows[0].get("mx"):
-            current_max = rows[0]["mx"]
+        current_max: Optional[dt.date] = rows[0].get("mx") if rows and rows[0].get("mx") else None
+        if use_refresh_audit_cursor:
+            audit_rows = self._fetchall(
+                """
+                SELECT MAX(trade_date)::date AS mx
+                  FROM market.dataset_date_refresh_audit
+                 WHERE dataset = %s
+                   AND status = 'success'
+                """,
+                (dataset,),
+            )
+            audit_max = audit_rows[0].get("mx") if audit_rows else None
+            if audit_max is not None:
+                current_max = audit_max
 
-        # 3) latest trading date <= today
-        ltd_rows = self._fetchall(
-            "SELECT MAX(cal_date) AS latest FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date <= CURRENT_DATE"
-        )
-        latest_trading: Optional[dt.date] = ltd_rows[0].get("latest") if ltd_rows else None
-        if latest_trading is None:
+        if use_calendar_dates:
+            latest_date: Optional[dt.date] = dt.date.today()
+        else:
+            ltd_rows = self._fetchall(
+                "SELECT MAX(cal_date) AS latest FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date <= CURRENT_DATE"
+            )
+            latest_date = ltd_rows[0].get("latest") if ltd_rows else None
+        if latest_date is None:
             return None, None
 
-        # 4) derive start_date
         if current_max is None:
-            # no data at all – let the script/engine handle full range
             return None, None
 
-        if current_max >= latest_trading:
-            # already up-to-date
+        if current_max >= latest_date:
             return None, None
 
-        next_rows = self._fetchall(
-            "SELECT MIN(cal_date) AS nxt FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date > %s",
-            (current_max,),
-        )
-        start_date = next_rows[0].get("nxt") if next_rows else None
-        if start_date is None or start_date > latest_trading:
+        if use_calendar_dates:
+            start_date = current_max + dt.timedelta(days=1)
+        else:
+            next_rows = self._fetchall(
+                "SELECT MIN(cal_date) AS nxt FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date > %s",
+                (current_max,),
+            )
+            start_date = next_rows[0].get("nxt") if next_rows else None
+        if start_date is None or start_date > latest_date:
             return None, None
 
-        return start_date, latest_trading
+        return start_date, latest_date
 
     def _resolve_suspend_d_refresh_range(
         self,
@@ -1117,6 +1148,8 @@ class TDXScheduler:
         # Tushare anns_d 公告数据使用独立脚本（两种模式共用）
         if dataset == "anns_d" and mode in {"init", "incremental"}:
             return DEFAULT_INGEST_TUSHARE_ANNS_D
+        if dataset == "anns_metadata" and mode in {"init", "incremental"}:
+            return DEFAULT_SYNC_ANNS_METADATA
         # Tushare cyq_perf 和 cyq_chips 筹码数据使用独立脚本（两种模式共用）
         if dataset in {"cyq_perf", "cyq_chips"} and mode in {"init", "incremental"}:
             return DEFAULT_INGEST_TUSHARE_CYQ
@@ -1146,6 +1179,29 @@ class TDXScheduler:
         args: List[str] = []
         dataset = (dataset or "").strip().lower()
         mode = (mode or "").strip().lower()
+
+        def add_anns_metadata_args(run_mode: str) -> None:
+            args.extend(["--mode", run_mode])
+            if options.get("start_date"):
+                args.extend(["--start-date", str(options["start_date"])])
+            if options.get("end_date"):
+                args.extend(["--end-date", str(options["end_date"])])
+            if options.get("lookback_days"):
+                args.extend(["--lookback-days", str(options["lookback_days"])])
+            if options.get("source"):
+                args.extend(["--source", str(options["source"])])
+            if options.get("workers"):
+                args.extend(["--workers", str(options["workers"])])
+            request_sleep = options.get("request_sleep", options.get("batch_sleep"))
+            if request_sleep is not None:
+                args.extend(["--request-sleep", str(request_sleep)])
+            if options.get("max_retries"):
+                args.extend(["--max-retries", str(options["max_retries"])])
+            if options.get("audit_jsonl"):
+                args.extend(["--audit-jsonl", str(options["audit_jsonl"])])
+            if options.get("job_id"):
+                args.extend(["--job-id", str(options["job_id"])])
+
         if mode == "incremental":
             if dataset == "adj_factor":
                 # Tushare adj_factor init: date range + optional truncate + job id
@@ -1227,6 +1283,8 @@ class TDXScheduler:
                     args += ["--batch-sleep", str(options["batch_sleep"])]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
+            elif dataset == "anns_metadata":
+                add_anns_metadata_args("incremental")
             elif dataset in {"cyq_perf", "cyq_chips"}:
                 # Tushare cyq_perf / cyq_chips 增量：起止日期 + job_id + 可选 batch_sleep
                 args += ["--mode", "incremental", "--dataset", dataset]
@@ -1299,6 +1357,8 @@ class TDXScheduler:
                     args += ["--truncate"]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
+            elif dataset == "anns_metadata":
+                add_anns_metadata_args("init")
             elif dataset in {"stock_st", "bak_basic", "daily_basic", "anns_d", "cyq_perf", "cyq_chips"}:
                 # Tushare stock_st / bak_basic / daily_basic / anns_d / cyq_perf / cyq_chips 全量：需要起止日期 + 可选 truncate/batch_sleep + job_id
                 args += ["--mode", "init"]
@@ -1712,6 +1772,8 @@ class TDXScheduler:
         rows = 0
         error_msg: Optional[str] = None
         delayed = False
+        audit_start: Optional[_dt.date] = None
+        audit_end: Optional[_dt.date] = None
         try:
             # 标记 job 为 running
             if job_id is not None:
@@ -1731,6 +1793,7 @@ class TDXScheduler:
                     raise ValueError("sector_data init requires start_date and end_date")
                 _logger.info("sector_data init: building %s ~ %s", start_date, end_date)
                 rows = builder.build_range(start_date, end_date)
+                audit_start, audit_end = start_date, end_date
             else:
                 # incremental: 自动推断日期范围
                 latest_sector = self._query_max_date("market.sector_data", "trade_date")
@@ -1798,8 +1861,21 @@ class TDXScheduler:
                     else:
                         _logger.info("sector_data incremental: building %s ~ %s", auto_start, auto_end)
                         rows = builder.build_range(auto_start, auto_end)
+                        audit_start, audit_end = auto_start, auto_end
 
             # 标记 job 状态（delayed 不标记为 success）
+            if not delayed:
+                try:
+                    self._record_refresh_audit_from_table_range(
+                        dataset="sector_data",
+                        job_id=job_id,
+                        start_date=audit_start,
+                        end_date=audit_end,
+                        data_source="sector_builder",
+                        metadata={"mode": mode, "rows": rows},
+                    )
+                except Exception as audit_exc:
+                    _logger.warning("sector_data refresh audit failed: %s", audit_exc)
             if job_id is not None and not delayed:
                 try:
                     summary_patch = json.dumps(
@@ -1858,6 +1934,127 @@ class TDXScheduler:
                 row = cur.fetchone()
                 return row[0] if row and row[0] else None
 
+    def _recent_trading_floor(self, count: int) -> Optional[dt.date]:
+        rows = self._fetchall(
+            """
+            SELECT cal_date
+            FROM market.trading_calendar
+            WHERE is_trading = TRUE AND cal_date <= CURRENT_DATE
+            ORDER BY cal_date DESC
+            LIMIT %s
+            """,
+            (count,),
+        )
+        if not rows:
+            return None
+        value = rows[-1].get("cal_date")
+        return value if isinstance(value, dt.date) else dt.date.fromisoformat(str(value))
+
+    @staticmethod
+    def _extract_cmd_arg(cmd: List[str], flag: str) -> Optional[str]:
+        try:
+            idx = cmd.index(flag)
+        except ValueError:
+            return None
+        if idx + 1 >= len(cmd):
+            return None
+        return str(cmd[idx + 1])
+
+    @staticmethod
+    def _parse_cmd_date(value: Optional[str]) -> Optional[dt.date]:
+        if not value:
+            return None
+        parts = str(value).split("-")
+        if len(parts) != 3 or not all(part.isdigit() for part in parts):
+            return None
+        year, month, day = (int(part) for part in parts)
+        if not (1 <= month <= 12 and 1 <= day <= 31):
+            return None
+        return dt.date(year, month, day)
+
+    def _record_refresh_audit_from_table_range(
+        self,
+        *,
+        dataset: str,
+        job_id: Optional[uuid.UUID],
+        start_date: Optional[dt.date],
+        end_date: Optional[dt.date],
+        data_source: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Write per-date readiness rows from the physical table after a job."""
+        if start_date is None or end_date is None or start_date > end_date:
+            return
+        info = DATASET_TABLE_MAP.get(dataset)
+        if info is None:
+            return
+        table_name, date_col = info
+        if dataset == "kline_minute_raw":
+            floor = self._recent_trading_floor(30)
+            if floor is not None and start_date < floor:
+                start_date = floor
+        rows = self._fetchall(
+            f"""
+            SELECT {date_col}::date AS trade_date,
+                   COUNT(*)::bigint AS row_count,
+                   MAX({date_col}) AS data_max_at
+            FROM {table_name}
+            WHERE {date_col} >= %s
+              AND {date_col} < %s
+            GROUP BY {date_col}::date
+            """,
+            (start_date, end_date + dt.timedelta(days=1)),
+        )
+        counts = {r["trade_date"]: int(r["row_count"] or 0) for r in rows}
+        max_at = {r["trade_date"]: r.get("data_max_at") for r in rows}
+        target_dates = self._fetchall(
+            """
+            SELECT cal_date
+            FROM market.trading_calendar
+            WHERE is_trading = TRUE
+              AND cal_date >= %s
+              AND cal_date <= %s
+            ORDER BY cal_date
+            """,
+            (start_date, end_date),
+        )
+        repo = DataRefreshAuditRepository()
+        base_metadata = dict(metadata or {})
+        base_metadata.update({"audit_from_target_table": True, "table": table_name})
+        with _get_conn(self._db_cfg) as conn:
+            for row in target_dates:
+                trade_date = row.get("cal_date")
+                row_count = int(counts.get(trade_date, 0))
+                data_max_at = max_at.get(trade_date)
+                if not isinstance(data_max_at, dt.datetime):
+                    data_max_at = None
+                if row_count > 0:
+                    repo.record_success(
+                        dataset=dataset,
+                        trade_date=trade_date,
+                        row_count=row_count,
+                        job_id=str(job_id) if job_id else None,
+                        data_source=data_source,
+                        metadata=base_metadata,
+                        data_max_at=data_max_at,
+                        written_rows=row_count,
+                        quality_status="ok",
+                        conn=conn,
+                    )
+                else:
+                    repo.record_failure(
+                        dataset=dataset,
+                        trade_date=trade_date,
+                        error_message=f"{dataset} has 0 rows in {table_name} for {trade_date}",
+                        job_id=str(job_id) if job_id else None,
+                        data_source=data_source,
+                        metadata=base_metadata,
+                        written_rows=0,
+                        quality_status="empty_invalid",
+                        failure_category="empty_invalid",
+                        conn=conn,
+                    )
+
     def _run_data_freshness_check(
         self,
         run_id: uuid.UUID,
@@ -1882,8 +2079,9 @@ class TDXScheduler:
                 except Exception as exc:
                     _logger.error("failed to mark job %s as running: %s", job_id, exc)
 
-            # 1. 使用 DataCompletenessChecker 进行分级检查
-            checker = DataCompletenessChecker(self._db_cfg)
+            # 1. Prefer refresh-audit checks; only fall back to direct tables
+            # for datasets that do not have audit rows yet.
+            checker = AuditBackedDataHealthChecker(self._db_cfg)
             check_results = checker.check_all()
 
             # 2. 汇总结果 (compatible with existing summary format)
@@ -2014,7 +2212,7 @@ class TDXScheduler:
 
             # Phase 1: run the same health checker used by alerting instead of
             # maintaining a separate hard-coded MAX(date) list here.
-            checker = DataCompletenessChecker(self._db_cfg)
+            checker = AuditBackedDataHealthChecker(self._db_cfg)
             check_results = checker.check_all()
             latest_trading = check_results[0].expected_date if check_results else None
             if latest_trading is None:
@@ -2414,7 +2612,7 @@ class TDXScheduler:
                 )
 
             # 1) Run completeness check
-            checker = DataCompletenessChecker(self._db_cfg)
+            checker = AuditBackedDataHealthChecker(self._db_cfg)
             results = checker.check_all()
 
             stale_or_low = [r for r in results if r.status not in ("ok", "error")]
@@ -2465,7 +2663,7 @@ class TDXScheduler:
 
             # 4) Re-check still-failed datasets
             if retried:
-                checker2 = DataCompletenessChecker(self._db_cfg)
+                checker2 = AuditBackedDataHealthChecker(self._db_cfg)
                 results2 = checker2.check_datasets(retried)
                 still_bad = [r for r in results2 if r.status not in ("ok", "error")]
                 if still_bad:
@@ -2745,6 +2943,20 @@ class TDXScheduler:
                     self._execute(sql, (status, json.dumps(summary, ensure_ascii=False, default=str), job_uuid))
                 except Exception as exc:
                     _logger.error("unexpected error: %s", exc)
+            if status == "success":
+                try:
+                    audit_start = self._parse_cmd_date(self._extract_cmd_arg(cmd, "--start-date"))
+                    audit_end = self._parse_cmd_date(self._extract_cmd_arg(cmd, "--end-date"))
+                    self._record_refresh_audit_from_table_range(
+                        dataset=(dataset or "").strip().lower(),
+                        job_id=job_uuid,
+                        start_date=audit_start,
+                        end_date=audit_end,
+                        data_source="script",
+                        metadata={"script": str(cmd[1]) if len(cmd) > 1 else None, "mode": mode},
+                    )
+                except Exception as audit_exc:
+                    _logger.warning("%s refresh audit from script output failed: %s", dataset, audit_exc)
         except Exception as exc:  # noqa: BLE001
             if schedule_id:
                 self._update_ingestion_schedule(schedule_id, last_run=start_ts, last_status="failed", last_error=str(exc))
@@ -2823,6 +3035,17 @@ class TDXScheduler:
                 # already up to date
                 status = "success"
                 summary["message"] = "already up to date"
+                try:
+                    self._record_refresh_audit_from_table_range(
+                        dataset=dataset,
+                        job_id=job_id,
+                        start_date=current_max,
+                        end_date=current_max,
+                        data_source="tdx_api",
+                        metadata={"mode": "incremental", "via": "go_init", "already_up_to_date": True},
+                    )
+                except Exception as audit_exc:
+                    _logger.warning("%s already-up-to-date refresh audit failed: %s", dataset, audit_exc)
                 # 更新 job 记录（由 _scheduled_ingestion_run 预创建）
                 if job_id:
                     try:
@@ -2923,6 +3146,17 @@ class TDXScheduler:
                     raise RuntimeError(f"Go task {go_task_id} timed out after 2400s, status={go_status}")
 
             status = "success"
+            try:
+                self._record_refresh_audit_from_table_range(
+                    dataset=dataset,
+                    job_id=job_id,
+                    start_date=start_date,
+                    end_date=latest_trading,
+                    data_source="tdx_api",
+                    metadata={"mode": "incremental", "via": "go_init", "go_task_id": go_task_id},
+                )
+            except Exception as audit_exc:
+                _logger.warning("%s refresh audit after Go sync failed: %s", dataset, audit_exc)
 
         except Exception as exc:  # noqa: BLE001
             summary["error"] = str(exc)

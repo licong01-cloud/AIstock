@@ -15,7 +15,24 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-DATASET_CLOSE_READY_AFTER = time(18, 0)
+DATASET_CLOSE_READY_AFTER = time(20, 0)
+DATASET_AUDIT_REQUIRED_COLUMNS = {
+    "dataset",
+    "trade_date",
+    "data_source",
+    "job_id",
+    "status",
+    "row_count",
+    "refreshed_at",
+    "error_message",
+    "metadata",
+    "data_max_at",
+    "written_rows",
+    "expected_rows",
+    "coverage_ratio",
+    "quality_status",
+    "failure_category",
+}
 
 
 @dataclass
@@ -68,6 +85,7 @@ class DataQualitySmoke:
         portfolio_name_prefix: str | None = None,
         portfolio_ids: list[str] | None = None,
         strict_history: bool = False,
+        audit_schema_only: bool = False,
     ) -> None:
         _load_dotenv()
         from backend.db.pg_pool import get_conn
@@ -78,12 +96,17 @@ class DataQualitySmoke:
         self.portfolio_name_prefix = portfolio_name_prefix
         self.portfolio_ids = portfolio_ids or []
         self.strict_history = strict_history
+        self.audit_schema_only = audit_schema_only
         self.results: list[CheckResult] = []
 
     def run(self) -> list[CheckResult]:
         with self._get_conn() as conn:
             with conn.cursor() as cur:
+                if self.audit_schema_only:
+                    self._check_dataset_audit_schema(cur)
+                    return self.results
                 self._check_required_tables(cur)
+                self._check_dataset_audit_schema(cur)
                 latest_trading_day = self._latest_trading_day(cur)
                 previous_trading_day = self._previous_trading_day(cur, latest_trading_day)
                 self._check_dataset_audit(cur, latest_trading_day, previous_trading_day)
@@ -172,6 +195,63 @@ class DataQualitySmoke:
         else:
             self._pass("schema_required_tables", "required Paper v2/Selection tables exist", {"table_count": len(required)})
 
+    def _check_dataset_audit_schema(self, cur: Any) -> None:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'market'
+              AND table_name = 'dataset_date_refresh_audit'
+            """
+        )
+        present = {row[0] for row in cur.fetchall()}
+        missing = sorted(DATASET_AUDIT_REQUIRED_COLUMNS - present)
+        cur.execute(
+            """
+            SELECT c.column_name, d.description
+            FROM information_schema.columns c
+            LEFT JOIN pg_catalog.pg_class cls
+              ON cls.relname = c.table_name
+            LEFT JOIN pg_catalog.pg_namespace ns
+              ON ns.oid = cls.relnamespace
+             AND ns.nspname = c.table_schema
+            LEFT JOIN pg_catalog.pg_attribute a
+              ON a.attrelid = cls.oid
+             AND a.attname = c.column_name
+            LEFT JOIN pg_catalog.pg_description d
+              ON d.objoid = cls.oid
+             AND d.objsubid = a.attnum
+            WHERE c.table_schema = 'market'
+              AND c.table_name = 'dataset_date_refresh_audit'
+            """
+        )
+        column_comments = {row[0]: row[1] for row in cur.fetchall()}
+        uncommented = sorted(col for col in DATASET_AUDIT_REQUIRED_COLUMNS if not column_comments.get(col))
+        cur.execute(
+            """
+            SELECT d.description
+            FROM pg_catalog.pg_class cls
+            JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace
+            LEFT JOIN pg_catalog.pg_description d
+              ON d.objoid = cls.oid
+             AND d.objsubid = 0
+            WHERE ns.nspname = 'market'
+              AND cls.relname = 'dataset_date_refresh_audit'
+            """
+        )
+        row = cur.fetchone()
+        table_comment = row[0] if row else None
+        context = {
+            "required_columns": sorted(DATASET_AUDIT_REQUIRED_COLUMNS),
+            "missing_columns": missing,
+            "uncommented_columns": uncommented,
+            "has_table_comment": bool(table_comment),
+        }
+        if missing or uncommented or not table_comment:
+            self._fail("dataset_refresh_audit_schema", "dataset refresh audit table is missing required fields or comments", context)
+        else:
+            self._pass("dataset_refresh_audit_schema", "dataset refresh audit table has required fields and comments", context)
+
     def _latest_trading_day(self, cur: Any) -> date:
         as_of_date = self._latest_completed_market_date()
         latest = self._query_one(
@@ -237,7 +317,9 @@ class DataQualitySmoke:
         for dataset, min_date in requirements.items():
             cur.execute(
                 """
-                SELECT trade_date, refreshed_at, row_count
+                SELECT trade_date, refreshed_at, row_count, written_rows,
+                       expected_rows, coverage_ratio, quality_status,
+                       failure_category
                 FROM market.dataset_date_refresh_audit
                 WHERE dataset = %s AND status = 'success'
                 ORDER BY trade_date DESC, refreshed_at DESC
@@ -246,15 +328,31 @@ class DataQualitySmoke:
                 (dataset,),
             )
             row = cur.fetchone()
-            latest_success, refreshed_at, row_count = row if row else (None, None, None)
+            (
+                latest_success,
+                refreshed_at,
+                row_count,
+                written_rows,
+                expected_rows,
+                coverage_ratio,
+                quality_status,
+                failure_category,
+            ) = row if row else (None, None, None, None, None, None, None, None)
             rows[dataset] = {
                 "latest_success": latest_success,
                 "min_required_date": min_date,
                 "refreshed_at": refreshed_at.isoformat() if refreshed_at else None,
                 "row_count_at_latest": row_count,
+                "written_rows": written_rows,
+                "expected_rows": expected_rows,
+                "coverage_ratio": float(coverage_ratio) if coverage_ratio is not None else None,
+                "quality_status": quality_status,
+                "failure_category": failure_category,
             }
             if latest_success is None or latest_success < min_date:
                 failures.append({"dataset": dataset, **rows[dataset]})
+            elif quality_status in {"error", "empty_invalid", "low_coverage"}:
+                failures.append({"dataset": dataset, **rows[dataset], "reason": "unusable_quality_status"})
         if failures:
             self._fail("dataset_refresh_audit", "required datasets are not fresh enough for Paper v2/Selection smoke", {"failures": failures, "rows": rows})
         else:
@@ -452,12 +550,13 @@ class DataQualitySmoke:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Read-only AIstock data quality smoke checks.")
-    parser.add_argument("--scope", default="paper_v2_selection_center", choices=["paper_v2_selection_center"])
+    parser.add_argument("--scope", default="paper_v2_selection_center", choices=["paper_v2_selection_center", "local_data_management"])
     parser.add_argument("--max-recent-runs", type=int, default=80)
     parser.add_argument("--since-hours", type=int, help="Only inspect Paper v2 runs started within this many hours.")
     parser.add_argument("--portfolio-name-prefix", help="Only inspect Paper v2 runs for portfolios whose name starts with this prefix. Ledger violations are fatal in this scoped mode.")
     parser.add_argument("--portfolio-id", action="append", dest="portfolio_ids", help="Only inspect Paper v2 runs for this portfolio_id; repeatable. Ledger violations are fatal in this scoped mode.")
     parser.add_argument("--strict-history", action="store_true", help="Treat historical ledger consistency warnings as failures.")
+    parser.add_argument("--audit-schema-only", action="store_true", help="Only validate market.dataset_date_refresh_audit fields/comments.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     parser.add_argument("--output", help="Optional JSON output path for validation evidence.")
     return parser
@@ -471,6 +570,7 @@ def main() -> int:
         portfolio_name_prefix=args.portfolio_name_prefix,
         portfolio_ids=args.portfolio_ids,
         strict_history=args.strict_history,
+        audit_schema_only=args.audit_schema_only,
     )
     results = smoke.run()
     payload = {
