@@ -29,7 +29,7 @@ from backend.tests.paper_trading_v2.test_day_runner import (
 def _portfolio_fixture():
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
-    manifest = make_paper_enabled_manifest()
+    manifest = make_paper_enabled_manifest(topk=2)
     package_repo.save_manifest(manifest)
     service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
@@ -107,7 +107,7 @@ def test_runtime_profile_activation_is_copied_into_day_run() -> None:
     profile, version = service.create_runtime_profile(
         portfolio_id=portfolio.portfolio_id,
         profile_name="Top2 active",
-        config_json={"runtime_profile": {"selection": {"top_k": 2}, "tradability": {"exclude_suspended": False}}},
+        config_json={"runtime_profile": {"selection": {"top_k": 2}, "tradability": {"exclude_suspended": True}}},
         created_by="unit_test",
     )
     activation = service.activate_runtime_config(

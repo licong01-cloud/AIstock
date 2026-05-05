@@ -8,8 +8,13 @@ from typing import Any
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
-from backend.services.selection_center.runtime_profile import normalize_selection_runtime_config, parse_selection_runtime_profile
+from backend.services.selection_center.runtime_profile import parse_selection_runtime_profile
 from backend.services.selection_center.tradability import TradabilityFilter
+from backend.services.strategy_package.backtest_contract import (
+    normalize_runtime_config_with_backtest_contract,
+    validate_execution_policy_matches_manifest,
+    validate_runtime_profile_matches_backtest_contract,
+)
 from backend.services.strategy_package.runtime import RebalanceEngine, StrategyPackageRuntime, TargetPositionEngine
 from backend.services.strategy_package.selection_artifact import (
     StrategyPackageSelectionArtifactService,
@@ -116,6 +121,12 @@ class PaperTradingDayRunner:
             trade_date=trade_date,
             runtime_config=runtime_config or {},
         )
+        config = normalize_runtime_config_with_backtest_contract(
+            manifest,
+            config,
+            context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "day_runner"},
+            include_contract=True,
+        )
         runtime_profile = parse_selection_runtime_profile(config)
         self._reject_raw_execution_overrides(config)
         execution_policy_context = self._execution_policy_context_for_date(portfolio, trade_date)
@@ -124,8 +135,19 @@ class PaperTradingDayRunner:
             package_id=manifest.package_id,
             policy_json=execution_policy_json,
         )
+        validate_execution_policy_matches_manifest(
+            manifest,
+            execution_policy_json,
+            context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
+        )
+        runtime_contract = validate_runtime_profile_matches_backtest_contract(
+            manifest,
+            runtime_profile,
+            context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
+        )
         execution_algo_config = dict(execution_policy_json.get("algo_config") or {})
         config["validated_execution_policy"] = execution_policy_context
+        config["qe_backtest_runtime_contract"] = runtime_contract
         run = PaperRun(
             portfolio_id=portfolio_id,
             trade_date=trade_date,
@@ -281,6 +303,9 @@ class PaperTradingDayRunner:
                     snapshot=snapshot,
                     total_equity=total_equity,
                     top_k=top_k,
+                    manifest=manifest,
+                    current_positions=current_positions,
+                    current_prices=config.get("current_prices") or {},
                 )
                 if snapshot.candidates
                 else []
@@ -292,7 +317,7 @@ class PaperTradingDayRunner:
                     trade_date=trade_date,
                     package_id=manifest.package_id,
                     manifest_sha256=manifest.manifest_sha256 or portfolio.manifest_sha256,
-                    existing_target_symbols={target.symbol for target in targets},
+                    existing_target_symbols=set(),
                 )
                 targets = [*targets, *forced_exit_targets]
             self.repository.save_run_event(
@@ -803,7 +828,7 @@ class PaperTradingDayRunner:
 
     @staticmethod
     def _policy_requires_day_features(policy_json: dict[str, Any]) -> bool:
-        return str(policy_json.get("algo_code") or "").strip().upper() == "V25_TWO_STAGE"
+        return str(policy_json.get("algo_code") or "").strip().upper() in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"}
 
     @staticmethod
     def _data_requirements_for_policy(policy_json: dict[str, Any], *, package_id: str) -> dict[str, bool]:

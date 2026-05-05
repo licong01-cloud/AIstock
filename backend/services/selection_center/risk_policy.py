@@ -95,17 +95,7 @@ class StPitRiskDecisionProvider:
         if not normalized:
             return {}
         if profile.strict_data_ready:
-            from backend.services.stock_universe_pit_service import (
-                DEFAULT_ST_PIT_START_DATE,
-                StockUniversePitService,
-            )
-
-            StockUniversePitService().ensure_st_pit_universe(
-                universe_key=profile.st_universe_key,
-                start_date=DEFAULT_ST_PIT_START_DATE,
-                end_date=trade_date,
-                strict=True,
-            )
+            self._require_ready_pit_state(universe_key=profile.st_universe_key, trade_date=trade_date)
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -177,6 +167,56 @@ class StPitRiskDecisionProvider:
                 ],
             )
         return decisions
+
+    def _require_ready_pit_state(self, *, universe_key: str, trade_date: date) -> None:
+        """Paper/Selection are consumers; data management owns PIT rebuilds."""
+
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT status, dirty, start_date, end_date, last_error
+                          FROM market.stock_universe_pit_state
+                         WHERE universe_key = %s
+                        """,
+                        (universe_key,),
+                    )
+                    row = cur.fetchone()
+        except Exception as exc:
+            raise DataUnavailableError(
+                "ST PIT risk policy readiness check failed",
+                context={"trade_date": trade_date.isoformat(), "universe_key": universe_key},
+            ) from exc
+        if not row:
+            raise DataUnavailableError(
+                "ST PIT risk policy universe state is missing",
+                context={"trade_date": trade_date.isoformat(), "universe_key": universe_key},
+            )
+        status, dirty, start_date, end_date, last_error = row
+        if str(status or "").lower() != "ready" or bool(dirty) or start_date is None or end_date is None:
+            raise DataUnavailableError(
+                "ST PIT risk policy universe is not ready",
+                context={
+                    "trade_date": trade_date.isoformat(),
+                    "universe_key": universe_key,
+                    "status": status,
+                    "dirty": bool(dirty),
+                    "start_date": start_date.isoformat() if start_date else None,
+                    "end_date": end_date.isoformat() if end_date else None,
+                    "last_error": last_error,
+                },
+            )
+        if start_date > trade_date or end_date < trade_date:
+            raise DataUnavailableError(
+                "ST PIT risk policy universe does not cover trade_date",
+                context={
+                    "trade_date": trade_date.isoformat(),
+                    "universe_key": universe_key,
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat(),
+                },
+            )
 
 
 class AnnouncementRiskDecisionProvider:

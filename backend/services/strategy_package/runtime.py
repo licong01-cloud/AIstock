@@ -7,12 +7,14 @@ schema-compatible but fails until component runtime artifacts are provided.
 
 from __future__ import annotations
 
+import math
 from datetime import date
 from typing import Any
 
 from backend.services.selection_center.hmm_runtime import SectorHMMRuntime
 from backend.services.selection_center.models import SelectionCandidate, SignalSnapshot, TargetPosition
 from backend.services.selection_center.runtime_profile import normalize_selection_runtime_config, parse_selection_runtime_profile
+from backend.services.strategy_package.backtest_contract import build_backtest_runtime_contract
 from backend.services.strategy_package.models import AlphaMode, StrategyPackageManifest
 from backend.services.strategy_package.selection_artifact import (
     StrategyPackageSelectionArtifactRepository,
@@ -229,6 +231,9 @@ class TargetPositionEngine:
         snapshot: SignalSnapshot,
         total_equity: float,
         top_k: int,
+        manifest: StrategyPackageManifest | None = None,
+        current_positions: dict[str, PositionLot] | None = None,
+        current_prices: dict[str, float] | None = None,
     ) -> list[TargetPosition]:
         if snapshot.valid_no_candidate:
             raise StrategyPackageValidationError(
@@ -239,6 +244,14 @@ class TargetPositionEngine:
             raise StrategyPackageValidationError("total_equity must be positive for target positions")
         if top_k <= 0:
             raise StrategyPackageValidationError("top_k must be positive for target positions")
+        if manifest is not None:
+            return self._build_targets_from_backtest_contract(
+                snapshot=snapshot,
+                total_equity=total_equity,
+                manifest=manifest,
+                current_positions=current_positions or {},
+                current_prices=current_prices or {},
+            )
         selected = sorted(snapshot.candidates, key=lambda item: item.rank)[:top_k]
         if not selected:
             raise StrategyPackageValidationError("target position engine received no candidates")
@@ -284,6 +297,386 @@ class TargetPositionEngine:
                 )
             )
         return targets
+
+    def _build_targets_from_backtest_contract(
+        self,
+        *,
+        snapshot: SignalSnapshot,
+        total_equity: float,
+        manifest: StrategyPackageManifest,
+        current_positions: dict[str, PositionLot],
+        current_prices: dict[str, float],
+    ) -> list[TargetPosition]:
+        contract = build_backtest_runtime_contract(manifest)
+        strategy = contract["portfolio_strategy"]
+        family = strategy["strategy_family"]
+        if family not in {"score_weighted_topk_v1", "score_weighted_topk_v2"}:
+            raise UnsupportedFeatureError(
+                "Paper v2 does not support the QE portfolio strategy contract yet",
+                context={"package_id": manifest.package_id, "strategy_family": family},
+            )
+        return self._build_score_weighted_targets(
+            snapshot=snapshot,
+            total_equity=total_equity,
+            current_positions=current_positions,
+            current_prices=current_prices,
+            params=strategy["params"],
+            strategy_family=family,
+        )
+
+    def _build_score_weighted_targets(
+        self,
+        *,
+        snapshot: SignalSnapshot,
+        total_equity: float,
+        current_positions: dict[str, PositionLot],
+        current_prices: dict[str, float],
+        params: dict[str, Any],
+        strategy_family: str,
+    ) -> list[TargetPosition]:
+        ordered = sorted(snapshot.candidates, key=lambda item: (item.rank, -item.score, item.symbol))
+        if not ordered:
+            raise StrategyPackageValidationError("target position engine received no candidates")
+
+        topk = int(params["topk"])
+        max_n_drop = int(params["max_n_drop"])
+        topk_candidates = ordered[:topk]
+        topk_symbols = {candidate.symbol for candidate in topk_candidates}
+        score_by_symbol = {candidate.symbol: float(candidate.score) for candidate in ordered}
+        candidate_by_symbol = {candidate.symbol: candidate for candidate in ordered}
+        current_symbols = list(current_positions)
+        valid_holdings = [symbol for symbol in current_symbols if symbol in score_by_symbol]
+
+        sell_candidates = [
+            (symbol, float(score_by_symbol.get(symbol, -999.0)))
+            for symbol in valid_holdings
+            if symbol not in topk_symbols
+        ]
+        sell_candidates.sort(key=lambda item: (item[1], item[0]))
+        buy_candidates = [
+            (candidate.symbol, float(candidate.score))
+            for candidate in topk_candidates
+            if candidate.symbol not in current_positions
+        ]
+        buy_candidates.sort(key=lambda item: (-item[1], item[0]))
+
+        ghost_sells: list[str] = []
+        if strategy_family == "score_weighted_topk_v2":
+            ghost_sells = [symbol for symbol in current_symbols if symbol not in score_by_symbol]
+
+        if (len(valid_holdings) if strategy_family == "score_weighted_topk_v2" else len(current_symbols)) < topk:
+            if strategy_family == "score_weighted_topk_v2":
+                actual_sells = [symbol for symbol, _ in sell_candidates[:max_n_drop]]
+                remaining_after_sell = len(valid_holdings) - len(actual_sells)
+                buy_slots = max(0, topk - remaining_after_sell)
+                actual_buys = [symbol for symbol, _ in buy_candidates[:buy_slots]]
+            else:
+                actual_sells = []
+                slots = max(0, topk - len(current_symbols))
+                actual_buys = [symbol for symbol, _ in buy_candidates[:slots]]
+        else:
+            actual_sells, actual_buys = self._filter_dynamic_ndrop(
+                sell_candidates=sell_candidates,
+                buy_candidates=buy_candidates,
+                current_scores=[score_by_symbol[symbol] for symbol in valid_holdings],
+                params=params,
+            )
+
+        requested_sells = list(actual_sells) + ghost_sells
+        all_sells = [
+            symbol
+            for symbol in requested_sells
+            if self._can_sell_under_hold_thresh(symbol, current_positions, snapshot.trade_date, params)
+        ]
+        retained_symbols = [symbol for symbol in current_symbols if symbol not in set(all_sells)]
+        max_buy_slots = max(0, topk - len(retained_symbols))
+        if len(actual_buys) > max_buy_slots:
+            actual_buys = actual_buys[:max_buy_slots]
+
+        final_symbols = [*retained_symbols, *actual_buys]
+        scored_final_symbols = [symbol for symbol in final_symbols if symbol in score_by_symbol]
+        weights = self._compute_score_weighted_weights(
+            [score_by_symbol[symbol] for symbol in scored_final_symbols],
+            params=params,
+        )
+        weight_by_symbol = {
+            symbol: float(weights[idx])
+            for idx, symbol in enumerate(scored_final_symbols)
+            if idx < len(weights)
+        }
+
+        targets: list[TargetPosition] = []
+        for symbol in all_sells:
+            candidate = candidate_by_symbol.get(symbol)
+            targets.append(
+                TargetPosition(
+                    symbol=symbol,
+                    target_quantity=0,
+                    target_weight=None,
+                    reference_price=self._optional_current_reference_price(symbol, current_prices),
+                    score=score_by_symbol.get(symbol, 0.0),
+                    rank=candidate.rank if candidate is not None else 999999,
+                    reason="qe_backtest_score_weighted_ghost_sell"
+                    if symbol in ghost_sells
+                    else "qe_backtest_score_weighted_sell",
+                    metadata={
+                        "snapshot_id": snapshot.snapshot_id,
+                        "qe_strategy_family": strategy_family,
+                        "component_scores": candidate.component_scores if candidate is not None else {},
+                        "current_quantity_before_sell": current_positions[symbol].quantity
+                        if symbol in current_positions
+                        else 0,
+                    },
+                )
+            )
+        for symbol in final_symbols:
+            candidate = candidate_by_symbol.get(symbol)
+            existing = current_positions.get(symbol)
+            weight = weight_by_symbol.get(symbol)
+            if existing is not None and symbol not in actual_buys:
+                quantity = existing.quantity
+                reference_price = candidate.reference_price if candidate is not None else None
+                if reference_price is None and quantity > 0:
+                    reference_price = self._required_current_reference_price(
+                        symbol,
+                        current_prices,
+                        context={"package_id": snapshot.package_id, "reason": "retain_existing_position"},
+                    )
+                targets.append(
+                    TargetPosition(
+                        symbol=symbol,
+                        target_quantity=quantity,
+                        target_weight=weight,
+                        reference_price=reference_price,
+                        score=score_by_symbol.get(symbol, 0.0),
+                        rank=candidate.rank if candidate is not None else 999999,
+                        reason="qe_backtest_score_weighted_retain",
+                        metadata={
+                            "snapshot_id": snapshot.snapshot_id,
+                            "qe_strategy_family": strategy_family,
+                            "component_scores": candidate.component_scores if candidate is not None else {},
+                            "current_quantity_retained": quantity,
+                        },
+                    )
+                )
+                continue
+            if symbol not in actual_buys:
+                continue
+            if candidate is None or candidate.reference_price is None:
+                raise DataUnavailableError(
+                    "QE score-weighted target requires reference_price for buy candidate",
+                    context={"package_id": snapshot.package_id, "symbol": symbol},
+                )
+            if not weight or weight <= 0:
+                continue
+            target_value = min(total_equity * weight, float(params["max_single_order_value"]))
+            raw_quantity = int(target_value / candidate.reference_price)
+            lot_size = int(params.get("lot_size") or 100)
+            quantity = (raw_quantity // lot_size) * lot_size
+            if quantity <= 0:
+                continue
+            targets.append(
+                TargetPosition(
+                    symbol=symbol,
+                    target_quantity=quantity,
+                    target_weight=weight,
+                    reference_price=candidate.reference_price,
+                    score=candidate.score,
+                    rank=candidate.rank,
+                    reason="qe_backtest_score_weighted_buy",
+                    metadata={
+                        "snapshot_id": snapshot.snapshot_id,
+                        "qe_strategy_family": strategy_family,
+                        "component_scores": candidate.component_scores,
+                        "target_value": target_value,
+                    },
+                )
+            )
+        if not targets and current_positions:
+            return [
+                TargetPosition(
+                    symbol=symbol,
+                    target_quantity=position.quantity,
+                    target_weight=None,
+                    reference_price=self._required_current_reference_price(
+                        symbol,
+                        current_prices,
+                        context={"package_id": snapshot.package_id, "reason": "score_weighted_no_change"},
+                    ),
+                    score=0.0,
+                    rank=999999,
+                    reason="qe_backtest_score_weighted_no_change",
+                    metadata={"snapshot_id": snapshot.snapshot_id, "qe_strategy_family": strategy_family},
+                )
+                for symbol, position in sorted(current_positions.items())
+            ]
+        if not targets:
+            raise StrategyPackageValidationError(
+                "QE score-weighted strategy produced no target positions",
+                context={"package_id": snapshot.package_id, "candidate_count": len(snapshot.candidates)},
+            )
+        return targets
+
+    @staticmethod
+    def _optional_current_reference_price(symbol: str, current_prices: dict[str, float]) -> float | None:
+        price = current_prices.get(symbol)
+        if price is None:
+            return None
+        value = float(price)
+        if value <= 0 or not math.isfinite(value):
+            return None
+        return value
+
+    @staticmethod
+    def _required_current_reference_price(
+        symbol: str,
+        current_prices: dict[str, float],
+        *,
+        context: dict[str, Any],
+    ) -> float:
+        price = current_prices.get(symbol)
+        if price is None:
+            raise DataUnavailableError(
+                "current price is required for retained QE target position",
+                context={**context, "symbol": symbol},
+            )
+        value = float(price)
+        if value <= 0 or not math.isfinite(value):
+            raise DataUnavailableError(
+                "current price for retained QE target position must be positive",
+                context={**context, "symbol": symbol, "current_price": price},
+            )
+        return value
+
+    def _filter_dynamic_ndrop(
+        self,
+        *,
+        sell_candidates: list[tuple[str, float]],
+        buy_candidates: list[tuple[str, float]],
+        current_scores: list[float],
+        params: dict[str, Any],
+    ) -> tuple[list[str], list[str]]:
+        max_n_drop = int(params["max_n_drop"])
+        min_n_drop = int(params["min_n_drop"])
+        if not bool(params.get("enable_dynamic_ndrop", True)):
+            n = min(max_n_drop, len(sell_candidates), len(buy_candidates))
+            return [s for s, _ in sell_candidates[:n]], [b for b, _ in buy_candidates[:n]]
+        sell_cands = sell_candidates[:max_n_drop]
+        buy_cands = buy_candidates[:max_n_drop]
+        threshold = self._compute_threshold(current_scores, params)
+        actual_sells: list[str] = []
+        actual_buys: list[str] = []
+        for idx in range(min(len(sell_cands), len(buy_cands))):
+            sell_symbol, sell_score = sell_cands[idx]
+            buy_symbol, buy_score = buy_cands[idx]
+            if buy_score - sell_score > threshold:
+                actual_sells.append(sell_symbol)
+                actual_buys.append(buy_symbol)
+            else:
+                break
+        while len(actual_sells) < min_n_drop:
+            idx = len(actual_sells)
+            if idx < len(sell_cands) and idx < len(buy_cands):
+                actual_sells.append(sell_cands[idx][0])
+                actual_buys.append(buy_cands[idx][0])
+            else:
+                break
+        return actual_sells, actual_buys
+
+    @staticmethod
+    def _compute_threshold(current_scores: list[float], params: dict[str, Any]) -> float:
+        if not current_scores:
+            return float(params.get("threshold_floor") or 0.0)
+        values = sorted(float(item) for item in current_scores if math.isfinite(float(item)))
+        if not values:
+            return float(params.get("threshold_floor") or 0.0)
+        method = str(params.get("threshold_method") or "adaptive")
+        floor = float(params.get("threshold_floor") or 0.0)
+        if method == "fixed":
+            return max(float(params.get("min_improvement") or 0.0), floor)
+        spread = max(values) - min(values)
+        if method == "percentile":
+            return max(spread * float(params.get("min_improvement") or 0.0), floor)
+        return max(spread * float(params.get("adaptive_multiplier") or 0.0), floor)
+
+    @staticmethod
+    def _compute_score_weighted_weights(scores: list[float], *, params: dict[str, Any]) -> list[float]:
+        if not scores:
+            return []
+        values = [float(score) for score in scores]
+        method = str(params.get("weight_method") or "softmax")
+        if method == "equal":
+            weights = [1.0 / len(values)] * len(values)
+        elif method == "rank":
+            ranked = sorted(range(len(values)), key=lambda idx: values[idx])
+            ranks = [0.0] * len(values)
+            for rank, idx in enumerate(ranked, start=1):
+                ranks[idx] = float(rank)
+            total = sum(ranks) or 1.0
+            weights = [rank / total for rank in ranks]
+        elif method == "linear":
+            minimum = min(values)
+            shifted = [value - minimum + 1e-8 for value in values]
+            total = sum(shifted) or 1.0
+            weights = [value / total for value in shifted]
+        elif method == "softmax":
+            temperature = max(float(params.get("temperature") or 1.0), 0.01)
+            scaled = [value / temperature for value in values]
+            maximum = max(scaled)
+            exp_values = [math.exp(value - maximum) for value in scaled]
+            total = sum(exp_values) or 1.0
+            weights = [value / total for value in exp_values]
+        else:
+            raise StrategyPackageValidationError(
+                "unsupported QE score-weighted weight_method",
+                context={"weight_method": method},
+            )
+
+        min_weight = float(params.get("min_weight") or 0.0)
+        max_weight = float(params.get("max_weight") or 1.0)
+        for _ in range(10):
+            over = [idx for idx, value in enumerate(weights) if value > max_weight]
+            under = [idx for idx, value in enumerate(weights) if 0 < value < min_weight]
+            if not over and not under:
+                break
+            if over:
+                excess = sum(weights[idx] - max_weight for idx in over)
+                for idx in over:
+                    weights[idx] = max_weight
+                free = [idx for idx in range(len(weights)) if idx not in over]
+                free_total = sum(weights[idx] for idx in free)
+                if free and free_total > 0:
+                    for idx in free:
+                        weights[idx] += excess * weights[idx] / free_total
+            if under:
+                deficit = sum(min_weight - weights[idx] for idx in under)
+                for idx in under:
+                    weights[idx] = min_weight
+                free = [idx for idx in range(len(weights)) if idx not in over and idx not in under]
+                free_total = sum(weights[idx] for idx in free)
+                if free and free_total > 0:
+                    for idx in free:
+                        weights[idx] = max(weights[idx] - deficit * weights[idx] / free_total, min_weight)
+        total = sum(weights)
+        if total > 0:
+            ratio = float(params.get("max_position_ratio") or 1.0)
+            weights = [weight / total * ratio for weight in weights]
+        return weights
+
+    @staticmethod
+    def _can_sell_under_hold_thresh(
+        symbol: str,
+        current_positions: dict[str, PositionLot],
+        trade_date: date,
+        params: dict[str, Any],
+    ) -> bool:
+        hold_thresh = float(params.get("hold_thresh") or 0)
+        if hold_thresh <= 0:
+            return True
+        position = current_positions.get(symbol)
+        if position is None:
+            return True
+        return float((trade_date - position.trade_date).days) >= hold_thresh
 
 
 class RebalanceEngine:

@@ -19,7 +19,7 @@ from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioSer
 from backend.services.paper_trading_v2.scheduler import PaperTradingV2SessionScheduler
 from backend.services.paper_trading_v2.session import PaperTradingSessionRunner, PaperTradingSessionService
 from backend.services.strategy_package.manifest import freeze_manifest
-from backend.services.strategy_package.models import PackageStatus
+from backend.services.strategy_package.models import PackageStatus, PortfolioPolicy
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.trading_core.errors import (
     DataUnavailableError,
@@ -33,7 +33,12 @@ from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
 def make_paper_manifest():
-    manifest = make_manifest().model_copy(update={"package_status": PackageStatus.PAPER_ENABLED})
+    manifest = make_manifest().model_copy(
+        update={
+            "package_status": PackageStatus.PAPER_ENABLED,
+            "portfolio_policy": PortfolioPolicy(topk=20, n_drop=5),
+        }
+    )
     return freeze_manifest(manifest)
 
 

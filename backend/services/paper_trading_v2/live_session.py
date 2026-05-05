@@ -16,6 +16,11 @@ from backend.services.paper_trading_v2.market_data import MinuteDataSource, Pape
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.runtime_profile import parse_selection_runtime_profile
 from backend.services.selection_center.tradability import TradabilityFilter
+from backend.services.strategy_package.backtest_contract import (
+    normalize_runtime_config_with_backtest_contract,
+    validate_execution_policy_matches_manifest,
+    validate_runtime_profile_matches_backtest_contract,
+)
 from backend.services.strategy_package.runtime import RebalanceEngine, StrategyPackageRuntime, TargetPositionEngine
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import (
@@ -280,6 +285,24 @@ class PaperTradingLiveMinuteExecutor:
         config["paper_v2_session"]["live_step_mode"] = capability.live_step_mode
         config["paper_v2_session"]["live_data_source"] = session.live_data_source.value if session.live_data_source else None
         self._ensure_live_selection_cutoff(config, trade_date=trade_date)
+        config = normalize_runtime_config_with_backtest_contract(
+            manifest,
+            config,
+            context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat(), "check": "live_session"},
+            include_contract=True,
+        )
+        runtime_profile = parse_selection_runtime_profile(config)
+        validate_execution_policy_matches_manifest(
+            manifest,
+            execution_policy_json,
+            context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat(), "check": "live_session"},
+        )
+        runtime_contract = validate_runtime_profile_matches_backtest_contract(
+            manifest,
+            runtime_profile,
+            context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat(), "check": "live_session"},
+        )
+        config["qe_backtest_runtime_contract"] = runtime_contract
 
         ready = self.day_helper._require_data_ready(
             manifest=manifest,
@@ -316,7 +339,6 @@ class PaperTradingLiveMinuteExecutor:
             data_source=signal_data_source,
             runtime_config=config,
         )
-        runtime_profile = parse_selection_runtime_profile(config)
         top_k = int(runtime_profile.selection.top_k or manifest.portfolio_policy.topk)
         raw_candidate_count = len(snapshot.candidates)
         risk_decisions = self.risk_policy_service.evaluate(
@@ -376,7 +398,14 @@ class PaperTradingLiveMinuteExecutor:
                 }
             )
         targets = (
-            self.target_engine.build_targets(snapshot=snapshot, total_equity=total_equity, top_k=top_k)
+            self.target_engine.build_targets(
+                snapshot=snapshot,
+                total_equity=total_equity,
+                top_k=top_k,
+                manifest=manifest,
+                current_positions=current_positions,
+                current_prices=current_prices,
+            )
             if snapshot.candidates
             else []
         )
@@ -389,7 +418,7 @@ class PaperTradingLiveMinuteExecutor:
                     trade_date=trade_date,
                     package_id=manifest.package_id,
                     manifest_sha256=manifest.manifest_sha256 or portfolio.manifest_sha256,
-                    existing_target_symbols={target.symbol for target in targets},
+                    existing_target_symbols=set(),
                 ),
             ]
         intents = self.rebalance_engine.build_order_intents(
@@ -553,7 +582,7 @@ class PaperTradingLiveMinuteExecutor:
         portfolio = self.repository.get_portfolio(session.portfolio_id)
         policy_json = run.runtime_config["validated_execution_policy"]["policy_json"]
         capability = require_execution_algo_supports_mode(policy_json, mode="LIVE_ONLY", package_id=portfolio.package_id)
-        require_day_features = capability.algo_code == "V25_TWO_STAGE"
+        require_day_features = capability.algo_code in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"}
         algo_config = dict(policy_json.get("algo_config") or {})
         states = self.repository.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)
         if not states:
@@ -606,7 +635,7 @@ class PaperTradingLiveMinuteExecutor:
                 {
                     "live_step_mode": capability.live_step_mode,
                     "plan_horizon_bars": capability.plan_horizon_bars,
-                    "v25_realtime_streaming": capability.algo_code == "V25_TWO_STAGE",
+                    "v25_realtime_streaming": capability.algo_code in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"},
                 }
             )
             final_order, updated_state, fills, events = self.execution_engine.execute_order_incremental(

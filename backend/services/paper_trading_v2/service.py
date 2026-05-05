@@ -19,6 +19,10 @@ from backend.services.strategy_package.validators import StrategyPackageValidato
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError
 from backend.services.trading_core.ledger import FeeModel
 from backend.services.selection_center.runtime_profile import normalize_selection_runtime_config
+from backend.services.strategy_package.backtest_contract import (
+    normalize_runtime_config_with_backtest_contract,
+    validate_execution_policy_matches_manifest,
+)
 
 from .market_data import MinuteDataSource
 from .models import (
@@ -106,10 +110,7 @@ class PaperTradingV2PortfolioService:
     ) -> PaperPortfolio:
         record = self.package_repository.get(package_id)
         manifest = record.current_manifest()
-        self._validate_package_manifest_for_portfolio(
-            manifest,
-            validate_manifest_execution_policy=execution_policy is None,
-        )
+        self.validator.validate_for_paper_trading(manifest)
         if not manifest.manifest_sha256:
             raise StrategyPackageValidationError(
                 "paper portfolio requires frozen strategy package manifest",
@@ -119,6 +120,7 @@ class PaperTradingV2PortfolioService:
             package_id=package_id,
             manifest_sha256=manifest.manifest_sha256,
             manifest_execution_policy=manifest.minute_execution_policy.model_dump(mode="json"),
+            manifest=manifest,
             requested_policy=execution_policy,
         )
         portfolio = PaperPortfolio(
@@ -138,26 +140,6 @@ class PaperTradingV2PortfolioService:
         if hasattr(self.package_repository, "mark_paper_portfolio_created"):
             self.package_repository.mark_paper_portfolio_created(package_id, saved.portfolio_id)
         return saved
-
-    def _validate_package_manifest_for_portfolio(
-        self,
-        manifest: Any,
-        *,
-        validate_manifest_execution_policy: bool,
-    ) -> None:
-        """Validate frozen package identity without forcing obsolete manifest algo.
-
-        StrategyPackage freezes factor/model lineage. Paper v2 may choose a
-        separate backtest-validated minute execution policy at portfolio
-        creation time. When such a policy is explicitly supplied, validating the
-        old manifest minute policy would incorrectly block V25/TWAP/etc. dynamic
-        execution selection before the requested policy is validated below.
-        """
-
-        if validate_manifest_execution_policy:
-            self.validator.validate_for_paper_trading(manifest)
-            return
-        self.validator.validate_manifest_identity_for_paper_trading(manifest)
 
     def list_portfolios(self, *, limit: int = 100) -> list[PaperPortfolio]:
         return self.repository.list_portfolios(limit=limit)
@@ -341,6 +323,11 @@ class PaperTradingV2PortfolioService:
                     policy_json=policy.policy_json,
                     instantiate_runtime=False,
                 )
+                validate_execution_policy_matches_manifest(
+                    portfolio.frozen_manifest,
+                    policy.policy_json,
+                    context={"portfolio_id": portfolio_id, "policy_id": policy.policy_id, "check": "list_execution_policies"},
+                )
                 if not policy.paper_enabled:
                     raise StrategyPackageValidationError(
                         "validated execution policy is not enabled for paper trading",
@@ -437,6 +424,11 @@ class PaperTradingV2PortfolioService:
             package_id=portfolio.package_id,
             policy_json=policy.policy_json,
         )
+        validate_execution_policy_matches_manifest(
+            portfolio.frozen_manifest,
+            policy.policy_json,
+            context={"portfolio_id": portfolio_id, "policy_id": policy.policy_id, "trade_date": trade_date.isoformat()},
+        )
         activation = PaperExecutionPolicyActivation(
             portfolio_id=portfolio_id,
             trade_date=trade_date,
@@ -486,7 +478,7 @@ class PaperTradingV2PortfolioService:
         reason: str | None = None,
     ) -> tuple[PaperRuntimeProfile, PaperRuntimeProfileVersion]:
         portfolio = self.repository.get_portfolio(portfolio_id)
-        config = self._normalize_runtime_profile_config(config_json)
+        config = self._normalize_runtime_profile_config(config_json, manifest=portfolio.frozen_manifest)
         profile = PaperRuntimeProfile(
             portfolio_id=portfolio_id,
             package_id=portfolio.package_id,
@@ -553,7 +545,7 @@ class PaperTradingV2PortfolioService:
                 "retired runtime profile cannot receive new versions",
                 context={"portfolio_id": portfolio_id, "profile_id": profile_id},
             )
-        config = self._normalize_runtime_profile_config(config_json)
+        config = self._normalize_runtime_profile_config(config_json, manifest=portfolio.frozen_manifest)
         versions = self.repository.list_runtime_profile_versions(profile_id, limit=10_000)
         next_no = (max((item.version_no for item in versions), default=0) + 1)
         current = next((item for item in versions if item.profile_version_id == profile.current_version_id), None)
@@ -650,6 +642,16 @@ class PaperTradingV2PortfolioService:
                     "validation_errors": version.validation_errors,
                 },
             )
+        normalize_runtime_config_with_backtest_contract(
+            portfolio.frozen_manifest,
+            version.config_json,
+            context={
+                "portfolio_id": portfolio_id,
+                "profile_version_id": profile_version_id,
+                "trade_date": trade_date.isoformat(),
+                "check": "runtime_config_activation",
+            },
+        )
         existing = self.repository.get_active_runtime_config_activation(portfolio_id, trade_date)
         if existing is not None:
             if not replace_existing:
@@ -737,13 +739,25 @@ class PaperTradingV2PortfolioService:
     ) -> dict[str, Any]:
         config = dict(runtime_config or {})
         if config.get("runtime_profile_activation"):
-            return normalize_selection_runtime_config(config)
+            return normalize_runtime_config_with_backtest_contract(
+                portfolio.frozen_manifest,
+                config,
+                context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
+            )
         session_opts = config.get("paper_v2_session") if isinstance(config.get("paper_v2_session"), dict) else {}
         if session_opts.get("freeze_runtime_profile"):
-            return normalize_selection_runtime_config(config)
+            return normalize_runtime_config_with_backtest_contract(
+                portfolio.frozen_manifest,
+                config,
+                context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
+            )
         activation = self.repository.get_active_runtime_config_activation(portfolio.portfolio_id, trade_date)
         if activation is None:
-            return normalize_selection_runtime_config(config)
+            return normalize_runtime_config_with_backtest_contract(
+                portfolio.frozen_manifest,
+                config,
+                context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
+            )
         conflicting = sorted(key for key in config if key in RUNTIME_PROFILE_INPUT_KEYS)
         if conflicting:
             raise StrategyPackageValidationError(
@@ -779,7 +793,11 @@ class PaperTradingV2PortfolioService:
             "activated_by": activation.activated_by,
             "reason": activation.reason,
         }
-        return normalize_selection_runtime_config(effective)
+        return normalize_runtime_config_with_backtest_contract(
+            portfolio.frozen_manifest,
+            effective,
+            context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
+        )
 
     def fee_model_from_policy(self, fee_policy: dict[str, Any]) -> FeeModel:
         return FeeModel(
@@ -788,7 +806,12 @@ class PaperTradingV2PortfolioService:
             min_cost=float(fee_policy.get("min_cost", FeeModel.min_cost)),
         )
 
-    def _normalize_runtime_profile_config(self, config_json: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_runtime_profile_config(
+        self,
+        config_json: dict[str, Any],
+        *,
+        manifest: Any | None = None,
+    ) -> dict[str, Any]:
         if not isinstance(config_json, dict) or not config_json:
             raise StrategyPackageValidationError("runtime profile config_json must be a non-empty object")
         self._reject_runtime_profile_execution_overrides(config_json)
@@ -801,7 +824,14 @@ class PaperTradingV2PortfolioService:
                     "allowed_fields": sorted(RUNTIME_PROFILE_INPUT_KEYS),
                 },
             )
-        normalized = normalize_selection_runtime_config(config_json)
+        if manifest is not None:
+            normalized = normalize_runtime_config_with_backtest_contract(
+                manifest,
+                config_json,
+                context={"package_id": getattr(manifest, "package_id", None), "check": "runtime_profile_config"},
+            )
+        else:
+            normalized = normalize_selection_runtime_config(config_json)
         for legacy_key in RUNTIME_PROFILE_INPUT_KEYS.difference(RUNTIME_PROFILE_VERSION_ALLOWED_KEYS):
             normalized.pop(legacy_key, None)
         unknown_after = sorted(set(normalized).difference(RUNTIME_PROFILE_VERSION_ALLOWED_KEYS))
@@ -881,6 +911,7 @@ class PaperTradingV2PortfolioService:
         package_id: str,
         manifest_sha256: str,
         manifest_execution_policy: dict[str, Any],
+        manifest: Any,
         requested_policy: dict[str, Any] | None,
     ) -> ValidatedExecutionPolicy:
         if requested_policy:
@@ -919,6 +950,11 @@ class PaperTradingV2PortfolioService:
         self.validator.validate_execution_policy_for_paper(
             package_id=package_id,
             policy_json=policy.policy_json,
+        )
+        validate_execution_policy_matches_manifest(
+            manifest,
+            policy.policy_json,
+            context={"package_id": package_id, "policy_id": policy.policy_id, "check": "resolve_validated_execution_policy"},
         )
         return policy
 

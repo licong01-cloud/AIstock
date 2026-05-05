@@ -26,6 +26,7 @@ from backend.services.trading_core.errors import (
 from backend.services.trading_core.execution_algo_capabilities import (
     require_execution_algo_supports_mode,
 )
+from backend.services.strategy_package.backtest_contract import validate_execution_policy_matches_manifest
 
 from .market_data import MinuteDataSource, TradeCalendarProvider
 from .models import (
@@ -186,6 +187,11 @@ class PaperTradingSessionService:
         )
         self._reject_raw_execution_overrides(config)
         policy_context = self._portfolio_policy_context(portfolio.execution_policy, portfolio_id=portfolio_id)
+        validate_execution_policy_matches_manifest(
+            portfolio.frozen_manifest,
+            policy_context["policy_json"],
+            context={"portfolio_id": portfolio_id, "check": "create_session"},
+        )
         require_execution_algo_supports_mode(
             policy_context["policy_json"],
             mode="HISTORICAL" if session_mode == PaperSessionMode.REPLAY_ONLY else session_mode.value,
@@ -347,6 +353,11 @@ class PaperTradingSessionService:
         for mode in PaperSessionMode:
             mode_payload: dict[str, Any] = {"can_start": False, "errors": []}
             try:
+                validate_execution_policy_matches_manifest(
+                    portfolio.frozen_manifest,
+                    policy_json,
+                    context={"portfolio_id": portfolio_id, "mode": mode.value, "check": "session_capabilities"},
+                )
                 if mode == PaperSessionMode.REPLAY_ONLY:
                     self._validate_sources(
                         mode=mode,

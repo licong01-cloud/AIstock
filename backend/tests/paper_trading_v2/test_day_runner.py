@@ -20,7 +20,7 @@ from backend.services.selection_center.risk_policy import RiskDecision, StockRis
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
-from backend.services.strategy_package.models import PackageStatus
+from backend.services.strategy_package.models import PackageStatus, PortfolioPolicy
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime
 from backend.services.strategy_package.selection_artifact import (
@@ -177,41 +177,96 @@ class FakeDbMinuteProvider:
         )
 
 
-def make_paper_enabled_manifest():
-    manifest = make_manifest().model_copy(update={"package_status": PackageStatus.PAPER_ENABLED})
+def make_paper_enabled_manifest(
+    *,
+    topk: int = 50,
+    n_drop: int = 5,
+    custom_params: dict | None = None,
+):
+    base = make_manifest()
+    strategy_config = dict(base.strategy_config)
+    if custom_params is not None:
+        strategy_config["custom_params"] = custom_params
+    manifest = base.model_copy(
+        update={
+            "package_status": PackageStatus.PAPER_ENABLED,
+            "portfolio_policy": PortfolioPolicy(topk=topk, n_drop=n_drop),
+            "strategy_config": strategy_config,
+        }
+    )
     return freeze_manifest(manifest)
 
 
-def test_create_portfolio_with_requested_policy_does_not_validate_manifest_algo_asset() -> None:
+def test_create_portfolio_rejects_requested_policy_that_differs_from_qe_contract() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = freeze_manifest(
         make_manifest(algo_code="V24_PLAN").model_copy(update={"package_status": PackageStatus.PAPER_ENABLED})
     )
     package_repo.save_manifest(manifest)
+    policy_json = {
+        "execution_level": "minute",
+        "bar_freq": "1m",
+        "algo_code": "TWAP",
+        "algo_config": {"split_count": 3},
+        "fallback_algo_code": None,
+        "data_requirements": {
+            "requires_minute_bar": True,
+            "requires_limit_price": True,
+            "requires_suspend_status": True,
+            "requires_trade_calendar": True,
+        },
+        "fallback_policy": {"on_missing_minute_bar": "fail", "on_algo_error": "fail"},
+        "quality_report": {
+            "record_slippage": True,
+            "record_participation_rate": True,
+            "record_unfilled_reason": True,
+        },
+    }
+
+    with pytest.raises(StrategyPackageValidationError, match="must match the QE backtest"):
+        StrategyPackageService(repository=package_repo).create_execution_policy(
+            package_id=manifest.package_id,
+            policy_name="requested_twappolicy",
+            policy_json=policy_json,
+            source_backtest_id="unit_twappolicy_backtest",
+            source_backtest_status="BACKTEST_VALIDATED",
+            paper_enabled=True,
+        )
+
     policy = StrategyPackageService(repository=package_repo).create_execution_policy(
         package_id=manifest.package_id,
         policy_name="requested_twappolicy",
-        policy_json={
-            "execution_level": "minute",
-            "bar_freq": "1m",
-            "algo_code": "TWAP",
-            "algo_config": {"split_count": 3},
-            "fallback_algo_code": None,
-            "data_requirements": {
-                "requires_minute_bar": True,
-                "requires_limit_price": True,
-                "requires_suspend_status": True,
-                "requires_trade_calendar": True,
-            },
-            "fallback_policy": {"on_missing_minute_bar": "fail", "on_algo_error": "fail"},
-            "quality_report": {
-                "record_slippage": True,
-                "record_participation_rate": True,
-                "record_unfilled_reason": True,
-            },
-        },
+        policy_json=policy_json,
         source_backtest_id="unit_twappolicy_backtest",
+        source_backtest_status="BACKTEST_VALIDATED",
+        paper_enabled=False,
+    )
+
+    with pytest.raises(DataUnavailableError, match="V24_PLAN requires config.model_path"):
+        PaperTradingV2PortfolioService(
+            package_repository=package_repo,
+            repository=paper_repo,
+        ).create_portfolio(
+            package_id=manifest.package_id,
+            portfolio_name="requested policy paper",
+            initial_cash=100_000,
+            start_date=date(2024, 1, 2),
+            data_source=MinuteDataSource.DB_HISTORICAL,
+            execution_policy={"validated_execution_policy_id": policy.policy_id},
+        )
+
+
+def test_create_portfolio_accepts_requested_policy_matching_qe_contract() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = make_paper_enabled_manifest()
+    package_repo.save_manifest(manifest)
+    policy = StrategyPackageService(repository=package_repo).create_execution_policy(
+        package_id=manifest.package_id,
+        policy_name="requested_manifest_policy",
+        policy_json=manifest.minute_execution_policy.model_dump(mode="json"),
+        source_backtest_id="unit_manifest_policy_backtest",
         source_backtest_status="BACKTEST_VALIDATED",
         paper_enabled=True,
     )
@@ -221,7 +276,7 @@ def test_create_portfolio_with_requested_policy_does_not_validate_manifest_algo_
         repository=paper_repo,
     ).create_portfolio(
         package_id=manifest.package_id,
-        portfolio_name="requested policy paper",
+        portfolio_name="requested matching policy paper",
         initial_cash=100_000,
         start_date=date(2024, 1, 2),
         data_source=MinuteDataSource.DB_HISTORICAL,
@@ -229,7 +284,7 @@ def test_create_portfolio_with_requested_policy_does_not_validate_manifest_algo_
     )
 
     assert portfolio.execution_policy["validated_execution_policy_id"] == policy.policy_id
-    assert portfolio.execution_policy["algo_code"] == "TWAP"
+    assert portfolio.execution_policy["algo_code"] == manifest.minute_execution_policy.algo_code
 
 
 def runtime_with_authoritative_scores(
@@ -306,7 +361,8 @@ def test_paper_trading_day_runner_persists_full_day_path() -> None:
     assert result.run.status.value == "SUCCEEDED"
     assert portfolio.execution_policy["validated_execution_policy_id"]
     assert result.run.runtime_config["validated_execution_policy"]["policy_sha256"] == portfolio.execution_policy["policy_sha256"]
-    assert sum(fill.quantity for fill in result.fills) == 300
+    assert sum(fill.quantity for fill in result.fills) == 9500
+    assert result.run.runtime_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["strategy_family"] == "score_weighted_topk_v2"
     assert len(paper_repo.orders[result.run.run_id]) == 1
     assert len(paper_repo.fills[result.run.run_id]) > 0
     assert paper_repo.cash_entries[result.run.run_id]
@@ -440,7 +496,7 @@ def test_db_historical_day_runner_loads_real_minute_price_for_existing_position_
 def test_day_runner_risk_policy_blocks_buy_and_forces_existing_position_exit() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
-    manifest = make_paper_enabled_manifest()
+    manifest = make_paper_enabled_manifest(custom_params={"risk_policy": {"enabled": True}})
     package_repo.save_manifest(manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
@@ -666,7 +722,7 @@ def test_paper_trading_day_runner_rejects_duplicate_portfolio_trade_date() -> No
         )
 
 
-def test_paper_execution_policy_activation_is_used_for_trade_date_run() -> None:
+def test_paper_execution_policy_activation_rejects_policy_that_differs_from_qe_contract() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
@@ -691,12 +747,45 @@ def test_paper_execution_policy_activation_is_used_for_trade_date_run() -> None:
         policy_json=policy_json,
         source_backtest_id="bt_close",
         source_backtest_status="COMPLETED",
-        paper_enabled=True,
+        paper_enabled=False,
     )
+    listed = portfolio_service.list_execution_policies(portfolio.portfolio_id)
+    listed_policy = next(item for item in listed if item["validated_execution_policy_id"] == policy.policy_id)
+    assert listed_policy["can_enter_paper"] is False
+    assert "must match the QE backtest" in listed_policy["paper_check_error"]["message"]
+    package_repo.execution_policies[policy.policy_id] = policy.model_copy(update={"paper_enabled": True})
+
+    with pytest.raises(StrategyPackageValidationError, match="must match the QE backtest"):
+        portfolio_service.activate_execution_policy(
+            portfolio_id=portfolio.portfolio_id,
+            trade_date=date(2024, 1, 2),
+            policy_id=policy.policy_id,
+            activated_by="unit_test",
+            reason="validate activation path",
+        )
+
+
+def test_paper_execution_policy_activation_matching_qe_contract_is_used_for_trade_date_run() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = make_paper_enabled_manifest()
+    package_repo.save_manifest(manifest)
+    portfolio_service = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    )
+    portfolio = portfolio_service.create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="paper policy activation",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.TDX_REALTIME,
+    )
+    policy_id = portfolio.execution_policy["validated_execution_policy_id"]
     activation = portfolio_service.activate_execution_policy(
         portfolio_id=portfolio.portfolio_id,
         trade_date=date(2024, 1, 2),
-        policy_id=policy.policy_id,
+        policy_id=policy_id,
         activated_by="unit_test",
         reason="validate activation path",
     )
@@ -720,8 +809,8 @@ def test_paper_execution_policy_activation_is_used_for_trade_date_run() -> None:
     context = result.run.runtime_config["validated_execution_policy"]
     assert context["activation_id"] == activation.activation_id
     assert context["activation_source"] == "trade_date_activation"
-    assert context["validated_execution_policy_id"] == policy.policy_id
-    assert context["algo_code"] == "CLOSE_PRICE"
+    assert context["validated_execution_policy_id"] == policy_id
+    assert context["algo_code"] == manifest.minute_execution_policy.algo_code
     assert paper_repo.list_execution_policy_activations(portfolio.portfolio_id)[0].activation_id == activation.activation_id
 
 

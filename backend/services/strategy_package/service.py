@@ -17,6 +17,7 @@ from .execution_policy import (
     ensure_policy_can_enter_paper,
     normalize_execution_policy_json,
 )
+from .backtest_contract import validate_execution_policy_matches_manifest
 from .metrics_summary import StrategyPackageMetricsSummary, metrics_summary_from_record
 from .model_state import (
     ModelRetrainJobStatus,
@@ -383,6 +384,11 @@ class StrategyPackageService:
                 package_id=package_id,
                 policy_json=policy.policy_json,
             )
+            validate_execution_policy_matches_manifest(
+                record.current_manifest(),
+                policy.policy_json,
+                context={"package_id": package_id, "policy_name": policy_name, "check": "create_execution_policy"},
+            )
         return self.repository.save_execution_policy(policy)
 
     def list_execution_policies(self, package_id: str) -> list[ValidatedExecutionPolicy]:
@@ -397,6 +403,12 @@ class StrategyPackageService:
         self.validator.validate_execution_policy_for_paper(
             package_id=package_id,
             policy_json=policy.policy_json,
+        )
+        record = self.repository.get(package_id)
+        validate_execution_policy_matches_manifest(
+            record.current_manifest(),
+            policy.policy_json,
+            context={"package_id": package_id, "policy_id": policy_id, "check": "enable_execution_policy_for_paper"},
         )
         return self.repository.set_execution_policy_paper_enabled(
             package_id=package_id,

@@ -9,8 +9,13 @@ from backend.services.data_refresh_audit import DataRefreshAuditRepository, Data
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import PaperV2MinuteMarketDataProvider, TradeCalendarProvider
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
-from backend.services.selection_center.runtime_profile import normalize_selection_runtime_config, parse_selection_runtime_profile
+from backend.services.selection_center.runtime_profile import parse_selection_runtime_profile
 from backend.services.selection_center.tradability import TradabilityFilter
+from backend.services.strategy_package.backtest_contract import (
+    normalize_runtime_config_with_backtest_contract,
+    validate_execution_policy_matches_manifest,
+    validate_runtime_profile_matches_backtest_contract,
+)
 from backend.services.strategy_package.runtime import RebalanceEngine, StrategyPackageRuntime, TargetPositionEngine
 from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactService
 from backend.services.strategy_package.validators import StrategyPackageValidator
@@ -19,6 +24,7 @@ from backend.services.trading_core.models import PositionLot
 
 from .models import PaperDayReadinessResult, PaperReadinessCheck, PortfolioStatus
 from .repository import PaperTradingV2Repository
+from .service import PaperTradingV2PortfolioService
 
 
 class PaperTradingReadinessService:
@@ -89,7 +95,17 @@ class PaperTradingReadinessService:
             )
 
         checks: list[PaperReadinessCheck] = []
-        config = normalize_selection_runtime_config(runtime_config or {})
+        config = PaperTradingV2PortfolioService(repository=self.repository).resolve_runtime_config_for_date(
+            portfolio=portfolio,
+            trade_date=trade_date,
+            runtime_config=runtime_config or {},
+        )
+        config = normalize_runtime_config_with_backtest_contract(
+            manifest,
+            config,
+            context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "readiness"},
+            include_contract=True,
+        )
         runtime_profile = parse_selection_runtime_profile(config)
         PaperTradingDayRunner._reject_raw_execution_overrides(config)
         execution_policy_context = self._execution_policy_context_for_date(portfolio, trade_date)
@@ -100,6 +116,17 @@ class PaperTradingReadinessService:
             package_id=manifest.package_id,
             policy_json=execution_policy_json,
         )
+        validate_execution_policy_matches_manifest(
+            manifest,
+            execution_policy_json,
+            context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "readiness"},
+        )
+        runtime_contract = validate_runtime_profile_matches_backtest_contract(
+            manifest,
+            runtime_profile,
+            context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "readiness"},
+        )
+        config["qe_backtest_runtime_contract"] = runtime_contract
         checks.append(PaperReadinessCheck(check_name="strategy_package_manifest", context={"package_id": manifest.package_id}))
 
         self.calendar_provider.ensure_trading_day(trade_date)
@@ -228,6 +255,9 @@ class PaperTradingReadinessService:
                 snapshot=snapshot,
                 total_equity=total_equity,
                 top_k=top_k,
+                manifest=manifest,
+                current_positions=current_positions,
+                current_prices=config.get("current_prices") or {},
             )
             if snapshot.candidates
             else []
@@ -241,7 +271,7 @@ class PaperTradingReadinessService:
                     trade_date=trade_date,
                     package_id=manifest.package_id,
                     manifest_sha256=manifest.manifest_sha256 or portfolio.manifest_sha256,
-                    existing_target_symbols={target.symbol for target in targets},
+                    existing_target_symbols=set(),
                 ),
             ]
         intents = self.rebalance_engine.build_order_intents(
