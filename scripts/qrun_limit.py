@@ -75,7 +75,7 @@ def load_benchmark_series(config=None):
     # Fallback: 从 qlib 在线生成（需要 qlib 已初始化且有 000300.sh 日线数据）
     try:
         from qlib.data import D
-        start, end = "2024-07-01", "2026-03-10"
+        start, end = "2024-07-01", "2026-04-27"
         if config:
             bt = _find_backtest_config(config)
             if bt:

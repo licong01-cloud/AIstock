@@ -73,6 +73,8 @@ interface BinExportInfo {
   exchanges?: string[] | null;
   exclude_st?: boolean | null;
   exclude_delisted_or_paused?: boolean | null;
+  stock_universe_mode?: string | null;
+  universe_key?: string | null;
   freq_types?: string[] | null;
 }
 
@@ -93,6 +95,7 @@ type ExportType =
 
 type ExportMode = "full" | "incremental" | "incremental_all";
 type ExportTab = "snapshot" | "bin";
+type StockUniverseMode = "legacy_static" | "pit_spans";
 
 // 所有日频类型均支持增量
 const INCREMENTAL_TYPES: ExportType[] = [
@@ -237,6 +240,8 @@ export default function QlibPage() {
   const [exBj, setExBj] = useState<boolean>(false);
   const [excludeSt, setExcludeSt] = useState<boolean>(true);
   const [excludeDelistedOrPaused, setExcludeDelistedOrPaused] = useState<boolean>(true);
+  const [snapshotStockUniverseMode, setSnapshotStockUniverseMode] = useState<StockUniverseMode>("pit_spans");
+  const [snapshotUniverseKey, setSnapshotUniverseKey] = useState<string>("shsz_st_pit_active_v1");
   const [start, setStart] = useState<string>("2025-11-01");
   const [end, setEnd] = useState<string>("2025-12-01");
   const [loading, setLoading] = useState(false);
@@ -274,6 +279,8 @@ export default function QlibPage() {
 
   // Bin 导出模式
   const [binExportMode, setBinExportMode] = useState<"full" | "incremental">("full");
+  const [binStockUniverseMode, setBinStockUniverseMode] = useState<StockUniverseMode>("pit_spans");
+  const [binUniverseKey, setBinUniverseKey] = useState<string>("shsz_st_pit_active_v1");
 
   // Bin 数据集多选
   const [binSelectedDatasets, setBinSelectedDatasets] = useState<Set<string>>(
@@ -484,6 +491,9 @@ export default function QlibPage() {
     setStepResults(new Map(initMap));
 
     try {
+      if (snapshotStockUniverseMode === "pit_spans" && !snapshotUniverseKey.trim()) {
+        throw new Error("PIT 股票池模式需要填写 universe_key");
+      }
       if (exportMode === "incremental_all") {
         // 一键增量：调用单一 API
         initMap.forEach((v, k) => { v.status = "running"; });
@@ -499,6 +509,8 @@ export default function QlibPage() {
             exchanges: exchanges.length > 0 ? exchanges : undefined,
             exclude_st: excludeSt,
             exclude_delisted_or_paused: excludeDelistedOrPaused,
+            stock_universe_mode: snapshotStockUniverseMode,
+            universe_key: snapshotStockUniverseMode === "pit_spans" ? snapshotUniverseKey.trim() : undefined,
           },
         );
 
@@ -535,6 +547,8 @@ export default function QlibPage() {
               exchanges: exchanges.length > 0 ? exchanges : undefined,
               exclude_st: excludeSt,
               exclude_delisted_or_paused: excludeDelistedOrPaused,
+              stock_universe_mode: snapshotStockUniverseMode,
+              universe_key: snapshotStockUniverseMode === "pit_spans" ? snapshotUniverseKey.trim() : undefined,
             };
             if (exportMode === "full") {
               payload.start = start;
@@ -814,19 +828,72 @@ export default function QlibPage() {
               </div>
             </div>
 
+            {/* 股票池口径 */}
+            <div>
+              <label className="block text-sm font-medium mb-2">股票池口径</label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                <label className="rounded-lg border p-3 cursor-pointer"
+                  style={{ borderColor: snapshotStockUniverseMode === "pit_spans" ? "#2563eb" : "#e5e7eb" }}>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="snapshotStockUniverseMode"
+                      value="pit_spans"
+                      checked={snapshotStockUniverseMode === "pit_spans"}
+                      onChange={() => setSnapshotStockUniverseMode("pit_spans")}
+                    />
+                    <span>ST PIT 股票池（推荐）</span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-600">
+                    导出前 strict ensure market.stock_universe_pit_spans；ST 公告后一交易日剔除，摘帽后恢复，退市/暂停 PIT 未启用。
+                  </p>
+                </label>
+                <label className="rounded-lg border p-3 cursor-pointer"
+                  style={{ borderColor: snapshotStockUniverseMode === "legacy_static" ? "#2563eb" : "#e5e7eb" }}>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="snapshotStockUniverseMode"
+                      value="legacy_static"
+                      checked={snapshotStockUniverseMode === "legacy_static"}
+                      onChange={() => setSnapshotStockUniverseMode("legacy_static")}
+                    />
+                    <span>旧静态过滤（兼容）</span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-600">
+                    按 end_date 静态排除曾经 ST 股票，仅用于兼容旧 Snapshot，不建议新权威 H5 导出使用。
+                  </p>
+                </label>
+              </div>
+              {snapshotStockUniverseMode === "pit_spans" && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                  <span>PIT universe_key</span>
+                  <input
+                    value={snapshotUniverseKey}
+                    onChange={(e) => setSnapshotUniverseKey(e.target.value)}
+                    style={{ ...inputStyle, width: 180, fontSize: 12, padding: "4px 8px" }}
+                    placeholder="shsz_st_pit_active_v1"
+                  />
+                  <span>H5 日线/分钟线会重写 instruments/all.txt，多因子 H5 会按同一 PIT 股票池导出。</span>
+                </div>
+              )}
+            </div>
+
             {/* 样本过滤 */}
             <div>
               <label className="block text-sm font-medium mb-2">样本过滤</label>
               <div className="flex flex-col gap-1 text-sm text-gray-700">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" checked={excludeSt}
+                    disabled={snapshotStockUniverseMode === "pit_spans"}
                     onChange={(e) => setExcludeSt(e.target.checked)} />
-                  <span>排除所有有过 ST 记录的股票（包括当前 ST）</span>
+                  <span>{snapshotStockUniverseMode === "pit_spans" ? "由 ST PIT 规则控制 ST 剔除/摘帽恢复" : "排除所有有过 ST 记录的股票（包括当前 ST）"}</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" checked={excludeDelistedOrPaused}
+                    disabled={snapshotStockUniverseMode === "pit_spans"}
                     onChange={(e) => setExcludeDelistedOrPaused(e.target.checked)} />
-                  <span>排除退市 / 当前暂停上市的股票</span>
+                  <span>{snapshotStockUniverseMode === "pit_spans" ? "ST-only active scope 固定排除当前 D/P，退市/暂停 PIT 未启用" : "排除退市 / 当前暂停上市的股票"}</span>
                 </label>
               </div>
             </div>
@@ -956,6 +1023,9 @@ export default function QlibPage() {
                 if (binSelectedDatasets.size === 0) {
                   throw new Error("请至少选择一个数据集");
                 }
+                if (binStockUniverseMode === "pit_spans" && !binUniverseKey.trim()) {
+                  throw new Error("PIT 股票池模式需要填写 universe_key");
+                }
 
                 const exchanges: string[] = [];
                 if (exSh) exchanges.push("sh");
@@ -970,6 +1040,8 @@ export default function QlibPage() {
                   run_health_check: binRunHealthCheck,
                   exclude_st: true,
                   exclude_delisted_or_paused: true,
+                  stock_universe_mode: binStockUniverseMode,
+                  universe_key: binStockUniverseMode === "pit_spans" ? binUniverseKey.trim() : undefined,
                   index_data_source: indexDataSource,
                 };
                 if (binExportMode === "full") {
@@ -1034,6 +1106,55 @@ export default function QlibPage() {
                     <input type="date" value={binEnd} onChange={(e) => setBinEnd(e.target.value)} style={inputStyle} />
                   </div>
                 </div>
+              </div>
+
+              {/* 股票池口径 */}
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <label className="block text-sm font-medium mb-2">股票池口径（写入 Qlib instruments/all.txt）</label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                  <label className={`cursor-pointer rounded-lg border p-3 ${binStockUniverseMode === "pit_spans" ? "border-emerald-400 bg-white" : "border-slate-200 bg-white/70"}`}>
+                    <div className="flex items-center gap-2 font-medium">
+                      <input
+                        type="radio"
+                        name="binStockUniverseMode"
+                        value="pit_spans"
+                        checked={binStockUniverseMode === "pit_spans"}
+                        onChange={() => setBinStockUniverseMode("pit_spans")}
+                      />
+                      <span>PIT 股票池（推荐）</span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-600">
+                      使用 ST 公告后一交易日剔除、摘帽后恢复的多区间 all.txt；退市/暂停上市 PIT 未启用，当前 D/P 股票不进入本轮 ST-only universe。
+                    </p>
+                  </label>
+                  <label className={`cursor-pointer rounded-lg border p-3 ${binStockUniverseMode === "legacy_static" ? "border-amber-400 bg-white" : "border-slate-200 bg-white/70"}`}>
+                    <div className="flex items-center gap-2 font-medium">
+                      <input
+                        type="radio"
+                        name="binStockUniverseMode"
+                        value="legacy_static"
+                        checked={binStockUniverseMode === "legacy_static"}
+                        onChange={() => setBinStockUniverseMode("legacy_static")}
+                      />
+                      <span>旧静态过滤（兼容）</span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-600">
+                      按 end_date 静态排除曾经 ST / 退市 / 暂停上市股票，仅用于兼容旧数据集，不建议新权威导出使用。
+                    </p>
+                  </label>
+                </div>
+                {binStockUniverseMode === "pit_spans" && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                    <span>PIT universe_key</span>
+                    <input
+                      value={binUniverseKey}
+                      onChange={(e) => setBinUniverseKey(e.target.value)}
+                      style={{ ...inputStyle, width: 180, fontSize: 12, padding: "4px 8px" }}
+                      placeholder="shsz_st_pit_active_v1"
+                    />
+                    <span>后端会从 market.stock_universe_pit_spans 生成多段 eligibility。</span>
+                  </div>
+                )}
               </div>
 
               {/* Bin 数据集多选 */}
@@ -1128,13 +1249,18 @@ export default function QlibPage() {
                   <div className="flex flex-col gap-1 text-sm text-gray-700">
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input type="checkbox" checked={true} disabled onChange={() => setExcludeSt(true)} />
-                      <span>排除 ST</span>
+                      <span>{binStockUniverseMode === "pit_spans" ? "PIT 规则处理 ST：公告后一交易日剔除，摘帽后恢复" : "排除曾经 / 当前 ST（旧静态口径）"}</span>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input type="checkbox" checked={true} disabled
                         onChange={() => setExcludeDelistedOrPaused(true)} />
-                      <span>排除退市/停牌</span>
+                      <span>{binStockUniverseMode === "pit_spans" ? "ST-only active scope 固定排除当前 D/P，退市/暂停 PIT 未启用" : "排除退市 / 暂停上市（旧静态口径）"}</span>
                     </label>
+                    <span className="text-xs text-gray-500">
+                      {binStockUniverseMode === "pit_spans"
+                        ? "新买入/选股范围由 instruments/all.txt 多区间约束；已有持仓卖出仍需由回测交易状态处理。"
+                        : "兼容旧导出逻辑，可能存在历史样本被未来 ST 状态整体删除的问题。"}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1340,6 +1466,7 @@ export default function QlibPage() {
                     <th className="text-left py-2 px-2">Snapshot ID</th>
                     <th className="text-left py-2 px-2">时间范围</th>
                     <th className="text-left py-2 px-2">数据类型</th>
+                    <th className="text-left py-2 px-2">股票池</th>
                     <th className="text-left py-2 px-2">bin 目录</th>
                     <th className="text-left py-2 px-2">最近修改</th>
                   </tr>
@@ -1350,6 +1477,9 @@ export default function QlibPage() {
                       <td className="py-2 px-2 font-mono">{b.snapshot_id}</td>
                       <td className="py-2 px-2">{b.start && b.end ? `${b.start} ~ ${b.end}` : "\u2014"}</td>
                       <td className="py-2 px-2">{b.freq_types?.join(", ") || "daily"}</td>
+                      <td className="py-2 px-2">
+                        {b.stock_universe_mode === "pit_spans" ? `PIT · ${b.universe_key || "shsz_st_pit_active_v1"}` : "旧静态过滤"}
+                      </td>
                       <td className="py-2 px-2 text-gray-700 break-all">{b.bin_dir}</td>
                       <td className="py-2 px-2 text-gray-500">{formatDateTimeShanghai(b.modified_at)}</td>
                     </tr>

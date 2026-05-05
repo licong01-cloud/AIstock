@@ -249,3 +249,284 @@ Phase 1: Baseline documents and code scan
 |-------|---------|------------|
 | None yet | - | - |
 
+
+
+---
+
+# Task Plan: HMM Horizon-Aware v2 Training and Script Backtest (2026-04-28)
+
+## Goal
+Create a non-overwriting HMM horizon-aware training workflow that matches future QE emphasis on 5D/10D/20D returns, train a new HMM version in the existing WSL/RD-Agent environment, and run script-only 6-month comparison backtests across old/new HMM versions without launching QE experiments.
+
+## Current Phase
+Complete: HMM Horizon-Aware v2 training, script backtest, and final report
+
+## Constraints
+- Do not modify or overwrite old HMM model assets, coefficient files, or existing training scripts.
+- New training code must be additive: new filenames and unique output directories/config display names.
+- Use WSL `rdagent-gpu` environment and existing local DB/Qlib data paths.
+- Do not use QE experiment execution for validation; all validation must be script-only.
+- Registering a new HMM snapshot/asset is allowed because the user explicitly requested new-version training, but old rows/assets must remain untouched.
+
+## Phases
+
+### Phase 1: Persistent Plan and Design Doc
+- [x] Read project memory and HMM reference reports.
+- [x] Capture workspace/env baseline.
+- [x] Write detailed optimization/training plan MD under `docs/analysis/`.
+- **Status:** complete
+
+### Phase 2: Additive Script Creation
+- [x] Create new horizon-aware HMM training script without changing old scripts.
+- [x] Create new coefficient precompute/calibration script if needed.
+- [x] Create script-only 6-month comparison backtest script.
+- **Status:** complete
+
+### Phase 3: Train New HMM Version
+- [x] Run new training in WSL `rdagent-gpu`.
+- [x] Save new model under unique `backend/data/hmm_models/<config_id>/<date>/` directory.
+- [x] Register a new DB snapshot/config with unique display name, if DB connection permits.
+- **Status:** complete
+
+### Phase 4: Six-Month Script Backtest
+- [x] Select latest valid six-month data window from available local data.
+- [x] Compare Raw/no-HMM, old baseline, covfix same params, covfix w5 zscore, and new horizon v2 HMM.
+- [x] Report HMM Top50 replacement, HMM-only label/forward returns, monthly returns, contribution, utilization proxies, and final holdings.
+- **Status:** complete
+
+### Phase 5: Final Report
+- [x] Write final detailed results MD.
+- [x] Summarize whether new HMM improves over prior versions.
+- [x] List files/assets created and validation limitations.
+- **Status:** complete
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Build horizon-aware HMM as additive scripts/assets only | User explicitly forbids overwriting old model files and training scripts |
+| Remove `limit_up_ratio` from v2 observation features unless consistently PIT available | Prior report identified it as covariance anomaly source and some runtime precompute paths do not consistently use it |
+| Label states by 5D/10D/20D train-window utility rather than 1D daily return | Future QE emphasis and prior evidence show fixed 1D-style trending is mismatched |
+| Calibrate coefficients per snapshot from validation 5D/10D/20D utility | Prevents fixed `trending=1.05` from rewarding a negative multi-day state |
+| Use script-only validation, no QE runs | User requirement |
+
+## Errors Encountered
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| WSL inline PowerShell quoting failed for dependency probe | 1 | Wrote a temporary `.codex_tmp/probe_env.sh` and executed it with WSL bash |
+| Conda activation failed under `set -u` because `LD_LIBRARY_PATH` was unbound | 1 | Re-ran the training shell wrapper without `set -u` |
+
+## Additional HMM Error Log
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| Temporary WSL wrapper inherited CRLF line continuation and generated output filenames with a private-use CR glyph | 1 | Replaced those generated temp outputs with sanitized `.codex_tmp/hmm_horizon_v2_backtest_20260428*` filenames |
+
+---
+
+# Task Plan: HMM w5 zscore PIT Retrain Check (2026-04-28)
+
+## Goal
+Retrain the previously best diagnostic-only `w5 zscore` HMM with Train/Validation ending before the six-month script backtest window, generate new isolated coefficient artifacts, and compare it against all prior HMM versions using the same script-only validation.
+
+## Current Phase
+Complete: w5 zscore PIT retrain and script comparison
+
+## Constraints
+- Do not overwrite prior HMM scripts, models, or coefficient artifacts.
+- Do not run QE experiments; use script-only comparison.
+- Use Train/Validation that end before 2025-09-01 to remove overlap with the 2025-09-01 ~ 2026-03-03 six-month validation window.
+- Preserve old diagnostic `w5 zscore` snapshot for comparison, but mark it diagnostic-only.
+
+## Phases
+
+### Phase 1: PIT Split and Training
+- [x] Use w5/zscore/n3/diag parameters with Train 2022-09-01 ~ 2025-05-30 and Validation 2025-06-02 ~ 2025-08-29.
+- [x] Train into a new unique config/model directory.
+- [x] Save training stdout/stderr and metrics.
+- **Status:** complete
+
+### Phase 2: Coefficient Precompute
+- [x] Precompute `preset_A` for 2025-09-01 ~ 2026-03-03.
+- [x] Precompute `preset_B` for 2025-09-01 ~ 2026-03-03 if training succeeds.
+- [x] Register a new DB config/snapshot or provide equivalent result JSON for script comparison.
+- **Status:** complete
+
+### Phase 3: Script Backtest and Report
+- [x] Re-run six-month script comparison including the new PIT w5 zscore artifacts.
+- [x] Compare new PIT w5 zscore versus old diagnostic w5, w3 preset_B, Raw, and Horizon v2.
+- [x] Write a short incremental report under `docs/analysis/`.
+- **Status:** complete
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Reuse w5/zscore/n3/diag hyperparameters but move train/val entirely before 2025-09-01 | Directly tests whether the old +6.46% result survives without overlap leakage |
+| Generate both preset_A and preset_B | preset_A was old diagnostic winner, while preset_B was best PIT-compatible in w3; both are cheap to precompute once the model exists |
+
+---
+
+# Task Plan: HMM Daily Coefficient Generation (2026-04-28)
+
+## Goal
+补齐 Paper v2 / Selection Center 所需的 HMM 每日实盘预测能力：使用最新已完成交易日数据生成下一交易日 HMM 系数产物，并通过 UI 完成预览和生成验证。
+
+## Current Phase
+Complete: design, backend/API, frontend UI, backend tests, UI E2E validation.
+
+## Phases
+
+### Phase 1: Design
+- [x] 写入 `docs/architecture/hmm_daily_coefficient_generation_design_20260428.md`
+- [x] 明确 PIT 规则、产物元数据、API、UI、fail-fast 边界
+
+### Phase 2: Backend/API
+- [x] `HMMTrainingService.preview_daily_coefficients`
+- [x] `HMMTrainingService.generate_daily_coefficients`
+- [x] `/hmm-training/snapshots/{snapshot_id}/daily-coefficients/preview`
+- [x] `/hmm-training/snapshots/{snapshot_id}/daily-coefficients/generate`
+- [x] `scripts/precompute_hmm_coefficients.py` 支持 `output_trade_date`
+
+### Phase 3: Frontend/UI
+- [x] `hmmTrainingApi.previewDailyCoefficients/generateDailyCoefficients`
+- [x] `/paper-v2/model-hmm` 新增每日系数生成卡片
+- [x] Playwright 覆盖每日系数预览和确认生成
+
+### Phase 4: Validation
+- [x] Backend pytest: 149 passed
+- [x] Frontend typecheck/build passed
+- [x] Paper v2 UI E2E on 8012/3012: 12 passed
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| 每日系数生成独立于 HMM 训练 | 真实模拟盘需要每日预测，不需要每日重训 |
+| `effective_trade_date` 必须晚于 `as_of_trade_date` | 防止未来函数和当天收盘数据泄漏 |
+| 生成文件为 additive artifact | 不修改模型权重、快照或历史系数文件 |
+| 同名已存在文件只允许完全匹配时幂等返回 `EXISTS` | 防止静默覆盖或篡改历史产物 |
+
+## Errors Encountered
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| Next dev proxy 对较长 HMM generate 请求出现 socket hang up | 1 | UI E2E 使用 3012 前端 + 8012 绝对 API base，避免经过 Next proxy；生成 API 本身直接验证成功 |
+
+
+---
+
+# Task Plan: HMM Dynamic Coefficient Offline Experiments (2026-04-29T01:11:15)
+
+## Goal
+???? AIstock ??/???????????????? HMM ????????????? HMM ?????????????? 6 ??? HMM ?????? 1 ? qlib/??????? No-HMM ?????????????? QE ??????
+
+## Scope Guardrails
+- ????? HMM ???????????????? coefficient artifact?qlib/????????????
+- ????? AIstock ??/??????????????????/??????? HMM config/snapshot/job??? QE ???
+- ??????????????????? QE ranking/TopK ?????
+
+## Phases
+
+### Phase 1: Scope & Discovery
+- [ ] ???? HMM ???DB ?????????????
+- [ ] ?? 1 ???????? PIT train/validation/test ??
+- **Status:** in_progress
+
+### Phase 2: Offline Experiment Script
+- [ ] ???????????????
+- [ ] ?? 6 ????dynamic expected-return?dynamic probability-up?10/20 blend?confidence shrink?K4 dynamic?additive overlay ????
+- [ ] ???? DB
+- **Status:** pending
+
+### Phase 3: Training & Artifact Generation
+- [ ] ????????
+- [ ] ?? models.json?coefficients/signals?metadata?logs ?????
+- **Status:** pending
+
+### Phase 4: One-Year Validation
+- [ ] ?? No-HMM baseline
+- [ ] ?? 6 ????? 1 ???/qlib-style ??
+- [ ] ?????Sharpe?MaxDD????HMM-only/Raw-only????????
+- **Status:** pending
+
+### Phase 5: Report & Recommendation
+- [ ] ??????
+- [ ] ????????????? QE ????
+- **Status:** pending
+
+## Decisions Made
+| Decision | Rationale |
+|---|---|
+| ??? DB | ????????????? HMM ???????????? |
+| ???? coefficient ???????? | ?? QE runtime ????????????????? |
+| ?? overlay ?????? | ?? QE ???? runtime ????????? QE-ready ?? |
+
+## Errors Encountered
+| Error | Attempt | Resolution |
+|---|---|---|
+| None yet | - | - |
+
+| NaN posterior/signal caused identical invalid full-run rankings | Full run v1 | Patched forward posterior normalization and sanitized non-finite signals/coefficients; rerun under a new output root |
+
+---
+
+# Task Plan: HMM Dynamic Coefficient Micro-Tuning Loop (2026-04-29)
+
+## Goal
+Iteratively tune valuable HMM dynamic-coefficient directions using script-only qlib validation, without modifying AIstock application code, existing DB HMM versions, or QE experiments.
+
+## Status
+Complete.
+
+## Completed Phases
+- [x] Confirmed scope: HMM offline scripts/model artifacts/qlib outputs only.
+- [x] Ran second-pass tuning grid after the first dynamic experiment.
+- [x] Added relative PUP helpers and pass3-pass8 narrow grids around the best direction.
+- [x] Trained and validated 112 offline HMM variants plus repeated No-HMM baselines.
+- [x] Verified HMM DB config count remains 4; no new DB HMM config/snapshot/job was inserted.
+- [x] Wrote final report: `docs/analysis/hmm_dynamic_tuning_final_report_20260429.md`.
+
+## Final Decision
+Best script-level candidate is `p8_pup_w20_50_clip_0p9800_1p0150_conf_0p075`: 3-state PUP, 5D/10D/20D weights 0.20/0.30/0.50, lambda 0.06, coefficient clip 0.98~1.015, confidence_scale 0.075.
+
+## Errors Encountered
+| Error | Resolution |
+|---|---|
+| PowerShell heredoc quoting broke a WSL DB query | Wrote a temporary `.codex_tmp` Python query and removed it after execution |
+| A first DB query referenced nonexistent `config_name` | Inspected table columns and re-ran using `model_type/display_name` only |
+
+---
+
+# Task Plan: HMM DB vs Dynamic 1Y Script Comparison (2026-04-29)
+
+## Goal
+Run a script-only one-year qlib comparison between current DB HMM coefficient artifacts and the two recommended offline dynamic HMM candidates, without inserting any new DB HMM version.
+
+## Scope Guardrails
+- No DB writes and no QE experiment submission.
+- No AIstock backend/frontend/runtime code changes.
+- Only additive HMM offline script, qlib comparison outputs, and analysis report are created.
+
+## Completed Phases
+- [x] Discovered current DB HMM snapshots and coefficient coverage.
+- [x] Added `scripts/hmm_db_vs_dynamic_1y_compare.py` as a standalone comparison script.
+- [x] Ran qlib Top50/5D rebalance validation for 2025-03-11 ~ 2026-03-03.
+- [x] Wrote report: `docs/analysis/hmm_db_vs_dynamic_1y_comparison_report_20260429.md`.
+- [x] Verified DB HMM config/snapshot counts remain 4/4.
+
+## Final Decision
+Do not insert into DB automatically. The best PIT-compatible result is the offline dynamic `p8_pup_w20_50_clip_0p9800_1p0150_conf_0p075`, so it should be treated as a pending DB-registration candidate after user confirmation.
+
+---
+
+# Task Plan: Register Dynamic HMM Candidates Into DB (2026-04-29)
+
+## Goal
+Register both dynamic PUP HMM candidates into the HMM DB version list, and keep only one existing DB HMM version as the baseline.
+
+## Completed Phases
+- [x] Kept baseline: `HMM_COVFIX_w3_raw_same_params__n3_diag_rw3_nozscore`.
+- [x] Deleted old DB configs/assets for original baseline, Horizon v2, and w5/zscore PIT-6m.
+- [x] Registered `HMM_DYNAMIC_PUP_w20_50_conf_0p075_PIT1Y__n3_diag`.
+- [x] Registered `HMM_DYNAMIC_PUP_w20_50_conf_0p10_PIT1Y__n3_diag`.
+- [x] Verified DB now has exactly 3 sector_hmm configs.
+- [x] Re-ran script comparison after DB registration and confirmed DB artifacts reproduce the offline results.
+
+## Usage Note
+The two dynamic DB versions currently have `preset_A` coefficient artifacts for `2025-03-11 ~ 2026-03-03`. QE windows outside this range need matching coefficient artifacts before validation.

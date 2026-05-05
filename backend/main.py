@@ -41,6 +41,7 @@ from .routers import (
     rdagent_sync_admin,
     tasks,
     stocks,
+    stock_universe,
     quantevolver,
     quantevolver_evolution,
     strategies,
@@ -48,6 +49,7 @@ from .routers import (
     selection_center,
     paper_trading_v2,
     validation,
+    prometheus_admin,
     rdagent,
     rdagent_catalog_admin,
     rdagent_llm_config,
@@ -470,6 +472,7 @@ def create_app() -> FastAPI:
     app.include_router(qlib_router, prefix="")
     app.include_router(tasks.router, prefix="/api/v1")
     app.include_router(stocks.router, prefix="/api/v1")
+    app.include_router(stock_universe.router, prefix="/api/v1")
     app.include_router(quantevolver.router, prefix="/api/v1")
     app.include_router(quantevolver_evolution.router, prefix="/api/v1")
     app.include_router(quantevolver_evolution.factor_metrics_router, prefix="/api/v1")
@@ -478,6 +481,7 @@ def create_app() -> FastAPI:
     app.include_router(selection_center.router, prefix="/api/v1")
     app.include_router(paper_trading_v2.router, prefix="/api/v1")
     app.include_router(validation.router, prefix="/api/v1")
+    app.include_router(prometheus_admin.router, prefix="/api/v1")
     app.include_router(hmm_training.router, prefix="/api/v1")
     app.include_router(llm_config.router)
     app.include_router(paper_trading.router, prefix="/api/v1")

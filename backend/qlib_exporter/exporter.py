@@ -28,6 +28,30 @@ class ExportResult:
     rows: int
 
 
+def _resolve_export_codes(
+    db: DBReader,
+    ts_codes: Optional[Iterable[str]],
+    *,
+    start: date,
+    end: date,
+    exchanges: Optional[Sequence[str]],
+    exclude_st: bool,
+    exclude_delisted_or_paused: bool,
+) -> List[str]:
+    if ts_codes is not None:
+        codes = list(ts_codes)
+        if not codes:
+            raise ValueError("export: ts_codes 为空")
+        return codes
+    return db.get_base_ts_codes(
+        start=start,
+        end=end,
+        exchanges=list(exchanges) if exchanges else None,
+        exclude_st=exclude_st,
+        exclude_delisted_or_paused=exclude_delisted_or_paused,
+    )
+
+
 class QlibDailyExporter:
     def __init__(
         self,
@@ -95,6 +119,7 @@ class QlibDailyExporter:
         self,
         snapshot_id: str,
         end: date,
+        ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
         exclude_st: bool = False,
         exclude_delisted_or_paused: bool = False,
@@ -114,13 +139,19 @@ class QlibDailyExporter:
                 start=start, end=end, ts_codes=[], rows=0,
             )
 
-        df = self.db.load_qlib_daily_data_all(
-            start, end,
-            exchanges=list(exchanges) if exchanges else None,
-            use_tushare_adj=True,
-            exclude_st=exclude_st,
-            exclude_delisted_or_paused=exclude_delisted_or_paused,
-        )
+        if ts_codes is None:
+            df = self.db.load_qlib_daily_data_all(
+                start, end,
+                exchanges=list(exchanges) if exchanges else None,
+                use_tushare_adj=True,
+                exclude_st=exclude_st,
+                exclude_delisted_or_paused=exclude_delisted_or_paused,
+            )
+        else:
+            codes = list(ts_codes)
+            if not codes:
+                raise ValueError("export_incremental: ts_codes 为空")
+            df = self.db.load_qlib_daily_data(codes, start, end, use_tushare_adj=True)
 
         if df.empty:
             return ExportResult(
@@ -445,6 +476,7 @@ class QlibDailyBasicExporter:
         snapshot_id: str,
         start: date,
         end: date,
+        ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
         exclude_st: bool = False,
         exclude_delisted_or_paused: bool = False,
@@ -462,10 +494,12 @@ class QlibDailyBasicExporter:
             filename: 输出文件名，默认为 daily_basic.h5
         """
 
-        codes = self.db.get_base_ts_codes(
+        codes = _resolve_export_codes(
+            self.db,
+            ts_codes,
             start=start,
             end=end,
-            exchanges=list(exchanges) if exchanges else None,
+            exchanges=exchanges,
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
         )
@@ -503,6 +537,7 @@ class QlibDailyBasicExporter:
         self,
         snapshot_id: str,
         end: date,
+        ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
         exclude_st: bool = False,
         exclude_delisted_or_paused: bool = False,
@@ -522,9 +557,11 @@ class QlibDailyBasicExporter:
                 start=start, end=end, ts_codes=[], rows=0,
             )
 
-        codes = self.db.get_base_ts_codes(
+        codes = _resolve_export_codes(
+            self.db,
+            ts_codes,
             start=start, end=end,
-            exchanges=list(exchanges) if exchanges else None,
+            exchanges=exchanges,
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
         )
@@ -577,6 +614,7 @@ class QlibMoneyflowExporter:
         snapshot_id: str,
         start: date,
         end: date,
+        ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
         exclude_st: bool = False,
         exclude_delisted_or_paused: bool = False,
@@ -594,10 +632,12 @@ class QlibMoneyflowExporter:
             filename: 输出文件名，默认为 moneyflow.h5
         """
 
-        codes = self.db.get_base_ts_codes(
+        codes = _resolve_export_codes(
+            self.db,
+            ts_codes,
             start=start,
             end=end,
-            exchanges=list(exchanges) if exchanges else None,
+            exchanges=exchanges,
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
         )
@@ -635,6 +675,7 @@ class QlibMoneyflowExporter:
         self,
         snapshot_id: str,
         end: date,
+        ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
         exclude_st: bool = False,
         exclude_delisted_or_paused: bool = False,
@@ -654,9 +695,11 @@ class QlibMoneyflowExporter:
                 start=start, end=end, ts_codes=[], rows=0,
             )
 
-        codes = self.db.get_base_ts_codes(
+        codes = _resolve_export_codes(
+            self.db,
+            ts_codes,
             start=start, end=end,
-            exchanges=list(exchanges) if exchanges else None,
+            exchanges=exchanges,
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
         )
@@ -709,6 +752,7 @@ class QlibBakBasicExporter:
         snapshot_id: str,
         start: date,
         end: date,
+        ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
         exclude_st: bool = False,
         exclude_delisted_or_paused: bool = False,
@@ -726,10 +770,12 @@ class QlibBakBasicExporter:
             filename: 输出文件名，默认为 bak_basic.h5
         """
 
-        codes = self.db.get_base_ts_codes(
+        codes = _resolve_export_codes(
+            self.db,
+            ts_codes,
             start=start,
             end=end,
-            exchanges=list(exchanges) if exchanges else None,
+            exchanges=exchanges,
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
         )
@@ -767,6 +813,7 @@ class QlibBakBasicExporter:
         self,
         snapshot_id: str,
         end: date,
+        ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
         exclude_st: bool = False,
         exclude_delisted_or_paused: bool = False,
@@ -786,9 +833,11 @@ class QlibBakBasicExporter:
                 start=start, end=end, ts_codes=[], rows=0,
             )
 
-        codes = self.db.get_base_ts_codes(
+        codes = _resolve_export_codes(
+            self.db,
+            ts_codes,
             start=start, end=end,
-            exchanges=list(exchanges) if exchanges else None,
+            exchanges=exchanges,
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
         )
@@ -841,6 +890,7 @@ class QlibCyqPerfExporter:
         snapshot_id: str,
         start: date,
         end: date,
+        ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
         exclude_st: bool = False,
         exclude_delisted_or_paused: bool = False,
@@ -858,10 +908,12 @@ class QlibCyqPerfExporter:
             filename: 输出文件名，默认为 cyq_perf.h5
         """
 
-        codes = self.db.get_base_ts_codes(
+        codes = _resolve_export_codes(
+            self.db,
+            ts_codes,
             start=start,
             end=end,
-            exchanges=list(exchanges) if exchanges else None,
+            exchanges=exchanges,
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
         )
@@ -899,6 +951,7 @@ class QlibCyqPerfExporter:
         self,
         snapshot_id: str,
         end: date,
+        ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
         exclude_st: bool = False,
         exclude_delisted_or_paused: bool = False,
@@ -918,9 +971,11 @@ class QlibCyqPerfExporter:
                 start=start, end=end, ts_codes=[], rows=0,
             )
 
-        codes = self.db.get_base_ts_codes(
+        codes = _resolve_export_codes(
+            self.db,
+            ts_codes,
             start=start, end=end,
-            exchanges=list(exchanges) if exchanges else None,
+            exchanges=exchanges,
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
         )
@@ -973,6 +1028,7 @@ class QlibMarginDetailExporter:
         snapshot_id: str,
         start: date,
         end: date,
+        ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
         exclude_st: bool = False,
         exclude_delisted_or_paused: bool = False,
@@ -980,10 +1036,12 @@ class QlibMarginDetailExporter:
     ) -> ExportResult:
         """全量导出 margin_detail 融资融券明细数据到 Snapshot."""
 
-        codes = self.db.get_base_ts_codes(
+        codes = _resolve_export_codes(
+            self.db,
+            ts_codes,
             start=start,
             end=end,
-            exchanges=list(exchanges) if exchanges else None,
+            exchanges=exchanges,
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
         )
@@ -1020,6 +1078,7 @@ class QlibMarginDetailExporter:
         self,
         snapshot_id: str,
         end: date,
+        ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
         exclude_st: bool = False,
         exclude_delisted_or_paused: bool = False,
@@ -1039,9 +1098,11 @@ class QlibMarginDetailExporter:
                 start=start, end=end, ts_codes=[], rows=0,
             )
 
-        codes = self.db.get_base_ts_codes(
+        codes = _resolve_export_codes(
+            self.db,
+            ts_codes,
             start=start, end=end,
-            exchanges=list(exchanges) if exchanges else None,
+            exchanges=exchanges,
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
         )
@@ -1094,6 +1155,7 @@ class QlibSectorDataExporter:
         snapshot_id: str,
         start: date,
         end: date,
+        ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
         exclude_st: bool = False,
         exclude_delisted_or_paused: bool = False,
@@ -1101,10 +1163,12 @@ class QlibSectorDataExporter:
     ) -> ExportResult:
         """全量导出 sector_data 到 Snapshot."""
 
-        codes = self.db.get_base_ts_codes(
+        codes = _resolve_export_codes(
+            self.db,
+            ts_codes,
             start=start,
             end=end,
-            exchanges=list(exchanges) if exchanges else None,
+            exchanges=exchanges,
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
         )
@@ -1141,6 +1205,7 @@ class QlibSectorDataExporter:
         self,
         snapshot_id: str,
         end: date,
+        ts_codes: Optional[Iterable[str]] = None,
         exchanges: Optional[Sequence[str]] = None,
         exclude_st: bool = False,
         exclude_delisted_or_paused: bool = False,
@@ -1160,9 +1225,11 @@ class QlibSectorDataExporter:
                 start=start, end=end, ts_codes=[], rows=0,
             )
 
-        codes = self.db.get_base_ts_codes(
+        codes = _resolve_export_codes(
+            self.db,
+            ts_codes,
             start=start, end=end,
-            exchanges=list(exchanges) if exchanges else None,
+            exchanges=exchanges,
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
         )

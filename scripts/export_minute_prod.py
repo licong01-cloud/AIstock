@@ -1,8 +1,8 @@
 """全量分钟线导出 → CSV → dump_bin → Qlib bin
-覆盖 RDAgent/QE 回测范围: 2024-01-02 ~ 2026-03-19
-  - QE test: 2024-07-01 ~ 2026-03-10 (需 60 天窗口 → 2024-05-01 起)
-  - RDAgent test: 2021-01-01 ~ 2026-03-10 (分钟线数据 2024-01-02 起)
-  - 导出全量 2024-01-02 ~ 2026-03-19 覆盖所有需求
+覆盖 RDAgent/QE 回测范围: 2024-01-02 ~ 2026-04-28
+  - QE test: 2024-07-01 ~ 2026-04-28 (需 60 天窗口 -> 2024-05-01 起)
+  - RDAgent test: 2021-01-01 ~ 2026-04-28 (分钟线数据 2024-01-02 起)
+  - 导出全量 2024-01-02 ~ 2026-04-28 覆盖所有需求
 字段: open, high, low, close, volume, amount, factor, limit_up, limit_down
 """
 import os, sys, time, gc, shutil
@@ -15,7 +15,7 @@ from pathlib import Path
 
 # ========== 配置 ==========
 START = '2024-01-02'
-END = '2026-03-19'
+END = '2026-04-28'
 OUTPUT_DIR = Path('F:/Dev/AIstock/qlib_minute_prod')
 CSV_DIR = OUTPUT_DIR / 'csv'
 BIN_DIR = OUTPUT_DIR / 'bin'

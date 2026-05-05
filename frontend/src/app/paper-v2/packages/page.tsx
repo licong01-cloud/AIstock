@@ -210,49 +210,41 @@ export default function PaperV2PackagesPage() {
   return (
     <main>
       <ErrorPanel error={error} title="策略包操作失败" />
-      <div className="pv2-grid pv2-grid-main">
-        <SectionCard title="从 QE 创建策略包" eyebrow="只显示未打包来源" action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新来源</button>}>
-          <div className="pv2-form-grid">
-            <div className="pv2-field">
-              <label>来源类型</label>
-              <select className="pv2-select" value={sourceKind} onChange={(event) => setSourceKind(event.target.value as typeof sourceKind)}>
-                <option value="all">全部来源</option>
-                <option value="qe_experiment">QE 单次实验</option>
-                <option value="qe_evolution_loop">QE 演进 Loop</option>
-              </select>
-            </div>
-            <div className="pv2-field pv2-field-wide">
-              <label>QE 来源（名称后显示年化、IC、最大回撤）</label>
-              <select className="pv2-select" value={sourceKey} onChange={(event) => setSourceKey(event.target.value)}>
-                {sources.map((item) => {
-                  const key = `${item.source_kind}:${item.experiment_id}:${item.qe_task_id || ""}:${item.qe_loop_id || ""}`;
-                  return <option value={key} key={key}>{item.display_name || `${item.experiment_name} | ${metricText(item)}`}</option>;
-                })}
-              </select>
-            </div>
+      <SectionCard title="从 QE 创建策略包" eyebrow="只显示未打包来源" action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新来源</button>}>
+        <div className="pv2-form-grid">
+          <div className="pv2-field">
+            <label>来源类型</label>
+            <select className="pv2-select" value={sourceKind} onChange={(event) => setSourceKind(event.target.value as typeof sourceKind)}>
+              <option value="all">全部来源</option>
+              <option value="qe_experiment">QE 单次实验</option>
+              <option value="qe_evolution_loop">QE 演进 Loop</option>
+            </select>
           </div>
-          <label className="pv2-chip" style={{ marginTop: 12 }}>
-            <input type="checkbox" checked={resolveRuntimeAssets} onChange={(event) => setResolveRuntimeAssets(event.target.checked)} />
-            创建时解析并复制运行时资产（V24/V25 等模型型执行策略需要）
-          </label>
-          <div className="pv2-row-actions" style={{ marginTop: 12 }}>
-            <button className="pv2-button" onClick={() => sourceAction("preview")} disabled={busy || !selectedSource} type="button">预览 Manifest</button>
-            <button className="pv2-button" onClick={() => sourceAction("readiness")} disabled={busy || !selectedSource} type="button">验证模拟盘就绪</button>
-            <button className="pv2-button-primary" onClick={() => sourceAction("create")} disabled={busy || !selectedSource} type="button">创建 StrategyPackage</button>
+          <div className="pv2-field pv2-field-wide">
+            <label>QE 来源（名称后显示年化、IC、最大回撤）</label>
+            <select className="pv2-select" value={sourceKey} onChange={(event) => setSourceKey(event.target.value)}>
+              {sources.map((item) => {
+                const key = `${item.source_kind}:${item.experiment_id}:${item.qe_task_id || ""}:${item.qe_loop_id || ""}`;
+                return <option value={key} key={key}>{item.display_name || `${item.experiment_name} | ${metricText(item)}`}</option>;
+              })}
+            </select>
           </div>
-          {!sources.length ? <NoticePanel title="暂无可打包 QE 来源" tone="info">符合条件且尚未加入策略包的 QE 单次实验或演进 Loop 为空。</NoticePanel> : null}
-          {sourcePreview ? <JsonPanel value={sourcePreview} /> : null}
-        </SectionCard>
-
-        <SectionCard title="策略包晋级规则" eyebrow="冻结 Manifest">
-          <ul>
-            <li>只允许 QE 单次实验或 QE 演进 Loop 创建 StrategyPackage。</li>
-            <li>manifest ?? 与 manifest_sha256 创建后冻结；状态流转不进入 hash。</li>
-            <li>HMM、行业黑名单、TopK、停牌剔除是运行时配置，不锁定在策略包中。</li>
-            <li>启用模拟盘会校验分钟线执行策略，不能使用未回测验证的模拟盘独有配置。</li>
-          </ul>
-        </SectionCard>
-      </div>
+        </div>
+        <label className="pv2-chip" style={{ marginTop: 12 }}>
+          <input type="checkbox" checked={resolveRuntimeAssets} onChange={(event) => setResolveRuntimeAssets(event.target.checked)} />
+          创建时解析并复制运行时资产（V24/V25 等模型型执行策略需要）
+        </label>
+        <div className="pv2-row-actions" style={{ marginTop: 12 }}>
+          <button className="pv2-button" onClick={() => sourceAction("preview")} disabled={busy || !selectedSource} type="button">预览 Manifest</button>
+          <button className="pv2-button" onClick={() => sourceAction("readiness")} disabled={busy || !selectedSource} type="button">验证模拟盘就绪</button>
+          <button className="pv2-button-primary" onClick={() => sourceAction("create")} disabled={busy || !selectedSource} type="button">创建 StrategyPackage</button>
+        </div>
+        <div className="pv2-help">
+          晋级规则：仅 QE 单次实验或 QE 演进 Loop 可创建 StrategyPackage；Manifest JSON 与 manifest_sha256 创建后冻结，状态流转不进入 hash；HMM、行业黑名单、TopK、停牌剔除属于运行时配置；启用模拟盘会校验分钟线执行策略。
+        </div>
+        {!sources.length ? <NoticePanel title="暂无可打包 QE 来源" tone="info">符合条件且尚未加入策略包的 QE 单次实验或演进 Loop 为空。</NoticePanel> : null}
+        {sourcePreview ? <JsonPanel value={sourcePreview} /> : null}
+      </SectionCard>
 
       <SectionCard title="StrategyPackage 策略包中心" eyebrow={loading ? "加载中" : `${packages.length} 个策略包`} action={<button className="pv2-button" onClick={load} type="button">刷新</button>}>
         <PaperTable

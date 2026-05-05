@@ -13,6 +13,7 @@ from . import qe_archive
 from . import smart_monitor
 from . import rdagent
 from . import rdagent_templates
+from . import stock_universe
 
 __all__ = [
     "health",
@@ -30,6 +31,7 @@ __all__ = [
     "smart_monitor",
     "rdagent",
     "rdagent_templates",
+    "stock_universe",
 ]
 
 from . import quantevolver

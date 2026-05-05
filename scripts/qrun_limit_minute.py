@@ -239,7 +239,7 @@ def load_benchmark_series(config=None):
     try:
         from qlib.data import D
         # 从 config 提取回测区间
-        start, end = "2024-07-01", "2026-03-10"
+        start, end = "2024-07-01", "2026-04-27"
         if config:
             _extract_backtest_range(config, lambda s, e: None)  # just to find range
             # 简单递归查找 backtest.start_time / end_time

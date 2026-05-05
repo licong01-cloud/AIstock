@@ -171,3 +171,110 @@
 - Session started at 2026-04-27T00:36:40.7611171+08:00.
 - Existing worktree is already dirty before this task; commits must stage only task-owned changes.
 - User-reported root issue confirmed from prior analysis: UI/custom params persisted V25_TWO_STAGE, while generated Qlib config defaulted to TailTWAPWithLimitStrategy; hold_thresh=5 was serialized but not enforced by custom strategy override.
+
+
+## HMM Horizon-Aware v2 Findings (2026-04-28T01:51:39)
+- Workspace already contains many unrelated untracked files; this task will create only additive HMM plan/script/report/model artifacts and will not stage/revert unrelated work.
+- WSL `rdagent-gpu` environment is available with Python 3.10.19 and required packages (`hmmlearn`, `psycopg2`, `numpy`, `pandas`).
+- `TDX_DB_PASSWORD` is empty in the Windows environment; scripts should support empty password and/or WSL local DB defaults, then log DB connection failures explicitly.
+- Authoritative HMM issue from reports: covfix w5 zscore fixed technical instability but `preset_A` rewards `trending` despite negative 3D/5D/10D/20D validation returns.
+- New HMM training should align observation features, state labels, and coefficient calibration with 5D/10D/20D horizon utility.
+
+## HMM Data/Snapshot Discovery (2026-04-28T01:55:02)
+- Local DB coverage: `market.sector_data`, `market.sw_daily`, `market.index_daily`, and `market.kline_daily_raw` are available through 2026-04-27.
+- Existing active HMM snapshots found in DB: baseline original w3 raw, covfix same-params w3 raw, and covfix w5 zscore candidate.
+- The covfix same-params w3 raw snapshot has positive validation `trending` returns through 20D; this should be included in six-month script comparison because it may be a stronger prior candidate than the w5/zscore version.
+
+## HMM v2 Script Implementation Notes (2026-04-28T02:00:04)
+- New training script is additive and includes integrated validation/coefficient precompute; no existing HMM trainer was modified.
+- New comparison script is script-only and uses a causal trailing 5D/10D/20D raw score with Top50 5D rebalancing; it intentionally does not use QE experiment execution.
+- Python 3.10 disallows backslashes inside f-string expressions, so WSL compilation caught and fixed a path conversion issue that Windows py_compile did not flag.
+
+## HMM v2 Training Result (2026-04-28T02:01:33)
+- New HMM v2 trained 131/131 sectors with zero skipped sectors.
+- Coefficient calibration result: `fading=1.020983`, `neutral=0.992210`, `trending=0.986807`.
+- Validation weighted 5D/10D/20D utilities show that the train-labeled `fading` bucket performed best in validation (+0.034876 pct), while `neutral` and `trending` were negative. This confirms why fixed state-name semantics are unsafe and why snapshot-specific calibration is required.
+- The first training attempt failed because `set -u` conflicted with conda activation; rerunning without nounset completed successfully.
+
+## HMM v2 Script Backtest Result (2026-04-28T02:07:01)
+- Six-month script validation window: 2025-09-01 to 2026-03-03, Top50 equal-weight, 5D rebalance, trailing 5D/10D/20D raw score.
+- Best PIT-compatible result is `HMM_COVFIX_w3_raw_same_params__n3_diag_rw3_nozscore::preset_B`: total -9.48%, annualized -18.87%, Sharpe -0.703, max drawdown -12.99%.
+- `HMM_COVFIX_w5_zscore_candidate__n3_diag_rw5_zscore::preset_A` is best overall in the proxy (+6.46%) but flagged diagnostic-only because train/validation overlaps the backtest window.
+- New Horizon v2 variants did not improve: main -23.87%, conservative -22.28%, risk_only -15.58%, all worse than Raw/no-HMM (-13.98%).
+- New v2 failure mode: HMM-only replacements were not better than raw-only candidates; v2 main HMM-only 5D averaged -0.72% while raw-only averaged +0.64%.
+- The comparison JSON now includes per-version stock contribution summaries under `contributions`; summary CSV includes capital utilization and buy-unfilled close-to-close proxies.
+- Final detailed report written to `docs/analysis/hmm_horizon_v2_training_backtest_report_20260428.md`.
+
+## HMM w5 zscore PIT Retrain Check (2026-04-28)
+- User asked whether the diagnostic-only w5/zscore result can be retrained with non-overlapping train/validation windows.
+- Planned split: Train 2022-09-01 ~ 2025-05-30, Validation 2025-06-02 ~ 2025-08-29, Backtest 2025-09-01 ~ 2026-03-03.
+- This directly removes the overlap that made `HMM_COVFIX_w5_zscore_candidate__n3_diag_rw5_zscore::preset_A` diagnostic-only.
+
+## HMM w5 zscore PIT Retrain Result (2026-04-28T08:51:43)
+- New PIT w5/zscore version trained and registered: `HMM_COVFIX_w5_zscore_PIT_6m__n3_diag_rw5_zscore`, config `c095ab83-48f4-453d-9eb9-c1987b6bd7fe`, snapshot `b6e18fc0-2b58-4f8b-a27b-353bdf203c6f`.
+- Non-overlap split: Train 2022-09-01 ~ 2025-05-30, Validation 2025-06-02 ~ 2025-08-29, script backtest 2025-09-01 ~ 2026-03-03.
+- Training succeeded for 131/131 sectors; rolling_window=5, zscore=true, covariance_type=diag; covariance clipping fixed 121 sectors / 248 anomalous covariance values.
+- Precomputed both `preset_A` and `preset_B` for 2025-09-01 ~ 2026-03-03.
+- Script backtest results: new PIT w5 preset_A total -16.38%, Sharpe -1.134; new PIT w5 preset_B total -14.98%, Sharpe -1.025.
+- The old diagnostic w5 preset_A +6.46% did not reproduce under non-overlap PIT training; current best PIT-compatible HMM remains `HMM_COVFIX_w3_raw_same_params__n3_diag_rw3_nozscore::preset_B` at -9.48%.
+- Incremental report: `docs/analysis/hmm_w5_zscore_pit_retrain_report_20260428.md`.
+
+## HMM Leaky w5/zscore Deletion (2026-04-28)
+- User requested hard deletion of the old leaking diagnostic version to avoid QE selection confusion.
+- Deleted DB records for config `be681443-fe5d-4641-b55f-5f889e6af8e1`, snapshot `4c9b5f7b-8e59-44a6-b580-e7186b9283df`, and job `b9263abe-bdf2-411d-a3e3-cb142360a72a`.
+- Deleted filesystem directory `backend/data/hmm_models/be681443-fe5d-4641-b55f-5f889e6af8e1`.
+- Verification: DB query for that config now returns no configs/snapshots/jobs; filesystem path no longer exists.
+- Remaining completed HMM DB configs: baseline original w3, covfix w3 raw same-params, new PIT w5 zscore, and Horizon v2.
+
+## HMM Daily Coefficient Generation Findings (2026-04-28)
+- Existing HMM runtime behavior was correct but incomplete: it consumed completed snapshots and coefficient artifacts, then fail-fasted when no artifact covered `trade_date`.
+- The missing production capability was daily artifact generation, not rolling HMM retraining.
+- The implemented PIT rule is: `effective_trade_date` must be later than `as_of_trade_date`; generation reads DB data only through `as_of_trade_date`, then remaps that day's forward-filtered coefficients to `effective_trade_date`.
+- Existing artifacts remain immutable. A deterministic daily filename may be reused only if metadata exactly matches; otherwise generation refuses to overwrite.
+- UI E2E initially exposed a proxy timeout risk for long generation calls; using absolute dev API base on port 8012 avoids the Next dev proxy during validation.
+
+
+## HMM Dynamic Coefficient Offline Experiment Findings (2026-04-29T01:11:15)
+- User requested six offline HMM directions with ~1-year qlib/script validation before QE.
+- Guardrail: do not modify existing HMM DB versions; do not modify AIstock application code; only HMM experiment scripts, model files, and validation artifacts are in scope.
+
+- 2026-04-29T01:20:42: WSL distro is `Ubuntu`; qlib 0.9.6.99 is available in conda env `rdagent-gpu`; `/home/lc999/data/qlib_bin` calendar currently ends at 2026-03-10, so the 1-year test window is set to 2025-03-11 ~ 2026-03-03 to leave 5D forward-return room.
+
+- 2026-04-29T01:29:00: Important implementation finding: `hmmlearn._hmmc.forward_log` in local 0.3.3 expects `startprob_` and `transmat_` probabilities plus log frame likelihoods. Passing log start/trans generated NaN forward lattices and invalid coefficients.
+
+## HMM Dynamic Offline Valid Result (2026-04-29)
+- Valid output root: `.codex_tmp/hmm_dynamic_offline_20260429_v3`. Earlier v1/v2 roots are diagnostic invalid because forward posterior normalization was wrong or zero-confidence.
+- Best QE-ready direction: `dyncoef_pup_blend_k3_clip_0p98_1p02`, total -13.39% vs No-HMM -21.00%, Sharpe -0.292 vs -0.628, MaxDD -34.13% vs -37.34%.
+- Additive overlay also improved vs baseline but is not QE-ready without runtime score-adjustment changes.
+- K4 probability-up underperformed materially and should be rejected or redesigned.
+
+## HMM Dynamic Coefficient Micro-Tuning Findings (2026-04-29)
+- Completed 8 offline tuning passes totaling 112 HMM variants; no QE experiments and no DB writes were performed.
+- Final best candidate: `p8_pup_w20_50_clip_0p9800_1p0150_conf_0p075`, total return -0.81%, Sharpe 0.142, MaxDD -30.91% vs No-HMM -21.00%, Sharpe -0.628, MaxDD -37.34%.
+- Best direction is 3-state probability-up (PUP), 5D/10D/20D weights 0.20/0.30/0.50, lambda 0.06, asymmetric clip 0.98~1.015, confidence_scale 0.075.
+- The best candidate improves because HMM-only replacements outperform raw-only candidates on all tested horizons: 5D +1.74pp, 10D +1.59pp, 20D +1.39pp.
+- ER/winsor/median, K4, neutral-band/confidence-floor, cross-sectional PUP rank/z, and 20D weights above 55% are not recommended for near-term QE validation.
+- The remaining negative total return is not caused only by final days; monthly drag is concentrated in 2025-03, 2025-04, and 2025-11, while HMM materially improves 2025-04, 2025-06, 2025-08, 2025-09, 2025-10, and 2026-01.
+- Verified DB HMM config count remained 4 after the full offline loop.
+
+## HMM DB vs Dynamic 1Y Script Comparison Findings (2026-04-29)
+- Ran `scripts/hmm_db_vs_dynamic_1y_compare.py` against qlib daily data for 2025-03-11 ~ 2026-03-03; no DB writes and no QE experiments were performed.
+- Included 5 full-window DB coefficient artifacts and 2 offline dynamic candidates; excluded 7 DB artifacts because their coefficient files only covered 2025-09-01 ~ 2026-03-03 or single dates.
+- Full-window DB artifacts are diagnostic-only for the 1-year window because their train/validation periods overlap the test start; this includes the w5/zscore PIT-6m version, which is PIT-compatible for the 2025-09-01 six-month window but not for 2025-03-11 one-year validation.
+- Best PIT-compatible result is still `OFFLINE_DYNAMIC::p8_pup_w20_50_clip_0p9800_1p0150_conf_0p075`: total -0.81%, Sharpe 0.142, MaxDD -30.91%, versus No-HMM -21.00%, Sharpe -0.628, MaxDD -37.34%.
+- The robust alternate `OFFLINE_DYNAMIC::p8_pup_w20_50_clip_0p9800_1p0150_conf_0p10` is very close: total -0.95%, Sharpe 0.138, MaxDD -30.91%.
+- Best DB diagnostic full-window artifact was `HMM_COVFIX_w5_zscore_PIT_6m__n3_diag_rw5_zscore::preset_A`: total -8.74%, Sharpe -0.182, MaxDD -27.27%; it cannot be considered a formal 1-year winner due split overlap.
+- DB HMM config/snapshot counts remained 4/4 after validation.
+
+## HMM Dynamic DB Registration Findings (2026-04-29)
+- User requested both dynamic candidates be added to DB and all old DB HMM versions except the recommended baseline be removed.
+- Kept existing baseline: `HMM_COVFIX_w3_raw_same_params__n3_diag_rw3_nozscore`, config `b99c907b-873a-4173-a4ee-5eab266f8c49`, snapshot `bbec3863-fb67-445f-938e-66f092d18696`.
+- Deleted DB configs and filesystem model directories for `HMM_BASELINE_ORIGINAL_w3_raw_unfixed__n3_diag_rw3_nozscore`, `HMM_COVFIX_w5_zscore_PIT_6m__n3_diag_rw5_zscore`, and `HMM_HORIZON_V2_w5w10w20_oos6m__n3_diag_ms75_no_limitup`.
+- Registered NEW1: `HMM_DYNAMIC_PUP_w20_50_conf_0p075_PIT1Y__n3_diag`, config `442fd70a-47b5-41ca-b4f5-96f52b81742e`, snapshot `ecd2bc1f-5b1b-4057-8815-c5590ab26804`.
+- Registered NEW2: `HMM_DYNAMIC_PUP_w20_50_conf_0p10_PIT1Y__n3_diag`, config `f3fe9433-ea86-4a16-a44b-989e1398c1b2`, snapshot `daddcd16-a618-4d5b-8919-dd61fd4e5eca`.
+- Both new DB versions use runtime preset `preset_A` and have coefficient artifacts covering `2025-03-11 ~ 2026-03-03`.
+- Post-registration script comparison confirmed the DB-registered NEW1/NEW2 reproduce the offline results exactly: NEW1 total -0.81%, Sharpe 0.142; NEW2 total -0.95%, Sharpe 0.138.
+- Different train/validation windows can materially change HMM results because hidden states, state posterior confidence, sector regimes, and validation-calibrated coefficients are all window-dependent.
+- PIT follow-up check: NEW1/NEW2 train/validation/coefficient periods are non-overlapping for the 2025-03-11 ~ 2026-03-03 validation window, and training code enforces `train_end < val_start` and `val_end < test_start`.
+- Residual metadata-PIT caveat: registered coefficient JSON uses a static `stock_sector_map` for runtime compatibility. The qlib/script validation itself used PIT date-sector maps, but current QE runtime consumes static `stock_sector_map`; this is not price/return leakage, but it is not perfect point-in-time industry membership. Over the 1Y window, 30 stocks have multiple overlapping membership rows in the broad overlap query.
+- Strict forward-label embargo caveat: because the dynamic PUP calibration uses 5D/10D/20D forward returns inside the validation period, a validation end of 2025-03-10 is adjacent to test start 2025-03-11 and therefore late-validation 20D labels look into the test window. For a strict 20D embargo, the latest validation date before 2025-03-11 should be 2025-02-11 or earlier.

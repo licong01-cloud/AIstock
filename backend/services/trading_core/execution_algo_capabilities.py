@@ -78,6 +78,16 @@ EXECUTION_ALGO_CAPABILITIES: dict[str, ExecutionAlgoCapability] = {
         plan_horizon_bars=240,
         runtime_asset_keys=("early_model_path", "late_model_path"),
     ),
+    "V25_1_SMALL_CAP": ExecutionAlgoCapability(
+        algo_code="V25_1_SMALL_CAP",
+        historical_min_required_bars=240,
+        historical_requires_full_day=True,
+        live_supported=True,
+        live_min_start_bars=1,
+        live_step_mode="persisted_plan",
+        plan_horizon_bars=240,
+        runtime_asset_keys=("early_model_path", "late_model_path"),
+    ),
 }
 
 

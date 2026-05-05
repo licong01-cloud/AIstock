@@ -176,3 +176,181 @@
   - Re-read docs/codex_project_memory.md.
   - Captured dirty git baseline; many pre-existing modified/untracked files are present.
   - Added new task plan section for this work.
+
+
+## Session: 2026-04-28 HMM Horizon-Aware v2 Training
+- **Status:** started
+- Actions taken:
+  - Activated `planning-with-files` workflow for persistent tracking.
+  - Re-read `docs/codex_project_memory.md` and HMM analysis reports from current context.
+  - Captured dirty git baseline; many unrelated untracked files pre-exist.
+  - Verified WSL `rdagent-gpu` dependency availability via `.codex_tmp/probe_env.sh`.
+  - Added this HMM-specific task plan section.
+- Timestamp: 2026-04-28T01:51:39
+
+- Wrote detailed HMM horizon-aware optimization/training plan: `docs/analysis/hmm_horizon_optimization_training_plan_20260428.md`.
+- Confirmed local DB has data through 2026-04-27 for sector, sw_daily, index_daily, and kline_daily_raw.
+- Timestamp: 2026-04-28T01:55:02
+
+- Created additive scripts: `scripts/hmm_horizon_v2_train.py` and `scripts/hmm_horizon_v2_compare.py`.
+- Verified both scripts compile in Windows Python and WSL `rdagent-gpu`; help output works.
+- Fixed a Python 3.10 f-string path-conversion syntax issue before training.
+- Timestamp: 2026-04-28T02:00:04
+
+- Trained new HMM horizon v2 in WSL `rdagent-gpu`.
+- New config: `f1da5529-0109-495f-a2b8-a2033cc31ee8`; snapshot: `77113d1b-1225-4cb2-9d1c-9d0c24f1d130`.
+- New model: `backend/data/hmm_models/f1da5529-0109-495f-a2b8-a2033cc31ee8/2026-04-28/models.json`.
+- New coefficients: `backend/data/hmm_models/f1da5529-0109-495f-a2b8-a2033cc31ee8/2026-04-28/coefficients_preset_horizon_v2_2025-09-01_2026-03-03.json`.
+- Validation calibration boosted the validation-best label (`fading` coefficient 1.020983) and downweighted negative labels (`neutral` 0.992210, `trending` 0.986807).
+- Timestamp: 2026-04-28T02:01:33
+
+### HMM Horizon v2 final validation pass
+- **Status:** complete
+- Actions taken:
+  - Re-ran `scripts/hmm_horizon_v2_compare.py` after adding contribution and execution-proxy diagnostics.
+  - Confirmed updated outputs at `.codex_tmp/hmm_horizon_v2_backtest_20260428.{json,md}` plus summary/monthly CSVs.
+  - Wrote final detailed report: `docs/analysis/hmm_horizon_v2_training_backtest_report_20260428.md`.
+  - Updated HMM task plan phases 4 and 5 to complete.
+- Key result:
+  - New HMM Horizon v2 is a valid isolated training artifact but should not be promoted; it underperformed Raw/no-HMM and old w3 preset_B in PIT-compatible script validation.
+- Files created/modified:
+  - `docs/analysis/hmm_horizon_v2_training_backtest_report_20260428.md`
+  - `scripts/hmm_horizon_v2_compare.py` (added contribution/proxy diagnostics)
+  - `.codex_tmp/hmm_horizon_v2_backtest_20260428.json`
+  - `.codex_tmp/hmm_horizon_v2_backtest_20260428_summary.csv`
+  - `.codex_tmp/hmm_horizon_v2_backtest_20260428_monthly.csv`
+  - `.codex_tmp/hmm_horizon_v2_backtest_20260428.md`
+- Timestamp: 2026-04-28T02:12:00
+
+## Session: 2026-04-28 HMM w5 zscore PIT Retrain Check
+- **Status:** started
+- Actions taken:
+  - Re-read `docs/codex_project_memory.md` and current HMM planning/findings/progress.
+  - Confirmed existing diagnostic w5 zscore snapshot used Train 2023-01-30 ~ 2026-01-23 and Validation 2026-01-26 ~ 2026-04-24, which overlaps the 2025-09-01 ~ 2026-03-03 script backtest.
+  - Added PIT retrain task plan using Train 2022-09-01 ~ 2025-05-30 and Validation 2025-06-02 ~ 2025-08-29.
+- Timestamp: 2026-04-28T02:20:00
+
+### HMM w5 zscore PIT retrain completion
+- **Status:** complete
+- Actions taken:
+  - Trained new PIT-compatible w5/zscore HMM with non-overlapping train/validation windows.
+  - Generated `preset_A` and `preset_B` coefficient artifacts for the six-month script backtest window.
+  - Registered the new config/snapshot/job in `model_train_configs`, `model_train_snapshots`, and `model_train_jobs`.
+  - Re-ran script-only comparison across 9 HMM coefficient artifacts plus Raw/no-HMM.
+  - Wrote incremental report: `docs/analysis/hmm_w5_zscore_pit_retrain_report_20260428.md`.
+- Key result:
+  - Old diagnostic-only w5/zscore +6.46% did not survive PIT retrain; new PIT w5 preset_A = -16.38%, preset_B = -14.98%.
+  - Best formal PIT-compatible version remains w3 raw same-params preset_B = -9.48%.
+- Files created/modified:
+  - `backend/data/hmm_models/c095ab83-48f4-453d-9eb9-c1987b6bd7fe/2026-04-28/models.json`
+  - `backend/data/hmm_models/c095ab83-48f4-453d-9eb9-c1987b6bd7fe/2026-04-28/coefficients_preset_A_2025-09-01_2026-03-03.json`
+  - `backend/data/hmm_models/c095ab83-48f4-453d-9eb9-c1987b6bd7fe/2026-04-28/coefficients_preset_B_2025-09-01_2026-03-03.json`
+  - `backend/data/hmm_models/c095ab83-48f4-453d-9eb9-c1987b6bd7fe/2026-04-28/training_result.json`
+  - `.codex_tmp/hmm_w5_zscore_pit_backtest_20260428.json`
+  - `.codex_tmp/hmm_w5_zscore_pit_backtest_20260428_summary.csv`
+  - `.codex_tmp/hmm_w5_zscore_pit_backtest_20260428_monthly.csv`
+  - `.codex_tmp/hmm_w5_zscore_pit_backtest_20260428.md`
+  - `docs/analysis/hmm_w5_zscore_pit_retrain_report_20260428.md`
+- Timestamp: 2026-04-28T08:55:00
+
+### HMM leaky w5/zscore hard deletion
+- **Status:** complete
+- Actions taken:
+  - Removed leaking diagnostic `HMM_COVFIX_w5_zscore_candidate__n3_diag_rw5_zscore` from `model_train_jobs`, `model_train_snapshots`, and `model_train_configs`.
+  - Removed model asset directory `backend/data/hmm_models/be681443-fe5d-4641-b55f-5f889e6af8e1` after verifying the resolved path is inside `backend/data/hmm_models`.
+  - Verified DB no longer has config/snapshot/job rows for `be681443-fe5d-4641-b55f-5f889e6af8e1` and the filesystem path is absent.
+- Timestamp: 2026-04-28T09:10:00
+
+## Session: 2026-04-28 HMM Daily Coefficient Generation
+- **Status:** complete
+- Actions taken:
+  - Added detailed design doc `docs/architecture/hmm_daily_coefficient_generation_design_20260428.md`.
+  - Implemented HMM daily coefficient preview/generate service methods and API routes.
+  - Extended `scripts/precompute_hmm_coefficients.py` to remap as-of coefficients to a separate effective trade date.
+  - Added `/paper-v2/model-hmm` UI controls for daily HMM coefficient preview/generation and fixed the confirmation component Chinese text.
+  - Added backend unit tests and extended Paper v2 Playwright coverage.
+- Validation:
+  - `pytest backend/tests/trading_core backend/tests/strategy_package backend/tests/paper_trading_v2 backend/tests/selection_center backend/tests/test_hmm_daily_coefficients.py backend/tests/test_hmm_rolling_training.py -q -p no:cacheprovider` -> 149 passed.
+  - `cd frontend && npx tsc --noEmit --pretty false` -> passed.
+  - `cd frontend && npm run build` -> passed.
+  - Dev backend 8012 and frontend 3012 UI E2E `npx playwright test --config=playwright.paper-v2.config.ts tests/paper-v2 --reporter=line` -> 12 passed.
+- Notes:
+  - Production backend 8001 was not restarted.
+  - Generated local runtime artifact `backend/data/hmm_models/c095ab83-48f4-453d-9eb9-c1987b6bd7fe/2026-04-28/coefficients_preset_A_2026-04-28_2026-04-28.json` during validation; it is an auditable HMM daily coefficient artifact and should not be committed as source code unless asset versioning is explicitly requested.
+
+
+## Session: 2026-04-29T01:11:15 HMM Dynamic Coefficient Offline Experiments
+- **Status:** started
+- Actions taken:
+  - Activated planning-with-files for long offline HMM experiment run.
+  - Scope locked to HMM scripts/model artifacts/qlib-style validation only; no AIstock backend/frontend code or existing DB HMM versions will be modified.
+
+- 2026-04-29T01:20:42: Created and smoke-tested `scripts/hmm_dynamic_offline_experiments.py`; smoke wrote only `.codex_tmp/hmm_dynamic_offline_smoke` and did not write DB. Starting full 1-year run next.
+
+- 2026-04-29T01:24:34: First full dynamic HMM run completed but was invalidated by NaN posterior/signal handling; patched `forward_posteriors` and coefficient sanitization, rerunning to `.codex_tmp/hmm_dynamic_offline_20260429_v2`.
+
+- 2026-04-29T01:29:00: Full run v2 showed zero confidence/effect. Debug found hmmlearn `_hmmc.forward_log` expects probability start/trans matrices, not log matrices. Patched and rerunning to `.codex_tmp/hmm_dynamic_offline_20260429_v3`.
+
+- 2026-04-29T01:33:31: Full valid v3 run completed. Best QE-ready offline candidate is `dyncoef_pup_blend_k3_clip_0p98_1p02` with total -13.39% vs baseline -21.00%, Sharpe -0.292 vs -0.628, MaxDD -34.13% vs -37.34%. Report written to `docs/analysis/hmm_dynamic_offline_experiment_report_20260429.md`. Verified existing DB HMM config count remained 4.
+
+- 2026-04-29T01:34:11: Removed self-created invalid/smoke temp roots (`hmm_dynamic_offline_smoke`, `hmm_dynamic_offline_20260429`, `hmm_dynamic_offline_20260429_v2`) to avoid confusion; kept only valid `.codex_tmp/hmm_dynamic_offline_20260429_v3`.
+
+## Session: 2026-04-29 HMM Dynamic Micro-Tuning Loop Completion
+- **Status:** complete
+- Actions taken:
+  - Continued from the first dynamic HMM experiment and ran second-pass through eighth-pass offline tuning grids.
+  - Added `pup_z` and `pup_rank` support to the offline experiment script for diagnostic relative-PUP tests.
+  - Added pass3-pass8 tuning scripts under `scripts/` without modifying AIstock backend/frontend/QE runtime code.
+  - Ran all grids in WSL `Ubuntu` conda env `rdagent-gpu` against qlib daily data and DB sector data.
+  - Wrote final report `docs/analysis/hmm_dynamic_tuning_final_report_20260429.md` and combined summaries under `.codex_tmp/`.
+- Key result:
+  - Best: `p8_pup_w20_50_clip_0p9800_1p0150_conf_0p075`, total -0.81%, Sharpe 0.142, MaxDD -30.91%, monthly win rate 54.55%.
+  - Baseline No-HMM: total -21.00%, Sharpe -0.628, MaxDD -37.34%.
+- Validation:
+  - Windows and WSL `py_compile` passed for updated/offline HMM scripts.
+  - Full pass8 command completed successfully.
+  - DB HMM config count check returned 4 unchanged configs.
+- Files created/modified:
+  - `scripts/hmm_dynamic_offline_experiments.py`
+  - `scripts/hmm_dynamic_tuning_experiments.py`
+  - `scripts/hmm_dynamic_tuning_pass3_experiments.py` through `scripts/hmm_dynamic_tuning_pass8_experiments.py`
+  - `.codex_tmp/hmm_dynamic_tuning_*_20260429/`
+  - `.codex_tmp/hmm_dynamic_tuning_combined_summary_20260429.csv`
+  - `docs/analysis/hmm_dynamic_tuning_final_report_20260429.md`
+
+## Session: 2026-04-29 HMM DB vs Dynamic 1Y Script Comparison
+- **Status:** complete
+- Actions taken:
+  - Added standalone comparison script `scripts/hmm_db_vs_dynamic_1y_compare.py`.
+  - Compared existing DB HMM coefficient artifacts that cover 2025-03-11 ~ 2026-03-03 with the two recommended offline dynamic candidates.
+  - Used qlib daily Top50 equal-weight 5D rebalance validation; no QE experiment and no DB write.
+  - Wrote outputs under `.codex_tmp/hmm_db_vs_dynamic_1y_20260429/`.
+  - Wrote analysis report `docs/analysis/hmm_db_vs_dynamic_1y_comparison_report_20260429.md`.
+- Key result:
+  - Best PIT-compatible candidate: `OFFLINE_DYNAMIC::p8_pup_w20_50_clip_0p9800_1p0150_conf_0p075`, total -0.81%, Sharpe 0.142, MaxDD -30.91%.
+  - No-HMM baseline: total -21.00%, Sharpe -0.628, MaxDD -37.34%.
+  - All full-window DB coefficient artifacts are diagnostic-only for this 1-year window due train/validation overlap.
+- Validation:
+  - WSL `py_compile scripts/hmm_db_vs_dynamic_1y_compare.py` passed.
+  - Full WSL comparison command completed successfully.
+  - DB HMM config/snapshot counts remained 4/4 after validation.
+
+## Session: 2026-04-29 HMM Dynamic Candidates DB Registration
+- **Status:** complete
+- Actions taken:
+  - Added `scripts/register_dynamic_hmm_candidates.py`.
+  - Kept only `HMM_COVFIX_w3_raw_same_params__n3_diag_rw3_nozscore` from previous DB HMM versions.
+  - Deleted DB rows and filesystem assets for the old original baseline, Horizon v2, and w5/zscore PIT-6m HMM versions.
+  - Registered both dynamic PUP candidates into DB:
+    - `HMM_DYNAMIC_PUP_w20_50_conf_0p075_PIT1Y__n3_diag`
+    - `HMM_DYNAMIC_PUP_w20_50_conf_0p10_PIT1Y__n3_diag`
+  - Re-ran 1Y qlib script comparison after DB registration.
+  - Wrote report `docs/analysis/hmm_dynamic_db_registration_report_20260429.md`.
+- Key result:
+  - DB now has 3 sector_hmm configs: 1 old baseline + 2 dynamic candidates.
+  - NEW1 DB result: -0.81%, Sharpe 0.142, MaxDD -30.91%.
+  - NEW2 DB result: -0.95%, Sharpe 0.138, MaxDD -30.91%.
+- Validation:
+  - `python -m py_compile scripts/register_dynamic_hmm_candidates.py` passed in WSL `rdagent-gpu`.
+  - DB/file verification confirmed model and coefficient artifacts exist and coefficient JSON contains `preset_A`, full 1Y dates, and stock-sector map.
+  - Post-registration script comparison discovered DB=4 coefficient artifacts and excluded DB=0.

@@ -14,7 +14,7 @@ from __future__ import annotations
 """
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Iterable, List, Optional
 
 import numpy as np
@@ -824,11 +824,12 @@ class DBReader:
         params: dict[str, object] = {"codes": codes, "freq": freq}
 
         if start is not None:
-            conditions.append("trade_time::date >= %(start)s")
-            params["start"] = start
+            conditions.append("trade_time >= %(start_ts)s")
+            params["start_ts"] = datetime.combine(start, datetime.min.time())
         if end is not None:
-            conditions.append("trade_time::date <= %(end)s")
-            params["end"] = end
+            # Keep the predicate sargable for minute-table indexes; avoid trade_time::date.
+            conditions.append("trade_time < %(end_next_ts)s")
+            params["end_next_ts"] = datetime.combine(end + timedelta(days=1), datetime.min.time())
 
         where_clause = " AND ".join(conditions)
 

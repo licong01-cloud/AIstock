@@ -67,6 +67,7 @@ class StockUniverseConfig:
     # their full post-listing history while remaining ineligible before T+365.
     min_listed_days: int = IPO_FILTER_DAYS
     ts_codes: Sequence[str] | None = None
+    universe_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,7 @@ class CsvExportSummary:
 
 STOCK_EXPORT_EXCHANGES = ("sh", "sz")
 EXCLUDED_STOCK_EXPORT_EXCHANGES = {"bj"}
+DEFAULT_PIT_UNIVERSE_KEY = "shsz_st_pit_active_v1"
 
 
 def normalize_stock_export_exchanges(exchanges: Sequence[str] | None) -> list[str]:
@@ -151,6 +153,8 @@ def _reject_bj_ts_codes(ts_codes: Sequence[str]) -> None:
 
 
 def _enforce_stock_export_policy(config: StockUniverseConfig) -> None:
+    if config.universe_key:
+        return
     if not config.exclude_st:
         raise ValueError("authoritative QE/Qlib stock exports must exclude all stocks that have ST records")
     if not config.exclude_delisted_or_paused:
@@ -205,6 +209,15 @@ def resolve_stock_universe(config: StockUniverseConfig) -> list[str]:
         raise ValueError("min_listed_days must be >= 0")
     _enforce_stock_export_policy(config)
 
+    if config.universe_key:
+        return resolve_stock_universe_from_pit_spans(
+            start=config.start,
+            end=config.end,
+            universe_key=config.universe_key,
+            exchanges=config.exchanges,
+            ts_codes=config.ts_codes,
+        )
+
     if config.ts_codes:
         codes = _clean_ts_codes(config.ts_codes)
         _reject_bj_ts_codes(codes)
@@ -243,6 +256,66 @@ def resolve_stock_universe(config: StockUniverseConfig) -> list[str]:
     with get_conn() as conn:
         df = pd.read_sql(sql, conn, params=params)
     return _clean_ts_codes(df["ts_code"].tolist())
+
+
+def resolve_stock_universe_from_pit_spans(
+    *,
+    start: date,
+    end: date,
+    universe_key: str = DEFAULT_PIT_UNIVERSE_KEY,
+    exchanges: Sequence[str] | None = None,
+    ts_codes: Sequence[str] | None = None,
+) -> list[str]:
+    """Resolve stock export codes from PIT eligibility spans.
+
+    The PIT universe controls buy/selection eligibility in instruments/all.txt.
+    Feature bins still preserve each selected stock's factual price history in
+    the requested export window.
+    """
+
+    if end < start:
+        raise ValueError("end must be >= start")
+    if not universe_key:
+        raise ValueError("universe_key is required for PIT stock universe export")
+
+    normalized_exchanges = _normalize_exchanges(exchanges)
+    suffixes = tuple(f".{item.upper()}" for item in normalized_exchanges)
+    codes_filter = _clean_ts_codes(ts_codes or [])
+    if codes_filter:
+        _reject_bj_ts_codes(codes_filter)
+
+    conditions = [
+        "p.universe_key = %(universe_key)s",
+        "p.eligible_start <= %(end)s",
+        "p.eligible_end >= %(start)s",
+    ]
+    params: dict[str, Any] = {"universe_key": universe_key, "start": start, "end": end}
+    if suffixes:
+        conditions.append("p.ts_code LIKE ANY(%(suffixes)s)")
+        params["suffixes"] = [f"%{suffix}" for suffix in suffixes]
+    if codes_filter:
+        conditions.append("p.ts_code = ANY(%(codes)s)")
+        params["codes"] = codes_filter
+
+    sql = f"""
+        SELECT DISTINCT p.ts_code
+        FROM market.stock_universe_pit_spans p
+        WHERE {' AND '.join(conditions)}
+        ORDER BY p.ts_code
+    """
+    with get_conn() as conn:
+        df = pd.read_sql(sql, conn, params=params)
+    codes = _clean_ts_codes(df["ts_code"].tolist()) if not df.empty else []
+    if codes_filter:
+        missing = [code for code in codes_filter if code not in set(codes)]
+        if missing:
+            sample = ", ".join(missing[:5])
+            raise ValueError(
+                f"explicit ts_codes include stocks outside PIT universe {universe_key} in {start}~{end}: {sample}"
+            )
+    if not codes:
+        raise RuntimeError(f"no stocks found in PIT universe {universe_key} for {start}~{end}")
+    return codes
 
 
 def _instrument_symbol_to_ts_code(symbol: str) -> str:
@@ -288,6 +361,182 @@ def _format_instrument_start(original_start: str, effective_start: date) -> str:
         return original_start
     suffix = original_start[10:] if len(original_start) > 10 else ""
     return f"{effective_start.isoformat()}{suffix}"
+
+
+def _format_instrument_end(original_end: str, effective_end: date) -> str:
+    original_end = str(original_end).strip()
+    if _date_prefix(original_end) == effective_end:
+        return original_end
+    suffix = original_end[10:] if len(original_end) > 10 else ""
+    return f"{effective_end.isoformat()}{suffix}"
+
+
+def _load_existing_instrument_ranges(all_txt: Path) -> dict[str, list[tuple[str, str, str, str]]]:
+    raw_lines = [line for line in all_txt.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not raw_lines:
+        raise RuntimeError(f"empty instruments/all.txt: {all_txt}")
+    parsed: dict[str, list[tuple[str, str, str, str]]] = {}
+    for raw in raw_lines:
+        symbol, start_value, end_value = _split_instrument_line(raw)
+        ts_code = _instrument_symbol_to_ts_code(symbol)
+        _reject_bj_ts_codes([ts_code])
+        parsed.setdefault(ts_code, []).append((symbol, start_value, end_value, ts_code))
+    return parsed
+
+
+def _load_pit_spans_for_all_txt(
+    *,
+    universe_key: str,
+    start: date,
+    end: date,
+    ts_codes: Sequence[str],
+) -> pd.DataFrame:
+    clean_codes = _clean_ts_codes(ts_codes)
+    if not clean_codes:
+        return pd.DataFrame(columns=["ts_code", "eligible_start", "eligible_end", "entry_reason", "exit_reason"])
+    sql = """
+        SELECT ts_code, eligible_start, eligible_end, entry_reason, exit_reason
+        FROM market.stock_universe_pit_spans
+        WHERE universe_key = %(universe_key)s
+          AND ts_code = ANY(%(codes)s)
+          AND eligible_start <= %(end)s
+          AND eligible_end >= %(start)s
+        ORDER BY ts_code, eligible_start, eligible_end
+    """
+    with get_conn() as conn:
+        df = pd.read_sql(
+            sql,
+            conn,
+            params={"universe_key": universe_key, "codes": clean_codes, "start": start, "end": end},
+        )
+    if df.empty:
+        return df
+    df["ts_code"] = df["ts_code"].astype(str).str.upper()
+    df["eligible_start"] = pd.to_datetime(df["eligible_start"]).dt.date
+    df["eligible_end"] = pd.to_datetime(df["eligible_end"]).dt.date
+    return df
+
+
+def _build_pit_all_txt_lines(
+    *,
+    existing_ranges: dict[str, list[tuple[str, str, str, str]]],
+    pit_spans: pd.DataFrame,
+    start: date,
+    end: date,
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Build Qlib instruments/all.txt lines from PIT spans and bin data ranges."""
+
+    lines: list[str] = []
+    skipped: list[dict[str, str]] = []
+    for row in pit_spans.itertuples(index=False):
+        ts_code = str(row.ts_code).upper()
+        parsed_ranges_raw = existing_ranges.get(ts_code)
+        if not parsed_ranges_raw:
+            skipped.append({"ts_code": ts_code, "reason": "missing_feature_in_all_txt"})
+            continue
+        if isinstance(parsed_ranges_raw, tuple):
+            # Backward-compatible path for existing unit tests and older callers.
+            parsed_ranges = [parsed_ranges_raw]
+        else:
+            parsed_ranges = parsed_ranges_raw
+
+        matched = False
+        for symbol, data_start_value, data_end_value, _ in parsed_ranges:
+            data_start = _date_prefix(data_start_value)
+            data_end = _date_prefix(data_end_value)
+            eligible_start = max(row.eligible_start, data_start, start)
+            eligible_end = min(row.eligible_end, data_end, end)
+            if eligible_start > eligible_end:
+                continue
+            matched = True
+            lines.append(
+                "\t".join(
+                    [
+                        symbol,
+                        _format_instrument_start(data_start_value, eligible_start),
+                        _format_instrument_end(data_end_value, eligible_end),
+                    ]
+                )
+            )
+
+        if not matched:
+            skipped.append(
+                {
+                    "ts_code": ts_code,
+                    "reason": "no_overlap_with_feature_range",
+                    "eligible_start": row.eligible_start.isoformat(),
+                    "eligible_end": row.eligible_end.isoformat(),
+                    "data_ranges": ";".join(
+                        f"{_date_prefix(start_value).isoformat()}~{_date_prefix(end_value).isoformat()}"
+                        for _, start_value, end_value, _ in parsed_ranges[:5]
+                    ),
+                }
+            )
+    lines = sorted(set(lines), key=lambda line: (_instrument_symbol_to_ts_code(line.split("\t", 1)[0]), line))
+    return lines, skipped
+
+
+def rewrite_stock_all_txt_from_pit_spans(
+    *,
+    bin_dir: Path,
+    universe_key: str = DEFAULT_PIT_UNIVERSE_KEY,
+    start: date,
+    end: date,
+) -> dict[str, Any]:
+    """Rewrite Qlib instruments/all.txt using PIT stock-universe spans."""
+
+    if end < start:
+        raise ValueError("end must be >= start")
+    if not universe_key:
+        raise ValueError("universe_key is required")
+
+    all_txt = bin_dir / "instruments" / "all.txt"
+    if not all_txt.exists():
+        raise FileNotFoundError(all_txt)
+
+    existing_ranges = _load_existing_instrument_ranges(all_txt)
+    pit_spans = _load_pit_spans_for_all_txt(
+        universe_key=universe_key,
+        start=start,
+        end=end,
+        ts_codes=list(existing_ranges.keys()),
+    )
+    if pit_spans.empty:
+        raise RuntimeError(f"no PIT spans found for {universe_key} within {start}~{end}")
+
+    kept_lines, skipped = _build_pit_all_txt_lines(
+        existing_ranges=existing_ranges,
+        pit_spans=pit_spans,
+        start=start,
+        end=end,
+    )
+    if not kept_lines:
+        raise RuntimeError("PIT all.txt rewrite would remove every stock; refusing to write empty universe")
+
+    all_txt.write_text("\n".join(kept_lines) + "\n", encoding="utf-8")
+    line_instruments = [_instrument_symbol_to_ts_code(line.split("\t", 1)[0]) for line in kept_lines]
+    unique_instruments = sorted(set(line_instruments))
+    counts = pd.Series(line_instruments).value_counts()
+    input_range_count = sum(len(ranges) for ranges in existing_ranges.values())
+    summary = {
+        "path": str(all_txt),
+        "mode": "pit_universe_spans",
+        "universe_key": universe_key,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "input_feature_instruments": len(existing_ranges),
+        "input_feature_ranges": input_range_count,
+        "pit_span_rows": int(len(pit_spans)),
+        "output_rows": len(kept_lines),
+        "output_instruments": len(unique_instruments),
+        "multi_span_instruments": int((counts > 1).sum()) if not counts.empty else 0,
+        "skipped_rows": len(skipped),
+        "sample_skipped": skipped[:20],
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    summary_path = all_txt.parent / "all_pit_universe_summary.json"
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary
 
 
 def _load_stock_list_dates(ts_codes: Sequence[str]) -> dict[str, date]:
@@ -765,6 +1014,7 @@ def export_stock_minute_csv(
     exclude_st: bool = True,
     exclude_delisted_or_paused: bool = True,
     ts_codes: Sequence[str] | None = None,
+    universe_key: str | None = None,
     basis_start: date | None = None,
     basis_end: date | None = None,
     strict_limit: bool = True,
@@ -793,6 +1043,7 @@ def export_stock_minute_csv(
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
             ts_codes=ts_codes,
+            universe_key=universe_key,
         )
     )
     csv_dir = csv_root / snapshot_id / "stock_minute_1min"
@@ -859,6 +1110,7 @@ def export_stock_minute_csv_chunked(
     exclude_st: bool = True,
     exclude_delisted_or_paused: bool = True,
     ts_codes: Sequence[str] | None = None,
+    universe_key: str | None = None,
     basis_start: date | None = None,
     basis_end: date | None = None,
     strict_limit: bool = True,
@@ -886,6 +1138,7 @@ def export_stock_minute_csv_chunked(
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
             ts_codes=ts_codes,
+            universe_key=universe_key,
         )
     )
     csv_dir = csv_root / snapshot_id / "stock_minute_1min"
@@ -1122,6 +1375,7 @@ def export_stock_daily_csv(
     exclude_st: bool = True,
     exclude_delisted_or_paused: bool = True,
     ts_codes: Sequence[str] | None = None,
+    universe_key: str | None = None,
     basis_start: date | None = None,
     basis_end: date | None = None,
     strict_limit: bool = False,
@@ -1142,6 +1396,7 @@ def export_stock_daily_csv(
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
             ts_codes=ts_codes,
+            universe_key=universe_key,
         )
     )
     csv_dir = csv_root / snapshot_id / "stock_daily"
@@ -1217,7 +1472,7 @@ def write_bin_meta(
         "end": end.isoformat(),
         "exchanges": _normalize_exchanges(exchanges),
         "exclude_st": bool(exclude_st),
-        "exclude_delisted_or_paused": True,
+        "exclude_delisted_or_paused": bool(exclude_delisted_or_paused),
         "exclude_bj": True,
         "min_listed_days": IPO_FILTER_DAYS,
         "ipo_filter_mode": "instruments_all_txt",
@@ -1232,7 +1487,10 @@ def write_bin_meta(
     if extra:
         meta.update(extra)
     bin_dir.mkdir(parents=True, exist_ok=True)
-    (bin_dir / "meta_export.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    (bin_dir / "meta_export.json").write_text(
+        json.dumps(meta, ensure_ascii=False, default=str, indent=2),
+        encoding="utf-8",
+    )
 
 
 def load_calendar(root: Path, freq: str) -> list[str]:
@@ -1359,6 +1617,7 @@ def validate_minute_bin_against_db(
     exclude_st: bool = True,
     exclude_delisted_or_paused: bool = True,
     ts_codes: Sequence[str] | None = None,
+    universe_key: str | None = None,
     fields: Sequence[str] | None = None,
     basis_start: date | None = None,
     basis_end: date | None = None,
@@ -1380,6 +1639,7 @@ def validate_minute_bin_against_db(
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
             ts_codes=ts_codes,
+            universe_key=universe_key,
         )
     )
     if not codes:
@@ -1571,6 +1831,7 @@ def validate_daily_bin_against_db(
     exclude_st: bool = True,
     exclude_delisted_or_paused: bool = True,
     ts_codes: Sequence[str] | None = None,
+    universe_key: str | None = None,
     fields: Sequence[str] | None = None,
     basis_start: date | None = None,
     basis_end: date | None = None,
@@ -1592,6 +1853,7 @@ def validate_daily_bin_against_db(
             exclude_st=exclude_st,
             exclude_delisted_or_paused=exclude_delisted_or_paused,
             ts_codes=ts_codes,
+            universe_key=universe_key,
         )
     )
     if not codes:

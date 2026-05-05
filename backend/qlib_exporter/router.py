@@ -26,6 +26,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..infra.wsl_qlib_runner import QlibWSLConfigError, run_qlib_script_in_wsl, win_to_wsl_path
+from ..services.stock_universe_pit_service import (
+    DEFAULT_ST_PIT_RULE_VERSION,
+    DEFAULT_ST_PIT_START_DATE,
+    StockUniversePitService,
+)
 from .config import (
     DAILY_RAW_TABLE,
     FIELD_MAPPING_DB_DAILY,
@@ -51,15 +56,20 @@ from .field_map_service import export_field_map_for_snapshot
 from .data_quality import DataReporter, DataValidator
 from .db_reader import DBReader
 from .authoritative_bin_exporter import (
+    DEFAULT_PIT_UNIVERSE_KEY,
     MINUTE_FREQ_QLIB,
     export_stock_daily_csv,
     export_stock_minute_csv_chunked,
     normalize_stock_export_exchanges,
+    resolve_stock_universe_from_pit_spans,
     rewrite_stock_all_txt_for_ipo_filter,
+    rewrite_stock_all_txt_from_pit_spans,
 )
 
 
 router = APIRouter()
+
+StockUniverseMode = Literal["legacy_static", "pit_spans"]
 
 
 class DailySnapshotRequest(BaseModel):
@@ -82,6 +92,11 @@ class DailySnapshotRequest(BaseModel):
         True,
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
+    stock_universe_mode: StockUniverseMode = Field(
+        "legacy_static",
+        description="股票池口径：legacy_static=旧静态过滤；pit_spans=使用 ST-only PIT spans",
+    )
+    universe_key: Optional[str] = Field(DEFAULT_PIT_UNIVERSE_KEY, description="PIT 股票池 key")
 
     @field_validator("snapshot_id")
     @classmethod
@@ -136,6 +151,11 @@ class MoneyflowSnapshotRequest(BaseModel):
         True,
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
+    stock_universe_mode: StockUniverseMode = Field(
+        "legacy_static",
+        description="股票池口径：legacy_static=旧静态过滤；pit_spans=使用 ST-only PIT spans",
+    )
+    universe_key: Optional[str] = Field(DEFAULT_PIT_UNIVERSE_KEY, description="PIT 股票池 key")
 
     @field_validator("snapshot_id")
     @classmethod
@@ -228,15 +248,42 @@ async def create_daily_snapshot(body: DailySnapshotRequest) -> DailySnapshotResp
     """触发一次日频前复权 Qlib Snapshot 导出."""
 
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_ts_codes_for_pit(
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            start=body.start,
+            end=body.end,
+            exchanges=body.exchanges,
+            ts_codes=body.ts_codes,
+        )
         result = _daily_exporter.export_full(
             snapshot_id=body.snapshot_id,
             start=body.start,
             end=body.end,
-            ts_codes=body.ts_codes,
+            ts_codes=ts_codes,
             exchanges=body.exchanges,
-            exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
         )
+        all_txt_summary = _rewrite_h5_all_txt_from_pit(
+            snapshot_id=body.snapshot_id,
+            universe_key=pit_key,
+            start=body.start,
+            end=body.end,
+        )
+        if pit_key:
+            try:
+                _update_h5_pit_meta(
+                    snapshot_id=body.snapshot_id,
+                    stock_universe_mode=body.stock_universe_mode,
+                    universe_key=pit_key,
+                    pit_ensure=pit_ensure,
+                    all_txt_summary=all_txt_summary,
+                )
+            except Exception:
+                traceback.print_exc()
         return DailySnapshotResponse.from_result(result)
     except ValueError as exc:
         # 参数或数据问题 → 400
@@ -266,6 +313,11 @@ class DailyBasicSnapshotRequest(BaseModel):
         True,
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
+    stock_universe_mode: StockUniverseMode = Field(
+        "legacy_static",
+        description="股票池口径：legacy_static=旧静态过滤；pit_spans=使用 ST-only PIT spans",
+    )
+    universe_key: Optional[str] = Field(DEFAULT_PIT_UNIVERSE_KEY, description="PIT 股票池 key")
 
     @field_validator("snapshot_id")
     @classmethod
@@ -311,13 +363,37 @@ async def create_daily_basic_snapshot(body: DailyBasicSnapshotRequest) -> DailyB
     """
 
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_ts_codes_for_pit(
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            start=body.start,
+            end=body.end,
+            exchanges=body.exchanges,
+            ts_codes=None,
+        )
         result = _daily_basic_exporter.export_full(
             snapshot_id=body.snapshot_id,
             start=body.start,
             end=body.end,
+            ts_codes=ts_codes,
             exchanges=body.exchanges,
-            exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
+        )
+        all_txt_summary = _rewrite_h5_all_txt_from_pit_if_present(
+            snapshot_id=body.snapshot_id,
+            universe_key=pit_key,
+            start=body.start,
+            end=body.end,
+        )
+        _update_h5_pit_meta(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_key,
+            pit_ensure=pit_ensure,
+            all_txt_summary=all_txt_summary,
         )
         # 导出成功后自动触发字段映射生成
         try:
@@ -345,13 +421,37 @@ async def create_moneyflow_snapshot(body: MoneyflowSnapshotRequest) -> Moneyflow
     """
 
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_ts_codes_for_pit(
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            start=body.start,
+            end=body.end,
+            exchanges=body.exchanges,
+            ts_codes=None,
+        )
         result = _moneyflow_exporter.export_full(
             snapshot_id=body.snapshot_id,
             start=body.start,
             end=body.end,
+            ts_codes=ts_codes,
             exchanges=body.exchanges,
-            exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
+        )
+        all_txt_summary = _rewrite_h5_all_txt_from_pit_if_present(
+            snapshot_id=body.snapshot_id,
+            universe_key=pit_key,
+            start=body.start,
+            end=body.end,
+        )
+        _update_h5_pit_meta(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_key,
+            pit_ensure=pit_ensure,
+            all_txt_summary=all_txt_summary,
         )
         # 导出成功后自动触发字段映射生成
         try:
@@ -387,6 +487,11 @@ class BakBasicSnapshotRequest(BaseModel):
         True,
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
+    stock_universe_mode: StockUniverseMode = Field(
+        "legacy_static",
+        description="股票池口径：legacy_static=旧静态过滤；pit_spans=使用 ST-only PIT spans",
+    )
+    universe_key: Optional[str] = Field(DEFAULT_PIT_UNIVERSE_KEY, description="PIT 股票池 key")
 
     @field_validator("snapshot_id")
     @classmethod
@@ -436,13 +541,37 @@ async def create_bak_basic_snapshot(body: BakBasicSnapshotRequest) -> BakBasicSn
     import traceback as _tb
 
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_ts_codes_for_pit(
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            start=body.start,
+            end=body.end,
+            exchanges=body.exchanges,
+            ts_codes=None,
+        )
         result = _bak_basic_exporter.export_full(
             snapshot_id=body.snapshot_id,
             start=body.start,
             end=body.end,
+            ts_codes=ts_codes,
             exchanges=body.exchanges,
-            exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
+        )
+        all_txt_summary = _rewrite_h5_all_txt_from_pit_if_present(
+            snapshot_id=body.snapshot_id,
+            universe_key=pit_key,
+            start=body.start,
+            end=body.end,
+        )
+        _update_h5_pit_meta(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_key,
+            pit_ensure=pit_ensure,
+            all_txt_summary=all_txt_summary,
         )
         # 导出成功后自动触发字段映射生成
         print(f"[DEBUG] BakBasic export success for {body.snapshot_id}, auto-triggering field map...")
@@ -471,6 +600,11 @@ class MarginDetailSnapshotRequest(BaseModel):
     exchanges: Optional[List[str]] = Field(None, description="可选，按交易所过滤")
     exclude_st: bool = Field(True, description="是否排除 ST 股票")
     exclude_delisted_or_paused: bool = Field(True, description="是否排除退市或暂停上市股票")
+    stock_universe_mode: StockUniverseMode = Field(
+        "legacy_static",
+        description="股票池口径：legacy_static=旧静态过滤；pit_spans=使用 ST-only PIT spans",
+    )
+    universe_key: Optional[str] = Field(DEFAULT_PIT_UNIVERSE_KEY, description="PIT 股票池 key")
 
     @field_validator("snapshot_id")
     @classmethod
@@ -507,13 +641,37 @@ async def create_margin_detail_snapshot(body: MarginDetailSnapshotRequest) -> Ma
     import traceback as _tb
 
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_ts_codes_for_pit(
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            start=body.start,
+            end=body.end,
+            exchanges=body.exchanges,
+            ts_codes=None,
+        )
         result = _margin_detail_exporter.export_full(
             snapshot_id=body.snapshot_id,
             start=body.start,
             end=body.end,
+            ts_codes=ts_codes,
             exchanges=body.exchanges,
-            exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
+        )
+        all_txt_summary = _rewrite_h5_all_txt_from_pit_if_present(
+            snapshot_id=body.snapshot_id,
+            universe_key=pit_key,
+            start=body.start,
+            end=body.end,
+        )
+        _update_h5_pit_meta(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_key,
+            pit_ensure=pit_ensure,
+            all_txt_summary=all_txt_summary,
         )
         try:
             from .field_map_service import export_field_map_for_snapshot
@@ -549,6 +707,11 @@ class CyqPerfSnapshotRequest(BaseModel):
         True,
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
+    stock_universe_mode: StockUniverseMode = Field(
+        "legacy_static",
+        description="股票池口径：legacy_static=旧静态过滤；pit_spans=使用 ST-only PIT spans",
+    )
+    universe_key: Optional[str] = Field(DEFAULT_PIT_UNIVERSE_KEY, description="PIT 股票池 key")
 
     @field_validator("snapshot_id")
     @classmethod
@@ -596,13 +759,37 @@ async def create_cyq_perf_snapshot(body: CyqPerfSnapshotRequest) -> CyqPerfSnaps
     """
 
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_ts_codes_for_pit(
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            start=body.start,
+            end=body.end,
+            exchanges=body.exchanges,
+            ts_codes=None,
+        )
         result = _cyq_perf_exporter.export_full(
             snapshot_id=body.snapshot_id,
             start=body.start,
             end=body.end,
+            ts_codes=ts_codes,
             exchanges=body.exchanges,
-            exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
+        )
+        all_txt_summary = _rewrite_h5_all_txt_from_pit_if_present(
+            snapshot_id=body.snapshot_id,
+            universe_key=pit_key,
+            start=body.start,
+            end=body.end,
+        )
+        _update_h5_pit_meta(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_key,
+            pit_ensure=pit_ensure,
+            all_txt_summary=all_txt_summary,
         )
         # 导出成功后自动触发字段映射生成
         print(f"[DEBUG] CyqPerf export success for {body.snapshot_id}, auto-triggering field map...")
@@ -681,6 +868,14 @@ class BinExportRequest(BaseModel):
         True,
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
+    stock_universe_mode: StockUniverseMode = Field(
+        "legacy_static",
+        description="股票池口径：legacy_static=旧静态过滤；pit_spans=使用 market.stock_universe_pit_spans",
+    )
+    universe_key: Optional[str] = Field(
+        DEFAULT_PIT_UNIVERSE_KEY,
+        description="PIT 股票池 key，仅 stock_universe_mode=pit_spans 时生效",
+    )
 
 
 class BinExportResponse(BaseModel):
@@ -708,6 +903,8 @@ try:
     FieldMapExportRequest.model_rebuild()
     MinuteSnapshotRequest.model_rebuild()
     IncrementalExportRequest.model_rebuild()
+    BinExportRequest.model_rebuild()
+    BinExportResponse.model_rebuild()
     BinExportInfo.model_rebuild()
     BinExportListResponse.model_rebuild()
 except Exception:
@@ -718,6 +915,265 @@ except Exception:
 _db_reader = DBReader()
 
 
+def _resolve_pit_universe_key(
+    stock_universe_mode: StockUniverseMode,
+    universe_key: Optional[str],
+) -> Optional[str]:
+    """Return the PIT universe key for PIT mode; legacy mode returns None."""
+
+    if stock_universe_mode == "legacy_static":
+        return None
+    key = (universe_key or DEFAULT_PIT_UNIVERSE_KEY).strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="PIT 股票池模式要求 universe_key 非空")
+    return key
+
+
+def _ensure_stock_pit_universe_for_export(
+    *,
+    universe_key: Optional[str],
+    start: date,
+    end: date,
+) -> Optional[Dict[str, Any]]:
+    """Strictly prepare ST PIT spans before exporting H5/Bin candidates."""
+
+    if not universe_key:
+        return None
+    try:
+        return StockUniversePitService().ensure_st_pit_universe(
+            universe_key=universe_key,
+            start_date=min(start, DEFAULT_ST_PIT_START_DATE),
+            end_date=end,
+            rule_version=DEFAULT_ST_PIT_RULE_VERSION,
+            strict=True,
+            rebuild_if_stale=True,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"ST PIT 股票池准备失败: {exc}") from exc
+
+
+def _resolve_h5_ts_codes_for_pit(
+    *,
+    stock_universe_mode: StockUniverseMode,
+    universe_key: Optional[str],
+    start: date,
+    end: date,
+    exchanges: Optional[List[str]],
+    ts_codes: Optional[List[str]],
+) -> tuple[Optional[List[str]], Optional[Dict[str, Any]], Optional[str]]:
+    key = _resolve_pit_universe_key(stock_universe_mode, universe_key)
+    if not key:
+        return ts_codes, None, None
+    pit_ensure = _ensure_stock_pit_universe_for_export(universe_key=key, start=start, end=end)
+    codes = resolve_stock_universe_from_pit_spans(
+        start=start,
+        end=end,
+        universe_key=key,
+        exchanges=exchanges,
+        ts_codes=ts_codes,
+    )
+    return codes, pit_ensure, key
+
+
+def _rewrite_h5_all_txt_from_pit(
+    *,
+    snapshot_id: str,
+    universe_key: Optional[str],
+    start: date,
+    end: date,
+) -> Optional[Dict[str, Any]]:
+    if not universe_key:
+        return None
+    snap_dir = QLIB_SNAPSHOT_ROOT / snapshot_id
+    return rewrite_stock_all_txt_from_pit_spans(
+        bin_dir=snap_dir,
+        universe_key=universe_key,
+        start=start,
+        end=end,
+    )
+
+
+def _h5_effective_exclude_st(pit_key: Optional[str], requested: bool) -> bool:
+    return False if pit_key else requested
+
+
+def _h5_effective_exclude_delisted_or_paused(pit_key: Optional[str], requested: bool) -> bool:
+    return True if pit_key else requested
+
+
+def _load_h5_snapshot_meta(snapshot_id: str) -> Dict[str, Any]:
+    meta_path = QLIB_SNAPSHOT_ROOT / snapshot_id / "meta.json"
+    if not meta_path.exists():
+        return {}
+    try:
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _resolve_h5_pit_key_for_incremental(
+    *,
+    snapshot_id: str,
+    stock_universe_mode: StockUniverseMode,
+    universe_key: Optional[str],
+) -> Optional[str]:
+    requested_key = _resolve_pit_universe_key(stock_universe_mode, universe_key)
+    meta = _load_h5_snapshot_meta(snapshot_id)
+    existing_mode = str(meta.get("stock_universe_mode") or "legacy_static")
+    if existing_mode == "pit_spans":
+        existing_key = str(meta.get("universe_key") or DEFAULT_PIT_UNIVERSE_KEY)
+        if requested_key and requested_key != existing_key:
+            raise HTTPException(
+                status_code=400,
+                detail=f"增量导出 PIT universe_key 必须与 Snapshot 元数据一致：已有 {existing_key}，请求 {requested_key}",
+            )
+        return existing_key
+    return requested_key
+
+
+def _resolve_h5_incremental_ts_codes_for_pit(
+    *,
+    snapshot_id: str,
+    stock_universe_mode: StockUniverseMode,
+    universe_key: Optional[str],
+    end: date,
+    exchanges: Optional[List[str]],
+) -> tuple[Optional[List[str]], Optional[Dict[str, Any]], Optional[str]]:
+    key = _resolve_h5_pit_key_for_incremental(
+        snapshot_id=snapshot_id,
+        stock_universe_mode=stock_universe_mode,
+        universe_key=universe_key,
+    )
+    if not key:
+        return None, None, None
+    start = _h5_meta_start(snapshot_id, DEFAULT_ST_PIT_START_DATE)
+    pit_ensure = _ensure_stock_pit_universe_for_export(universe_key=key, start=start, end=end)
+    codes = resolve_stock_universe_from_pit_spans(
+        start=start,
+        end=end,
+        universe_key=key,
+        exchanges=exchanges,
+        ts_codes=None,
+    )
+    return codes, pit_ensure, key
+
+
+def _h5_meta_start(snapshot_id: str, fallback: date) -> date:
+    meta = _load_h5_snapshot_meta(snapshot_id)
+    start_raw = meta.get("start")
+    if start_raw:
+        try:
+            return date.fromisoformat(str(start_raw)[:10])
+        except ValueError:
+            pass
+    return fallback
+
+
+def _rewrite_h5_all_txt_from_pit_if_present(
+    *,
+    snapshot_id: str,
+    universe_key: Optional[str],
+    start: date,
+    end: date,
+) -> Optional[Dict[str, Any]]:
+    if not universe_key:
+        return None
+    try:
+        return _rewrite_h5_all_txt_from_pit(
+            snapshot_id=snapshot_id,
+            universe_key=universe_key,
+            start=start,
+            end=end,
+        )
+    except FileNotFoundError as exc:
+        return {
+            "skipped": True,
+            "reason": "instruments_all_txt_not_found",
+            "path": str(exc),
+        }
+
+
+def _update_h5_pit_meta(
+    *,
+    snapshot_id: str,
+    stock_universe_mode: StockUniverseMode,
+    universe_key: Optional[str],
+    pit_ensure: Optional[Dict[str, Any]],
+    all_txt_summary: Optional[Dict[str, Any]] = None,
+) -> None:
+    if not universe_key:
+        return
+    meta_path = QLIB_SNAPSHOT_ROOT / snapshot_id / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    meta.update(
+        {
+            "stock_universe_mode": "pit_spans",
+            "universe_key": universe_key,
+            "rule_version": DEFAULT_ST_PIT_RULE_VERSION,
+            "authority_scope": "current_active_shsz_st_pit",
+            "st_pit": True,
+            "delist_pit": False,
+            "pause_pit": False,
+            "survivorship_bias": "current D/P stocks excluded by scope; delisting PIT not implemented",
+            "pit_ensure": pit_ensure,
+        }
+    )
+    if all_txt_summary is not None:
+        meta["all_txt_rewrite"] = all_txt_summary
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
+
+
+def _finalize_h5_incremental_pit_metadata(
+    *,
+    snapshot_id: str,
+    stock_universe_mode: StockUniverseMode,
+    universe_key: Optional[str],
+    pit_ensure: Optional[Dict[str, Any]],
+    fallback_start: date,
+    end: date,
+) -> None:
+    if not universe_key:
+        return
+    all_txt_summary = _rewrite_h5_all_txt_from_pit_if_present(
+        snapshot_id=snapshot_id,
+        universe_key=universe_key,
+        start=_h5_meta_start(snapshot_id, fallback_start),
+        end=end,
+    )
+    _update_h5_pit_meta(
+        snapshot_id=snapshot_id,
+        stock_universe_mode=stock_universe_mode,
+        universe_key=universe_key,
+        pit_ensure=pit_ensure,
+        all_txt_summary=all_txt_summary,
+    )
+
+
+def _stock_all_txt_rewrite_start(
+    *,
+    mode: str,
+    request_start: Optional[date],
+    meta: dict,
+    fallback_start: Optional[date],
+) -> date:
+    """Resolve the full all.txt PIT rewrite start for full and incremental exports."""
+
+    if mode == "full":
+        if request_start is None:
+            raise HTTPException(status_code=400, detail="full stock bin export requires start")
+        return request_start
+    raw = meta.get("start") or meta.get("basis_start")
+    if raw:
+        return date.fromisoformat(str(raw))
+    if fallback_start is not None:
+        return fallback_start
+    raise HTTPException(
+        status_code=400,
+        detail="incremental PIT all.txt rewrite requires meta_export.json start/basis_start; run a full export first",
+    )
+
+
 def _export_daily_to_csv_for_dump_bin(
     snapshot_id: str,
     start: date,
@@ -726,6 +1182,7 @@ def _export_daily_to_csv_for_dump_bin(
     *,
     exclude_st: bool,
     exclude_delisted_or_paused: bool,
+    universe_key: Optional[str] = None,
     basis_start: Optional[date] = None,
     basis_end: Optional[date] = None,
 ) -> Path:
@@ -738,7 +1195,7 @@ def _export_daily_to_csv_for_dump_bin(
         stock_exchanges = normalize_stock_export_exchanges(exchanges)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    if not exclude_st or not exclude_delisted_or_paused:
+    if universe_key is None and (not exclude_st or not exclude_delisted_or_paused):
         raise HTTPException(
             status_code=400,
             detail="authoritative stock bin export requires excluding ST and delisted/paused stocks",
@@ -752,6 +1209,7 @@ def _export_daily_to_csv_for_dump_bin(
         exchanges=stock_exchanges,
         exclude_st=exclude_st,
         exclude_delisted_or_paused=exclude_delisted_or_paused,
+        universe_key=universe_key,
         basis_start=basis_start,
         basis_end=basis_end,
         strict_limit=True,
@@ -768,6 +1226,7 @@ def _export_minute_to_csv_for_dump_bin(
     *,
     exclude_st: bool,
     exclude_delisted_or_paused: bool,
+    universe_key: Optional[str] = None,
     freq: str = "1min",
     basis_start: Optional[date] = None,
     basis_end: Optional[date] = None,
@@ -781,7 +1240,7 @@ def _export_minute_to_csv_for_dump_bin(
         stock_exchanges = normalize_stock_export_exchanges(exchanges)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    if not exclude_st or not exclude_delisted_or_paused:
+    if universe_key is None and (not exclude_st or not exclude_delisted_or_paused):
         raise HTTPException(
             status_code=400,
             detail="authoritative stock bin export requires excluding ST and delisted/paused stocks",
@@ -799,6 +1258,7 @@ def _export_minute_to_csv_for_dump_bin(
         exchanges=stock_exchanges,
         exclude_st=exclude_st,
         exclude_delisted_or_paused=exclude_delisted_or_paused,
+        universe_key=universe_key,
         basis_start=basis_start,
         basis_end=basis_end,
         strict_limit=True,
@@ -893,6 +1353,12 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
         stock_exchanges = normalize_stock_export_exchanges(body.exchanges)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    pit_universe_key = _resolve_pit_universe_key(body.stock_universe_mode, body.universe_key)
+    pit_ensure = _ensure_stock_pit_universe_for_export(
+        universe_key=pit_universe_key,
+        start=body.start,
+        end=body.end,
+    )
 
     # 1. 导出 CSV（根据 freq 分支）
     if body.freq == "day":
@@ -903,6 +1369,7 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
             exchanges=stock_exchanges,
             exclude_st=body.exclude_st,
             exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            universe_key=pit_universe_key,
         )
         dump_freq = "day"
     elif body.freq in {"1m", "1min"}:
@@ -913,6 +1380,7 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
             exchanges=stock_exchanges,
             exclude_st=body.exclude_st,
             exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            universe_key=pit_universe_key,
             freq="1min",
         )
         dump_freq = MINUTE_FREQ_QLIB
@@ -966,12 +1434,19 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
     ]
 
     dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
-    ipo_all_txt_summary: Optional[Dict[str, Any]] = None
+    all_txt_summary: Optional[Dict[str, Any]] = None
+    stock_stdout = dump_res.stdout
     if dump_res.ok:
-        try:
-            ipo_all_txt_summary = rewrite_stock_all_txt_for_ipo_filter(bin_dir=bin_dir)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"failed to rewrite stock instruments/all.txt IPO filter: {exc}") from exc
+        step_ok, stock_stdout, step_error, all_txt_summary = _finalize_stock_dump_result(
+            dump_res,
+            bin_dir,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_universe_key,
+            start=body.start,
+            end=body.end,
+        )
+        if not step_ok:
+            raise HTTPException(status_code=500, detail=step_error or "failed to rewrite stock instruments/all.txt")
 
     check_ok: Optional[bool] = None
     stdout_check: Optional[str] = None
@@ -1004,10 +1479,23 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
         "exclude_delisted_or_paused": True,
         "exclude_bj": True,
         "min_listed_days": IPO_FILTER_DAYS,
-        "ipo_filter_mode": "instruments_all_txt",
+        "stock_universe_mode": body.stock_universe_mode,
+        "universe_key": pit_universe_key,
+        "rule_version": DEFAULT_ST_PIT_RULE_VERSION if pit_universe_key else None,
+        "authority_scope": "current_active_shsz_st_pit" if pit_universe_key else "legacy_static",
+        "st_pit": bool(pit_universe_key),
+        "delist_pit": False if pit_universe_key else None,
+        "pause_pit": False if pit_universe_key else None,
+        "survivorship_bias": (
+            "current D/P stocks excluded by scope; delisting PIT not implemented"
+            if pit_universe_key else None
+        ),
+        "pit_ensure": pit_ensure,
+        "ipo_filter_mode": "pit_universe_spans" if pit_universe_key else "instruments_all_txt",
         "bin_contains_pre_ipo_filter_data": True,
         "stock_universe_min_listed_days_prefilter": False,
-        "ipo_all_txt_rewrite": ipo_all_txt_summary,
+        "ipo_all_txt_rewrite": all_txt_summary,
+        "all_txt_rewrite": all_txt_summary,
         "run_health_check": body.run_health_check,
         "freq_types": [
             "daily" if dump_freq == "day" else dump_freq,
@@ -1017,7 +1505,7 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
         },
     }
     meta_path = bin_dir / "meta_export.json"
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
 
     return BinExportResponse(
         snapshot_id=body.snapshot_id,
@@ -1025,7 +1513,7 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
         bin_dir=str(bin_dir),
         dump_bin_ok=dump_res.ok,
         check_ok=check_ok,
-        stdout_dump=dump_res.stdout,
+        stdout_dump=stock_stdout,
         stderr_dump=dump_res.stderr,
         stdout_check=stdout_check,
         stderr_check=stderr_check,
@@ -1057,6 +1545,8 @@ class BinExportInfo(BaseModel):
     exclude_delisted_or_paused: Optional[bool] = Field(
         None, description="是否排除退市 / 暂停上市股票"
     )
+    stock_universe_mode: Optional[str] = Field(None, description="股票池口径：legacy_static 或 pit_spans")
+    universe_key: Optional[str] = Field(None, description="PIT 股票池 key")
     freq_types: Optional[List[str]] = Field(
         None,
         description="bin 中包含的数据频率类型，例如 ['daily']，预留扩展分钟线等",
@@ -1106,6 +1596,8 @@ async def list_bin_exports() -> BinExportListResponse:
         exchanges: Optional[List[str]] = None
         exclude_st: Optional[bool] = None
         exclude_delisted_or_paused: Optional[bool] = None
+        stock_universe_mode: Optional[str] = None
+        universe_key: Optional[str] = None
         freq_types: Optional[List[str]] = None
 
         if meta_path.exists():
@@ -1122,6 +1614,10 @@ async def list_bin_exports() -> BinExportListResponse:
                     exclude_st = bool(meta_data["exclude_st"])
                 if "exclude_delisted_or_paused" in meta_data:
                     exclude_delisted_or_paused = bool(meta_data["exclude_delisted_or_paused"])
+                if "stock_universe_mode" in meta_data:
+                    stock_universe_mode = str(meta_data["stock_universe_mode"])
+                if meta_data.get("universe_key") is not None:
+                    universe_key = str(meta_data["universe_key"])
                 freq_val = meta_data.get("freq_types")
                 if isinstance(freq_val, list):
                     freq_types = [str(x) for x in freq_val]
@@ -1140,6 +1636,8 @@ async def list_bin_exports() -> BinExportListResponse:
                 exchanges=exchanges,
                 exclude_st=exclude_st,
                 exclude_delisted_or_paused=exclude_delisted_or_paused,
+                stock_universe_mode=stock_universe_mode,
+                universe_key=universe_key,
                 freq_types=freq_types,
             )
         )
@@ -1573,6 +2071,11 @@ class MinuteSnapshotRequest(BaseModel):
         description="是否排除退市或当前暂停上市股票（stock_basic.list_status in ('D','P')）",
     )
     freq: str = Field("1m", description="分钟线频率，当前固定为 1m")
+    stock_universe_mode: StockUniverseMode = Field(
+        "legacy_static",
+        description="股票池口径：legacy_static=旧静态过滤；pit_spans=使用 ST-only PIT spans",
+    )
+    universe_key: Optional[str] = Field(DEFAULT_PIT_UNIVERSE_KEY, description="PIT 股票池 key")
 
     @field_validator("snapshot_id")
     @classmethod
@@ -1614,16 +2117,43 @@ async def create_minute_snapshot(body: MinuteSnapshotRequest) -> MinuteSnapshotR
     """触发一次分钟线 Qlib Snapshot 导出（目前支持 1m，按日期区间导出全天分钟线）。"""
 
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_ts_codes_for_pit(
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            start=body.start,
+            end=body.end,
+            exchanges=body.exchanges,
+            ts_codes=body.ts_codes,
+        )
         result = _minute_exporter.export_full(
             snapshot_id=body.snapshot_id,
             start=body.start,
             end=body.end,
-            ts_codes=body.ts_codes,
+            ts_codes=ts_codes,
             exchanges=body.exchanges,
-            exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
             freq=body.freq,
         )
+        all_txt_summary = _rewrite_h5_all_txt_from_pit(
+            snapshot_id=body.snapshot_id,
+            universe_key=pit_key,
+            start=body.start,
+            end=body.end,
+        )
+        if pit_key:
+            try:
+                _update_h5_pit_meta(
+                    snapshot_id=body.snapshot_id,
+                    stock_universe_mode=body.stock_universe_mode,
+                    universe_key=pit_key,
+                    pit_ensure=pit_ensure,
+                    all_txt_summary=all_txt_summary,
+                )
+            except Exception:
+                traceback.print_exc()
         return MinuteSnapshotResponse.from_result(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -1834,6 +2364,11 @@ class IncrementalExportRequest(BaseModel):
         True,
         description="是否排除退市或当前暂停上市股票（仅分钟线有效；stock_basic.list_status in ('D','P')）",
     )
+    stock_universe_mode: StockUniverseMode = Field(
+        "legacy_static",
+        description="股票池口径：legacy_static=旧静态过滤；pit_spans=使用 ST-only PIT spans",
+    )
+    universe_key: Optional[str] = Field(DEFAULT_PIT_UNIVERSE_KEY, description="PIT 股票池 key")
 
     @field_validator("snapshot_id")
     @classmethod
@@ -1872,12 +2407,30 @@ async def create_minute_snapshot_incremental(body: IncrementalExportRequest) -> 
     """增量导出分钟线数据。从上次导出位置继续。"""
 
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_incremental_ts_codes_for_pit(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            end=body.end,
+            exchanges=body.exchanges,
+        )
         result = _minute_exporter.export_incremental(
             snapshot_id=body.snapshot_id,
             end=body.end,
+            ts_codes=ts_codes,
             exchanges=body.exchanges,
-            exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
+        )
+        _finalize_h5_incremental_pit_metadata(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_key,
+            pit_ensure=pit_ensure,
+            fallback_start=result.start,
+            end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
     except ValueError as exc:
@@ -1898,6 +2451,11 @@ class SectorDataSnapshotRequest(BaseModel):
     exchanges: Optional[List[str]] = Field(None, description="可选，交易所过滤")
     exclude_st: bool = Field(True)
     exclude_delisted_or_paused: bool = Field(True)
+    stock_universe_mode: StockUniverseMode = Field(
+        "legacy_static",
+        description="股票池口径：legacy_static=旧静态过滤；pit_spans=使用 ST-only PIT spans",
+    )
+    universe_key: Optional[str] = Field(DEFAULT_PIT_UNIVERSE_KEY, description="PIT 股票池 key")
 
     @field_validator("snapshot_id")
     @classmethod
@@ -1941,10 +2499,35 @@ except Exception:
 async def create_sector_data_snapshot(body: SectorDataSnapshotRequest) -> SectorDataSnapshotResponse:
     """全量导出申万行业板块 sector_data 到 Snapshot."""
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_ts_codes_for_pit(
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            start=body.start,
+            end=body.end,
+            exchanges=body.exchanges,
+            ts_codes=None,
+        )
         result = _sector_data_exporter.export_full(
             snapshot_id=body.snapshot_id, start=body.start, end=body.end,
-            exchanges=body.exchanges, exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            ts_codes=ts_codes,
+            exchanges=body.exchanges,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
+        )
+        all_txt_summary = _rewrite_h5_all_txt_from_pit_if_present(
+            snapshot_id=body.snapshot_id,
+            universe_key=pit_key,
+            start=body.start,
+            end=body.end,
+        )
+        _update_h5_pit_meta(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_key,
+            pit_ensure=pit_ensure,
+            all_txt_summary=all_txt_summary,
         )
         return SectorDataSnapshotResponse.from_result(result)
     except ValueError as exc:
@@ -1958,10 +2541,29 @@ async def create_sector_data_snapshot(body: SectorDataSnapshotRequest) -> Sector
 async def create_sector_data_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
     """增量导出 sector_data 数据。"""
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_incremental_ts_codes_for_pit(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            end=body.end,
+            exchanges=body.exchanges,
+        )
         result = _sector_data_exporter.export_incremental(
             snapshot_id=body.snapshot_id, end=body.end,
-            exchanges=body.exchanges, exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            ts_codes=ts_codes,
+            exchanges=body.exchanges,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
+        )
+        _finalize_h5_incremental_pit_metadata(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_key,
+            pit_ensure=pit_ensure,
+            fallback_start=result.start,
+            end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
     except ValueError as exc:
@@ -1980,10 +2582,29 @@ async def create_sector_data_incremental(body: IncrementalExportRequest) -> Incr
 async def create_daily_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
     """增量导出日频行情数据。"""
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_incremental_ts_codes_for_pit(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            end=body.end,
+            exchanges=body.exchanges,
+        )
         result = _daily_exporter.export_incremental(
             snapshot_id=body.snapshot_id, end=body.end,
-            exchanges=body.exchanges, exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            ts_codes=ts_codes,
+            exchanges=body.exchanges,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
+        )
+        _finalize_h5_incremental_pit_metadata(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_key,
+            pit_ensure=pit_ensure,
+            fallback_start=result.start,
+            end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
     except ValueError as exc:
@@ -1997,10 +2618,29 @@ async def create_daily_incremental(body: IncrementalExportRequest) -> Incrementa
 async def create_moneyflow_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
     """增量导出个股资金流向数据。"""
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_incremental_ts_codes_for_pit(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            end=body.end,
+            exchanges=body.exchanges,
+        )
         result = _moneyflow_exporter.export_incremental(
             snapshot_id=body.snapshot_id, end=body.end,
-            exchanges=body.exchanges, exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            ts_codes=ts_codes,
+            exchanges=body.exchanges,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
+        )
+        _finalize_h5_incremental_pit_metadata(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_key,
+            pit_ensure=pit_ensure,
+            fallback_start=result.start,
+            end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
     except ValueError as exc:
@@ -2014,10 +2654,29 @@ async def create_moneyflow_incremental(body: IncrementalExportRequest) -> Increm
 async def create_daily_basic_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
     """增量导出每日指标数据。"""
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_incremental_ts_codes_for_pit(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            end=body.end,
+            exchanges=body.exchanges,
+        )
         result = _daily_basic_exporter.export_incremental(
             snapshot_id=body.snapshot_id, end=body.end,
-            exchanges=body.exchanges, exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            ts_codes=ts_codes,
+            exchanges=body.exchanges,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
+        )
+        _finalize_h5_incremental_pit_metadata(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_key,
+            pit_ensure=pit_ensure,
+            fallback_start=result.start,
+            end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
     except ValueError as exc:
@@ -2031,10 +2690,29 @@ async def create_daily_basic_incremental(body: IncrementalExportRequest) -> Incr
 async def create_bak_basic_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
     """增量导出历史股票列表数据。"""
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_incremental_ts_codes_for_pit(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            end=body.end,
+            exchanges=body.exchanges,
+        )
         result = _bak_basic_exporter.export_incremental(
             snapshot_id=body.snapshot_id, end=body.end,
-            exchanges=body.exchanges, exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            ts_codes=ts_codes,
+            exchanges=body.exchanges,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
+        )
+        _finalize_h5_incremental_pit_metadata(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_key,
+            pit_ensure=pit_ensure,
+            fallback_start=result.start,
+            end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
     except ValueError as exc:
@@ -2048,10 +2726,29 @@ async def create_bak_basic_incremental(body: IncrementalExportRequest) -> Increm
 async def create_margin_detail_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
     """增量导出融资融券明细数据。"""
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_incremental_ts_codes_for_pit(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            end=body.end,
+            exchanges=body.exchanges,
+        )
         result = _margin_detail_exporter.export_incremental(
             snapshot_id=body.snapshot_id, end=body.end,
-            exchanges=body.exchanges, exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            ts_codes=ts_codes,
+            exchanges=body.exchanges,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
+        )
+        _finalize_h5_incremental_pit_metadata(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_key,
+            pit_ensure=pit_ensure,
+            fallback_start=result.start,
+            end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
     except ValueError as exc:
@@ -2065,10 +2762,29 @@ async def create_margin_detail_incremental(body: IncrementalExportRequest) -> In
 async def create_cyq_perf_incremental(body: IncrementalExportRequest) -> IncrementalExportResponse:
     """增量导出每日筹码及胜率数据。"""
     try:
+        ts_codes, pit_ensure, pit_key = _resolve_h5_incremental_ts_codes_for_pit(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=body.universe_key,
+            end=body.end,
+            exchanges=body.exchanges,
+        )
         result = _cyq_perf_exporter.export_incremental(
             snapshot_id=body.snapshot_id, end=body.end,
-            exchanges=body.exchanges, exclude_st=body.exclude_st,
-            exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+            ts_codes=ts_codes,
+            exchanges=body.exchanges,
+            exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+            exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                pit_key, body.exclude_delisted_or_paused
+            ),
+        )
+        _finalize_h5_incremental_pit_metadata(
+            snapshot_id=body.snapshot_id,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_key,
+            pit_ensure=pit_ensure,
+            fallback_start=result.start,
+            end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
     except ValueError as exc:
@@ -2139,6 +2855,11 @@ class UnifiedBinExportRequest(BaseModel):
     exchanges: Optional[List[str]] = Field(None, description="交易所过滤")
     exclude_st: bool = Field(True)
     exclude_delisted_or_paused: bool = Field(True)
+    stock_universe_mode: StockUniverseMode = Field(
+        "legacy_static",
+        description="股票池口径：legacy_static=旧静态过滤；pit_spans=使用 market.stock_universe_pit_spans",
+    )
+    universe_key: Optional[str] = Field(DEFAULT_PIT_UNIVERSE_KEY, description="PIT 股票池 key")
     run_health_check: bool = Field(True)
     index_codes: Optional[List[str]] = Field(None, description="指数代码列表，如 ['000300.SH']")
     index_data_source: Literal["tushare", "tdx"] = Field("tushare")
@@ -2164,6 +2885,12 @@ async def unified_bin_export(body: UnifiedBinExportRequest) -> UnifiedBinExportR
         stock_exchanges = normalize_stock_export_exchanges(body.exchanges)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    pit_universe_key = _resolve_pit_universe_key(body.stock_universe_mode, body.universe_key)
+    pit_ensure = _ensure_stock_pit_universe_for_export(
+        universe_key=pit_universe_key,
+        start=body.start,
+        end=body.end,
+    )
 
     # 1. 导出股票日线
     csv_dir = _export_daily_to_csv_for_dump_bin(
@@ -2171,6 +2898,7 @@ async def unified_bin_export(body: UnifiedBinExportRequest) -> UnifiedBinExportR
         exchanges=stock_exchanges,
         exclude_st=body.exclude_st,
         exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+        universe_key=pit_universe_key,
     )
 
     bin_root = os.getenv("QLIB_BIN_ROOT_WIN")
@@ -2189,12 +2917,19 @@ async def unified_bin_export(body: UnifiedBinExportRequest) -> UnifiedBinExportR
         "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
     ]
     dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
-    ipo_all_txt_summary: Optional[Dict[str, Any]] = None
+    all_txt_summary: Optional[Dict[str, Any]] = None
+    stock_stdout = dump_res.stdout
     if dump_res.ok:
-        try:
-            ipo_all_txt_summary = rewrite_stock_all_txt_for_ipo_filter(bin_dir=bin_dir)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"failed to rewrite stock instruments/all.txt IPO filter: {exc}") from exc
+        step_ok, stock_stdout, step_error, all_txt_summary = _finalize_stock_dump_result(
+            dump_res,
+            bin_dir,
+            stock_universe_mode=body.stock_universe_mode,
+            universe_key=pit_universe_key,
+            start=body.start,
+            end=body.end,
+        )
+        if not step_ok:
+            raise HTTPException(status_code=500, detail=step_error or "failed to rewrite stock instruments/all.txt")
 
     # 2. 导出指数（dump_bin 会覆盖 instruments/all.txt，需要先备份再还原，并将指数写入 index.txt）
     index_results = []
@@ -2264,15 +2999,28 @@ async def unified_bin_export(body: UnifiedBinExportRequest) -> UnifiedBinExportR
             "exclude_delisted_or_paused": True,
             "exclude_bj": True,
             "min_listed_days": IPO_FILTER_DAYS,
-            "ipo_filter_mode": "instruments_all_txt",
+            "stock_universe_mode": body.stock_universe_mode,
+            "universe_key": pit_universe_key,
+            "rule_version": DEFAULT_ST_PIT_RULE_VERSION if pit_universe_key else None,
+            "authority_scope": "current_active_shsz_st_pit" if pit_universe_key else "legacy_static",
+            "st_pit": bool(pit_universe_key),
+            "delist_pit": False if pit_universe_key else None,
+            "pause_pit": False if pit_universe_key else None,
+            "survivorship_bias": (
+                "current D/P stocks excluded by scope; delisting PIT not implemented"
+                if pit_universe_key else None
+            ),
+            "pit_ensure": pit_ensure,
+            "ipo_filter_mode": "pit_universe_spans" if pit_universe_key else "instruments_all_txt",
             "bin_contains_pre_ipo_filter_data": True,
             "stock_universe_min_listed_days_prefilter": False,
-            "ipo_all_txt_rewrite": ipo_all_txt_summary,
+            "ipo_all_txt_rewrite": all_txt_summary,
+            "all_txt_rewrite": all_txt_summary,
             "freq_types": ["daily"],
             "index_codes": body.index_codes or [],
         }
         (bin_dir / "meta_export.json").write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(meta, ensure_ascii=False, default=str, indent=2), encoding="utf-8"
         )
     except Exception:
         pass
@@ -2280,7 +3028,7 @@ async def unified_bin_export(body: UnifiedBinExportRequest) -> UnifiedBinExportR
     return UnifiedBinExportResponse(
         snapshot_id=body.snapshot_id, stock_ok=dump_res.ok,
         stock_csv_dir=str(csv_dir), stock_bin_dir=str(bin_dir),
-        stock_stdout=dump_res.stdout, stock_stderr=dump_res.stderr,
+        stock_stdout=stock_stdout, stock_stderr=dump_res.stderr,
         index_results=index_results,
         check_ok=check_ok, stdout_check=stdout_check, stderr_check=stderr_check,
     )
@@ -2312,6 +3060,11 @@ class UnifiedBinExportRequestV2(BaseModel):
     exchanges: Optional[List[str]] = Field(None, description="交易所过滤")
     exclude_st: bool = Field(True)
     exclude_delisted_or_paused: bool = Field(True)
+    stock_universe_mode: StockUniverseMode = Field(
+        "legacy_static",
+        description="股票池口径：legacy_static=旧静态过滤；pit_spans=使用 market.stock_universe_pit_spans",
+    )
+    universe_key: Optional[str] = Field(DEFAULT_PIT_UNIVERSE_KEY, description="PIT 股票池 key")
     run_health_check: bool = Field(True)
     index_data_source: Literal["tushare", "tdx"] = Field("tushare")
 
@@ -2406,16 +3159,35 @@ def _resolve_stock_qfq_basis(
     return basis_start, basis_end
 
 
-def _finalize_stock_dump_result(dump_res: Any, bin_dir: Path) -> tuple[bool, Optional[str], Optional[str], Optional[dict]]:
-    """Rewrite stock all.txt IPO eligibility after dump_bin and return step status."""
+def _finalize_stock_dump_result(
+    dump_res: Any,
+    bin_dir: Path,
+    *,
+    stock_universe_mode: StockUniverseMode,
+    universe_key: Optional[str],
+    start: date,
+    end: date,
+) -> tuple[bool, Optional[str], Optional[str], Optional[dict]]:
+    """Rewrite stock all.txt eligibility after dump_bin and return step status."""
 
     if not dump_res.ok:
         return False, dump_res.stdout, None, None
     try:
-        summary = rewrite_stock_all_txt_for_ipo_filter(bin_dir=bin_dir)
+        if stock_universe_mode == "pit_spans":
+            key = _resolve_pit_universe_key(stock_universe_mode, universe_key)
+            summary = rewrite_stock_all_txt_from_pit_spans(
+                bin_dir=bin_dir,
+                universe_key=key or DEFAULT_PIT_UNIVERSE_KEY,
+                start=start,
+                end=end,
+            )
+            label = "AIstock PIT all.txt rewrite"
+        else:
+            summary = rewrite_stock_all_txt_for_ipo_filter(bin_dir=bin_dir)
+            label = "AIstock IPO all.txt rewrite"
     except Exception as exc:
-        return False, dump_res.stdout, f"failed to rewrite stock instruments/all.txt IPO filter: {exc}", None
-    stdout = (dump_res.stdout or "") + "\n[AIstock IPO all.txt rewrite]\n" + json.dumps(
+        return False, dump_res.stdout, f"failed to rewrite stock instruments/all.txt eligibility: {exc}", None
+    stdout = (dump_res.stdout or "") + f"\n[{label}]\n" + json.dumps(
         summary,
         ensure_ascii=False,
         indent=2,
@@ -2509,14 +3281,31 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
     last_end_dates: Dict[str, str] = meta.get("last_end_dates", {})
     has_stock_dataset = any(ds in body.datasets for ds in ("stock_daily", "stock_minute"))
     stock_exchanges: Optional[List[str]] = None
+    pit_universe_key: Optional[str] = None
     if has_stock_dataset:
         try:
             stock_exchanges = normalize_stock_export_exchanges(body.exchanges)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        pit_universe_key = _resolve_pit_universe_key(body.stock_universe_mode, body.universe_key)
+        if body.mode == "incremental":
+            existing_mode = str(meta.get("stock_universe_mode") or "legacy_static")
+            if existing_mode != body.stock_universe_mode:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"增量导出股票池口径必须与全量导出一致：已有 {existing_mode}，请求 {body.stock_universe_mode}",
+                )
+            existing_key = meta.get("universe_key")
+            if pit_universe_key and existing_key and str(existing_key) != pit_universe_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"增量导出 PIT universe_key 必须与全量导出一致：已有 {existing_key}，请求 {pit_universe_key}",
+                )
 
     stock_basis_start: Optional[date] = None
     stock_basis_end: Optional[date] = None
+    stock_all_txt_start: Optional[date] = None
+    pit_ensure: Optional[Dict[str, Any]] = None
     if has_stock_dataset:
         stock_basis_start, stock_basis_end = _resolve_stock_qfq_basis(
             meta=meta,
@@ -2524,6 +3313,18 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
             start=body.start,
             end=body.end,
         )
+        stock_all_txt_start = _stock_all_txt_rewrite_start(
+            mode=body.mode,
+            request_start=body.start,
+            meta=meta,
+            fallback_start=stock_basis_start,
+        )
+        pit_ensure = _ensure_stock_pit_universe_for_export(
+            universe_key=pit_universe_key,
+            start=stock_all_txt_start or body.start or stock_basis_start or body.end,
+            end=body.end,
+        )
+    stock_all_txt_rewrite: Optional[dict] = None
 
     # ──────────────────────────────────────────────────────
     # 步骤 1：stock_daily
@@ -2545,6 +3346,7 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                         exchanges=stock_exchanges,
                         exclude_st=body.exclude_st,
                         exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+                        universe_key=pit_universe_key,
                         basis_start=stock_basis_start,
                         basis_end=stock_basis_end,
                     )
@@ -2555,7 +3357,14 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                         "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
                     ]
                     dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
-                    step_ok, step_stdout, step_error, _ = _finalize_stock_dump_result(dump_res, bin_dir)
+                    step_ok, step_stdout, step_error, stock_all_txt_rewrite = _finalize_stock_dump_result(
+                        dump_res,
+                        bin_dir,
+                        stock_universe_mode=body.stock_universe_mode,
+                        universe_key=pit_universe_key,
+                        start=stock_all_txt_start or inc_start,
+                        end=body.end,
+                    )
                     steps.append(BinDatasetStepResult(
                         dataset="stock_daily", ok=step_ok,
                         error=step_error,
@@ -2572,6 +3381,7 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                     exchanges=stock_exchanges,
                     exclude_st=body.exclude_st,
                     exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+                    universe_key=pit_universe_key,
                     basis_start=stock_basis_start,
                     basis_end=stock_basis_end,
                 )
@@ -2582,7 +3392,14 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                     "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
                 ]
                 dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
-                step_ok, step_stdout, step_error, _ = _finalize_stock_dump_result(dump_res, bin_dir)
+                step_ok, step_stdout, step_error, stock_all_txt_rewrite = _finalize_stock_dump_result(
+                    dump_res,
+                    bin_dir,
+                    stock_universe_mode=body.stock_universe_mode,
+                    universe_key=pit_universe_key,
+                    start=stock_all_txt_start or body.start,
+                    end=body.end,
+                )
                 steps.append(BinDatasetStepResult(
                     dataset="stock_daily", ok=step_ok,
                     error=step_error,
@@ -2619,6 +3436,7 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                         exchanges=stock_exchanges,
                         exclude_st=body.exclude_st,
                         exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+                        universe_key=pit_universe_key,
                         freq=MINUTE_FREQ_QLIB,
                         basis_start=stock_basis_start,
                         basis_end=stock_basis_end,
@@ -2630,7 +3448,14 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                         "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
                     ]
                     dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
-                    step_ok, step_stdout, step_error, _ = _finalize_stock_dump_result(dump_res, bin_dir)
+                    step_ok, step_stdout, step_error, stock_all_txt_rewrite = _finalize_stock_dump_result(
+                        dump_res,
+                        bin_dir,
+                        stock_universe_mode=body.stock_universe_mode,
+                        universe_key=pit_universe_key,
+                        start=stock_all_txt_start or inc_start,
+                        end=body.end,
+                    )
                     steps.append(BinDatasetStepResult(
                         dataset="stock_minute", ok=step_ok,
                         error=step_error,
@@ -2646,6 +3471,7 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                     exchanges=stock_exchanges,
                     exclude_st=body.exclude_st,
                     exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+                    universe_key=pit_universe_key,
                     freq=MINUTE_FREQ_QLIB,
                     basis_start=stock_basis_start,
                     basis_end=stock_basis_end,
@@ -2657,7 +3483,14 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                     "--symbol_field_name", "symbol", "--exclude_fields", "date,symbol",
                 ]
                 dump_res = run_qlib_script_in_wsl("dump_bin.py", dump_args)
-                step_ok, step_stdout, step_error, _ = _finalize_stock_dump_result(dump_res, bin_dir)
+                step_ok, step_stdout, step_error, stock_all_txt_rewrite = _finalize_stock_dump_result(
+                    dump_res,
+                    bin_dir,
+                    stock_universe_mode=body.stock_universe_mode,
+                    universe_key=pit_universe_key,
+                    start=stock_all_txt_start or body.start,
+                    end=body.end,
+                )
                 steps.append(BinDatasetStepResult(
                     dataset="stock_minute", ok=step_ok,
                     error=step_error,
@@ -2789,9 +3622,32 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
         "exclude_delisted_or_paused": True,
         "exclude_bj": bool(has_stock_dataset),
         "min_listed_days": IPO_FILTER_DAYS if has_stock_dataset else None,
-        "ipo_filter_mode": "instruments_all_txt" if has_stock_dataset else None,
+        "stock_universe_mode": body.stock_universe_mode if has_stock_dataset else meta.get("stock_universe_mode"),
+        "universe_key": pit_universe_key if has_stock_dataset else meta.get("universe_key"),
+        "rule_version": DEFAULT_ST_PIT_RULE_VERSION if has_stock_dataset and pit_universe_key else meta.get("rule_version"),
+        "authority_scope": (
+            "current_active_shsz_st_pit"
+            if has_stock_dataset and pit_universe_key
+            else meta.get("authority_scope", "legacy_static")
+        ),
+        "st_pit": bool(pit_universe_key) if has_stock_dataset else meta.get("st_pit"),
+        "delist_pit": False if has_stock_dataset and pit_universe_key else meta.get("delist_pit"),
+        "pause_pit": False if has_stock_dataset and pit_universe_key else meta.get("pause_pit"),
+        "survivorship_bias": (
+            "current D/P stocks excluded by scope; delisting PIT not implemented"
+            if has_stock_dataset and pit_universe_key
+            else meta.get("survivorship_bias")
+        ),
+        "pit_ensure": pit_ensure or meta.get("pit_ensure"),
+        "ipo_filter_mode": (
+            "pit_universe_spans"
+            if has_stock_dataset and pit_universe_key
+            else ("instruments_all_txt" if has_stock_dataset else meta.get("ipo_filter_mode"))
+        ),
         "bin_contains_pre_ipo_filter_data": bool(has_stock_dataset),
         "stock_universe_min_listed_days_prefilter": False if has_stock_dataset else None,
+        "ipo_all_txt_rewrite": stock_all_txt_rewrite or meta.get("ipo_all_txt_rewrite"),
+        "all_txt_rewrite": stock_all_txt_rewrite or meta.get("all_txt_rewrite"),
         "freq_types": sorted(freq_types),
         "index_codes": index_datasets,
         "last_end_dates": last_end_dates,
@@ -2814,7 +3670,7 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
     meta_update["index_codes"] = sorted(existing_index_codes)
 
     meta_path = bin_dir / "meta_export.json"
-    meta_path.write_text(json.dumps(meta_update, ensure_ascii=False, indent=2), encoding="utf-8")
+    meta_path.write_text(json.dumps(meta_update, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
 
     return UnifiedBinExportResponseV2(
         snapshot_id=body.snapshot_id,
@@ -2848,6 +3704,13 @@ async def incremental_all(snapshot_id: str, body: IncrementalExportRequest) -> I
         raise HTTPException(status_code=404, detail=f"Snapshot {sid} 不存在")
 
     results: Dict[str, Any] = {}
+    pit_ts_codes, pit_ensure, pit_key = _resolve_h5_incremental_ts_codes_for_pit(
+        snapshot_id=sid,
+        stock_universe_mode=body.stock_universe_mode,
+        universe_key=body.universe_key,
+        end=body.end,
+        exchanges=body.exchanges,
+    )
 
     # 定义要增量更新的数据集及对应 exporter 和文件
     dataset_map = [
@@ -2869,9 +3732,12 @@ async def incremental_all(snapshot_id: str, body: IncrementalExportRequest) -> I
         try:
             result = exporter.export_incremental(
                 snapshot_id=sid, end=body.end,
+                ts_codes=pit_ts_codes,
                 exchanges=body.exchanges,
-                exclude_st=body.exclude_st,
-                exclude_delisted_or_paused=body.exclude_delisted_or_paused,
+                exclude_st=_h5_effective_exclude_st(pit_key, body.exclude_st),
+                exclude_delisted_or_paused=_h5_effective_exclude_delisted_or_paused(
+                    pit_key, body.exclude_delisted_or_paused
+                ),
             )
             results[data_type] = {
                 "rows": result.rows,
@@ -2880,6 +3746,15 @@ async def incremental_all(snapshot_id: str, body: IncrementalExportRequest) -> I
             }
         except Exception as exc:
             results[data_type] = {"error": str(exc)}
+
+    _finalize_h5_incremental_pit_metadata(
+        snapshot_id=sid,
+        stock_universe_mode=body.stock_universe_mode,
+        universe_key=pit_key,
+        pit_ensure=pit_ensure,
+        fallback_start=DEFAULT_ST_PIT_START_DATE,
+        end=body.end,
+    )
 
     return IncrementalAllResponse(snapshot_id=sid, results=results)
 

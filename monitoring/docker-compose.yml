@@ -13,8 +13,10 @@ services:
       - "host.docker.internal:host-gateway"
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.retention.time=30d"
+      - "--storage.tsdb.retention.time=14d"
+      - "--storage.tsdb.retention.size=30GB"
       - "--web.enable-lifecycle"
+      - "--web.enable-admin-api"
     labels:
       - "com.aistock.component=monitoring"
 

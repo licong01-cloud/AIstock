@@ -10,21 +10,31 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Sequence
 
+from dotenv import load_dotenv
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.qlib_exporter.authoritative_bin_exporter import (  # noqa: E402
+    DEFAULT_PIT_UNIVERSE_KEY,
     MINUTE_FREQ_QLIB,
     export_stock_daily_csv,
     export_stock_minute_csv,
     export_stock_minute_csv_chunked,
     normalize_stock_export_exchanges,
     rewrite_stock_all_txt_for_ipo_filter,
+    rewrite_stock_all_txt_from_pit_spans,
     validate_daily_bin_against_db,
     validate_minute_bin_against_db,
     write_bin_meta,
+)
+from backend.services.stock_universe_pit_service import (  # noqa: E402
+    DEFAULT_ST_PIT_RULE_VERSION,
+    DEFAULT_ST_PIT_START_DATE,
+    StockUniversePitService,
 )
 
 
@@ -126,6 +136,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reports-dir", default=str(PROJECT_ROOT / "reports" / "qlib_authoritative_export"))
     parser.add_argument("--exchanges", default="sh,sz", help="comma-separated: sh,sz; bj/BSE is rejected for stock exports")
     parser.add_argument("--codes", default=None, help="optional comma-separated explicit stock codes")
+    parser.add_argument(
+        "--stock-universe-mode",
+        choices=["legacy_static", "pit_spans"],
+        default="legacy_static",
+        help="legacy_static keeps the old end-date static ST/D/P filter; pit_spans uses market.stock_universe_pit_spans.",
+    )
+    parser.add_argument("--universe-key", default=DEFAULT_PIT_UNIVERSE_KEY, help="PIT universe key when --stock-universe-mode=pit_spans")
     parser.add_argument("--exclude-st", action=argparse.BooleanOptionalAction, default=True, help="Exclude all ST stocks; default: true")
     parser.add_argument("--exclude-delisted-or-paused", action=argparse.BooleanOptionalAction, default=True, help="Exclude delisted or paused listings; default: true")
     parser.add_argument("--strict-limit", action="store_true", default=True)
@@ -161,6 +178,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     bin_dir = bin_root / args.snapshot_id
     exchanges = normalize_stock_export_exchanges(parse_csv_list(args.exchanges))
     codes = parse_csv_list(args.codes)
+    pit_universe_key = args.universe_key if args.stock_universe_mode == "pit_spans" else None
+    pit_ensure = None
+    if pit_universe_key:
+        pit_ensure = StockUniversePitService().ensure_st_pit_universe(
+            universe_key=pit_universe_key,
+            start_date=min(start, DEFAULT_ST_PIT_START_DATE),
+            end_date=end,
+            rule_version=DEFAULT_ST_PIT_RULE_VERSION,
+            strict=True,
+            rebuild_if_stale=True,
+        )
 
     result: dict = {
         "snapshot_id": args.snapshot_id,
@@ -170,6 +198,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         "end": end.isoformat(),
         "basis_start": basis_start.isoformat(),
         "basis_end": basis_end.isoformat(),
+        "stock_universe_mode": args.stock_universe_mode,
+        "universe_key": pit_universe_key,
+        "rule_version": DEFAULT_ST_PIT_RULE_VERSION if pit_universe_key else None,
+        "authority_scope": "current_active_shsz_st_pit" if pit_universe_key else "legacy_static",
+        "st_pit": bool(pit_universe_key),
+        "delist_pit": False if pit_universe_key else None,
+        "pause_pit": False if pit_universe_key else None,
+        "survivorship_bias": (
+            "current D/P stocks excluded by scope; delisting PIT not implemented"
+            if pit_universe_key else None
+        ),
+        "pit_ensure": pit_ensure,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
     }
 
@@ -184,6 +224,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 exclude_st=args.exclude_st,
                 exclude_delisted_or_paused=args.exclude_delisted_or_paused,
                 ts_codes=codes,
+                universe_key=pit_universe_key,
                 basis_start=basis_start,
                 basis_end=basis_end,
                 strict_limit=args.strict_limit,
@@ -202,6 +243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 exclude_st=args.exclude_st,
                 exclude_delisted_or_paused=args.exclude_delisted_or_paused,
                 ts_codes=codes,
+                universe_key=pit_universe_key,
                 basis_start=basis_start,
                 basis_end=basis_end,
                 strict_limit=args.strict_limit,
@@ -217,6 +259,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 exclude_st=args.exclude_st,
                 exclude_delisted_or_paused=args.exclude_delisted_or_paused,
                 ts_codes=codes,
+                universe_key=pit_universe_key,
                 basis_start=basis_start,
                 basis_end=basis_end,
                 strict_limit=args.strict_limit,
@@ -252,14 +295,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"dump": {k: v for k, v in dump.items() if k not in {"stdout", "stderr"}}}, ensure_ascii=False, indent=2))
         if not dump["ok"]:
             (reports_dir / f"{args.snapshot_id}_{args.dataset}_failed.json").write_text(
-                json.dumps(result, ensure_ascii=False, indent=2),
+                json.dumps(result, ensure_ascii=False, default=str, indent=2),
                 encoding="utf-8",
             )
             print(dump["stdout"])
             print(dump["stderr"], file=sys.stderr)
             return 2
-        ipo_all_txt_summary = rewrite_stock_all_txt_for_ipo_filter(bin_dir=bin_dir)
-        result["ipo_all_txt_rewrite"] = ipo_all_txt_summary
+        if args.stock_universe_mode == "pit_spans":
+            all_txt_summary = rewrite_stock_all_txt_from_pit_spans(
+                bin_dir=bin_dir,
+                universe_key=args.universe_key,
+                start=start,
+                end=end,
+            )
+            result["pit_all_txt_rewrite"] = all_txt_summary
+        else:
+            all_txt_summary = rewrite_stock_all_txt_for_ipo_filter(bin_dir=bin_dir)
+            result["ipo_all_txt_rewrite"] = all_txt_summary
         write_bin_meta(
             bin_dir=bin_dir,
             snapshot_id=args.snapshot_id,
@@ -275,7 +327,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "basis_end": basis_end.isoformat(),
                 "csv_dir": str(csv_dir),
                 "tool": "scripts/qlib_authoritative_bin_export.py",
-                "ipo_all_txt_rewrite": ipo_all_txt_summary,
+                "stock_universe_mode": args.stock_universe_mode,
+                "universe_key": pit_universe_key,
+                "rule_version": DEFAULT_ST_PIT_RULE_VERSION if pit_universe_key else None,
+                "authority_scope": "current_active_shsz_st_pit" if pit_universe_key else "legacy_static",
+                "st_pit": bool(pit_universe_key),
+                "delist_pit": False if pit_universe_key else None,
+                "pause_pit": False if pit_universe_key else None,
+                "survivorship_bias": (
+                    "current D/P stocks excluded by scope; delisting PIT not implemented"
+                    if pit_universe_key else None
+                ),
+                "pit_ensure": pit_ensure,
+                "ipo_filter_mode": "pit_universe_spans" if pit_universe_key else "instruments_all_txt",
+                "all_txt_rewrite": all_txt_summary,
             },
         )
 
@@ -289,6 +354,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             exclude_st=args.exclude_st,
             exclude_delisted_or_paused=args.exclude_delisted_or_paused,
             ts_codes=codes,
+            universe_key=pit_universe_key,
             basis_start=basis_start,
             basis_end=basis_end,
             strict_limit=args.strict_limit,
@@ -300,13 +366,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"validation": validation}, ensure_ascii=False, indent=2))
         if not validation["ok"]:
             (reports_dir / f"{args.snapshot_id}_{args.dataset}_failed.json").write_text(
-                json.dumps(result, ensure_ascii=False, indent=2),
+                json.dumps(result, ensure_ascii=False, default=str, indent=2),
                 encoding="utf-8",
             )
             return 3
 
     report_path = reports_dir / f"{args.snapshot_id}_{args.dataset}_{args.stage}.json"
-    report_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    report_path.write_text(json.dumps(result, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
     print(f"[OK] wrote report: {report_path}")
     return 0
 
