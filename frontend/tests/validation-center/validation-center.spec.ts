@@ -496,6 +496,10 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   });
 
   await page.goto("/validation-center");
+  const pipelineGroup = page.locator(".sidebar-group-title", { hasText: "自动化流水线" });
+  await expect(pipelineGroup).toBeVisible();
+  await pipelineGroup.click();
+  await expect(page.getByRole("link", { name: /流水线中心/ })).toHaveAttribute("href", "/validation-center");
   await expect(page.getByRole("heading", { name: "自动化测试流水线中心" })).toBeVisible();
   await expect(page.getByText("只读 API")).toBeVisible();
   await expect(page.getByText("受控 Runner：allowlist only")).toBeVisible();

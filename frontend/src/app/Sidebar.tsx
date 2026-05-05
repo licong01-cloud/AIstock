@@ -47,11 +47,16 @@ const NAV_GROUPS: {
     ],
   },
   {
+    title: "自动化流水线",
+    items: [
+      { href: "/validation-center", label: "🧪 流水线中心" },
+    ],
+  },
+  {
     title: "系统与数据",
     items: [
       { href: "/config", label: "⚙️ 环境配置" },
       { href: "/local-data", label: "🗄️ 本地数据管理" },
-      { href: "/validation-center", label: "🧪 测试流水线中心" },
       { href: "/rdagent/dispatch/system-monitor", label: "📡 系统监控" },
       { href: "/rdagent/dispatch/db-monitor", label: "🗄️ 数据库监控" },
     ],
