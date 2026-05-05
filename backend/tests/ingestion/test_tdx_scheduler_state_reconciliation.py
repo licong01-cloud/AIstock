@@ -69,3 +69,43 @@ def test_stale_queued_reconciliation_marks_schedule_created_jobs_failed():
     assert "UPDATE market.ingestion_schedules" in seen["schedule_sql"]
     assert "last_status = 'failed'" in seen["schedule_sql"]
     assert seen["schedule_params"] == ("unit_test", str(schedule_id))
+
+
+def test_script_ingestion_job_started_at_uses_database_clock(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    job_id = uuid.uuid4()
+
+    class CompletedProcess:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _execute(sql, params=()):
+        calls.append((sql, params))
+
+    scheduler._execute = _execute
+    scheduler._extract_job_id_from_cmd = lambda _cmd: job_id
+    scheduler._update_ingestion_schedule = lambda *args, **kwargs: None
+    scheduler._log_ingestion_run = lambda *args, **kwargs: None
+    scheduler._extract_cmd_arg = lambda *args, **kwargs: None
+    scheduler._parse_cmd_date = lambda *args, **kwargs: None
+    scheduler._record_refresh_audit_from_table_range = lambda *args, **kwargs: None
+
+    monkeypatch.setattr(
+        "backend.ingestion.tdx_scheduler.subprocess.run",
+        lambda *args, **kwargs: CompletedProcess(),
+    )
+
+    scheduler._run_ingestion_process(
+        uuid.uuid4(),
+        str(uuid.uuid4()),
+        "anns_metadata",
+        "incremental",
+        "schedule",
+        ["python", "scripts/sync_anns_metadata_incremental.py", "--job-id", str(job_id)],
+    )
+
+    first_sql, first_params = calls[0]
+    assert "started_at=COALESCE(started_at, NOW())" in first_sql
+    assert first_params == (job_id,)

@@ -3022,11 +3022,11 @@ class TDXScheduler:
                 sql = (
                     """
                     UPDATE market.ingestion_jobs
-                       SET status='running', started_at=COALESCE(started_at, %s)
+                       SET status='running', started_at=COALESCE(started_at, NOW())
                      WHERE job_id=%s AND status='queued'
                     """
                 )
-                self._execute(sql, (start_ts, job_uuid))
+                self._execute(sql, (job_uuid,))
         except Exception as exc:
             _logger.error("unexpected error: %s", exc)
         try:
