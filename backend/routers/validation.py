@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from backend.services.validation.execution_runner import ValidationExecutionRunner, ValidationRunnerError
 from backend.services.validation.finding_store import ValidationFindingStore
+from backend.services.validation.git_status_provider import GitStatusProviderError, GitWorkspaceStatusProvider
 from backend.services.validation.history_store import ValidationHistoryStore
 from backend.services.validation.models import ValidationResponse
 from backend.services.validation.plan_catalog import ValidationCatalogError, ValidationPlanCatalog
@@ -27,6 +28,10 @@ def get_finding_store() -> ValidationFindingStore:
 
 def get_execution_runner() -> ValidationExecutionRunner:
     return ValidationExecutionRunner()
+
+
+def get_git_status_provider() -> GitWorkspaceStatusProvider:
+    return GitWorkspaceStatusProvider()
 
 
 class ValidationExecutionStartRequest(BaseModel):
@@ -177,6 +182,34 @@ def get_validation_evidence(
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"evidence manifest not found: {manifest_id}")
     return _success(manifest)
+
+
+@router.get(
+    "/git/workspace-status",
+    response_model=ValidationResponse,
+    summary="Get read-only git workspace dirty-file status",
+)
+def get_validation_git_workspace_status(
+    git_status_provider: GitWorkspaceStatusProvider = Depends(get_git_status_provider),
+):
+    try:
+        return _success(git_status_provider.workspace_status())
+    except GitStatusProviderError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get(
+    "/git/branch-status",
+    response_model=ValidationResponse,
+    summary="Get read-only git branch and upstream status",
+)
+def get_validation_git_branch_status(
+    git_status_provider: GitWorkspaceStatusProvider = Depends(get_git_status_provider),
+):
+    try:
+        return _success(git_status_provider.branch_status())
+    except GitStatusProviderError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/findings", response_model=ValidationResponse, summary="List validation quality findings")
