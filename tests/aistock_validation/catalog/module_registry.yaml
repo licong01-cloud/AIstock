@@ -159,7 +159,7 @@ modules:
     api_routes: [/api/v1/validation/*]
     test_plans:
       required_on_change: [l0, validation_center_backend]
-      recommended: [validation_center_ui]
+      recommended: [validation_center_ui, validation_center_real_port_ui]
   - module_id: validation.center
     display_name: Validation Center UI/API
     parent_module: validation
@@ -168,7 +168,7 @@ modules:
     description: Validation Center API, UI, history, findings, and summaries.
     test_plans:
       required_on_change: [l0, validation_center_backend]
-      recommended: [validation_center_ui]
+      recommended: [validation_center_ui, validation_center_real_port_ui]
   - module_id: validation.runner
     display_name: Validation runner
     parent_module: validation
@@ -201,6 +201,7 @@ modules:
     description: Module registry, file ownership, commit impact, workspace dirty status, and quality matrix.
     test_plans:
       required_on_change: [l0, validation_module_registry_l0]
+      recommended: [validation_center_real_port_ui]
   - module_id: platform
     display_name: Platform
     module_type: technical_layer

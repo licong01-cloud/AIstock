@@ -1,0 +1,67 @@
+﻿{
+  "schema_version": "aistock_validation_run_v1",
+  "module": "validation_center",
+  "module_slug": "validation_center",
+  "level": "L3",
+  "level_slug": "l3",
+  "title": "Validation Center Real-port UI Smoke Nox Entry",
+  "title_slug": "validation-center-real-port-ui-smoke-nox",
+  "git_commit": "7d18a00",
+  "operator": "Codex",
+  "started_at": "2026-05-05T23:00:00+08:00",
+  "finished_at": "2026-05-05T23:18:02+08:00",
+  "status": "passed",
+  "environment": {
+    "backend_port": "8012",
+    "frontend_port": "3012",
+    "next_public_api_base": "http://127.0.0.1:8012/api/v1"
+  },
+  "markdown_path": "tests/aistock_validation/history/validation_center/20260505_l3_validation-center-real-port-ui-smoke-nox.md",
+  "metadata_path": "tests/aistock_validation/history/validation_center/20260505_l3_validation-center-real-port-ui-smoke-nox.json",
+  "coverage": {
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "status": "passed",
+    "line": 82.37,
+    "branch": 65.7,
+    "snapshot_path": "tests/aistock_validation/history/validation_center/20260505_l3_validation-center-real-port-ui-smoke-nox-coverage-snapshot.json"
+  },
+  "quality_gates": [
+    {"name": "validation_center_backend", "status": "passed"},
+    {"name": "validation_center_real_port_ui", "status": "passed"},
+    {"name": "targeted_l0", "status": "passed"}
+  ],
+  "evidence": [
+    "tests/aistock_validation/history/validation_center/20260505_l3_validation-center-real-port-ui-smoke-nox-ui-smoke.json",
+    "tests/aistock_validation/history/validation_center/20260505_l3_validation-center-real-port-ui-smoke-nox-evidence.json",
+    "tests/aistock_validation/history/validation_center/20260505_l3_validation-center-real-port-ui-smoke-nox-coverage-snapshot.json",
+    "tests/aistock_validation/history/validation_center/20260505_l3_validation-center-real-port-ui-smoke-nox-l0-guardrail.json"
+  ],
+  "pass_scope": {
+    "level": "L3",
+    "real_backend": true,
+    "real_database": false,
+    "real_node_api": false,
+    "real_frontend_click": true,
+    "writes_business_state": false,
+    "positive_business_success": true,
+    "negative_failfast_only": false,
+    "mock_api_used": false,
+    "production_8001_touched": false
+  },
+  "business_assertion": {
+    "can_user_complete_operation": true,
+    "operation_name": "View Validation Center Git workspace, recent commit, and module quality panels",
+    "evidence": {
+      "api": "tmp/validation/validation_center/ui_real_port_smoke.json and copied history smoke JSON",
+      "ui": "Playwright Chromium real-port smoke",
+      "db": "not applicable",
+      "logs": "nox validation_center_real_port_ui output"
+    },
+    "unresolved_blockers": [
+      "Rerun the same nox session against full backend.main after unrelated paper_trading_v2/live_session.py SyntaxError is resolved."
+    ]
+  },
+  "residual_risks": [
+    "This validation used a temporary validation-router-only backend because unrelated dirty code prevented full backend.main startup."
+  ]
+}

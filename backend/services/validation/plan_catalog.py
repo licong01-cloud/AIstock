@@ -16,6 +16,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_validation_module_registry_l0": "validation_module_registry_l0",
     "nox_validation_center_backend": "validation_center_backend",
     "nox_validation_center_live_readonly": "validation_center_live_readonly",
+    "nox_validation_center_real_port_ui": "validation_center_real_port_ui",
     "nox_validation_center_ui": "validation_center_ui",
     "nox_qe_data_contract_backend": "qe_data_contract_backend",
     "nox_qe_archive_backend": "qe_archive_backend",

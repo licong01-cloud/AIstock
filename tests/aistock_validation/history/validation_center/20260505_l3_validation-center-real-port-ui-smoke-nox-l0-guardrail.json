@@ -1,0 +1,45 @@
+{
+  "schema_version": "aistock_guardrail_scan_result_v1",
+  "generated_at": "2026-05-05T15:22:14.160840+00:00",
+  "mode": "paths",
+  "files_scanned": 13,
+  "baseline": {
+    "baseline_json": "tmp/validation/guardrails/baseline_20260504.json",
+    "fail_new_only": true
+  },
+  "gate": {
+    "fail_on_severity": "P1",
+    "blocking_count": 0,
+    "status": "passed"
+  },
+  "summary": {
+    "total_findings": 1,
+    "by_severity": {
+      "P1": 1
+    },
+    "by_rule": {
+      "SCRIPT-LOCATION-001": 1
+    },
+    "by_category": {
+      "repository_hygiene": 1
+    },
+    "by_baseline_status": {
+      "baseline": 1
+    }
+  },
+  "findings": [
+    {
+      "rule_id": "SCRIPT-LOCATION-001",
+      "title": "One-off test and diagnostic scripts belong under debug_tools",
+      "severity": "P1",
+      "category": "repository_hygiene",
+      "file": "noxfile.py",
+      "line": 1,
+      "message": "One-off test and diagnostic scripts belong under debug_tools",
+      "remediation": "Put one-off diagnostics under debug_tools/<module>/<date_or_issue>; reusable business scripts need parameters and tests under scripts.",
+      "baseline_policy": "block_new_only",
+      "fingerprint": "615e024e9692283e",
+      "baseline_status": "baseline"
+    }
+  ]
+}

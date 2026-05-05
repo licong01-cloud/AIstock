@@ -279,6 +279,42 @@ def test_plan_catalog_rejects_production_backend_port(tmp_path) -> None:
         ValidationPlanCatalog(catalog_path).list_plans()
 
 
+def test_plan_catalog_allows_real_port_ui_smoke_plan(tmp_path) -> None:
+    catalog_path = tmp_path / "plans.yaml"
+    _write_json(
+        catalog_path,
+        {
+            "schema_version": "aistock_validation_plans_v1",
+            "plans": [
+                {
+                    "plan_key": "validation_center_real_port_ui",
+                    "title": "Validation Center real-port UI",
+                    "module": "validation_center",
+                    "level": "L3",
+                    "command_key": "nox_validation_center_real_port_ui",
+                    "nox_session": "validation_center_real_port_ui",
+                    "requires_backend": True,
+                    "requires_frontend": True,
+                    "allowed_backend_ports": [8012],
+                    "allowed_frontend_ports": [3012],
+                    "writes_database": False,
+                    "writes_artifacts": True,
+                    "writes_business_state": False,
+                    "runner_enabled": False,
+                }
+            ],
+        },
+    )
+
+    plan = ValidationPlanCatalog(catalog_path).get_plan("validation_center_real_port_ui")
+
+    assert plan is not None
+    assert plan["nox_session"] == "validation_center_real_port_ui"
+    assert plan["allowed_backend_ports"] == [8012]
+    assert plan["allowed_frontend_ports"] == [3012]
+    assert plan["writes_business_state"] is False
+
+
 def test_validation_health_and_plans_are_read_only(client: TestClient) -> None:
     health = client.get("/api/v1/validation/health").json()["data"]
     assert health["mode"] == "read_only"

@@ -4,6 +4,7 @@ import os
 import socket
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import nox
 
@@ -634,6 +635,104 @@ def validation_center_ui(session: nox.Session) -> None:
         )
     finally:
         os.chdir(old_cwd)
+
+
+@nox.session(venv_backend="none")
+def validation_center_real_port_ui(session: nox.Session) -> None:
+    """Run Validation Center UI against a real dev backend and frontend."""
+    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8012")
+    frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3012")
+    if str(backend_port) == "8001":
+        session.error("Refusing to validate against production backend port 8001.")
+    if str(frontend_port) == "3000":
+        session.error("Refusing to validate against production frontend port 3000.")
+    api_base = os.environ.get("VALIDATION_CENTER_API_BASE", f"http://127.0.0.1:{backend_port}/api/v1")
+    parsed_api_base = urlparse(api_base)
+    if parsed_api_base.port == 8001:
+        session.error("Refusing to validate against production backend port 8001.")
+    if parsed_api_base.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        session.error("Refusing to validate against a non-localhost Validation Center API.")
+    output = ROOT / "tmp" / "validation" / "validation_center" / "ui_real_port_smoke.json"
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        backend_port,
+        frontend_port,
+        external=True,
+    )
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "services",
+        "--backend-port",
+        backend_port,
+        "--skip-tdx",
+        external=True,
+    )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "npm",
+            "exec",
+            "tsc",
+            "--",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run(
+            "npm",
+            "run",
+            "test:e2e",
+            "--",
+            "tests/validation-center/validation-center-real-port.spec.ts",
+            env=_env(
+                {
+                    "BACKEND_PORT": backend_port,
+                    "FRONTEND_PORT": frontend_port,
+                    "NEXT_PUBLIC_API_BASE": api_base,
+                    "VALIDATION_CENTER_API_BASE": api_base,
+                    "VALIDATION_CENTER_UI_SMOKE_OUTPUT": str(output),
+                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "evidence",
+        "--module",
+        "validation_center",
+        "--level",
+        "L3",
+        "--title",
+        "Validation Center real-port Git and module quality UI smoke",
+        "--output",
+        "tmp/validation/validation_center/ui_real_port_smoke_evidence.json",
+        "--smoke-json",
+        str(output),
+        "--playwright-report",
+        "tmp/playwright-report",
+        "--item",
+        "frontend/tests/validation-center/validation-center-real-port.spec.ts",
+        "--item",
+        "frontend/src/app/validation-center/page.tsx",
+        "--item",
+        "frontend/src/lib/validation/api.ts",
+        "--item",
+        "backend/services/validation/git_activity_provider.py",
+        "--item",
+        "backend/services/validation/module_quality.py",
+        env=_env({"VALIDATION_CENTER_API_BASE": api_base}),
+        external=True,
+    )
 
 
 @nox.session(venv_backend="none")

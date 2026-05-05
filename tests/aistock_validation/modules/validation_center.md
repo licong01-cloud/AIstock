@@ -34,10 +34,11 @@ Required coverage for the first-stage complete loop:
 python -m nox -s validation_coverage_backend
 python -m nox -s validation_center_backend
 python -m nox -s validation_center_ui
+python -m nox -s validation_center_real_port_ui
 python -m nox -s validation_center_live_readonly
 python -m nox -s validation_center_runner_smoke
 python -m nox -s qe_data_contract_backend
-python -m nox -s l0 -- scripts/aistock_validate.py backend/tests/test_aistock_validate_metadata.py backend/tests/test_aistock_validate_coverage.py noxfile.py tests/aistock_validation/modules/validation_center.md
+python -m nox -s l0 -- scripts/aistock_validate.py backend/tests/test_aistock_validate_metadata.py backend/tests/test_aistock_validate_coverage.py noxfile.py tests/aistock_validation/modules/validation_center.md frontend/tests/validation-center/validation-center-real-port.spec.ts
 ```
 
 ## L3 Controlled Runner Contract
@@ -164,3 +165,17 @@ The live read-only smoke validates that the UI/API contracts work against a runn
 - The JSON smoke output uses schema `aistock_validation_center_readonly_smoke_v1`, records endpoint status, counts, failures, read-only state, and `production_8001_touched=false` for normal dev runs.
 - Empty run/coverage/evidence/finding/Bug lists are allowed, but endpoint shape and summary counts must remain explicit.
 - This live smoke is an additional L3 proof; mocked UI E2E remains required for deterministic UI regression.
+
+## L3 Real-port UI Smoke Contract
+
+The real-port UI smoke validates that the operator-facing Validation Center page can load Git workspace status, recent commit activity, and module quality priority data from a running dev backend and a dev frontend:
+
+- `nox -s validation_center_real_port_ui` probes only dev backend/frontend ports. Defaults are backend `8012` and frontend `3012`; `8001` and `3000` are refused.
+- The session requires a running FastAPI dev backend and never starts, restarts, or stops production `8001`.
+- If the frontend port is free, Playwright starts a temporary Next.js dev server with `NEXT_PUBLIC_API_BASE` pointing to the dev backend. If the frontend port is already occupied, the session uses that existing dev frontend.
+- `frontend/tests/validation-center/validation-center-real-port.spec.ts` sends no Validation API writes. Any non-GET Validation API request is recorded in `write_methods_sent` and fails the smoke.
+- Required UI assertions include the page title, Git workspace panel, module quality priority panel, needs-validation metric, recent commit panel, and file-ownership aggregation copy.
+- Required backend responses include `GET /api/v1/validation/git/commit-activity` and `GET /api/v1/validation/modules/quality-summary` with HTTP `200`.
+- The smoke fails on page errors, console errors, request failures, Validation API 4xx/5xx responses, missing UI assertions, or unexpected write methods.
+- The JSON evidence uses schema `aistock_validation_center_real_port_ui_smoke_v1` and is written to `tmp/validation/validation_center/ui_real_port_smoke.json`.
+- The nox session also writes a standard evidence manifest to `tmp/validation/validation_center/ui_real_port_smoke_evidence.json`.
