@@ -256,6 +256,7 @@ def _sync_one_source(
                     args.request_sleep,
                     args.max_retries,
                     args.bulk_session_tune,
+                    str(job_id),
                 )
             ] = ann_date
 

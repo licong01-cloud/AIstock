@@ -59,6 +59,7 @@ class EffectiveDateResult:
     source_time_quality: str
     effective_trade_date: dt.date
     effective_rule: str
+    available_at: Optional[dt.datetime] = None
 
 
 def rx(pattern: str) -> Pattern[str]:
@@ -362,13 +363,21 @@ class AnnouncementTitleClassifier:
         ann_date: dt.date,
         rec_time: Optional[dt.datetime],
         trading_days: Sequence[dt.date],
+        *,
+        first_seen_at: Optional[dt.datetime] = None,
+        time_mode: str = "backtest",
     ) -> EffectiveDateResult:
         """Apply leakage-safe effective-date rules for backtest/live parity."""
 
         if not trading_days:
             raise ValueError("trading_days is required to infer announcement effective date")
 
+        mode = (time_mode or "backtest").strip().lower()
+        observed_mode = mode in {"live", "paper", "paper_live", "observed", "simulation"}
+
         if rec_time is None:
+            if observed_mode and first_seen_at is not None:
+                return self._effective_from_first_seen(first_seen_at, trading_days)
             return EffectiveDateResult(
                 "MISSING",
                 self._next_trading_day(trading_days, ann_date, strictly_after=True),
@@ -377,6 +386,8 @@ class AnnouncementTitleClassifier:
 
         local_time = self._to_shanghai(rec_time)
         if local_time.time().replace(tzinfo=None) == dt.time(0, 0):
+            if observed_mode and first_seen_at is not None:
+                return self._effective_from_first_seen(first_seen_at, trading_days)
             return EffectiveDateResult(
                 "MIDNIGHT_DEFAULT",
                 self._next_trading_day(trading_days, ann_date, strictly_after=True),
@@ -391,12 +402,42 @@ class AnnouncementTitleClassifier:
                 if ann_is_trading
                 else self._next_trading_day(trading_days, ann_date, strictly_after=False)
             )
-            return EffectiveDateResult("EXACT", effective, "exact_before_preopen")
+            return EffectiveDateResult("EXACT", effective, "exact_before_preopen", local_time)
 
         return EffectiveDateResult(
             "EXACT",
             self._next_trading_day(trading_days, ann_date, strictly_after=True),
             "exact_after_preopen_next_trading_day",
+            local_time,
+        )
+
+    def _effective_from_first_seen(
+        self,
+        first_seen_at: dt.datetime,
+        trading_days: Sequence[dt.date],
+    ) -> EffectiveDateResult:
+        local_seen = self._to_shanghai(first_seen_at)
+        local_date = local_seen.date()
+        local_time = local_seen.time().replace(tzinfo=None)
+        local_idx = bisect_left(trading_days, local_date)
+        local_is_trading = local_idx < len(trading_days) and trading_days[local_idx] == local_date
+        if local_time <= self.pre_open_cutoff:
+            effective = (
+                local_date
+                if local_is_trading
+                else self._next_trading_day(trading_days, local_date, strictly_after=False)
+            )
+            return EffectiveDateResult(
+                "LOCAL_FIRST_SEEN",
+                effective,
+                "local_first_seen_before_preopen",
+                local_seen,
+            )
+        return EffectiveDateResult(
+            "LOCAL_FIRST_SEEN",
+            self._next_trading_day(trading_days, local_date, strictly_after=True),
+            "local_first_seen_after_preopen_next_trading_day",
+            local_seen,
         )
 
     @staticmethod

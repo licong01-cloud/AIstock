@@ -63,6 +63,12 @@ def parse_args() -> argparse.Namespace:
         help="Only process announcements missing this rule_version in ann_event_classification",
     )
     parser.add_argument(
+        "--time-mode",
+        choices=["backtest", "paper", "live", "observed"],
+        default="backtest",
+        help="backtest ignores local first_seen_at; paper/live/observed can use first_seen_at for date-only rows",
+    )
+    parser.add_argument(
         "--truncate-version",
         action="store_true",
         help="Delete existing rows for the selected date range and rule_version before processing",
@@ -169,7 +175,13 @@ def load_trading_days(conn: Any, start_date: dt.date, end_date: dt.date) -> list
     return rows
 
 
-def delete_existing_range(conn: Any, rule_version: str, start_date: dt.date, end_date: dt.date) -> None:
+def delete_existing_range(
+    conn: Any,
+    rule_version: str,
+    time_mode: str,
+    start_date: dt.date,
+    end_date: dt.date,
+) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -177,10 +189,11 @@ def delete_existing_range(conn: Any, rule_version: str, start_date: dt.date, end
              USING market.anns a
              WHERE s.ann_id = a.id
                AND s.rule_version = %s
+               AND s.time_mode = %s
                AND a.ann_date >= %s
                AND a.ann_date <= %s
             """,
-            (rule_version, start_date, end_date),
+            (rule_version, time_mode, start_date, end_date),
         )
         cur.execute(
             """
@@ -188,10 +201,11 @@ def delete_existing_range(conn: Any, rule_version: str, start_date: dt.date, end
              USING market.anns a
              WHERE c.ann_id = a.id
                AND c.rule_version = %s
+               AND c.time_mode = %s
                AND a.ann_date >= %s
                AND a.ann_date <= %s
             """,
-            (rule_version, start_date, end_date),
+            (rule_version, time_mode, start_date, end_date),
         )
 
 
@@ -203,6 +217,7 @@ def fetch_batch(
     last_id: int,
     batch_size: int,
     rule_version: str,
+    time_mode: str,
     missing_only: bool,
     remaining_limit: Optional[int],
 ) -> list[dict[str, Any]]:
@@ -218,12 +233,14 @@ def fetch_batch(
                  FROM market.ann_event_classification c
                 WHERE c.ann_id = a.id
                   AND c.rule_version = %s
+                  AND c.time_mode = %s
            )
         """
         params.append(rule_version)
+        params.append(time_mode)
     params.append(limit)
     sql = f"""
-        SELECT a.id, a.ann_date, a.ts_code, a.name, a.title, a.rec_time
+        SELECT a.id, a.ann_date, a.ts_code, a.name, a.title, a.rec_time, a.first_seen_at
           FROM market.anns a
          WHERE a.ann_date >= %s
            AND a.ann_date <= %s
@@ -242,6 +259,7 @@ def classification_tuple(
     result: ClassificationResult,
     effective: EffectiveDateResult,
     detail: dict[str, Any],
+    time_mode: str,
 ) -> tuple[Any, ...]:
     return (
         row["id"],
@@ -249,6 +267,7 @@ def classification_tuple(
         row["ann_date"],
         title_hash(row["title"]),
         result.rule_version,
+        time_mode,
         result.event_type,
         result.risk_level,
         result.action,
@@ -258,6 +277,7 @@ def classification_tuple(
         effective.source_time_quality,
         effective.effective_trade_date,
         effective.effective_rule,
+        effective.available_at,
         result.confidence,
         result.severity_score,
         json.dumps(detail, ensure_ascii=False, default=str),
@@ -268,6 +288,7 @@ def signal_tuple(
     row: dict[str, Any],
     result: ClassificationResult,
     effective: EffectiveDateResult,
+    time_mode: str,
 ) -> tuple[Any, ...]:
     evidence = {
         "ann_id": row["id"],
@@ -276,6 +297,8 @@ def signal_tuple(
         "matched_text": result.matched_text,
         "source_time_quality": effective.source_time_quality,
         "effective_rule": effective.effective_rule,
+        "available_at": effective.available_at,
+        "time_mode": time_mode,
     }
     reason = f"{result.risk_level} {result.event_type}: {result.description}"
     return (
@@ -283,11 +306,13 @@ def signal_tuple(
         row["ts_code"],
         row["ann_date"],
         result.rule_version,
+        time_mode,
         result.event_type,
         result.risk_level,
         result.action,
         effective.source_time_quality,
         effective.effective_trade_date,
+        effective.available_at,
         "ACTIVE",
         result.severity_score,
         result.confidence,
@@ -303,6 +328,7 @@ def persist_batch(
     signals: list[tuple[Any, ...]],
     processed_ann_ids: list[int],
     rule_version: str,
+    time_mode: str,
     generate_signals: bool,
 ) -> None:
     with conn.cursor() as cur:
@@ -312,14 +338,14 @@ def persist_batch(
                 """
                 INSERT INTO market.ann_event_classification
                     (
-                        ann_id, ts_code, ann_date, title_hash, rule_version,
+                        ann_id, ts_code, ann_date, title_hash, rule_version, time_mode,
                         event_type, risk_level, action, needs_llm,
                         matched_rule, matched_text, source_time_quality,
-                        effective_trade_date, effective_rule,
+                        effective_trade_date, effective_rule, available_at,
                         confidence, severity_score, classification_detail
                     )
                 VALUES %s
-                ON CONFLICT (ann_id, rule_version) DO UPDATE SET
+                ON CONFLICT (ann_id, rule_version, time_mode) DO UPDATE SET
                     ts_code = EXCLUDED.ts_code,
                     ann_date = EXCLUDED.ann_date,
                     title_hash = EXCLUDED.title_hash,
@@ -332,6 +358,7 @@ def persist_batch(
                     source_time_quality = EXCLUDED.source_time_quality,
                     effective_trade_date = EXCLUDED.effective_trade_date,
                     effective_rule = EXCLUDED.effective_rule,
+                    available_at = EXCLUDED.available_at,
                     confidence = EXCLUDED.confidence,
                     severity_score = EXCLUDED.severity_score,
                     classification_detail = EXCLUDED.classification_detail,
@@ -349,19 +376,21 @@ def persist_batch(
                     """
                     DELETE FROM market.ann_risk_signal
                      WHERE rule_version = %s
+                       AND time_mode = %s
                        AND ann_id = ANY(%s)
                        AND NOT (ann_id = ANY(%s))
                     """,
-                    (rule_version, processed_ann_ids, risk_ids),
+                    (rule_version, time_mode, processed_ann_ids, risk_ids),
                 )
             else:
                 cur.execute(
                     """
                     DELETE FROM market.ann_risk_signal
                      WHERE rule_version = %s
+                       AND time_mode = %s
                        AND ann_id = ANY(%s)
                     """,
-                    (rule_version, processed_ann_ids),
+                    (rule_version, time_mode, processed_ann_ids),
                 )
         if generate_signals and signals:
             psycopg2.extras.execute_values(
@@ -369,13 +398,13 @@ def persist_batch(
                 """
                 INSERT INTO market.ann_risk_signal
                     (
-                        ann_id, ts_code, ann_date, rule_version,
+                        ann_id, ts_code, ann_date, rule_version, time_mode,
                         event_type, risk_level, action, source_time_quality,
-                        effective_trade_date, signal_status, severity_score,
+                        effective_trade_date, available_at, signal_status, severity_score,
                         confidence, reason, evidence
                     )
                 VALUES %s
-                ON CONFLICT (ann_id, rule_version) DO UPDATE SET
+                ON CONFLICT (ann_id, rule_version, time_mode) DO UPDATE SET
                     ts_code = EXCLUDED.ts_code,
                     ann_date = EXCLUDED.ann_date,
                     event_type = EXCLUDED.event_type,
@@ -383,6 +412,7 @@ def persist_batch(
                     action = EXCLUDED.action,
                     source_time_quality = EXCLUDED.source_time_quality,
                     effective_trade_date = EXCLUDED.effective_trade_date,
+                    available_at = EXCLUDED.available_at,
                     signal_status = EXCLUDED.signal_status,
                     severity_score = EXCLUDED.severity_score,
                     confidence = EXCLUDED.confidence,
@@ -409,6 +439,7 @@ def write_reports(summary: dict[str, Any], json_path: Path, md_path: Path) -> No
         "# AIstock Announcement Title Classification v0",
         "",
         f"- Rule version: `{summary['rule_version']}`",
+        f"- Time mode: `{summary['time_mode']}`",
         f"- Rows processed: `{summary['processed_rows']}`",
         f"- Persisted: `{summary['persisted']}`",
         f"- Risk signals written/touched: `{summary['signal_rows']}`",
@@ -470,7 +501,7 @@ def main() -> int:
         if args.persist:
             seed_rule_metadata(conn, classifier)
             if args.truncate_version:
-                delete_existing_range(conn, classifier.rule_version, start_date, end_date)
+                delete_existing_range(conn, classifier.rule_version, args.time_mode, start_date, end_date)
 
         while True:
             remaining_limit = None if args.limit is None else args.limit - processed
@@ -481,6 +512,7 @@ def main() -> int:
                 last_id=last_id,
                 batch_size=args.batch_size,
                 rule_version=classifier.rule_version,
+                time_mode=args.time_mode,
                 missing_only=args.missing_only,
                 remaining_limit=remaining_limit,
             )
@@ -495,18 +527,27 @@ def main() -> int:
                 last_id = int(row["id"])
                 processed_ids.append(last_id)
                 result = classifier.classify(row["title"])
-                effective = classifier.infer_effective_date(row["ann_date"], row.get("rec_time"), trading_days)
+                effective = classifier.infer_effective_date(
+                    row["ann_date"],
+                    row.get("rec_time"),
+                    trading_days,
+                    first_seen_at=row.get("first_seen_at"),
+                    time_mode=args.time_mode,
+                )
                 detail = {
                     "engine": ENGINE_NAME,
                     "rule_version": classifier.rule_version,
+                    "time_mode": args.time_mode,
                     "description": result.description,
                     "title": row["title"],
                     "rec_time": row.get("rec_time"),
+                    "first_seen_at": row.get("first_seen_at"),
+                    "available_at": effective.available_at,
                 }
 
-                classification_rows.append(classification_tuple(row, result, effective, detail))
+                classification_rows.append(classification_tuple(row, result, effective, detail, args.time_mode))
                 if result.risk_level in SIGNAL_RISK_LEVELS:
-                    signal_write_rows.append(signal_tuple(row, result, effective))
+                    signal_write_rows.append(signal_tuple(row, result, effective, args.time_mode))
 
                 counts_by_level[result.risk_level] += 1
                 counts_by_type[result.event_type] += 1
@@ -533,6 +574,7 @@ def main() -> int:
                     signals=signal_write_rows,
                     processed_ann_ids=processed_ids,
                     rule_version=classifier.rule_version,
+                    time_mode=args.time_mode,
                     generate_signals=args.generate_signals,
                 )
 
@@ -564,6 +606,7 @@ def main() -> int:
         "persisted": bool(args.persist),
         "generate_signals": bool(args.generate_signals),
         "missing_only": bool(args.missing_only),
+        "time_mode": args.time_mode,
         "start_date": start_date,
         "end_date": end_date,
         "elapsed_sec": round(time.time() - started, 3),

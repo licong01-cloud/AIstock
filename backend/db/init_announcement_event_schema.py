@@ -10,17 +10,20 @@ from .pg_pool import get_conn
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATION_PATH = ROOT / "backend" / "migrations" / "announcement_event_signal_schema_20260505.sql"
+MIGRATION_PATHS = [
+    ROOT / "backend" / "migrations" / "announcement_event_signal_schema_20260505.sql",
+    ROOT / "backend" / "migrations" / "announcement_observation_time_fields_20260505.sql",
+]
 
 
 def init_announcement_event_schema() -> None:
     """Create announcement taxonomy, rule-set, classification, and signal tables."""
 
     load_dotenv(override=True)
-    sql = MIGRATION_PATH.read_text(encoding="utf-8")
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql)
+            for path in MIGRATION_PATHS:
+                cur.execute(path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

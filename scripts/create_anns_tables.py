@@ -37,6 +37,14 @@ def main() -> None:
                 file_hash       TEXT        NULL,                -- 文件哈希（如md5/sha256）
                 download_status TEXT        NOT NULL DEFAULT 'pending', -- 下载状态 pending/success/failed
 
+                first_seen_at   TIMESTAMPTZ NULL,               -- Local first observation timestamp; NULL for historical rows
+                last_seen_at    TIMESTAMPTZ NULL,               -- Local latest observation timestamp
+                first_seen_source TEXT      NULL,               -- Source that first observed the row locally
+                last_seen_source  TEXT      NULL,               -- Source that most recently observed the row locally
+                first_seen_job_id UUID      NULL,               -- ingestion_jobs.job_id for first local observation
+                last_seen_job_id  UUID      NULL,               -- ingestion_jobs.job_id for latest local observation
+                observed_time_quality TEXT NOT NULL DEFAULT 'BACKFILL_UNKNOWN',
+
                 created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
                 updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
             );
@@ -87,6 +95,13 @@ def main() -> None:
             COMMENT ON COLUMN market.anns.file_size IS '本地文件大小，单位字节';
             COMMENT ON COLUMN market.anns.file_hash IS '本地文件内容哈希值，例如md5/sha256，用于校验';
             COMMENT ON COLUMN market.anns.download_status IS 'PDF下载状态：pending/success/failed';
+            COMMENT ON COLUMN market.anns.first_seen_at IS 'Local timestamp when AIstock first observed this announcement from an interface; NULL for rows inserted before this field existed to avoid historical backtest leakage.';
+            COMMENT ON COLUMN market.anns.last_seen_at IS 'Local timestamp when AIstock most recently observed or upserted this announcement from an interface.';
+            COMMENT ON COLUMN market.anns.first_seen_source IS 'Source name for first_seen_at, such as eastmoney, cninfo, or tushare; NULL for pre-observation-migration historical rows.';
+            COMMENT ON COLUMN market.anns.last_seen_source IS 'Source name for last_seen_at, such as eastmoney, cninfo, or tushare.';
+            COMMENT ON COLUMN market.anns.first_seen_job_id IS 'Optional market.ingestion_jobs.job_id that first observed this announcement locally; NULL when unknown.';
+            COMMENT ON COLUMN market.anns.last_seen_job_id IS 'Optional market.ingestion_jobs.job_id that most recently observed this announcement locally; NULL when unknown.';
+            COMMENT ON COLUMN market.anns.observed_time_quality IS 'Quality of local observation fields: BACKFILL_UNKNOWN for historical/pre-migration rows, LOCAL_FIRST_SEEN for announcements first inserted by live/incremental observation after this migration.';
 
             COMMENT ON COLUMN market.anns.created_at IS '记录创建时间';
             COMMENT ON COLUMN market.anns.updated_at IS '记录最近更新时间';

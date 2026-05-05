@@ -331,11 +331,22 @@ def fetch_eastmoney_date(
     return list(rows_by_key.values()), audit
 
 
-def upsert_rows(conn: psycopg2.extensions.connection, rows: List[Tuple[Any, ...]]) -> int:
+def upsert_rows(
+    conn: psycopg2.extensions.connection,
+    rows: List[Tuple[Any, ...]],
+    *,
+    source: str = "eastmoney",
+    job_id: Optional[str] = None,
+) -> int:
     if not rows:
         return 0
+    observed_rows = [(*row, source, source, job_id, job_id) for row in rows]
     sql = """
-        INSERT INTO market.anns (ann_date, ts_code, name, title, url, rec_time, download_status)
+        INSERT INTO market.anns (
+            ann_date, ts_code, name, title, url, rec_time, download_status,
+            first_seen_at, last_seen_at, first_seen_source, last_seen_source,
+            first_seen_job_id, last_seen_job_id, observed_time_quality
+        )
         VALUES %s
         ON CONFLICT (ts_code, ann_date, title) DO UPDATE SET
             name = COALESCE(NULLIF(EXCLUDED.name, ''), market.anns.name),
@@ -346,10 +357,19 @@ def upsert_rows(conn: psycopg2.extensions.connection, rows: List[Tuple[Any, ...]
                     ELSE EXCLUDED.url
                   END,
             rec_time = COALESCE(EXCLUDED.rec_time, market.anns.rec_time),
+            last_seen_at = NOW(),
+            last_seen_source = EXCLUDED.last_seen_source,
+            last_seen_job_id = EXCLUDED.last_seen_job_id,
             updated_at = NOW()
     """
     with conn.cursor() as cur:
-        pgx.execute_values(cur, sql, rows, page_size=1000)
+        pgx.execute_values(
+            cur,
+            sql,
+            observed_rows,
+            template="(%s,%s,%s,%s,%s,%s,%s,NOW(),NOW(),%s,%s,%s,%s,'LOCAL_FIRST_SEEN')",
+            page_size=1000,
+        )
     return len(rows)
 
 
@@ -364,11 +384,12 @@ def sync_one_date(
     request_sleep: float,
     max_retries: int,
     bulk_session_tune: bool,
+    job_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     conn = get_conn(bulk_session_tune=bulk_session_tune)
     try:
         rows, audit = fetch_eastmoney_date(query_date, request_sleep=request_sleep, max_retries=max_retries)
-        touched = upsert_rows(conn, rows)
+        touched = upsert_rows(conn, rows, source="eastmoney", job_id=job_id)
         db_count_after = db_count_for_date(conn, query_date)
         conn.commit()
         audit.update({"status": "success", "upsert_touched": touched, "db_count_after": db_count_after})

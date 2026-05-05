@@ -76,6 +76,17 @@ BEGIN
           FROM pg_constraint
          WHERE conname = 'ann_event_classification_ann_rule_uniq'
            AND conrelid = 'market.ann_event_classification'::regclass
+    ) AND NOT EXISTS (
+        SELECT 1
+          FROM pg_constraint
+         WHERE conname = 'ann_event_classification_ann_rule_mode_uniq'
+           AND conrelid = 'market.ann_event_classification'::regclass
+    ) AND NOT EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = 'market'
+           AND table_name = 'ann_event_classification'
+           AND column_name = 'time_mode'
     ) THEN
         ALTER TABLE market.ann_event_classification
             ADD CONSTRAINT ann_event_classification_ann_rule_uniq
@@ -87,6 +98,17 @@ BEGIN
           FROM pg_constraint
          WHERE conname = 'ann_risk_signal_ann_rule_uniq'
            AND conrelid = 'market.ann_risk_signal'::regclass
+    ) AND NOT EXISTS (
+        SELECT 1
+          FROM pg_constraint
+         WHERE conname = 'ann_risk_signal_ann_rule_mode_uniq'
+           AND conrelid = 'market.ann_risk_signal'::regclass
+    ) AND NOT EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = 'market'
+           AND table_name = 'ann_risk_signal'
+           AND column_name = 'time_mode'
     ) THEN
         ALTER TABLE market.ann_risk_signal
             ADD CONSTRAINT ann_risk_signal_ann_rule_uniq

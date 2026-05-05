@@ -77,3 +77,55 @@ def test_effective_date_rules_prevent_leakage():
     assert midnight.effective_trade_date == dt.date(2026, 5, 6)
     assert missing.source_time_quality == "MISSING"
     assert missing.effective_trade_date == dt.date(2026, 5, 6)
+
+
+def test_live_mode_can_use_local_first_seen_for_date_only_announcements():
+    classifier = AnnouncementTitleClassifier()
+    trading_days = [
+        dt.date(2026, 5, 4),
+        dt.date(2026, 5, 5),
+        dt.date(2026, 5, 6),
+    ]
+    first_seen_at = dt.datetime(2026, 5, 5, 7, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
+
+    live = classifier.infer_effective_date(
+        dt.date(2026, 5, 5),
+        None,
+        trading_days,
+        first_seen_at=first_seen_at,
+        time_mode="live",
+    )
+    backtest = classifier.infer_effective_date(
+        dt.date(2026, 5, 5),
+        None,
+        trading_days,
+        first_seen_at=first_seen_at,
+        time_mode="backtest",
+    )
+
+    assert live.source_time_quality == "LOCAL_FIRST_SEEN"
+    assert live.effective_rule == "local_first_seen_before_preopen"
+    assert live.effective_trade_date == dt.date(2026, 5, 5)
+    assert live.available_at == first_seen_at
+    assert backtest.source_time_quality == "MISSING"
+    assert backtest.effective_trade_date == dt.date(2026, 5, 6)
+
+
+def test_live_mode_delays_local_first_seen_after_preopen():
+    classifier = AnnouncementTitleClassifier()
+    trading_days = [
+        dt.date(2026, 5, 5),
+        dt.date(2026, 5, 6),
+    ]
+
+    result = classifier.infer_effective_date(
+        dt.date(2026, 5, 5),
+        None,
+        trading_days,
+        first_seen_at=dt.datetime(2026, 5, 5, 10, 30, tzinfo=dt.timezone(dt.timedelta(hours=8))),
+        time_mode="paper",
+    )
+
+    assert result.source_time_quality == "LOCAL_FIRST_SEEN"
+    assert result.effective_rule == "local_first_seen_after_preopen_next_trading_day"
+    assert result.effective_trade_date == dt.date(2026, 5, 6)

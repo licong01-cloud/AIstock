@@ -78,3 +78,37 @@ def test_announcement_event_schema_comments_are_declared():
         assert f"COMMENT ON TABLE market.{table}" in migration
         for column in columns:
             assert f"COMMENT ON COLUMN market.{table}.{column}" in migration
+
+
+def test_announcement_observation_time_comments_are_declared():
+    root = Path(__file__).resolve().parents[2]
+    migration = (root / "backend/migrations/announcement_observation_time_fields_20260505.sql").read_text(
+        encoding="utf-8"
+    )
+
+    for column in [
+        "first_seen_at",
+        "last_seen_at",
+        "first_seen_source",
+        "last_seen_source",
+        "first_seen_job_id",
+        "last_seen_job_id",
+        "observed_time_quality",
+    ]:
+        assert f"COMMENT ON COLUMN market.anns.{column}" in migration
+
+    assert "COMMENT ON COLUMN market.ann_event_classification.available_at" in migration
+    assert "COMMENT ON COLUMN market.ann_event_classification.time_mode" in migration
+    assert "COMMENT ON COLUMN market.ann_risk_signal.available_at" in migration
+    assert "COMMENT ON COLUMN market.ann_risk_signal.time_mode" in migration
+    assert "ann_event_classification_ann_rule_mode_uniq" in migration
+    assert "ann_risk_signal_ann_rule_mode_uniq" in migration
+
+
+def test_base_schema_unique_constraints_do_not_recreate_legacy_keys_after_time_mode_migration():
+    root = Path(__file__).resolve().parents[2]
+    migration = (root / "backend/migrations/announcement_event_signal_schema_20260505.sql").read_text(encoding="utf-8")
+
+    assert "ann_event_classification_ann_rule_mode_uniq" in migration
+    assert "ann_risk_signal_ann_rule_mode_uniq" in migration
+    assert "column_name = 'time_mode'" in migration
