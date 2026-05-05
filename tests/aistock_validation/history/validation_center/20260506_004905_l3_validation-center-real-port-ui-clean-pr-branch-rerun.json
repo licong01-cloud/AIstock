@@ -1,0 +1,129 @@
+{
+  "coverage": {
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "snapshot_path": "tmp/validation/coverage/validation_center_backend_snapshot.json",
+    "line": 82.33,
+    "branch": 65.7,
+    "diff_line": null,
+    "diff_branch": null,
+    "status": "passed",
+    "quality_gates": [
+      {
+        "name": "line_threshold",
+        "threshold": 75,
+        "actual": 82.33,
+        "status": "passed"
+      },
+      {
+        "name": "branch_threshold",
+        "threshold": 55,
+        "actual": 65.7,
+        "status": "passed"
+      }
+    ]
+  },
+  "environment": {
+    "backend_port": "8012",
+    "frontend_port": "3012",
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "kind": "ui_smoke_json",
+      "path": "tests\\aistock_validation\\history\\validation_center\\20260506_004905_l3_validation-center-real-port-ui-clean-pr-branch-rerun-ui-smoke.json"
+    },
+    {
+      "kind": "evidence_manifest",
+      "path": "tests\\aistock_validation\\history\\validation_center\\20260506_004905_l3_validation-center-real-port-ui-clean-pr-branch-rerun-evidence.json"
+    },
+    {
+      "kind": "backend_coverage_snapshot",
+      "path": "tmp/validation/coverage/validation_center_backend_snapshot.json"
+    },
+    {
+      "kind": "l0_guardrail_json",
+      "path": "tmp/validation/guardrails/l0_paths.json"
+    }
+  ],
+  "finished_at": "2026-05-06T00:49:49",
+  "git_commit": "085dac9",
+  "level": "L3",
+  "level_slug": "l3",
+  "markdown_path": "tests/aistock_validation/history/validation_center/20260506_004905_l3_validation-center-real-port-ui-clean-pr-branch-rerun.md",
+  "metadata_path": "tests/aistock_validation/history/validation_center/20260506_004905_l3_validation-center-real-port-ui-clean-pr-branch-rerun.json",
+  "module": "validation_center",
+  "module_slug": "validation_center",
+  "operator": "lc999",
+  "quality_gates": [
+    {
+      "name": "targeted_l0",
+      "status": "passed",
+      "blocking": 0
+    },
+    {
+      "name": "validation_center_backend",
+      "status": "passed",
+      "tests": 47,
+      "line_coverage": 82.33,
+      "branch_coverage": 65.7
+    },
+    {
+      "name": "validation_center_real_port_ui",
+      "status": "passed",
+      "playwright_tests": 1,
+      "bad_responses": 0,
+      "request_failures": 0,
+      "page_errors": 0,
+      "console_errors": 0,
+      "write_methods": 0
+    },
+    {
+      "name": "production_isolation",
+      "status": "passed",
+      "production_8001_touched": false
+    }
+  ],
+  "residual_risks": [
+    "GitHub CLI is not authenticated, so PR creation requires browser/owner credentials or gh auth login.",
+    "The isolated worktree needed ignored runtime dependencies backend/services/rl_execution and frontend/node_modules for full backend/UI validation; this task did not change repository packaging rules."
+  ],
+  "schema_version": "aistock_validation_run_v1",
+  "started_at": "2026-05-06T00:49:05",
+  "status": "passed",
+  "steps": [
+    {
+      "name": "create_clean_branch",
+      "status": "passed",
+      "detail": "Created isolated worktree branch from origin/main and cherry-picked validation commits 2d00052 and b2b4391."
+    },
+    {
+      "name": "targeted_l0",
+      "status": "passed",
+      "detail": "Ran nox -s l0 on Validation Center changed files after generating a temporary baseline in the isolated worktree."
+    },
+    {
+      "name": "validation_center_backend",
+      "status": "passed",
+      "detail": "47 tests passed; coverage line 82.33, branch 65.7."
+    },
+    {
+      "name": "validation_center_real_port_ui",
+      "status": "passed",
+      "detail": "Playwright 1 passed against backend 8012 and frontend 3012 with no write methods or runtime errors."
+    },
+    {
+      "name": "stop_test_services",
+      "status": "passed",
+      "detail": "Stopped test backend/frontend; ports 8012 and 3012 were free after validation."
+    }
+  ],
+  "title": "Validation Center real-port UI clean PR branch rerun",
+  "title_slug": "validation-center-real-port-ui-clean-pr-branch-rerun"
+}

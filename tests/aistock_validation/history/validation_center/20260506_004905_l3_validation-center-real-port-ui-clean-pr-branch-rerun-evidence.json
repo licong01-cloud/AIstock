@@ -1,0 +1,91 @@
+{
+  "environment": {
+    "backend_port": "8012",
+    "frontend_port": "3012",
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "frontend/tests/validation-center/validation-center-real-port.spec.ts",
+      "sha256": "02d3b9254f4e685140376c4b91b8831fe9f4f9d79a7f3059306404f06bea20a3",
+      "size_bytes": 6674
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "frontend/src/app/validation-center/page.tsx",
+      "sha256": "cf7d565c2a6f11bd40fa763bf63473c5420224712d0d83fa5b78cfa52f33c864",
+      "size_bytes": 61572
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "frontend/src/lib/validation/api.ts",
+      "sha256": "e459b3afb133b59dfcff06e1da244dbb9ea5da0516b51c92475606c3b081da69",
+      "size_bytes": 23328
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "backend/services/validation/git_activity_provider.py",
+      "sha256": "27ac36efb59d174a2d148260771bb2d38bbdfd1f1fe4a6b0c25f9153a08c66e9",
+      "size_bytes": 13822
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "backend/services/validation/module_quality.py",
+      "sha256": "c2c630f6fcea13c64998d6e99f1faa2c9699783f48e84bd2490b3c51ec6d219d",
+      "size_bytes": 14588
+    },
+    {
+      "child_count": 1,
+      "exists": true,
+      "is_dir": true,
+      "kind": "playwright_report",
+      "path": "tmp/playwright-report",
+      "sha256": null,
+      "size_bytes": null
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "smoke_json",
+      "path": "tmp/validation/validation_center/ui_real_port_smoke.json",
+      "sha256": "911f7b0c8640f640b033f2a629f66cd770e2cfcea2bbdda616836858baf692f3",
+      "size_bytes": 3100
+    }
+  ],
+  "generated_at": "2026-05-06T00:47:49",
+  "git_commit": "085dac9",
+  "level": "L3",
+  "missing": [],
+  "missing_count": 0,
+  "module": "validation_center",
+  "operator": "lc999",
+  "run_id": "20260506_004905_l3_validation-center-real-port-ui-clean-pr-branch-rerun",
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "Validation Center real-port Git and module quality UI smoke",
+  "copied_to_history": true,
+  "history_smoke_json": "tests\\aistock_validation\\history\\validation_center\\20260506_004905_l3_validation-center-real-port-ui-clean-pr-branch-rerun-ui-smoke.json"
+}
