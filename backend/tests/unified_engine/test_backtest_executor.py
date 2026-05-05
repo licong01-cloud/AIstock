@@ -200,6 +200,9 @@ class TestBacktestExecutorBasic:
         # stock_pool and label_type go into custom_params
         assert kwargs["custom_params"]["stock_pool"] == "csi300"
         assert kwargs["custom_params"]["label_type"] == "Ref($close, -2)/Ref($close, -1) - 1"
+        assert kwargs["custom_params"]["risk_policy"]["enabled"] is True
+        assert kwargs["custom_params"]["risk_policy"]["providers"] == ["st_pit"]
+        assert "force_exit" in kwargs["custom_params"]["risk_policy"]["hard_actions"]
 
     def test_path2_unfilled_handler_in_custom_params(self):
         """Path 2: unfilled_handler 参数展开到 custom_params"""

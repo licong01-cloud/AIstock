@@ -8,6 +8,7 @@ from typing import Any
 from backend.services.data_refresh_audit import DataRefreshAuditRepository, DatasetRefreshStatus
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import PaperV2MinuteMarketDataProvider, TradeCalendarProvider
+from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.runtime_profile import normalize_selection_runtime_config, parse_selection_runtime_profile
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.runtime import RebalanceEngine, StrategyPackageRuntime, TargetPositionEngine
@@ -42,6 +43,7 @@ class PaperTradingReadinessService:
         tradability_filter: TradabilityFilter | Any | None = None,
         refresh_audit: DataRefreshAuditRepository | Any | None = None,
         selection_artifact_service: StrategyPackageSelectionArtifactService | Any | None = None,
+        risk_policy_service: StockRiskPolicyService | Any | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
@@ -55,6 +57,7 @@ class PaperTradingReadinessService:
         self.selection_artifact_service = selection_artifact_service or StrategyPackageSelectionArtifactService(
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
         )
+        self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
 
     def check_day(
         self,
@@ -169,7 +172,7 @@ class PaperTradingReadinessService:
             data_source=portfolio.data_source.value,
             runtime_config=config,
         )
-        if snapshot.valid_no_candidate:
+        if snapshot.valid_no_candidate and not (current_positions and runtime_profile.risk_policy.enabled):
             raise StrategyPackageValidationError(
                 "valid_no_candidate snapshots cannot enter paper v2 trading readiness",
                 context={"package_id": manifest.package_id, "reason": snapshot.no_candidate_reason},
@@ -177,7 +180,26 @@ class PaperTradingReadinessService:
         raw_candidate_count = len(snapshot.candidates)
         excluded_count = 0
         top_k = int(runtime_profile.selection.top_k or manifest.portfolio_policy.topk)
-        if runtime_profile.tradability.exclude_suspended or runtime_profile.industry_blacklist:
+        risk_decisions = self.risk_policy_service.evaluate(
+            symbols=sorted(set(item.symbol for item in snapshot.candidates) | set(current_positions)),
+            trade_date=trade_date,
+            profile=runtime_profile.risk_policy,
+            current_positions=current_positions,
+        )
+        risk_adjusted, risk_excluded = self.risk_policy_service.apply_to_candidates(
+            candidates=snapshot.candidates,
+            decisions=risk_decisions,
+            trade_date=trade_date,
+            top_k=top_k,
+            package_id=manifest.package_id,
+            manifest_sha256=manifest.manifest_sha256 or portfolio.manifest_sha256,
+            allow_empty=bool(current_positions),
+        )
+        snapshot = snapshot.model_copy(update={"candidates": risk_adjusted})
+        excluded_count += len(risk_excluded)
+        if snapshot.candidates and (
+            runtime_profile.tradability.exclude_suspended or runtime_profile.industry_blacklist
+        ):
             tradable, excluded = self.tradability_filter.filter_candidates(
                 candidates=snapshot.candidates,
                 trade_date=trade_date,
@@ -188,7 +210,7 @@ class PaperTradingReadinessService:
                 industry_blacklist=runtime_profile.industry_blacklist,
             )
             snapshot = snapshot.model_copy(update={"candidates": tradable})
-            excluded_count = len(excluded)
+            excluded_count += len(excluded)
         checks.append(
             PaperReadinessCheck(
                 check_name="selection_runtime",
@@ -201,11 +223,27 @@ class PaperTradingReadinessService:
             )
         )
 
-        targets = self.target_engine.build_targets(
-            snapshot=snapshot,
-            total_equity=total_equity,
-            top_k=top_k,
+        targets = (
+            self.target_engine.build_targets(
+                snapshot=snapshot,
+                total_equity=total_equity,
+                top_k=top_k,
+            )
+            if snapshot.candidates
+            else []
         )
+        if runtime_profile.risk_policy.enabled and current_positions:
+            targets = [
+                *targets,
+                *self.risk_policy_service.forced_exit_targets(
+                    decisions=risk_decisions,
+                    current_positions=current_positions,
+                    trade_date=trade_date,
+                    package_id=manifest.package_id,
+                    manifest_sha256=manifest.manifest_sha256 or portfolio.manifest_sha256,
+                    existing_target_symbols={target.symbol for target in targets},
+                ),
+            ]
         intents = self.rebalance_engine.build_order_intents(
             package_id=manifest.package_id,
             portfolio_id=portfolio_id,

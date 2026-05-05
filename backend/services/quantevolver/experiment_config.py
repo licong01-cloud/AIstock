@@ -6,12 +6,108 @@ Replaces the ad-hoc loop_custom_params dicts scattered across the four call path
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pydantic import BaseModel, model_validator
 
 ALLOWED_LABEL_HORIZONS = {1, 3, 5, 10, 20}
 DEFAULT_LABEL_HORIZON = 1
+
+QE_DEFAULT_RISK_POLICY: dict[str, Any] = {
+    "enabled": True,
+    "policy_version": "stock_event_risk_policy_v1",
+    "providers": ["st_pit"],
+    "st_universe_key": "shsz_st_pit_active_v1",
+    "hard_actions": ["block_buy", "force_exit"],
+    "visible_time_mode": "next_trading_session",
+    "strict_data_ready": True,
+    "score_overlay": {
+        "enabled": False,
+        "negative_multiplier_floor": 0.7,
+        "positive_multiplier_cap": 1.1,
+    },
+}
+
+_QE_RISK_POLICY_RUNTIME_KEYS = {
+    "risk_policy_enabled",
+    "risk_policy_file",
+    "risk_policy_strict",
+    "quote_universe_codes",
+}
+
+
+def default_qe_risk_policy() -> dict[str, Any]:
+    """Return the mandatory ST PIT event-risk policy for new QE runs."""
+
+    return json.loads(json.dumps(QE_DEFAULT_RISK_POLICY, ensure_ascii=False))
+
+
+def ensure_qe_risk_policy(custom_params: dict[str, Any] | None, *, source: str = "qe") -> dict[str, Any]:
+    """Inject and validate the mandatory QE ST PIT risk policy.
+
+    This is called only while constructing a new runnable QE config.  It does
+    not migrate completed historical experiment rows.
+    """
+
+    params: dict[str, Any] = dict(custom_params or {})
+    for runtime_key in _QE_RISK_POLICY_RUNTIME_KEYS:
+        params.pop(runtime_key, None)
+
+    raw_policy = params.get("risk_policy")
+    if raw_policy in (None, "", False):
+        params["risk_policy"] = default_qe_risk_policy()
+        return params
+
+    if isinstance(raw_policy, str):
+        try:
+            raw_policy = json.loads(raw_policy)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{source}: risk_policy must be a JSON object string") from exc
+    if not isinstance(raw_policy, dict):
+        raise ValueError(f"{source}: risk_policy must be an object")
+
+    policy = dict(raw_policy)
+    if policy.get("enabled") is False:
+        raise ValueError(f"{source}: risk_policy.enabled=false is not allowed for new QE runs")
+    policy["enabled"] = True
+
+    if "policy_version" not in policy:
+        policy["policy_version"] = QE_DEFAULT_RISK_POLICY["policy_version"]
+    if "st_universe_key" not in policy:
+        policy["st_universe_key"] = QE_DEFAULT_RISK_POLICY["st_universe_key"]
+    if "visible_time_mode" not in policy:
+        policy["visible_time_mode"] = QE_DEFAULT_RISK_POLICY["visible_time_mode"]
+    if "strict_data_ready" not in policy:
+        policy["strict_data_ready"] = QE_DEFAULT_RISK_POLICY["strict_data_ready"]
+    if "score_overlay" not in policy:
+        policy["score_overlay"] = default_qe_risk_policy()["score_overlay"]
+
+    providers = policy.get("providers")
+    if providers in (None, ""):
+        providers = list(QE_DEFAULT_RISK_POLICY["providers"])
+    if not isinstance(providers, list):
+        raise ValueError(f"{source}: risk_policy.providers must be a list")
+    providers = [str(item).strip() for item in providers if str(item or "").strip()]
+    if "st_pit" not in providers:
+        raise ValueError(f"{source}: risk_policy.providers must include st_pit")
+    policy["providers"] = providers
+
+    hard_actions = policy.get("hard_actions")
+    if hard_actions in (None, ""):
+        hard_actions = list(QE_DEFAULT_RISK_POLICY["hard_actions"])
+    if not isinstance(hard_actions, list):
+        raise ValueError(f"{source}: risk_policy.hard_actions must be a list")
+    hard_actions = [str(item).strip() for item in hard_actions if str(item or "").strip()]
+    required_actions = {"block_buy", "force_exit"}
+    if not required_actions.issubset(set(hard_actions)):
+        raise ValueError(
+            f"{source}: risk_policy.hard_actions must include {sorted(required_actions)}"
+        )
+    policy["hard_actions"] = hard_actions
+
+    params["risk_policy"] = policy
+    return params
 
 
 def normalize_label_horizon(value: Any, *, field_name: str = "label_horizon") -> int:
@@ -225,7 +321,7 @@ class ExperimentConfig(BaseModel):
         # 11. initial_cash must NOT flow into custom_params
         params.pop("initial_cash", None)
 
-        return params
+        return ensure_qe_risk_policy(params, source="ExperimentConfig.build_custom_params")
 
     def build_strategy_params(self) -> dict[str, Any]:
         """Return the strategy_params dict for compose_experiment_in_memory().

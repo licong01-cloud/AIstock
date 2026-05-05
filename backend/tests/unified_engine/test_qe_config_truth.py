@@ -6,6 +6,7 @@ import base64
 from pathlib import Path
 
 import pytest
+import pandas as pd
 from fastapi import HTTPException
 from unittest.mock import AsyncMock
 
@@ -20,6 +21,7 @@ from backend.services.quantevolver.config_composer import (
     ConfigComposer,
     QE_DEFAULT_BACKTEST_END,
     QE_DEFAULT_SIGNAL_END,
+    RISK_POLICY_FILE,
     RDAGENT_DEFAULT_DATA_SPLIT,
 )
 from backend.services.quantevolver.qe_evolution_service import (
@@ -45,6 +47,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from qe_suspend_filter import QESuspendFilter  # noqa: E402
+from qe_event_risk_policy import QEEventRiskPolicy  # noqa: E402
 
 
 DATA_SPLIT = {
@@ -349,6 +352,156 @@ def test_v25_execution_algo_generates_v25_inner_strategy():
     assert "late_model_path:" in yaml_text
 
 
+def test_qe_exchange_can_receive_wider_quote_universe_codes_for_forced_exit():
+    yaml_text = _base_yaml(
+        execution_algo="V25_TWO_STAGE",
+        execution_algo_params={"device": "cpu"},
+        custom_params={
+            "quote_universe_codes": ["000001.SZ", "600000.SH"],
+            "risk_policy": {
+                "enabled": True,
+                "providers": ["st_pit"],
+                "hard_actions": ["block_buy", "force_exit"],
+            },
+        },
+    )
+    exchange = _slice_yaml_between(
+        yaml_text,
+        "        exchange_kwargs:",
+        "task:",
+    )
+
+    assert "codes:" in exchange
+    assert "- 000001.SZ" in exchange
+    assert "- 600000.SH" in exchange
+    assert "contract: stock_event_risk_policy_v1" in yaml_text
+
+
+def test_qe_risk_policy_wraps_outer_strategy_and_emits_runtime_kwargs():
+    yaml_text = _base_yaml(
+        custom_params={
+            "risk_policy": {
+                "enabled": True,
+                "providers": ["st_pit"],
+                "hard_actions": ["block_buy", "force_exit"],
+            },
+            "risk_policy_file": RISK_POLICY_FILE,
+            "risk_policy_strict": True,
+        },
+    )
+
+    outer_strategy = _slice_yaml_between(
+        yaml_text,
+        "    strategy:",
+        "    model:",
+    )
+
+    assert "class: SuspendFilterTopkDropoutStrategy" in outer_strategy
+    assert "module_path: qe_suspend_filter_strategy" in outer_strategy
+    assert "risk_policy_enabled: true" in outer_strategy
+    assert f"risk_policy_file: {RISK_POLICY_FILE}" in outer_strategy
+    assert "risk_policy_strict: true" in outer_strategy
+    assert "filter_suspended_on_signal: true" in outer_strategy
+    assert "suspend_filter_file: qe_suspend_filter.json" in outer_strategy
+    assert "suspend_filter_strict: true" in outer_strategy
+
+
+def test_qe_risk_policy_wraps_score_weighted_v2_strategy():
+    yaml_text = _base_yaml(
+        strategy_info={
+            "strategy_id": "score_weighted_v2",
+            "source_code": "class ScoreWeightedTopkStrategyV2(object):\n    pass\n",
+            "portfolio_config": {"class": "ScoreWeightedTopkStrategyV2", "kwargs": {}},
+        },
+        custom_params={
+            "risk_policy": {
+                "enabled": True,
+                "providers": ["st_pit"],
+                "hard_actions": ["block_buy", "force_exit"],
+            },
+            "risk_policy_file": RISK_POLICY_FILE,
+        },
+    )
+
+    assert "class: SuspendFilterScoreWeightedTopkStrategyV2" in yaml_text
+    assert "module_path: qe_suspend_filter_score_weighted_strategy" in yaml_text
+    assert "risk_policy_enabled: true" in yaml_text
+    assert "filter_suspended_on_signal: true" in yaml_text
+
+
+def test_qe_risk_policy_runtime_prepares_local_artifact(monkeypatch):
+    composer = ConfigComposer()
+    calls = []
+
+    def fake_build_risk_policy_artifact(data_split, custom_params):
+        calls.append((data_split, custom_params["risk_policy"]["st_universe_key"]))
+        return json.dumps(
+            {
+                "enabled": True,
+                "contract": "stock_event_risk_policy_v1",
+                "active_spans": [
+                    {"ts_code": "600000.SH", "eligible_start": "2021-01-01", "eligible_end": "2021-12-31"},
+                    {"ts_code": "000001.SZ", "eligible_start": "2021-01-01", "eligible_end": "2021-12-31"},
+                ],
+            }
+        )
+
+    monkeypatch.setattr(composer, "_build_qe_risk_policy_artifact", fake_build_risk_policy_artifact)
+    custom_params, artifact = composer._prepare_risk_policy_runtime(
+        custom_params={
+            "risk_policy": {
+                "enabled": True,
+                "providers": ["st_pit"],
+                "st_universe_key": "shsz_st_pit_active_v1",
+                "hard_actions": ["block_buy", "force_exit"],
+            }
+        },
+        data_split=DATA_SPLIT,
+    )
+
+    assert artifact.startswith('{"enabled": true')
+    assert calls == [(DATA_SPLIT, "shsz_st_pit_active_v1")]
+    assert custom_params["risk_policy_enabled"] is True
+    assert custom_params["risk_policy_file"] == RISK_POLICY_FILE
+    assert custom_params["risk_policy_strict"] is True
+    assert custom_params["quote_universe_codes"] == ["000001.SZ", "600000.SH"]
+
+
+def test_qe_risk_policy_runtime_defaults_and_overwrites_stale_quote_universe(monkeypatch):
+    composer = ConfigComposer()
+
+    def fake_build_risk_policy_artifact(data_split, custom_params):
+        assert custom_params["risk_policy"]["enabled"] is True
+        assert custom_params["risk_policy"]["providers"] == ["st_pit"]
+        return json.dumps(
+            {
+                "enabled": True,
+                "contract": "stock_event_risk_policy_v1",
+                "active_spans": [
+                    {"ts_code": "000001.SZ", "eligible_start": "2021-01-01", "eligible_end": "2021-12-31"},
+                ],
+            }
+        )
+
+    monkeypatch.setattr(composer, "_build_qe_risk_policy_artifact", fake_build_risk_policy_artifact)
+    custom_params, artifact = composer._prepare_risk_policy_runtime(
+        custom_params={"topk": 20, "quote_universe_codes": ["STALE.SH"]},
+        data_split=DATA_SPLIT,
+    )
+
+    assert json.loads(artifact)["enabled"] is True
+    assert custom_params["risk_policy"]["st_universe_key"] == "shsz_st_pit_active_v1"
+    assert custom_params["quote_universe_codes"] == ["000001.SZ"]
+
+
+def test_qe_risk_policy_runtime_rejects_disabled_policy():
+    with pytest.raises(ValueError, match="risk_policy.enabled=false"):
+        ConfigComposer()._prepare_risk_policy_runtime(
+            custom_params={"risk_policy": {"enabled": False}},
+            data_split=DATA_SPLIT,
+        )
+
+
 def test_v25_execution_prepares_suspend_artifact_without_signal_filter(monkeypatch):
     composer = ConfigComposer()
     calls = []
@@ -370,6 +523,35 @@ def test_v25_execution_prepares_suspend_artifact_without_signal_filter(monkeypat
     assert custom_params["suspend_filter_file"] == "qe_suspend_filter.json"
     assert custom_params["suspend_filter_strict"] is True
     assert "filter_suspended_on_signal" not in custom_params
+
+
+def test_qe_risk_policy_prepares_suspend_artifact_for_signal_filter(monkeypatch):
+    composer = ConfigComposer()
+    calls = []
+
+    def fake_build_suspend_filter_artifact(data_split, *, strict_audit=True):
+        calls.append((data_split, strict_audit))
+        return '{"enabled": true, "suspended_by_date": {}}'
+
+    monkeypatch.setattr(composer, "_build_suspend_filter_artifact", fake_build_suspend_filter_artifact)
+    custom_params, artifact = composer._prepare_suspend_filter_runtime(
+        custom_params={
+            "risk_policy": {
+                "enabled": True,
+                "providers": ["st_pit"],
+                "hard_actions": ["block_buy", "force_exit"],
+            }
+        },
+        data_split=DATA_SPLIT,
+        strategy_info=None,
+        execution_algo=None,
+    )
+
+    assert artifact == '{"enabled": true, "suspended_by_date": {}}'
+    assert calls == [(DATA_SPLIT, True)]
+    assert custom_params["filter_suspended_on_signal"] is True
+    assert custom_params["suspend_filter_file"] == "qe_suspend_filter.json"
+    assert custom_params["suspend_filter_strict"] is True
 
 
 def test_hmm_precomputed_coefficients_skip_runtime_precompute(monkeypatch):
@@ -619,8 +801,52 @@ def test_qe_suspend_filter_symbol_aliases_and_strict_missing_date(tmp_path):
     assert "SZ000001" in suspended
     assert "600000.SH" in suspended
     assert "SH600000" in suspended
+    assert filt.is_suspended("SZ000001", "2024-01-02") is True
+    assert filt.is_suspended("000002.SZ", "2024-01-02") is False
     with pytest.raises(RuntimeError, match="no entry"):
         filt.suspended_symbols("2024-01-03")
+
+
+def test_score_weighted_suspend_wrapper_guards_orders_and_prices():
+    source = (SCRIPTS_DIR / "qe_suspend_filter_score_weighted_strategy.py").read_text(encoding="utf-8")
+
+    assert "def _get_current_price" in source
+    assert "def _filter_scores_without_close" in source
+    assert "def _filter_untradable_orders" in source
+    assert "def _is_orderable_without_warning" in source
+    assert "self.trade_exchange.get_close" in source
+    assert "self._qe_suspend_filter.is_suspended" in source
+
+
+def test_qe_event_risk_policy_filters_buys_and_marks_forced_exits(tmp_path):
+    artifact = tmp_path / "qe_event_risk_policy.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "contract": "stock_event_risk_policy_v1",
+                "providers": ["st_pit"],
+                "hard_actions": ["block_buy", "force_exit"],
+                "start_date": "2024-01-01",
+                "end_date": "2024-01-31",
+                "active_spans": [
+                    {
+                        "ts_code": "000001.SZ",
+                        "eligible_start": "2024-01-01",
+                        "eligible_end": "2024-01-31",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    policy = QEEventRiskPolicy(True, str(artifact), strict=True)
+    scores = policy.filter_scores(pd.Series([1.0, 2.0], index=["000001.SZ", "600000.SH"]), "2024-01-02")
+
+    assert list(scores.index) == ["000001.SZ"]
+    assert policy.force_exit_symbols(["000001.SZ", "600000.SH"], "2024-01-02") == {"600000.SH"}
+    with pytest.raises(RuntimeError, match="does not cover trade date"):
+        policy.force_exit_symbols(["000001.SZ"], "2024-02-01")
 
 
 def _write_stock_pool(root: Path, filename: str = "filtered_pool_x.txt") -> tuple[Path, str]:

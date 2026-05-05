@@ -92,6 +92,15 @@ class QESuspendFilter:
             return set()
         return set(self._by_date.get(key) or set())
 
+    def is_suspended(self, symbol, trade_date) -> bool:
+        """Return whether one symbol is suspended on the given PIT trade date."""
+        if not self.enabled:
+            return False
+        suspended = self.suspended_symbols(trade_date)
+        if not suspended:
+            return False
+        return bool(self._symbol_aliases(symbol) & suspended)
+
     def filter_scores(self, scores, trade_date):
         """Return scores with suspended instruments removed.
 

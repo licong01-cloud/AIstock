@@ -13,6 +13,7 @@ from typing import Any
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
+from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.runtime_profile import parse_selection_runtime_profile
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.runtime import RebalanceEngine, StrategyPackageRuntime, TargetPositionEngine
@@ -68,6 +69,7 @@ class PaperTradingLiveMinuteExecutor:
         tradability_filter: TradabilityFilter | Any | None = None,
         refresh_audit: DataRefreshAuditRepository | Any | None = None,
         replay_service: PaperTradingHistoricalReplay | None = None,
+        risk_policy_service: StockRiskPolicyService | Any | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
@@ -80,6 +82,7 @@ class PaperTradingLiveMinuteExecutor:
         self.validator = validator or StrategyPackageValidator()
         self.tradability_filter = tradability_filter or TradabilityFilter()
         self.refresh_audit = refresh_audit or DataRefreshAuditRepository()
+        self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
         self.day_helper = PaperTradingDayRunner(
             repository=self.repository,
             calendar_provider=self.calendar_provider,
@@ -92,6 +95,7 @@ class PaperTradingLiveMinuteExecutor:
             validator=self.validator,
             tradability_filter=self.tradability_filter,
             refresh_audit=self.refresh_audit,
+            risk_policy_service=self.risk_policy_service,
         )
         self.replay_service = replay_service or PaperTradingHistoricalReplay(
             repository=self.repository,
@@ -315,7 +319,37 @@ class PaperTradingLiveMinuteExecutor:
         runtime_profile = parse_selection_runtime_profile(config)
         top_k = int(runtime_profile.selection.top_k or manifest.portfolio_policy.topk)
         raw_candidate_count = len(snapshot.candidates)
-        if not snapshot.valid_no_candidate and (
+        risk_decisions = self.risk_policy_service.evaluate(
+            symbols=sorted(set(item.symbol for item in snapshot.candidates) | set(current_positions)),
+            trade_date=trade_date,
+            profile=runtime_profile.risk_policy,
+            current_positions=current_positions,
+        )
+        risk_excluded = []
+        if not snapshot.valid_no_candidate:
+            risk_adjusted, risk_excluded = self.risk_policy_service.apply_to_candidates(
+                candidates=snapshot.candidates,
+                decisions=risk_decisions,
+                trade_date=trade_date,
+                top_k=top_k,
+                package_id=manifest.package_id,
+                manifest_sha256=manifest.manifest_sha256 or portfolio.manifest_sha256,
+                allow_empty=bool(current_positions),
+            )
+            snapshot = snapshot.model_copy(
+                update={
+                    "candidates": risk_adjusted,
+                    "runtime_config": {
+                        **snapshot.runtime_config,
+                        "risk_policy": {
+                            "profile": runtime_profile.risk_policy.model_dump(mode="json"),
+                            "excluded_count": len(risk_excluded),
+                            "excluded": [item.model_dump(mode="json") for item in risk_excluded],
+                        },
+                    },
+                }
+            )
+        if not snapshot.valid_no_candidate and snapshot.candidates and (
             runtime_profile.tradability.exclude_suspended or runtime_profile.industry_blacklist
         ):
             tradable, excluded = self.tradability_filter.filter_candidates(
@@ -341,7 +375,23 @@ class PaperTradingLiveMinuteExecutor:
                     },
                 }
             )
-        targets = self.target_engine.build_targets(snapshot=snapshot, total_equity=total_equity, top_k=top_k)
+        targets = (
+            self.target_engine.build_targets(snapshot=snapshot, total_equity=total_equity, top_k=top_k)
+            if snapshot.candidates
+            else []
+        )
+        if runtime_profile.risk_policy.enabled and current_positions:
+            targets = [
+                *targets,
+                *self.risk_policy_service.forced_exit_targets(
+                    decisions=risk_decisions,
+                    current_positions=current_positions,
+                    trade_date=trade_date,
+                    package_id=manifest.package_id,
+                    manifest_sha256=manifest.manifest_sha256 or portfolio.manifest_sha256,
+                    existing_target_symbols={target.symbol for target in targets},
+                ),
+            ]
         intents = self.rebalance_engine.build_order_intents(
             package_id=manifest.package_id,
             portfolio_id=portfolio.portfolio_id,
@@ -367,6 +417,11 @@ class PaperTradingLiveMinuteExecutor:
                 "raw_candidate_count": raw_candidate_count,
                 "target_count": len(targets),
                 "order_intent_count": len(intents),
+                "risk_policy_enabled": runtime_profile.risk_policy.enabled,
+                "risk_excluded_count": len(risk_excluded),
+                "risk_force_exit_symbols": [
+                    symbol for symbol, decision in risk_decisions.items() if decision.force_exit
+                ],
                 "data_ready": ready,
                 "signal_data_source": signal_data_source,
                 "live_data_source": run.data_source.value,

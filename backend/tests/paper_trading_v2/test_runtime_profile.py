@@ -64,6 +64,20 @@ def test_runtime_profile_version_hash_and_audit_are_persisted() -> None:
             "hmm": {"enabled": False, "model_snapshot_id": None, "signal_preset": None, "coefficients_path": None},
             "tradability": {"exclude_suspended": True},
             "selection": {"top_k": 2},
+            "risk_policy": {
+                "enabled": False,
+                "policy_version": "stock_event_risk_policy_v1",
+                "providers": ["st_pit"],
+                "st_universe_key": "shsz_st_pit_active_v1",
+                "hard_actions": ["block_buy", "force_exit"],
+                "visible_time_mode": "next_trading_session",
+                "strict_data_ready": True,
+                "score_overlay": {
+                    "enabled": False,
+                    "negative_multiplier_floor": 0.7,
+                    "positive_multiplier_cap": 1.1,
+                },
+            },
         }
     }
     audit = paper_repo.list_config_change_audit(portfolio.portfolio_id)

@@ -177,7 +177,7 @@ from pydantic import BaseModel, Field
 
 from ..db.pg_pool import get_conn
 from ..services.quantevolver.callback_urls import build_aistock_callback_url
-from ..services.quantevolver.experiment_config import normalize_label_horizon
+from ..services.quantevolver.experiment_config import ensure_qe_risk_policy, normalize_label_horizon
 from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
 from ..services.quantevolver.node_execution import (
     QENodePreflightError,
@@ -2843,6 +2843,11 @@ def generate_config(req: GenerateConfigRequest):
             except RuntimeError as e:
                 raise HTTPException(status_code=500, detail=str(e)) from e
             custom_params["label_horizon"] = label_horizon
+
+        try:
+            custom_params = ensure_qe_risk_policy(custom_params, source="quantevolver.config.generate")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
         # --- 尾盘涨停未成交处理注入（对齐演进任务逻辑）---
         _VALID_UNFILLED_HANDLERS = {"TAIL_BOOST", "TAIL_SUBSTITUTE"}
         if req.unfilled_handler:

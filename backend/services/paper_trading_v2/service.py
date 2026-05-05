@@ -51,6 +51,7 @@ RUNTIME_PROFILE_INPUT_KEYS = {
     "hmm_signal_preset",
     "hmm_coefficients_path",
     "hmm_coefficients_file",
+    "risk_policy",
     "selection_artifact_config",
     "selection_artifact",
     "model",

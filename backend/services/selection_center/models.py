@@ -100,7 +100,7 @@ class TargetPosition(BaseModel):
     symbol: str
     target_quantity: int = Field(ge=0)
     target_weight: float | None = Field(default=None, gt=0)
-    reference_price: float = Field(gt=0)
+    reference_price: float | None = Field(default=None, gt=0)
     score: float
     rank: int = Field(gt=0)
     reason: str
@@ -112,6 +112,12 @@ class TargetPosition(BaseModel):
         if value % 100 != 0:
             raise ValueError("target_quantity must be a 100-share round lot")
         return value
+
+    @model_validator(mode="after")
+    def _reference_price_required_for_nonzero_target(self) -> "TargetPosition":
+        if self.target_quantity > 0 and self.reference_price is None:
+            raise ValueError("reference_price is required for non-zero target positions")
+        return self
 
 
 class SelectionRun(BaseModel):

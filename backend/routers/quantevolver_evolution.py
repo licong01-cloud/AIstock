@@ -31,7 +31,7 @@ from psycopg2.extras import RealDictCursor, execute_values
 
 from ..services.quantevolver.factor_eligibility_service import FactorEligibilityService
 from ..services.quantevolver.evaluation_universe_service import EvaluationUniverseService
-from ..services.quantevolver.experiment_config import normalize_label_horizon
+from ..services.quantevolver.experiment_config import ensure_qe_risk_policy, normalize_label_horizon
 from ..services.quantevolver.factor_official_evaluation_service import CALC_ENGINE
 from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
 from ..services.quantevolver.node_execution import (
@@ -104,6 +104,7 @@ def _merge_strategy_runtime_flags(
     """Persist runtime signal-filter flags without requiring new task table columns."""
     merged = dict(strategy_params or {})
     _reject_nested_runtime_flags(merged, "strategy_params")
+    merged = ensure_qe_risk_policy(merged, source="strategy_params")
     if filter_suspended_on_signal:
         merged["filter_suspended_on_signal"] = True
         merged["suspend_filter_strict"] = bool(suspend_filter_strict)
@@ -1136,6 +1137,10 @@ async def _prepare_custom_evo_loop_configs(
         _reject_nested_runtime_flags(
             cfg_dict.get("strategy_params"),
             f"custom_loop[{pos}].strategy_params",
+        )
+        cfg_dict["strategy_params"] = ensure_qe_risk_policy(
+            cfg_dict.get("strategy_params") or {},
+            source=f"custom_loop[{pos}].strategy_params",
         )
         cfg_dict["loop_index"] = assigned_loop_indexes[pos - 1] if assigned_loop_indexes else pos
         cfg_dict["execution_algo"] = _normalize_qe_execution_algo_for_request(

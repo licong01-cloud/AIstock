@@ -33,6 +33,7 @@ from backend.services.trading_core.errors import (
 
 from .models import SelectionCandidate, SelectionMode, SelectionPaperPortfolioLink, SelectionRun, SelectionRunStatus
 from .repository import SelectionCenterRepository
+from .risk_policy import StockRiskPolicyService
 from .runtime_profile import normalize_selection_runtime_config, parse_selection_runtime_profile
 from .tradability import TradabilityFilter
 
@@ -49,6 +50,7 @@ class SelectionCenterService:
         paper_portfolio_service: PaperTradingV2PortfolioService | Any | None = None,
         selection_artifact_service: StrategyPackageSelectionArtifactService | Any | None = None,
         calendar_provider: TradeCalendarProvider | Any | None = None,
+        risk_policy_service: StockRiskPolicyService | Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.repository = repository or SelectionCenterRepository()
@@ -63,6 +65,7 @@ class SelectionCenterService:
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
         )
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
+        self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
 
     def run_single_package(
         self,
@@ -145,17 +148,39 @@ class SelectionCenterService:
                     package_results[package_id] = []
                     excluded_results[package_id] = []
                 else:
-                    tradable, excluded = self.tradability_filter.filter_candidates(
-                        candidates=snapshot.candidates,
+                    top_k = self._top_k_for_package(manifest, package_profile, global_profile)
+                    risk_decisions = self.risk_policy_service.evaluate(
+                        symbols=[item.symbol for item in snapshot.candidates],
                         trade_date=trade_date,
-                        top_k=self._top_k_for_package(manifest, package_profile, global_profile),
+                        profile=package_profile.risk_policy,
+                    )
+                    risk_adjusted, risk_excluded = self.risk_policy_service.apply_to_candidates(
+                        candidates=snapshot.candidates,
+                        decisions=risk_decisions,
+                        trade_date=trade_date,
+                        top_k=top_k,
+                        package_id=manifest.package_id,
+                        manifest_sha256=snapshot.manifest_sha256,
+                    )
+                    if not (
+                        package_profile.tradability.exclude_suspended
+                        or package_profile.industry_blacklist
+                    ):
+                        package_results[package_id] = risk_adjusted[:top_k]
+                        excluded_results[package_id] = risk_excluded
+                        manifest_sha[package_id] = snapshot.manifest_sha256
+                        continue
+                    tradable, excluded = self.tradability_filter.filter_candidates(
+                        candidates=risk_adjusted,
+                        trade_date=trade_date,
+                        top_k=top_k,
                         package_id=manifest.package_id,
                         manifest_sha256=snapshot.manifest_sha256,
                         enabled=package_profile.tradability.exclude_suspended,
                         industry_blacklist=package_profile.industry_blacklist,
                     )
                     package_results[package_id] = tradable
-                    excluded_results[package_id] = excluded
+                    excluded_results[package_id] = [*risk_excluded, *excluded]
                 manifest_sha[package_id] = snapshot.manifest_sha256
             aggregate = self._aggregate(mode=mode, package_results=package_results, package_weights=weights)
             if not aggregate:

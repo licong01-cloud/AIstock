@@ -16,6 +16,7 @@ from backend.services.paper_trading_v2.readiness import PaperTradingReadinessSer
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.replay import PaperTradingHistoricalReplay
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
+from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
@@ -66,6 +67,14 @@ class FakeSuspendLookup:
             for symbol in symbols
             if symbol in self.suspended
         }
+
+
+class FakeRiskPolicyService(StockRiskPolicyService):
+    def __init__(self, decisions: dict[str, RiskDecision]) -> None:
+        self._decisions = decisions
+
+    def evaluate(self, *, symbols, trade_date, profile, current_positions=None):
+        return {symbol: self._decisions.get(symbol, RiskDecision(symbol=symbol)) for symbol in symbols}
 
 
 class FakeLimitProvider:
@@ -424,6 +433,90 @@ def test_db_historical_day_runner_loads_real_minute_price_for_existing_position_
     assert provider.calls[0]["source"] == MinuteDataSource.DB_HISTORICAL
     assert any(
         item["event_type"] == "CURRENT_POSITION_PRICES_LOADED"
+        for item in paper_repo.list_run_events(portfolio.portfolio_id, run_id=result.run.run_id)
+    )
+
+
+def test_day_runner_risk_policy_blocks_buy_and_forces_existing_position_exit() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = make_paper_enabled_manifest()
+    package_repo.save_manifest(manifest)
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="risk policy forced exit",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+    )
+    previous_run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio.portfolio_id,
+            trade_date=date(2024, 1, 2),
+            status=RunStatus.SUCCEEDED,
+            data_source=MinuteDataSource.DB_HISTORICAL,
+        )
+    )
+    paper_repo.save_positions(
+        run_id=previous_run.run_id,
+        trade_date=date(2024, 1, 2),
+        positions=[
+            PositionLot(
+                portfolio_id=portfolio.portfolio_id,
+                symbol="000001.SZ",
+                quantity=300,
+                available_quantity=300,
+                avg_cost=10.0,
+                trade_date=date(2024, 1, 2),
+            )
+        ],
+        prices={"000001.SZ": 10.0},
+    )
+    provider = FakeDbMinuteProvider()
+
+    result = PaperTradingDayRunner(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=provider,  # type: ignore[arg-type]
+        runtime=runtime_with_authoritative_scores(
+            manifest,
+            trade_date=date(2024, 1, 3),
+            data_source=MinuteDataSource.DB_HISTORICAL.value,
+            rows=[
+                {"symbol": "000001.SZ", "score": 0.91, "rank": 1, "target_weight": 0.03, "reference_price": 10.0},
+                {"symbol": "000002.SZ", "score": 0.89, "rank": 2, "target_weight": 0.03, "reference_price": 10.0},
+            ],
+        ),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=RecordingRefreshAudit(),
+        risk_policy_service=FakeRiskPolicyService(
+            {
+                "000001.SZ": RiskDecision(
+                    symbol="000001.SZ",
+                    can_buy=False,
+                    force_exit=True,
+                    position_target_override=0,
+                    reason_codes=["unit_st_pit_not_eligible"],
+                )
+            }
+        ),
+    ).run_day(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 3),
+        runtime_config={"runtime_profile": {"risk_policy": {"enabled": True}}},
+    )
+
+    orders = paper_repo.orders[result.run.run_id]
+    sell_orders = [order for order in orders if order.symbol == "000001.SZ" and order.side.value == "SELL"]
+    buy_orders = [order for order in orders if order.symbol == "000001.SZ" and order.side.value == "BUY"]
+    assert sell_orders
+    assert not buy_orders
+    assert sell_orders[0].metadata["rebalance_reason"] == "risk_policy_forced_exit"
+    assert any(
+        item["event_type"] == "RISK_POLICY_APPLIED"
         for item in paper_repo.list_run_events(portfolio.portfolio_id, run_id=result.run.run_id)
     )
 

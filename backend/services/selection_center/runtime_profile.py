@@ -8,7 +8,7 @@ and must resolve to authoritative live/latest-data selection artifacts.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -44,6 +44,56 @@ class RuntimeSelectionProfile(BaseModel):
     top_k: int | None = Field(default=None, gt=0, le=50)
 
 
+class RuntimeRiskScoreOverlayProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    negative_multiplier_floor: float = Field(default=0.70, gt=0, le=1)
+    positive_multiplier_cap: float = Field(default=1.10, ge=1)
+
+
+class RuntimeRiskPolicyProfile(BaseModel):
+    """Event-risk policy profile shared by Selection Center, Paper v2, and QE.
+
+    The first provider is the current ST PIT universe. Announcement providers
+    are schema-compatible here but remain explicitly disabled unless requested.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    policy_version: str = "stock_event_risk_policy_v1"
+    providers: list[Literal["st_pit", "announcement_risk"]] = Field(default_factory=lambda: ["st_pit"])
+    st_universe_key: str = "shsz_st_pit_active_v1"
+    hard_actions: list[Literal["block_buy", "force_exit"]] = Field(
+        default_factory=lambda: ["block_buy", "force_exit"]
+    )
+    visible_time_mode: Literal["next_trading_session", "trade_date"] = "next_trading_session"
+    strict_data_ready: bool = True
+    score_overlay: RuntimeRiskScoreOverlayProfile = Field(default_factory=RuntimeRiskScoreOverlayProfile)
+
+    @field_validator("policy_version", "st_universe_key")
+    @classmethod
+    def _strip_required_text(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("risk policy text fields cannot be empty")
+        return value
+
+    @field_validator("providers", "hard_actions")
+    @classmethod
+    def _dedupe_text_list(cls, value: list[Any]) -> list[Any]:
+        normalized: list[Any] = []
+        seen: set[str] = set()
+        for item in value or []:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            normalized.append(text)
+            seen.add(text)
+        return normalized
+
+
 class SelectionRuntimeProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -51,6 +101,7 @@ class SelectionRuntimeProfile(BaseModel):
     hmm: RuntimeHMMProfile = Field(default_factory=RuntimeHMMProfile)
     tradability: RuntimeTradabilityProfile = Field(default_factory=RuntimeTradabilityProfile)
     selection: RuntimeSelectionProfile = Field(default_factory=RuntimeSelectionProfile)
+    risk_policy: RuntimeRiskPolicyProfile = Field(default_factory=RuntimeRiskPolicyProfile)
 
     @field_validator("industry_blacklist")
     @classmethod
@@ -120,6 +171,15 @@ def parse_selection_runtime_profile(runtime_config: dict[str, Any] | None) -> Se
         hmm_payload["coefficients_path"] = config["hmm_coefficients_file"]
     payload["hmm"] = hmm_payload
 
+    risk_policy_payload = dict(payload.get("risk_policy") or {})
+    if "risk_policy" in config:
+        if not isinstance(config["risk_policy"], dict):
+            raise StrategyPackageValidationError("runtime_config.risk_policy must be an object")
+        merged = dict(config["risk_policy"])
+        merged.update(risk_policy_payload)
+        risk_policy_payload = merged
+    payload["risk_policy"] = risk_policy_payload
+
     try:
         profile = SelectionRuntimeProfile.model_validate(payload)
     except ValueError as exc:
@@ -139,6 +199,19 @@ def parse_selection_runtime_profile(runtime_config: dict[str, Any] | None) -> Se
                 "HMM runtime profile requires signal_preset when enabled",
                 context={"runtime_profile": profile.model_dump(mode="json")},
             )
+    if profile.risk_policy.enabled and not profile.risk_policy.providers:
+        raise StrategyPackageValidationError(
+            "risk policy requires at least one provider when enabled",
+            context={"runtime_profile": profile.model_dump(mode="json")},
+        )
+    if "announcement_risk" in profile.risk_policy.providers and profile.risk_policy.enabled:
+        # The schema is reserved now so the announcement pipeline can be added
+        # without changing Selection/Paper contracts. Runtime use must fail
+        # until the provider is explicitly implemented.
+        raise StrategyPackageValidationError(
+            "announcement_risk provider is not implemented yet",
+            context={"runtime_profile": profile.model_dump(mode="json")},
+        )
     return profile
 
 

@@ -12,8 +12,12 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from services.quantevolver.experiment_config import ExperimentConfig, HmmConfig
-from services.quantevolver.experiment_config_builders import (
+from backend.services.quantevolver.experiment_config import (
+    ExperimentConfig,
+    HmmConfig,
+    default_qe_risk_policy,
+)
+from backend.services.quantevolver.experiment_config_builders import (
     _build_hmm_config_from_fields,
     _pop_hmm_fields,
     _resolve_hmm_config_json,
@@ -40,6 +44,16 @@ from tests.fixtures.sample_configs import (
     CUSTOM_EVO_TASK,
     HMM_SNAPSHOT,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_optional_hmm_config_json(monkeypatch, request):
+    if request.node.name == "test_hmm_config_resolves_hidden_snapshot_config":
+        return
+    monkeypatch.setattr(
+        "backend.services.quantevolver.experiment_config_builders._resolve_hmm_config_json",
+        lambda _snapshot_id: None,
+    )
 
 
 MULTI_ALPHA_CONFIG = {
@@ -94,7 +108,16 @@ class TestExperimentConfig:
     def test_build_custom_params_empty(self):
         cfg = ExperimentConfig(factor_names=["f1"], model_id="lgbm")
         params = cfg.build_custom_params()
-        assert params == {}
+        assert params == {"risk_policy": default_qe_risk_policy()}
+
+    def test_build_custom_params_rejects_disabled_risk_policy(self):
+        cfg = ExperimentConfig(
+            factor_names=["f1"],
+            model_id="lgbm",
+            extra_params={"risk_policy": {"enabled": False}},
+        )
+        with pytest.raises(ValueError, match="risk_policy.enabled=false"):
+            cfg.build_custom_params()
 
     def test_build_custom_params_pops_initial_cash(self):
         cfg = ExperimentConfig(
@@ -216,7 +239,7 @@ class TestBuildConfigFromExpRecord:
     def test_invalid_unfilled_handler_params_raises(self):
         """unfilled_handler_params 解析后非 dict 时应 raise，不能静默返回 {}"""
         import json
-        from services.quantevolver.experiment_config_builders import _build_unfilled_handler_params
+        from backend.services.quantevolver.experiment_config_builders import _build_unfilled_handler_params
         # 合法 JSON 但类型是 list，不是 dict
         with pytest.raises(ValueError, match="unfilled_handler_params must be a dict"):
             _build_unfilled_handler_params(json.dumps([1, 2, 3]))
@@ -315,7 +338,7 @@ class TestBuildConfigFromStrategyEvoLoop:
     def test_with_hmm(self):
         mock_snapshot = HMM_SNAPSHOT.copy()
         with patch(
-            "services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
+            "backend.services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
             return_value=mock_snapshot["model_path"],
         ):
             cfg = build_config_from_strategy_evo_loop(
@@ -340,7 +363,7 @@ class TestBuildConfigFromCustomEvoLoop:
     def test_full_config(self):
         mock_path = HMM_SNAPSHOT["model_path"]
         with patch(
-            "services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
+            "backend.services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
             return_value=mock_path,
         ):
             cfg = build_config_from_custom_evo_loop(CUSTOM_EVO_LOOP_FULL, CUSTOM_EVO_TASK)
@@ -372,7 +395,7 @@ class TestBuildConfigFromCustomEvoLoop:
     def test_factor_keys_split(self):
         """factor_keys with '||' separator should be split correctly."""
         with patch(
-            "services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
+            "backend.services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
             return_value=HMM_SNAPSHOT["model_path"],
         ):
             cfg = build_config_from_custom_evo_loop(CUSTOM_EVO_LOOP_FULL, CUSTOM_EVO_TASK)
@@ -381,7 +404,7 @@ class TestBuildConfigFromCustomEvoLoop:
     def test_hmm_snapshot_not_found_raises(self):
         loop = {**CUSTOM_EVO_LOOP_FULL, "hmm_model_version_id": "nonexistent_snap"}
         with patch(
-            "services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
+            "backend.services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
             side_effect=ValueError("HMM snapshot 'nonexistent_snap' does not exist"),
         ):
             with pytest.raises(ValueError, match="nonexistent_snap"):
@@ -394,7 +417,7 @@ class TestBuildConfigFromCustomEvoLoop:
             "multi_alpha_config": MULTI_ALPHA_CONFIG,
         }
         with patch(
-            "services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
+            "backend.services.quantevolver.experiment_config_builders._resolve_hmm_snapshot",
             return_value=HMM_SNAPSHOT["model_path"],
         ):
             cfg = build_config_from_custom_evo_loop(loop, CUSTOM_EVO_TASK)
@@ -413,7 +436,7 @@ class TestBuildConfigFromCustomEvoLoop:
             "config_json": {"runtime_preset": "preset_A", "precomputed_only": True},
         }
         fake_module = types.SimpleNamespace(HMMTrainingService=MagicMock(return_value=svc))
-        with patch.dict(sys.modules, {"services.hmm_training_service": fake_module}):
+        with patch.dict(sys.modules, {"backend.services.hmm_training_service": fake_module}):
             cfg_json = _resolve_hmm_config_json("snap_hidden")
 
         assert cfg_json["runtime_preset"] == "preset_A"

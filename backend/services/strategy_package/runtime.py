@@ -330,7 +330,12 @@ class RebalanceEngine:
                     metadata={
                         "target_quantity": target_qty,
                         "current_quantity": current_qty,
-                        "rebalance_reason": "target_position_diff",
+                        "rebalance_reason": target_by_symbol[symbol].reason
+                        if symbol in target_by_symbol
+                        else "target_position_diff",
+                        "target_metadata": target_by_symbol[symbol].metadata
+                        if symbol in target_by_symbol
+                        else {},
                     },
                 )
             )

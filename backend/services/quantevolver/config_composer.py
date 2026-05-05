@@ -26,7 +26,7 @@ from ..strategy_package.workspace_policy import (
     ensure_aistock_artifact_path,
     ensure_not_forbidden_worker_workspace_path,
 )
-from .experiment_config import normalize_label_horizon
+from .experiment_config import ensure_qe_risk_policy, normalize_label_horizon
 from .runtime_contract import merge_qe_minute_runtime_contract
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
@@ -161,6 +161,7 @@ SUPPORTED_QE_EXECUTION_ALGOS = {
 }
 DEFAULT_QE_EXECUTION_ALGO = "TWAP"
 SUSPEND_FILTER_FILE = "qe_suspend_filter.json"
+RISK_POLICY_FILE = "qe_event_risk_policy.json"
 PRECOMPUTED_HMM_COEFF_JSON_PARAM = "_precomputed_hmm_coefficients_json"
 QE_LOCAL_STRATEGY_ROOTS = [
     AISTOCK_PROJECT_ROOT / "backend" / "rebalance_strategies",
@@ -645,7 +646,9 @@ class ConfigComposer:
 
     @classmethod
     def _is_v25_execution(cls, execution_algo: Optional[str]) -> bool:
-        return cls._normalize_execution_algo(execution_algo) == "V25_TWO_STAGE"
+        return cls._normalize_execution_algo(execution_algo) in {
+            "V25_TWO_STAGE",
+                }
 
     @staticmethod
     def _is_suspend_filter_enabled(custom_params: Optional[Dict[str, Any]]) -> bool:
@@ -762,6 +765,22 @@ class ConfigComposer:
                 "QE blocks this request instead of silently ignoring the UI configuration."
             )
 
+    def _ensure_qe_risk_policy_supported(self, strategy_class: str) -> None:
+        supported = {
+            "TopkDropoutStrategy",
+            "SuspendFilterTopkDropoutStrategy",
+            "ScoreWeightedTopkStrategy",
+            "SuspendFilterScoreWeightedTopkStrategy",
+            "ScoreWeightedTopkStrategyV2",
+            "SuspendFilterScoreWeightedTopkStrategyV2",
+        }
+        if strategy_class not in supported:
+            raise ValueError(
+                "runtime risk_policy.enabled=True is not supported by strategy "
+                f"'{strategy_class}'. Supported strategies: {sorted(supported)}. "
+                "QE blocks this request instead of silently ignoring forced-exit semantics."
+            )
+
     def _prepare_suspend_filter_runtime(
         self,
         *,
@@ -772,7 +791,13 @@ class ConfigComposer:
     ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
         """Build the suspend artifact needed by signal filtering or V25 execution."""
 
-        signal_filter_enabled = self._is_suspend_filter_enabled(custom_params)
+        # Mandatory event-risk policies can force exits or block buys before
+        # ``filter_suspended_on_signal`` is explicitly set.  In that mode the
+        # outer signal strategy must still remove confirmed suspend_d names so
+        # Qlib does not emit orders for a fully suspended day.
+        signal_filter_enabled = self._is_suspend_filter_enabled(
+            custom_params
+        ) or self._is_qe_risk_policy_enabled(custom_params)
         execution_filter_required = self._is_v25_execution(execution_algo)
         if not signal_filter_enabled and not execution_filter_required:
             return custom_params, None
@@ -795,6 +820,162 @@ class ConfigComposer:
             custom_params["filter_suspended_on_signal"] = True
 
         return custom_params, suspend_filter_json
+
+    @staticmethod
+    def _risk_policy_profile(custom_params: Optional[Dict[str, Any]]):
+        raw_policy = (custom_params or {}).get("risk_policy")
+        if raw_policy in (None, "", False):
+            raw_policy = {"enabled": False}
+        if isinstance(raw_policy, str):
+            raw_policy = json.loads(raw_policy)
+        if not isinstance(raw_policy, dict):
+            raise ValueError("custom_params.risk_policy must be an object or JSON object string")
+        from backend.services.selection_center.runtime_profile import RuntimeRiskPolicyProfile
+
+        return RuntimeRiskPolicyProfile.model_validate(raw_policy)
+
+    @classmethod
+    def _is_qe_risk_policy_enabled(cls, custom_params: Optional[Dict[str, Any]]) -> bool:
+        return bool(cls._risk_policy_profile(custom_params).enabled)
+
+    def _build_qe_risk_policy_artifact(self, data_split: Dict[str, str], custom_params: Dict[str, Any]) -> str:
+        """Export ST PIT spans to a local JSON artifact for Qlib runtime."""
+
+        profile = self._risk_policy_profile(custom_params)
+        if not profile.enabled:
+            raise ValueError("risk policy artifact requested while risk_policy.enabled is false")
+        if not profile.providers:
+            raise ValueError("risk_policy.enabled=True requires at least one provider")
+        if "announcement_risk" in profile.providers:
+            raise ValueError(
+                "risk_policy.providers includes announcement_risk, but QE announcement-risk runtime is not implemented yet"
+            )
+        if "st_pit" not in profile.providers:
+            raise ValueError("risk_policy.providers must include st_pit for the current QE runtime")
+
+        backtest_start = self._parse_date(data_split["test_start"])
+        backtest_end = self._parse_date(data_split["backtest_end"])
+        if backtest_end < backtest_start:
+            raise ValueError("backtest_end is earlier than test_start; cannot build QE risk policy")
+
+        from backend.services.stock_universe_pit_service import (
+            DEFAULT_ST_PIT_START_DATE,
+            StockUniversePitService,
+        )
+
+        StockUniversePitService().ensure_st_pit_universe(
+            universe_key=profile.st_universe_key,
+            start_date=DEFAULT_ST_PIT_START_DATE,
+            end_date=backtest_end,
+            strict=profile.strict_data_ready,
+        )
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT cal_date
+                    FROM market.trading_calendar
+                    WHERE is_trading = TRUE
+                      AND cal_date BETWEEN %s AND %s
+                    ORDER BY cal_date
+                    """,
+                    (backtest_start, backtest_end),
+                )
+                trade_dates = [row[0] for row in cur.fetchall()]
+                if not trade_dates:
+                    raise RuntimeError(
+                        f"No trading dates found for QE risk policy: {backtest_start}..{backtest_end}"
+                    )
+                cur.execute(
+                    """
+                    SELECT ts_code, eligible_start, eligible_end, entry_reason,
+                           exit_reason, rule_version, metadata
+                    FROM market.stock_universe_pit_spans
+                    WHERE universe_key = %s
+                      AND eligible_start <= %s
+                      AND eligible_end >= %s
+                    ORDER BY ts_code, eligible_start, eligible_end
+                    """,
+                    (profile.st_universe_key, backtest_end, backtest_start),
+                )
+                spans = [
+                    {
+                        "ts_code": row[0],
+                        "eligible_start": row[1].isoformat(),
+                        "eligible_end": row[2].isoformat(),
+                        "entry_reason": row[3],
+                        "exit_reason": row[4],
+                        "rule_version": row[5],
+                        "metadata": row[6] or {},
+                    }
+                    for row in cur.fetchall()
+                ]
+                cur.execute(
+                    """
+                    SELECT universe_key, rule_version, scope, status, dirty,
+                           source_fingerprint_sha256, generated_at
+                    FROM market.stock_universe_pit_state
+                    WHERE universe_key = %s
+                    """,
+                    (profile.st_universe_key,),
+                )
+                state = cur.fetchone()
+
+        payload = {
+            "enabled": True,
+            "contract": profile.policy_version,
+            "source": "market.stock_universe_pit_spans",
+            "providers": list(profile.providers),
+            "hard_actions": list(profile.hard_actions),
+            "visible_time_mode": profile.visible_time_mode,
+            "strict_data_ready": profile.strict_data_ready,
+            "st_universe_key": profile.st_universe_key,
+            "start_date": backtest_start.isoformat(),
+            "end_date": backtest_end.isoformat(),
+            "trade_date_count": len(trade_dates),
+            "span_count": len(spans),
+            "active_spans": spans,
+            "state": {
+                "universe_key": state[0] if state else profile.st_universe_key,
+                "rule_version": state[1] if state else None,
+                "scope": state[2] if state else None,
+                "status": state[3] if state else "missing",
+                "dirty": bool(state[4]) if state else True,
+                "source_fingerprint_sha256": state[5] if state else None,
+                "generated_at": state[6].isoformat() if state and state[6] else None,
+            },
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str)
+
+    def _prepare_risk_policy_runtime(
+        self,
+        *,
+        custom_params: Optional[Dict[str, Any]],
+        data_split: Dict[str, str],
+    ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+        custom_params = ensure_qe_risk_policy(
+            custom_params,
+            source="ConfigComposer._prepare_risk_policy_runtime",
+        )
+        if not self._is_qe_risk_policy_enabled(custom_params):
+            return custom_params, None
+        risk_policy_json = self._build_qe_risk_policy_artifact(data_split, custom_params)
+        profile = self._risk_policy_profile(custom_params)
+        custom_params["risk_policy_file"] = RISK_POLICY_FILE
+        custom_params["risk_policy_enabled"] = True
+        custom_params["risk_policy_strict"] = profile.strict_data_ready
+        payload = json.loads(risk_policy_json)
+        quote_universe_codes = sorted(
+            {
+                str(span.get("ts_code") or "").strip().upper()
+                for span in payload.get("active_spans", [])
+                if str(span.get("ts_code") or "").strip()
+            }
+        )
+        if quote_universe_codes:
+            custom_params["quote_universe_codes"] = quote_universe_codes
+        return custom_params, risk_policy_json
 
     @staticmethod
     def _validate_hmm_coefficients_json(content: str) -> None:
@@ -974,6 +1155,10 @@ class ConfigComposer:
                     f"支持的策略: {', '.join(sorted(_hmm_supported_classes))}"
                 )
 
+        custom_params, risk_policy_json = self._prepare_risk_policy_runtime(
+            custom_params=custom_params,
+            data_split=data_split,
+        )
         custom_params, suspend_filter_json = self._prepare_suspend_filter_runtime(
             custom_params=custom_params,
             data_split=data_split,
@@ -1017,6 +1202,8 @@ class ConfigComposer:
 
         if suspend_filter_json:
             (exp_dir / SUSPEND_FILTER_FILE).write_text(suspend_filter_json, encoding="utf-8")
+        if risk_policy_json:
+            (exp_dir / RISK_POLICY_FILE).write_text(risk_policy_json, encoding="utf-8")
 
         # 写入因子原始代码到 factors/ 子目录（保持原始格式不变）
         if has_factor_files:
@@ -1049,7 +1236,7 @@ class ConfigComposer:
             v24_src = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
-            for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
                 helper_src = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_src.exists():
                     shutil.copy2(helper_src, exp_dir / helper_name)
@@ -1057,7 +1244,7 @@ class ConfigComposer:
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
-        for helper_name in ("qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+        for helper_name in ("qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
             helper_src = scripts_dir / helper_name
             if helper_src.exists():
                 shutil.copy2(helper_src, exp_dir / helper_name)
@@ -1282,6 +1469,12 @@ class ConfigComposer:
                     f"请切换到支持 HMM 的策略或关闭 HMM。"
                 )
 
+        custom_params, risk_policy_json = self._prepare_risk_policy_runtime(
+            custom_params=custom_params,
+            data_split=data_split,
+        )
+        if risk_policy_json:
+            experiment_files[RISK_POLICY_FILE] = risk_policy_json
         custom_params, suspend_filter_json = self._prepare_suspend_filter_runtime(
             custom_params=custom_params,
             data_split=data_split,
@@ -1350,7 +1543,7 @@ class ConfigComposer:
             v24_path = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_path.exists():
                 experiment_files["tail_twap_v24_strategy.py"] = v24_path.read_text(encoding="utf-8")
-            for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
                 helper_path = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_path.exists():
                     experiment_files[helper_name] = helper_path.read_text(encoding="utf-8")
@@ -1361,7 +1554,7 @@ class ConfigComposer:
                 experiment_files["benchmark_sh000300.parquet.b64"] = base64.b64encode(
                     bench_path.read_bytes()
                 ).decode("ascii")
-        for helper_name in ("qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+        for helper_name in ("qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
             helper_path = scripts_dir / helper_name
             if helper_path.exists():
                 experiment_files[helper_name] = helper_path.read_text(encoding="utf-8")
@@ -1476,7 +1669,7 @@ class ConfigComposer:
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
-                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "close_execution_strategy", "qe_suspend_filter", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
+                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
         deps_dict: Dict[str, str] = {}
 
         def _resolve_deps(code: str, collected: set) -> str:
@@ -1876,6 +2069,10 @@ class ConfigComposer:
             execution_algo_params["unfilled_trigger_minute"] = _cp["unfilled_trigger_minute"]
         if _cp.get("unfilled_backup_depth"):
             execution_algo_params["unfilled_backup_depth"] = _cp["unfilled_backup_depth"]
+        custom_params, risk_policy_json = self._prepare_risk_policy_runtime(
+            custom_params=custom_params,
+            data_split=data_split,
+        )
         custom_params, suspend_filter_json = self._prepare_suspend_filter_runtime(
             custom_params=custom_params,
             data_split=data_split,
@@ -1913,6 +2110,8 @@ class ConfigComposer:
         conf_path.write_text(conf_yaml, encoding="utf-8")
         if suspend_filter_json:
             (exp_dir / SUSPEND_FILTER_FILE).write_text(suspend_filter_json, encoding="utf-8")
+        if risk_policy_json:
+            (exp_dir / RISK_POLICY_FILE).write_text(risk_policy_json, encoding="utf-8")
 
         if has_factor_files:
             self._write_factor_files(exp_dir, factors_info)
@@ -1943,14 +2142,14 @@ class ConfigComposer:
             v24_src = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
-            for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in ("tail_twap_v25_strategy.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
                 helper_src = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_src.exists():
                     shutil.copy2(helper_src, exp_dir / helper_name)
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
-        for helper_name in ("qe_suspend_filter.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+        for helper_name in ("qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
             helper_src = scripts_dir / helper_name
             if helper_src.exists():
                 shutil.copy2(helper_src, exp_dir / helper_name)
@@ -2404,6 +2603,11 @@ class ConfigComposer:
             "initial_cash",         # 初始资金（已在上层处理）
             "hmm_model_version_id", # HMM 版本 ID（已在上层处理为 hmm_coefficients_file）
             "hmm_config_json",      # HMM 训练配置，仅用于动态系数预计算
+            "quote_universe_codes", # Qlib Exchange 报价/卖出 universe，非策略构造参数
+            "risk_policy",          # 统一事件风险策略配置，非当前 Qlib 策略构造参数
+            "risk_policy_enabled",
+            "risk_policy_file",
+            "risk_policy_strict",
             # Industry blacklist metadata is persisted for UI/detail traceability.
             # The executable restriction is represented by stock_pool, not by
             # passing these metadata objects into the Qlib strategy constructor.
@@ -2458,7 +2662,9 @@ class ConfigComposer:
 
         strategy_kwargs["signal"] = "<PRED>"
 
-        suspend_filter_enabled = self._is_suspend_filter_enabled(custom_params)
+        suspend_filter_enabled = self._is_suspend_filter_enabled(
+            custom_params
+        ) or self._is_qe_risk_policy_enabled(custom_params)
         if suspend_filter_enabled:
             self._ensure_suspend_filter_supported(strategy_class)
             strategy_kwargs["filter_suspended_on_signal"] = True
@@ -2471,6 +2677,22 @@ class ConfigComposer:
                 strategy_class = "SuspendFilterScoreWeightedTopkStrategy"
                 strategy_module = "qe_suspend_filter_score_weighted_strategy"
             elif strategy_class == "ScoreWeightedTopkStrategyV2":
+                strategy_class = "SuspendFilterScoreWeightedTopkStrategyV2"
+                strategy_module = "qe_suspend_filter_score_weighted_strategy"
+
+        risk_policy_enabled = self._is_qe_risk_policy_enabled(custom_params)
+        if risk_policy_enabled:
+            self._ensure_qe_risk_policy_supported(strategy_class)
+            strategy_kwargs["risk_policy_enabled"] = True
+            strategy_kwargs["risk_policy_file"] = (custom_params or {}).get("risk_policy_file") or RISK_POLICY_FILE
+            strategy_kwargs["risk_policy_strict"] = bool((custom_params or {}).get("risk_policy_strict", True))
+            if strategy_class in {"TopkDropoutStrategy", "SuspendFilterTopkDropoutStrategy"}:
+                strategy_class = "SuspendFilterTopkDropoutStrategy"
+                strategy_module = "qe_suspend_filter_strategy"
+            elif strategy_class in {"ScoreWeightedTopkStrategy", "SuspendFilterScoreWeightedTopkStrategy"}:
+                strategy_class = "SuspendFilterScoreWeightedTopkStrategy"
+                strategy_module = "qe_suspend_filter_score_weighted_strategy"
+            elif strategy_class in {"ScoreWeightedTopkStrategyV2", "SuspendFilterScoreWeightedTopkStrategyV2"}:
                 strategy_class = "SuspendFilterScoreWeightedTopkStrategyV2"
                 strategy_module = "qe_suspend_filter_score_weighted_strategy"
 
@@ -2487,11 +2709,14 @@ class ConfigComposer:
         _SUSPEND_FILTER_KEYS = {
             "filter_suspended_on_signal", "suspend_filter_file", "suspend_filter_strict",
         }
+        _RISK_POLICY_KEYS = {
+            "risk_policy_enabled", "risk_policy_file", "risk_policy_strict",
+        }
         _TOPK_DROPOUT_ALLOWED_KEYS = {
             "signal", "topk", "n_drop", "method_sell", "method_buy",
             "hold_thresh", "only_tradable", "forbid_all_trade_at_limit",
             "risk_degree",
-        } | _UNFILLED_KEYS | _SUSPEND_FILTER_KEYS
+        } | _UNFILLED_KEYS | _SUSPEND_FILTER_KEYS | _RISK_POLICY_KEYS
         # EnhancedTopkDropoutStrategy 支持的额外参数
         _ENHANCED_TOPK_ALLOWED_KEYS = _TOPK_DROPOUT_ALLOWED_KEYS | {
             "min_score", "max_position_ratio", "stop_loss", "max_market_cap",
@@ -2513,7 +2738,7 @@ class ConfigComposer:
             "threshold_method", "min_improvement", "adaptive_multiplier",
             "threshold_floor", "min_trade_price", "max_trade_price",
             "max_single_order_value", "lot_size",
-        } | _UNFILLED_KEYS | _HMM_KEYS | _SUSPEND_FILTER_KEYS
+        } | _UNFILLED_KEYS | _HMM_KEYS | _SUSPEND_FILTER_KEYS | _RISK_POLICY_KEYS
 
         if strategy_class in {"TopkDropoutStrategy", "SuspendFilterTopkDropoutStrategy"}:
             _removed = {k for k in strategy_kwargs if k not in _TOPK_DROPOUT_ALLOWED_KEYS}
@@ -2800,6 +3025,28 @@ class ConfigComposer:
         lines.append("            close_cost: 0.000595")
         lines.append("            min_cost: 5")
         lines.append("            trade_unit: 100")
+        quote_universe_codes = (custom_params or {}).get("quote_universe_codes")
+        if quote_universe_codes:
+            if isinstance(quote_universe_codes, str):
+                quote_universe_codes = [
+                    item.strip()
+                    for item in quote_universe_codes.replace(";", ",").split(",")
+                    if item.strip()
+                ]
+            if not isinstance(quote_universe_codes, list) or not quote_universe_codes:
+                raise ValueError("quote_universe_codes must be a non-empty list or comma-separated string")
+            lines.append("            # Quote/sell universe can be wider than market buy universe.")
+            lines.append("            codes:")
+            for code in quote_universe_codes:
+                lines.append(f"                - {self._yaml_scalar(str(code).upper())}")
+        risk_policy = (custom_params or {}).get("risk_policy")
+        if risk_policy:
+            lines.append("        # risk_policy:")
+            lines.append("        #   contract: stock_event_risk_policy_v1")
+            lines.append("        #   note: QE strategy templates must consume the same hard-block/forced-exit")
+            lines.append("        #         semantics as Paper v2; all.txt remains the buy universe.")
+            for raw_line in json.dumps(risk_policy, ensure_ascii=False, sort_keys=True).splitlines():
+                lines.append(f"        #   {raw_line}")
 
         # task（模型 + 数据集）
         lines.append("task:")
@@ -4045,7 +4292,7 @@ model_cls = {nn_class_name}
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
-                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "close_execution_strategy", "qe_suspend_filter", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
+                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
 
         def _copy_deps_recursive(code: str, copied: set) -> str:
             """递归处理相对导入：转换为本地导入并复制依赖文件."""

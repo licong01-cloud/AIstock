@@ -62,6 +62,11 @@ const INGESTION_DATASETS_BY_SOURCE: Record<DataSource, Record<string, string>> =
     suspend_d: "Tushare suspend_d daily suspend/resume info",
     stk_limit: "每日涨跌停价格（Tushare stk_limit）",
     margin_detail: "融资融券明细（Tushare margin_detail）",
+    anns_metadata: "公告元数据（Eastmoney/Cninfo，滚动两天）",
+    stock_st_events: "ST 风险警示事件（Tushare st）",
+    stock_universe_pit_events: "ST PIT 派生事件（本地规则）",
+    stock_universe_pit_spans: "ST PIT 可选区间（本地规则）",
+    stock_universe_pit_state: "ST PIT 派生表状态（本地规则）",
   },
   xtquant: {
     xtquant_pershare_index: "每股主要指标（PershareIndex）",
@@ -82,6 +87,7 @@ const TRUNCABLE_DATASETS: string[] = [
   "adj_factor",
   "stock_moneyflow_ts",
   "stock_st",
+  "stock_st_events",
   "bak_basic",
   "stk_limit",
   "suspend_d",
@@ -265,12 +271,18 @@ export default function LocalDataPage() {
       } else if (lower === "stock_st") {
         dataSource = "Tushare";
         dataset = "stock_st";
+      } else if (lower === "stock_st_events") {
+        dataSource = "Tushare";
+        dataset = "stock_st_events";
       } else if (lower === "bak_basic") {
         dataSource = "Tushare";
         dataset = "bak_basic";
       } else if (lower === "anns_d") {
         dataSource = "Tushare";
         dataset = "anns_d";
+      } else if (lower === "anns_metadata") {
+        dataSource = "Tushare";
+        dataset = "anns_metadata";
       } else if (lower === "index_daily") {
         dataSource = "Tushare";
         dataset = "index_daily";
@@ -494,6 +506,7 @@ function InitTab() {
       label: "index_daily · 指数日线行情（Tushare index_daily）",
     },
     { key: "stock_st", label: "stock_st · ST 股票列表" },
+    { key: "stock_st_events", label: "stock_st_events · ST 风险警示事件（Tushare st）" },
     { key: "bak_basic", label: "bak_basic · 历史股票列表" },
     { key: "daily_basic", label: "daily_basic · 股票每日指标（Tushare）" },
     { key: "stk_limit", label: "stk_limit · 每日涨跌停价格（Tushare）" },
@@ -501,6 +514,10 @@ function InitTab() {
     {
       key: "anns_d",
       label: "anns_d · 上市公司公告（Tushare anns_d）",
+    },
+    {
+      key: "anns_metadata",
+      label: "anns_metadata · 公告元数据（Eastmoney/Cninfo）",
     },
     {
       key: "tushare_trade_cal",
@@ -740,6 +757,7 @@ function InitTab() {
           "index_basic",
           "index_daily",
           "stock_st",
+          "stock_st_events",
           "bak_basic",
           "stk_limit",
           "suspend_d",
@@ -773,6 +791,7 @@ function InitTab() {
           "index_basic",
           "index_daily",
           "stock_st",
+          "stock_st_events",
           "bak_basic",
           "suspend_d",
           "anns_d",
@@ -788,7 +807,7 @@ function InitTab() {
           opts.index_markets = indexMarkets;
         }
       }
-      if (dataset === "stock_st" || dataset === "bak_basic" || dataset === "stk_limit" || dataset === "suspend_d" || dataset === "margin_detail" || dataset === "anns_d" || dataset === "cyq_perf" || dataset === "cyq_chips") {
+      if (dataset === "stock_st" || dataset === "stock_st_events" || dataset === "bak_basic" || dataset === "stk_limit" || dataset === "suspend_d" || dataset === "margin_detail" || dataset === "anns_d" || dataset === "anns_metadata" || dataset === "cyq_perf" || dataset === "cyq_chips") {
         if (!opts.start_date || !opts.end_date) {
           setError("请填写起止日期再执行初始化。");
           return;
@@ -998,6 +1017,7 @@ function InitTab() {
               "index_basic",
               "index_daily",
               "stock_st",
+              "stock_st_events",
               "bak_basic",
               "stk_limit",
               "suspend_d",
@@ -1224,6 +1244,7 @@ function IncrementalTab({
       label: "index_basic · 指数基础信息（Tushare index_basic）",
     },
     { key: "stock_st", label: "stock_st · ST 股票列表（按公告日增量）" },
+    { key: "stock_st_events", label: "stock_st_events · ST 风险警示事件（按 pub_date 增量）" },
     { key: "bak_basic", label: "bak_basic · 历史股票列表（按交易日增量）" },
     { key: "daily_basic", label: "daily_basic · 股票每日指标（Tushare）" },
     { key: "stk_limit", label: "stk_limit · 每日涨跌停价格（Tushare）" },
@@ -1231,6 +1252,10 @@ function IncrementalTab({
     {
       key: "anns_d",
       label: "anns_d · 上市公司公告（Tushare anns_d）",
+    },
+    {
+      key: "anns_metadata",
+      label: "anns_metadata · 公告元数据（Eastmoney/Cninfo，默认最近两天）",
     },
     {
       key: "cyq_perf",
@@ -1618,7 +1643,7 @@ function IncrementalTab({
               <div className={styles.textMutedSmall}>
                 将从
                 {startDate || "（请先选择起始日期）"}
-                自动补齐到当前最新交易日。
+                自动补齐到当前最新日期。
               </div>
               {autoInfo && (
                 <div className={styles.textMutedSmall} style={{ marginTop: 2 }}>
@@ -1629,7 +1654,7 @@ function IncrementalTab({
                   <div className={styles.textMutedSmall}>
                     本次将从
                     {startDate || "（请先选择起始日期）"}
-                    自动补齐到当前最新交易日：
+                    自动补齐到当前最新日期：
                     {autoInfo.latestTradingDate || "未知"}
                   </div>
                 </div>
@@ -3465,7 +3490,9 @@ function JobsTab() {
                     ? "本地日线聚合"
                     : meta.source === "tdx_api_minute_trade_all"
                       ? "TDX 分钟成交聚合"
-                      : meta.source || "—";
+                      : meta.source === "eastmoney_cninfo"
+                        ? "Eastmoney/Cninfo"
+                        : meta.source || "—";
 
             const canDelete = !!jobId;
             // 仅当任务由 Go 驱动（即 summary/meta 中存在 go_task_id）且仍在运行/排队时，才允许前端发起停止请求，
@@ -3814,6 +3841,8 @@ function DataStatsTab({
   const [fillLoadingKind, setFillLoadingKind] = useState<string | null>(null);
   const [newsStats, setNewsStats] = useState<any | null>(null);
   const [newsLoading, setNewsLoading] = useState<boolean>(false);
+  const [stPitStatus, setStPitStatus] = useState<any | null>(null);
+  const [stPitLoading, setStPitLoading] = useState<boolean>(false);
 
   const [collapsedCategories, setCollapsedCategories] = useState<
     Record<"market" | "basic" | "xtquant" | "sector" | "other", boolean>
@@ -3842,6 +3871,10 @@ function DataStatsTab({
     if (
       k === "stock_basic" ||
       k === "stock_st" ||
+      k === "stock_st_events" ||
+      k === "stock_universe_pit_events" ||
+      k === "stock_universe_pit_spans" ||
+      k === "stock_universe_pit_state" ||
       k === "bak_basic" ||
       k === "daily_basic" ||
       k === "adj_factor" ||
@@ -3878,6 +3911,18 @@ function DataStatsTab({
     }
   }
 
+  async function loadStPitStatus() {
+    setStPitLoading(true);
+    try {
+      const data: any = await backendRequest("GET", "/api/v1/stock-universe/st-pit/status");
+      setStPitStatus(data || null);
+    } catch {
+      setStPitStatus({ status: "unavailable" });
+    } finally {
+      setStPitLoading(false);
+    }
+  }
+
   const loadExistingStats = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -3885,6 +3930,7 @@ function DataStatsTab({
       const data: any = await backendRequest("GET", "/api/data-stats");
       const nextItems = Array.isArray(data?.items) ? data.items : [];
       setItems(nextItems);
+      await loadStPitStatus();
     } catch (e: any) {
       setError(e?.message || "加载统计数据失败");
     } finally {
@@ -3904,6 +3950,7 @@ function DataStatsTab({
       const nextItems = Array.isArray(data?.items) ? data.items : [];
       setItems(nextItems);
       await loadNewsStats();
+      await loadStPitStatus();
     } catch (e: any) {
       setError(e?.message || "刷新统计数据失败");
     } finally {
@@ -3916,7 +3963,27 @@ function DataStatsTab({
     // 初次进入数据看板时仅加载上次刷新结果，不主动触发后端 refresh
     loadExistingStats();
     loadNewsStats();
+    loadStPitStatus();
   }, [loadExistingStats]);
+
+  const handleRebuildStPitClick = useCallback(async () => {
+    setStPitLoading(true);
+    setError(null);
+    try {
+      const data: any = await backendRequest("POST", "/api/v1/stock-universe/st-pit/rebuild", {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      setStPitStatus(data || null);
+      await backendRequest("POST", "/api/data-stats/refresh");
+      const stats: any = await backendRequest("GET", "/api/data-stats");
+      setItems(Array.isArray(stats?.items) ? stats.items : []);
+    } catch (e: any) {
+      setError(e?.message || "重建 ST PIT 派生表失败");
+    } finally {
+      setStPitLoading(false);
+    }
+  }, []);
 
   const handleCheckGapsClick = useCallback(
     async (kind: string, refresh: boolean = false) => {
@@ -3957,11 +4024,13 @@ function DataStatsTab({
           lower === "stock_basic" ||
           lower === "stock_moneyflow_ts" ||
           lower === "stock_st" ||
+          lower === "stock_st_events" ||
           lower === "bak_basic" ||
           lower === "stk_limit" ||
           lower === "suspend_d" ||
           lower === "margin_detail" ||
           lower === "anns_d" ||
+          lower === "anns_metadata" ||
           lower === "index_daily" ||
           lower === "xtquant_pershare_index" ||
           lower === "cyq_perf" ||
@@ -3975,13 +4044,13 @@ function DataStatsTab({
             `/api/ingestion/auto-range?${params.toString()}`,
           );
           const startDate = data?.start_date;
-          const latestTradingDate = data?.latest_trading_date;
+          const latestDate = data?.latest_date ?? data?.latest_trading_date;
           const currentMaxDate = data?.current_max_date ?? null;
-          if (!startDate || !latestTradingDate) {
+          if (!startDate || !latestDate) {
             setError("无法自动计算补齐区间，请检查数据统计和交易日历。");
             return;
           }
-          onFillLatest(kind, String(startDate), String(latestTradingDate), currentMaxDate);
+          onFillLatest(kind, String(startDate), String(latestDate), currentMaxDate);
         } else {
           setError(`数据集 “${kind}” 未注册 auto-range 补齐逻辑，请在 handleFillLatestClick 中添加支持。`);
           return;
@@ -4013,6 +4082,40 @@ function DataStatsTab({
         <span className={styles.textMuted}>
           统计数据来自后台预计算表 market.data_stats，适合快速查看各类数据的时间范围、条数和更新时间。
         </span>
+      </div>
+
+      <div className={styles.cardInfo}>
+        <div className={styles.rowBetween}>
+          <span style={{ fontWeight: 500 }}>ST PIT 派生股票池</span>
+          {stPitLoading && <span className={styles.textMuted}>处理中...</span>}
+        </div>
+        <div className={styles.rowWrapSmall}>
+          <span>
+            Universe：<strong>{stPitStatus?.universe_key || "shsz_st_pit_active_v1"}</strong>
+          </span>
+          <span>
+            状态：<strong>{stPitStatus?.status || "missing"}</strong>
+          </span>
+          <span>Dirty：{String(Boolean(stPitStatus?.dirty))}</span>
+          <span>规则：{stPitStatus?.rule_version || stPitStatus?.summary?.rule_version || "st_pub_next_trade_restore_active_l_v1"}</span>
+          <span>范围：{String(stPitStatus?.start_date || "2018-08-01")} ~ {String(stPitStatus?.end_date || "—")}</span>
+        </div>
+        <div className={styles.rowWrapSmall}>
+          <span className={styles.textMuted}>
+            本表是本地派生缓存：更新 stock_basic / stock_st / stock_st_events 后会自动标记过期并尝试重建；导出 H5/Bin 时会 strict ensure，退市/暂停上市 PIT 未启用。
+          </span>
+          <button
+            type="button"
+            className={styles.btnSecondary}
+            onClick={handleRebuildStPitClick}
+            disabled={stPitLoading}
+          >
+            {stPitLoading ? "重建中..." : "重建 ST PIT 派生表"}
+          </button>
+        </div>
+        {stPitStatus?.last_error && (
+          <div style={{ color: "#b91c1c", marginTop: 8 }}>最近错误：{String(stPitStatus.last_error)}</div>
+        )}
       </div>
 
       {/* 新闻统计摘要（仅展示数量与时间范围，不展示新闻内容） */}
@@ -4223,8 +4326,10 @@ function DataStatsTab({
                       "stock_basic",
                       "stock_moneyflow_ts",
                       "stock_st",
+                      "stock_st_events",
                       "bak_basic",
                       "anns_d",
+                      "anns_metadata",
                       "index_daily",
                       "xtquant_pershare_index",
                       "cyq_perf",
@@ -4277,7 +4382,7 @@ function DataStatsTab({
                               >
                                 {fillLoadingKind === kind
                                   ? "补齐中..."
-                                  : "补齐到最新交易日"}
+                                  : "补齐到最新日期"}
                               </button>
                             )}
                             {kind && (
@@ -5036,7 +5141,7 @@ const WORKER_SUPPORTED_DATASETS = new Set([
   "xtquant_pershare_index", "adjust_daily", "kline_adjust_daily",
 ]);
 
-// 每日定时调度快捷创建：12 个目标数据集及默认执行时间
+// 每日定时调度快捷创建：核心目标数据集及默认执行时间
 const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; defaultAt: string; frequency?: string }[] = [
   { dataset: "kline_daily_raw", label: "日线（未复权 RAW）", source: "TDX", defaultAt: "17:00" },
   { dataset: "kline_minute_raw", label: "分钟线（RAW）", source: "TDX", defaultAt: "17:00" },
@@ -5052,9 +5157,11 @@ const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; 
   // Tushare 低频/不定期数据
   { dataset: "stock_basic", label: "股票基础信息", source: "Tushare", defaultAt: "17:30" },
   { dataset: "stock_st", label: "ST 标记", source: "Tushare", defaultAt: "17:33" },
+  { dataset: "stock_st_events", label: "ST 风险警示事件", source: "Tushare", defaultAt: "20:40" },
   { dataset: "bak_basic", label: "备用基础信息", source: "Tushare", defaultAt: "17:36" },
   { dataset: "stk_limit", label: "每日涨跌停价格", source: "Tushare", defaultAt: "09:10" },
   { dataset: "suspend_d", label: "Daily suspend/resume info", source: "Tushare", defaultAt: "", frequency: "1h" },
+  { dataset: "anns_metadata", label: "公告元数据（滚动两天）", source: "Eastmoney", defaultAt: "", frequency: "1h" },
 ];
 
 /** 数据健康检查报告组件 — 在 _auto_retry_stale 调度卡片内展开 */
@@ -5401,6 +5508,15 @@ function IngestionSchedulesTab() {
       if (newWorkers > 0 && WORKER_SUPPORTED_DATASETS.has(newDataset)) {
         options.workers = newWorkers;
       }
+      if (newDataset === "anns_metadata") {
+        Object.assign(options, {
+          lookback_days: 2,
+          source: "eastmoney",
+          workers: 1,
+          request_sleep: 0.05,
+          skip_auto_range: true,
+        });
+      }
       await backendRequest("POST", "/api/ingestion/schedule", {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -5544,7 +5660,7 @@ function IngestionSchedulesTab() {
       <div className={styles.card} style={{ marginBottom: 12 }}>
         <h4 className={styles.headingSmall}>⏰ 每日定时调度 · 快捷创建</h4>
         <p className={styles.textMutedSmall} style={{ marginBottom: 8 }}>
-          为 {DAILY_SCHEDULE_PRESETS.length} 个核心数据集创建每日增量调度，自动检测缺口并补齐到最新交易日。
+          为 {DAILY_SCHEDULE_PRESETS.length} 个核心数据集创建每日增量调度，自动检测缺口并补齐到最新日期。
         </p>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
           {DAILY_SCHEDULE_PRESETS.map((p) => {

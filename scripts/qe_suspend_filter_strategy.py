@@ -8,6 +8,7 @@ import pandas as pd
 from qlib.backtest.decision import Order, OrderDir, TradeDecisionWO
 from qlib.contrib.strategy.signal_strategy import TopkDropoutStrategy
 
+from qe_event_risk_policy import QEEventRiskPolicy
 from qe_suspend_filter import QESuspendFilter
 
 
@@ -22,6 +23,9 @@ class SuspendFilterTopkDropoutStrategy(TopkDropoutStrategy):
         filter_suspended_on_signal=False,
         suspend_filter_file=None,
         suspend_filter_strict=True,
+        risk_policy_enabled=False,
+        risk_policy_file=None,
+        risk_policy_strict=True,
         **kwargs,
     ):
         super().__init__(signal=signal, topk=topk, n_drop=n_drop, **kwargs)
@@ -29,6 +33,11 @@ class SuspendFilterTopkDropoutStrategy(TopkDropoutStrategy):
             enabled=filter_suspended_on_signal,
             suspend_filter_file=suspend_filter_file,
             strict=suspend_filter_strict,
+        )
+        self._qe_risk_policy = QEEventRiskPolicy(
+            enabled=risk_policy_enabled,
+            risk_policy_file=risk_policy_file,
+            strict=risk_policy_strict,
         )
 
     def generate_trade_decision(self, execute_result=None):
@@ -39,10 +48,13 @@ class SuspendFilterTopkDropoutStrategy(TopkDropoutStrategy):
         if isinstance(pred_score, pd.DataFrame):
             pred_score = pred_score.iloc[:, 0]
         if pred_score is None:
-            return TradeDecisionWO([], self)
+            forced_orders = self._build_forced_exit_orders(trade_start_time, trade_end_time)
+            return TradeDecisionWO(forced_orders, self)
         pred_score = self._qe_suspend_filter.filter_scores(pred_score, trade_start_time)
+        pred_score = self._qe_risk_policy.filter_scores(pred_score, trade_start_time)
         if pred_score is None or pred_score.empty:
-            return TradeDecisionWO([], self)
+            forced_empty_orders = self._build_forced_exit_orders(trade_start_time, trade_end_time)
+            return TradeDecisionWO(forced_empty_orders, self)
 
         if self.only_tradable:
             def get_first_n(li, n, reverse=False):
@@ -83,7 +95,9 @@ class SuspendFilterTopkDropoutStrategy(TopkDropoutStrategy):
         buy_order_list = []
         cash = current_temp.get_cash()
         current_stock_list = current_temp.get_stock_list()
-        last = pred_score.reindex(current_stock_list).sort_values(ascending=False).index
+        forced_exit = self._qe_risk_policy.force_exit_symbols(current_stock_list, trade_start_time)
+        eligible_current_stock_list = [code for code in current_stock_list if str(code) not in forced_exit]
+        last = pred_score.reindex(eligible_current_stock_list).sort_values(ascending=False).index
         if self.method_buy == "top":
             today = get_first_n(
                 pred_score[~pred_score.index.isin(last)].sort_values(ascending=False).index,
@@ -112,7 +126,9 @@ class SuspendFilterTopkDropoutStrategy(TopkDropoutStrategy):
         else:
             raise NotImplementedError("This type of input is not supported")
 
-        buy = today[: len(sell) + self.topk - len(last)]
+        normal_sell_count = len(sell)
+        sell = pd.Index(list(dict.fromkeys([*list(sell), *sorted(forced_exit)])))
+        buy = today[: normal_sell_count + self.topk - len(last)]
         for code in current_stock_list:
             if not self.trade_exchange.is_stock_tradable(
                 stock_id=code,
@@ -163,3 +179,30 @@ class SuspendFilterTopkDropoutStrategy(TopkDropoutStrategy):
                 direction=Order.BUY,
             ))
         return TradeDecisionWO(sell_order_list + buy_order_list, self)
+
+    def _build_forced_exit_orders(self, trade_start_time, trade_end_time):
+        current_stock_list = self.trade_position.get_stock_list()
+        forced_exit = self._qe_risk_policy.force_exit_symbols(current_stock_list, trade_start_time)
+        orders = []
+        for code in current_stock_list:
+            if str(code) not in forced_exit:
+                continue
+            if not self.trade_exchange.is_stock_tradable(
+                stock_id=code,
+                start_time=trade_start_time,
+                end_time=trade_end_time,
+                direction=None if self.forbid_all_trade_at_limit else OrderDir.SELL,
+            ):
+                continue
+            amount = self.trade_position.get_stock_amount(code=code)
+            if amount is not None and float(amount) > 0:
+                orders.append(
+                    Order(
+                        stock_id=code,
+                        amount=amount,
+                        start_time=trade_start_time,
+                        end_time=trade_end_time,
+                        direction=Order.SELL,
+                    )
+                )
+        return orders

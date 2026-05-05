@@ -7,6 +7,7 @@ from typing import Any
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
+from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.runtime_profile import normalize_selection_runtime_config, parse_selection_runtime_profile
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.runtime import RebalanceEngine, StrategyPackageRuntime, TargetPositionEngine
@@ -49,6 +50,7 @@ class PaperTradingDayRunner:
         tradability_filter: TradabilityFilter | Any | None = None,
         refresh_audit: DataRefreshAuditRepository | Any | None = None,
         selection_artifact_service: StrategyPackageSelectionArtifactService | Any | None = None,
+        risk_policy_service: StockRiskPolicyService | Any | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
@@ -64,6 +66,7 @@ class PaperTradingDayRunner:
         self.selection_artifact_service = selection_artifact_service or StrategyPackageSelectionArtifactService(
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
         )
+        self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
 
     def run_day(
         self,
@@ -189,7 +192,52 @@ class PaperTradingDayRunner:
                 },
             )
             top_k = int(runtime_profile.selection.top_k or manifest.portfolio_policy.topk)
-            if not snapshot.valid_no_candidate and (
+            risk_decisions = self.risk_policy_service.evaluate(
+                symbols=sorted(set(item.symbol for item in snapshot.candidates) | set(current_positions)),
+                trade_date=trade_date,
+                profile=runtime_profile.risk_policy,
+                current_positions=current_positions,
+            )
+            if not snapshot.valid_no_candidate:
+                risk_adjusted, risk_excluded = self.risk_policy_service.apply_to_candidates(
+                    candidates=snapshot.candidates,
+                    decisions=risk_decisions,
+                    trade_date=trade_date,
+                    top_k=top_k,
+                    package_id=manifest.package_id,
+                    manifest_sha256=manifest.manifest_sha256 or portfolio.manifest_sha256,
+                    allow_empty=bool(current_positions),
+                )
+                snapshot = snapshot.model_copy(
+                    update={
+                        "candidates": risk_adjusted,
+                        "runtime_config": {
+                            **snapshot.runtime_config,
+                            "risk_policy": {
+                                "profile": runtime_profile.risk_policy.model_dump(mode="json"),
+                                "excluded_count": len(risk_excluded),
+                                "excluded": [item.model_dump(mode="json") for item in risk_excluded],
+                            },
+                        },
+                    }
+                )
+                if runtime_profile.risk_policy.enabled:
+                    self.repository.save_run_event(
+                        run_id=run.run_id,
+                        event_type="RISK_POLICY_APPLIED",
+                        message="event risk policy applied to signal candidates and current positions",
+                        context={
+                            "raw_candidate_count": raw_candidate_count,
+                            "risk_adjusted_candidate_count": len(risk_adjusted),
+                            "excluded_count": len(risk_excluded),
+                            "excluded_symbols": [item.symbol for item in risk_excluded],
+                            "force_exit_symbols": [
+                                symbol for symbol, decision in risk_decisions.items() if decision.force_exit
+                            ],
+                            "runtime_profile": runtime_profile.risk_policy.model_dump(mode="json"),
+                        },
+                    )
+            if not snapshot.valid_no_candidate and snapshot.candidates and (
                 runtime_profile.tradability.exclude_suspended or runtime_profile.industry_blacklist
             ):
                 tradable, excluded = self.tradability_filter.filter_candidates(
@@ -228,11 +276,25 @@ class PaperTradingDayRunner:
                         "runtime_profile": runtime_profile.model_dump(mode="json"),
                     },
                 )
-            targets = self.target_engine.build_targets(
-                snapshot=snapshot,
-                total_equity=total_equity,
-                top_k=top_k,
+            targets = (
+                self.target_engine.build_targets(
+                    snapshot=snapshot,
+                    total_equity=total_equity,
+                    top_k=top_k,
+                )
+                if snapshot.candidates
+                else []
             )
+            if runtime_profile.risk_policy.enabled and current_positions:
+                forced_exit_targets = self.risk_policy_service.forced_exit_targets(
+                    decisions=risk_decisions,
+                    current_positions=current_positions,
+                    trade_date=trade_date,
+                    package_id=manifest.package_id,
+                    manifest_sha256=manifest.manifest_sha256 or portfolio.manifest_sha256,
+                    existing_target_symbols={target.symbol for target in targets},
+                )
+                targets = [*targets, *forced_exit_targets]
             self.repository.save_run_event(
                 run_id=run.run_id,
                 event_type="TARGETS_GENERATED",

@@ -268,3 +268,6 @@ def test_custom_evo_clone_create_keeps_loop_nodes_and_parallelism(monkeypatch):
     assert result["node_parallelism"] == {"node-a": 2, "node-b": 3}
     assert dummy.calls[0][0] == "create"
     assert dummy.calls[0][1]["clone_from_task_id"] == "source-task"
+    loops_config = dummy.calls[0][1]["loops_config"]
+    assert all(loop["strategy_params"]["risk_policy"]["enabled"] is True for loop in loops_config)
+    assert all("force_exit" in loop["strategy_params"]["risk_policy"]["hard_actions"] for loop in loops_config)
