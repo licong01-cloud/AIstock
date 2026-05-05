@@ -45,6 +45,10 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "index_daily",           "mode": "incremental", "frequency": "daily", "at": "16:50"},
     {"dataset": "stock_basic",           "mode": "init",        "frequency": "daily", "at": "16:55"},
     {"dataset": "stock_st",              "mode": "incremental", "frequency": "daily", "at": "17:00"},
+    {"dataset": "stock_st_events",       "mode": "incremental", "frequency": "daily", "at": "20:40"},
+    {"dataset": "anns_metadata",         "mode": "incremental", "frequency": "1h",
+     "lookback_days": 2, "source": "eastmoney", "workers": 1, "request_sleep": 0.05,
+     "skip_auto_range": True},
 
     # ── Phase 4 — Tushare 中期数据（16:30-17:00 更新 +10min 缓冲） ──
     {"dataset": "sw_sector",             "mode": "incremental", "frequency": "daily", "at": "17:10"},

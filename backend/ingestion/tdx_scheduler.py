@@ -65,6 +65,8 @@ _AUTO_RETRY_CHECK_ALIASES = {
     # sw_sector is the scheduled composite dataset; sw_daily is the table checked.
     "sw_sector": "sw_daily",
 }
+_SCHEDULE_ERROR_CLEAR_STATUSES = frozenset({"success"})
+_STALE_QUEUED_JOB_MINUTES = 10
 
 # TDX datasets whose incremental mode should go through Go backend API (not ingest_incremental.py)
 _GO_INCREMENTAL_DATASETS: Dict[str, Dict[str, str]] = {
@@ -278,6 +280,7 @@ class TDXScheduler:
         self._lock = threading.RLock()
         self._tracker = _FutureTracker()
         self._delayed_retry_keys: set[str] = set()
+        self._stale_queued_reconciled = False
         DEFAULT_TEST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -482,6 +485,89 @@ class TDXScheduler:
         except Exception as exc:  # noqa: BLE001
             _logger.warning("failed to mark duplicate job %s as skipped: %s", job_id, exc)
 
+    def _mark_job_failed_before_start(
+        self,
+        job_id_str: Optional[str],
+        dataset: str,
+        mode: str,
+        error: str,
+    ) -> None:
+        if not job_id_str:
+            return
+        try:
+            job_id = uuid.UUID(str(job_id_str))
+        except Exception:
+            return
+        payload = {
+            "dataset": dataset,
+            "mode": mode,
+            "error": error,
+            "failed_before_start": True,
+        }
+        try:
+            self._execute(
+                """
+                UPDATE market.ingestion_jobs
+                   SET status = 'failed',
+                       finished_at = NOW(),
+                       summary = COALESCE(summary::jsonb, '{}'::jsonb) || %s::jsonb
+                 WHERE job_id = %s
+                   AND status IN ('queued', 'pending')
+                """,
+                (json.dumps(payload, ensure_ascii=False, default=str), job_id),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("failed to mark pre-start job %s as failed: %s", job_id, exc)
+
+    def _reconcile_stale_queued_ingestion_jobs(
+        self,
+        older_than_minutes: int = _STALE_QUEUED_JOB_MINUTES,
+        dataset: Optional[str] = None,
+        mode: Optional[str] = None,
+        reason: str = "scheduler_stale_queued_reconciliation",
+    ) -> int:
+        """Fail schedule-created queued jobs that cannot be owned after restart."""
+
+        minutes = max(int(older_than_minutes), 0)
+        ds = (dataset or "").strip().lower() or None
+        md = (mode or "").strip().lower() or None
+        payload = {
+            "stale_reconciled": True,
+            "stale_reason": reason,
+            "error": reason,
+        }
+        rows = self._fetchall(
+            """
+            UPDATE market.ingestion_jobs
+               SET status = 'failed',
+                   finished_at = NOW(),
+                   summary = COALESCE(summary::jsonb, '{}'::jsonb) || %s::jsonb
+             WHERE status IN ('queued', 'pending')
+               AND started_at IS NULL
+               AND created_at < NOW() - (%s || ' minutes')::interval
+               AND COALESCE(summary->>'triggered_by', '') = 'schedule'
+               AND (%s IS NULL OR lower(summary->>'dataset') = %s)
+               AND (%s IS NULL OR lower(COALESCE(summary->>'mode', '')) = %s)
+             RETURNING job_id
+            """,
+            (
+                json.dumps(payload, ensure_ascii=False, default=str),
+                str(minutes),
+                ds,
+                ds,
+                md,
+                md,
+            ),
+        )
+        count = len(rows)
+        if count:
+            _logger.warning(
+                "reconciled %d stale queued ingestion jobs older than %d minutes",
+                count,
+                minutes,
+            )
+        return count
+
     def _job_update_outcome(self, job_id: uuid.UUID) -> Dict[str, Any]:
         rows = self._fetchall(
             """
@@ -510,6 +596,12 @@ class TDXScheduler:
     # schedule management
     def refresh_schedules(self) -> None:
         """Reload enabled schedules from database and update in-memory jobs."""
+        if not self._stale_queued_reconciled:
+            try:
+                self._reconcile_stale_queued_ingestion_jobs()
+                self._stale_queued_reconciled = True
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning("stale queued ingestion job reconciliation failed: %s", exc)
         testing = self._fetchall(
             """
             SELECT schedule_id, enabled, frequency, options
@@ -644,7 +736,16 @@ class TDXScheduler:
                 except Exception as exc:  # noqa: BLE001
                     _logger.warning("run_ingestion_for_schedule: failed to parse options JSON for schedule %s: %s", schedule_id, exc)
                     options = {}
-        run_id = self._submit_ingestion(sched_id, dataset, mode, triggered_by, options)
+        try:
+            run_id = self._submit_ingestion(sched_id, dataset, mode, triggered_by, options)
+        except Exception as exc:
+            self._update_ingestion_schedule(
+                sched_id,
+                last_status="failed",
+                last_error=str(exc),
+                next_run=self._next_run_for(sched_id),
+            )
+            raise
         self._update_ingestion_schedule(sched_id, last_status="queued", next_run=self._next_run_for(sched_id))
         return run_id
 
@@ -818,7 +919,8 @@ class TDXScheduler:
             if schedule_id:
                 self._update_ingestion_schedule(
                     schedule_id,
-                    last_status="skip_duplicate_running",
+                    last_status="skipped",
+                    last_error="duplicate_running",
                     next_run=self._next_run_for(schedule_id),
                 )
             return
@@ -826,7 +928,8 @@ class TDXScheduler:
             if schedule_id:
                 self._update_ingestion_schedule(
                     schedule_id,
-                    last_status="skip_duplicate_recent",
+                    last_status="skipped",
+                    last_error="duplicate_recent",
                     next_run=self._next_run_for(schedule_id),
                 )
             return
@@ -896,7 +999,25 @@ class TDXScheduler:
             except Exception as exc:
                 _logger.error("failed to create job record for %s: %s", dataset, exc)
 
-        run_id = self._submit_ingestion(schedule_id, dataset, mode, "schedule", effective_options)
+        try:
+            run_id = self._submit_ingestion(schedule_id, dataset, mode, "schedule", effective_options)
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("scheduled ingestion submit failed for %s/%s: %s", dataset, mode, exc)
+            self._mark_job_failed_before_start(
+                effective_options.get("job_id"),
+                dataset,
+                mode,
+                str(exc),
+            )
+            if schedule_id:
+                self._update_ingestion_schedule(
+                    schedule_id,
+                    last_run=_now(),
+                    last_status="failed",
+                    last_error=str(exc),
+                    next_run=self._next_run_for(schedule_id),
+                )
+            return
         if schedule_id:
             self._update_ingestion_schedule(
                 schedule_id,
@@ -3279,6 +3400,8 @@ class TDXScheduler:
         if last_error is not None:
             sets.append("last_error=%s")
             values.append(last_error)
+        elif str(last_status or "").strip().lower() in _SCHEDULE_ERROR_CLEAR_STATUSES:
+            sets.append("last_error=NULL")
         if next_run is not None:
             sets.append("next_run_at=%s")
             values.append(next_run)
