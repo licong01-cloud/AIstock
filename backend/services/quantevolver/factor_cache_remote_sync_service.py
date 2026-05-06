@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from contextlib import ExitStack
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +57,16 @@ def _save_json(path: Path, payload: Dict[str, Any]) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
+
+
+def _bounded_workers(value: int, item_count: int) -> int:
+    if item_count <= 0:
+        return 1
+    try:
+        workers = int(value)
+    except Exception:
+        workers = 4
+    return max(1, min(workers, 16, item_count))
 
 
 def _safe_factor_file_name(factor_name: str) -> str:
@@ -160,6 +170,67 @@ class FactorCacheNodeApiClient:
             raise RuntimeError(f"node factor-cache status response is invalid: {exc}") from exc
         return bool(isinstance(payload, dict) and payload.get("exists") is True)
 
+    def upload_factor_file(
+        self,
+        *,
+        cache_dir: Optional[str],
+        factor_name: str,
+        path: Path,
+        timeout_s: int,
+    ) -> Dict[str, Any]:
+        url = self._url(f"factors/{quote(str(factor_name), safe='')}/file")
+        file_path = Path(path)
+        size_bytes = file_path.stat().st_size
+        params = self._params(cache_dir)
+        params["expected_size"] = str(size_bytes)
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "Content-Length": str(size_bytes),
+        }
+        try:
+            with file_path.open("rb") as f:
+                resp = requests.put(url, params=params, data=f, headers=headers, timeout=timeout_s)
+            resp.raise_for_status()
+            payload = resp.json()
+        except requests.exceptions.HTTPError as exc:
+            self._raise_api_unavailable(exc, url)
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(f"node factor-cache streaming upload failed for {factor_name}: {exc}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"node factor-cache streaming upload response is invalid for {factor_name}: {exc}") from exc
+
+        if not isinstance(payload, dict) or payload.get("ok") is False:
+            raise RuntimeError(f"node factor-cache streaming upload returned invalid payload for {factor_name}: {payload}")
+        return payload
+
+    def update_meta(
+        self,
+        *,
+        cache_dir: Optional[str],
+        merged_meta: Dict[str, Any],
+        timeout_s: int,
+    ) -> Dict[str, Any]:
+        url = self._url("meta")
+        try:
+            resp = requests.post(
+                url,
+                params=self._params(cache_dir),
+                json={"meta": merged_meta},
+                timeout=timeout_s,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except requests.exceptions.HTTPError as exc:
+            self._raise_api_unavailable(exc, url)
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(f"node factor-cache meta update failed: {exc}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"node factor-cache meta update response is invalid: {exc}") from exc
+
+        if not isinstance(payload, dict) or payload.get("ok") is False:
+            raise RuntimeError(f"node factor-cache meta update returned invalid payload: {payload}")
+        return payload
+
     def upload_sync_bundle(
         self,
         *,
@@ -167,42 +238,42 @@ class FactorCacheNodeApiClient:
         factor_files: Dict[str, Path],
         merged_meta: Dict[str, Any],
         timeout_s: int,
+        max_workers: int = 4,
     ) -> Dict[str, Any]:
-        url = self._url("sync")
-        data = {
-            "meta_json": json.dumps(merged_meta, ensure_ascii=False),
-            "factor_names_json": json.dumps(list(factor_files.keys()), ensure_ascii=False),
+        workers = _bounded_workers(max_workers, len(factor_files))
+        uploaded: List[Dict[str, Any]] = []
+
+        def _upload_one(item: tuple[str, Path]) -> Dict[str, Any]:
+            factor_name, path = item
+            return self.upload_factor_file(
+                cache_dir=cache_dir,
+                factor_name=factor_name,
+                path=path,
+                timeout_s=timeout_s,
+            )
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="factor-cache-upload") as pool:
+            futures = {pool.submit(_upload_one, item): item[0] for item in factor_files.items()}
+            for future in as_completed(futures):
+                factor_name = futures[future]
+                try:
+                    uploaded.append(future.result())
+                except Exception as exc:
+                    raise RuntimeError(f"node factor-cache streaming upload failed: {factor_name}: {exc}") from exc
+
+        meta_result = self.update_meta(
+            cache_dir=cache_dir,
+            merged_meta=merged_meta,
+            timeout_s=timeout_s,
+        )
+        return {
+            "ok": True,
+            "transport": "node_api_streaming_put",
+            "upload_workers": workers,
+            "uploaded_count": len(uploaded),
+            "uploaded": sorted(uploaded, key=lambda item: str(item.get("factor_name") or "")),
+            "meta": meta_result,
         }
-        if cache_dir:
-            data["cache_dir"] = cache_dir
-
-        try:
-            with ExitStack() as stack:
-                files = []
-                for factor_name, path in factor_files.items():
-                    files.append(
-                        (
-                            "parquet_files",
-                            (
-                                _safe_factor_file_name(factor_name),
-                                stack.enter_context(path.open("rb")),
-                                "application/octet-stream",
-                            ),
-                        )
-                    )
-                resp = requests.post(url, data=data, files=files, timeout=timeout_s)
-            resp.raise_for_status()
-            payload = resp.json()
-        except requests.exceptions.HTTPError as exc:
-            self._raise_api_unavailable(exc, url)
-        except requests.exceptions.RequestException as exc:
-            raise RuntimeError(f"node factor-cache sync request failed: {exc}") from exc
-        except Exception as exc:
-            raise RuntimeError(f"node factor-cache sync response is invalid: {exc}") from exc
-
-        if isinstance(payload, dict) and payload.get("ok") is False:
-            raise RuntimeError(f"node factor-cache sync returned ok=false: {payload}")
-        return payload if isinstance(payload, dict) else {"ok": True, "payload": payload}
 
 
 class FactorCacheRemoteSyncService:
@@ -398,7 +469,7 @@ class FactorCacheRemoteSyncService:
                 "factor_cache_dir": node.factor_cache_dir,
                 "resolved_factor_cache_dir": node.resolved_cache_dir,
                 "configured": bool(node.factor_cache_dir),
-                "sync_transport": "node_api",
+                "sync_transport": "node_api_streaming_put",
             }
             try:
                 remote_meta = self._remote_meta(node)
@@ -473,6 +544,7 @@ class FactorCacheRemoteSyncService:
         force: bool = False,
         configure_default_dir: bool = True,
         timeout_s: int = 1800,
+        upload_workers: int = 4,
     ) -> Dict[str, Any]:
         node = self.get_node(node_id)
         if configure_default_dir:
@@ -493,10 +565,18 @@ class FactorCacheRemoteSyncService:
             "failed_count": 0,
             "synced_factors": [item["factor_name"] for item in sync_items],
             "error": None,
+            "sync_transport": "node_api_streaming_put",
+            "upload_workers": _bounded_workers(upload_workers, len(sync_items)),
         }
         try:
             if sync_items:
-                self._sync_via_node_api(node, sync_items, plan["remote_meta"], timeout_s=timeout_s)
+                self._sync_via_node_api(
+                    node,
+                    sync_items,
+                    plan["remote_meta"],
+                    timeout_s=timeout_s,
+                    upload_workers=upload_workers,
+                )
             job["status"] = "completed"
         except Exception as exc:
             job["status"] = "failed"
@@ -513,6 +593,7 @@ class FactorCacheRemoteSyncService:
         *,
         force: bool = False,
         configure_default_dir: bool = True,
+        upload_workers: int = 4,
     ) -> Dict[str, Any]:
         jobs = []
         for node in self.list_remote_nodes():
@@ -522,6 +603,7 @@ class FactorCacheRemoteSyncService:
                     factor_names,
                     force=force,
                     configure_default_dir=configure_default_dir,
+                    upload_workers=upload_workers,
                 )
             )
         ok = all(job.get("status") == "completed" for job in jobs)
@@ -534,6 +616,7 @@ class FactorCacheRemoteSyncService:
         remote_meta: Dict[str, Any],
         *,
         timeout_s: int,
+        upload_workers: int,
     ) -> None:
         local_meta = self.load_local_meta()
         merged_meta = dict(remote_meta or {})
@@ -557,7 +640,8 @@ class FactorCacheRemoteSyncService:
             "source": "AIstock",
             "factor_count": len(sync_items),
             "local_meta_sha256": _sha256_file(self.local_meta_path) if self.local_meta_path.exists() else None,
-            "transport": "node_api",
+            "transport": "node_api_streaming_put",
+            "upload_workers": _bounded_workers(upload_workers, len(sync_items)),
         }
 
         self._node_api_client(node, timeout_s).upload_sync_bundle(
@@ -565,6 +649,7 @@ class FactorCacheRemoteSyncService:
             factor_files=factor_files,
             merged_meta=merged_meta,
             timeout_s=timeout_s,
+            max_workers=_bounded_workers(upload_workers, len(sync_items)),
         )
 
     def _record_job(self, job: Dict[str, Any]) -> None:
