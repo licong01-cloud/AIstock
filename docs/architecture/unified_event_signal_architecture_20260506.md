@@ -359,7 +359,9 @@ fina_indicator: 扣非净利润同比 +50%
 | `available_at` | AIstock 判定本事件可得的时间戳 |
 | `effective_trade_date` | 第一个允许交易系统消费的交易日 |
 | `time_mode` | `backtest` / `paper` / `live` / `observed` |
-| `source_time_quality` | `EXACT` / `MIDNIGHT_DEFAULT` / `MISSING` / `DATE_ONLY` / `LOCAL_FIRST_SEEN` / `BACKFILL_UNKNOWN` |
+| `source_time_quality` | `EXACT` / `MIDNIGHT_DEFAULT` / `MISSING` / `DATE_ONLY` / `LOCAL_FIRST_SEEN` / `OBSERVED` |
+
+实现约束：统一事件信号使用 `backend/services/event_signal/time_semantics.py` 作为同一套时间语义引擎。回测、paper、live、observed 只改变输入时间的选择，不允许不同模块各自实现 effective date 规则，避免回测和实盘口径漂移。
 
 ### 7.2 回测模式规则
 
@@ -373,16 +375,38 @@ Tushare forecast/express/fina_indicator：只有 ann_date，无精确发布时�
 
 建议保持现有公告分类器的 `pre_open_cutoff=09:25`。是否改为 `09:30` 需要用户确认；建议沿用 `09:25`，与集合竞价前风险控制一致。
 
+关键防泄漏规则：
+
+- 回测只能使用源公告精确发布时间，或在没有精确时间时使用 `ann_date` 的保守下一交易日。
+- 回测不得使用本地 `first_seen_at` / `observed_at`，因为历史回补时这些时间只代表 AIstock 何时抓取到数据，不代表历史当时市场可见。
+- Tushare `forecast_vip`、`express_vip`、`fina_indicator_vip` 现阶段没有比 `ann_date` 更准确的可见时间；如需更精确，只能与 `anns_d.rec_time` 或交易所/公告源元数据联动。
+- 若 Tushare 返回 `ann_date` 晚于本地观测日，不能简单判定为错误未来数据：paper/live 可以使用真实本地观测时间；backtest 仍按 `ann_date` 或公告发布时间保守处理。
+
 ### 7.3 Paper/Live 模式规则
 
 ```text
 若源记录有 first_seen_at：以 first_seen_at 作为 available_at
 first_seen_at <= 09:25 且当日为交易日：当日生效
 first_seen_at > 09:25：下一交易日生效
-没有 first_seen_at：退回日期-only保守规则，下一交易日生效
+没有 first_seen_at 但有 observed_at：以 observed_at 作为观察模式兜底，质量标记为 OBSERVED
+没有 first_seen_at/observed_at：退回日期-only保守规则，下一交易日生效
 ```
 
 这解决了用户提出的场景：如果实盘早上 07:00 本地同步到了公告或结构化财务事件，`first_seen_at=07:00`，则可以当天生效；历史回测不能伪造该时间，只能用保守下一交易日。
+
+示例：`fina_indicator_vip` 在 `2026-05-06 20:20` 被本地实际获取，源记录 `ann_date=2026-05-07`。paper/live 视为 `2026-05-06 20:20` 已观察到，因已过盘前窗口，`effective_trade_date=2026-05-07`；backtest 不能使用这次 2026 年本地抓取时间，若无公告精确发布时间，则按 `ann_date=2026-05-07` 的日期-only规则，下一交易日生效。
+
+### 7.4 Observed 模式规则
+
+`observed` 只用于审计、数据源比较、接口延迟诊断和实盘前观察，不作为历史回测真值：
+
+```text
+优先使用 observed_at，标记为 OBSERVED
+没有 observed_at 但有 first_seen_at：使用 first_seen_at，标记为 LOCAL_FIRST_SEEN
+effective_trade_date 仍沿用 09:25 盘前切分规则
+```
+
+因此，`observed` 能回答“AIstock 这次同步什么时候看到数据”，但不能回答“历史上市场参与者什么时候第一次看到数据”。
 
 ## 8. 核心表设计草案
 
@@ -717,7 +741,7 @@ WHERE time_mode = 'backtest'
 
 ### 12.2 Paper/Live（未来阶段）
 
-Paper/Live 使用 `time_mode='paper'/'live'`，允许使用 `first_seen_at` 产生当天盘前可用信号。
+Paper/Live 使用 `time_mode='paper'/'live'`，允许使用本地真实 `first_seen_at` 产生当天盘前可用信号；没有 `first_seen_at` 时可使用 `observed_at` 作为审计级兜底。Tushare 结构化接口返回了记录即代表本地运行时已可见，paper/live 不应因 `ann_date` 晚于当前同步日而判定为不可用；但 backtest 仍不能用这次本地观测时间。
 
 实时增量流程：
 
@@ -1024,6 +1048,7 @@ DB smoke：
 4. 在 backtest 与 paper time_mode 下重复生成：互不覆盖，effective date 符合规则。
 5. 当前阶段隔离检查：确认未修改 QE、Selection、Paper v2、模拟盘相关文件，`event_signal` 不被任何交易链路读取。
 6. 未来 Phase 6 才验证 Selection/Paper provider：P0 候选被剔除，record_only 候选保留。
+7. 事件时间语义单测：backtest 精确盘前/盘后、00:00、日期-only，paper/live 本地 first_seen_at，observed_at 兜底，以及 Tushare `ann_date` 晚于本地观测日的样本。
 ```
 
 ## 20. 参考链接

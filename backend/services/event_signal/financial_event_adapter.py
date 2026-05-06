@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -26,12 +25,16 @@ from backend.services.event_signal.announcement_adapter import (
     UNIFIED_RULE_VERSION,
     seed_unified_rule_set,
 )
+from backend.services.event_signal.time_semantics import (
+    DEFAULT_PRE_OPEN_CUTOFF as PRE_OPEN_CUTOFF,
+    compute_event_time,
+    next_trading_day,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
 ENGINE_NAME = "FinancialEventAdapter"
 FINANCIAL_RULE_VERSION = "financial_event_rules_v0_20260506"
-PRE_OPEN_CUTOFF = dt.time(9, 25)
 
 SOURCE_TABLES: dict[str, str] = {
     "tushare_forecast": "market.tushare_forecast_raw",
@@ -267,46 +270,24 @@ def classify_financial_row(source_type: str, payload: dict[str, Any]) -> Financi
     return classify_actual(payload, source_type)
 
 
-def next_trading_day(trading_days: list[dt.date], base_date: dt.date, *, strictly_after: bool) -> dt.date:
-    idx = bisect_right(trading_days, base_date) if strictly_after else bisect_left(trading_days, base_date)
-    if idx >= len(trading_days):
-        raise ValueError(f"trading calendar has no effective date after {base_date.isoformat()}")
-    return trading_days[idx]
-
-
 def infer_effective_date(
     ann_date: dt.date,
     trading_days: list[dt.date],
     *,
     time_mode: str = "backtest",
     first_seen_at: Optional[dt.datetime] = None,
+    observed_at: Optional[dt.datetime] = None,
+    source_publish_time: Optional[dt.datetime] = None,
 ) -> tuple[str, Optional[dt.datetime], dt.date, str]:
-    mode = (time_mode or "backtest").lower()
-    if mode in {"paper", "live", "observed"} and first_seen_at is not None:
-        local_seen = first_seen_at
-        if local_seen.tzinfo is None:
-            local_seen = local_seen.replace(tzinfo=dt.timezone(dt.timedelta(hours=8)))
-        local_date = local_seen.date()
-        local_time = local_seen.time().replace(tzinfo=None)
-        if local_time <= PRE_OPEN_CUTOFF:
-            return (
-                "LOCAL_FIRST_SEEN",
-                local_seen,
-                next_trading_day(trading_days, local_date, strictly_after=False),
-                "local_first_seen_before_preopen",
-            )
-        return (
-            "LOCAL_FIRST_SEEN",
-            local_seen,
-            next_trading_day(trading_days, local_date, strictly_after=True),
-            "local_first_seen_after_preopen_next_trading_day",
-        )
-    return (
-        "DATE_ONLY",
-        None,
-        next_trading_day(trading_days, ann_date, strictly_after=True),
-        "tushare_date_only_next_trading_day",
+    result = compute_event_time(
+        ann_date,
+        trading_days,
+        time_mode=time_mode,
+        source_publish_time=source_publish_time,
+        first_seen_at=first_seen_at,
+        observed_at=observed_at,
     )
+    return result.source_time_quality, result.available_at, result.effective_trade_date, result.effective_rule
 
 
 def build_run_id(*, time_mode: str, run_mode: str) -> str:
@@ -346,11 +327,12 @@ def build_fact(
 ) -> FactBuild:
     payload = row["raw_payload"] or {}
     classification = classify_financial_row(row["source_type"], payload)
-    time_quality, available_at, effective_trade_date, effective_rule = infer_effective_date(
+    time_result = compute_event_time(
         row["ann_date"],
         trading_days,
         time_mode=time_mode,
         first_seen_at=row.get("first_seen_at"),
+        observed_at=row.get("observed_at"),
     )
     event_key = build_event_key(
         row["source_type"],
@@ -369,7 +351,8 @@ def build_fact(
         "action": classification.action,
         "reason": classification.reason,
         "metrics": classification.metrics,
-        "effective_rule": effective_rule,
+        "effective_rule": time_result.effective_rule,
+        "time_semantics": time_result.trace,
         "raw_payload": payload,
     }
     fact_tuple = (
@@ -382,10 +365,10 @@ def build_fact(
         str(row["raw_observation_id"]),
         row["source_record_key"],
         row["ann_date"],
-        None,
-        time_quality,
-        available_at,
-        effective_trade_date,
+        time_result.source_available_at,
+        time_result.source_time_quality,
+        time_result.available_at,
+        time_result.effective_trade_date,
         time_mode,
         row["report_period"],
         rule_version,

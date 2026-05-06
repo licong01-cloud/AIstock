@@ -106,6 +106,43 @@ def test_effective_date_observed_can_use_local_first_seen():
     assert rule == "local_first_seen_before_preopen"
 
 
+def test_effective_date_paper_can_fallback_to_observed_at_when_first_seen_missing():
+    quality, available_at, effective, rule = infer_effective_date(
+        dt.date(2024, 2, 1),
+        TRADING_DAYS,
+        time_mode="paper",
+        observed_at=dt.datetime(2024, 2, 1, 12, 0),
+    )
+
+    assert quality == "OBSERVED"
+    assert available_at is not None
+    assert effective == dt.date(2024, 2, 2)
+    assert rule == "observed_at_after_preopen_next_trading_day"
+
+
+def test_build_fact_paper_uses_local_first_seen_not_future_ann_date():
+    row = _raw_row(
+        "tushare_fina_indicator",
+        77,
+        {"dt_netprofit_yoy": 55},
+        ann_date=dt.date(2024, 2, 2),
+    )
+    row["first_seen_at"] = dt.datetime(2024, 2, 1, 20, 20)
+    row["observed_at"] = dt.datetime(2024, 2, 1, 20, 20)
+    fact = build_fact(
+        row,
+        trading_days=TRADING_DAYS,
+        run_id="run-1",
+        rule_version="unified_event_signal_rules_v0_20260506",
+        time_mode="paper",
+    )
+
+    assert fact.fact_tuple[10] == "LOCAL_FIRST_SEEN"
+    assert fact.fact_tuple[11] is not None
+    assert fact.fact_tuple[12] == dt.date(2024, 2, 2)
+    assert fact.fact_tuple[18].adapted["time_semantics"]["observation_field"] == "local_first_seen"
+
+
 def test_build_fact_and_signal_keep_financial_alpha_disabled():
     row = _raw_row("tushare_forecast", 1, {"type": "预增", "p_change_min": 80, "p_change_max": 120})
     fact = build_fact(
