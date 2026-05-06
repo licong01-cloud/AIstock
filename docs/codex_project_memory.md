@@ -87,6 +87,21 @@ Important directories:
 - Testing standard: future high-risk AIstock features must define tests at design time, include appropriate L0-L5 validation, produce run records, and enforce coverage gates for new/changed code. Backend Python coverage should include line and branch coverage; QE data completeness, warehouse/archive, trading execution, cost/ledger, HMM, and cleanup gates are high-risk modules that need explicit unit/integration/business-oracle tests in addition to UI E2E.
 - Standards document location: project development standards must live under `docs/standards`, not `docs/architecture`. The active human-readable standard and same-version machine-readable YAML stay in `docs/standards`; older versions move to `docs/standards/archive`. Architecture documents may explain implementation of guardrails but must not become a competing standards source.
 
+## Multi-Codex Parallel Development Guardrails - 2026-05-06
+
+These rules are mandatory for all future Codex windows to avoid losing work when multiple agents develop AIstock in parallel:
+
+- Treat the root worktree `F:\Dev\AIstock` / branch `main` as a sync and rescue baseline, not a normal development workspace. Do not start new feature work on a dirty `main`.
+- Each Codex window must use its own branch and, preferably, its own worktree under a path such as `F:\Dev\AIstock_worktrees\<task-name>`, created from the latest `origin/main` with a `codex/<module-task-date>` branch name.
+- At task start, run a Git preflight: `git status --short --branch`, `git branch --show-current`, and `git log --oneline -5`. If the branch is `main`, has `M`/`MM`/`??` changes, or is ahead/behind unexpectedly, stop and create a clean worktree or make a rescue backup before editing.
+- Never run `git pull --rebase`, `git merge origin/main`, `git reset --hard`, `git checkout -- .`, or `git clean -fd` in a dirty shared worktree unless the user explicitly approves that exact destructive/synchronizing action after a backup.
+- Keep one task per branch and one feature per commit series. Do not mix QE runtime changes, Paper v2 changes, HMM experiments, validation-center work, and local-data UI changes in the same commit unless the user explicitly requests a single integrated change.
+- Commit or export patches before handing work to another Codex window. Handoff notes must include branch name, commit hash, changed file list, tests run, untracked files, push status, and whether production port `8001` was touched.
+- Use clean integration branches from `origin/main` for combining parallel work. Cherry-pick feature commits in logical order, validate after each functional group, and prefer the already-pushed/validated `origin/main` version over older local duplicate commits.
+- Before any risky synchronization or conflict resolution, create a rescue snapshot: backup branch at current `HEAD`, `git bundle create ... --all`, binary patches for staged/unstaged changes, `git status --porcelain=v1 -uall`, and a copy/list of untracked files outside the repo.
+- Keep temporary outputs and large experiment artifacts out of the repo by default (`.codex_tmp/`, `.coverage`, `catboost_info/`, Qlib validation CSV/Bin/PKL artifacts, one-off diagnostics). Store them under `F:\Dev\AIstock_backups` or `F:\Dev\AIstock_artifacts` unless they are deliberately curated validation records.
+- When a local branch and `origin/main` both contain similar features, do not blindly preserve the local commit. Compare final file contents and validation records; adopt the most complete validated version, then re-apply only true missing functionality as a small patch.
+
 ## Known Current Workspace Notes
 
 - The existing AGENTS.md in the project root may belong to another programming tool. Avoid editing it.
