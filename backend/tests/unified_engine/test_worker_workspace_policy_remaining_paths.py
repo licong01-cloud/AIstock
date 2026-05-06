@@ -16,6 +16,7 @@ from backend.services.rdagent_asset_service import RDAgentAssetService
 from backend.services import rdagent_factor_catalog_sync as factor_sync
 from backend.services import rdagent_model_catalog_sync as model_sync
 from backend.services.selection_center import hmm_runtime
+from backend.services.strategy_package import workspace_policy
 from backend.services.strategy_package.workspace_policy import (
     ensure_not_forbidden_worker_workspace_path,
     is_forbidden_worker_workspace_path,
@@ -123,6 +124,7 @@ def test_worker_policy_allows_wsl_mounted_aistock_runtime_cache(monkeypatch) -> 
     safe_root = "/mnt/t/aistock_safe/rdagent_assets/strategy_package_runtime"
     mounted_runtime_workspace = f"{safe_root}/pkg/hash"
     monkeypatch.setenv("AISTOCK_SAFE_ARTIFACT_ROOTS", safe_root)
+    monkeypatch.setattr(workspace_policy, "_is_wsl_process", lambda: True)
 
     ensure_not_forbidden_worker_workspace_path(
         mounted_runtime_workspace,

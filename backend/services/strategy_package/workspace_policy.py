@@ -131,8 +131,6 @@ def is_forbidden_worker_workspace_path(path: Path | str) -> bool:
             root_text = item.strip().strip('"')
             if root_text and is_relative_to_path(candidate, Path(root_text)):
                 return True
-    if normalized.startswith("/mnt/") or "/mnt/" in normalized:
-        return not is_under_allowed_artifact_root(raw)
     return False
 
 
