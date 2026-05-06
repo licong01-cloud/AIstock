@@ -2,6 +2,7 @@
 
 import io
 import json
+import runpy
 import tarfile
 from datetime import date
 from pathlib import Path
@@ -19,7 +20,7 @@ from backend.services.selection_center.repository import InMemorySelectionCenter
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.manifest import freeze_manifest
-from backend.services.strategy_package.models import PackageStatus
+from backend.services.strategy_package.models import PackageStatus, SourceType, StrategyPackageSource
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime, TargetPositionEngine
 from backend.services.strategy_package.selection_artifact import (
@@ -429,6 +430,79 @@ def test_selection_artifact_service_generates_live_inference_artifact_without_ex
     assert [item.symbol for item in run.aggregate_results] == ["000001.SZ", "000002.SZ"]
 
 
+def test_selection_artifact_service_resolves_qe_evolution_loop_source(tmp_path) -> None:
+    class FakeResolver:
+        def __init__(self) -> None:
+            self.source_calls: list[dict] = []
+
+        def load_source_for_strategy_package(self, **kwargs):
+            self.source_calls.append(kwargs)
+            return {"experiment_id": "qe_task_L1"}
+
+        def prepare_workspace(self, **_kwargs):
+            class Prepared:
+                workspace_path = tmp_path
+                factor_order_path = tmp_path / "factor_order.json"
+                factor_entry_path = tmp_path / "factor_entry.py"
+                model_params_path = tmp_path / "params.pkl"
+                model_source_path = tmp_path / "source_params.pkl"
+                factor_source_dir = tmp_path / "factors"
+                factor_order = ["factor_a"]
+                alpha158_factors = []
+                dynamic_factors = ["factor_a"]
+                model_candidate_count = 1
+
+            return Prepared()
+
+    class FakeProvider:
+        backend_name = "fake_live"
+
+        def run(self, **_kwargs):
+            return LiveInferenceResult(
+                scores=[{"symbol": "000001.SZ", "score": 1.0, "rank": 1}],
+                metadata={},
+            )
+
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(
+            update={
+                "package_status": PackageStatus.SELECTION_ENABLED,
+                "source": StrategyPackageSource(
+                    source_type=SourceType.QE_EVOLUTION_LOOP,
+                    source_id="qe_task",
+                    loop_id="Loop1",
+                    run_id="qe_task_L1",
+                ),
+            }
+        )
+    )
+    package_repo.save_manifest(manifest)
+    resolver = FakeResolver()
+    artifact_service = StrategyPackageSelectionArtifactService(
+        package_repository=package_repo,
+        artifact_repository=InMemorySelectionScoreArtifactRepository(),
+        runtime_asset_resolver=resolver,
+        live_inference_provider=FakeProvider(),
+    )
+
+    artifact = artifact_service.generate_from_live_inference(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        include_reference_price=False,
+    )
+
+    assert artifact.status.value == "SUCCEEDED"
+    assert resolver.source_calls == [
+        {
+            "source_type": "qe_evolution_loop",
+            "source_id": "qe_task",
+            "loop_id": "Loop1",
+            "run_id": "qe_task_L1",
+        }
+    ]
+
+
 def test_selection_center_pit_mode_resolves_previous_trading_day_and_passes_cutoff(tmp_path) -> None:
     class FakeCalendar:
         def __init__(self) -> None:
@@ -539,6 +613,10 @@ def test_live_inference_factor_order_uses_static_dataloader_schema(tmp_path) -> 
             f"def calculate():\n    return pd.DataFrame({{{factor_name!r}: [1.0]}})\n",
             encoding="utf-8",
         )
+    (workspace / "model.py").write_text(
+        "class CustomModel:\n    pass\n",
+        encoding="utf-8",
+    )
     static_columns = pd.MultiIndex.from_tuples(
         [("feature", "factor_b"), ("feature", "factor_a"), ("feature", "factor_c")]
     )
@@ -559,6 +637,9 @@ data_handler_config:
         - class: qlib.data.dataset.loader.StaticDataLoader
           kwargs:
             config: combined_factors_df.parquet
+model:
+  kwargs:
+    "num_features": {{ num_features }}
 """,
         encoding="utf-8",
     )
@@ -585,6 +666,9 @@ data_handler_config:
     payload = json.loads(prepared.factor_order_path.read_text(encoding="utf-8"))
     assert payload["dynamic_factor_source"] == "qe_static_dataloader"
     assert payload["qe_experiment_factor_name_count"] == 1
+    assert (prepared.workspace_path / "model" / "model.py").exists()
+    entry_namespace = runpy.run_path(str(prepared.factor_entry_path))
+    assert entry_namespace["_FACTOR_FILES"]["factor_a"] == str((factors_dir / "factor_a.py").resolve(strict=False))
 
 
 def test_live_inference_factor_order_falls_back_to_qe_factor_names_when_static_schema_missing(tmp_path) -> None:
@@ -657,6 +741,9 @@ data_handler_config:
         - class: qlib.data.dataset.loader.StaticDataLoader
           kwargs:
             config: combined_factors_df.parquet
+model:
+  kwargs:
+    "num_features": {{ num_features }}
 """
 
     def params_archive() -> bytes:
@@ -687,6 +774,8 @@ data_handler_config:
                 )
             if file_path == "factors/factor_a.py":
                 return b"def calculate():\n    return None\n"
+            if file_path == "model.py":
+                return b"class CustomModel:\n    pass\n"
             raise AssertionError(f"unexpected workspace file request: {file_path}")
 
         async def download_mlruns_params(self, task_id, loop_id):
@@ -708,6 +797,7 @@ data_handler_config:
     assert (source_dir / "conf.yaml").exists()
     assert not (source_dir / "combined_factors_df.parquet").exists()
     assert (source_dir / "factors" / "factor_a.py").exists()
+    assert (source_dir / "model.py").exists()
     assert list(source_dir.glob("**/artifacts/params.pkl"))
 
 
@@ -733,6 +823,13 @@ def test_live_inference_materialize_uses_cached_params_when_node_mlruns_params_4
                 return b"data_handler_config: {}\n"
             if file_path == "factors/factor_a.py":
                 return b"def calculate():\n    return None\n"
+            if file_path == "model.py":
+                raise QEWorkspaceFileNotFound(
+                    task_id,
+                    loop_id,
+                    file_path,
+                    "http://node/files/model.py",
+                )
             raise AssertionError(f"unexpected workspace file request: {file_path}")
 
         async def download_mlruns_params(self, task_id, loop_id):
@@ -803,6 +900,66 @@ def test_live_inference_load_source_materializes_via_node_api_not_db_workspace(t
     assert source.db_workspace_path == Path()
     assert source.qe_task_id == "qe_task_node"
     assert source.qe_loop_id == "Loop3"
+    assert source.execution_node_id == "node-1"
+
+
+def test_live_inference_load_source_for_qe_evolution_loop_uses_task_loop(tmp_path, monkeypatch) -> None:
+    class Cursor:
+        description = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, query, params=None, **_kwargs):
+            self.query = query
+            self.params = params
+
+        def fetchone(self):
+            assert "WHERE qe_task_id = %s" in self.query
+            assert self.params == ("qe_task", "Loop1")
+            return {
+                "experiment_id": "qe_task_L1",
+                "status": "completed",
+                "qe_task_id": "qe_task",
+                "qe_loop_id": "Loop1",
+                "factor_names": ["factor_a"],
+                "custom_params": {},
+                "data_split": {},
+                "result_metrics": {"execution_trace": {"node_id": "node-1"}},
+            }
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def cursor(self, *_args, **_kwargs):
+            return Cursor()
+
+    def fake_materialize(self, **kwargs):
+        assert kwargs["experiment_id"] == "qe_task_L1"
+        assert kwargs["qe_task_id"] == "qe_task"
+        assert kwargs["qe_loop_id"] == "Loop1"
+        return tmp_path / "node_api_cache"
+
+    monkeypatch.setattr(QEExperimentRuntimeAssetResolver, "_materialize_runtime_source_from_node", fake_materialize)
+
+    resolver = QEExperimentRuntimeAssetResolver(conn_factory=lambda: Conn(), cache_root=tmp_path / "runtime")
+    source = resolver.load_source_for_strategy_package(
+        source_type="qe_evolution_loop",
+        source_id="qe_task",
+        loop_id="Loop1",
+        run_id="qe_task_L1",
+    )
+
+    assert source.experiment_id == "qe_task_L1"
+    assert source.qe_task_id == "qe_task"
+    assert source.qe_loop_id == "Loop1"
     assert source.execution_node_id == "node-1"
 
 

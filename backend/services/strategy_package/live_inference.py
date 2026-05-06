@@ -122,6 +122,91 @@ def _parse_jsonish(value: Any) -> Any:
     return value
 
 
+def _load_qe_conf_yaml(conf_path: Path, *, purpose: str) -> dict[str, Any]:
+    text = conf_path.read_text(encoding="utf-8")
+    try:
+        loaded = yaml.safe_load(text) or {}
+    except Exception as first_exc:
+        sanitized, changed = _sanitize_unresolved_jinja_for_yaml(text)
+        if not changed:
+            raise StrategyPackageValidationError(
+                f"failed to parse QE conf.yaml for {purpose}",
+                context={"conf_path": str(conf_path), "error": str(first_exc)},
+            ) from first_exc
+        try:
+            loaded = yaml.safe_load(sanitized) or {}
+        except Exception as second_exc:
+            raise StrategyPackageValidationError(
+                f"failed to parse QE conf.yaml for {purpose}",
+                context={
+                    "conf_path": str(conf_path),
+                    "error": str(second_exc),
+                    "original_error": str(first_exc),
+                    "template_placeholders_sanitized": True,
+                },
+            ) from second_exc
+    if not isinstance(loaded, dict):
+        raise StrategyPackageValidationError(
+            f"QE conf.yaml must be a mapping for {purpose}",
+            context={"conf_path": str(conf_path), "actual_type": type(loaded).__name__},
+        )
+    return loaded
+
+
+def _sanitize_unresolved_jinja_for_yaml(text: str) -> tuple[str, bool]:
+    changed = False
+    sanitized_lines: list[str] = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith(("{%", "{#")):
+            indent = line[: len(line) - len(stripped)]
+            newline = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+            sanitized_lines.append(f"{indent}# {stripped.rstrip()}{newline}")
+            changed = True
+            continue
+        sanitized, line_changed = _replace_unquoted_jinja_expressions(line)
+        sanitized_lines.append(sanitized)
+        changed = changed or line_changed
+    return "".join(sanitized_lines), changed
+
+
+def _replace_unquoted_jinja_expressions(line: str) -> tuple[str, bool]:
+    result: list[str] = []
+    changed = False
+    in_single = False
+    in_double = False
+    i = 0
+    while i < len(line):
+        if not in_single and not in_double and line.startswith("{{", i):
+            end = line.find("}}", i + 2)
+            if end != -1:
+                expr = line[i + 2 : end].strip()
+                safe_expr = re.sub(r"[^0-9A-Za-z_]+", "_", expr).strip("_")[:64] or "expr"
+                result.append(json.dumps(f"__AISTOCK_UNRESOLVED_JINJA_{safe_expr}__"))
+                i = end + 2
+                changed = True
+                continue
+
+        ch = line[i]
+        result.append(ch)
+        if ch == "'" and not in_double:
+            if in_single and i + 1 < len(line) and line[i + 1] == "'":
+                result.append(line[i + 1])
+                i += 2
+                continue
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            backslashes = 0
+            j = len(result) - 2
+            while j >= 0 and result[j] == "\\":
+                backslashes += 1
+                j -= 1
+            if backslashes % 2 == 0:
+                in_double = not in_double
+        i += 1
+    return "".join(result), changed
+
+
 def _safe_name(value: str) -> str:
     text = re.sub(r"\W+", "_", value.strip())
     if not text or text[0].isdigit():
@@ -253,12 +338,68 @@ class QEExperimentRuntimeAssetResolver:
         experiment_id = str(experiment_id or "").strip()
         if not experiment_id:
             raise StrategyPackageValidationError("QE experiment_id is required for live inference")
+        row = self._load_experiment_row_by_id(experiment_id)
+        return self._source_from_experiment_row(row, source_lookup={"experiment_id": experiment_id})
+
+    def load_source_for_strategy_package(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        loop_id: str | None = None,
+        run_id: str | None = None,
+    ) -> QEExperimentRuntimeSource:
+        """Resolve runtime source using the frozen StrategyPackage source identity."""
+
+        normalized_type = str(source_type or "").strip()
+        normalized_source_id = str(source_id or "").strip()
+        normalized_loop_id = str(loop_id or "").strip()
+        normalized_run_id = str(run_id or "").strip()
+        if normalized_type == "qe_evolution_loop":
+            if not normalized_source_id or not normalized_loop_id:
+                raise DataUnavailableError(
+                    "QE evolution loop package is missing qe_task_id/qe_loop_id for live inference",
+                    context={
+                        "source_type": normalized_type,
+                        "source_id": normalized_source_id or None,
+                        "loop_id": normalized_loop_id or None,
+                        "run_id": normalized_run_id or None,
+                    },
+                )
+            row = self._load_experiment_row_by_task_loop(
+                qe_task_id=normalized_source_id,
+                qe_loop_id=normalized_loop_id,
+            )
+            return self._source_from_experiment_row(
+                row,
+                source_lookup={
+                    "source_type": normalized_type,
+                    "source_id": normalized_source_id,
+                    "loop_id": normalized_loop_id,
+                    "run_id": normalized_run_id or None,
+                },
+            )
+
+        if normalized_type == "qe_experiment":
+            if not normalized_source_id:
+                raise StrategyPackageValidationError("QE experiment source_id is required for live inference")
+            return self.load_source(normalized_source_id)
+
+        raise StrategyPackageValidationError(
+            "unsupported StrategyPackage source_type for live inference",
+            context={
+                "source_type": normalized_type,
+                "supported": ["qe_experiment", "qe_evolution_loop"],
+            },
+        )
+
+    def _load_experiment_row_by_id(self, experiment_id: str) -> dict[str, Any]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
                     SELECT experiment_id, status, qe_task_id, qe_loop_id,
-                           factor_names, custom_params, data_split
+                           factor_names, custom_params, data_split, result_metrics
                     FROM qe_experiments
                     WHERE experiment_id = %s
                     """,
@@ -270,6 +411,38 @@ class QEExperimentRuntimeAssetResolver:
                 "QE experiment does not exist for live inference",
                 context={"experiment_id": experiment_id},
             )
+        return dict(row)
+
+    def _load_experiment_row_by_task_loop(self, *, qe_task_id: str, qe_loop_id: str) -> dict[str, Any]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT experiment_id, status, qe_task_id, qe_loop_id,
+                           factor_names, custom_params, data_split, result_metrics
+                    FROM qe_experiments
+                    WHERE qe_task_id = %s
+                      AND qe_loop_id = %s
+                    ORDER BY completed_at DESC NULLS LAST, created_at DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    (qe_task_id, qe_loop_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError(
+                "QE evolution loop does not exist for live inference",
+                context={"qe_task_id": qe_task_id, "qe_loop_id": qe_loop_id},
+            )
+        return dict(row)
+
+    def _source_from_experiment_row(
+        self,
+        row: dict[str, Any],
+        *,
+        source_lookup: dict[str, Any],
+    ) -> QEExperimentRuntimeSource:
+        experiment_id = str(row["experiment_id"])
         if str(row["status"]).lower() != "completed":
             raise StrategyPackageValidationError(
                 "QE experiment must be completed before live inference",
@@ -287,17 +460,30 @@ class QEExperimentRuntimeAssetResolver:
             raise StrategyPackageValidationError("QE experiment custom_params must be an object")
         if not isinstance(data_split, dict):
             raise StrategyPackageValidationError("QE experiment data_split must be an object")
+        result_metrics = _parse_jsonish(row.get("result_metrics")) or {}
+        if not isinstance(result_metrics, dict):
+            result_metrics = {}
+        execution_trace = result_metrics.get("execution_trace")
+        if not isinstance(execution_trace, dict):
+            execution_trace = {}
 
         qe_task_id = str(row.get("qe_task_id") or experiment_id).strip()
         qe_loop_id = str(row.get("qe_loop_id") or "").strip()
         if not qe_task_id or not qe_loop_id:
             raise DataUnavailableError(
                 "QE experiment is missing qe_task_id/qe_loop_id for node API runtime asset resolution",
-                context={"experiment_id": experiment_id, "qe_task_id": qe_task_id or None, "qe_loop_id": qe_loop_id or None},
+                context={
+                    "experiment_id": experiment_id,
+                    "qe_task_id": qe_task_id or None,
+                    "qe_loop_id": qe_loop_id or None,
+                    **source_lookup,
+                },
             )
         execution_node_id = str(
             custom_params.get("execution_node_id")
             or custom_params.get("node_id")
+            or result_metrics.get("execution_node_id")
+            or execution_trace.get("node_id")
             or resolve_default_qe_node_id()
         ).strip()
         asset_workspace = self._materialize_runtime_source_from_node(
@@ -354,6 +540,9 @@ class QEExperimentRuntimeAssetResolver:
 
         model_dest = workspace_path / "model" / "params.pkl"
         shutil.copy2(model_source_path, model_dest)
+        model_code_source = source.asset_workspace_path / "model.py"
+        if model_code_source.exists() and model_code_source.is_file():
+            shutil.copy2(model_code_source, workspace_path / "model" / "model.py")
 
         factor_order_path = workspace_path / "factor_order.json"
         factor_order_path.write_text(
@@ -481,7 +670,7 @@ class QEExperimentRuntimeAssetResolver:
                 )
                 conf_path = source_dir / "conf.yaml"
                 static_paths = self._find_static_loader_configs(
-                    yaml.safe_load(conf_path.read_text(encoding="utf-8")) or {}
+                    _load_qe_conf_yaml(conf_path, purpose="node static asset discovery")
                 )
                 seen_static_relpaths: set[str] = set()
                 for raw_path in static_paths:
@@ -527,6 +716,17 @@ class QEExperimentRuntimeAssetResolver:
                         rel_path,
                         source_dir / rel_path,
                     )
+
+                try:
+                    await self._download_workspace_file(
+                        client,
+                        qe_task_id,
+                        qe_loop_id,
+                        "model.py",
+                        source_dir / "model.py",
+                    )
+                except QEWorkspaceFileNotFound:
+                    pass
 
                 params_tar: bytes | None = None
                 try:
@@ -758,13 +958,7 @@ class QEExperimentRuntimeAssetResolver:
         source: QEExperimentRuntimeSource,
         conf_path: Path,
     ) -> StaticLoaderFeatureResolution:
-        try:
-            conf = yaml.safe_load(conf_path.read_text(encoding="utf-8")) or {}
-        except Exception as exc:
-            raise StrategyPackageValidationError(
-                "failed to parse QE conf.yaml for static factor order",
-                context={"conf_path": str(conf_path), "error": str(exc)},
-            ) from exc
+        conf = _load_qe_conf_yaml(conf_path, purpose="static factor order")
 
         configs = self._find_static_loader_configs(conf)
         if not configs:
@@ -871,13 +1065,7 @@ class QEExperimentRuntimeAssetResolver:
         )
 
     def _extract_alpha158_aliases(self, conf_path: Path) -> list[str]:
-        try:
-            conf = yaml.safe_load(conf_path.read_text(encoding="utf-8")) or {}
-        except Exception as exc:
-            raise StrategyPackageValidationError(
-                "failed to parse QE conf.yaml for alpha158 factors",
-                context={"conf_path": str(conf_path), "error": str(exc)},
-            ) from exc
+        conf = _load_qe_conf_yaml(conf_path, purpose="alpha158 factors")
 
         aliases = self._find_alpha158_aliases(conf)
         if not aliases:
@@ -980,10 +1168,10 @@ class QEExperimentRuntimeAssetResolver:
         factor_files: dict[str, Path],
         path_converter: Callable[[str], str] | None,
     ) -> str:
-        entries = {
-            factor_name: path_converter(str(path)) if path_converter else str(path)
-            for factor_name, path in factor_files.items()
-        }
+        entries = {}
+        for factor_name, path in factor_files.items():
+            resolved = str(path.resolve(strict=False))
+            entries[factor_name] = path_converter(resolved) if path_converter else resolved
         lines = [
             "from __future__ import annotations",
             "",

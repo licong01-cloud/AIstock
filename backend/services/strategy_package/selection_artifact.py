@@ -381,7 +381,16 @@ class StrategyPackageSelectionArtifactService:
                 context={"package_id": package_id},
             )
         runtime_hash = selection_artifact_runtime_hash(runtime_config)
-        source = self.runtime_asset_resolver.load_source(record.source_id)
+        source_loader = getattr(self.runtime_asset_resolver, "load_source_for_strategy_package", None)
+        if callable(source_loader):
+            source = source_loader(
+                source_type=record.source_type,
+                source_id=record.source_id,
+                loop_id=record.loop_id,
+                run_id=record.run_id,
+            )
+        else:
+            source = self.runtime_asset_resolver.load_source(record.source_id)
         provider, inference_backend = self._resolve_live_provider(runtime_config)
         prepared = self.runtime_asset_resolver.prepare_workspace(
             package_id=package_id,
