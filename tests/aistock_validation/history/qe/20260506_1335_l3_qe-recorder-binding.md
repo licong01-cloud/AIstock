@@ -139,6 +139,33 @@ Result: passed. Both runner helpers write `qe_current_recorder.json` with the ex
 - Remote runner-helper validation temp dir: `/home/lc999/tmp/qe_qrun_binding_helper_20260506_133036`
 - Local operation docs: `docs/operations/qe_recorder_binding_contract_20260506.md`
 
+
+### 5. Remote parallel recorder smoke after duplicate-experiment hardening
+
+A true parallel remote smoke was run under the `rdagent-gpu` environment. It created two Qlib recorders concurrently in a shared temp `mlruns`, wrote one `qe_current_recorder.json` per loop, then ran two strict `read_exp_res.py` processes concurrently.
+
+Remote temp dir:
+
+```text
+/home/lc999/tmp/qe_parallel_recorder_binding_smoke_20260506_134743
+```
+
+Observed output:
+
+```text
+CREATED Loop1 ab86720f642b4daeb7bcda5d2b6d1c77
+CREATED Loop2 bbd86da10d254066a8d91842a47eff0d
+Bound recorder selected: recorder_id=ab86720f642b4daeb7bcda5d2b6d1c77 ...
+BOUND=ab86720f642b4daeb7bcda5d2b6d1c77
+SELECTED=ab86720f642b4daeb7bcda5d2b6d1c77
+Bound recorder selected: recorder_id=bbd86da10d254066a8d91842a47eff0d ...
+BOUND=bbd86da10d254066a8d91842a47eff0d
+SELECTED=bbd86da10d254066a8d91842a47eff0d
+```
+
+Result: passed. Both parallel readers selected their own bound recorder while sharing the same `mlruns` tree.
+
+During the first attempt, concurrent first-use MLflow experiment creation exposed a duplicate experiment-name edge case. `read_exp_res.py` was hardened to scan all experiments by bound recorder id instead of narrowing by experiment name, then the parallel smoke passed.
 ## Production Port Impact
 
 - Did not restart or modify production backend port `8001`.
@@ -149,3 +176,4 @@ Result: passed. Both runner helpers write `qe_current_recorder.json` with the ex
 - Historical experiments that already used legacy latest-recorder fallback may still contain incorrect persisted metrics. They need mismatch scanning and/or re-extraction with explicit recorder id to be certified.
 - New correctness depends on all QE runners using the updated `qrun_limit*.py` and generated commands with `QE_REQUIRE_RECORDER_ID=1`.
 - Data warehouse and Paper/Selection modules still need to consume recorder trust metadata; this change only documents the contract and updates QE, per scope restriction.
+

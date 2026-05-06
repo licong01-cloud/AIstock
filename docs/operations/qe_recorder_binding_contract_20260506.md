@@ -55,6 +55,10 @@ QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
 
 因此旧实验可以继续读取；但如果旧实验本身是并行 backtest-only 且 `mlruns` 混合多个 recorder，需要用 mismatch 扫描脚本单独标记可信度。
 
+
+### 4. 绑定 recorder 查询范围
+
+绑定了 `recorder_id` 时，`read_exp_res.py` 会扫描当前 tracking URI 可见的所有 experiments 来定位该 recorder，而不是只按 `experiment_name` 缩小范围。原因是 MLflow file store 在并行首次创建同名 experiment 时可能出现同名 experiment 竞争；按 recorder id 全局精确匹配更安全。如果 recorder id 前缀匹配多个 recorder，必须失败并要求使用完整 recorder id。
 ## 数仓模块需要更新的规则
 
 数仓侧如果归档 QE 结果，建议把 recorder 绑定信息作为结果可信度字段纳入归档：
@@ -86,3 +90,4 @@ QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
 4. 远端已知 mismatch workspace 中，严格绑定目标 recorder 后能抽取目标 recorder，不再抽 latest recorder。
 5. 旧实验无绑定文件时，不设置严格模式仍能按旧逻辑读取。
 6. 严格模式无绑定文件时必须失败，不能静默 fallback。
+
