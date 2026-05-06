@@ -365,7 +365,6 @@ def _link_allowed_files(src_dir: str, dst_dir: str) -> list[str]:
 _PIPELINE_WRAPPER = r'''
 import os as _os, json as _json
 import pandas as _pd
-import inspect as _inspect
 
 _FN = __FN__
 _SD = __SD__
@@ -373,66 +372,6 @@ _ED = __ED__
 _CP = __CP__
 _ME = __ME__
 _EE = __EE__
-
-
-class _BacktestH5RealtimeLoader:
-    """Compatibility loader for factors written against the realtime loader API."""
-
-    def __init__(self):
-        self._daily = None
-
-    def _load_daily(self):
-        if self._daily is None:
-            if not _os.path.exists("daily_pv.h5"):
-                raise RuntimeError("daily_pv.h5 is required for _REALTIME_LOADER compatibility")
-            self._daily = _pd.read_hdf("daily_pv.h5", key="data").sort_index()
-        return self._daily
-
-    def load(self, instruments=None, start_date=None, end_date=None, fields=None, adjust=None):
-        df = self._load_daily()
-        if not isinstance(df.index, _pd.MultiIndex):
-            raise RuntimeError("daily_pv.h5 must use MultiIndex(datetime, instrument)")
-        out = df
-        dates = _pd.to_datetime(out.index.get_level_values(0))
-        if start_date:
-            out = out[dates >= _pd.Timestamp(start_date)]
-            dates = _pd.to_datetime(out.index.get_level_values(0))
-        if end_date:
-            out = out[dates <= _pd.Timestamp(end_date)]
-        if instruments:
-            wanted = {str(x) for x in instruments}
-            inst = out.index.get_level_values(1).astype(str)
-            out = out[inst.isin(wanted)]
-        if fields:
-            available = [f for f in fields if f in out.columns]
-            missing = [f for f in fields if f not in out.columns]
-            if missing:
-                raise RuntimeError(f"daily_pv.h5 missing fields for _REALTIME_LOADER: {missing}")
-            out = out[available]
-        return out.sort_index()
-
-
-def _call_calculate_function_if_needed():
-    if _os.path.exists("result.h5"):
-        return
-    func = globals().get(f"calculate_{_FN}")
-    if not callable(func):
-        return
-    globals().setdefault("_REALTIME_LOADER", _BacktestH5RealtimeLoader())
-    sig = _inspect.signature(func)
-    if len(sig.parameters) == 0:
-        result = func()
-    else:
-        result = func(None, _SD, _ED)
-    if result is not None and not _os.path.exists("result.h5"):
-        if isinstance(result, _pd.Series):
-            result = result.to_frame(name=_FN)
-        if not isinstance(result, _pd.DataFrame):
-            raise RuntimeError(f"{_FN}: calculate function returned non-DataFrame result")
-        result.to_hdf("result.h5", key="data", mode="w")
-
-
-_call_calculate_function_if_needed()
 
 if not _os.path.exists("result.h5"):
     raise RuntimeError("factor.py did not produce result.h5")
