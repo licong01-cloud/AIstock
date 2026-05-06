@@ -15,6 +15,8 @@ from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELEC
 from backend.services.strategy_package.selection_artifact import selection_artifact_runtime_hash
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, TradingCoreError
 
+from .runtime_profile import parse_selection_runtime_profile
+
 
 PASS = "PASS"
 WARN = "WARN"
@@ -30,9 +32,11 @@ class SelectionPackageHealthService:
         *,
         artifact_repository: Any | None = None,
         runtime_source_resolver: Any | None = None,
+        hmm_runtime: Any | None = None,
     ) -> None:
         self.artifact_repository = artifact_repository
         self.runtime_source_resolver = runtime_source_resolver
+        self.hmm_runtime = hmm_runtime
 
     def summarize(
         self,
@@ -66,7 +70,7 @@ class SelectionPackageHealthService:
                 }
             )
 
-        checks.extend(self._deferred_runtime_checks())
+        checks.extend(self._deferred_runtime_checks(self._hmm_artifact_check(manifest, config, trade_date)))
         blocked = [item for item in checks if item["status"] == BLOCKED]
         extra_checks: list[dict[str, Any]] = []
         st_pit_authoritative = bool(config.get("st_pit_authoritative") or config.get("enforce_st_pit_contract"))
@@ -300,8 +304,61 @@ class SelectionPackageHealthService:
             "context": {"source_type": record.source_type, "source_id": record.source_id, "loop_id": record.loop_id},
         }
 
+    def _hmm_artifact_check(
+        self,
+        manifest: Any,
+        runtime_config: dict[str, Any],
+        trade_date: date | None,
+    ) -> dict[str, Any]:
+        try:
+            profile = parse_selection_runtime_profile(runtime_config)
+        except TradingCoreError as exc:
+            return {"name": "hmm_artifact_status", "status": BLOCKED, "message": exc.message, "context": exc.context}
+        if not profile.hmm.enabled:
+            return {
+                "name": "hmm_artifact_status",
+                "status": UNKNOWN,
+                "message": "not requested because runtime_profile.hmm.enabled is false",
+                "context": {},
+            }
+        if trade_date is None:
+            return {
+                "name": "hmm_artifact_status",
+                "status": BLOCKED,
+                "message": "HMM artifact health requires trade_date",
+                "context": {"package_id": manifest.package_id},
+            }
+        if self.hmm_runtime is None or not hasattr(self.hmm_runtime, "preflight_coefficients"):
+            return {
+                "name": "hmm_artifact_status",
+                "status": BLOCKED,
+                "message": "HMM runtime is not available for artifact preflight",
+                "context": {"package_id": manifest.package_id},
+            }
+        try:
+            context = self.hmm_runtime.preflight_coefficients(
+                trade_date=trade_date,
+                profile=profile.hmm,
+                package_id=manifest.package_id,
+            )
+        except TradingCoreError as exc:
+            return {"name": "hmm_artifact_status", "status": BLOCKED, "message": exc.message, "context": exc.context}
+        except Exception as exc:
+            return {
+                "name": "hmm_artifact_status",
+                "status": BLOCKED,
+                "message": str(exc),
+                "context": {"package_id": manifest.package_id},
+            }
+        return {
+            "name": "hmm_artifact_status",
+            "status": PASS,
+            "message": "HMM coefficient artifact preflight passed",
+            "context": context,
+        }
+
     @staticmethod
-    def _deferred_runtime_checks() -> list[dict[str, Any]]:
+    def _deferred_runtime_checks(hmm_artifact_check: dict[str, Any]) -> list[dict[str, Any]]:
         return [
             {
                 "name": "model_schema_matches",
@@ -315,12 +372,7 @@ class SelectionPackageHealthService:
                 "message": "checked by strict live inference after feature preparation",
                 "context": {},
             },
-            {
-                "name": "hmm_artifact_status",
-                "status": UNKNOWN,
-                "message": "checked only when runtime_profile.hmm.enabled=true",
-                "context": {},
-            },
+            hmm_artifact_check,
             {
                 "name": "cold_cache_safe",
                 "status": UNKNOWN,

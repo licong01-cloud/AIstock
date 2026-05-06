@@ -73,6 +73,7 @@ class SelectionCenterService:
         self.package_health_service = package_health_service or SelectionPackageHealthService(
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
             runtime_source_resolver=getattr(self.selection_artifact_service, "runtime_asset_resolver", None),
+            hmm_runtime=getattr(self.runtime, "hmm_runtime", None),
         )
 
     def run_single_package(
