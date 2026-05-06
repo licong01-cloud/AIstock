@@ -753,7 +753,9 @@ def main():
     # 提取增强指标（read_exp_res.py 从 mlruns 提取完整回测指标）
     print("\\n=== Extracting enhanced metrics ===")
     res_cmd = [sys.executable, "read_exp_res.py"]
-    res_result = subprocess.run(res_cmd)
+    res_env = os.environ.copy()
+    res_env["QE_REQUIRE_RECORDER_ID"] = "1"
+    res_result = subprocess.run(res_cmd, env=res_env)
     if res_result.returncode != 0:
         raise RuntimeError(
             f"read_exp_res.py FAILED (exit code {{res_result.returncode}}). "

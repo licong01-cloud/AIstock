@@ -1,5 +1,6 @@
 import pickle
 import os
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -52,42 +53,141 @@ if not _tracking_uri:
 # Assuming you have already listed the experiments
 experiments = R.list_experiments()
 
-# Support QE_RECORDER_ID env var to select a specific recorder
-_target_rid = os.environ.get("QE_RECORDER_ID")
 
-# Iterate through each experiment to find the latest recorder (or specific one)
+def _truthy_env(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _load_bound_recorder_ref() -> dict:
+    """Load the recorder id that belongs to this QE loop, if available."""
+    env_rid = os.environ.get("QE_RECORDER_ID")
+    if env_rid and env_rid.strip():
+        return {"recorder_id": env_rid.strip(), "source": "env:QE_RECORDER_ID"}
+
+    json_path = Path.cwd() / "qe_current_recorder.json"
+    if json_path.exists():
+        try:
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            if _truthy_env("QE_REQUIRE_RECORDER_ID"):
+                raise SystemExit(f"ERROR: failed to parse {json_path}: {exc}")
+            print(f"Warning: failed to parse {json_path}: {exc}; falling back to legacy latest-recorder mode")
+        else:
+            rid = str(payload.get("recorder_id") or payload.get("id") or "").strip()
+            if rid:
+                payload = dict(payload)
+                payload["recorder_id"] = rid
+                payload["source"] = str(json_path)
+                return payload
+            if _truthy_env("QE_REQUIRE_RECORDER_ID"):
+                raise SystemExit(f"ERROR: {json_path} does not contain recorder_id")
+            print(f"Warning: {json_path} does not contain recorder_id; falling back to legacy latest-recorder mode")
+
+    txt_path = Path.cwd() / "qe_recorder_id.txt"
+    if txt_path.exists():
+        rid = txt_path.read_text(encoding="utf-8").strip()
+        if rid:
+            return {"recorder_id": rid, "source": str(txt_path)}
+
+    return {}
+
+
+def _recorder_id_matches(recorder_id: str, target_rid: str) -> bool:
+    return recorder_id == target_rid or recorder_id.startswith(target_rid)
+
+
+def _write_extracted_recorder_ref(recorder, experiment_name: str, binding: dict) -> None:
+    if not binding and not _truthy_env("QE_WRITE_EXTRACTED_RECORDER"):
+        return
+    info = getattr(recorder, "info", {}) or {}
+    payload = {
+        "schema_version": 1,
+        "selected_recorder_id": str(info.get("id") or ""),
+        "selected_experiment_name": experiment_name,
+        "selected_experiment_id": str(info.get("experiment_id") or ""),
+        "binding_source": binding.get("source"),
+        "target_recorder_id": binding.get("recorder_id"),
+        "strict_required": _truthy_env("QE_REQUIRE_RECORDER_ID"),
+        "written_at": datetime.now(timezone.utc).isoformat(),
+    }
+    path = Path.cwd() / "qe_extracted_recorder.json"
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+_binding = _load_bound_recorder_ref()
+_target_rid = str(_binding.get("recorder_id") or "").strip()
+_target_experiment = str(_binding.get("experiment_name") or "").strip()
+_require_bound_recorder = _truthy_env("QE_REQUIRE_RECORDER_ID")
+
+if _require_bound_recorder and not _target_rid:
+    raise SystemExit(
+        "ERROR: QE_REQUIRE_RECORDER_ID=1 but no QE_RECORDER_ID, qe_current_recorder.json, "
+        "or qe_recorder_id.txt was found. Refusing legacy latest-recorder fallback."
+    )
+
 experiment_name = None
 latest_recorder = None
-for experiment in experiments:
+matched_recorders = []
+scan_experiments = experiments
+if _target_rid and _target_experiment:
+    if _target_experiment in experiments:
+        scan_experiments = [_target_experiment]
+    elif _require_bound_recorder:
+        raise SystemExit(
+            f"ERROR: bound experiment {_target_experiment!r} not found while selecting recorder {_target_rid}"
+        )
+
+for experiment in scan_experiments:
     recorders = R.list_recorders(experiment_name=experiment)
     for recorder_id in recorders:
-        if recorder_id is not None:
-            experiment_name = experiment
+        if recorder_id is None:
+            continue
+        try:
             recorder = R.get_recorder(recorder_id=recorder_id, experiment_name=experiment)
-            try:
-                if _target_rid:
-                    # Match by prefix when QE_RECORDER_ID is set
-                    if recorder_id.startswith(_target_rid):
-                        latest_recorder = recorder
-                        break
-                else:
-                    end_time = recorder.info.get("end_time")
-                    # Check if the recorder has a valid end time
-                    if end_time is not None:
-                        if latest_recorder is None or end_time > latest_recorder.info["end_time"]:
-                            latest_recorder = recorder
-                    else:
-                        print(f"Warning: Recorder {recorder_id} has no valid end time")
-            except Exception as e:
-                print(f"Error: {e}")
-    if _target_rid and latest_recorder:
-        break
+            if _target_rid:
+                if _recorder_id_matches(str(recorder_id), _target_rid):
+                    matched_recorders.append((experiment, recorder_id, recorder))
+                continue
+
+            end_time = recorder.info.get("end_time")
+            if end_time is not None:
+                if latest_recorder is None or end_time > latest_recorder.info["end_time"]:
+                    latest_recorder = recorder
+                    experiment_name = experiment
+            else:
+                print(f"Warning: Recorder {recorder_id} has no valid end time")
+        except Exception as e:
+            print(f"Error: {e}")
+
+if _target_rid:
+    if len(matched_recorders) == 1:
+        experiment_name, _selected_recorder_id, latest_recorder = matched_recorders[0]
+        print(
+            f"Bound recorder selected: recorder_id={_selected_recorder_id} "
+            f"experiment={experiment_name} source={_binding.get('source')}"
+        )
+    elif len(matched_recorders) == 0:
+        raise SystemExit(
+            f"ERROR: target recorder {_target_rid} from {_binding.get('source')} was not found; "
+            "refusing to extract another recorder."
+        )
+    else:
+        matches = ", ".join(f"{exp}/{rid}" for exp, rid, _ in matched_recorders[:10])
+        raise SystemExit(
+            f"ERROR: target recorder prefix {_target_rid} matched multiple recorders: {matches}. "
+            "Use a full recorder id."
+        )
+elif not _require_bound_recorder:
+    print("Warning: no bound recorder id found; using legacy latest-recorder fallback for old experiments")
 
 # Check if the latest recorder is found
 if latest_recorder is None:
     print("No recorders found")
 else:
     print(f"Latest recorder: {latest_recorder}")
+    _write_extracted_recorder_ref(latest_recorder, experiment_name or "", _binding)
 
     # Load the specified file from the latest recorder
     metrics = pd.Series(latest_recorder.list_metrics())

@@ -205,6 +205,23 @@ def test_qe_generation_code_has_no_windows_worker_workspace_direct_access():
         assert '["wsl"' not in fn_source
 
 
+def test_qe_new_tasks_require_bound_recorder_before_result_extraction():
+    import backend.services.quantevolver.config_composer as composer_module
+
+    source = Path(composer_module.__file__).read_text(encoding="utf-8")
+    assert "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py" in source
+    assert "\npython read_exp_res.py\n" not in source
+
+
+def test_qe_read_exp_res_keeps_legacy_fallback_but_supports_strict_binding():
+    template = Path("backend/services/quantevolver/templates/read_exp_res.py").read_text(encoding="utf-8")
+
+    assert "qe_current_recorder.json" in template
+    assert "QE_REQUIRE_RECORDER_ID=1" in template
+    assert "using legacy latest-recorder fallback for old experiments" in template
+    assert "refusing to extract another recorder" in template
+
+
 def test_strategy_dependency_env_rejects_linux_worker_root(monkeypatch):
     monkeypatch.setenv("RDAGENT_FACTOR_TEMPLATE_WIN", "/home/lc999/RD-Agent-main/rdagent/scenarios/qlib")
 

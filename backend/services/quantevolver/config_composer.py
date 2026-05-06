@@ -3926,7 +3926,7 @@ class ConfigComposer:
         if train_only:
             runner_cmd += " --train-only"
         core_parts.append(runner_cmd)
-        core_parts.append("python read_exp_res.py")
+        core_parts.append("QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py")
         return env_lines, core_parts
 
     def _generate_wsl_command(self, wsl_path: str,
@@ -3993,7 +3993,7 @@ python prepare_factors.py
 python {runner} conf.yaml{train_only_flag}
 
 # 步骤4: 读取结果
-python read_exp_res.py
+QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
         elif use_custom_model:
@@ -4012,7 +4012,7 @@ conda activate rdagent-gpu
 python {runner} conf.yaml{train_only_flag}
 
 # 读取结果
-python read_exp_res.py
+QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
         else:
@@ -4025,7 +4025,7 @@ conda activate rdagent-gpu
 {_link_data_manual}
 
 python {runner} conf.yaml{train_only_flag}
-python read_exp_res.py
+QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
 
@@ -4593,13 +4593,14 @@ model_cls = {nn_class_name}
         模板文件维护在 QE 专用程序目录中，不再内嵌于本文件。
         这样 Phase 3 增强的诊断提取功能可以直接生效。
         """
+        external_template_path = ensure_aistock_artifact_path(
+            QE_PROGRAMS_WIN / "templates" / "read_exp_res.py",
+            purpose="QE read_exp_res.py local template",
+            extra_roots=[QE_PROGRAMS_WIN],
+        )
         candidate_paths = [
-            ensure_aistock_artifact_path(
-                QE_PROGRAMS_WIN / "templates" / "read_exp_res.py",
-                purpose="QE read_exp_res.py local template",
-                extra_roots=[QE_PROGRAMS_WIN],
-            ),
             BUNDLED_QE_TEMPLATE_ROOT / "read_exp_res.py",
+            external_template_path,
         ]
         template_path = next((path for path in candidate_paths if path.exists()), candidate_paths[0])
         try:

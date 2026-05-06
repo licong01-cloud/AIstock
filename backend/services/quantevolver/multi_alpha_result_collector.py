@@ -1034,7 +1034,7 @@ class MultiAlphaResultCollector:
             "export MALLOC_ARENA_MAX=4 && "
             "export PYTHONUNBUFFERED=1 && "
             "python qrun_limit_minute.py conf.yaml --pred-backtest combined_prediction.pkl && "
-            "python read_exp_res.py"
+            "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py"
         )
 
         backtest_config = {
