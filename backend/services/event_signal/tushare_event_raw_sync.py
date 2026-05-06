@@ -273,6 +273,7 @@ def build_raw_values(
     values: list[tuple[Any, ...]] = []
     skipped = 0
     seen_keys: set[tuple[str, str]] = set()
+    job_id_value = str(job_id) if job_id is not None else None
     for row in rows:
         payload = normalize_row(row)
         try:
@@ -300,9 +301,9 @@ def build_raw_values(
                 row_hash,
                 psycopg2.extras.Json(payload, dumps=_json_dumps),
                 observed_at,
-                job_id,
-                job_id,
-                job_id,
+                job_id_value,
+                job_id_value,
+                job_id_value,
             )
         )
     return values, skipped

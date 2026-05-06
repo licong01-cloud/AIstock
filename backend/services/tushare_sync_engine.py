@@ -22,7 +22,12 @@ from .tushare_rate_limiter import get_limiter
 from .tushare_dataset_specs import DatasetSpec, QueryMode
 
 PIT_SOURCE_DATASETS = {"stock_basic", "stock_st", "stock_st_events"}
-ZERO_ROW_VALID_DATASETS = {"suspend_d", "stock_st", "stock_st_events"}
+FINANCIAL_EVENT_RAW_DATASETS = {
+    "tushare_forecast_raw": "forecast",
+    "tushare_express_raw": "express",
+    "tushare_fina_indicator_raw": "fina_indicator",
+}
+ZERO_ROW_VALID_DATASETS = {"suspend_d", "stock_st", "stock_st_events", *FINANCIAL_EVENT_RAW_DATASETS}
 
 
 @dataclass
@@ -35,6 +40,7 @@ class SyncResult:
     failed_batches: int = 0
     inserted_rows: int = 0
     error: Optional[str] = None
+    periods: List[str] | None = None
 
     @property
     def ok(self) -> bool:
@@ -50,6 +56,7 @@ class SyncResult:
             "failed_batches": self.failed_batches,
             "inserted_rows": self.inserted_rows,
             "error": self.error,
+            "periods": self.periods or [],
         }
 
 
@@ -397,6 +404,115 @@ class TushareSyncEngine:
 
         return result
 
+    def _sync_by_period(
+        self,
+        conn,
+        spec: DatasetSpec,
+        start_date: dt.date,
+        end_date: dt.date,
+        job_id: uuid.UUID,
+    ) -> SyncResult:
+        """Sync event-style Tushare VIP APIs by report period.
+
+        The financial raw tables are source-only JSON/version tables. They
+        cannot use the generic typed-column upsert path; instead they reuse the
+        event raw service and then write date-level refresh audit rows for the
+        requested announcement-date window.
+        """
+
+        logical_dataset = FINANCIAL_EVENT_RAW_DATASETS.get(spec.name)
+        if logical_dataset is None:
+            raise RuntimeError(f"{spec.name}: BY_PERIOD has no financial raw dataset mapping")
+
+        from backend.services.event_signal.financial_event_backfill import (
+            generate_report_periods,
+            period_to_tushare,
+        )
+        from backend.services.event_signal.tushare_event_raw_sync import TushareEventRawSyncService
+
+        periods = [period_to_tushare(period) for period in generate_report_periods(start_date, end_date)]
+        result = SyncResult(
+            dataset=spec.name,
+            mode="sync",
+            job_id=job_id,
+            total_batches=len(periods),
+            periods=periods,
+        )
+        raw_service = TushareEventRawSyncService()
+        errors: list[str] = []
+
+        for period in periods:
+            try:
+                summary = raw_service.sync_period(logical_dataset, period=period, job_id=job_id)
+                result.inserted_rows += int(summary.written_rows or 0)
+                result.success_batches += 1
+                self._log(
+                    conn,
+                    job_id,
+                    "info",
+                    (
+                        f"{spec.name} period={period} fetched={summary.fetched_rows} "
+                        f"written={summary.written_rows} skipped={summary.skipped_rows}"
+                    ),
+                )
+            except Exception as exc:
+                result.failed_batches += 1
+                errors.append(f"{period}: {exc}")
+                self._log(conn, job_id, "error", f"{spec.name} period={period} failed: {exc}")
+
+            try:
+                self._update_progress(conn, job_id, result)
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("_sync_by_period: progress update failed for job %s: %s", job_id, exc)
+
+            if spec.batch_sleep > 0:
+                time.sleep(spec.batch_sleep)
+
+        metadata = {
+            "tushare_api": spec.tushare_api,
+            "mode": spec.query_mode.value,
+            "periods": periods,
+            "date_column": spec.date_column,
+            "sparse_event_dataset": True,
+        }
+        if errors:
+            result.error = "; ".join(errors)[:4000]
+            for d in _date_range(start_date, end_date):
+                try:
+                    self._refresh_audit.record_failure(
+                        dataset=spec.name,
+                        trade_date=d,
+                        error_message=result.error,
+                        job_id=str(job_id),
+                        data_source="tushare",
+                        metadata=metadata,
+                        quality_status="error",
+                        failure_category="provider_or_persistence_error",
+                        conn=conn,
+                    )
+                except Exception as audit_exc:
+                    self._log(conn, job_id, "error", f"{spec.name} {d} refresh audit failed: {audit_exc}")
+            return result
+
+        row_counts = self._table_row_counts_by_date(conn, spec, start_date, end_date)
+        for d in _date_range(start_date, end_date):
+            row_count = int(row_counts.get(d, 0))
+            quality_status = "ok" if row_count > 0 else "empty_valid"
+            self._refresh_audit.record_success(
+                dataset=spec.name,
+                trade_date=d,
+                row_count=row_count,
+                job_id=str(job_id),
+                data_source="tushare",
+                metadata=metadata,
+                written_rows=row_count,
+                quality_status=quality_status,
+                conn=conn,
+            )
+
+        return result
+
     def _sync_single_call(
         self, conn, spec: DatasetSpec, job_id: uuid.UUID,
     ) -> SyncResult:
@@ -592,6 +708,10 @@ class TushareSyncEngine:
                         f"{spec.name}: BY_CODE requires start_date when skip_date_params=False"
                     )
                 result = self._sync_by_code_batched(spec, start_date, end_date, job_id)
+            elif spec.query_mode == QueryMode.BY_PERIOD:
+                assert start_date is not None
+                with get_conn() as conn:
+                    result = self._sync_by_period(conn, spec, start_date, end_date, job_id)
             else:
                 assert start_date is not None
                 with get_conn() as conn:

@@ -14,6 +14,7 @@ class QueryMode(str, Enum):
     """How the engine iterates over the Tushare API."""
     BY_DATE = "by_date"            # one API call per trade_date
     BY_CODE = "by_code"            # one API call per ts_code
+    BY_PERIOD = "by_period"        # one API call per report-period quarter end
     SINGLE_CALL = "single_call"    # one API call fetches everything
 
 
@@ -287,6 +288,82 @@ SUSPEND_D = DatasetSpec(
 )
 
 
+TUSHARE_FORECAST_RAW = DatasetSpec(
+    name="tushare_forecast_raw",
+    tushare_api="forecast_vip",
+    target_table="market.tushare_forecast_raw",
+    primary_keys=["source_record_key", "source_row_hash"],
+    query_mode=QueryMode.BY_PERIOD,
+    columns={
+        "source_api": "text",
+        "fetch_params": "jsonb",
+        "source_record_key": "text",
+        "ts_code": "text",
+        "ann_date": "date",
+        "report_period": "date",
+        "source_row_hash": "text",
+        "raw_payload": "jsonb",
+        "first_seen_at": "datetime",
+        "last_seen_at": "datetime",
+        "observed_at": "datetime",
+    },
+    date_column="ann_date",
+    batch_sleep=0.3,
+    rate_per_minute=200,
+    incremental_cursor_from_audit=True,
+)
+
+TUSHARE_EXPRESS_RAW = DatasetSpec(
+    name="tushare_express_raw",
+    tushare_api="express_vip",
+    target_table="market.tushare_express_raw",
+    primary_keys=["source_record_key", "source_row_hash"],
+    query_mode=QueryMode.BY_PERIOD,
+    columns={
+        "source_api": "text",
+        "fetch_params": "jsonb",
+        "source_record_key": "text",
+        "ts_code": "text",
+        "ann_date": "date",
+        "report_period": "date",
+        "source_row_hash": "text",
+        "raw_payload": "jsonb",
+        "first_seen_at": "datetime",
+        "last_seen_at": "datetime",
+        "observed_at": "datetime",
+    },
+    date_column="ann_date",
+    batch_sleep=0.3,
+    rate_per_minute=200,
+    incremental_cursor_from_audit=True,
+)
+
+TUSHARE_FINA_INDICATOR_RAW = DatasetSpec(
+    name="tushare_fina_indicator_raw",
+    tushare_api="fina_indicator_vip",
+    target_table="market.tushare_fina_indicator_raw",
+    primary_keys=["source_record_key", "source_row_hash"],
+    query_mode=QueryMode.BY_PERIOD,
+    columns={
+        "source_api": "text",
+        "fetch_params": "jsonb",
+        "source_record_key": "text",
+        "ts_code": "text",
+        "ann_date": "date",
+        "report_period": "date",
+        "source_row_hash": "text",
+        "raw_payload": "jsonb",
+        "first_seen_at": "datetime",
+        "last_seen_at": "datetime",
+        "observed_at": "datetime",
+    },
+    date_column="ann_date",
+    batch_sleep=0.3,
+    rate_per_minute=200,
+    incremental_cursor_from_audit=True,
+)
+
+
 # ---------------------------------------------------------------------------
 # 3 Shenwan (申万) sector dataset definitions
 # ---------------------------------------------------------------------------
@@ -390,6 +467,9 @@ DATASET_REGISTRY: Dict[str, DatasetSpec] = {
         BAK_BASIC,
         STK_LIMIT,
         SUSPEND_D,
+        TUSHARE_FORECAST_RAW,
+        TUSHARE_EXPRESS_RAW,
+        TUSHARE_FINA_INDICATOR_RAW,
         MARGIN_DETAIL,
         SW_INDEX_CLASSIFY,
         SW_INDEX_MEMBER,

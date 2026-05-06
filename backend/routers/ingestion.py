@@ -21,6 +21,12 @@ from ..services.tushare_sync_engine import TushareSyncEngine
 
 router = APIRouter(prefix="/api", tags=["ingestion"])
 
+FINANCIAL_EVENT_RAW_DATASETS = {
+    "tushare_forecast_raw",
+    "tushare_express_raw",
+    "tushare_fina_indicator_raw",
+}
+
 
 # ---------------------------------------------------------------------------
 # 通用 JSON / 时间处理工具（保持与 tdx_backend 中实现一致）
@@ -319,6 +325,7 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
         "stk_limit",
         "suspend_d",
         "margin_detail",
+        *FINANCIAL_EVENT_RAW_DATASETS,
     }:
         return "tushare"
     if ds in {"index_daily", "index_basic"}:
@@ -1284,6 +1291,9 @@ _DAILY_PRESETS = [
     ("stk_limit", "incremental"),
     ("suspend_d", "incremental"),
     ("anns_metadata", "incremental"),
+    ("tushare_forecast_raw", "incremental"),
+    ("tushare_express_raw", "incremental"),
+    ("tushare_fina_indicator_raw", "incremental"),
     ("margin_detail", "incremental"),
     ("sw_sector", "incremental"),
     ("sector_data", "incremental"),
@@ -1515,7 +1525,7 @@ def list_tushare_datasets() -> Dict[str, Any]:
 
 @router.post("/ingestion/tushare/sync-all")
 def tushare_sync_all() -> Dict[str, Any]:
-    """Trigger incremental sync for all 7 engine-managed datasets."""
+    """Trigger incremental sync for all engine-managed datasets."""
     jobs: List[Dict[str, Any]] = []
     for name, spec in DATASET_REGISTRY.items():
         mode = "init" if not spec.supports_incremental else "incremental"
@@ -1597,6 +1607,11 @@ def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="margin_detail init requires start_date")
         if mode == "init" and not options.get("end_date"):
             raise HTTPException(status_code=400, detail="margin_detail init requires end_date")
+    elif dataset in FINANCIAL_EVENT_RAW_DATASETS:
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail=f"{dataset} init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail=f"{dataset} init requires end_date")
     elif dataset == "index_daily":
         # 指数日线行情 index_daily：
         # - init: 必须提供 start_date/end_date

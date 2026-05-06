@@ -1,4 +1,5 @@
 import datetime as dt
+import uuid
 
 from backend.services.event_signal.tushare_event_raw_sync import (
     DATASET_CONFIGS,
@@ -131,3 +132,29 @@ def test_build_raw_values_deduplicates_same_source_key_and_hash_in_one_batch():
 
     assert len(values) == 1
     assert skipped == 1
+
+
+def test_build_raw_values_serializes_uuid_job_id_for_psycopg2():
+    config = DATASET_CONFIGS["forecast"]
+    job_id = uuid.uuid4()
+
+    values, skipped = build_raw_values(
+        config,
+        [
+            {
+                "ts_code": "000001.SZ",
+                "ann_date": "20240131",
+                "end_date": "20231231",
+                "type": "pre_increase",
+            }
+        ],
+        source_api="forecast_vip",
+        fetch_params={"period": "20231231"},
+        observed_at=dt.datetime(2026, 5, 6, tzinfo=dt.timezone.utc),
+        job_id=job_id,
+    )
+
+    assert skipped == 0
+    assert values[0][9] == str(job_id)
+    assert values[0][10] == str(job_id)
+    assert values[0][11] == str(job_id)
