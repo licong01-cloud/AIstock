@@ -1,10 +1,12 @@
 import datetime as dt
 import uuid
 from dataclasses import replace
+from types import SimpleNamespace
 
 import backend.services.tushare_sync_engine as sync_engine
+import backend.services.event_signal.tushare_event_raw_sync as raw_sync_module
 import backend.services.stock_universe_pit_service as pit_service
-from backend.services.tushare_dataset_specs import SUSPEND_D
+from backend.services.tushare_dataset_specs import DATASET_REGISTRY, QueryMode, SUSPEND_D, TUSHARE_FORECAST_RAW
 from backend.services.tushare_sync_engine import TushareSyncEngine
 
 
@@ -37,6 +39,27 @@ class _FakeConn:
 
     def rollback(self):
         self.rollbacks += 1
+
+
+class _PeriodCursor(_FakeCursor):
+    def __init__(self, conn):
+        super().__init__(conn)
+        self._rows = []
+
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        if "GROUP BY" in sql and "market.tushare_forecast_raw" in sql:
+            self._rows = [(dt.date(2024, 2, 1), 3)]
+        else:
+            self._rows = []
+
+    def fetchall(self):
+        return self._rows
+
+
+class _PeriodConn(_FakeConn):
+    def cursor(self):
+        return _PeriodCursor(self)
 
 
 def test_sync_by_date_replaces_suspend_d_date_even_when_tushare_returns_empty(monkeypatch):
@@ -81,6 +104,60 @@ def test_sync_by_date_uses_upsert_only_when_replace_existing_dates_is_disabled(m
     assert any("dataset_date_refresh_audit" in sql for sql, _params in conn.executed)
     assert upserted == [rows]
     assert conn.commits == 0
+
+
+def test_financial_event_raw_dataset_specs_use_period_vip_sync_mode():
+    for name, api in {
+        "tushare_forecast_raw": "forecast_vip",
+        "tushare_express_raw": "express_vip",
+        "tushare_fina_indicator_raw": "fina_indicator_vip",
+    }.items():
+        spec = DATASET_REGISTRY[name]
+        assert spec.query_mode == QueryMode.BY_PERIOD
+        assert spec.tushare_api == api
+        assert spec.date_column == "ann_date"
+        assert spec.incremental_cursor_from_audit is True
+
+
+def test_sync_by_period_uses_financial_raw_service_and_records_sparse_audit(monkeypatch):
+    calls = []
+
+    class _FakeRawService:
+        def sync_period(self, dataset, *, period, job_id=None):
+            calls.append((dataset, period, job_id))
+            return SimpleNamespace(fetched_rows=5, written_rows=4, skipped_rows=1)
+
+    monkeypatch.setattr(raw_sync_module, "TushareEventRawSyncService", _FakeRawService)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+    engine = TushareSyncEngine()
+    conn = _PeriodConn()
+    job_id = uuid.uuid4()
+    result = engine._sync_by_period(
+        conn,
+        TUSHARE_FORECAST_RAW,
+        dt.date(2024, 2, 1),
+        dt.date(2024, 2, 2),
+        job_id,
+    )
+
+    assert result.ok is True
+    assert result.periods == ["20231231"]
+    assert result.inserted_rows == 4
+    assert calls == [("forecast", "20231231", job_id)]
+    audit_rows = [
+        params
+        for sql, params in conn.executed
+        if "INSERT INTO market.dataset_date_refresh_audit" in sql
+    ]
+    assert len(audit_rows) == 2
+    assert audit_rows[0][0] == "tushare_forecast_raw"
+    assert audit_rows[0][1] == dt.date(2024, 2, 1)
+    assert audit_rows[0][5] == 3
+    assert audit_rows[0][12] == "ok"
+    assert audit_rows[1][1] == dt.date(2024, 2, 2)
+    assert audit_rows[1][5] == 0
+    assert audit_rows[1][12] == "empty_valid"
 
 
 def test_stock_st_events_success_hook_marks_dirty_and_ensures(monkeypatch):

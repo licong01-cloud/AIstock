@@ -43,6 +43,11 @@ const FREQUENCY_CHOICES: { label: string; value: string }[] = [
   { label: "每日", value: "daily" },
 ];
 
+const FINANCIAL_EVENT_RAW_DATASETS: string[] = [
+  "tushare_forecast_raw",
+  "tushare_express_raw",
+  "tushare_fina_indicator_raw",
+];
 const INGESTION_DATASETS_BY_SOURCE: Record<DataSource, Record<string, string>> = {
   TDX: {
     kline_daily_raw: "日线（未复权 RAW）",
@@ -63,6 +68,9 @@ const INGESTION_DATASETS_BY_SOURCE: Record<DataSource, Record<string, string>> =
     stk_limit: "每日涨跌停价格（Tushare stk_limit）",
     margin_detail: "融资融券明细（Tushare margin_detail）",
     anns_metadata: "公告元数据（Eastmoney/Cninfo，滚动两天）",
+    tushare_forecast_raw: "Performance forecast raw (Tushare forecast_vip)",
+    tushare_express_raw: "Performance express raw (Tushare express_vip)",
+    tushare_fina_indicator_raw: "Financial indicator raw (Tushare fina_indicator_vip)",
     stock_st_events: "ST 风险警示事件（Tushare st）",
     stock_universe_pit_events: "ST PIT 派生事件（本地规则）",
     stock_universe_pit_spans: "ST PIT 可选区间（本地规则）",
@@ -92,6 +100,7 @@ const TRUNCABLE_DATASETS: string[] = [
   "stk_limit",
   "suspend_d",
   "margin_detail",
+  ...FINANCIAL_EVENT_RAW_DATASETS,
   "daily_basic",
   "anns_d",
   "cyq_perf",
@@ -283,6 +292,9 @@ export default function LocalDataPage() {
       } else if (lower === "anns_metadata") {
         dataSource = "Tushare";
         dataset = "anns_metadata";
+      } else if (FINANCIAL_EVENT_RAW_DATASETS.includes(lower)) {
+        dataSource = "Tushare";
+        dataset = lower;
       } else if (lower === "index_daily") {
         dataSource = "Tushare";
         dataset = "index_daily";
@@ -519,6 +531,9 @@ function InitTab() {
       key: "anns_metadata",
       label: "anns_metadata · 公告元数据（Eastmoney/Cninfo）",
     },
+    { key: "tushare_forecast_raw", label: "tushare_forecast_raw - Performance forecast raw (Tushare)" },
+    { key: "tushare_express_raw", label: "tushare_express_raw - Performance express raw (Tushare)" },
+    { key: "tushare_fina_indicator_raw", label: "tushare_fina_indicator_raw - Financial indicator raw (Tushare)" },
     {
       key: "tushare_trade_cal",
       label: "tushare_trade_cal · 交易日历（Tushare trade_cal 同步）",
@@ -762,6 +777,7 @@ function InitTab() {
           "stk_limit",
           "suspend_d",
           "margin_detail",
+          ...FINANCIAL_EVENT_RAW_DATASETS,
           "anns_d",
           "cyq_perf",
           "cyq_chips",
@@ -798,6 +814,7 @@ function InitTab() {
           "cyq_perf",
           "cyq_chips",
           "margin_detail",
+          ...FINANCIAL_EVENT_RAW_DATASETS,
         ].includes(dataset)
       ) {
         opts.truncate = Boolean(truncate);
@@ -807,7 +824,7 @@ function InitTab() {
           opts.index_markets = indexMarkets;
         }
       }
-      if (dataset === "stock_st" || dataset === "stock_st_events" || dataset === "bak_basic" || dataset === "stk_limit" || dataset === "suspend_d" || dataset === "margin_detail" || dataset === "anns_d" || dataset === "anns_metadata" || dataset === "cyq_perf" || dataset === "cyq_chips") {
+      if (dataset === "stock_st" || dataset === "stock_st_events" || dataset === "bak_basic" || dataset === "stk_limit" || dataset === "suspend_d" || dataset === "margin_detail" || FINANCIAL_EVENT_RAW_DATASETS.includes(dataset) || dataset === "anns_d" || dataset === "anns_metadata" || dataset === "cyq_perf" || dataset === "cyq_chips") {
         if (!opts.start_date || !opts.end_date) {
           setError("请填写起止日期再执行初始化。");
           return;
@@ -1022,6 +1039,7 @@ function InitTab() {
               "stk_limit",
               "suspend_d",
               "margin_detail",
+              ...FINANCIAL_EVENT_RAW_DATASETS,
               "anns_d",
             ].includes(dataset))) && (
           <div className={styles.formGroup}>
@@ -1257,6 +1275,9 @@ function IncrementalTab({
       key: "anns_metadata",
       label: "anns_metadata · 公告元数据（Eastmoney/Cninfo，默认最近两天）",
     },
+    { key: "tushare_forecast_raw", label: "tushare_forecast_raw - Performance forecast raw (Tushare)" },
+    { key: "tushare_express_raw", label: "tushare_express_raw - Performance express raw (Tushare)" },
+    { key: "tushare_fina_indicator_raw", label: "tushare_fina_indicator_raw - Financial indicator raw (Tushare)" },
     {
       key: "cyq_perf",
       label: "cyq_perf · 每日筹码及胜率（Tushare）",
@@ -3880,7 +3901,8 @@ function DataStatsTab({
       k === "adj_factor" ||
       k === "symbol_dim" ||
       k === "index_basic" ||
-      k === "stk_limit"
+      k === "stk_limit" ||
+      FINANCIAL_EVENT_RAW_DATASETS.includes(k)
     ) {
       return "basic";
     }
@@ -4029,6 +4051,7 @@ function DataStatsTab({
           lower === "stk_limit" ||
           lower === "suspend_d" ||
           lower === "margin_detail" ||
+          FINANCIAL_EVENT_RAW_DATASETS.includes(lower) ||
           lower === "anns_d" ||
           lower === "anns_metadata" ||
           lower === "index_daily" ||
@@ -4337,6 +4360,7 @@ function DataStatsTab({
                       "stk_limit",
                       "suspend_d",
                       "margin_detail",
+                      ...FINANCIAL_EVENT_RAW_DATASETS,
                     ].includes(kind);
 
                     rows.push(
@@ -5162,6 +5186,9 @@ const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; 
   { dataset: "stk_limit", label: "每日涨跌停价格", source: "Tushare", defaultAt: "09:10" },
   { dataset: "suspend_d", label: "Daily suspend/resume info", source: "Tushare", defaultAt: "", frequency: "1h" },
   { dataset: "anns_metadata", label: "公告元数据（滚动两天）", source: "Eastmoney", defaultAt: "", frequency: "1h" },
+  { dataset: "tushare_forecast_raw", label: "Performance forecast raw", source: "Tushare", defaultAt: "20:45" },
+  { dataset: "tushare_express_raw", label: "Performance express raw", source: "Tushare", defaultAt: "20:50" },
+  { dataset: "tushare_fina_indicator_raw", label: "Financial indicator raw", source: "Tushare", defaultAt: "21:00" },
 ];
 
 /** 数据健康检查报告组件 — 在 _auto_retry_stale 调度卡片内展开 */

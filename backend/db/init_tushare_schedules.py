@@ -49,6 +49,9 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "anns_metadata",         "mode": "incremental", "frequency": "1h",
      "lookback_days": 2, "source": "eastmoney", "workers": 1, "request_sleep": 0.05,
      "skip_auto_range": True},
+    {"dataset": "tushare_forecast_raw",       "mode": "incremental", "frequency": "daily", "at": "20:45"},
+    {"dataset": "tushare_express_raw",        "mode": "incremental", "frequency": "daily", "at": "20:50"},
+    {"dataset": "tushare_fina_indicator_raw", "mode": "incremental", "frequency": "daily", "at": "21:00"},
 
     # ── Phase 4 — Tushare 中期数据（16:30-17:00 更新 +10min 缓冲） ──
     {"dataset": "sw_sector",             "mode": "incremental", "frequency": "daily", "at": "17:10"},
