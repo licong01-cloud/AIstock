@@ -19,7 +19,7 @@ class FakeExternalResolver(ModelAssetResolver):
         super().__init__(cache_root=cache_root)
         self.source = source
 
-    def _candidate_paths(self, original_path: str) -> list[Path]:
+    def _candidate_paths(self, original_path: str, *, algo_code: str | None = None) -> list[Path]:
         return [Path(original_path), self.source]
 
 
@@ -100,13 +100,22 @@ def test_model_asset_resolver_fails_when_v24_model_source_and_cache_are_missing(
         ModelAssetResolver(cache_root=workspace_tmp / "cache").resolve_manifest_assets(manifest)
 
 
-def test_model_asset_resolver_does_not_probe_wsl_unc_paths_on_windows(monkeypatch, workspace_tmp) -> None:
+def test_model_asset_resolver_uses_aistock_cache_without_wsl_unc_probe(monkeypatch, workspace_tmp) -> None:
     monkeypatch.setattr(resolver_module.os, "name", "nt")
     resolver = ModelAssetResolver(cache_root=workspace_tmp / "cache")
 
-    candidates = [str(path) for path in resolver._candidate_paths("/home/lc999/model.pt")]
+    candidates = [
+        str(path)
+        for path in resolver._candidate_paths(
+            "/home/lc999/model.pt",
+            algo_code="V25_TWO_STAGE",
+        )
+    ]
 
-    assert candidates == [str(Path("/home/lc999/model.pt"))]
+    assert candidates == [
+        str(Path("/home/lc999/model.pt")),
+        str(workspace_tmp / "cache" / "V25_TWO_STAGE" / "model.pt"),
+    ]
     assert all("\\\\wsl" not in item.lower() for item in candidates)
 
 
@@ -138,7 +147,7 @@ def test_model_asset_resolver_copies_all_v25_model_assets(workspace_tmp) -> None
     )
 
     class MultiSourceResolver(ModelAssetResolver):
-        def _candidate_paths(self, original_path: str) -> list[Path]:
+        def _candidate_paths(self, original_path: str, *, algo_code: str | None = None) -> list[Path]:
             if original_path.endswith("v25_early.pt"):
                 return [Path(original_path), early]
             return [Path(original_path), late]
@@ -152,4 +161,34 @@ def test_model_asset_resolver_copies_all_v25_model_assets(workspace_tmp) -> None
     assert config["original_late_model_path"] == "/home/lc999/data/rl_models/v25/v25_late.pt"
     assert config["runtime_asset_cache_status"] == {"early_model_path": "copied", "late_model_path": "copied"}
     assert resolved.manifest_sha256 != manifest.manifest_sha256
+    StrategyPackageValidator().validate_manifest(resolved)
+
+
+def test_model_asset_resolver_promotes_legacy_aistock_cache_file_to_hashed_cache(workspace_tmp) -> None:
+    cache_root = workspace_tmp / "cache"
+    legacy_dir = cache_root / "V25_TWO_STAGE"
+    legacy_dir.mkdir(parents=True)
+    legacy_early = legacy_dir / "v25_early_net_joint_fixed.pt"
+    legacy_late = legacy_dir / "v25_late_net_joint_fixed.pt"
+    legacy_early.write_bytes(b"legacy-early")
+    legacy_late.write_bytes(b"legacy-late")
+    manifest = make_v25_manifest(
+        "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt",
+        "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt",
+    )
+
+    resolved = ModelAssetResolver(cache_root=cache_root).resolve_manifest_assets(manifest)
+    config = resolved.minute_execution_policy.algo_config
+    cached_early = Path(config["early_model_path"])
+    cached_late = Path(config["late_model_path"])
+
+    assert cached_early != legacy_early
+    assert cached_late != legacy_late
+    assert cached_early.read_bytes() == b"legacy-early"
+    assert cached_late.read_bytes() == b"legacy-late"
+    assert (cached_early.with_suffix(cached_early.suffix + ".json")).exists()
+    assert (cached_late.with_suffix(cached_late.suffix + ".json")).exists()
+    assert config["runtime_asset_cache_status"] == {"early_model_path": "copied", "late_model_path": "copied"}
+    assert config["original_early_model_path"] == "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt"
+    assert config["original_late_model_path"] == "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt"
     StrategyPackageValidator().validate_manifest(resolved)

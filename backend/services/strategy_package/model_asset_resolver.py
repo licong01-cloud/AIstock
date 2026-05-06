@@ -170,7 +170,7 @@ class ModelAssetResolver:
                 },
             )
 
-        source = self._find_existing_source(original_path)
+        source = self._find_existing_source(original_path, algo_code=algo_code)
         if source is None:
             raise DataUnavailableError(
                 f"{algo_code} {config_key} is not accessible from AIstock backend",
@@ -180,7 +180,9 @@ class ModelAssetResolver:
                     "config_key": config_key,
                     "asset_path": original_path,
                     "cache_path": str(destination),
-                    "attempted_paths": [str(path) for path in self._candidate_paths(original_path)],
+                    "attempted_paths": [
+                        str(path) for path in self._candidate_paths(original_path, algo_code=algo_code)
+                    ],
                 },
             )
 
@@ -324,8 +326,8 @@ class ModelAssetResolver:
                 },
             )
 
-    def _find_existing_source(self, original_path: str) -> Path | None:
-        for candidate in self._candidate_paths(original_path):
+    def _find_existing_source(self, original_path: str, *, algo_code: str) -> Path | None:
+        for candidate in self._candidate_paths(original_path, algo_code=algo_code):
             if self._is_existing_file(candidate):
                 return candidate
         return None
@@ -337,9 +339,28 @@ class ModelAssetResolver:
         except OSError:
             return False
 
-    def _candidate_paths(self, original_path: str) -> list[Path]:
+    def _candidate_paths(self, original_path: str, *, algo_code: str | None = None) -> list[Path]:
         ensure_not_forbidden_worker_workspace_path(original_path, purpose="StrategyPackage model asset source path")
-        return [Path(original_path)]
+        candidates = [Path(original_path)]
+        filename = Path(original_path).name
+        normalized_algo = str(algo_code or "").strip().upper()
+        if filename and normalized_algo:
+            # Legacy hand-copied model assets live under the AIstock cache by
+            # original filename; use them only as a source for hashed cache copy.
+            candidates.append(self.cache_root / normalized_algo / filename)
+        return self._dedupe_candidate_paths(candidates)
+
+    @staticmethod
+    def _dedupe_candidate_paths(candidates: list[Path]) -> list[Path]:
+        seen: set[str] = set()
+        deduped: list[Path] = []
+        for candidate in candidates:
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(candidate)
+        return deduped
 
     @staticmethod
     def _ensure_not_worker_path(
