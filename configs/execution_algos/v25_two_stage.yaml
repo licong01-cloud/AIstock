@@ -1,0 +1,8 @@
+# V25 Two-Stage执行策略配置
+algo_code: V25_TWO_STAGE
+description: v25 two-stage execution
+early_model_path: /home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt
+late_model_path: /home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt
+device: cuda
+version: v25_joint_fixed
+kl_divergence: 0.2773

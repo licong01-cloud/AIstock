@@ -17,6 +17,15 @@ Scope: compare `F:/Dev/AIstock` against `origin/main` without modifying producti
 - local_only_doc_count: `51`
 - local_only_artifact_temp_count: `621`
 
+
+## Reconcile actions executed on clean branch
+
+- Preserved production-visible `/paper-trading/package-selection` route by copying `frontend/src/app/paper-trading/package-selection/page.tsx` from the production worktree and validating `npm run build` in the reconcile worktree.
+- Preserved RD-Agent dispatch environment coverage by copying `backend/tests/test_dispatch_service_env.py`, updating the local-home fixture to match current `origin/main`, and validating the targeted pytest file.
+- Preserved reviewed local-only non-temp docs, validation records, and reusable diagnostic scripts in their original paths so a later production sync does not remove them from `F:/Dev/AIstock`.
+- Did not preserve `scripts/v25_verify.py` because it has a syntax error in the production worktree and is not a runnable function; it remains in the backup snapshot for manual recovery if needed.
+- Did not preserve `.codex_tmp/`, `.coverage`, `catboost_info/`, `qlib_minute_validation/`, `monitoring/process-exporter/process-exporter`, transient PKL/CSV artifacts, or root deletion-candidate manifests as production runtime functions.
+
 ## Tracked files different from origin/main
 
 - ` M` `backend/services/quantevolver/config_composer.py`
