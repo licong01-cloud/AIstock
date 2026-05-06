@@ -10,8 +10,10 @@
 
 用法：python qrun_limit.py conf.yaml
 """
+import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from jinja2 import Template, meta
@@ -19,6 +21,36 @@ from ruamel.yaml import YAML
 from qlib.workflow.cli import sys_config, task_train
 import qlib
 from qlib.config import C
+
+
+RECORDER_REF_FILE = "qe_current_recorder.json"
+
+
+def _write_qe_current_recorder(recorder, mode: str, experiment_name: str):
+    """Persist the recorder created by this runner for read_exp_res.py."""
+    info = getattr(recorder, "info", {}) or {}
+    recorder_id = str(info.get("id") or info.get("recorder_id") or getattr(recorder, "id", "") or "")
+    if not recorder_id:
+        print(f"[WARN] QE recorder binding skipped: recorder id missing for mode={mode}")
+        return None
+
+    payload = {
+        "schema_version": 1,
+        "recorder_id": recorder_id,
+        "experiment_name": experiment_name,
+        "experiment_id": str(info.get("experiment_id") or ""),
+        "mode": mode,
+        "runner": Path(__file__).name,
+        "cwd": str(Path.cwd()),
+        "mlflow_tracking_uri": os.environ.get("MLFLOW_TRACKING_URI", ""),
+        "written_at": datetime.now(timezone.utc).isoformat(),
+    }
+    path = Path.cwd() / RECORDER_REF_FILE
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    print(f"[INFO] QE recorder binding written: {path} recorder_id={recorder_id} mode={mode}")
+    return payload
 
 
 def render_yaml_template(yaml_path: str) -> str:
@@ -156,6 +188,7 @@ def main():
     # Run training + backtesting
     experiment_name = config.get("experiment_name", "workflow")
     recorder = task_train(config.get("task"), experiment_name=experiment_name)
+    _write_qe_current_recorder(recorder, "full", experiment_name)
     recorder.save_objects(config=config)
 
 

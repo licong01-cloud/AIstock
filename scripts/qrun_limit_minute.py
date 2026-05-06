@@ -26,6 +26,7 @@ import gc
 import os
 import sys
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 
 # 尾盘策略 14:30 前不出单，空 bar 触发 np.nanmean([]) 警告，无害
@@ -58,6 +59,36 @@ import pandas as pd
 
 # 环境变量：SAVE_MINUTE_TRADES=1 启用分钟级记录
 SAVE_MINUTE_TRADES = os.environ.get('SAVE_MINUTE_TRADES', '0') == '1'
+
+RECORDER_REF_FILE = "qe_current_recorder.json"
+
+
+def _write_qe_current_recorder(recorder, mode: str, experiment_name: str):
+    """Persist the recorder created by this runner for read_exp_res.py."""
+    info = getattr(recorder, "info", {}) or {}
+    recorder_id = str(info.get("id") or info.get("recorder_id") or getattr(recorder, "id", "") or "")
+    if not recorder_id:
+        print(f"[WARN] QE recorder binding skipped: recorder id missing for mode={mode}")
+        return None
+
+    payload = {
+        "schema_version": 1,
+        "recorder_id": recorder_id,
+        "experiment_name": experiment_name,
+        "experiment_id": str(info.get("experiment_id") or ""),
+        "mode": mode,
+        "runner": Path(__file__).name,
+        "cwd": str(Path.cwd()),
+        "mlflow_tracking_uri": os.environ.get("MLFLOW_TRACKING_URI", ""),
+        "written_at": datetime.now(timezone.utc).isoformat(),
+    }
+    path = Path.cwd() / RECORDER_REF_FILE
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    print(f"[INFO] QE recorder binding written: {path} recorder_id={recorder_id} mode={mode}")
+    return payload
+
 
 def save_minute_trades_from_recorder(recorder, output_dir='.'):
     """从recorder中提取并保存分钟级交易记录
@@ -356,6 +387,7 @@ def main():
     else:
         # Full mode: train and backtest.
         recorder = task_train(config.get("task"), experiment_name=experiment_name)
+        _write_qe_current_recorder(recorder, "full", experiment_name)
         recorder.save_objects(config=config)
         
         # 保存分钟级交易记录（环境变量控制）
@@ -461,6 +493,7 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
 
     with R.start(experiment_name=experiment_name):
         recorder = R.get_recorder()
+        _write_qe_current_recorder(recorder, "pred_backtest", experiment_name)
         # 注入 prediction 和 label 到 recorder
         # SigAnaRecord 依赖: pred.pkl + label.pkl（check() 验证两者都存在）
         # PortAnaRecord 依赖: pred.pkl（从 recorder 加载预测信号）
@@ -516,6 +549,7 @@ def _run_train_only(config: dict, experiment_name: str):
 
     # 执行训练（task_train 内部会执行 filtered_records 中的 SignalRecord + SigAnaRecord）
     recorder = task_train(task_config, experiment_name=experiment_name)
+    _write_qe_current_recorder(recorder, "train_only", experiment_name)
     recorder.save_objects(config=config)
     print("[INFO] Train-only completed: model trained, pred.pkl generated")
 
@@ -610,15 +644,17 @@ def _run_backtest_only(config: dict, experiment_name: str):
 
     # 创建新 recorder（不 resume 旧的），避免并行 loop 共用同一个 run 导致冲突
     with R.start(experiment_name=experiment_name):
+        recorder = R.get_recorder()
+        _write_qe_current_recorder(recorder, "backtest_only", experiment_name)
         for record_config in records:
             r = init_instance_by_config(
                 record_config,
-                recorder=R.get_recorder(),
+                recorder=recorder,
                 default_module="qlib.workflow.record_temp",
                 try_kwargs={"model": model, "dataset": dataset},
             )
             r.generate()
-        R.get_recorder().save_objects(config=config, params_pkl=model)
+        recorder.save_objects(config=config, params_pkl=model)
 
     print("[INFO] Backtest-only completed successfully")
 
