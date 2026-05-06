@@ -571,6 +571,14 @@ def test_day_runner_risk_policy_blocks_buy_and_forces_existing_position_exit() -
     assert sell_orders
     assert not buy_orders
     assert sell_orders[0].metadata["rebalance_reason"] == "risk_policy_forced_exit"
+    target_event = next(
+        item
+        for item in paper_repo.list_run_events(portfolio.portfolio_id, run_id=result.run.run_id)
+        if item["event_type"] == "TARGETS_GENERATED"
+    )
+    target_symbols = [item["symbol"] for item in target_event["context"]["targets"]]
+    assert target_event["context"]["target_count"] == 2
+    assert target_symbols.count("000001.SZ") == 1
     assert any(
         item["event_type"] == "RISK_POLICY_APPLIED"
         for item in paper_repo.list_run_events(portfolio.portfolio_id, run_id=result.run.run_id)
@@ -987,6 +995,144 @@ def test_paper_trading_readiness_checks_rebalance_and_market_data() -> None:
         "rebalance",
         "minute_market_data",
     }
+
+
+def test_readiness_loads_db_price_for_existing_position_equity() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = make_paper_enabled_manifest()
+    package_repo.save_manifest(manifest)
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="readiness existing position",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+    )
+    previous_run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio.portfolio_id,
+            trade_date=date(2024, 1, 2),
+            status=RunStatus.SUCCEEDED,
+            data_source=MinuteDataSource.DB_HISTORICAL,
+        )
+    )
+    paper_repo.save_positions(
+        run_id=previous_run.run_id,
+        trade_date=date(2024, 1, 2),
+        positions=[
+            PositionLot(
+                portfolio_id=portfolio.portfolio_id,
+                symbol="000001.SZ",
+                quantity=100,
+                available_quantity=100,
+                avg_cost=10.0,
+                trade_date=date(2024, 1, 2),
+            )
+        ],
+        prices={"000001.SZ": 10.0},
+    )
+    provider = FakeDbMinuteProvider()
+
+    result = PaperTradingReadinessService(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=provider,  # type: ignore[arg-type]
+        runtime=runtime_with_authoritative_scores(
+            manifest,
+            trade_date=date(2024, 1, 3),
+            data_source=MinuteDataSource.DB_HISTORICAL.value,
+        ),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    ).check_day(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 3),
+    )
+
+    assert result.checked_symbols == ["000001.SZ"]
+    assert "current_prices" in result.runtime_config_keys
+    assert {check.check_name for check in result.checks} >= {"current_position_prices", "portfolio_state"}
+    assert provider.calls[0]["symbol"] == "000001.SZ"
+    assert provider.calls[0]["min_bars"] == 1
+
+
+def test_readiness_risk_policy_forced_exit_overrides_score_sell_target_once() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = make_paper_enabled_manifest(custom_params={"risk_policy": {"enabled": True}})
+    package_repo.save_manifest(manifest)
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="readiness risk forced exit",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+    )
+    previous_run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio.portfolio_id,
+            trade_date=date(2024, 1, 2),
+            status=RunStatus.SUCCEEDED,
+            data_source=MinuteDataSource.DB_HISTORICAL,
+        )
+    )
+    paper_repo.save_positions(
+        run_id=previous_run.run_id,
+        trade_date=date(2024, 1, 2),
+        positions=[
+            PositionLot(
+                portfolio_id=portfolio.portfolio_id,
+                symbol="000001.SZ",
+                quantity=300,
+                available_quantity=300,
+                avg_cost=10.0,
+                trade_date=date(2024, 1, 2),
+            )
+        ],
+        prices={"000001.SZ": 10.0},
+    )
+
+    result = PaperTradingReadinessService(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeDbMinuteProvider(),  # type: ignore[arg-type]
+        runtime=runtime_with_authoritative_scores(
+            manifest,
+            trade_date=date(2024, 1, 3),
+            data_source=MinuteDataSource.DB_HISTORICAL.value,
+            rows=[
+                {"symbol": "000001.SZ", "score": 0.91, "rank": 1, "target_weight": 0.03, "reference_price": 10.0},
+                {"symbol": "000002.SZ", "score": 0.89, "rank": 2, "target_weight": 0.03, "reference_price": 10.0},
+            ],
+        ),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        risk_policy_service=FakeRiskPolicyService(
+            {
+                "000001.SZ": RiskDecision(
+                    symbol="000001.SZ",
+                    can_buy=False,
+                    force_exit=True,
+                    position_target_override=0,
+                    reason_codes=["unit_st_pit_not_eligible"],
+                )
+            }
+        ),
+    ).check_day(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 3),
+    )
+
+    assert result.target_count == 2
+    assert result.order_intent_count == 2
+    assert result.checked_symbols == ["000001.SZ", "000002.SZ"]
 
 
 class FakeReplayDayRunner:

@@ -938,3 +938,10 @@ Mandatory future rules:
 - Direct Selection Center ST PIT authoritative runs now call `normalize_runtime_config_with_backtest_contract(...)`, persist per-package effective runtime configs plus `qe_backtest_runtime_contract`, and reject legacy non-ST-PIT packages instead of silently upgrading frozen manifests.
 - UI TopN is now `display_top_n`; engine TopK is inherited from the frozen QE contract. This prevents the Selection UI from changing backtested portfolio behavior.
 - Validation record: `tests/aistock_validation/history/paper_v2_selection_center/20260506_l3_selection-center-st-pit-health-contract-alignment.md`. Passed: `py_compile`; Selection/StrategyPackage/Paper regression (`142 passed`); QE config/rebalance regression (`49 passed`); frontend `tsc`; frontend `npm run build`; `git diff --check` with line-ending warnings only. No protected assets were modified.
+
+## Paper v2 ST PIT Risk/Readiness Closure - 2026-05-06
+
+- Follow-up in the same branch stayed within `backend/services/paper_trading_v2` plus Paper v2 tests/docs; no QE shared implementation files were modified and production backend `8001` was not restarted.
+- Added a Paper v2 forced-exit target overlay so ST PIT/risk-policy forced exits replace same-symbol QE-style ghost/sell targets instead of appending duplicate target rows. Day-runner, readiness, and live-session paths now share this helper.
+- Paper v2 readiness now loads DB historical first-observed minute close for existing positions when `current_prices` are absent, matching the day-runner equity path before target/rebalance checks.
+- Validation record: `tests/aistock_validation/history/paper_v2_selection_center/20260506_l3_paper-v2-st-pit-risk-readiness-closure.md`. Passed: Paper v2 focused tests (`4 passed`), full Paper v2 suite (`69 passed`), Selection/StrategyPackage/Paper regression (`145 passed`), QE config/rebalance regression (`49 passed`), frontend `tsc`, frontend `npm run build`, and guardrail scans. No protected assets or production data were modified.

@@ -7,7 +7,7 @@ from typing import Any
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository, DatasetRefreshStatus
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
-from backend.services.paper_trading_v2.market_data import PaperV2MinuteMarketDataProvider, TradeCalendarProvider
+from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.runtime_profile import parse_selection_runtime_profile
 from backend.services.selection_center.tradability import TradabilityFilter
@@ -24,6 +24,7 @@ from backend.services.trading_core.models import PositionLot
 
 from .models import PaperDayReadinessResult, PaperReadinessCheck, PortfolioStatus
 from .repository import PaperTradingV2Repository
+from .risk_targets import overlay_risk_forced_exit_targets
 from .service import PaperTradingV2PortfolioService
 
 
@@ -157,6 +158,14 @@ class PaperTradingReadinessService:
             checks.append(self._audit_check("stk_limit_refresh", status))
 
         current_positions = self.repository.load_latest_positions(portfolio_id, trade_date)
+        price_check = self._ensure_current_prices_for_existing_positions(
+            config=config,
+            current_positions=current_positions,
+            trade_date=trade_date,
+            data_source=portfolio.data_source,
+        )
+        if price_check is not None:
+            checks.append(price_check)
         latest_cash = self.repository.load_latest_cash(portfolio, trade_date)
         total_equity = self._resolve_total_equity(
             latest_cash=latest_cash,
@@ -263,17 +272,15 @@ class PaperTradingReadinessService:
             else []
         )
         if runtime_profile.risk_policy.enabled and current_positions:
-            targets = [
-                *targets,
-                *self.risk_policy_service.forced_exit_targets(
-                    decisions=risk_decisions,
-                    current_positions=current_positions,
-                    trade_date=trade_date,
-                    package_id=manifest.package_id,
-                    manifest_sha256=manifest.manifest_sha256 or portfolio.manifest_sha256,
-                    existing_target_symbols=set(),
-                ),
-            ]
+            forced_exit_targets = self.risk_policy_service.forced_exit_targets(
+                decisions=risk_decisions,
+                current_positions=current_positions,
+                trade_date=trade_date,
+                package_id=manifest.package_id,
+                manifest_sha256=manifest.manifest_sha256 or portfolio.manifest_sha256,
+                existing_target_symbols=set(),
+            )
+            targets = overlay_risk_forced_exit_targets(targets, forced_exit_targets)
         intents = self.rebalance_engine.build_order_intents(
             package_id=manifest.package_id,
             portfolio_id=portfolio_id,
@@ -345,6 +352,56 @@ class PaperTradingReadinessService:
                 "data_source": status.data_source,
                 "row_count": status.row_count,
                 "refreshed_at": status.refreshed_at.isoformat(),
+            },
+        )
+
+    def _ensure_current_prices_for_existing_positions(
+        self,
+        *,
+        config: dict[str, Any],
+        current_positions: dict[str, PositionLot],
+        trade_date: date,
+        data_source: MinuteDataSource,
+    ) -> PaperReadinessCheck | None:
+        if not current_positions or config.get("current_prices"):
+            return None
+        if data_source != MinuteDataSource.DB_HISTORICAL:
+            return None
+
+        prices: dict[str, float] = {}
+        price_context: dict[str, Any] = {}
+        for symbol in sorted(current_positions):
+            market_input = self.market_data_provider.load_symbol_input(
+                symbol=symbol,
+                trade_date=trade_date,
+                source=MinuteDataSource.DB_HISTORICAL,
+                min_bars=1,
+                require_suspend_status=True,
+                require_day_features=False,
+            )
+            if not market_input.minute_bars:
+                raise DataUnavailableError(
+                    "historical replay readiness current position price requires at least one DB minute bar",
+                    context={"symbol": symbol, "trade_date": trade_date.isoformat(), "source": data_source.value},
+                )
+            first_bar = market_input.minute_bars[0]
+            prices[symbol] = first_bar.close
+            price_context[symbol] = {
+                "price": first_bar.close,
+                "bar_time": first_bar.bar_time.isoformat(),
+                "source": data_source.value,
+                "basis": "first_observed_minute_close",
+            }
+
+        config["current_prices"] = prices
+        config["current_price_context"] = price_context
+        return PaperReadinessCheck(
+            check_name="current_position_prices",
+            context={
+                "trade_date": trade_date.isoformat(),
+                "symbol_count": len(prices),
+                "basis": "first_observed_minute_close",
+                "data_source": data_source.value,
             },
         )
 
