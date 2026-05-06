@@ -539,6 +539,8 @@ export type ValidationModuleQualityItem = JsonObject & {
   parent_module?: string | null;
   module_type?: string;
   registry_risk_level?: string;
+  description?: string;
+  description_zh?: string;
   ui_routes?: string[];
   api_routes?: string[];
   test_plans?: JsonObject & {

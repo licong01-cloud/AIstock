@@ -622,7 +622,7 @@ def validation_center_ui(session: nox.Session) -> None:
             "run",
             "test:e2e",
             "--",
-            "tests/validation-center",
+            "tests/validation-center/validation-center.spec.ts",
             env=_env(
                 {
                     "BACKEND_PORT": backend_port,

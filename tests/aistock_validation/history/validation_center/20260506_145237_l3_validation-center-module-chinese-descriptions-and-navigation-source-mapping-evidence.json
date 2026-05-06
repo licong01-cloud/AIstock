@@ -1,0 +1,179 @@
+{
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "tests/aistock_validation/catalog/module_registry.yaml",
+      "sha256": "a265006c3ee9339ebb5ebfb603f9d76095bdb63680ebb4997e00b6323d8b30b3",
+      "size_bytes": 18080
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "backend/services/validation/module_registry.py",
+      "sha256": "dd2674bb14274dc519eb3e942de99d154ce3bc69bb88e371285be230f5cbb205",
+      "size_bytes": 8481
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "backend/services/validation/module_quality.py",
+      "sha256": "ca397b1b8cdb727948fdf7ad3dfdd9233ad9b4f0de82835c3a992a419d5a0b3a",
+      "size_bytes": 14693
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "frontend/src/lib/navigation/nav-groups.ts",
+      "sha256": "20fa1f8fd04e9a415d9897625d6125e68fa994ff9e95679aedaab83f7f63b7f3",
+      "size_bytes": 5217
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "frontend/src/app/Sidebar.tsx",
+      "sha256": "82f7cfc8fe82f1ff383e29a2ae551ee4b937fe32456172515f0f2843c2c1e8e0",
+      "size_bytes": 3223
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "frontend/src/app/validation-center/page.tsx",
+      "sha256": "108df2b189578d65a96de86b8f4db3b02d3acd40733ee0b1c31d27c115a6e3fd",
+      "size_bytes": 70642
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "frontend/src/lib/validation/api.ts",
+      "sha256": "99366fed56d9fbcfdd411ea31b411d44451d59f8d0a9ba5e5054d67210566dac",
+      "size_bytes": 23374
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "frontend/tests/validation-center/validation-center.spec.ts",
+      "sha256": "f2231d64652dcbc597f0de4ff5913356b16180e0855688e8e392bd604df8b1ff",
+      "size_bytes": 36379
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "frontend/tests/validation-center/validation-center-real-port.spec.ts",
+      "sha256": "d270ea7f988e84e491a3dbe38cabf9e23f02069b21bfa0bde746e73cc555758a",
+      "size_bytes": 7902
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "noxfile.py",
+      "sha256": "283a68ba21e496ca7fa5ab6fa31d830393baf0a1fbd747c1f00a0d1b54a9605f",
+      "size_bytes": 35170
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "tmp/validation/guardrails/l0_paths.json",
+      "sha256": "e206fb56b067b1bd71588c978f6973609822c014c72c67157a5b6b21e1faa830",
+      "size_bytes": 3142
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "tmp/validation/guardrails/l0_paths.md",
+      "sha256": "011c1b41a3d6057314668da95ab6ddd4966eede2e6555be562c24e24dd43cef0",
+      "size_bytes": 1641
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "tmp/validation/module_ownership/l0_paths.json",
+      "sha256": "b3bcc4d6d0721cbb1990e5abfd5c68a30bbb6fdd262effe0fb34ecfab1a383e8",
+      "size_bytes": 5345
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "file",
+      "path": "tmp/validation/validation_center/ui_real_port_smoke_evidence.json",
+      "sha256": "6df4ddce45098c87d932b4aab5175e1c8dcc08a186aebce69d9a21938df35b29",
+      "size_bytes": 2694
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "coverage",
+      "path": "tmp/validation/coverage/validation_center_backend_snapshot.json",
+      "sha256": "e3cbcb6a7102f8c552a629ef998d26f99f8d87e06e5fa3e26624f789425cef09",
+      "size_bytes": 73968
+    },
+    {
+      "child_count": 1,
+      "exists": true,
+      "is_dir": true,
+      "kind": "playwright_report",
+      "path": "tmp/playwright-report",
+      "sha256": null,
+      "size_bytes": null
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "smoke_json",
+      "path": "tmp/validation/validation_center/ui_real_port_smoke.json",
+      "sha256": "b7329aa34d5a738620065b212e7eaf6bc7049534e4349ea6821da7a27311bdea",
+      "size_bytes": 2861
+    }
+  ],
+  "generated_at": "2026-05-06T14:55:27",
+  "git_commit": "793e196",
+  "level": "L3",
+  "missing": [],
+  "missing_count": 0,
+  "module": "validation_center",
+  "operator": "lc999",
+  "run_id": "20260506_145237_l3_validation-center-module-chinese-descriptions-and-navigation-source-mapping",
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "Validation Center module Chinese descriptions and navigation source mapping evidence"
+}

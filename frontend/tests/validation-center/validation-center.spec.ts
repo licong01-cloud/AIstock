@@ -413,6 +413,8 @@ const moduleQuality = {
       parent_module: "validation",
       module_type: "cross_cutting",
       registry_risk_level: "high",
+      description_zh: "覆盖 Validation Center 的页面、API、历史记录、质量发现、Bug 展示和汇总面板。",
+      ui_routes: ["/validation-center"],
       test_plans: {
         required_on_change: ["l0", "validation_center_backend"],
         recommended: ["validation_center_ui"],
@@ -459,6 +461,8 @@ const moduleQuality = {
       parent_module: "validation",
       module_type: "cross_cutting",
       registry_risk_level: "high",
+      description_zh: "覆盖模块注册表、文件归属、commit 影响分析、工作区 dirty 状态和模块质量优先级矩阵。",
+      ui_routes: ["/validation-center"],
       test_plans: {
         required_on_change: ["l0", "validation_module_registry_l0"],
         recommended: ["validation_center_ui"],
@@ -797,6 +801,16 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   await expect(page.getByText("feat(validation): show git workspace status").first()).toBeVisible();
   await expect(page.getByText("unmapped_workspace_files_present")).toBeVisible();
   await expect(page.getByText("validation_module_registry_l0")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "页面导航同源覆盖入口" })).toBeVisible();
+  await expect(page.getByText("同源数据：frontend/src/lib/navigation/nav-groups.ts")).toBeVisible();
+  const validationRouteRow = page.locator("tr", { hasText: "流水线中心" }).filter({ hasText: "/validation-center" }).first();
+  await expect(validationRouteRow.getByText("validation.center / exact")).toBeVisible();
+  await validationRouteRow.getByRole("button", { name: "查看测试覆盖" }).click();
+  await expect(page.getByRole("heading", { name: "页面测试覆盖详情" })).toBeVisible();
+  const routeDetailPanel = page.locator("section").filter({ has: page.getByRole("heading", { name: "页面测试覆盖详情" }) }).last();
+  await expect(routeDetailPanel.getByText("已映射模块")).toBeVisible();
+  await expect(routeDetailPanel.getByRole("cell", { name: "覆盖 Validation Center 的页面、API、历史记录、质量发现、Bug 展示和汇总面板。", exact: true })).toBeVisible();
+  await expect(routeDetailPanel.getByText("Line 81.35% / Branch 64.35%")).toBeVisible();
   await expect(page.getByText("受控 Runner：allowlist only")).toBeVisible();
   await expect(page.getByText("Validation Center backend contract")).toBeVisible();
   await expect(page.getByText("Runner 执行队列")).toBeVisible();

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { NAV_GROUPS } from "@/lib/navigation/nav-groups";
+
 import MetricCard from "@/components/paper-v2/MetricCard";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
@@ -23,6 +25,7 @@ import {
   type ValidationGitCommitActivity,
   type ValidationGitWorkspaceStatus,
   type ValidationHealth,
+  type ValidationModuleQualityItem,
   type ValidationModuleQualitySummary,
   type ValidationPage,
   type ValidationPassScope,
@@ -118,6 +121,151 @@ function CountChips({ counts }: { counts?: Record<string, number> }) {
   if (!entries.length) return <span className="pv2-muted">无统计</span>;
   return <div className="pv2-chip-row">{entries.map(([key, count]) => <span className="pv2-chip" key={key}>{key}: {count}</span>)}</div>;
 }
+
+type NavRouteMatchType = "exact" | "prefix";
+
+type NavRouteRow = {
+  groupTitle: string;
+  href: string;
+  label: string;
+  matches: Array<{ module: ValidationModuleQualityItem; matchType: NavRouteMatchType }>;
+};
+
+function normalizeRoute(value: string): string {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  const withoutTrailingSlash = trimmed.length > 1 ? trimmed.replace(/\/+$/, "") : trimmed;
+  return withoutTrailingSlash || "/";
+}
+
+function matchRouteToModule(routeHref: string, moduleRoute: string): NavRouteMatchType | null {
+  const route = normalizeRoute(routeHref);
+  const target = normalizeRoute(moduleRoute);
+  if (!route || !target) return null;
+  if (target.endsWith("/*")) {
+    const prefix = normalizeRoute(target.slice(0, -2));
+    if (route === prefix || (prefix !== "/" && route.startsWith(`${prefix}/`))) return "prefix";
+  }
+  if (route === target) return "exact";
+  if (target !== "/" && route.startsWith(`${target}/`)) return "prefix";
+  return null;
+}
+
+function priorityScore(module: ValidationModuleQualityItem): number {
+  return Number(module.priority?.score || 0);
+}
+
+function buildNavRouteRows(moduleQuality?: ValidationModuleQualitySummary | null): NavRouteRow[] {
+  const modules = moduleQuality?.modules || [];
+  return NAV_GROUPS.flatMap((group) => group.items.map((item) => {
+    const matches = modules.flatMap((module) => {
+      const matchTypes = (module.ui_routes || [])
+        .map((route) => matchRouteToModule(item.href, route))
+        .filter(Boolean) as NavRouteMatchType[];
+      const bestMatch = matchTypes.includes("exact") ? "exact" : matchTypes[0];
+      return bestMatch ? [{ module, matchType: bestMatch }] : [];
+    }).sort((left, right) => {
+      if (left.matchType !== right.matchType) return left.matchType === "exact" ? -1 : 1;
+      return priorityScore(right.module) - priorityScore(left.module);
+    });
+    return { groupTitle: group.title, href: item.href, label: item.label, matches };
+  }));
+}
+
+function NavigationSourcePanel({ moduleQuality }: { moduleQuality?: ValidationModuleQualitySummary | null }) {
+  const [selectedHref, setSelectedHref] = useState("");
+  const routeRows = useMemo(() => buildNavRouteRows(moduleQuality), [moduleQuality]);
+  const routeCount = routeRows.length;
+  const mappedCount = routeRows.filter((row) => row.matches.length).length;
+  const needsValidationCount = routeRows.filter((row) => row.matches.some((match) => ["medium", "high", "critical"].includes(String(match.module.priority?.level || "").toLowerCase()))).length;
+  const selectedRoute = routeRows.find((row) => row.href === selectedHref) || routeRows[0];
+  return (
+    <SectionCard
+      title="页面导航同源覆盖入口"
+      eyebrow="shared NAV_GROUPS / route target baseline / module quality"
+      action={<span className="pv2-chip">同源数据：frontend/src/lib/navigation/nav-groups.ts</span>}
+    >
+      <div className="pv2-grid pv2-grid-3">
+        <MetricCard label="导航分组" value={NAV_GROUPS.length} hint="与正式左侧菜单共用同一份 NAV_GROUPS" tone="success" />
+        <MetricCard label="已映射路由" value={`${mappedCount}/${routeCount}`} hint="按 module_registry.ui_routes 自动关联模块" tone={mappedCount === routeCount ? "success" : "warning"} />
+        <MetricCard label="需优先验证" value={needsValidationCount} hint="关联模块优先级为 medium/high/critical 的页面" tone={needsValidationCount ? "warning" : "success"} />
+      </div>
+      <div className="pv2-notice pv2-notice-info" style={{ marginTop: 12 }}>
+        <div className="pv2-notice-title">同源边界说明</div>
+        <div className="pv2-notice-body">
+          本区块只作为 Validation Center 内部的页面覆盖对象选择入口，不替代、不覆盖 AIstock 全局左侧导航；
+          当前先用正式菜单 NAV_GROUPS 和 module_registry.ui_routes 做页面到模块的只读关联，
+          route 级功能点、业务断言和专用 coverage/evidence 仍需后续接入 `ui_targets.yaml` 与 route coverage API 后才能声明业务通过。
+        </div>
+      </div>
+      <div className="pv2-table-wrap" style={{ marginTop: 16 }}>
+        <table className="pv2-table">
+          <thead><tr><th>菜单分组</th><th>页面路由</th><th>模块覆盖状态</th><th>关联模块</th><th>操作</th></tr></thead>
+          <tbody>
+            {routeRows.map((row, index) => (
+              <tr key={`${row.groupTitle}-${row.href}`}>
+                <td>{index === 0 || routeRows[index - 1]?.groupTitle !== row.groupTitle ? <strong>{row.groupTitle}</strong> : <span className="pv2-muted">同组</span>}</td>
+                <td><strong>{row.label}</strong><br /><span className="pv2-muted pv2-mono">{row.href}</span></td>
+                <td>
+                  <StatusBadge status={row.matches.length ? "mapped" : "unmapped"} />
+                  <br /><span className="pv2-muted">{row.matches.length ? "已关联模块质量数据" : "需要补充模块 ui_routes 或 ui_targets.yaml"}</span>
+                </td>
+                <td>
+                  {row.matches.length ? (
+                    <div className="pv2-readable-list">
+                      {row.matches.slice(0, 3).map((match) => <span className="pv2-chip" key={`${row.href}-${match.module.module_id}`}>{match.module.module_id} / {match.matchType}</span>)}
+                    </div>
+                  ) : <span className="pv2-muted">未映射</span>}
+                </td>
+                <td>
+                  <button className="pv2-link-button" type="button" onClick={() => setSelectedHref(row.href)}>查看测试覆盖</button>
+                  <br /><a className="pv2-link-button" href={row.href}>打开业务页面</a>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {selectedRoute ? (
+        <div style={{ marginTop: 16 }}>
+        <SectionCard title="页面测试覆盖详情" eyebrow="selected route / matched modules">
+          <KeyValuePanel rows={[
+            ["菜单分组", selectedRoute.groupTitle],
+            ["页面名称", selectedRoute.label],
+            ["页面路由", selectedRoute.href],
+            ["映射状态", selectedRoute.matches.length ? "已映射模块" : "未映射"],
+          ]} />
+          {selectedRoute.matches.length ? (
+            <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
+              <table className="pv2-table">
+                <thead><tr><th>模块</th><th>模块说明</th><th>优先级</th><th>覆盖率</th><th>测试计划</th><th>质量问题</th></tr></thead>
+                <tbody>
+                  {selectedRoute.matches.map((match) => (
+                    <tr key={`${selectedRoute.href}-${match.module.module_id}`}>
+                      <td><strong>{match.module.display_name || match.module.module_id}</strong><br /><span className="pv2-muted pv2-mono">{match.module.module_id}</span><br /><span className="pv2-muted">匹配：{match.matchType}</span></td>
+                      <td>{display(match.module.description_zh || match.module.description)}</td>
+                      <td><StatusBadge status={match.module.priority?.level || "low"} /><br /><span className="pv2-muted">score={display(match.module.priority?.score)}</span><br /><BadgeList items={match.module.priority?.reason_codes} /></td>
+                      <td><StatusBadge status={match.module.coverage?.status || "missing"} /><br /><span className="pv2-muted">Line {pct(match.module.coverage?.line_percent)} / Branch {pct(match.module.coverage?.branch_percent)}</span></td>
+                      <td><BadgeList items={match.module.test_plans?.required_on_change} empty="无 required_on_change" /><br /><BadgeList items={match.module.test_plans?.recommended} empty="无 recommended" /></td>
+                      <td>Findings {display(match.module.quality?.finding_count ?? 0)} / Bugs {display(match.module.quality?.bug_count ?? 0)}<br /><span className="pv2-muted">changed {display(match.module.workspace?.changed_file_count ?? 0)} / commits {display(match.module.commits?.commit_count ?? 0)}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="pv2-notice pv2-notice-warning" style={{ marginTop: 12 }}>
+              <div className="pv2-notice-title">未映射页面不能声明已覆盖</div>
+              <div className="pv2-notice-body">该页面已来自正式菜单，但还没有可追踪的模块归属；后续需要补充 module_registry.ui_routes 或 ui_targets.yaml，再绑定测试计划、coverage 和 evidence。</div>
+            </div>
+          )}
+        </SectionCard>
+        </div>
+      ) : null}
+    </SectionCard>
+  );
+}
+
 
 function Pagination({ page, label, onPageChange }: { page: ValidationPage<unknown>; label: string; onPageChange: (page: number) => void }) {
   return (
@@ -345,7 +493,7 @@ function GitModuleQualityPanel({ commitActivity, moduleQuality }: { commitActivi
           <tbody>
             {modules.length ? modules.map((module) => (
               <tr key={module.module_id}>
-                <td><strong>{module.display_name || module.module_id}</strong><br /><span className="pv2-muted pv2-mono">{module.module_id}</span></td>
+                <td><strong>{module.display_name || module.module_id}</strong><br /><span className="pv2-muted pv2-mono">{module.module_id}</span><br /><span className="pv2-muted">{display(module.description_zh || module.description)}</span></td>
                 <td><StatusBadge status={module.priority?.level || "low"} /><br /><span className="pv2-muted">score={display(module.priority?.score)}</span><br /><BadgeList items={module.priority?.reason_codes} /></td>
                 <td>{display(module.workspace?.changed_file_count ?? 0)} 个文件<br /><span className="pv2-muted">staged {display(module.workspace?.staged_file_count ?? 0)} / unstaged {display(module.workspace?.unstaged_file_count ?? 0)}</span></td>
                 <td>{display(module.commits?.commit_count ?? 0)} commits<br /><span className="pv2-muted">{display(module.commits?.latest_commit?.short_hash)} {display(module.commits?.latest_commit?.subject)}</span></td>
@@ -681,6 +829,7 @@ export default function ValidationCenterPage() {
       <GitWorkspacePanel workspaceStatus={workspaceStatus} branchStatus={branchStatus} />
 
       <GitModuleQualityPanel commitActivity={commitActivity} moduleQuality={moduleQuality} />
+      <NavigationSourcePanel moduleQuality={moduleQuality} />
 
       <SectionCard
         title="测试计划目录"

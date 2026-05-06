@@ -11,6 +11,12 @@ const labels = {
   commitActivityUpper: "\u8fd1\u671f COMMIT",
   commitActivityTitle: "\u8fd1\u671f Commit",
   fileOwnershipAggregation: "\u6309\u6587\u4ef6\u5f52\u5c5e\u81ea\u52a8\u805a\u5408",
+  navigationSource: "\u9875\u9762\u5bfc\u822a\u540c\u6e90\u8986\u76d6\u5165\u53e3",
+  navigationSharedSource: "\u540c\u6e90\u6570\u636e\uff1afrontend/src/lib/navigation/nav-groups.ts",
+  routeDetail: "\u9875\u9762\u6d4b\u8bd5\u8986\u76d6\u8be6\u60c5",
+  viewCoverage: "\u67e5\u770b\u6d4b\u8bd5\u8986\u76d6",
+  pipelineCenter: "\u6d41\u6c34\u7ebf\u4e2d\u5fc3",
+  validationCenterRoute: "/validation-center",
 };
 
 const backendPort = process.env.BACKEND_PORT || "8012";
@@ -122,6 +128,11 @@ test("Validation Center Git and module quality panels work against real dev port
     await expect(page.getByRole("heading", { name: labels.title })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("heading", { name: labels.gitWorkspace })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("heading", { name: labels.moduleQuality })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("heading", { name: labels.navigationSource })).toBeVisible({ timeout: 30_000 });
+    const validationRouteRow = page.locator("tr", { hasText: labels.pipelineCenter }).filter({ hasText: labels.validationCenterRoute }).first();
+    await expect(validationRouteRow).toBeVisible({ timeout: 30_000 });
+    await validationRouteRow.getByRole("button", { name: labels.viewCoverage }).click();
+    await expect(page.getByRole("heading", { name: labels.routeDetail })).toBeVisible({ timeout: 30_000 });
     await page.waitForFunction((text) => document.body.innerText.includes(text), labels.needsValidation, {
       timeout: 30_000,
     });
@@ -137,6 +148,10 @@ test("Validation Center Git and module quality panels work against real dev port
       has_commit_activity_panel:
         body.includes(labels.commitActivityUpper) || body.includes(labels.commitActivityTitle),
       has_file_ownership_aggregation_text: body.includes(labels.fileOwnershipAggregation),
+      has_navigation_source_panel: body.includes(labels.navigationSource),
+      has_navigation_shared_source_text: body.includes(labels.navigationSharedSource),
+      has_route_detail_panel: body.includes(labels.routeDetail),
+      has_validation_center_route: body.includes(labels.validationCenterRoute),
       has_commit_activity_endpoint_response: summary.validation_responses.some(
         (line) => line.startsWith("200 ") && line.includes("/git/commit-activity"),
       ),

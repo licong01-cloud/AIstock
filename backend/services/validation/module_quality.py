@@ -77,6 +77,8 @@ class ModuleQualityService:
                 "parent_module": module.parent_module,
                 "module_type": module.module_type,
                 "registry_risk_level": module.risk_level,
+                "description": module.description,
+                "description_zh": module.description_zh,
                 "ui_routes": list(module.ui_routes),
                 "api_routes": list(module.api_routes),
                 "test_plans": {

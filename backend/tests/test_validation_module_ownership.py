@@ -82,6 +82,11 @@ def test_default_module_registry_and_file_ownership_catalog_load() -> None:
     loaded = registry.load()
     assert loaded["missing"] is False
     assert registry.get_module("validation.module_quality") is not None
+    descriptions_zh = [item.get("description_zh") or "" for item in loaded["modules"]]
+    assert all(descriptions_zh)
+    assert not any("?" in text or "\ufffd" in text for text in descriptions_zh)
+    assert registry.get_module("qe") is not None
+    assert registry.get_module("qe").description_zh.startswith("覆盖 QuantEvolver")
 
     catalog = FileOwnershipCatalog(module_registry=registry)
     match = catalog.match_path("scripts/aistock_module_ownership_scan.py")
