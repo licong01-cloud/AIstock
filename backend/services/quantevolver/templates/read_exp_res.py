@@ -118,7 +118,6 @@ def _write_extracted_recorder_ref(recorder, experiment_name: str, binding: dict)
 
 _binding = _load_bound_recorder_ref()
 _target_rid = str(_binding.get("recorder_id") or "").strip()
-_target_experiment = str(_binding.get("experiment_name") or "").strip()
 _require_bound_recorder = _truthy_env("QE_REQUIRE_RECORDER_ID")
 
 if _require_bound_recorder and not _target_rid:
@@ -131,13 +130,9 @@ experiment_name = None
 latest_recorder = None
 matched_recorders = []
 scan_experiments = experiments
-if _target_rid and _target_experiment:
-    if _target_experiment in experiments:
-        scan_experiments = [_target_experiment]
-    elif _require_bound_recorder:
-        raise SystemExit(
-            f"ERROR: bound experiment {_target_experiment!r} not found while selecting recorder {_target_rid}"
-        )
+# Scan all visible experiments when a recorder id is bound. Concurrent first-use
+# MLflow file-store creation can leave duplicate experiment names, so narrowing
+# by name can hide the target recorder even when the id is correct.
 
 for experiment in scan_experiments:
     recorders = R.list_recorders(experiment_name=experiment)
