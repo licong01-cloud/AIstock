@@ -166,7 +166,8 @@ def test_unified_event_signal_time_mode_is_explicit_for_backtest_paper_live_pari
 
     assert "time_mode TEXT NOT NULL" in migration
     assert "time_mode IN ('backtest', 'paper', 'live', 'observed')" in migration
-    assert "Stable idempotency key including source events, event type, rule version, action, and time_mode" in migration
+    assert "LOCAL_FIRST_SEEN" in migration
+    assert "Stable idempotency key including source type, source primary key, unified rule version" in migration
     assert "ON market.event_signal(ts_code, time_mode, effective_trade_date, risk_level, action)" in migration
 
 

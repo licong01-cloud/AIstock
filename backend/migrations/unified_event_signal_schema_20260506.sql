@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS market.event_fact (
     CONSTRAINT event_fact_event_key_uniq UNIQUE (event_key),
     CONSTRAINT event_fact_status_check CHECK (event_status IN ('ACTIVE', 'REVISED', 'SUPERSEDED', 'CANCELLED', 'UNKNOWN')),
     CONSTRAINT event_fact_time_mode_check CHECK (time_mode IN ('backtest', 'paper', 'live', 'observed')),
-    CONSTRAINT event_fact_source_time_quality_check CHECK (source_time_quality IN ('EXACT', 'DATE_ONLY', 'MIDNIGHT_DEFAULT', 'MISSING', 'OBSERVED')),
+    CONSTRAINT event_fact_source_time_quality_check CHECK (source_time_quality IN ('EXACT', 'DATE_ONLY', 'MIDNIGHT_DEFAULT', 'MISSING', 'OBSERVED', 'LOCAL_FIRST_SEEN')),
     CONSTRAINT event_fact_confidence_range CHECK (fact_confidence >= 0 AND fact_confidence <= 1)
 );
 
@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS market.event_signal (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT event_signal_signal_key_uniq UNIQUE (signal_key),
     CONSTRAINT event_signal_time_mode_check CHECK (time_mode IN ('backtest', 'paper', 'live', 'observed')),
-    CONSTRAINT event_signal_source_time_quality_check CHECK (source_time_quality IN ('EXACT', 'DATE_ONLY', 'MIDNIGHT_DEFAULT', 'MISSING', 'OBSERVED')),
+    CONSTRAINT event_signal_source_time_quality_check CHECK (source_time_quality IN ('EXACT', 'DATE_ONLY', 'MIDNIGHT_DEFAULT', 'MISSING', 'OBSERVED', 'LOCAL_FIRST_SEEN')),
     CONSTRAINT event_signal_risk_level_check CHECK (risk_level IN ('P0_BLOCK', 'P1_HIGH', 'P2_REVIEW', 'P3_POSITIVE_CANDIDATE', 'P4_NEUTRAL')),
     CONSTRAINT event_signal_action_check CHECK (action IN ('block_buy', 'warn_high', 'warn_review', 'record_only', 'alpha_hint_disabled', 'discard_or_archive', 'force_exit')),
     CONSTRAINT event_signal_type_check CHECK (signal_type IN ('risk', 'alpha_hint', 'audit', 'research')),
@@ -139,6 +139,20 @@ CREATE TABLE IF NOT EXISTS market.event_signal (
     CONSTRAINT event_signal_confidence_range CHECK (confidence >= 0 AND confidence <= 1),
     CONSTRAINT event_signal_alpha_range CHECK (alpha_score >= -1 AND alpha_score <= 1)
 );
+
+ALTER TABLE market.event_fact
+    DROP CONSTRAINT IF EXISTS event_fact_source_time_quality_check;
+
+ALTER TABLE market.event_fact
+    ADD CONSTRAINT event_fact_source_time_quality_check
+    CHECK (source_time_quality IN ('EXACT', 'DATE_ONLY', 'MIDNIGHT_DEFAULT', 'MISSING', 'OBSERVED', 'LOCAL_FIRST_SEEN'));
+
+ALTER TABLE market.event_signal
+    DROP CONSTRAINT IF EXISTS event_signal_source_time_quality_check;
+
+ALTER TABLE market.event_signal
+    ADD CONSTRAINT event_signal_source_time_quality_check
+    CHECK (source_time_quality IN ('EXACT', 'DATE_ONLY', 'MIDNIGHT_DEFAULT', 'MISSING', 'OBSERVED', 'LOCAL_FIRST_SEEN'));
 
 CREATE INDEX IF NOT EXISTS idx_event_signal_rule_set_active
     ON market.event_signal_rule_set(is_active, rule_version);
@@ -232,7 +246,7 @@ COMMENT ON COLUMN market.event_fact.source_pk IS 'Source-specific primary key or
 COMMENT ON COLUMN market.event_fact.source_record_key IS 'Source business key used for source revision grouping, such as ts_code plus report_period plus ann_date.';
 COMMENT ON COLUMN market.event_fact.source_event_date IS 'Natural source event date, usually announcement date or Tushare ann_date, before trading calendar adjustment.';
 COMMENT ON COLUMN market.event_fact.source_available_at IS 'Timestamp when the source claims the event became available; NULL when the source only provides a date.';
-COMMENT ON COLUMN market.event_fact.source_time_quality IS 'Quality of source timing: EXACT, DATE_ONLY, MIDNIGHT_DEFAULT, MISSING, or OBSERVED.';
+COMMENT ON COLUMN market.event_fact.source_time_quality IS 'Quality of source timing: EXACT, DATE_ONLY, MIDNIGHT_DEFAULT, MISSING, OBSERVED, or LOCAL_FIRST_SEEN.';
 COMMENT ON COLUMN market.event_fact.available_at IS 'Point-in-time timestamp visible to AIstock under the selected time_mode; backtests may keep this NULL for date-only rows.';
 COMMENT ON COLUMN market.event_fact.effective_trade_date IS 'First trading date when this fact may be consumed without look-ahead under the selected time_mode.';
 COMMENT ON COLUMN market.event_fact.time_mode IS 'Visibility mode used to compute available_at and effective_trade_date: backtest, paper, live, or observed.';
@@ -267,7 +281,7 @@ COMMENT ON COLUMN market.event_relation.updated_at IS 'Database timestamp when t
 
 COMMENT ON TABLE market.event_signal IS 'Unified non-daily event signals consumable by future risk overlays and warning dashboards; current phase generates data only and does not trade.';
 COMMENT ON COLUMN market.event_signal.signal_id IS 'Local surrogate primary key for one generated event signal.';
-COMMENT ON COLUMN market.event_signal.signal_key IS 'Stable idempotency key including source events, event type, rule version, action, and time_mode.';
+COMMENT ON COLUMN market.event_signal.signal_key IS 'Stable idempotency key including source type, source primary key, unified rule version, time_mode, and signal purpose.';
 COMMENT ON COLUMN market.event_signal.ts_code IS 'A-share Tushare security code affected by this event signal.';
 COMMENT ON COLUMN market.event_signal.event_id IS 'Primary event_fact.event_id that produced this signal; NULL if a future compaction keeps only evidence arrays.';
 COMMENT ON COLUMN market.event_signal.source_event_ids IS 'Array of event_fact ids used as direct evidence for this signal.';
@@ -275,7 +289,7 @@ COMMENT ON COLUMN market.event_signal.relation_ids IS 'Array of event_relation i
 COMMENT ON COLUMN market.event_signal.source_type IS 'Canonical source type for the primary signal source, such as announcement or tushare_forecast.';
 COMMENT ON COLUMN market.event_signal.source_pk IS 'Primary source record identifier represented as text for traceability back to the raw or announcement table.';
 COMMENT ON COLUMN market.event_signal.source_event_date IS 'Natural source event date before trading calendar adjustment.';
-COMMENT ON COLUMN market.event_signal.source_time_quality IS 'Quality of source timing used for effective-date logic: EXACT, DATE_ONLY, MIDNIGHT_DEFAULT, MISSING, or OBSERVED.';
+COMMENT ON COLUMN market.event_signal.source_time_quality IS 'Quality of source timing used for effective-date logic: EXACT, DATE_ONLY, MIDNIGHT_DEFAULT, MISSING, OBSERVED, or LOCAL_FIRST_SEEN.';
 COMMENT ON COLUMN market.event_signal.available_at IS 'Point-in-time timestamp when this signal became visible under the selected time_mode; NULL when only date is known.';
 COMMENT ON COLUMN market.event_signal.effective_trade_date IS 'First trading date when this signal can affect a future risk overlay without look-ahead.';
 COMMENT ON COLUMN market.event_signal.time_mode IS 'Visibility mode used for this signal: backtest, paper, live, or observed; included in signal_key to prevent overwrites.';
