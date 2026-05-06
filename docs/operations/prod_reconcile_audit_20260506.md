@@ -23,8 +23,8 @@ Scope: compare `F:/Dev/AIstock` against `origin/main` without modifying producti
 - Preserved production-visible `/paper-trading/package-selection` route by copying `frontend/src/app/paper-trading/package-selection/page.tsx` from the production worktree and validating `npm run build` in the reconcile worktree.
 - Preserved RD-Agent dispatch environment coverage by copying `backend/tests/test_dispatch_service_env.py`, updating the local-home fixture to match current `origin/main`, and validating the targeted pytest file.
 - Preserved reviewed local-only non-temp docs, validation records, and reusable diagnostic scripts in their original paths so a later production sync does not remove them from `F:/Dev/AIstock`.
-- Did not preserve `scripts/v25_verify.py` because it has a syntax error in the production worktree and is not a runnable function; it remains in the backup snapshot for manual recovery if needed.
-- Did not preserve `.codex_tmp/`, `.coverage`, `catboost_info/`, `qlib_minute_validation/`, `monitoring/process-exporter/process-exporter`, transient PKL/CSV artifacts, or root deletion-candidate manifests as production runtime functions.
+- Did not preserve `scripts/v25_verify.py` or `scripts/test_v25_simple.py` because they have syntax errors in the production worktree and are not runnable functions; they remain in the backup snapshot for manual recovery if needed.
+- Did not preserve `.codex_tmp/`, `.coverage`, `catboost_info/`, `qlib_minute_validation/`, `monitoring/process-exporter/process-exporter`, transient PKL/CSV artifacts, or root deletion-candidate manifests as production runtime functions. The native `monitoring/process-exporter/process-exporter` binary is also excluded because the tracked service/docker configuration uses `/usr/local/bin/process-exporter` or the Docker image, not this untracked binary path.
 
 ## Tracked files different from origin/main
 
