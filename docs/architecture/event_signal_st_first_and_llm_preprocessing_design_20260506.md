@@ -1,8 +1,8 @@
 # 事件信号 ST 优先验证与 LLM 公告预处理详细设计
 
-日期：2026-05-06  
-状态：详细设计，当前阶段不改 QE / 回测 / Selection Center / Paper v2 / 模拟盘 / 实盘消费者  
-工作树：`F:\Dev\AIstock_worktrees\event-signal-st-llm-design-20260506`  
+日期：2026-05-06
+状态：详细设计，当前阶段不改 QE / 回测 / Selection Center / Paper v2 / 模拟盘 / 实盘消费者
+工作树：`F:\Dev\AIstock_worktrees\event-signal-st-llm-design-20260506`
 前置设计：`docs/architecture/unified_event_signal_architecture_20260506.md`
 
 ## 1. 目标与阶段边界
