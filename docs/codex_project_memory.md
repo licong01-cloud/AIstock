@@ -102,6 +102,22 @@ These rules are mandatory for all future Codex windows to avoid losing work when
 - Keep temporary outputs and large experiment artifacts out of the repo by default (`.codex_tmp/`, `.coverage`, `catboost_info/`, Qlib validation CSV/Bin/PKL artifacts, one-off diagnostics). Store them under `F:\Dev\AIstock_backups` or `F:\Dev\AIstock_artifacts` unless they are deliberately curated validation records.
 - When a local branch and `origin/main` both contain similar features, do not blindly preserve the local commit. Compare final file contents and validation records; adopt the most complete validated version, then re-apply only true missing functionality as a small patch.
 
+
+## Production Root Sync Rule - 2026-05-06
+
+The 2026-05-06 production/GitHub reconciliation is documented in `docs/operations/prod_github_sync_conflict_resolution_20260506.md` and the detailed audit in `docs/operations/prod_reconcile_audit_20260506.md`.
+
+Mandatory future rules:
+
+- `F:\Dev\AIstock` is the production runtime/sync target, not a normal development worktree. Do not perform feature development there.
+- Start every new coding task from a clean worktree created from latest `origin/main`, for example `F:\Dev\AIstock_worktrees\<task-name>` on branch `codex/<module-task-date>`.
+- Before editing, always run `git status --short --branch`, `git branch --show-current`, and `git log --oneline -5`. If the worktree is dirty, on `main`, or diverged, create a backup or clean worktree before editing.
+- Never leave developed functionality as untracked files. New frontend pages, backend modules, scripts, configs, migrations, tests, docs, and validation records must be committed, or explicitly classified as temporary artifacts with a backup path.
+- Before synchronizing `F:\Dev\AIstock` to GitHub, classify local-only files first. Functional local-only files must be copied into a clean reconcile branch and committed before `F:\Dev\AIstock` is reset or cleaned.
+- Temporary artifacts must be quarantined under `F:\Dev\AIstock_backups` or `F:\Dev\AIstock_artifacts`, not kept in the production root and not silently deleted.
+- Do not run `git pull`, `git merge`, `git reset --hard`, `git checkout -- .`, or `git clean -fd` in `F:\Dev\AIstock` unless all of the following are true: a backup exists, GitHub already contains all preserved functionality, local-only files are classified, and the operation is an explicit production sync procedure.
+- Code synchronization and runtime activation are separate. Do not restart or reload production port `8001` unless the user explicitly requests it; use non-production ports for validation.
+- Every handoff after code changes must include branch, commit hash, changed files, tests/validation results, untracked file status, push status, and whether production `8001` was touched.
 ## Known Current Workspace Notes
 
 - The existing AGENTS.md in the project root may belong to another programming tool. Avoid editing it.
@@ -167,7 +183,7 @@ These rules are mandatory for all future Codex windows to avoid losing work when
 - Paper v2 supports per-trade-date activation of backtest-validated execution policies through `paper_v2.execution_policy_activation` and `/execution-policy-activations`. Day runner/readiness use the active date policy first and the portfolio default policy otherwise.
 - Selection Center exposes `/runs/{run_id}/excluded-results` for suspended/blacklisted trace review.
 - Paper v2 performance reports now include annualized return, annualized volatility, Sharpe, average daily return, win-day ratio, and explicit insufficient-data reasons rather than fabricating unavailable metrics.
-- UI/manual page鑱旇皟 remains deferred per user direction; use a non-8001 temporary backend port for API validation.
+- UI/manual page閼辨棁鐨?remains deferred per user direction; use a non-8001 temporary backend port for API validation.
 
 ## Selection Runtime HMM / Industry Data Update - 2026-04-26
 
@@ -479,7 +495,7 @@ These rules are mandatory for all future Codex windows to avoid losing work when
 
 ## Architecture Design Documentation Directory - 2026-05-02
 
-- User requires all future design方案 / architecture design / implementation design documents produced by Codex in this repository to be stored under `docs/architecture` (`F:\Dev\AIstock\docs\architecture`). Do not place new design documents elsewhere unless the user explicitly requests a different path.
+- User requires all future design鏂规 / architecture design / implementation design documents produced by Codex in this repository to be stored under `docs/architecture` (`F:\Dev\AIstock\docs\architecture`). Do not place new design documents elsewhere unless the user explicitly requests a different path.
 - QE real-time experiment warehouse top-level design is recorded at `docs/architecture/qe_realtime_experiment_warehouse_top_level_design_20260502.md`.
 - QE experiment data completeness pre-warehouse design is recorded at `docs/architecture/qe_experiment_data_completeness_prewarehouse_plan_20260503.md`; it establishes that QE DB may duplicate non-large operational data for generation/retry/recovery/UI, while the future warehouse must keep independent long-term storage because QE workspace and QE DB records may be cleaned after verified archival.
 - AIstock automated testing, coverage, observability, and version-gate design is recorded at `docs/architecture/aistock_automated_testing_coverage_observability_design_20260504.md`; v1.1 explicitly builds on existing `noxfile.py`, `scripts/aistock_validate.py`, `tests/aistock_validation`, Playwright tests, data-quality smoke scripts, and run records rather than creating a separate framework from zero. Future test UI should schedule allowlisted nox/aistock_validate plans and add JSON metadata, evidence manifests, coverage gates, and L0-L5 quality pipeline requirements.
@@ -609,7 +625,7 @@ These rules are mandatory for all future Codex windows to avoid losing work when
 ## QE Archive API Backfill / Realtime Hook Foundation - 2026-05-02
 
 - Added backend API router `backend/routers/qe_archive.py` under `/api/v1/qe-archive`, registered in `backend/main.py`. The API exposes `/health`, `/backfill`, and `/runs/{run_id}/quality`.
-- Added `backend/services/qe_archive/backfill_service.py` so historical experiment/loop补录 can be triggered through API instead of hand-running `scripts/qe_archive_backfill.py`. API write mode requires `confirm_write=QE_ARCHIVE_WRITE` and can validate minimum metric/curve/factor/account row counts after writing.
+- Added `backend/services/qe_archive/backfill_service.py` so historical experiment/loop琛ュ綍 can be triggered through API instead of hand-running `scripts/qe_archive_backfill.py`. API write mode requires `confirm_write=QE_ARCHIVE_WRITE` and can validate minimum metric/curve/factor/account row counts after writing.
 - Added `backend/services/qe_archive/realtime_ingestion.py` and best-effort QE completion hooks in `backend/services/quantevolver/qe_evolution_service.py` plus single-experiment status sync in `backend/routers/quantevolver.py`. Realtime archive ingestion is disabled by default through `QE_ARCHIVE_REALTIME_ENABLED`; when enabled it writes after source QE DB completion succeeds and catches/logs archive failures without changing QE loop/experiment status.
 - API smoke with FastAPI `TestClient` proved dry-run, confirmed write, run quality, and warehouse health endpoints against local DB using existing run `qear_run_c2b3a64b30929794faf91e65`; local archive remains `run_count=11`, `pending_outbox_count=0`.
 - Validation record: `tests/aistock_validation/history/qe_archive/20260502_195907_l3_qe-archive-realtime-warehouse-validation.md`. `qe_archive_backend`, `qe_archive_data_quality`, and `qe_archive_l3` passed with 31 backend tests; production backend `8001` was not restarted.
@@ -664,7 +680,7 @@ These rules are mandatory for all future Codex windows to avoid losing work when
 
 - Added API/UI support for historical backfill candidate lists: `/api/v1/qe-archive/backfill-candidates` lists QE evolution tasks and single experiments with type, description, loop counts, archived/pending counts, model/label/factor metadata, status, and execution timestamps.
 - Backfill now accepts `task_ids`; selecting one QE evolution task expands to all matching loops and archives every loop through the existing archive service. This preserves idempotent archive writes and avoids manual shell scripts for historical backfill.
-- The `/qe-archive` UI now shows selectable pending candidates, "select all pending", dry-run preview, confirmed "写入数仓", and a fixed quality gate explanation. Minimum metrics/curves/factors are post-write completeness checks, not data collection filters.
+- The `/qe-archive` UI now shows selectable pending candidates, "select all pending", dry-run preview, confirmed "鍐欏叆鏁颁粨", and a fixed quality gate explanation. Minimum metrics/curves/factors are post-write completeness checks, not data collection filters.
 - Updated QE archive validation matrix and detailed design to make candidate-list backfill part of the first-stage workflow. Production backend `8001` was not restarted; realtime ingestion remains disabled unless explicitly enabled.
 - Validation record: `tests/aistock_validation/history/qe_archive/20260503_000218_l3_qe-archive-realtime-warehouse-validation.md`. `qe_archive_backend`, `qe_archive_data_quality`, `qe_archive_ui`, and full `qe_archive_l3` passed with mocked UI APIs; DB smoke still shows 27/27 managed tables, 458/458 commented columns, `run_count=11`, and `pending_outbox_count=0`.
 
@@ -903,5 +919,5 @@ These rules are mandatory for all future Codex windows to avoid losing work when
 - Derived runs from old experiments still get the new logic because single-experiment rerun, standard evolution retry, strategy-evo backtest-only, custom-evo selected-loop execution, and Multi-Alpha root backtest all flow through `ExperimentConfig.build_custom_params()` or `ConfigComposer._prepare_risk_policy_runtime()`.
 - Follow-up closure after real QE backtest warnings: the mandatory risk policy now also forces signal-side `suspend_d` filtering, prepares the risk artifact before suspend-filter runtime, and prevents inherited `filter_suspended_on_signal=false` from bypassing the ST PIT/suspend contract.
 - `ScoreWeightedTopkStrategy` wrappers now guard suspend/missing-close symbols before current-price reads, filter score/order universes through risk/suspend/missing-close checks, and only append forced-exit orders when orderable; suspension/limit/no-close remains an explicit market no-fill/wait state instead of a default-price fallback.
-- Backtest-only WSL validation used source task `qe_20260505_153534_388f` loop 1 with existing recorder `8fdfd04a826a40f89838a9cc26b4a0de`; final task `qe_20260505_200632_a357` completed with 0 Qlib `$close None!!!`, 0 `WARNING - qlib.online operator`, 0 `买入价格无效`, and 0 Traceback entries. Production backend `8001` was not restarted; temporary backend `8012` and WSL API `9000` were used.
+- Backtest-only WSL validation used source task `qe_20260505_153534_388f` loop 1 with existing recorder `8fdfd04a826a40f89838a9cc26b4a0de`; final task `qe_20260505_200632_a357` completed with 0 Qlib `$close None!!!`, 0 `WARNING - qlib.online operator`, 0 `涔板叆浠锋牸鏃犳晥`, and 0 Traceback entries. Production backend `8001` was not restarted; temporary backend `8012` and WSL API `9000` were used.
 - Validation record: `tests/aistock_validation/history/qe/20260505_182545_l3_qe-mandatory-st-pit-risk-policy-for-new-and-derived-runs.md`. Validation passed: `py_compile`; final unified QE suite (108 passed); Selection/Paper/StrategyPackage regression (151 passed); TradingCore/StrategyPackage regression (91 passed); ST PIT targeted tests (10 passed); frontend build passed. No production datasets, model weights, HMM snapshots, manifests, or validated policies were modified by the code validation pass.
