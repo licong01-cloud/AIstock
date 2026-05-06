@@ -737,7 +737,7 @@ def main():
                 end_date=end_date,
                 universe_key=args.universe_key,
             )
-            eligible_index_path = str(TASK_DIR / f"{task_id}.eligible_index.parquet")
+            eligible_index_path = str(TASKS_DIR / f"{task_id}.eligible_index.parquet")
             eligible_index.to_frame(index=False).to_parquet(eligible_index_path, index=False)
     audit_context["universe_metadata"] = universe_metadata
     audit_context["eligible_index_path"] = eligible_index_path
