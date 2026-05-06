@@ -8,6 +8,7 @@ workspace path recorded in QE/RD-Agent metadata.
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 from pathlib import Path
 from typing import Iterable
@@ -65,6 +66,33 @@ def _resolve_for_policy(path: Path) -> Path:
     return path.expanduser().resolve(strict=False)
 
 
+def _is_windows_process() -> bool:
+    return os.name == "nt"
+
+
+def _is_wsl_process() -> bool:
+    if os.name != "posix":
+        return False
+    if os.getenv("WSL_DISTRO_NAME") or os.getenv("WSL_INTEROP"):
+        return True
+    release = platform.release().lower()
+    if "microsoft" in release or "wsl" in release:
+        return True
+    try:
+        return "microsoft" in Path("/proc/version").read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        return False
+
+
+def _is_mnt_path(normalized: str) -> bool:
+    return normalized.startswith("/mnt/") or "/mnt/" in normalized
+
+
+def _is_allowed_artifact_path_without_worker_check(path: Path | str) -> bool:
+    candidate = Path(path)
+    return any(is_relative_to_path(candidate, root) for root in allowed_aistock_artifact_roots())
+
+
 def is_relative_to_path(path: Path, root: Path) -> bool:
     resolved = _resolve_for_policy(path)
     resolved_root = _resolve_for_policy(root)
@@ -87,9 +115,11 @@ def is_forbidden_worker_workspace_path(path: Path | str) -> bool:
     normalized = raw.replace("\\", "/").lower()
     if normalized.startswith("//wsl$") or normalized.startswith("//wsl.localhost"):
         return True
-    if normalized.startswith("/mnt/") or "/mnt/" in normalized:
-        return True
     if "/qe_workspace" in normalized or "/rdagent_workspace" in normalized:
+        return True
+    if _is_mnt_path(normalized):
+        if _is_wsl_process() and _is_allowed_artifact_path_without_worker_check(raw):
+            return False
         return True
 
     candidate = Path(raw)
