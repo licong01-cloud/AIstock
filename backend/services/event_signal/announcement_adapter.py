@@ -68,9 +68,24 @@ def unified_rule_config(source_rule_version: str = ANNOUNCEMENT_RULE_VERSION) ->
                 "signal_risk_levels": list(SIGNAL_RISK_LEVELS),
                 "source_fact_table": "market.ann_event_classification",
                 "source_signal_table": "market.ann_risk_signal",
-            }
+            },
+            "tushare_financial_raw": {
+                "source_tables": [
+                    "market.tushare_forecast_raw",
+                    "market.tushare_express_raw",
+                    "market.tushare_fina_indicator_raw",
+                ],
+                "enabled_event_families": [
+                    "financial_forecast",
+                    "financial_express",
+                    "financial_indicator",
+                    "financial_relation",
+                ],
+                "positive_alpha_enabled": False,
+                "llm_enabled": False,
+            },
         },
-        "phase": "announcement_adapter_v0",
+        "phase": "announcement_and_financial_rules_v0",
         "llm_enabled": False,
         "pdf_enabled": False,
         "trading_consumption_enabled": False,
@@ -128,11 +143,16 @@ def seed_unified_rule_set(
             (
                 rule_version,
                 ENGINE_NAME,
-                "market.ann_event_classification_and_market.ann_risk_signal",
-                "announcement_adapter_v0",
+                "market.ann_event_classification_ann_risk_signal_and_tushare_event_raw_tables",
+                "announcement_and_financial_events_v0",
                 unified_rule_hash(source_rule_version),
                 _json_dumps(unified_rule_config(source_rule_version)),
-                _json_dumps({"announcement_title": source_rule_version}),
+                _json_dumps(
+                    {
+                        "announcement_title": source_rule_version,
+                        "tushare_financial": "financial_event_rules_v0_20260506",
+                    }
+                ),
             ),
         )
 
