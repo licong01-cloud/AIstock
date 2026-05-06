@@ -3656,6 +3656,7 @@ class FactorCacheRemoteSyncRequest(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="仅同步指定因子；空=同步全部有效本地缓存")
     force: bool = Field(False, description="强制同步，即使远端 meta 看起来已一致")
     configure_default_dir: bool = Field(True, description="当节点 factor_cache_dir 为空时写入默认远端缓存目录")
+    upload_workers: int = Field(4, ge=1, le=16, description="流式上传并发度；默认 4，避免串行单因子同步占不满局域网")
 
 
 @router.post("/factor-cache/compute", summary="触发因子值计算（WSL后台任务）")
@@ -3923,12 +3924,14 @@ def factor_cache_sync_to_node(req: FactorCacheRemoteSyncRequest):
                 req.factor_names,
                 force=req.force,
                 configure_default_dir=req.configure_default_dir,
+                upload_workers=req.upload_workers,
             )
             return {"ok": job.get("status") == "completed", "job": job}
         result = svc.sync_to_all_remote_nodes(
             req.factor_names,
             force=req.force,
             configure_default_dir=req.configure_default_dir,
+            upload_workers=req.upload_workers,
         )
         return result
     except ValueError as e:
