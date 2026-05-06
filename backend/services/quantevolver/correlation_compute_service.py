@@ -23,7 +23,10 @@ from psycopg2.extras import execute_values
 
 from ...db.pg_pool import get_conn
 from .correlation_engine import CorrelationEngine, CorrelationResult
-from .evaluation_universe_service import EvaluationUniverseService
+from .factor_universe_mask_service import (
+    OFFICIAL_FACTOR_UNIVERSE_KEY,
+    FactorUniverseMaskService,
+)
 from .factor_eligibility_service import FactorEligibilityService
 from .factor_value_loader import FactorValueLoader
 
@@ -310,13 +313,14 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
     # 自动推导 data_date: as_of_date (YYYY-MM-DD) → data_date (YYYYMMDD)
     if not data_date and as_of_date:
         data_date = as_of_date.replace("-", "")
-    official_instruments = None
-    if data_date:
-        official_instruments = EvaluationUniverseService().get_official_universe(
-            as_of_date=f"{data_date[:4]}-{data_date[4:6]}-{data_date[6:8]}"
+    universe_metadata: dict[str, Any] = {"universe_key": OFFICIAL_FACTOR_UNIVERSE_KEY}
+    if as_of_date:
+        # Correlation reuses official single-factor cache; its universe metadata must match the ST PIT state.
+        universe_metadata = FactorUniverseMaskService().metadata(
+            start_date="2018-08-01",
+            end_date=as_of_date,
+            universe_key=OFFICIAL_FACTOR_UNIVERSE_KEY,
         )
-    elif as_of_date:
-        official_instruments = EvaluationUniverseService().get_official_universe(as_of_date=as_of_date)
 
     global _latest_result
     timeout_timer = None
@@ -584,6 +588,10 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 on_progress=_matrix_progress,
                 stop_event=_stop_event,
                 expected_as_of_date=_aod_value,
+                expected_universe_key=universe_metadata.get("universe_key"),
+                expected_universe_rule_version=universe_metadata.get("universe_rule_version"),
+                expected_universe_fingerprint_sha256=universe_metadata.get("universe_fingerprint_sha256"),
+                expected_index_policy=universe_metadata.get("index_policy"),
             )
             _latest_result = result
             _correlation_progress.advance(done=1)
@@ -603,7 +611,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             _correlation_logs.append(f"[阶段3/3] 写入数据库 ({len(records)} 条记录)")
             phase3_t0 = time.time()
             if records:
-                _persist_correlations_batch(records)
+                _persist_correlations_batch(records, universe_metadata=universe_metadata)
             if _latest_result:
                 _persist_correlation_metadata(_latest_result)
             _correlation_progress.advance(done=1)
@@ -712,7 +720,10 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
 
 # ── 相关性 DB 持久化辅助函数 ──
 
-def _persist_correlations_batch(records: List[Dict[str, Any]]) -> int:
+def _persist_correlations_batch(
+    records: List[Dict[str, Any]],
+    universe_metadata: Optional[Dict[str, Any]] = None,
+) -> int:
     """批量写入相关性记录到 qe_factor_correlations 表。
 
     使用 execute_values 批量 UPSERT，替代逐条 INSERT。
@@ -720,6 +731,7 @@ def _persist_correlations_batch(records: List[Dict[str, Any]]) -> int:
     """
     if not records:
         return 0
+    universe_metadata = universe_metadata or {}
 
     # 写库只做 catalog → id 映射, 不再按 is_available 过滤;
     # 准入策略由调用方（compute_correlations）通过 include_disabled 决定, 此处只负责持久化.
@@ -758,7 +770,13 @@ def _persist_correlations_batch(records: List[Dict[str, Any]]) -> int:
                         raise RuntimeError(f"无法从 data_period 解析 as_of_date: {data_period}")
                 if as_of_date is None:
                     raise RuntimeError(f"相关性记录缺少 as_of_date: {r}")
-                seen[(a_id, b_id)] = (a_id, b_id, r["correlation"], r["method"], as_of_date, 252)
+                seen[(a_id, b_id)] = (
+                    a_id, b_id, r["correlation"], r["method"], as_of_date, 252,
+                    universe_metadata.get("universe_key"),
+                    universe_metadata.get("universe_rule_version"),
+                    universe_metadata.get("universe_fingerprint_sha256"),
+                    universe_metadata.get("index_policy"),
+                )
 
             values = list(seen.values())
             if not values:
@@ -771,17 +789,22 @@ def _persist_correlations_batch(records: List[Dict[str, Any]]) -> int:
                 """
                 INSERT INTO qe_factor_correlations
                     (factor_a_id, factor_b_id, correlation, method,
-                     as_of_date, data_window_days, computed_at)
+                     as_of_date, data_window_days, universe, universe_rule_version,
+                     universe_fingerprint_sha256, index_policy, computed_at)
                 VALUES %s
                 ON CONFLICT (factor_a_id, factor_b_id) DO UPDATE SET
                     correlation = EXCLUDED.correlation,
                     method = EXCLUDED.method,
                     as_of_date = EXCLUDED.as_of_date,
                     data_window_days = EXCLUDED.data_window_days,
+                    universe = EXCLUDED.universe,
+                    universe_rule_version = EXCLUDED.universe_rule_version,
+                    universe_fingerprint_sha256 = EXCLUDED.universe_fingerprint_sha256,
+                    index_policy = EXCLUDED.index_policy,
                     computed_at = NOW()
                 """,
                 values,
-                template="(%s, %s, %s, %s, %s::DATE, %s, NOW())",
+                template="(%s, %s, %s, %s, %s::DATE, %s, %s, %s, %s, %s, NOW())",
                 page_size=2000,
             )
 
@@ -827,14 +850,19 @@ def _persist_correlation_metadata(result: CorrelationResult) -> None:
             cur.execute("""
                 INSERT INTO qe_correlation_metadata
                     (as_of_date, num_factors, num_high_corr_pairs,
-                     avg_correlation, computation_time_sec, hdf5_path)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                     avg_correlation, computation_time_sec, hdf5_path,
+                     universe, universe_rule_version, universe_fingerprint_sha256, index_policy)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (as_of_date) DO UPDATE SET
                     num_factors = EXCLUDED.num_factors,
                     num_high_corr_pairs = EXCLUDED.num_high_corr_pairs,
                     avg_correlation = EXCLUDED.avg_correlation,
                     computation_time_sec = EXCLUDED.computation_time_sec,
                     hdf5_path = EXCLUDED.hdf5_path,
+                    universe = EXCLUDED.universe,
+                    universe_rule_version = EXCLUDED.universe_rule_version,
+                    universe_fingerprint_sha256 = EXCLUDED.universe_fingerprint_sha256,
+                    index_policy = EXCLUDED.index_policy,
                     created_at = NOW()
             """, (
                 result.as_of_date,
@@ -843,6 +871,10 @@ def _persist_correlation_metadata(result: CorrelationResult) -> None:
                 float(result.metadata.get("avg_correlation", 0)),
                 result.computation_time_sec,
                 result.metadata.get("hdf5_path"),
+                result.metadata.get("universe_key"),
+                result.metadata.get("universe_rule_version"),
+                result.metadata.get("universe_fingerprint_sha256"),
+                result.metadata.get("index_policy"),
             ))
 
 

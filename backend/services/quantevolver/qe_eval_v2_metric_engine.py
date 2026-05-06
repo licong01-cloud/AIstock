@@ -16,6 +16,11 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
+from .factor_universe_mask_service import (
+    OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
+    OFFICIAL_FACTOR_UNIVERSE_KEY,
+    FactorUniverseMaskService,
+)
 from .qe_eval_v2_qlib_reader import read_close_prices
 
 logger = logging.getLogger(__name__)
@@ -120,13 +125,20 @@ def _cs_zscore_matrix(arr: np.ndarray) -> np.ndarray:
 
 
 def _group_returns_from_matrices(
-    f_arr: np.ndarray, r_arr: np.ndarray, n_groups: int = N_GROUPS
+    f_arr: np.ndarray,
+    r_arr: np.ndarray,
+    n_groups: int = N_GROUPS,
+    sample_mask: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Vectorized group returns from pre-unstacked matrices.
 
     Returns (n_dates, n_groups) array of daily group mean returns. NaN for invalid rows.
     """
     valid = ~(np.isnan(f_arr) | np.isnan(r_arr))
+    if sample_mask is not None:
+        if sample_mask.shape != f_arr.shape:
+            raise ValueError("sample_mask must match factor matrix shape")
+        valid &= sample_mask
     n_valid = valid.sum(axis=1)
     n_dates = f_arr.shape[0]
 
@@ -412,20 +424,42 @@ def _pit_coverage_from_masks(
     market_valid: np.ndarray,
     suspended: np.ndarray,
     non_warmup: np.ndarray,
+    eligible: Optional[np.ndarray] = None,
 ) -> float:
     """PIT coverage over listed/tradable/non-warm-up samples."""
+    stats = _pit_coverage_stats_from_masks(f_arr, market_valid, suspended, non_warmup, eligible)
+    return stats["coverage"]
+
+
+def _pit_coverage_stats_from_masks(
+    f_arr: np.ndarray,
+    market_valid: np.ndarray,
+    suspended: np.ndarray,
+    non_warmup: np.ndarray,
+    eligible: Optional[np.ndarray] = None,
+) -> dict[str, Any]:
+    """Coverage numerator/denominator plus ST PIT and suspend exclusions."""
     if (
         f_arr.shape != market_valid.shape
         or f_arr.shape != suspended.shape
         or f_arr.shape != non_warmup.shape
     ):
         raise ValueError("PIT coverage masks must have the same shape as factor values")
-    denominator = market_valid & ~suspended & non_warmup
+    eligible_mask = eligible if eligible is not None else np.ones_like(f_arr, dtype=bool)
+    if eligible_mask.shape != f_arr.shape:
+        raise ValueError("eligible mask must have the same shape as factor values")
+    denominator = eligible_mask & market_valid & ~suspended & non_warmup
     denom_count = int(np.count_nonzero(denominator))
-    if denom_count <= 0:
-        return 0.0
     finite_count = int(np.count_nonzero(denominator & np.isfinite(f_arr)))
-    return float(finite_count / denom_count)
+    coverage = float(finite_count / denom_count) if denom_count > 0 else 0.0
+    return {
+        "coverage": coverage,
+        "coverage_numerator": finite_count,
+        "coverage_denominator": denom_count,
+        "eligible_sample_count": int(np.count_nonzero(eligible_mask & market_valid & non_warmup)),
+        "suspended_excluded_count": int(np.count_nonzero(eligible_mask & market_valid & suspended & non_warmup)),
+        "st_pit_excluded_count": int(np.count_nonzero((~eligible_mask) & market_valid & non_warmup)),
+    }
 
 
 # ================================================================
@@ -443,19 +477,25 @@ def _compute_factor_metrics_impl(
     data_end: str,
     calc_batch_id: str,
     suspended_mask: Optional[np.ndarray] = None,
+    eligible_mask: Optional[np.ndarray] = None,
+    universe_metadata: Optional[dict[str, Any]] = None,
 ) -> tuple[list, list]:
     """Compute all eval-window metrics for a single factor (thread-safe, read-only).
 
     Returns (factor_results, factor_reports).
     """
-    grp_full = _group_returns_from_matrices(f_arr_full, fwd_arr)
-
     factor_results = []
     factor_reports = []
+    universe_metadata = universe_metadata or {}
     close_arr = close_unstacked.values
     market_valid_full = np.isfinite(close_arr) & np.isfinite(fwd_arr)
     suspended_full = suspended_mask if suspended_mask is not None else np.zeros_like(f_arr_full, dtype=bool)
+    eligible_full = eligible_mask if eligible_mask is not None else np.ones_like(f_arr_full, dtype=bool)
+    if eligible_full.shape != f_arr_full.shape:
+        raise ValueError("eligible_mask must match factor matrix shape")
     non_warmup_full = _post_first_finite_mask(f_arr_full)
+    eval_valid_full = eligible_full & market_valid_full & ~suspended_full
+    grp_full = _group_returns_from_matrices(f_arr_full, fwd_arr, sample_mask=eval_valid_full)
 
     for window_name, window_spec in EVAL_WINDOWS.items():
         try:
@@ -484,8 +524,9 @@ def _compute_factor_metrics_impl(
                 })
                 continue
 
-            f_w = f_arr_full[mask]
-            r_w = fwd_arr[mask]
+            eval_valid_w = eval_valid_full[mask]
+            f_w = np.where(eval_valid_w, f_arr_full[mask], np.nan)
+            r_w = np.where(eval_valid_w, fwd_arr[mask], np.nan)
 
             f_w_z = _robust_zscore_matrix(f_w)
             r_w_z = _robust_zscore_matrix(r_w)
@@ -510,7 +551,12 @@ def _compute_factor_metrics_impl(
                 "factor_name": fname, "eval_window": window_name,
                 "calc_batch_id": calc_batch_id,
                 "data_start": w_start, "data_end": w_end,
-                "return_horizon": "1d", "universe": "all",
+                "return_horizon": "1d",
+                "universe": universe_metadata.get("universe_key", OFFICIAL_FACTOR_UNIVERSE_KEY),
+                "coverage_semantics": universe_metadata.get("coverage_semantics", OFFICIAL_FACTOR_COVERAGE_SEMANTICS),
+                "universe_rule_version": universe_metadata.get("universe_rule_version"),
+                "universe_fingerprint_sha256": universe_metadata.get("universe_fingerprint_sha256"),
+                "index_policy": universe_metadata.get("index_policy"),
                 "calculated_at": datetime.now(timezone.utc).isoformat(),
                 "ic_mean": ic_mean, "ic_std": ic_std, "ic_csz_mean": ic_csz_mean,
                 "rank_ic_mean": ric_mean, "rank_ic_std": ric_std,
@@ -526,8 +572,9 @@ def _compute_factor_metrics_impl(
             result["group_return_monotonicity"] = _monotonicity_from_group_arr(grp_full, mask)
 
             if window_name == "full":
-                result["turnover"] = _turnover_from_matrix(f_arr_full)
-                result["ic_decay_half_life"] = _ic_decay_half_life(f_arr_full, close_unstacked)
+                turnover_arr = np.where(eval_valid_full & non_warmup_full, f_arr_full, np.nan)
+                result["turnover"] = _turnover_from_matrix(turnover_arr)
+                result["ic_decay_half_life"] = _ic_decay_half_life(turnover_arr, close_unstacked)
                 #  IC
                 window_dates = dates[mask]
                 result["monthly_ic_series"] = _aggregate_monthly_ic(window_dates, ic_p, ic_s)
@@ -538,7 +585,7 @@ def _compute_factor_metrics_impl(
             if window_name == "full":
                 f_ranked_full = _rank_matrix(f_w)
                 for pname, p_arr in fwd_arrs.items():
-                    r_p = p_arr[mask]
+                    r_p = np.where(eligible_full[mask] & np.isfinite(p_arr[mask]), p_arr[mask], np.nan)
                     r_ranked_p = _rank_matrix(r_p)
                     ic_mp = _pearson_ic_from_matrices(f_ranked_full, r_ranked_p)
                     ic_mp_clean = ic_mp[~np.isnan(ic_mp)]
@@ -547,12 +594,14 @@ def _compute_factor_metrics_impl(
                 for pname in HOLDING_PERIODS:
                     result[f"rank_ic_{pname}"] = None
 
-            result["coverage"] = _pit_coverage_from_masks(
-                f_w,
+            coverage_stats = _pit_coverage_stats_from_masks(
+                f_arr_full[mask],
                 market_valid_full[mask],
                 suspended_full[mask],
                 non_warmup_full[mask],
+                eligible_full[mask],
             )
+            result.update(coverage_stats)
             result["n_trading_days"] = int(mask.sum())
 
             factor_results.append(result)
@@ -591,6 +640,8 @@ def prepare_shared_context(
     end_date: Optional[str] = None,
     instrument_hint: Optional[set[str]] = None,
     load_suspend_d: bool = True,
+    load_st_pit_mask: bool = True,
+    universe_key: str = OFFICIAL_FACTOR_UNIVERSE_KEY,
 ) -> dict[str, Any]:
     """One-time shared data preparation: load close prices + compute forward returns.
 
@@ -620,6 +671,29 @@ def prepare_shared_context(
     if load_suspend_d:
         suspended_pairs = _load_suspend_pairs(data_start, data_end, set(close_unstacked.columns))
 
+    universe_metadata: dict[str, Any] = {
+        "universe_key": universe_key,
+        "coverage_semantics": OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
+    }
+    st_pit_eligible_mask = pd.DataFrame(
+        True, index=dates, columns=close_unstacked.columns, dtype=bool
+    )
+    if load_st_pit_mask:
+        universe_service = FactorUniverseMaskService()
+        eligible_arr = universe_service.build_eligible_mask(
+            dates,
+            list(close_unstacked.columns),
+            start_date=data_start,
+            end_date=data_end,
+            universe_key=universe_key,
+        )
+        st_pit_eligible_mask = pd.DataFrame(eligible_arr, index=dates, columns=close_unstacked.columns)
+        universe_metadata = universe_service.metadata(
+            start_date=data_start,
+            end_date=data_end,
+            universe_key=universe_key,
+        )
+
     logger.info(f"Shared context ready: {len(dates)} dates  {len(close_unstacked.columns)} instruments, "
                 f"{data_start} ~ {data_end}, {time.time()-t0:.1f}s")
 
@@ -632,7 +706,9 @@ def prepare_shared_context(
         "data_end": data_end,
         "calc_batch_id": calc_batch_id,
         "suspended_pairs": suspended_pairs,
-        "coverage_semantics": "pit_listed_tradable_non_warmup_v1",
+        "st_pit_eligible_mask": st_pit_eligible_mask,
+        "universe_metadata": universe_metadata,
+        "coverage_semantics": universe_metadata.get("coverage_semantics", OFFICIAL_FACTOR_COVERAGE_SEMANTICS),
         "calc_engine": "qe_eval_v2",
     }
 
@@ -683,6 +759,9 @@ def compute_single_factor_metrics(
             logger.info(f"compute_single_factor_metrics({fname}): renaming close instruments (qlibtushare)")
             close_unstacked = close_unstacked.rename(columns=mapping)
             fwd_ret_mats = {k: v.rename(columns=mapping) for k, v in fwd_ret_mats.items()}
+            if isinstance(ctx.get("st_pit_eligible_mask"), pd.DataFrame):
+                ctx = dict(ctx)
+                ctx["st_pit_eligible_mask"] = ctx["st_pit_eligible_mask"].rename(columns=mapping)
         else:
             raise ValueError(
                 f" close : "
@@ -708,6 +787,13 @@ def compute_single_factor_metrics(
         list(common_insts),
         ctx.get("suspended_pairs") or set(),
     )
+    eligible_mask_df = ctx.get("st_pit_eligible_mask")
+    if isinstance(eligible_mask_df, pd.DataFrame):
+        eligible_mask = eligible_mask_df.reindex(
+            index=dates, columns=common_insts, fill_value=False
+        ).values.astype(bool)
+    else:
+        eligible_mask = np.ones_like(f_arr_full, dtype=bool)
 
     factor_results, factor_reports = _compute_factor_metrics_impl(
         fname=fname,
@@ -720,6 +806,8 @@ def compute_single_factor_metrics(
         data_end=ctx["data_end"],
         calc_batch_id=ctx["calc_batch_id"],
         suspended_mask=suspended_mask,
+        eligible_mask=eligible_mask,
+        universe_metadata=ctx.get("universe_metadata") or {},
     )
 
     # Sanitize NaN/Inf  None
@@ -749,6 +837,7 @@ def compute_single_factor_metrics(
         "duration": round(duration, 2),
         "calc_engine": "qe_eval_v2",
         "coverage_semantics": ctx.get("coverage_semantics"),
+        "universe_metadata": ctx.get("universe_metadata") or {},
     }
 
 
@@ -762,6 +851,8 @@ def compute_all_factors_metrics(
     factor_filter: Optional[list[str]] = None,
     max_workers: int = 4,
     load_suspend_d: bool = True,
+    load_st_pit_mask: bool = True,
+    universe_key: str = OFFICIAL_FACTOR_UNIVERSE_KEY,
 ) -> dict[str, Any]:
     """Compute metrics for all factors using pre-unstacked matrix architecture.
 
@@ -844,6 +935,26 @@ def compute_all_factors_metrics(
     if load_suspend_d:
         suspended_pairs = _load_suspend_pairs(data_start, data_end, set(common_insts))
     suspended_mask = _build_suspended_mask(dates, list(common_insts), suspended_pairs)
+    universe_metadata: dict[str, Any] = {
+        "universe_key": universe_key,
+        "coverage_semantics": OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
+    }
+    if load_st_pit_mask:
+        universe_service = FactorUniverseMaskService()
+        eligible_mask = universe_service.build_eligible_mask(
+            dates,
+            list(common_insts),
+            start_date=data_start,
+            end_date=data_end,
+            universe_key=universe_key,
+        )
+        universe_metadata = universe_service.metadata(
+            start_date=data_start,
+            end_date=data_end,
+            universe_key=universe_key,
+        )
+    else:
+        eligible_mask = np.ones_like(fwd_arr, dtype=bool)
 
     logger.info(f"Unstack done: {len(dates)} dates  {len(common_insts)} instruments, {time.time()-t1:.1f}s")
 
@@ -868,6 +979,8 @@ def compute_all_factors_metrics(
             data_end=data_end,
             calc_batch_id=calc_batch_id,
             suspended_mask=suspended_mask,
+            eligible_mask=eligible_mask,
+            universe_metadata=universe_metadata,
         )
         return fi, factor_results, factor_reports
 
@@ -918,7 +1031,8 @@ def compute_all_factors_metrics(
         "factor_reports": all_reports,
         "calc_batch_id": calc_batch_id,
         "calc_engine": "qe_eval_v2",
-        "coverage_semantics": "pit_listed_tradable_non_warmup_v1",
+        "coverage_semantics": universe_metadata.get("coverage_semantics", OFFICIAL_FACTOR_COVERAGE_SEMANTICS),
+        "universe_metadata": universe_metadata,
         "summary": {
             "ok_count": ok_count,
             "skipped_count": skipped_count,

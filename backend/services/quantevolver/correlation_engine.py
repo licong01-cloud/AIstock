@@ -209,6 +209,10 @@ class CorrelationEngine:
         on_progress: Optional[Callable[[int, int], None]] = None,
         stop_event: Optional[threading.Event] = None,
         expected_as_of_date: Optional[str] = None,
+        expected_universe_key: Optional[str] = None,
+        expected_universe_rule_version: Optional[str] = None,
+        expected_universe_fingerprint_sha256: Optional[str] = None,
+        expected_index_policy: Optional[str] = None,
     ) -> CorrelationResult:
         """计算截至 as_of_date 的完整 K×K 相关性矩阵。
 
@@ -250,6 +254,9 @@ class CorrelationEngine:
             start_date=window_dates[0],
             end_date=window_dates[-1],
             expected_as_of_date=expected_as_of_date,
+            expected_universe_key=expected_universe_key,
+            expected_universe_fingerprint_sha256=expected_universe_fingerprint_sha256,
+            expected_index_policy=expected_index_policy,
         )
 
         # 无条件同步 factor_names 与面板实际列顺序（修复列错位 bug）
@@ -345,6 +352,10 @@ class CorrelationEngine:
                 "winsorize_quantile": self._winsorize_q,
                 "avg_stocks_per_day": round(np.mean(stocks_per_day), 1),
                 "date_range": f"{valid_dates[0]}~{valid_dates[-1]}",
+                "universe_key": expected_universe_key,
+                "universe_rule_version": expected_universe_rule_version,
+                "universe_fingerprint_sha256": expected_universe_fingerprint_sha256,
+                "index_policy": expected_index_policy,
                 "num_high_corr_07": len(result.get_high_corr_pairs(0.7))
                     if False else 0,  # 占位，下面计算
             },

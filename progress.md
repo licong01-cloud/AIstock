@@ -354,3 +354,22 @@
   - `python -m py_compile scripts/register_dynamic_hmm_candidates.py` passed in WSL `rdagent-gpu`.
   - DB/file verification confirmed model and coefficient artifacts exist and coefficient JSON contains `preset_A`, full 1Y dates, and stock-sector map.
   - Post-registration script comparison discovered DB=4 coefficient artifacts and excluded DB=0.
+
+
+---
+
+## Session: 2026-05-06 ST PIT Official Factor Metrics and Cache
+- Status: started implementation in isolated worktree `F:/Dev/AIstock_worktrees/factor-st-pit-metrics-20260506`.
+- Branch: `codex/factor-st-pit-metrics-20260506`.
+- Added design document `docs/architecture/factor_st_pit_official_metrics_cache_design_20260506.md`.
+- Production port 8001 has not been touched.
+
+
+### ST PIT factor metrics/cache implementation progress (2026-05-06T13:25:00+08:00)
+- Restored accidental root-only edits into the isolated worktree and repaired the missing `factor_universe_mask_service.py` file.
+- Implemented ST PIT universe metadata propagation for factor snapshots, single-factor parquet cache, official metrics, cache coverage checks, loader sidecar checks, and correlation persistence.
+- Applied DB migration `factor_metrics_st_pit_universe_metadata_20260506.sql` after stripping BOM; new column comments verified in local DB.
+- Validation so far: target `py_compile` passed; `pytest backend/tests/test_factor_st_pit_metrics_cache.py backend/tests/test_factor_metrics_authority_static.py -q -p no:cacheprovider` -> 20 passed, 1 expected numpy warning.
+- Data validation: `shsz_st_pit_active_v1` ready/dirty=false, coverage 2018-08-01~2026-04-27; Jan 2025 service eligible index rows 88193 matched direct SQL join rows 88193.
+
+- Follow-up hardening: `FactorValuePipeline` now recreates an existing snapshot when its universe key/fingerprint/index policy is stale relative to the current ST PIT state. Re-ran py_compile and targeted pytest after the change.

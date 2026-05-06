@@ -430,6 +430,17 @@ if _ME and _os.path.exists(_CP):
 _dir = _os.path.dirname(_CP)
 if _dir:
     _os.makedirs(_dir, exist_ok=True)
+_EIP = __EIP__
+if _EIP and _os.path.exists(_EIP):
+    _idx_df = _pd.read_parquet(_EIP)
+    if isinstance(_idx_df.index, _pd.MultiIndex):
+        _target_index = _idx_df.index
+    elif {"datetime", "instrument"}.issubset(set(_idx_df.columns)):
+        _idx_df["datetime"] = _pd.to_datetime(_idx_df["datetime"], errors="coerce")
+        _target_index = _idx_df.set_index(["datetime", "instrument"]).index
+    else:
+        raise RuntimeError(f"eligible index parquet has invalid schema: {_EIP}")
+    _df = _df[~_df.index.duplicated(keep="last")].sort_index().reindex(_target_index)
 _save = _df.rename(columns={_df.columns[0]: "value"})
 _save.to_parquet(_CP, engine="pyarrow", compression="snappy")
 
@@ -454,6 +465,7 @@ def _build_pipeline_wrapper(
     cache_parquet_path: str,
     merge_existing: bool,
     existing_end_date: Optional[str],
+    eligible_index_path: Optional[str] = None,
 ) -> str:
     """Build the subprocess pipeline wrapper with actual parameter values."""
     return (
@@ -464,6 +476,7 @@ def _build_pipeline_wrapper(
         .replace("__CP__", repr(cache_parquet_path))
         .replace("__ME__", repr(merge_existing))
         .replace("__EE__", repr(existing_end_date or ""))
+        .replace("__EIP__", repr(eligible_index_path or ""))
     )
 
 
@@ -479,6 +492,7 @@ def _execute_factor_subprocess(
     merge_existing: bool = False,
     existing_end_date: Optional[str] = None,
     timeout: int = 0,
+    eligible_index_path: Optional[str] = None,
 ) -> dict:
     """通过 subprocess 执行因子计算 + 全部后处理，直接写入缓存 parquet。
 
@@ -501,7 +515,7 @@ def _execute_factor_subprocess(
     # 追加全流程 pipeline wrapper 到因子代码末尾
     wrapper = _build_pipeline_wrapper(
         factor_name, start_date, end_date, cache_parquet_path,
-        merge_existing, existing_end_date,
+        merge_existing, existing_end_date, eligible_index_path,
     )
     factor_py = os.path.join(factor_dir, "factor.py")
     with open(factor_py, "w", encoding="utf-8") as f:
@@ -572,6 +586,7 @@ def _execute_factor_via_backtest_data(
                 merge_existing=merge_existing,
                 existing_end_date=existing_end_date,
                 timeout=timeout,
+                eligible_index_path=audit_context.get("eligible_index_path"),
             )
         except Exception as e:
             trace = traceback.format_exc()
@@ -608,6 +623,7 @@ def _execute_factor_via_backtest_data(
             "window_train_start": audit_context["window_train_start"],
             "window_backtest_end": audit_context["window_backtest_end"],
         }
+        result.meta_entry.update(audit_context.get("universe_metadata") or {})
         result.meta_as_of_date = end_date
         return result
 
@@ -686,6 +702,11 @@ def main():
     ap.add_argument("--retry-failed-only", action="store_true", help="恢复历史任务时仅重试失败因子")
     ap.add_argument("--strict-backtest-data", action="store_true", help="要求严格使用回测数据目录")
     ap.add_argument("--code-manifest", help="JSON 文件路径，包含 {factor_name: code_text}，使用原始代码+subprocess 执行")
+    ap.add_argument("--universe-key", default="shsz_st_pit_active_v1", help="ST PIT universe key for cache index")
+    ap.add_argument("--universe-rule-version", default=None, help="Expected universe rule version")
+    ap.add_argument("--universe-fingerprint-sha256", default=None, help="Expected universe source fingerprint")
+    ap.add_argument("--index-policy", default="st_pit_buy_eligible_reindexed_v1", help="Factor cache index policy")
+    ap.add_argument("--eligible-index-path", default=None, help="Parquet MultiIndex(datetime,instrument) for PIT cache reindex")
     args = ap.parse_args()
 
     task_id = args.task_id or f"cache_local_{int(time.time() * 1000)}"
@@ -693,6 +714,33 @@ def main():
     audit_context = resolve_execution_context(args)
     start_date = audit_context["window_train_start"]
     end_date = audit_context["window_backtest_end"]
+
+    universe_metadata = {}
+    eligible_index_path = args.eligible_index_path
+    if args.universe_key:
+        from backend.services.quantevolver.factor_universe_mask_service import FactorUniverseMaskService
+
+        universe_service = FactorUniverseMaskService()
+        universe_metadata = universe_service.metadata(
+            start_date=start_date,
+            end_date=end_date,
+            universe_key=args.universe_key,
+        )
+        if args.universe_rule_version and universe_metadata.get("universe_rule_version") != args.universe_rule_version:
+            raise RuntimeError("universe rule version mismatch")
+        if args.universe_fingerprint_sha256 and universe_metadata.get("universe_fingerprint_sha256") != args.universe_fingerprint_sha256:
+            raise RuntimeError("universe fingerprint mismatch")
+        universe_metadata["index_policy"] = args.index_policy
+        if not eligible_index_path:
+            eligible_index = universe_service.build_eligible_index(
+                start_date=start_date,
+                end_date=end_date,
+                universe_key=args.universe_key,
+            )
+            eligible_index_path = str(TASK_DIR / f"{task_id}.eligible_index.parquet")
+            eligible_index.to_frame(index=False).to_parquet(eligible_index_path, index=False)
+    audit_context["universe_metadata"] = universe_metadata
+    audit_context["eligible_index_path"] = eligible_index_path
 
     print("=" * 60)
     print(f"Factor Cache Backfill: {start_date} ~ {end_date}")
@@ -847,6 +895,8 @@ def main():
                 meta_now.setdefault("factors", {})[name] = result.meta_entry
                 if result.meta_as_of_date:
                     meta_now["as_of_date"] = result.meta_as_of_date
+                for _k, _v in (audit_context.get("universe_metadata") or {}).items():
+                    meta_now[_k] = _v
                 save_meta(meta_now)
             state["success_factors"].append({
                 "name": name,

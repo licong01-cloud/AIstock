@@ -174,12 +174,20 @@ class DataSnapshotManager:
         from ...data_service.qe_data_service import build_static_factors
 
         timings: Dict[str, float] = {}
+        universe_meta: Dict[str, Any] = {}
 
-        # instruments=None 时获取全市场股票列表
+        # instruments=None means the official factor snapshot universe:
+        # keep all symbols that are ST-PIT eligible at least once in the window.
         if instruments is None:
-            from .evaluation_universe_service import EvaluationUniverseService
-            instruments = EvaluationUniverseService().get_official_universe(as_of_date=end_date)
-            logger.info(f"[快照 {data_date}] 使用官方评估股票池: {len(instruments)} 只")
+            from .factor_universe_mask_service import FactorUniverseMaskService
+
+            universe_service = FactorUniverseMaskService()
+            instruments = universe_service.get_window_union_instruments(
+                start_date=start_date,
+                end_date=end_date,
+            )
+            universe_meta = universe_service.metadata(start_date=start_date, end_date=end_date)
+            logger.info(f"[快照 {data_date}] 使用 ST PIT 窗口 union 股票池: {len(instruments)} 只")
 
         # 1. 加载行情数据
         logger.info(
@@ -321,6 +329,7 @@ class DataSnapshotManager:
             "filtered_suspicious_days": [str(d.date()) for d in sorted(suspicious_days)] if len(suspicious_days) > 0 else [],
             "timings": timings,
         }
+        meta.update({k: v for k, v in universe_meta.items() if v is not None})
         with open(self._meta_path(data_date), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
 

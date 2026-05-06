@@ -530,3 +530,52 @@ Register both dynamic PUP HMM candidates into the HMM DB version list, and keep 
 
 ## Usage Note
 The two dynamic DB versions currently have `preset_A` coefficient artifacts for `2025-03-11 ~ 2026-03-03`. QE windows outside this range need matching coefficient artifacts before validation.
+
+
+---
+
+# Task Plan: ST PIT Official Factor Metrics and Cache (2026-05-06)
+
+## Goal
+Make the official factor independent metrics, single-factor cache, factor backtest cache, and correlation calculation use the same ST PIT universe semantics: `shsz_st_pit_active_v1`, daily buy-eligible mask, and universe fingerprint metadata.
+
+## Phases
+- [x] Create isolated worktree/branch and detailed design document.
+- [ ] Implement shared factor universe mask service.
+- [ ] Wire ST PIT universe into snapshots, factor value pipeline, and metric engine.
+- [ ] Wire universe metadata into backtest cache and correlation cache.
+- [ ] Add DB migration and targeted tests.
+- [ ] Run data accuracy checks and test-port backend validation.
+- [ ] Commit, push, and confirm clean worktree.
+
+## Constraints
+- Do not modify `AGENTS.md`.
+- Do not restart production backend port 8001.
+- Use test port 8012 for backend validation.
+- Commit all files changed for this task; leave no uncommitted files.
+
+
+---
+
+# Task Plan: ST PIT Official Factor Metrics and Cache (2026-05-06)
+
+## Goal
+Make official factor independent metrics, single-factor backtest cache, and factor correlation all use one ST PIT universe contract: `shsz_st_pit_active_v1`, daily buy-eligible mask/index, and universe fingerprint metadata.
+
+## Current Phase
+Phase 4: validation and API smoke
+
+## Phases
+- [x] Phase 1: verify worktree safety and recover misplaced root edits into isolated task worktree.
+- [x] Phase 2: implement `FactorUniverseMaskService` and wire DataSnapshotManager / FactorValuePipeline / metric engine.
+- [x] Phase 3: wire cache coverage, loader sidecar checks, official metrics DB writes, correlation metadata, backfill script, migration, and tests.
+- [ ] Phase 4: run py_compile, pytest, DB data checks, and test-port API smoke; save validation run record.
+- [ ] Phase 5: commit and push task branch; leave no uncommitted files in the task worktree.
+
+## Decisions Made
+| Decision | Rationale |
+| --- | --- |
+| Official metrics use ST PIT buy-eligible samples, not all raw rows | Aligns independent metrics with QE experiment buy universe and avoids future-ST leakage. |
+| Snapshots use window union, caches use daily eligible index | Preserves enough raw data while metrics/cache samples are PIT-correct per date. |
+| Correlation validates universe metadata | Prevents merged cache or old single cache from being silently mixed into current official correlation. |
+| Root worktree edits are not reverted in this task | They may be user/parallel-session state; only the isolated task worktree is committed. |

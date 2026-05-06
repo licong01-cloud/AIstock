@@ -41,6 +41,17 @@ _PROJECT_ROOT = os.path.normpath(
 _REALTIME_OUTPUT_DIR = os.path.join(_PROJECT_ROOT, "rdagent_assets", "factor_values_realtime")
 _QE_FACTORS_DIR = os.path.join(_PROJECT_ROOT, "rdagent_assets", "qe_factors")
 
+_UNIVERSE_META_KEYS = (
+    "universe_key",
+    "universe_rule_version",
+    "universe_fingerprint_sha256",
+    "universe_scope",
+    "stock_universe_mode",
+    "snapshot_universe_mode",
+    "index_policy",
+    "coverage_semantics",
+)
+
 
 @dataclass
 class FactorComputeResult:
@@ -299,7 +310,7 @@ class FactorValuePipeline:
         加载后注入到 RealtimeFactorDataLoader（类级别）和 self._snapshot_static_df，
         批次内所有因子线程共享同一内存数据。
         """
-        from .data_snapshot_manager import DataSnapshotManager
+        from .data_snapshot_manager import DataSnapshotManager, _parse_data_date, DEFAULT_START_DATE
         from ...data_service.realtime_factor_data_loader import RealtimeFactorDataLoader
 
         mgr = DataSnapshotManager()
@@ -308,8 +319,14 @@ class FactorValuePipeline:
         # 1. 快照不存在 → 创建（首次执行，从 DB 加载）
         if not mgr.snapshot_exists(data_date):
             if instruments is None:
-                from .evaluation_universe_service import EvaluationUniverseService
-                instruments = EvaluationUniverseService().get_official_universe(as_of_date=data_date[:4] + "-" + data_date[4:6] + "-" + data_date[6:8])
+                from .factor_universe_mask_service import FactorUniverseMaskService
+
+                end_date = _parse_data_date(data_date)
+                start_date = snapshot_start_date or DEFAULT_START_DATE
+                instruments = FactorUniverseMaskService().get_window_union_instruments(
+                    start_date=start_date,
+                    end_date=end_date,
+                )
 
             logger.info(f"[快照] 首次创建快照 {data_date}，从 DB 加载数据...")
             t0 = time.time()
@@ -443,7 +460,8 @@ class FactorValuePipeline:
         # 从快照 meta 读取起止日期，确保所有因子使用快照确定的时间范围
         from .data_snapshot_manager import DataSnapshotManager, _parse_data_date, DEFAULT_START_DATE
         mgr = DataSnapshotManager()
-        if mgr.snapshot_exists(data_date):
+        snapshot_exists = mgr.snapshot_exists(data_date)
+        if snapshot_exists:
             snap_meta = mgr.load_meta(data_date)
             start_date = snap_meta["start_date"]
             end_date = snap_meta["end_date"]
@@ -451,10 +469,41 @@ class FactorValuePipeline:
             end_date = _parse_data_date(data_date)
             start_date = DEFAULT_START_DATE
 
+        cache_index: Optional[pd.MultiIndex] = None
+        cache_metadata: Dict[str, Any] = {}
         if instruments is None:
-            from .evaluation_universe_service import EvaluationUniverseService
-            instruments = EvaluationUniverseService().get_official_universe(as_of_date=end_date)
-            logger.info(f"使用官方评估股票池: {len(instruments)} 只")
+            from .factor_universe_mask_service import FactorUniverseMaskService
+
+            universe_service = FactorUniverseMaskService()
+            instruments = universe_service.get_window_union_instruments(
+                start_date=start_date,
+                end_date=end_date,
+            )
+            cache_index = universe_service.build_eligible_index(
+                start_date=start_date,
+                end_date=end_date,
+                instruments=instruments,
+            )
+            cache_metadata = universe_service.metadata(start_date=start_date, end_date=end_date)
+            if snapshot_exists:
+                snapshot_mismatch = [
+                    key
+                    for key in ("universe_key", "universe_fingerprint_sha256", "index_policy")
+                    if snap_meta.get(key) != cache_metadata.get(key)
+                ]
+                if snapshot_mismatch:
+                    logger.warning(
+                        "Existing factor snapshot %s has stale universe metadata (%s); recreating",
+                        data_date,
+                        snapshot_mismatch,
+                    )
+                    mgr.delete_snapshot(data_date)
+                    snapshot_exists = False
+            logger.info(
+                "Using ST PIT official factor universe: union=%s, eligible_rows=%s",
+                len(instruments),
+                len(cache_index),
+            )
 
         warmup_timings = self._warm_from_snapshot(data_date, instruments, snapshot_start_date=snapshot_start_date)
 
@@ -470,6 +519,8 @@ class FactorValuePipeline:
                 t0=t0,
                 warmup_timings=warmup_timings,
                 on_factor_success=on_factor_success,
+                cache_index=cache_index,
+                cache_metadata=cache_metadata,
             )
         finally:
             self.clear_snapshot()
@@ -480,6 +531,8 @@ class FactorValuePipeline:
         max_workers, timeout_per_factor, save_parquet,
         t0, warmup_timings,
         on_factor_success=None,
+        cache_index: Optional[pd.MultiIndex] = None,
+        cache_metadata: Optional[Dict[str, Any]] = None,
     ) -> BatchComputeResult:
         """compute_factor_values 的实际执行逻辑（分离出来以便 try/finally 清理快照）。"""
 
@@ -511,7 +564,11 @@ class FactorValuePipeline:
         # 本次计算以 end_date 为权威 as_of_date, meta 中任何非该值的条目 (以及对应的 single parquet)
         # 必须清除, 否则会导致相关性计算 Phase 1.5 因多快照失败.
         # 保留增量能力: meta 中 as_of_date == end_date 的条目不动 (允许本批次只补算部分因子)
-        prune_stats = self._prune_stale_snapshot(expected_as_of_date=end_date)
+        cache_metadata = cache_metadata or {}
+        prune_stats = self._prune_stale_snapshot(
+            expected_as_of_date=end_date,
+            expected_universe_metadata=cache_metadata or None,
+        )
         if prune_stats["pruned_factors"]:
             logger.warning(
                 f"[策略B] 开工前清理陈旧快照: "
@@ -539,18 +596,27 @@ class FactorValuePipeline:
                 # 立即写 single/{name}.parquet — 相关性计算直接复用
                 single_path = os.path.join(single_dir, f"{info['factor_name']}.parquet")
                 try:
-                    df.to_parquet(single_path)
+                    df_to_save = df
+                    if cache_index is not None:
+                        df = df[~df.index.duplicated(keep="last")].sort_index()
+                        df_to_save = df.reindex(cache_index)
+                    df_to_save.to_parquet(single_path)
                     success_single_paths.append(single_path)
-                    # 构建 meta_entry — 供 _meta.json 记录因子元数据
-                    _dates = df.index.get_level_values(0)
+                    # ?? meta_entry ? ? _meta.json ???????
+                    _dates = df_to_save.index.get_level_values(0)
+                    _value_col = df_to_save.columns[0]
+                    result.num_rows = len(df_to_save)
+                    result.nan_rate = round(float(df_to_save[_value_col].isna().mean()), 4) if len(df_to_save) else 0.0
                     result.meta_entry = {
                         "status": "ok",
                         "computed_at": datetime.now().isoformat(),
-                        "rows": len(df),
+                        "rows": len(df_to_save),
+                        "raw_rows": len(df),
                         "date_range": f"{_dates.min().strftime('%Y-%m-%d')}~{_dates.max().strftime('%Y-%m-%d')}",
                         "as_of_date": end_date,
                         "data_source_mode": "snapshot",
                     }
+                    result.meta_entry.update(cache_metadata)
                     result.meta_as_of_date = end_date
                 except Exception as e:
                     logger.error(f"写入 single 缓存失败: {info['factor_name']}: {e}")
@@ -597,7 +663,7 @@ class FactorValuePipeline:
                 # 回调：立即计算指标 + 入库
                 if on_factor_success is not None:
                     try:
-                        on_factor_success(info["factor_name"], single_path, df)
+                        on_factor_success(info["factor_name"], single_path, df_to_save)
                     except Exception as cb_err:
                         logger.error(
                             f"因子回调失败: {info['factor_name']}: {cb_err}", exc_info=True,
@@ -607,6 +673,7 @@ class FactorValuePipeline:
                         result.success = False
                         result.error = f"指标入库失败: {cb_err}"
                 # 立即释放 df — 不在内存中累积
+                del df_to_save
                 del df
             # 每 10 个因子做一次 gc，避免中间数据累积
             if (i + 1) % 10 == 0:
@@ -621,7 +688,10 @@ class FactorValuePipeline:
         # 1) disk 上有 parquet 但 meta 无条目 → 删除 parquet (孤儿)
         # 2) meta 有条目但 disk 无 parquet → 移除 meta 条目 (孤儿)
         # 任何不一致直接抛出，严禁静默吞错
-        reconcile_stats = self.reconcile_meta_and_single(expected_as_of_date=end_date)
+        reconcile_stats = self.reconcile_meta_and_single(
+            expected_as_of_date=end_date,
+            expected_universe_metadata=cache_metadata or None,
+        )
         logger.info(
             f"_meta.json reconcile 完成: "
             f"removed_orphan_parquets={reconcile_stats['removed_orphan_parquets']}, "
@@ -1044,81 +1114,76 @@ class FactorValuePipeline:
         meta = self._load_meta()
         meta.setdefault("factors", {})[factor_name] = meta_entry
         meta["as_of_date"] = as_of_date
+        for key in _UNIVERSE_META_KEYS:
+            if meta_entry.get(key) is not None:
+                meta[key] = meta_entry.get(key)
         self._save_meta(meta)
 
-    def _prune_stale_snapshot(self, expected_as_of_date: str) -> Dict[str, Any]:
-        """策略 B: 清理 meta 中非 expected_as_of_date 的条目 + 对应 single parquet。
-
-        保留 as_of_date == expected_as_of_date 的条目不动，实现增量补算；
-        非 expected 的条目无条件清除，保证 single/ + meta 单一快照。
-
-        Returns
-        -------
-        {
-            "expected_as_of_date": str,
-            "pruned_factors": [factor_name, ...],
-            "pruned_as_of_dates": {aod: count},
-        }
-
-        Raises
-        ------
-        FileNotFoundError : 需要删除的 parquet 不存在且 meta 条目存在（强一致性断言）
-        """
+    def _prune_stale_snapshot(
+        self,
+        expected_as_of_date: str,
+        expected_universe_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Remove single-cache entries whose snapshot or universe policy is stale."""
         if not expected_as_of_date:
-            raise ValueError("_prune_stale_snapshot 必须传入 expected_as_of_date")
+            raise ValueError("_prune_stale_snapshot requires expected_as_of_date")
 
         single_dir = os.path.join(self._output_dir, "single")
         meta = self._load_meta()
         factors = meta.get("factors", {})
+        expected_universe_metadata = expected_universe_metadata or {}
 
         pruned_factors: List[str] = []
         pruned_aods: Dict[str, int] = {}
+        pruned_universe: Dict[str, int] = {}
 
         for fn in list(factors.keys()):
             entry = factors[fn]
             aod = entry.get("as_of_date")
-            if aod != expected_as_of_date:
-                # 删除对应 parquet (允许不存在, 此时视为 meta 孤儿)
+            universe_mismatch_keys = [
+                key
+                for key in ("universe_key", "universe_fingerprint_sha256", "index_policy")
+                if expected_universe_metadata.get(key) is not None
+                and entry.get(key) != expected_universe_metadata.get(key)
+            ]
+            if aod != expected_as_of_date or universe_mismatch_keys:
                 pq_path = os.path.join(single_dir, f"{fn}.parquet")
                 if os.path.isfile(pq_path):
                     os.remove(pq_path)
                 del factors[fn]
                 pruned_factors.append(fn)
-                pruned_aods[aod] = pruned_aods.get(aod, 0) + 1
+                pruned_aods[str(aod)] = pruned_aods.get(str(aod), 0) + 1
+                for key in universe_mismatch_keys:
+                    pruned_universe[key] = pruned_universe.get(key, 0) + 1
 
         if pruned_factors:
             meta["factors"] = factors
-            # 顶层 as_of_date 回写为期望值 (本次计算后会变成该值, 先保证一致)
             meta["as_of_date"] = expected_as_of_date
+            for key in _UNIVERSE_META_KEYS:
+                if expected_universe_metadata.get(key) is not None:
+                    meta[key] = expected_universe_metadata.get(key)
             self._save_meta(meta)
 
         return {
             "expected_as_of_date": expected_as_of_date,
             "pruned_factors": pruned_factors,
             "pruned_as_of_dates": pruned_aods,
+            "pruned_universe_mismatches": pruned_universe,
         }
 
     def reconcile_meta_and_single(
         self,
         expected_as_of_date: Optional[str] = None,
+        expected_universe_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """双向对账 single/ ↔ _meta.json，保证强一致。
-
-        1) disk 上有 parquet 但 meta 无条目 → 删除 parquet (孤儿文件)
-        2) meta 有条目但 disk 无 parquet → 移除 meta 条目 (孤儿 meta)
-        3) 如指定 expected_as_of_date, meta 内出现其他 as_of_date → 抛出异常
-           (此阶段不应再有陈旧条目, _prune_stale_snapshot 已处理; 若存在即逻辑缺陷)
-
-        任何 I/O 错误必须抛出, 严禁静默吞错.
-        """
+        """Reconcile single parquet files and _meta.json, then validate snapshot/universe policy."""
         single_dir = os.path.join(self._output_dir, "single")
         if not os.path.isdir(single_dir):
-            raise FileNotFoundError(
-                f"single 缓存目录不存在: {single_dir}, 无法 reconcile"
-            )
+            raise FileNotFoundError(f"single cache directory does not exist: {single_dir}")
 
         meta = self._load_meta()
         factors = meta.setdefault("factors", {})
+        expected_universe_metadata = expected_universe_metadata or {}
 
         disk_names = {
             f[:-8] for f in os.listdir(single_dir)
@@ -1126,18 +1191,14 @@ class FactorValuePipeline:
         }
         meta_names = set(factors.keys())
 
-        # 1) 孤儿 parquet: disk 有 meta 无
         orphan_parquets = sorted(disk_names - meta_names)
         for fn in orphan_parquets:
-            pq_path = os.path.join(single_dir, f"{fn}.parquet")
-            os.remove(pq_path)
+            os.remove(os.path.join(single_dir, f"{fn}.parquet"))
 
-        # 2) 孤儿 meta: meta 有 disk 无
         orphan_meta = sorted(meta_names - disk_names)
         for fn in orphan_meta:
             del factors[fn]
 
-        # 3) as_of_date 一致性检查
         if expected_as_of_date is not None:
             mismatched = {
                 fn: entry.get("as_of_date")
@@ -1146,15 +1207,31 @@ class FactorValuePipeline:
             }
             if mismatched:
                 raise RuntimeError(
-                    f"reconcile 发现 as_of_date 不一致 "
-                    f"(expected={expected_as_of_date}): "
+                    f"single cache as_of_date mismatch: expected={expected_as_of_date}, "
                     f"count={len(mismatched)}, sample={list(mismatched.items())[:5]}"
                 )
-            # 顶层 as_of_date 同步为期望值
             meta["as_of_date"] = expected_as_of_date
 
-        # 有写操作时持久化
-        if orphan_parquets or orphan_meta or expected_as_of_date:
+        universe_mismatches: Dict[str, Dict[str, Any]] = {}
+        for fn, entry in factors.items():
+            bad = {
+                key: {"actual": entry.get(key), "expected": expected_universe_metadata.get(key)}
+                for key in ("universe_key", "universe_fingerprint_sha256", "index_policy")
+                if expected_universe_metadata.get(key) is not None
+                and entry.get(key) != expected_universe_metadata.get(key)
+            }
+            if bad:
+                universe_mismatches[fn] = bad
+        if universe_mismatches:
+            raise RuntimeError(
+                "single cache universe metadata mismatch: "
+                f"count={len(universe_mismatches)}, sample={list(universe_mismatches.items())[:3]}"
+            )
+        for key in _UNIVERSE_META_KEYS:
+            if expected_universe_metadata.get(key) is not None:
+                meta[key] = expected_universe_metadata.get(key)
+
+        if orphan_parquets or orphan_meta or expected_as_of_date or expected_universe_metadata:
             self._save_meta(meta)
 
         return {

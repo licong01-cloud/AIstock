@@ -12,9 +12,9 @@ from typing import Any, Dict, List, Optional
 
 from ...db.pg_pool import get_conn
 from ...infra.wsl_qlib_runner import win_to_wsl_path
-from .evaluation_universe_service import (
-    EvaluationUniverseService,
-    UNIVERSE_POLICY_VERSION,
+from .factor_universe_mask_service import (
+    OFFICIAL_FACTOR_UNIVERSE_KEY,
+    FactorUniverseMaskService,
 )
 from .factor_eligibility_service import FactorEligibilityService
 from .factor_value_pipeline import FactorValuePipeline
@@ -38,7 +38,10 @@ INSERT INTO aistock_factor_metrics (
     ic_csz_mean, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d,
     icir_annualized, rank_icir_annualized,
     direction, best_horizon, best_horizon_advantage,
-    coverage, n_trading_days, source_task_id, calc_batch_id, calc_engine,
+    coverage, coverage_numerator, coverage_denominator, coverage_semantics,
+    universe_rule_version, universe_fingerprint_sha256, index_policy,
+    eligible_sample_count, suspended_excluded_count, st_pit_excluded_count,
+    n_trading_days, source_task_id, calc_batch_id, calc_engine,
     factor_catalog_id, snapshot_date
 ) VALUES (
     %(factor_name)s, %(calculated_at)s, %(data_start)s, %(data_end)s, %(eval_window)s,
@@ -50,12 +53,16 @@ INSERT INTO aistock_factor_metrics (
     %(ic_csz_mean)s, %(rank_ic_1d)s, %(rank_ic_5d)s, %(rank_ic_10d)s, %(rank_ic_20d)s,
     %(icir_annualized)s, %(rank_icir_annualized)s,
     %(direction)s, %(best_horizon)s, %(best_horizon_advantage)s,
-    %(coverage)s, %(n_trading_days)s, %(source_task_id)s, %(calc_batch_id)s, %(calc_engine)s,
+    %(coverage)s, %(coverage_numerator)s, %(coverage_denominator)s, %(coverage_semantics)s,
+    %(universe_rule_version)s, %(universe_fingerprint_sha256)s, %(index_policy)s,
+    %(eligible_sample_count)s, %(suspended_excluded_count)s, %(st_pit_excluded_count)s,
+    %(n_trading_days)s, %(source_task_id)s, %(calc_batch_id)s, %(calc_engine)s,
     %(factor_catalog_id)s, %(snapshot_date)s
 )
 ON CONFLICT (factor_name, eval_window, data_start, data_end, snapshot_date)
 DO UPDATE SET
     calculated_at = EXCLUDED.calculated_at,
+    universe = EXCLUDED.universe,
     ic_mean = EXCLUDED.ic_mean,
     ic_std = EXCLUDED.ic_std,
     rank_ic_mean = EXCLUDED.rank_ic_mean,
@@ -83,6 +90,15 @@ DO UPDATE SET
     best_horizon = EXCLUDED.best_horizon,
     best_horizon_advantage = EXCLUDED.best_horizon_advantage,
     coverage = EXCLUDED.coverage,
+    coverage_numerator = EXCLUDED.coverage_numerator,
+    coverage_denominator = EXCLUDED.coverage_denominator,
+    coverage_semantics = EXCLUDED.coverage_semantics,
+    universe_rule_version = EXCLUDED.universe_rule_version,
+    universe_fingerprint_sha256 = EXCLUDED.universe_fingerprint_sha256,
+    index_policy = EXCLUDED.index_policy,
+    eligible_sample_count = EXCLUDED.eligible_sample_count,
+    suspended_excluded_count = EXCLUDED.suspended_excluded_count,
+    st_pit_excluded_count = EXCLUDED.st_pit_excluded_count,
     n_trading_days = EXCLUDED.n_trading_days,
     source_task_id = EXCLUDED.source_task_id,
     calc_batch_id = EXCLUDED.calc_batch_id,
@@ -270,7 +286,7 @@ class FactorOfficialEvaluationService:
 
     def __init__(self) -> None:
         self._eligibility_service = FactorEligibilityService()
-        self._universe_service = EvaluationUniverseService()
+        self._universe_service = FactorUniverseMaskService()
         self._pipeline = FactorValuePipeline()
         self._dispatch_service = None
 
@@ -623,8 +639,20 @@ class FactorOfficialEvaluationService:
             }
 
         as_of_date = f"{data_date[:4]}-{data_date[4:6]}-{data_date[6:8]}"
-        universe_meta = self._universe_service.get_official_universe_with_meta(as_of_date=as_of_date)
-        instruments = universe_meta["instruments"]
+        from .data_snapshot_manager import DataSnapshotManager
+
+        snap_meta = DataSnapshotManager().load_meta(data_date)
+        universe_meta = self._universe_service.metadata(
+            start_date=snap_meta["start_date"],
+            end_date=snap_meta["end_date"],
+        )
+        universe_count = len(
+            self._universe_service.get_window_union_instruments(
+                start_date=snap_meta["start_date"],
+                end_date=snap_meta["end_date"],
+                ensure=False,
+            )
+        )
 
         # ── 准备指标计算共享上下文（在因子计算之前，只准备一次）──
         db_result = {"inserted": 0, "skipped": 0, "errors": []}
@@ -638,9 +666,6 @@ class FactorOfficialEvaluationService:
                 prepare_shared_context,
             )
             qlib_bin_path = self._resolve_qlib_bin_path()
-            # 从快照 meta 获取日期范围
-            from .data_snapshot_manager import DataSnapshotManager
-            snap_meta = DataSnapshotManager().load_meta(data_date)
             metrics_ctx = prepare_shared_context(
                 qlib_bin_path=qlib_bin_path,
                 start_date=snap_meta["start_date"],
@@ -712,7 +737,7 @@ class FactorOfficialEvaluationService:
         # ── 执行因子计算（每个因子成功后通过回调立即入库）──
         pipeline_result = self._pipeline.compute_factor_values(
             factor_names=eligible_names,
-            instruments=instruments,
+            instruments=None,
             data_date=data_date,
             max_workers=max_workers,
             timeout_per_factor=timeout_per_factor,
@@ -762,9 +787,10 @@ class FactorOfficialEvaluationService:
             "skipped_factors": skipped,
             "pipeline_version": PIPELINE_VERSION,
             "code_source": CODE_SOURCE,
-            "universe_policy_version": UNIVERSE_POLICY_VERSION,
+            "universe_policy_version": OFFICIAL_FACTOR_UNIVERSE_KEY,
+            "universe_metadata": universe_meta,
             "snapshot_date": as_of_date,
-            "universe_count": universe_meta["count"],
+            "universe_count": universe_count,
             "pipeline_summary": summary,
             "db_result": db_result,
             "success_count": success_count,
@@ -1029,6 +1055,15 @@ class FactorOfficialEvaluationService:
                         "best_horizon": enrichment["best_horizon"],
                         "best_horizon_advantage": enrichment["best_horizon_advantage"],
                         "coverage": rec.get("coverage"),
+                        "coverage_numerator": rec.get("coverage_numerator"),
+                        "coverage_denominator": rec.get("coverage_denominator"),
+                        "coverage_semantics": rec.get("coverage_semantics"),
+                        "universe_rule_version": rec.get("universe_rule_version"),
+                        "universe_fingerprint_sha256": rec.get("universe_fingerprint_sha256"),
+                        "index_policy": rec.get("index_policy"),
+                        "eligible_sample_count": rec.get("eligible_sample_count"),
+                        "suspended_excluded_count": rec.get("suspended_excluded_count"),
+                        "st_pit_excluded_count": rec.get("st_pit_excluded_count"),
                         "n_trading_days": rec.get("n_trading_days"),
                         "source_task_id": None,
                         "calc_batch_id": calc_batch_id,

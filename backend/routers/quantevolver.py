@@ -3361,6 +3361,9 @@ def _factor_cache_candidate_covers(
     target_end: Optional[str] = None,
     *,
     max_start_gap_days: int = DEFAULT_WARMUP_TOLERANCE_DAYS,
+    expected_universe_key: Optional[str] = None,
+    expected_universe_fingerprint_sha256: Optional[str] = None,
+    expected_index_policy: Optional[str] = None,
 ) -> bool:
     if not candidate.get("valid_cache"):
         return False
@@ -3370,6 +3373,9 @@ def _factor_cache_candidate_covers(
         target_start=target_start,
         target_end=target_end,
         entry=candidate.get("entry") or {},
+        expected_universe_key=expected_universe_key,
+        expected_universe_fingerprint_sha256=expected_universe_fingerprint_sha256,
+        expected_index_policy=expected_index_policy,
         max_start_gap_days=max_start_gap_days,
     )
     return covered
@@ -3420,6 +3426,10 @@ def _collect_factor_cache_candidates(
                 "cache_window_train_start": entry.get("window_train_start"),
                 "cache_window_backtest_end": entry.get("window_backtest_end"),
                 "cache_data_source_mode": entry.get("data_source_mode"),
+                "cache_universe_key": entry.get("universe_key"),
+                "cache_universe_rule_version": entry.get("universe_rule_version"),
+                "cache_universe_fingerprint_sha256": entry.get("universe_fingerprint_sha256"),
+                "cache_index_policy": entry.get("index_policy"),
                 "cache_size_mb": size_mb,
             }
         )

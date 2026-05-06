@@ -107,6 +107,9 @@ class FactorValueLoader:
         start_date: str,
         end_date: str,
         expected_as_of_date: Optional[str] = None,
+        expected_universe_key: Optional[str] = None,
+        expected_universe_fingerprint_sha256: Optional[str] = None,
+        expected_index_policy: Optional[str] = None,
     ) -> pd.DataFrame:
         """返回指定因子在日期范围内的面板数据。
 
@@ -127,6 +130,9 @@ class FactorValueLoader:
             return self._load_panel_from_singles(
                 factor_names, start_date, end_date,
                 expected_as_of_date=expected_as_of_date,
+                expected_universe_key=expected_universe_key,
+                expected_universe_fingerprint_sha256=expected_universe_fingerprint_sha256,
+                expected_index_policy=expected_index_policy,
             )
 
         # auto / parquet 模式
@@ -154,6 +160,9 @@ class FactorValueLoader:
         factor_names: List[str],
         date: str,
         expected_as_of_date: Optional[str] = None,
+        expected_universe_key: Optional[str] = None,
+        expected_universe_fingerprint_sha256: Optional[str] = None,
+        expected_index_policy: Optional[str] = None,
     ) -> pd.DataFrame:
         """获取某一天的截面数据。
 
@@ -166,6 +175,9 @@ class FactorValueLoader:
             panel = self._load_panel_from_singles(
                 factor_names, date, date,
                 expected_as_of_date=expected_as_of_date,
+                expected_universe_key=expected_universe_key,
+                expected_universe_fingerprint_sha256=expected_universe_fingerprint_sha256,
+                expected_index_policy=expected_index_policy,
             )
             if panel.empty:
                 return pd.DataFrame(columns=factor_names)
@@ -320,6 +332,9 @@ class FactorValueLoader:
         start_date: str,
         end_date: str,
         expected_as_of_date: Optional[str] = None,
+        expected_universe_key: Optional[str] = None,
+        expected_universe_fingerprint_sha256: Optional[str] = None,
+        expected_index_policy: Optional[str] = None,
     ) -> pd.DataFrame:
         """从 single/ 目录按需加载指定因子，合并为面板。
 
@@ -347,6 +362,9 @@ class FactorValueLoader:
         cached_panel = self._try_read_merged_cache(
             merged_path, factor_names, start_date, end_date,
             expected_as_of_date=expected_as_of_date,
+            expected_universe_key=expected_universe_key,
+            expected_universe_fingerprint_sha256=expected_universe_fingerprint_sha256,
+            expected_index_policy=expected_index_policy,
         )
         if cached_panel is not None:
             elapsed = round(_time.time() - t0, 1)
@@ -473,6 +491,9 @@ class FactorValueLoader:
                 "date_range": f"{merged.index.get_level_values(0).min().strftime('%Y-%m-%d')}~{merged.index.get_level_values(0).max().strftime('%Y-%m-%d')}",
                 "row_count": len(merged),
                 "generated_at": datetime.now().isoformat(),
+                "universe_key": expected_universe_key,
+                "universe_fingerprint_sha256": expected_universe_fingerprint_sha256,
+                "index_policy": expected_index_policy,
             }
             tmp_sidecar = sidecar_path + ".tmp"
             with open(tmp_sidecar, "w", encoding="utf-8") as _sf:
@@ -539,6 +560,9 @@ class FactorValueLoader:
         start_date: str,
         end_date: str,
         expected_as_of_date: Optional[str] = None,
+        expected_universe_key: Optional[str] = None,
+        expected_universe_fingerprint_sha256: Optional[str] = None,
+        expected_index_policy: Optional[str] = None,
     ) -> Optional[pd.DataFrame]:
         """尝试从合并面板缓存加载。命中返回 DataFrame，否则 None。
 
@@ -574,6 +598,21 @@ class FactorValueLoader:
             os.remove(merged_path)
             os.remove(sidecar_path)
             return None
+
+        universe_checks = {
+            "universe_key": expected_universe_key,
+            "universe_fingerprint_sha256": expected_universe_fingerprint_sha256,
+            "index_policy": expected_index_policy,
+        }
+        for key, expected in universe_checks.items():
+            if expected is not None and sidecar.get(key) != expected:
+                logger.info(
+                    "merged factor cache %s mismatch: actual=%s expected=%s; rebuild",
+                    key, sidecar.get(key), expected,
+                )
+                os.remove(merged_path)
+                os.remove(sidecar_path)
+                return None
 
         # 文件大小保护: 超过 1GB 的缓存文件跳过（解压后内存放大 5-8 倍）
         file_size_mb = os.path.getsize(merged_path) / (1024 ** 2)

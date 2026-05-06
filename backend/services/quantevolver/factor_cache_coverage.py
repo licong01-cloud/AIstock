@@ -28,6 +28,9 @@ def factor_cache_covers_window(
     target_start: Optional[str],
     target_end: Optional[str],
     entry: Optional[Mapping[str, Any]] = None,
+    expected_universe_key: Optional[str] = None,
+    expected_universe_fingerprint_sha256: Optional[str] = None,
+    expected_index_policy: Optional[str] = None,
     max_start_gap_days: int = DEFAULT_WARMUP_TOLERANCE_DAYS,
 ) -> Tuple[bool, str]:
     """Return whether a factor cache covers the requested window.
@@ -37,6 +40,17 @@ def factor_cache_covers_window(
     - the actual first factor-value date being no more than
       `max_start_gap_days` after `target_start`.
     """
+
+    entry = entry or {}
+    if expected_universe_key and entry.get("universe_key") != expected_universe_key:
+        return False, "universe_mismatch"
+    if (
+        expected_universe_fingerprint_sha256
+        and entry.get("universe_fingerprint_sha256") != expected_universe_fingerprint_sha256
+    ):
+        return False, "universe_fingerprint_changed"
+    if expected_index_policy and entry.get("index_policy") != expected_index_policy:
+        return False, "index_policy_mismatch"
 
     if not cache_start_date or not cache_end_date:
         return False, "missing_cache_date_range"
@@ -55,7 +69,6 @@ def factor_cache_covers_window(
     if not req_start or not cache_start:
         return True, "end_covered"
 
-    entry = entry or {}
     window_start_raw = entry.get("window_train_start")
     if window_start_raw:
         try:

@@ -278,3 +278,21 @@
 - PIT follow-up check: NEW1/NEW2 train/validation/coefficient periods are non-overlapping for the 2025-03-11 ~ 2026-03-03 validation window, and training code enforces `train_end < val_start` and `val_end < test_start`.
 - Residual metadata-PIT caveat: registered coefficient JSON uses a static `stock_sector_map` for runtime compatibility. The qlib/script validation itself used PIT date-sector maps, but current QE runtime consumes static `stock_sector_map`; this is not price/return leakage, but it is not perfect point-in-time industry membership. Over the 1Y window, 30 stocks have multiple overlapping membership rows in the broad overlap query.
 - Strict forward-label embargo caveat: because the dynamic PUP calibration uses 5D/10D/20D forward returns inside the validation period, a validation end of 2025-03-10 is adjacent to test start 2025-03-11 and therefore late-validation 20D labels look into the test window. For a strict 20D embargo, the latest validation date before 2025-03-11 should be 2025-02-11 or earlier.
+
+
+---
+
+# Findings: ST PIT Official Factor Metrics and Cache (2026-05-06)
+
+- Current official metric universe still uses `EvaluationUniverseService` static end-date semantics in multiple places.
+- Current metric coverage denominator excludes suspend/warmup but does not include ST PIT buy eligibility.
+- Current single cache metadata only validates `as_of_date`; universe metadata is missing.
+- Current correlation merged cache sidecar validates `as_of_date` but not universe key/fingerprint/index policy.
+- Existing `market.stock_universe_pit_spans` and `StockUniversePitService` already provide the correct first-stage ST-only PIT source.
+
+
+## ST PIT factor metrics/cache implementation findings (2026-05-06)
+- Root worktree had accidental task edits in `data_snapshot_manager.py`, `factor_cache_coverage.py`, `factor_value_pipeline.py`, `qe_eval_v2_metric_engine.py`, and untracked `factor_universe_mask_service.py`; the isolated task worktree was missing the new service. Changes were migrated/repaired in the task worktree without reverting root files.
+- `FactorValuePipeline` had ST PIT cache-index logic but missed `_UNIVERSE_META_KEYS` and `_do_compute_factor_values(..., cache_index, cache_metadata)` parameters; py_compile caught and repairs were applied.
+- `qe_eval_v2_metric_engine` needed `FactorUniverseMaskService` imports and `_pit_coverage_stats_from_masks`; unit tests now verify denominator/numerator semantics.
+- The migration file initially had a UTF-8 BOM that PostgreSQL rejected; it was rewritten as UTF-8 without BOM before applying.
