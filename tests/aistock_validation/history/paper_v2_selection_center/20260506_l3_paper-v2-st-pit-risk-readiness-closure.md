@@ -24,6 +24,8 @@ Continue the ST PIT alignment work without modifying QE shared implementation co
 
 ## Automated Validation
 
+The branch was merged with `origin/main` commit `2c64f078c3b6168f868f97ac59a653e3c86a5f28` and the key validation matrix was rerun after that merge.
+
 ```powershell
 python -m py_compile backend/services/paper_trading_v2/risk_targets.py backend/services/paper_trading_v2/day_runner.py backend/services/paper_trading_v2/readiness.py backend/services/paper_trading_v2/live_session.py backend/tests/paper_trading_v2/test_risk_targets.py backend/tests/paper_trading_v2/test_day_runner.py
 ```
@@ -46,13 +48,15 @@ Result: `69 passed in 1.37s`.
 python -m pytest backend/tests/selection_center backend/tests/strategy_package backend/tests/paper_trading_v2 -q -p no:cacheprovider
 ```
 
-Result: `145 passed in 33.12s`.
+Result before merge: `145 passed in 33.12s`.
+Post-merge rerun result: `145 passed in 15.53s`.
 
 ```powershell
 python -m pytest backend/tests/unified_engine/test_qe_config_truth.py backend/tests/strategy_package/test_rebalance_runtime.py -q -p no:cacheprovider
 ```
 
-Result: `49 passed in 28.01s`.
+Result before merge: `49 passed in 28.01s`.
+Post-merge rerun result: `49 passed in 23.59s`.
 
 ```powershell
 cmd /c frontend\node_modules\.bin\tsc.cmd -p frontend\tsconfig.json --noEmit --incremental false --pretty false
@@ -64,7 +68,7 @@ Result: passed.
 npm run build
 ```
 
-Result: passed. Next.js built 64 app routes, including `/paper-v2/selection`.
+Result: passed before and after merge. Next.js built 64 app routes, including `/paper-v2/selection`.
 
 ```powershell
 git diff --check
