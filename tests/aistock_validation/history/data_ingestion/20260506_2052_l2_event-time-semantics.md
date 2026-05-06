@@ -53,7 +53,7 @@ rg -n "event_signal|time_semantics" backend/services/quantevolver backend/servic
 Result: no matches (`rg` exit 1), confirming no new event-signal consumer references in QE, Selection Center, Paper v2, Paper Trading, QMT, or live adapter paths.
 
 ```powershell
-Select-String -Path <changed code/test files> -Pattern AKIA,SECRET_KEY,TUSHARE_TOKEN=,password= -SimpleMatch
+Select-String -Path <changed code/test files> -Pattern <secret-like token names> -SimpleMatch
 ```
 
 Result: no forbidden token matches.
