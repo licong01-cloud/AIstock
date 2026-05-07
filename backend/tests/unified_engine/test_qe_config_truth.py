@@ -426,6 +426,33 @@ def test_v25_1_execution_algo_generates_v25_1_inner_strategy():
     assert "board_lot_trade_unit: true" in yaml_text
 
 
+def test_v25_1_execution_algo_yaml_preserves_ui_cost_params_for_wrapper_aliases():
+    yaml_text = _base_yaml(
+        execution_algo="V25_1_SMALL_CAP",
+        execution_algo_params={
+            "device": "cpu",
+            "min_cost": 5.0,
+            "commission_rate": 0.00025,
+            "tolerance_bps": 10.0,
+            "max_buckets": 12,
+        },
+    )
+    inner_strategy = _slice_yaml_between(
+        yaml_text,
+        "            inner_strategy:",
+        "            # qe_execution_trace:",
+    )
+
+    assert "min_cost: 5.0" in inner_strategy
+    assert "commission_rate: 0.00025" in inner_strategy
+    assert "tolerance_bps: 10.0" in inner_strategy
+    assert "max_buckets: 12" in inner_strategy
+    assert "v25_1_min_cost:" not in inner_strategy
+    assert "v25_1_commission_rate:" not in inner_strategy
+    assert "v25_1_tolerance_bps:" not in inner_strategy
+    assert "v25_1_max_buckets:" not in inner_strategy
+
+
 def test_v25_1_execution_algo_receives_suspend_artifact_when_signal_filter_enabled():
     yaml_text = _base_yaml(
         execution_algo="V25_1_SMALL_CAP",

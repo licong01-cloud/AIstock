@@ -224,6 +224,24 @@ class TailTWAPWithV25_1SmallCapStrategy(TailTWAPWithV25TwoStageStrategy):
         v25_1_max_buckets: Optional[int] = None,
         **kwargs,
     ):
+        v25_1_min_cost = self._consume_v25_1_alias(
+            kwargs, "min_cost", "v25_1_min_cost", v25_1_min_cost
+        )
+        v25_1_commission_rate = self._consume_v25_1_alias(
+            kwargs,
+            "commission_rate",
+            "v25_1_commission_rate",
+            v25_1_commission_rate,
+        )
+        v25_1_tolerance_bps = self._consume_v25_1_alias(
+            kwargs,
+            "tolerance_bps",
+            "v25_1_tolerance_bps",
+            v25_1_tolerance_bps,
+        )
+        v25_1_max_buckets = self._consume_v25_1_alias(
+            kwargs, "max_buckets", "v25_1_max_buckets", v25_1_max_buckets
+        )
         super().__init__(*args, **kwargs)
         self._v25_1_min_cost = float(
             self.DEFAULT_MIN_COST if v25_1_min_cost is None else v25_1_min_cost
@@ -264,6 +282,29 @@ class TailTWAPWithV25_1SmallCapStrategy(TailTWAPWithV25TwoStageStrategy):
             self._v25_1_tolerance_bps,
             self._v25_1_max_buckets,
         )
+
+    @staticmethod
+    def _consume_v25_1_alias(kwargs, alias_name, canonical_name, canonical_value):
+        """Promote generic QE config aliases before the parent swallows them."""
+
+        if alias_name not in kwargs:
+            return canonical_value
+        alias_value = kwargs.pop(alias_name)
+        if alias_value is None:
+            return canonical_value
+        if canonical_value is None:
+            return alias_value
+        try:
+            same_value = float(alias_value) == float(canonical_value)
+        except (TypeError, ValueError):
+            same_value = alias_value == canonical_value
+        if not same_value:
+            raise ValueError(
+                "V25.1 conflicting config aliases: "
+                f"{canonical_name}={canonical_value!r} "
+                f"{alias_name}={alias_value!r}"
+            )
+        return canonical_value
 
     def _minimum_child_order_amount(
         self,
