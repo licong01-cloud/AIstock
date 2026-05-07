@@ -11,6 +11,10 @@ from backend.services.validation.history_store import ValidationHistoryStore
 from backend.services.validation.models import ValidationResponse
 from backend.services.validation.module_quality import ModuleQualityService
 from backend.services.validation.plan_catalog import ValidationCatalogError, ValidationPlanCatalog
+from backend.services.validation.ui_target_catalog import (
+    ValidationUiTargetCatalog,
+    ValidationUiTargetCatalogError,
+)
 
 
 router = APIRouter(prefix="/validation", tags=["validation"])
@@ -42,6 +46,10 @@ def get_git_activity_provider() -> GitCommitActivityProvider:
 
 def get_module_quality_service() -> ModuleQualityService:
     return ModuleQualityService()
+
+
+def get_ui_target_catalog() -> ValidationUiTargetCatalog:
+    return ValidationUiTargetCatalog()
 
 
 class ValidationExecutionStartRequest(BaseModel):
@@ -250,6 +258,57 @@ def get_validation_module_quality_summary(
         return _success(module_quality_service.module_quality_summary(commit_limit=commit_limit))
     except (GitActivityProviderError, GitStatusProviderError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/ui-targets", response_model=ValidationResponse, summary="List route-level validation UI targets")
+def list_validation_ui_targets(
+    nav_group: str | None = Query(None),
+    module: str | None = Query(None),
+    coverage_status: str | None = Query(None),
+    risk_level: str | None = Query(None),
+    search: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    ui_target_catalog: ValidationUiTargetCatalog = Depends(get_ui_target_catalog),
+):
+    try:
+        return _success(
+            ui_target_catalog.list_targets(
+                nav_group=nav_group,
+                module=module,
+                coverage_status=coverage_status,
+                risk_level=risk_level,
+                search=search,
+                page=page,
+                page_size=page_size,
+            )
+        )
+    except ValidationUiTargetCatalogError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/ui-targets/summary", response_model=ValidationResponse, summary="Summarize route-level UI validation targets")
+def get_validation_ui_targets_summary(
+    ui_target_catalog: ValidationUiTargetCatalog = Depends(get_ui_target_catalog),
+):
+    try:
+        return _success(ui_target_catalog.summary())
+    except ValidationUiTargetCatalogError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/ui-targets/{route_id}", response_model=ValidationResponse, summary="Get route-level UI validation target detail")
+def get_validation_ui_target(
+    route_id: str,
+    ui_target_catalog: ValidationUiTargetCatalog = Depends(get_ui_target_catalog),
+):
+    try:
+        target = ui_target_catalog.get_target(route_id)
+    except ValidationUiTargetCatalogError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"validation UI target not found: {route_id}")
+    return _success(target)
 
 
 @router.get("/findings", response_model=ValidationResponse, summary="List validation quality findings")

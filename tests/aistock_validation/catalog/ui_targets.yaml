@@ -1,0 +1,847 @@
+schema_version: aistock_validation_ui_targets_v1
+targets:
+- route_id: qe.overview
+  href: /quantevolver
+  label: QE Overview
+  nav_group: QuantEvolver
+  primary_module: qe.single_experiment
+  impact_modules:
+  - qe
+  - qe.core
+  - qe.enhanced_metrics
+  risk_level: high
+  required_test_plans:
+  - l0
+  - qe_read_l3
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open QE Overview
+  - Review QE Overview state
+  - Validate QE Overview primary workflow
+  coverage_status: planned
+- route_id: qe.factor_library
+  href: /quantevolver/factors
+  label: Factor Library
+  nav_group: QuantEvolver
+  primary_module: factor_library
+  impact_modules:
+  - qe
+  - qe.enhanced_metrics
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open Factor Library
+  - Review Factor Library state
+  - Validate Factor Library primary workflow
+  coverage_status: planned
+- route_id: qe.factor_correlation
+  href: /quantevolver/factor-correlation
+  label: Factor Correlation
+  nav_group: QuantEvolver
+  primary_module: factor_library
+  impact_modules:
+  - qe
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open Factor Correlation
+  - Review Factor Correlation state
+  - Validate Factor Correlation primary workflow
+  coverage_status: planned
+- route_id: qe.model_library
+  href: /quantevolver/models
+  label: Model Library
+  nav_group: QuantEvolver
+  primary_module: model_library
+  impact_modules:
+  - qe
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open Model Library
+  - Review Model Library state
+  - Validate Model Library primary workflow
+  coverage_status: planned
+- route_id: qe.strategy_library
+  href: /quantevolver/strategies
+  label: Strategy Library
+  nav_group: QuantEvolver
+  primary_module: qe.core
+  impact_modules:
+  - qe.single_experiment
+  risk_level: high
+  required_test_plans:
+  - l0
+  - qe_read_l3
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open Strategy Library
+  - Review Strategy Library state
+  - Validate Strategy Library primary workflow
+  coverage_status: planned
+- route_id: qe.execution_algorithms
+  href: /quantevolver/execution-algorithms
+  label: Execution Algorithms
+  nav_group: QuantEvolver
+  primary_module: paper_v2
+  impact_modules:
+  - qe.core
+  - strategy_package
+  risk_level: critical
+  required_test_plans:
+  - l0
+  - paper_v2_backend
+  recommended_test_plans:
+  - paper_v2_l3
+  business_operations:
+  - Open Execution Algorithms
+  - Review Execution Algorithms state
+  - Validate Execution Algorithms primary workflow
+  coverage_status: planned
+- route_id: qe.compose
+  href: /quantevolver/compose
+  label: Compose Experiment
+  nav_group: QuantEvolver
+  primary_module: qe.single_experiment
+  impact_modules:
+  - qe.core
+  - factor_library
+  - model_library
+  risk_level: high
+  required_test_plans:
+  - l0
+  - qe_read_l3
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open Compose Experiment
+  - Review Compose Experiment state
+  - Validate Compose Experiment primary workflow
+  coverage_status: planned
+- route_id: qe.experiments
+  href: /quantevolver/experiments
+  label: Experiment History
+  nav_group: QuantEvolver
+  primary_module: qe.single_experiment
+  impact_modules:
+  - qe.enhanced_metrics
+  - qe.data_completeness
+  risk_level: high
+  required_test_plans:
+  - l0
+  - qe_read_l3
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open Experiment History
+  - Review Experiment History state
+  - Validate Experiment History primary workflow
+  coverage_status: planned
+- route_id: qe.archive
+  href: /qe-archive
+  label: QE Archive Warehouse
+  nav_group: QuantEvolver
+  primary_module: qe.archive
+  impact_modules:
+  - qe.data_completeness
+  - qe.enhanced_metrics
+  risk_level: high
+  required_test_plans:
+  - l0
+  - qe_archive_l3
+  recommended_test_plans:
+  - qe_archive_data_quality
+  business_operations:
+  - Open QE Archive Warehouse
+  - Review QE Archive Warehouse state
+  - Validate QE Archive Warehouse primary workflow
+  coverage_status: partial
+- route_id: qe.auto_evolution
+  href: /quantevolver/evolution
+  label: Auto Evolution
+  nav_group: QuantEvolver
+  primary_module: qe.auto_evolution
+  impact_modules:
+  - qe.custom_evolution
+  - qe.data_completeness
+  risk_level: high
+  required_test_plans:
+  - l0
+  - qe_read_l3
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open Auto Evolution
+  - Review Auto Evolution state
+  - Validate Auto Evolution primary workflow
+  coverage_status: planned
+- route_id: qe.multi_alpha_diagnostics
+  href: /quantevolver/multi-alpha/diagnostics
+  label: Multi-Alpha Diagnostics
+  nav_group: QuantEvolver
+  primary_module: qe.auto_evolution
+  impact_modules:
+  - qe.enhanced_metrics
+  risk_level: high
+  required_test_plans:
+  - l0
+  - qe_read_l3
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open Multi-Alpha Diagnostics
+  - Review Multi-Alpha Diagnostics state
+  - Validate Multi-Alpha Diagnostics primary workflow
+  coverage_status: planned
+- route_id: qe.multi_alpha_evolve
+  href: /quantevolver/multi-alpha/evolve-wizard
+  label: Multi-Alpha Evolution
+  nav_group: QuantEvolver
+  primary_module: qe.auto_evolution
+  impact_modules:
+  - qe.custom_evolution
+  risk_level: high
+  required_test_plans:
+  - l0
+  - qe_read_l3
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open Multi-Alpha Evolution
+  - Review Multi-Alpha Evolution state
+  - Validate Multi-Alpha Evolution primary workflow
+  coverage_status: planned
+- route_id: qe.sota
+  href: /quantevolver/evolution/sota
+  label: SOTA Hall
+  nav_group: QuantEvolver
+  primary_module: qe.auto_evolution
+  impact_modules:
+  - qe.enhanced_metrics
+  risk_level: high
+  required_test_plans:
+  - l0
+  - qe_read_l3
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open SOTA Hall
+  - Review SOTA Hall state
+  - Validate SOTA Hall primary workflow
+  coverage_status: planned
+- route_id: qe.model_training
+  href: /quantevolver/model-training
+  label: Model Training
+  nav_group: QuantEvolver
+  primary_module: model_library
+  impact_modules:
+  - qe.data_completeness
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open Model Training
+  - Review Model Training state
+  - Validate Model Training primary workflow
+  coverage_status: planned
+- route_id: qe.selection
+  href: /quantevolver/selection
+  label: Experiment Selection
+  nav_group: QuantEvolver
+  primary_module: qe.single_experiment
+  impact_modules:
+  - selection_center
+  risk_level: high
+  required_test_plans:
+  - l0
+  - qe_read_l3
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open Experiment Selection
+  - Review Experiment Selection state
+  - Validate Experiment Selection primary workflow
+  coverage_status: planned
+- route_id: qe.prompts
+  href: /quantevolver/prompts
+  label: Prompt Configuration
+  nav_group: QuantEvolver
+  primary_module: qe.core
+  impact_modules:
+  - qe.auto_evolution
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans:
+  - qe_read_l3
+  business_operations:
+  - Open Prompt Configuration
+  - Review Prompt Configuration state
+  - Validate Prompt Configuration primary workflow
+  coverage_status: planned
+- route_id: rdagent.dispatch
+  href: /rdagent/dispatch
+  label: Dispatch Center
+  nav_group: RD-Agent Management
+  primary_module: rdagent
+  impact_modules:
+  - qlib_data
+  - qe
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Dispatch Center
+  - Review Dispatch Center state
+  - Validate Dispatch Center primary workflow
+  coverage_status: planned
+- route_id: rdagent.qlib_export
+  href: /qlib
+  label: Qlib Snapshot Export
+  nav_group: RD-Agent Management
+  primary_module: qlib_data
+  impact_modules:
+  - local_data
+  - qe
+  risk_level: critical
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Qlib Snapshot Export
+  - Review Qlib Snapshot Export state
+  - Validate Qlib Snapshot Export primary workflow
+  coverage_status: planned
+- route_id: rdagent.scheduler
+  href: /scheduler
+  label: RD-Agent Scheduler
+  nav_group: RD-Agent Management
+  primary_module: rdagent
+  impact_modules:
+  - platform
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open RD-Agent Scheduler
+  - Review RD-Agent Scheduler state
+  - Validate RD-Agent Scheduler primary workflow
+  coverage_status: planned
+- route_id: rdagent.tasks_sync
+  href: /rdagent/tasks-sync
+  label: Task Asset Sync
+  nav_group: RD-Agent Management
+  primary_module: rdagent
+  impact_modules:
+  - qe
+  - qlib_data
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Task Asset Sync
+  - Review Task Asset Sync state
+  - Validate Task Asset Sync primary workflow
+  coverage_status: planned
+- route_id: rdagent.tasks
+  href: /rdagent/tasks
+  label: Task List
+  nav_group: RD-Agent Management
+  primary_module: rdagent
+  impact_modules:
+  - qe
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Task List
+  - Review Task List state
+  - Validate Task List primary workflow
+  coverage_status: planned
+- route_id: rdagent.task_selection
+  href: /rdagent/task-selection
+  label: Task Selection
+  nav_group: RD-Agent Management
+  primary_module: rdagent
+  impact_modules:
+  - selection_center
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Task Selection
+  - Review Task Selection state
+  - Validate Task Selection primary workflow
+  coverage_status: planned
+- route_id: rdagent.llm_config
+  href: /config/rdagent-llm
+  label: RD-Agent LLM Config
+  nav_group: RD-Agent Management
+  primary_module: rdagent
+  impact_modules:
+  - platform
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open RD-Agent LLM Config
+  - Review RD-Agent LLM Config state
+  - Validate RD-Agent LLM Config primary workflow
+  coverage_status: planned
+- route_id: validation.center
+  href: /validation-center
+  label: Validation Center
+  nav_group: Validation Pipeline
+  primary_module: validation.center
+  impact_modules:
+  - validation.runner
+  - validation.coverage
+  - validation.module_quality
+  risk_level: medium
+  required_test_plans:
+  - l0
+  - validation_center_backend
+  recommended_test_plans:
+  - validation_center_ui
+  - validation_center_real_port_ui
+  business_operations:
+  - Open Validation Center
+  - Review Validation Center state
+  - Validate Validation Center primary workflow
+  coverage_status: partial
+- route_id: system.config
+  href: /config
+  label: Environment Config
+  nav_group: System and Data
+  primary_module: platform
+  impact_modules:
+  - platform.api
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Environment Config
+  - Review Environment Config state
+  - Validate Environment Config primary workflow
+  coverage_status: planned
+- route_id: system.local_data
+  href: /local-data
+  label: Local Data Management
+  nav_group: System and Data
+  primary_module: local_data
+  impact_modules:
+  - qlib_data
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Local Data Management
+  - Review Local Data Management state
+  - Validate Local Data Management primary workflow
+  coverage_status: planned
+- route_id: system.monitor
+  href: /rdagent/dispatch/system-monitor
+  label: System Monitor
+  nav_group: System and Data
+  primary_module: platform
+  impact_modules:
+  - rdagent
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open System Monitor
+  - Review System Monitor state
+  - Validate System Monitor primary workflow
+  coverage_status: planned
+- route_id: system.db_monitor
+  href: /rdagent/dispatch/db-monitor
+  label: Database Monitor
+  nav_group: System and Data
+  primary_module: platform.db
+  impact_modules:
+  - platform
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Database Monitor
+  - Review Database Monitor state
+  - Validate Database Monitor primary workflow
+  coverage_status: planned
+- route_id: analysis.stock
+  href: /analysis
+  label: Stock Analysis
+  nav_group: Feature Navigation
+  primary_module: analysis
+  impact_modules:
+  - local_data
+  risk_level: medium
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Stock Analysis
+  - Review Stock Analysis state
+  - Validate Stock Analysis primary workflow
+  coverage_status: planned
+- route_id: analysis.trend
+  href: /analysis-trend
+  label: Trend Analysis
+  nav_group: Feature Navigation
+  primary_module: analysis
+  impact_modules:
+  - local_data
+  risk_level: medium
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Trend Analysis
+  - Review Trend Analysis state
+  - Validate Trend Analysis primary workflow
+  coverage_status: planned
+- route_id: selection.watchlist
+  href: /watchlist
+  label: Watchlist
+  nav_group: Stock Selection
+  primary_module: watchlist
+  impact_modules:
+  - portfolio_management
+  risk_level: medium
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Watchlist
+  - Review Watchlist state
+  - Validate Watchlist primary workflow
+  coverage_status: planned
+- route_id: selection.cloud_screening
+  href: /cloud-screening
+  label: Cloud Screening
+  nav_group: Stock Selection
+  primary_module: watchlist
+  impact_modules:
+  - local_data
+  risk_level: medium
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Cloud Screening
+  - Review Cloud Screening state
+  - Validate Cloud Screening primary workflow
+  coverage_status: planned
+- route_id: selection.market_news
+  href: /market-news
+  label: Market News
+  nav_group: Stock Selection
+  primary_module: market_news
+  impact_modules:
+  - analysis
+  risk_level: low
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Market News
+  - Review Market News state
+  - Validate Market News primary workflow
+  coverage_status: planned
+- route_id: strategy.sector
+  href: /sector-strategy
+  label: Sector Strategy
+  nav_group: Strategy Analysis
+  primary_module: analysis
+  impact_modules:
+  - factor_library
+  risk_level: medium
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Sector Strategy
+  - Review Sector Strategy state
+  - Validate Sector Strategy primary workflow
+  coverage_status: planned
+- route_id: portfolio.analysis
+  href: /portfolio
+  label: Portfolio Analysis
+  nav_group: Investment Management
+  primary_module: portfolio_management
+  impact_modules:
+  - qmt
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Portfolio Analysis
+  - Review Portfolio Analysis state
+  - Validate Portfolio Analysis primary workflow
+  coverage_status: planned
+- route_id: portfolio.smart_monitor
+  href: /smart-monitor
+  label: Smart Monitor
+  nav_group: Investment Management
+  primary_module: portfolio_management
+  impact_modules:
+  - market_news
+  - qmt
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Smart Monitor
+  - Review Smart Monitor state
+  - Validate Smart Monitor primary workflow
+  coverage_status: planned
+- route_id: portfolio.realtime_monitor
+  href: /monitor
+  label: Realtime Monitor
+  nav_group: Investment Management
+  primary_module: portfolio_management
+  impact_modules:
+  - qmt
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Realtime Monitor
+  - Review Realtime Monitor state
+  - Validate Realtime Monitor primary workflow
+  coverage_status: planned
+- route_id: qmt.positions
+  href: /qmt/positions
+  label: QMT Positions
+  nav_group: QMT Sim Trading
+  primary_module: qmt
+  impact_modules:
+  - portfolio_management
+  risk_level: critical
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open QMT Positions
+  - Review QMT Positions state
+  - Validate QMT Positions primary workflow
+  coverage_status: planned
+- route_id: qmt.strategies
+  href: /qmt/strategies
+  label: QMT Strategies
+  nav_group: QMT Sim Trading
+  primary_module: qmt
+  impact_modules:
+  - strategy_package
+  risk_level: critical
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open QMT Strategies
+  - Review QMT Strategies state
+  - Validate QMT Strategies primary workflow
+  coverage_status: planned
+- route_id: paper_v2.overview
+  href: /paper-v2
+  label: Paper v2 Overview
+  nav_group: Paper Trading v2
+  primary_module: paper_v2
+  impact_modules:
+  - selection_center
+  - strategy_package
+  risk_level: critical
+  required_test_plans:
+  - l0
+  - paper_v2_backend
+  recommended_test_plans:
+  - paper_v2_l3
+  business_operations:
+  - Open Paper v2 Overview
+  - Review Paper v2 Overview state
+  - Validate Paper v2 Overview primary workflow
+  coverage_status: partial
+- route_id: paper_v2.packages
+  href: /paper-v2/packages
+  label: Strategy Package Center
+  nav_group: Paper Trading v2
+  primary_module: strategy_package
+  impact_modules:
+  - paper_v2
+  - selection_center
+  risk_level: high
+  required_test_plans:
+  - l0
+  - paper_v2_backend
+  recommended_test_plans:
+  - paper_v2_l3
+  business_operations:
+  - Open Strategy Package Center
+  - Review Strategy Package Center state
+  - Validate Strategy Package Center primary workflow
+  coverage_status: partial
+- route_id: paper_v2.selection
+  href: /paper-v2/selection
+  label: Unified Selection Center
+  nav_group: Paper Trading v2
+  primary_module: selection_center
+  impact_modules:
+  - paper_v2
+  - strategy_package
+  - hmm
+  risk_level: high
+  required_test_plans:
+  - l0
+  - paper_v2_backend
+  recommended_test_plans:
+  - paper_v2_l3
+  business_operations:
+  - Open Unified Selection Center
+  - Review Unified Selection Center state
+  - Validate Unified Selection Center primary workflow
+  coverage_status: partial
+- route_id: paper_v2.portfolios
+  href: /paper-v2/portfolios
+  label: Paper v2 Portfolios
+  nav_group: Paper Trading v2
+  primary_module: paper_v2
+  impact_modules:
+  - strategy_package
+  - selection_center
+  risk_level: critical
+  required_test_plans:
+  - l0
+  - paper_v2_backend
+  recommended_test_plans:
+  - paper_v2_l3
+  business_operations:
+  - Open Paper v2 Portfolios
+  - Review Paper v2 Portfolios state
+  - Validate Paper v2 Portfolios primary workflow
+  coverage_status: partial
+- route_id: paper_v2.model_hmm
+  href: /paper-v2/model-hmm
+  label: Model and HMM
+  nav_group: Paper Trading v2
+  primary_module: hmm
+  impact_modules:
+  - paper_v2
+  - selection_center
+  risk_level: high
+  required_test_plans:
+  - l0
+  - paper_v2_backend
+  recommended_test_plans:
+  - paper_v2_l3
+  business_operations:
+  - Open Model and HMM
+  - Review Model and HMM state
+  - Validate Model and HMM primary workflow
+  coverage_status: partial
+- route_id: paper_trading.selection
+  href: /paper-trading/selection
+  label: Legacy Paper Selection
+  nav_group: Legacy Paper Trading
+  primary_module: paper_trading_legacy
+  impact_modules:
+  - selection_center
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Legacy Paper Selection
+  - Review Legacy Paper Selection state
+  - Validate Legacy Paper Selection primary workflow
+  coverage_status: planned
+- route_id: paper_trading.training
+  href: /paper-trading/training
+  label: Legacy Model Training
+  nav_group: Legacy Paper Trading
+  primary_module: paper_trading_legacy
+  impact_modules:
+  - model_library
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Legacy Model Training
+  - Review Legacy Model Training state
+  - Validate Legacy Model Training primary workflow
+  coverage_status: planned
+- route_id: paper_trading.config
+  href: /paper-trading/config
+  label: Legacy Paper Config
+  nav_group: Legacy Paper Trading
+  primary_module: paper_trading_legacy
+  impact_modules:
+  - platform
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Legacy Paper Config
+  - Review Legacy Paper Config state
+  - Validate Legacy Paper Config primary workflow
+  coverage_status: planned
+- route_id: paper_trading.monitor
+  href: /paper-trading/monitor
+  label: Legacy Paper Monitor
+  nav_group: Legacy Paper Trading
+  primary_module: paper_trading_legacy
+  impact_modules:
+  - portfolio_management
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Legacy Paper Monitor
+  - Review Legacy Paper Monitor state
+  - Validate Legacy Paper Monitor primary workflow
+  coverage_status: planned
+- route_id: paper_trading.reports
+  href: /paper-trading/reports
+  label: Legacy Paper Reports
+  nav_group: Legacy Paper Trading
+  primary_module: paper_trading_legacy
+  impact_modules:
+  - portfolio_management
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Legacy Paper Reports
+  - Review Legacy Paper Reports state
+  - Validate Legacy Paper Reports primary workflow
+  coverage_status: planned

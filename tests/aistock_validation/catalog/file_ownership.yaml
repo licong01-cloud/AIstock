@@ -5,6 +5,7 @@ rules:
     include:
       - tests/aistock_validation/catalog/module_registry.yaml
       - tests/aistock_validation/catalog/file_ownership.yaml
+      - tests/aistock_validation/catalog/ui_targets.yaml
     primary_module: validation.module_quality
     impact_modules: [validation.guardrails, tests.validation_history]
     layer: validation_catalog

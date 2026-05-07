@@ -11,11 +11,11 @@ const labels = {
   commitActivityUpper: "\u8fd1\u671f COMMIT",
   commitActivityTitle: "\u8fd1\u671f Commit",
   fileOwnershipAggregation: "\u6309\u6587\u4ef6\u5f52\u5c5e\u81ea\u52a8\u805a\u5408",
-  navigationSource: "\u9875\u9762\u5bfc\u822a\u540c\u6e90\u8986\u76d6\u5165\u53e3",
-  navigationSharedSource: "\u540c\u6e90\u6570\u636e\uff1afrontend/src/lib/navigation/nav-groups.ts",
-  routeDetail: "\u9875\u9762\u6d4b\u8bd5\u8986\u76d6\u8be6\u60c5",
-  viewCoverage: "\u67e5\u770b\u6d4b\u8bd5\u8986\u76d6",
-  pipelineCenter: "\u6d41\u6c34\u7ebf\u4e2d\u5fc3",
+  navigationSource: "UI Target Route Coverage",
+  navigationSharedSource: "Catalog: tests/aistock_validation/catalog/ui_targets.yaml",
+  routeDetail: "UI Target Detail",
+  viewCoverage: "View UI target coverage",
+  pipelineCenter: "Validation Center",
   validationCenterRoute: "/validation-center",
 };
 
@@ -123,6 +123,16 @@ test("Validation Center Git and module quality panels work against real dev port
     }
   });
 
+  await page.route("**/api/ingestion/**", async (route) => {
+    const pathName = new URL(route.request().url()).pathname;
+    const data = pathName.endsWith("/unack-count") ? { count: 0 } : { alerts: [], items: [], total: 0 };
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(data),
+    });
+  });
+
   try {
     await page.goto(`${frontendBase}/validation-center`, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await expect(page.getByRole("heading", { name: labels.title })).toBeVisible({ timeout: 30_000 });
@@ -138,6 +148,7 @@ test("Validation Center Git and module quality panels work against real dev port
     });
     await waitForCollectedResponse(summary.validation_responses, "/git/commit-activity");
     await waitForCollectedResponse(summary.validation_responses, "/modules/quality-summary");
+    await waitForCollectedResponse(summary.validation_responses, "/ui-targets");
 
     const body = await page.locator("body").innerText();
     summary.assertions = {
@@ -157,6 +168,9 @@ test("Validation Center Git and module quality panels work against real dev port
       ),
       has_module_quality_endpoint_response: summary.validation_responses.some(
         (line) => line.startsWith("200 ") && line.includes("/modules/quality-summary"),
+      ),
+      has_ui_target_endpoint_response: summary.validation_responses.some(
+        (line) => line.startsWith("200 ") && line.includes("/ui-targets"),
       ),
     };
 

@@ -493,6 +493,50 @@ const moduleQuality = {
   arbitrary_shell_allowed: false,
   production_8001_touched: false,
 };
+const uiTargetItem = {
+  route_id: "validation.center",
+  href: "/validation-center",
+  label: "Validation Center",
+  nav_group: "Validation Pipeline",
+  primary_module: "validation.center",
+  impact_modules: ["validation.runner", "validation.coverage", "validation.module_quality"],
+  risk_level: "medium",
+  required_test_plans: ["l0", "validation_center_backend"],
+  recommended_test_plans: ["validation_center_ui", "validation_center_real_port_ui"],
+  business_operations: ["Open Validation Center", "Review quality state", "Run controlled validation"],
+  coverage_status: "partial",
+  module_quality: moduleQuality.modules[0],
+  latest_run: runItems[0],
+  warnings: ["route_coverage_not_fully_proven"],
+  proven_by_real_business_evidence: false,
+};
+
+const uiTargetPage = {
+  schema_version: "aistock_validation_ui_targets_v1",
+  catalog_path: "tests/aistock_validation/catalog/ui_targets.yaml",
+  missing: false,
+  items: [uiTargetItem],
+  total: 1,
+  page: 1,
+  page_size: 100,
+  has_more: false,
+};
+
+const uiTargetSummary = {
+  schema_version: "aistock_validation_ui_targets_v1",
+  generated_at: "2026-05-07T09:00:00+08:00",
+  catalog_path: "tests/aistock_validation/catalog/ui_targets.yaml",
+  missing: false,
+  target_count: 1,
+  nav_group_count: 1,
+  warning_count: 1,
+  targets_requiring_action: 1,
+  by_nav_group: [{ nav_group: "Validation Pipeline", target_count: 1, warning_count: 1 }],
+  by_coverage_status: { partial: 1 },
+  by_risk_level: { medium: 1 },
+  production_8001_touched: false,
+};
+
 
 test("Validation Center UI uses mocked APIs and controlled runner POST", async ({ page }) => {
   const consoleErrors: string[] = [];
@@ -510,6 +554,16 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
     if (response.url().includes("/api/v1/validation/") && response.status() >= 400) {
       badResponses.push(`${response.status()} ${response.url()}`);
     }
+  });
+
+  await page.route("**/api/ingestion/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const data = path.endsWith("/unack-count") ? { count: 0 } : { alerts: [], items: [], total: 0 };
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(data),
+    });
   });
 
   await page.route("**/api/v1/validation/**", async (route) => {
@@ -649,6 +703,27 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
     if (path.endsWith("/api/v1/validation/modules/quality-summary")) {
       expect(Number(url.searchParams.get("commit_limit") || "0")).toBeGreaterThan(0);
       return respond({ status: "success", data: moduleQuality });
+    }
+
+    if (path.endsWith("/api/v1/validation/ui-targets/summary")) {
+      return respond({ status: "success", data: uiTargetSummary });
+    }
+
+    if (path.endsWith("/api/v1/validation/ui-targets")) {
+      expect(Number(url.searchParams.get("page_size") || "0")).toBeGreaterThanOrEqual(20);
+      return respond({ status: "success", data: uiTargetPage });
+    }
+
+    if (path.endsWith("/api/v1/validation/ui-targets/validation.center")) {
+      return respond({
+        status: "success",
+        data: {
+          schema_version: "aistock_validation_ui_targets_v1",
+          catalog_path: "tests/aistock_validation/catalog/ui_targets.yaml",
+          missing: false,
+          target: uiTargetItem,
+        },
+      });
     }
 
     if (path.endsWith("/api/v1/validation/executions") && method === "GET") {
@@ -801,16 +876,18 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   await expect(page.getByText("feat(validation): show git workspace status").first()).toBeVisible();
   await expect(page.getByText("unmapped_workspace_files_present")).toBeVisible();
   await expect(page.getByText("validation_module_registry_l0")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "页面导航同源覆盖入口" })).toBeVisible();
-  await expect(page.getByText("同源数据：frontend/src/lib/navigation/nav-groups.ts")).toBeVisible();
-  const validationRouteRow = page.locator("tr", { hasText: "流水线中心" }).filter({ hasText: "/validation-center" }).first();
-  await expect(validationRouteRow.getByText("validation.center / exact")).toBeVisible();
-  await validationRouteRow.getByRole("button", { name: "查看测试覆盖" }).click();
-  await expect(page.getByRole("heading", { name: "页面测试覆盖详情" })).toBeVisible();
-  const routeDetailPanel = page.locator("section").filter({ has: page.getByRole("heading", { name: "页面测试覆盖详情" }) }).last();
-  await expect(routeDetailPanel.getByText("已映射模块")).toBeVisible();
-  await expect(routeDetailPanel.getByRole("cell", { name: "覆盖 Validation Center 的页面、API、历史记录、质量发现、Bug 展示和汇总面板。", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "UI Target Route Coverage" })).toBeVisible();
+  await expect(page.getByText("Catalog: tests/aistock_validation/catalog/ui_targets.yaml")).toBeVisible();
+  await expect(page.getByText("Route coverage boundary")).toBeVisible();
+  const validationRouteRow = page.locator("tr", { hasText: "Validation Center" }).filter({ hasText: "/validation-center" }).first();
+  await expect(validationRouteRow.getByText("validation.center").first()).toBeVisible();
+  await expect(validationRouteRow.getByText("route_coverage_not_fully_proven")).toBeVisible();
+  await validationRouteRow.getByRole("button", { name: "View UI target coverage" }).click();
+  await expect(page.getByRole("heading", { name: "UI Target Detail" })).toBeVisible();
+  const routeDetailPanel = page.locator("section").filter({ has: page.getByRole("heading", { name: "UI Target Detail" }) }).last();
+  await expect(routeDetailPanel.getByText("Open Validation Center")).toBeVisible();
   await expect(routeDetailPanel.getByText("Line 81.35% / Branch 64.35%")).toBeVisible();
+  await expect(routeDetailPanel.getByText(passedRunId)).toBeVisible();
   await expect(page.getByText("受控 Runner：allowlist only")).toBeVisible();
   await expect(page.getByText("Validation Center backend contract")).toBeVisible();
   await expect(page.getByText("Runner 执行队列")).toBeVisible();
@@ -823,7 +900,7 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   await expect(page.getByRole("heading", { name: "Runner Detail" })).toBeVisible();
   await expect(page.getByText("api runner ok")).toBeVisible();
   await expect(page.getByText("aistock_validation_evidence_manifest_v1")).toBeVisible();
-  await expect(page.getByText("Validation API Run")).toBeVisible();
+  await expect(page.getByText("Validation API Run").first()).toBeVisible();
   await expect(page.getByText("质量发现与 Bug Registry")).toBeVisible();
   await expect(page.getByText("No silent fallback")).toBeVisible();
   await expect(page.getByText("Demo validation failure")).toBeVisible();

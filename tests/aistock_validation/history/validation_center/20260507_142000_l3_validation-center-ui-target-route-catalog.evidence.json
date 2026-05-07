@@ -1,0 +1,152 @@
+{
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "backend_service",
+      "path": "backend/services/validation/ui_target_catalog.py",
+      "sha256": "54957aa198153ddde17f92d970384e52b4a3fd88dd7f7340759702a017a69a4e",
+      "size_bytes": 18478
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "router",
+      "path": "backend/routers/validation.py",
+      "sha256": "793788a07156f183c05818771541763b6e14b0c35da3edc4d8a860e8e76185be",
+      "size_bytes": 18839
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "frontend",
+      "path": "frontend/src/app/validation-center/page.tsx",
+      "sha256": "a8eaddd9ee273c3f85f7339afeb5297b1c661ed57486816a41730dfec7b9933c",
+      "size_bytes": 69754
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "api_client",
+      "path": "frontend/src/lib/validation/api.ts",
+      "sha256": "37b124fec6f70b8d11f054e2433cd58b6e0ca38b2c5727534a9770a88cfda0d8",
+      "size_bytes": 25417
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "catalog",
+      "path": "tests/aistock_validation/catalog/ui_targets.yaml",
+      "sha256": "6b6af105fab43d97200652869921bc8bbc3d60d490824e910987d3c099674bb5",
+      "size_bytes": 22638
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "tests",
+      "path": "backend/tests/test_validation_ui_target_catalog.py",
+      "sha256": "45e81a99605fd0036d480fec3e0de59fa26f2645c340ddf98eff422731c0d505",
+      "size_bytes": 12169
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "ui_test",
+      "path": "frontend/tests/validation-center/validation-center.spec.ts",
+      "sha256": "2ac1e385bdd09b5adb1ca6d76fae140a05fd33864ad598487f6a845a888eedbb",
+      "size_bytes": 39106
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "real_port_ui_test",
+      "path": "frontend/tests/validation-center/validation-center-real-port.spec.ts",
+      "sha256": "113ad96df91ef0f3d65317be62696fa6e0533407dacd5cb6836a626563b9ff24",
+      "size_bytes": 8398
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "coverage",
+      "path": "tmp/validation/coverage/validation_center_backend_snapshot.json",
+      "sha256": "de65787a9a46524c9d5036d3a4dd6a02878fbb28467c3d96967104425666159e",
+      "size_bytes": 81434
+    },
+    {
+      "child_count": 1,
+      "exists": true,
+      "is_dir": true,
+      "kind": "playwright_report",
+      "path": "tmp/playwright-report",
+      "sha256": null,
+      "size_bytes": null
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "smoke_json",
+      "path": "tmp/validation/validation_center/ui_real_port_smoke.json",
+      "sha256": "d50cd4c1da134b6994e0cfabd822a4d2b5dd1cd3f8369665f687e17fb0343985",
+      "size_bytes": 3533
+    },
+    {
+      "kind": "guardrail_l0_json",
+      "path": "tmp/validation/guardrails/l0_paths.json",
+      "exists": true,
+      "is_dir": false,
+      "child_count": null,
+      "size_bytes": 3142,
+      "sha256": "b89d34a30458cd81024585809cd6f87506ab01d9662b243060cad3e9e7a0fae7"
+    },
+    {
+      "kind": "guardrail_l0_markdown",
+      "path": "tmp/validation/guardrails/l0_paths.md",
+      "exists": true,
+      "is_dir": false,
+      "child_count": null,
+      "size_bytes": 1641,
+      "sha256": "79200cd7e0e2b66ce1eca2a2b0d8fbc3b0d5cc138ce6f5b0a4c1f08c691a524e"
+    },
+    {
+      "kind": "real_port_smoke_evidence",
+      "path": "tmp/validation/validation_center/ui_real_port_smoke_evidence.json",
+      "exists": true,
+      "is_dir": false,
+      "child_count": null,
+      "size_bytes": 2690,
+      "sha256": "03b03d59b0c752e20dcb1a1052a13fdafc2419c44b4679d0f20b7ed8bf72c9ff"
+    }
+  ],
+  "generated_at": "2026-05-07T14:40:00",
+  "git_commit": "acadcbd",
+  "level": "L3",
+  "missing": [],
+  "missing_count": 0,
+  "module": "validation_center",
+  "operator": "lc999",
+  "run_id": "20260507_142000_l3_validation-center-ui-target-route-catalog",
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "Validation Center UI target route catalog"
+}

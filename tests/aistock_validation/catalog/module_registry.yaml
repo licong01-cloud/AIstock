@@ -159,6 +159,51 @@ modules:
     ui_routes: [/local-data, /qlib]
     test_plans:
       required_on_change: [l0]
+  - module_id: analysis
+    display_name: Stock analysis
+    module_type: product_feature
+    risk_level: medium
+    description: Stock analysis, trend analysis, and sector strategy research pages.
+    description_zh: Covers stock analysis, trend research, and sector strategy pages for research workflows.
+    ui_routes: [/analysis, /analysis-trend, /sector-strategy]
+    test_plans:
+      required_on_change: [l0]
+  - module_id: watchlist
+    display_name: Watchlist and screening
+    module_type: product_feature
+    risk_level: medium
+    description: Watchlist, cloud screening, and candidate-stock management pages.
+    description_zh: Covers watchlist, cloud screening, and candidate-stock management workflows.
+    ui_routes: [/watchlist, /cloud-screening]
+    test_plans:
+      required_on_change: [l0]
+  - module_id: market_news
+    display_name: Market news
+    module_type: data_pipeline
+    risk_level: low
+    description: Market news, market flashes, and external information display.
+    description_zh: Covers read-only market news, flashes, and external information display.
+    ui_routes: [/market-news]
+    test_plans:
+      required_on_change: [l0]
+  - module_id: portfolio_management
+    display_name: Portfolio management
+    module_type: product_feature
+    risk_level: high
+    description: Portfolio analysis, smart monitor, and realtime monitor UI workflows.
+    description_zh: Covers portfolio analysis, smart monitor, and realtime portfolio monitoring.
+    ui_routes: [/portfolio, /smart-monitor, /monitor]
+    test_plans:
+      required_on_change: [l0]
+  - module_id: paper_trading_legacy
+    display_name: Paper trading legacy
+    module_type: product_feature
+    risk_level: high
+    description: Legacy paper-trading selection, training, config, monitor, and reports pages.
+    description_zh: Covers legacy paper-trading selection, training, config, monitor, and reports pages.
+    ui_routes: [/paper-trading/selection, /paper-trading/training, /paper-trading/config, /paper-trading/monitor, /paper-trading/reports]
+    test_plans:
+      required_on_change: [l0]
   - module_id: qmt
     display_name: QMT
     module_type: trading_infra
