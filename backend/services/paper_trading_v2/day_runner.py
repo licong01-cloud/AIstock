@@ -34,6 +34,7 @@ from backend.services.trading_core.oms import OMS
 
 from .models import PaperDayRunResult, PaperRun, PortfolioStatus
 from .repository import PaperTradingV2Repository
+from .risk_targets import overlay_risk_forced_exit_targets
 from .service import PaperTradingV2PortfolioService
 
 
@@ -319,7 +320,7 @@ class PaperTradingDayRunner:
                     manifest_sha256=manifest.manifest_sha256 or portfolio.manifest_sha256,
                     existing_target_symbols=set(),
                 )
-                targets = [*targets, *forced_exit_targets]
+                targets = overlay_risk_forced_exit_targets(targets, forced_exit_targets)
             self.repository.save_run_event(
                 run_id=run.run_id,
                 event_type="TARGETS_GENERATED",

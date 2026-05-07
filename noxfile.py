@@ -486,12 +486,15 @@ def validation_module_registry_l0(session: nox.Session) -> None:
         "backend/services/validation/module_registry.py",
         "backend/services/validation/file_ownership.py",
         "backend/tests/test_validation_module_ownership.py",
+        "backend/tests/test_validation_ui_target_catalog.py",
         "scripts/aistock_module_ownership_scan.py",
         "tests/aistock_validation/catalog/module_registry.yaml",
         "tests/aistock_validation/catalog/file_ownership.yaml",
         "noxfile.py",
         "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/ui_target_catalog.py",
         "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/catalog/ui_targets.yaml",
     ]
     session.run(
         sys.executable,
@@ -499,6 +502,7 @@ def validation_module_registry_l0(session: nox.Session) -> None:
         "compileall",
         "backend/services/validation/module_registry.py",
         "backend/services/validation/file_ownership.py",
+        "backend/services/validation/ui_target_catalog.py",
         "scripts/aistock_module_ownership_scan.py",
         external=True,
     )
@@ -553,6 +557,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/tests/test_validation_git_activity_provider.py",
         "backend/tests/test_validation_git_status_provider.py",
         "backend/tests/test_validation_module_ownership.py",
+        "backend/tests/test_validation_ui_target_catalog.py",
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
         "--cov=backend.services.validation",
@@ -622,7 +627,7 @@ def validation_center_ui(session: nox.Session) -> None:
             "run",
             "test:e2e",
             "--",
-            "tests/validation-center",
+            "tests/validation-center/validation-center.spec.ts",
             env=_env(
                 {
                     "BACKEND_PORT": backend_port,
@@ -694,7 +699,8 @@ def validation_center_real_port_ui(session: nox.Session) -> None:
                 {
                     "BACKEND_PORT": backend_port,
                     "FRONTEND_PORT": frontend_port,
-                    "NEXT_PUBLIC_API_BASE": api_base,
+                    "NEXT_PUBLIC_API_BASE": "/api/v1",
+                    "PAPER_V2_API_PROXY_TARGET": api_base,
                     "VALIDATION_CENTER_API_BASE": api_base,
                     "VALIDATION_CENTER_UI_SMOKE_OUTPUT": str(output),
                     "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",

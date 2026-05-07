@@ -108,6 +108,7 @@ export type SelectablePackage = {
   portfolio_topk?: number;
   metrics_summary?: MetricsSummary;
   model_state?: ModelState | JsonObject;
+  selection_health?: JsonObject;
   latest_selection_run?: LatestSelectionRun | null;
 };
 

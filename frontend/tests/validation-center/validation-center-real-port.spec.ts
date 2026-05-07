@@ -11,6 +11,12 @@ const labels = {
   commitActivityUpper: "\u8fd1\u671f COMMIT",
   commitActivityTitle: "\u8fd1\u671f Commit",
   fileOwnershipAggregation: "\u6309\u6587\u4ef6\u5f52\u5c5e\u81ea\u52a8\u805a\u5408",
+  navigationSource: "UI Target Route Coverage",
+  navigationSharedSource: "Catalog: tests/aistock_validation/catalog/ui_targets.yaml",
+  routeDetail: "UI Target Detail",
+  viewCoverage: "View UI target coverage",
+  pipelineCenter: "Validation Center",
+  validationCenterRoute: "/validation-center",
 };
 
 const backendPort = process.env.BACKEND_PORT || "8012";
@@ -117,16 +123,32 @@ test("Validation Center Git and module quality panels work against real dev port
     }
   });
 
+  await page.route("**/api/ingestion/**", async (route) => {
+    const pathName = new URL(route.request().url()).pathname;
+    const data = pathName.endsWith("/unack-count") ? { count: 0 } : { alerts: [], items: [], total: 0 };
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(data),
+    });
+  });
+
   try {
     await page.goto(`${frontendBase}/validation-center`, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await expect(page.getByRole("heading", { name: labels.title })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("heading", { name: labels.gitWorkspace })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("heading", { name: labels.moduleQuality })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("heading", { name: labels.navigationSource })).toBeVisible({ timeout: 30_000 });
+    const validationRouteRow = page.locator("tr", { hasText: labels.pipelineCenter }).filter({ hasText: labels.validationCenterRoute }).first();
+    await expect(validationRouteRow).toBeVisible({ timeout: 30_000 });
+    await validationRouteRow.getByRole("button", { name: labels.viewCoverage }).click();
+    await expect(page.getByRole("heading", { name: labels.routeDetail })).toBeVisible({ timeout: 30_000 });
     await page.waitForFunction((text) => document.body.innerText.includes(text), labels.needsValidation, {
       timeout: 30_000,
     });
     await waitForCollectedResponse(summary.validation_responses, "/git/commit-activity");
     await waitForCollectedResponse(summary.validation_responses, "/modules/quality-summary");
+    await waitForCollectedResponse(summary.validation_responses, "/ui-targets");
 
     const body = await page.locator("body").innerText();
     summary.assertions = {
@@ -137,11 +159,18 @@ test("Validation Center Git and module quality panels work against real dev port
       has_commit_activity_panel:
         body.includes(labels.commitActivityUpper) || body.includes(labels.commitActivityTitle),
       has_file_ownership_aggregation_text: body.includes(labels.fileOwnershipAggregation),
+      has_navigation_source_panel: body.includes(labels.navigationSource),
+      has_navigation_shared_source_text: body.includes(labels.navigationSharedSource),
+      has_route_detail_panel: body.includes(labels.routeDetail),
+      has_validation_center_route: body.includes(labels.validationCenterRoute),
       has_commit_activity_endpoint_response: summary.validation_responses.some(
         (line) => line.startsWith("200 ") && line.includes("/git/commit-activity"),
       ),
       has_module_quality_endpoint_response: summary.validation_responses.some(
         (line) => line.startsWith("200 ") && line.includes("/modules/quality-summary"),
+      ),
+      has_ui_target_endpoint_response: summary.validation_responses.some(
+        (line) => line.startsWith("200 ") && line.includes("/ui-targets"),
       ),
     };
 

@@ -5,9 +5,10 @@ const frontendPort =
   process.env.FRONTEND_PORT || process.env.PAPER_V2_FRONTEND_PORT || "3012";
 const apiBase =
   process.env.API_BASE ||
-  process.env.NEXT_PUBLIC_API_BASE ||
   process.env.PAPER_V2_API_BASE ||
   `http://127.0.0.1:${backendPort}/api/v1`;
+const nextPublicApiBase = process.env.NEXT_PUBLIC_API_BASE || apiBase;
+const paperV2ApiProxyTarget = process.env.PAPER_V2_API_PROXY_TARGET || apiBase;
 const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEBSERVER === "1";
 
 export default defineConfig({
@@ -40,9 +41,9 @@ export default defineConfig({
     env: {
       NEXT_DEV_PORT: frontendPort,
       NEXT_DIST_DIR: `.next-dev-${frontendPort}`,
-      NEXT_PUBLIC_API_BASE: apiBase,
+      NEXT_PUBLIC_API_BASE: nextPublicApiBase,
       PAPER_V2_API_BASE: apiBase,
-      PAPER_V2_API_PROXY_TARGET: apiBase,
+      PAPER_V2_API_PROXY_TARGET: paperV2ApiProxyTarget,
     },
   },
 });

@@ -50,6 +50,7 @@ from .models import (
 )
 from .replay import PaperTradingHistoricalReplay
 from .repository import PaperTradingV2Repository
+from .risk_targets import overlay_risk_forced_exit_targets
 
 
 MARKET_CLOSE = time(15, 0)
@@ -410,17 +411,15 @@ class PaperTradingLiveMinuteExecutor:
             else []
         )
         if runtime_profile.risk_policy.enabled and current_positions:
-            targets = [
-                *targets,
-                *self.risk_policy_service.forced_exit_targets(
-                    decisions=risk_decisions,
-                    current_positions=current_positions,
-                    trade_date=trade_date,
-                    package_id=manifest.package_id,
-                    manifest_sha256=manifest.manifest_sha256 or portfolio.manifest_sha256,
-                    existing_target_symbols=set(),
-                ),
-            ]
+            forced_exit_targets = self.risk_policy_service.forced_exit_targets(
+                decisions=risk_decisions,
+                current_positions=current_positions,
+                trade_date=trade_date,
+                package_id=manifest.package_id,
+                manifest_sha256=manifest.manifest_sha256 or portfolio.manifest_sha256,
+                existing_target_symbols=set(),
+            )
+            targets = overlay_risk_forced_exit_targets(targets, forced_exit_targets)
         intents = self.rebalance_engine.build_order_intents(
             package_id=manifest.package_id,
             portfolio_id=portfolio.portfolio_id,

@@ -53,9 +53,9 @@ export function asText(value: unknown): string {
 
 export function statusTone(status: unknown): "success" | "danger" | "warning" | "info" | "neutral" {
   const s = String(status || "").toUpperCase();
-  if (["PASSED", "SUCCEEDED", "SUCCESS", "COMPLETED", "PAPER_ENABLED", "SELECTION_ENABLED", "ACTIVE", "CURRENT", "FILLED", "ALL_TRADED"].includes(s)) return "success";
-  if (["FAILED", "ERROR", "REJECTED", "PAPER_FAILED", "BLOCKED", "CANCELED", "CANCELLED", "EXPIRED"].includes(s)) return "danger";
-  if (["STALE", "STALE_WARNING", "WARNING", "PENDING", "DRAFT", "RETRAINING", "RUNNING", "PAUSED", "PREFLIGHTING", "REPLAYING", "CATCHING_UP", "SWITCHING_TO_LIVE", "LIVE_RUNNING", "LIVE_WAITING_FOR_BAR", "PARTIALLY_FILLED", "PARTIAL_FILLED", "NEW", "SUBMITTED"].includes(s)) return "warning";
+  if (["PASSED", "SUCCEEDED", "SUCCESS", "COMPLETED", "PAPER_ENABLED", "SELECTION_ENABLED", "ACTIVE", "CURRENT", "FILLED", "ALL_TRADED", "RUNNABLE"].includes(s)) return "success";
+  if (["FAILED", "ERROR", "REJECTED", "PAPER_FAILED", "BLOCKED", "PAPER_DATA_BLOCKED", "CANCELED", "CANCELLED", "EXPIRED"].includes(s)) return "danger";
+  if (["STALE", "STALE_WARNING", "WARNING", "WARN", "LEGACY_NON_ST_PIT", "CACHE_ONLY", "PENDING", "DRAFT", "RETRAINING", "RUNNING", "PAUSED", "PREFLIGHTING", "REPLAYING", "CATCHING_UP", "SWITCHING_TO_LIVE", "LIVE_RUNNING", "LIVE_WAITING_FOR_BAR", "PARTIALLY_FILLED", "PARTIAL_FILLED", "NEW", "SUBMITTED"].includes(s)) return "warning";
   if (["READY", "CREATED", "STOPPED", "LIVE_WAITING_NEXT_TRADING_DAY", "UNSUPPORTED", "NOT_RUN", "NO_DATA"].includes(s)) return "info";
   return "neutral";
 }
@@ -68,6 +68,7 @@ const STATUS_LABELS: Record<string, string> = {
   COMPLETED: "已完成",
   PAPER_ENABLED: "已启用模拟盘",
   SELECTION_ENABLED: "已启用选股",
+  RUNNABLE: "可运行",
   ACTIVE: "生效中",
   CURRENT: "当前",
   FAILED: "失败",
@@ -78,6 +79,10 @@ const STATUS_LABELS: Record<string, string> = {
   STALE: "已过期",
   STALE_WARNING: "过期提醒",
   WARNING: "警告",
+  WARN: "预警",
+  LEGACY_NON_ST_PIT: "旧版非 ST PIT",
+  CACHE_ONLY: "仅当前缓存可用",
+  PAPER_DATA_BLOCKED: "模拟盘数据阻断",
   PENDING: "等待中",
   DRAFT: "草稿",
   RETRAINING: "重训练中",

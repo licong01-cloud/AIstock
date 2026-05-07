@@ -179,3 +179,18 @@ The real-port UI smoke validates that the operator-facing Validation Center page
 - The smoke fails on page errors, console errors, request failures, Validation API 4xx/5xx responses, missing UI assertions, or unexpected write methods.
 - The JSON evidence uses schema `aistock_validation_center_real_port_ui_smoke_v1` and is written to `tmp/validation/validation_center/ui_real_port_smoke.json`.
 - The nox session also writes a standard evidence manifest to `tmp/validation/validation_center/ui_real_port_smoke_evidence.json`.
+
+## L2/L3 UI Target Catalog Contract
+
+The route-level UI target catalog is the first durable coverage map between the official AIstock navigation surface, module ownership, and validation plans.
+
+- `tests/aistock_validation/catalog/ui_targets.yaml` uses schema `aistock_validation_ui_targets_v1`.
+- Every official `NAV_GROUPS` route must have exactly one `ui_targets.yaml` target, and every target href must exist in `NAV_GROUPS`.
+- Each target must declare `route_id`, `href`, `label`, `nav_group`, `primary_module`, `impact_modules`, `risk_level`, `required_test_plans`, `recommended_test_plans`, `business_operations`, and `coverage_status`.
+- `primary_module` and every `impact_modules` entry must exist in `module_registry.yaml`; test plan keys must exist in `test_plans.yaml`.
+- Invalid YAML, duplicate `route_id`, duplicate `href`, missing business operations, unknown modules, unknown plans, or invalid risk/coverage status must fail fast.
+- Coverage status values are `covered`, `partial`, `planned`, and `excluded`; excluded targets must include an explicit `exclusion_reason`.
+- The backend exposes read-only endpoints: `GET /api/v1/validation/ui-targets`, `GET /api/v1/validation/ui-targets/summary`, and `GET /api/v1/validation/ui-targets/{route_id}`.
+- API payloads enrich each route with module quality, latest validation run when available, warnings, and an explicit `proven_by_real_business_evidence` boolean; missing evidence must be warnings, not fake success.
+- The Validation Center page displays the route catalog inside the page body, grouped by catalog/navigation metadata, without covering or replacing the global sidebar.
+- Mock UI and real-port UI smokes must prove the page consumes `/ui-targets` and `/ui-targets/summary`, shows warnings/gaps, and supports selecting a route detail panel.

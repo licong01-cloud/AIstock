@@ -5,6 +5,7 @@ import pytest
 
 from backend.services.quantevolver import factor_cache_remote_sync_service as sync_module
 from backend.services.quantevolver.factor_cache_remote_sync_service import (
+    FactorCacheNodeApiClient,
     FactorCacheRemoteSyncService,
     RemoteCacheNode,
 )
@@ -43,7 +44,7 @@ class _FakeNodeApi:
     def factor_exists(self, *, factor_name, cache_dir):
         return self.exists
 
-    def upload_sync_bundle(self, *, cache_dir, factor_files, merged_meta, timeout_s):
+    def upload_sync_bundle(self, *, cache_dir, factor_files, merged_meta, timeout_s, max_workers=4):
         self.uploads.append(
             {
                 "cache_dir": cache_dir,
@@ -51,6 +52,7 @@ class _FakeNodeApi:
                 "paths": {name: str(path) for name, path in factor_files.items()},
                 "merged_meta": merged_meta,
                 "timeout_s": timeout_s,
+                "max_workers": max_workers,
             }
         )
         return {"ok": True, "uploaded": sorted(factor_files)}
@@ -149,7 +151,8 @@ def test_factor_cache_remote_sync_uploads_through_node_api(tmp_path, monkeypatch
     assert upload["factor_names"] == ["AlphaA"]
     assert upload["cache_dir"] == "/home/node/aistock_cache/factor_values"
     assert upload["paths"]["AlphaA"].endswith("AlphaA.parquet")
-    assert upload["merged_meta"]["_last_remote_sync"]["transport"] == "node_api"
+    assert upload["merged_meta"]["_last_remote_sync"]["transport"] == "node_api_streaming_put"
+    assert upload["max_workers"] == 1
 
 
 def test_factor_cache_remote_sync_skips_synced_factor_via_node_api_status(tmp_path, monkeypatch) -> None:
@@ -184,3 +187,55 @@ def test_factor_cache_remote_sync_refuses_factor_name_traversal(tmp_path, monkey
 
     with pytest.raises(StrategyPackageValidationError, match="single safe path segment"):
         service.plan_sync(RemoteCacheNode("node-api", None, "http://127.0.0.1:9000", None, "online"))
+
+
+def test_factor_cache_node_api_client_streams_raw_put_and_posts_meta(tmp_path, monkeypatch) -> None:
+    parquet = tmp_path / "AlphaA.parquet"
+    parquet.write_bytes(b"PAR1" * 1024)
+    calls = {"put": [], "post": []}
+
+    class _Resp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def fake_put(url, *, params, data, headers, timeout):
+        assert "factors/AlphaA/file" in url
+        assert params["cache_dir"] == "/cache/factor_values"
+        assert params["expected_size"] == str(parquet.stat().st_size)
+        assert headers["Content-Type"] == "application/octet-stream"
+        assert headers["Content-Length"] == str(parquet.stat().st_size)
+        assert hasattr(data, "read")
+        assert data.read(4) == b"PAR1"
+        calls["put"].append({"url": url, "timeout": timeout})
+        return _Resp({"ok": True, "factor_name": "AlphaA", "size_bytes": parquet.stat().st_size})
+
+    def fake_post(url, *, params, json, timeout):
+        assert url.endswith("/factor-cache/meta")
+        assert params["cache_dir"] == "/cache/factor_values"
+        assert json["meta"]["factors"]["AlphaA"]["status"] == "ok"
+        calls["post"].append({"url": url, "timeout": timeout})
+        return _Resp({"ok": True, "meta_factor_count": 1})
+
+    monkeypatch.setattr(sync_module.requests, "put", fake_put)
+    monkeypatch.setattr(sync_module.requests, "post", fake_post)
+    client = FactorCacheNodeApiClient("http://node:9000")
+
+    result = client.upload_sync_bundle(
+        cache_dir="/cache/factor_values",
+        factor_files={"AlphaA": parquet},
+        merged_meta={"factors": {"AlphaA": {"status": "ok"}}},
+        timeout_s=30,
+        max_workers=4,
+    )
+
+    assert result["ok"] is True
+    assert result["transport"] == "node_api_streaming_put"
+    assert result["upload_workers"] == 1
+    assert len(calls["put"]) == 1
+    assert len(calls["post"]) == 1

@@ -539,6 +539,8 @@ export type ValidationModuleQualityItem = JsonObject & {
   parent_module?: string | null;
   module_type?: string;
   registry_risk_level?: string;
+  description?: string;
+  description_zh?: string;
   ui_routes?: string[];
   api_routes?: string[];
   test_plans?: JsonObject & {
@@ -599,6 +601,63 @@ export type ValidationModuleQualitySummary = JsonObject & {
   git_command_mode?: string;
   arbitrary_shell_allowed?: boolean;
   production_8001_touched?: boolean;
+};
+
+export type ValidationUiTarget = JsonObject & {
+  route_id: string;
+  href: string;
+  label?: string;
+  nav_group?: string;
+  primary_module?: string;
+  impact_modules?: string[];
+  risk_level?: string;
+  required_test_plans?: string[];
+  recommended_test_plans?: string[];
+  business_operations?: string[];
+  coverage_status?: string;
+  exclusion_reason?: string;
+  module_quality?: ValidationModuleQualityItem | null;
+  latest_run?: ValidationRunSummary | null;
+  warnings?: string[];
+  proven_by_real_business_evidence?: boolean;
+};
+
+export type ValidationUiTargetPage = ValidationPage<ValidationUiTarget> & {
+  schema_version?: string;
+  catalog_path?: string;
+  missing?: boolean;
+};
+
+export type ValidationUiTargetSummary = JsonObject & {
+  schema_version?: string;
+  generated_at?: string;
+  catalog_path?: string;
+  missing?: boolean;
+  target_count?: number;
+  nav_group_count?: number;
+  warning_count?: number;
+  targets_requiring_action?: number;
+  by_nav_group?: Array<JsonObject & { nav_group?: string; target_count?: number; warning_count?: number }>;
+  by_coverage_status?: Record<string, number>;
+  by_risk_level?: Record<string, number>;
+  production_8001_touched?: boolean;
+};
+
+export type ValidationUiTargetDetail = JsonObject & {
+  schema_version?: string;
+  catalog_path?: string;
+  missing?: boolean;
+  target: ValidationUiTarget;
+};
+
+export type ValidationUiTargetQuery = {
+  nav_group?: string;
+  module?: string;
+  coverage_status?: string;
+  risk_level?: string;
+  search?: string;
+  page?: number;
+  page_size?: number;
 };
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1").replace(/\/+$/, "");
@@ -725,6 +784,15 @@ export const validationApi = {
   },
   moduleQualitySummary(commitLimit = 50): Promise<ValidationModuleQualitySummary> {
     return unwrap<ValidationModuleQualitySummary>(appendQuery("/validation/modules/quality-summary", { commit_limit: commitLimit }));
+  },
+  uiTargets(query: ValidationUiTargetQuery = {}): Promise<ValidationUiTargetPage> {
+    return unwrap<ValidationUiTargetPage>(appendQuery("/validation/ui-targets", query));
+  },
+  uiTargetSummary(): Promise<ValidationUiTargetSummary> {
+    return unwrap<ValidationUiTargetSummary>("/validation/ui-targets/summary");
+  },
+  uiTarget(routeId: string): Promise<ValidationUiTargetDetail> {
+    return unwrap<ValidationUiTargetDetail>(`/validation/ui-targets/${encodeURIComponent(routeId)}`);
   },
   executions(query: ValidationExecutionQuery = {}): Promise<ValidationPage<ValidationExecutionJob>> {
     return unwrap<ValidationPage<ValidationExecutionJob>>(appendQuery("/validation/executions", query));

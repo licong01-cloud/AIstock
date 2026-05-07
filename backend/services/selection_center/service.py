@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date, timedelta
 from math import isfinite
 from typing import Any
@@ -11,6 +12,7 @@ from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.paper_trading_v2.market_data import TradeCalendarProvider
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
+from backend.services.strategy_package.backtest_contract import normalize_runtime_config_with_backtest_contract
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime
@@ -32,6 +34,7 @@ from backend.services.trading_core.errors import (
 )
 
 from .models import SelectionCandidate, SelectionMode, SelectionPaperPortfolioLink, SelectionRun, SelectionRunStatus
+from .package_health import SelectionPackageHealthService
 from .repository import SelectionCenterRepository
 from .risk_policy import StockRiskPolicyService
 from .runtime_profile import normalize_selection_runtime_config, parse_selection_runtime_profile
@@ -51,6 +54,7 @@ class SelectionCenterService:
         selection_artifact_service: StrategyPackageSelectionArtifactService | Any | None = None,
         calendar_provider: TradeCalendarProvider | Any | None = None,
         risk_policy_service: StockRiskPolicyService | Any | None = None,
+        package_health_service: SelectionPackageHealthService | Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.repository = repository or SelectionCenterRepository()
@@ -66,6 +70,11 @@ class SelectionCenterService:
         )
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
         self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
+        self.package_health_service = package_health_service or SelectionPackageHealthService(
+            artifact_repository=getattr(self.runtime, "artifact_repository", None),
+            runtime_source_resolver=getattr(self.selection_artifact_service, "runtime_asset_resolver", None),
+            hmm_runtime=getattr(self.runtime, "hmm_runtime", None),
+        )
 
     def run_single_package(
         self,
@@ -103,6 +112,16 @@ class SelectionCenterService:
         if mode in {SelectionMode.INTERSECTION, SelectionMode.UNION, SelectionMode.WEIGHTED_FUSION} and len(package_ids) < 2:
             raise StrategyPackageValidationError("package aggregation requires at least two packages")
         weights = self._package_weights(config, package_ids) if mode == SelectionMode.WEIGHTED_FUSION else None
+        records_by_id, package_configs, package_health = self._prepare_package_runtime_configs(
+            package_ids=package_ids,
+            config=config,
+            trade_date=trade_date,
+            data_source=data_source,
+        )
+        if package_configs:
+            config["package_runtime_configs"] = package_configs
+        if package_health:
+            config["package_health"] = package_health
 
         run = SelectionRun(
             mode=mode,
@@ -119,18 +138,9 @@ class SelectionCenterService:
             excluded_results = {}
             manifest_sha: dict[str, str] = {}
             for package_id in package_ids:
-                record = self.package_repository.get(package_id)
-                if record.package_status not in {
-                    PackageStatus.BACKTEST_APPROVED,
-                    PackageStatus.SELECTION_ENABLED,
-                    PackageStatus.PAPER_ENABLED,
-                }:
-                    raise StrategyPackageValidationError(
-                        "package is not enabled for selection",
-                        context={"package_id": package_id, "package_status": record.package_status.value},
-                    )
+                record = records_by_id[package_id]
                 manifest = record.current_manifest()
-                package_config = normalize_selection_runtime_config(self._package_runtime_config(config, package_id))
+                package_config = package_configs[package_id]
                 package_profile = parse_selection_runtime_profile(package_config)
                 self._ensure_authoritative_selection_artifact(
                     record=record,
@@ -227,8 +237,126 @@ class SelectionCenterService:
                 raise StrategyPackageValidationError(
                     "required_cutoff_audit_datasets requires selection_artifact_config.cutoff_date",
                     context={"required_cutoff_audit_datasets": artifact_config.get("required_cutoff_audit_datasets")},
-                )
+            )
             self.refresh_audit.require_success(dataset=str(dataset), trade_date=date.fromisoformat(str(cutoff)))
+
+    def _prepare_package_runtime_configs(
+        self,
+        *,
+        package_ids: list[str],
+        config: dict[str, Any],
+        trade_date: date,
+        data_source: str,
+    ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        records_by_id: dict[str, Any] = {}
+        package_configs: dict[str, dict[str, Any]] = {}
+        package_health: dict[str, dict[str, Any]] = {}
+        for package_id in package_ids:
+            record = self.package_repository.get(package_id)
+            if record.package_status not in {
+                PackageStatus.BACKTEST_APPROVED,
+                PackageStatus.SELECTION_ENABLED,
+                PackageStatus.PAPER_ENABLED,
+            }:
+                raise StrategyPackageValidationError(
+                    "package is not enabled for selection",
+                    context={"package_id": package_id, "package_status": record.package_status.value},
+                )
+            manifest = record.current_manifest()
+            raw_package_config = self._package_runtime_config(config, package_id)
+            package_config = self._normalize_package_runtime_config(
+                manifest=manifest,
+                runtime_config=raw_package_config,
+                package_id=package_id,
+            )
+            health = self.package_health_service.require_runnable(
+                record,
+                runtime_config=package_config,
+                trade_date=trade_date,
+                data_source=data_source,
+            )
+            records_by_id[package_id] = record
+            package_configs[package_id] = package_config
+            package_health[package_id] = health
+        return records_by_id, package_configs, package_health
+
+    def _normalize_package_runtime_config(
+        self,
+        *,
+        manifest: Any,
+        runtime_config: dict[str, Any],
+        package_id: str,
+    ) -> dict[str, Any]:
+        if not self._st_pit_authoritative(runtime_config):
+            return normalize_selection_runtime_config(runtime_config)
+
+        contract_input, display_top_n = self._contract_input_with_display_top_n(runtime_config)
+        normalized = normalize_runtime_config_with_backtest_contract(
+            manifest,
+            contract_input,
+            context={"package_id": package_id, "check": "selection_center"},
+            include_contract=True,
+        )
+        normalized["st_pit_authoritative"] = True
+        if display_top_n is not None:
+            normalized["display_top_n"] = self._validate_display_top_n(display_top_n, package_id=package_id)
+        return normalized
+
+    @staticmethod
+    def _st_pit_authoritative(runtime_config: dict[str, Any]) -> bool:
+        return bool(runtime_config.get("st_pit_authoritative") or runtime_config.get("enforce_st_pit_contract"))
+
+    @staticmethod
+    def _contract_input_with_display_top_n(runtime_config: dict[str, Any]) -> tuple[dict[str, Any], Any | None]:
+        config = deepcopy(runtime_config)
+        display_top_n = config.get("display_top_n")
+        if display_top_n is None and "top_k" in config:
+            display_top_n = config["top_k"]
+        config.pop("top_k", None)
+
+        raw_profile = config.get("runtime_profile")
+        if raw_profile is None:
+            profile: dict[str, Any] = {}
+        elif isinstance(raw_profile, dict):
+            profile = dict(raw_profile)
+        else:
+            raise StrategyPackageValidationError(
+                "runtime_config.runtime_profile must be an object",
+                context={"runtime_profile_type": type(raw_profile).__name__},
+            )
+
+        selection_payload = dict(profile.get("selection") or {})
+        if display_top_n is None and "top_k" in selection_payload:
+            display_top_n = selection_payload["top_k"]
+        selection_payload.pop("top_k", None)
+        if selection_payload:
+            profile["selection"] = selection_payload
+        else:
+            profile.pop("selection", None)
+        risk_payload = profile.get("risk_policy")
+        if isinstance(risk_payload, dict) and risk_payload.get("enabled") is False and "risk_policy" not in config:
+            profile.pop("risk_policy", None)
+        hmm_payload = profile.get("hmm")
+        if isinstance(hmm_payload, dict) and hmm_payload.get("enabled") is False and "hmm" not in config:
+            profile.pop("hmm", None)
+        config["runtime_profile"] = profile
+        return config, display_top_n
+
+    @staticmethod
+    def _validate_display_top_n(value: Any, *, package_id: str) -> int:
+        try:
+            display_top_n = int(value)
+        except (TypeError, ValueError) as exc:
+            raise StrategyPackageValidationError(
+                "selection display_top_n must be an integer",
+                context={"package_id": package_id, "display_top_n": value},
+            ) from exc
+        if display_top_n <= 0 or display_top_n > 50:
+            raise StrategyPackageValidationError(
+                "selection display_top_n must be between 1 and 50",
+                context={"package_id": package_id, "display_top_n": display_top_n, "max_display_top_n": 50},
+            )
+        return display_top_n
 
     @staticmethod
     def _package_runtime_config(config: dict[str, Any], package_id: str) -> dict[str, Any]:
@@ -294,7 +422,7 @@ class SelectionCenterService:
             trade_date=trade_date,
             data_source=data_source,
             runtime_config=runtime_config,
-            include_reference_price=True,
+            include_reference_price=bool(artifact_config.get("include_reference_price", True)),
             cutoff_date=cutoff_date,
         )
 
@@ -459,6 +587,7 @@ class SelectionCenterService:
             manifest = record.current_manifest()
             model_state = package_service.get_model_state(record.package_id)
             latest_run = latest_runs.get(record.package_id)
+            health = self.package_health_service.summarize(record)
             items.append(
                 {
                     "package_id": record.package_id,
@@ -477,6 +606,7 @@ class SelectionCenterService:
                     "updated_at": record.updated_at.isoformat(),
                     "metrics_summary": metrics_summary_from_record(record).model_dump(mode="json"),
                     "model_state": model_state.model_dump(mode="json"),
+                    "selection_health": health,
                     "latest_selection_run": self._selection_run_summary(latest_run) if latest_run else None,
                 }
             )

@@ -36,6 +36,7 @@ class ModuleDefinition:
     module_type: str
     risk_level: str
     description: str = ""
+    description_zh: str = ""
     parent_module: str | None = None
     ui_routes: tuple[str, ...] = ()
     api_routes: tuple[str, ...] = ()
@@ -50,6 +51,7 @@ class ModuleDefinition:
             "module_type": self.module_type,
             "risk_level": self.risk_level,
             "description": self.description,
+            "description_zh": self.description_zh,
             "ui_routes": list(self.ui_routes),
             "api_routes": list(self.api_routes),
             "test_plans": {
@@ -125,6 +127,7 @@ class ModuleRegistry:
                     module_type=item["module_type"],
                     risk_level=item["risk_level"],
                     description=item.get("description") or "",
+                    description_zh=item.get("description_zh") or "",
                     ui_routes=tuple(item.get("ui_routes") or []),
                     api_routes=tuple(item.get("api_routes") or []),
                     test_plans_required=tuple(test_plans.get("required_on_change") or []),
@@ -171,6 +174,7 @@ class ModuleRegistry:
             module_type=module_type,
             risk_level=risk_level,
             description=str(raw_module.get("description") or "").strip(),
+            description_zh=str(raw_module.get("description_zh") or "").strip(),
             ui_routes=_as_tuple(raw_module.get("ui_routes")),
             api_routes=_as_tuple(raw_module.get("api_routes")),
             test_plans_required=_as_tuple(test_plans.get("required_on_change")),

@@ -23,6 +23,7 @@ import {
   type ValidationGitCommitActivity,
   type ValidationGitWorkspaceStatus,
   type ValidationHealth,
+  type ValidationModuleQualityItem,
   type ValidationModuleQualitySummary,
   type ValidationPage,
   type ValidationPassScope,
@@ -31,6 +32,8 @@ import {
   type ValidationRunDetail,
   type ValidationRunSummary,
   type ValidationSummary,
+  type ValidationUiTargetPage,
+  type ValidationUiTargetSummary,
   validationApi,
 } from "@/lib/validation/api";
 
@@ -118,6 +121,97 @@ function CountChips({ counts }: { counts?: Record<string, number> }) {
   if (!entries.length) return <span className="pv2-muted">无统计</span>;
   return <div className="pv2-chip-row">{entries.map(([key, count]) => <span className="pv2-chip" key={key}>{key}: {count}</span>)}</div>;
 }
+
+function UiTargetCoveragePanel({ uiTargets, uiTargetSummary }: { uiTargets?: ValidationUiTargetPage | null; uiTargetSummary?: ValidationUiTargetSummary | null }) {
+  const [selectedRouteId, setSelectedRouteId] = useState("");
+  const targets = uiTargets?.items || [];
+  const selectedTarget = targets.find((item) => item.route_id === selectedRouteId) || targets[0];
+  const missingCatalog = Boolean(uiTargets?.missing || uiTargetSummary?.missing);
+  return (
+    <SectionCard
+      title="UI Target Route Coverage"
+      eyebrow="ui_targets.yaml / module registry / validation evidence"
+      action={<span className="pv2-chip">Catalog: {display(uiTargets?.catalog_path || uiTargetSummary?.catalog_path || "tests/aistock_validation/catalog/ui_targets.yaml")}</span>}
+    >
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="Route Targets" value={uiTargetSummary?.target_count ?? uiTargets?.total ?? 0} hint={`groups ${display(uiTargetSummary?.nav_group_count ?? 0)}`} tone={missingCatalog ? "danger" : "info"} />
+        <MetricCard label="Needs Action" value={uiTargetSummary?.targets_requiring_action ?? 0} hint="warnings or missing proof" tone={uiTargetSummary?.targets_requiring_action ? "warning" : "success"} />
+        <MetricCard label="Warnings" value={uiTargetSummary?.warning_count ?? 0} hint="explicit gaps, not fake success" tone={uiTargetSummary?.warning_count ? "warning" : "success"} />
+        <MetricCard label="Proved Partial" value={uiTargetSummary?.by_coverage_status?.partial ?? 0} hint={`planned ${display(uiTargetSummary?.by_coverage_status?.planned ?? 0)}`} tone="info" />
+      </div>
+      <div className="pv2-notice pv2-notice-info" style={{ marginTop: 12 }}>
+        <div className="pv2-notice-title">Route coverage boundary</div>
+        <div className="pv2-notice-body">
+          This panel is rendered inside Validation Center and reads backend `/validation/ui-targets` data. It does not replace the global sidebar. A route is not treated as business-proven unless the API returns real evidence and no missing-proof warning.
+        </div>
+      </div>
+      <div className="pv2-grid pv2-grid-3" style={{ marginTop: 16 }}>
+        <div>
+          <h3 className="pv2-subtitle">Coverage Status</h3>
+          <CountChips counts={uiTargetSummary?.by_coverage_status} />
+        </div>
+        <div>
+          <h3 className="pv2-subtitle">Risk Level</h3>
+          <CountChips counts={uiTargetSummary?.by_risk_level} />
+        </div>
+        <div>
+          <h3 className="pv2-subtitle">Navigation Groups</h3>
+          <div className="pv2-chip-row">{(uiTargetSummary?.by_nav_group || []).slice(0, 8).map((item) => <span className="pv2-chip" key={String(item.nav_group)}>{display(item.nav_group)}: {display(item.target_count)}</span>)}</div>
+        </div>
+      </div>
+      <div className="pv2-table-wrap" style={{ marginTop: 16 }}>
+        <table className="pv2-table">
+          <thead><tr><th>Navigation Group</th><th>Route</th><th>Module</th><th>Coverage</th><th>Plans and Warnings</th><th>Action</th></tr></thead>
+          <tbody>
+            {targets.length ? targets.map((target) => (
+              <tr key={target.route_id}>
+                <td><strong>{display(target.nav_group)}</strong></td>
+                <td><strong>{display(target.label)}</strong><br /><span className="pv2-muted pv2-mono">{target.href}</span><br /><span className="pv2-muted pv2-mono">{target.route_id}</span></td>
+                <td>{display(target.primary_module)}<br /><BadgeList items={target.impact_modules} /></td>
+                <td><StatusBadge status={target.coverage_status || "unknown"} /><br /><span className="pv2-muted">proved={display(target.proven_by_real_business_evidence)}</span><br /><span className="pv2-muted">Line {pct(target.module_quality?.coverage?.line_percent)} / Branch {pct(target.module_quality?.coverage?.branch_percent)}</span></td>
+                <td><BadgeList items={target.required_test_plans} empty="No required plans" /><br /><BadgeList items={target.recommended_test_plans} empty="No recommended plans" /><br /><BadgeList items={target.warnings} empty="No warnings" /></td>
+                <td><button className="pv2-link-button" type="button" onClick={() => setSelectedRouteId(target.route_id)}>View UI target coverage</button><br /><a className="pv2-link-button" href={target.href}>Open business page</a></td>
+              </tr>
+            )) : <tr><td className="pv2-empty-cell" colSpan={6}>No UI targets loaded.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {selectedTarget ? (
+        <div style={{ marginTop: 16 }}>
+          <SectionCard title="UI Target Detail" eyebrow="selected route / module / evidence warnings">
+            <KeyValuePanel rows={[
+              ["route_id", selectedTarget.route_id],
+              ["href", selectedTarget.href],
+              ["label", selectedTarget.label],
+              ["nav_group", selectedTarget.nav_group],
+              ["primary_module", selectedTarget.primary_module],
+              ["coverage_status", selectedTarget.coverage_status],
+              ["proven_by_real_business_evidence", selectedTarget.proven_by_real_business_evidence],
+              ["business_operations", selectedTarget.business_operations],
+              ["warnings", selectedTarget.warnings],
+              ["latest_run", selectedTarget.latest_run?.run_id],
+            ]} />
+            <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
+              <table className="pv2-table">
+                <thead><tr><th>Module Quality</th><th>Coverage</th><th>Priority</th><th>Quality Issues</th><th>Latest Run</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><strong>{display(selectedTarget.module_quality?.display_name || selectedTarget.primary_module)}</strong><br /><span className="pv2-muted pv2-mono">{display(selectedTarget.module_quality?.module_id || selectedTarget.primary_module)}</span><br />{display(selectedTarget.module_quality?.description_zh || selectedTarget.module_quality?.description)}</td>
+                    <td><StatusBadge status={selectedTarget.module_quality?.coverage?.status || "missing"} /><br /><span className="pv2-muted">Line {pct(selectedTarget.module_quality?.coverage?.line_percent)} / Branch {pct(selectedTarget.module_quality?.coverage?.branch_percent)}</span></td>
+                    <td><StatusBadge status={selectedTarget.module_quality?.priority?.level || "unknown"} /><br /><span className="pv2-muted">score={display(selectedTarget.module_quality?.priority?.score)}</span><br /><BadgeList items={selectedTarget.module_quality?.priority?.reason_codes} /></td>
+                    <td>Findings {display(selectedTarget.module_quality?.quality?.finding_count ?? 0)} / Bugs {display(selectedTarget.module_quality?.quality?.bug_count ?? 0)}<br /><span className="pv2-muted">workspace {display(selectedTarget.module_quality?.workspace?.changed_file_count ?? 0)} / commits {display(selectedTarget.module_quality?.commits?.commit_count ?? 0)}</span></td>
+                    <td>{display(selectedTarget.latest_run?.title || selectedTarget.latest_run?.run_id)}<br /><StatusBadge status={selectedTarget.latest_run?.status || "missing"} /></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </SectionCard>
+        </div>
+      ) : null}
+    </SectionCard>
+  );
+}
+
 
 function Pagination({ page, label, onPageChange }: { page: ValidationPage<unknown>; label: string; onPageChange: (page: number) => void }) {
   return (
@@ -345,7 +439,7 @@ function GitModuleQualityPanel({ commitActivity, moduleQuality }: { commitActivi
           <tbody>
             {modules.length ? modules.map((module) => (
               <tr key={module.module_id}>
-                <td><strong>{module.display_name || module.module_id}</strong><br /><span className="pv2-muted pv2-mono">{module.module_id}</span></td>
+                <td><strong>{module.display_name || module.module_id}</strong><br /><span className="pv2-muted pv2-mono">{module.module_id}</span><br /><span className="pv2-muted">{display(module.description_zh || module.description)}</span></td>
                 <td><StatusBadge status={module.priority?.level || "low"} /><br /><span className="pv2-muted">score={display(module.priority?.score)}</span><br /><BadgeList items={module.priority?.reason_codes} /></td>
                 <td>{display(module.workspace?.changed_file_count ?? 0)} 个文件<br /><span className="pv2-muted">staged {display(module.workspace?.staged_file_count ?? 0)} / unstaged {display(module.workspace?.unstaged_file_count ?? 0)}</span></td>
                 <td>{display(module.commits?.commit_count ?? 0)} commits<br /><span className="pv2-muted">{display(module.commits?.latest_commit?.short_hash)} {display(module.commits?.latest_commit?.subject)}</span></td>
@@ -386,6 +480,8 @@ export default function ValidationCenterPage() {
   const [branchStatus, setBranchStatus] = useState<ValidationGitBranchStatus | null>(null);
   const [commitActivity, setCommitActivity] = useState<ValidationGitCommitActivity | null>(null);
   const [moduleQuality, setModuleQuality] = useState<ValidationModuleQualitySummary | null>(null);
+  const [uiTargets, setUiTargets] = useState<ValidationUiTargetPage | null>(null);
+  const [uiTargetSummary, setUiTargetSummary] = useState<ValidationUiTargetSummary | null>(null);
   const [plans, setPlans] = useState<ValidationPlan[]>([]);
   const [runs, setRuns] = useState<ValidationPage<ValidationRunSummary>>(emptyPage<ValidationRunSummary>());
   const [coverage, setCoverage] = useState<ValidationPage<ValidationCoverageSummary>>(emptyPage<ValidationCoverageSummary>(10));
@@ -415,7 +511,7 @@ export default function ValidationCenterPage() {
     setLoading(true);
     setError(null);
     try {
-      const [healthData, summaryData, planCatalog, coverageData, evidenceData, executionData, findingSummaryData, bugSummaryData, workspaceData, branchData, commitData, moduleQualityData] = await Promise.all([
+      const [healthData, summaryData, planCatalog, coverageData, evidenceData, executionData, findingSummaryData, bugSummaryData, workspaceData, branchData, commitData, moduleQualityData, uiTargetsData, uiTargetSummaryData] = await Promise.all([
         validationApi.health(),
         validationApi.summary(),
         validationApi.plans(),
@@ -428,6 +524,8 @@ export default function ValidationCenterPage() {
         validationApi.branchStatus(),
         validationApi.commitActivity(50),
         validationApi.moduleQualitySummary(50),
+        validationApi.uiTargets({ page: 1, page_size: 100 }),
+        validationApi.uiTargetSummary(),
       ]);
       setHealth(healthData);
       setSummary(summaryData);
@@ -441,6 +539,8 @@ export default function ValidationCenterPage() {
       setBranchStatus(branchData);
       setCommitActivity(commitData);
       setModuleQuality(moduleQualityData);
+      setUiTargets(uiTargetsData);
+      setUiTargetSummary(uiTargetSummaryData);
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -681,6 +781,7 @@ export default function ValidationCenterPage() {
       <GitWorkspacePanel workspaceStatus={workspaceStatus} branchStatus={branchStatus} />
 
       <GitModuleQualityPanel commitActivity={commitActivity} moduleQuality={moduleQuality} />
+      <UiTargetCoveragePanel uiTargets={uiTargets} uiTargetSummary={uiTargetSummary} />
 
       <SectionCard
         title="测试计划目录"

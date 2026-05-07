@@ -1,0 +1,132 @@
+{
+  "coverage": {
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "status": "passed",
+    "line": 82.21,
+    "branch": 65.94,
+    "diff_line": null,
+    "diff_branch": null,
+    "snapshot_path": "tmp/validation/coverage/validation_center_backend_snapshot.json",
+    "quality_gates": [
+      {
+        "actual": 82.21,
+        "metric": "line",
+        "reason": null,
+        "status": "passed",
+        "threshold": 75.0
+      },
+      {
+        "actual": 65.94,
+        "metric": "branch",
+        "reason": null,
+        "status": "passed",
+        "threshold": 55.0
+      }
+    ]
+  },
+  "environment": {
+    "backend_port": 8013,
+    "frontend_port": 3013,
+    "next_public_api_base": "/api/v1 for real-port smoke; mocked UI uses http://127.0.0.1:8013/api/v1",
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": "skipped",
+    "conda_env": "AIstock"
+  },
+  "evidence": [
+    {
+      "kind": "coverage",
+      "path": "tmp/validation/coverage/validation_center_backend_snapshot.json"
+    },
+    {
+      "kind": "evidence_manifest",
+      "path": "tests/aistock_validation/history/validation_center/20260507_142000_l3_validation-center-ui-target-route-catalog.evidence.json"
+    },
+    {
+      "kind": "real_port_smoke",
+      "path": "tmp/validation/validation_center/ui_real_port_smoke.json"
+    },
+    {
+      "kind": "real_port_smoke_evidence",
+      "path": "tmp/validation/validation_center/ui_real_port_smoke_evidence.json"
+    },
+    {
+      "kind": "guardrail_l0_json",
+      "path": "tmp/validation/guardrails/l0_paths.json"
+    },
+    {
+      "kind": "guardrail_l0_markdown",
+      "path": "tmp/validation/guardrails/l0_paths.md"
+    }
+  ],
+  "finished_at": "2026-05-07T14:40:00",
+  "git_commit": "acadcbd",
+  "level": "L3",
+  "level_slug": "l3",
+  "markdown_path": "tests/aistock_validation/history/validation_center/20260507_142000_l3_validation-center-ui-target-route-catalog.md",
+  "metadata_path": "tests/aistock_validation/history/validation_center/20260507_142000_l3_validation-center-ui-target-route-catalog.json",
+  "module": "validation_center",
+  "module_slug": "validation_center",
+  "operator": "lc999",
+  "quality_gates": [
+    {
+      "actual": 82.21,
+      "metric": "line",
+      "reason": null,
+      "status": "passed",
+      "threshold": 75.0
+    },
+    {
+      "actual": 65.94,
+      "metric": "branch",
+      "reason": null,
+      "status": "passed",
+      "threshold": 55.0
+    }
+  ],
+  "residual_risks": [
+    "Real-port smoke used dev ports 8013/3013 because 8011/3011 and 8012/3012 were occupied by other test services.",
+    "backend/services/rl_execution was copied as ignored runtime-only dependency for isolated worktree backend startup and was not committed.",
+    "Initial L0 rerun required regenerating the local guardrail baseline JSON in tmp/validation/guardrails; no new blocking findings remained after rerun."
+  ],
+  "schema_version": "aistock_validation_run_v1",
+  "started_at": "2026-05-07T14:20:00",
+  "status": "passed",
+  "steps": [
+    "Integrated previous navigation-to-module coverage branch.",
+    "Added ui_targets.yaml catalog and fail-fast backend catalog validation.",
+    "Exposed read-only UI target list, summary, and detail APIs.",
+    "Updated Validation Center UI to render backend UI target coverage and route detail.",
+    "Validated backend, mocked UI, and real-port UI on non-production ports.",
+    "Ran L0 changed-file guardrail gate with baseline-only historical findings allowed."
+  ],
+  "title": "Validation Center UI target route catalog",
+  "title_slug": "validation-center-ui-target-route-catalog",
+  "pass_scope": {
+    "level": "L3",
+    "real_backend": true,
+    "real_database": false,
+    "real_node_api": false,
+    "real_frontend_click": true,
+    "writes_business_state": false,
+    "positive_business_success": true,
+    "negative_failfast_only": false,
+    "mock_api_used": true,
+    "production_8001_touched": false
+  },
+  "business_assertion": {
+    "can_user_complete_operation": true,
+    "operation_name": "Open Validation Center and inspect route-level UI target coverage for /validation-center",
+    "evidence": {
+      "api": "GET /api/v1/validation/ui-targets and /ui-targets/summary returned 200 on backend port 8013",
+      "ui": "Playwright clicked View UI target coverage and displayed UI Target Detail",
+      "db": "not touched",
+      "logs": "nox validation_center_real_port_ui and validation_center_ui passed"
+    },
+    "unresolved_blockers": []
+  }
+}

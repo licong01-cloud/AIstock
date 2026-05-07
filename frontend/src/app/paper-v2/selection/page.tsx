@@ -30,6 +30,25 @@ function artifactCoverageLabel(snapshot: HmmSnapshot, preset: string) {
   return artifacts.map((artifact) => `${artifact.start_date || "?"}~${artifact.end_date || "?"} (${artifact.date_count || 0}日)`).join("; ");
 }
 
+function packageHealth(packageRow: SelectablePackage): JsonObject {
+  return (packageRow.selection_health || {}) as JsonObject;
+}
+
+function packageHealthStatus(packageRow: SelectablePackage): string {
+  return String(packageHealth(packageRow).status || "UNKNOWN");
+}
+
+function packageHealthRunnable(packageRow: SelectablePackage): boolean {
+  return packageHealth(packageRow).runnable === true;
+}
+
+function packageHealthHint(packageRow: SelectablePackage): string {
+  const health = packageHealth(packageRow);
+  const checks = Array.isArray(health.checks) ? health.checks as JsonObject[] : [];
+  const first = checks.find((item) => ["BLOCKED", "WARN"].includes(String(item.status))) || checks[0];
+  return String(first?.message || health.status || "UNKNOWN");
+}
+
 export default function PaperV2SelectionPage() {
   const [packages, setPackages] = useState<SelectablePackage[]>([]);
   const [runs, setRuns] = useState<SelectionRun[]>([]);
@@ -81,7 +100,11 @@ export default function PaperV2SelectionPage() {
       setRuns(runRows);
       setHmmConfigs(configRows);
       setWeights((prev) => Object.fromEntries(rows.map((item) => [item.package_id, prev[item.package_id] ?? 1])));
-      setSelected((prev) => Object.fromEntries(rows.map((item, index) => [item.package_id, prev[item.package_id] ?? index === 0])));
+      const firstRunnable = rows.find((item) => packageHealthRunnable(item))?.package_id;
+      setSelected((prev) => Object.fromEntries(rows.map((item) => [
+        item.package_id,
+        packageHealthRunnable(item) && Boolean(prev[item.package_id] ?? item.package_id === firstRunnable),
+      ])));
       if (!hmmConfigId && configRows[0]) setHmmConfigId(configRows[0].config_id);
     } catch (exc) {
       setError(exc);
@@ -184,6 +207,8 @@ export default function PaperV2SelectionPage() {
     }
     const config: JsonObject = {
       top_k: topK,
+      display_top_n: topK,
+      st_pit_authoritative: true,
       selection_artifact_config: artifactConfig,
       runtime_profile: runtimeProfile,
     };
@@ -217,6 +242,10 @@ export default function PaperV2SelectionPage() {
       }
       if (singlePackageMode && packageIds.length !== 1) throw new Error("单策略包模式必须且只能选择一个 StrategyPackage。");
       if (!singlePackageMode && packageIds.length < 2) throw new Error("多策略包聚合至少需要两个 StrategyPackage。");
+      const blockedPackages = selectedPackages.filter((item) => !packageHealthRunnable(item));
+      if (blockedPackages.length) {
+        throw new Error(`策略包健康预检未通过：${blockedPackages.map((item) => `${item.package_name}: ${packageHealthStatus(item)}`).join("; ")}`);
+      }
       const next = await selectionCenterApi.runSelection({ package_ids: packageIds, trade_date: tradeDate, data_source: dataSource, mode, runtime_config: runtimeConfig() });
       await hydrateRun(next);
       setRuns(await selectionCenterApi.listRuns(200));
@@ -275,7 +304,9 @@ export default function PaperV2SelectionPage() {
 
   const excludedFlat = Object.entries(excluded || {}).flatMap(([packageId, rows]) => rows.map((row) => ({ packageId, row: row as JsonObject })));
   const aggregateEnabled = !running && mode !== "single_package" && sourceRunIds.length >= 2;
+  const selectedPackageBlocked = selectedPackages.some((item) => !packageHealthRunnable(item));
   const resultRows = run?.aggregate_results || [];
+  const visibleResultRows = resultRows.slice(0, topK);
 
   return (
     <main>
@@ -332,7 +363,8 @@ export default function PaperV2SelectionPage() {
               </div>
             ) : null}
           </div>
-          <button className="pv2-button-primary" data-testid="selection-run" disabled={running} onClick={runSelection} type="button">{running ? "运行中..." : "运行选股"}</button>
+          <button className="pv2-button-primary" data-testid="selection-run" disabled={running || selectedPackageBlocked} onClick={runSelection} type="button">{running ? "运行中..." : "运行选股"}</button>
+          {selectedPackageBlocked ? <NoticePanel title="策略包健康预检阻断" tone="warning">当前选择包含 BLOCKED/LEGACY_NON_ST_PIT 策略包。请换用通过 ST PIT 合约的新包，或先重建/修复旧包。</NoticePanel> : null}
         </SectionCard>
 
         <SectionCard title="策略包选择器" eyebrow={`${selectedPackages.length} 个已选择`}>
@@ -340,9 +372,10 @@ export default function PaperV2SelectionPage() {
             rows={packages}
             empty="暂无可选 StrategyPackage。请先启用策略包选股。"
             columns={[
-              { key: "pick", header: "选择", render: (row) => <input data-testid={`selection-package-${row.package_id}`} type="checkbox" checked={Boolean(selected[row.package_id])} onChange={(event) => updatePackageSelection(row.package_id, event.target.checked)} /> },
+              { key: "pick", header: "选择", render: (row) => <input data-testid={`selection-package-${row.package_id}`} type="checkbox" checked={Boolean(selected[row.package_id])} disabled={!packageHealthRunnable(row)} onChange={(event) => updatePackageSelection(row.package_id, event.target.checked)} /> },
               { key: "name", header: "策略包", render: (row) => <><strong>{row.package_name}</strong><br /><span className="pv2-muted pv2-mono">{shortHash(row.package_id, 7)}</span></> },
               { key: "status", header: "状态", render: (row) => <StatusBadge status={row.package_status} /> },
+              { key: "health", header: "预检", render: (row) => <><StatusBadge status={packageHealthStatus(row)} /><br /><span className="pv2-muted">{packageHealthHint(row)}</span></> },
               { key: "annual", header: "年化", render: (row) => formatPercent(row.metrics_summary?.annual_return) },
               { key: "ic", header: "IC", render: (row) => formatPercent(row.metrics_summary?.ic) },
               { key: "model", header: "模型", render: (row) => <StatusBadge status={String(row.model_state?.staleness_status || "unknown")} /> },
@@ -362,7 +395,7 @@ export default function PaperV2SelectionPage() {
           <div className="pv2-field"><label>数据截止日</label><div className="pv2-chip">{asText((run?.runtime_config?.point_in_time_context as JsonObject | undefined)?.cutoff_date || pitContext?.cutoff_date)}</div></div>
         </div>
         <PaperTable
-          rows={resultRows}
+          rows={visibleResultRows}
           empty="运行选股或点击历史记录后查看排序候选股。"
           columns={[
             { key: "rank", header: "排名", render: (row) => row.rank },

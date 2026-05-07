@@ -17,10 +17,11 @@ from backend.services.selection_center.hmm_runtime import SectorHMMRuntime
 from backend.services.selection_center.industry_provider import IndustryInfo
 from backend.services.selection_center.models import SelectionMode, SelectionRunStatus
 from backend.services.selection_center.repository import InMemorySelectionCenterRepository
+from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.manifest import freeze_manifest
-from backend.services.strategy_package.models import PackageStatus, SourceType, StrategyPackageSource
+from backend.services.strategy_package.models import PackageStatus, PortfolioPolicy, SourceType, StrategyPackageSource
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime, TargetPositionEngine
 from backend.services.strategy_package.selection_artifact import (
@@ -70,6 +71,16 @@ class FakeIndustryLookup:
         if self.fail:
             raise DataUnavailableError("industry provider failed")
         return {symbol: self.industries[symbol] for symbol in symbols if symbol in self.industries}
+
+
+class RecordingRiskPolicyService(StockRiskPolicyService):
+    def __init__(self, decisions: dict[str, RiskDecision] | None = None) -> None:
+        self.decisions = decisions or {}
+        self.profile_seen = None
+
+    def evaluate(self, *, symbols, trade_date, profile, current_positions=None):  # type: ignore[override]
+        self.profile_seen = profile
+        return {symbol: self.decisions.get(symbol, RiskDecision(symbol=symbol)) for symbol in symbols}
 
 
 class FakeHMMSnapshotProvider:
@@ -166,6 +177,44 @@ def ready_manifest_with_score_rows(package_name: str, rows: list[dict]):
             "strategy_config": {
                 "strategy_id": package_name,
                 "selection_runtime": {"scores": rows},
+            },
+        }
+    )
+    frozen = freeze_manifest(manifest)
+    seed_test_authoritative_artifact(frozen, rows)
+    return frozen
+
+
+def st_pit_manifest_with_score_rows(
+    package_name: str,
+    rows: list[dict],
+    *,
+    topk: int = 2,
+    hmm_custom_params: dict | None = None,
+):
+    custom_params = {
+        "strategy_id": "score_weighted_topk_v2",
+        "topk": topk,
+        "n_drop": 1,
+        "risk_policy": {
+            "enabled": True,
+            "providers": ["st_pit"],
+            "st_universe_key": "shsz_st_pit_active_v1",
+            "hard_actions": ["block_buy", "force_exit"],
+            "strict_data_ready": True,
+        },
+    }
+    if hmm_custom_params:
+        custom_params.update(hmm_custom_params)
+    manifest = make_manifest().model_copy(
+        update={
+            "package_name": package_name,
+            "package_status": PackageStatus.SELECTION_ENABLED,
+            "portfolio_policy": PortfolioPolicy(topk=topk, n_drop=1),
+            "strategy_config": {
+                "strategy_id": "score_weighted_topk_v2",
+                "selection_runtime": {"scores": rows},
+                "custom_params": custom_params,
             },
         }
     )
@@ -586,6 +635,7 @@ def test_selection_center_pit_mode_resolves_previous_trading_day_and_passes_cuto
             "selection_artifact_config": {
                 "auto_generate": True,
                 "inference_backend": "local",
+                "include_reference_price": False,
                 "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
             },
             "runtime_profile": {"selection": {"top_k": 2}},
@@ -1025,7 +1075,230 @@ def test_selection_center_lists_selectable_packages_with_metrics_and_latest_run(
     assert packages[0]["metrics_summary"]["ic"] == pytest.approx(0.05)
     assert packages[0]["metrics_summary"]["rank_ic"] == pytest.approx(0.04)
     assert packages[0]["model_state"]["package_id"] == manifest.package_id
+    assert "selection_health" in packages[0]
     assert packages[0]["latest_selection_run"]["run_id"] == run.run_id
+
+
+def test_selection_center_authoritative_mode_inherits_backtest_risk_policy_and_uses_display_top_n() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = st_pit_manifest_with_score_rows(
+        "pkg_st_pit_contract",
+        [
+            {"symbol": "000001.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03, "reference_price": 10.0},
+            {"symbol": "000002.SZ", "score": 0.98, "rank": 2, "target_weight": 0.03, "reference_price": 10.0},
+        ],
+        topk=2,
+    )
+    package_repo.save_manifest(manifest)
+    risk_policy = RecordingRiskPolicyService(
+        {
+            "000001.SZ": RiskDecision(
+                symbol="000001.SZ",
+                can_buy=False,
+                reason_codes=["unit_st_pit_not_eligible"],
+            )
+        }
+    )
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        risk_policy_service=risk_policy,
+    )
+
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config={
+            "st_pit_authoritative": True,
+            "top_k": 1,
+            "runtime_profile": {"selection": {"top_k": 1}},
+        },
+    )
+
+    package_config = run.runtime_config["package_runtime_configs"][manifest.package_id]
+    assert package_config["display_top_n"] == 1
+    assert package_config["runtime_profile"]["selection"]["top_k"] == 2
+    assert package_config["runtime_profile"]["risk_policy"]["enabled"] is True
+    assert package_config["qe_backtest_runtime_contract"]["runtime_features"]["risk_policy"]["enabled"] is True
+    assert risk_policy.profile_seen is not None
+    assert risk_policy.profile_seen.enabled is True
+    assert [item.symbol for item in run.package_results[manifest.package_id]] == ["000002.SZ"]
+    assert run.excluded_results[manifest.package_id][0].reason == "risk_policy_block_buy"
+
+
+def test_selection_center_authoritative_mode_blocks_legacy_non_st_pit_package() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(
+            update={
+                "package_name": "pkg_legacy_contract",
+                "package_status": PackageStatus.SELECTION_ENABLED,
+                "strategy_config": {
+                    "strategy_id": "score_weighted_topk_v2",
+                    "custom_params": {"strategy_id": "score_weighted_topk_v2"},
+                },
+            }
+        )
+    )
+    package_repo.save_manifest(manifest)
+    seed_test_authoritative_artifact(
+        manifest,
+        [{"symbol": "000001.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03, "reference_price": 10.0}],
+    )
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    )
+
+    with pytest.raises(StrategyPackageValidationError, match="health preflight"):
+        service.run_single_package(
+            package_id=manifest.package_id,
+            trade_date=date(2024, 1, 2),
+            data_source="DB_HISTORICAL",
+            runtime_config={"st_pit_authoritative": True},
+        )
+
+
+def test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_inference(tmp_path) -> None:
+    model_path = tmp_path / "models.json"
+    model_path.write_text("{}", encoding="utf-8")
+    (tmp_path / "coefficients_preset_A_2024-01-01_2024-01-31.json").write_text(
+        json.dumps(
+            {
+                "preset_key": "preset_A",
+                "daily_coefficients": {"2024-01-02": {"801780.SI": 0.95}},
+                "stock_sector_map": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = st_pit_manifest_with_score_rows(
+        "pkg_st_pit_hmm_missing_map",
+        [{"symbol": "000001.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03, "reference_price": 10.0}],
+        hmm_custom_params={
+            "enable_sector_hmm": True,
+            "hmm_model_snapshot_id": "hmm_001",
+            "hmm_signal_preset": "preset_A",
+        },
+    )
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        runtime=StrategyPackageRuntime(
+            hmm_runtime=SectorHMMRuntime(
+                snapshot_provider=FakeHMMSnapshotProvider(
+                    {
+                        "hmm_001": {
+                            "snapshot_id": "hmm_001",
+                            "model_path": str(model_path),
+                            "status": "completed",
+                        }
+                    }
+                )
+            )
+        ),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    )
+
+    with pytest.raises(StrategyPackageValidationError, match="health preflight") as exc_info:
+        service.run_single_package(
+            package_id=manifest.package_id,
+            trade_date=date(2024, 1, 2),
+            data_source="DB_HISTORICAL",
+            runtime_config={
+                "st_pit_authoritative": True,
+                "runtime_profile": {
+                    "hmm": {
+                        "enabled": True,
+                        "model_snapshot_id": "hmm_001",
+                        "signal_preset": "preset_A",
+                    }
+                },
+            },
+        )
+
+    checks = exc_info.value.context["checks"]
+    hmm_check = next(item for item in checks if item["name"] == "hmm_artifact_status")
+    assert hmm_check["status"] == "BLOCKED"
+    assert "stock sector mapping" in hmm_check["message"]
+
+
+def test_selection_center_health_passes_hmm_artifact_preflight(tmp_path) -> None:
+    model_path = tmp_path / "models.json"
+    model_path.write_text("{}", encoding="utf-8")
+    (tmp_path / "coefficients_preset_A_2024-01-01_2024-01-31.json").write_text(
+        json.dumps(
+            {
+                "preset_key": "preset_A",
+                "daily_coefficients": {"2024-01-02": {"801780.SI": 0.95}},
+                "stock_sector_map": {"000001.SZ": "801780.SI"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = st_pit_manifest_with_score_rows(
+        "pkg_st_pit_hmm_preflight_ok",
+        [{"symbol": "000001.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03, "reference_price": 10.0}],
+        hmm_custom_params={
+            "enable_sector_hmm": True,
+            "hmm_model_snapshot_id": "hmm_001",
+            "hmm_signal_preset": "preset_A",
+        },
+    )
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        runtime=StrategyPackageRuntime(
+            hmm_runtime=SectorHMMRuntime(
+                snapshot_provider=FakeHMMSnapshotProvider(
+                    {
+                        "hmm_001": {
+                            "snapshot_id": "hmm_001",
+                            "model_path": str(model_path),
+                            "status": "completed",
+                        }
+                    }
+                )
+            )
+        ),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        risk_policy_service=RecordingRiskPolicyService(),
+    )
+
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config={
+            "st_pit_authoritative": True,
+            "runtime_profile": {
+                "hmm": {
+                    "enabled": True,
+                    "model_snapshot_id": "hmm_001",
+                    "signal_preset": "preset_A",
+                }
+            },
+        },
+    )
+
+    hmm_check = next(
+        item
+        for item in run.runtime_config["package_health"][manifest.package_id]["checks"]
+        if item["name"] == "hmm_artifact_status"
+    )
+    assert hmm_check["status"] == "PASS"
+    assert hmm_check["context"]["stock_sector_map_count"] == 1
 
 
 def test_selection_center_weighted_fusion_uses_rank_normalized_scores() -> None:

@@ -178,6 +178,102 @@ class SectorHMMRuntime:
         adjusted.sort(key=lambda item: (-item.score, item.component_scores.get("raw_rank", item.rank), item.symbol))
         return [item.model_copy(update={"rank": rank}) for rank, item in enumerate(adjusted, start=1)]
 
+    def preflight_coefficients(
+        self,
+        *,
+        trade_date: date,
+        profile: RuntimeHMMProfile,
+        package_id: str,
+    ) -> dict[str, Any]:
+        """Validate the HMM artifact shape before live selection inference starts."""
+
+        if not profile.enabled:
+            return {"enabled": False}
+        if not profile.model_snapshot_id:
+            raise StrategyPackageValidationError(
+                "HMM runtime profile requires model_snapshot_id when enabled",
+                context={"package_id": package_id, "runtime_profile": profile.model_dump(mode="json")},
+            )
+        if not profile.signal_preset:
+            raise StrategyPackageValidationError(
+                "HMM runtime profile requires signal_preset when enabled",
+                context={"package_id": package_id, "runtime_profile": profile.model_dump(mode="json")},
+            )
+
+        snapshot = self._load_snapshot(profile.model_snapshot_id)
+        status = str(snapshot.get("status") or "").strip().casefold()
+        if status not in self._READY_STATUSES:
+            raise DataUnavailableError(
+                "HMM snapshot is not ready",
+                context={
+                    "package_id": package_id,
+                    "snapshot_id": profile.model_snapshot_id,
+                    "snapshot_status": snapshot.get("status"),
+                },
+            )
+        model_path = _resolve_local_path(str(snapshot.get("model_path") or ""))
+        if model_path is None or not model_path.exists() or not model_path.is_file():
+            raise DataUnavailableError(
+                "HMM model artifact does not exist",
+                context={
+                    "package_id": package_id,
+                    "snapshot_id": profile.model_snapshot_id,
+                    "model_path": snapshot.get("model_path"),
+                },
+            )
+
+        artifact = self._load_coefficients(
+            model_path=model_path,
+            profile=profile,
+            trade_date=trade_date,
+            package_id=package_id,
+        )
+        daily_coefficients = artifact.payload.get("daily_coefficients")
+        stock_sector_map = artifact.payload.get("stock_sector_map")
+        if not isinstance(daily_coefficients, dict) or not isinstance(stock_sector_map, dict):
+            raise StrategyPackageValidationError(
+                "HMM coefficient artifact is missing required keys",
+                context={
+                    "package_id": package_id,
+                    "snapshot_id": profile.model_snapshot_id,
+                    "coefficients_path": str(artifact.path),
+                    "keys": sorted(str(key) for key in artifact.payload),
+                },
+            )
+        day_key = trade_date.isoformat()
+        day_coefficients = daily_coefficients.get(day_key)
+        if not isinstance(day_coefficients, dict):
+            raise DataUnavailableError(
+                "HMM coefficient artifact has no coefficients for trade_date",
+                context={
+                    "package_id": package_id,
+                    "snapshot_id": profile.model_snapshot_id,
+                    "trade_date": day_key,
+                    "coefficients_path": str(artifact.path),
+                },
+            )
+        if not stock_sector_map:
+            raise DataUnavailableError(
+                "HMM coefficient artifact is missing stock sector mapping",
+                context={
+                    "package_id": package_id,
+                    "snapshot_id": profile.model_snapshot_id,
+                    "trade_date": day_key,
+                    "coefficients_path": str(artifact.path),
+                },
+            )
+        return {
+            "enabled": True,
+            "snapshot_id": profile.model_snapshot_id,
+            "snapshot_status": snapshot.get("status"),
+            "signal_preset": profile.signal_preset,
+            "model_path": str(model_path),
+            "coefficients_path": str(artifact.path),
+            "trade_date": day_key,
+            "sector_count": len(day_coefficients),
+            "stock_sector_map_count": len(stock_sector_map),
+        }
+
     def _load_snapshot(self, snapshot_id: str) -> dict[str, Any]:
         provider = self._snapshot_provider
         if provider is None:
