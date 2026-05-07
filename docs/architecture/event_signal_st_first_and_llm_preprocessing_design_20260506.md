@@ -195,7 +195,7 @@ ST 标题信号不是孤立判断，应与 Tushare ST 事件源建立校验：
 ST-first 仍复用 `market.event_fact` 和 `market.event_signal`，新增规则版本建议：
 
 ```text
-announcement_st_title_rules_v1_20260506
+aistock_announcement_title_rules_v1_20260506
 unified_event_signal_rules_st_first_v1_20260506
 ```
 
@@ -213,7 +213,7 @@ unified_event_signal_rules_st_first_v1_20260506
     "pub_date": "2026-04-30",
     "imp_date": "2026-05-06"
   },
-  "rule_version": "announcement_st_title_rules_v1_20260506"
+  "rule_version": "aistock_announcement_title_rules_v1_20260506"
 }
 ```
 

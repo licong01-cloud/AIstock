@@ -18,7 +18,7 @@ from typing import Iterable, Mapping, Optional, Pattern, Sequence
 from zoneinfo import ZoneInfo
 
 
-RULE_VERSION = "aistock_announcement_title_rules_v0_20260505"
+RULE_VERSION = "aistock_announcement_title_rules_v1_20260506"
 ENGINE_NAME = "AnnouncementTitleClassifier"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -67,22 +67,84 @@ def rx(pattern: str) -> Pattern[str]:
 
 
 RULES: list[TitleRule] = [
+    # ST-first rules are ordered deliberately: bond-like delisting/repayment
+    # notices and removal/continuation cases must not fall through to stock
+    # hard-block rules just because the title also contains "摘牌" or "风险警示".
     TitleRule(
-        "risk_warning_removed",
+        "convertible_bond_delisting_or_redemption",
+        "P4_NEUTRAL",
+        "record_only",
+        "NO",
+        rx(
+            r"((可转债|转债|可转换公司债券).*(赎回|兑付|摘牌|停止交易|到期|回售|付息)"
+            r"|(赎回|兑付|摘牌|停止交易|到期|回售|付息).*(可转债|转债|可转换公司债券))"
+        ),
+        "Convertible-bond redemption, repayment, delisting, or similar bond-only notice; not a stock ST hard block.",
+    ),
+    TitleRule(
+        "generic_bond_delisting_or_repayment",
+        "P4_NEUTRAL",
+        "discard_or_archive",
+        "NO",
+        rx(
+            r"((公司债券|企业债券|债券持有人|债券简称|债券代码|中期票据|短期融资券|资产支持证券|ABS)"
+            r".*(本息兑付|兑付|付息|摘牌|回售|赎回|到期)"
+            r"|(本息兑付|兑付|付息|摘牌|回售|赎回|到期)"
+            r".*(公司债券|企业债券|债券持有人|债券简称|债券代码|中期票据|短期融资券|资产支持证券|ABS))"
+        ),
+        "Generic bond repayment, interest, put-back, redemption, or delisting notice; archive outside stock hard-risk rules.",
+    ),
+    TitleRule(
+        "stock_st_added_or_continued",
+        "P1_HIGH",
+        "warn_high",
+        "NO",
+        rx(r"(撤销部分.*(继续|仍将|仍被).*(风险警示)|继续(被)?实施.*风险警示|叠加实施.*风险警示|公司股票.*叠加.*风险警示)"),
+        "Stock risk warning is added, stacked, or continues after partial removal; high-risk but separated from first-time hard block.",
+    ),
+    TitleRule(
+        "stock_st_removal_applied",
+        "P2_REVIEW",
+        "warn_review",
+        "NO",
+        rx(r"((申请|拟申请).*(撤销|取消).*(退市风险警示|其他风险警示|风险警示|ST)|申请摘帽|申请.*摘帽|撤销.*风险警示.*进展)"),
+        "Application or progress for risk-warning removal; not confirmed removal and not a hard block.",
+    ),
+    TitleRule(
+        "stock_st_removed_confirmed",
         "P3_POSITIVE_CANDIDATE",
         "record_only",
         "NO",
         rx(r"(撤销|取消|申请撤销).*(退市风险警示|其他风险警示|风险警示)|摘帽|撤销.*ST"),
-        "Risk-warning removal candidate; do not treat as hard block.",
+        "Confirmed stock risk-warning removal candidate; do not treat as hard block.",
+        exclude=rx(r"(申请|拟申请|进展|部分|继续|仍将|仍被)"),
     ),
     TitleRule(
-        "delisting_or_risk_warning",
+        "stock_delisting_confirmed",
         "P0_BLOCK",
         "block_buy",
         "NO",
-        rx(r"(终止上市|强制退市|退市整理期|摘牌|可能被终止上市|退市风险警示|实施其他风险警示|被实施.*风险警示|公司股票.*ST|变更为\*?ST)"),
-        "Hard risk warning, ST, or delisting event.",
-        exclude=rx(r"(撤销|取消|申请撤销|摘帽)"),
+        rx(r"(终止上市|强制退市|退市整理期|股票.*摘牌|将被终止上市|股票.*将.*摘牌|收到.*终止上市.*决定|作出.*终止上市.*决定)"),
+        "Confirmed or near-confirmed stock delisting event.",
+        exclude=rx(r"(可转债|转债|可转换公司债券|公司债券|企业债券|债券持有人|中期票据|短期融资券|资产支持证券|ABS|撤销|取消|申请撤销|摘帽|可能|触及|风险提示)"),
+    ),
+    TitleRule(
+        "stock_delisting_risk_warning",
+        "P0_BLOCK",
+        "block_buy",
+        "NO",
+        rx(r"(可能被终止上市|触及.*终止上市|股票.*停牌.*可能被终止上市|股票.*终止上市.*风险提示|财务类终止上市情形)"),
+        "Stock may be delisted or has touched delisting conditions.",
+        exclude=rx(r"(可转债|转债|可转换公司债券|公司债券|企业债券|债券持有人|中期票据|短期融资券|资产支持证券|ABS|撤销|取消|申请撤销|摘帽)"),
+    ),
+    TitleRule(
+        "stock_st_imposed",
+        "P0_BLOCK",
+        "block_buy",
+        "NO",
+        rx(r"((被|将被|拟被|股票交易被|股票将被|股票被).*(实施|实行).*(退市风险警示|其他风险警示|风险警示)|实施退市风险警示|实施其他风险警示|证券简称.*(变更|变更为).*\*?ST|公司股票.*\*?ST)"),
+        "Stock is or will be subject to delisting risk warning, other risk warning, or ST name change.",
+        exclude=rx(r"(可转债|转债|可转换公司债券|公司债券|企业债券|债券持有人|中期票据|短期融资券|资产支持证券|ABS|撤销|取消|申请撤销|摘帽|继续|叠加)"),
     ),
     TitleRule(
         "bankruptcy_restructuring",
