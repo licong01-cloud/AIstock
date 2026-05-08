@@ -1,14 +1,21 @@
 import datetime as dt
 
+import pandas as pd
+
 from backend.services.event_signal.financial_distress_qe_overlay_research import (
     FIRST_BATCH_RULES,
     SIZE_BUCKET_RULES,
+    CandidateScore,
     _active_dates_for_signal,
     _fixed_width_table,
     _rule_applies,
+    build_score_down_ranking,
     build_overlay_frame,
+    expand_simulator_scenarios,
+    filter_research_rules_by_key,
     load_loop_specs,
     parse_loop_spec,
+    run_score_down_rerank_counterfactual,
     select_research_rules,
     summarize_multiloop_validations,
 )
@@ -70,6 +77,51 @@ def test_select_research_rules_can_run_size_bucket_only():
     assert [rule.rule_key for rule in rules] == [rule.rule_key for rule in SIZE_BUCKET_RULES]
 
 
+def test_filter_research_rules_by_key_keeps_requested_rule_only():
+    rules = filter_research_rules_by_key(
+        SIZE_BUCKET_RULES,
+        ["loss_to_market_cap_ge_50pct_mv_lt_10bn"],
+    )
+
+    assert [rule.rule_key for rule in rules] == ["loss_to_market_cap_ge_50pct_mv_lt_10bn"]
+
+
+def test_expand_simulator_scenarios_adds_score_down_penalty_modes():
+    scenarios = expand_simulator_scenarios(
+        simulator_modes=["score_down"],
+        score_down_rank_penalty_pcts=[5, 0.10],
+        score_down_top_k=50,
+        score_down_ranking_date_mode="previous",
+    )
+
+    assert [scenario.mode_key for scenario in scenarios] == [
+        "score_down_rank_5pct_top50_previous",
+        "score_down_rank_10pct_top50_previous",
+    ]
+    assert [scenario.rank_penalty_pct for scenario in scenarios] == [0.05, 0.10]
+
+
+def test_build_score_down_ranking_demotes_blocked_candidates_by_topk_pct():
+    candidates = [
+        CandidateScore("A", 0.9),
+        CandidateScore("BAD", 0.8),
+        CandidateScore("C", 0.7),
+        CandidateScore("D", 0.6),
+    ]
+
+    ranking = build_score_down_ranking(
+        candidates=candidates,
+        blocked_symbols={"BAD"},
+        rank_penalty_pct=0.50,
+        top_k=4,
+    )
+    by_symbol = {row.ts_code: row for row in ranking}
+
+    assert by_symbol["BAD"].original_rank == 2
+    assert by_symbol["BAD"].adjusted_rank == 4
+    assert [row.ts_code for row in ranking] == ["A", "C", "D", "BAD"]
+
+
 def test_active_dates_use_next_trading_day_and_requested_lifetime():
     trading_days = [
         dt.date(2024, 1, 2),
@@ -125,6 +177,62 @@ def test_build_overlay_frame_is_research_only_buy_filter_not_force_exit():
     assert overlay["force_exit"].tolist() == [False, False]
     assert overlay["active_signal_count"].tolist() == [1, 1]
     assert overlay["source_signal_ids"].tolist() == ["101", "101"]
+
+
+def test_score_down_rerank_counterfactual_replaces_dropped_topk_buy():
+    index = dt.datetime(2024, 1, 2), dt.datetime(2024, 1, 3), dt.datetime(2024, 1, 4)
+    report = pd.DataFrame(
+        {
+            "account": [100.0, 100.0, 90.0],
+            "return": [0.0, 0.0, -0.10],
+            "cash": [100.0, 0.0, 0.0],
+        },
+        index=index,
+    )
+    positions = {
+        dt.date(2024, 1, 2): {},
+        dt.date(2024, 1, 3): {"BAD": {"amount": 1.0, "price": 100.0, "weight": 1.0}},
+        dt.date(2024, 1, 4): {"BAD": {"amount": 1.0, "price": 90.0, "weight": 1.0}},
+    }
+    overlay = pd.DataFrame(
+        [
+            {"trade_date": dt.date(2024, 1, 3), "ts_code": "BAD", "can_buy": False, "force_exit": False},
+            {"trade_date": dt.date(2024, 1, 4), "ts_code": "BAD", "can_buy": False, "force_exit": False},
+        ]
+    )
+    candidate_scores = {
+        dt.date(2024, 1, 2): [
+            CandidateScore("A", 0.9),
+            CandidateScore("B", 0.8),
+            CandidateScore("BAD", 0.7),
+            CandidateScore("GOOD", 0.6),
+        ],
+        dt.date(2024, 1, 3): [
+            CandidateScore("A", 0.9),
+            CandidateScore("B", 0.8),
+            CandidateScore("BAD", 0.7),
+            CandidateScore("GOOD", 0.6),
+        ],
+    }
+
+    account, stats = run_score_down_rerank_counterfactual(
+        positions=positions,
+        report=report,
+        overlay=overlay,
+        candidate_scores=candidate_scores,
+        price_returns={dt.date(2024, 1, 4): {"GOOD": 0.20}},
+        date_from=dt.date(2024, 1, 2),
+        date_to=dt.date(2024, 1, 4),
+        rank_penalty_pct=0.50,
+        top_k=3,
+        ranking_date_mode="previous",
+    )
+
+    assert round(float(account.iloc[-1]), 6) == 120.0
+    assert stats["score_down_evaluated_topk_buy_events"] == 1
+    assert stats["score_down_dropped_from_topk_events"] == 1
+    assert stats["replacement_open_events"] == 1
+    assert stats["sample_replacement_events"][0]["replacement_symbol"] == "GOOD"
 
 
 def test_fixed_width_table_has_outer_and_inner_borders():

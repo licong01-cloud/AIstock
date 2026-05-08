@@ -55,10 +55,15 @@ DEFAULT_EXPERIMENT_ID = "qe_20260507_132049_d4e7"
 DEFAULT_LOOP_ID = "Loop1"
 DEFAULT_ACTIVE_TRADING_DAYS = (60, 120, 242)
 DEFAULT_SIMULATOR_MODES = ("cash", "next_candidate")
-SIMULATOR_VERSION = "financial_distress_qe_overlay_research_v1_20260508"
+SIMULATOR_VERSION = "financial_distress_qe_overlay_research_v2_20260508_score_down"
 GE50_LOSS_BUCKETS = {"loss_50pct_to_100pct_mv", "loss_ge_100pct_mv"}
 SMALL_MARKET_CAP_BUCKETS = {"mv_lt_5bn_yuan", "mv_5bn_to_10bn_yuan"}
 MID_LARGE_MARKET_CAP_BUCKETS = {"mv_10bn_to_30bn_yuan", "mv_30bn_to_100bn_yuan", "mv_ge_100bn_yuan"}
+DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS = (0.05, 0.10, 0.20, 0.50)
+DEFAULT_SCORE_DOWN_TOP_K = 50
+DEFAULT_SCORE_DOWN_RANKING_DATE_MODE = "previous"
+SCORE_DOWN_BASE_MODE = "score_down"
+CANDIDATE_REQUIRED_BASE_MODES = {"next_candidate", SCORE_DOWN_BASE_MODE}
 
 
 @dataclass(frozen=True)
@@ -88,6 +93,38 @@ class QELoopSpec:
     experiment_id: str
     loop_id: str
     loop_path: str
+
+
+@dataclass(frozen=True)
+class SimulatorScenario:
+    mode_key: str
+    base_mode: str
+    rank_penalty_pct: Optional[float] = None
+    top_k: Optional[int] = None
+    ranking_date_mode: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class RankedCandidate:
+    ts_code: str
+    score: float
+    original_rank: int
+    adjusted_sort_rank: int
+    adjusted_rank: int
+    penalized: bool
+
+
+@dataclass(frozen=True)
+class ScoreDownReplacementSlot:
+    original_symbol: str
+    replacement_symbol: str
+    opened_trade_date: dt.date
+    opened_reason: str
+    original_rank: int
+    adjusted_rank: int
+    replacement_original_rank: int
+    replacement_adjusted_rank: int
+    score: float
 
 
 @dataclass(frozen=True)
@@ -215,10 +252,65 @@ def _pct(value: Any) -> str:
     return f"{float(value) * 100:.2f}%"
 
 
+def _pct_label(value: float) -> str:
+    pct_value = value * 100.0
+    if abs(pct_value - round(pct_value)) < 1e-9:
+        return f"{int(round(pct_value))}pct"
+    return f"{pct_value:.2f}".rstrip("0").rstrip(".").replace(".", "p") + "pct"
+
+
+def normalize_penalty_pct(value: float) -> float:
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized <= 0:
+        raise ValueError("score-down penalty pct must be positive")
+    if normalized > 1.0:
+        normalized = normalized / 100.0
+    if normalized > 1.0:
+        raise ValueError("score-down penalty pct must be <= 1.0 or <= 100")
+    return normalized
+
+
 def _money(value: Any) -> str:
     if value is None or (isinstance(value, float) and not math.isfinite(value)):
         return "NA"
     return f"{float(value):,.2f}"
+
+
+def expand_simulator_scenarios(
+    *,
+    simulator_modes: Sequence[str],
+    score_down_rank_penalty_pcts: Sequence[float] = DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS,
+    score_down_top_k: int = DEFAULT_SCORE_DOWN_TOP_K,
+    score_down_ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
+) -> tuple[SimulatorScenario, ...]:
+    if score_down_top_k <= 0:
+        raise ValueError("score_down_top_k must be positive")
+    if score_down_ranking_date_mode not in {"current", "previous"}:
+        raise ValueError("score_down_ranking_date_mode must be current or previous")
+
+    scenarios: list[SimulatorScenario] = []
+    for mode in simulator_modes:
+        if mode in {"cash", "next_candidate"}:
+            scenarios.append(SimulatorScenario(mode_key=mode, base_mode=mode))
+            continue
+        if mode == SCORE_DOWN_BASE_MODE:
+            for raw_pct in score_down_rank_penalty_pcts:
+                pct_value = normalize_penalty_pct(raw_pct)
+                scenarios.append(
+                    SimulatorScenario(
+                        mode_key=(
+                            f"score_down_rank_{_pct_label(pct_value)}"
+                            f"_top{score_down_top_k}_{score_down_ranking_date_mode}"
+                        ),
+                        base_mode=SCORE_DOWN_BASE_MODE,
+                        rank_penalty_pct=pct_value,
+                        top_k=score_down_top_k,
+                        ranking_date_mode=score_down_ranking_date_mode,
+                    )
+                )
+            continue
+        raise ValueError(f"unsupported simulator mode: {mode}")
+    return tuple(scenarios)
 
 
 def _metric_delta(baseline: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str, float]:
@@ -244,6 +336,22 @@ def select_research_rules(
     if not rules:
         raise ValueError("at least one research rule set must be enabled")
     return tuple(sorted(rules, key=lambda item: item.priority))
+
+
+def filter_research_rules_by_key(
+    rules: Sequence[FinancialDistressRule],
+    rule_keys: Optional[Sequence[str]],
+) -> tuple[FinancialDistressRule, ...]:
+    if not rule_keys:
+        return tuple(rules)
+    requested = set(rule_keys)
+    selected = tuple(rule for rule in rules if rule.rule_key in requested)
+    missing = requested.difference(rule.rule_key for rule in selected)
+    if missing:
+        raise ValueError(f"unknown research rule_key values: {sorted(missing)}")
+    if not selected:
+        raise ValueError("at least one research rule must remain after --rule-key filtering")
+    return selected
 
 
 def _max_drawdown(account: pd.Series) -> float:
@@ -545,9 +653,468 @@ def _load_or_fetch_price_returns(
     return fetch_price_returns_from_db(symbols=candidate_symbols, date_from=date_from, date_to=date_to)
 
 
+def _overlay_by_date(overlay_window: pd.DataFrame) -> dict[dt.date, dict[str, dict[str, Any]]]:
+    overlay_by_date: dict[dt.date, dict[str, dict[str, Any]]] = {}
+    for row in overlay_window.to_dict("records"):
+        overlay_by_date.setdefault(row["trade_date"], {})[str(row["ts_code"])] = row
+    return overlay_by_date
+
+
+def _blocked_symbols(current_overlay: Mapping[str, Mapping[str, Any]]) -> set[str]:
+    return {
+        symbol
+        for symbol, row in current_overlay.items()
+        if (not bool(row.get("can_buy", True))) or bool(row.get("force_exit", False))
+    }
+
+
+def build_score_down_ranking(
+    *,
+    candidates: Sequence[CandidateScore],
+    blocked_symbols: set[str],
+    rank_penalty_pct: float,
+    top_k: int,
+) -> list[RankedCandidate]:
+    """Demote active-risk candidates by a TopK-relative rank penalty."""
+
+    if top_k <= 0:
+        raise ValueError("top_k must be positive")
+    pct_value = normalize_penalty_pct(rank_penalty_pct)
+    penalty_ranks = max(1, int(math.ceil(top_k * pct_value)))
+    draft: list[dict[str, Any]] = []
+    for original_rank, candidate in enumerate(candidates, start=1):
+        penalized = candidate.ts_code in blocked_symbols
+        draft.append(
+            {
+                "candidate": candidate,
+                "original_rank": original_rank,
+                "adjusted_sort_rank": original_rank + penalty_ranks if penalized else original_rank,
+                "penalized": penalized,
+            }
+        )
+    draft.sort(key=lambda row: (int(row["adjusted_sort_rank"]), 1 if bool(row["penalized"]) else 0, int(row["original_rank"])))
+    ranked: list[RankedCandidate] = []
+    for adjusted_rank, row in enumerate(draft, start=1):
+        candidate = row["candidate"]
+        ranked.append(
+            RankedCandidate(
+                ts_code=candidate.ts_code,
+                score=candidate.score,
+                original_rank=int(row["original_rank"]),
+                adjusted_sort_rank=int(row["adjusted_sort_rank"]),
+                adjusted_rank=adjusted_rank,
+                penalized=bool(row["penalized"]),
+            )
+        )
+    return ranked
+
+
+def _price_return_available(
+    *,
+    symbol: str,
+    required_return_dates: Sequence[dt.date],
+    price_returns: Mapping[dt.date, Mapping[str, float]],
+) -> bool:
+    if not required_return_dates:
+        return False
+    return all(symbol in price_returns.get(return_date, {}) for return_date in required_return_dates)
+
+
+def run_score_down_rerank_counterfactual(
+    *,
+    positions: dict[dt.date, dict[str, dict[str, float]]],
+    report: pd.DataFrame,
+    overlay: pd.DataFrame,
+    candidate_scores: dict[dt.date, list[CandidateScore]],
+    price_returns: dict[dt.date, dict[str, float]],
+    date_from: dt.date,
+    date_to: dt.date,
+    rank_penalty_pct: float,
+    top_k: int = DEFAULT_SCORE_DOWN_TOP_K,
+    ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
+) -> tuple[pd.Series, dict[str, Any]]:
+    """Approximate a score-down overlay by demoting risky names before TopK selection.
+
+    This is still offline research: it only edits the daily return stream from
+    persisted QE artifacts. It does not reproduce every strategy turnover rule.
+    """
+
+    if ranking_date_mode not in {"current", "previous"}:
+        raise ValueError("ranking_date_mode must be current or previous")
+    pct_value = normalize_penalty_pct(rank_penalty_pct)
+    penalty_ranks = max(1, int(math.ceil(top_k * pct_value)))
+    report_window = report[(report.index.date >= date_from) & (report.index.date <= date_to)].copy()
+    if report_window.empty:
+        raise ValueError("report has no rows in requested date window")
+
+    overlay_window = overlay[(overlay["trade_date"] >= date_from) & (overlay["trade_date"] <= date_to)].copy()
+    overlay_by_date = _overlay_by_date(overlay_window)
+
+    adjusted_returns: list[float] = []
+    adjusted_account: list[float] = []
+    account_prev = float(report_window["account"].iloc[0])
+    adjusted_account.append(account_prev)
+    adjusted_returns.append(0.0)
+
+    dates = [_date_key(value) for value in report_window.index]
+    blocked_active: set[str] = set()
+    replacement_slots: dict[str, ScoreDownReplacementSlot] = {}
+    buy_hits: list[dict[str, Any]] = []
+    force_exit_hits: list[dict[str, Any]] = []
+    score_down_events: list[dict[str, Any]] = []
+    replacement_events: list[dict[str, Any]] = []
+    replacement_pnl: dict[str, float] = {}
+    original_pnl_removed: dict[str, float] = {}
+    blocked_symbol_days: dict[str, int] = {}
+    evaluated_topk_buy_events = 0
+    dropped_from_topk_events = 0
+    still_in_topk_events = 0
+    candidate_missing_events = 0
+    original_rank_outside_topk_events = 0
+    no_replacement_events = 0
+    replacement_missing_return_days = 0
+    replacement_reselect_events = 0
+    original_ranks: list[float] = []
+    adjusted_ranks: list[float] = []
+    rank_drops: list[float] = []
+    replacement_original_ranks: list[float] = []
+    replacement_adjusted_ranks: list[float] = []
+    replacement_rank_gaps: list[float] = []
+
+    def open_replacement(
+        *,
+        original_symbol: str,
+        trade_date: dt.date,
+        reason: str,
+        required_return_dates: list[dt.date],
+        prev_symbols: set[str],
+        current_symbols: set[str],
+        current_blocked: set[str],
+        original_rank: int,
+        adjusted_rank: int,
+        adjusted_topk: Sequence[RankedCandidate],
+        original_topk_symbols: set[str],
+    ) -> None:
+        nonlocal no_replacement_events
+        active_replacements = {slot.replacement_symbol for slot in replacement_slots.values()}
+        excluded = set(prev_symbols) | set(current_symbols) | set(blocked_active) | active_replacements | {original_symbol}
+        for candidate in adjusted_topk:
+            symbol = candidate.ts_code
+            if symbol in original_topk_symbols:
+                continue
+            if symbol in excluded or symbol in current_blocked:
+                continue
+            if not _price_return_available(
+                symbol=symbol,
+                required_return_dates=required_return_dates,
+                price_returns=price_returns,
+            ):
+                continue
+            replacement_slots[original_symbol] = ScoreDownReplacementSlot(
+                original_symbol=original_symbol,
+                replacement_symbol=symbol,
+                opened_trade_date=trade_date,
+                opened_reason=reason,
+                original_rank=original_rank,
+                adjusted_rank=adjusted_rank,
+                replacement_original_rank=candidate.original_rank,
+                replacement_adjusted_rank=candidate.adjusted_rank,
+                score=candidate.score,
+            )
+            replacement_original_ranks.append(float(candidate.original_rank))
+            replacement_adjusted_ranks.append(float(candidate.adjusted_rank))
+            replacement_rank_gaps.append(float(candidate.original_rank - original_rank))
+            replacement_events.append(
+                {
+                    "trade_date": trade_date.isoformat(),
+                    "original_symbol": original_symbol,
+                    "replacement_symbol": symbol,
+                    "reason": reason,
+                    "status": "opened",
+                    "original_rank": original_rank,
+                    "adjusted_rank": adjusted_rank,
+                    "replacement_original_rank": candidate.original_rank,
+                    "replacement_adjusted_rank": candidate.adjusted_rank,
+                    "score": candidate.score,
+                }
+            )
+            return
+        replacement_slots.pop(original_symbol, None)
+        no_replacement_events += 1
+        replacement_events.append(
+            {
+                "trade_date": trade_date.isoformat(),
+                "original_symbol": original_symbol,
+                "replacement_symbol": None,
+                "reason": reason,
+                "status": "no_candidate",
+                "original_rank": original_rank,
+                "adjusted_rank": adjusted_rank,
+            }
+        )
+
+    prev_date: Optional[dt.date] = None
+    for i, current_date in enumerate(dates):
+        if i == 0:
+            prev_date = current_date
+            continue
+        next_date = dates[i + 1] if i + 1 < len(dates) else None
+        rank_date = current_date if ranking_date_mode == "current" else (prev_date or current_date)
+        prev_positions = positions.get(prev_date or current_date, {})
+        current_positions = positions.get(current_date, {})
+        prev_symbols = set(prev_positions)
+        current_symbols = set(current_positions)
+        current_overlay = overlay_by_date.get(current_date, {})
+        current_blocked = _blocked_symbols(current_overlay)
+        force_exit_symbols = {symbol for symbol, row in current_overlay.items() if bool(row.get("force_exit", False))}
+        ranking_cache: Optional[tuple[dict[str, RankedCandidate], set[str], list[RankedCandidate]]] = None
+
+        def ensure_ranking() -> tuple[dict[str, RankedCandidate], set[str], list[RankedCandidate]]:
+            nonlocal ranking_cache
+            if ranking_cache is None:
+                ranking = build_score_down_ranking(
+                    candidates=candidate_scores.get(rank_date, []),
+                    blocked_symbols=current_blocked,
+                    rank_penalty_pct=pct_value,
+                    top_k=top_k,
+                )
+                ranking_cache = (
+                    {row.ts_code: row for row in ranking},
+                    {row.ts_code for row in ranking if row.original_rank <= top_k},
+                    [row for row in ranking if row.adjusted_rank <= top_k],
+                )
+            return ranking_cache
+
+        for original_symbol, slot in list(replacement_slots.items()):
+            invalid_reason: Optional[str] = None
+            if slot.replacement_symbol in current_blocked:
+                invalid_reason = "replacement_blocked"
+            elif slot.replacement_symbol in prev_symbols or slot.replacement_symbol in current_symbols:
+                invalid_reason = "replacement_overlaps_baseline"
+            if invalid_reason and original_symbol in blocked_active:
+                _, original_topk_symbols, adjusted_topk = ensure_ranking()
+                replacement_slots.pop(original_symbol, None)
+                replacement_reselect_events += 1
+                open_replacement(
+                    original_symbol=original_symbol,
+                    trade_date=current_date,
+                    reason=invalid_reason,
+                    required_return_dates=[current_date],
+                    prev_symbols=prev_symbols,
+                    current_symbols=current_symbols,
+                    current_blocked=current_blocked,
+                    original_rank=slot.original_rank,
+                    adjusted_rank=slot.adjusted_rank,
+                    adjusted_topk=adjusted_topk,
+                    original_topk_symbols=original_topk_symbols,
+                )
+
+        for symbol in sorted((current_symbols - prev_symbols) & current_blocked):
+            rank_by_symbol, original_topk_symbols, adjusted_topk = ensure_ranking()
+            action = current_overlay[symbol].get("primary_action")
+            buy_hits.append(
+                {
+                    "trade_date": current_date.isoformat(),
+                    "rank_date": rank_date.isoformat(),
+                    "ts_code": symbol,
+                    "action": action,
+                }
+            )
+            rank_row = rank_by_symbol.get(symbol)
+            if rank_row is None:
+                candidate_missing_events += 1
+                score_down_events.append(
+                    {
+                        "trade_date": current_date.isoformat(),
+                        "rank_date": rank_date.isoformat(),
+                        "ts_code": symbol,
+                        "status": "candidate_missing",
+                    }
+                )
+                continue
+            original_ranks.append(float(rank_row.original_rank))
+            adjusted_ranks.append(float(rank_row.adjusted_rank))
+            rank_drops.append(float(rank_row.adjusted_rank - rank_row.original_rank))
+            if rank_row.original_rank > top_k:
+                original_rank_outside_topk_events += 1
+                score_down_events.append(
+                    {
+                        "trade_date": current_date.isoformat(),
+                        "rank_date": rank_date.isoformat(),
+                        "ts_code": symbol,
+                        "status": "original_rank_outside_topk",
+                        "original_rank": rank_row.original_rank,
+                        "adjusted_rank": rank_row.adjusted_rank,
+                    }
+                )
+                continue
+            evaluated_topk_buy_events += 1
+            if rank_row.adjusted_rank <= top_k:
+                still_in_topk_events += 1
+                score_down_events.append(
+                    {
+                        "trade_date": current_date.isoformat(),
+                        "rank_date": rank_date.isoformat(),
+                        "ts_code": symbol,
+                        "status": "still_in_topk",
+                        "original_rank": rank_row.original_rank,
+                        "adjusted_rank": rank_row.adjusted_rank,
+                    }
+                )
+                continue
+            dropped_from_topk_events += 1
+            blocked_active.add(symbol)
+            score_down_events.append(
+                {
+                    "trade_date": current_date.isoformat(),
+                    "rank_date": rank_date.isoformat(),
+                    "ts_code": symbol,
+                    "status": "dropped_from_topk",
+                    "original_rank": rank_row.original_rank,
+                    "adjusted_rank": rank_row.adjusted_rank,
+                }
+            )
+            open_replacement(
+                original_symbol=symbol,
+                trade_date=current_date,
+                reason="score_down_dropped_from_topk",
+                required_return_dates=[next_date] if next_date is not None else [],
+                prev_symbols=prev_symbols,
+                current_symbols=current_symbols,
+                current_blocked=current_blocked,
+                original_rank=rank_row.original_rank,
+                adjusted_rank=rank_row.adjusted_rank,
+                adjusted_topk=adjusted_topk,
+                original_topk_symbols=original_topk_symbols,
+            )
+
+        for symbol in sorted(prev_symbols & force_exit_symbols):
+            rank_by_symbol, original_topk_symbols, adjusted_topk = ensure_ranking()
+            action = current_overlay[symbol].get("primary_action")
+            force_exit_hits.append({"trade_date": current_date.isoformat(), "ts_code": symbol, "action": action})
+            blocked_active.add(symbol)
+            rank_row = rank_by_symbol.get(symbol)
+            open_replacement(
+                original_symbol=symbol,
+                trade_date=current_date,
+                reason="force_exit",
+                required_return_dates=[current_date],
+                prev_symbols=prev_symbols,
+                current_symbols=current_symbols,
+                current_blocked=current_blocked,
+                original_rank=rank_row.original_rank if rank_row else 0,
+                adjusted_rank=rank_row.adjusted_rank if rank_row else 0,
+                adjusted_topk=adjusted_topk,
+                original_topk_symbols=original_topk_symbols,
+            )
+
+        blocked_active.intersection_update(current_symbols | prev_symbols)
+        original_contribution = 0.0
+        replacement_contribution = 0.0
+        for symbol in sorted(blocked_active & prev_symbols & current_symbols):
+            prev_price = prev_positions[symbol]["price"]
+            current_price = current_positions[symbol]["price"]
+            if prev_price <= 0 or current_price <= 0:
+                continue
+            symbol_return = current_price / prev_price - 1.0
+            prev_weight = prev_positions[symbol]["weight"]
+            symbol_contribution = prev_weight * symbol_return
+            original_contribution += symbol_contribution
+            original_pnl_removed[symbol] = original_pnl_removed.get(symbol, 0.0) + account_prev * symbol_contribution
+            blocked_symbol_days[symbol] = blocked_symbol_days.get(symbol, 0) + 1
+
+            slot = replacement_slots.get(symbol)
+            if slot is None:
+                continue
+            replacement_return = price_returns.get(current_date, {}).get(slot.replacement_symbol)
+            if replacement_return is None:
+                replacement_missing_return_days += 1
+                continue
+            replacement_symbol_contribution = prev_weight * replacement_return
+            replacement_contribution += replacement_symbol_contribution
+            replacement_pnl[slot.replacement_symbol] = (
+                replacement_pnl.get(slot.replacement_symbol, 0.0) + account_prev * replacement_symbol_contribution
+            )
+
+        base_return = float(report_window["return"].iloc[i])
+        adjusted_return = max(base_return - original_contribution + replacement_contribution, -0.999)
+        account_prev = account_prev * (1.0 + adjusted_return)
+        adjusted_account.append(account_prev)
+        adjusted_returns.append(adjusted_return)
+
+        for symbol in list(blocked_active):
+            if symbol not in current_symbols:
+                blocked_active.remove(symbol)
+                replacement_slots.pop(symbol, None)
+        prev_date = current_date
+
+    account = pd.Series(adjusted_account, index=report_window.index, name="overlay_score_down_account")
+    replacement_profit_count = sum(1 for value in replacement_pnl.values() if value > 0)
+    replacement_loss_count = sum(1 for value in replacement_pnl.values() if value < 0)
+    original_positive = sum(1 for value in original_pnl_removed.values() if value > 0)
+    original_negative = sum(1 for value in original_pnl_removed.values() if value < 0)
+    hit_stats = {
+        "overlay_rows": int(len(overlay_window)),
+        "overlay_symbols": int(overlay_window["ts_code"].nunique()) if not overlay_window.empty else 0,
+        "candidate_score_dates": len(candidate_scores),
+        "candidate_score_symbols": len({score.ts_code for scores in candidate_scores.values() for score in scores}),
+        "price_return_dates": len(price_returns),
+        "price_return_symbols": len({symbol for values in price_returns.values() for symbol in values}),
+        "score_down_rank_penalty_pct": pct_value,
+        "score_down_penalty_ranks": penalty_ranks,
+        "score_down_top_k": top_k,
+        "score_down_ranking_date_mode": ranking_date_mode,
+        "blocked_buy_events": len(buy_hits),
+        "force_exit_events": len(force_exit_hits),
+        "unique_buy_hit_symbols": len({row["ts_code"] for row in buy_hits}),
+        "unique_force_exit_symbols": len({row["ts_code"] for row in force_exit_hits}),
+        "score_down_evaluated_topk_buy_events": evaluated_topk_buy_events,
+        "score_down_dropped_from_topk_events": dropped_from_topk_events,
+        "score_down_still_in_topk_events": still_in_topk_events,
+        "score_down_candidate_missing_events": candidate_missing_events,
+        "score_down_original_rank_outside_topk_events": original_rank_outside_topk_events,
+        "replacement_open_events": sum(1 for row in replacement_events if row["status"] == "opened"),
+        "replacement_no_candidate_events": no_replacement_events,
+        "replacement_reselect_events": replacement_reselect_events,
+        "replacement_missing_return_days": replacement_missing_return_days,
+        "avg_original_rank_before_penalty": _mean(original_ranks),
+        "avg_adjusted_rank_after_penalty": _mean(adjusted_ranks),
+        "avg_rank_drop": _mean(rank_drops),
+        "avg_replacement_original_rank": _mean(replacement_original_ranks),
+        "avg_replacement_adjusted_rank": _mean(replacement_adjusted_ranks),
+        "avg_replacement_rank_gap": _mean(replacement_rank_gaps),
+        "original_contribution_removed_sum": float(sum(original_pnl_removed.values())),
+        "replacement_pnl_sum": float(sum(replacement_pnl.values())),
+        "net_replacement_vs_cash_pnl": float(sum(replacement_pnl.values())),
+        "original_removed_positive_count": original_positive,
+        "original_removed_negative_count": original_negative,
+        "replacement_profit_symbol_count": replacement_profit_count,
+        "replacement_loss_symbol_count": replacement_loss_count,
+        "top_replacement_profit_symbols": [
+            {"ts_code": k, "pnl": v} for k, v in sorted(replacement_pnl.items(), key=lambda item: item[1], reverse=True)[:20]
+        ],
+        "top_replacement_loss_symbols": [
+            {"ts_code": k, "pnl": v} for k, v in sorted(replacement_pnl.items(), key=lambda item: item[1])[:20]
+        ],
+        "top_original_removed_profit_symbols": [
+            {"ts_code": k, "pnl": v, "days": blocked_symbol_days.get(k, 0)}
+            for k, v in sorted(original_pnl_removed.items(), key=lambda item: item[1], reverse=True)[:20]
+        ],
+        "top_original_removed_loss_symbols": [
+            {"ts_code": k, "pnl": v, "days": blocked_symbol_days.get(k, 0)}
+            for k, v in sorted(original_pnl_removed.items(), key=lambda item: item[1])[:20]
+        ],
+        "sample_buy_hits": buy_hits[:50],
+        "sample_force_exit_hits": force_exit_hits[:50],
+        "sample_score_down_events": score_down_events[:100],
+        "sample_replacement_events": replacement_events[:100],
+    }
+    return account, hit_stats
+
+
 def _run_one_mode(
     *,
-    simulator_mode: str,
+    simulator_scenario: SimulatorScenario,
     positions: dict[dt.date, dict[str, dict[str, float]]],
     report: pd.DataFrame,
     overlay: pd.DataFrame,
@@ -558,6 +1125,7 @@ def _run_one_mode(
 ) -> tuple[pd.Series, dict[str, Any]]:
     overlay_for_validator = overlay.copy()
     overlay_for_validator["trade_date"] = pd.to_datetime(overlay_for_validator["trade_date"]).dt.date
+    simulator_mode = simulator_scenario.base_mode
     if simulator_mode == "cash":
         return run_cash_counterfactual(
             positions=positions,
@@ -578,6 +1146,23 @@ def _run_one_mode(
             date_from=date_from,
             date_to=date_to,
         )
+    if simulator_mode == SCORE_DOWN_BASE_MODE:
+        if candidate_scores is None or price_returns is None:
+            raise ValueError("score_down mode requires candidate_scores and price_returns")
+        if simulator_scenario.rank_penalty_pct is None or simulator_scenario.top_k is None:
+            raise ValueError("score_down scenario missing rank_penalty_pct/top_k")
+        return run_score_down_rerank_counterfactual(
+            positions=positions,
+            report=report,
+            overlay=overlay_for_validator,
+            candidate_scores=candidate_scores,
+            price_returns=price_returns,
+            date_from=date_from,
+            date_to=date_to,
+            rank_penalty_pct=simulator_scenario.rank_penalty_pct,
+            top_k=simulator_scenario.top_k,
+            ranking_date_mode=simulator_scenario.ranking_date_mode or DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
+        )
     raise ValueError(f"unsupported simulator mode: {simulator_mode}")
 
 
@@ -591,6 +1176,9 @@ def run_financial_distress_qe_overlay_research(
     date_to: Optional[dt.date],
     active_trading_days_values: Sequence[int] = DEFAULT_ACTIVE_TRADING_DAYS,
     simulator_modes: Sequence[str] = DEFAULT_SIMULATOR_MODES,
+    score_down_rank_penalty_pcts: Sequence[float] = DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS,
+    score_down_top_k: int = DEFAULT_SCORE_DOWN_TOP_K,
+    score_down_ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
     price_return_csv: Optional[Path] = None,
     prediction_pkl: Optional[Path] = None,
     financial_rule_version: str = FINANCIAL_RULE_VERSION,
@@ -613,6 +1201,12 @@ def run_financial_distress_qe_overlay_research(
     if report_window.empty:
         raise ValueError("QE report has no rows in requested date window")
 
+    simulator_scenarios = expand_simulator_scenarios(
+        simulator_modes=simulator_modes,
+        score_down_rank_penalty_pcts=score_down_rank_penalty_pcts,
+        score_down_top_k=score_down_top_k,
+        score_down_ranking_date_mode=score_down_ranking_date_mode,
+    )
     max_active_days = max(active_trading_days_values)
     if financial_rows_override is not None and trading_days_override is not None:
         financial_rows = [dict(row) for row in financial_rows_override]
@@ -632,7 +1226,7 @@ def run_financial_distress_qe_overlay_research(
     candidate_scores: Optional[dict[dt.date, list[CandidateScore]]] = None
     price_returns: Optional[dict[dt.date, dict[str, float]]] = None
     pred_path_for_snapshot: Optional[Path] = None
-    if "next_candidate" in simulator_modes:
+    if any(scenario.base_mode in CANDIDATE_REQUIRED_BASE_MODES for scenario in simulator_scenarios):
         root_artifact_dir = find_loop_artifact_dir(loop_path)
         pred_path_for_snapshot = prediction_pkl or (root_artifact_dir / "pred.pkl")
         candidate_scores = load_prediction_scores(pred_path_for_snapshot)
@@ -674,9 +1268,9 @@ def run_financial_distress_qe_overlay_research(
                     **_overlay_hit_distribution(overlay),
                 }
             )
-            for simulator_mode in simulator_modes:
+            for simulator_scenario in simulator_scenarios:
                 overlay_account, hit_stats = _run_one_mode(
-                    simulator_mode=simulator_mode,
+                    simulator_scenario=simulator_scenario,
                     positions=positions,
                     report=report,
                     overlay=overlay,
@@ -692,7 +1286,8 @@ def run_financial_distress_qe_overlay_research(
                         "rule_key": rule.rule_key,
                         "rule_title": rule.title,
                         "active_trading_days": active_days,
-                        "simulator_mode": simulator_mode,
+                        "simulator_mode": simulator_scenario.mode_key,
+                        "simulator_scenario": asdict(simulator_scenario),
                         "overlay_metrics": overlay_metrics,
                         "delta_metrics": delta_metrics,
                         "hit_stats": hit_stats,
@@ -721,6 +1316,10 @@ def run_financial_distress_qe_overlay_research(
             "time_mode": time_mode,
             "active_trading_days_values": list(active_trading_days_values),
             "simulator_modes": list(simulator_modes),
+            "expanded_simulator_modes": [scenario.mode_key for scenario in simulator_scenarios],
+            "score_down_rank_penalty_pcts": [scenario.rank_penalty_pct for scenario in simulator_scenarios if scenario.base_mode == SCORE_DOWN_BASE_MODE],
+            "score_down_top_k": score_down_top_k,
+            "score_down_ranking_date_mode": score_down_ranking_date_mode,
             "financial_rows_loaded": len(financial_rows),
             "trading_days_loaded": len(trading_days),
             "write_overlay_csv": write_overlay_csv,
@@ -787,7 +1386,7 @@ def parse_loop_spec(value: str) -> QELoopSpec:
 def load_loop_specs(*, loop_specs: Optional[Sequence[str]], loop_spec_json: Optional[Path]) -> list[QELoopSpec]:
     specs = [parse_loop_spec(value) for value in loop_specs or []]
     if loop_spec_json is not None:
-        raw = json.loads(loop_spec_json.read_text(encoding="utf-8"))
+        raw = json.loads(loop_spec_json.read_text(encoding="utf-8-sig"))
         items = raw.get("loops", raw) if isinstance(raw, dict) else raw
         if not isinstance(items, list):
             raise ValueError("loop spec json must be a list or an object with a 'loops' list")
@@ -861,6 +1460,12 @@ def summarize_multiloop_validations(loop_payloads: Sequence[Mapping[str, Any]]) 
                     "final_account_delta": float(delta["final_account_delta"]),
                     "blocked_buy_events": int(hit_stats.get("blocked_buy_events") or 0),
                     "unique_buy_hit_symbols": int(hit_stats.get("unique_buy_hit_symbols") or 0),
+                    "score_down_evaluated_topk_buy_events": int(hit_stats.get("score_down_evaluated_topk_buy_events") or 0),
+                    "score_down_dropped_from_topk_events": int(hit_stats.get("score_down_dropped_from_topk_events") or 0),
+                    "score_down_still_in_topk_events": int(hit_stats.get("score_down_still_in_topk_events") or 0),
+                    "replacement_open_events": int(hit_stats.get("replacement_open_events") or 0),
+                    "avg_rank_drop": hit_stats.get("avg_rank_drop"),
+                    "avg_replacement_rank_gap": hit_stats.get("avg_replacement_rank_gap"),
                 }
             )
 
@@ -890,6 +1495,25 @@ def summarize_multiloop_validations(loop_payloads: Sequence[Mapping[str, Any]]) 
                 "avg_mdd_delta": _mean(mdd_deltas),
                 "total_blocked_buy_events": sum(row["blocked_buy_events"] for row in rows),
                 "avg_unique_buy_hit_symbols": _mean([row["unique_buy_hit_symbols"] for row in rows]),
+                "total_score_down_evaluated_topk_buy_events": sum(row["score_down_evaluated_topk_buy_events"] for row in rows),
+                "total_score_down_dropped_from_topk_events": sum(row["score_down_dropped_from_topk_events"] for row in rows),
+                "total_score_down_still_in_topk_events": sum(row["score_down_still_in_topk_events"] for row in rows),
+                "total_replacement_open_events": sum(row["replacement_open_events"] for row in rows),
+                "avg_rank_drop": _mean(
+                    [
+                        float(row["avg_rank_drop"])
+                        for row in rows
+                        if isinstance(row.get("avg_rank_drop"), (int, float)) and math.isfinite(float(row["avg_rank_drop"]))
+                    ]
+                ),
+                "avg_replacement_rank_gap": _mean(
+                    [
+                        float(row["avg_replacement_rank_gap"])
+                        for row in rows
+                        if isinstance(row.get("avg_replacement_rank_gap"), (int, float))
+                        and math.isfinite(float(row["avg_replacement_rank_gap"]))
+                    ]
+                ),
             }
         )
 
@@ -960,6 +1584,9 @@ def run_multiloop_financial_distress_qe_overlay_research(
     date_to: Optional[dt.date],
     active_trading_days_values: Sequence[int] = DEFAULT_ACTIVE_TRADING_DAYS,
     simulator_modes: Sequence[str] = DEFAULT_SIMULATOR_MODES,
+    score_down_rank_penalty_pcts: Sequence[float] = DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS,
+    score_down_top_k: int = DEFAULT_SCORE_DOWN_TOP_K,
+    score_down_ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
     price_return_csv: Optional[Path] = None,
     financial_rule_version: str = FINANCIAL_RULE_VERSION,
     time_mode: str = DEFAULT_TIME_MODE,
@@ -980,9 +1607,16 @@ def run_multiloop_financial_distress_qe_overlay_research(
         time_mode=time_mode,
         limit=limit,
     )
+    simulator_scenarios = expand_simulator_scenarios(
+        simulator_modes=simulator_modes,
+        score_down_rank_penalty_pcts=score_down_rank_penalty_pcts,
+        score_down_top_k=score_down_top_k,
+        score_down_ranking_date_mode=score_down_ranking_date_mode,
+    )
     price_returns_override = (
         load_price_returns_csv(price_return_csv)
-        if price_return_csv is not None and "next_candidate" in simulator_modes
+        if price_return_csv is not None
+        and any(scenario.base_mode in CANDIDATE_REQUIRED_BASE_MODES for scenario in simulator_scenarios)
         else None
     )
 
@@ -999,6 +1633,9 @@ def run_multiloop_financial_distress_qe_overlay_research(
             date_to=resolved_date_to,
             active_trading_days_values=active_trading_days_values,
             simulator_modes=simulator_modes,
+            score_down_rank_penalty_pcts=score_down_rank_penalty_pcts,
+            score_down_top_k=score_down_top_k,
+            score_down_ranking_date_mode=score_down_ranking_date_mode,
             price_return_csv=price_return_csv,
             financial_rule_version=financial_rule_version,
             time_mode=time_mode,
@@ -1032,6 +1669,10 @@ def run_multiloop_financial_distress_qe_overlay_research(
             "time_mode": time_mode,
             "active_trading_days_values": list(active_trading_days_values),
             "simulator_modes": list(simulator_modes),
+            "expanded_simulator_modes": [scenario.mode_key for scenario in simulator_scenarios],
+            "score_down_rank_penalty_pcts": [scenario.rank_penalty_pct for scenario in simulator_scenarios if scenario.base_mode == SCORE_DOWN_BASE_MODE],
+            "score_down_top_k": score_down_top_k,
+            "score_down_ranking_date_mode": score_down_ranking_date_mode,
             "financial_rows_loaded": len(financial_rows),
             "trading_days_loaded": len(trading_days),
             "price_return_csv": str(price_return_csv) if price_return_csv else None,
@@ -1083,6 +1724,9 @@ def _write_multiloop_report_md(path: Path, payload: Mapping[str, Any]) -> None:
                 row["simulator_mode"],
                 f"{row['positive_return_loops']}/{row['loops']}",
                 row["total_blocked_buy_events"],
+                row.get("total_score_down_evaluated_topk_buy_events", 0),
+                row.get("total_score_down_dropped_from_topk_events", 0),
+                row.get("total_replacement_open_events", 0),
                 _pct(row["avg_return_delta"]),
                 _pct(row["median_return_delta"]),
                 _pct(row["min_return_delta"]),
@@ -1137,7 +1781,7 @@ def _write_multiloop_report_md(path: Path, payload: Mapping[str, Any]) -> None:
         f"Date range : {payload['date_from']} -> {payload['date_to']}",
         f"Loops      : {len(payload['loop_specs'])}",
         f"Validations: {len(payload['validation_summary']['flat_rows'])}",
-        f"Modes      : {', '.join(payload['parameters']['simulator_modes'])}",
+        f"Modes      : {', '.join(payload['parameters'].get('expanded_simulator_modes') or payload['parameters']['simulator_modes'])}",
         f"Active td  : {payload['parameters']['active_trading_days_values']}",
         "```",
         "",
@@ -1151,6 +1795,9 @@ def _write_multiloop_report_md(path: Path, payload: Mapping[str, Any]) -> None:
                 "mode",
                 "pos/loops",
                 "blocked",
+                "eval_topk",
+                "dropped",
+                "repl",
                 "avg_ret_d",
                 "med_ret_d",
                 "min_ret_d",
@@ -1219,6 +1866,9 @@ def _write_report_md(path: Path, payload: Mapping[str, Any]) -> None:
                 row["rule_key"],
                 row["simulator_mode"],
                 hit_stats.get("blocked_buy_events", 0),
+                hit_stats.get("score_down_evaluated_topk_buy_events", 0),
+                hit_stats.get("score_down_dropped_from_topk_events", 0),
+                hit_stats.get("replacement_open_events", 0),
                 _pct(delta.get("total_return_delta")),
                 _pct(delta.get("cagr_delta")),
                 _pct(delta.get("max_drawdown_delta")),
@@ -1250,6 +1900,9 @@ def _write_report_md(path: Path, payload: Mapping[str, Any]) -> None:
                 "rule_key",
                 "mode",
                 "blocked_buys",
+                "eval_topk",
+                "dropped",
+                "repl",
                 "return_delta",
                 "cagr_delta",
                 "mdd_delta",
@@ -1286,7 +1939,21 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--date-from", default=None)
     parser.add_argument("--date-to", default=None)
     parser.add_argument("--active-trading-days", type=int, action="append", default=None)
-    parser.add_argument("--simulator-mode", action="append", choices=["cash", "next_candidate"], default=None)
+    parser.add_argument("--simulator-mode", action="append", choices=["cash", "next_candidate", SCORE_DOWN_BASE_MODE], default=None)
+    parser.add_argument(
+        "--score-down-rank-penalty-pct",
+        type=float,
+        action="append",
+        default=None,
+        help="Score-down rank demotion as pct of TopK. Accepts 0.05 or 5 for 5%%.",
+    )
+    parser.add_argument("--score-down-top-k", type=int, default=DEFAULT_SCORE_DOWN_TOP_K)
+    parser.add_argument(
+        "--score-down-ranking-date-mode",
+        choices=["current", "previous"],
+        default=DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
+        help="Use current trade-date predictions or previous trade-date predictions for score-down ranking.",
+    )
     parser.add_argument("--prediction-pkl", default=None)
     parser.add_argument("--price-return-csv", default=None)
     parser.add_argument("--financial-rule-version", default=FINANCIAL_RULE_VERSION)
@@ -1295,6 +1962,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--no-overlay-csv", action="store_true")
     parser.add_argument("--include-size-bucket-rules", action="store_true")
     parser.add_argument("--size-bucket-only", action="store_true")
+    parser.add_argument("--rule-key", action="append", default=None, help="Limit research to one or more rule_key values.")
     return parser.parse_args(argv)
 
 
@@ -1306,6 +1974,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         include_size_bucket_rules=args.include_size_bucket_rules,
         size_bucket_only=args.size_bucket_only,
     )
+    research_rules = filter_research_rules_by_key(research_rules, args.rule_key)
     if args.loop_spec or args.loop_spec_json:
         summary = run_multiloop_financial_distress_qe_overlay_research(
             loop_specs=load_loop_specs(
@@ -1317,6 +1986,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             date_to=_parse_date(args.date_to),
             active_trading_days_values=tuple(args.active_trading_days or DEFAULT_ACTIVE_TRADING_DAYS),
             simulator_modes=tuple(args.simulator_mode or DEFAULT_SIMULATOR_MODES),
+            score_down_rank_penalty_pcts=tuple(args.score_down_rank_penalty_pct or DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS),
+            score_down_top_k=args.score_down_top_k,
+            score_down_ranking_date_mode=args.score_down_ranking_date_mode,
             price_return_csv=Path(args.price_return_csv) if args.price_return_csv else None,
             financial_rule_version=args.financial_rule_version,
             time_mode=args.time_mode,
@@ -1337,6 +2009,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         date_to=_parse_date(args.date_to),
         active_trading_days_values=tuple(args.active_trading_days or DEFAULT_ACTIVE_TRADING_DAYS),
         simulator_modes=tuple(args.simulator_mode or DEFAULT_SIMULATOR_MODES),
+        score_down_rank_penalty_pcts=tuple(args.score_down_rank_penalty_pct or DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS),
+        score_down_top_k=args.score_down_top_k,
+        score_down_ranking_date_mode=args.score_down_ranking_date_mode,
         price_return_csv=Path(args.price_return_csv) if args.price_return_csv else None,
         prediction_pkl=Path(args.prediction_pkl) if args.prediction_pkl else None,
         financial_rule_version=args.financial_rule_version,
