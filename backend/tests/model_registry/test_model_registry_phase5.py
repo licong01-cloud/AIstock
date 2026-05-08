@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 import backend.routers.model_registry as model_registry_router
 from backend.services.model_registry import (
     InMemoryModelRegistryRepository,
+    LegacyModelCatalogBridgeRecord,
+    ModelCatalogCompatRecord,
     ModelArtifactRecord,
     ModelRegistryService,
     ModelSpecRecord,
@@ -225,6 +227,56 @@ def test_model_registry_registers_trial_and_artifact_layers() -> None:
     assert repo.artifacts["artifact_1"] == artifact
 
 
+def test_model_registry_lists_catalog_compat_and_legacy_bridge_read_models() -> None:
+    repo = InMemoryModelRegistryRepository()
+    repo.catalog_compat.append(
+        ModelCatalogCompatRecord(
+            model_id="spec_ok",
+            model_name="ok",
+            model_type="LGBModel",
+            lifecycle_status="research_candidate",
+            qe_selectable=True,
+            paper_selectable=False,
+        )
+    )
+    repo.legacy_catalog_bridge.extend(
+        [
+            LegacyModelCatalogBridgeRecord(
+                legacy_model_id="legacy_ok",
+                model_type="LGBModel",
+                lifecycle_status="research_candidate",
+                qe_selectable=True,
+                paper_selectable=False,
+            ),
+            LegacyModelCatalogBridgeRecord(
+                legacy_model_id="legacy_failed",
+                model_type="LGBModel",
+                lifecycle_status="training_failed",
+                qe_selectable=False,
+                paper_selectable=False,
+            ),
+        ]
+    )
+    service = ModelRegistryService(repo)
+
+    compat = service.list_model_catalog_compat(qe_selectable=True)
+    legacy = service.list_legacy_catalog_bridge(include_training_failed=False)
+
+    assert [item.model_id for item in compat] == ["spec_ok"]
+    assert [item.legacy_model_id for item in legacy] == ["legacy_ok"]
+    assert compat[0].paper_selectable is False
+    assert legacy[0].paper_selectable is False
+
+
+def test_model_registry_list_pagination_fails_fast() -> None:
+    service = ModelRegistryService(InMemoryModelRegistryRepository())
+
+    with pytest.raises(StrategyPackageValidationError, match="limit"):
+        service.list_model_catalog_compat(limit=0)
+    with pytest.raises(StrategyPackageValidationError, match="offset"):
+        service.list_legacy_catalog_bridge(offset=-1)
+
+
 def test_model_registry_lifecycle_transition_fails_fast_for_missing_objects_and_empty_reason() -> None:
     repo = InMemoryModelRegistryRepository()
     service = ModelRegistryService(repo)
@@ -313,11 +365,71 @@ def test_model_registry_post_routes_return_403_before_db_access(monkeypatch: pyt
         assert response.json()["detail"]["error_code"] == "MODEL_REGISTRY_WRITE_API_DISABLED"
 
 
+def test_model_registry_read_routes_do_not_require_write_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeService:
+        def list_qe_selectable_specs(self) -> list[ModelSpecRecord]:
+            return []
+
+        def list_model_catalog_compat(
+            self,
+            *,
+            limit: int,
+            offset: int,
+            qe_selectable: bool | None = None,
+        ) -> list[ModelCatalogCompatRecord]:
+            assert (limit, offset, qe_selectable) == (2, 1, True)
+            return [
+                ModelCatalogCompatRecord(
+                    model_id="spec_ok",
+                    model_name="ok",
+                    lifecycle_status="research_candidate",
+                    qe_selectable=True,
+                    paper_selectable=False,
+                )
+            ]
+
+        def list_legacy_catalog_bridge(
+            self,
+            *,
+            limit: int,
+            offset: int,
+            qe_selectable: bool | None = None,
+            include_training_failed: bool = True,
+        ) -> list[LegacyModelCatalogBridgeRecord]:
+            assert (limit, offset, qe_selectable, include_training_failed) == (3, 0, False, False)
+            return [
+                LegacyModelCatalogBridgeRecord(
+                    legacy_model_id="legacy_failed",
+                    lifecycle_status="training_failed",
+                    qe_selectable=False,
+                    paper_selectable=False,
+                )
+            ]
+
+    monkeypatch.delenv("AISTOCK_MODEL_REGISTRY_WRITE_API_ENABLED", raising=False)
+    monkeypatch.setattr(model_registry_router, "_service", lambda: FakeService())
+    app = FastAPI()
+    app.include_router(model_registry_router.router)
+    client = TestClient(app)
+
+    compat = client.get("/model-registry/catalog-compat?limit=2&offset=1&qe_selectable=true")
+    legacy = client.get("/model-registry/legacy-catalog-bridge?limit=3&qe_selectable=false&include_training_failed=false")
+
+    assert compat.status_code == 200
+    assert compat.json()["items"][0]["model_id"] == "spec_ok"
+    assert compat.json()["items"][0]["paper_selectable"] is False
+    assert legacy.status_code == 200
+    assert legacy.json()["items"][0]["legacy_model_id"] == "legacy_failed"
+    assert legacy.json()["items"][0]["paper_selectable"] is False
+
+
 def test_model_registry_router_exposes_write_guard_and_trial_artifact_endpoints() -> None:
     source = inspect.getsource(model_registry_router)
     assert "AISTOCK_MODEL_REGISTRY_WRITE_API_ENABLED" in source
     assert "@router.post(\"/trials\"" in source
     assert "@router.post(\"/artifacts\"" in source
+    assert "@router.get(\"/catalog-compat\"" in source
+    assert "@router.get(\"/legacy-catalog-bridge\"" in source
     assert source.count("_assert_write_api_enabled()") >= 5
 
 
@@ -326,3 +438,15 @@ def test_postgres_repository_uses_lifecycle_update_and_event_not_delete() -> Non
     assert "UPDATE {table_name}" in source
     assert "model_registry.model_lifecycle_event" in source
     assert "DELETE" not in source.upper()
+
+
+def test_postgres_repository_uses_read_only_model_registry_views_for_catalog_bridge() -> None:
+    compat_source = inspect.getsource(PostgresModelRegistryRepository.list_model_catalog_compat)
+    legacy_source = inspect.getsource(PostgresModelRegistryRepository.list_legacy_catalog_bridge)
+
+    assert "model_registry.v_model_catalog_compat" in compat_source
+    assert "model_registry.v_legacy_aistock_model_catalog_bridge" in legacy_source
+    combined = f"{compat_source}\n{legacy_source}".upper()
+    assert "INSERT" not in combined
+    assert "UPDATE" not in combined
+    assert "DELETE" not in combined

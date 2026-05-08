@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.services.model_registry import (
@@ -54,6 +54,42 @@ def _assert_write_api_enabled() -> None:
 def list_qe_selectable_specs() -> dict[str, Any]:
     try:
         items = _service().list_qe_selectable_specs()
+    except TradingCoreError as exc:
+        raise _handle_domain_error(exc) from exc
+    return {"ok": True, "items": [item.model_dump(mode="json") for item in items]}
+
+
+@router.get("/catalog-compat", summary="List model_registry catalog-compat rows")
+def list_catalog_compat(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    qe_selectable: bool | None = None,
+) -> dict[str, Any]:
+    try:
+        items = _service().list_model_catalog_compat(
+            limit=limit,
+            offset=offset,
+            qe_selectable=qe_selectable,
+        )
+    except TradingCoreError as exc:
+        raise _handle_domain_error(exc) from exc
+    return {"ok": True, "items": [item.model_dump(mode="json") for item in items]}
+
+
+@router.get("/legacy-catalog-bridge", summary="List read-only legacy aistock_model_catalog bridge rows")
+def list_legacy_catalog_bridge(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    qe_selectable: bool | None = None,
+    include_training_failed: bool = True,
+) -> dict[str, Any]:
+    try:
+        items = _service().list_legacy_catalog_bridge(
+            limit=limit,
+            offset=offset,
+            qe_selectable=qe_selectable,
+            include_training_failed=include_training_failed,
+        )
     except TradingCoreError as exc:
         raise _handle_domain_error(exc) from exc
     return {"ok": True, "items": [item.model_dump(mode="json") for item in items]}
