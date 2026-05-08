@@ -43,6 +43,21 @@ HAS_RECORDER_HELPERS = all(
 )
 
 
+@pytest.fixture(autouse=True)
+def _clear_qe_backtest_env():
+    names = (
+        "QE_BACKTEST_SOURCE_PARAMS_DIR",
+        "QE_BACKTEST_SOURCE_MLRUNS_DIR",
+        "QE_BACKTEST_ALLOW_LEGACY_MLRUNS_SOURCE",
+        "MLFLOW_TRACKING_URI",
+    )
+    for name in names:
+        os.environ.pop(name, None)
+    yield
+    for name in names:
+        os.environ.pop(name, None)
+
+
 def _install_qrun_stubs(monkeypatch) -> None:
     qlib = types.ModuleType("qlib")
     qlib_model = types.ModuleType("qlib.model")
