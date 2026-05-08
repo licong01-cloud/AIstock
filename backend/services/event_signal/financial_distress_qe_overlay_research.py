@@ -55,7 +55,7 @@ DEFAULT_EXPERIMENT_ID = "qe_20260507_132049_d4e7"
 DEFAULT_LOOP_ID = "Loop1"
 DEFAULT_ACTIVE_TRADING_DAYS = (60, 120, 242)
 DEFAULT_SIMULATOR_MODES = ("cash", "next_candidate")
-SIMULATOR_VERSION = "financial_distress_qe_overlay_research_v2_20260508_score_down"
+SIMULATOR_VERSION = "financial_distress_qe_overlay_research_v3_20260508_severity_score_down"
 GE50_LOSS_BUCKETS = {"loss_50pct_to_100pct_mv", "loss_ge_100pct_mv"}
 SMALL_MARKET_CAP_BUCKETS = {"mv_lt_5bn_yuan", "mv_5bn_to_10bn_yuan"}
 MID_LARGE_MARKET_CAP_BUCKETS = {"mv_10bn_to_30bn_yuan", "mv_30bn_to_100bn_yuan", "mv_ge_100bn_yuan"}
@@ -63,7 +63,9 @@ DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS = (0.05, 0.10, 0.20, 0.50)
 DEFAULT_SCORE_DOWN_TOP_K = 50
 DEFAULT_SCORE_DOWN_RANKING_DATE_MODE = "previous"
 SCORE_DOWN_BASE_MODE = "score_down"
-CANDIDATE_REQUIRED_BASE_MODES = {"next_candidate", SCORE_DOWN_BASE_MODE}
+SCORE_DOWN_SEVERITY_BASE_MODE = "score_down_severity"
+CANDIDATE_REQUIRED_BASE_MODES = {"next_candidate", SCORE_DOWN_BASE_MODE, SCORE_DOWN_SEVERITY_BASE_MODE}
+DEFAULT_SCORE_DOWN_SEVERITY_PROFILES = ("balanced", "loss_heavy", "conservative")
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,7 @@ class SimulatorScenario:
     rank_penalty_pct: Optional[float] = None
     top_k: Optional[int] = None
     ranking_date_mode: Optional[str] = None
+    severity_profile: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +128,17 @@ class ScoreDownReplacementSlot:
     replacement_original_rank: int
     replacement_adjusted_rank: int
     score: float
+
+
+@dataclass(frozen=True)
+class SeverityProfile:
+    profile_key: str
+    title: str
+    base_pct: float
+    loss_ge_100_add_pct: float
+    mv_lt_5bn_add_pct: float
+    loss_reports_ge_4_add_pct: float
+    max_pct: float
 
 
 @dataclass(frozen=True)
@@ -214,6 +228,36 @@ SIZE_BUCKET_RULES: tuple[FinancialDistressRule, ...] = (
     ),
 )
 
+SEVERITY_PROFILES: dict[str, SeverityProfile] = {
+    "balanced": SeverityProfile(
+        profile_key="balanced",
+        title="base 10%, add loss>=100%, micro/small cap, and repeated losses; cap at 25%",
+        base_pct=0.10,
+        loss_ge_100_add_pct=0.05,
+        mv_lt_5bn_add_pct=0.05,
+        loss_reports_ge_4_add_pct=0.05,
+        max_pct=0.25,
+    ),
+    "loss_heavy": SeverityProfile(
+        profile_key="loss_heavy",
+        title="base 5%, put more weight on loss severity; cap at 30%",
+        base_pct=0.05,
+        loss_ge_100_add_pct=0.15,
+        mv_lt_5bn_add_pct=0.025,
+        loss_reports_ge_4_add_pct=0.025,
+        max_pct=0.30,
+    ),
+    "conservative": SeverityProfile(
+        profile_key="conservative",
+        title="base 10%, smaller add-ons; cap at 20%",
+        base_pct=0.10,
+        loss_ge_100_add_pct=0.05,
+        mv_lt_5bn_add_pct=0.025,
+        loss_reports_ge_4_add_pct=0.025,
+        max_pct=0.20,
+    ),
+}
+
 
 def _json_dumps(value: Any, *, indent: Optional[int] = None) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str, indent=indent)
@@ -282,6 +326,7 @@ def expand_simulator_scenarios(
     score_down_rank_penalty_pcts: Sequence[float] = DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS,
     score_down_top_k: int = DEFAULT_SCORE_DOWN_TOP_K,
     score_down_ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
+    score_down_severity_profiles: Sequence[str] = DEFAULT_SCORE_DOWN_SEVERITY_PROFILES,
 ) -> tuple[SimulatorScenario, ...]:
     if score_down_top_k <= 0:
         raise ValueError("score_down_top_k must be positive")
@@ -306,6 +351,20 @@ def expand_simulator_scenarios(
                         rank_penalty_pct=pct_value,
                         top_k=score_down_top_k,
                         ranking_date_mode=score_down_ranking_date_mode,
+                    )
+                )
+            continue
+        if mode == SCORE_DOWN_SEVERITY_BASE_MODE:
+            for profile_key in score_down_severity_profiles:
+                if profile_key not in SEVERITY_PROFILES:
+                    raise ValueError(f"unknown score-down severity profile: {profile_key}")
+                scenarios.append(
+                    SimulatorScenario(
+                        mode_key=f"score_down_severity_{profile_key}_top{score_down_top_k}_{score_down_ranking_date_mode}",
+                        base_mode=SCORE_DOWN_SEVERITY_BASE_MODE,
+                        top_k=score_down_top_k,
+                        ranking_date_mode=score_down_ranking_date_mode,
+                        severity_profile=profile_key,
                     )
                 )
             continue
@@ -677,13 +736,31 @@ def build_score_down_ranking(
 ) -> list[RankedCandidate]:
     """Demote active-risk candidates by a TopK-relative rank penalty."""
 
+    pct_value = normalize_penalty_pct(rank_penalty_pct)
+    return build_variable_score_down_ranking(
+        candidates=candidates,
+        symbol_rank_penalty_pct={symbol: pct_value for symbol in blocked_symbols},
+        top_k=top_k,
+    )
+
+
+def build_variable_score_down_ranking(
+    *,
+    candidates: Sequence[CandidateScore],
+    symbol_rank_penalty_pct: Mapping[str, float],
+    top_k: int,
+) -> list[RankedCandidate]:
+    """Demote candidates with per-symbol TopK-relative rank penalties."""
+
     if top_k <= 0:
         raise ValueError("top_k must be positive")
-    pct_value = normalize_penalty_pct(rank_penalty_pct)
-    penalty_ranks = max(1, int(math.ceil(top_k * pct_value)))
     draft: list[dict[str, Any]] = []
     for original_rank, candidate in enumerate(candidates, start=1):
-        penalized = candidate.ts_code in blocked_symbols
+        raw_penalty = float(symbol_rank_penalty_pct.get(candidate.ts_code) or 0.0)
+        if raw_penalty < 0 or raw_penalty > 1.0 or not math.isfinite(raw_penalty):
+            raise ValueError(f"invalid rank penalty for {candidate.ts_code}: {raw_penalty}")
+        penalty_ranks = int(math.ceil(top_k * raw_penalty)) if raw_penalty > 0 else 0
+        penalized = penalty_ranks > 0
         draft.append(
             {
                 "candidate": candidate,
@@ -720,6 +797,50 @@ def _price_return_available(
     return all(symbol in price_returns.get(return_date, {}) for return_date in required_return_dates)
 
 
+def _safe_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def severity_penalty_pct_from_overlay_row(row: Mapping[str, Any], profile: SeverityProfile) -> float:
+    penalty = profile.base_pct
+    loss_to_market_cap = _safe_float(row.get("max_loss_to_market_cap"))
+    if loss_to_market_cap is not None and loss_to_market_cap >= 1.0:
+        penalty += profile.loss_ge_100_add_pct
+    market_cap_buckets = str(row.get("market_cap_buckets") or "")
+    if "mv_lt_5bn_yuan" in market_cap_buckets:
+        penalty += profile.mv_lt_5bn_add_pct
+    loss_reports = int(_safe_float(row.get("loss_report_count_730d_max")) or 0)
+    if loss_reports >= 4:
+        penalty += profile.loss_reports_ge_4_add_pct
+    return min(profile.max_pct, max(0.0, penalty))
+
+
+def build_severity_penalty_by_date(
+    overlay: pd.DataFrame,
+    *,
+    profile: SeverityProfile,
+) -> dict[dt.date, dict[str, float]]:
+    penalties: dict[dt.date, dict[str, float]] = {}
+    if overlay.empty:
+        return penalties
+    frame = overlay.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"]).dt.date
+    for row in frame.to_dict("records"):
+        if bool(row.get("can_buy", True)) and not bool(row.get("force_exit", False)):
+            continue
+        trade_date = row["trade_date"]
+        symbol = str(row["ts_code"])
+        penalty = severity_penalty_pct_from_overlay_row(row, profile)
+        penalties.setdefault(trade_date, {})[symbol] = max(penalties.get(trade_date, {}).get(symbol, 0.0), penalty)
+    return penalties
+
+
 def run_score_down_rerank_counterfactual(
     *,
     positions: dict[dt.date, dict[str, dict[str, float]]],
@@ -732,6 +853,8 @@ def run_score_down_rerank_counterfactual(
     rank_penalty_pct: float,
     top_k: int = DEFAULT_SCORE_DOWN_TOP_K,
     ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
+    symbol_rank_penalty_pct_by_date: Optional[Mapping[dt.date, Mapping[str, float]]] = None,
+    severity_profile_key: Optional[str] = None,
 ) -> tuple[pd.Series, dict[str, Any]]:
     """Approximate a score-down overlay by demoting risky names before TopK selection.
 
@@ -741,8 +864,8 @@ def run_score_down_rerank_counterfactual(
 
     if ranking_date_mode not in {"current", "previous"}:
         raise ValueError("ranking_date_mode must be current or previous")
-    pct_value = normalize_penalty_pct(rank_penalty_pct)
-    penalty_ranks = max(1, int(math.ceil(top_k * pct_value)))
+    pct_value = normalize_penalty_pct(rank_penalty_pct) if symbol_rank_penalty_pct_by_date is None else 0.0
+    penalty_ranks = max(1, int(math.ceil(top_k * pct_value))) if symbol_rank_penalty_pct_by_date is None else 0
     report_window = report[(report.index.date >= date_from) & (report.index.date <= date_to)].copy()
     if report_window.empty:
         raise ValueError("report has no rows in requested date window")
@@ -780,6 +903,7 @@ def run_score_down_rerank_counterfactual(
     replacement_original_ranks: list[float] = []
     replacement_adjusted_ranks: list[float] = []
     replacement_rank_gaps: list[float] = []
+    applied_penalty_pcts: list[float] = []
 
     def open_replacement(
         *,
@@ -872,12 +996,19 @@ def run_score_down_rerank_counterfactual(
         def ensure_ranking() -> tuple[dict[str, RankedCandidate], set[str], list[RankedCandidate]]:
             nonlocal ranking_cache
             if ranking_cache is None:
-                ranking = build_score_down_ranking(
-                    candidates=candidate_scores.get(rank_date, []),
-                    blocked_symbols=current_blocked,
-                    rank_penalty_pct=pct_value,
-                    top_k=top_k,
-                )
+                if symbol_rank_penalty_pct_by_date is None:
+                    ranking = build_score_down_ranking(
+                        candidates=candidate_scores.get(rank_date, []),
+                        blocked_symbols=current_blocked,
+                        rank_penalty_pct=pct_value,
+                        top_k=top_k,
+                    )
+                else:
+                    ranking = build_variable_score_down_ranking(
+                        candidates=candidate_scores.get(rank_date, []),
+                        symbol_rank_penalty_pct=symbol_rank_penalty_pct_by_date.get(current_date, {}),
+                        top_k=top_k,
+                    )
                 ranking_cache = (
                     {row.ts_code: row for row in ranking},
                     {row.ts_code for row in ranking if row.original_rank <= top_k},
@@ -935,6 +1066,12 @@ def run_score_down_rerank_counterfactual(
             original_ranks.append(float(rank_row.original_rank))
             adjusted_ranks.append(float(rank_row.adjusted_rank))
             rank_drops.append(float(rank_row.adjusted_rank - rank_row.original_rank))
+            applied_penalty_pct = (
+                float(symbol_rank_penalty_pct_by_date.get(current_date, {}).get(symbol) or 0.0)
+                if symbol_rank_penalty_pct_by_date is not None
+                else pct_value
+            )
+            applied_penalty_pcts.append(applied_penalty_pct)
             if rank_row.original_rank > top_k:
                 original_rank_outside_topk_events += 1
                 score_down_events.append(
@@ -945,6 +1082,7 @@ def run_score_down_rerank_counterfactual(
                         "status": "original_rank_outside_topk",
                         "original_rank": rank_row.original_rank,
                         "adjusted_rank": rank_row.adjusted_rank,
+                        "rank_penalty_pct": applied_penalty_pct,
                     }
                 )
                 continue
@@ -959,6 +1097,7 @@ def run_score_down_rerank_counterfactual(
                         "status": "still_in_topk",
                         "original_rank": rank_row.original_rank,
                         "adjusted_rank": rank_row.adjusted_rank,
+                        "rank_penalty_pct": applied_penalty_pct,
                     }
                 )
                 continue
@@ -972,6 +1111,7 @@ def run_score_down_rerank_counterfactual(
                     "status": "dropped_from_topk",
                     "original_rank": rank_row.original_rank,
                     "adjusted_rank": rank_row.adjusted_rank,
+                    "rank_penalty_pct": applied_penalty_pct,
                 }
             )
             open_replacement(
@@ -1062,6 +1202,11 @@ def run_score_down_rerank_counterfactual(
         "price_return_symbols": len({symbol for values in price_returns.values() for symbol in values}),
         "score_down_rank_penalty_pct": pct_value,
         "score_down_penalty_ranks": penalty_ranks,
+        "score_down_variable_penalty_enabled": symbol_rank_penalty_pct_by_date is not None,
+        "score_down_severity_profile": severity_profile_key,
+        "score_down_avg_applied_penalty_pct": _mean(applied_penalty_pcts),
+        "score_down_min_applied_penalty_pct": min(applied_penalty_pcts) if applied_penalty_pcts else None,
+        "score_down_max_applied_penalty_pct": max(applied_penalty_pcts) if applied_penalty_pcts else None,
         "score_down_top_k": top_k,
         "score_down_ranking_date_mode": ranking_date_mode,
         "blocked_buy_events": len(buy_hits),
@@ -1163,6 +1308,27 @@ def _run_one_mode(
             top_k=simulator_scenario.top_k,
             ranking_date_mode=simulator_scenario.ranking_date_mode or DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
         )
+    if simulator_mode == SCORE_DOWN_SEVERITY_BASE_MODE:
+        if candidate_scores is None or price_returns is None:
+            raise ValueError("score_down_severity mode requires candidate_scores and price_returns")
+        if simulator_scenario.severity_profile is None or simulator_scenario.top_k is None:
+            raise ValueError("score_down_severity scenario missing severity_profile/top_k")
+        profile = SEVERITY_PROFILES[simulator_scenario.severity_profile]
+        symbol_penalties = build_severity_penalty_by_date(overlay_for_validator, profile=profile)
+        return run_score_down_rerank_counterfactual(
+            positions=positions,
+            report=report,
+            overlay=overlay_for_validator,
+            candidate_scores=candidate_scores,
+            price_returns=price_returns,
+            date_from=date_from,
+            date_to=date_to,
+            rank_penalty_pct=profile.base_pct,
+            top_k=simulator_scenario.top_k,
+            ranking_date_mode=simulator_scenario.ranking_date_mode or DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
+            symbol_rank_penalty_pct_by_date=symbol_penalties,
+            severity_profile_key=profile.profile_key,
+        )
     raise ValueError(f"unsupported simulator mode: {simulator_mode}")
 
 
@@ -1177,6 +1343,7 @@ def run_financial_distress_qe_overlay_research(
     active_trading_days_values: Sequence[int] = DEFAULT_ACTIVE_TRADING_DAYS,
     simulator_modes: Sequence[str] = DEFAULT_SIMULATOR_MODES,
     score_down_rank_penalty_pcts: Sequence[float] = DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS,
+    score_down_severity_profiles: Sequence[str] = DEFAULT_SCORE_DOWN_SEVERITY_PROFILES,
     score_down_top_k: int = DEFAULT_SCORE_DOWN_TOP_K,
     score_down_ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
     price_return_csv: Optional[Path] = None,
@@ -1204,6 +1371,7 @@ def run_financial_distress_qe_overlay_research(
     simulator_scenarios = expand_simulator_scenarios(
         simulator_modes=simulator_modes,
         score_down_rank_penalty_pcts=score_down_rank_penalty_pcts,
+        score_down_severity_profiles=score_down_severity_profiles,
         score_down_top_k=score_down_top_k,
         score_down_ranking_date_mode=score_down_ranking_date_mode,
     )
@@ -1318,6 +1486,8 @@ def run_financial_distress_qe_overlay_research(
             "simulator_modes": list(simulator_modes),
             "expanded_simulator_modes": [scenario.mode_key for scenario in simulator_scenarios],
             "score_down_rank_penalty_pcts": [scenario.rank_penalty_pct for scenario in simulator_scenarios if scenario.base_mode == SCORE_DOWN_BASE_MODE],
+            "score_down_severity_profiles": [scenario.severity_profile for scenario in simulator_scenarios if scenario.base_mode == SCORE_DOWN_SEVERITY_BASE_MODE],
+            "severity_profiles": {key: asdict(SEVERITY_PROFILES[key]) for key in SEVERITY_PROFILES},
             "score_down_top_k": score_down_top_k,
             "score_down_ranking_date_mode": score_down_ranking_date_mode,
             "financial_rows_loaded": len(financial_rows),
@@ -1466,6 +1636,7 @@ def summarize_multiloop_validations(loop_payloads: Sequence[Mapping[str, Any]]) 
                     "replacement_open_events": int(hit_stats.get("replacement_open_events") or 0),
                     "avg_rank_drop": hit_stats.get("avg_rank_drop"),
                     "avg_replacement_rank_gap": hit_stats.get("avg_replacement_rank_gap"),
+                    "avg_applied_penalty_pct": hit_stats.get("score_down_avg_applied_penalty_pct"),
                 }
             )
 
@@ -1512,6 +1683,14 @@ def summarize_multiloop_validations(loop_payloads: Sequence[Mapping[str, Any]]) 
                         for row in rows
                         if isinstance(row.get("avg_replacement_rank_gap"), (int, float))
                         and math.isfinite(float(row["avg_replacement_rank_gap"]))
+                    ]
+                ),
+                "avg_applied_penalty_pct": _mean(
+                    [
+                        float(row["avg_applied_penalty_pct"])
+                        for row in rows
+                        if isinstance(row.get("avg_applied_penalty_pct"), (int, float))
+                        and math.isfinite(float(row["avg_applied_penalty_pct"]))
                     ]
                 ),
             }
@@ -1585,6 +1764,7 @@ def run_multiloop_financial_distress_qe_overlay_research(
     active_trading_days_values: Sequence[int] = DEFAULT_ACTIVE_TRADING_DAYS,
     simulator_modes: Sequence[str] = DEFAULT_SIMULATOR_MODES,
     score_down_rank_penalty_pcts: Sequence[float] = DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS,
+    score_down_severity_profiles: Sequence[str] = DEFAULT_SCORE_DOWN_SEVERITY_PROFILES,
     score_down_top_k: int = DEFAULT_SCORE_DOWN_TOP_K,
     score_down_ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
     price_return_csv: Optional[Path] = None,
@@ -1610,6 +1790,7 @@ def run_multiloop_financial_distress_qe_overlay_research(
     simulator_scenarios = expand_simulator_scenarios(
         simulator_modes=simulator_modes,
         score_down_rank_penalty_pcts=score_down_rank_penalty_pcts,
+        score_down_severity_profiles=score_down_severity_profiles,
         score_down_top_k=score_down_top_k,
         score_down_ranking_date_mode=score_down_ranking_date_mode,
     )
@@ -1634,6 +1815,7 @@ def run_multiloop_financial_distress_qe_overlay_research(
             active_trading_days_values=active_trading_days_values,
             simulator_modes=simulator_modes,
             score_down_rank_penalty_pcts=score_down_rank_penalty_pcts,
+            score_down_severity_profiles=score_down_severity_profiles,
             score_down_top_k=score_down_top_k,
             score_down_ranking_date_mode=score_down_ranking_date_mode,
             price_return_csv=price_return_csv,
@@ -1671,6 +1853,8 @@ def run_multiloop_financial_distress_qe_overlay_research(
             "simulator_modes": list(simulator_modes),
             "expanded_simulator_modes": [scenario.mode_key for scenario in simulator_scenarios],
             "score_down_rank_penalty_pcts": [scenario.rank_penalty_pct for scenario in simulator_scenarios if scenario.base_mode == SCORE_DOWN_BASE_MODE],
+            "score_down_severity_profiles": [scenario.severity_profile for scenario in simulator_scenarios if scenario.base_mode == SCORE_DOWN_SEVERITY_BASE_MODE],
+            "severity_profiles": {key: asdict(SEVERITY_PROFILES[key]) for key in SEVERITY_PROFILES},
             "score_down_top_k": score_down_top_k,
             "score_down_ranking_date_mode": score_down_ranking_date_mode,
             "financial_rows_loaded": len(financial_rows),
@@ -1727,6 +1911,7 @@ def _write_multiloop_report_md(path: Path, payload: Mapping[str, Any]) -> None:
                 row.get("total_score_down_evaluated_topk_buy_events", 0),
                 row.get("total_score_down_dropped_from_topk_events", 0),
                 row.get("total_replacement_open_events", 0),
+                _pct(row.get("avg_applied_penalty_pct")),
                 _pct(row["avg_return_delta"]),
                 _pct(row["median_return_delta"]),
                 _pct(row["min_return_delta"]),
@@ -1798,6 +1983,7 @@ def _write_multiloop_report_md(path: Path, payload: Mapping[str, Any]) -> None:
                 "eval_topk",
                 "dropped",
                 "repl",
+                "avg_pen",
                 "avg_ret_d",
                 "med_ret_d",
                 "min_ret_d",
@@ -1869,6 +2055,7 @@ def _write_report_md(path: Path, payload: Mapping[str, Any]) -> None:
                 hit_stats.get("score_down_evaluated_topk_buy_events", 0),
                 hit_stats.get("score_down_dropped_from_topk_events", 0),
                 hit_stats.get("replacement_open_events", 0),
+                _pct(hit_stats.get("score_down_avg_applied_penalty_pct")),
                 _pct(delta.get("total_return_delta")),
                 _pct(delta.get("cagr_delta")),
                 _pct(delta.get("max_drawdown_delta")),
@@ -1903,6 +2090,7 @@ def _write_report_md(path: Path, payload: Mapping[str, Any]) -> None:
                 "eval_topk",
                 "dropped",
                 "repl",
+                "avg_pen",
                 "return_delta",
                 "cagr_delta",
                 "mdd_delta",
@@ -1939,7 +2127,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--date-from", default=None)
     parser.add_argument("--date-to", default=None)
     parser.add_argument("--active-trading-days", type=int, action="append", default=None)
-    parser.add_argument("--simulator-mode", action="append", choices=["cash", "next_candidate", SCORE_DOWN_BASE_MODE], default=None)
+    parser.add_argument(
+        "--simulator-mode",
+        action="append",
+        choices=["cash", "next_candidate", SCORE_DOWN_BASE_MODE, SCORE_DOWN_SEVERITY_BASE_MODE],
+        default=None,
+    )
     parser.add_argument(
         "--score-down-rank-penalty-pct",
         type=float,
@@ -1948,6 +2141,13 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Score-down rank demotion as pct of TopK. Accepts 0.05 or 5 for 5%%.",
     )
     parser.add_argument("--score-down-top-k", type=int, default=DEFAULT_SCORE_DOWN_TOP_K)
+    parser.add_argument(
+        "--score-down-severity-profile",
+        action="append",
+        choices=sorted(SEVERITY_PROFILES),
+        default=None,
+        help="Severity profile for score_down_severity mode. Can be repeated.",
+    )
     parser.add_argument(
         "--score-down-ranking-date-mode",
         choices=["current", "previous"],
@@ -1987,6 +2187,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             active_trading_days_values=tuple(args.active_trading_days or DEFAULT_ACTIVE_TRADING_DAYS),
             simulator_modes=tuple(args.simulator_mode or DEFAULT_SIMULATOR_MODES),
             score_down_rank_penalty_pcts=tuple(args.score_down_rank_penalty_pct or DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS),
+            score_down_severity_profiles=tuple(args.score_down_severity_profile or DEFAULT_SCORE_DOWN_SEVERITY_PROFILES),
             score_down_top_k=args.score_down_top_k,
             score_down_ranking_date_mode=args.score_down_ranking_date_mode,
             price_return_csv=Path(args.price_return_csv) if args.price_return_csv else None,
@@ -2010,6 +2211,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         active_trading_days_values=tuple(args.active_trading_days or DEFAULT_ACTIVE_TRADING_DAYS),
         simulator_modes=tuple(args.simulator_mode or DEFAULT_SIMULATOR_MODES),
         score_down_rank_penalty_pcts=tuple(args.score_down_rank_penalty_pct or DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS),
+        score_down_severity_profiles=tuple(args.score_down_severity_profile or DEFAULT_SCORE_DOWN_SEVERITY_PROFILES),
         score_down_top_k=args.score_down_top_k,
         score_down_ranking_date_mode=args.score_down_ranking_date_mode,
         price_return_csv=Path(args.price_return_csv) if args.price_return_csv else None,

@@ -6,10 +6,13 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
     FIRST_BATCH_RULES,
     SIZE_BUCKET_RULES,
     CandidateScore,
+    SEVERITY_PROFILES,
     _active_dates_for_signal,
     _fixed_width_table,
     _rule_applies,
+    build_severity_penalty_by_date,
     build_score_down_ranking,
+    build_variable_score_down_ranking,
     build_overlay_frame,
     expand_simulator_scenarios,
     filter_research_rules_by_key,
@@ -101,6 +104,21 @@ def test_expand_simulator_scenarios_adds_score_down_penalty_modes():
     assert [scenario.rank_penalty_pct for scenario in scenarios] == [0.05, 0.10]
 
 
+def test_expand_simulator_scenarios_adds_severity_profiles():
+    scenarios = expand_simulator_scenarios(
+        simulator_modes=["score_down_severity"],
+        score_down_severity_profiles=["balanced", "conservative"],
+        score_down_top_k=50,
+        score_down_ranking_date_mode="previous",
+    )
+
+    assert [scenario.mode_key for scenario in scenarios] == [
+        "score_down_severity_balanced_top50_previous",
+        "score_down_severity_conservative_top50_previous",
+    ]
+    assert [scenario.severity_profile for scenario in scenarios] == ["balanced", "conservative"]
+
+
 def test_build_score_down_ranking_demotes_blocked_candidates_by_topk_pct():
     candidates = [
         CandidateScore("A", 0.9),
@@ -120,6 +138,46 @@ def test_build_score_down_ranking_demotes_blocked_candidates_by_topk_pct():
     assert by_symbol["BAD"].original_rank == 2
     assert by_symbol["BAD"].adjusted_rank == 4
     assert [row.ts_code for row in ranking] == ["A", "C", "D", "BAD"]
+
+
+def test_variable_score_down_ranking_uses_symbol_specific_penalties():
+    candidates = [
+        CandidateScore("A", 0.9),
+        CandidateScore("BAD", 0.8),
+        CandidateScore("C", 0.7),
+        CandidateScore("D", 0.6),
+    ]
+
+    ranking = build_variable_score_down_ranking(
+        candidates=candidates,
+        symbol_rank_penalty_pct={"BAD": 0.25},
+        top_k=4,
+    )
+    by_symbol = {row.ts_code: row for row in ranking}
+
+    assert by_symbol["BAD"].original_rank == 2
+    assert by_symbol["BAD"].adjusted_rank == 3
+    assert [row.ts_code for row in ranking] == ["A", "C", "BAD", "D"]
+
+
+def test_severity_penalty_profile_uses_loss_size_and_loss_history():
+    overlay = pd.DataFrame(
+        [
+            {
+                "trade_date": dt.date(2024, 1, 3),
+                "ts_code": "BAD",
+                "can_buy": False,
+                "force_exit": False,
+                "max_loss_to_market_cap": 1.2,
+                "market_cap_buckets": "mv_lt_5bn_yuan",
+                "loss_report_count_730d_max": 4,
+            }
+        ]
+    )
+
+    penalties = build_severity_penalty_by_date(overlay, profile=SEVERITY_PROFILES["balanced"])
+
+    assert penalties[dt.date(2024, 1, 3)]["BAD"] == 0.25
 
 
 def test_active_dates_use_next_trading_day_and_requested_lifetime():
