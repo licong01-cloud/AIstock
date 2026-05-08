@@ -30,6 +30,7 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 5     | severity score-down overlay              | complete | 46fe636 / severity_qe_overlay_result                        |
 | 6     | market-cap and industry exposure audit   | complete | 9c61508 / exposure_qe_overlay_result                        |
 | 7     | rolling loss-history rules               | complete | bf67daa / loss_history_qe_overlay_result                    |
+| 8     | market-cap bucket report for every signal| complete | market_cap_bucket_qe_overlay_result                         |
 +-------+------------------------------------------+----------+-------------------------------------------------------------+
 ```
 
@@ -52,7 +53,6 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 | phase | next research                                 | status     | validation requirement                                       |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
-| 8     | market-cap bucket report for every signal     | pending    | report all-market, <5bn, 5-10bn, 10-30bn, 30-100bn, >100bn  |
 | 9     | medium/large-cap event families               | pending    | test impairment, audit opinion, regulatory, debt, miss cases |
 | 10    | loss history + industry + size interactions   | pending    | must beat or explain baseline without overfitting            |
 | 11    | forecast/express/report mismatch research     | pending    | detect expectation miss, not raw growth/loss only            |

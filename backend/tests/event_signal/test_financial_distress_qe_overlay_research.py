@@ -11,6 +11,7 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
     _active_dates_for_signal,
     _fixed_width_table,
     _rule_applies,
+    build_market_cap_bucket_summary,
     build_severity_penalty_by_date,
     build_score_down_ranking,
     build_variable_score_down_ranking,
@@ -18,6 +19,7 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
     expand_simulator_scenarios,
     filter_research_rules_by_key,
     load_loop_specs,
+    normalize_market_cap_bucket_counter,
     parse_loop_spec,
     run_score_down_rerank_counterfactual,
     select_research_rules,
@@ -103,6 +105,70 @@ def test_filter_research_rules_by_key_keeps_requested_rule_only():
     )
 
     assert [rule.rule_key for rule in rules] == ["loss_to_market_cap_ge_50pct_mv_lt_10bn"]
+
+
+def test_normalize_market_cap_counter_splits_composite_buckets():
+    normalized = normalize_market_cap_bucket_counter(
+        {
+            "mv_lt_5bn_yuan": 2,
+            "mv_5bn_to_10bn_yuan+mv_lt_5bn_yuan": 3,
+            "unexpected_bucket": 4,
+        }
+    )
+
+    assert normalized["mv_lt_5bn_yuan"] == 5
+    assert normalized["mv_5bn_to_10bn_yuan"] == 3
+    assert normalized["mv_unknown"] == 4
+
+
+def test_market_cap_bucket_summary_reports_every_bucket_for_each_rule_mode():
+    validation_summary = {
+        "stability_rows": [
+            {
+                "rule_key": "loss_to_market_cap_ge_50pct_mv_lt_10bn",
+                "active_trading_days": 60,
+                "simulator_mode": "score_down_rank_20pct_top50_previous",
+                "total_score_down_evaluated_topk_buy_events": 5,
+                "total_score_down_dropped_from_topk_events": 2,
+                "evaluated_market_cap_buckets": {
+                    "mv_lt_5bn_yuan": 3,
+                    "mv_5bn_to_10bn_yuan": 2,
+                },
+                "dropped_market_cap_buckets": {
+                    "mv_lt_5bn_yuan": 1,
+                    "mv_5bn_to_10bn_yuan": 1,
+                },
+                "still_market_cap_buckets": {
+                    "mv_lt_5bn_yuan": 2,
+                    "mv_5bn_to_10bn_yuan": 1,
+                },
+            }
+        ]
+    }
+    exposure_summary = [
+        {
+            "rule_key": "loss_to_market_cap_ge_50pct_mv_lt_10bn",
+            "active_trading_days": 60,
+            "overlay_rows": 10,
+            "market_cap_buckets": {
+                "mv_lt_5bn_yuan": 6,
+                "mv_5bn_to_10bn_yuan": 4,
+            },
+        }
+    ]
+
+    rows = build_market_cap_bucket_summary(
+        validation_summary=validation_summary,
+        exposure_summary=exposure_summary,
+    )
+
+    assert len(rows) == 6
+    by_bucket = {row["market_cap_bucket"]: row for row in rows}
+    assert by_bucket["mv_lt_5bn_yuan"]["overlay_rows"] == 6
+    assert by_bucket["mv_lt_5bn_yuan"]["evaluated_topk_buy_events"] == 3
+    assert by_bucket["mv_lt_5bn_yuan"]["dropped_from_topk_events"] == 1
+    assert by_bucket["mv_lt_5bn_yuan"]["drop_rate_within_bucket"] == 1 / 3
+    assert by_bucket["mv_ge_100bn_yuan"]["evaluated_topk_buy_events"] == 0
 
 
 def test_loss_history_rules_match_repeated_losses_and_small_cap_variants():

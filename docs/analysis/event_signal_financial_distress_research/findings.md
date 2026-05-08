@@ -12,6 +12,7 @@
 | F004 | Loss-history-only is too broad               | Use as a feature, not a standalone runtime rule.             |
 | F005 | Industry exposure is not single-industry only | Avoid hard industry filters until larger evidence exists.    |
 | F006 | Current research is biased toward small caps  | Next phase must report every signal by market-cap bucket.    |
+| F007 | Every rule now has market-cap bucket coverage | Use bucket rows to prevent small-cap-only overgeneralization. |
 +------+----------------------------------------------+--------------------------------------------------------------+
 ```
 
@@ -49,3 +50,20 @@ Observed benchmark from the 10-loop overlay research:
 ## Important Caution
 
 The current empirical win is concentrated in small-cap financial distress. The framework must still generate and evaluate signals for all market-cap buckets. Do not hard-code a small-cap-only architecture.
+
+## Market-Cap Bucket Finding
+
+The phase-8 report generated 504 bucket rows across current rule families, active lifetimes, modes, and canonical market-cap buckets.
+
+```text
++----------+--------------------------------------------------------------+
+| bucket   | current interpretation                                       |
++----------+--------------------------------------------------------------+
+| <5bn     | dominant Top50 interaction for financial distress candidates |
+| 5-10bn   | secondary interaction; still part of current best benchmark  |
+| 10-30bn  | sparse but non-zero; needs dedicated medium-cap research     |
+| 30-100bn | very sparse for current loss-based rules                     |
+| >=100bn  | almost no current Top50 interaction                          |
+| unknown  | data-quality bucket; do not use for runtime action           |
++----------+--------------------------------------------------------------+
+```

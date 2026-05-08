@@ -56,10 +56,26 @@ DEFAULT_EXPERIMENT_ID = "qe_20260507_132049_d4e7"
 DEFAULT_LOOP_ID = "Loop1"
 DEFAULT_ACTIVE_TRADING_DAYS = (60, 120, 242)
 DEFAULT_SIMULATOR_MODES = ("cash", "next_candidate")
-SIMULATOR_VERSION = "financial_distress_qe_overlay_research_v4_20260508_loss_history"
+SIMULATOR_VERSION = "financial_distress_qe_overlay_research_v5_20260508_market_cap_bucket_summary"
 GE50_LOSS_BUCKETS = {"loss_50pct_to_100pct_mv", "loss_ge_100pct_mv"}
 SMALL_MARKET_CAP_BUCKETS = {"mv_lt_5bn_yuan", "mv_5bn_to_10bn_yuan"}
 MID_LARGE_MARKET_CAP_BUCKETS = {"mv_10bn_to_30bn_yuan", "mv_30bn_to_100bn_yuan", "mv_ge_100bn_yuan"}
+MARKET_CAP_BUCKET_ORDER = (
+    "mv_lt_5bn_yuan",
+    "mv_5bn_to_10bn_yuan",
+    "mv_10bn_to_30bn_yuan",
+    "mv_30bn_to_100bn_yuan",
+    "mv_ge_100bn_yuan",
+    "mv_unknown",
+)
+MARKET_CAP_BUCKET_LABELS = {
+    "mv_lt_5bn_yuan": "<5bn",
+    "mv_5bn_to_10bn_yuan": "5-10bn",
+    "mv_10bn_to_30bn_yuan": "10-30bn",
+    "mv_30bn_to_100bn_yuan": "30-100bn",
+    "mv_ge_100bn_yuan": ">=100bn",
+    "mv_unknown": "unknown",
+}
 DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS = (0.05, 0.10, 0.20, 0.50)
 DEFAULT_SCORE_DOWN_TOP_K = 50
 DEFAULT_SCORE_DOWN_RANKING_DATE_MODE = "previous"
@@ -359,6 +375,31 @@ def _counter_top(counter: Counter[str], limit: int = 20) -> dict[str, int]:
 def _counter_add_map(target: Counter[str], values: Mapping[str, Any]) -> None:
     for key, value in values.items():
         target[str(key)] += int(value)
+
+
+def _market_cap_bucket_groups(raw_bucket: str) -> tuple[str, ...]:
+    """Map raw or composite bucket text to canonical market-cap groups."""
+
+    parts = [part for part in str(raw_bucket or "").split("+") if part]
+    groups = [part for part in parts if part in MARKET_CAP_BUCKET_ORDER]
+    if groups:
+        return tuple(dict.fromkeys(groups))
+    return ("mv_unknown",)
+
+
+def normalize_market_cap_bucket_counter(values: Mapping[str, Any]) -> dict[str, int]:
+    normalized = {bucket: 0 for bucket in MARKET_CAP_BUCKET_ORDER}
+    for raw_bucket, raw_count in values.items():
+        count = int(raw_count or 0)
+        if count == 0:
+            continue
+        for bucket in _market_cap_bucket_groups(str(raw_bucket)):
+            normalized[bucket] += count
+    return normalized
+
+
+def _market_cap_value(values: Mapping[str, int], bucket: str) -> int:
+    return int(values.get(bucket) or 0)
 
 
 def _display_label(value: Any) -> str:
@@ -1839,6 +1880,9 @@ def summarize_multiloop_validations(loop_payloads: Sequence[Mapping[str, Any]]) 
                         and math.isfinite(float(row["avg_applied_penalty_pct"]))
                     ]
                 ),
+                "evaluated_market_cap_buckets": dict(evaluated_mv),
+                "dropped_market_cap_buckets": dict(dropped_mv),
+                "still_market_cap_buckets": dict(still_mv),
                 "top_evaluated_market_cap_buckets": _counter_top(evaluated_mv, 5),
                 "top_evaluated_industries": _counter_top(evaluated_ind, 5),
                 "top_dropped_market_cap_buckets": _counter_top(dropped_mv, 5),
@@ -1905,6 +1949,71 @@ def aggregate_overlay_exposure(loop_payloads: Sequence[Mapping[str, Any]]) -> li
             }
         )
     return sorted(rows, key=lambda item: (item["active_trading_days"], item["rule_key"]))
+
+
+def build_market_cap_bucket_summary(
+    *,
+    validation_summary: Mapping[str, Any],
+    exposure_summary: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    exposure_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+    for row in exposure_summary:
+        key = (str(row["rule_key"]), int(row["active_trading_days"]))
+        exposure_by_key[key] = {
+            "overlay_rows": int(row.get("overlay_rows") or 0),
+            "market_cap_buckets": normalize_market_cap_bucket_counter(dict(row.get("market_cap_buckets") or {})),
+        }
+
+    rows: list[dict[str, Any]] = []
+    for row in validation_summary.get("stability_rows", []):
+        key = (str(row["rule_key"]), int(row["active_trading_days"]))
+        exposure = exposure_by_key.get(key, {"overlay_rows": 0, "market_cap_buckets": {}})
+        overlay_bucket_counts = normalize_market_cap_bucket_counter(dict(exposure.get("market_cap_buckets") or {}))
+        evaluated_counts = normalize_market_cap_bucket_counter(
+            dict(row.get("evaluated_market_cap_buckets") or row.get("top_evaluated_market_cap_buckets") or {})
+        )
+        dropped_counts = normalize_market_cap_bucket_counter(
+            dict(row.get("dropped_market_cap_buckets") or row.get("top_dropped_market_cap_buckets") or {})
+        )
+        still_counts = normalize_market_cap_bucket_counter(
+            dict(row.get("still_market_cap_buckets") or row.get("top_still_market_cap_buckets") or {})
+        )
+        overlay_total = int(exposure.get("overlay_rows") or 0)
+        evaluated_total = int(row.get("total_score_down_evaluated_topk_buy_events") or 0)
+        dropped_total = int(row.get("total_score_down_dropped_from_topk_events") or 0)
+        for bucket in MARKET_CAP_BUCKET_ORDER:
+            overlay_rows = _market_cap_value(overlay_bucket_counts, bucket)
+            evaluated_topk = _market_cap_value(evaluated_counts, bucket)
+            dropped_topk = _market_cap_value(dropped_counts, bucket)
+            still_topk = _market_cap_value(still_counts, bucket)
+            rows.append(
+                {
+                    "rule_key": key[0],
+                    "active_trading_days": key[1],
+                    "simulator_mode": row["simulator_mode"],
+                    "market_cap_bucket": bucket,
+                    "market_cap_label": MARKET_CAP_BUCKET_LABELS[bucket],
+                    "overlay_rows": overlay_rows,
+                    "overlay_share": (overlay_rows / overlay_total) if overlay_total else None,
+                    "evaluated_topk_buy_events": evaluated_topk,
+                    "evaluated_share": (evaluated_topk / evaluated_total) if evaluated_total else None,
+                    "dropped_from_topk_events": dropped_topk,
+                    "dropped_share": (dropped_topk / dropped_total) if dropped_total else None,
+                    "drop_rate_within_bucket": (dropped_topk / evaluated_topk) if evaluated_topk else None,
+                    "still_in_topk_events": still_topk,
+                    "all_market_evaluated_topk_buy_events": evaluated_total,
+                    "all_market_dropped_from_topk_events": dropped_total,
+                }
+            )
+    return sorted(
+        rows,
+        key=lambda item: (
+            item["rule_key"],
+            item["active_trading_days"],
+            item["simulator_mode"],
+            MARKET_CAP_BUCKET_ORDER.index(item["market_cap_bucket"]),
+        ),
+    )
 
 
 def run_multiloop_financial_distress_qe_overlay_research(
@@ -1985,6 +2094,10 @@ def run_multiloop_financial_distress_qe_overlay_research(
 
     validation_summary = summarize_multiloop_validations(loop_payloads)
     exposure_summary = aggregate_overlay_exposure(loop_payloads)
+    market_cap_bucket_summary = build_market_cap_bucket_summary(
+        validation_summary=validation_summary,
+        exposure_summary=exposure_summary,
+    )
     report_id = "financial_distress_qe_multiloop_{}_{}".format(
         resolved_date_from.isoformat(),
         dt.datetime.now().strftime("%Y%m%d_%H%M%S"),
@@ -2018,6 +2131,7 @@ def run_multiloop_financial_distress_qe_overlay_research(
         },
         "validation_summary": validation_summary,
         "exposure_summary": exposure_summary,
+        "market_cap_bucket_summary": market_cap_bucket_summary,
         "research_boundary": {
             "writes_db": False,
             "changes_qe_runtime": False,
@@ -2120,6 +2234,21 @@ def _write_multiloop_report_md(path: Path, payload: Mapping[str, Any]) -> None:
         for row in stability_rows[:30]
         if int(row.get("total_score_down_evaluated_topk_buy_events") or 0) > 0
     ]
+    market_cap_bucket_rows = [
+        [
+            row["active_trading_days"],
+            row["rule_key"],
+            row["simulator_mode"],
+            row["market_cap_label"],
+            row["overlay_rows"],
+            _pct(row.get("overlay_share")),
+            row["evaluated_topk_buy_events"],
+            row["dropped_from_topk_events"],
+            _pct(row.get("drop_rate_within_bucket")),
+            row["still_in_topk_events"],
+        ]
+        for row in payload.get("market_cap_bucket_summary", [])
+    ]
     lines = [
         "# Financial Distress QE Multi-Loop Overlay Research",
         "",
@@ -2191,6 +2320,28 @@ def _write_multiloop_report_md(path: Path, payload: Mapping[str, Any]) -> None:
                 "drop_industries",
             ],
             score_down_exposure_rows,
+        ),
+        "```",
+        "",
+        "## Market-Cap Bucket Coverage",
+        "",
+        "Full-size coverage is reported for every rule/mode so small-cap findings are not overgeneralized to the whole market.",
+        "",
+        "```text",
+        *_fixed_width_table(
+            [
+                "active_td",
+                "rule_key",
+                "mode",
+                "mv_bucket",
+                "overlay_rows",
+                "overlay_sh",
+                "eval_topk",
+                "dropped",
+                "drop_rate",
+                "still",
+            ],
+            market_cap_bucket_rows,
         ),
         "```",
         "",
