@@ -41,6 +41,8 @@ from ..services.quantevolver.node_execution import (
     preflight_qe_nodes,
     resolve_custom_loop_nodes,
 )
+from ..services.strategy_package.promotion_review import PromotionReviewService
+from ..services.trading_core.errors import TradingCoreError
 
 # RD-Agent QE workspace API base URL
 RDAGENT_QE_BASE = os.getenv("RDAGENT_RESULTS_API_BASE_URL", "http://127.0.0.1:9000").rstrip("/")
@@ -1475,6 +1477,11 @@ class LoopCompletedPayload(BaseModel):
     task_id: str = Field(..., description="演进任务ID")
     loop_id: str = Field(..., description="Loop DB ID, 格式: {task_id}_Loop{N}")
 
+
+class PromotionReviewCreateRequest(BaseModel):
+    requested_by: str = Field("manual_user", description="Operator or UI identity requesting manual SOTA review")
+    review_reason: Optional[str] = Field(None, description="Manual review note; does not approve SOTA")
+
 @router.post("/webhook/loop-completed", summary="Loop 完成回调（由 RDAgent 侧或扫描器触发）")
 async def on_loop_completed_webhook(request: Request, payload: LoopCompletedPayload):
     """
@@ -1496,6 +1503,54 @@ async def on_loop_completed_webhook(request: Request, payload: LoopCompletedPayl
     _task = asyncio.create_task(_process_with_logging())
     _task.add_done_callback(lambda t: logger.error(f"Webhook task error: {t.exception()}") if t.exception() else None)
     return {"status": "accepted", "message": f"Processing loop {payload.loop_id}"}
+
+
+@router.post("/tasks/{task_id}/loops/{loop_id}/promotion-review", summary="Create a manual SOTA promotion review")
+def create_loop_promotion_review(task_id: str, loop_id: str, req: PromotionReviewCreateRequest):
+    """
+    Create a REVIEW_PENDING audit record for a completed QE loop.
+
+    This is the Phase 1 manual gate: it never marks the loop as approved SOTA,
+    never enables Paper v2, and is idempotent while the source remains pending.
+    """
+    try:
+        evolution_loop_db_id = loop_id if loop_id.startswith(f"{task_id}_") else f"{task_id}_{loop_id}"
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT loop_id, task_id, experiment_id, metrics_json, status
+                    FROM qe_evolution_loops
+                    WHERE loop_id = %s AND task_id = %s
+                    """,
+                    (evolution_loop_db_id, task_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="QE evolution loop not found")
+        if row.get("status") != "completed":
+            raise HTTPException(status_code=400, detail="Only completed QE loops can enter manual SOTA review")
+
+        review = PromotionReviewService().request_loop_review(
+            task_id=task_id,
+            loop_id=evolution_loop_db_id,
+            requested_by=req.requested_by,
+            review_reason=req.review_reason,
+            source_metrics=row.get("metrics_json") or {},
+            experiment_id=row.get("experiment_id"),
+        )
+        return {
+            "status": "success",
+            "data": review.model_dump(mode="json"),
+            "message": "Created REVIEW_PENDING record; no approved SOTA or Paper v2 state was changed.",
+        }
+    except HTTPException:
+        raise
+    except TradingCoreError as e:
+        raise HTTPException(status_code=400, detail=e.to_dict()) from e
+    except Exception as e:
+        logger.error(f"Failed to create promotion review for {task_id}/{loop_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================
