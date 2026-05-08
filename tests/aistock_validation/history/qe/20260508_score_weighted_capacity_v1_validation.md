@@ -5,11 +5,14 @@
 - Commit: uncommitted, pending integrator validation.
 - Strategy ID: `score_weighted_topk_v2_capacity_v1`.
 - New source file: `scripts/score_weighted_strategy_v2_capacity_v1.py`.
+- Local dependency files: `scripts/score_weighted_strategy.py` and `scripts/score_weighted_strategy_v2.py` are included so Windows/WSL workers can import the capacity wrapper without relying on an external RD-Agent checkout path.
 - Registration script: `scripts/register_score_weighted_strategy_v2_capacity_v1.py` defaults to dry-run; no DB write was performed.
 
 ## Changed Files
 
 - `scripts/score_weighted_strategy_v2_capacity_v1.py`
+- `scripts/score_weighted_strategy.py`
+- `scripts/score_weighted_strategy_v2.py`
 - `scripts/register_score_weighted_strategy_v2_capacity_v1.py`
 - `scripts/qe_suspend_filter_score_weighted_strategy.py`
 - `backend/services/quantevolver/config_composer.py`
@@ -23,9 +26,11 @@
 
 ## Validation Commands
 
-- `python -m py_compile scripts/register_score_weighted_strategy_v2_capacity_v1.py scripts/score_weighted_strategy_v2_capacity_v1.py scripts/qe_suspend_filter_score_weighted_strategy.py backend/services/quantevolver/config_composer.py backend/services/strategy_package/backtest_contract.py backend/services/strategy_package/runtime.py` passed.
+- `python -m py_compile scripts/score_weighted_strategy.py scripts/score_weighted_strategy_v2.py scripts/register_score_weighted_strategy_v2_capacity_v1.py scripts/score_weighted_strategy_v2_capacity_v1.py scripts/qe_suspend_filter_score_weighted_strategy.py backend/services/quantevolver/config_composer.py backend/services/strategy_package/backtest_contract.py backend/services/strategy_package/runtime.py` passed.
 - `python scripts/register_score_weighted_strategy_v2_capacity_v1.py` passed in dry-run mode; output included `max_single_order_value=1000000000.0` and no DB write.
-- `pytest backend/tests -q -p no:cacheprovider -k "strategy and (capacity or score_weighted or package)"` passed: 47 passed, 845 deselected.
+- `pytest backend/tests -q -p no:cacheprovider -k "strategy and (capacity or score_weighted or package)"` passed after integration: 54 passed, 860 deselected.
+- Windows import smoke with qlib stubs passed using only AIstock `scripts/` on `sys.path`.
+- WSL `/mnt/f/Dev/AIstock_worktrees/qe-hmm-hotfix-integration-20260508` py_compile and path/import smoke passed using only the AIstock worktree strategy files; no external RD-Agent path was required.
 - `python scripts/aistock_guardrail_scan.py --changed-only --fail-on-severity P1 --fail-new-only --baseline-json tmp/validation/guardrails/baseline_20260504.json` passed: blocking=0, P2 review findings only.
 - `cd frontend; npm exec tsc -- --noEmit --incremental false` passed after `npm ci` installed local dependencies.
 - `git diff --check` passed with line-ending warnings only.
@@ -33,6 +38,7 @@
 ## Business Checks
 
 - New strategy defaults include `max_single_order_value=1000000000.0`, `max_weight=0.05`, and `max_position_ratio=0.95`.
+- New strategy runtime import chain is self-contained in AIstock scripts: capacity wrapper -> V2 strategy -> base ScoreWeighted strategy.
 - New strategy param schema exposes `max_single_order_value`, `max_weight`, and `max_position_ratio`.
 - StrategyPackage contract keeps the family as `score_weighted_topk_v2` and records the new `strategy_id` with `capacity_profile=capacity_parameterized_v1`.
 - Legacy `score_weighted_topk_v2` contract still uses `max_single_order_value=5000000.0` when the manifest lacks an explicit capacity value.
