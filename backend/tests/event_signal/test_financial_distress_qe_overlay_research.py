@@ -6,6 +6,9 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
     _fixed_width_table,
     _rule_applies,
     build_overlay_frame,
+    load_loop_specs,
+    parse_loop_spec,
+    summarize_multiloop_validations,
 )
 
 
@@ -107,3 +110,74 @@ def test_fixed_width_table_has_outer_and_inner_borders():
     assert lines[0].startswith("+") and lines[0].endswith("+")
     assert lines[1].startswith("| ") and " | " in lines[1]
     assert lines[-1] == lines[0]
+
+
+def test_parse_loop_spec_uses_comma_to_allow_windows_or_wsl_paths():
+    spec = parse_loop_spec("qe_x,Loop1,/mnt/f/Dev/RD-Agent-main/qe_workspace/qe_x/Loop1")
+
+    assert spec.experiment_id == "qe_x"
+    assert spec.loop_id == "Loop1"
+    assert spec.loop_path.endswith("/Loop1")
+
+
+def test_load_loop_specs_deduplicates_by_experiment_and_loop():
+    specs = load_loop_specs(
+        loop_specs=[
+            "qe_x,Loop1,/tmp/a",
+            "qe_x,Loop1,/tmp/a",
+            "qe_x,Loop2,/tmp/b",
+        ],
+        loop_spec_json=None,
+    )
+
+    assert [(item.experiment_id, item.loop_id) for item in specs] == [("qe_x", "Loop1"), ("qe_x", "Loop2")]
+
+
+def test_summarize_multiloop_validations_reports_rule_stability():
+    payloads = [
+        {
+            "experiment_id": "qe_a",
+            "loop_id": "Loop1",
+            "validations": [
+                {
+                    "rule_key": "loss_to_market_cap_ge_50pct",
+                    "active_trading_days": 60,
+                    "simulator_mode": "cash",
+                    "delta_metrics": {
+                        "total_return_delta": 0.02,
+                        "cagr_delta": 0.01,
+                        "max_drawdown_delta": 0.0,
+                        "final_account_delta": 200.0,
+                    },
+                    "hit_stats": {"blocked_buy_events": 2, "unique_buy_hit_symbols": 2},
+                }
+            ],
+        },
+        {
+            "experiment_id": "qe_b",
+            "loop_id": "Loop2",
+            "validations": [
+                {
+                    "rule_key": "loss_to_market_cap_ge_50pct",
+                    "active_trading_days": 60,
+                    "simulator_mode": "cash",
+                    "delta_metrics": {
+                        "total_return_delta": -0.01,
+                        "cagr_delta": -0.005,
+                        "max_drawdown_delta": 0.01,
+                        "final_account_delta": -100.0,
+                    },
+                    "hit_stats": {"blocked_buy_events": 3, "unique_buy_hit_symbols": 3},
+                }
+            ],
+        },
+    ]
+
+    summary = summarize_multiloop_validations(payloads)
+    row = summary["stability_rows"][0]
+
+    assert row["loops"] == 2
+    assert row["positive_return_loops"] == 1
+    assert row["negative_return_loops"] == 1
+    assert row["total_blocked_buy_events"] == 5
+    assert round(row["avg_return_delta"], 6) == 0.005
