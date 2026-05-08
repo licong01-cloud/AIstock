@@ -22,6 +22,21 @@
 
 ---
 
+## 0. 修订说明（2026-05-09 本轮派单口径）
+
+本文档 v1（前轮交付，commit `3d856f4`）覆盖三维 diff（OrderIntent / NAV / 持仓）。本轮按 Lead 派单口径扩展：
+
+| # | 本轮新增覆盖 | 落地章节 |
+| --- | --- | --- |
+| 1 | 加 D4 换手率 diff（turnover）维度 | §3.4 / §4.2 / §6.1 |
+| 2 | 加 D5 费用 diff（fees / commission / slippage cost）维度 | §3.5 / §4.2 / §6.1 |
+| 3 | 与 Codex Validation Mode A-F + 附录 A.3.4 Mode G 整合（v1 仅 §7 涉及 Mode G，未含 Mode A-F） | §15 新增章节 |
+| 4 | 容忍度阈值"按维度分级"显式表达 | §3.6 新增小节 |
+
+v1 既有 §3.1-§3.3 / §4-§14 内容保留不动；本节后续 §3.4 起为本轮增量。
+
+---
+
 ## 1. 设计目标与边界
 
 ### 1.1 目标
@@ -135,6 +150,120 @@ class ReconcilerConfig:
 
 无 yaml schema；纯 Python dataclass + 调 reconciler 时显式传入（没有运行时配置漂移问题）。
 
+### 3.4 D4 换手率 diff（本轮新增）
+
+**数据源**：从两侧 orders 数据按日聚合得到日内换手率
+- QE 侧：`orders.csv` → `daily_turnover = sum(|fill_amount|) / portfolio_nav_at_open`
+- Paper 侧：`orders.jsonl` → 同公式
+
+**容差口径**：**relative 容差 5%**（默认；可配）
+- `(qe_turnover - paper_turnover) / max(qe_turnover, paper_turnover) <= 0.05` 视为 PASS
+- 超阈 → finding `turnover_drift_exceeded`
+
+**为何独立成维**：
+- 即便 D1（OrderIntent 决策）一致 + D2（NAV）一致，**换手率漂移**仍可能暴露撮合层偏差（如 QE 视为 fill 100 但 Paper 视为 fill 80 + 撤 20，最终 NAV 接近但行为有差）
+- 换手率是策略产能 / 容量 / 费率压力的**先行指标**；漂移风险下游放大
+
+**字段细化**：
+```python
+@dataclass(frozen=True)
+class TurnoverDiffRow:
+    trade_date: date
+    qe_turnover_ratio: float           # daily_turnover / portfolio_nav
+    paper_turnover_ratio: float
+    relative_diff: float               # |qe - paper| / max(qe, paper)
+    is_pass: bool
+
+
+@dataclass(frozen=True)
+class TurnoverDiffReport:
+    per_day: list[TurnoverDiffRow]
+    max_relative_diff: float
+    threshold_relative: float          # 默认 0.05
+    is_pass: bool
+```
+
+### 3.5 D5 费用 diff（本轮新增）
+
+**数据源**：从两侧 orders / ledger 提取每笔成交的费用项
+- QE 侧：`orders.csv` 列含 `commission` / `stamp_tax` / `transfer_fee`（按 audit §11.3.1 行业惯例）
+- Paper 侧：`ledger_snapshots.jsonl` 含 `cumulative_fees`（per ledger snapshot）
+
+**比对策略**：
+- **总费用对账**：累计费用差异 = `|qe_total_fees - paper_total_fees|`，按累计 NAV 折算 bp
+- **费用结构对账**（可选）：commission / stamp_tax / slippage_cost 各类目分别对账（slippage_cost = `|fill_price - reference_price| * fill_qty`）
+
+**容差口径**：
+- 总费用：**bp 级容差 0.5 bp**（默认；可配）— 比 NAV 严格，因为费用应几乎确定（费率参数已约定）
+- 各类目：**relative 容差 10%**（commission / stamp_tax 应严格一致；slippage 允许较大相对差，因撮合差异本就反映在这里）
+
+**字段细化**：
+```python
+@dataclass(frozen=True)
+class FeesDiffReport:
+    qe_total_fees: Decimal
+    paper_total_fees: Decimal
+    fees_diff_bp: float                # vs cumulative NAV
+    by_category: dict[str, "FeeCategoryDiff"]   # commission / stamp_tax / slippage_cost
+    is_pass: bool
+
+
+@dataclass(frozen=True)
+class FeeCategoryDiff:
+    category: Literal["commission", "stamp_tax", "transfer_fee", "slippage_cost"]
+    qe_amount: Decimal
+    paper_amount: Decimal
+    relative_diff: float
+    is_pass: bool
+```
+
+**为何独立成维**：
+- 费用是 **策略可投容量 + 实盘真实回报**的关键差距源（详见 audit §11.3.1）
+- QE 用合约级费率（写在 backtest contract）/ Paper v2 用 ledger 实际累计——两者偏差直接反映"backtest 用了什么费率参数 vs 实际 paper 撮合配的什么费率参数"
+- D2 NAV 已含费用影响，但 D5 单独提取费用维度让漂移**可定位**（如发现 NAV 漂移源于费用错算 vs 源于撮合差异）
+
+### 3.6 容忍度阈值按维度分级（本轮新增）
+
+汇总 D1-D5 容差，**按维度分级**显式：
+
+| 维度 | 默认容差 | 严格度等级 | 严重性触发 |
+| --- | --- | --- | --- |
+| **D1 OrderIntent** | 零容差（任意条目差异） | **L0 决策侧 byte-equal** | `decision_drift` → severity = **CRITICAL** |
+| **D2 NAV** | 1 bp（max_per_day） | L1 撮合可接受微漂移 | `nav_drift_exceeded` → severity = HIGH |
+| **D3 持仓** | 零股数差异 | **L0 持仓物理一致** | `holding_drift` → severity = CRITICAL |
+| **D4 换手率** | 5% relative | L2 行为指标先行 | `turnover_drift_exceeded` → severity = HIGH |
+| **D5 总费用** | 0.5 bp（vs 累计 NAV） | L1 费率参数应一致 | `fees_drift_exceeded` → severity = HIGH |
+| **D5 费用类目（slippage）** | 10% relative | L2 滑点维度 | `slippage_drift_exceeded` → severity = MEDIUM |
+| **D5 费用类目（commission/stamp）** | 10% relative | **L0 应严格一致** | `commission_drift` → severity = CRITICAL（费率配置错） |
+
+**ReconcilerConfig 增量**（v1 配置基础上加 D4/D5 字段）：
+
+```python
+@dataclass(frozen=True)
+class ReconcilerConfig:
+    # v1 字段（D1/D2/D3）保持不变
+    allow_order_diff: bool = False
+    nav_bp_threshold: int = 1
+    nav_compare_mode: Literal["per_day_max", "final"] = "per_day_max"
+    allow_share_diff: bool = False
+
+    # 本轮新增 D4 / D5
+    turnover_relative_threshold: float = 0.05       # D4
+    fees_total_bp_threshold: float = 0.5             # D5 总费用
+    fees_category_relative_threshold: float = 0.10   # D5 各类目（默认）
+    fees_strict_categories: list[str] = field(
+        default_factory=lambda: ["commission", "stamp_tax", "transfer_fee"]
+    )                                                # D5 这些类目必须严格一致（任意差 → CRITICAL）
+
+    align_window_start: date | None = None
+    align_window_end: date | None = None
+```
+
+**禁止做法**（与 §6.3 v1 不变量保持一致）：
+- ❌ 把 D1/D3 / strict_categories 的 CRITICAL 失败降级为 HIGH（语义上零容差就该 CRITICAL）
+- ❌ 让 D4/D5 默认值为"任意通过"（必须显式给阈值）
+- ❌ 用单一 `tolerance_threshold` 覆盖所有维度（语义不同，必须分级）
+
 ---
 
 ## 4. Reconciler API 契约
@@ -154,7 +283,9 @@ class ReconciliationResult:
     d1_order_diff: OrderDiffReport
     d2_nav_diff: NavDiffReport
     d3_position_diff: PositionDiffReport
-    overall_status: Literal["pass", "fail_d1", "fail_d2", "fail_d3", "fail_multi"]
+    d4_turnover_diff: TurnoverDiffReport            # 本轮新增
+    d5_fees_diff: FeesDiffReport                    # 本轮新增
+    overall_status: Literal["pass", "fail_d1", "fail_d2", "fail_d3", "fail_d4", "fail_d5", "fail_multi"]
     findings_emitted: list[str]           # 写入 bug_root 的 bug_id 列表
 
 
@@ -307,7 +438,20 @@ class ArtifactSchemaError(ShadowRunReconcileError):
 ### 6.2 错误 vs Finding 的区分
 
 - **错误（exception）**：reconcile 输入有问题（artifact 缺失 / schema 错 / manifest 不一致）→ 立即抛；不写 finding（错的对账没意义）
-- **Finding**：reconcile 成功跑完但发现真实漂移（D1/D2/D3 fail）→ 写入 bug_root；返回 ReconciliationResult.findings_emitted
+- **Finding**：reconcile 成功跑完但发现真实漂移（D1/D2/D3/D4/D5 fail）→ 写入 bug_root；返回 ReconciliationResult.findings_emitted
+
+**Finding 类型集合（含本轮新增 D4/D5）**：
+
+| failure_type | 触发维度 | severity | 来源 |
+| --- | --- | --- | --- |
+| `decision_drift` | D1 OrderIntent 任意差异 | CRITICAL | v1 |
+| `nav_drift_exceeded` | D2 NAV max diff > threshold | HIGH | v1 |
+| `holding_drift` | D3 持仓股数任意差异 | CRITICAL | v1 |
+| `manifest_mismatch` | reconcile 阶段（错误而非 finding） | — | v1 |
+| `turnover_drift_exceeded` | D4 换手率 relative > threshold | HIGH | **本轮新增** |
+| `fees_drift_exceeded` | D5 总费用 bp > threshold | HIGH | **本轮新增** |
+| `commission_drift` | D5 commission/stamp/transfer 任意差异 | CRITICAL | **本轮新增** |
+| `slippage_drift_exceeded` | D5 slippage_cost relative > threshold | MEDIUM | **本轮新增** |
 
 ### 6.3 禁止做法
 
@@ -464,9 +608,86 @@ agent 在 session 内查到 shadow run finding，决定如何处置（修代码 
 
 ---
 
+## 15. 与 Codex Validation Mode A-F + 附录 A.3.4 Mode G 整合（本轮新增）
+
+`docs/architecture/qe_sota_strategy_package_asset_governance_design_20260508.md` §6.2 定义 Validation Mode A-F（QE 端验证模式集合），附录 §A.3.4 引入 Mode G Cross-Adapter Equivalence。本设施与每个 Mode 的具体协作关系：
+
+### 15.1 Mode 编号速查（来自 Codex 主体 §6.2）
+
+| Mode | 名称 | 范围 |
+| --- | --- | --- |
+| A | Original-config retest | 同 manifest + 同原始配置 / 数据快照重跑 — NAV vs 原 archive |
+| B | Latest-data retest | 同 manifest + 最新数据窗口 |
+| C | Rolling retrain | 滚动训练新 ModelArtifact，进 ORIGINAL_RETESTING |
+| D | Out-of-sample retest | 划出 OOS 段重测 |
+| E | Stress / regime overlay | 极端 regime / 黑天鹅段验证 |
+| F | Cross-strategy互独立性 | 多策略组合下单策略稳定性 |
+| G | Cross-Adapter Equivalence（附录 A.3.4） | 同 (manifest, scores, portfolio, seed) → QE/Paper/Live 三 adapter byte-equal OrderIntent |
+
+### 15.2 本设施与 Mode A-G 的协作矩阵
+
+| Mode | 本设施衔接方式 | 协作粒度 |
+| --- | --- | --- |
+| **A Original retest** | Mode A 跑出的 QE retest run + 对应 Paper v2 replay run → 本设施作为"retest pass 后的端到端漂移监控"（与主体 §A.6.4 滚动训练后流程一致） | 强协作；推荐 Mode A 通过后 24h 内自动跑本设施一次 |
+| **B Latest-data retest** | Mode B 跑出的 latest-window QE run + 对应 Paper 同窗口 replay → 本设施验证最新数据下决策+撮合一致 | 强协作；窗口对齐是关键 |
+| **C Rolling retrain** | Mode C 产出新 ModelArtifact 进 ORIGINAL_RETESTING；本设施在 retest pass 后跑（同 Mode A 流程） | 强协作；本设施是滚动训练流水线的"出门 gate" |
+| **D OOS retest** | Mode D 是 QE 端单边验证；本设施需要 Paper v2 也跑同 OOS 段才能对账 — **本期不强制对接**（OOS 段往往是历史，Paper v2 重放不一定有此段） | 弱协作；视有无 Paper 历史决定 |
+| **E Stress overlay** | 同 Mode D；regime 段 Paper v2 不一定跑过 | 弱协作 |
+| **F Cross-strategy** | 多策略组合下的单策略行为稳定性 — 本设施可单独对账每个策略包；多策略聚合层不在本设施 scope | 中协作；逐包并行跑 |
+| **G Cross-Adapter Equivalence**（最强协作） | Mode G 是**单元层 fixture 等价**；本设施是**端到端真实 run 等价**。Mode G PASS 是本设施 D1 PASS 的**必要前提**（决策代码一致才可能 OrderIntent 一致） | **互锁协作**：Mode G 失败 → 本设施 D1 几乎必然失败（先修代码，不跑本设施）；Mode G PASS + 本设施 D1 失败 → 喂入数据流不一致（不是代码 bug） |
+
+### 15.3 与 §A.5 测试矩阵衔接
+
+主体 §A.5 规定每个 Codex Phase PR 必须含测试矩阵 + ≥ 3 个 case。本设施对应 Phase 4-7 的测试矩阵中可作为 **L4 端到端验证项**：
+
+| Phase | 测试矩阵文件 | 本设施位置 |
+| --- | --- | --- |
+| Phase 4 (Master Seed Contract) | `tests/aistock_validation/modules/qe_reproducibility.md` | 本设施作为 L4 reproducibility gate 的端到端补充（同 master_seed → 同 OrderIntent + 同 NAV ± 1bp） |
+| Phase 5 (Model Library) | `tests/aistock_validation/modules/model_registry.md` | 本设施 D1/D5 失败 → artifact_id 不一致 / 费率参数错配 |
+| Phase 6 (Runtime Variants) | `tests/aistock_validation/modules/strategy_package_v2.md` | variant 切换前后跑本设施验证 variant_id 一致 |
+| Phase 7 (Latest-data + Rolling) | `tests/aistock_validation/modules/qe_validation_modes.md` | 本设施作为 Mode A/B/C 通过后的 gate |
+
+### 15.4 触发顺序（推荐）
+
+```
+Codex Phase 4 PR 合 main：Master Seed Contract gate
+   ↓
+Mode G fixture 等价性测试 PASS（Engine 实施 PR）
+   ↓
+现有 paper_trading_v2 + LocalSim/MiniQMTSim 基础设施落地（task #20 / #29）
+   ↓
+本设施实施（reconciler 落地）
+   ↓
+循环：每个新 manifest 走 Mode A 通过 → 24h 内本设施扫一次 → 失败写 finding
+```
+
+**关键**：本设施**前置依赖** Mode G 能 PASS（否则 D1 必然失败，跑了无意义）。Mode G 是 fixture 单元层；本设施是真实 run 端到端层。
+
+### 15.5 失败归因 decision tree（含本轮 D4/D5）
+
+```
+本设施失败：
+├── D1 OrderIntent 失败
+│   ├── Mode G 也失败 → engine 决策代码 bug（修代码；不动本设施）
+│   └── Mode G PASS → score / portfolio 数据流不一致（修上游数据通路）
+├── D2 NAV 失败但 D1 PASS
+│   ├── D5 commission_drift / fees_drift 同时失败 → 费率参数错配（合约 vs 实际）
+│   └── D5 PASS → 撮合层差异（QE Exchange vs LocalSim ledger 差异；可接受或上调阈值）
+├── D3 持仓失败但 D1 PASS
+│   └── 撮合层 fill 量计算 bug（撮合 bug，不是决策 bug）
+├── D4 换手率失败但 D1+D2+D3 都 PASS
+│   └── 行为指标先行预警；通常意味着撮合层有"等价但不同形状"的差异（如 split 单 vs 整单）
+└── D5 单独失败
+    ├── commission_drift（CRITICAL）→ 费率参数（backtest_contract vs paper config）不一致
+    ├── slippage_drift_exceeded（MEDIUM）→ 撮合层滑点模型差异；可调阈值或接受
+    └── fees_drift_exceeded（HIGH）→ 总费用累计错；查 ledger 计费路径
+```
+
+---
+
 ## 14. 一句话总结
 
-**Shadow Run Consistency Reconciler = 旁路 + 只读对账器**：消费 QE backtest run 与 Paper v2 replay run 的 artifact，做三维 diff（OrderIntent 零容差 / NAV 1bp / 持仓零股数容差），失败时写入 BUG_SCHEMA finding 让 ValidationFindingStore + MCP server 消费。与 Mode G 互补（Mode G = 决策侧 fixture 单元；本设施 = 决策+执行侧真实 run 端到端）；不修改 schema、不改 QE/Paper 路径、fail-fast typed error；CLI / 定时 / CI 三种触发。
+**Shadow Run Consistency Reconciler = 旁路 + 只读对账器**：消费 QE backtest run 与 Paper v2 replay run 的 artifact，做**五维 diff**（D1 OrderIntent 零容差 / D2 NAV 1bp / D3 持仓零股数容差 / D4 换手率 5% relative / D5 费用 0.5bp 总 + 各类目分级容差），失败时写入 BUG_SCHEMA finding 让 ValidationFindingStore + MCP server 消费。**与 Codex Mode A-G 整合**（前置依赖 Mode G PASS；Mode A/B/C 通过后定时跑本设施作 gate）；不修改 schema、不改 QE/Paper 路径、fail-fast typed error；CLI / 定时 / CI 三种触发。
 
 ---
 

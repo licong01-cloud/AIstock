@@ -12,9 +12,26 @@
 > - `~/.claude/projects/.../memory/feedback_no_silent_errors.md`
 >
 > **核心约束**：
-> - **read-only**：MCP server 只暴露 finding_store 既有的查询方法，**不**新增写入路径，**不**改 finding_store schema
+> - **read-only**：MCP server 只暴露 finding_store / module_registry / plan_catalog / history_store 既有的查询方法，**不**新增写入路径，**不**改任何 schema
 > - **不动 main 业务代码**：本设计仅描述 MCP server 实现位置 + tool 契约 + 部署形态；实际实施由后续 PR 落地
 > - **fail-fast**：所有错误显式抛出，禁止 silent fallback（与 `feedback_no_silent_errors` 一致）
+>
+> **本设计是 cross-test 模板 §4.2 点名的"Validation MCP server (参考 mempalace MCP)"** — cross-test 模板 §4.2 明确把它列为"仍需补的衔接点"之一；本设计是该项的纸面方案。
+
+---
+
+## 0. 修订说明（2026-05-09 本轮派单口径）
+
+本文档 v1（前轮交付，commit `3d856f4`）仅覆盖 finding_store 的 8 个 method 镜像。本轮按 Lead 派单扩展：
+
+| # | 本轮新增覆盖 | 落地章节 |
+| --- | --- | --- |
+| 1 | 参考 mempalace MCP 实现模式（实施细节） | §4.4 mempalace 参考节 |
+| 2 | `list_runs` / `get_module_matrix` 等覆盖 plan_catalog / module_registry / history_store 的查询面 | §3.9-§3.13 新增 5 个 tool |
+| 3 | filter by tag / status / module / date range 的统一参数 schema | §3.14 通用查询参数规范 |
+| 4 | 与 Cross-testing 流程衔接（cross_test_framework_template §4 自动化路径） | §13 新增章节 |
+
+v1 既有内容（§3.1-§3.8 finding_store 8 tool / §4-§11 实现规范 / 测试 / 部署）保留不动；本节后续 §3.9 起为本轮增量。
 
 ---
 
@@ -200,6 +217,155 @@
 
 ---
 
+### 3.9 `validation.list_runs`（本轮新增 R-T37.2 D2）
+
+**对应数据源**：`backend/services/validation/history_store.py` + `tests/aistock_validation/runs/` 目录下的 run 历史记录（read-only）
+
+**用途**：cross-tester / agent 查询某模块 / 某 plan / 某时间窗口内的测试运行历史
+
+**input schema**（全部 optional，遵循 §3.14 统一查询参数规范）：
+```json
+{
+  "module": "string | null",          // 例: "validation/shadow_run"
+  "plan_id": "string | null",          // 关联到 plan_catalog 的 plan_id
+  "status": "passed | failed | error | pending | null",
+  "tag": "string | null",              // run 自带的 tag（如 'cross_test' / 'shadow_run'）
+  "started_after": "ISO8601 | null",   // 过滤 run.started_at >= ...
+  "started_before": "ISO8601 | null",
+  "page": "int (default 1)",
+  "page_size": "int (default 20, max 100)"
+}
+```
+
+**output schema**：
+```json
+{
+  "items": [
+    {
+      "run_id": "...",
+      "plan_id": "...",
+      "module": "...",
+      "status": "passed | failed | error | pending",
+      "tag": "...",
+      "started_at": "...",
+      "ended_at": "...",
+      "summary": { "passed": ..., "failed": ..., "errors": ... },
+      "evidence_paths": ["..."]        // 关联证据文件路径（read-only）
+    }
+  ],
+  "total": 0,
+  "page": 1,
+  "page_size": 20
+}
+```
+
+**fail-fast**：
+- 非法 status 值 → `ValidationToolError(type="invalid_status", context={given: ..., allowed: [...]})`
+- ISO8601 解析失败 → `invalid_date_format`
+
+### 3.10 `validation.get_run`（本轮新增 R-T37.2 D2）
+
+**对应**：history_store 单 run 查询
+
+**input**：`{ "run_id": "string" }`
+
+**output**：
+- 命中：完整 run dict + `evidence_paths` 列表
+- 未命中：`{ "error": { "type": "run_not_found", "context": { "run_id": "..." } } }`
+
+### 3.11 `validation.get_module_matrix`（本轮新增 R-T37.2 D2）
+
+**对应数据源**：
+- `backend/services/validation/module_registry.py`（模块注册表）
+- `backend/services/validation/module_quality.py`（模块质量评分）
+- `tests/aistock_validation/modules/<module>.md`（模块测试矩阵文档）
+- `tests/aistock_validation/catalog/file_ownership.yaml`（模块归属）
+- `tests/aistock_validation/catalog/test_levels.md`（L0-L5 等级定义）
+
+**用途**：cross-tester 接到模块级 cross-test 任务时，一次性拉到该模块的全部测试矩阵 + 当前质量画像
+
+**input**：`{ "module": "string" }`（必填）
+
+**output schema**：
+```json
+{
+  "module": "validation/shadow_run",
+  "owners": ["engine-design"],
+  "matrix": {
+    "L0_present": true,
+    "L1_present": true,
+    "L2_present": false,
+    "L3_present": false,
+    "L4_present": false,
+    "L5_present": false,
+    "matrix_path": "tests/aistock_validation/modules/validation_shadow_run.md"
+  },
+  "quality": {
+    "open_findings": { "CRITICAL": 0, "HIGH": 2, "MEDIUM": 5, "LOW": 0 },
+    "open_bugs": { "CRITICAL": 0, "HIGH": 1, "MEDIUM": 0, "LOW": 0 },
+    "last_passed_run_at": "...",
+    "last_failed_run_at": "..."
+  },
+  "recent_runs": [...top 5...]
+}
+```
+
+**fail-fast**：
+- 未注册模块 → `ValidationToolError(type="module_not_found", context={module: "..."})`
+- 矩阵文件存在但 schema 不符 → `matrix_schema_error`
+
+### 3.12 `validation.list_modules`（本轮新增 R-T37.2 D2）
+
+**对应**：module_registry.list_modules()
+
+**用途**：返回所有已注册模块及其顶层元数据（owners / matrix_present / open_findings_count）
+
+**input**（全部 optional）：
+```json
+{
+  "owner": "string | null",            // 例: "engine-design" / "impl-paper-v2"
+  "tag": "string | null",
+  "with_matrix_only": "bool (default false)",   // 仅返回有 matrix 的模块
+  "page": "int", "page_size": "int"
+}
+```
+
+**output**：items 数组（每个 item 是 get_module_matrix 输出的精简摘要 — 仅 module / owners / matrix.L*_present / quality.open_findings 计数）
+
+### 3.13 `validation.get_plan`（本轮新增 R-T37.2 D2）
+
+**对应**：plan_catalog.get_plan(plan_id)
+
+**用途**：cross-tester 接到 plan_id 后查询完整 plan 描述 + 关联 module + 期望覆盖等级
+
+**input**：`{ "plan_id": "string" }`
+
+**output**：
+- 命中：plan dict（含 plan_id / module / level / steps / expected_outcome / linked_findings）
+- 未命中：typed `plan_not_found` error
+
+### 3.14 通用查询参数规范（本轮新增 R-T37.2 D3）
+
+为保持 tool 入参一致性，所有"列表 + 过滤"类 tool（list_findings / list_bugs / list_runs / list_modules）必须遵循统一规范：
+
+| 参数 | 类型 | 含义 | 校验规则 |
+| --- | --- | --- | --- |
+| `module` | `string \| null` | 模块名（与 `tests/aistock_validation/catalog/file_ownership.yaml` 一致） | 大小写敏感；不存在时返回 0 项不抛错（除 `get_module_matrix` 外） |
+| `tag` | `string \| null` | 资源 tag（runs / plans 自带；findings/bugs 不一定有） | 大小写不敏感子串匹配 |
+| `status` | `string \| null` | 各 tool 的允许值不同；非法值抛 `invalid_status` | 见 tool 各自定义 |
+| `severity` | `CRITICAL \| HIGH \| MEDIUM \| LOW \| null` | 仅 findings / bugs 适用 | 大小写不敏感 |
+| `started_after` / `started_before` / `last_seen_after` / `last_seen_before` | ISO8601 string \| null | 时间范围（runs 用 started_*，findings 用 last_seen_*） | 解析失败抛 `invalid_date_format` |
+| `search` | `string \| null` | 全局子串搜索（id / title / fingerprint / file_path） | 大小写不敏感 |
+| `page` | `int` | 页码（1-based） | < 1 抛 `invalid_page` |
+| `page_size` | `int` | 每页大小 | < 1 或 > 100 抛 `page_size_exceeded` |
+
+**禁止**：
+- ❌ 跨 tool 同名参数语义不一致（例如不能让 status 在 list_findings 与 list_runs 中允许集不同但不在 input schema 里说明）
+- ❌ silent ignore 非法参数（必须 typed error）
+- ❌ 缺省值魔法（除 page=1 / page_size=20，其他过滤参数缺省 = "不过滤" 而非"用默认值替代"）
+
+---
+
 ## 4. 文件位置 + server 实现规范
 
 ### 4.1 新建文件
@@ -326,6 +492,40 @@ agent 端配置 MCP client 时（`.mcp.json` 或类似）：
   }
 }
 ```
+
+### 4.4 参考 mempalace MCP 实施模式（本轮新增 R-T37.2 D1）
+
+mempalace 是用户已在用的 MCP server（参 `~/.claude/projects/.../memory/mempalace_setup.md`），可作为本设计的实施参考。**关键复用模式**：
+
+| mempalace 模式 | 本 server 复用方式 |
+| --- | --- |
+| **stdio transport + Anthropic MCP SDK**（`mcp.server.Server`） | 同 — §4.2 骨架已示意 |
+| **每个 tool 一个 `@server.tool` 装饰函数**，输入 dict 透传给底层 service | 同 — finding_store / module_registry / plan_catalog / history_store 各一组 method 镜像 |
+| **错误向 MCP framework 抛 typed exception**（如 mempalace 的 sanitize_name 失败抛错而非吞错） | 同 — `ValidationToolError` 一致风格 |
+| **server 进程不持久化业务状态**（mempalace 每次 query 都查 sqlite + ChromaDB） | 同 — 本 server 每次 tool call 让底层 service 重读磁盘（finding_store 已是此模式，参 finding_store.py:170-188） |
+| **轻量启动**（mempalace 启动 < 1s） | 同 — 本 server 依赖纯 Python service，无外部连接 |
+| **失败后 fallback 提示而非吞错**（mempalace 的 reconnect 机制） | 不复用——本 server 是纯 read-only，不需要 reconnect；任何 IO 失败原样抛 `io_error` |
+| **session-local server 进程**（每个 Claude session 启动自己的 mempalace 实例） | 同 — §5.2 隔离形态已说明 |
+
+**与 mempalace 的差异**（本 server **不**复用的部分）：
+
+| mempalace 特性 | 本 server 不复用的原因 |
+| --- | --- |
+| 写入 tool（add_drawer / kg_add / diary_write） | 本 server 严格 read-only（G2 / 安全约束 S1） |
+| 语义搜索（embedding + ChromaDB） | finding_store 是结构化数据；不需要语义检索 |
+| 跨 wing tunnel / KG | 本 server 无关系图；只暴露平面 list/get tool |
+| Hook 触发（autosave 等） | 本 server 不需要主动触发；仅响应 client 调用 |
+| AAAK 压缩格式 | 本 server 输出原始 finding/bug dict |
+
+**实施期具体落点参考**（mempalace 代码位置 → 本 server 对应）：
+
+| mempalace 文件 | 本 server 对应文件 |
+| --- | --- |
+| `mempalace/mempalace_server.py` 顶层 main + Server 实例化 | `backend/services/validation/mcp_server.py` 同 |
+| `mempalace/tools/*.py`（每类 tool 一个文件） | 本 server 单文件即可（tool 数量少；< 13 个） |
+| `mempalace/db/*.py`（sqlite 包装） | 本 server **不需要**——直接调既有 service 类 |
+
+实施 PR 提交时建议在 commit message 引用 mempalace 模式，便于 reviewer 对照。
 
 ---
 
@@ -454,9 +654,95 @@ agent 端配置 MCP client 时（`.mcp.json` 或类似）：
 
 ---
 
-## 11. 一句话总结
+## 13. 与 Cross-testing 流程衔接（本轮新增 R-T37.2 D4）
 
-**Validation Center MCP Server = `ValidationFindingStore` 的 read-only 透传包装**：8 个 MCP tool 一一对应 finding_store 既有方法；不改 schema、不暴露写入、不绕过既有写入流程；fail-fast typed error；进程隔离 + stdio transport；让 Claude/Codex agent 能在 session 内直接查询 findings / bugs。
+`docs/standards/cross_test_framework_template_20260508.md` §4.2 明确把 "Validation MCP server (参考 mempalace MCP)" 列为 cross-test 自动化路径"仍需补的衔接点"之一。本设计是该项的纸面方案。本节落到 cross-test 模板中具体的衔接动作。
+
+### 13.1 cross-test 模板 §4.3 工作流的 MCP tool 映射
+
+cross-test 模板 §4.3 给出 MVP 期人工 cross-test 工作流（6 步）。本 server 落地后，每步可自动化的关键 MCP 调用如下：
+
+```
+Step 1  cross-tester 跑 test plan，发现 fail
+   ├─ MCP: validation.get_plan(plan_id)              # 获取 plan 定义
+   ├─ MCP: validation.list_runs(plan_id=..., status=failed)  # 检查是否已有失败记录
+   └─ (跑 test 本身不在 MCP 范围；由 cross-test runner 直接执行)
+
+Step 2  cross-tester 不修代码，改为：
+   a. 在 GitHub 创建 Issue (gh CLI；本 server 不暴露 GitHub 写)
+   b. body 含 §2.8 yaml 中的 agent_context (机读)
+   c. 通过 Validation Center API POST /findings (写入 — 不在本 server 范围；
+      仍走既有 28 个 API 端点之一；本 server 只读)
+
+Step 3  通知 developer_agent
+   └─ MCP: validation.bug_agent_context(bug_id)      # cross-tester 提供 bug 上下文给 dev
+
+Step 4  developer_agent 修复，push
+   └─ MCP: validation.get_module_matrix(module=...)  # dev 修代码前查模块完整测试矩阵
+       └─ 用于决定是否需要补测试用例 / 哪些用例必须复跑
+
+Step 5  人工 re-trigger cross-tester 跑同 test_id
+   ├─ MCP: validation.get_run(run_id)                # 查上次失败 run 详情
+   └─ (跑 test 本身不在 MCP 范围)
+
+Step 6  通过：Issue 标 verified；Validation Center finding 标 CLOSED
+   ├─ MCP: validation.list_runs(plan_id=..., started_after=re_trigger_ts)
+   │   └─ 验证新 run 已 PASS
+   └─ (Issue / finding 状态写入 — 不在本 server 范围；走既有 28 API)
+```
+
+**关键不变量**：
+- 本 server **只读**所有衔接点；写入仍走 GitHub API + Validation Center 既有 28 个 API 端点
+- cross-test 模板 §4.2 明确"MVP 阶段用人工 cross-test"——本 server 是**人工 cross-test 的查询助手**，不替代自动路由（cross_test_router.py 仍待新建，不在本设计范围）
+
+### 13.2 与 cross-test 模板 §2.8 yaml 字段的映射
+
+cross-test 模板 §2.8 要求 Test Plan 与 Validation Center 衔接的 yaml 字段（含 plan_id / module / level / linked_findings / agent_context）。本 server 提供以下查询能力对齐这些字段：
+
+| cross-test §2.8 字段 | 对应 MCP tool |
+| --- | --- |
+| `plan_id` | `validation.get_plan(plan_id)` 验证 plan 存在性 + 拉详情 |
+| `module` | `validation.get_module_matrix(module)` 拉模块完整画像 |
+| `level` (L0-L5) | 含在 get_module_matrix 输出的 matrix.L*_present 字段 |
+| `linked_findings`（finding_id 数组） | 逐个 `validation.get_finding(finding_id)` 验证存在性 |
+| `linked_bugs` | 逐个 `validation.get_bug(bug_id)` |
+| `assigned_agent` | `validation.list_findings(...) / list_bugs(...)` 用 agent 参数过滤 |
+| `agent_context`（reproduce_command / suspected_files / safety_constraints / required_verification_commands） | `validation.bug_agent_context(bug_id)` 直接拉到 |
+
+### 13.3 cross-test 自动路由（cross_test_router.py）的预留接口
+
+cross-test 模板 §4.2 列出"Cross-test 自动路由（`cross_test_router.py` 待新建）"。该 router 一旦落地，通过本 server 的 MCP 调用即可获得所需 read 能力：
+
+```
+cross_test_router.py 期望流程（伪代码，不在本设计实施）：
+   1. 监听 Git push 事件
+   2. 据 file_ownership.yaml 判断改动文件归属模块
+   3. MCP: validation.get_module_matrix(module=改动模块)
+        → 拉到 owners + matrix
+   4. 据 owners 路由 cross-tester
+   5. cross-tester 跑 plan 后：
+      MCP: validation.list_runs(module=..., started_after=push_ts)
+        → 等 run 完成
+   6. 失败时：（写入路径不在本 server）
+      POST /findings + assigned_agent
+   7. 通知开发者
+```
+
+**本 server 的角色**：步骤 3 / 5 的 read 调用；写入步骤（6）走既有 28 API。
+
+### 13.4 与 cross-test 模板 §A.5 测试矩阵的关系
+
+cross-test 模板 §4.4 提到主体设计 §A.5 规定每个 Codex Phase PR 必须含测试矩阵。本 server 的 `validation.get_module_matrix` tool 是这些测试矩阵的**统一读取入口**：
+
+- 矩阵文件位于 `tests/aistock_validation/modules/<module>.md`
+- module_registry 已注册的模块都暴露此 tool
+- cross-tester / dev / Lead 都用同一 tool 读，避免文档读取 + 路径硬编码漂移
+
+---
+
+## 14. 一句话总结
+
+**Validation Center MCP Server = 多模块 read-only 透传包装**：13 个 MCP tool 覆盖 finding_store / module_registry / plan_catalog / history_store 四个 read-only service（不改 schema、不暴露写入、不绕过既有写入流程）；fail-fast typed error；进程隔离 + stdio transport；参考 mempalace 模式实施；落地 cross-test 模板 §4.2 点名的 MCP server 衔接点；让 Claude/Codex agent 能在 session 内直接查询 findings / bugs / runs / module matrices。
 
 ---
 
