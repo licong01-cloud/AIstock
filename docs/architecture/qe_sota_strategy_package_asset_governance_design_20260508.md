@@ -2205,3 +2205,14 @@ Week 16+:
 **附录 B 到此结束**。如对附录任一节有异议，建议在用户协调下双方讨论修订。
 
 > **重申免责声明**：附录内容以补充建议形式存在，与主体（第 1-16 章）冲突时以主体为准。Codex 可在主体设计实施过程中评估附录建议的采纳与否；用户最终拍板。
+
+---
+
+## Appendix C: QE/HMM Hotfix Cross Reference (2026-05-08)
+
+The implementation of this governance design must also include the two QE/HMM remediation items defined in `docs/architecture/qe_hmm_hotfix_and_governance_detailed_design_20260508.md`:
+
+1. **backtest-only recorder isolation**: this is a P0 bugfix. Before any original-config retest, runtime-variant retest, or backtest-only loop can become Paper-ready, the target recorder must be loop-local, non-symlinked, and not the same realpath as the source `mlruns`.
+2. **capacity-parameterized ScoreWeighted V2 strategy asset**: do not directly change the legacy `score_weighted_topk_v2` behavior. Add a new versioned strategy file and strategy_id, make it selectable in DB/UI, and keep the legacy strategy labeled as `legacy_5m_cap` or an equivalent capacity-constrained profile.
+
+These remediation items do not change the main responsibility split: QE discovers combinations, SOTA Hall handles manual review and promotion, StrategyPackage remains the single standard asset for Selection/Paper/future live candidates, the model registry stores model specs/trials/artifacts/seeds/history, and the warehouse stores durable analytical facts. They add required infrastructure correctness and strategy-versioning gates before an experiment result can move through that governance flow.
