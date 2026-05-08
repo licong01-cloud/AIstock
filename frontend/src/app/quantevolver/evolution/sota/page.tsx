@@ -49,6 +49,8 @@ export default function EvolutionSotaPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedRow, setExpandedRow] = useState<string | null>(null); // use loop_id as key
+  const [reviewMessage, setReviewMessage] = useState<string | null>(null);
+  const [creatingReview, setCreatingReview] = useState<string | null>(null);
 
   const fetchSota = useCallback(async () => {
     setLoading(true);
@@ -98,6 +100,35 @@ export default function EvolutionSotaPage() {
     };
   }, [items, leaderboardSummary]);
 
+  const requestPromotionReview = async (row: SotaRow) => {
+    if (!row.task_id || !row.loop_id) {
+      setReviewMessage("This row cannot create a manual review because task_id or loop_id is missing.");
+      return;
+    }
+    const key = rowKey(row);
+    setCreatingReview(key);
+    setReviewMessage(null);
+    try {
+      const res = await fetch(`${API}/quantevolver/evolution/tasks/${encodeURIComponent(row.task_id)}/loops/${encodeURIComponent(row.loop_id)}/promotion-review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requested_by: "quantevolver_sota_ui",
+          review_reason: "Manual SOTA Hall review requested from Phase 1 UI skeleton",
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || data?.status !== "success") {
+        throw new Error(data?.detail?.message || data?.detail || "Failed to create promotion review");
+      }
+      setReviewMessage(`REVIEW_PENDING created: ${data.data?.review_id || row.loop_id}. This is not approved SOTA.`);
+    } catch (e: any) {
+      setReviewMessage(e?.message || "Failed to create promotion review");
+    } finally {
+      setCreatingReview(null);
+    }
+  };
+
   const rowKey = (row: SotaRow) => row.loop_id || String(row.sota_id || Math.random());
 
   return (
@@ -128,6 +159,7 @@ export default function EvolutionSotaPage() {
         ))}
       </div>
 
+      {reviewMessage && <div style={{ padding: "10px 12px", borderRadius: "8px", background: "#f8fafc", border: "1px solid #cbd5e1", color: "#334155" }}>{reviewMessage}</div>}
       {loading && <div>加载中...</div>}
       {error && <div style={{ color: "#dc2626" }}>加载失败：{error}</div>}
 
@@ -146,6 +178,7 @@ export default function EvolutionSotaPage() {
                 <th style={{ padding: "10px" }}>换手率</th>
                 <th style={{ padding: "10px" }}>同步</th>
                 <th style={{ padding: "10px" }}>评估理由</th>
+                <th style={{ padding: "10px" }}>Action</th>
               </tr>
             </thead>
             <tbody>
@@ -189,10 +222,20 @@ export default function EvolutionSotaPage() {
                         title={row.evaluation_reason || ""}>
                         {row.evaluation_reason || "-"}
                       </td>
+                      <td style={{ padding: "10px" }} onClick={(e) => e.stopPropagation()}>
+                        <button
+                          disabled={creatingReview === key || !row.task_id || !row.loop_id}
+                          onClick={() => requestPromotionReview(row)}
+                          title="Create REVIEW_PENDING only; does not approve SOTA"
+                          style={{ padding: "6px 10px", borderRadius: "7px", border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e", cursor: "pointer", fontSize: "12px" }}
+                        >
+                          {creatingReview === key ? "Creating..." : "Manual review"}
+                        </button>
+                      </td>
                     </tr>
                     {expandedRow === key && (
                       <tr>
-                        <td colSpan={10} style={{ padding: "12px 20px", backgroundColor: "#f8fafc", borderTop: "1px solid #e2e8f0" }}>
+                        <td colSpan={11} style={{ padding: "12px 20px", backgroundColor: "#f8fafc", borderTop: "1px solid #e2e8f0" }}>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
                             <div>
                               <div style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", marginBottom: "8px" }}>详细指标</div>
@@ -221,7 +264,7 @@ export default function EvolutionSotaPage() {
               })}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={10} style={{ padding: "20px", textAlign: "center", color: "#94a3b8" }}>
+                  <td colSpan={11} style={{ padding: "20px", textAlign: "center", color: "#94a3b8" }}>
                     暂无 SOTA 记录
                   </td>
                 </tr>
