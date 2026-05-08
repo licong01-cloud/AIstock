@@ -159,6 +159,15 @@
 
 **Lead 推荐 (D1.a)**：实证已成立 + 14 测试覆盖完整 + 不动 quantevolver/qe_strategies；blockers §5 边界源自 Day 2 时缺乏对 strategy_package 工作面归属的清晰判断（实际 strategy_package/ 在 audit §8.5 已商定 Claude 工作面）。
 
+> **决策辅助文档**：impl-paper-v2 已交付 `docs/analysis/p0_f_live_inference_root_cause_and_fix_menu_20260509.md` (commit `5515b74`，384 行)，含 7 节结构：
+> - §1 现状（已实施）+ 5 项 preflight 检查 + typed error 结构
+> - §2 7 个根因假设 H1-H7 + preflight 覆盖矩阵（H1/H3/H4/H5 ✅ 覆盖约 70-80% 历史失败；H6 WSL timeout / H7 universe spans 留后续）
+> - §3 边界澄清（blockers §5 line 76 与 audit §8.5 矛盾点 + 文件归属拆分 + blockers §5 更新建议）
+> - §4 修复路径 menu（路径 A keep 推荐 2-3h / 路径 B revert 6-9h 高风险 / 路径 C 协调 Codex 4-6h+等待）
+> - §5 后续扩展 menu（5 项含 H6/H7 + readiness.py 整合）
+>
+> 用户做 D1 决策时直接读 5515b74 §4 即可。
+
 ### D2 — Phase 2 + Phase 1 全套是否合 main
 
 当前所有 PR-A/B/C 代码 + impl-paper-v2 backend (含 81b1370 中) + env-poc T5 (e212460) 都在 feature 分支 `claude/paper-v2-vnpy-mvp-20260508`，未合 main。
