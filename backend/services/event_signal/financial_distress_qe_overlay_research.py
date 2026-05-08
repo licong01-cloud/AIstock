@@ -81,6 +81,24 @@ class OverlayRunSummary:
     validations: int
 
 
+@dataclass(frozen=True)
+class QELoopSpec:
+    experiment_id: str
+    loop_id: str
+    loop_path: str
+
+
+@dataclass(frozen=True)
+class MultiLoopOverlayRunSummary:
+    report_id: str
+    output_json: str
+    output_md: str
+    loops: int
+    date_from: dt.date
+    date_to: dt.date
+    validations: int
+
+
 FIRST_BATCH_RULES: tuple[FinancialDistressRule, ...] = (
     FinancialDistressRule(
         rule_key="loss_to_market_cap_ge_50pct",
@@ -135,6 +153,20 @@ def _parse_date(value: Optional[str]) -> Optional[dt.date]:
 
 def _date_key(value: Any) -> dt.date:
     return pd.Timestamp(value).date()
+
+
+def _mean(values: Sequence[float]) -> Optional[float]:
+    return sum(values) / len(values) if values else None
+
+
+def _median(values: Sequence[float]) -> Optional[float]:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[mid])
+    return float((ordered[mid - 1] + ordered[mid]) / 2.0)
 
 
 def _pct(value: Any) -> str:
@@ -498,6 +530,9 @@ def run_financial_distress_qe_overlay_research(
     time_mode: str = DEFAULT_TIME_MODE,
     limit: Optional[int] = None,
     write_overlay_csv: bool = True,
+    financial_rows_override: Optional[Sequence[Mapping[str, Any]]] = None,
+    trading_days_override: Optional[Sequence[dt.date]] = None,
+    price_returns_override: Optional[dict[dt.date, dict[str, float]]] = None,
 ) -> OverlayRunSummary:
     artifact_dir = find_portfolio_artifact_dir(loop_path)
     report_path = artifact_dir / "report_normal_1day.pkl"
@@ -511,14 +546,20 @@ def run_financial_distress_qe_overlay_research(
         raise ValueError("QE report has no rows in requested date window")
 
     max_active_days = max(active_trading_days_values)
-    financial_rows, trading_days = load_enriched_financial_rows(
-        date_from=resolved_date_from,
-        date_to=resolved_date_to,
-        active_trading_days=max_active_days,
-        financial_rule_version=financial_rule_version,
-        time_mode=time_mode,
-        limit=limit,
-    )
+    if financial_rows_override is not None and trading_days_override is not None:
+        financial_rows = [dict(row) for row in financial_rows_override]
+        trading_days = list(trading_days_override)
+    elif financial_rows_override is None and trading_days_override is None:
+        financial_rows, trading_days = load_enriched_financial_rows(
+            date_from=resolved_date_from,
+            date_to=resolved_date_to,
+            active_trading_days=max_active_days,
+            financial_rule_version=financial_rule_version,
+            time_mode=time_mode,
+            limit=limit,
+        )
+    else:
+        raise ValueError("financial_rows_override and trading_days_override must be provided together")
 
     candidate_scores: Optional[dict[dt.date, list[CandidateScore]]] = None
     price_returns: Optional[dict[dt.date, dict[str, float]]] = None
@@ -527,11 +568,15 @@ def run_financial_distress_qe_overlay_research(
         root_artifact_dir = find_loop_artifact_dir(loop_path)
         pred_path_for_snapshot = prediction_pkl or (root_artifact_dir / "pred.pkl")
         candidate_scores = load_prediction_scores(pred_path_for_snapshot)
-        price_returns = _load_or_fetch_price_returns(
-            price_return_csv=price_return_csv,
-            candidate_scores=candidate_scores,
-            date_from=resolved_date_from,
-            date_to=resolved_date_to,
+        price_returns = (
+            price_returns_override
+            if price_returns_override is not None
+            else _load_or_fetch_price_returns(
+                price_return_csv=price_return_csv,
+                candidate_scores=candidate_scores,
+                date_from=resolved_date_from,
+                date_to=resolved_date_to,
+            )
         )
 
     baseline_metrics = _metrics_from_account(report_window, report_window["account"])
@@ -618,6 +663,7 @@ def run_financial_distress_qe_overlay_research(
             "positions_path": str(positions_path),
             "prediction_pkl": str(pred_path_for_snapshot) if pred_path_for_snapshot else None,
             "price_return_csv": str(price_return_csv) if price_return_csv else None,
+            "price_returns_override": price_returns_override is not None,
             "candidate_score_dates": len(candidate_scores) if candidate_scores else 0,
             "price_return_dates": len(price_returns) if price_returns else 0,
         },
@@ -661,6 +707,425 @@ def _fixed_width_table(headers: Sequence[str], rows: Sequence[Sequence[Any]]) ->
         lines.append("| " + " | ".join(row[idx].ljust(widths[idx]) for idx in range(len(headers))) + " |")
     lines.append(border)
     return lines
+
+
+def parse_loop_spec(value: str) -> QELoopSpec:
+    parts = [part.strip() for part in value.split(",", 2)]
+    if len(parts) != 3 or any(not part for part in parts):
+        raise ValueError("loop spec must be 'experiment_id,loop_id,loop_path'")
+    return QELoopSpec(experiment_id=parts[0], loop_id=parts[1], loop_path=parts[2])
+
+
+def load_loop_specs(*, loop_specs: Optional[Sequence[str]], loop_spec_json: Optional[Path]) -> list[QELoopSpec]:
+    specs = [parse_loop_spec(value) for value in loop_specs or []]
+    if loop_spec_json is not None:
+        raw = json.loads(loop_spec_json.read_text(encoding="utf-8"))
+        items = raw.get("loops", raw) if isinstance(raw, dict) else raw
+        if not isinstance(items, list):
+            raise ValueError("loop spec json must be a list or an object with a 'loops' list")
+        for item in items:
+            if not isinstance(item, Mapping):
+                raise ValueError("each loop spec json item must be an object")
+            specs.append(
+                QELoopSpec(
+                    experiment_id=str(item["experiment_id"]),
+                    loop_id=str(item["loop_id"]),
+                    loop_path=str(item["loop_path"]),
+                )
+            )
+    if not specs:
+        raise ValueError("at least one --loop-spec or --loop-spec-json entry is required for multi-loop mode")
+    seen: set[tuple[str, str]] = set()
+    deduped: list[QELoopSpec] = []
+    for spec in specs:
+        key = (spec.experiment_id, spec.loop_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(spec)
+    return deduped
+
+
+def resolve_multiloop_date_range(
+    *,
+    loop_specs: Sequence[QELoopSpec],
+    date_from: Optional[dt.date],
+    date_to: Optional[dt.date],
+) -> tuple[dt.date, dt.date]:
+    if date_from is not None and date_to is not None:
+        return date_from, date_to
+    starts: list[dt.date] = []
+    ends: list[dt.date] = []
+    for spec in loop_specs:
+        artifact_dir = find_portfolio_artifact_dir(Path(spec.loop_path))
+        report = load_report(artifact_dir / "report_normal_1day.pkl")
+        starts.append(_date_key(report.index[0]))
+        ends.append(_date_key(report.index[-1]))
+    resolved_from = date_from or max(starts)
+    resolved_to = date_to or min(ends)
+    if resolved_from > resolved_to:
+        raise ValueError(f"resolved empty common date range: {resolved_from} > {resolved_to}")
+    return resolved_from, resolved_to
+
+
+def _loop_payload_key(payload: Mapping[str, Any]) -> str:
+    return f"{payload['experiment_id']}:{payload['loop_id']}"
+
+
+def summarize_multiloop_validations(loop_payloads: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    flat: list[dict[str, Any]] = []
+    for payload in loop_payloads:
+        loop_key = _loop_payload_key(payload)
+        for row in payload.get("validations", []):
+            delta = row["delta_metrics"]
+            hit_stats = row["hit_stats"]
+            flat.append(
+                {
+                    "experiment_id": payload["experiment_id"],
+                    "loop_id": payload["loop_id"],
+                    "loop_key": loop_key,
+                    "rule_key": row["rule_key"],
+                    "active_trading_days": int(row["active_trading_days"]),
+                    "simulator_mode": row["simulator_mode"],
+                    "return_delta": float(delta["total_return_delta"]),
+                    "cagr_delta": float(delta["cagr_delta"]),
+                    "mdd_delta": float(delta["max_drawdown_delta"]),
+                    "final_account_delta": float(delta["final_account_delta"]),
+                    "blocked_buy_events": int(hit_stats.get("blocked_buy_events") or 0),
+                    "unique_buy_hit_symbols": int(hit_stats.get("unique_buy_hit_symbols") or 0),
+                }
+            )
+
+    grouped: dict[tuple[str, int, str], list[dict[str, Any]]] = {}
+    for row in flat:
+        key = (row["rule_key"], row["active_trading_days"], row["simulator_mode"])
+        grouped.setdefault(key, []).append(row)
+
+    stability_rows: list[dict[str, Any]] = []
+    for (rule_key, active_days, simulator_mode), rows in sorted(grouped.items()):
+        return_deltas = [row["return_delta"] for row in rows]
+        cagr_deltas = [row["cagr_delta"] for row in rows]
+        mdd_deltas = [row["mdd_delta"] for row in rows]
+        stability_rows.append(
+            {
+                "rule_key": rule_key,
+                "active_trading_days": active_days,
+                "simulator_mode": simulator_mode,
+                "loops": len(rows),
+                "positive_return_loops": sum(1 for value in return_deltas if value > 0),
+                "negative_return_loops": sum(1 for value in return_deltas if value < 0),
+                "avg_return_delta": _mean(return_deltas),
+                "median_return_delta": _median(return_deltas),
+                "min_return_delta": min(return_deltas) if return_deltas else None,
+                "max_return_delta": max(return_deltas) if return_deltas else None,
+                "avg_cagr_delta": _mean(cagr_deltas),
+                "avg_mdd_delta": _mean(mdd_deltas),
+                "total_blocked_buy_events": sum(row["blocked_buy_events"] for row in rows),
+                "avg_unique_buy_hit_symbols": _mean([row["unique_buy_hit_symbols"] for row in rows]),
+            }
+        )
+
+    best_by_loop: list[dict[str, Any]] = []
+    worst_by_loop: list[dict[str, Any]] = []
+    rows_by_loop: dict[str, list[dict[str, Any]]] = {}
+    for row in flat:
+        rows_by_loop.setdefault(row["loop_key"], []).append(row)
+    for loop_key, rows in sorted(rows_by_loop.items()):
+        best = max(rows, key=lambda item: item["return_delta"])
+        worst = min(rows, key=lambda item: item["return_delta"])
+        best_by_loop.append(dict(best))
+        worst_by_loop.append(dict(worst))
+
+    return {
+        "flat_rows": flat,
+        "stability_rows": stability_rows,
+        "best_by_loop": best_by_loop,
+        "worst_by_loop": worst_by_loop,
+    }
+
+
+def aggregate_overlay_exposure(loop_payloads: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, int], dict[str, Any]] = {}
+    for payload in loop_payloads:
+        for overlay in payload.get("overlays", []):
+            rule_key = str(overlay["rule"]["rule_key"])
+            active_days = int(overlay["active_trading_days"])
+            target = grouped.setdefault(
+                (rule_key, active_days),
+                {
+                    "rule_key": rule_key,
+                    "active_trading_days": active_days,
+                    "loops": 0,
+                    "overlay_rows": 0,
+                    "overlay_symbols_sum": 0,
+                    "market_cap_buckets": {},
+                    "industries": {},
+                },
+            )
+            target["loops"] += 1
+            target["overlay_rows"] += int(overlay.get("overlay_rows") or 0)
+            target["overlay_symbols_sum"] += int(overlay.get("overlay_symbols") or 0)
+            for bucket, count in dict(overlay.get("by_market_cap_buckets") or {}).items():
+                target["market_cap_buckets"][bucket] = target["market_cap_buckets"].get(bucket, 0) + int(count)
+            for industry, count in dict(overlay.get("by_industries_top20") or {}).items():
+                target["industries"][industry] = target["industries"].get(industry, 0) + int(count)
+    rows: list[dict[str, Any]] = []
+    for row in grouped.values():
+        rows.append(
+            {
+                **row,
+                "avg_overlay_symbols": row["overlay_symbols_sum"] / row["loops"] if row["loops"] else None,
+                "top_market_cap_buckets": dict(
+                    sorted(row["market_cap_buckets"].items(), key=lambda item: item[1], reverse=True)[:5]
+                ),
+                "top_industries": dict(sorted(row["industries"].items(), key=lambda item: item[1], reverse=True)[:5]),
+            }
+        )
+    return sorted(rows, key=lambda item: (item["active_trading_days"], item["rule_key"]))
+
+
+def run_multiloop_financial_distress_qe_overlay_research(
+    *,
+    loop_specs: Sequence[QELoopSpec],
+    output_dir: Path,
+    date_from: Optional[dt.date],
+    date_to: Optional[dt.date],
+    active_trading_days_values: Sequence[int] = DEFAULT_ACTIVE_TRADING_DAYS,
+    simulator_modes: Sequence[str] = DEFAULT_SIMULATOR_MODES,
+    price_return_csv: Optional[Path] = None,
+    financial_rule_version: str = FINANCIAL_RULE_VERSION,
+    time_mode: str = DEFAULT_TIME_MODE,
+    limit: Optional[int] = None,
+    write_overlay_csv: bool = False,
+) -> MultiLoopOverlayRunSummary:
+    resolved_date_from, resolved_date_to = resolve_multiloop_date_range(
+        loop_specs=loop_specs,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    financial_rows, trading_days = load_enriched_financial_rows(
+        date_from=resolved_date_from,
+        date_to=resolved_date_to,
+        active_trading_days=max(active_trading_days_values),
+        financial_rule_version=financial_rule_version,
+        time_mode=time_mode,
+        limit=limit,
+    )
+    price_returns_override = (
+        load_price_returns_csv(price_return_csv)
+        if price_return_csv is not None and "next_candidate" in simulator_modes
+        else None
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    loop_payloads: list[dict[str, Any]] = []
+    loop_summaries: list[dict[str, Any]] = []
+    for spec in loop_specs:
+        summary = run_financial_distress_qe_overlay_research(
+            experiment_id=spec.experiment_id,
+            loop_id=spec.loop_id,
+            loop_path=Path(spec.loop_path),
+            output_dir=output_dir / "loops",
+            date_from=resolved_date_from,
+            date_to=resolved_date_to,
+            active_trading_days_values=active_trading_days_values,
+            simulator_modes=simulator_modes,
+            price_return_csv=price_return_csv,
+            financial_rule_version=financial_rule_version,
+            time_mode=time_mode,
+            limit=limit,
+            write_overlay_csv=write_overlay_csv,
+            financial_rows_override=financial_rows,
+            trading_days_override=trading_days,
+            price_returns_override=price_returns_override,
+        )
+        loop_summaries.append(asdict(summary))
+        loop_payloads.append(json.loads(Path(summary.output_json).read_text(encoding="utf-8")))
+
+    validation_summary = summarize_multiloop_validations(loop_payloads)
+    exposure_summary = aggregate_overlay_exposure(loop_payloads)
+    report_id = "financial_distress_qe_multiloop_{}_{}".format(
+        resolved_date_from.isoformat(),
+        dt.datetime.now().strftime("%Y%m%d_%H%M%S"),
+    ).replace("-", "")
+    json_path = output_dir / f"{report_id}.json"
+    md_path = output_dir / f"{report_id}.md"
+    payload = {
+        "report_id": report_id,
+        "simulator_version": SIMULATOR_VERSION,
+        "date_from": resolved_date_from,
+        "date_to": resolved_date_to,
+        "loop_specs": [asdict(spec) for spec in loop_specs],
+        "loop_summaries": loop_summaries,
+        "parameters": {
+            "financial_rule_version": financial_rule_version,
+            "time_mode": time_mode,
+            "active_trading_days_values": list(active_trading_days_values),
+            "simulator_modes": list(simulator_modes),
+            "financial_rows_loaded": len(financial_rows),
+            "trading_days_loaded": len(trading_days),
+            "price_return_csv": str(price_return_csv) if price_return_csv else None,
+            "price_returns_preloaded": price_returns_override is not None,
+            "write_overlay_csv": write_overlay_csv,
+        },
+        "validation_summary": validation_summary,
+        "exposure_summary": exposure_summary,
+        "research_boundary": {
+            "writes_db": False,
+            "changes_qe_runtime": False,
+            "changes_selection_center": False,
+            "changes_paper_trading": False,
+            "changes_qmt_or_live_trading": False,
+            "financial_signals_hard_block_enabled": False,
+            "financial_signals_force_exit_enabled": False,
+        },
+    }
+    json_path.write_text(_json_dumps(payload, indent=2), encoding="utf-8")
+    _write_multiloop_report_md(md_path, payload)
+    return MultiLoopOverlayRunSummary(
+        report_id=report_id,
+        output_json=str(json_path),
+        output_md=str(md_path),
+        loops=len(loop_specs),
+        date_from=resolved_date_from,
+        date_to=resolved_date_to,
+        validations=len(validation_summary["flat_rows"]),
+    )
+
+
+def _write_multiloop_report_md(path: Path, payload: Mapping[str, Any]) -> None:
+    stability_rows = sorted(
+        payload["validation_summary"]["stability_rows"],
+        key=lambda row: (
+            -float(row.get("avg_return_delta") or 0.0),
+            row["active_trading_days"],
+            row["rule_key"],
+            row["simulator_mode"],
+        ),
+    )
+    top_rows = []
+    for row in stability_rows[:30]:
+        top_rows.append(
+            [
+                row["active_trading_days"],
+                row["rule_key"],
+                row["simulator_mode"],
+                f"{row['positive_return_loops']}/{row['loops']}",
+                row["total_blocked_buy_events"],
+                _pct(row["avg_return_delta"]),
+                _pct(row["median_return_delta"]),
+                _pct(row["min_return_delta"]),
+                _pct(row["max_return_delta"]),
+                _pct(row["avg_mdd_delta"]),
+            ]
+        )
+
+    best_rows = [
+        [
+            row["loop_key"],
+            row["active_trading_days"],
+            row["rule_key"],
+            row["simulator_mode"],
+            row["blocked_buy_events"],
+            _pct(row["return_delta"]),
+            _pct(row["mdd_delta"]),
+        ]
+        for row in payload["validation_summary"]["best_by_loop"]
+    ]
+    worst_rows = [
+        [
+            row["loop_key"],
+            row["active_trading_days"],
+            row["rule_key"],
+            row["simulator_mode"],
+            row["blocked_buy_events"],
+            _pct(row["return_delta"]),
+            _pct(row["mdd_delta"]),
+        ]
+        for row in payload["validation_summary"]["worst_by_loop"]
+    ]
+    exposure_rows = [
+        [
+            row["active_trading_days"],
+            row["rule_key"],
+            row["overlay_rows"],
+            f"{float(row['avg_overlay_symbols'] or 0.0):.1f}",
+            "; ".join(f"{k}:{v}" for k, v in row["top_market_cap_buckets"].items()),
+            "; ".join(f"{k}:{v}" for k, v in row["top_industries"].items()),
+        ]
+        for row in payload["exposure_summary"][:20]
+    ]
+    lines = [
+        "# Financial Distress QE Multi-Loop Overlay Research",
+        "",
+        "Research-only offline overlay. It reads existing QE artifacts and does not change QE runtime or trading consumers.",
+        "",
+        "## Scope",
+        "",
+        "```text",
+        f"Date range : {payload['date_from']} -> {payload['date_to']}",
+        f"Loops      : {len(payload['loop_specs'])}",
+        f"Validations: {len(payload['validation_summary']['flat_rows'])}",
+        f"Modes      : {', '.join(payload['parameters']['simulator_modes'])}",
+        f"Active td  : {payload['parameters']['active_trading_days_values']}",
+        "```",
+        "",
+        "## Stability Summary",
+        "",
+        "```text",
+        *_fixed_width_table(
+            [
+                "active_td",
+                "rule_key",
+                "mode",
+                "pos/loops",
+                "blocked",
+                "avg_ret_d",
+                "med_ret_d",
+                "min_ret_d",
+                "max_ret_d",
+                "avg_mdd_d",
+            ],
+            top_rows,
+        ),
+        "```",
+        "",
+        "## Best Rule By Loop",
+        "",
+        "```text",
+        *_fixed_width_table(
+            ["loop", "active_td", "rule_key", "mode", "blocked", "return_delta", "mdd_delta"],
+            best_rows,
+        ),
+        "```",
+        "",
+        "## Worst Rule By Loop",
+        "",
+        "```text",
+        *_fixed_width_table(
+            ["loop", "active_td", "rule_key", "mode", "blocked", "return_delta", "mdd_delta"],
+            worst_rows,
+        ),
+        "```",
+        "",
+        "## Exposure Summary",
+        "",
+        "```text",
+        *_fixed_width_table(
+            ["active_td", "rule_key", "overlay_rows", "avg_symbols", "top_mv_buckets", "top_industries"],
+            exposure_rows,
+        ),
+        "```",
+        "",
+        "## Boundary",
+        "",
+        "```text",
+        "writes_db=false, changes_qe_runtime=false, changes_selection_center=false, changes_paper_trading=false, changes_qmt_or_live_trading=false",
+        "financial_signals_hard_block_enabled=false, financial_signals_force_exit_enabled=false",
+        "```",
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def _write_report_md(path: Path, payload: Mapping[str, Any]) -> None:
@@ -738,7 +1203,14 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run read-only financial distress QE overlay research")
     parser.add_argument("--experiment-id", default=DEFAULT_EXPERIMENT_ID)
     parser.add_argument("--loop-id", default=DEFAULT_LOOP_ID)
-    parser.add_argument("--loop-path", required=True)
+    parser.add_argument("--loop-path", default=None)
+    parser.add_argument(
+        "--loop-spec",
+        action="append",
+        default=None,
+        help="Multi-loop spec: experiment_id,loop_id,loop_path. Can be repeated.",
+    )
+    parser.add_argument("--loop-spec-json", default=None, help="JSON list/object containing multi-loop specs.")
     parser.add_argument("--output-dir", default="reports/event_signal/financial_distress_qe_overlay")
     parser.add_argument("--date-from", default=None)
     parser.add_argument("--date-to", default=None)
@@ -756,6 +1228,27 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[list[str]] = None) -> int:
     load_dotenv(ROOT / ".env", override=False)
     args = parse_args(argv)
+    if args.loop_spec or args.loop_spec_json:
+        summary = run_multiloop_financial_distress_qe_overlay_research(
+            loop_specs=load_loop_specs(
+                loop_specs=args.loop_spec,
+                loop_spec_json=Path(args.loop_spec_json) if args.loop_spec_json else None,
+            ),
+            output_dir=Path(args.output_dir),
+            date_from=_parse_date(args.date_from),
+            date_to=_parse_date(args.date_to),
+            active_trading_days_values=tuple(args.active_trading_days or DEFAULT_ACTIVE_TRADING_DAYS),
+            simulator_modes=tuple(args.simulator_mode or DEFAULT_SIMULATOR_MODES),
+            price_return_csv=Path(args.price_return_csv) if args.price_return_csv else None,
+            financial_rule_version=args.financial_rule_version,
+            time_mode=args.time_mode,
+            limit=args.limit,
+            write_overlay_csv=not args.no_overlay_csv,
+        )
+        print(_json_dumps(asdict(summary), indent=2))
+        return 0
+    if not args.loop_path:
+        raise ValueError("--loop-path is required for single-loop mode")
     summary = run_financial_distress_qe_overlay_research(
         experiment_id=args.experiment_id,
         loop_id=args.loop_id,
