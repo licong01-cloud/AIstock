@@ -24,6 +24,8 @@
 import argparse
 import gc
 import os
+import shutil
+import stat
 import sys
 import warnings
 from datetime import datetime, timezone
@@ -61,6 +63,44 @@ import pandas as pd
 SAVE_MINUTE_TRADES = os.environ.get('SAVE_MINUTE_TRADES', '0') == '1'
 
 RECORDER_REF_FILE = "qe_current_recorder.json"
+RECORDER_ISOLATION_FILE = "qe_recorder_isolation.json"
+SOURCE_PARAMS_ENV = "QE_BACKTEST_SOURCE_PARAMS_DIR"
+SOURCE_MLRUNS_ENV = "QE_BACKTEST_SOURCE_MLRUNS_DIR"
+ALLOW_LEGACY_SOURCE_ENV = "QE_BACKTEST_ALLOW_LEGACY_MLRUNS_SOURCE"
+
+ERR_TARGET_MLRUNS_SYMLINK = "QE_BACKTEST_TARGET_MLRUNS_IS_SYMLINK"
+ERR_REALPATH_COLLISION = "QE_BACKTEST_SOURCE_TARGET_REALPATH_COLLISION"
+ERR_RECORDER_NOT_ISOLATED = "QE_BACKTEST_RECORDER_NOT_ISOLATED"
+ERR_SOURCE_PARAMS_MISSING = "QE_BACKTEST_SOURCE_PARAMS_MISSING"
+PRED_BACKTEST_PICKLE_MAX_BYTES_ENV = "QE_PRED_BACKTEST_PICKLE_MAX_BYTES"
+PARAMS_PICKLE_MAX_BYTES_ENV = "QE_BACKTEST_PARAMS_PICKLE_MAX_BYTES"
+DEFAULT_PRED_BACKTEST_PICKLE_MAX_BYTES = 2 * 1024 * 1024 * 1024
+DEFAULT_PARAMS_PICKLE_MAX_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def _pickle_max_bytes(env_name: str, default_bytes: int) -> int:
+    raw_value = os.environ.get(env_name)
+    if not raw_value:
+        return default_bytes
+    try:
+        max_bytes = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{env_name} must be an integer byte limit, got {raw_value!r}") from exc
+    if max_bytes <= 0:
+        raise ValueError(f"{env_name} must be positive, got {max_bytes}")
+    return max_bytes
+
+
+def _load_pickle_with_size_bound(path: Path, *, max_bytes: int, purpose: str):
+    size_bytes = path.stat().st_size
+    if size_bytes > max_bytes:
+        raise MemoryError(
+            f"{purpose} is too large to load in one process: {path} has {size_bytes} bytes, "
+            f"limit={max_bytes}. Increase the explicit QE pickle byte limit only after "
+            "confirming the runner has enough memory."
+        )
+    with path.open("rb") as f:
+        return pickle.Unpickler(f).load()
 
 
 def _write_qe_current_recorder(recorder, mode: str, experiment_name: str):
@@ -71,6 +111,7 @@ def _write_qe_current_recorder(recorder, mode: str, experiment_name: str):
         print(f"[WARN] QE recorder binding skipped: recorder id missing for mode={mode}")
         return None
 
+    target_mlruns = Path.cwd() / "mlruns"
     payload = {
         "schema_version": 1,
         "recorder_id": recorder_id,
@@ -80,6 +121,7 @@ def _write_qe_current_recorder(recorder, mode: str, experiment_name: str):
         "runner": Path(__file__).name,
         "cwd": str(Path.cwd()),
         "mlflow_tracking_uri": os.environ.get("MLFLOW_TRACKING_URI", ""),
+        "target_mlruns_realpath": str(target_mlruns.resolve()) if target_mlruns.exists() else "",
         "written_at": datetime.now(timezone.utc).isoformat(),
     }
     path = Path.cwd() / RECORDER_REF_FILE
@@ -88,6 +130,237 @@ def _write_qe_current_recorder(recorder, mode: str, experiment_name: str):
     tmp.replace(path)
     print(f"[INFO] QE recorder binding written: {path} recorder_id={recorder_id} mode={mode}")
     return payload
+
+
+class BacktestRecorderIsolationError(RuntimeError):
+    """Fail-fast error with a stable QE_BACKTEST_* code for orchestration."""
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(f"{code}: {message}")
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_reparse_or_symlink(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    if callable(is_junction) and is_junction():
+        return True
+    try:
+        attrs = getattr(path.lstat(), "st_file_attributes", 0)
+    except OSError:
+        return False
+    return bool(attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
+def _has_params_pkl(path: Path) -> bool:
+    return path.exists() and any(path.glob("**/params.pkl"))
+
+
+def _write_backtest_recorder_isolation(payload: dict) -> dict:
+    path = Path.cwd() / RECORDER_ISOLATION_FILE
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    print(
+        "[INFO] QE backtest recorder isolation passed: "
+        f"source={payload.get('source_mlruns_realpath')} "
+        f"target={payload.get('target_mlruns_realpath')}"
+    )
+    return payload
+
+
+def _relocate_payload_mlruns_to_source_model(cwd: Path) -> None:
+    """Move extracted source mlruns out of target mlruns before qlib.init."""
+    if os.environ.get(SOURCE_PARAMS_ENV) or os.environ.get(SOURCE_MLRUNS_ENV):
+        return
+
+    extracted_mlruns = cwd / "mlruns"
+    source_mlruns = cwd / "source_model" / "mlruns"
+    if _is_reparse_or_symlink(extracted_mlruns) or not _has_params_pkl(extracted_mlruns):
+        return
+    if source_mlruns.exists():
+        raise BacktestRecorderIsolationError(
+            ERR_RECORDER_NOT_ISOLATED,
+            f"source_model/mlruns already exists while target mlruns contains params.pkl: {source_mlruns}",
+        )
+
+    source_mlruns.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(extracted_mlruns), str(source_mlruns))
+    os.environ[SOURCE_MLRUNS_ENV] = str(source_mlruns)
+    os.environ[SOURCE_PARAMS_ENV] = str(source_mlruns)
+    print(f"[INFO] Backtest-only source mlruns relocated to read-only source_model: {source_mlruns}")
+
+
+def _find_backtest_source_params_dir(cwd: Path) -> Path | None:
+    candidates = []
+    for env_name in (SOURCE_PARAMS_ENV, SOURCE_MLRUNS_ENV):
+        env_value = os.environ.get(env_name)
+        if env_value:
+            candidates.append(Path(env_value))
+    candidates.extend([cwd / "source_model", cwd / "source_model" / "mlruns"])
+
+    for candidate in candidates:
+        if _has_params_pkl(candidate):
+            return candidate
+
+    legacy_mlruns = cwd / "mlruns"
+    if os.environ.get(ALLOW_LEGACY_SOURCE_ENV) == "1" and _has_params_pkl(legacy_mlruns):
+        return legacy_mlruns
+    return None
+
+
+def _prepare_backtest_recorder_isolation(
+    experiment_name: str,
+    source_ref: dict | None = None,
+) -> dict:
+    """Ensure backtest-only source reads and target recorder writes are separated."""
+    cwd = Path.cwd().resolve()
+    target_mlruns = cwd / "mlruns"
+
+    if _is_reparse_or_symlink(target_mlruns):
+        raise BacktestRecorderIsolationError(
+            ERR_TARGET_MLRUNS_SYMLINK,
+            f"target mlruns must be a loop-local directory, not a symlink/reparse point: {target_mlruns}",
+        )
+
+    _relocate_payload_mlruns_to_source_model(cwd)
+    source_params_dir = _find_backtest_source_params_dir(cwd)
+    if source_params_dir is None:
+        raise BacktestRecorderIsolationError(
+            ERR_SOURCE_PARAMS_MISSING,
+            "backtest-only requires readable source params.pkl under source_model or "
+            f"{SOURCE_PARAMS_ENV}; refusing to read source model from target mlruns",
+        )
+
+    target_mlruns.mkdir(parents=True, exist_ok=True)
+    if _is_reparse_or_symlink(target_mlruns):
+        raise BacktestRecorderIsolationError(
+            ERR_TARGET_MLRUNS_SYMLINK,
+            f"target mlruns must be a loop-local directory, not a symlink/reparse point: {target_mlruns}",
+        )
+
+    source_mlruns = Path(os.environ.get(SOURCE_MLRUNS_ENV) or source_params_dir)
+    source_real = source_mlruns.resolve()
+    target_real = target_mlruns.resolve()
+
+    if source_real == target_real:
+        raise BacktestRecorderIsolationError(
+            ERR_REALPATH_COLLISION,
+            f"source and target mlruns resolve to the same path: {source_real}",
+        )
+    if _is_relative_to(target_real, source_real):
+        raise BacktestRecorderIsolationError(
+            ERR_RECORDER_NOT_ISOLATED,
+            f"target mlruns is inside source mlruns: source={source_real} target={target_real}",
+        )
+    if _is_relative_to(source_real, target_real):
+        raise BacktestRecorderIsolationError(
+            ERR_RECORDER_NOT_ISOLATED,
+            f"source mlruns is inside target mlruns: source={source_real} target={target_real}",
+        )
+
+    os.environ["MLFLOW_TRACKING_URI"] = str(target_real)
+    os.environ[SOURCE_PARAMS_ENV] = str(source_params_dir.resolve())
+    os.environ[SOURCE_MLRUNS_ENV] = str(source_real)
+
+    ref = source_ref or _read_backtest_source_ref()
+    payload = {
+        "schema_version": "qe_backtest_recorder_isolation_v1",
+        "mode": "backtest_only",
+        "experiment_name": experiment_name,
+        "source_task_id": ref.get("source_task_id"),
+        "source_loop_id": ref.get("source_loop") or ref.get("source_loop_id"),
+        "source_recorder_id": ref.get("source_recorder_id"),
+        "source_params_dir_realpath": str(source_params_dir.resolve()),
+        "source_mlruns_realpath": str(source_real),
+        "target_task_id": ref.get("target_task_id"),
+        "target_loop_id": ref.get("target_loop_id"),
+        "target_mlruns_realpath": str(target_real),
+        "target_mlruns_is_symlink": False,
+        "parallel_group_id": ref.get("parallel_group_id"),
+        "recorder_isolation_status": "passed",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return _write_backtest_recorder_isolation(payload)
+
+
+def _read_backtest_recorder_isolation_manifest() -> dict:
+    path = Path.cwd() / RECORDER_ISOLATION_FILE
+    if not path.exists():
+        raise BacktestRecorderIsolationError(
+            ERR_RECORDER_NOT_ISOLATED,
+            f"missing recorder isolation manifest before recorder creation: {path}",
+        )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise BacktestRecorderIsolationError(
+            ERR_RECORDER_NOT_ISOLATED,
+            f"recorder isolation manifest is not valid JSON: {path}",
+        ) from exc
+    if not isinstance(payload, dict) or payload.get("recorder_isolation_status") != "passed":
+        raise BacktestRecorderIsolationError(
+            ERR_RECORDER_NOT_ISOLATED,
+            f"recorder isolation manifest did not pass: {path}",
+        )
+    return payload
+
+
+def _validate_backtest_recorder_isolation_manifest(payload: dict | None = None) -> dict:
+    payload = payload or _read_backtest_recorder_isolation_manifest()
+    cwd = Path.cwd().resolve()
+    target_mlruns = cwd / "mlruns"
+    if _is_reparse_or_symlink(target_mlruns):
+        raise BacktestRecorderIsolationError(
+            ERR_TARGET_MLRUNS_SYMLINK,
+            f"target mlruns changed to a symlink/reparse point after isolation gate: {target_mlruns}",
+        )
+    expected_target_raw = str(payload.get("target_mlruns_realpath") or "")
+    expected_source_raw = str(payload.get("source_mlruns_realpath") or "")
+    if not expected_target_raw or not expected_source_raw:
+        raise BacktestRecorderIsolationError(
+            ERR_RECORDER_NOT_ISOLATED,
+            "recorder isolation manifest is missing source/target realpaths",
+        )
+    expected_target = Path(expected_target_raw)
+    expected_source = Path(expected_source_raw)
+    target_real = target_mlruns.resolve()
+    source_real = expected_source.resolve()
+    if target_real != expected_target.resolve():
+        raise BacktestRecorderIsolationError(
+            ERR_RECORDER_NOT_ISOLATED,
+            f"target mlruns realpath changed after isolation gate: expected={expected_target} actual={target_real}",
+        )
+    if source_real == target_real:
+        raise BacktestRecorderIsolationError(
+            ERR_REALPATH_COLLISION,
+            f"source and target mlruns resolve to the same path: {source_real}",
+        )
+    if _is_relative_to(target_real, source_real) or _is_relative_to(source_real, target_real):
+        raise BacktestRecorderIsolationError(
+            ERR_RECORDER_NOT_ISOLATED,
+            f"source and target mlruns are not physically isolated: source={source_real} target={target_real}",
+        )
+    return payload
+
+
+def _read_backtest_source_ref() -> dict:
+    for path in (Path.cwd() / "qe_backtest_source_ref.json", Path.cwd() / "source_model" / "source_recorder_ref.json"):
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                print(f"[WARN] Failed to parse source ref {path}: {exc}")
+    return {}
 
 
 def save_minute_trades_from_recorder(recorder, output_dir='.'):
@@ -352,6 +625,10 @@ def main():
     C["kernels"] = 4
     print(f"[INFO] Limited qlib kernels to 4")
 
+    isolation_manifest = None
+    if args.backtest_only:
+        isolation_manifest = _prepare_backtest_recorder_isolation(config.get("experiment_name", "workflow"))
+
     # Init qlib
     tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
     if not tracking_uri:
@@ -359,6 +636,8 @@ def main():
         os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
     exp_manager = C["exp_manager"]
     exp_manager["kwargs"]["uri"] = "file:" + tracking_uri
+    if args.backtest_only:
+        _validate_backtest_recorder_isolation_manifest(isolation_manifest)
     qlib.init(**config.get("qlib_init"), exp_manager=exp_manager)
 
     # 注入 benchmark Series（在 qlib init 之后，fallback 需要 D.features）
@@ -415,8 +694,14 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
     from qlib.data.dataset import Dataset
 
     # 1. 加载 prediction
-    with open(pred_path, "rb") as f:
-        pred_df = pickle.load(f)
+    pred_df = _load_pickle_with_size_bound(
+        pred_path,
+        max_bytes=_pickle_max_bytes(
+            PRED_BACKTEST_PICKLE_MAX_BYTES_ENV,
+            DEFAULT_PRED_BACKTEST_PICKLE_MAX_BYTES,
+        ),
+        purpose="pred-backtest prediction pickle",
+    )
 
     if isinstance(pred_df, pd.Series):
         pred_df = pred_df.to_frame("score")
@@ -564,8 +849,17 @@ def _load_backtest_only_model_from_loose_params(mlruns_dir: Path):
     )
     for params_path in reversed(params_files):
         try:
-            with params_path.open("rb") as f:
-                return pickle.load(f), params_path
+            return (
+                _load_pickle_with_size_bound(
+                    params_path,
+                    max_bytes=_pickle_max_bytes(
+                        PARAMS_PICKLE_MAX_BYTES_ENV,
+                        DEFAULT_PARAMS_PICKLE_MAX_BYTES,
+                    ),
+                    purpose="backtest-only source params pickle",
+                ),
+                params_path,
+            )
         except Exception as exc:
             print(f"[WARN] Failed to load loose params.pkl {params_path}: {exc}")
     return None, None
@@ -583,50 +877,15 @@ def _run_backtest_only(config: dict, experiment_name: str):
     from qlib.model.trainer import fill_placeholder
 
     task_config = config.get("task")
-
-    # 查找已有的 experiment 和 recorder
-    try:
-        exp = R.get_exp(experiment_name=experiment_name)
-        recorders = exp.list_recorders()
-    except Exception as exc:
-        print(f"[WARN] Backtest-only: MLflow metadata unavailable, trying loose params.pkl: {exc}")
-        recorders = {}
-    if not recorders:
-        model, params_path = _load_backtest_only_model_from_loose_params(Path("mlruns"))
-        if model is None:
-            raise RuntimeError(
-                f"Backtest-only: experiment '{experiment_name}' 中没有已有的 recorder，"
-                f"且 mlruns 下没有可加载的 params.pkl。需要先执行完整训练。"
-            )
-        rec_id = str(params_path)
-        print(f"[INFO] Loaded trained model from loose params.pkl {params_path}")
-    else:
-        # 从所有 recorders 中找到包含 params.pkl 的那个（跳过未完成的训练 run）
-        recorder = None
-        rec_id = None
-        for rid in reversed(list(recorders.keys())):
-            r = recorders[rid]
-            try:
-                obj = r.load_object("params.pkl")
-                if obj is not None:
-                    recorder = r
-                    rec_id = rid
-                    model = obj
-                    break
-            except Exception:
-                continue
-
-        if recorder is None:
-            model, params_path = _load_backtest_only_model_from_loose_params(Path("mlruns"))
-            if model is None:
-                raise RuntimeError(
-                    "Backtest-only: 所有 recorder 中均未找到 params.pkl，"
-                    "且 mlruns 下没有可加载的 params.pkl。无法跳过训练。"
-                )
-            rec_id = str(params_path)
-            print(f"[INFO] Loaded trained model from loose params.pkl {params_path}")
-        else:
-            print(f"[INFO] Loaded trained model from recorder {rec_id}")
+    source_params_dir = Path(os.environ.get(SOURCE_PARAMS_ENV, "source_model"))
+    model, params_path = _load_backtest_only_model_from_loose_params(source_params_dir)
+    if model is None:
+        raise RuntimeError(
+            f"{ERR_SOURCE_PARAMS_MISSING}: Backtest-only source params.pkl not found "
+            f"under {source_params_dir}; target mlruns is reserved for recorder writes."
+        )
+    rec_id = str(params_path)
+    print(f"[INFO] Loaded trained model from isolated source params.pkl {params_path}")
 
     # 重建 dataset（从配置重新初始化，不需要训练数据）
     dataset: Dataset = init_instance_by_config(task_config["dataset"], accept_types=Dataset)
@@ -643,6 +902,8 @@ def _run_backtest_only(config: dict, experiment_name: str):
         records = [records]
 
     # 创建新 recorder（不 resume 旧的），避免并行 loop 共用同一个 run 导致冲突
+    _validate_backtest_recorder_isolation_manifest()
+
     with R.start(experiment_name=experiment_name):
         recorder = R.get_recorder()
         _write_qe_current_recorder(recorder, "backtest_only", experiment_name)

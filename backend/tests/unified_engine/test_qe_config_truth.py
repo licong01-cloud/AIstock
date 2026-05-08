@@ -3,6 +3,7 @@ import json
 import sys
 import asyncio
 import base64
+import inspect
 from pathlib import Path
 
 import pytest
@@ -852,8 +853,13 @@ def test_backtest_only_model_payload_uses_node_api_archive():
         "source_task_id": "qe_source",
         "source_loop": "Loop26",
         "cross_node": True,
+        "source_transport": "mlruns_params_tar",
     }
     assert base64.b64decode(extra_files["mlruns_params.tar.gz.b64"]) == b"tar-bytes"
+    source_ref = json.loads(extra_files["qe_backtest_source_ref.json"])
+    assert source_ref["source_task_id"] == "qe_source"
+    assert source_ref["source_loop"] == "Loop26"
+    assert source_ref["source_transport"] == "mlruns_params_tar"
     client.download_mlruns_params.assert_awaited_once_with("qe_source", "Loop26")
 
 
@@ -871,6 +877,49 @@ def test_backtest_only_model_payload_fails_without_params():
                 reason="unit-test backtest-only",
             )
         )
+
+
+def test_backtest_retry_requires_isolation_passed():
+    client = AsyncMock()
+    client.get_workspace_file.return_value = {"recorder_isolation_status": "failed"}
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+
+    with pytest.raises(ValueError, match="QE_BACKTEST_RETRY_REQUIRES_ISOLATION_PASSED"):
+        asyncio.get_event_loop().run_until_complete(
+            scheduler._require_backtest_retry_isolation_passed(
+                client,
+                "qe_task",
+                "Loop4",
+                "rdagent-node1",
+            )
+        )
+
+
+def test_backtest_retry_accepts_isolation_passed_manifest_json():
+    client = AsyncMock()
+    client.get_workspace_file.return_value = json.dumps({"recorder_isolation_status": "passed"})
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+
+    payload = asyncio.get_event_loop().run_until_complete(
+        scheduler._require_backtest_retry_isolation_passed(
+            client,
+            "qe_task",
+            "Loop4",
+            "rdagent-node1",
+        )
+    )
+
+    assert payload["recorder_isolation_status"] == "passed"
+
+
+def test_backtest_retry_isolation_gate_precedes_auto_fallback_try():
+    source = inspect.getsource(AutoEvolutionScheduler.retry_loop)
+    retry_block_idx = source.index("if requested_retry_mode in (")
+    require_idx = source.index("await self._require_backtest_retry_isolation_passed", retry_block_idx)
+    fallback_try_idx = source.index("try:", retry_block_idx)
+    payload_idx = source.index("retry_model_source, retry_extra_experiment_files", fallback_try_idx)
+
+    assert require_idx < fallback_try_idx < payload_idx
 
 
 def test_suspend_filter_wraps_topk_strategy():
