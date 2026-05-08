@@ -56,7 +56,7 @@ DEFAULT_EXPERIMENT_ID = "qe_20260507_132049_d4e7"
 DEFAULT_LOOP_ID = "Loop1"
 DEFAULT_ACTIVE_TRADING_DAYS = (60, 120, 242)
 DEFAULT_SIMULATOR_MODES = ("cash", "next_candidate")
-SIMULATOR_VERSION = "financial_distress_qe_overlay_research_v3_20260508_severity_score_down"
+SIMULATOR_VERSION = "financial_distress_qe_overlay_research_v4_20260508_loss_history"
 GE50_LOSS_BUCKETS = {"loss_50pct_to_100pct_mv", "loss_ge_100pct_mv"}
 SMALL_MARKET_CAP_BUCKETS = {"mv_lt_5bn_yuan", "mv_5bn_to_10bn_yuan"}
 MID_LARGE_MARKET_CAP_BUCKETS = {"mv_10bn_to_30bn_yuan", "mv_30bn_to_100bn_yuan", "mv_ge_100bn_yuan"}
@@ -226,6 +226,37 @@ SIZE_BUCKET_RULES: tuple[FinancialDistressRule, ...] = (
         description="Relative loss is at least 50% but PIT market cap enrichment is missing.",
         policy_risk_level="REVIEW",
         priority=150,
+    ),
+)
+
+LOSS_HISTORY_RULES: tuple[FinancialDistressRule, ...] = (
+    FinancialDistressRule(
+        rule_key="loss_reports_ge_4",
+        title="rolling loss reports >= 4",
+        description="At least four loss reports in the last 730 days, without requiring current relative-loss severity.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=210,
+    ),
+    FinancialDistressRule(
+        rule_key="loss_reports_ge_4_mv_lt_10bn",
+        title="rolling loss reports >= 4 and market cap < 10bn CNY",
+        description="At least four loss reports in the last 730 days and PIT market cap bucket is below 10bn CNY.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=220,
+    ),
+    FinancialDistressRule(
+        rule_key="loss_reports_ge_4_mv_lt_10bn_ex_ge50_loss",
+        title="rolling loss reports >= 4, market cap < 10bn CNY, excluding current loss/mv >= 50%",
+        description="Loss-history-only incremental candidate: repeated losses and small cap, excluding current relative loss >= 50%.",
+        policy_risk_level="MEDIUM",
+        priority=230,
+    ),
+    FinancialDistressRule(
+        rule_key="forecast_loss_reports_ge_4_mv_lt_10bn",
+        title="forecast loss, rolling losses >= 4, and market cap < 10bn CNY",
+        description="Performance forecast loss with at least four rolling loss reports and PIT market cap below 10bn CNY.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=240,
     ),
 )
 
@@ -412,13 +443,19 @@ def select_research_rules(
     *,
     include_first_batch_rules: bool = True,
     include_size_bucket_rules: bool = False,
+    include_loss_history_rules: bool = False,
     size_bucket_only: bool = False,
+    loss_history_only: bool = False,
 ) -> tuple[FinancialDistressRule, ...]:
     rules: list[FinancialDistressRule] = []
-    if include_first_batch_rules and not size_bucket_only:
+    if size_bucket_only and loss_history_only:
+        raise ValueError("size_bucket_only and loss_history_only cannot both be enabled")
+    if include_first_batch_rules and not size_bucket_only and not loss_history_only:
         rules.extend(FIRST_BATCH_RULES)
-    if include_size_bucket_rules or size_bucket_only:
+    if (include_size_bucket_rules or size_bucket_only) and not loss_history_only:
         rules.extend(SIZE_BUCKET_RULES)
+    if include_loss_history_rules or loss_history_only:
+        rules.extend(LOSS_HISTORY_RULES)
     if not rules:
         raise ValueError("at least one research rule set must be enabled")
     return tuple(sorted(rules, key=lambda item: item.priority))
@@ -501,6 +538,22 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
         return loss_bucket in GE50_LOSS_BUCKETS and market_cap_bucket in MID_LARGE_MARKET_CAP_BUCKETS
     if rule.rule_key == "loss_to_market_cap_ge_50pct_mv_unknown":
         return loss_bucket in GE50_LOSS_BUCKETS and market_cap_bucket == "mv_unknown"
+    if rule.rule_key == "loss_reports_ge_4":
+        return loss_count_bucket == "loss_reports_ge_4"
+    if rule.rule_key == "loss_reports_ge_4_mv_lt_10bn":
+        return loss_count_bucket == "loss_reports_ge_4" and market_cap_bucket in SMALL_MARKET_CAP_BUCKETS
+    if rule.rule_key == "loss_reports_ge_4_mv_lt_10bn_ex_ge50_loss":
+        return (
+            loss_count_bucket == "loss_reports_ge_4"
+            and market_cap_bucket in SMALL_MARKET_CAP_BUCKETS
+            and loss_bucket not in GE50_LOSS_BUCKETS
+        )
+    if rule.rule_key == "forecast_loss_reports_ge_4_mv_lt_10bn":
+        return (
+            event_type == "financial_forecast_loss"
+            and loss_count_bucket == "loss_reports_ge_4"
+            and market_cap_bucket in SMALL_MARKET_CAP_BUCKETS
+        )
     raise ValueError(f"unsupported financial distress rule: {rule.rule_key}")
 
 
@@ -2291,6 +2344,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--no-overlay-csv", action="store_true")
     parser.add_argument("--include-size-bucket-rules", action="store_true")
     parser.add_argument("--size-bucket-only", action="store_true")
+    parser.add_argument("--include-loss-history-rules", action="store_true")
+    parser.add_argument("--loss-history-only", action="store_true")
     parser.add_argument("--rule-key", action="append", default=None, help="Limit research to one or more rule_key values.")
     return parser.parse_args(argv)
 
@@ -2301,7 +2356,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     research_rules = select_research_rules(
         include_first_batch_rules=True,
         include_size_bucket_rules=args.include_size_bucket_rules,
+        include_loss_history_rules=args.include_loss_history_rules,
         size_bucket_only=args.size_bucket_only,
+        loss_history_only=args.loss_history_only,
     )
     research_rules = filter_research_rules_by_key(research_rules, args.rule_key)
     if args.loop_spec or args.loop_spec_json:

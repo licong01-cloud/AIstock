@@ -4,6 +4,7 @@ import pandas as pd
 
 from backend.services.event_signal.financial_distress_qe_overlay_research import (
     FIRST_BATCH_RULES,
+    LOSS_HISTORY_RULES,
     SIZE_BUCKET_RULES,
     CandidateScore,
     SEVERITY_PROFILES,
@@ -25,7 +26,7 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
 
 
 def _rule(key: str):
-    return next(rule for rule in (*FIRST_BATCH_RULES, *SIZE_BUCKET_RULES) if rule.rule_key == key)
+    return next(rule for rule in (*FIRST_BATCH_RULES, *SIZE_BUCKET_RULES, *LOSS_HISTORY_RULES) if rule.rule_key == key)
 
 
 def test_first_batch_loss_to_market_cap_ge_50_includes_ge_100_bucket():
@@ -80,6 +81,21 @@ def test_select_research_rules_can_run_size_bucket_only():
     assert [rule.rule_key for rule in rules] == [rule.rule_key for rule in SIZE_BUCKET_RULES]
 
 
+def test_select_research_rules_can_run_loss_history_only():
+    rules = select_research_rules(loss_history_only=True)
+
+    assert [rule.rule_key for rule in rules] == [rule.rule_key for rule in LOSS_HISTORY_RULES]
+
+
+def test_select_research_rules_can_include_loss_history_with_first_batch():
+    rules = select_research_rules(include_loss_history_rules=True)
+
+    assert [rule.rule_key for rule in rules] == [
+        *(rule.rule_key for rule in FIRST_BATCH_RULES),
+        *(rule.rule_key for rule in LOSS_HISTORY_RULES),
+    ]
+
+
 def test_filter_research_rules_by_key_keeps_requested_rule_only():
     rules = filter_research_rules_by_key(
         SIZE_BUCKET_RULES,
@@ -87,6 +103,50 @@ def test_filter_research_rules_by_key_keeps_requested_rule_only():
     )
 
     assert [rule.rule_key for rule in rules] == ["loss_to_market_cap_ge_50pct_mv_lt_10bn"]
+
+
+def test_loss_history_rules_match_repeated_losses_and_small_cap_variants():
+    base = {
+        "event_type": "financial_express_loss",
+        "loss_to_market_cap_bucket": "loss_20pct_to_50pct_mv",
+        "loss_report_count_730d_bucket": "loss_reports_ge_4",
+        "market_cap_bucket": "mv_lt_5bn_yuan",
+    }
+
+    assert _rule_applies(base, _rule("loss_reports_ge_4"))
+    assert _rule_applies(base, _rule("loss_reports_ge_4_mv_lt_10bn"))
+    assert _rule_applies(base, _rule("loss_reports_ge_4_mv_lt_10bn_ex_ge50_loss"))
+    assert not _rule_applies(
+        {**base, "loss_to_market_cap_bucket": "loss_50pct_to_100pct_mv"},
+        _rule("loss_reports_ge_4_mv_lt_10bn_ex_ge50_loss"),
+    )
+    assert not _rule_applies(
+        {**base, "market_cap_bucket": "mv_10bn_to_30bn_yuan"},
+        _rule("loss_reports_ge_4_mv_lt_10bn"),
+    )
+
+
+def test_forecast_loss_history_rule_requires_forecast_event_and_small_cap():
+    matching = {
+        "event_type": "financial_forecast_loss",
+        "loss_to_market_cap_bucket": "loss_20pct_to_50pct_mv",
+        "loss_report_count_730d_bucket": "loss_reports_ge_4",
+        "market_cap_bucket": "mv_5bn_to_10bn_yuan",
+    }
+
+    assert _rule_applies(matching, _rule("forecast_loss_reports_ge_4_mv_lt_10bn"))
+    assert not _rule_applies(
+        {**matching, "event_type": "financial_express_loss"},
+        _rule("forecast_loss_reports_ge_4_mv_lt_10bn"),
+    )
+    assert not _rule_applies(
+        {**matching, "loss_report_count_730d_bucket": "loss_reports_3"},
+        _rule("forecast_loss_reports_ge_4_mv_lt_10bn"),
+    )
+    assert not _rule_applies(
+        {**matching, "market_cap_bucket": "mv_10bn_to_30bn_yuan"},
+        _rule("forecast_loss_reports_ge_4_mv_lt_10bn"),
+    )
 
 
 def test_expand_simulator_scenarios_adds_score_down_penalty_modes():
