@@ -34,6 +34,7 @@ def _write_qe_current_recorder(recorder, mode: str, experiment_name: str):
         print(f"[WARN] QE recorder binding skipped: recorder id missing for mode={mode}")
         return None
 
+    target_mlruns = Path.cwd() / "mlruns"
     payload = {
         "schema_version": 1,
         "recorder_id": recorder_id,
@@ -43,6 +44,7 @@ def _write_qe_current_recorder(recorder, mode: str, experiment_name: str):
         "runner": Path(__file__).name,
         "cwd": str(Path.cwd()),
         "mlflow_tracking_uri": os.environ.get("MLFLOW_TRACKING_URI", ""),
+        "target_mlruns_realpath": str(target_mlruns.resolve()) if target_mlruns.exists() else "",
         "written_at": datetime.now(timezone.utc).isoformat(),
     }
     path = Path.cwd() / RECORDER_REF_FILE
