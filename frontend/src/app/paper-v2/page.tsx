@@ -8,8 +8,9 @@ import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
+import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { paperV2Api, selectionCenterApi, strategyPackageApi } from "@/lib/paper-v2/api";
-import { dataSourceLabel, formatCompact, packageDisplayLabel, shortHash } from "@/lib/paper-v2/format";
+import { dataSourceLabel, formatCompact, packageDisplayLabel, paperV2WorkflowSteps, shortHash } from "@/lib/paper-v2/format";
 import {
   latestSnapshot,
   parseRunningSummaryItem,
@@ -98,8 +99,18 @@ export default function PaperV2OverviewPage() {
     next();
   }
 
+  const workflowSteps = paperV2WorkflowSteps({
+    hasPackages: packages.length > 0,
+    hasSelectionEnabledPackage: packages.some((item) => ["SELECTION_ENABLED", "PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
+    hasPaperEnabledPackage: packages.some((item) => ["PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
+    hasSelectionRun: selectable.some((item) => item.latest_selection_run),
+    hasPortfolio: rows.length > 0 || (pagination?.total ?? 0) > 0,
+    hasReadyRun: latestRuns > 0,
+  });
+
   return (
     <main>
+      <WorkflowStepper steps={workflowSteps} />
       <div className="pv2-grid pv2-grid-4">
         <MetricCard label="可用策略包" value={readyPackages} hint={`共 ${packages.length} 个策略包`} tone="success" />
         <MetricCard label="可选策略包" value={selectable.length} hint={`${staleModels} 个模型过期提醒`} tone={staleModels ? "warning" : "success"} />

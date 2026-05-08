@@ -213,3 +213,31 @@
 .pv2-readiness-context { list-style: none; padding: 6px 0 0 26px; margin: 4px 0 0; display: grid; gap: 2px; font-size: 12px; }
 .pv2-readiness-context-key { color: var(--pv2-muted); font-weight: 700; margin-right: 6px; }
 .pv2-readiness-context-value { font-family: "Cascadia Mono", "Consolas", monospace; }
+
+.pv2-workflow-stepper { margin-bottom: 16px; padding: 14px 16px; border: 1px solid var(--pv2-line); border-left: 5px solid var(--pv2-teal); border-radius: 14px; background: linear-gradient(135deg, #f0fdfa, #fffdf8); }
+.pv2-workflow-title { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; color: var(--pv2-teal-dark); text-transform: uppercase; margin-bottom: 10px; }
+.pv2-workflow-list { list-style: none; margin: 0; padding: 0; display: flex; gap: 8px; flex-wrap: wrap; }
+.pv2-workflow-step { flex: 1 1 180px; min-width: 160px; }
+.pv2-workflow-link { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--pv2-line); border-radius: 12px; background: rgba(255, 253, 248, 0.85); text-decoration: none; color: inherit; }
+.pv2-workflow-step-current .pv2-workflow-link { border-color: var(--pv2-teal); box-shadow: 0 0 0 2px rgba(15,118,110,0.12); background: #fffdf8; }
+.pv2-workflow-step-done .pv2-workflow-link { border-color: rgba(22,101,52,0.35); background: #f0fdf4; }
+.pv2-workflow-step-locked .pv2-workflow-link { opacity: 0.55; cursor: not-allowed; }
+.pv2-workflow-step a.pv2-workflow-link:hover { background: #ccfbf1; border-color: #99f6e4; }
+.pv2-workflow-num { display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 999px; font-weight: 900; font-size: 12px; flex-shrink: 0; background: #e7e5e4; color: #44403c; }
+.pv2-workflow-num-current { background: var(--pv2-teal); color: white; }
+.pv2-workflow-num-done { background: #16a34a; color: white; }
+.pv2-workflow-num-available { background: #dbeafe; color: #1e40af; }
+.pv2-workflow-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pv2-workflow-label { font-weight: 800; font-size: 13px; }
+.pv2-workflow-hint { font-size: 11px; color: var(--pv2-muted); }
+.pv2-workflow-stepper-compact { padding: 8px 12px; }
+.pv2-workflow-stepper-compact .pv2-workflow-list { gap: 4px; }
+.pv2-workflow-stepper-compact .pv2-workflow-link { padding: 6px 10px; }
+
+.pv2-error-card-list { display: grid; gap: 8px; }
+.pv2-error-card-row { padding: 10px 12px; border: 1px solid rgba(185,28,28,0.25); border-left: 4px solid var(--pv2-red); border-radius: 12px; background: #fff5f5; }
+.pv2-error-card-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pv2-error-card-message { margin-top: 6px; font-weight: 600; }
+.pv2-error-card-context { list-style: none; padding: 6px 0 0; margin: 6px 0 0; display: grid; gap: 2px; font-size: 12px; }
+.pv2-error-card-context-key { color: var(--pv2-muted); font-weight: 700; margin-right: 6px; }
+.pv2-error-card-context-value { font-family: "Cascadia Mono", "Consolas", monospace; }

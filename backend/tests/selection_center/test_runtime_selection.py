@@ -583,6 +583,28 @@ def test_selection_center_pit_mode_resolves_previous_trading_day_and_passes_cuto
 
             return Prepared()
 
+        def require_preflight_or_raise(self, **_kwargs):
+            # P0-F preflight stub — fake resolver always passes (test fixture
+            # exercises happy path, not the cold-start failure surface).
+            from backend.services.strategy_package.live_inference import (
+                LiveInferencePreflightCheck,
+                LiveInferencePreflightResult,
+                PREFLIGHT_CHECK_NAMES,
+                PREFLIGHT_STATUS_PASS,
+            )
+
+            return LiveInferencePreflightResult(
+                passed=True,
+                checks=[
+                    LiveInferencePreflightCheck(
+                        name=name,
+                        status=PREFLIGHT_STATUS_PASS,
+                        message="fake resolver preflight stub",
+                    )
+                    for name in PREFLIGHT_CHECK_NAMES
+                ],
+            )
+
     class FakeProvider:
         backend_name = "fake_live"
 

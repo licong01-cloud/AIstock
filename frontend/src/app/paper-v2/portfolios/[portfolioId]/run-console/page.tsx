@@ -13,7 +13,7 @@ import ReadinessFailureCard from "@/components/paper-v2/ReadinessFailureCard";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { paperV2Api } from "@/lib/paper-v2/api";
-import { shortHash, todayIso } from "@/lib/paper-v2/format";
+import { dataSourceLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
 import type {
   Activation,
   ExecutionPolicy,
@@ -541,7 +541,7 @@ export default function PaperV2RunConsolePage() {
               </div>
               <div className="pv2-field">
                 <label>信号数据源</label>
-                <input className="pv2-input" value="DB_HISTORICAL" readOnly />
+                <input className="pv2-input" value={dataSourceLabel("DB_HISTORICAL")} readOnly />
               </div>
               <div className="pv2-field">
                 <label>选股产物</label>
@@ -647,7 +647,7 @@ export default function PaperV2RunConsolePage() {
             <div className="pv2-field"><label>历史追赶开始</label><input className="pv2-input" data-testid="console-replay-start" type="date" value={replayStart} onChange={(event) => setReplayStart(event.target.value)} disabled={sessionMode === "LIVE_ONLY"} /></div>
             <div className="pv2-field"><label>历史追赶结束</label><input className="pv2-input" data-testid="console-replay-end" type="date" value={replayEnd} onChange={(event) => setReplayEnd(event.target.value)} disabled={sessionMode === "LIVE_ONLY"} /></div>
             <div className="pv2-field"><label>实时开始日期</label><input className="pv2-input" data-testid="console-live-start-inline" type="date" value={liveStartDate} onChange={(event) => setLiveStartDate(event.target.value)} disabled={sessionMode !== "LIVE_ONLY"} /></div>
-            <div className="pv2-field"><label>数据源角色</label><input className="pv2-input" value={sessionMode === "LIVE_ONLY" ? "TDX_REALTIME" : sessionMode === "CATCHUP_THEN_LIVE" ? "DB_HISTORICAL -> TDX_REALTIME" : "DB_HISTORICAL"} readOnly /></div>
+            <div className="pv2-field"><label>数据源角色</label><input className="pv2-input" value={sessionMode === "LIVE_ONLY" ? dataSourceLabel("TDX_REALTIME") : sessionMode === "CATCHUP_THEN_LIVE" ? `${dataSourceLabel("DB_HISTORICAL")} → ${dataSourceLabel("TDX_REALTIME")}` : dataSourceLabel("DB_HISTORICAL")} readOnly /></div>
             <div className="pv2-field"><label>重跑策略</label><input className="pv2-input" value="reject_existing / reset_portfolio" readOnly /></div>
           </div>
           <NoticePanel title="场景含义" tone="info">
@@ -668,7 +668,7 @@ export default function PaperV2RunConsolePage() {
         <SectionCard title="实时模拟与后台调度" eyebrow="TDX 实时分钟线">
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>实时开始日期</label><input className="pv2-input" data-testid="console-live-start" type="date" value={liveStartDate} onChange={(event) => setLiveStartDate(event.target.value)} /></div>
-            <div className="pv2-field"><label>实时数据源</label><input className="pv2-input" value="TDX_REALTIME" readOnly /></div>
+            <div className="pv2-field"><label>实时数据源</label><input className="pv2-input" value={dataSourceLabel("TDX_REALTIME")} readOnly /></div>
             <div className="pv2-field"><label>调度间隔（秒）</label><input className="pv2-input" data-testid="console-scheduler-interval" type="number" min={1} max={3600} value={schedulerInterval} onChange={(event) => setSchedulerInterval(Number(event.target.value))} /></div>
           </div>
           <div className="pv2-row-actions" style={{ marginTop: 12 }}>

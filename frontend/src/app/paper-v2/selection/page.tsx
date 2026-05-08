@@ -6,8 +6,9 @@ import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
+import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { hmmTrainingApi, paperV2Api, selectionCenterApi } from "@/lib/paper-v2/api";
-import { asText, dataSourceLabel, formatNumber, formatPercent, hmmSnapshotLabel, selectionRunLabel, shortHash, statusLabel, todayIso } from "@/lib/paper-v2/format";
+import { asText, dataSourceLabel, formatNumber, formatPercent, hmmSnapshotLabel, paperV2WorkflowSteps, selectionRunLabel, shortHash, statusLabel, todayIso } from "@/lib/paper-v2/format";
 import type { DataSource, HmmConfig, HmmSnapshot, JsonObject, SelectablePackage, SelectionMode, SelectionRun, SelectionWatchlistImportResult } from "@/lib/paper-v2/types";
 
 function runLabel(run: SelectionRun): string {
@@ -308,8 +309,18 @@ export default function PaperV2SelectionPage() {
   const resultRows = run?.aggregate_results || [];
   const visibleResultRows = resultRows.slice(0, topK);
 
+  const workflowSteps = paperV2WorkflowSteps({
+    hasPackages: packages.length > 0,
+    hasSelectionEnabledPackage: packages.length > 0,
+    hasPaperEnabledPackage: packages.some((item) => packageHealthRunnable(item)),
+    hasSelectionRun: runs.length > 0,
+    hasPortfolio: false,
+    hasReadyRun: false,
+  }, "selection");
+
   return (
     <main>
+      <WorkflowStepper steps={workflowSteps} compact />
       <ErrorPanel error={error} title="选股操作失败" />
       <div className="pv2-grid pv2-grid-main">
         <SectionCard title="选股控制" eyebrow="StrategyPackage 权威推理" action={<button className="pv2-button" onClick={loadPackages} disabled={loading} type="button">刷新策略包</button>}>
@@ -385,7 +396,7 @@ export default function PaperV2SelectionPage() {
         </SectionCard>
       </div>
 
-      {dataSource === "TDX_REALTIME" ? <NoticePanel title="实时数据源提示" tone="warning">当前权威 artifact 推理仍要求 DB_HISTORICAL；选择 TDX_REALTIME 时后端会明确失败，不会静默回退。</NoticePanel> : null}
+      {dataSource === "TDX_REALTIME" ? <NoticePanel title="实时数据源提示" tone="warning">当前权威 artifact 推理仍要求「{dataSourceLabel("DB_HISTORICAL")}」；选择「{dataSourceLabel("TDX_REALTIME")}」时后端会明确失败，不会静默回退。</NoticePanel> : null}
       {mode !== "single_package" ? <NoticePanel title="多策略包边界" tone="warning">多策略包当前只用于统一选股研究；不能直接创建模拟盘执行组合。</NoticePanel> : null}
 
       <SectionCard title="选股结果" eyebrow={run ? selectionRunLabel(run) : "尚未运行"} action={<button className="pv2-button" data-testid="selection-add-watchlist" onClick={addToWatchlist} disabled={!run || !resultRows.length} type="button">一键加入自选股票池</button>}>

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import ErrorListCard from "@/components/paper-v2/ErrorListCard";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
 import JsonPanel from "@/components/paper-v2/JsonPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
@@ -252,16 +253,7 @@ export default function PaperV2LedgerPage() {
         </SectionCard>
 
         <SectionCard title="错误" eyebrow="Fail-fast 持久化">
-          <PaperTable
-            rows={errors}
-            empty="暂无错误。"
-            columns={[
-              { key: "time", header: "创建时间", render: (row) => text(row, "created_at").slice(0, 19).replace("T", " ") },
-              { key: "code", header: "代码", render: (row) => <StatusBadge status={text(row, "error_code")} /> },
-              { key: "message", header: "消息", render: (row) => text(row, "message") },
-              { key: "context", header: "上下文", render: (row) => compactJson(row, "context") },
-            ]}
-          />
+          <ErrorListCard rows={errors} empty="暂无错误。" />
         </SectionCard>
       </div>
 

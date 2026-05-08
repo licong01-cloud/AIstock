@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import CopyChip from "@/components/paper-v2/CopyChip";
+import ErrorListCard from "@/components/paper-v2/ErrorListCard";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
 import JsonPanel from "@/components/paper-v2/JsonPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
@@ -11,7 +13,7 @@ import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { paperV2Api } from "@/lib/paper-v2/api";
-import { formatCompact, formatNumber, formatPercent, shortHash } from "@/lib/paper-v2/format";
+import { formatCompact, formatNumber, formatPercent, packageDisplayLabel, shortHash } from "@/lib/paper-v2/format";
 import type { Activation, JsonObject, PaperPortfolio, PaperRun } from "@/lib/paper-v2/types";
 
 function asDate(value: unknown): string {
@@ -183,12 +185,12 @@ export default function PaperV2PortfolioDetailPage() {
             }
           >
             <div className="pv2-chip-row">
-              <span className="pv2-chip">portfolio_id: {shortHash(portfolio.portfolio_id)}</span>
               <span className="pv2-chip">策略包: {packageName(portfolio)}</span>
-              <span className="pv2-chip">package_id: {shortHash(portfolio.package_id)}</span>
-              <span className="pv2-chip">manifest: {shortHash(portfolio.manifest_sha256)}</span>
-              <span className="pv2-chip">data: {portfolio.data_source}</span>
-              <span className="pv2-chip">start: {portfolio.start_date}</span>
+              <span className="pv2-chip">数据源: {portfolio.data_source}</span>
+              <span className="pv2-chip">起始: {portfolio.start_date}</span>
+              <CopyChip label={`portfolio_id ${shortHash(portfolio.portfolio_id, 6)}`} value={portfolio.portfolio_id} title={`完整 portfolio_id：${portfolio.portfolio_id}`} />
+              <CopyChip label={`package_id ${shortHash(portfolio.package_id, 6)}`} value={portfolio.package_id} title={`完整 package_id：${portfolio.package_id}`} />
+              <CopyChip label={`manifest ${shortHash(portfolio.manifest_sha256, 6)}`} value={portfolio.manifest_sha256} title={`完整 manifest_sha256：${portfolio.manifest_sha256}`} />
             </div>
             <NoticePanel title="冻结合约" tone="info">
               package_id、manifest_sha256、initial_cash、start_date、data_source、fee_policy、risk_policy 和默认 execution_policy 都是不可变的组合创建事实。每日执行策略变更必须记录为带日期的激活记录。
@@ -243,15 +245,8 @@ export default function PaperV2PortfolioDetailPage() {
                   { key: "run", header: "运行", render: (row) => <span className="pv2-mono">{shortHash(row.run_id)}</span> },
                 ]}
               />
-              <PaperTable
-                rows={errors.slice(0, 6)}
-                empty="暂无持久化错误。"
-                columns={[
-                  { key: "stage", header: "阶段", render: (row) => String(row.stage || row.error_stage || "-") },
-                  { key: "code", header: "代码", render: (row) => <StatusBadge status={String(row.error_code || "error")} /> },
-                  { key: "message", header: "消息", render: (row) => String(row.message || row.error_message || "-") },
-                ]}
-              />
+              <h3>持久化错误</h3>
+              <ErrorListCard rows={errors.slice(0, 6)} empty="暂无持久化错误。" />
             </SectionCard>
           </div>
         </>
