@@ -254,8 +254,22 @@ def test_score_down_rerank_counterfactual_replaces_dropped_topk_buy():
     }
     overlay = pd.DataFrame(
         [
-            {"trade_date": dt.date(2024, 1, 3), "ts_code": "BAD", "can_buy": False, "force_exit": False},
-            {"trade_date": dt.date(2024, 1, 4), "ts_code": "BAD", "can_buy": False, "force_exit": False},
+            {
+                "trade_date": dt.date(2024, 1, 3),
+                "ts_code": "BAD",
+                "can_buy": False,
+                "force_exit": False,
+                "market_cap_buckets": "mv_lt_5bn_yuan",
+                "industries": "real_estate",
+            },
+            {
+                "trade_date": dt.date(2024, 1, 4),
+                "ts_code": "BAD",
+                "can_buy": False,
+                "force_exit": False,
+                "market_cap_buckets": "mv_lt_5bn_yuan",
+                "industries": "real_estate",
+            },
         ]
     )
     candidate_scores = {
@@ -290,6 +304,8 @@ def test_score_down_rerank_counterfactual_replaces_dropped_topk_buy():
     assert stats["score_down_evaluated_topk_buy_events"] == 1
     assert stats["score_down_dropped_from_topk_events"] == 1
     assert stats["replacement_open_events"] == 1
+    assert stats["score_down_dropped_by_market_cap_buckets"] == {"mv_lt_5bn_yuan": 1}
+    assert stats["score_down_dropped_by_industries_top20"] == {"real_estate": 1}
     assert stats["sample_replacement_events"][0]["replacement_symbol"] == "GOOD"
 
 

@@ -13,6 +13,7 @@ import bisect
 import datetime as dt
 import json
 import math
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
@@ -318,6 +319,32 @@ def _money(value: Any) -> str:
     if value is None or (isinstance(value, float) and not math.isfinite(value)):
         return "NA"
     return f"{float(value):,.2f}"
+
+
+def _counter_top(counter: Counter[str], limit: int = 20) -> dict[str, int]:
+    return {key: int(value) for key, value in counter.most_common(limit)}
+
+
+def _counter_add_map(target: Counter[str], values: Mapping[str, Any]) -> None:
+    for key, value in values.items():
+        target[str(key)] += int(value)
+
+
+def _display_label(value: Any) -> str:
+    text = str(value)
+    if not text:
+        return text
+    try:
+        decoded = text.encode("gb18030", errors="strict").decode("utf-8", errors="strict")
+    except UnicodeError:
+        return text
+    if decoded == text or not any("\u4e00" <= char <= "\u9fff" for char in decoded):
+        return text
+    return decoded
+
+
+def _format_counter_items(values: Mapping[str, Any]) -> str:
+    return "; ".join(f"{_display_label(k)}:{v}" for k, v in values.items())
 
 
 def expand_simulator_scenarios(
@@ -904,6 +931,26 @@ def run_score_down_rerank_counterfactual(
     replacement_adjusted_ranks: list[float] = []
     replacement_rank_gaps: list[float] = []
     applied_penalty_pcts: list[float] = []
+    evaluated_market_cap_buckets: Counter[str] = Counter()
+    evaluated_industries: Counter[str] = Counter()
+    dropped_market_cap_buckets: Counter[str] = Counter()
+    dropped_industries: Counter[str] = Counter()
+    still_market_cap_buckets: Counter[str] = Counter()
+    still_industries: Counter[str] = Counter()
+
+    def record_exposure(
+        *,
+        symbol: str,
+        current_overlay: Mapping[str, Mapping[str, Any]],
+        market_cap_counter: Counter[str],
+        industry_counter: Counter[str],
+    ) -> dict[str, str]:
+        row = current_overlay.get(symbol, {})
+        market_cap_bucket = str(row.get("market_cap_buckets") or "mv_unknown")
+        industry = str(row.get("industries") or "industry_unknown")
+        market_cap_counter[market_cap_bucket] += 1
+        industry_counter[industry] += 1
+        return {"market_cap_buckets": market_cap_bucket, "industries": industry}
 
     def open_replacement(
         *,
@@ -1066,6 +1113,12 @@ def run_score_down_rerank_counterfactual(
             original_ranks.append(float(rank_row.original_rank))
             adjusted_ranks.append(float(rank_row.adjusted_rank))
             rank_drops.append(float(rank_row.adjusted_rank - rank_row.original_rank))
+            exposure = record_exposure(
+                symbol=symbol,
+                current_overlay=current_overlay,
+                market_cap_counter=evaluated_market_cap_buckets,
+                industry_counter=evaluated_industries,
+            )
             applied_penalty_pct = (
                 float(symbol_rank_penalty_pct_by_date.get(current_date, {}).get(symbol) or 0.0)
                 if symbol_rank_penalty_pct_by_date is not None
@@ -1083,12 +1136,19 @@ def run_score_down_rerank_counterfactual(
                         "original_rank": rank_row.original_rank,
                         "adjusted_rank": rank_row.adjusted_rank,
                         "rank_penalty_pct": applied_penalty_pct,
+                        **exposure,
                     }
                 )
                 continue
             evaluated_topk_buy_events += 1
             if rank_row.adjusted_rank <= top_k:
                 still_in_topk_events += 1
+                record_exposure(
+                    symbol=symbol,
+                    current_overlay=current_overlay,
+                    market_cap_counter=still_market_cap_buckets,
+                    industry_counter=still_industries,
+                )
                 score_down_events.append(
                     {
                         "trade_date": current_date.isoformat(),
@@ -1098,10 +1158,17 @@ def run_score_down_rerank_counterfactual(
                         "original_rank": rank_row.original_rank,
                         "adjusted_rank": rank_row.adjusted_rank,
                         "rank_penalty_pct": applied_penalty_pct,
+                        **exposure,
                     }
                 )
                 continue
             dropped_from_topk_events += 1
+            record_exposure(
+                symbol=symbol,
+                current_overlay=current_overlay,
+                market_cap_counter=dropped_market_cap_buckets,
+                industry_counter=dropped_industries,
+            )
             blocked_active.add(symbol)
             score_down_events.append(
                 {
@@ -1112,6 +1179,7 @@ def run_score_down_rerank_counterfactual(
                     "original_rank": rank_row.original_rank,
                     "adjusted_rank": rank_row.adjusted_rank,
                     "rank_penalty_pct": applied_penalty_pct,
+                    **exposure,
                 }
             )
             open_replacement(
@@ -1218,6 +1286,12 @@ def run_score_down_rerank_counterfactual(
         "score_down_still_in_topk_events": still_in_topk_events,
         "score_down_candidate_missing_events": candidate_missing_events,
         "score_down_original_rank_outside_topk_events": original_rank_outside_topk_events,
+        "score_down_evaluated_by_market_cap_buckets": _counter_top(evaluated_market_cap_buckets),
+        "score_down_evaluated_by_industries_top20": _counter_top(evaluated_industries),
+        "score_down_dropped_by_market_cap_buckets": _counter_top(dropped_market_cap_buckets),
+        "score_down_dropped_by_industries_top20": _counter_top(dropped_industries),
+        "score_down_still_by_market_cap_buckets": _counter_top(still_market_cap_buckets),
+        "score_down_still_by_industries_top20": _counter_top(still_industries),
         "replacement_open_events": sum(1 for row in replacement_events if row["status"] == "opened"),
         "replacement_no_candidate_events": no_replacement_events,
         "replacement_reselect_events": replacement_reselect_events,
@@ -1637,6 +1711,12 @@ def summarize_multiloop_validations(loop_payloads: Sequence[Mapping[str, Any]]) 
                     "avg_rank_drop": hit_stats.get("avg_rank_drop"),
                     "avg_replacement_rank_gap": hit_stats.get("avg_replacement_rank_gap"),
                     "avg_applied_penalty_pct": hit_stats.get("score_down_avg_applied_penalty_pct"),
+                    "evaluated_by_market_cap_buckets": dict(hit_stats.get("score_down_evaluated_by_market_cap_buckets") or {}),
+                    "evaluated_by_industries": dict(hit_stats.get("score_down_evaluated_by_industries_top20") or {}),
+                    "dropped_by_market_cap_buckets": dict(hit_stats.get("score_down_dropped_by_market_cap_buckets") or {}),
+                    "dropped_by_industries": dict(hit_stats.get("score_down_dropped_by_industries_top20") or {}),
+                    "still_by_market_cap_buckets": dict(hit_stats.get("score_down_still_by_market_cap_buckets") or {}),
+                    "still_by_industries": dict(hit_stats.get("score_down_still_by_industries_top20") or {}),
                 }
             )
 
@@ -1650,6 +1730,19 @@ def summarize_multiloop_validations(loop_payloads: Sequence[Mapping[str, Any]]) 
         return_deltas = [row["return_delta"] for row in rows]
         cagr_deltas = [row["cagr_delta"] for row in rows]
         mdd_deltas = [row["mdd_delta"] for row in rows]
+        evaluated_mv: Counter[str] = Counter()
+        evaluated_ind: Counter[str] = Counter()
+        dropped_mv: Counter[str] = Counter()
+        dropped_ind: Counter[str] = Counter()
+        still_mv: Counter[str] = Counter()
+        still_ind: Counter[str] = Counter()
+        for row in rows:
+            _counter_add_map(evaluated_mv, row.get("evaluated_by_market_cap_buckets") or {})
+            _counter_add_map(evaluated_ind, row.get("evaluated_by_industries") or {})
+            _counter_add_map(dropped_mv, row.get("dropped_by_market_cap_buckets") or {})
+            _counter_add_map(dropped_ind, row.get("dropped_by_industries") or {})
+            _counter_add_map(still_mv, row.get("still_by_market_cap_buckets") or {})
+            _counter_add_map(still_ind, row.get("still_by_industries") or {})
         stability_rows.append(
             {
                 "rule_key": rule_key,
@@ -1693,6 +1786,12 @@ def summarize_multiloop_validations(loop_payloads: Sequence[Mapping[str, Any]]) 
                         and math.isfinite(float(row["avg_applied_penalty_pct"]))
                     ]
                 ),
+                "top_evaluated_market_cap_buckets": _counter_top(evaluated_mv, 5),
+                "top_evaluated_industries": _counter_top(evaluated_ind, 5),
+                "top_dropped_market_cap_buckets": _counter_top(dropped_mv, 5),
+                "top_dropped_industries": _counter_top(dropped_ind, 5),
+                "top_still_market_cap_buckets": _counter_top(still_mv, 5),
+                "top_still_industries": _counter_top(still_ind, 5),
             }
         )
 
@@ -1950,10 +2049,23 @@ def _write_multiloop_report_md(path: Path, payload: Mapping[str, Any]) -> None:
             row["rule_key"],
             row["overlay_rows"],
             f"{float(row['avg_overlay_symbols'] or 0.0):.1f}",
-            "; ".join(f"{k}:{v}" for k, v in row["top_market_cap_buckets"].items()),
-            "; ".join(f"{k}:{v}" for k, v in row["top_industries"].items()),
+            _format_counter_items(row["top_market_cap_buckets"]),
+            _format_counter_items(row["top_industries"]),
         ]
         for row in payload["exposure_summary"][:20]
+    ]
+    score_down_exposure_rows = [
+        [
+            row["active_trading_days"],
+            row["simulator_mode"],
+            row.get("total_score_down_evaluated_topk_buy_events", 0),
+            row.get("total_score_down_dropped_from_topk_events", 0),
+            _format_counter_items(dict(row.get("top_evaluated_market_cap_buckets") or {})),
+            _format_counter_items(dict(row.get("top_dropped_market_cap_buckets") or {})),
+            _format_counter_items(dict(row.get("top_dropped_industries") or {})),
+        ]
+        for row in stability_rows[:30]
+        if int(row.get("total_score_down_evaluated_topk_buy_events") or 0) > 0
     ]
     lines = [
         "# Financial Distress QE Multi-Loop Overlay Research",
@@ -2009,6 +2121,23 @@ def _write_multiloop_report_md(path: Path, payload: Mapping[str, Any]) -> None:
         *_fixed_width_table(
             ["loop", "active_td", "rule_key", "mode", "blocked", "return_delta", "mdd_delta"],
             worst_rows,
+        ),
+        "```",
+        "",
+        "## Score-Down Hit Exposure",
+        "",
+        "```text",
+        *_fixed_width_table(
+            [
+                "active_td",
+                "mode",
+                "eval_topk",
+                "dropped",
+                "eval_mv",
+                "drop_mv",
+                "drop_industries",
+            ],
+            score_down_exposure_rows,
         ),
         "```",
         "",
