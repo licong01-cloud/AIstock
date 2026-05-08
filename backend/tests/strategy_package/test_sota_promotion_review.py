@@ -85,4 +85,8 @@ def test_legacy_sota_leaderboard_read_path_still_uses_registry() -> None:
 
     assert "FROM qe_sota_registry" in source
     assert "JOIN qe_evolution_loops" in source
+    assert "automatic_candidates" in source
+    assert "AUTO_CANDIDATE" in source
+    assert "approved_sota" in source
+    assert "FALSE AS approved_sota" in source
     assert "leaderboard" in source

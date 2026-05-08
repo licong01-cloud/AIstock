@@ -15,6 +15,8 @@ type SotaRow = {
   status?: string;
   evaluation_reason?: string;
   created_at?: string;
+  promotion_state?: "LEGACY_REGISTRY" | "AUTO_CANDIDATE" | string;
+  approved_sota?: boolean;
   // Metrics - either from top-level (leaderboard) or metrics_json (legacy)
   ic?: number | null;
   sharpe?: number | null;
@@ -170,6 +172,7 @@ export default function EvolutionSotaPage() {
               <tr style={{ background: "#f8fafc", textAlign: "left" }}>
                 <th style={{ padding: "10px", width: "28px" }}></th>
                 <th style={{ padding: "10px" }}>Loop</th>
+                <th style={{ padding: "10px" }}>Review state</th>
                 <th style={{ padding: "10px" }}>任务</th>
                 <th style={{ padding: "10px" }}>IC</th>
                 <th style={{ padding: "10px" }}>ICIR</th>
@@ -198,6 +201,19 @@ export default function EvolutionSotaPage() {
                       </td>
                       <td style={{ padding: "10px", fontFamily: "monospace" }}>
                         {row.loop_index != null ? `Loop ${row.loop_index}` : row.loop_id}
+                      </td>
+                      <td style={{ padding: "10px" }}>
+                        <span style={{
+                          padding: "3px 8px",
+                          borderRadius: "999px",
+                          border: `1px solid ${row.approved_sota ? "#16a34a" : "#f59e0b"}`,
+                          background: row.approved_sota ? "#f0fdf4" : "#fffbeb",
+                          color: row.approved_sota ? "#166534" : "#92400e",
+                          fontSize: "11px",
+                          fontWeight: 700,
+                        }}>
+                          {row.promotion_state || (row.approved_sota ? "LEGACY_REGISTRY" : "AUTO_CANDIDATE")}
+                        </span>
                       </td>
                       <td style={{ padding: "10px" }}>{row.task_name || "-"}</td>
                       <td style={{ padding: "10px", fontFamily: "monospace", fontWeight: 600 }}>
@@ -235,7 +251,7 @@ export default function EvolutionSotaPage() {
                     </tr>
                     {expandedRow === key && (
                       <tr>
-                        <td colSpan={11} style={{ padding: "12px 20px", backgroundColor: "#f8fafc", borderTop: "1px solid #e2e8f0" }}>
+                        <td colSpan={12} style={{ padding: "12px 20px", backgroundColor: "#f8fafc", borderTop: "1px solid #e2e8f0" }}>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
                             <div>
                               <div style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", marginBottom: "8px" }}>详细指标</div>
@@ -264,7 +280,7 @@ export default function EvolutionSotaPage() {
               })}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={11} style={{ padding: "20px", textAlign: "center", color: "#94a3b8" }}>
+                  <td colSpan={12} style={{ padding: "20px", textAlign: "center", color: "#94a3b8" }}>
                     暂无 SOTA 记录
                   </td>
                 </tr>
