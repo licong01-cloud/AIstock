@@ -30,6 +30,12 @@ from .model_state import (
 from .models import PackageStatus, StrategyPackageManifest
 from .qe_source_resolver import QEExperimentSourceResolver
 from .repository import PackageStatusEvent, StrategyPackageRecord, StrategyPackageRepository
+from .runtime_variant import (
+    RuntimeVariantKind,
+    RuntimeVariantValidationStatus,
+    StrategyPackageRuntimeVariant,
+    build_runtime_variant,
+)
 from .validators import StrategyPackageValidator
 
 
@@ -534,6 +540,61 @@ class StrategyPackageService:
     def list_model_retrain_jobs(self, package_id: str, *, limit: int = 100) -> list[StrategyPackageModelRetrainJob]:
         self.repository.get(package_id)
         return self.repository.list_model_retrain_jobs(package_id, limit=limit)
+
+    def create_runtime_variant(
+        self,
+        package_id: str,
+        *,
+        variant_name: str,
+        variant_kind: RuntimeVariantKind,
+        variant_config: dict[str, Any],
+        validation_status: RuntimeVariantValidationStatus = RuntimeVariantValidationStatus.DRAFT,
+        paper_candidate: bool = False,
+        validation_evidence: dict[str, Any] | None = None,
+        created_by: str = "aistock_api",
+    ) -> StrategyPackageRuntimeVariant:
+        record = self.repository.get(package_id)
+        variant = build_runtime_variant(
+            record.current_manifest(),
+            variant_name=variant_name,
+            variant_kind=variant_kind,
+            variant_config=variant_config,
+            validation_status=validation_status,
+            paper_candidate=paper_candidate,
+            validation_evidence=validation_evidence,
+            created_by=created_by,
+        )
+        return self.repository.save_runtime_variant(variant)
+
+    def list_runtime_variants(
+        self,
+        package_id: str,
+        *,
+        include_retired: bool = False,
+        limit: int = 100,
+    ) -> list[StrategyPackageRuntimeVariant]:
+        return self.repository.list_runtime_variants(
+            package_id,
+            include_retired=include_retired,
+            limit=limit,
+        )
+
+    def mark_runtime_variant_validation(
+        self,
+        package_id: str,
+        variant_id: str,
+        *,
+        validation_status: RuntimeVariantValidationStatus,
+        paper_candidate: bool = False,
+        validation_evidence: dict[str, Any] | None = None,
+    ) -> StrategyPackageRuntimeVariant:
+        return self.repository.set_runtime_variant_validation(
+            package_id=package_id,
+            variant_id=variant_id,
+            validation_status=validation_status,
+            paper_candidate=paper_candidate,
+            validation_evidence=validation_evidence or {},
+        )
 
     @staticmethod
     def _initial_model_state(record: StrategyPackageRecord) -> StrategyPackageModelState:

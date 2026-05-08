@@ -74,6 +74,7 @@ These L1 commands are placeholders until Phase 1/4 implementation lands. Before 
 | QE-GOV-L2-003 additive schema safety | `rg -n "CREATE TABLE|ALTER TABLE|COMMENT ON" backend docs tests` plus migration tests | New governance tables live in `strategy_pkg` / `model_registry`, include comments, and avoid destructive DDL. | No writes to existing production schema during validation. |
 | QE-GOV-L2-004 validation-run persistence | `python -m pytest backend/tests -q -k "package_validation_run"` | Retest/Mode A-F evidence is appended as independent validation runs. | Do not overwrite original QE metrics. |
 | QE-GOV-L2-005 protected asset manifest metadata | `python -m pytest backend/tests -q -k "protected_asset or asset_manifest"` | Asset hash/size/source/protected flag is recorded and immutable after freeze. | Use temp artifacts only. |
+| QE-GOV-L2-006 runtime variant foundation | `python -m pytest backend/tests/strategy_package/test_runtime_variants.py -q` | Runtime variants have independent hashes, keep frozen core hash unchanged, and require validation before `paper_candidate=true`. | No protected asset writes; no Paper v2 run execution. |
 
 ## 7. L3 UI / Dev-Port Workflow Gate
 
@@ -93,6 +94,7 @@ These L1 commands are placeholders until Phase 1/4 implementation lands. Before 
 | QE-GOV-L4-003 Mode A-F validation evidence | Future integration suite | Retest modes write independent validation runs and do not overwrite source QE metrics. | Uses controlled assets and dev artifact paths. |
 | QE-GOV-L4-004 Paper-ready selection boundary | Future integration suite | Paper v2 only selects approved, frozen, validated StrategyPackages. | Does not authorize live trading; no real broker/QMT path. |
 | QE-GOV-L4-005 protected asset boundary | Future integration suite plus artifact hash check | Frozen assets are read-only; runtime variants do not mutate frozen core. | Dev protected path only: `rdagent_assets/strategy_package_runtime_dev/` or worktree-local assets. |
+| QE-GOV-L4-006 runtime variant validation trace | Future integration suite | Variant validation runs record evidence and do not mutate frozen StrategyPackage manifest/core. | Variant can become Paper candidate only after validation passes. |
 
 ## 9. Phase-Specific Required Gates
 
@@ -101,6 +103,7 @@ These L1 commands are placeholders until Phase 1/4 implementation lands. Before 
 | Phase 0 terminology baseline | QE-GOV-L0-001 through QE-GOV-L0-007; terminology scan checklist; run-record template exists. | Documentation and test matrix consistently separate QE candidate, SOTA approved, promotion review, and StrategyPackage lifecycle. |
 | Phase 1 manual SOTA flow | Phase 0 gates plus QE-GOV-L1-001/002/003, QE-GOV-L2-001/002, QE-GOV-L3-001/002. | QE automation cannot create approved SOTA; user action creates review pending with audit. |
 | Phase 4 seed contract | Phase 0 gates plus QE-GOV-L1-004, QE-GOV-L4-002, and seed fragility evidence. | Same manifest + same master seed satisfies deterministic NAV/holding oracle or is explicitly quarantined/non-deterministic. |
+| Phase 6 runtime variants | Phase 0 gates plus QE-GOV-L2-006 and QE-GOV-L4-005/006 follow-up evidence. | Runtime variants cannot mutate frozen model/factor core and cannot become Paper candidates before validation passes. |
 
 ## 10. Run Record Requirements
 

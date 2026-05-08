@@ -13,6 +13,7 @@ from backend.services.strategy_package.metrics_summary import metrics_summary_fr
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.qe_source_resolver import QEExperimentSourceResolver
 from backend.services.strategy_package.repository import StrategyPackageRecord
+from backend.services.strategy_package.runtime_variant import RuntimeVariantKind, RuntimeVariantValidationStatus
 from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactService
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.strategy_package.validators import StrategyPackageValidator
@@ -70,6 +71,22 @@ class ModelRetrainStartRequest(BaseModel):
     confirm_text: str | None = None
 
 
+class CreateRuntimeVariantRequest(BaseModel):
+    variant_name: str = Field(min_length=1)
+    variant_kind: RuntimeVariantKind
+    variant_config: dict[str, Any] = Field(default_factory=dict)
+    validation_status: RuntimeVariantValidationStatus = RuntimeVariantValidationStatus.DRAFT
+    paper_candidate: bool = False
+    validation_evidence: dict[str, Any] = Field(default_factory=dict)
+    created_by: str = Field(default="aistock_api", min_length=1)
+
+
+class RuntimeVariantValidationRequest(BaseModel):
+    validation_status: RuntimeVariantValidationStatus
+    paper_candidate: bool = False
+    validation_evidence: dict[str, Any] = Field(default_factory=dict)
+
+
 class GenerateSelectionArtifactsRequest(BaseModel):
     trade_date: date | None = None
     start_date: date | None = None
@@ -118,6 +135,10 @@ def _selection_artifact_payload(artifact) -> dict[str, Any]:
     payload.pop("scores_json", None)
     payload["score_preview"] = artifact.scores_json[:10]
     return payload
+
+
+def _runtime_variant_payload(variant) -> dict[str, Any]:
+    return variant.model_dump(mode="json")
 
 
 def _trading_dates_between(start_date: date, end_date: date) -> list[date]:
@@ -411,6 +432,64 @@ def list_strategy_package_model_retrain_jobs(package_id: str, limit: int = 100) 
     try:
         jobs = StrategyPackageService().list_model_retrain_jobs(package_id, limit=limit)
         return {"ok": True, "package_id": package_id, "jobs": [job.model_dump(mode="json") for job in jobs]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/runtime-variants")
+def create_strategy_package_runtime_variant(package_id: str, req: CreateRuntimeVariantRequest) -> dict[str, Any]:
+    try:
+        variant = StrategyPackageService().create_runtime_variant(
+            package_id,
+            variant_name=req.variant_name,
+            variant_kind=req.variant_kind,
+            variant_config=req.variant_config,
+            validation_status=req.validation_status,
+            paper_candidate=req.paper_candidate,
+            validation_evidence=req.validation_evidence,
+            created_by=req.created_by,
+        )
+        return {"ok": True, "runtime_variant": _runtime_variant_payload(variant)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/runtime-variants")
+def list_strategy_package_runtime_variants(
+    package_id: str,
+    include_retired: bool = False,
+    limit: int = 100,
+) -> dict[str, Any]:
+    try:
+        variants = StrategyPackageService().list_runtime_variants(
+            package_id,
+            include_retired=include_retired,
+            limit=limit,
+        )
+        return {
+            "ok": True,
+            "package_id": package_id,
+            "runtime_variants": [_runtime_variant_payload(variant) for variant in variants],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/runtime-variants/{variant_id}/validation")
+def mark_strategy_package_runtime_variant_validation(
+    package_id: str,
+    variant_id: str,
+    req: RuntimeVariantValidationRequest,
+) -> dict[str, Any]:
+    try:
+        variant = StrategyPackageService().mark_runtime_variant_validation(
+            package_id,
+            variant_id,
+            validation_status=req.validation_status,
+            paper_candidate=req.paper_candidate,
+            validation_evidence=req.validation_evidence,
+        )
+        return {"ok": True, "runtime_variant": _runtime_variant_payload(variant)}
     except TradingCoreError as exc:
         _raise_http(exc)
 
