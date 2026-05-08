@@ -52,6 +52,9 @@ frontend/.next-dev-*/
 frontend/.next-build-*/
 tmp/
 
+# Paper v2 sim runner state (worktree-local SQLite event log + scratch dir)
+var/
+
 # Debug tools and test scripts (not tracked)
 debug_tools/
 
