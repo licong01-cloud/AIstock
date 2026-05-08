@@ -21,6 +21,8 @@ def _literal_assignment(path: Path, name: str):
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == name:
                     return ast.literal_eval(node.value)
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == name:
+            return ast.literal_eval(node.value)
     raise AssertionError(f"{name} assignment not found in {path}")
 
 

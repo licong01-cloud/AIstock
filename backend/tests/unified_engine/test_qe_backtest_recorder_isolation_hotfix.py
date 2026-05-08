@@ -174,6 +174,8 @@ def test_backtest_only_prefers_source_params_dir_before_target_mlruns() -> None:
 )
 def test_backtest_only_behavior_writes_isolation_manifest_and_target_binding(tmp_path, monkeypatch) -> None:
     runner = _load_runner(monkeypatch)
+    monkeypatch.delenv(runner.SOURCE_PARAMS_ENV, raising=False)
+    monkeypatch.delenv(runner.SOURCE_MLRUNS_ENV, raising=False)
     extracted_source = tmp_path / "mlruns"
     params_path = _write_params(extracted_source)
 
@@ -201,6 +203,8 @@ def test_backtest_only_behavior_writes_isolation_manifest_and_target_binding(tmp
 )
 def test_backtest_only_behavior_rejects_target_reparse_swap(tmp_path, monkeypatch) -> None:
     runner = _load_runner(monkeypatch)
+    monkeypatch.delenv(runner.SOURCE_PARAMS_ENV, raising=False)
+    monkeypatch.delenv(runner.SOURCE_MLRUNS_ENV, raising=False)
     extracted_source = tmp_path / "mlruns"
     _write_params(extracted_source)
 
