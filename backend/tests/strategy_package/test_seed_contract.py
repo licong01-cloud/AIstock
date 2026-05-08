@@ -132,3 +132,47 @@ def test_phase4_seed_contract_ddl_comments_cover_new_tables_and_columns() -> Non
     column_comments = set(re.findall(r"COMMENT\s+ON\s+COLUMN\s+([a-z0-9_]+\.[a-z0-9_]+\.[a-z0-9_]+)\s+IS", sql, re.I))
 
     assert (created_columns | altered_columns) <= column_comments
+
+
+def test_phase4_seed_contract_add_constraints_are_idempotent() -> None:
+    sql_path = Path("backend/migrations/qe_phase4_master_seed_contract_20260509.sql")
+    sql = sql_path.read_text(encoding="utf-8")
+
+    assert "ADD CONSTRAINT IF NOT EXISTS" not in sql.upper()
+    assert "FROM pg_constraint" in sql
+    assert "package_seed_policy_check" in sql
+    assert "package_master_seed_range_check" in sql
+
+
+def test_phase1_promotion_review_has_standalone_additive_migration() -> None:
+    sql_path = Path("backend/migrations/strategy_pkg_promotion_review_20260509.sql")
+    sql = sql_path.read_text(encoding="utf-8")
+
+    assert "CREATE SCHEMA IF NOT EXISTS strategy_pkg" in sql
+    assert "CREATE TABLE IF NOT EXISTS strategy_pkg.promotion_review" in sql
+    assert " public." not in sql.lower()
+    assert "DROP COLUMN" not in sql.upper()
+    assert "COMMENT ON TABLE strategy_pkg.promotion_review" in sql
+
+    table_match = re.search(
+        r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+strategy_pkg\.promotion_review\s*\((.*?)\n\);",
+        sql,
+        re.I | re.S,
+    )
+    assert table_match is not None
+    created_columns = set()
+    for raw_line in table_match.group(1).splitlines():
+        line = raw_line.strip().rstrip(",")
+        if not line or line.upper().startswith(("UNIQUE ", "CONSTRAINT ", "PRIMARY ", "FOREIGN ", "CHECK ")):
+            continue
+        created_columns.add(line.split()[0])
+    column_comments = {
+        match.group(1)
+        for match in re.finditer(
+            r"COMMENT\s+ON\s+COLUMN\s+strategy_pkg\.promotion_review\.([a-z0-9_]+)\s+IS",
+            sql,
+            re.I,
+        )
+    }
+
+    assert created_columns <= column_comments

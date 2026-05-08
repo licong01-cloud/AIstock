@@ -12,13 +12,33 @@ ALTER TABLE strategy_pkg.package ADD COLUMN IF NOT EXISTS seed_contract_sha256 T
 ALTER TABLE strategy_pkg.package ADD COLUMN IF NOT EXISTS reproducibility_level TEXT NULL;
 ALTER TABLE strategy_pkg.package ADD COLUMN IF NOT EXISTS nondeterministic_flags JSONB NULL;
 
-ALTER TABLE strategy_pkg.package
-    ADD CONSTRAINT package_seed_policy_check
-    CHECK (seed_policy IS NULL OR seed_policy IN ('fixed', 'multi_seed', 'random_logged', 'unset_legacy'));
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'package_seed_policy_check'
+          AND conrelid = 'strategy_pkg.package'::regclass
+    ) THEN
+        ALTER TABLE strategy_pkg.package
+            ADD CONSTRAINT package_seed_policy_check
+            CHECK (seed_policy IS NULL OR seed_policy IN ('fixed', 'multi_seed', 'random_logged', 'unset_legacy'));
+    END IF;
+END $$;
 
-ALTER TABLE strategy_pkg.package
-    ADD CONSTRAINT package_master_seed_range_check
-    CHECK (master_seed IS NULL OR master_seed >= 0);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'package_master_seed_range_check'
+          AND conrelid = 'strategy_pkg.package'::regclass
+    ) THEN
+        ALTER TABLE strategy_pkg.package
+            ADD CONSTRAINT package_master_seed_range_check
+            CHECK (master_seed IS NULL OR master_seed >= 0);
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS strategy_pkg.seed_fragility_score (
     package_id TEXT PRIMARY KEY REFERENCES strategy_pkg.package(package_id),

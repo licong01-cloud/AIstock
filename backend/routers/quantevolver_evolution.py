@@ -1667,44 +1667,79 @@ def get_evolution_trajectory(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/leaderboard", summary="获取跨任务 SOTA 排行榜")
+@router.get("/leaderboard", summary="Get cross-task SOTA leaderboard")
 def get_sota_leaderboard():
-    """
-    从 qe_evolution_loops + qe_sota_registry 聚合所有任务的 SOTA 记录，按 IC 降序排列。
-    """
+    """Return legacy SOTA registry rows plus unapproved automatic candidates."""
     try:
         from ..db.pg_pool import get_conn
         import json as _json
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT l.task_id, l.loop_id, l.loop_index, l.action_type,
-                           l.metrics_json, l.is_sota, l.status,
-                           t.task_name,
-                           r.evaluation_reason, r.created_at
-                    FROM qe_sota_registry r
-                    JOIN qe_evolution_loops l ON r.loop_id = l.loop_id
-                    JOIN qe_evolution_tasks t ON l.task_id = t.task_id
-                    ORDER BY r.created_at DESC
+                    WITH legacy_registry AS (
+                        SELECT l.task_id, l.loop_id, l.loop_index, l.action_type,
+                               l.metrics_json, l.is_sota, l.status,
+                               t.task_name,
+                               r.evaluation_reason, r.created_at,
+                               r.model_assets_synced, r.local_asset_path,
+                               'LEGACY_REGISTRY'::text AS promotion_state,
+                               TRUE AS approved_sota
+                        FROM qe_sota_registry r
+                        JOIN qe_evolution_loops l ON r.loop_id = l.loop_id
+                        JOIN qe_evolution_tasks t ON l.task_id = t.task_id
+                    ),
+                    automatic_candidates AS (
+                        SELECT l.task_id, l.loop_id, l.loop_index, l.action_type,
+                               l.metrics_json, l.is_sota, l.status,
+                               t.task_name,
+                               'Automatic SOTA candidate; requires manual promotion review before approval.'::text AS evaluation_reason,
+                               l.created_at,
+                               FALSE AS model_assets_synced,
+                               NULL::text AS local_asset_path,
+                               'AUTO_CANDIDATE'::text AS promotion_state,
+                               FALSE AS approved_sota
+                        FROM qe_evolution_loops l
+                        JOIN qe_evolution_tasks t ON l.task_id = t.task_id
+                        WHERE l.is_sota = TRUE
+                          AND l.status = 'completed'
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM qe_sota_registry r
+                              WHERE r.loop_id = l.loop_id
+                          )
+                    )
+                    SELECT *
+                    FROM legacy_registry
+                    UNION ALL
+                    SELECT *
+                    FROM automatic_candidates
+                    ORDER BY created_at DESC
                     LIMIT 100
                 """)
                 cols = [desc[0] for desc in cur.description]
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
-        # Extract IC from metrics_json for sorting
+        # Extract common metrics for sorting and frontend summaries.
         for row in rows:
             m = row.get("metrics_json") or {}
             if isinstance(m, str):
-                m = _json.loads(m)
+                try:
+                    m = _json.loads(m)
+                except Exception:
+                    m = {}
+            if not isinstance(m, dict):
+                m = {}
             row["ic"] = m.get("IC")
-            row["sharpe"] = m.get("sharpe")
+            row["rank_ic"] = m.get("Rank_IC")
+            row["icir"] = m.get("ICIR")
+            row["sharpe"] = m.get("Sharpe", m.get("sharpe"))
 
         rows.sort(key=lambda r: r.get("ic") or 0, reverse=True)
 
         total_tasks = len(set(r["task_id"] for r in rows))
         total_loops = len(rows)
-        best_ic = max((r["ic"] for r in rows if r.get("ic")), default=None)
-        best_sharpe = max((r["sharpe"] for r in rows if r.get("sharpe")), default=None)
+        best_ic = max((r["ic"] for r in rows if r.get("ic") is not None), default=None)
+        best_sharpe = max((r["sharpe"] for r in rows if r.get("sharpe") is not None), default=None)
 
         return {
             "status": "success",

@@ -95,13 +95,13 @@ COMMENT ON COLUMN strategy_pkg.promotion_review.source_id IS 'Stable source obje
 COMMENT ON COLUMN strategy_pkg.promotion_review.task_id IS 'Optional QE task id for evolution-loop sources, retained for audit and UI filtering.';
 COMMENT ON COLUMN strategy_pkg.promotion_review.loop_id IS 'Optional QE evolution loop id in database form, usually {task_id}_Loop{N}.';
 COMMENT ON COLUMN strategy_pkg.promotion_review.experiment_id IS 'Optional QE experiment id associated with the promoted source.';
-COMMENT ON COLUMN strategy_pkg.promotion_review.status IS 'Promotion lifecycle status; REVIEW_PENDING means awaiting human review, SOTA_APPROVED requires explicit future approval.';
+COMMENT ON COLUMN strategy_pkg.promotion_review.status IS 'Promotion lifecycle status; AUTO_CANDIDATE is an unapproved automatic discovery, REVIEW_PENDING awaits human review, and SOTA_APPROVED requires explicit future approval.';
 COMMENT ON COLUMN strategy_pkg.promotion_review.requested_by IS 'User, UI actor, or service identity that requested manual SOTA review.';
 COMMENT ON COLUMN strategy_pkg.promotion_review.reviewer IS 'Human reviewer identity that made a future approval or rejection decision; NULL while pending.';
 COMMENT ON COLUMN strategy_pkg.promotion_review.review_reason IS 'Requester-supplied reason or note captured when creating the review.';
 COMMENT ON COLUMN strategy_pkg.promotion_review.decision_reason IS 'Reviewer-supplied approval or rejection rationale; NULL while pending.';
 COMMENT ON COLUMN strategy_pkg.promotion_review.source_metrics_json IS 'Snapshot of source QE metrics at request time; display/audit evidence only, not recomputed by this table.';
-COMMENT ON COLUMN strategy_pkg.promotion_review.audit_json IS 'Machine-readable audit context including workflow source and non-approval flags.';
+COMMENT ON COLUMN strategy_pkg.promotion_review.audit_json IS 'Machine-readable audit context including workflow source, candidate state, non-approval flags, and Paper eligibility false by default.';
 COMMENT ON COLUMN strategy_pkg.promotion_review.created_at IS 'Timestamp when the manual promotion review row was created.';
 COMMENT ON COLUMN strategy_pkg.promotion_review.updated_at IS 'Timestamp when the promotion review row was last updated.';
 COMMENT ON COLUMN strategy_pkg.promotion_review.decided_at IS 'Timestamp of a future human approval or rejection decision; NULL for REVIEW_PENDING.';
