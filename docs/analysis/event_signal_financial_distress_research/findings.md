@@ -67,3 +67,36 @@ The phase-8 report generated 504 bucket rows across current rule families, activ
 | unknown  | data-quality bucket; do not use for runtime action           |
 +----------+--------------------------------------------------------------+
 ```
+
+## Phase 9 Initial Data Availability
+
+Read-only DB count on `market.event_signal` joined to PIT `market.daily_basic` for 2023-01-01..2026-04-27 shows medium/large samples are present for structured financial events.
+
+```text
++--------------------------------------+----------+---------+---------+---------+
+| event family                         | 10-30bn  | 30-100bn| >=100bn | note    |
++--------------------------------------+----------+---------+---------+---------+
+| financial_positive_but_miss_expect.  | 407      | 91      | 20      | usable  |
+| financial_forecast_large_decline     | 608      | 159     | 35      | usable  |
+| financial_indicator_large_decline    | 2153     | 473     | 77      | broad   |
+| financial_express_large_decline      | 42       | 11      | 2       | sparse  |
++--------------------------------------+----------+---------+---------+---------+
+```
+
+Phase 9 first implementation should therefore test structured medium/large-cap rules before title/PDF/LLM rules.
+
+## Phase 9 Medium/Large-Cap Structured Event Finding
+
+```text
++--------------------------------------+-----------------------+------------------------------------------------------------+
+| candidate                            | decision              | evidence                                                   |
++--------------------------------------+-----------------------+------------------------------------------------------------+
+| indicator_large_decline_mv_ge_10bn   | KEEP_RESEARCH_FEATURE | 242td avg_ret_d 0.28% fixed / 0.24% severity               |
+| structured_financial_risk_mv_ge_10bn | COVERAGE_BENCHMARK    | broad positive average but too blunt as standalone         |
+| forecast_express_large_decline_mv_ge | REJECT_STANDALONE     | 120/242td fixed mode negative                              |
+| expectation_miss_mv_ge_10bn          | WATCHLIST_RESEARCH    | weak Top50 interaction; useful concept but not enough      |
+| expectation_miss_mv_ge_30bn          | REJECT_RUNTIME        | 30bn+ sample had no dropped Top50 events                   |
++--------------------------------------+-----------------------+------------------------------------------------------------+
+```
+
+Medium/large-cap structured financial risk evidence is concentrated in the 10-30bn bucket. The next research step should split `indicator_large_decline_mv_ge_10bn` by industry, size sub-buckets, and loss history before any runtime design.

@@ -39,21 +39,47 @@ git diff --check
 | check                                | result                      |
 +--------------------------------------+-----------------------------+
 | py_compile                           | pass                        |
-| targeted financial-distress pytest   | 23 passed after phase 8     |
-| event_signal pytest suite            | 153 passed                  |
+| targeted financial-distress pytest   | 26 passed after phase 9     |
+| event_signal pytest suite            | 156 passed                  |
 | runtime isolation scan               | no runtime references added |
-| WSL 10-loop offline overlay          | pass, 840 validations       |
-| market_cap_bucket_summary            | pass, 504 rows              |
+| WSL 10-loop offline overlay          | pass, 360 validations        |
+| mid-large bucket coverage            | pass, included in report     |
 | git diff --check                     | pass, LF/CRLF warnings only |
 +--------------------------------------+-----------------------------+
 ```
 
 ## Current Next Action
 
-Phase 9: research medium/large-cap event families. Current loss-based financial distress rules interact mostly with <10bn market cap names, so medium/large-cap risk signals should focus on impairment, non-standard audit opinion, regulatory actions, debt stress, and expectation-miss events.
+Phase 10: research loss-history + industry + size interactions, starting from phase-9 `indicator_large_decline_mv_ge_10bn` and broad structured-risk benchmark. Continue with scripts/offline overlay only; no runtime integration.
 
 ## Commit Policy
 
 - Commit curated tracking docs after this update.
 - Continue pushing to the feature branch only.
 - Do not merge to `main` until user explicitly requests integration.
+
+## 2026-05-09 Phase 9 Session
+
+```text
++---------------------+--------------------------------------------------+-------------------------------+
+| time                | action                                           | result                        |
++---------------------+--------------------------------------------------+-------------------------------+
+| 2026-05-09 morning  | resumed phase 9 in dedicated worktree           | branch clean; root main unused |
+| 2026-05-09 morning  | checked structured event_signal availability    | mid/large samples exist        |
++---------------------+--------------------------------------------------+-------------------------------+
+```
+
+## 2026-05-09 Phase 9 Completion
+
+```text
++---------------------+--------------------------------------------------+-------------------------------+
+| time                | action                                           | result                        |
++---------------------+--------------------------------------------------+-------------------------------+
+| 2026-05-09 morning  | implemented mid-large structured event rules     | tests passed                  |
+| 2026-05-09 morning  | ran WSL 10-loop overlay validation               | 360 validations passed        |
+| 2026-05-09 morning  | added curated report and validation record       | ready to commit               |
++---------------------+--------------------------------------------------+-------------------------------+
+```
+
+Latest curated report: `docs/analysis/event_signal_financial_distress_mid_large_qe_overlay_result_20260509.md`.
+Latest validation record: `tests/aistock_validation/history/local_data_management/20260509_l2_financial-distress-mid-large-qe-overlay-validation.md`.

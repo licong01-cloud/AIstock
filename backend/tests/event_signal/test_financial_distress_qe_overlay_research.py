@@ -2,9 +2,11 @@ import datetime as dt
 
 import pandas as pd
 
+from backend.services.event_signal.early_financial_distress_research import classify_metric_bucket
 from backend.services.event_signal.financial_distress_qe_overlay_research import (
     FIRST_BATCH_RULES,
     LOSS_HISTORY_RULES,
+    MID_LARGE_EVENT_RULES,
     SIZE_BUCKET_RULES,
     CandidateScore,
     SEVERITY_PROFILES,
@@ -28,7 +30,11 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
 
 
 def _rule(key: str):
-    return next(rule for rule in (*FIRST_BATCH_RULES, *SIZE_BUCKET_RULES, *LOSS_HISTORY_RULES) if rule.rule_key == key)
+    return next(
+        rule
+        for rule in (*FIRST_BATCH_RULES, *SIZE_BUCKET_RULES, *LOSS_HISTORY_RULES, *MID_LARGE_EVENT_RULES)
+        if rule.rule_key == key
+    )
 
 
 def test_first_batch_loss_to_market_cap_ge_50_includes_ge_100_bucket():
@@ -87,6 +93,12 @@ def test_select_research_rules_can_run_loss_history_only():
     rules = select_research_rules(loss_history_only=True)
 
     assert [rule.rule_key for rule in rules] == [rule.rule_key for rule in LOSS_HISTORY_RULES]
+
+
+def test_select_research_rules_can_run_mid_large_only():
+    rules = select_research_rules(mid_large_only=True)
+
+    assert [rule.rule_key for rule in rules] == [rule.rule_key for rule in MID_LARGE_EVENT_RULES]
 
 
 def test_select_research_rules_can_include_loss_history_with_first_batch():
@@ -213,6 +225,54 @@ def test_forecast_loss_history_rule_requires_forecast_event_and_small_cap():
         {**matching, "market_cap_bucket": "mv_10bn_to_30bn_yuan"},
         _rule("forecast_loss_reports_ge_4_mv_lt_10bn"),
     )
+
+
+def test_mid_large_event_rules_match_expectation_miss_and_declines():
+    miss = {
+        "event_type": "financial_positive_but_miss_expectation",
+        "market_cap_bucket": "mv_10bn_to_30bn_yuan",
+        "metric_detail": {"miss_gap": 55.0},
+    }
+    small_miss = {**miss, "market_cap_bucket": "mv_5bn_to_10bn_yuan"}
+    mild_miss = {**miss, "metric_detail": {"miss_gap": 35.0}}
+    large_miss = {**miss, "market_cap_bucket": "mv_30bn_to_100bn_yuan"}
+
+    assert _rule_applies(miss, _rule("expectation_miss_mv_ge_10bn"))
+    assert _rule_applies(miss, _rule("expectation_miss_gap_ge_50_mv_ge_10bn"))
+    assert not _rule_applies(mild_miss, _rule("expectation_miss_gap_ge_50_mv_ge_10bn"))
+    assert _rule_applies(large_miss, _rule("expectation_miss_mv_ge_30bn"))
+    assert not _rule_applies(small_miss, _rule("expectation_miss_mv_ge_10bn"))
+
+    assert _rule_applies(
+        {"event_type": "financial_forecast_large_decline", "market_cap_bucket": "mv_10bn_to_30bn_yuan"},
+        _rule("forecast_express_large_decline_mv_ge_10bn"),
+    )
+    assert _rule_applies(
+        {"event_type": "financial_indicator_large_decline", "market_cap_bucket": "mv_30bn_to_100bn_yuan"},
+        _rule("indicator_large_decline_mv_ge_10bn"),
+    )
+    assert _rule_applies(
+        {"event_type": "financial_express_loss", "market_cap_bucket": "mv_ge_100bn_yuan"},
+        _rule("structured_financial_risk_mv_ge_10bn"),
+    )
+
+
+def test_expectation_miss_metric_bucket_exposes_gap_for_overlay_rules():
+    metric_bucket, detail = classify_metric_bucket(
+        "financial_positive_but_miss_expectation",
+        {
+            "metrics": {
+                "forecast_mid": "120.5",
+                "actual_yoy": "55.0",
+                "miss_gap": "65.5",
+                "actual_source_type": "tushare_express",
+            }
+        },
+    )
+
+    assert metric_bucket == "expectation_miss:miss_gap_50pct_to_100pct|actual_source=tushare_express"
+    assert detail["miss_gap"] == 65.5
+    assert detail["miss_gap_bucket"] == "miss_gap_50pct_to_100pct"
 
 
 def test_expand_simulator_scenarios_adds_score_down_penalty_modes():

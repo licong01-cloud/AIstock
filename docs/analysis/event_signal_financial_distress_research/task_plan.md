@@ -31,6 +31,7 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 6     | market-cap and industry exposure audit   | complete | 9c61508 / exposure_qe_overlay_result                        |
 | 7     | rolling loss-history rules               | complete | bf67daa / loss_history_qe_overlay_result                    |
 | 8     | market-cap bucket report for every signal| complete | market_cap_bucket_qe_overlay_result                         |
+| 9     | medium/large-cap event families          | complete | mid_large_qe_overlay_result_20260509                        |
 +-------+------------------------------------------+----------+-------------------------------------------------------------+
 ```
 
@@ -53,7 +54,7 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 | phase | next research                                 | status     | validation requirement                                       |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
-| 9     | medium/large-cap event families               | pending    | test impairment, audit opinion, regulatory, debt, miss cases |
+| 9     | medium/large-cap event families               | complete   | structured miss/decline tested on 10 QE loops                |
 | 10    | loss history + industry + size interactions   | pending    | must beat or explain baseline without overfitting            |
 | 11    | forecast/express/report mismatch research     | pending    | detect expectation miss, not raw growth/loss only            |
 | 12    | LLM/PDF preprocessing design                  | deferred   | start only after structured signals show value               |

@@ -270,6 +270,29 @@ def classify_metric_bucket(event_type: str, evidence: Optional[Mapping[str, Any]
             f"express_loss:{bucket}|{equity_bucket}",
             {"net_profit_yuan": net_profit, "equity_yuan": equity, "equity_bucket": equity_bucket},
         )
+    if event_type == "financial_positive_but_miss_expectation":
+        miss_gap = _safe_float(metrics.get("miss_gap"))
+        forecast_mid = _safe_float(metrics.get("forecast_mid"))
+        actual_yoy = _safe_float(metrics.get("actual_yoy"))
+        actual_source_type = str(metrics.get("actual_source_type") or "unknown")
+        if miss_gap is None:
+            miss_gap_bucket = "miss_gap_unknown"
+        elif miss_gap >= 100:
+            miss_gap_bucket = "miss_gap_ge_100pct"
+        elif miss_gap >= 50:
+            miss_gap_bucket = "miss_gap_50pct_to_100pct"
+        else:
+            miss_gap_bucket = "miss_gap_30pct_to_50pct"
+        return (
+            f"expectation_miss:{miss_gap_bucket}|actual_source={actual_source_type}",
+            {
+                "forecast_mid": forecast_mid,
+                "actual_yoy": actual_yoy,
+                "miss_gap": miss_gap,
+                "actual_source_type": actual_source_type,
+                "miss_gap_bucket": miss_gap_bucket,
+            },
+        )
     return (f"{event_type}:default", {})
 
 

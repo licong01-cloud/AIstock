@@ -27,7 +27,6 @@ from backend.services.event_signal.early_financial_distress_research import (
     DEFAULT_TIME_MODE,
     FINANCIAL_RULE_VERSION,
     FinancialRiskSignal,
-    build_precision_rows,
     enrich_precision_rows_with_industry,
     enrich_precision_rows_with_loss_history,
     enrich_precision_rows_with_market_cap,
@@ -56,10 +55,26 @@ DEFAULT_EXPERIMENT_ID = "qe_20260507_132049_d4e7"
 DEFAULT_LOOP_ID = "Loop1"
 DEFAULT_ACTIVE_TRADING_DAYS = (60, 120, 242)
 DEFAULT_SIMULATOR_MODES = ("cash", "next_candidate")
-SIMULATOR_VERSION = "financial_distress_qe_overlay_research_v5_20260508_market_cap_bucket_summary"
+SIMULATOR_VERSION = "financial_distress_qe_overlay_research_v6_20260509_mid_large_events"
 GE50_LOSS_BUCKETS = {"loss_50pct_to_100pct_mv", "loss_ge_100pct_mv"}
 SMALL_MARKET_CAP_BUCKETS = {"mv_lt_5bn_yuan", "mv_5bn_to_10bn_yuan"}
 MID_LARGE_MARKET_CAP_BUCKETS = {"mv_10bn_to_30bn_yuan", "mv_30bn_to_100bn_yuan", "mv_ge_100bn_yuan"}
+LARGE_MARKET_CAP_BUCKETS = {"mv_30bn_to_100bn_yuan", "mv_ge_100bn_yuan"}
+EXPECTATION_MISS_EVENT_TYPE = "financial_positive_but_miss_expectation"
+FORECAST_EXPRESS_LARGE_DECLINE_EVENT_TYPES = {
+    "financial_forecast_large_decline",
+    "financial_express_large_decline",
+}
+STRUCTURED_LARGE_DECLINE_EVENT_TYPES = {
+    *FORECAST_EXPRESS_LARGE_DECLINE_EVENT_TYPES,
+    "financial_indicator_large_decline",
+}
+STRUCTURED_FINANCIAL_RISK_EVENT_TYPES = {
+    "financial_forecast_loss",
+    "financial_express_loss",
+    *STRUCTURED_LARGE_DECLINE_EVENT_TYPES,
+    EXPECTATION_MISS_EVENT_TYPE,
+}
 MARKET_CAP_BUCKET_ORDER = (
     "mv_lt_5bn_yuan",
     "mv_5bn_to_10bn_yuan",
@@ -276,6 +291,51 @@ LOSS_HISTORY_RULES: tuple[FinancialDistressRule, ...] = (
     ),
 )
 
+MID_LARGE_EVENT_RULES: tuple[FinancialDistressRule, ...] = (
+    FinancialDistressRule(
+        rule_key="expectation_miss_mv_ge_10bn",
+        title="expectation miss and market cap >= 10bn CNY",
+        description="Actual financial result misses a prior high-growth forecast and PIT market cap is at least 10bn CNY.",
+        policy_risk_level="MEDIUM",
+        priority=310,
+    ),
+    FinancialDistressRule(
+        rule_key="expectation_miss_gap_ge_50_mv_ge_10bn",
+        title="expectation miss gap >= 50ppt and market cap >= 10bn CNY",
+        description="Expectation-miss relation with miss gap at least 50 percentage points and PIT market cap at least 10bn CNY.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=320,
+    ),
+    FinancialDistressRule(
+        rule_key="expectation_miss_mv_ge_30bn",
+        title="expectation miss and market cap >= 30bn CNY",
+        description="Expectation-miss relation restricted to large-cap PIT market cap buckets.",
+        policy_risk_level="MEDIUM",
+        priority=330,
+    ),
+    FinancialDistressRule(
+        rule_key="forecast_express_large_decline_mv_ge_10bn",
+        title="forecast/express large decline and market cap >= 10bn CNY",
+        description="Performance forecast or express large profit decline with PIT market cap at least 10bn CNY.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=340,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_large_decline_mv_ge_10bn",
+        title="financial indicator large decline and market cap >= 10bn CNY",
+        description="Financial-indicator large decline with PIT market cap at least 10bn CNY.",
+        policy_risk_level="MEDIUM",
+        priority=350,
+    ),
+    FinancialDistressRule(
+        rule_key="structured_financial_risk_mv_ge_10bn",
+        title="any structured financial risk and market cap >= 10bn CNY",
+        description="Broad medium/large-cap structured financial event family for coverage comparison only.",
+        policy_risk_level="REVIEW",
+        priority=360,
+    ),
+)
+
 SEVERITY_PROFILES: dict[str, SeverityProfile] = {
     "balanced": SeverityProfile(
         profile_key="balanced",
@@ -485,18 +545,30 @@ def select_research_rules(
     include_first_batch_rules: bool = True,
     include_size_bucket_rules: bool = False,
     include_loss_history_rules: bool = False,
+    include_mid_large_event_rules: bool = False,
     size_bucket_only: bool = False,
     loss_history_only: bool = False,
+    mid_large_only: bool = False,
 ) -> tuple[FinancialDistressRule, ...]:
     rules: list[FinancialDistressRule] = []
-    if size_bucket_only and loss_history_only:
-        raise ValueError("size_bucket_only and loss_history_only cannot both be enabled")
-    if include_first_batch_rules and not size_bucket_only and not loss_history_only:
-        rules.extend(FIRST_BATCH_RULES)
-    if (include_size_bucket_rules or size_bucket_only) and not loss_history_only:
+    enabled_only_flags = sum(1 for flag in (size_bucket_only, loss_history_only, mid_large_only) if flag)
+    if enabled_only_flags > 1:
+        raise ValueError("only one of size_bucket_only, loss_history_only, and mid_large_only can be enabled")
+    if size_bucket_only:
         rules.extend(SIZE_BUCKET_RULES)
-    if include_loss_history_rules or loss_history_only:
+    elif loss_history_only:
         rules.extend(LOSS_HISTORY_RULES)
+    elif mid_large_only:
+        rules.extend(MID_LARGE_EVENT_RULES)
+    else:
+        if include_first_batch_rules:
+            rules.extend(FIRST_BATCH_RULES)
+        if include_size_bucket_rules:
+            rules.extend(SIZE_BUCKET_RULES)
+        if include_loss_history_rules:
+            rules.extend(LOSS_HISTORY_RULES)
+        if include_mid_large_event_rules:
+            rules.extend(MID_LARGE_EVENT_RULES)
     if not rules:
         raise ValueError("at least one research rule set must be enabled")
     return tuple(sorted(rules, key=lambda item: item.priority))
@@ -554,11 +626,28 @@ def _metrics_from_account(report: pd.DataFrame, account: pd.Series) -> dict[str,
     }
 
 
+def _metric_detail_float(row: Mapping[str, Any], key: str) -> Optional[float]:
+    detail = row.get("metric_detail")
+    if not isinstance(detail, Mapping):
+        return None
+    value = detail.get(key)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
 def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
     event_type = str(row.get("event_type") or "")
     loss_bucket = str(row.get("loss_to_market_cap_bucket") or "")
     loss_count_bucket = str(row.get("loss_report_count_730d_bucket") or "")
     market_cap_bucket = str(row.get("market_cap_bucket") or "mv_unknown")
+    is_mid_large_cap = market_cap_bucket in MID_LARGE_MARKET_CAP_BUCKETS
+    is_large_cap = market_cap_bucket in LARGE_MARKET_CAP_BUCKETS
+    miss_gap = _metric_detail_float(row, "miss_gap")
     if rule.rule_key == "loss_to_market_cap_ge_50pct":
         return loss_bucket in GE50_LOSS_BUCKETS
     if rule.rule_key == "forecast_loss_to_market_cap_ge_50pct":
@@ -595,6 +684,18 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
             and loss_count_bucket == "loss_reports_ge_4"
             and market_cap_bucket in SMALL_MARKET_CAP_BUCKETS
         )
+    if rule.rule_key == "expectation_miss_mv_ge_10bn":
+        return event_type == EXPECTATION_MISS_EVENT_TYPE and is_mid_large_cap
+    if rule.rule_key == "expectation_miss_gap_ge_50_mv_ge_10bn":
+        return event_type == EXPECTATION_MISS_EVENT_TYPE and is_mid_large_cap and miss_gap is not None and miss_gap >= 50.0
+    if rule.rule_key == "expectation_miss_mv_ge_30bn":
+        return event_type == EXPECTATION_MISS_EVENT_TYPE and is_large_cap
+    if rule.rule_key == "forecast_express_large_decline_mv_ge_10bn":
+        return event_type in FORECAST_EXPRESS_LARGE_DECLINE_EVENT_TYPES and is_mid_large_cap
+    if rule.rule_key == "indicator_large_decline_mv_ge_10bn":
+        return event_type == "financial_indicator_large_decline" and is_mid_large_cap
+    if rule.rule_key == "structured_financial_risk_mv_ge_10bn":
+        return event_type in STRUCTURED_FINANCIAL_RISK_EVENT_TYPES and is_mid_large_cap
     raise ValueError(f"unsupported financial distress rule: {rule.rule_key}")
 
 
@@ -639,18 +740,25 @@ def build_financial_signal_rows(
     combo_window_days: int = DEFAULT_COMBO_WINDOW_DAYS,
     study_end: Optional[dt.date] = None,
 ) -> list[dict[str, Any]]:
-    """Build candidate-ready signal rows without requiring ST labels."""
+    """Build candidate-ready signal rows without future-ST labels.
 
-    rows = build_precision_rows(
-        signals,
-        cycles=[],
-        study_start=None,
-        study_end=study_end,
-        combo_window_days=combo_window_days,
-    )
-    if rows:
-        return rows
-    return [_signal_row_from_signal(signal) for signal in signals if study_end is None or signal.effective_trade_date <= study_end]
+    The overlay simulator only needs event metadata, PIT market cap, industry,
+    and loss-history enrichment. Avoid the heavier precision-study combo scan
+    so multi-loop research remains fast on full historical signal tables.
+    """
+
+    del combo_window_days
+    rows: list[dict[str, Any]] = []
+    for signal in sorted(signals, key=lambda row: (row.ts_code, row.effective_trade_date, row.signal_id)):
+        if study_end is not None and signal.effective_trade_date > study_end:
+            continue
+        payload = _signal_row_from_signal(signal)
+        payload["combo_source_count"] = 1
+        payload["combo_source_key"] = signal.source_type
+        payload["combo_event_count"] = 1
+        payload["combo_event_key"] = signal.event_type
+        rows.append(payload)
+    return rows
 
 
 def enrich_financial_signal_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -734,6 +842,7 @@ def build_overlay_frame(
                     "market_cap_buckets": set(),
                     "industries": set(),
                     "max_loss_to_market_cap": None,
+                    "max_miss_gap": None,
                     "loss_report_count_730d_max": 0,
                     "earliest_effective_trade_date": effective_trade_date,
                     "latest_effective_trade_date": effective_trade_date,
@@ -748,6 +857,10 @@ def build_overlay_frame(
             if isinstance(loss_to_mv, (int, float)) and math.isfinite(float(loss_to_mv)):
                 current = payload.get("max_loss_to_market_cap")
                 payload["max_loss_to_market_cap"] = max(float(loss_to_mv), float(current or 0.0))
+            miss_gap = _metric_detail_float(row, "miss_gap")
+            if miss_gap is not None:
+                current_miss_gap = payload.get("max_miss_gap")
+                payload["max_miss_gap"] = max(miss_gap, float(current_miss_gap or 0.0))
             payload["loss_report_count_730d_max"] = max(
                 int(payload.get("loss_report_count_730d_max") or 0),
                 int(row.get("loss_report_count_730d") or 0),
@@ -775,6 +888,7 @@ def build_overlay_frame(
                 "market_cap_buckets": "+".join(sorted(payload["market_cap_buckets"])),
                 "industries": "+".join(sorted(payload["industries"])),
                 "max_loss_to_market_cap": payload["max_loss_to_market_cap"],
+                "max_miss_gap": payload["max_miss_gap"],
                 "loss_report_count_730d_max": payload["loss_report_count_730d_max"],
                 "earliest_effective_trade_date": payload["earliest_effective_trade_date"].isoformat(),
                 "latest_effective_trade_date": payload["latest_effective_trade_date"].isoformat(),
@@ -2497,6 +2611,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--size-bucket-only", action="store_true")
     parser.add_argument("--include-loss-history-rules", action="store_true")
     parser.add_argument("--loss-history-only", action="store_true")
+    parser.add_argument("--include-mid-large-rules", action="store_true")
+    parser.add_argument("--mid-large-only", action="store_true")
     parser.add_argument("--rule-key", action="append", default=None, help="Limit research to one or more rule_key values.")
     return parser.parse_args(argv)
 
@@ -2508,8 +2624,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         include_first_batch_rules=True,
         include_size_bucket_rules=args.include_size_bucket_rules,
         include_loss_history_rules=args.include_loss_history_rules,
+        include_mid_large_event_rules=args.include_mid_large_rules,
         size_bucket_only=args.size_bucket_only,
         loss_history_only=args.loss_history_only,
+        mid_large_only=args.mid_large_only,
     )
     research_rules = filter_research_rules_by_key(research_rules, args.rule_key)
     if args.loop_spec or args.loop_spec_json:
