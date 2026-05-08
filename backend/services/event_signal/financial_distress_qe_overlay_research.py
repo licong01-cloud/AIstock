@@ -57,6 +57,8 @@ DEFAULT_ACTIVE_TRADING_DAYS = (60, 120, 242)
 DEFAULT_SIMULATOR_MODES = ("cash", "next_candidate")
 SIMULATOR_VERSION = "financial_distress_qe_overlay_research_v1_20260508"
 GE50_LOSS_BUCKETS = {"loss_50pct_to_100pct_mv", "loss_ge_100pct_mv"}
+SMALL_MARKET_CAP_BUCKETS = {"mv_lt_5bn_yuan", "mv_5bn_to_10bn_yuan"}
+MID_LARGE_MARKET_CAP_BUCKETS = {"mv_10bn_to_30bn_yuan", "mv_30bn_to_100bn_yuan", "mv_ge_100bn_yuan"}
 
 
 @dataclass(frozen=True)
@@ -137,6 +139,44 @@ FIRST_BATCH_RULES: tuple[FinancialDistressRule, ...] = (
     ),
 )
 
+SIZE_BUCKET_RULES: tuple[FinancialDistressRule, ...] = (
+    FinancialDistressRule(
+        rule_key="loss_to_market_cap_ge_50pct_mv_lt_5bn",
+        title="loss / market cap >= 50% and market cap < 5bn CNY",
+        description="Relative loss is at least 50% and PIT market cap bucket is below 5bn CNY.",
+        policy_risk_level="HIGH",
+        priority=110,
+    ),
+    FinancialDistressRule(
+        rule_key="loss_to_market_cap_ge_50pct_mv_5_10bn",
+        title="loss / market cap >= 50% and market cap 5-10bn CNY",
+        description="Relative loss is at least 50% and PIT market cap bucket is 5-10bn CNY.",
+        policy_risk_level="HIGH",
+        priority=120,
+    ),
+    FinancialDistressRule(
+        rule_key="loss_to_market_cap_ge_50pct_mv_lt_10bn",
+        title="loss / market cap >= 50% and market cap < 10bn CNY",
+        description="Relative loss is at least 50% and PIT market cap bucket is below 10bn CNY.",
+        policy_risk_level="HIGH",
+        priority=130,
+    ),
+    FinancialDistressRule(
+        rule_key="loss_to_market_cap_ge_50pct_mv_ge_10bn",
+        title="loss / market cap >= 50% and market cap >= 10bn CNY",
+        description="Relative loss is at least 50% and PIT market cap bucket is 10bn CNY or above.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=140,
+    ),
+    FinancialDistressRule(
+        rule_key="loss_to_market_cap_ge_50pct_mv_unknown",
+        title="loss / market cap >= 50% and market cap unknown",
+        description="Relative loss is at least 50% but PIT market cap enrichment is missing.",
+        policy_risk_level="REVIEW",
+        priority=150,
+    ),
+)
+
 
 def _json_dumps(value: Any, *, indent: Optional[int] = None) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str, indent=indent)
@@ -190,6 +230,22 @@ def _metric_delta(baseline: Mapping[str, Any], overlay: Mapping[str, Any]) -> di
     }
 
 
+def select_research_rules(
+    *,
+    include_first_batch_rules: bool = True,
+    include_size_bucket_rules: bool = False,
+    size_bucket_only: bool = False,
+) -> tuple[FinancialDistressRule, ...]:
+    rules: list[FinancialDistressRule] = []
+    if include_first_batch_rules and not size_bucket_only:
+        rules.extend(FIRST_BATCH_RULES)
+    if include_size_bucket_rules or size_bucket_only:
+        rules.extend(SIZE_BUCKET_RULES)
+    if not rules:
+        raise ValueError("at least one research rule set must be enabled")
+    return tuple(sorted(rules, key=lambda item: item.priority))
+
+
 def _max_drawdown(account: pd.Series) -> float:
     nav = account / float(account.iloc[0])
     drawdown = nav / nav.cummax() - 1.0
@@ -230,6 +286,7 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
     event_type = str(row.get("event_type") or "")
     loss_bucket = str(row.get("loss_to_market_cap_bucket") or "")
     loss_count_bucket = str(row.get("loss_report_count_730d_bucket") or "")
+    market_cap_bucket = str(row.get("market_cap_bucket") or "mv_unknown")
     if rule.rule_key == "loss_to_market_cap_ge_50pct":
         return loss_bucket in GE50_LOSS_BUCKETS
     if rule.rule_key == "forecast_loss_to_market_cap_ge_50pct":
@@ -240,6 +297,16 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
         return event_type == "financial_forecast_loss" and loss_count_bucket == "loss_reports_ge_4"
     if rule.rule_key == "loss_to_market_cap_20_50pct":
         return loss_bucket == "loss_20pct_to_50pct_mv"
+    if rule.rule_key == "loss_to_market_cap_ge_50pct_mv_lt_5bn":
+        return loss_bucket in GE50_LOSS_BUCKETS and market_cap_bucket == "mv_lt_5bn_yuan"
+    if rule.rule_key == "loss_to_market_cap_ge_50pct_mv_5_10bn":
+        return loss_bucket in GE50_LOSS_BUCKETS and market_cap_bucket == "mv_5bn_to_10bn_yuan"
+    if rule.rule_key == "loss_to_market_cap_ge_50pct_mv_lt_10bn":
+        return loss_bucket in GE50_LOSS_BUCKETS and market_cap_bucket in SMALL_MARKET_CAP_BUCKETS
+    if rule.rule_key == "loss_to_market_cap_ge_50pct_mv_ge_10bn":
+        return loss_bucket in GE50_LOSS_BUCKETS and market_cap_bucket in MID_LARGE_MARKET_CAP_BUCKETS
+    if rule.rule_key == "loss_to_market_cap_ge_50pct_mv_unknown":
+        return loss_bucket in GE50_LOSS_BUCKETS and market_cap_bucket == "mv_unknown"
     raise ValueError(f"unsupported financial distress rule: {rule.rule_key}")
 
 
@@ -533,6 +600,7 @@ def run_financial_distress_qe_overlay_research(
     financial_rows_override: Optional[Sequence[Mapping[str, Any]]] = None,
     trading_days_override: Optional[Sequence[dt.date]] = None,
     price_returns_override: Optional[dict[dt.date, dict[str, float]]] = None,
+    research_rules: Sequence[FinancialDistressRule] = FIRST_BATCH_RULES,
 ) -> OverlayRunSummary:
     artifact_dir = find_portfolio_artifact_dir(loop_path)
     report_path = artifact_dir / "report_normal_1day.pkl"
@@ -585,7 +653,7 @@ def run_financial_distress_qe_overlay_research(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for active_days in active_trading_days_values:
-        for rule in FIRST_BATCH_RULES:
+        for rule in research_rules:
             overlay = build_overlay_frame(
                 financial_rows=financial_rows,
                 trading_days=trading_days,
@@ -690,7 +758,7 @@ def run_financial_distress_qe_overlay_research(
         loop_id=loop_id,
         date_from=resolved_date_from,
         date_to=resolved_date_to,
-        rules=len(FIRST_BATCH_RULES),
+        rules=len(research_rules),
         validations=len(validations),
     )
 
@@ -897,6 +965,7 @@ def run_multiloop_financial_distress_qe_overlay_research(
     time_mode: str = DEFAULT_TIME_MODE,
     limit: Optional[int] = None,
     write_overlay_csv: bool = False,
+    research_rules: Sequence[FinancialDistressRule] = FIRST_BATCH_RULES,
 ) -> MultiLoopOverlayRunSummary:
     resolved_date_from, resolved_date_to = resolve_multiloop_date_range(
         loop_specs=loop_specs,
@@ -938,6 +1007,7 @@ def run_multiloop_financial_distress_qe_overlay_research(
             financial_rows_override=financial_rows,
             trading_days_override=trading_days,
             price_returns_override=price_returns_override,
+            research_rules=research_rules,
         )
         loop_summaries.append(asdict(summary))
         loop_payloads.append(json.loads(Path(summary.output_json).read_text(encoding="utf-8")))
@@ -967,6 +1037,7 @@ def run_multiloop_financial_distress_qe_overlay_research(
             "price_return_csv": str(price_return_csv) if price_return_csv else None,
             "price_returns_preloaded": price_returns_override is not None,
             "write_overlay_csv": write_overlay_csv,
+            "rule_keys": [rule.rule_key for rule in research_rules],
         },
         "validation_summary": validation_summary,
         "exposure_summary": exposure_summary,
@@ -1222,12 +1293,19 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--time-mode", choices=["backtest", "paper", "live", "observed"], default=DEFAULT_TIME_MODE)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--no-overlay-csv", action="store_true")
+    parser.add_argument("--include-size-bucket-rules", action="store_true")
+    parser.add_argument("--size-bucket-only", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     load_dotenv(ROOT / ".env", override=False)
     args = parse_args(argv)
+    research_rules = select_research_rules(
+        include_first_batch_rules=True,
+        include_size_bucket_rules=args.include_size_bucket_rules,
+        size_bucket_only=args.size_bucket_only,
+    )
     if args.loop_spec or args.loop_spec_json:
         summary = run_multiloop_financial_distress_qe_overlay_research(
             loop_specs=load_loop_specs(
@@ -1244,6 +1322,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             time_mode=args.time_mode,
             limit=args.limit,
             write_overlay_csv=not args.no_overlay_csv,
+            research_rules=research_rules,
         )
         print(_json_dumps(asdict(summary), indent=2))
         return 0
@@ -1264,6 +1343,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         time_mode=args.time_mode,
         limit=args.limit,
         write_overlay_csv=not args.no_overlay_csv,
+        research_rules=research_rules,
     )
     print(_json_dumps(asdict(summary), indent=2))
     return 0
