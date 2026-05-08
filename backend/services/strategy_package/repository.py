@@ -28,6 +28,13 @@ from .model_state import (
     StrategyPackageModelState,
 )
 from .models import PackageStatus, StrategyPackageManifest
+from .runtime_variant import (
+    RuntimeVariantKind,
+    RuntimeVariantValidationStatus,
+    StrategyPackageRuntimeVariant,
+    derive_locked_core_hash,
+    ensure_runtime_variant_status,
+)
 
 ConnFactory = Callable[[], Iterator[Any]]
 
@@ -520,6 +527,142 @@ class StrategyPackageRepository:
                 rows = cur.fetchall()
         return [self._model_retrain_job_from_row(dict(row)) for row in rows]
 
+    def save_runtime_variant(self, variant: StrategyPackageRuntimeVariant) -> StrategyPackageRuntimeVariant:
+        record = self.get(variant.package_id)
+        _validate_variant_matches_package(variant, record)
+        ensure_runtime_variant_status(
+            validation_status=variant.validation_status,
+            paper_candidate=variant.paper_candidate,
+            validation_evidence=variant.validation_evidence,
+        )
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.package_runtime_variant (
+                        variant_id, package_id, manifest_sha256, locked_core_hash, variant_name,
+                        variant_kind, variant_config, variant_hash, validation_status,
+                        paper_candidate, validation_evidence, created_by, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (package_id, variant_hash) DO NOTHING
+                    """,
+                    (
+                        variant.variant_id,
+                        variant.package_id,
+                        variant.manifest_sha256,
+                        variant.locked_core_hash,
+                        variant.variant_name,
+                        variant.variant_kind.value,
+                        psycopg2.extras.Json(variant.variant_config),
+                        variant.variant_hash,
+                        variant.validation_status.value,
+                        variant.paper_candidate,
+                        psycopg2.extras.Json(variant.validation_evidence),
+                        variant.created_by,
+                        variant.created_at,
+                        variant.updated_at,
+                    ),
+                )
+                if cur.rowcount == 0:
+                    cur.execute(
+                        """
+                        SELECT variant_id
+                        FROM strategy_pkg.package_runtime_variant
+                        WHERE package_id = %s AND variant_hash = %s
+                        """,
+                        (variant.package_id, variant.variant_hash),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        variant = variant.model_copy(update={"variant_id": row[0]})
+        return self.get_runtime_variant(variant.package_id, variant.variant_id)
+
+    def get_runtime_variant(self, package_id: str, variant_id: str) -> StrategyPackageRuntimeVariant:
+        self.get(package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.package_runtime_variant
+                    WHERE package_id = %s AND variant_id = %s
+                    """,
+                    (package_id, variant_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError(
+                "strategy package runtime variant does not exist",
+                context={"package_id": package_id, "variant_id": variant_id},
+            )
+        return self._runtime_variant_from_row(dict(row))
+
+    def list_runtime_variants(
+        self,
+        package_id: str,
+        *,
+        include_retired: bool = False,
+        limit: int = 100,
+    ) -> list[StrategyPackageRuntimeVariant]:
+        self.get(package_id)
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        where = "package_id = %s"
+        params: list[Any] = [package_id]
+        if not include_retired:
+            where += " AND validation_status <> 'RETIRED'"
+        params.append(limit)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT *
+                    FROM strategy_pkg.package_runtime_variant
+                    WHERE {where}
+                    ORDER BY created_at DESC, variant_id DESC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+        return [self._runtime_variant_from_row(dict(row)) for row in rows]
+
+    def set_runtime_variant_validation(
+        self,
+        *,
+        package_id: str,
+        variant_id: str,
+        validation_status: RuntimeVariantValidationStatus,
+        paper_candidate: bool,
+        validation_evidence: dict[str, Any],
+    ) -> StrategyPackageRuntimeVariant:
+        self.get_runtime_variant(package_id, variant_id)
+        ensure_runtime_variant_status(
+            validation_status=validation_status,
+            paper_candidate=paper_candidate,
+            validation_evidence=validation_evidence,
+        )
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.package_runtime_variant
+                    SET validation_status = %s,
+                        paper_candidate = %s,
+                        validation_evidence = %s,
+                        updated_at = NOW()
+                    WHERE package_id = %s AND variant_id = %s
+                    """,
+                    (
+                        validation_status.value,
+                        paper_candidate,
+                        psycopg2.extras.Json(validation_evidence),
+                        package_id,
+                        variant_id,
+                    ),
+                )
+        return self.get_runtime_variant(package_id, variant_id)
+
     def _record_from_row(self, row: dict[str, Any]) -> StrategyPackageRecord:
         manifest_json = row["manifest_json"]
         manifest = StrategyPackageManifest.model_validate(manifest_json)
@@ -604,6 +747,25 @@ class StrategyPackageRepository:
             completed_at=row["completed_at"],
         )
 
+    @staticmethod
+    def _runtime_variant_from_row(row: dict[str, Any]) -> StrategyPackageRuntimeVariant:
+        return StrategyPackageRuntimeVariant(
+            variant_id=row["variant_id"],
+            package_id=row["package_id"],
+            manifest_sha256=row["manifest_sha256"],
+            locked_core_hash=row["locked_core_hash"],
+            variant_name=row["variant_name"],
+            variant_kind=RuntimeVariantKind(row["variant_kind"]),
+            variant_config=row["variant_config"] or {},
+            variant_hash=row["variant_hash"],
+            validation_status=RuntimeVariantValidationStatus(row["validation_status"]),
+            paper_candidate=bool(row["paper_candidate"]),
+            validation_evidence=row["validation_evidence"] or {},
+            created_by=row["created_by"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
 
 class InMemoryStrategyPackageRepository:
     """Test repository with the same fail-fast semantics as PostgreSQL."""
@@ -614,6 +776,7 @@ class InMemoryStrategyPackageRepository:
         self.execution_policies: dict[str, ValidatedExecutionPolicy] = {}
         self.model_states: dict[str, StrategyPackageModelState] = {}
         self.model_retrain_jobs: dict[str, StrategyPackageModelRetrainJob] = {}
+        self.runtime_variants: dict[str, StrategyPackageRuntimeVariant] = {}
 
     def save_manifest(self, manifest: StrategyPackageManifest) -> StrategyPackageRecord:
         frozen = freeze_manifest(manifest)
@@ -778,3 +941,99 @@ class InMemoryStrategyPackageRepository:
         rows = [job for job in self.model_retrain_jobs.values() if job.package_id == package_id]
         rows.sort(key=lambda item: item.created_at, reverse=True)
         return rows[:limit]
+
+    def save_runtime_variant(self, variant: StrategyPackageRuntimeVariant) -> StrategyPackageRuntimeVariant:
+        record = self.get(variant.package_id)
+        _validate_variant_matches_package(variant, record)
+        ensure_runtime_variant_status(
+            validation_status=variant.validation_status,
+            paper_candidate=variant.paper_candidate,
+            validation_evidence=variant.validation_evidence,
+        )
+        for existing in self.runtime_variants.values():
+            if existing.package_id == variant.package_id and existing.variant_hash == variant.variant_hash:
+                return existing
+        self.runtime_variants[variant.variant_id] = variant
+        return variant
+
+    def get_runtime_variant(self, package_id: str, variant_id: str) -> StrategyPackageRuntimeVariant:
+        self.get(package_id)
+        variant = self.runtime_variants.get(variant_id)
+        if variant is None or variant.package_id != package_id:
+            raise DataUnavailableError(
+                "strategy package runtime variant does not exist",
+                context={"package_id": package_id, "variant_id": variant_id},
+            )
+        return variant
+
+    def list_runtime_variants(
+        self,
+        package_id: str,
+        *,
+        include_retired: bool = False,
+        limit: int = 100,
+    ) -> list[StrategyPackageRuntimeVariant]:
+        self.get(package_id)
+        rows = [
+            variant
+            for variant in self.runtime_variants.values()
+            if variant.package_id == package_id
+            and (
+                include_retired
+                or variant.validation_status != RuntimeVariantValidationStatus.RETIRED
+            )
+        ]
+        rows.sort(key=lambda item: item.created_at, reverse=True)
+        return rows[:limit]
+
+    def set_runtime_variant_validation(
+        self,
+        *,
+        package_id: str,
+        variant_id: str,
+        validation_status: RuntimeVariantValidationStatus,
+        paper_candidate: bool,
+        validation_evidence: dict[str, Any],
+    ) -> StrategyPackageRuntimeVariant:
+        variant = self.get_runtime_variant(package_id, variant_id)
+        ensure_runtime_variant_status(
+            validation_status=validation_status,
+            paper_candidate=paper_candidate,
+            validation_evidence=validation_evidence,
+        )
+        updated = variant.model_copy(
+            update={
+                "validation_status": validation_status,
+                "paper_candidate": paper_candidate,
+                "validation_evidence": validation_evidence,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        self.runtime_variants[variant_id] = updated
+        return updated
+
+
+def _validate_variant_matches_package(
+    variant: StrategyPackageRuntimeVariant,
+    record: StrategyPackageRecord,
+) -> None:
+    current_manifest = record.current_manifest()
+    if variant.manifest_sha256 != record.manifest_sha256:
+        raise StrategyPackageValidationError(
+            "runtime variant manifest_sha256 does not match current package",
+            context={
+                "package_id": record.package_id,
+                "variant_manifest_sha256": variant.manifest_sha256,
+                "package_manifest_sha256": record.manifest_sha256,
+            },
+        )
+    expected_core_hash = derive_locked_core_hash(current_manifest)
+    if variant.locked_core_hash != expected_core_hash:
+        raise StrategyPackageValidationError(
+            "runtime variant locked core hash does not match current package core",
+            context={
+                "package_id": record.package_id,
+                "variant_locked_core_hash": variant.locked_core_hash,
+                "expected_locked_core_hash": expected_core_hash,
+            },
+        )
