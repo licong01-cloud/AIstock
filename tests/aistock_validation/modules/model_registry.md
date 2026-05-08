@@ -15,6 +15,8 @@ Scope: QE governance Phase 5 model library foundation. This module covers the ne
 - Migration smoke defaults to static dry-run and must not connect to DB unless an explicit dev DB transaction/apply mode is requested.
 - DB transaction smoke must roll back by default, require a confirmation token, and refuse production-like targets unless a second rollback-only override is explicitly present.
 - Rollback SQL is destructive and must fail fast unless the operator sets the session confirmation token in a dev transaction.
+- Model registry catalog compatibility and legacy bridge APIs are read-only and must not require enabling write APIs.
+- Legacy bridge rows preserve `paper_selectable=false`; Paper v2 must continue to select StrategyPackage records, not raw model rows.
 
 ## Gates
 
@@ -32,6 +34,7 @@ Scope: QE governance Phase 5 model library foundation. This module covers the ne
 | MODEL-REG-L2-004 migration static smoke | `python scripts/model_registry_migration_smoke.py --json` | Static dry-run validates schema objects, comments, indexes, views, and guarded rollback plan without DB connection. |
 | MODEL-REG-L2-005 migration guard tests | `pytest backend/tests/model_registry/test_model_registry_migration_smoke.py -q -p no:cacheprovider` | Default mode is no-write/no-DB; DB transaction and apply modes require tokens/env guards and refuse production-like targets. |
 | MODEL-REG-L3-001 dev DB rollback smoke | `AISTOCK_MODEL_REGISTRY_MIGRATION_DEV_DB=true python scripts/model_registry_migration_smoke.py --db-transaction-check --confirm-db-check MODEL_REGISTRY_PHASE5_DEV_ROLLBACK_CHECK --db-name <dev_db>` | Optional dev-only check executes migration in one transaction and rolls back. Never run against production DB. |
+| MODEL-REG-L2-006 bridge read API | `pytest backend/tests/model_registry/test_model_registry_phase5.py -q -p no:cacheprovider` | `/model-registry/catalog-compat` and `/model-registry/legacy-catalog-bridge` are read-only, use model_registry views, and do not require the write API guard. |
 
 ## Out Of Scope For Phase 5 Foundation
 

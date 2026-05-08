@@ -190,6 +190,54 @@ class ModelLifecycleEvent(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class ModelCatalogCompatRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: str
+    model_name: str | None = None
+    model_type: str | None = None
+    lifecycle_status: str | None = None
+    qe_selectable: bool = False
+    paper_selectable: bool = False
+    task_run_id: str | None = None
+    loop_id: str | None = None
+    code_sha256: str | None = None
+    architecture_sha256: str | None = None
+    trial_id: str | None = None
+    latest_trial_status: str | None = None
+    ic: float | None = None
+    rank_ic: float | None = None
+    sharpe: float | None = None
+    score_total: float | None = None
+    artifact_id: str | None = None
+    artifact_uri: str | None = None
+    artifact_status: str | None = None
+    protected_asset: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class LegacyModelCatalogBridgeRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    legacy_model_id: str
+    model_type: str | None = None
+    task_run_id: str | None = None
+    loop_id: str | None = None
+    workspace_id: str | None = None
+    asset_bundle_id: str | None = None
+    model_config_json: Any = None
+    feature_schema: Any = None
+    model_artifacts: Any = None
+    model_role: str = "artifact_legacy"
+    lifecycle_status: str
+    qe_selectable: bool = False
+    paper_selectable: bool = False
+    qe_selectability_reason: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class ModelRegistryRepository(Protocol):
     def upsert_template(self, record: ModelTemplateRecord) -> ModelTemplateRecord: ...
 
@@ -200,6 +248,23 @@ class ModelRegistryRepository(Protocol):
     def upsert_artifact(self, record: ModelArtifactRecord) -> ModelArtifactRecord: ...
 
     def list_qe_selectable_specs(self) -> list[ModelSpecRecord]: ...
+
+    def list_model_catalog_compat(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        qe_selectable: bool | None = None,
+    ) -> list[ModelCatalogCompatRecord]: ...
+
+    def list_legacy_catalog_bridge(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        qe_selectable: bool | None = None,
+        include_training_failed: bool = True,
+    ) -> list[LegacyModelCatalogBridgeRecord]: ...
 
     def transition_status(
         self,
@@ -229,6 +294,8 @@ class InMemoryModelRegistryRepository:
         self.trials: dict[str, ModelTrialRecord] = {}
         self.artifacts: dict[str, ModelArtifactRecord] = {}
         self.events: list[ModelLifecycleEvent] = []
+        self.catalog_compat: list[ModelCatalogCompatRecord] = []
+        self.legacy_catalog_bridge: list[LegacyModelCatalogBridgeRecord] = []
 
     def upsert_template(self, record: ModelTemplateRecord) -> ModelTemplateRecord:
         self.templates[record.template_id] = record
@@ -268,6 +335,32 @@ class InMemoryModelRegistryRepository:
                 continue
             result.append(spec)
         return sorted(result, key=lambda item: item.spec_id)
+
+    def list_model_catalog_compat(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        qe_selectable: bool | None = None,
+    ) -> list[ModelCatalogCompatRecord]:
+        rows = [row for row in self.catalog_compat if qe_selectable is None or row.qe_selectable is qe_selectable]
+        return rows[offset : offset + limit]
+
+    def list_legacy_catalog_bridge(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        qe_selectable: bool | None = None,
+        include_training_failed: bool = True,
+    ) -> list[LegacyModelCatalogBridgeRecord]:
+        rows = [
+            row
+            for row in self.legacy_catalog_bridge
+            if (qe_selectable is None or row.qe_selectable is qe_selectable)
+            and (include_training_failed or row.lifecycle_status != "training_failed")
+        ]
+        return rows[offset : offset + limit]
 
     def transition_status(
         self,
@@ -572,6 +665,63 @@ class PostgresModelRegistryRepository:
                 )
                 return [self._spec_from_row(dict(row)) for row in cur.fetchall()]
 
+    def list_model_catalog_compat(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        qe_selectable: bool | None = None,
+    ) -> list[ModelCatalogCompatRecord]:
+        conditions: list[str] = []
+        params: list[Any] = []
+        if qe_selectable is not None:
+            conditions.append("qe_selectable = %s")
+            params.append(qe_selectable)
+        where_clause = _sql_where_clause(conditions)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT *
+                    FROM model_registry.v_model_catalog_compat
+                    {where_clause}
+                    ORDER BY created_at DESC NULLS LAST, model_id ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    [*params, limit, offset],
+                )
+                return [self._catalog_compat_from_row(dict(row)) for row in cur.fetchall()]
+
+    def list_legacy_catalog_bridge(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        qe_selectable: bool | None = None,
+        include_training_failed: bool = True,
+    ) -> list[LegacyModelCatalogBridgeRecord]:
+        conditions: list[str] = []
+        params: list[Any] = []
+        if qe_selectable is not None:
+            conditions.append("qe_selectable = %s")
+            params.append(qe_selectable)
+        if not include_training_failed:
+            conditions.append("lifecycle_status <> 'training_failed'")
+        where_clause = _sql_where_clause(conditions)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT *
+                    FROM model_registry.v_legacy_aistock_model_catalog_bridge
+                    {where_clause}
+                    ORDER BY created_at DESC NULLS LAST, legacy_model_id ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    [*params, limit, offset],
+                )
+                return [self._legacy_bridge_from_row(dict(row)) for row in cur.fetchall()]
+
     def transition_status(
         self,
         *,
@@ -761,6 +911,54 @@ class PostgresModelRegistryRepository:
             created_at=row["created_at"],
         )
 
+    @staticmethod
+    def _catalog_compat_from_row(row: dict[str, Any]) -> ModelCatalogCompatRecord:
+        return ModelCatalogCompatRecord(
+            model_id=row["model_id"],
+            model_name=row.get("model_name"),
+            model_type=row.get("model_type"),
+            lifecycle_status=row.get("lifecycle_status"),
+            qe_selectable=bool(row.get("qe_selectable")),
+            paper_selectable=bool(row.get("paper_selectable")),
+            task_run_id=row.get("task_run_id"),
+            loop_id=row.get("loop_id"),
+            code_sha256=row.get("code_sha256"),
+            architecture_sha256=row.get("architecture_sha256"),
+            trial_id=row.get("trial_id"),
+            latest_trial_status=row.get("latest_trial_status"),
+            ic=row.get("ic"),
+            rank_ic=row.get("rank_ic"),
+            sharpe=row.get("sharpe"),
+            score_total=row.get("score_total"),
+            artifact_id=row.get("artifact_id"),
+            artifact_uri=row.get("artifact_uri"),
+            artifact_status=row.get("artifact_status"),
+            protected_asset=bool(row.get("protected_asset")),
+            created_at=row.get("created_at"),
+            updated_at=row.get("updated_at"),
+        )
+
+    @staticmethod
+    def _legacy_bridge_from_row(row: dict[str, Any]) -> LegacyModelCatalogBridgeRecord:
+        return LegacyModelCatalogBridgeRecord(
+            legacy_model_id=row["legacy_model_id"],
+            model_type=row.get("model_type"),
+            task_run_id=row.get("task_run_id"),
+            loop_id=row.get("loop_id"),
+            workspace_id=row.get("workspace_id"),
+            asset_bundle_id=row.get("asset_bundle_id"),
+            model_config_json=row.get("model_config"),
+            feature_schema=row.get("feature_schema"),
+            model_artifacts=row.get("model_artifacts"),
+            model_role=row.get("model_role") or "artifact_legacy",
+            lifecycle_status=row["lifecycle_status"],
+            qe_selectable=bool(row.get("qe_selectable")),
+            paper_selectable=bool(row.get("paper_selectable")),
+            qe_selectability_reason=row.get("qe_selectability_reason"),
+            created_at=row.get("created_at"),
+            updated_at=row.get("updated_at"),
+        )
+
 
 class ModelRegistryService:
     def __init__(self, repository: ModelRegistryRepository | None = None) -> None:
@@ -793,6 +991,32 @@ class ModelRegistryService:
 
     def list_qe_selectable_specs(self) -> list[ModelSpecRecord]:
         return self.repository.list_qe_selectable_specs()
+
+    def list_model_catalog_compat(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        qe_selectable: bool | None = None,
+    ) -> list[ModelCatalogCompatRecord]:
+        limit, offset = _validate_page(limit=limit, offset=offset)
+        return self.repository.list_model_catalog_compat(limit=limit, offset=offset, qe_selectable=qe_selectable)
+
+    def list_legacy_catalog_bridge(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        qe_selectable: bool | None = None,
+        include_training_failed: bool = True,
+    ) -> list[LegacyModelCatalogBridgeRecord]:
+        limit, offset = _validate_page(limit=limit, offset=offset)
+        return self.repository.list_legacy_catalog_bridge(
+            limit=limit,
+            offset=offset,
+            qe_selectable=qe_selectable,
+            include_training_failed=include_training_failed,
+        )
 
     def transition_status(
         self,
@@ -896,3 +1120,20 @@ def _validate_terminal_transition(*, from_status: str | None, to_status: str, ob
             "retired model registry objects are terminal",
             context={"object_type": object_type.value, "from_status": from_status, "to_status": to_status},
         )
+
+
+def _validate_page(*, limit: int, offset: int) -> tuple[int, int]:
+    if limit < 1 or limit > 500:
+        raise StrategyPackageValidationError("model registry list limit must be between 1 and 500")
+    if offset < 0:
+        raise StrategyPackageValidationError("model registry list offset must be non-negative")
+    return limit, offset
+
+
+def _sql_where_clause(conditions: list[str]) -> str:
+    if not conditions:
+        return ""
+    clause = f"WHERE {conditions[0]}"
+    for condition in conditions[1:]:
+        clause += f" AND {condition}"
+    return clause

@@ -1,5 +1,7 @@
 from .registry import (
     InMemoryModelRegistryRepository,
+    LegacyModelCatalogBridgeRecord,
+    ModelCatalogCompatRecord,
     ModelArtifactRecord,
     ModelLifecycleEvent,
     ModelRegistryService,
@@ -11,6 +13,8 @@ from .registry import (
 
 __all__ = [
     "InMemoryModelRegistryRepository",
+    "LegacyModelCatalogBridgeRecord",
+    "ModelCatalogCompatRecord",
     "ModelArtifactRecord",
     "ModelLifecycleEvent",
     "ModelRegistryService",
