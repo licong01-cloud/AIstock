@@ -1,4 +1,4 @@
-﻿# QE SOTA 殿堂、StrategyPackage 资产治理、Seed 可复现性与模型库设计
+# QE SOTA 殿堂、StrategyPackage 资产治理、Seed 可复现性与模型库设计
 
 日期：2026-05-08
 状态：实施前设计草案
@@ -661,6 +661,542 @@ QE Warehouse
 
 数仓可以记录每一次 model trial；模型库保留可复用候选和 promoted assets；StrategyPackage 指向用于策略的精确模型 artifact。
 
+### 8.7 模型库底层规范化存储
+
+模型库不应继续只依赖一张扁平 `aistock_model_catalog` 表。推荐目标结构是独立 `model_registry` schema，至少包含：
+
+```text
+model_registry.model_template
+model_registry.model_spec
+model_registry.model_trial
+model_registry.model_artifact
+model_registry.model_lifecycle_event
+```
+
+关系：
+
+```text
+model_template 1 -> N model_spec
+model_spec     1 -> N model_trial
+model_trial    1 -> N model_artifact
+model_artifact N -> N strategy_pkg.package_asset / StrategyPackage
+```
+
+#### model_template
+
+保存模型族能力，不保存某次训练结果：
+
+```text
+template_id
+family                  # tree / boosting / neural_ts / tabular_deep / transformer
+model_type              # LGBModel / XGBoost / CatBoost / LSTM / GRU / Transformer
+display_name
+description
+task_type               # rank / regression / classification
+supported_freq          # day / 1min / mixed
+supported_input_shape   # tabular / sequence_10d / sequence_30d
+train_backend           # qlib / sklearn / torch / tabpfn
+default_search_space
+default_train_budget
+seed_capability         # fixed / multi_seed / random_logged / unsupported
+deterministic_support   # full / partial / none
+gpu_required
+lifecycle_status        # active / experimental / deprecated / retired
+```
+
+#### model_spec
+
+保存可训练模型规格：代码、结构、输入输出契约和搜索空间。
+
+```text
+spec_id
+template_id
+spec_version
+model_name
+model_type
+code_ref
+code_text
+code_sha256
+architecture_config
+architecture_sha256
+hyperparam_schema
+default_hyperparams
+search_space_json
+input_contract_json
+output_contract_json
+feature_schema_requirements
+label_requirements
+dependency_versions
+source_type             # builtin / rdagent_sync / manual / imported
+source_task_id
+source_loop_id
+lifecycle_status        # template / research_candidate / validated_spec / quarantined / retired
+qe_selectable
+qe_selectability_reason
+created_at
+updated_at
+```
+
+#### model_trial
+
+保存一次训练试验事实。相同模型规格、不同因子/数据/split/超参/seed 都是不同 trial。
+
+```text
+trial_id
+spec_id
+qe_run_id
+qe_experiment_id
+qe_task_id
+qe_loop_id
+factor_set_hash
+factor_list_ordered
+feature_schema_hash
+data_context_id
+dataset_version
+label_config_hash
+train_start
+train_end
+valid_start
+valid_end
+test_start
+test_end
+train_config_json
+hyperparams_json
+seed_policy
+random_seed
+seed_sequence
+deterministic_flags_json
+status                  # succeeded / failed / interrupted / invalid
+failure_reason
+best_epoch
+total_epochs
+train_loss_final
+val_loss_final
+training_curves
+ic
+rank_ic
+icir
+annualized_return
+sharpe
+max_drawdown
+turnover
+cost_drag
+score_total
+created_at
+completed_at
+```
+
+#### model_artifact
+
+保存具体可复用资产，包括权重和推理所需辅助文件。
+
+```text
+artifact_id
+trial_id
+artifact_type           # weights / preprocessor / feature_order / feature_schema / prediction_schema / checkpoint / params
+artifact_uri
+artifact_sha256
+artifact_size_bytes
+feature_schema_hash
+feature_order_hash
+preprocessor_hash
+model_format            # pkl / pt / json / txt / qlib_recorder / tar
+retention_class         # temporary / archived / promoted / protected
+protected_asset
+artifact_status         # present / missing / corrupted / expired
+created_at
+validated_at
+metadata_json
+```
+
+#### model_lifecycle_event
+
+记录治理变更，替代无审计的直接删除。
+
+```text
+event_id
+object_type             # template / spec / trial / artifact
+object_id
+from_status
+to_status
+reason
+operator
+context_json
+created_at
+```
+
+### 8.8 `aistock_model_catalog` 的过渡定位
+
+当前 `aistock_model_catalog` 混合了模型规格、训练结果、SOTA 标记、代码、诊断、workspace 路径和指标。短期不建议立刻废弃，而应降级为兼容层：
+
+```text
+aistock_model_catalog = 旧 API 兼容表 / 聚合视图
+model_registry.*      = 新权威结构
+```
+
+短期补充治理字段：
+
+```text
+model_role              # template / spec / trial / artifact_legacy
+lifecycle_status
+qe_selectable
+qe_selectability_reason
+paper_selectable         # 固定 false；Paper 选择 StrategyPackage，不选模型
+seed_policy
+random_seed
+determinism_level
+code_sha256
+architecture_sha256
+model_spec_sha256
+feature_schema_hash
+artifact_status
+protected_asset
+quarantine_reason
+retired_at
+```
+
+删除操作应改为高权限治理动作。普通页面默认提供：
+
+```text
+hide_from_qe
+quarantine
+retire
+restore_to_research_candidate
+```
+
+只有确认没有 StrategyPackage / Paper / 归档引用时，管理员才允许物理删除。
+
+### 8.9 模型库页面展示设计
+
+模型库页面建议从单一列表拆为五个视图。
+
+#### 视图 A：模型搜索空间
+
+面向 QE 创建实验，展示 `ModelTemplate + ModelSpec`。
+
+核心列：
+
+```text
+模型族
+模型规格
+输入形态
+支持频率
+默认搜索空间
+训练成本
+GPU需求
+Seed支持
+确定性支持
+QE可选状态
+生命周期
+最近验证摘要
+```
+
+默认隐藏：
+
+```text
+training_failed
+quarantined
+retired
+runtime_broken
+data_incompatible
+```
+
+#### 视图 B：训练试验
+
+面向研究复盘，展示 `ModelTrial`。
+
+核心列：
+
+```text
+trial_id
+模型规格
+因子组合 hash
+数据版本
+seed
+训练状态
+best_epoch
+IC / RankIC / ICIR
+年化 / Sharpe / 回撤
+训练耗时
+QE来源
+失败原因
+```
+
+筛选项：
+
+```text
+模型族
+因子组合
+seed_policy
+数据版本
+训练状态
+best_epoch=0
+高回撤
+高seed敏感
+```
+
+#### 视图 C：模型资产
+
+面向资产治理，展示 `ModelArtifact`。
+
+核心列：
+
+```text
+artifact_id
+模型规格
+trial_id
+权重状态
+feature_schema_hash
+feature_order_hash
+sha256
+retention_class
+protected_asset
+是否绑定 StrategyPackage
+是否 Paper 可用
+```
+
+可执行动作：
+
+```text
+校验 hash
+复制到受控资产库
+绑定 StrategyPackage
+标记 protected
+标记 corrupted
+```
+
+#### 视图 D：已晋级 / Paper 相关
+
+展示已经被 SOTA 殿堂或 StrategyPackage 使用的模型资产。
+
+核心列：
+
+```text
+StrategyPackage
+manifest_sha256
+model_artifact_id
+factor_schema_hash
+原始复测状态
+Paper状态
+最近Paper表现
+模型新鲜度
+```
+
+该视图只展示关系，不允许直接把模型送入 Paper。Paper 仍只选择 StrategyPackage。
+
+#### 视图 E：治理 / 清理
+
+展示失败、重复、退役、缺资产模型。
+
+分组：
+
+```text
+training_failed
+missing_code
+missing_artifact
+seed_unset_legacy
+quarantined
+retired
+duplicate_spec
+```
+
+### 8.10 QE 实验中的模型选择范围
+
+QE 创建实验时不应简单选择“历史训练模型”。应按模式选择不同对象。
+
+#### 模式 A：训练新模型
+
+默认模式。选择对象是：
+
+```text
+ModelSpec / ModelSearchSpace
+```
+
+可选范围：
+
+```text
+template
+research_candidate
+rdagent_candidate
+validated_spec
+experimental, if explicitly enabled
+```
+
+默认排除：
+
+```text
+training_failed
+runtime_broken
+data_incompatible
+quarantined
+retired
+paper_only_artifact
+```
+
+UI 必须提示：
+
+```text
+当前选择的是模型规格/搜索空间，不是复用历史权重。QE 会基于本次因子组合重新训练模型。
+```
+
+#### 模式 B：自动搜索模型池
+
+用户选择模型池，而不是单一模型。
+
+示例模型池：
+
+```text
+快速树模型池：LGB + XGB + CatBoost
+时序神经网络池：LSTM + GRU + TCN
+深度探索池：Transformer + TabPFN + NN variants
+稳健基线池：LGB + Ridge + shallow MLP
+RD-Agent候选池
+```
+
+QE 生成：
+
+```text
+factor_set × model_spec × hyperparams × seed
+```
+
+#### 模式 C：复用权重 / 只回测
+
+特殊模式，不是默认探索模式。选择对象是：
+
+```text
+ModelArtifact
+```
+
+必须满足：
+
+```text
+feature_schema_hash 完全匹配
+feature_order_hash 完全匹配
+preprocessor_hash 完整
+模型权重存在
+artifact hash 校验通过
+```
+
+用途：
+
+- 验证执行策略；
+- 验证成本参数；
+- 验证 HMM / 风控；
+- 固定信号下做 Paper-like 回测。
+
+不同因子组合不能默认复用旧权重。
+
+### 8.11 QE 模型选择 UI
+
+QE 创建向导中的模型页建议分三层。
+
+第一层：选择模式。
+
+```text
+自动模型搜索池（推荐）
+手工选择模型规格
+复用已训练权重，只做回测
+```
+
+第二层：选择范围。
+
+如果是自动模型搜索池：
+
+```text
+快速筛选
+稳健树模型
+时序神经网络
+深度探索
+RD-Agent候选
+人工实验模型
+```
+
+如果是手工选择模型规格，展示 `ModelSpec` 表：
+
+```text
+模型规格
+模型族
+输入要求
+支持当前因子
+Seed支持
+确定性等级
+训练成本
+最近trial数量
+最近中位IC
+最近最差回撤
+失败率
+生命周期
+```
+
+如果是复用已训练权重，展示 `ModelArtifact` 表：
+
+```text
+artifact
+所属 StrategyPackage / Trial
+feature_schema_match
+权重状态
+原始因子数
+原始训练窗口
+原始 seed
+hash 状态
+是否可用于当前因子组合
+```
+
+第三层：配置搜索预算。
+
+```text
+seed policy
+每个模型最大 trial 数
+超参搜索预算
+训练时间上限
+GPU / CPU 选择
+早停策略
+失败模型跳过策略
+```
+
+### 8.12 模型兼容性检查 API
+
+QE 在选择因子后，应调用兼容性 API，而不是只按 `model_type` 或 `is_sota` 过滤。
+
+```text
+POST /api/v1/model-registry/compatible-specs
+```
+
+输入：
+
+```text
+factor_list
+factor_schema
+freq
+label_horizon
+data_split
+training_mode
+```
+
+输出：
+
+```text
+spec_id
+compatible
+reason
+required_input_shape
+estimated_train_cost
+seed_support
+determinism_level
+recommended_budget
+warnings
+```
+
+典型原因：
+
+```text
+compatible=false, reason=requires_sequence_10d_but_current_features_are_tabular
+compatible=false, reason=requires_gpu
+compatible=false, reason=feature_count_too_small
+compatible=true, warning=seed_unstable_model_family
+```
+
+这个 API 是 QE 模型选择、模型库页面可选状态、SOTA 晋级健康检查的共同基础。
 ## 9. 数据与资产存储边界
 
 ### 9.1 QE Runtime Tables
