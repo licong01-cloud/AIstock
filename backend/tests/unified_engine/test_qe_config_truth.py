@@ -909,6 +909,61 @@ def test_suspend_filter_wraps_score_weighted_v2_strategy():
     assert "module_path: qe_suspend_filter_score_weighted_strategy" in yaml_text
 
 
+def test_score_weighted_capacity_strategy_config_exposes_explicit_capacity_params():
+    yaml_text = _base_yaml(
+        strategy_info={
+            "strategy_id": "score_weighted_topk_v2_capacity_v1",
+            "source_code": (
+                "from score_weighted_strategy_v2 import ScoreWeightedTopkStrategyV2\n\n"
+                "class ScoreWeightedTopkStrategyV2CapacityV1(ScoreWeightedTopkStrategyV2):\n"
+                "    pass\n"
+            ),
+            "portfolio_config": {"class": "ScoreWeightedTopkStrategyV2CapacityV1", "kwargs": {}},
+            "default_kwargs": {
+                "max_single_order_value": 1_000_000_000.0,
+                "max_weight": 0.05,
+                "max_position_ratio": 0.95,
+            },
+        },
+        custom_params={
+            "topk": 20,
+            "n_drop": 2,
+            "max_single_order_value": 1_000_000_000.0,
+            "max_weight": 0.05,
+            "max_position_ratio": 0.95,
+        },
+    )
+
+    assert "class: ScoreWeightedTopkStrategyV2CapacityV1" in yaml_text
+    assert "max_single_order_value: 1000000000.0" in yaml_text
+    assert "max_weight: 0.05" in yaml_text
+    assert "max_position_ratio: 0.95" in yaml_text
+
+
+def test_score_weighted_capacity_strategy_suspend_filter_uses_capacity_wrapper():
+    yaml_text = _base_yaml(
+        strategy_info={
+            "strategy_id": "score_weighted_topk_v2_capacity_v1",
+            "source_code": (
+                "from score_weighted_strategy_v2 import ScoreWeightedTopkStrategyV2\n\n"
+                "class ScoreWeightedTopkStrategyV2CapacityV1(ScoreWeightedTopkStrategyV2):\n"
+                "    pass\n"
+            ),
+            "portfolio_config": {"class": "ScoreWeightedTopkStrategyV2CapacityV1", "kwargs": {}},
+            "default_kwargs": {"max_single_order_value": 1_000_000_000.0},
+        },
+        custom_params={
+            "filter_suspended_on_signal": True,
+            "suspend_filter_file": "qe_suspend_filter.json",
+            "max_single_order_value": 1_000_000_000.0,
+        },
+    )
+
+    assert "class: SuspendFilterScoreWeightedTopkStrategyV2CapacityV1" in yaml_text
+    assert "module_path: qe_suspend_filter_score_weighted_strategy" in yaml_text
+    assert "max_single_order_value: 1000000000.0" in yaml_text
+
+
 def test_suspend_runtime_flags_reject_nested_conflicts():
     merged = _merge_strategy_runtime_flags({"topk": 10}, True, False)
     assert merged["filter_suspended_on_signal"] is True
