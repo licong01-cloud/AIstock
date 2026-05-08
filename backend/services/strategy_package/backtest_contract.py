@@ -29,6 +29,14 @@ SCORE_WEIGHTED_V2_IDS = {
     "score_weighted_topk_v2",
     "ScoreWeightedTopkStrategyV2",
     "SuspendFilterScoreWeightedTopkStrategyV2",
+    "score_weighted_topk_v2_capacity_v1",
+    "ScoreWeightedTopkStrategyV2CapacityV1",
+    "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1",
+}
+SCORE_WEIGHTED_V2_CAPACITY_V1_IDS = {
+    "score_weighted_topk_v2_capacity_v1",
+    "ScoreWeightedTopkStrategyV2CapacityV1",
+    "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1",
 }
 
 SCORE_WEIGHTED_DEFAULTS: dict[str, Any] = {
@@ -54,6 +62,12 @@ SCORE_WEIGHTED_DEFAULTS: dict[str, Any] = {
     "forbid_all_trade_at_limit": False,
     "risk_degree": 1.0,
 }
+SCORE_WEIGHTED_CAPACITY_V1_DEFAULTS: dict[str, Any] = {
+    **SCORE_WEIGHTED_DEFAULTS,
+    "max_single_order_value": 1_000_000_000.0,
+    "max_weight": 0.05,
+    "max_position_ratio": 0.95,
+}
 
 
 def build_backtest_runtime_contract(manifest: StrategyPackageManifest) -> dict[str, Any]:
@@ -72,15 +86,19 @@ def build_backtest_runtime_contract(manifest: StrategyPackageManifest) -> dict[s
     strategy_family = _portfolio_strategy_family(strategy_marker)
     portfolio_params = _portfolio_strategy_params(
         strategy_family=strategy_family,
+        strategy_marker=strategy_marker,
         custom_params=custom_params,
         manifest=manifest,
     )
+    capacity_profile = _portfolio_capacity_profile(strategy_marker, strategy_family)
     return {
         "contract_version": "qe_paper_runtime_contract_v1",
         "source": manifest.source.model_dump(mode="json"),
         "portfolio_strategy": {
+            "strategy_id": strategy_marker,
             "strategy_marker": strategy_marker,
             "strategy_family": strategy_family,
+            "capacity_profile": capacity_profile,
             "params": portfolio_params,
         },
         "runtime_features": {
@@ -316,7 +334,7 @@ def _portfolio_strategy_family(strategy_marker: str) -> str:
         "Paper v2 does not support the QE portfolio strategy contract yet",
         context={
             "strategy_marker": strategy_marker,
-            "supported": sorted(SCORE_WEIGHTED_V1_IDS | SCORE_WEIGHTED_V2_IDS),
+            "supported": sorted(SCORE_WEIGHTED_V1_IDS | SCORE_WEIGHTED_V2_IDS | SCORE_WEIGHTED_V2_CAPACITY_V1_IDS),
         },
     )
 
@@ -324,22 +342,38 @@ def _portfolio_strategy_family(strategy_marker: str) -> str:
 def _portfolio_strategy_params(
     *,
     strategy_family: str,
+    strategy_marker: str,
     custom_params: dict[str, Any],
     manifest: StrategyPackageManifest,
 ) -> dict[str, Any]:
-    params = dict(SCORE_WEIGHTED_DEFAULTS)
+    defaults = (
+        SCORE_WEIGHTED_CAPACITY_V1_DEFAULTS
+        if strategy_marker.strip() in SCORE_WEIGHTED_V2_CAPACITY_V1_IDS
+        else SCORE_WEIGHTED_DEFAULTS
+    )
+    params = dict(defaults)
     params["topk"] = int(custom_params.get("topk") or manifest.portfolio_policy.topk)
     params["n_drop"] = int(custom_params.get("n_drop") or manifest.portfolio_policy.n_drop)
-    for key in SCORE_WEIGHTED_DEFAULTS:
+    for key in defaults:
         if key in custom_params:
             params[key] = custom_params[key]
     params["strategy_family"] = strategy_family
+    params["strategy_id"] = strategy_marker
+    params["capacity_profile"] = _portfolio_capacity_profile(strategy_marker, strategy_family)
     params["topk"] = int(params["topk"])
     params["n_drop"] = int(params["n_drop"])
     params["max_n_drop"] = int(params["max_n_drop"])
     params["min_n_drop"] = int(params["min_n_drop"])
     params["hold_thresh"] = float(params.get("hold_thresh") or 0)
     return params
+
+
+def _portfolio_capacity_profile(strategy_marker: str, strategy_family: str) -> str | None:
+    if strategy_marker.strip() in SCORE_WEIGHTED_V2_CAPACITY_V1_IDS:
+        return "capacity_parameterized_v1"
+    if strategy_family == "score_weighted_topk_v2":
+        return "legacy_5m_cap"
+    return None
 
 
 def _hmm_contract(custom_params: dict[str, Any]) -> dict[str, Any]:

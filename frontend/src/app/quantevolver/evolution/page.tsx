@@ -165,6 +165,100 @@ export default function EvolutionDashboard() {
     delete cleaned.disable_alpha158;
     return cleaned;
   };
+  const selectedStrategyInfo = useCallback((strategyId: string | undefined) => (
+    strategyCatalog.find((s: any) => s.strategy_id === strategyId)
+  ), [strategyCatalog]);
+  const parseJsonish = (value: any, fallback: any) => {
+    if (!value) return fallback;
+    if (typeof value === "string") {
+      try { return JSON.parse(value); } catch { return fallback; }
+    }
+    return value;
+  };
+  const schemaFromStrategy = useCallback((strategyId: string | undefined) => {
+    const info = selectedStrategyInfo(strategyId);
+    const rawSchema = parseJsonish(info?.param_schema, []);
+    const rawDefaults = parseJsonish(info?.default_kwargs, {});
+    const schema: Record<string, any> = {};
+    if (Array.isArray(rawSchema)) {
+      for (const field of rawSchema) {
+        if (!field?.name) continue;
+        const fieldType = field.type === "bool" ? "boolean" : field.type === "int" ? "integer" : field.type === "float" ? "number" : field.type === "enum" ? "string" : field.type;
+        schema[field.name] = {
+          type: fieldType,
+          default: field.default ?? rawDefaults[field.name],
+          minimum: field.minimum ?? field.min,
+          maximum: field.maximum ?? field.max,
+          enum: field.enum ?? field.options,
+          title: field.title ?? field.name,
+          description: field.description ?? field.desc,
+        };
+      }
+    } else if (rawSchema?.properties) {
+      Object.assign(schema, rawSchema.properties);
+    } else if (rawSchema && typeof rawSchema === "object") {
+      Object.assign(schema, rawSchema);
+    }
+    schema.initial_cash = schema.initial_cash || { type: "integer", default: 100000000, minimum: 100000, description: "初始资金（元）" };
+    return schema;
+  }, [selectedStrategyInfo]);
+  const defaultParamsForStrategy = useCallback((strategyId: string | undefined) => {
+    const info = selectedStrategyInfo(strategyId);
+    const defaults = stripRuntimeStrategyFlags(parseJsonish(info?.default_kwargs, {}));
+    const schema = schemaFromStrategy(strategyId);
+    const allowedFields = new Set(Object.keys(schema));
+    if (strategyId !== "score_weighted_topk_v2_capacity_v1") {
+      return {};
+    }
+    return ["max_single_order_value", "max_weight", "max_position_ratio"].reduce((acc: Record<string, any>, key) => {
+      if (allowedFields.has(key) && defaults[key] !== undefined) {
+        acc[key] = defaults[key];
+      }
+      return acc;
+    }, {});
+  }, [schemaFromStrategy, selectedStrategyInfo]);
+  const strategyOptionLabel = (strategy: any) => {
+    const label = strategy.display_name || strategy.strategy_id;
+    if (strategy.strategy_id === "score_weighted_topk_v2") return `${label} (legacy_5m_cap)`;
+    if (strategy.strategy_id === "score_weighted_topk_v2_capacity_v1") return `${label} (capacity params)`;
+    return label;
+  };
+  const renderStrategyParamEditor = (
+    strategyId: string | undefined,
+    values: Record<string, any>,
+    onChange: (key: string, value: any) => void,
+    emptyLabel: string,
+  ) => {
+    if (!strategyId) {
+      return (
+        <ParamSchemaForm
+          schema={{
+            topk: { type: "integer", default: 50, minimum: 1, maximum: 200, description: "持仓股票数" },
+            n_drop: { type: "integer", default: 5, minimum: 0, maximum: 50, description: "每期替换数" },
+            hold_thresh: { type: "integer", default: 2, minimum: 1, maximum: 30, description: "持有期（天）" },
+            risk_degree: { type: "number", default: 0.95, minimum: 0.1, maximum: 1.0, description: "仓位比例" },
+            method_buy: { type: "string", default: "top", enum: ["top", "random"], description: "买入方式" },
+            method_sell: { type: "string", default: "bottom", enum: ["bottom", "random"], description: "卖出方式" },
+            only_tradable: { type: "boolean", default: true, description: "仅可交易标的" },
+            forbid_all_trade_at_limit: { type: "boolean", default: false, description: "涨跌停禁止交易" },
+            initial_cash: { type: "integer", default: 100000000, minimum: 100000, description: "初始资金（元）" },
+          }}
+          values={values}
+          onChange={onChange}
+        />
+      );
+    }
+    return (
+      <>
+        <div style={{ padding: "8px 12px", backgroundColor: "#f1f5f9", borderRadius: "6px", fontSize: "12px", color: "#64748b", marginBottom: "8px" }}>
+          {strategyId === "score_weighted_topk_v2"
+            ? "旧版 ScoreWeighted V2 保持 legacy_5m_cap；如需放大容量请选择 score_weighted_topk_v2_capacity_v1。"
+            : emptyLabel}
+        </div>
+        <ParamSchemaForm schema={schemaFromStrategy(strategyId)} values={values} onChange={onChange} />
+      </>
+    );
+  };
   const [computeNodes, setComputeNodes] = useState<any[]>([]);
 
   // 手动选择模型/因子相关状态
@@ -3008,12 +3102,12 @@ export default function EvolutionDashboard() {
                     <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "4px" }}>交易策略</label>
                     <select
                       value={newTask.strategy_id}
-                      onChange={e => setNewTask({ ...newTask, strategy_id: e.target.value, strategy_params: {} })}
+                      onChange={e => setNewTask({ ...newTask, strategy_id: e.target.value, strategy_params: defaultParamsForStrategy(e.target.value) })}
                       style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box", backgroundColor: "white" }}
                     >
                       <option value="">默认（继承基础实验）</option>
                       {strategyCatalog.map(s => (
-                        <option key={s.strategy_id} value={s.strategy_id}>{s.display_name || s.strategy_id}</option>
+                        <option key={s.strategy_id} value={s.strategy_id}>{strategyOptionLabel(s)}</option>
                       ))}
                     </select>
                   </div>
@@ -3034,39 +3128,17 @@ export default function EvolutionDashboard() {
                   </div>
                 </div>
                 {/* 策略参数图形化编辑 */}
-                {!newTask.strategy_id ? (
-                  <div style={{ marginTop: "8px" }}>
-                    <div style={{ fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "6px" }}>策略参数（默认 TopkDropoutStrategy）</div>
-                    <ParamSchemaForm
-                      schema={{
-                        topk: { type: "integer", default: 50, minimum: 1, maximum: 200, description: "持仓股票数" },
-                        n_drop: { type: "integer", default: 5, minimum: 0, maximum: 50, description: "每期替换数" },
-                        hold_thresh: { type: "integer", default: 2, minimum: 1, maximum: 30, description: "持有期（天）" },
-                        risk_degree: { type: "number", default: 0.95, minimum: 0.1, maximum: 1.0, description: "仓位比例" },
-                        method_buy: { type: "string", default: "top", enum: ["top", "random"], description: "买入方式" },
-                        method_sell: { type: "string", default: "bottom", enum: ["bottom", "random"], description: "卖出方式" },
-                        only_tradable: { type: "boolean", default: true, description: "仅可交易标的" },
-                        forbid_all_trade_at_limit: { type: "boolean", default: false, description: "涨跌停禁止交易" },
-                        initial_cash: { type: "integer", default: 100000000, minimum: 100000, description: "初始资金（元）" },
-                      }}
-                      values={newTask.strategy_params}
-                      onChange={(key, val) => setNewTask(prev => ({ ...prev, strategy_params: { ...prev.strategy_params, [key]: val } }))}
-                    />
+                <div style={{ marginTop: "8px" }}>
+                  <div style={{ fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "6px" }}>
+                    策略参数（{newTask.strategy_id ? (selectedStrategyInfo(newTask.strategy_id)?.display_name || newTask.strategy_id) : "默认 TopkDropoutStrategy"}）
                   </div>
-                ) : (
-                  <div style={{ marginTop: "8px" }}>
-                    <div style={{ padding: "8px 12px", backgroundColor: "#f1f5f9", borderRadius: "6px", fontSize: "12px", color: "#64748b", marginBottom: "8px" }}>
-                      自定义策略参数请在策略管理页面的 portfolio_config 中配置
-                    </div>
-                    <ParamSchemaForm
-                      schema={{
-                        initial_cash: { type: "integer", default: 100000000, minimum: 100000, description: "初始资金（元）" },
-                      }}
-                      values={newTask.strategy_params}
-                      onChange={(key, val) => setNewTask(prev => ({ ...prev, strategy_params: { ...prev.strategy_params, [key]: val } }))}
-                    />
-                  </div>
-                )}
+                  {renderStrategyParamEditor(
+                    newTask.strategy_id,
+                    newTask.strategy_params,
+                    (key, val) => setNewTask(prev => ({ ...prev, strategy_params: { ...prev.strategy_params, [key]: val } })),
+                    "参数来自策略目录 param_schema，可在此覆盖后写入本次 QE requested/effective config。",
+                  )}
+                </div>
 
                 {/* 执行算法参数图形化编辑 */}
                 {newTask.execution_algo && (() => {
@@ -3582,9 +3654,9 @@ export default function EvolutionDashboard() {
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "8px" }}>
                         <div>
                           <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>交易策略</label>
-                          <select value={loop.strategy_id} onChange={e => updateCustomEvoLoop(loopIdx, { strategy_id: e.target.value, strategy_params: {} })} style={{ width: "100%", padding: "5px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px" }}>
+                          <select value={loop.strategy_id} onChange={e => updateCustomEvoLoop(loopIdx, { strategy_id: e.target.value, strategy_params: defaultParamsForStrategy(e.target.value) })} style={{ width: "100%", padding: "5px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px" }}>
                             <option value="">默认 TopkDropoutStrategy</option>
-                            {strategyCatalog.map(s => (<option key={s.strategy_id} value={s.strategy_id}>{s.display_name || s.strategy_id}</option>))}
+                            {strategyCatalog.map(s => (<option key={s.strategy_id} value={s.strategy_id}>{strategyOptionLabel(s)}</option>))}
                           </select>
                         </div>
                         <div>
@@ -3599,16 +3671,12 @@ export default function EvolutionDashboard() {
                         </div>
                       </div>
                       {/* 策略参数 */}
-                      <ParamSchemaForm
-                        schema={{
-                          topk: { type: "integer", default: 50, minimum: 1, maximum: 200, description: "持仓股票数" },
-                          n_drop: { type: "integer", default: 5, minimum: 0, maximum: 50, description: "每期替换数" },
-                          hold_thresh: { type: "integer", default: 2, minimum: 1, maximum: 30, description: "持有期（天）" },
-                          risk_degree: { type: "number", default: 0.95, minimum: 0.1, maximum: 1.0, description: "仓位比例" },
-                        }}
-                        values={loop.strategy_params}
-                        onChange={(key: string, val: any) => updateCustomEvoLoop(loopIdx, { strategy_params: { ...loop.strategy_params, [key]: val } })}
-                      />
+                      {renderStrategyParamEditor(
+                        loop.strategy_id,
+                        loop.strategy_params,
+                        (key: string, val: any) => updateCustomEvoLoop(loopIdx, { strategy_params: { ...loop.strategy_params, [key]: val } }),
+                        "参数来自策略目录 param_schema，可覆盖本 Loop 的容量/权重设置。",
+                      )}
                       {/* 尾盘处理 */}
                       {loop.execution_algo !== "CLOSE_PRICE" && (
                         <div style={{ marginTop: "8px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
@@ -4022,11 +4090,11 @@ export default function EvolutionDashboard() {
                   <div>
                     <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "4px" }}>交易策略</label>
                     <select value={forkForm.strategy_id}
-                      onChange={e => setForkForm(f => ({ ...f, strategy_id: e.target.value, strategy_params: {} }))}
+                      onChange={e => setForkForm(f => ({ ...f, strategy_id: e.target.value, strategy_params: defaultParamsForStrategy(e.target.value) }))}
                       style={{ width: "100%", padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box", backgroundColor: "white" }}>
                       <option value="">继承源任务</option>
                       {strategyCatalog.map(s => (
-                        <option key={s.strategy_id} value={s.strategy_id}>{s.display_name || s.strategy_id}</option>
+                        <option key={s.strategy_id} value={s.strategy_id}>{strategyOptionLabel(s)}</option>
                       ))}
                     </select>
                   </div>
@@ -4064,32 +4132,14 @@ export default function EvolutionDashboard() {
                   )}
                 </div>
                 {/* 策略参数（含 initial_cash） */}
-                {!forkForm.strategy_id ? (
-                  <ParamSchemaForm
-                    schema={{
-                      topk: { type: "integer", default: 50, minimum: 1, maximum: 200, description: "持仓股票数" },
-                      n_drop: { type: "integer", default: 5, minimum: 0, maximum: 50, description: "每期替换数" },
-                      hold_thresh: { type: "integer", default: 2, minimum: 1, maximum: 30, description: "持有期（天）" },
-                      risk_degree: { type: "number", default: 0.95, minimum: 0.1, maximum: 1.0, description: "仓位比例" },
-                      initial_cash: { type: "integer", default: 100000000, minimum: 100000, description: "初始资金（元）" },
-                    }}
-                    values={forkForm.strategy_params}
-                    onChange={(key, val) => setForkForm(f => ({ ...f, strategy_params: { ...f.strategy_params, [key]: val } }))}
-                  />
-                ) : (
-                  <div style={{ marginTop: "8px" }}>
-                    <div style={{ padding: "8px 12px", backgroundColor: "#f1f5f9", borderRadius: "6px", fontSize: "12px", color: "#64748b", marginBottom: "8px" }}>
-                      自定义策略参数请在策略管理页面的 portfolio_config 中配置
-                    </div>
-                    <ParamSchemaForm
-                      schema={{
-                        initial_cash: { type: "integer", default: 100000000, minimum: 100000, description: "初始资金（元）" },
-                      }}
-                      values={forkForm.strategy_params}
-                      onChange={(key, val) => setForkForm(f => ({ ...f, strategy_params: { ...f.strategy_params, [key]: val } }))}
-                    />
-                  </div>
-                )}
+                <div style={{ marginTop: "8px" }}>
+                  {renderStrategyParamEditor(
+                    forkForm.strategy_id,
+                    forkForm.strategy_params,
+                    (key, val) => setForkForm(f => ({ ...f, strategy_params: { ...f.strategy_params, [key]: val } })),
+                    "参数来自策略目录 param_schema，可覆盖本次 fork 的容量/权重设置。",
+                  )}
+                </div>
               </div>
             </div>
             </>
@@ -4244,46 +4294,24 @@ export default function EvolutionDashboard() {
                       </div>
 
                       {/* 策略参数 */}
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "8px", marginBottom: "8px" }}>
-                        <div>
-                          <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>topk</label>
-                          <input
-                            type="number"
-                            value={loop.strategy_params?.topk || 50}
-                            onChange={e => updateStrategyEvoLoop(index, { strategy_params: { ...loop.strategy_params, topk: parseInt(e.target.value) || 50 } })}
-                            style={{ width: "100%", padding: "4px 6px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px" }}
-                          />
-                        </div>
-                        <div>
-                          <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>n_drop</label>
-                          <input
-                            type="number"
-                            value={loop.strategy_params?.n_drop || 5}
-                            onChange={e => updateStrategyEvoLoop(index, { strategy_params: { ...loop.strategy_params, n_drop: parseInt(e.target.value) || 5 } })}
-                            style={{ width: "100%", padding: "4px 6px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px" }}
-                          />
-                        </div>
-                        <div>
-                          <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>hold_thresh</label>
-                          <input
-                            type="number"
-                            value={loop.strategy_params?.hold_thresh || 2}
-                            onChange={e => updateStrategyEvoLoop(index, { strategy_params: { ...loop.strategy_params, hold_thresh: parseInt(e.target.value) || 2 } })}
-                            style={{ width: "100%", padding: "4px 6px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px" }}
-                          />
-                        </div>
-                        <div>
-                          <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>risk_degree</label>
-                          <input
-                            type="number"
-                            step="0.05"
-                            min="0.1"
-                            max="1.0"
-                            value={loop.strategy_params?.risk_degree || 0.95}
-                            onChange={e => updateStrategyEvoLoop(index, { strategy_params: { ...loop.strategy_params, risk_degree: parseFloat(e.target.value) || 0.95 } })}
-                            style={{ width: "100%", padding: "4px 6px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px" }}
-                          />
-                        </div>
+                      <div style={{ marginBottom: "8px" }}>
+                        <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>交易策略</label>
+                        <select
+                          value={loop.strategy_id || ""}
+                          onChange={e => updateStrategyEvoLoop(index, { strategy_id: e.target.value, strategy_params: defaultParamsForStrategy(e.target.value) })}
+                          style={{ width: "100%", padding: "4px 6px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "12px", marginBottom: "8px" }}
+                        >
+                          <option value="">继承源任务</option>
+                          {strategyCatalog.map(s => (
+                            <option key={s.strategy_id} value={s.strategy_id}>{strategyOptionLabel(s)}</option>
+                          ))}
+                        </select>
+                        {renderStrategyParamEditor(
+                          loop.strategy_id,
+                          loop.strategy_params || {},
+                          (key: string, val: any) => updateStrategyEvoLoop(index, { strategy_params: { ...loop.strategy_params, [key]: val } }),
+                          "参数来自策略目录 param_schema，可覆盖本策略演进 Loop 的容量/权重设置。",
+                        )}
                       </div>
 
                       {/* 执行算法和 HMM */}

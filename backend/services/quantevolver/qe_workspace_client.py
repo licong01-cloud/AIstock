@@ -74,7 +74,8 @@ class QEWorkspaceClient:
         通知 RDAgent 根据配置生成代码并启动执行 QLib 回测
         返回 RDAgent 端生成的 loop_id
 
-        model_source: 策略演进时传入模型来源信息，用于创建 mlruns 符号链接
+        model_source: 策略演进时传入模型来源信息；backtest-only 应使用打包 payload，
+            避免目标 loop 通过 mlruns 符号链接写回 source recorder
             {
                 "source_task_id": "qe_xxx",
                 "source_loop": "Loop3",

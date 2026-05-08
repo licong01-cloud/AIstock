@@ -9,6 +9,13 @@ try:
     from custom_strategy import ScoreWeightedTopkStrategyV2
 except ImportError:
     from score_weighted_strategy_v2 import ScoreWeightedTopkStrategyV2
+try:
+    from custom_strategy import ScoreWeightedTopkStrategyV2CapacityV1
+except ImportError:
+    try:
+        from score_weighted_strategy_v2_capacity_v1 import ScoreWeightedTopkStrategyV2CapacityV1
+    except ImportError:
+        ScoreWeightedTopkStrategyV2CapacityV1 = ScoreWeightedTopkStrategyV2
 import pandas as pd
 from qlib.backtest.decision import Order, OrderDir, TradeDecisionWO
 
@@ -180,5 +187,12 @@ class SuspendFilterScoreWeightedTopkStrategy(
 class SuspendFilterScoreWeightedTopkStrategyV2(
     _SuspendFilterScoreWeightedMixin,
     ScoreWeightedTopkStrategyV2,
+):
+    pass
+
+
+class SuspendFilterScoreWeightedTopkStrategyV2CapacityV1(
+    _SuspendFilterScoreWeightedMixin,
+    ScoreWeightedTopkStrategyV2CapacityV1,
 ):
     pass

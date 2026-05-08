@@ -333,9 +333,18 @@ class AutoEvolutionScheduler:
             # Reuse the existing node contract: when true, the API extracts the
             # packaged mlruns tar from experiment_files instead of probing links.
             "cross_node": True,
+            "source_transport": "mlruns_params_tar",
+        }
+        source_ref = {
+            "schema_version": "qe_backtest_source_ref_v1",
+            "source_task_id": source_task_id,
+            "source_loop": source_loop,
+            "source_transport": "mlruns_params_tar",
+            "reason": reason,
         }
         extra_experiment_files = {
-            "mlruns_params.tar.gz.b64": base64.b64encode(mlruns_tar).decode("ascii")
+            "mlruns_params.tar.gz.b64": base64.b64encode(mlruns_tar).decode("ascii"),
+            "qe_backtest_source_ref.json": json.dumps(source_ref, ensure_ascii=False, indent=2),
         }
         logger.info(
             "%s packaged source model params via node API: source=%s/%s bytes=%s",
@@ -345,6 +354,48 @@ class AutoEvolutionScheduler:
             len(mlruns_tar),
         )
         return model_source, extra_experiment_files
+
+    async def _require_backtest_retry_isolation_passed(
+        self,
+        client: QEWorkspaceClient,
+        task_id: str,
+        loop_id: str,
+        node_id: str,
+    ) -> Dict[str, Any]:
+        """Ensure retry does not mask a failed backtest-only recorder isolation gate."""
+        try:
+            isolation_payload = await client.get_workspace_file(
+                task_id,
+                loop_id,
+                "qe_recorder_isolation.json",
+            )
+        except Exception as exc:
+            raise ValueError(
+                "QE_BACKTEST_RETRY_REQUIRES_ISOLATION_PASSED: "
+                f"{task_id}/{loop_id} has no readable qe_recorder_isolation.json on node {node_id}"
+            ) from exc
+
+        if isinstance(isolation_payload, str):
+            try:
+                isolation_payload = json.loads(isolation_payload)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    "QE_BACKTEST_RETRY_REQUIRES_ISOLATION_PASSED: "
+                    f"{task_id}/{loop_id} isolation manifest is not valid JSON"
+                ) from exc
+
+        if not isinstance(isolation_payload, dict):
+            raise ValueError(
+                "QE_BACKTEST_RETRY_REQUIRES_ISOLATION_PASSED: "
+                f"{task_id}/{loop_id} isolation manifest has invalid type"
+            )
+        if isolation_payload.get("recorder_isolation_status") != "passed":
+            raise ValueError(
+                "QE_BACKTEST_RETRY_REQUIRES_ISOLATION_PASSED: "
+                f"{task_id}/{loop_id} recorder_isolation_status="
+                f"{isolation_payload.get('recorder_isolation_status')!r}"
+            )
+        return isolation_payload
 
     def _get_callback_url_for_node(self, node_id: Optional[str]) -> Optional[str]:
         with get_conn() as conn:
@@ -2986,6 +3037,10 @@ class AutoEvolutionScheduler:
         await preflight_qe_node(effective_node_id)
 
         client = self._get_workspace_client_for_node_id(effective_node_id)
+        config = loop_row["config_json"]
+        if isinstance(config, str):
+            config = json.loads(config)
+        original_backtest_only = bool(isinstance(config, dict) and config.get("backtest_only"))
 
         # 3. Resolve retry mode. UI/API callers may force full training or
         # backtest-only; auto preserves the old artifact-based behavior.
@@ -2996,6 +3051,13 @@ class AutoEvolutionScheduler:
             QE_LOOP_RETRY_MODE_AUTO,
             QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
         ):
+            if original_backtest_only:
+                await self._require_backtest_retry_isolation_passed(
+                    client,
+                    task_id,
+                    loop_id,
+                    effective_node_id,
+                )
             try:
                 retry_model_source, retry_extra_experiment_files = await self._build_backtest_only_model_payload(
                     client,
@@ -3048,10 +3110,6 @@ class AutoEvolutionScheduler:
 
         # 5. 使用统一引擎重新 compose 并提交
         try:
-            config = loop_row["config_json"]
-            if isinstance(config, str):
-                config = json.loads(config)
-
             from .experiment_config_builders import build_config_from_retry_loop
             from .executors.backtest import BacktestExecutor, BacktestMode
             from .executors.base import ExecutionContext
@@ -4125,37 +4183,32 @@ class AutoEvolutionScheduler:
                     """, (json.dumps(base_config), evolution_loop_db_id))
                 conn.commit()
 
-            model_source = {
-                "source_task_id": source_task_id,
-                "source_loop": f"Loop{source_loop_idx}",
-            }
-            extra_experiment_files = {}
-
-            # Cross-node backtest-only must sync source model params or fail fast.
             target_node_id = task.get("node_id")
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT node_id FROM qe_evolution_tasks WHERE task_id = %s", (source_task_id,))
                     src_row = cur.fetchone()
             source_node_id = src_row[0] if src_row else None
-
-            if (target_node_id or None) != (source_node_id or None):
-                logger.info(
-                    f"cross-node strategy evolution: source={source_node_id or 'local'} -> target={target_node_id or 'local'}, syncing mlruns"
-                )
-                source_client = (
-                    self.workspace_client
-                    if not source_node_id
-                    else self._node_clients.get(source_node_id) or QEWorkspaceClient.for_node(source_node_id)
-                )
-                if source_node_id and source_node_id not in self._node_clients:
-                    self._node_clients[source_node_id] = source_client
-                model_source, extra_experiment_files = await self._build_backtest_only_model_payload(
-                    source_client,
-                    source_task_id,
-                    int(source_loop_idx),
-                    reason="cross-node strategy evolution",
-                )
+            source_client = (
+                self.workspace_client
+                if not source_node_id
+                else self._node_clients.get(source_node_id) or QEWorkspaceClient.for_node(source_node_id)
+            )
+            if source_node_id and source_node_id not in self._node_clients:
+                self._node_clients[source_node_id] = source_client
+            model_source, extra_experiment_files = await self._build_backtest_only_model_payload(
+                source_client,
+                source_task_id,
+                int(source_loop_idx),
+                reason="strategy evolution backtest-only",
+            )
+            logger.info(
+                "strategy evolution backtest-only packaged source model: source=%s/%s source_node=%s target_node=%s",
+                source_task_id,
+                f"Loop{source_loop_idx}",
+                source_node_id or "local",
+                target_node_id or "local",
+            )
 
             client = self._get_workspace_client_for_task(task_id)
             executor = BacktestExecutor(ConfigComposer(), client)
@@ -5453,23 +5506,24 @@ class AutoEvolutionScheduler:
                     raise ValueError(
                         f"Loop {loop_index}: backtest_only=True 但未指定 model_source"
                     )
-                model_source = {
-                    "source_task_id": cfg.model_source_task_id,
-                    "source_loop": f"Loop{cfg.model_source_loop_index}",
-                }
-                extra_experiment_files = {}
                 source_node_id = self._get_loop_node_id(
                     cfg.model_source_task_id,
                     int(cfg.model_source_loop_index),
                 )
-                if source_node_id != effective_node_id:
-                    source_client = self._get_workspace_client_for_node_id(source_node_id)
-                    model_source, extra_experiment_files = await self._build_backtest_only_model_payload(
-                        source_client,
-                        cfg.model_source_task_id,
-                        int(cfg.model_source_loop_index),
-                        reason="cross-node custom evolution",
-                    )
+                source_client = self._get_workspace_client_for_node_id(source_node_id)
+                model_source, extra_experiment_files = await self._build_backtest_only_model_payload(
+                    source_client,
+                    cfg.model_source_task_id,
+                    int(cfg.model_source_loop_index),
+                    reason="custom evolution backtest-only",
+                )
+                logger.info(
+                    "custom evolution backtest-only packaged source model: source=%s/Loop%s source_node=%s target_node=%s",
+                    cfg.model_source_task_id,
+                    cfg.model_source_loop_index,
+                    source_node_id or "local",
+                    effective_node_id or "local",
+                )
 
                 ctx = ExecutionContext(
                     task_id=task_id,

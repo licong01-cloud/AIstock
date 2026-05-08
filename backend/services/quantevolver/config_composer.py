@@ -771,7 +771,12 @@ class ConfigComposer:
         return strategy_info.get("strategy_name") or "TopkDropoutStrategy"
 
     def _ensure_suspend_filter_supported(self, strategy_class: str) -> None:
-        supported = {"TopkDropoutStrategy", "ScoreWeightedTopkStrategy", "ScoreWeightedTopkStrategyV2"}
+        supported = {
+            "TopkDropoutStrategy",
+            "ScoreWeightedTopkStrategy",
+            "ScoreWeightedTopkStrategyV2",
+            "ScoreWeightedTopkStrategyV2CapacityV1",
+        }
         if strategy_class not in supported:
             raise ValueError(
                 "filter_suspended_on_signal=True is not supported by strategy "
@@ -787,6 +792,8 @@ class ConfigComposer:
             "SuspendFilterScoreWeightedTopkStrategy",
             "ScoreWeightedTopkStrategyV2",
             "SuspendFilterScoreWeightedTopkStrategyV2",
+            "ScoreWeightedTopkStrategyV2CapacityV1",
+            "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1",
         }
         if strategy_class not in supported:
             raise ValueError(
@@ -1150,6 +1157,7 @@ class ConfigComposer:
                 "TopkDropoutWithRiskControlStrategy",
                 "ScoreWeightedTopkStrategy",
                 "ScoreWeightedTopkStrategyV2",
+                "ScoreWeightedTopkStrategyV2CapacityV1",
                 "EnhancedTopkDropoutStrategy",
                 "SmallCapTopkDropoutStrategy",
             }
@@ -1458,6 +1466,7 @@ class ConfigComposer:
                 "TopkDropoutWithRiskControlStrategy",
                 "ScoreWeightedTopkStrategy",
                 "ScoreWeightedTopkStrategyV2",
+                "ScoreWeightedTopkStrategyV2CapacityV1",
                 "EnhancedTopkDropoutStrategy",
                 "SmallCapTopkDropoutStrategy",
             }
@@ -2693,6 +2702,9 @@ class ConfigComposer:
             elif strategy_class == "ScoreWeightedTopkStrategyV2":
                 strategy_class = "SuspendFilterScoreWeightedTopkStrategyV2"
                 strategy_module = "qe_suspend_filter_score_weighted_strategy"
+            elif strategy_class == "ScoreWeightedTopkStrategyV2CapacityV1":
+                strategy_class = "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1"
+                strategy_module = "qe_suspend_filter_score_weighted_strategy"
 
         risk_policy_enabled = self._is_qe_risk_policy_enabled(custom_params)
         if risk_policy_enabled:
@@ -2708,6 +2720,12 @@ class ConfigComposer:
                 strategy_module = "qe_suspend_filter_score_weighted_strategy"
             elif strategy_class in {"ScoreWeightedTopkStrategyV2", "SuspendFilterScoreWeightedTopkStrategyV2"}:
                 strategy_class = "SuspendFilterScoreWeightedTopkStrategyV2"
+                strategy_module = "qe_suspend_filter_score_weighted_strategy"
+            elif strategy_class in {
+                "ScoreWeightedTopkStrategyV2CapacityV1",
+                "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1",
+            }:
+                strategy_class = "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1"
                 strategy_module = "qe_suspend_filter_score_weighted_strategy"
 
         # 安全过滤：只保留策略支持的参数
@@ -2789,8 +2807,13 @@ class ConfigComposer:
                     f"策略 '{strategy_class}' 不支持参数: {sorted(_removed)}。"
                     f"允许的参数: {sorted(_SCORE_WEIGHTED_TOPK_ALLOWED_KEYS)}"
                 )
-        elif strategy_class in {"ScoreWeightedTopkStrategyV2", "SuspendFilterScoreWeightedTopkStrategyV2"}:
-            # V2 与 V1 参数集相同，修复了补仓模式 Bug #1 和幽灵持仓 Bug #2
+        elif strategy_class in {
+            "ScoreWeightedTopkStrategyV2",
+            "SuspendFilterScoreWeightedTopkStrategyV2",
+            "ScoreWeightedTopkStrategyV2CapacityV1",
+            "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1",
+        }:
+            # V2 and the capacity variant share parameters; only defaults differ.
             _removed = {k for k in strategy_kwargs if k not in _SCORE_WEIGHTED_TOPK_ALLOWED_KEYS}
             if _removed:
                 raise ValueError(
