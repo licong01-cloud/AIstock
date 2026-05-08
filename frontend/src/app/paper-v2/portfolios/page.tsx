@@ -9,7 +9,7 @@ import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { hmmTrainingApi, paperV2Api, strategyPackageApi } from "@/lib/paper-v2/api";
-import { formatCompact, hmmSnapshotLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
+import { dataSourceLabel, formatCompact, hmmSnapshotLabel, packageDisplayLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
 import type { DataSource, ExecutionPolicy, HmmConfig, HmmSnapshot, JsonObject, PaperPortfolio, PaperSessionMode, PaperSessionProgress, RuntimeProfileVersion, StrategyPackage } from "@/lib/paper-v2/types";
 
 function daysAgoIso(days: number): string {
@@ -299,9 +299,13 @@ export default function PaperV2PortfoliosPage() {
           columns={[
             { key: "name", header: "名称", render: (row) => <Link href={`/paper-v2/portfolios/${row.portfolio_id}`}>{row.portfolio_name}</Link> },
             { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
-            { key: "package", header: "策略包", render: (row) => <span className="pv2-mono">{shortHash(row.package_id, 7)}</span> },
+            { key: "package", header: "策略包", render: (row) => {
+              const pkg = packages.find((item) => item.package_id === row.package_id);
+              const label = pkg ? packageDisplayLabel(pkg) : shortHash(row.package_id, 7);
+              return <span title={String(row.package_id)}>{label}</span>;
+            } },
             { key: "cash", header: "初始资金", render: (row) => formatCompact(row.initial_cash) },
-            { key: "source", header: "数据源", render: (row) => row.data_source },
+            { key: "source", header: "数据源", render: (row) => dataSourceLabel(row.data_source) },
             { key: "start", header: "开始", render: (row) => row.start_date },
             { key: "actions", header: "操作", render: (row) => <div className="pv2-row-actions"><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio_id}/run-console`}>运行控制台</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio_id}/ledger`}>账本</Link><button className="pv2-link-button" onClick={() => lifecycle(row.portfolio_id, row.status === "PAUSED" ? "resume" : "pause")} type="button">{row.status === "PAUSED" ? "恢复" : "暂停"}</button><button className="pv2-link-button" onClick={() => lifecycle(row.portfolio_id, "retire")} type="button">退役</button></div> },
           ]}

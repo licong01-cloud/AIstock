@@ -141,3 +141,28 @@ export function dataSourceLabel(source: unknown): string {
   if (raw === "TDX_REALTIME") return "TDX 实时分钟线（TDX_REALTIME）";
   return raw || "-";
 }
+
+export function packageDisplayLabel(pkg: {
+  package_name?: string | null;
+  package_id?: string | null;
+  alpha_mode?: string | null;
+  created_at?: string | null;
+  manifest?: { metadata?: { name?: string | null } | null } | null;
+}): string {
+  const metadataName = pkg.manifest?.metadata?.name;
+  const explicit = String(metadataName || pkg.package_name || "").trim();
+  if (explicit) return explicit;
+  return shortHash(pkg.package_id, 7);
+}
+
+export function selectionRunLabel(run: {
+  trade_date?: string | null;
+  mode?: string | null;
+  run_id?: string | null;
+}): string {
+  const parts: string[] = [];
+  if (run.trade_date) parts.push(String(run.trade_date));
+  if (run.mode) parts.push(statusLabel(run.mode));
+  if (!parts.length) return shortHash(run.run_id);
+  return parts.join(" / ");
+}

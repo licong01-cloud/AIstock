@@ -9,6 +9,7 @@ import JsonPanel from "@/components/paper-v2/JsonPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
+import ReadinessFailureCard from "@/components/paper-v2/ReadinessFailureCard";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { paperV2Api } from "@/lib/paper-v2/api";
@@ -57,6 +58,26 @@ const SESSION_MODE_OPTIONS: Array<{ value: PaperSessionMode; label: string; desc
 
 function isActiveSession(session: PaperSession | null | undefined): boolean {
   return Boolean(session && !TERMINAL_SESSION_STATUSES.includes(String(session.status || "").toUpperCase()));
+}
+
+function CapabilityErrorList({ node }: { node: { can_start: boolean; errors: JsonObject[] } | undefined }) {
+  if (!node) return <div className="pv2-muted">尚未加载能力诊断。</div>;
+  const errors = (node.errors || []) as JsonObject[];
+  if (!errors.length) return <div className="pv2-muted">{node.can_start ? "可启动。" : "已禁用，但未返回具体错误。"}</div>;
+  return (
+    <ul className="pv2-readiness-context" style={{ paddingLeft: 16 }}>
+      {errors.map((err, index) => {
+        const code = String(err.error_code || err.code || "ERROR");
+        const message = String(err.message || err.detail || "");
+        return (
+          <li key={`${code}-${index}`}>
+            <span className="pv2-badge pv2-badge-danger" style={{ marginRight: 6 }} title={code}>{code}</span>
+            <span>{message}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 export default function PaperV2RunConsolePage() {
@@ -563,7 +584,7 @@ export default function PaperV2RunConsolePage() {
               本页面严格遵守 v2 流程。同一交易日和同一运行配置通过后端就绪门禁前，单日运行保持禁用。
             </NoticePanel>
           ) : null}
-          {readiness ? <JsonPanel value={readiness} /> : null}
+          {readiness ? <ReadinessFailureCard result={readiness} /> : null}
           {runResult ? <JsonPanel value={runResult} /> : null}
         </SectionCard>
 
@@ -636,7 +657,7 @@ export default function PaperV2RunConsolePage() {
             <button className="pv2-button" data-testid="console-replay-reject" disabled={busy || sessionModeBlocked} onClick={() => replay("reject_existing")} type="button">{sessionMode === "LIVE_ONLY" ? "启动完全实时" : sessionMode === "CATCHUP_THEN_LIVE" ? "启动追赶后自动实时" : "启动仅历史追赶"}</button>
             <ConfirmAction label="重置并重跑历史追赶" danger disabled={busy || sessionMode === "LIVE_ONLY" || sessionModeBlocked} confirmText={portfolioId} onConfirm={() => replay("reset_portfolio")} testId="console-replay-reset" />
           </div>
-          {sessionModeBlocked ? <NoticePanel title="当前场景被后端能力诊断禁用" tone="warning"><JsonPanel value={sessionMode === "REPLAY_ONLY" ? replayCapability : sessionMode === "CATCHUP_THEN_LIVE" ? catchupCapability : liveCapability} /></NoticePanel> : null}
+          {sessionModeBlocked ? <NoticePanel title="当前场景被后端能力诊断禁用" tone="warning"><CapabilityErrorList node={sessionMode === "REPLAY_ONLY" ? replayCapability : sessionMode === "CATCHUP_THEN_LIVE" ? catchupCapability : liveCapability} /></NoticePanel> : null}
           <NoticePanel title="重置会删除该组合账本历史" tone="warning">
             重置只用于需要替换已有历史运行、订单、成交、现金、持仓、快照、事件和错误时使用；否则使用 reject_existing 追赶缺失交易日。
           </NoticePanel>
@@ -667,7 +688,7 @@ export default function PaperV2RunConsolePage() {
             <button className="pv2-button-primary" data-testid="console-switch-mode-apply" disabled={busy || !activeSession || switchModeBlocked} onClick={switchActiveSessionMode} type="button" style={{ marginTop: 12 }}>切换活跃任务场景</button>
             <NoticePanel title="切换约束" tone="warning">切换会先停止原活跃会话，再按目标场景创建新会话；后端在 09:15-15:00 A 股交易时间内拒绝执行该操作。</NoticePanel>
           </div>
-          {liveBlocked ? <NoticePanel title="实时模式被后端能力诊断禁用" tone="warning"><JsonPanel value={liveCapability} /></NoticePanel> : null}
+          {liveBlocked ? <NoticePanel title="实时模式被后端能力诊断禁用" tone="warning"><CapabilityErrorList node={liveCapability} /></NoticePanel> : null}
           <NoticePanel title="后台调度不会改变业务逻辑" tone="info">
             调度器只调用与页面相同的 session tick 接口。无新分钟线时进入等待状态；数据、算法或策略产物缺失会显示后端错误，不会降级到日频或其他算法。
           </NoticePanel>
