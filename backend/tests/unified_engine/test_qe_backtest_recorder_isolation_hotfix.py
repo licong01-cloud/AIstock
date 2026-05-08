@@ -257,4 +257,3 @@ def test_two_backtest_only_target_loops_reuse_one_source_payload_independently()
     assert [call.args[1] for call in calls] == [1, 2]
     assert calls[0].kwargs["model_source"] == calls[1].kwargs["model_source"]
     assert calls[0].args[3]["mlruns_params.tar.gz.b64"] == calls[1].args[3]["mlruns_params.tar.gz.b64"]
-
