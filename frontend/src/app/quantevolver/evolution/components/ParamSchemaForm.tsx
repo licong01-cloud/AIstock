@@ -6,8 +6,12 @@ interface FieldSchema {
   default?: any;
   minimum?: number;
   maximum?: number;
+  min?: number;
+  max?: number;
   enum?: string[];
+  options?: string[];
   description?: string;
+  desc?: string;
   title?: string;
 }
 
@@ -44,7 +48,20 @@ function FieldControl({
   const isDefault = value === undefined || value === null || value === "";
   const displayVal = isDefault ? defaultVal : value;
 
-  if (schema.type === "boolean") {
+  const normalizedType = schema.type === "bool"
+    ? "boolean"
+    : schema.type === "int"
+      ? "integer"
+      : schema.type === "float"
+        ? "number"
+        : schema.type === "enum"
+          ? "string"
+          : schema.type;
+  const minimum = schema.minimum ?? schema.min;
+  const maximum = schema.maximum ?? schema.max;
+  const enumOptions = schema.enum ?? schema.options;
+
+  if (normalizedType === "boolean") {
     return (
       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
         <input
@@ -64,7 +81,7 @@ function FieldControl({
     );
   }
 
-  if (schema.type === "string" && schema.enum) {
+  if (normalizedType === "string" && enumOptions) {
     return (
       <div>
         <label style={LABEL_STYLE}>
@@ -76,7 +93,7 @@ function FieldControl({
           onChange={e => onChange(e.target.value)}
           style={INPUT_STYLE}
         >
-          {schema.enum.map(opt => (
+          {enumOptions.map(opt => (
             <option key={opt} value={opt}>{opt}</option>
           ))}
         </select>
@@ -84,15 +101,15 @@ function FieldControl({
     );
   }
 
-  if (schema.type === "integer" || schema.type === "number") {
-    const step = schema.type === "integer" ? 1 : 0.01;
-    const hasRange = schema.minimum !== undefined && schema.maximum !== undefined;
+  if (normalizedType === "integer" || normalizedType === "number") {
+    const step = normalizedType === "integer" ? 1 : 0.01;
+    const hasRange = minimum !== undefined && maximum !== undefined;
     return (
       <div>
         <label style={LABEL_STYLE}>
           {label}
-          {schema.minimum !== undefined && schema.maximum !== undefined && (
-            <span style={{ color: "#94a3b8", fontWeight: 400 }}> [{schema.minimum}, {schema.maximum}]</span>
+          {minimum !== undefined && maximum !== undefined && (
+            <span style={{ color: "#94a3b8", fontWeight: 400 }}> [{minimum}, {maximum}]</span>
           )}
           {defaultVal !== undefined && <span style={{ color: "#94a3b8", fontWeight: 400 }}>（默认: {defaultVal}）</span>}
         </label>
@@ -100,23 +117,23 @@ function FieldControl({
           {hasRange && (
             <input
               type="range"
-              min={schema.minimum}
-              max={schema.maximum}
+              min={minimum}
+              max={maximum}
               step={step}
               value={displayVal ?? defaultVal ?? 0}
-              onChange={e => onChange(schema.type === "integer" ? parseInt(e.target.value) : parseFloat(e.target.value))}
+              onChange={e => onChange(normalizedType === "integer" ? parseInt(e.target.value) : parseFloat(e.target.value))}
               style={{ flex: 1, accentColor: "#3b82f6" }}
             />
           )}
           <input
             type="number"
-            min={schema.minimum}
-            max={schema.maximum}
+            min={minimum}
+            max={maximum}
             step={step}
             value={displayVal ?? ""}
             placeholder={String(defaultVal ?? "")}
             onChange={e => {
-              const v = schema.type === "integer" ? parseInt(e.target.value) : parseFloat(e.target.value);
+              const v = normalizedType === "integer" ? parseInt(e.target.value) : parseFloat(e.target.value);
               onChange(isNaN(v) ? undefined : v);
             }}
             style={{ ...INPUT_STYLE, width: hasRange ? "80px" : "100%" }}

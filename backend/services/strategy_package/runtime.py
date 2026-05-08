@@ -33,6 +33,9 @@ from backend.services.trading_core.errors import (
 from backend.services.trading_core.models import OrderIntent, OrderSide, PositionLot
 
 
+SCORE_WEIGHTED_V2_LIKE_FAMILIES = {"score_weighted_topk_v2", "score_weighted_topk_v2_capacity_v1"}
+
+
 class StrategyPackageRuntime:
     """Load package runtime scores into a strict signal snapshot."""
 
@@ -310,7 +313,7 @@ class TargetPositionEngine:
         contract = build_backtest_runtime_contract(manifest)
         strategy = contract["portfolio_strategy"]
         family = strategy["strategy_family"]
-        if family not in {"score_weighted_topk_v1", "score_weighted_topk_v2"}:
+        if family not in {"score_weighted_topk_v1", *SCORE_WEIGHTED_V2_LIKE_FAMILIES}:
             raise UnsupportedFeatureError(
                 "Paper v2 does not support the QE portfolio strategy contract yet",
                 context={"package_id": manifest.package_id, "strategy_family": family},
@@ -361,11 +364,12 @@ class TargetPositionEngine:
         buy_candidates.sort(key=lambda item: (-item[1], item[0]))
 
         ghost_sells: list[str] = []
-        if strategy_family == "score_weighted_topk_v2":
+        is_v2_like = strategy_family in SCORE_WEIGHTED_V2_LIKE_FAMILIES
+        if is_v2_like:
             ghost_sells = [symbol for symbol in current_symbols if symbol not in score_by_symbol]
 
-        if (len(valid_holdings) if strategy_family == "score_weighted_topk_v2" else len(current_symbols)) < topk:
-            if strategy_family == "score_weighted_topk_v2":
+        if (len(valid_holdings) if is_v2_like else len(current_symbols)) < topk:
+            if is_v2_like:
                 actual_sells = [symbol for symbol, _ in sell_candidates[:max_n_drop]]
                 remaining_after_sell = len(valid_holdings) - len(actual_sells)
                 buy_slots = max(0, topk - remaining_after_sell)
