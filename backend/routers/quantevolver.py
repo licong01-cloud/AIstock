@@ -188,6 +188,9 @@ from ..services.quantevolver.node_execution import (
 logger = logging.getLogger("aistock.routers.quantevolver")
 
 router = APIRouter(prefix="/quantevolver", tags=["QuantEvolver"])
+from .model_registry import router as model_registry_router
+
+router.include_router(model_registry_router)
 
 QE_EXPERIMENT_LOG_TERMINAL_STATUSES = {
     "completed",
