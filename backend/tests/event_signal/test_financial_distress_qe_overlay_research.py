@@ -2,18 +2,20 @@ import datetime as dt
 
 from backend.services.event_signal.financial_distress_qe_overlay_research import (
     FIRST_BATCH_RULES,
+    SIZE_BUCKET_RULES,
     _active_dates_for_signal,
     _fixed_width_table,
     _rule_applies,
     build_overlay_frame,
     load_loop_specs,
     parse_loop_spec,
+    select_research_rules,
     summarize_multiloop_validations,
 )
 
 
 def _rule(key: str):
-    return next(rule for rule in FIRST_BATCH_RULES if rule.rule_key == key)
+    return next(rule for rule in (*FIRST_BATCH_RULES, *SIZE_BUCKET_RULES) if rule.rule_key == key)
 
 
 def test_first_batch_loss_to_market_cap_ge_50_includes_ge_100_bucket():
@@ -45,6 +47,27 @@ def test_first_batch_combined_loss_history_rule_requires_20_50_bucket_and_ge_4_r
     assert _rule_applies(matching, _rule("loss_20_50pct_and_loss_reports_ge_4"))
     assert not _rule_applies(wrong_bucket, _rule("loss_20_50pct_and_loss_reports_ge_4"))
     assert not _rule_applies(too_few_losses, _rule("loss_20_50pct_and_loss_reports_ge_4"))
+
+
+def test_size_bucket_rules_split_loss_to_market_cap_ge_50_by_market_cap():
+    base = {
+        "event_type": "financial_forecast_loss",
+        "loss_to_market_cap_bucket": "loss_50pct_to_100pct_mv",
+        "loss_report_count_730d_bucket": "loss_reports_2",
+    }
+
+    assert _rule_applies({**base, "market_cap_bucket": "mv_lt_5bn_yuan"}, _rule("loss_to_market_cap_ge_50pct_mv_lt_5bn"))
+    assert _rule_applies({**base, "market_cap_bucket": "mv_5bn_to_10bn_yuan"}, _rule("loss_to_market_cap_ge_50pct_mv_5_10bn"))
+    assert _rule_applies({**base, "market_cap_bucket": "mv_5bn_to_10bn_yuan"}, _rule("loss_to_market_cap_ge_50pct_mv_lt_10bn"))
+    assert _rule_applies({**base, "market_cap_bucket": "mv_10bn_to_30bn_yuan"}, _rule("loss_to_market_cap_ge_50pct_mv_ge_10bn"))
+    assert not _rule_applies({**base, "market_cap_bucket": "mv_10bn_to_30bn_yuan"}, _rule("loss_to_market_cap_ge_50pct_mv_lt_10bn"))
+    assert not _rule_applies({**base, "market_cap_bucket": "mv_unknown"}, _rule("loss_to_market_cap_ge_50pct_mv_ge_10bn"))
+
+
+def test_select_research_rules_can_run_size_bucket_only():
+    rules = select_research_rules(size_bucket_only=True)
+
+    assert [rule.rule_key for rule in rules] == [rule.rule_key for rule in SIZE_BUCKET_RULES]
 
 
 def test_active_dates_use_next_trading_day_and_requested_lifetime():
