@@ -270,13 +270,19 @@ DDL: list[str] = [
         frozen_manifest_json JSONB NOT NULL,
         initial_cash NUMERIC(20, 6) NOT NULL CHECK (initial_cash > 0),
         start_date DATE NOT NULL,
-        data_source TEXT NOT NULL CHECK (data_source IN ('TDX_REALTIME', 'DB_HISTORICAL')),
+        data_source TEXT NOT NULL CHECK (data_source IN ('TDX_REALTIME', 'DB_HISTORICAL', 'MINIQMT_REALTIME')),
+        broker_backend VARCHAR(32) NOT NULL DEFAULT 'local_sim'
+            CHECK (broker_backend IN ('local_sim', 'minqmt_sim')),
         fee_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
         risk_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
         execution_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
         status TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT portfolio_broker_market_source_check CHECK (
+            (broker_backend = 'local_sim' AND data_source IN ('TDX_REALTIME', 'DB_HISTORICAL'))
+            OR (broker_backend = 'minqmt_sim' AND data_source = 'MINIQMT_REALTIME')
+        )
     )
     """,
     """

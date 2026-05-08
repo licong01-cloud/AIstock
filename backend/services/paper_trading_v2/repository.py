@@ -96,9 +96,9 @@ class PaperTradingV2Repository:
                     INSERT INTO paper_v2.portfolio (
                         portfolio_id, portfolio_name, package_id, manifest_sha256,
                         frozen_manifest_json, initial_cash, start_date, data_source,
-                        fee_policy, risk_policy, execution_policy, status,
+                        broker_backend, fee_policy, risk_policy, execution_policy, status,
                         created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         portfolio.portfolio_id,
@@ -109,6 +109,7 @@ class PaperTradingV2Repository:
                         portfolio.initial_cash,
                         portfolio.start_date,
                         portfolio.data_source.value,
+                        portfolio.broker_backend,
                         psycopg2.extras.Json(portfolio.fee_policy),
                         psycopg2.extras.Json(portfolio.risk_policy),
                         psycopg2.extras.Json(portfolio.execution_policy),
@@ -1851,6 +1852,7 @@ class PaperTradingV2Repository:
             initial_cash=float(row["initial_cash"]),
             start_date=row["start_date"],
             data_source=MinuteDataSource(row["data_source"]),
+            broker_backend=row.get("broker_backend") or "local_sim",
             fee_policy=row["fee_policy"] or {},
             risk_policy=row["risk_policy"] or {},
             execution_policy=row["execution_policy"] or {},
