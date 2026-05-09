@@ -109,7 +109,10 @@ monitoring/textfile_collector/*.prom.*
 data/
 data_governance/
 rl_data/
-rl_execution/
+# rl_execution/ paths -- only backend/services/rl_execution/ source must be tracked (T4 audit fix);
+# top-level rl_execution/ (training artifacts) and scripts/rl_execution/ (analysis scripts) keep original ignored status.
+/rl_execution/
+scripts/rl_execution/
 reports/
 stock_pools/
 dispatch_logs/
