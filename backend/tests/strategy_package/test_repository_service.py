@@ -81,6 +81,109 @@ def test_enable_paper_requires_passed_original_fixed_weight_retest() -> None:
         StrategyPackageService(repository=repo).enable_paper(manifest.package_id)
 
 
+def test_enable_paper_reports_failed_original_retest_without_status_mutation() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+    failed = service.create_validation_run(
+        manifest.package_id,
+        validation_type=PackageValidationType.ORIGINAL_FIXED_WEIGHT,
+        retrain_mode=PackageValidationRetrainMode.NO_RETRAIN,
+        status=PackageValidationStatus.FAILED,
+        evidence_json={"reason": "nav drift exceeded tolerance"},
+        completed_at=datetime.now(timezone.utc),
+        created_by="unit_test",
+    )
+    before_reasons = [event.reason for event in repo.list_status_events(manifest.package_id)]
+
+    with pytest.raises(StrategyPackageValidationError, match="original fixed-weight validation") as exc_info:
+        service.enable_paper(manifest.package_id)
+
+    context = exc_info.value.context
+    assert context["required_validation_type"] == PackageValidationType.ORIGINAL_FIXED_WEIGHT.value
+    assert context["required_status"] == PackageValidationStatus.PASSED.value
+    assert context["same_manifest_run_count"] == 1
+    assert context["observed_original_fixed_weight_runs"] == [
+        {
+            "validation_run_id": failed.validation_run_id,
+            "status": PackageValidationStatus.FAILED.value,
+            "manifest_sha256": manifest.manifest_sha256,
+            "manifest_matches": True,
+            "completed_at": failed.completed_at.isoformat(),
+            "created_by": "unit_test",
+        }
+    ]
+    assert repo.get(manifest.package_id).package_status == PackageStatus.BACKTEST_APPROVED
+    assert [event.reason for event in repo.list_status_events(manifest.package_id)] == before_reasons
+
+
+def test_enable_paper_does_not_fall_back_to_latest_fixed_weight_validation() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+    service.create_validation_run(
+        manifest.package_id,
+        validation_type=PackageValidationType.LATEST_FIXED_WEIGHT,
+        retrain_mode=PackageValidationRetrainMode.NO_RETRAIN,
+        target_data_version="qlib_2026q2_latest",
+        status=PackageValidationStatus.PASSED,
+        metrics_json={"annual_return": 0.2},
+        artifact_manifest_json={"artifact_sha256": "sha256:latest-only"},
+        evidence_json={"commands": ["pytest synthetic latest validation"]},
+        completed_at=datetime.now(timezone.utc),
+        created_by="unit_test",
+    )
+
+    with pytest.raises(StrategyPackageValidationError) as exc_info:
+        service.enable_paper(manifest.package_id)
+
+    assert exc_info.value.context["required_validation_type"] == PackageValidationType.ORIGINAL_FIXED_WEIGHT.value
+    assert exc_info.value.context["same_manifest_run_count"] == 0
+    assert exc_info.value.context["observed_original_fixed_weight_runs"] == []
+    assert repo.get(manifest.package_id).package_status == PackageStatus.BACKTEST_APPROVED
+
+
+def test_enable_paper_finds_passed_original_retest_even_after_many_newer_runs() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+    passed = service.create_validation_run(
+        manifest.package_id,
+        validation_type=PackageValidationType.ORIGINAL_FIXED_WEIGHT,
+        retrain_mode=PackageValidationRetrainMode.NO_RETRAIN,
+        status=PackageValidationStatus.PASSED,
+        metrics_json={"annual_return": 0.12, "max_drawdown": -0.08},
+        artifact_manifest_json={"artifact_sha256": "sha256:unit-test-original-retest"},
+        evidence_json={"commands": ["pytest synthetic original retest"], "mode": "A"},
+        completed_at=datetime.now(timezone.utc),
+        created_by="unit_test",
+    )
+    for index in range(100):
+        service.create_validation_run(
+            manifest.package_id,
+            validation_type=PackageValidationType.ORIGINAL_FIXED_WEIGHT,
+            retrain_mode=PackageValidationRetrainMode.NO_RETRAIN,
+            status=PackageValidationStatus.REQUESTED,
+            created_by=f"noise_{index}",
+        )
+
+    report = service.governance_eligibility(manifest.package_id)
+    paper = service.enable_paper(manifest.package_id)
+
+    assert report["original_fixed_weight_retest"]["matching_passed_run_id"] == passed.validation_run_id
+    assert report["original_fixed_weight_retest"]["same_manifest_run_count"] == 101
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
+
+
 def test_strategy_package_repository_rejects_silent_manifest_replacement() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(make_manifest())
