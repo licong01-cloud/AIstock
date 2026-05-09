@@ -497,8 +497,9 @@ class PaperTradingV2Repository:
                     """
                     INSERT INTO paper_v2.run (
                         run_id, portfolio_id, trade_date, status, data_source,
-                        runtime_config, started_at, completed_at, error_json
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        runtime_config, started_at, completed_at, error_json,
+                        model_params_origin
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         run.run_id,
@@ -510,9 +511,42 @@ class PaperTradingV2Repository:
                         run.started_at,
                         run.completed_at,
                         psycopg2.extras.Json(run.error) if run.error else None,
+                        run.model_params_origin,
                     ),
                 )
         return run
+
+    def update_run_model_params_origin(
+        self, run: PaperRun, model_params_origin: str
+    ) -> PaperRun:
+        """Record the resolved provenance of model params on an existing run.
+
+        Called by the live inference flow once
+        ``StrategyPackageLiveInference.prepare_workspace`` returns a
+        ``PreparedInferenceWorkspace`` whose ``model_params_origin`` is known.
+        """
+
+        if model_params_origin not in ("node", "cache", "unavailable"):
+            raise InvalidStateTransitionError(
+                "invalid paper v2 run.model_params_origin value",
+                context={
+                    "run_id": run.run_id,
+                    "model_params_origin": model_params_origin,
+                },
+            )
+        updated = run.model_copy(update={"model_params_origin": model_params_origin})
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE paper_v2.run SET model_params_origin = %s WHERE run_id = %s",
+                    (model_params_origin, run.run_id),
+                )
+                if cur.rowcount != 1:
+                    raise DataUnavailableError(
+                        "paper v2 run does not exist",
+                        context={"run_id": run.run_id},
+                    )
+        return updated
 
     def get_run_by_portfolio_date(self, portfolio_id: str, trade_date: date) -> PaperRun | None:
         with self._conn_factory() as conn:
@@ -520,7 +554,8 @@ class PaperTradingV2Repository:
                 cur.execute(
                     """
                     SELECT run_id, portfolio_id, trade_date, status, data_source,
-                           runtime_config, started_at, completed_at, error_json
+                           runtime_config, started_at, completed_at, error_json,
+                           model_params_origin
                     FROM paper_v2.run
                     WHERE portfolio_id = %s AND trade_date = %s
                     """,
@@ -539,6 +574,7 @@ class PaperTradingV2Repository:
             started_at=row["started_at"],
             completed_at=row["completed_at"],
             error=row["error_json"],
+            model_params_origin=row["model_params_origin"],
         )
 
     def get_run(self, run_id: str) -> PaperRun:
@@ -547,7 +583,8 @@ class PaperTradingV2Repository:
                 cur.execute(
                     """
                     SELECT run_id, portfolio_id, trade_date, status, data_source,
-                           runtime_config, started_at, completed_at, error_json
+                           runtime_config, started_at, completed_at, error_json,
+                           model_params_origin
                     FROM paper_v2.run
                     WHERE run_id = %s
                     """,
@@ -566,6 +603,7 @@ class PaperTradingV2Repository:
             started_at=row["started_at"],
             completed_at=row["completed_at"],
             error=row["error_json"],
+            model_params_origin=row["model_params_origin"],
         )
 
     def update_run_status(self, run: PaperRun, status: RunStatus, error: dict[str, Any] | None = None) -> PaperRun:
@@ -2221,6 +2259,21 @@ class InMemoryPaperTradingV2Repository:
 
     def update_run_runtime_config(self, run: PaperRun, runtime_config: dict[str, Any]) -> PaperRun:
         updated = run.model_copy(update={"runtime_config": runtime_config})
+        self.runs[run.run_id] = updated
+        return updated
+
+    def update_run_model_params_origin(
+        self, run: PaperRun, model_params_origin: str
+    ) -> PaperRun:
+        if model_params_origin not in ("node", "cache", "unavailable"):
+            raise InvalidStateTransitionError(
+                "invalid paper v2 run.model_params_origin value",
+                context={
+                    "run_id": run.run_id,
+                    "model_params_origin": model_params_origin,
+                },
+            )
+        updated = run.model_copy(update={"model_params_origin": model_params_origin})
         self.runs[run.run_id] = updated
         return updated
 

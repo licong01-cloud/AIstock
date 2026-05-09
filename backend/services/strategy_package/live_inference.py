@@ -12,6 +12,7 @@ import ast
 import asyncio
 import io
 import json
+import logging
 import math
 import os
 import re
@@ -19,11 +20,15 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from threading import Thread
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Literal
+
+logger = logging.getLogger(__name__)
+
+ModelParamsOrigin = Literal["node", "cache", "unavailable"]
 
 import pandas as pd
 import psycopg2.extras
@@ -59,6 +64,10 @@ class QEExperimentRuntimeSource:
     qe_task_id: str | None = None
     qe_loop_id: str | None = None
     execution_node_id: str | None = None
+    # Provenance of the params.pkl materialized into asset_workspace_path.
+    # Set by _materialize_runtime_source_from_node based on whether the
+    # mlruns archive came from the QE node API or the local cache fallback.
+    model_params_origin: ModelParamsOrigin = "node"
 
 
 @dataclass(frozen=True)
@@ -96,6 +105,12 @@ class PreparedInferenceWorkspace:
     dynamic_factors: list[str]
     model_source_path: Path
     model_candidate_count: int
+    # Provenance of the params.pkl used for this workspace. 'node' = downloaded
+    # from the QE node API (the only origin allowed by default); 'cache' = local
+    # StrategyPackage cache fallback (requires explicit allow_cache_fallback=True
+    # at the materialization call site); 'unavailable' is reserved for failed
+    # runs written from upstream error handlers.
+    model_params_origin: ModelParamsOrigin = "node"
 
 
 @dataclass(frozen=True)
@@ -891,7 +906,12 @@ class QEExperimentRuntimeAssetResolver:
             or execution_trace.get("node_id")
             or resolve_default_qe_node_id()
         ).strip()
-        asset_workspace = self._materialize_runtime_source_from_node(
+        # allow_cache_fallback is intentionally False here. Live inference must
+        # surface the node fetch failure rather than silently substitute a
+        # cached params.pkl (feedback_no_silent_errors). Callers that need
+        # cache fallback must construct the source through a dedicated path
+        # that flips this flag and records origin='cache' downstream.
+        asset_workspace, model_params_origin = self._materialize_runtime_source_from_node(
             experiment_id=experiment_id,
             qe_task_id=qe_task_id,
             qe_loop_id=qe_loop_id,
@@ -899,6 +919,7 @@ class QEExperimentRuntimeAssetResolver:
             factor_names=[str(item) for item in factor_names],
             custom_params=custom_params,
             data_split=data_split,
+            allow_cache_fallback=False,
         )
         return QEExperimentRuntimeSource(
             experiment_id=experiment_id,
@@ -907,6 +928,7 @@ class QEExperimentRuntimeAssetResolver:
             factor_names=[str(item) for item in factor_names],
             custom_params=custom_params,
             data_split=data_split,
+            model_params_origin=model_params_origin,
             qe_task_id=qe_task_id,
             qe_loop_id=qe_loop_id,
             execution_node_id=execution_node_id,
@@ -1014,6 +1036,7 @@ class QEExperimentRuntimeAssetResolver:
                         "factor_source_dir": str(factor_source_dir),
                         "model_source_path": str(model_source_path),
                         "model_candidate_count": model_candidate_count,
+                        "model_params_origin": source.model_params_origin,
                     },
                 },
                 ensure_ascii=False,
@@ -1035,6 +1058,7 @@ class QEExperimentRuntimeAssetResolver:
             dynamic_factors=factor_order_resolution.dynamic_factors,
             model_source_path=model_source_path,
             model_candidate_count=model_candidate_count,
+            model_params_origin=source.model_params_origin,
         )
 
     def _materialize_runtime_source_from_node(
@@ -1047,7 +1071,21 @@ class QEExperimentRuntimeAssetResolver:
         factor_names: list[str],
         custom_params: dict[str, Any],
         data_split: dict[str, Any],
-    ) -> Path:
+        allow_cache_fallback: bool = False,
+    ) -> tuple[Path, ModelParamsOrigin]:
+        """Materialize a QE runtime source workspace from the node API.
+
+        Returns the (source_dir, origin) tuple. ``origin`` is ``'node'`` when
+        ``download_mlruns_params`` succeeded; ``'cache'`` only when both
+        ``allow_cache_fallback=True`` AND the node fetch failed but a local
+        cache hit replaced the params.
+
+        Per feedback_no_silent_errors: a node fetch failure with
+        ``allow_cache_fallback=False`` (the default) propagates the original
+        exception. Callers that want to opt into cache fallback must pass
+        ``allow_cache_fallback=True`` and record the resulting origin.
+        """
+
         source_dir = (
             self.cache_root
             / "_qe_node_sources"
@@ -1057,6 +1095,10 @@ class QEExperimentRuntimeAssetResolver:
             / _safe_cache_component(qe_loop_id)
         )
         self._reset_cache_dir(source_dir)
+
+        # Mutable origin holder threaded into the inner async closure so the
+        # return value reflects the actual provenance of params.pkl.
+        origin_holder: dict[str, ModelParamsOrigin] = {"origin": "node"}
 
         async def _download() -> Path:
             async with QEWorkspaceClient.for_node(execution_node_id) as client:
@@ -1136,27 +1178,66 @@ class QEExperimentRuntimeAssetResolver:
                 params_tar: bytes | None = None
                 try:
                     params_tar = await client.download_mlruns_params(qe_task_id, qe_loop_id)
-                except Exception:
-                    if not self._copy_cached_mlruns_params(
+                except Exception as fetch_exc:
+                    if not allow_cache_fallback:
+                        # Per feedback_no_silent_errors: do NOT silently fall
+                        # back to a locally cached params.pkl. Reproducibility
+                        # requires the caller to opt in to cache fallback.
+                        raise
+                    cache_path = self._copy_cached_mlruns_params(
                         experiment_id=experiment_id,
                         source_dir=source_dir,
-                    ):
+                    )
+                    if cache_path is None:
                         raise
+                    logger.warning(
+                        "live_inference.mlruns_params_cache_fallback experiment_id=%s "
+                        "qe_task_id=%s qe_loop_id=%s cache_path=%s reason=%s",
+                        experiment_id,
+                        qe_task_id,
+                        qe_loop_id,
+                        str(cache_path),
+                        repr(fetch_exc),
+                    )
+                    origin_holder["origin"] = "cache"
                 if params_tar:
                     self._extract_mlruns_params_archive(params_tar, source_dir)
                 elif not list(source_dir.glob("**/artifacts/params.pkl")):
-                    if not self._copy_cached_mlruns_params(
+                    # Node returned an empty archive (or fetch was bypassed via
+                    # cache fallback above without producing a params.pkl). Cache
+                    # fallback here is only allowed when the caller opted in.
+                    if not allow_cache_fallback:
+                        raise DataUnavailableError(
+                            "QE node API returned an empty mlruns params archive and cache fallback is disabled",
+                            context={
+                                "experiment_id": experiment_id,
+                                "qe_task_id": qe_task_id,
+                                "qe_loop_id": qe_loop_id,
+                            },
+                        )
+                    cache_path = self._copy_cached_mlruns_params(
                         experiment_id=experiment_id,
                         source_dir=source_dir,
-                    ):
+                    )
+                    if cache_path is None:
                         raise DataUnavailableError(
                             "QE node API returned an empty mlruns params archive and no local StrategyPackage cache was available",
                             context={"experiment_id": experiment_id, "qe_task_id": qe_task_id, "qe_loop_id": qe_loop_id},
                         )
+                    logger.warning(
+                        "live_inference.mlruns_params_cache_fallback_empty_archive experiment_id=%s "
+                        "qe_task_id=%s qe_loop_id=%s cache_path=%s",
+                        experiment_id,
+                        qe_task_id,
+                        qe_loop_id,
+                        str(cache_path),
+                    )
+                    origin_holder["origin"] = "cache"
             return source_dir
 
         try:
-            return _run_async_blocking(_download)
+            resolved = _run_async_blocking(_download)
+            return resolved, origin_holder["origin"]
         except StrategyPackageValidationError:
             raise
         except DataUnavailableError:
@@ -1232,8 +1313,17 @@ class QEExperimentRuntimeAssetResolver:
                 context={"dest_dir": str(dest_dir)},
             )
 
-    def _copy_cached_mlruns_params(self, *, experiment_id: str, source_dir: Path) -> bool:
-        """Reuse an AIstock-local StrategyPackage model cache when the node lacks mlruns params."""
+    def _copy_cached_mlruns_params(
+        self, *, experiment_id: str, source_dir: Path
+    ) -> Path | None:
+        """Reuse an AIstock-local StrategyPackage model cache when the node lacks mlruns params.
+
+        Returns the destination ``params.pkl`` Path on cache hit (so the caller
+        can record the cache path used), or ``None`` when no cache candidate
+        was found. The caller is responsible for deciding whether a cache hit
+        is acceptable (origin='cache') or whether the absence of a cache hit
+        should propagate the original node fetch error.
+        """
 
         cache_root = self.cache_root.resolve(strict=False)
         candidates: list[Path] = []
@@ -1256,7 +1346,7 @@ class QEExperimentRuntimeAssetResolver:
                 candidates.append(params_path)
 
         if not candidates:
-            return False
+            return None
         candidates.sort(key=lambda item: (item.stat().st_mtime, str(item).lower()), reverse=True)
         dest = source_dir / "mlruns" / "cached_strategy_package" / "artifacts" / "params.pkl"
         resolved_dest = dest.resolve(strict=False)
@@ -1268,7 +1358,7 @@ class QEExperimentRuntimeAssetResolver:
             )
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(candidates[0], dest)
-        return True
+        return dest
 
     def _resolve_conf_path(self, source: QEExperimentRuntimeSource) -> Path:
         candidates = [source.asset_workspace_path / "conf.yaml"]

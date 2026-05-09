@@ -856,7 +856,7 @@ model:
     monkeypatch.setattr(QEWorkspaceClient, "for_node", staticmethod(lambda _node_id: FakeClient()))
 
     resolver = QEExperimentRuntimeAssetResolver(cache_root=tmp_path / "runtime_cache")
-    source_dir = resolver._materialize_runtime_source_from_node(
+    source_dir, model_params_origin = resolver._materialize_runtime_source_from_node(
         experiment_id="qe_node_missing_static",
         qe_task_id="qe_task_node",
         qe_loop_id="Loop1",
@@ -866,6 +866,7 @@ model:
         data_split={},
     )
 
+    assert model_params_origin == "node"
     assert (source_dir / "conf.yaml").exists()
     assert not (source_dir / "combined_factors_df.parquet").exists()
     assert (source_dir / "factors" / "factor_a.py").exists()
@@ -910,7 +911,8 @@ def test_live_inference_materialize_uses_cached_params_when_node_mlruns_params_4
     monkeypatch.setattr(QEWorkspaceClient, "for_node", staticmethod(lambda _node_id: FakeClient()))
 
     resolver = QEExperimentRuntimeAssetResolver(cache_root=cache_root)
-    source_dir = resolver._materialize_runtime_source_from_node(
+    # Cache fallback now requires explicit opt-in (feedback_no_silent_errors).
+    source_dir, model_params_origin = resolver._materialize_runtime_source_from_node(
         experiment_id="qe_cached_params",
         qe_task_id="qe_task_node",
         qe_loop_id="Loop1",
@@ -918,8 +920,10 @@ def test_live_inference_materialize_uses_cached_params_when_node_mlruns_params_4
         factor_names=["factor_a"],
         custom_params={"disable_alpha158": True},
         data_split={},
+        allow_cache_fallback=True,
     )
 
+    assert model_params_origin == "cache"
     copied = list(source_dir.glob("**/artifacts/params.pkl"))
     assert len(copied) == 1
     assert copied[0].read_bytes() == b"cached model params"
@@ -961,7 +965,7 @@ def test_live_inference_load_source_materializes_via_node_api_not_db_workspace(t
 
     def fake_materialize(self, **kwargs):
         assert kwargs["execution_node_id"] == "node-1"
-        return tmp_path / "node_api_cache"
+        return tmp_path / "node_api_cache", "node"
 
     monkeypatch.setattr(QEExperimentRuntimeAssetResolver, "_materialize_runtime_source_from_node", fake_materialize)
 
@@ -1017,7 +1021,7 @@ def test_live_inference_load_source_for_qe_evolution_loop_uses_task_loop(tmp_pat
         assert kwargs["experiment_id"] == "qe_task_L1"
         assert kwargs["qe_task_id"] == "qe_task"
         assert kwargs["qe_loop_id"] == "Loop1"
-        return tmp_path / "node_api_cache"
+        return tmp_path / "node_api_cache", "node"
 
     monkeypatch.setattr(QEExperimentRuntimeAssetResolver, "_materialize_runtime_source_from_node", fake_materialize)
 

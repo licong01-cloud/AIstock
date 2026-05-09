@@ -376,6 +376,8 @@ DDL: list[str] = [
         started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         completed_at TIMESTAMPTZ,
         error_json JSONB,
+        model_params_origin VARCHAR(16) NOT NULL DEFAULT 'node'
+            CHECK (model_params_origin IN ('node', 'cache', 'unavailable')),
         UNIQUE(portfolio_id, trade_date)
     )
     """,

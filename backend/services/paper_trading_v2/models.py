@@ -78,6 +78,9 @@ class PaperPortfolio(BaseModel):
         return self
 
 
+ModelParamsOrigin = Literal["node", "cache", "unavailable"]
+
+
 class PaperRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -90,6 +93,18 @@ class PaperRun(BaseModel):
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
     error: dict[str, Any] | None = None
+    # Provenance of the QE model params used for this run. Default 'node'
+    # is intentional — it covers (a) existing rows post-migration and
+    # (b) PaperRun construction sites that fire BEFORE the live inference
+    # workspace is materialized (e.g. day_runner / live_session) and
+    # subsequently UPDATE the field once inference resolves origin.
+    # Cache fallback ('cache') is only legitimate when the live inference
+    # call site explicitly opted in via allow_cache_fallback=True; see
+    # backend/services/strategy_package/live_inference.py.
+    # TODO: once update_run_model_params_origin is wired through every
+    # live inference call site, consider tightening this to require an
+    # explicit value at INSERT time (no model-level default).
+    model_params_origin: ModelParamsOrigin = "node"
 
 
 class ExecutionPolicyActivationStatus(str, Enum):
