@@ -19,6 +19,7 @@ def _route(path: str) -> tuple[int | None, dict | None, str | None]:
                 "packages": [
                     {
                         "package_id": "pkg_1",
+                        "manifest_sha256": "sha_pkg_1",
                         "manifest": {"schema_version": "strategy_package_manifest_v1"},
                         "metrics_summary": {"annual_return": 0.1},
                     }
@@ -29,6 +30,7 @@ def _route(path: str) -> tuple[int | None, dict | None, str | None]:
             {
                 "package": {
                     "package_id": "pkg_1",
+                    "manifest_sha256": "sha_pkg_1",
                     "manifest": {"schema_version": "strategy_package_manifest_v1"},
                     "metrics_summary": {"annual_return": 0.1},
                 }
@@ -48,6 +50,22 @@ def _route(path: str) -> tuple[int | None, dict | None, str | None]:
             {"validation_run": {"validation_run_id": "vr_1", "status": "PASSED"}}
         ),
         "/strategy-packages/pkg_1/validation-stability": _ok({"stability": {"package_id": "pkg_1"}}),
+        "/strategy-packages/pkg_1/governance-eligibility": _ok(
+            {
+                "eligibility": {
+                    "package_id": "pkg_1",
+                    "manifest_sha256": "sha_pkg_1",
+                    "paper_ready": True,
+                    "blockers": [],
+                    "satisfied_gates": ["manifest_identity", "original_fixed_weight_retest"],
+                    "manifest_identity": {"passed": True},
+                    "original_fixed_weight_retest": {"passed": True},
+                    "validation_stability": {"passed": True},
+                    "protected_asset_status": {"passed": True},
+                    "runtime_variant_candidate_status": {"passed": True},
+                }
+            }
+        ),
     }
     if path_only not in routes:
         return None, None, f"unexpected path: {path}"
@@ -76,7 +94,7 @@ def test_readonly_smoke_passes_with_complete_governance_contract(monkeypatch, tm
     assert payload["counts"]["packages"] == 1
     assert payload["counts"]["runtime_variants"] == 1
     assert payload["counts"]["validation_runs"] == 1
-    assert payload["endpoint_count"] == 13
+    assert payload["endpoint_count"] == 14
     assert set(methods) == {"GET"}
 
 
@@ -160,3 +178,46 @@ def test_readonly_smoke_fails_on_missing_governance_list(monkeypatch, tmp_path: 
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert exit_code == 1
     assert "/strategy-packages/pkg_1/runtime-variants runtime_variants must be a list" in payload["failures"]
+
+
+def test_readonly_smoke_fails_on_incomplete_governance_eligibility_summary(monkeypatch, tmp_path: Path) -> None:
+    def route(path: str):
+        path_only = path.split("?", 1)[0]
+        if path_only == "/strategy-packages/qe-sources":
+            return _ok({"sources": []})
+        if path_only == "/strategy-packages":
+            return _ok(
+                {
+                    "packages": [
+                        {
+                            "package_id": "pkg_1",
+                            "manifest_sha256": "sha_pkg_1",
+                            "manifest": {"schema_version": "strategy_package_manifest_v1"},
+                            "metrics_summary": {"annual_return": 0.1},
+                        }
+                    ]
+                }
+            )
+        if path_only == "/strategy-packages/pkg_1":
+            return _ok(
+                {
+                    "package": {
+                        "package_id": "pkg_1",
+                        "manifest_sha256": "sha_pkg_1",
+                        "manifest": {"schema_version": "strategy_package_manifest_v1"},
+                        "metrics_summary": {"annual_return": 0.1},
+                    }
+                }
+            )
+        if path_only == "/strategy-packages/pkg_1/governance-eligibility":
+            return _ok({"eligibility": {"package_id": "pkg_1", "manifest_sha256": "sha_pkg_1", "blockers": []}})
+        return _route(path)
+
+    monkeypatch.setattr(smoke, "_request_json", lambda _api_base, path, *, timeout: route(path))
+    output = tmp_path / "bad_eligibility.json"
+
+    exit_code = smoke.run_smoke(api_base="http://127.0.0.1:8011/api/v1", output=output)
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert "/strategy-packages/{package_id}/governance-eligibility paper_ready must be a boolean" in payload["failures"]

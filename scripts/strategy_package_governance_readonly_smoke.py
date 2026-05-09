@@ -180,19 +180,31 @@ def _require_object(payload: dict[str, Any], path: str, key: str, failures: list
     return value
 
 
-def _check_payload_package(payload: dict[str, Any], path: str, failures: list[str]) -> str | None:
+def _require_bool(payload: dict[str, Any], path: str, key: str, failures: list[str]) -> bool | None:
+    value = payload.get(key)
+    if not isinstance(value, bool):
+        failures.append(f"{path} {key} must be a boolean")
+        return None
+    return value
+
+
+def _check_payload_package(payload: dict[str, Any], path: str, failures: list[str]) -> tuple[str | None, str | None]:
     package = _require_object(payload, path, "package", failures)
     if package is None:
-        return None
+        return None, None
     package_id = package.get("package_id")
     if not package_id:
         failures.append(f"{path} package.package_id must be present")
-        return None
+        return None, None
+    manifest_sha256 = package.get("manifest_sha256")
+    if not isinstance(manifest_sha256, str) or not manifest_sha256:
+        failures.append(f"{path} package.manifest_sha256 must be present")
+        return None, None
     if not _is_object(package.get("manifest")):
         failures.append(f"{path} package.manifest must be an object")
     if not _is_object(package.get("metrics_summary")):
         failures.append(f"{path} package.metrics_summary must be an object")
-    return str(package_id)
+    return str(package_id), manifest_sha256
 
 
 def run_smoke(
@@ -239,6 +251,7 @@ def run_smoke(
         failures,
     )
     package_id: str | None = None
+    package_manifest_sha256: str | None = None
     if package_list:
         packages = _require_list(package_list, "/strategy-packages", "packages", failures)
         counts["packages"] = len(packages)
@@ -253,9 +266,11 @@ def run_smoke(
             failures,
         )
         if detail:
-            detail_id = _check_payload_package(detail, f"/strategy-packages/{package_id}", failures)
+            detail_id, detail_manifest_sha256 = _check_payload_package(detail, f"/strategy-packages/{package_id}", failures)
             if detail_id and detail_id != package_id:
                 failures.append("/strategy-packages/{package_id} returned mismatched package_id")
+            if detail_manifest_sha256:
+                package_manifest_sha256 = detail_manifest_sha256
 
         _check_list_endpoint(
             api_base,
@@ -354,6 +369,37 @@ def run_smoke(
             failures,
             timeout,
         )
+        eligibility = _check_object_endpoint(
+            api_base,
+            f"/strategy-packages/{encoded_package_id}/governance-eligibility?metric_key={_quote('annual_return')}&limit={limit}",
+            "eligibility",
+            endpoints,
+            failures,
+            timeout,
+        )
+        if eligibility:
+            if eligibility.get("package_id") != package_id:
+                failures.append("/strategy-packages/{package_id}/governance-eligibility returned mismatched package_id")
+            if package_manifest_sha256 and eligibility.get("manifest_sha256") != package_manifest_sha256:
+                failures.append(
+                    "/strategy-packages/{package_id}/governance-eligibility returned mismatched manifest_sha256"
+                )
+            _require_bool(eligibility, "/strategy-packages/{package_id}/governance-eligibility", "paper_ready", failures)
+            _require_list(eligibility, "/strategy-packages/{package_id}/governance-eligibility", "blockers", failures)
+            _require_list(
+                eligibility,
+                "/strategy-packages/{package_id}/governance-eligibility",
+                "satisfied_gates",
+                failures,
+            )
+            for key in (
+                "manifest_identity",
+                "original_fixed_weight_retest",
+                "validation_stability",
+                "protected_asset_status",
+                "runtime_variant_candidate_status",
+            ):
+                _require_object(eligibility, "/strategy-packages/{package_id}/governance-eligibility", key, failures)
 
     payload = _payload(started_at, api_base, endpoints, failures, counts, output, production_8001_touched)
     _write_json(output, payload)
