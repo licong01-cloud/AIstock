@@ -726,11 +726,9 @@ class SectorHMMInference:
 
         # Forward filtering — causal, no look-ahead
         from hmmlearn import _hmmc
-        log_startprob = np.log(hmm.startprob_ + 1e-300)
-        log_transmat = np.log(hmm.transmat_ + 1e-300)
         log_frameprob = hmm._compute_log_likelihood(obs)
         _, fwd_lattice = _hmmc.forward_log(
-            log_startprob, log_transmat, log_frameprob,
+            hmm.startprob_, hmm.transmat_, log_frameprob,
         )
         # fwd_lattice[-1] contains log P(state, o_1:T) — marginalize to posterior
         log_posterior = fwd_lattice[-1]

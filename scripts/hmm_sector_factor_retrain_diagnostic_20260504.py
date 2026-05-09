@@ -489,9 +489,7 @@ def forward_filter_posteriors(hmm: GaussianHMM, obs: np.ndarray) -> np.ndarray:
     try:
         _, fwd_lattice = _hmmc.forward_log(hmm.startprob_, hmm.transmat_, log_frameprob)
     except TypeError:
-        log_startprob = np.log(hmm.startprob_ + 1e-300)
-        log_transmat = np.log(hmm.transmat_ + 1e-300)
-        _, fwd_lattice = _hmmc.forward_log(log_startprob, log_transmat, log_frameprob)
+        _, fwd_lattice = _hmmc.forward_log(hmm.startprob_, hmm.transmat_, log_frameprob)
     row_max = np.max(fwd_lattice, axis=1, keepdims=True)
     row_max = np.where(np.isfinite(row_max), row_max, 0.0)
     posteriors = np.exp(fwd_lattice - row_max)

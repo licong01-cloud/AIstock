@@ -292,10 +292,8 @@ def forward_filter_states(hmm: GaussianHMM, obs: np.ndarray) -> np.ndarray:
     from hmmlearn import _hmmc
     from hmmlearn.utils import normalize as hmm_normalize
 
-    log_startprob = np.log(hmm.startprob_ + 1e-300)
-    log_transmat = np.log(hmm.transmat_ + 1e-300)
     log_frameprob = hmm._compute_log_likelihood(obs)
-    _, fwd_lattice = _hmmc.forward_log(log_startprob, log_transmat, log_frameprob)
+    _, fwd_lattice = _hmmc.forward_log(hmm.startprob_, hmm.transmat_, log_frameprob)
     posteriors = np.exp(fwd_lattice)
     hmm_normalize(posteriors, axis=1)
     return posteriors.argmax(axis=1)
