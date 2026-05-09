@@ -19,7 +19,7 @@ This checkpoint preserves the current Codex-side AIstock QE governance progress 
 - Main branch status at checkpoint: `main...origin/main`; not touched by Codex governance work.
 - Governance integration worktree: `F:\Dev\AIstock_worktrees\qe-governance-integration-20260509`
 - Governance integration branch: `codex/qe-governance-integration-20260509`
-- Latest integration code commit before this checkpoint-doc update: `64e90b9 merge(qe): production readonly governance preflight`
+- Latest integration code commit before this checkpoint-doc update: `0dede08 merge(qe): governance eligibility summary`
 
 RD-Agent follow-up:
 
@@ -87,9 +87,25 @@ All items below are merged only into `codex/qe-governance-integration-20260509` 
    - Hardened DB smoke connection failures so missing local dev DB credentials return structured failure JSON instead of an uncaught traceback.
    - Added guarded `--production-readonly-preflight` mode to `scripts/governance_migration_smoke.py`; it requires `AISTOCK_QE_GOVERNANCE_PROD_READONLY_PREFLIGHT=true` plus confirmation token `QE_GOVERNANCE_PROD_READONLY_PREFLIGHT`, uses SELECT-only catalog introspection, and reports whether production catalog objects/columns/indexes/constraints are missing without DDL or writes.
 
+11. Governance eligibility summary and Paper gate audit
+   - Feature commit: `52bd086 feat(qe): add governance eligibility summary`
+   - Integration merge: `0dede08 merge(qe): governance eligibility summary`
+   - Added read-only `GET /strategy-packages/{package_id}/governance-eligibility`.
+   - The endpoint aggregates `paper_ready`, `blockers`, `satisfied_gates`, `manifest_sha256`, current package status, original fixed-weight retest status, validation stability, protected-asset ledger status, and runtime-variant Paper candidate status.
+   - Fixed the `enable_paper()` original fixed-weight retest gate to scan all matching validation runs, not only the latest 100, so an older passed original retest is not hidden by later noisy/requested runs.
+   - Preserved the governance boundary: `latest_fixed_weight` cannot substitute for `original_fixed_weight`, failed gates do not mutate package status, and the endpoint is read-only.
+
 ## Latest Verified Gates
 
-The latest integration gates after production-readonly preflight merge:
+The latest integration gates after governance eligibility summary merge:
+
+- `python -m pytest backend\tests\strategy_package -q -p no:cacheprovider` - `98 passed`.
+- `python scripts\governance_migration_smoke.py` - `status=passed mode=static_dry_run`.
+- `python -m py_compile backend\services\strategy_package\service.py backend\services\strategy_package\repository.py backend\routers\strategy_packages.py backend\tests\strategy_package\test_repository_service.py backend\tests\strategy_package\test_governance_eligibility.py` - passed.
+- `python scripts\aistock_guardrail_scan.py --fail-on-severity P1 backend\services\strategy_package\service.py backend\services\strategy_package\repository.py backend\routers\strategy_packages.py backend\tests\strategy_package\test_repository_service.py backend\tests\strategy_package\test_governance_eligibility.py` - `blocking=0`; non-blocking P2 complexity notes remain in `repository.py`.
+- `git diff --check` - passed.
+
+Previous integration gates after production-readonly preflight merge:
 
 - `python scripts/governance_migration_smoke.py` - `status=passed mode=static_dry_run`.
 - `python -m pytest backend/tests/model_registry/test_governance_migration_smoke.py backend/tests/strategy_package/test_governance_readonly_smoke.py -q -p no:cacheprovider` - `23 passed`.
@@ -149,7 +165,8 @@ Codex governance work does not implement Paper v2 runtime functionality. Claude 
 
 Codex changes that can affect Paper-adjacent behavior:
 
-- `StrategyPackageService.enable_paper()` requires a passed original fixed-weight validation run.
+- `StrategyPackageService.enable_paper()` requires a passed original fixed-weight validation run and scans all original fixed-weight runs for the current manifest.
+- `GET /strategy-packages/{package_id}/governance-eligibility` exposes a read-only summary of Paper eligibility blockers and satisfied gates.
 - Runtime variants can be marked Paper candidates only after validation evidence passes.
 - Model registry bridge keeps `paper_selectable=false`; Paper should select StrategyPackages, not raw model catalog rows.
 
@@ -171,7 +188,7 @@ Codex changes that can affect Paper-adjacent behavior:
 2. Run:
    - `git status --short --branch`
    - `git log --oneline -12`
-3. Confirm integration branch is still clean and at or after `64e90b9`.
+3. Confirm integration branch is still clean and at or after `0dede08`.
 4. Do not merge to `main`.
 5. If continuing governance, first run static governance migration smoke:
    - `python scripts\governance_migration_smoke.py`
