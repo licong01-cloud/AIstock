@@ -12,13 +12,15 @@ ALTER TABLE strategy_pkg.package ADD COLUMN IF NOT EXISTS seed_contract_sha256 T
 ALTER TABLE strategy_pkg.package ADD COLUMN IF NOT EXISTS reproducibility_level TEXT NULL;
 ALTER TABLE strategy_pkg.package ADD COLUMN IF NOT EXISTS nondeterministic_flags JSONB NULL;
 
+-- PostgreSQL CHECK constraints do not have a native IF NOT EXISTS form,
+-- so reruns must guard by table oid and constraint name before adding them.
 DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1
-        FROM pg_constraint
+        FROM pg_catalog.pg_constraint
         WHERE conname = 'package_seed_policy_check'
-          AND conrelid = 'strategy_pkg.package'::regclass
+          AND conrelid = to_regclass('strategy_pkg.package')
     ) THEN
         ALTER TABLE strategy_pkg.package
             ADD CONSTRAINT package_seed_policy_check
@@ -30,9 +32,9 @@ DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1
-        FROM pg_constraint
+        FROM pg_catalog.pg_constraint
         WHERE conname = 'package_master_seed_range_check'
-          AND conrelid = 'strategy_pkg.package'::regclass
+          AND conrelid = to_regclass('strategy_pkg.package')
     ) THEN
         ALTER TABLE strategy_pkg.package
             ADD CONSTRAINT package_master_seed_range_check

@@ -1,7 +1,8 @@
--- Phase 1 Manual SOTA Promotion Review additive migration.
+-- Phase 1 Manual SOTA Promotion Review standalone additive migration.
 -- Draft only: do not execute against production DB until reviewed and scheduled.
--- Adds strategy_pkg.promotion_review for existing databases that predate the
--- trading_core_v2_schema.sql baseline.
+-- Intended for existing dev/integration databases that already applied older
+-- baselines before strategy_pkg.promotion_review existed; do not rerun the
+-- full trading_core_v2_schema.sql baseline just to create this table.
 
 CREATE SCHEMA IF NOT EXISTS strategy_pkg;
 

@@ -139,7 +139,9 @@ def test_phase4_seed_contract_add_constraints_are_idempotent() -> None:
     sql = sql_path.read_text(encoding="utf-8")
 
     assert "ADD CONSTRAINT IF NOT EXISTS" not in sql.upper()
-    assert "FROM pg_constraint" in sql
+    assert "FROM pg_catalog.pg_constraint" in sql
+    assert "to_regclass('strategy_pkg.package')" in sql
+    assert "'strategy_pkg.package'::regclass" not in sql
     assert "package_seed_policy_check" in sql
     assert "package_master_seed_range_check" in sql
 
@@ -150,6 +152,8 @@ def test_phase1_promotion_review_has_standalone_additive_migration() -> None:
 
     assert "CREATE SCHEMA IF NOT EXISTS strategy_pkg" in sql
     assert "CREATE TABLE IF NOT EXISTS strategy_pkg.promotion_review" in sql
+    assert "do not rerun the" in sql
+    assert "full trading_core_v2_schema.sql baseline" in sql
     assert " public." not in sql.lower()
     assert "DROP COLUMN" not in sql.upper()
     assert "COMMENT ON TABLE strategy_pkg.promotion_review" in sql
