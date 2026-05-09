@@ -2,6 +2,7 @@
 
 from .manifest import compute_manifest_sha256, freeze_manifest
 from .models import StrategyPackageManifest
+from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .runtime_variant import (
     RuntimeVariantKind,
     RuntimeVariantValidationStatus,
@@ -34,6 +35,8 @@ __all__ = [
     "PackageValidationStatus",
     "PackageValidationType",
     "PackageValidationStabilitySummary",
+    "StrategyPackageAssetRecord",
+    "StrategyPackageAssetType",
     "StrategyPackageManifest",
     "StrategyPackageRuntimeVariant",
     "StrategyPackageValidationRun",
