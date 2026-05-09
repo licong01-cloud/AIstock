@@ -171,6 +171,10 @@ def _validation_run_payload(run) -> dict[str, Any]:
     return run.model_dump(mode="json")
 
 
+def _validation_stability_payload(summary) -> dict[str, Any]:
+    return summary.model_dump(mode="json")
+
+
 def _trading_dates_between(start_date: date, end_date: date) -> list[date]:
     try:
         with get_conn() as conn:
@@ -580,6 +584,23 @@ def get_strategy_package_validation_run(package_id: str, validation_run_id: str)
     try:
         run = StrategyPackageService().get_validation_run(package_id, validation_run_id)
         return {"ok": True, "validation_run": _validation_run_payload(run)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/validation-stability")
+def get_strategy_package_validation_stability(
+    package_id: str,
+    metric_key: str = "annual_return",
+    limit: int = 500,
+) -> dict[str, Any]:
+    try:
+        summary = StrategyPackageService().summarize_validation_stability(
+            package_id,
+            metric_key=metric_key,
+            limit=limit,
+        )
+        return {"ok": True, "stability": _validation_stability_payload(summary)}
     except TradingCoreError as exc:
         _raise_http(exc)
 
