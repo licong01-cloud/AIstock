@@ -353,3 +353,10 @@ P2      若板块因子 overlay 在 QE 中有效，再考虑将高 RankIC 板块
 1. 读取本文档和 `docs/codex_project_memory.md`。
 2. 调用 `8001` 的 HMM configs/snapshots API，确认 DB 可选列表没有被其他流程改变。
 3. 若要训练新版本，先复制 old covfix config 为新 config，显式写入 preprocess/zscore 策略，不覆盖已有 config/snapshot。
+
+## 2026-05-09 regime bounded screen 进展
+
+- 新增离线筛选脚本 `scripts/hmm_regime_bounded_candidate_screen_20260509.py`，把重新定义的 regime-HMM 输出转换为有上下界的板块系数，并做 sector-level + TopK 归因评估。
+- 经过 `--shortlist 32` 的扩大筛选，当前最稳健的候选是 `REGHMM_REGIMELINEAR_BOTH_T20_B15_BOOST0p01_PEN0p005`；它同时满足近期 holdout 与全样本 10d DB 收益都高于 Loop2，且换手/进入频率明显低于 Loop2/Loop10。
+- `REGHMM_REGIMETOPBOTLINEAR_BOTH_T20_B15_BOOST0p005_PEN0p005` 等部分 top/bottom 候选只在近期 holdout 里有改善，但 train_pre_holdout 为负，暂不建议直接进入 QE 作为主候选。
+- 本轮仍未做 DB/QE 选配注册；当前结论是“可继续向 hidden QE 候选注册推进，但只优先推进 `REGHMM_REGIMELINEAR_BOTH_T20_B15_BOOST0p01_PEN0p005` 这类同时兼顾近期与全段收益的版本”。
