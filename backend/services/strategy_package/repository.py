@@ -35,6 +35,14 @@ from .runtime_variant import (
     derive_locked_core_hash,
     ensure_runtime_variant_status,
 )
+from .validation_run import (
+    PackageValidationRetrainMode,
+    PackageValidationReproducibility,
+    PackageValidationStatus,
+    PackageValidationType,
+    StrategyPackageValidationRun,
+    ensure_package_validation_run,
+)
 
 ConnFactory = Callable[[], Iterator[Any]]
 
@@ -663,6 +671,107 @@ class StrategyPackageRepository:
                 )
         return self.get_runtime_variant(package_id, variant_id)
 
+    def save_validation_run(self, run: StrategyPackageValidationRun) -> StrategyPackageValidationRun:
+        record = self.get(run.package_id)
+        _validate_validation_run_matches_package(run, record)
+        if run.runtime_variant_id is not None:
+            variant = self.get_runtime_variant(run.package_id, run.runtime_variant_id)
+            _validate_validation_run_matches_variant(run, variant.variant_hash)
+        ensure_package_validation_run(run)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.package_validation_run (
+                        validation_run_id, package_id, manifest_sha256, runtime_variant_id,
+                        runtime_variant_hash, validation_type, retrain_mode, model_version_id,
+                        seed_policy, random_seed, source_data_version, target_data_version,
+                        backtest_start, backtest_end, status, metrics_json, artifact_manifest_json,
+                        evidence_json, reproducibility_level, created_by, created_at, completed_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        run.validation_run_id,
+                        run.package_id,
+                        run.manifest_sha256,
+                        run.runtime_variant_id,
+                        run.runtime_variant_hash,
+                        run.validation_type.value,
+                        run.retrain_mode.value,
+                        run.model_version_id,
+                        run.seed_policy,
+                        run.random_seed,
+                        run.source_data_version,
+                        run.target_data_version,
+                        run.backtest_start,
+                        run.backtest_end,
+                        run.status.value,
+                        psycopg2.extras.Json(run.metrics_json),
+                        psycopg2.extras.Json(run.artifact_manifest_json),
+                        psycopg2.extras.Json(run.evidence_json),
+                        run.reproducibility_level.value,
+                        run.created_by,
+                        run.created_at,
+                        run.completed_at,
+                    ),
+                )
+        return self.get_validation_run(run.package_id, run.validation_run_id)
+
+    def get_validation_run(self, package_id: str, validation_run_id: str) -> StrategyPackageValidationRun:
+        self.get(package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.package_validation_run
+                    WHERE package_id = %s AND validation_run_id = %s
+                    """,
+                    (package_id, validation_run_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError(
+                "strategy package validation run does not exist",
+                context={"package_id": package_id, "validation_run_id": validation_run_id},
+            )
+        return self._validation_run_from_row(dict(row))
+
+    def list_validation_runs(
+        self,
+        package_id: str,
+        *,
+        validation_type: PackageValidationType | None = None,
+        runtime_variant_id: str | None = None,
+        limit: int = 100,
+    ) -> list[StrategyPackageValidationRun]:
+        self.get(package_id)
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        where = ["package_id = %s"]
+        params: list[Any] = [package_id]
+        if validation_type is not None:
+            where.append("validation_type = %s")
+            params.append(validation_type.value)
+        if runtime_variant_id is not None:
+            where.append("runtime_variant_id = %s")
+            params.append(runtime_variant_id)
+        params.append(limit)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT *
+                    FROM strategy_pkg.package_validation_run
+                    WHERE {' AND '.join(where)}
+                    ORDER BY created_at DESC, validation_run_id DESC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+        return [self._validation_run_from_row(dict(row)) for row in rows]
+
     def _record_from_row(self, row: dict[str, Any]) -> StrategyPackageRecord:
         manifest_json = row["manifest_json"]
         manifest = StrategyPackageManifest.model_validate(manifest_json)
@@ -766,6 +875,33 @@ class StrategyPackageRepository:
             updated_at=row["updated_at"],
         )
 
+    @staticmethod
+    def _validation_run_from_row(row: dict[str, Any]) -> StrategyPackageValidationRun:
+        return StrategyPackageValidationRun(
+            validation_run_id=row["validation_run_id"],
+            package_id=row["package_id"],
+            manifest_sha256=row["manifest_sha256"],
+            runtime_variant_id=row["runtime_variant_id"],
+            runtime_variant_hash=row["runtime_variant_hash"],
+            validation_type=PackageValidationType(row["validation_type"]),
+            retrain_mode=PackageValidationRetrainMode(row["retrain_mode"]),
+            model_version_id=row["model_version_id"],
+            seed_policy=row["seed_policy"],
+            random_seed=row["random_seed"],
+            source_data_version=row["source_data_version"],
+            target_data_version=row["target_data_version"],
+            backtest_start=row["backtest_start"],
+            backtest_end=row["backtest_end"],
+            status=PackageValidationStatus(row["status"]),
+            metrics_json=row["metrics_json"] or {},
+            artifact_manifest_json=row["artifact_manifest_json"] or {},
+            evidence_json=row["evidence_json"] or {},
+            reproducibility_level=PackageValidationReproducibility(row["reproducibility_level"]),
+            created_by=row["created_by"],
+            created_at=row["created_at"],
+            completed_at=row["completed_at"],
+        )
+
 
 class InMemoryStrategyPackageRepository:
     """Test repository with the same fail-fast semantics as PostgreSQL."""
@@ -777,6 +913,7 @@ class InMemoryStrategyPackageRepository:
         self.model_states: dict[str, StrategyPackageModelState] = {}
         self.model_retrain_jobs: dict[str, StrategyPackageModelRetrainJob] = {}
         self.runtime_variants: dict[str, StrategyPackageRuntimeVariant] = {}
+        self.validation_runs: dict[str, StrategyPackageValidationRun] = {}
 
     def save_manifest(self, manifest: StrategyPackageManifest) -> StrategyPackageRecord:
         frozen = freeze_manifest(manifest)
@@ -1012,6 +1149,48 @@ class InMemoryStrategyPackageRepository:
         self.runtime_variants[variant_id] = updated
         return updated
 
+    def save_validation_run(self, run: StrategyPackageValidationRun) -> StrategyPackageValidationRun:
+        record = self.get(run.package_id)
+        _validate_validation_run_matches_package(run, record)
+        if run.runtime_variant_id is not None:
+            variant = self.get_runtime_variant(run.package_id, run.runtime_variant_id)
+            _validate_validation_run_matches_variant(run, variant.variant_hash)
+        ensure_package_validation_run(run)
+        if run.validation_run_id in self.validation_runs:
+            raise StrategyPackageValidationError(
+                "validation run already exists",
+                context={"validation_run_id": run.validation_run_id},
+            )
+        self.validation_runs[run.validation_run_id] = run
+        return run
+
+    def get_validation_run(self, package_id: str, validation_run_id: str) -> StrategyPackageValidationRun:
+        self.get(package_id)
+        run = self.validation_runs.get(validation_run_id)
+        if run is None or run.package_id != package_id:
+            raise DataUnavailableError(
+                "strategy package validation run does not exist",
+                context={"package_id": package_id, "validation_run_id": validation_run_id},
+            )
+        return run
+
+    def list_validation_runs(
+        self,
+        package_id: str,
+        *,
+        validation_type: PackageValidationType | None = None,
+        runtime_variant_id: str | None = None,
+        limit: int = 100,
+    ) -> list[StrategyPackageValidationRun]:
+        self.get(package_id)
+        rows = [run for run in self.validation_runs.values() if run.package_id == package_id]
+        if validation_type is not None:
+            rows = [run for run in rows if run.validation_type == validation_type]
+        if runtime_variant_id is not None:
+            rows = [run for run in rows if run.runtime_variant_id == runtime_variant_id]
+        rows.sort(key=lambda item: item.created_at, reverse=True)
+        return rows[:limit]
+
 
 def _validate_variant_matches_package(
     variant: StrategyPackageRuntimeVariant,
@@ -1035,5 +1214,33 @@ def _validate_variant_matches_package(
                 "package_id": record.package_id,
                 "variant_locked_core_hash": variant.locked_core_hash,
                 "expected_locked_core_hash": expected_core_hash,
+            },
+        )
+
+
+def _validate_validation_run_matches_package(
+    run: StrategyPackageValidationRun,
+    record: StrategyPackageRecord,
+) -> None:
+    if run.manifest_sha256 != record.manifest_sha256:
+        raise StrategyPackageValidationError(
+            "validation run manifest_sha256 does not match current package manifest",
+            context={
+                "package_id": run.package_id,
+                "run_manifest_sha256": run.manifest_sha256,
+                "package_manifest_sha256": record.manifest_sha256,
+            },
+        )
+
+
+def _validate_validation_run_matches_variant(run: StrategyPackageValidationRun, expected_variant_hash: str) -> None:
+    if run.runtime_variant_hash != expected_variant_hash:
+        raise StrategyPackageValidationError(
+            "validation run runtime_variant_hash does not match current runtime variant",
+            context={
+                "package_id": run.package_id,
+                "runtime_variant_id": run.runtime_variant_id,
+                "run_runtime_variant_hash": run.runtime_variant_hash,
+                "expected_runtime_variant_hash": expected_variant_hash,
             },
         )

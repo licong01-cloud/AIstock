@@ -36,6 +36,14 @@ from .runtime_variant import (
     StrategyPackageRuntimeVariant,
     build_runtime_variant,
 )
+from .validation_run import (
+    PackageValidationRetrainMode,
+    PackageValidationReproducibility,
+    PackageValidationStatus,
+    PackageValidationType,
+    StrategyPackageValidationRun,
+    build_package_validation_run,
+)
 from .validators import StrategyPackageValidator
 
 
@@ -594,6 +602,74 @@ class StrategyPackageService:
             validation_status=validation_status,
             paper_candidate=paper_candidate,
             validation_evidence=validation_evidence or {},
+        )
+
+    def create_validation_run(
+        self,
+        package_id: str,
+        *,
+        validation_type: PackageValidationType,
+        retrain_mode: PackageValidationRetrainMode,
+        runtime_variant_id: str | None = None,
+        model_version_id: str | None = None,
+        seed_policy: str | None = None,
+        random_seed: int | None = None,
+        source_data_version: str | None = None,
+        target_data_version: str | None = None,
+        backtest_start: date | None = None,
+        backtest_end: date | None = None,
+        status: PackageValidationStatus = PackageValidationStatus.REQUESTED,
+        metrics_json: dict[str, Any] | None = None,
+        artifact_manifest_json: dict[str, Any] | None = None,
+        evidence_json: dict[str, Any] | None = None,
+        reproducibility_level: PackageValidationReproducibility = PackageValidationReproducibility.UNKNOWN,
+        created_by: str = "aistock_api",
+        completed_at: datetime | None = None,
+    ) -> StrategyPackageValidationRun:
+        record = self.repository.get(package_id)
+        runtime_variant_hash = None
+        if runtime_variant_id is not None:
+            variant = self.repository.get_runtime_variant(package_id, runtime_variant_id)
+            runtime_variant_hash = variant.variant_hash
+        run = build_package_validation_run(
+            record.current_manifest(),
+            validation_type=validation_type,
+            retrain_mode=retrain_mode,
+            runtime_variant_id=runtime_variant_id,
+            runtime_variant_hash=runtime_variant_hash,
+            model_version_id=model_version_id,
+            seed_policy=seed_policy,
+            random_seed=random_seed,
+            source_data_version=source_data_version,
+            target_data_version=target_data_version,
+            backtest_start=backtest_start,
+            backtest_end=backtest_end,
+            status=status,
+            metrics_json=metrics_json,
+            artifact_manifest_json=artifact_manifest_json,
+            evidence_json=evidence_json,
+            reproducibility_level=reproducibility_level,
+            created_by=created_by,
+            completed_at=completed_at,
+        )
+        return self.repository.save_validation_run(run)
+
+    def get_validation_run(self, package_id: str, validation_run_id: str) -> StrategyPackageValidationRun:
+        return self.repository.get_validation_run(package_id, validation_run_id)
+
+    def list_validation_runs(
+        self,
+        package_id: str,
+        *,
+        validation_type: PackageValidationType | None = None,
+        runtime_variant_id: str | None = None,
+        limit: int = 100,
+    ) -> list[StrategyPackageValidationRun]:
+        return self.repository.list_validation_runs(
+            package_id,
+            validation_type=validation_type,
+            runtime_variant_id=runtime_variant_id,
+            limit=limit,
         )
 
     @staticmethod
