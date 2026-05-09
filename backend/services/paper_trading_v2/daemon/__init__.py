@@ -8,10 +8,18 @@ The SimGateway facade is in ``trading_core.sim_gateway`` and is reused here
 without modification.
 """
 
-from .event_log import DaemonEventLog, DaemonEventRecord, DaemonEventType
+from .event_log import (
+    PAPER_DAEMON_EVENT_TYPE_NAMES,
+    PAPER_DAEMON_SOURCE_SYSTEM,
+    DaemonEventLog,
+    DaemonEventRecord,
+    DaemonEventType,
+)
 from .sim_runner import PaperV2SimRunner, SimRunResult
 
 __all__ = [
+    "PAPER_DAEMON_EVENT_TYPE_NAMES",
+    "PAPER_DAEMON_SOURCE_SYSTEM",
     "DaemonEventLog",
     "DaemonEventRecord",
     "DaemonEventType",
