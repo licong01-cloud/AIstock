@@ -506,7 +506,10 @@ def _connect(target: DbTarget):
         import psycopg2  # type: ignore
     except ImportError as exc:  # pragma: no cover - depends on local environment
         raise GovernanceMigrationSmokeError("psycopg2 is required for DB execution checks") from exc
-    return psycopg2.connect(**target.as_psycopg2_kwargs())
+    try:
+        return psycopg2.connect(**target.as_psycopg2_kwargs())
+    except Exception as exc:  # pragma: no cover - exact driver error depends on local DB setup
+        raise GovernanceMigrationSmokeError(f"failed to connect to DB target {target.label}: {exc}") from exc
 
 
 def _fetch_names(cur: Any, sql: str) -> set[str]:
