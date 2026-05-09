@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -16,6 +16,12 @@ from backend.services.strategy_package.repository import StrategyPackageRecord
 from backend.services.strategy_package.runtime_variant import RuntimeVariantKind, RuntimeVariantValidationStatus
 from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactService
 from backend.services.strategy_package.service import StrategyPackageService
+from backend.services.strategy_package.validation_run import (
+    PackageValidationRetrainMode,
+    PackageValidationReproducibility,
+    PackageValidationStatus,
+    PackageValidationType,
+)
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import (
     DataUnavailableError,
@@ -87,6 +93,26 @@ class RuntimeVariantValidationRequest(BaseModel):
     validation_evidence: dict[str, Any] = Field(default_factory=dict)
 
 
+class CreateValidationRunRequest(BaseModel):
+    validation_type: PackageValidationType
+    retrain_mode: PackageValidationRetrainMode
+    runtime_variant_id: str | None = None
+    model_version_id: str | None = None
+    seed_policy: str | None = None
+    random_seed: int | None = None
+    source_data_version: str | None = None
+    target_data_version: str | None = None
+    backtest_start: date | None = None
+    backtest_end: date | None = None
+    status: PackageValidationStatus = PackageValidationStatus.REQUESTED
+    metrics_json: dict[str, Any] = Field(default_factory=dict)
+    artifact_manifest_json: dict[str, Any] = Field(default_factory=dict)
+    evidence_json: dict[str, Any] = Field(default_factory=dict)
+    reproducibility_level: PackageValidationReproducibility = PackageValidationReproducibility.UNKNOWN
+    created_by: str = Field(default="aistock_api", min_length=1)
+    completed_at: datetime | None = None
+
+
 class GenerateSelectionArtifactsRequest(BaseModel):
     trade_date: date | None = None
     start_date: date | None = None
@@ -139,6 +165,10 @@ def _selection_artifact_payload(artifact) -> dict[str, Any]:
 
 def _runtime_variant_payload(variant) -> dict[str, Any]:
     return variant.model_dump(mode="json")
+
+
+def _validation_run_payload(run) -> dict[str, Any]:
+    return run.model_dump(mode="json")
 
 
 def _trading_dates_between(start_date: date, end_date: date) -> list[date]:
@@ -490,6 +520,66 @@ def mark_strategy_package_runtime_variant_validation(
             validation_evidence=req.validation_evidence,
         )
         return {"ok": True, "runtime_variant": _runtime_variant_payload(variant)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/validation-runs")
+def create_strategy_package_validation_run(package_id: str, req: CreateValidationRunRequest) -> dict[str, Any]:
+    try:
+        run = StrategyPackageService().create_validation_run(
+            package_id,
+            validation_type=req.validation_type,
+            retrain_mode=req.retrain_mode,
+            runtime_variant_id=req.runtime_variant_id,
+            model_version_id=req.model_version_id,
+            seed_policy=req.seed_policy,
+            random_seed=req.random_seed,
+            source_data_version=req.source_data_version,
+            target_data_version=req.target_data_version,
+            backtest_start=req.backtest_start,
+            backtest_end=req.backtest_end,
+            status=req.status,
+            metrics_json=req.metrics_json,
+            artifact_manifest_json=req.artifact_manifest_json,
+            evidence_json=req.evidence_json,
+            reproducibility_level=req.reproducibility_level,
+            created_by=req.created_by,
+            completed_at=req.completed_at,
+        )
+        return {"ok": True, "validation_run": _validation_run_payload(run)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/validation-runs")
+def list_strategy_package_validation_runs(
+    package_id: str,
+    validation_type: PackageValidationType | None = None,
+    runtime_variant_id: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    try:
+        runs = StrategyPackageService().list_validation_runs(
+            package_id,
+            validation_type=validation_type,
+            runtime_variant_id=runtime_variant_id,
+            limit=limit,
+        )
+        return {
+            "ok": True,
+            "package_id": package_id,
+            "validation_runs": [_validation_run_payload(run) for run in runs],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/validation-runs/{validation_run_id}")
+def get_strategy_package_validation_run(package_id: str, validation_run_id: str) -> dict[str, Any]:
+    try:
+        run = StrategyPackageService().get_validation_run(package_id, validation_run_id)
+        return {"ok": True, "validation_run": _validation_run_payload(run)}
     except TradingCoreError as exc:
         _raise_http(exc)
 

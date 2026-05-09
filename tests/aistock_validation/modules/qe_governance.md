@@ -72,7 +72,7 @@ These L1 commands are placeholders until Phase 1/4 implementation lands. Before 
 | QE-GOV-L2-001 create promotion review | `python -m pytest backend/tests -q -k "promotion_review and api"` | Explicit user action creates a `REVIEW_PENDING` review record and audit trail. | Test-owned DB/session only; no production rows. |
 | QE-GOV-L2-002 reject direct Paper enablement | `python -m pytest backend/tests -q -k "paper_ready and promotion"` | Candidate/rejected review cannot become Paper-selectable. | No Paper v2 runtime run required. |
 | QE-GOV-L2-003 additive schema safety | `rg -n "CREATE TABLE|ALTER TABLE|COMMENT ON" backend docs tests` plus migration tests | New governance tables live in `strategy_pkg` / `model_registry`, include comments, and avoid destructive DDL. | No writes to existing production schema during validation. |
-| QE-GOV-L2-004 validation-run persistence | `python -m pytest backend/tests -q -k "package_validation_run"` | Retest/Mode A-F evidence is appended as independent validation runs. | Do not overwrite original QE metrics. |
+| QE-GOV-L2-004 validation-run persistence | `python -m pytest backend/tests -q -k "validation_run"` | Retest/Mode A-F evidence is appended as independent validation runs. | Do not overwrite original QE metrics. |
 | QE-GOV-L2-005 protected asset manifest metadata | `python -m pytest backend/tests -q -k "protected_asset or asset_manifest"` | Asset hash/size/source/protected flag is recorded and immutable after freeze. | Use temp artifacts only. |
 | QE-GOV-L2-006 runtime variant foundation | `python -m pytest backend/tests/strategy_package/test_runtime_variants.py -q` | Runtime variants have independent hashes, keep frozen core hash unchanged, and require validation before `paper_candidate=true`. | No protected asset writes; no Paper v2 run execution. |
 
@@ -92,6 +92,7 @@ These L1 commands are placeholders until Phase 1/4 implementation lands. Before 
 | QE-GOV-L4-001 candidate-to-package trace | Future integration suite: `python -m nox -s qe_governance_l4` | QE candidate -> review pending -> approved -> frozen StrategyPackage trace is complete and auditable. | Controlled dev/test IDs only (`pkg_dev_*`, `qe_dev_*`); no production rows. |
 | QE-GOV-L4-002 Phase 4 strict seed reproducibility | Future Phase 4 suite | Same manifest + same `master_seed` produces NAV difference < 0.01bp and 100% identical holdings, or records nondeterministic flags. | This is the core Phase 4 gate; failures block integration. |
 | QE-GOV-L4-003 Mode A-F validation evidence | Future integration suite | Retest modes write independent validation runs and do not overwrite source QE metrics. | Uses controlled assets and dev artifact paths. |
+| QE-GOV-L4-003A Phase 7 latest/rolling validation modes | `python -m pytest backend/tests/strategy_package/test_validation_runs.py -q` | Latest fixed-weight, latest retrain, walk-forward rolling, and runtime-variant validation modes fail-fast on missing evidence and append independent validation runs. | Foundation only; no live QE/Paper execution and no production DB writes. |
 | QE-GOV-L4-004 Paper-ready selection boundary | Future integration suite | Paper v2 only selects approved, frozen, validated StrategyPackages. | Does not authorize live trading; no real broker/QMT path. |
 | QE-GOV-L4-005 protected asset boundary | Future integration suite plus artifact hash check | Frozen assets are read-only; runtime variants do not mutate frozen core. | Dev protected path only: `rdagent_assets/strategy_package_runtime_dev/` or worktree-local assets. |
 | QE-GOV-L4-006 runtime variant validation trace | Future integration suite | Variant validation runs record evidence and do not mutate frozen StrategyPackage manifest/core. | Variant can become Paper candidate only after validation passes. |
@@ -104,6 +105,7 @@ These L1 commands are placeholders until Phase 1/4 implementation lands. Before 
 | Phase 1 manual SOTA flow | Phase 0 gates plus QE-GOV-L1-001/002/003, QE-GOV-L2-001/002, QE-GOV-L3-001/002. | QE automation cannot create approved SOTA; user action creates review pending with audit. |
 | Phase 4 seed contract | Phase 0 gates plus QE-GOV-L1-004, QE-GOV-L4-002, and seed fragility evidence. | Same manifest + same master seed satisfies deterministic NAV/holding oracle or is explicitly quarantined/non-deterministic. |
 | Phase 6 runtime variants | Phase 0 gates plus QE-GOV-L2-006 and QE-GOV-L4-005/006 follow-up evidence. | Runtime variants cannot mutate frozen model/factor core and cannot become Paper candidates before validation passes. |
+| Phase 7 latest/rolling validation | Phase 0 gates plus QE-GOV-L2-004, QE-GOV-L4-003/003A, and migration comment checks. | Latest-data and rolling validation evidence is appended as `package_validation_run` rows and never overwrites original QE metrics or frozen StrategyPackage manifests. |
 
 ## 10. Run Record Requirements
 
