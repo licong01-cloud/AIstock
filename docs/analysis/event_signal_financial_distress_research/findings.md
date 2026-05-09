@@ -265,3 +265,17 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | full rerun cost is high                     | use cheap overlay gates before WSL true rerun expansion       |
 +---------------------------------------------+---------------------------------------------------------------+
 ```
+
+## Phase 20 Selective True QE Shortlist Finding
+
+```text
++---------------------------------------------+---------------------------------------------------------------+
+| finding                                     | implication                                                   |
++---------------------------------------------+---------------------------------------------------------------+
+| no candidate passes direct WSL rerun gate   | do not start broad WSL full-universe rerun batch yet          |
+| 60td ctx-balanced remains weak baseline     | keep as calibration after one-loop true rerun, not deployment |
+| best new rows are still only 10-loop cheap  | expand them to the 22-loop cheap overlay set first            |
+| benchmark loss/mv rule is not hard risk     | direct T+5/T+20 abnormal medians are positive                 |
+| next phase is cheap expansion               | test top shortlist rules before spending WSL true-rerun time  |
++---------------------------------------------+---------------------------------------------------------------+
+```

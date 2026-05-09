@@ -375,3 +375,34 @@ Phase 19 evidence:
 | production backend 8001              | not touched                                                  |
 +--------------------------------------+--------------------------------------------------------------+
 ```
+
+## 2026-05-10 Phase 20 Completion
+
+```text
++----------------------+---------------------------------------+-------------------------------------------------+
+| time                 | action                                | result                                          |
++----------------------+---------------------------------------+-------------------------------------------------+
+| 2026-05-10 morning   | added cheap rerun shortlist script    | parsed latest ignored multiloop reports         |
+| 2026-05-10 morning   | screened 343 stability rows           | no row passed WSL_TRUE_RERUN_NOW                |
+| 2026-05-10 morning   | compared direct event sanity rows     | benchmark rule not a hard-risk proof            |
+| 2026-05-10 morning   | documented next empirical step        | 22-loop cheap expansion before WSL rerun        |
++----------------------+---------------------------------------+-------------------------------------------------+
+```
+
+Latest curated report: `docs/analysis/event_signal_financial_distress_selective_true_qe_shortlist_20260510.md`.
+Latest validation record: `tests/aistock_validation/history/local_data_management/20260510_l2_financial-distress-selective-true-qe-shortlist-validation.md`.
+
+Phase 20 evidence:
+
+```text
++--------------------------------------+--------------------------------------------------------------+
+| check                                | result                                                       |
++--------------------------------------+--------------------------------------------------------------+
+| multiloop JSON reports scanned        | 13 latest report files under reports/event_signal            |
+| candidate stability rows              | 343 rows                                                     |
+| direct WSL rerun candidates           | 0 rows passed strict gate                                    |
+| top cheap-expansion candidate          | structured_financial_risk_mv_ge_10bn                         |
+| runtime promotion                      | rejected; research-only                                      |
+| production backend 8001               | not touched                                                  |
++--------------------------------------+--------------------------------------------------------------+
+```

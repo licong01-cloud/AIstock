@@ -35,6 +35,7 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 10    | size/loss-history/decay refinements      | complete | refinement_qe_overlay_result_20260509                       |
 | 18    | copied-loop true QE smoke rerun          | complete | true_qe_rerun_smoke_result_20260509                         |
 | 19    | WSL full-universe true QE parity rerun   | complete | true_qe_wsl_full_universe_result_20260510                   |
+| 20    | selective true QE rerun shortlist        | complete | selective_true_qe_shortlist_20260510                        |
 +-------+------------------------------------------+----------+-------------------------------------------------------------+
 ```
 
@@ -68,8 +69,9 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 17    | true QE rerun design / dry-run harness          | complete   | pred-backtest materializer path designed and unit-tested      |
 | 18    | copied-loop true QE smoke rerun                 | complete   | technical path passes; full-universe PnL blocked by memory   |
 | 19    | memory-safe true QE rerun feasibility           | complete   | WSL full-universe baseline/adjusted parity rerun completed   |
-| 20    | selective true QE rerun shortlist               | pending    | screen cheap first; true-rerun only stronger candidates       |
-| 21    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
+| 20    | selective true QE rerun shortlist               | complete   | no direct true-rerun candidate; cheap expansion first         |
+| 21    | shortlist cheap 22-loop overlay expansion       | pending    | expand top 10-loop candidates before WSL true-rerun budget   |
+| 22    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -218,5 +220,19 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | indicator_large_decline_mv_10_30bn      | KEEP_RESEARCH_ONLY         | one-loop full true rerun is weak positive but immaterial               |
 | immediate runtime promotion             | REJECT                     | +0.147pp annualized return is insufficient for deployment              |
 | next empirical step                     | SELECTIVE_TRUE_RERUN       | screen stronger candidates before expensive WSL multi-loop reruns      |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+```
+
+## Phase 20 Selective True QE Shortlist Finding
+
+```text
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| candidate                              | decision                   | evidence                                                               |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| WSL true-rerun batch                    | REJECT_NOW                 | no candidate passed strict cheap gate                                  |
+| indicator_large_decline_mv_10_30bn      | KEEP_WEAK_BASELINE         | 22-loop cheap score ok, but one-loop WSL true rerun was immaterial     |
+| structured_financial_risk_mv_ge_10bn    | EXPAND_22_LOOP_FIRST       | best 10-loop cheap row; needs same 22-loop cheap validation before WSL |
+| loss_to_market_cap_ge_50pct_mv_lt_10bn  | BENCHMARK_ONLY             | direct event T+5/T+20 medians positive; not a hard-risk proof          |
+| next empirical step                     | CHEAP_OVERLAY_EXPANSION    | run 22-loop overlay expansion for top 10-loop candidates               |
 +----------------------------------------+----------------------------+------------------------------------------------------------------------+
 ```
