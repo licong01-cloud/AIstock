@@ -61,8 +61,9 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 12    | context-aware overlay rule research             | complete   | rank/severity/decay context profiles tested on 10 QE loops   |
 | 13    | proposed non-hard signal-policy config          | complete   | config proposal documented; no runtime integration           |
 | 14    | additional QE experiment validation             | complete   | 12 extra loops tested; 60td weakly better than 20td          |
-| 15    | non-hard parameter sweep across loop sets       | pending    | compare 20/60/120td and moderate score-down strengths        |
-| 16    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
+| 15    | non-hard parameter sweep across loop sets       | complete   | 22-loop sweep shows 60td context-balanced as best shape      |
+| 16    | true QE rerun / persistence gate                | pending    | require stronger evidence before runtime or DB promotion     |
+| 17    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -140,5 +141,19 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | indicator_large_decline_mv_10_30bn 60td| KEEP_AS_PRIMARY_TEST       | extra 12 loops average +0.04%, positive count 8/12, tail -0.32%         |
 | immediate runtime promotion            | DEFER                      | combined evidence is not stable enough and still artifact-level         |
 | next research                          | PARAMETER_SWEEP            | test active windows and moderate penalties on both loop sets            |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+```
+
+
+## Phase 15 Parameter Sweep Finding
+
+```text
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| candidate                              | decision                   | evidence                                                               |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| indicator_large_decline_mv_10_30bn     | KEEP_RESEARCH_PRIMARY      | 60td context-balanced best overall: avg +0.11%, 14/22 positive         |
+| fixed 10% baseline                     | KEEP_BASELINE              | simpler but weaker tail than the best context profile                  |
+| 20td variants                          | KEEP_COMPARISON            | useful reference, but not preferred over the 60td context profile      |
+| 120td severity profile                 | KEEP_SECONDARY             | still viable, but not better than the 60td balanced candidate          |
 +----------------------------------------+----------------------------+------------------------------------------------------------------------+
 ```

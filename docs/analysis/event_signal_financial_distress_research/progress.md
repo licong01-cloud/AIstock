@@ -190,3 +190,30 @@ Phase 14 errors and resolutions:
 | quoted DB port                           | raw .env quotes were not stripped            | stripped surrounding quotes before rerun      |
 +------------------------------------------+----------------------------------------------+----------------------------------------------+
 ```
+
+
+## 2026-05-09 Phase 15 Completion
+
+```text
++----------------------+---------------------------------------+-------------------------------------------------+
+| time                 | action                                | result                                          |
++----------------------+---------------------------------------+-------------------------------------------------+
+| 2026-05-09 afternoon | combined Phase 12 and Phase 14 loops  | 22-loop validation set built                    |
+| 2026-05-09 afternoon | ran context profile sweep             | 132 validations completed                       |
+| 2026-05-09 afternoon | ran fixed-rank penalty sweep          | 198 validations completed                       |
+| 2026-05-09 afternoon | compared all rows                     | 60td context-balanced is best overall           |
++----------------------+---------------------------------------+-------------------------------------------------+
+```
+
+Latest curated report: `docs/analysis/event_signal_financial_distress_parameter_sweep_result_20260509.md`.
+Latest validation record: `tests/aistock_validation/history/local_data_management/20260509_l2_financial-distress-parameter-sweep-validation.md`.
+
+Phase 15 selected result:
+
+```text
++------------------------------------+-----------+----------------+-----------+-----------+-----------+
+| rule                               | active_td | mode           | pos/loops | avg_ret_d | min_ret_d |
++------------------------------------+-----------+----------------+-----------+-----------+-----------+
+| indicator_large_decline_mv_10_30bn | 60        | ctx_balanced   | 14/22     | 0.11%     | -0.32%    |
++------------------------------------+-----------+----------------+-----------+-----------+-----------+
+```
