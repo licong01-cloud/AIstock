@@ -34,6 +34,7 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 9     | medium/large-cap event families          | complete | mid_large_qe_overlay_result_20260509                        |
 | 10    | size/loss-history/decay refinements      | complete | refinement_qe_overlay_result_20260509                       |
 | 18    | copied-loop true QE smoke rerun          | complete | true_qe_rerun_smoke_result_20260509                         |
+| 19    | WSL full-universe true QE parity rerun   | complete | true_qe_wsl_full_universe_result_20260510                   |
 +-------+------------------------------------------+----------+-------------------------------------------------------------+
 ```
 
@@ -66,8 +67,9 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 16    | robustness gate / persistence decision          | complete   | keep research-only; reject runtime and DB promotion for now  |
 | 17    | true QE rerun design / dry-run harness          | complete   | pred-backtest materializer path designed and unit-tested      |
 | 18    | copied-loop true QE smoke rerun                 | complete   | technical path passes; full-universe PnL blocked by memory   |
-| 19    | memory-safe true QE rerun feasibility           | pending    | require baseline parity before any multi-loop batch           |
-| 20    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
+| 19    | memory-safe true QE rerun feasibility           | complete   | WSL full-universe baseline/adjusted parity rerun completed   |
+| 20    | selective true QE rerun shortlist               | pending    | screen cheap first; true-rerun only stronger candidates       |
+| 21    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -202,5 +204,19 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | indicator_large_decline_mv_10_30bn      | KEEP_RESEARCH_ONLY         | materializer works, but no valid PnL proof yet                         |
 | immediate runtime promotion             | REJECT                     | Phase 18 is a technical smoke, not a deployment gate                   |
 | next empirical step                     | FEASIBILITY_REDESIGN       | solve memory-safe or parity-controlled true rerun before batch         |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+```
+
+## Phase 19 WSL Full-Universe Finding
+
+```text
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| candidate                              | decision                   | evidence                                                               |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| WSL full-universe rerun path            | VALIDATED                  | baseline and adjusted full-universe PortAnaRecord completed            |
+| Windows full-universe rerun path        | AVOID_FOR_RESEARCH         | Phase 18 MemoryError remains a Windows copied-run blocker              |
+| indicator_large_decline_mv_10_30bn      | KEEP_RESEARCH_ONLY         | one-loop full true rerun is weak positive but immaterial               |
+| immediate runtime promotion             | REJECT                     | +0.147pp annualized return is insufficient for deployment              |
+| next empirical step                     | SELECTIVE_TRUE_RERUN       | screen stronger candidates before expensive WSL multi-loop reruns      |
 +----------------------------------------+----------------------------+------------------------------------------------------------------------+
 ```

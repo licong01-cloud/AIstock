@@ -344,3 +344,34 @@ Phase 18 errors and resolutions:
 | qlib_init parsed as missing              | conf.yaml had UTF-8 BOM after rewrite        | rewrote copied conf.yaml without BOM         |
 +------------------------------------------+----------------------------------------------+----------------------------------------------+
 ```
+
+## 2026-05-10 Phase 19 Completion
+
+```text
++----------------------+---------------------------------------+-------------------------------------------------+
+| time                 | action                                | result                                          |
++----------------------+---------------------------------------+-------------------------------------------------+
+| 2026-05-09 night     | ran WSL adjusted full-universe rerun  | PortAnaRecord completed, recorder 59eaf3f...   |
+| 2026-05-10 early     | ran WSL baseline full-universe rerun  | PortAnaRecord completed, recorder 7b5782...    |
+| 2026-05-10 early     | compared same-environment metrics     | weak positive effect, not deployment material  |
++----------------------+---------------------------------------+-------------------------------------------------+
+```
+
+Latest curated report: `docs/analysis/event_signal_financial_distress_true_qe_wsl_full_universe_result_20260510.md`.
+Latest validation record: `tests/aistock_validation/history/local_data_management/20260510_l2_financial-distress-wsl-full-universe-validation.md`.
+
+Phase 19 evidence:
+
+```text
++--------------------------------------+--------------------------------------------------------------+
+| check                                | result                                                       |
++--------------------------------------+--------------------------------------------------------------+
+| WSL adjusted full-universe rerun      | pass: 442 backtest steps completed                           |
+| WSL baseline full-universe rerun      | pass: 442 backtest steps completed                           |
+| annualized excess return delta        | +0.0014692370                                                |
+| information ratio delta               | +0.0063244896                                                |
+| max drawdown delta                    | +0.0002757115                                                |
+| runtime promotion                     | rejected; signal remains research-only                       |
+| production backend 8001              | not touched                                                  |
++--------------------------------------+--------------------------------------------------------------+
+```

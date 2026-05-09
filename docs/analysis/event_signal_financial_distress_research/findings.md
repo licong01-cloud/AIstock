@@ -252,3 +252,16 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | signal promotion remains blocked            | require memory-safe or parity-controlled rerun before runtime  |
 +---------------------------------------------+---------------------------------------------------------------+
 ```
+
+## Phase 19 WSL Full-Universe Finding
+
+```text
++---------------------------------------------+---------------------------------------------------------------+
+| finding                                     | implication                                                   |
++---------------------------------------------+---------------------------------------------------------------+
+| WSL full-universe rerun completes           | future true QE research should run in WSL, not Windows UNC    |
+| baseline and adjusted are now comparable    | full-universe same-conf parity is available for shortlisted rules |
+| current candidate is only weak positive     | keep it as research-only and do not write runtime policy      |
+| full rerun cost is high                     | use cheap overlay gates before WSL true rerun expansion       |
++---------------------------------------------+---------------------------------------------------------------+
+```
