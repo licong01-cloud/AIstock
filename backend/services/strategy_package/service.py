@@ -28,6 +28,7 @@ from .model_state import (
     evaluate_model_staleness,
 )
 from .models import PackageStatus, StrategyPackageManifest
+from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .qe_source_resolver import QEExperimentSourceResolver
 from .repository import PackageStatusEvent, StrategyPackageRecord, StrategyPackageRepository
 from .runtime_variant import (
@@ -371,6 +372,35 @@ class StrategyPackageService:
 
     def list_status_events(self, package_id: str, *, limit: int = 200) -> list[PackageStatusEvent]:
         return self.repository.list_status_events(package_id, limit=limit)
+
+    def record_package_asset(
+        self,
+        package_id: str,
+        *,
+        asset_type: StrategyPackageAssetType,
+        asset_ref: str,
+        asset_sha256: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        asset_role: str = "governed_asset",
+        asset_size_bytes: int | None = None,
+        protected_asset: bool = True,
+        source_uri: str | None = None,
+    ) -> StrategyPackageAssetRecord:
+        asset = StrategyPackageAssetRecord(
+            package_id=package_id,
+            asset_type=asset_type,
+            asset_ref=asset_ref,
+            asset_sha256=asset_sha256,
+            metadata=metadata or {},
+            asset_role=asset_role,
+            asset_size_bytes=asset_size_bytes,
+            protected_asset=protected_asset,
+            source_uri=source_uri,
+        )
+        return self.repository.save_package_asset(asset)
+
+    def list_package_assets(self, package_id: str, *, protected_only: bool = False) -> list[StrategyPackageAssetRecord]:
+        return self.repository.list_package_assets(package_id, protected_only=protected_only)
 
     def create_execution_policy(
         self,

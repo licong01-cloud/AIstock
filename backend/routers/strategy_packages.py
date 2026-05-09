@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from backend.db.pg_pool import get_conn
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.models import PackageStatus
+from backend.services.strategy_package.package_asset import StrategyPackageAssetType
 from backend.services.strategy_package.qe_source_resolver import QEExperimentSourceResolver
 from backend.services.strategy_package.repository import StrategyPackageRecord
 from backend.services.strategy_package.runtime_variant import RuntimeVariantKind, RuntimeVariantValidationStatus
@@ -61,6 +62,17 @@ class CreateExecutionPolicyRequest(BaseModel):
     source_backtest_id: str = Field(min_length=1)
     source_backtest_status: str = Field(min_length=1)
     paper_enabled: bool = False
+
+
+class RecordPackageAssetRequest(BaseModel):
+    asset_type: StrategyPackageAssetType
+    asset_ref: str = Field(min_length=1)
+    asset_sha256: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    asset_role: str = Field(default="governed_asset", min_length=1)
+    asset_size_bytes: int | None = Field(default=None, ge=0)
+    protected_asset: bool = True
+    source_uri: str | None = None
 
 
 class ModelRetrainPreviewRequest(BaseModel):
@@ -154,6 +166,10 @@ def _record_payload(record: StrategyPackageRecord) -> dict[str, Any]:
 
 def _execution_policy_payload(policy) -> dict[str, Any]:
     return policy.model_dump(mode="json")
+
+
+def _package_asset_payload(asset) -> dict[str, Any]:
+    return asset.model_dump(mode="json")
 
 
 def _selection_artifact_payload(artifact) -> dict[str, Any]:
@@ -264,6 +280,38 @@ def list_strategy_package_status_events(package_id: str, limit: int = 200) -> di
     try:
         events = StrategyPackageService().list_status_events(package_id, limit=limit)
         return {"ok": True, "package_id": package_id, "events": [event.model_dump(mode="json") for event in events]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/assets")
+def record_strategy_package_asset(package_id: str, req: RecordPackageAssetRequest) -> dict[str, Any]:
+    try:
+        asset = StrategyPackageService().record_package_asset(
+            package_id,
+            asset_type=req.asset_type,
+            asset_ref=req.asset_ref,
+            asset_sha256=req.asset_sha256,
+            metadata=req.metadata,
+            asset_role=req.asset_role,
+            asset_size_bytes=req.asset_size_bytes,
+            protected_asset=req.protected_asset,
+            source_uri=req.source_uri,
+        )
+        return {"ok": True, "asset": _package_asset_payload(asset)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/assets")
+def list_strategy_package_assets(package_id: str, protected_only: bool = False) -> dict[str, Any]:
+    try:
+        assets = StrategyPackageService().list_package_assets(package_id, protected_only=protected_only)
+        return {
+            "ok": True,
+            "package_id": package_id,
+            "assets": [_package_asset_payload(asset) for asset in assets],
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 

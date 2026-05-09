@@ -28,6 +28,7 @@ from .model_state import (
     StrategyPackageModelState,
 )
 from .models import PackageStatus, StrategyPackageManifest
+from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .runtime_variant import (
     RuntimeVariantKind,
     RuntimeVariantValidationStatus,
@@ -306,6 +307,61 @@ class StrategyPackageRepository:
             )
             for row in rows
         ]
+
+    def save_package_asset(self, asset: StrategyPackageAssetRecord) -> StrategyPackageAssetRecord:
+        self.get(asset.package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.package_asset (
+                        package_id, asset_type, asset_ref, asset_sha256, metadata,
+                        asset_role, asset_size_bytes, protected_asset, source_uri, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (package_id, asset_type, asset_ref) DO UPDATE
+                    SET asset_sha256 = EXCLUDED.asset_sha256,
+                        metadata = EXCLUDED.metadata,
+                        asset_role = EXCLUDED.asset_role,
+                        asset_size_bytes = EXCLUDED.asset_size_bytes,
+                        protected_asset = EXCLUDED.protected_asset,
+                        source_uri = EXCLUDED.source_uri
+                    RETURNING *
+                    """,
+                    (
+                        asset.package_id,
+                        asset.asset_type.value,
+                        asset.asset_ref,
+                        asset.asset_sha256,
+                        psycopg2.extras.Json(asset.metadata),
+                        asset.asset_role,
+                        asset.asset_size_bytes,
+                        asset.protected_asset,
+                        asset.source_uri,
+                        asset.created_at,
+                    ),
+                )
+                row = cur.fetchone()
+        return self._package_asset_from_row(dict(row))
+
+    def list_package_assets(self, package_id: str, *, protected_only: bool = False) -> list[StrategyPackageAssetRecord]:
+        self.get(package_id)
+        where = ["package_id = %s"]
+        params: list[Any] = [package_id]
+        if protected_only:
+            where.append("protected_asset = TRUE")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT *
+                    FROM strategy_pkg.package_asset
+                    WHERE {' AND '.join(where)}
+                    ORDER BY created_at DESC, asset_id DESC
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+        return [self._package_asset_from_row(dict(row)) for row in rows]
 
     def save_execution_policy(self, policy: ValidatedExecutionPolicy) -> ValidatedExecutionPolicy:
         self.get(policy.package_id)
@@ -819,6 +875,22 @@ class StrategyPackageRepository:
         )
 
     @staticmethod
+    def _package_asset_from_row(row: dict[str, Any]) -> StrategyPackageAssetRecord:
+        return StrategyPackageAssetRecord(
+            asset_id=row["asset_id"],
+            package_id=row["package_id"],
+            asset_type=StrategyPackageAssetType(row["asset_type"]),
+            asset_ref=row["asset_ref"],
+            asset_sha256=row["asset_sha256"],
+            metadata=row["metadata"] or {},
+            asset_role=row.get("asset_role") or "governed_asset",
+            asset_size_bytes=row.get("asset_size_bytes"),
+            protected_asset=bool(row.get("protected_asset", True)),
+            source_uri=row.get("source_uri"),
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
     def _model_state_from_row(row: dict[str, Any]) -> StrategyPackageModelState:
         return StrategyPackageModelState(
             package_id=row["package_id"],
@@ -910,6 +982,8 @@ class InMemoryStrategyPackageRepository:
         self.records: dict[str, StrategyPackageRecord] = {}
         self.events: list[PackageStatusEvent] = []
         self.execution_policies: dict[str, ValidatedExecutionPolicy] = {}
+        self.package_assets: dict[tuple[str, StrategyPackageAssetType, str], StrategyPackageAssetRecord] = {}
+        self._next_package_asset_id = 1
         self.model_states: dict[str, StrategyPackageModelState] = {}
         self.model_retrain_jobs: dict[str, StrategyPackageModelRetrainJob] = {}
         self.runtime_variants: dict[str, StrategyPackageRuntimeVariant] = {}
@@ -995,6 +1069,25 @@ class InMemoryStrategyPackageRepository:
     def list_status_events(self, package_id: str, *, limit: int = 200) -> list[PackageStatusEvent]:
         self.get(package_id)
         return [event for event in self.events if event.package_id == package_id][:limit]
+
+    def save_package_asset(self, asset: StrategyPackageAssetRecord) -> StrategyPackageAssetRecord:
+        self.get(asset.package_id)
+        key = (asset.package_id, asset.asset_type, asset.asset_ref)
+        existing = self.package_assets.get(key)
+        asset_id = existing.asset_id if existing else self._next_package_asset_id
+        if existing is None:
+            self._next_package_asset_id += 1
+        saved = asset.model_copy(update={"asset_id": asset_id})
+        self.package_assets[key] = saved
+        return saved
+
+    def list_package_assets(self, package_id: str, *, protected_only: bool = False) -> list[StrategyPackageAssetRecord]:
+        self.get(package_id)
+        rows = [asset for asset in self.package_assets.values() if asset.package_id == package_id]
+        if protected_only:
+            rows = [asset for asset in rows if asset.protected_asset]
+        rows.sort(key=lambda item: item.created_at, reverse=True)
+        return rows
 
     def mark_paper_portfolio_created(self, package_id: str, portfolio_id: str) -> StrategyPackageRecord:
         record = self.get(package_id)
