@@ -645,9 +645,21 @@ class PaperTradingLiveMinuteExecutor:
                 algo_config=algo_config,
                 market_context=market_context,
             )
+            # T6.1 capture wiring: intended_price from Order.limit_price
+            # (inherited from the original OrderIntent; None for MARKET orders).
+            # fill_market_context is the augmented dict actually fed to the
+            # execution engine (includes live_step_mode + plan_horizon_bars +
+            # v25_realtime_streaming overlay on top of market_input).
+            intended_price = order.limit_price
+            fill_market_context = dict(market_context)
             for fill in fills:
                 ledger.apply_fill(fill)
-                self.repository.save_fill(run.run_id, fill)
+                self.repository.save_fill(
+                    run.run_id,
+                    fill,
+                    intended_price=intended_price,
+                    fill_market_context=fill_market_context,
+                )
                 new_fill_count += 1
             for event in events:
                 self.repository.save_order_event(run.run_id, event)

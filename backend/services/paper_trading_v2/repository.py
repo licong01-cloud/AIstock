@@ -1455,10 +1455,13 @@ class PaperTradingV2Repository:
         fill_market_context: dict[str, Any] | None = None,
     ) -> None:
         # T5 capture fields for DW ETL: intended_price + fill_market_context
-        # are NULLable. Default None means the call site has not yet wired
-        # the source values from order_execution_state.algo_state_json.
-        # TODO(T6.1): wire intended_price + market context from algo_state_json
-        # once the execution path threads them through to the fill emit step.
+        # are NULLable. Default None preserves backward compat for any caller
+        # that has not threaded the values through yet (and is the recorded
+        # value when the order has no intended price — i.e. MARKET orders).
+        # T6.1 wired the production callers (day_runner.py + live_session.py)
+        # to pass OrderIntent.limit_price / Order.limit_price as intended_price
+        # and the market_input.market_context dict (the same one fed to the
+        # execution engine) as fill_market_context.
         # created_at / updated_at are passed explicitly via now() so the
         # InMemoryPaperTradingV2Repository fallback (which does not have
         # DEFAULT NOW()) sees the same value the PG path writes.

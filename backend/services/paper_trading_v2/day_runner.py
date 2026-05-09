@@ -473,9 +473,20 @@ class PaperTradingDayRunner:
                     market_context=market_input.market_context,
                     allow_partial_fill=bool(execution_algo_config.get("allow_partial_fill", True)),
                 )
+                # T6.1 capture wiring: intended_price from OrderIntent.limit_price
+                # (None for MARKET orders — that's structurally accurate, not a gap),
+                # fill_market_context from the same dict that the execution engine
+                # consumed, so the saved snapshot matches the matching context.
+                intended_price = intent.limit_price
+                fill_market_context = dict(market_input.market_context)
                 for fill in order_fills:
                     ledger.apply_fill(fill)
-                    self.repository.save_fill(run.run_id, fill)
+                    self.repository.save_fill(
+                        run.run_id,
+                        fill,
+                        intended_price=intended_price,
+                        fill_market_context=fill_market_context,
+                    )
                 for event in order_events:
                     self.repository.save_order_event(run.run_id, event)
                 self.repository.save_order(run.run_id, final_order)
