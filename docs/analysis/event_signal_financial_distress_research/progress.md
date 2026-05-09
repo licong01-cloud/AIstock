@@ -217,3 +217,29 @@ Phase 15 selected result:
 | indicator_large_decline_mv_10_30bn | 60        | ctx_balanced   | 14/22     | 0.11%     | -0.32%    |
 +------------------------------------+-----------+----------------+-----------+-----------+-----------+
 ```
+
+
+## 2026-05-09 Phase 16 Completion
+
+```text
++----------------------+---------------------------------------+-------------------------------------------------+
+| time                 | action                                | result                                          |
++----------------------+---------------------------------------+-------------------------------------------------+
+| 2026-05-09 evening   | parsed Phase 15 selected profile      | robustness and by-experiment summaries built    |
+| 2026-05-09 evening   | evaluated promotion gates             | runtime and DB promotion rejected for now        |
+| 2026-05-09 evening   | documented true-QE-rerun direction    | next phase should design traceable rerun path    |
++----------------------+---------------------------------------+-------------------------------------------------+
+```
+
+Latest curated report: `docs/analysis/event_signal_financial_distress_robustness_gate_result_20260509.md`.
+Latest validation record: `tests/aistock_validation/history/local_data_management/20260509_l2_financial-distress-robustness-gate-validation.md`.
+
+Phase 16 selected result:
+
+```text
++----------------+-----------+-----------+-----------+-----------+-----------+
+| profile        | pos/loops | avg_ret_d | med_ret_d | min_ret_d | ex_max_avg|
++----------------+-----------+-----------+-----------+-----------+-----------+
+| ctx_balanced60 | 14/22     | 0.1134%   | 0.0000%   | -0.3206%  | 0.0294%   |
++----------------+-----------+-----------+-----------+-----------+-----------+
+```

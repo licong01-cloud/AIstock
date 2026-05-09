@@ -62,8 +62,9 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 13    | proposed non-hard signal-policy config          | complete   | config proposal documented; no runtime integration           |
 | 14    | additional QE experiment validation             | complete   | 12 extra loops tested; 60td weakly better than 20td          |
 | 15    | non-hard parameter sweep across loop sets       | complete   | 22-loop sweep shows 60td context-balanced as best shape      |
-| 16    | true QE rerun / persistence gate                | pending    | require stronger evidence before runtime or DB promotion     |
-| 17    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
+| 16    | robustness gate / persistence decision          | complete   | keep research-only; reject runtime and DB promotion for now  |
+| 17    | true QE rerun design / dry-run harness          | pending    | define traceable rerun path without production QE coupling   |
+| 18    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -155,5 +156,19 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | fixed 10% baseline                     | KEEP_BASELINE              | simpler but weaker tail than the best context profile                  |
 | 20td variants                          | KEEP_COMPARISON            | useful reference, but not preferred over the 60td context profile      |
 | 120td severity profile                 | KEEP_SECONDARY             | still viable, but not better than the 60td balanced candidate          |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+```
+
+
+## Phase 16 Robustness Gate Finding
+
+```text
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| candidate                              | decision                   | evidence                                                               |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| 60td context-balanced score-down       | KEEP_RESEARCH_PRIMARY      | avg +0.1134%, 14/22 positive, tail -0.3206%, but median is 0            |
+| runtime integration                    | REJECT_NOW                 | benefit is modest and partly driven by a few replacement events         |
+| DB policy draft persistence            | DEFER                      | wait for true QE rerun or stronger breadth before writing policy rows   |
+| true QE rerun                          | DESIGN_NEXT                | next phase should define a traceable, research-only rerun path          |
 +----------------------------------------+----------------------------+------------------------------------------------------------------------+
 ```

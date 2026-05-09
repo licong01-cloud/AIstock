@@ -20,6 +20,7 @@
 | F012 | Phase-13 config can stay non-hard and schema-neutral | Store as draft policy/rule config later; do not change raw source tables. |
 | F013 | Additional loops weaken 20td default and favor more research | Keep 60td as primary test; run parameter sweep before runtime promotion. |
 | F014 | 22-loop parameter sweep favors 60td context-balanced score-down | Use as primary research candidate; keep fixed 10% only as baseline. |
+| F015 | Robustness gate rejects runtime and DB promotion for now | Median is zero and effect is replacement-sparse; design true QE rerun next. |
 +------+----------------------------------------------+--------------------------------------------------------------+
 ```
 
@@ -207,5 +208,19 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | fixed 10% is simpler but weaker        | keep as explanation baseline, not preferred policy shape       |
 | 20td variants are close but not best   | keep as comparison; do not restore as default                  |
 | 120td severity has non-zero value      | keep as secondary diagnostic branch                            |
++----------------------------------------+---------------------------------------------------------------+
+```
+
+
+## Phase 16 Robustness Gate Finding
+
+```text
++----------------------------------------+---------------------------------------------------------------+
+| finding                                | implication                                                   |
++----------------------------------------+---------------------------------------------------------------+
+| selected profile passes weak research gates | keep as primary research candidate only                    |
+| median effect is zero                  | do not persist or integrate until true QE rerun improves proof |
+| outlier dependence remains             | require broader experiment support before promotion            |
+| traceable rerun is justified           | next phase should design rerun trace and hook points           |
 +----------------------------------------+---------------------------------------------------------------+
 ```
