@@ -217,3 +217,15 @@ def test_db_transaction_check_rolls_back_and_never_commits(monkeypatch: pytest.M
     assert fake_conn.commit_count == 0
     assert fake_conn.rollback_count == 1
     assert fake_conn.close_count == 1
+
+
+def test_connect_wraps_driver_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    import psycopg2
+
+    def fail_connect(**_kwargs: object) -> object:
+        raise RuntimeError("connection unavailable")
+
+    monkeypatch.setattr(psycopg2, "connect", fail_connect)
+
+    with pytest.raises(smoke.GovernanceMigrationSmokeError, match="failed to connect to DB target"):
+        smoke._connect(smoke.DbTarget(host="localhost", port=5432, dbname="aistock_dev", user="postgres"))
