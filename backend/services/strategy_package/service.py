@@ -44,6 +44,7 @@ from .validation_run import (
     StrategyPackageValidationRun,
     build_package_validation_run,
 )
+from .validation_stability import PackageValidationStabilitySummary, summarize_validation_stability
 from .validators import StrategyPackageValidator
 
 
@@ -671,6 +672,16 @@ class StrategyPackageService:
             runtime_variant_id=runtime_variant_id,
             limit=limit,
         )
+
+    def summarize_validation_stability(
+        self,
+        package_id: str,
+        *,
+        metric_key: str = "annual_return",
+        limit: int = 500,
+    ) -> PackageValidationStabilitySummary:
+        runs = self.repository.list_validation_runs(package_id, limit=limit)
+        return summarize_validation_stability(package_id, runs, metric_key=metric_key)
 
     @staticmethod
     def _initial_model_state(record: StrategyPackageRecord) -> StrategyPackageModelState:

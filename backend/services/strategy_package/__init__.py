@@ -14,6 +14,7 @@ from .validation_run import (
     PackageValidationType,
     StrategyPackageValidationRun,
 )
+from .validation_stability import PackageValidationStabilitySummary, StabilityStatus
 from .seed_contract import (
     DerivedSeedContract,
     SeedContractError,
@@ -32,10 +33,12 @@ __all__ = [
     "PackageValidationReproducibility",
     "PackageValidationStatus",
     "PackageValidationType",
+    "PackageValidationStabilitySummary",
     "StrategyPackageManifest",
     "StrategyPackageRuntimeVariant",
     "StrategyPackageValidationRun",
     "StrategyPackageValidator",
+    "StabilityStatus",
     "build_master_seed_contract",
     "compute_manifest_sha256",
     "freeze_manifest",
