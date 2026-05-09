@@ -339,6 +339,7 @@ class StrategyPackageService:
             # so enabling the package for Paper v2 must not validate an obsolete
             # manifest-embedded V24/V25 runtime asset path.
             self.validator.validate_manifest_identity_for_paper_trading(record.current_manifest())
+            self._require_original_fixed_weight_retest_passed(record)
         return self.repository.transition_status(
             package_id=package_id,
             to_status=to_status,
@@ -682,6 +683,25 @@ class StrategyPackageService:
     ) -> PackageValidationStabilitySummary:
         runs = self.repository.list_validation_runs(package_id, limit=limit)
         return summarize_validation_stability(package_id, runs, metric_key=metric_key)
+
+    def _require_original_fixed_weight_retest_passed(self, record: StrategyPackageRecord) -> None:
+        runs = self.repository.list_validation_runs(
+            record.package_id,
+            validation_type=PackageValidationType.ORIGINAL_FIXED_WEIGHT,
+            limit=100,
+        )
+        for run in runs:
+            if run.manifest_sha256 == record.manifest_sha256 and run.status == PackageValidationStatus.PASSED:
+                return
+        raise StrategyPackageValidationError(
+            "original fixed-weight validation must pass before enabling Paper",
+            context={
+                "package_id": record.package_id,
+                "manifest_sha256": record.manifest_sha256,
+                "required_validation_type": PackageValidationType.ORIGINAL_FIXED_WEIGHT.value,
+                "required_status": PackageValidationStatus.PASSED.value,
+            },
+        )
 
     @staticmethod
     def _initial_model_state(record: StrategyPackageRecord) -> StrategyPackageModelState:

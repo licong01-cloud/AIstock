@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
@@ -8,10 +8,29 @@ from backend.services.strategy_package.model_state import ModelRetrainJobStatus,
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.service import StrategyPackageService
+from backend.services.strategy_package.validation_run import (
+    PackageValidationRetrainMode,
+    PackageValidationStatus,
+    PackageValidationType,
+)
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError, UnsupportedFeatureError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 import pytest
+
+
+def _record_passed_original_retest(service: StrategyPackageService, package_id: str) -> None:
+    service.create_validation_run(
+        package_id,
+        validation_type=PackageValidationType.ORIGINAL_FIXED_WEIGHT,
+        retrain_mode=PackageValidationRetrainMode.NO_RETRAIN,
+        status=PackageValidationStatus.PASSED,
+        metrics_json={"annual_return": 0.12, "max_drawdown": -0.08},
+        artifact_manifest_json={"artifact_sha256": "sha256:unit-test-original-retest"},
+        evidence_json={"commands": ["pytest synthetic original retest"], "mode": "A"},
+        completed_at=datetime.now(timezone.utc),
+        created_by="unit_test",
+    )
 
 
 def test_strategy_package_repository_persists_frozen_manifest_and_status_flow() -> None:
@@ -21,6 +40,7 @@ def test_strategy_package_repository_persists_frozen_manifest_and_status_flow() 
 
     service = StrategyPackageService(repository=repo)
     selected = service.enable_selection(saved.package_id)
+    _record_passed_original_retest(service, saved.package_id)
     paper = service.enable_paper(saved.package_id)
     repo.mark_paper_portfolio_created(saved.package_id, "paper_1")
 
@@ -42,10 +62,23 @@ def test_enable_paper_does_not_validate_manifest_minute_runtime_asset() -> None:
         make_manifest(algo_code="V24_PLAN").model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
     )
     repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+    _record_passed_original_retest(service, manifest.package_id)
 
-    paper = StrategyPackageService(repository=repo).enable_paper(manifest.package_id)
+    paper = service.enable_paper(manifest.package_id)
 
     assert paper.package_status == PackageStatus.PAPER_ENABLED
+
+
+def test_enable_paper_requires_passed_original_fixed_weight_retest() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    repo.save_manifest(manifest)
+
+    with pytest.raises(StrategyPackageValidationError, match="original fixed-weight validation"):
+        StrategyPackageService(repository=repo).enable_paper(manifest.package_id)
 
 
 def test_strategy_package_repository_rejects_silent_manifest_replacement() -> None:
