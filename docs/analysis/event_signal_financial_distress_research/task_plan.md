@@ -33,6 +33,7 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 8     | market-cap bucket report for every signal| complete | market_cap_bucket_qe_overlay_result                         |
 | 9     | medium/large-cap event families          | complete | mid_large_qe_overlay_result_20260509                        |
 | 10    | size/loss-history/decay refinements      | complete | refinement_qe_overlay_result_20260509                       |
+| 18    | copied-loop true QE smoke rerun          | complete | true_qe_rerun_smoke_result_20260509                         |
 +-------+------------------------------------------+----------+-------------------------------------------------------------+
 ```
 
@@ -64,8 +65,9 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 15    | non-hard parameter sweep across loop sets       | complete   | 22-loop sweep shows 60td context-balanced as best shape      |
 | 16    | robustness gate / persistence decision          | complete   | keep research-only; reject runtime and DB promotion for now  |
 | 17    | true QE rerun design / dry-run harness          | complete   | pred-backtest materializer path designed and unit-tested      |
-| 18    | copied-loop true QE smoke rerun                 | pending    | rerun one loop baseline/adjusted pred in copied workspace     |
-| 19    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
+| 18    | copied-loop true QE smoke rerun                 | complete   | technical path passes; full-universe PnL blocked by memory   |
+| 19    | memory-safe true QE rerun feasibility           | pending    | require baseline parity before any multi-loop batch           |
+| 20    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -185,5 +187,20 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | prediction-date mapping                | REQUIRED                   | Qlib trades date T from prediction date T-1 in current generated config |
 | runtime integration                    | STILL_REJECT               | harness is for copied-loop research only; no production QE code change  |
 | next empirical step                    | RUN_ONE_LOOP_SMOKE         | compare baseline rerun vs adjusted-pred rerun before 22-loop batch      |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+```
+
+## Phase 18 Copied-Loop Smoke Finding
+
+```text
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| candidate                              | decision                   | evidence                                                               |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| copied-loop pred-backtest path          | VALIDATED                  | adjusted pred.pkl completed SigAnaRecord + PortAnaRecord               |
+| full-universe true rerun                | FAIL_CURRENT_MACHINE       | copied full-universe attempts reproduced MemoryError                   |
+| narrowed-universe PnL comparison        | REJECT_AS_EVIDENCE         | quote universe mismatch makes return/drawdown non-comparable           |
+| indicator_large_decline_mv_10_30bn      | KEEP_RESEARCH_ONLY         | materializer works, but no valid PnL proof yet                         |
+| immediate runtime promotion             | REJECT                     | Phase 18 is a technical smoke, not a deployment gate                   |
+| next empirical step                     | FEASIBILITY_REDESIGN       | solve memory-safe or parity-controlled true rerun before batch         |
 +----------------------------------------+----------------------------+------------------------------------------------------------------------+
 ```

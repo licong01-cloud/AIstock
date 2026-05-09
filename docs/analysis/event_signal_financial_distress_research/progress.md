@@ -296,3 +296,51 @@ Phase 17 errors and resolutions:
 | PowerShell rejected python heredoc syntax| bash-style python - <<'PY' is unsupported    | used PowerShell here-string piped to python  |
 +------------------------------------------+----------------------------------------------+----------------------------------------------+
 ```
+
+## 2026-05-09 Phase 18 Completion
+
+```text
++----------------------+---------------------------------------+-------------------------------------------------+
+| time                 | action                                | result                                          |
++----------------------+---------------------------------------+-------------------------------------------------+
+| 2026-05-09 evening   | patched copied workspace paths        | WSL Qlib/provider and V25 model paths usable    |
+| 2026-05-09 evening   | fixed copied conf BOM                 | qlib_init parsed correctly                      |
+| 2026-05-09 evening   | ran adjusted pred-backtest smoke      | SigAnaRecord + PortAnaRecord completed          |
+| 2026-05-09 evening   | attempted full-universe true rerun    | MemoryError reproduced on copied workspaces     |
+| 2026-05-09 evening   | reviewed narrowed-universe metrics    | technical smoke only; PnL evidence rejected     |
++----------------------+---------------------------------------+-------------------------------------------------+
+```
+
+Latest curated report: `docs/analysis/event_signal_financial_distress_true_qe_rerun_smoke_result_20260509.md`.
+Latest validation record: `tests/aistock_validation/history/local_data_management/20260509_l2_financial-distress-true-qe-rerun-smoke-validation.md`.
+
+Phase 18 validation:
+
+```powershell
+C:\Users\lc999\miniconda3\envs\AIstock\python.exe qrun_limit_minute.py conf.yaml --pred-backtest event_signal_pred_backtest\adjusted_pred.pkl
+```
+
+```text
++--------------------------------------+--------------------------------------------------------------+
+| check                                | result                                                       |
++--------------------------------------+--------------------------------------------------------------+
+| copied conf parse                    | pass: qlib_init key loaded after BOM cleanup                |
+| adjusted pred-backtest               | pass: completed in narrowed copied workspace                 |
+| full-universe copied rerun           | fail-current-machine: MemoryError                            |
+| narrowed-universe PnL metrics        | rejected as non-comparable evidence                          |
+| runtime promotion                    | rejected; technical smoke only                               |
+| production backend 8001              | not touched                                                  |
++--------------------------------------+--------------------------------------------------------------+
+```
+
+Phase 18 errors and resolutions:
+
+```text
++------------------------------------------+----------------------------------------------+----------------------------------------------+
+| error                                    | cause                                        | resolution                                   |
++------------------------------------------+----------------------------------------------+----------------------------------------------+
+| MemoryError on full universe             | copied exchange creation too large           | recorded blocker; do not infer PnL from narrowed runs |
+| V25 model path not found                 | copied config had Linux /home paths          | changed copied workspace to WSL UNC paths    |
+| qlib_init parsed as missing              | conf.yaml had UTF-8 BOM after rewrite        | rewrote copied conf.yaml without BOM         |
++------------------------------------------+----------------------------------------------+----------------------------------------------+
+```

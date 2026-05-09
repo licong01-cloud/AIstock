@@ -239,3 +239,16 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | score-weighted sizing remains approximate   | require copied-loop baseline parity before interpreting alpha   |
 +---------------------------------------------+---------------------------------------------------------------+
 ```
+
+## Phase 18 Copied-Loop Smoke Finding
+
+```text
++---------------------------------------------+---------------------------------------------------------------+
+| finding                                     | implication                                                   |
++---------------------------------------------+---------------------------------------------------------------+
+| copied-loop pred-backtest completes         | the true QE rerun harness is operational as a technical path   |
+| full-universe copied rerun hits MemoryError | current Windows copied-loop path cannot validate full PnL      |
+| narrowed-universe metrics are non-comparable| do not infer alpha/risk value from completed smoke metrics     |
+| signal promotion remains blocked            | require memory-safe or parity-controlled rerun before runtime  |
++---------------------------------------------+---------------------------------------------------------------+
+```
