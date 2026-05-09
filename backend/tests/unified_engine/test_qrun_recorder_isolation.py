@@ -87,6 +87,35 @@ def test_backtest_only_target_mlruns_rejects_symlink(tmp_path, monkeypatch):
         runner._prepare_backtest_recorder_isolation("exp")
 
 
+def test_backtest_only_implicit_source_symlink_is_relocated(tmp_path, monkeypatch):
+    runner = _load_runner(monkeypatch)
+    source = tmp_path / "source"
+    params_path = _write_params(source)
+    target = tmp_path / "mlruns"
+    try:
+        target.symlink_to(source, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink unavailable on this platform: {exc}")
+
+    monkeypatch.chdir(tmp_path)
+    payload = runner._prepare_backtest_recorder_isolation(
+        "exp",
+        {"source_task_id": "qe_src", "source_loop": "Loop1", "target_loop_id": "Loop5"},
+    )
+
+    relocated = tmp_path / "source_model" / "mlruns"
+    assert relocated.is_symlink()
+    assert relocated.resolve() == source.resolve()
+    assert params_path.exists()
+    assert not target.is_symlink()
+    assert target.is_dir()
+    assert payload["source_params_dir_realpath"] == str(source.resolve())
+    assert payload["source_mlruns_realpath"] == str(source.resolve())
+    assert payload["target_mlruns_realpath"] == str(target.resolve())
+    assert os.environ[runner.SOURCE_PARAMS_ENV] == str(source.resolve())
+    assert os.environ["MLFLOW_TRACKING_URI"] == str(target.resolve())
+
+
 def test_backtest_only_rejects_same_source_target_realpath(tmp_path, monkeypatch):
     runner = _load_runner(monkeypatch)
     target = tmp_path / "mlruns"
