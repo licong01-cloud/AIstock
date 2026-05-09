@@ -68,6 +68,7 @@ nul
 !package.json
 !package-lock.json
 !tsconfig.json
+!.eslintrc.json
 
 # Backup and temp directories
 git_ignore_folder/
