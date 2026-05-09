@@ -19,7 +19,7 @@ This checkpoint preserves the current Codex-side AIstock QE governance progress 
 - Main branch status at checkpoint: `main...origin/main`; not touched by Codex governance work.
 - Governance integration worktree: `F:\Dev\AIstock_worktrees\qe-governance-integration-20260509`
 - Governance integration branch: `codex/qe-governance-integration-20260509`
-- Latest integration commit before this checkpoint update: `f709c2f Revert "merge(qe): governance dev backend startup fix"`
+- Latest integration code commit before this checkpoint-doc update: `64e90b9 merge(qe): production readonly governance preflight`
 
 RD-Agent follow-up:
 
@@ -80,21 +80,27 @@ All items below are merged only into `codex/qe-governance-integration-20260509` 
    - StrategyPackage API smoke integration merge: `056a18a merge(qe): strategy package governance readonly smoke`
    - DB error hardening feature commit: `069ae8b test(qe): harden governance migration DB smoke errors`
    - DB error hardening integration merge: `5a92ba7 merge(qe): harden governance smoke errors`
+   - Production-readonly preflight feature commit: `83a569f test(qe): add production readonly governance preflight`
+   - Production-readonly preflight integration merge: `64e90b9 merge(qe): production readonly governance preflight`
    - Added `scripts/governance_migration_smoke.py` for static dry-run validation of the full six-file governance migration stack, with guarded opt-in dev DB transaction mode.
    - Added `scripts/strategy_package_governance_readonly_smoke.py` for GET-only StrategyPackage governance API smoke checks that refuse production port `8001` by default.
    - Hardened DB smoke connection failures so missing local dev DB credentials return structured failure JSON instead of an uncaught traceback.
+   - Added guarded `--production-readonly-preflight` mode to `scripts/governance_migration_smoke.py`; it requires `AISTOCK_QE_GOVERNANCE_PROD_READONLY_PREFLIGHT=true` plus confirmation token `QE_GOVERNANCE_PROD_READONLY_PREFLIGHT`, uses SELECT-only catalog introspection, and reports whether production catalog objects/columns/indexes/constraints are missing without DDL or writes.
 
 ## Latest Verified Gates
 
-The latest integration gates after governance smoke hardening:
+The latest integration gates after production-readonly preflight merge:
 
 - `python scripts/governance_migration_smoke.py` - `status=passed mode=static_dry_run`.
-- `python -m pytest backend/tests/model_registry/test_governance_migration_smoke.py backend/tests/strategy_package/test_governance_readonly_smoke.py -q -p no:cacheprovider` - `17 passed`.
-- `python -m py_compile scripts/governance_migration_smoke.py scripts/strategy_package_governance_readonly_smoke.py backend/tests/model_registry/test_governance_migration_smoke.py backend/tests/strategy_package/test_governance_readonly_smoke.py` - passed.
+- `python -m pytest backend/tests/model_registry/test_governance_migration_smoke.py backend/tests/strategy_package/test_governance_readonly_smoke.py -q -p no:cacheprovider` - `23 passed`.
+- `python -m py_compile scripts/governance_migration_smoke.py backend/tests/model_registry/test_governance_migration_smoke.py` - passed.
+- `python scripts/aistock_guardrail_scan.py --fail-on-severity P1 scripts/governance_migration_smoke.py backend/tests/model_registry/test_governance_migration_smoke.py` - `files=2, findings=0, blocking=0`.
+- `git diff --check` - passed.
+
+Previous broader integration gates before the production-readonly preflight merge:
+
 - `python -m pytest backend/tests/strategy_package -q -p no:cacheprovider` - `93 passed`.
 - `python -m pytest backend/tests/model_registry/test_model_registry_migration_smoke.py backend/tests/model_registry/test_governance_migration_smoke.py -q -p no:cacheprovider` - `20 passed`.
-- `python scripts/aistock_guardrail_scan.py --fail-on-severity P1 scripts/governance_migration_smoke.py scripts/strategy_package_governance_readonly_smoke.py backend/tests/model_registry/test_governance_migration_smoke.py backend/tests/strategy_package/test_governance_readonly_smoke.py` - `files=4, findings=0, blocking=0`.
-- `git diff --check` - passed.
 
 Previous integration gates after Phase 2 asset ledger:
 
@@ -111,7 +117,10 @@ Previous integration gates also passed for Phase 6.1, Phase 7 validation runs, P
 
 - No production DB writes were performed.
 - No migrations were applied to any DB during this checkpointed governance work.
-- Full governance migration static smoke now exists and passes without opening a DB connection.
+- Production-readonly preflight mode now exists for environments where a dev/test DB is unavailable; it is guarded by env + confirmation token and performs SELECT-only catalog inspection.
+- The preflight reports base dependencies plus missing governance tables, views, columns, indexes, and named constraints; it does not apply migrations or run DDL/write SQL.
+- A local guarded preflight sanity check with confirm/env but no DB password failed at connection to `postgres@127.0.0.1:5432/aistock` with `fe_sendauth: no password supplied`; no catalog SQL executed and no DB writes occurred.
+- Full governance migration static smoke still exists and passes without opening a DB connection.
 - Guarded full governance dev/test DB transaction smoke was attempted against `postgres@127.0.0.1:5432/aistock_dev` with `AISTOCK_QE_GOVERNANCE_MIGRATION_DEV_DB=true` and confirmation token.
   - Result: failed before applying migrations because local PostgreSQL credentials were unavailable: `fe_sendauth: no password supplied`.
   - After hardening, this failure is reported as structured JSON instead of an uncaught traceback.
@@ -132,7 +141,7 @@ DB production risk summary:
 
 - The governance migrations are mostly additive schema changes, but applying them directly to production is not zero-risk.
 - Risk sources include `ALTER TABLE strategy_pkg.package`, new constraints/indexes, view dependencies on `public.aistock_model_catalog`, and possible short locks.
-- Recommended next DB step is dev DB / test DB migration smoke before any production DB schema rollout.
+- Recommended next DB step is either a guarded SELECT-only production-readonly preflight when no dev/test DB is available, or a dev/test DB transaction smoke if a real dev/test DB can be provided. Neither path authorizes production DDL/write rollout.
 
 ## Important Behavioral Boundary
 
@@ -162,23 +171,27 @@ Codex changes that can affect Paper-adjacent behavior:
 2. Run:
    - `git status --short --branch`
    - `git log --oneline -12`
-3. Confirm integration branch is still clean and at or after `f709c2f`.
+3. Confirm integration branch is still clean and at or after `64e90b9`.
 4. Do not merge to `main`.
 5. If continuing governance, first run static governance migration smoke:
    - `python scripts\governance_migration_smoke.py`
-6. Provide/use an explicit dev/test DB target with credentials, then run guarded transaction migration smoke:
+6. If no dev/test DB is available, run only the guarded production-readonly catalog preflight against the target DB; this is SELECT-only and must not be confused with migration apply:
+   - `$env:AISTOCK_QE_GOVERNANCE_PROD_READONLY_PREFLIGHT='true'`
+   - `python scripts\governance_migration_smoke.py --production-readonly-preflight --confirm-production-readonly-preflight QE_GOVERNANCE_PROD_READONLY_PREFLIGHT --db-host <host> --db-port <port> --db-name <db> --db-user <user> --json`
+   - Inspect `checks.production_preflight.apply_needed`, `missing_base_dependencies`, and per-spec missing objects before any rollout decision.
+7. If a real dev/test DB later becomes available, run guarded transaction migration smoke there instead of production:
    - `AISTOCK_QE_GOVERNANCE_MIGRATION_DEV_DB=true`
    - `python scripts\governance_migration_smoke.py --db-transaction-check --confirm-db-check QE_GOVERNANCE_FULL_STACK_DEV_ROLLBACK_CHECK --db-host 127.0.0.1 --db-port 5432 --db-name aistock_dev --db-user postgres --json`
    - The dev/test DB must already contain `strategy_pkg.package` and `public.aistock_model_catalog`.
-7. The transaction smoke covers:
+8. Both DB preflight paths cover:
    - `model_registry_phase5_20260509.sql`
    - `strategy_pkg_promotion_review_20260509.sql`
    - `qe_phase4_master_seed_contract_20260509.sql`
    - `strategy_pkg_runtime_variant_20260509.sql`
    - `strategy_pkg_validation_run_20260509.sql`
    - `strategy_pkg_package_asset_20260509.sql`
-8. Before real dev-port smoke, resolve or explicitly accept the `backend.services.rl_execution` startup blocker in `backend.main` without violating guardrails.
-9. Then run dev-port smoke on a real governance-enabled dev backend/frontend, not production `8001`:
+9. Before real dev-port smoke, resolve or explicitly accept the `backend.services.rl_execution` startup blocker in `backend.main` without violating guardrails.
+10. Then run dev-port smoke on a real governance-enabled dev backend/frontend, not production `8001`:
    - Validation Center: `scripts\validation_center_readonly_smoke.py`
    - StrategyPackage governance: `scripts\strategy_package_governance_readonly_smoke.py`
-10. Coordinate with Claude Code before touching Paper v2 / vn.py / trading_core files.
+11. Coordinate with Claude Code before touching Paper v2 / vn.py / trading_core files.
