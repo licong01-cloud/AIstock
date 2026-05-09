@@ -799,10 +799,10 @@ class StrategyPackageRepository:
         *,
         validation_type: PackageValidationType | None = None,
         runtime_variant_id: str | None = None,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> list[StrategyPackageValidationRun]:
         self.get(package_id)
-        if limit <= 0:
+        if limit is not None and limit <= 0:
             raise StrategyPackageValidationError("limit must be positive")
         where = ["package_id = %s"]
         params: list[Any] = [package_id]
@@ -812,19 +812,18 @@ class StrategyPackageRepository:
         if runtime_variant_id is not None:
             where.append("runtime_variant_id = %s")
             params.append(runtime_variant_id)
-        params.append(limit)
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    f"""
+                sql = f"""
                     SELECT *
                     FROM strategy_pkg.package_validation_run
                     WHERE {' AND '.join(where)}
                     ORDER BY created_at DESC, validation_run_id DESC
-                    LIMIT %s
-                    """,
-                    tuple(params),
-                )
+                """
+                if limit is not None:
+                    sql += " LIMIT %s"
+                    params.append(limit)
+                cur.execute(sql, tuple(params))
                 rows = cur.fetchall()
         return [self._validation_run_from_row(dict(row)) for row in rows]
 
@@ -1273,15 +1272,19 @@ class InMemoryStrategyPackageRepository:
         *,
         validation_type: PackageValidationType | None = None,
         runtime_variant_id: str | None = None,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> list[StrategyPackageValidationRun]:
         self.get(package_id)
+        if limit is not None and limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
         rows = [run for run in self.validation_runs.values() if run.package_id == package_id]
         if validation_type is not None:
             rows = [run for run in rows if run.validation_type == validation_type]
         if runtime_variant_id is not None:
             rows = [run for run in rows if run.runtime_variant_id == runtime_variant_id]
-        rows.sort(key=lambda item: item.created_at, reverse=True)
+        rows.sort(key=lambda item: (item.created_at, item.validation_run_id), reverse=True)
+        if limit is None:
+            return rows
         return rows[:limit]
 
 
