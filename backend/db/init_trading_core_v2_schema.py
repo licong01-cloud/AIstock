@@ -513,7 +513,11 @@ DDL: list[str] = [
         trade_time TIMESTAMPTZ NOT NULL,
         bar_time TIMESTAMPTZ,
         reason TEXT NOT NULL,
-        metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        intended_price NUMERIC(18, 4),
+        fill_market_context JSONB
     )
     """,
     """
@@ -545,6 +549,8 @@ DDL: list[str] = [
         market_price DOUBLE PRECISION NOT NULL,
         market_value DOUBLE PRECISION NOT NULL,
         metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(run_id, symbol)
     )
     """,
@@ -560,6 +566,8 @@ DDL: list[str] = [
         position_count INTEGER NOT NULL,
         snapshot_time TIMESTAMPTZ NOT NULL,
         metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(portfolio_id, trade_date)
     )
     """,

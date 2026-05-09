@@ -1446,15 +1446,33 @@ class PaperTradingV2Repository:
         )
         return [self._order_from_row(row) for row in rows]
 
-    def save_fill(self, run_id: str, fill: Fill) -> None:
+    def save_fill(
+        self,
+        run_id: str,
+        fill: Fill,
+        *,
+        intended_price: float | None = None,
+        fill_market_context: dict[str, Any] | None = None,
+    ) -> None:
+        # T5 capture fields for DW ETL: intended_price + fill_market_context
+        # are NULLable. Default None means the call site has not yet wired
+        # the source values from order_execution_state.algo_state_json.
+        # TODO(T6.1): wire intended_price + market context from algo_state_json
+        # once the execution path threads them through to the fill emit step.
+        # created_at / updated_at are passed explicitly via now() so the
+        # InMemoryPaperTradingV2Repository fallback (which does not have
+        # DEFAULT NOW()) sees the same value the PG path writes.
+        now = datetime.now(UTC)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO paper_v2.fills (
                         fill_id, run_id, order_id, symbol, side, quantity, price,
-                        trade_time, bar_time, reason, metadata
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        trade_time, bar_time, reason, metadata,
+                        created_at, updated_at, intended_price, fill_market_context
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                              %s, %s, %s, %s)
                     ON CONFLICT(fill_id) DO NOTHING
                     """,
                     (
@@ -1469,6 +1487,10 @@ class PaperTradingV2Repository:
                         fill.bar_time,
                         fill.reason,
                         psycopg2.extras.Json(fill.metadata),
+                        now,
+                        now,
+                        intended_price,
+                        psycopg2.extras.Json(fill_market_context) if fill_market_context is not None else None,
                     ),
                 )
 
@@ -1555,6 +1577,9 @@ class PaperTradingV2Repository:
                 )
 
     def save_positions(self, *, run_id: str, trade_date: date, positions: list[PositionLot], prices: dict[str, float]) -> None:
+        # T5: created_at / updated_at watermark fields for DW ETL. Passed
+        # explicitly via now() so InMemory parity is preserved.
+        now = datetime.now(UTC)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM paper_v2.positions WHERE run_id = %s", (run_id,))
@@ -1564,8 +1589,9 @@ class PaperTradingV2Repository:
                         """
                         INSERT INTO paper_v2.positions (
                             run_id, portfolio_id, trade_date, symbol, quantity,
-                            available_quantity, avg_cost, market_price, market_value, metadata
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            available_quantity, avg_cost, market_price, market_value, metadata,
+                            created_at, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             run_id,
@@ -1578,19 +1604,26 @@ class PaperTradingV2Repository:
                             price,
                             position.quantity * price,
                             psycopg2.extras.Json({"position_trade_date": position.trade_date.isoformat()}),
+                            now,
+                            now,
                         ),
                     )
 
     def save_daily_snapshot(self, *, run_id: str, trade_date: date, snapshot: AccountSnapshot, metadata: dict[str, Any] | None = None) -> None:
         metadata = metadata or {}
+        # T5: created_at / updated_at watermark fields for DW ETL. updated_at
+        # is bumped on every upsert (ON CONFLICT path); created_at is set on
+        # INSERT only and preserved on conflict.
+        now = datetime.now(UTC)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO paper_v2.daily_snapshots (
                         run_id, portfolio_id, trade_date, cash, market_value, nav,
-                        position_count, snapshot_time, metadata
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        position_count, snapshot_time, metadata,
+                        created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT(portfolio_id, trade_date) DO UPDATE SET
                         run_id = EXCLUDED.run_id,
                         cash = EXCLUDED.cash,
@@ -1598,7 +1631,8 @@ class PaperTradingV2Repository:
                         nav = EXCLUDED.nav,
                         position_count = EXCLUDED.position_count,
                         snapshot_time = EXCLUDED.snapshot_time,
-                        metadata = EXCLUDED.metadata
+                        metadata = EXCLUDED.metadata,
+                        updated_at = EXCLUDED.updated_at
                     """,
                     (
                         run_id,
@@ -1610,6 +1644,8 @@ class PaperTradingV2Repository:
                         int(metadata.get("position_count") or 0),
                         snapshot.snapshot_time,
                         psycopg2.extras.Json(metadata),
+                        now,
+                        now,
                     ),
                 )
 
@@ -2058,10 +2094,21 @@ class InMemoryPaperTradingV2Repository:
         self.runs: dict[str, PaperRun] = {}
         self.orders: dict[str, list[Order]] = {}
         self.fills: dict[str, list[Fill]] = {}
+        # T5 side-channel for DW ETL capture fields. Indexed by fill_id so
+        # the underlying Fill model (in trading_core, outside D1 boundary)
+        # does not need to grow new fields. Keys: created_at, updated_at,
+        # intended_price, fill_market_context.
+        self.fill_capture: dict[str, dict[str, Any]] = {}
         self.events: dict[str, list[OrderEvent]] = {}
         self.cash_entries: dict[str, list[CashLedgerEntry]] = {}
         self.positions: dict[str, list[PositionLot]] = {}
+        # T5 side-channel for positions watermarks. Indexed by run_id since
+        # save_positions overwrites all rows for a run.
+        self.position_capture: dict[str, dict[str, datetime]] = {}
         self.snapshots: dict[str, AccountSnapshot] = {}
+        # T5 side-channel for daily_snapshots watermarks. Keyed by
+        # (portfolio_id, trade_date) to preserve created_at on upsert.
+        self.snapshot_capture: dict[tuple[str, date], dict[str, datetime]] = {}
         self.errors: list[dict[str, Any]] = []
         self.run_events: list[dict[str, Any]] = []
         self.reset_audits: list[dict[str, Any]] = []
@@ -2670,10 +2717,28 @@ class InMemoryPaperTradingV2Repository:
     def list_orders_for_run(self, run_id: str) -> list[Order]:
         return list(self.orders.get(run_id, []))
 
-    def save_fill(self, run_id: str, fill: Fill) -> None:
+    def save_fill(
+        self,
+        run_id: str,
+        fill: Fill,
+        *,
+        intended_price: float | None = None,
+        fill_market_context: dict[str, Any] | None = None,
+    ) -> None:
         existing = self.fills.setdefault(run_id, [])
         if not any(item.fill_id == fill.fill_id for item in existing):
             existing.append(fill)
+            # T5 capture fields: only set on first INSERT (mirrors
+            # ON CONFLICT(fill_id) DO NOTHING semantics on the PG path).
+            now = datetime.now(UTC)
+            self.fill_capture[fill.fill_id] = {
+                "created_at": now,
+                "updated_at": now,
+                "intended_price": intended_price,
+                "fill_market_context": (
+                    dict(fill_market_context) if fill_market_context is not None else None
+                ),
+            }
 
     def list_fills_for_run(self, run_id: str) -> list[dict[str, Any]]:
         return [fill.model_dump(mode="json") for fill in self.fills.get(run_id, [])]
@@ -2715,9 +2780,24 @@ class InMemoryPaperTradingV2Repository:
 
     def save_positions(self, *, run_id: str, trade_date: date, positions: list[PositionLot], prices: dict[str, float]) -> None:
         self.positions[run_id] = positions
+        # T5 watermark: save_positions deletes-and-inserts at the PG level
+        # (DELETE ... WHERE run_id = %s, then INSERT each row), so both
+        # created_at and updated_at advance to now() on every call.
+        now = datetime.now(UTC)
+        self.position_capture[run_id] = {"created_at": now, "updated_at": now}
 
     def save_daily_snapshot(self, *, run_id: str, trade_date: date, snapshot: AccountSnapshot, metadata: dict[str, Any] | None = None) -> None:
         self.snapshots[run_id] = snapshot
+        # T5 watermark: PG path is upsert keyed by (portfolio_id, trade_date),
+        # preserving created_at on conflict and bumping updated_at. Mirror
+        # that here so tests can verify updated_at moves but created_at does not.
+        now = datetime.now(UTC)
+        cap_key = (snapshot.portfolio_id, trade_date)
+        existing = self.snapshot_capture.get(cap_key)
+        if existing is None:
+            self.snapshot_capture[cap_key] = {"created_at": now, "updated_at": now}
+        else:
+            existing["updated_at"] = now
 
     def save_run_event(self, *, run_id: str, event_type: str, message: str, context: dict[str, Any] | None = None) -> None:
         self.run_events.append({"run_id": run_id, "event_type": event_type, "message": message, "context": context or {}})
