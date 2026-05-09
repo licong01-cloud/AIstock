@@ -160,3 +160,33 @@ Latest validation record: `tests/aistock_validation/history/local_data_managemen
 
 Latest curated report: `docs/analysis/event_signal_financial_distress_policy_config_proposal_20260509.md`.
 Latest validation record: `tests/aistock_validation/history/local_data_management/20260509_l2_financial-distress-policy-config-proposal-validation.md`.
+
+
+## 2026-05-09 Phase 14 Completion
+
+```text
++----------------------+---------------------------------------+-------------------------------------------------+
+| time                 | action                                | result                                          |
++----------------------+---------------------------------------+-------------------------------------------------+
+| 2026-05-09 afternoon | selected additional QE artifacts      | 12 loops across 3 experiments                   |
+| 2026-05-09 afternoon | ran exact Phase-13 config validation  | 48 validations completed                        |
+| 2026-05-09 afternoon | compared 20td and 60td windows        | 60td weakly better; 20td downgraded to test     |
+| 2026-05-09 afternoon | preserved runtime boundary            | no QE/Paper/Selection/QMT integration           |
++----------------------+---------------------------------------+-------------------------------------------------+
+```
+
+Latest curated report: `docs/analysis/event_signal_financial_distress_additional_qe_policy_config_validation_20260509.md`.
+Latest validation record: `tests/aistock_validation/history/local_data_management/20260509_l2_financial-distress-additional-qe-policy-config-validation.md`.
+
+Phase 14 errors and resolutions:
+
+```text
++------------------------------------------+----------------------------------------------+----------------------------------------------+
+| error                                    | cause                                        | resolution                                   |
++------------------------------------------+----------------------------------------------+----------------------------------------------+
+| missing artifact in Loop1                | qe_20260429_015755_c4ba:Loop1 lacks pkl files| replaced with Loop5 after artifact check     |
+| unknown rule_key values                  | refinement and size-bucket flags omitted     | reran with include-size/refinement flags      |
+| no DB password supplied                  | worktree has no .env                         | loaded TDX_DB_* from root .env for process    |
+| quoted DB port                           | raw .env quotes were not stripped            | stripped surrounding quotes before rerun      |
++------------------------------------------+----------------------------------------------+----------------------------------------------+
+```

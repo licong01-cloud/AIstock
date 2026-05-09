@@ -18,6 +18,7 @@
 | F010 | Context overlay improves policy shape more than raw return | Prefer it for runtime-shaped design, not because it beats every benchmark. |
 | F011 | Sector relief is not yet a decision driver | Keep compatibility for plate rotation, but do not select rules by sector relief. |
 | F012 | Phase-13 config can stay non-hard and schema-neutral | Store as draft policy/rule config later; do not change raw source tables. |
+| F013 | Additional loops weaken 20td default and favor more research | Keep 60td as primary test; run parameter sweep before runtime promotion. |
 +------+----------------------------------------------+--------------------------------------------------------------+
 ```
 
@@ -177,5 +178,19 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | score-down depends on candidate rank   | treat as post-alpha rerank overlay, not a daily factor          |
 | existing policy schema is enough now   | no schema change or raw table modification in Phase 13          |
 | true consumer audit remains future work| final rerank trace should be persisted when runtime is added    |
++----------------------------------------+---------------------------------------------------------------+
+```
+
+
+## Phase 14 Additional QE Validation Finding
+
+```text
++----------------------------------------+---------------------------------------------------------------+
+| finding                                | implication                                                   |
++----------------------------------------+---------------------------------------------------------------+
+| extra loops do not confirm 20td default| keep 20td as a comparison row, not the preferred default       |
+| 60td is better but still weak          | continue research; do not persist or integrate runtime yet     |
+| effect size is limited by few drops    | test stronger but still non-hard rank demotion profiles        |
+| smallcap benchmark has too few hits    | this extra loop set is not a strong benchmark sample           |
 +----------------------------------------+---------------------------------------------------------------+
 ```

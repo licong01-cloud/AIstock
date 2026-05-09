@@ -60,8 +60,9 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 11    | sector-regime attribution + direct event study | complete   | direct raw/abnormal returns + sector attribution validated   |
 | 12    | context-aware overlay rule research             | complete   | rank/severity/decay context profiles tested on 10 QE loops   |
 | 13    | proposed non-hard signal-policy config          | complete   | config proposal documented; no runtime integration           |
-| 14    | additional QE experiment validation             | pending    | validate exact Phase-13 config beyond the current 10 loops   |
-| 15    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
+| 14    | additional QE experiment validation             | complete   | 12 extra loops tested; 60td weakly better than 20td          |
+| 15    | non-hard parameter sweep across loop sets       | pending    | compare 20/60/120td and moderate score-down strengths        |
+| 16    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -125,5 +126,19 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | financial distress hard action         | REJECT_CURRENT_STAGE       | direct event study is mixed; no hard buy ban or forced sell            |
 | event_signal_policy_* existing schema  | SUFFICIENT_FOR_DRAFT       | profile/rule/state/overlay tables can carry config without raw changes |
 | final candidate rerank audit           | FUTURE_TRACE_REQUIREMENT   | rank penalty is candidate-list dependent, so audit belongs at consumer  |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+```
+
+
+## Phase 14 Additional QE Validation Finding
+
+```text
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| candidate                              | decision                   | evidence                                                               |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| indicator_large_decline_mv_10_30bn 20td| DOWNGRADE_TO_TEST          | extra 12 loops average -0.01%, even though positive count is 8/12       |
+| indicator_large_decline_mv_10_30bn 60td| KEEP_AS_PRIMARY_TEST       | extra 12 loops average +0.04%, positive count 8/12, tail -0.32%         |
+| immediate runtime promotion            | DEFER                      | combined evidence is not stable enough and still artifact-level         |
+| next research                          | PARAMETER_SWEEP            | test active windows and moderate penalties on both loop sets            |
 +----------------------------------------+----------------------------+------------------------------------------------------------------------+
 ```
