@@ -17,6 +17,9 @@ type SotaRow = {
   created_at?: string;
   promotion_state?: "LEGACY_REGISTRY" | "AUTO_CANDIDATE" | string;
   approved_sota?: boolean;
+  review_id?: string | null;
+  review_requested_by?: string | null;
+  review_created_at?: string | null;
   // Metrics - either from top-level (leaderboard) or metrics_json (legacy)
   ic?: number | null;
   sharpe?: number | null;
@@ -58,24 +61,16 @@ export default function EvolutionSotaPage() {
     setLoading(true);
     setError(null);
     try {
-      // Try leaderboard API first (enhanced), fallback to legacy
-      const lbRes = await fetch(`${API}/quantevolver/evolution/leaderboard`).catch(() => null);
-      const lbData = lbRes ? await lbRes.json().catch(() => null) : null;
-      if (lbData?.status === "success" && lbData?.data) {
-        setLeaderboardSummary(lbData.data.summary || null);
-        if (Array.isArray(lbData.data.leaderboard) && lbData.data.leaderboard.length > 0) {
-          setItems(lbData.data.leaderboard);
-          setLoading(false);
-          return;
-        }
+      const lbRes = await fetch(`${API}/quantevolver/evolution/leaderboard`);
+      const lbData = await lbRes.json().catch(() => null);
+      if (!lbRes.ok || lbData?.status !== "success" || !lbData?.data) {
+        throw new Error(lbData?.detail?.message || lbData?.detail || "SOTA评审列表接口返回异常");
       }
-      // Fallback to legacy SOTA endpoint
-      const res = await fetch(`${API}/quantevolver/evolution/sota`);
-      const data = await res.json();
-      if (data?.status !== "success" || !Array.isArray(data?.data)) {
-        throw new Error(data?.detail || "SOTA接口返回异常");
+      if (!Array.isArray(lbData.data.leaderboard)) {
+        throw new Error("SOTA评审列表缺少leaderboard数组");
       }
-      setItems(data.data);
+      setLeaderboardSummary(lbData.data.summary || null);
+      setItems(lbData.data.leaderboard);
     } catch (e: any) {
       setError(e?.message || "加载失败");
     } finally {
@@ -124,6 +119,7 @@ export default function EvolutionSotaPage() {
         throw new Error(data?.detail?.message || data?.detail || "Failed to create promotion review");
       }
       setReviewMessage(`REVIEW_PENDING created: ${data.data?.review_id || row.loop_id}. This is not approved SOTA.`);
+      await fetchSota();
     } catch (e: any) {
       setReviewMessage(e?.message || "Failed to create promotion review");
     } finally {
@@ -145,7 +141,7 @@ export default function EvolutionSotaPage() {
       {/* Summary stat cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "12px" }}>
         {[
-          { label: "SOTA 总数", value: items.length, color: "#3b82f6" },
+          { label: "评审列表", value: items.length, color: "#3b82f6" },
           { label: "已同步", value: summary.synced, color: "#10b981" },
           { label: "涉及任务", value: summary.total, color: "#8b5cf6" },
           { label: "最佳 IC", value: summary.bestIc != null ? summary.bestIc.toFixed(4) : "-", color: "#f59e0b" },
@@ -192,6 +188,26 @@ export default function EvolutionSotaPage() {
                 const rankIc = getMetric(row, "rank_ic", "Rank_IC");
                 const sharpe = getMetric(row, "sharpe", "Sharpe");
                 const turnover = getMetric(row, "avg_turnover");
+                const reviewState = row.promotion_state || (row.approved_sota ? "LEGACY_REGISTRY" : "AUTO_CANDIDATE");
+                const canCreateReview = reviewState === "AUTO_CANDIDATE" && !row.approved_sota && !!row.task_id && !!row.loop_id;
+                let actionTitle = "Create REVIEW_PENDING only; does not approve SOTA";
+                let actionLabel = "Manual review";
+                if (row.approved_sota) {
+                  actionTitle = "Already in legacy qe_sota_registry; approved SOTA semantics are unchanged";
+                  actionLabel = "Approved registry";
+                } else if (reviewState === "REVIEW_PENDING") {
+                  actionTitle = "REVIEW_PENDING already exists";
+                  actionLabel = "Pending review";
+                } else if (reviewState === "REVIEW_REJECTED") {
+                  actionTitle = "This candidate was rejected; create a new review from the owning workflow";
+                  actionLabel = "Rejected";
+                } else if (reviewState === "SOTA_APPROVED") {
+                  actionTitle = "Review is approved, but formal SOTA approval still requires qe_sota_registry";
+                  actionLabel = "Review approved";
+                } else if (!row.task_id || !row.loop_id) {
+                  actionTitle = "Cannot create review because task_id or loop_id is missing";
+                }
+                if (creatingReview === key) actionLabel = "Creating...";
                 return (
                   <React.Fragment key={key}>
                     <tr style={{ borderTop: "1px solid #f1f5f9", cursor: "pointer" }}
@@ -212,7 +228,7 @@ export default function EvolutionSotaPage() {
                           fontSize: "11px",
                           fontWeight: 700,
                         }}>
-                          {row.promotion_state || (row.approved_sota ? "LEGACY_REGISTRY" : "AUTO_CANDIDATE")}
+                          {reviewState}
                         </span>
                       </td>
                       <td style={{ padding: "10px" }}>{row.task_name || "-"}</td>
@@ -240,12 +256,12 @@ export default function EvolutionSotaPage() {
                       </td>
                       <td style={{ padding: "10px" }} onClick={(e) => e.stopPropagation()}>
                         <button
-                          disabled={creatingReview === key || !row.task_id || !row.loop_id}
+                          disabled={creatingReview === key || !canCreateReview}
                           onClick={() => requestPromotionReview(row)}
-                          title="Create REVIEW_PENDING only; does not approve SOTA"
-                          style={{ padding: "6px 10px", borderRadius: "7px", border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e", cursor: "pointer", fontSize: "12px" }}
+                          title={actionTitle}
+                          style={{ padding: "6px 10px", borderRadius: "7px", border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e", cursor: canCreateReview ? "pointer" : "not-allowed", fontSize: "12px", opacity: canCreateReview ? 1 : 0.65 }}
                         >
-                          {creatingReview === key ? "Creating..." : "Manual review"}
+                          {actionLabel}
                         </button>
                       </td>
                     </tr>
@@ -268,7 +284,9 @@ export default function EvolutionSotaPage() {
                                 {row.action_type ? `策略类型: ${row.action_type}` : "资产路径"}
                               </div>
                               <div style={{ fontSize: "12px", fontFamily: "monospace", color: "#475569", wordBreak: "break-all" }}>
-                                {row.local_asset_path || row.action_type || "未同步"}
+                                {row.review_id
+                                  ? `review=${row.review_id}; requested_by=${row.review_requested_by || "-"}; created_at=${row.review_created_at || "-"}`
+                                  : row.local_asset_path || row.action_type || "未同步"}
                               </div>
                             </div>
                           </div>
