@@ -57,8 +57,9 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 | 9     | medium/large-cap event families               | complete   | structured miss/decline tested on 10 QE loops                |
 | 10    | loss history + size + decay refinements       | complete   | industry explanatory only; no neutralization                 |
-| 11    | sector-regime attribution + direct event study | pending    | validate plate-rotation context and event-date returns       |
-| 12    | LLM/PDF preprocessing design                  | deferred   | start only after structured signals show value               |
+| 11    | sector-regime attribution + direct event study | complete   | direct raw/abnormal returns + sector attribution validated   |
+| 12    | context-aware overlay rule research             | pending    | combine QE rank, event severity, decay, and sector context   |
+| 13    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -81,4 +82,18 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 5. read docs/analysis/event_signal_financial_distress_research/findings.md
 6. read docs/analysis/event_signal_financial_distress_research/progress.md
 7. continue from the first pending phase
+```
+
+
+## Phase 11 Direct Event Study Finding
+
+```text
++-------------------------------------+-----------------------+-----------------------------------------------------------------------------+
+| candidate                           | decision              | evidence                                                                    |
++-------------------------------------+-----------------------+-----------------------------------------------------------------------------+
+| indicator_large_decline_mv_10_30bn  | CONTEXTUAL_SCORE_DOWN | QE overlay positive, but direct abnormal medians turn negative at T+20/T+60 |
+| indicator_large_decline_mv_30_100bn | WATCHLIST_ONLY        | direct abnormal median negative and QE effect weak                          |
+| smallcap_loss_mv50                  | KEEP_BENCHMARK        | strong QE benchmark but direct event returns are not a hard-ban proof       |
+| structured_risk_10_30bn             | COVERAGE_BENCHMARK    | broad coverage, positive mean but negative abnormal median                  |
++-------------------------------------+-----------------------+-----------------------------------------------------------------------------+
 ```

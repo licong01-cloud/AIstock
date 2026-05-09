@@ -110,3 +110,20 @@ Latest validation record: `tests/aistock_validation/history/local_data_managemen
 
 Latest curated report: `docs/analysis/event_signal_financial_distress_refinement_qe_overlay_result_20260509.md`.
 Latest validation record: `tests/aistock_validation/history/local_data_management/20260509_l2_financial-distress-refinement-qe-overlay-validation.md`.
+
+
+## 2026-05-09 Phase 11 Completion
+
+```text
++--------------------+---------------------------------------------+----------------------------------------------+
+| time               | action                                      | result                                       |
++--------------------+---------------------------------------------+----------------------------------------------+
+| 2026-05-09 morning | added direct event-return research script   | research-only; no DB writes                  |
+| 2026-05-09 morning | added 000300.SH abnormal-return aggregation | raw and benchmark-adjusted returns available |
+| 2026-05-09 morning | ran direct study for 4 rules                | 3713 events / 22278 return rows              |
+| 2026-05-09 morning | documented Phase 11 conclusion              | contextual score-down, no hard ban           |
++--------------------+---------------------------------------------+----------------------------------------------+
+```
+
+Latest curated report: `docs/analysis/event_signal_financial_distress_direct_event_return_result_20260509.md`.
+Latest validation record: `tests/aistock_validation/history/local_data_management/20260509_l2_financial-distress-direct-event-return-validation.md`.

@@ -13,6 +13,8 @@
 | F005 | Industry exposure is not single-industry only | Avoid hard industry filters until larger evidence exists.    |
 | F006 | Current research is biased toward small caps  | Next phase must report every signal by market-cap bucket.    |
 | F007 | Every rule now has market-cap bucket coverage | Use bucket rows to prevent small-cap-only overgeneralization. |
+| F008 | Direct event returns are not pure downside events | Do not convert financial distress rules to hard bans without context. |
+| F009 | Medium-cap indicator decline is context-sensitive | Keep as QE rank/severity score-down candidate, not standalone risk filter. |
 +------+----------------------------------------------+--------------------------------------------------------------+
 ```
 
@@ -132,3 +134,17 @@ User confirmed on 2026-05-09 that expected capital is about 10 million CNY, mark
 ```
 
 Preferred current candidate for future non-hard overlay research: `indicator_large_decline_mv_10_30bn` with 20-60 trading-day severity-style score-down. It should not be a hard ban or forced sell at this stage.
+
+
+## Phase 11 Direct Event Return Finding
+
+```text
++----------------------------+----------------------------------------------------------------------------------------------+------------------------------------------------------------------------+
+| rule                       | direct finding                                                                               | implementation implication                                             |
++----------------------------+----------------------------------------------------------------------------------------------+------------------------------------------------------------------------+
+| smallcap_loss_mv50         | T+5/T+20 abnormal returns are positive; T+60 median slightly negative with high missing rate | benchmark remains useful for QE overlay comparison, not hard-ban proof |
+| indicator_decline_10_30bn  | T+20/T+60 abnormal medians are negative while means are positive                             | score-down only when model ranks the stock highly                      |
+| indicator_decline_30_100bn | abnormal medians negative from T+5 onward but QE overlay weak                                | watchlist-only research feature                                        |
+| structured_risk_10_30bn    | positive abnormal mean but negative abnormal median                                          | coverage benchmark, not standalone runtime signal                      |
++----------------------------+----------------------------------------------------------------------------------------------+------------------------------------------------------------------------+
+```
