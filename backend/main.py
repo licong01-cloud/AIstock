@@ -60,7 +60,12 @@ from .routers import (
 )
 from .routers import llm_config
 from .routers import paper_trading
-from .routers import rl_execution
+try:
+    from .routers import rl_execution
+except ModuleNotFoundError as exc:
+    if not str(exc.name).startswith("backend.services.rl_execution"):
+        raise
+    rl_execution = None
 from .qlib_exporter.router import router as qlib_router
 from .ingestion.tdx_scheduler import scheduler as ingestion_scheduler
 from .schedulers.strategy_scheduler import scheduler as strategy_scheduler
@@ -486,7 +491,10 @@ def create_app() -> FastAPI:
     app.include_router(llm_config.router)
     app.include_router(paper_trading.router, prefix="/api/v1")
     app.include_router(dispatch.router, prefix="/api/v1")
-    app.include_router(rl_execution.router, prefix="/api/v1")
+    if rl_execution is not None:
+        app.include_router(rl_execution.router, prefix="/api/v1")
+    else:
+        logging.getLogger(__name__).warning("Skipping rl_execution router: backend.services.rl_execution is missing")
 
     # ingestion / 本地数据管理接口：保持与旧 tdx_backend 相同的 /api/* 路径
     app.include_router(ingestion.router, prefix="")
