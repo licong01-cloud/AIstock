@@ -910,6 +910,12 @@ def enrich_precision_rows_with_loss_history(
         ts_code = str(row["ts_code"])
         report_period = row.get("report_period")
         periods = loss_periods_by_symbol.get(ts_code, set())
+        prior_anchor = report_period if isinstance(report_period, dt.date) else row.get("effective_trade_date")
+        if isinstance(prior_anchor, dt.date):
+            prior_lower_bound = prior_anchor - dt.timedelta(days=lookback_days)
+            prior_rolling_count = sum(1 for period in periods if prior_lower_bound <= period <= prior_anchor)
+        else:
+            prior_rolling_count = 0
         if row.get("event_type") not in loss_events or not isinstance(report_period, dt.date):
             strict_streak = 0
             rolling_count = 0
@@ -926,6 +932,8 @@ def enrich_precision_rows_with_loss_history(
         row["loss_report_streak_bucket"] = _loss_report_count_bucket(strict_streak)
         row["loss_report_count_730d"] = rolling_count
         row["loss_report_count_730d_bucket"] = _loss_report_count_bucket(rolling_count)
+        row["prior_loss_report_count_730d"] = prior_rolling_count
+        row["prior_loss_report_count_730d_bucket"] = _loss_report_count_bucket(prior_rolling_count)
     return rows
 
 

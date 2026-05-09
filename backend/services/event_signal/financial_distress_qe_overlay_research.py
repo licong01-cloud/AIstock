@@ -60,6 +60,8 @@ GE50_LOSS_BUCKETS = {"loss_50pct_to_100pct_mv", "loss_ge_100pct_mv"}
 SMALL_MARKET_CAP_BUCKETS = {"mv_lt_5bn_yuan", "mv_5bn_to_10bn_yuan"}
 MID_LARGE_MARKET_CAP_BUCKETS = {"mv_10bn_to_30bn_yuan", "mv_30bn_to_100bn_yuan", "mv_ge_100bn_yuan"}
 LARGE_MARKET_CAP_BUCKETS = {"mv_30bn_to_100bn_yuan", "mv_ge_100bn_yuan"}
+PRIOR_LOSS_GE2_BUCKETS = {"loss_reports_2", "loss_reports_3", "loss_reports_ge_4"}
+PRIOR_LOSS_GE4_BUCKETS = {"loss_reports_ge_4"}
 EXPECTATION_MISS_EVENT_TYPE = "financial_positive_but_miss_expectation"
 FORECAST_EXPRESS_LARGE_DECLINE_EVENT_TYPES = {
     "financial_forecast_large_decline",
@@ -336,6 +338,65 @@ MID_LARGE_EVENT_RULES: tuple[FinancialDistressRule, ...] = (
     ),
 )
 
+REFINEMENT_RULES: tuple[FinancialDistressRule, ...] = (
+    FinancialDistressRule(
+        rule_key="indicator_large_decline_mv_10_30bn",
+        title="financial indicator large decline and market cap 10-30bn CNY",
+        description="Phase-10 size sub-bucket for the strongest medium-cap structured financial event candidate.",
+        policy_risk_level="MEDIUM",
+        priority=410,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_large_decline_mv_30_100bn",
+        title="financial indicator large decline and market cap 30-100bn CNY",
+        description="Phase-10 large-cap sub-bucket test for financial-indicator large decline.",
+        policy_risk_level="MEDIUM",
+        priority=420,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_large_decline_mv_ge_100bn",
+        title="financial indicator large decline and market cap >=100bn CNY",
+        description="Phase-10 mega-cap sparse-sample check for financial-indicator large decline.",
+        policy_risk_level="REVIEW",
+        priority=430,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_large_decline_mv_ge_10bn_prior_loss_ge_2",
+        title="financial indicator large decline, market cap >=10bn, prior losses >=2",
+        description="Indicator large decline with at least two loss-report periods in the trailing 730 days.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=440,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_large_decline_mv_10_30bn_prior_loss_ge_2",
+        title="financial indicator large decline, market cap 10-30bn, prior losses >=2",
+        description="Medium-cap indicator large decline with at least two loss-report periods in the trailing 730 days.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=450,
+    ),
+    FinancialDistressRule(
+        rule_key="structured_financial_risk_mv_10_30bn",
+        title="any structured financial risk and market cap 10-30bn CNY",
+        description="Phase-10 medium-cap sub-bucket for the broad structured financial risk benchmark.",
+        policy_risk_level="REVIEW",
+        priority=460,
+    ),
+    FinancialDistressRule(
+        rule_key="structured_financial_risk_mv_ge_30bn",
+        title="any structured financial risk and market cap >=30bn CNY",
+        description="Phase-10 large/mega-cap sub-bucket for the broad structured financial risk benchmark.",
+        policy_risk_level="REVIEW",
+        priority=470,
+    ),
+    FinancialDistressRule(
+        rule_key="structured_financial_risk_mv_ge_10bn_prior_loss_ge_2",
+        title="any structured financial risk, market cap >=10bn, prior losses >=2",
+        description="Broad structured financial risk with at least two loss-report periods in the trailing 730 days.",
+        policy_risk_level="REVIEW",
+        priority=480,
+    ),
+)
+
 SEVERITY_PROFILES: dict[str, SeverityProfile] = {
     "balanced": SeverityProfile(
         profile_key="balanced",
@@ -546,20 +607,24 @@ def select_research_rules(
     include_size_bucket_rules: bool = False,
     include_loss_history_rules: bool = False,
     include_mid_large_event_rules: bool = False,
+    include_refinement_rules: bool = False,
     size_bucket_only: bool = False,
     loss_history_only: bool = False,
     mid_large_only: bool = False,
+    refinement_only: bool = False,
 ) -> tuple[FinancialDistressRule, ...]:
     rules: list[FinancialDistressRule] = []
-    enabled_only_flags = sum(1 for flag in (size_bucket_only, loss_history_only, mid_large_only) if flag)
+    enabled_only_flags = sum(1 for flag in (size_bucket_only, loss_history_only, mid_large_only, refinement_only) if flag)
     if enabled_only_flags > 1:
-        raise ValueError("only one of size_bucket_only, loss_history_only, and mid_large_only can be enabled")
+        raise ValueError("only one *_only rule-set flag can be enabled")
     if size_bucket_only:
         rules.extend(SIZE_BUCKET_RULES)
     elif loss_history_only:
         rules.extend(LOSS_HISTORY_RULES)
     elif mid_large_only:
         rules.extend(MID_LARGE_EVENT_RULES)
+    elif refinement_only:
+        rules.extend(REFINEMENT_RULES)
     else:
         if include_first_batch_rules:
             rules.extend(FIRST_BATCH_RULES)
@@ -569,6 +634,8 @@ def select_research_rules(
             rules.extend(LOSS_HISTORY_RULES)
         if include_mid_large_event_rules:
             rules.extend(MID_LARGE_EVENT_RULES)
+        if include_refinement_rules:
+            rules.extend(REFINEMENT_RULES)
     if not rules:
         raise ValueError("at least one research rule set must be enabled")
     return tuple(sorted(rules, key=lambda item: item.priority))
@@ -644,9 +711,14 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
     event_type = str(row.get("event_type") or "")
     loss_bucket = str(row.get("loss_to_market_cap_bucket") or "")
     loss_count_bucket = str(row.get("loss_report_count_730d_bucket") or "")
+    prior_loss_count_bucket = str(row.get("prior_loss_report_count_730d_bucket") or "")
     market_cap_bucket = str(row.get("market_cap_bucket") or "mv_unknown")
     is_mid_large_cap = market_cap_bucket in MID_LARGE_MARKET_CAP_BUCKETS
     is_large_cap = market_cap_bucket in LARGE_MARKET_CAP_BUCKETS
+    is_10_30bn_cap = market_cap_bucket == "mv_10bn_to_30bn_yuan"
+    is_30_100bn_cap = market_cap_bucket == "mv_30bn_to_100bn_yuan"
+    is_ge_100bn_cap = market_cap_bucket == "mv_ge_100bn_yuan"
+    is_indicator_large_decline = event_type == "financial_indicator_large_decline"
     miss_gap = _metric_detail_float(row, "miss_gap")
     if rule.rule_key == "loss_to_market_cap_ge_50pct":
         return loss_bucket in GE50_LOSS_BUCKETS
@@ -696,6 +768,22 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
         return event_type == "financial_indicator_large_decline" and is_mid_large_cap
     if rule.rule_key == "structured_financial_risk_mv_ge_10bn":
         return event_type in STRUCTURED_FINANCIAL_RISK_EVENT_TYPES and is_mid_large_cap
+    if rule.rule_key == "indicator_large_decline_mv_10_30bn":
+        return is_indicator_large_decline and is_10_30bn_cap
+    if rule.rule_key == "indicator_large_decline_mv_30_100bn":
+        return is_indicator_large_decline and is_30_100bn_cap
+    if rule.rule_key == "indicator_large_decline_mv_ge_100bn":
+        return is_indicator_large_decline and is_ge_100bn_cap
+    if rule.rule_key == "indicator_large_decline_mv_ge_10bn_prior_loss_ge_2":
+        return is_indicator_large_decline and is_mid_large_cap and prior_loss_count_bucket in PRIOR_LOSS_GE2_BUCKETS
+    if rule.rule_key == "indicator_large_decline_mv_10_30bn_prior_loss_ge_2":
+        return is_indicator_large_decline and is_10_30bn_cap and prior_loss_count_bucket in PRIOR_LOSS_GE2_BUCKETS
+    if rule.rule_key == "structured_financial_risk_mv_10_30bn":
+        return event_type in STRUCTURED_FINANCIAL_RISK_EVENT_TYPES and is_10_30bn_cap
+    if rule.rule_key == "structured_financial_risk_mv_ge_30bn":
+        return event_type in STRUCTURED_FINANCIAL_RISK_EVENT_TYPES and is_large_cap
+    if rule.rule_key == "structured_financial_risk_mv_ge_10bn_prior_loss_ge_2":
+        return event_type in STRUCTURED_FINANCIAL_RISK_EVENT_TYPES and is_mid_large_cap and prior_loss_count_bucket in PRIOR_LOSS_GE2_BUCKETS
     raise ValueError(f"unsupported financial distress rule: {rule.rule_key}")
 
 
@@ -844,6 +932,7 @@ def build_overlay_frame(
                     "max_loss_to_market_cap": None,
                     "max_miss_gap": None,
                     "loss_report_count_730d_max": 0,
+                    "prior_loss_report_count_730d_max": 0,
                     "earliest_effective_trade_date": effective_trade_date,
                     "latest_effective_trade_date": effective_trade_date,
                 },
@@ -864,6 +953,10 @@ def build_overlay_frame(
             payload["loss_report_count_730d_max"] = max(
                 int(payload.get("loss_report_count_730d_max") or 0),
                 int(row.get("loss_report_count_730d") or 0),
+            )
+            payload["prior_loss_report_count_730d_max"] = max(
+                int(payload.get("prior_loss_report_count_730d_max") or 0),
+                int(row.get("prior_loss_report_count_730d") or 0),
             )
             payload["earliest_effective_trade_date"] = min(payload["earliest_effective_trade_date"], effective_trade_date)
             payload["latest_effective_trade_date"] = max(payload["latest_effective_trade_date"], effective_trade_date)
@@ -890,6 +983,7 @@ def build_overlay_frame(
                 "max_loss_to_market_cap": payload["max_loss_to_market_cap"],
                 "max_miss_gap": payload["max_miss_gap"],
                 "loss_report_count_730d_max": payload["loss_report_count_730d_max"],
+                "prior_loss_report_count_730d_max": payload["prior_loss_report_count_730d_max"],
                 "earliest_effective_trade_date": payload["earliest_effective_trade_date"].isoformat(),
                 "latest_effective_trade_date": payload["latest_effective_trade_date"].isoformat(),
             }
@@ -2613,6 +2707,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--loss-history-only", action="store_true")
     parser.add_argument("--include-mid-large-rules", action="store_true")
     parser.add_argument("--mid-large-only", action="store_true")
+    parser.add_argument("--include-refinement-rules", action="store_true")
+    parser.add_argument("--refinement-only", action="store_true")
     parser.add_argument("--rule-key", action="append", default=None, help="Limit research to one or more rule_key values.")
     return parser.parse_args(argv)
 
@@ -2625,9 +2721,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         include_size_bucket_rules=args.include_size_bucket_rules,
         include_loss_history_rules=args.include_loss_history_rules,
         include_mid_large_event_rules=args.include_mid_large_rules,
+        include_refinement_rules=args.include_refinement_rules,
         size_bucket_only=args.size_bucket_only,
         loss_history_only=args.loss_history_only,
         mid_large_only=args.mid_large_only,
+        refinement_only=args.refinement_only,
     )
     research_rules = filter_research_rules_by_key(research_rules, args.rule_key)
     if args.loop_spec or args.loop_spec_json:

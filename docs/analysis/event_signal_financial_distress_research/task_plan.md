@@ -32,6 +32,7 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 7     | rolling loss-history rules               | complete | bf67daa / loss_history_qe_overlay_result                    |
 | 8     | market-cap bucket report for every signal| complete | market_cap_bucket_qe_overlay_result                         |
 | 9     | medium/large-cap event families          | complete | mid_large_qe_overlay_result_20260509                        |
+| 10    | size/loss-history/decay refinements      | complete | refinement_qe_overlay_result_20260509                       |
 +-------+------------------------------------------+----------+-------------------------------------------------------------+
 ```
 
@@ -55,8 +56,8 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | phase | next research                                 | status     | validation requirement                                       |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 | 9     | medium/large-cap event families               | complete   | structured miss/decline tested on 10 QE loops                |
-| 10    | loss history + industry + size interactions   | pending    | must beat or explain baseline without overfitting            |
-| 11    | forecast/express/report mismatch research     | pending    | detect expectation miss, not raw growth/loss only            |
+| 10    | loss history + size + decay refinements       | complete   | industry explanatory only; no neutralization                 |
+| 11    | sector-regime attribution + direct event study | pending    | validate plate-rotation context and event-date returns       |
 | 12    | LLM/PDF preprocessing design                  | deferred   | start only after structured signals show value               |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
@@ -67,7 +68,7 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 - Do not merge to `main` during research unless explicitly requested.
 - Every committed phase needs both a curated analysis doc and a validation record.
 - Every new signal must be validated on the same 10 QE loops before being considered for a signal table or runtime hook.
-- Every report must compare against `loss_to_market_cap_ge_50pct_mv_lt_10bn` and show market-cap exposure.
+- Every report must compare against `loss_to_market_cap_ge_50pct_mv_lt_10bn` and show market-cap exposure. Industry/sector concentration is explanatory only and must not be used as an automatic rejection gate under the 10m CNY/no-neutralization assumption.
 - Financial distress signals remain research-only: no hard buy ban, no forced sell, no live/paper runtime connection.
 
 ## Resume Checklist

@@ -99,4 +99,36 @@ Phase 9 first implementation should therefore test structured medium/large-cap r
 +--------------------------------------+-----------------------+------------------------------------------------------------+
 ```
 
-Medium/large-cap structured financial risk evidence is concentrated in the 10-30bn bucket. The next research step should split `indicator_large_decline_mv_ge_10bn` by industry, size sub-buckets, and loss history before any runtime design.
+Medium/large-cap structured financial risk evidence is concentrated in the 10-30bn bucket. Industry concentration should be treated as sector-rotation context, not as a neutralization or rejection gate.
+
+## Phase 10 Constraint Update - Fund Size and Sector Exposure
+
+User confirmed on 2026-05-09 that expected capital is about 10 million CNY, market impact is not a near-term constraint, and industry neutrality is not required. Industry concentration should not be used as a rejection reason by itself; sector/industry exposure remains an explanatory field for possible sector-rotation opportunities.
+
+```text
++----------------------+--------------------------------------------------------------+
+| constraint           | phase-10 implication                                         |
++----------------------+--------------------------------------------------------------+
+| capital ~10m CNY     | no market-impact filter in current research                  |
+| no industry neutral  | do not reject signals solely because they cluster by sector  |
+| sector rotation goal | keep industry/sector stats as explanation, not neutralizer   |
+| risk-first framework | still evaluate return/drawdown impact before runtime design  |
++----------------------+--------------------------------------------------------------+
+```
+
+
+## Phase 10 Refinement Finding
+
+```text
++--------------------------------------------+-----------------------+------------------------------------------------------------+
+| candidate                                  | decision              | evidence                                                   |
++--------------------------------------------+-----------------------+------------------------------------------------------------+
+| indicator_large_decline_mv_10_30bn         | KEEP_PRIMARY_CANDIDATE| 60td severity avg_ret_d 0.20%, pos 6/10, min approx 0      |
+| indicator_large_decline_mv_30_100bn        | WATCHLIST_ONLY        | weak but non-zero; 242td avg_ret_d about 0.03%             |
+| indicator_large_decline_mv_ge_100bn        | REJECT_RUNTIME        | no dropped Top50 events                                    |
+| prior-loss refinements                     | REJECT_REFINEMENT     | lower coverage and no improvement over size-only rule      |
+| structured_financial_risk_mv_10_30bn       | COVERAGE_BENCHMARK    | positive but broader/worse tail than indicator split       |
++--------------------------------------------+-----------------------+------------------------------------------------------------+
+```
+
+Preferred current candidate for future non-hard overlay research: `indicator_large_decline_mv_10_30bn` with 20-60 trading-day severity-style score-down. It should not be a hard ban or forced sell at this stage.

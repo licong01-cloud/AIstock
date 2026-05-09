@@ -2,11 +2,15 @@ import datetime as dt
 
 import pandas as pd
 
-from backend.services.event_signal.early_financial_distress_research import classify_metric_bucket
+from backend.services.event_signal.early_financial_distress_research import (
+    classify_metric_bucket,
+    enrich_precision_rows_with_loss_history,
+)
 from backend.services.event_signal.financial_distress_qe_overlay_research import (
     FIRST_BATCH_RULES,
     LOSS_HISTORY_RULES,
     MID_LARGE_EVENT_RULES,
+    REFINEMENT_RULES,
     SIZE_BUCKET_RULES,
     CandidateScore,
     SEVERITY_PROFILES,
@@ -32,7 +36,7 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
 def _rule(key: str):
     return next(
         rule
-        for rule in (*FIRST_BATCH_RULES, *SIZE_BUCKET_RULES, *LOSS_HISTORY_RULES, *MID_LARGE_EVENT_RULES)
+        for rule in (*FIRST_BATCH_RULES, *SIZE_BUCKET_RULES, *LOSS_HISTORY_RULES, *MID_LARGE_EVENT_RULES, *REFINEMENT_RULES)
         if rule.rule_key == key
     )
 
@@ -99,6 +103,12 @@ def test_select_research_rules_can_run_mid_large_only():
     rules = select_research_rules(mid_large_only=True)
 
     assert [rule.rule_key for rule in rules] == [rule.rule_key for rule in MID_LARGE_EVENT_RULES]
+
+
+def test_select_research_rules_can_run_refinement_only():
+    rules = select_research_rules(refinement_only=True)
+
+    assert [rule.rule_key for rule in rules] == [rule.rule_key for rule in REFINEMENT_RULES]
 
 
 def test_select_research_rules_can_include_loss_history_with_first_batch():
@@ -273,6 +283,60 @@ def test_expectation_miss_metric_bucket_exposes_gap_for_overlay_rules():
     assert metric_bucket == "expectation_miss:miss_gap_50pct_to_100pct|actual_source=tushare_express"
     assert detail["miss_gap"] == 65.5
     assert detail["miss_gap_bucket"] == "miss_gap_50pct_to_100pct"
+
+
+def test_prior_loss_history_is_available_for_non_loss_events():
+    rows = [
+        {
+            "signal_id": 1,
+            "ts_code": "000001.SZ",
+            "event_type": "financial_forecast_loss",
+            "report_period": dt.date(2023, 12, 31),
+            "effective_trade_date": dt.date(2024, 1, 31),
+        },
+        {
+            "signal_id": 2,
+            "ts_code": "000001.SZ",
+            "event_type": "financial_express_loss",
+            "report_period": dt.date(2024, 3, 31),
+            "effective_trade_date": dt.date(2024, 4, 30),
+        },
+        {
+            "signal_id": 3,
+            "ts_code": "000001.SZ",
+            "event_type": "financial_indicator_large_decline",
+            "report_period": dt.date(2024, 6, 30),
+            "effective_trade_date": dt.date(2024, 8, 30),
+        },
+    ]
+
+    enriched = enrich_precision_rows_with_loss_history(rows)
+    indicator = enriched[-1]
+
+    assert indicator["loss_report_count_730d"] == 0
+    assert indicator["prior_loss_report_count_730d"] == 2
+    assert indicator["prior_loss_report_count_730d_bucket"] == "loss_reports_2"
+
+
+def test_refinement_rules_split_size_and_prior_loss_history():
+    base = {
+        "event_type": "financial_indicator_large_decline",
+        "market_cap_bucket": "mv_10bn_to_30bn_yuan",
+        "prior_loss_report_count_730d_bucket": "loss_reports_2",
+    }
+
+    assert _rule_applies(base, _rule("indicator_large_decline_mv_10_30bn"))
+    assert _rule_applies(base, _rule("indicator_large_decline_mv_ge_10bn_prior_loss_ge_2"))
+    assert _rule_applies(base, _rule("indicator_large_decline_mv_10_30bn_prior_loss_ge_2"))
+    assert not _rule_applies({**base, "market_cap_bucket": "mv_30bn_to_100bn_yuan"}, _rule("indicator_large_decline_mv_10_30bn"))
+    assert _rule_applies(
+        {"event_type": "financial_forecast_loss", "market_cap_bucket": "mv_30bn_to_100bn_yuan"},
+        _rule("structured_financial_risk_mv_ge_30bn"),
+    )
+    assert _rule_applies(
+        {"event_type": "financial_express_loss", "market_cap_bucket": "mv_10bn_to_30bn_yuan"},
+        _rule("structured_financial_risk_mv_10_30bn"),
+    )
 
 
 def test_expand_simulator_scenarios_adds_score_down_penalty_modes():

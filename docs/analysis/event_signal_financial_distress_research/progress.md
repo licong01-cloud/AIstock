@@ -39,18 +39,18 @@ git diff --check
 | check                                | result                      |
 +--------------------------------------+-----------------------------+
 | py_compile                           | pass                        |
-| targeted financial-distress pytest   | 26 passed after phase 9     |
-| event_signal pytest suite            | 156 passed                  |
+| targeted financial-distress pytest   | 29 passed after phase 10    |
+| event_signal pytest suite            | 159 passed                  |
 | runtime isolation scan               | no runtime references added |
-| WSL 10-loop offline overlay          | pass, 360 validations        |
-| mid-large bucket coverage            | pass, included in report     |
+| WSL 10-loop offline overlay          | pass, 640 phase-10 rows     |
+| refinement validation                | pass, 20/60/120/242td tested|
 | git diff --check                     | pass, LF/CRLF warnings only |
 +--------------------------------------+-----------------------------+
 ```
 
 ## Current Next Action
 
-Phase 10: research loss-history + industry + size interactions, starting from phase-9 `indicator_large_decline_mv_ge_10bn` and broad structured-risk benchmark. Continue with scripts/offline overlay only; no runtime integration.
+Phase 11: research sector-regime attribution and direct event-date returns for `indicator_large_decline_mv_10_30bn`. Industry concentration remains explanatory/rotation context only; do not implement industry neutralization.
 
 ## Commit Policy
 
@@ -83,3 +83,30 @@ Phase 10: research loss-history + industry + size interactions, starting from ph
 
 Latest curated report: `docs/analysis/event_signal_financial_distress_mid_large_qe_overlay_result_20260509.md`.
 Latest validation record: `tests/aistock_validation/history/local_data_management/20260509_l2_financial-distress-mid-large-qe-overlay-validation.md`.
+
+## 2026-05-09 Phase 10 Start
+
+```text
++---------------------+--------------------------------------------------+-------------------------------+
+| time                | action                                           | result                        |
++---------------------+--------------------------------------------------+-------------------------------+
+| 2026-05-09 morning  | accepted no industry-neutral constraint          | phase-10 scope adjusted       |
+| 2026-05-09 morning  | kept sector exposure as explanatory only         | no industry rejection planned |
++---------------------+--------------------------------------------------+-------------------------------+
+```
+
+
+## 2026-05-09 Phase 10 Completion
+
+```text
++---------------------+--------------------------------------------------+-------------------------------+
+| time                | action                                           | result                        |
++---------------------+--------------------------------------------------+-------------------------------+
+| 2026-05-09 morning  | added refinement rule set and prior loss fields  | tests passed                  |
+| 2026-05-09 morning  | ran WSL 10-loop refinement validation            | 640 validations passed        |
+| 2026-05-09 morning  | documented no industry-neutralization decision   | sector as explanation only    |
++---------------------+--------------------------------------------------+-------------------------------+
+```
+
+Latest curated report: `docs/analysis/event_signal_financial_distress_refinement_qe_overlay_result_20260509.md`.
+Latest validation record: `tests/aistock_validation/history/local_data_management/20260509_l2_financial-distress-refinement-qe-overlay-validation.md`.
