@@ -59,8 +59,9 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 10    | loss history + size + decay refinements       | complete   | industry explanatory only; no neutralization                 |
 | 11    | sector-regime attribution + direct event study | complete   | direct raw/abnormal returns + sector attribution validated   |
 | 12    | context-aware overlay rule research             | complete   | rank/severity/decay context profiles tested on 10 QE loops   |
-| 13    | proposed non-hard signal-policy config          | pending    | document preferred config before runtime integration         |
-| 14    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
+| 13    | proposed non-hard signal-policy config          | complete   | config proposal documented; no runtime integration           |
+| 14    | additional QE experiment validation             | pending    | validate exact Phase-13 config beyond the current 10 loops   |
+| 15    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -111,4 +112,18 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | structured_financial_risk_mv_10_30bn   | RESEARCH_ONLY               | context reduces tail but best row only 4/10 positive                       |
 | indicator_large_decline_mv_30_100bn    | WATCHLIST_ONLY              | effect is positive but too small                                           |
 +----------------------------------------+-----------------------------+----------------------------------------------------------------------------+
+```
+
+
+## Phase 13 Policy Config Proposal Finding
+
+```text
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| candidate                              | decision                   | evidence                                                               |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| indicator_large_decline_mv_10_30bn     | CONFIG_DRAFT_READY         | rank-aware 20/60td score-down can be represented as policy config      |
+| financial distress hard action         | REJECT_CURRENT_STAGE       | direct event study is mixed; no hard buy ban or forced sell            |
+| event_signal_policy_* existing schema  | SUFFICIENT_FOR_DRAFT       | profile/rule/state/overlay tables can carry config without raw changes |
+| final candidate rerank audit           | FUTURE_TRACE_REQUIREMENT   | rank penalty is candidate-list dependent, so audit belongs at consumer  |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
 ```

@@ -17,6 +17,7 @@
 | F009 | Medium-cap indicator decline is context-sensitive | Keep as QE rank/severity score-down candidate, not standalone risk filter. |
 | F010 | Context overlay improves policy shape more than raw return | Prefer it for runtime-shaped design, not because it beats every benchmark. |
 | F011 | Sector relief is not yet a decision driver | Keep compatibility for plate rotation, but do not select rules by sector relief. |
+| F012 | Phase-13 config can stay non-hard and schema-neutral | Store as draft policy/rule config later; do not change raw source tables. |
 +------+----------------------------------------------+--------------------------------------------------------------+
 ```
 
@@ -163,4 +164,18 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | smallcap loss/mv benchmark remains useful                                               | continue comparing every new rule against it |
 | sector relief had little measurable effect in this run                                  | keep as configurable future hook only        |
 +-----------------------------------------------------------------------------------------+----------------------------------------------+
+```
+
+
+## Phase 13 Policy Config Proposal Finding
+
+```text
++----------------------------------------+---------------------------------------------------------------+
+| finding                                | implication                                                   |
++----------------------------------------+---------------------------------------------------------------+
+| first non-hard config is draft-ready   | document profile/rule params before any runtime integration    |
+| score-down depends on candidate rank   | treat as post-alpha rerank overlay, not a daily factor          |
+| existing policy schema is enough now   | no schema change or raw table modification in Phase 13          |
+| true consumer audit remains future work| final rerank trace should be persisted when runtime is added    |
++----------------------------------------+---------------------------------------------------------------+
 ```
