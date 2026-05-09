@@ -58,8 +58,9 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 9     | medium/large-cap event families               | complete   | structured miss/decline tested on 10 QE loops                |
 | 10    | loss history + size + decay refinements       | complete   | industry explanatory only; no neutralization                 |
 | 11    | sector-regime attribution + direct event study | complete   | direct raw/abnormal returns + sector attribution validated   |
-| 12    | context-aware overlay rule research             | pending    | combine QE rank, event severity, decay, and sector context   |
-| 13    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
+| 12    | context-aware overlay rule research             | complete   | rank/severity/decay context profiles tested on 10 QE loops   |
+| 13    | proposed non-hard signal-policy config          | pending    | document preferred config before runtime integration         |
+| 14    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -96,4 +97,18 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | smallcap_loss_mv50                  | KEEP_BENCHMARK        | strong QE benchmark but direct event returns are not a hard-ban proof       |
 | structured_risk_10_30bn             | COVERAGE_BENCHMARK    | broad coverage, positive mean but negative abnormal median                  |
 +-------------------------------------+-----------------------+-----------------------------------------------------------------------------+
+```
+
+
+## Phase 12 Context Overlay Finding
+
+```text
++----------------------------------------+-----------------------------+----------------------------------------------------------------------------+
+| candidate                              | decision                    | evidence                                                                   |
++----------------------------------------+-----------------------------+----------------------------------------------------------------------------+
+| indicator_large_decline_mv_10_30bn     | PREFERRED_CONTEXT_CANDIDATE | balanced 20/60td: 6/10 positive, avg about 0.20%, min about 0              |
+| loss_to_market_cap_ge_50pct_mv_lt_10bn | KEEP_BENCHMARK              | old rank20 remains stronger avg; context useful as safer design comparison |
+| structured_financial_risk_mv_10_30bn   | RESEARCH_ONLY               | context reduces tail but best row only 4/10 positive                       |
+| indicator_large_decline_mv_30_100bn    | WATCHLIST_ONLY              | effect is positive but too small                                           |
++----------------------------------------+-----------------------------+----------------------------------------------------------------------------+
 ```

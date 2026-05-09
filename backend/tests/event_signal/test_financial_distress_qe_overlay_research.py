@@ -13,10 +13,12 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
     REFINEMENT_RULES,
     SIZE_BUCKET_RULES,
     CandidateScore,
+    CONTEXT_SCORE_DOWN_PROFILES,
     SEVERITY_PROFILES,
     _active_dates_for_signal,
     _fixed_width_table,
     _rule_applies,
+    build_context_score_down_penalty_by_date,
     build_market_cap_bucket_summary,
     build_severity_penalty_by_date,
     build_score_down_ranking,
@@ -369,6 +371,21 @@ def test_expand_simulator_scenarios_adds_severity_profiles():
     assert [scenario.severity_profile for scenario in scenarios] == ["balanced", "conservative"]
 
 
+def test_expand_simulator_scenarios_adds_context_profiles():
+    scenarios = expand_simulator_scenarios(
+        simulator_modes=["score_down_context"],
+        score_down_context_profiles=["rank_decay_light", "rank_decay_sector_relief"],
+        score_down_top_k=50,
+        score_down_ranking_date_mode="previous",
+    )
+
+    assert [scenario.mode_key for scenario in scenarios] == [
+        "score_down_context_rank_decay_light_top50_previous",
+        "score_down_context_rank_decay_sector_relief_top50_previous",
+    ]
+    assert [scenario.context_profile for scenario in scenarios] == ["rank_decay_light", "rank_decay_sector_relief"]
+
+
 def test_build_score_down_ranking_demotes_blocked_candidates_by_topk_pct():
     candidates = [
         CandidateScore("A", 0.9),
@@ -430,6 +447,81 @@ def test_severity_penalty_profile_uses_loss_size_and_loss_history():
     assert penalties[dt.date(2024, 1, 3)]["BAD"] == 0.25
 
 
+def test_context_score_down_penalty_uses_rank_severity_decay_and_sector_relief():
+    records = [
+        {
+            "trade_date": dt.date(2024, 1, 4),
+            "ts_code": "BAD",
+            "can_buy": False,
+            "force_exit": False,
+            "active_trading_days": 5,
+            "active_signal_count": 2,
+            "max_loss_to_market_cap": 1.2,
+            "max_miss_gap": 55.0,
+            "loss_report_count_730d_max": 1,
+            "prior_loss_report_count_730d_max": 2,
+            "min_active_age_trading_days": 2,
+            "earliest_effective_trade_date": dt.date(2024, 1, 2),
+            "industries": "software",
+        },
+        {
+            "trade_date": dt.date(2024, 1, 4),
+            "ts_code": "PEER",
+            "can_buy": False,
+            "force_exit": False,
+            "active_trading_days": 5,
+            "active_signal_count": 1,
+            "max_loss_to_market_cap": None,
+            "max_miss_gap": None,
+            "loss_report_count_730d_max": 0,
+            "prior_loss_report_count_730d_max": 0,
+            "min_active_age_trading_days": 0,
+            "earliest_effective_trade_date": dt.date(2024, 1, 4),
+            "industries": "software",
+        },
+    ]
+    filler = {
+        "trade_date": dt.date(2024, 1, 4),
+        "can_buy": False,
+        "force_exit": False,
+        "active_trading_days": 5,
+        "active_signal_count": 1,
+        "max_loss_to_market_cap": None,
+        "max_miss_gap": None,
+        "loss_report_count_730d_max": 0,
+        "prior_loss_report_count_730d_max": 0,
+        "min_active_age_trading_days": 0,
+        "earliest_effective_trade_date": dt.date(2024, 1, 4),
+        "industries": "software",
+    }
+    overlay = pd.DataFrame([*records, *[{**filler, "ts_code": f"FILL{idx:02d}"} for idx in range(18)]])
+    trading_days = [
+        dt.date(2024, 1, 2),
+        dt.date(2024, 1, 3),
+        dt.date(2024, 1, 4),
+        dt.date(2024, 1, 5),
+    ]
+    candidate_scores = {
+        dt.date(2024, 1, 3): [
+            CandidateScore("BAD", 0.9),
+            CandidateScore("PEER", 0.8),
+            CandidateScore("OTHER", 0.7),
+        ]
+    }
+
+    penalties = build_context_score_down_penalty_by_date(
+        overlay,
+        candidate_scores=candidate_scores,
+        trading_days=trading_days,
+        profile=CONTEXT_SCORE_DOWN_PROFILES["rank_decay_sector_relief"],
+        top_k=3,
+        ranking_date_mode="previous",
+    )
+
+    assert round(penalties[dt.date(2024, 1, 4)]["BAD"], 6) == 0.196875
+    assert round(penalties[dt.date(2024, 1, 4)]["PEER"], 6) == 0.075
+
+
 def test_active_dates_use_next_trading_day_and_requested_lifetime():
     trading_days = [
         dt.date(2024, 1, 2),
@@ -485,6 +577,7 @@ def test_build_overlay_frame_is_research_only_buy_filter_not_force_exit():
     assert overlay["force_exit"].tolist() == [False, False]
     assert overlay["active_signal_count"].tolist() == [1, 1]
     assert overlay["source_signal_ids"].tolist() == ["101", "101"]
+    assert overlay["min_active_age_trading_days"].tolist() == [0, 1]
 
 
 def test_score_down_rerank_counterfactual_replaces_dropped_topk_buy():

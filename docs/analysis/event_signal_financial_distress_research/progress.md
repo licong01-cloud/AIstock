@@ -127,3 +127,20 @@ Latest validation record: `tests/aistock_validation/history/local_data_managemen
 
 Latest curated report: `docs/analysis/event_signal_financial_distress_direct_event_return_result_20260509.md`.
 Latest validation record: `tests/aistock_validation/history/local_data_management/20260509_l2_financial-distress-direct-event-return-validation.md`.
+
+
+## 2026-05-09 Phase 12 Completion
+
+```text
++----------------------+---------------------------------------+-------------------------------------------------+
+| time                 | action                                | result                                          |
++----------------------+---------------------------------------+-------------------------------------------------+
+| 2026-05-09 afternoon | added context score-down profiles     | rank/severity/decay/sector-relief supported     |
+| 2026-05-09 afternoon | ran light/severity context validation | 480 validations passed                          |
+| 2026-05-09 afternoon | ran balanced context validation       | 320 validations passed                          |
+| 2026-05-09 afternoon | documented Phase 12 conclusion        | preferred non-hard context candidate identified |
++----------------------+---------------------------------------+-------------------------------------------------+
+```
+
+Latest curated report: `docs/analysis/event_signal_financial_distress_context_qe_overlay_result_20260509.md`.
+Latest validation record: `tests/aistock_validation/history/local_data_management/20260509_l2_financial-distress-context-qe-overlay-validation.md`.

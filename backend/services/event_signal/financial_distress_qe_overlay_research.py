@@ -13,7 +13,7 @@ import bisect
 import datetime as dt
 import json
 import math
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
@@ -55,7 +55,7 @@ DEFAULT_EXPERIMENT_ID = "qe_20260507_132049_d4e7"
 DEFAULT_LOOP_ID = "Loop1"
 DEFAULT_ACTIVE_TRADING_DAYS = (60, 120, 242)
 DEFAULT_SIMULATOR_MODES = ("cash", "next_candidate")
-SIMULATOR_VERSION = "financial_distress_qe_overlay_research_v6_20260509_mid_large_events"
+SIMULATOR_VERSION = "financial_distress_qe_overlay_research_v7_20260509_context_overlay"
 GE50_LOSS_BUCKETS = {"loss_50pct_to_100pct_mv", "loss_ge_100pct_mv"}
 SMALL_MARKET_CAP_BUCKETS = {"mv_lt_5bn_yuan", "mv_5bn_to_10bn_yuan"}
 MID_LARGE_MARKET_CAP_BUCKETS = {"mv_10bn_to_30bn_yuan", "mv_30bn_to_100bn_yuan", "mv_ge_100bn_yuan"}
@@ -98,8 +98,21 @@ DEFAULT_SCORE_DOWN_TOP_K = 50
 DEFAULT_SCORE_DOWN_RANKING_DATE_MODE = "previous"
 SCORE_DOWN_BASE_MODE = "score_down"
 SCORE_DOWN_SEVERITY_BASE_MODE = "score_down_severity"
-CANDIDATE_REQUIRED_BASE_MODES = {"next_candidate", SCORE_DOWN_BASE_MODE, SCORE_DOWN_SEVERITY_BASE_MODE}
+SCORE_DOWN_CONTEXT_BASE_MODE = "score_down_context"
+CANDIDATE_REQUIRED_BASE_MODES = {
+    "next_candidate",
+    SCORE_DOWN_BASE_MODE,
+    SCORE_DOWN_SEVERITY_BASE_MODE,
+    SCORE_DOWN_CONTEXT_BASE_MODE,
+}
 DEFAULT_SCORE_DOWN_SEVERITY_PROFILES = ("balanced", "loss_heavy", "conservative")
+DEFAULT_SCORE_DOWN_CONTEXT_PROFILES = (
+    "rank_decay_light",
+    "rank_decay_balanced",
+    "rank_decay_balanced_sector_relief",
+    "rank_decay_severity",
+    "rank_decay_sector_relief",
+)
 
 
 @dataclass(frozen=True)
@@ -139,6 +152,7 @@ class SimulatorScenario:
     top_k: Optional[int] = None
     ranking_date_mode: Optional[str] = None
     severity_profile: Optional[str] = None
+    context_profile: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -172,6 +186,24 @@ class SeverityProfile:
     loss_ge_100_add_pct: float
     mv_lt_5bn_add_pct: float
     loss_reports_ge_4_add_pct: float
+    max_pct: float
+
+
+@dataclass(frozen=True)
+class ContextScoreDownProfile:
+    profile_key: str
+    title: str
+    base_pct: float
+    top_quintile_add_pct: float
+    top_half_add_pct: float
+    loss_ge_100_add_pct: float
+    loss_ge_50_add_pct: float
+    repeated_loss_add_pct: float
+    miss_gap_ge_50_add_pct: float
+    multi_signal_add_pct: float
+    decay_floor: float
+    sector_cluster_min_count: int
+    sector_cluster_relief_pct: float
     max_pct: float
 
 
@@ -428,6 +460,90 @@ SEVERITY_PROFILES: dict[str, SeverityProfile] = {
 }
 
 
+CONTEXT_SCORE_DOWN_PROFILES: dict[str, ContextScoreDownProfile] = {
+    "rank_decay_light": ContextScoreDownProfile(
+        profile_key="rank_decay_light",
+        title="top-rank aware light score-down with trading-day decay",
+        base_pct=0.05,
+        top_quintile_add_pct=0.10,
+        top_half_add_pct=0.05,
+        loss_ge_100_add_pct=0.0,
+        loss_ge_50_add_pct=0.0,
+        repeated_loss_add_pct=0.0,
+        miss_gap_ge_50_add_pct=0.0,
+        multi_signal_add_pct=0.0,
+        decay_floor=0.40,
+        sector_cluster_min_count=0,
+        sector_cluster_relief_pct=0.0,
+        max_pct=0.15,
+    ),
+    "rank_decay_balanced": ContextScoreDownProfile(
+        profile_key="rank_decay_balanced",
+        title="higher-conviction top-rank score-down with moderate severity add-ons and decay",
+        base_pct=0.10,
+        top_quintile_add_pct=0.10,
+        top_half_add_pct=0.05,
+        loss_ge_100_add_pct=0.05,
+        loss_ge_50_add_pct=0.025,
+        repeated_loss_add_pct=0.025,
+        miss_gap_ge_50_add_pct=0.025,
+        multi_signal_add_pct=0.025,
+        decay_floor=0.50,
+        sector_cluster_min_count=0,
+        sector_cluster_relief_pct=0.0,
+        max_pct=0.30,
+    ),
+    "rank_decay_balanced_sector_relief": ContextScoreDownProfile(
+        profile_key="rank_decay_balanced_sector_relief",
+        title="balanced context score-down with industry-cluster relief for plate-rotation context",
+        base_pct=0.10,
+        top_quintile_add_pct=0.10,
+        top_half_add_pct=0.05,
+        loss_ge_100_add_pct=0.05,
+        loss_ge_50_add_pct=0.025,
+        repeated_loss_add_pct=0.025,
+        miss_gap_ge_50_add_pct=0.025,
+        multi_signal_add_pct=0.025,
+        decay_floor=0.50,
+        sector_cluster_min_count=20,
+        sector_cluster_relief_pct=0.25,
+        max_pct=0.30,
+    ),
+    "rank_decay_severity": ContextScoreDownProfile(
+        profile_key="rank_decay_severity",
+        title="top-rank aware score-down with financial severity add-ons and decay",
+        base_pct=0.05,
+        top_quintile_add_pct=0.10,
+        top_half_add_pct=0.05,
+        loss_ge_100_add_pct=0.10,
+        loss_ge_50_add_pct=0.05,
+        repeated_loss_add_pct=0.05,
+        miss_gap_ge_50_add_pct=0.05,
+        multi_signal_add_pct=0.025,
+        decay_floor=0.40,
+        sector_cluster_min_count=0,
+        sector_cluster_relief_pct=0.0,
+        max_pct=0.30,
+    ),
+    "rank_decay_sector_relief": ContextScoreDownProfile(
+        profile_key="rank_decay_sector_relief",
+        title="severity score-down with decay and industry-cluster relief for plate-rotation context",
+        base_pct=0.05,
+        top_quintile_add_pct=0.10,
+        top_half_add_pct=0.05,
+        loss_ge_100_add_pct=0.10,
+        loss_ge_50_add_pct=0.05,
+        repeated_loss_add_pct=0.05,
+        miss_gap_ge_50_add_pct=0.05,
+        multi_signal_add_pct=0.025,
+        decay_floor=0.40,
+        sector_cluster_min_count=20,
+        sector_cluster_relief_pct=0.25,
+        max_pct=0.30,
+    ),
+}
+
+
 def _json_dumps(value: Any, *, indent: Optional[int] = None) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str, indent=indent)
 
@@ -547,6 +663,7 @@ def expand_simulator_scenarios(
     score_down_top_k: int = DEFAULT_SCORE_DOWN_TOP_K,
     score_down_ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
     score_down_severity_profiles: Sequence[str] = DEFAULT_SCORE_DOWN_SEVERITY_PROFILES,
+    score_down_context_profiles: Sequence[str] = DEFAULT_SCORE_DOWN_CONTEXT_PROFILES,
 ) -> tuple[SimulatorScenario, ...]:
     if score_down_top_k <= 0:
         raise ValueError("score_down_top_k must be positive")
@@ -585,6 +702,20 @@ def expand_simulator_scenarios(
                         top_k=score_down_top_k,
                         ranking_date_mode=score_down_ranking_date_mode,
                         severity_profile=profile_key,
+                    )
+                )
+            continue
+        if mode == SCORE_DOWN_CONTEXT_BASE_MODE:
+            for profile_key in score_down_context_profiles:
+                if profile_key not in CONTEXT_SCORE_DOWN_PROFILES:
+                    raise ValueError(f"unknown context score-down profile: {profile_key}")
+                scenarios.append(
+                    SimulatorScenario(
+                        mode_key=f"score_down_context_{profile_key}_top{score_down_top_k}_{score_down_ranking_date_mode}",
+                        base_mode=mode,
+                        top_k=score_down_top_k,
+                        ranking_date_mode=score_down_ranking_date_mode,
+                        context_profile=profile_key,
                     )
                 )
             continue
@@ -912,6 +1043,7 @@ def build_overlay_frame(
         )
         for trade_date in active_dates:
             key = (trade_date, str(row["ts_code"]))
+            active_age = max(0, bisect.bisect_left(trading_days, trade_date) - bisect.bisect_left(trading_days, effective_trade_date))
             payload = grouped.setdefault(
                 key,
                 {
@@ -933,6 +1065,7 @@ def build_overlay_frame(
                     "max_miss_gap": None,
                     "loss_report_count_730d_max": 0,
                     "prior_loss_report_count_730d_max": 0,
+                    "min_active_age_trading_days": active_age,
                     "earliest_effective_trade_date": effective_trade_date,
                     "latest_effective_trade_date": effective_trade_date,
                 },
@@ -957,6 +1090,10 @@ def build_overlay_frame(
             payload["prior_loss_report_count_730d_max"] = max(
                 int(payload.get("prior_loss_report_count_730d_max") or 0),
                 int(row.get("prior_loss_report_count_730d") or 0),
+            )
+            payload["min_active_age_trading_days"] = min(
+                int(payload.get("min_active_age_trading_days") or active_age),
+                active_age,
             )
             payload["earliest_effective_trade_date"] = min(payload["earliest_effective_trade_date"], effective_trade_date)
             payload["latest_effective_trade_date"] = max(payload["latest_effective_trade_date"], effective_trade_date)
@@ -984,6 +1121,7 @@ def build_overlay_frame(
                 "max_miss_gap": payload["max_miss_gap"],
                 "loss_report_count_730d_max": payload["loss_report_count_730d_max"],
                 "prior_loss_report_count_730d_max": payload["prior_loss_report_count_730d_max"],
+                "min_active_age_trading_days": payload["min_active_age_trading_days"],
                 "earliest_effective_trade_date": payload["earliest_effective_trade_date"].isoformat(),
                 "latest_effective_trade_date": payload["latest_effective_trade_date"].isoformat(),
             }
@@ -1170,6 +1308,140 @@ def build_severity_penalty_by_date(
     return penalties
 
 
+def _rank_date_for_context(
+    *,
+    trade_date: dt.date,
+    trading_days: Sequence[dt.date],
+    ranking_date_mode: str,
+) -> dt.date:
+    if ranking_date_mode == "current":
+        return trade_date
+    if ranking_date_mode != "previous":
+        raise ValueError("ranking_date_mode must be current or previous")
+    idx = bisect.bisect_left(trading_days, trade_date)
+    if idx <= 0:
+        return trade_date
+    if idx < len(trading_days) and trading_days[idx] == trade_date:
+        return trading_days[idx - 1]
+    return trading_days[max(0, idx - 1)]
+
+
+def _trading_day_age(
+    *,
+    trade_date: dt.date,
+    effective_trade_date: dt.date,
+    trading_days: Sequence[dt.date],
+) -> int:
+    trade_idx = bisect.bisect_left(trading_days, trade_date)
+    effective_idx = bisect.bisect_left(trading_days, effective_trade_date)
+    if trade_idx >= len(trading_days):
+        trade_idx = len(trading_days) - 1
+    if effective_idx >= len(trading_days):
+        effective_idx = trade_idx
+    return max(0, trade_idx - effective_idx)
+
+
+def _industry_tokens(value: Any) -> tuple[str, ...]:
+    tokens = [item for item in str(value or "industry_unknown").split("+") if item]
+    return tuple(tokens or ["industry_unknown"])
+
+
+def build_context_score_down_penalty_by_date(
+    overlay: pd.DataFrame,
+    *,
+    candidate_scores: Mapping[dt.date, Sequence[CandidateScore]],
+    trading_days: Sequence[dt.date],
+    profile: ContextScoreDownProfile,
+    top_k: int,
+    ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
+) -> dict[dt.date, dict[str, float]]:
+    """Build rank/severity/decay aware penalties for research-only overlay tests."""
+
+    if top_k <= 0:
+        raise ValueError("top_k must be positive")
+    if overlay.empty:
+        return {}
+    frame = overlay.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"]).dt.date
+    frame["earliest_effective_trade_date"] = pd.to_datetime(frame["earliest_effective_trade_date"]).dt.date
+
+    rank_maps: dict[dt.date, dict[str, int]] = {
+        trade_date: {score.ts_code: idx for idx, score in enumerate(scores, start=1)}
+        for trade_date, scores in candidate_scores.items()
+    }
+    industry_counts_by_date: dict[dt.date, Counter[str]] = defaultdict(Counter)
+    for row in frame.to_dict("records"):
+        if bool(row.get("can_buy", True)) and not bool(row.get("force_exit", False)):
+            continue
+        for industry in _industry_tokens(row.get("industries")):
+            industry_counts_by_date[row["trade_date"]][industry] += 1
+
+    penalties: dict[dt.date, dict[str, float]] = {}
+    for row in frame.to_dict("records"):
+        if bool(row.get("can_buy", True)) and not bool(row.get("force_exit", False)):
+            continue
+        trade_date = row["trade_date"]
+        rank_date = _rank_date_for_context(
+            trade_date=trade_date,
+            trading_days=trading_days,
+            ranking_date_mode=ranking_date_mode,
+        )
+        original_rank = rank_maps.get(rank_date, {}).get(str(row["ts_code"]))
+        if original_rank is None or original_rank > top_k:
+            continue
+
+        penalty = profile.base_pct
+        if original_rank <= max(1, math.ceil(top_k * 0.20)):
+            penalty += profile.top_quintile_add_pct
+        elif original_rank <= max(1, math.ceil(top_k * 0.50)):
+            penalty += profile.top_half_add_pct
+
+        loss_to_market_cap = _safe_float(row.get("max_loss_to_market_cap"))
+        if loss_to_market_cap is not None:
+            if loss_to_market_cap >= 1.0:
+                penalty += profile.loss_ge_100_add_pct
+            elif loss_to_market_cap >= 0.50:
+                penalty += profile.loss_ge_50_add_pct
+        loss_reports = int(_safe_float(row.get("loss_report_count_730d_max")) or 0)
+        prior_loss_reports = int(_safe_float(row.get("prior_loss_report_count_730d_max")) or 0)
+        if max(loss_reports, prior_loss_reports) >= 2:
+            penalty += profile.repeated_loss_add_pct
+        miss_gap = _safe_float(row.get("max_miss_gap"))
+        if miss_gap is not None and miss_gap >= 50.0:
+            penalty += profile.miss_gap_ge_50_add_pct
+        if int(_safe_float(row.get("active_signal_count")) or 0) >= 2:
+            penalty += profile.multi_signal_add_pct
+
+        raw_age = _safe_float(row.get("min_active_age_trading_days"))
+        age = (
+            int(raw_age)
+            if raw_age is not None
+            else _trading_day_age(
+                trade_date=trade_date,
+                effective_trade_date=row["earliest_effective_trade_date"],
+                trading_days=trading_days,
+            )
+        )
+        active_days = max(1, int(_safe_float(row.get("active_trading_days")) or top_k))
+        decay_span = max(1, active_days - 1)
+        decay_multiplier = max(profile.decay_floor, 1.0 - (age / decay_span) * (1.0 - profile.decay_floor))
+        penalty *= decay_multiplier
+
+        if profile.sector_cluster_min_count > 0 and profile.sector_cluster_relief_pct > 0:
+            sector_count = max(industry_counts_by_date.get(trade_date, {}).get(industry, 0) for industry in _industry_tokens(row.get("industries")))
+            if sector_count >= profile.sector_cluster_min_count:
+                penalty *= max(0.0, 1.0 - profile.sector_cluster_relief_pct)
+
+        penalty = min(profile.max_pct, max(0.0, penalty))
+        if penalty <= 0:
+            continue
+        penalties.setdefault(trade_date, {})[str(row["ts_code"])] = max(
+            penalties.get(trade_date, {}).get(str(row["ts_code"]), 0.0),
+            penalty,
+        )
+    return penalties
+
+
 def run_score_down_rerank_counterfactual(
     *,
     positions: dict[dt.date, dict[str, dict[str, float]]],
@@ -1184,6 +1456,7 @@ def run_score_down_rerank_counterfactual(
     ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
     symbol_rank_penalty_pct_by_date: Optional[Mapping[dt.date, Mapping[str, float]]] = None,
     severity_profile_key: Optional[str] = None,
+    context_profile_key: Optional[str] = None,
 ) -> tuple[pd.Series, dict[str, Any]]:
     """Approximate a score-down overlay by demoting risky names before TopK selection.
 
@@ -1574,6 +1847,7 @@ def run_score_down_rerank_counterfactual(
         "score_down_penalty_ranks": penalty_ranks,
         "score_down_variable_penalty_enabled": symbol_rank_penalty_pct_by_date is not None,
         "score_down_severity_profile": severity_profile_key,
+        "score_down_context_profile": context_profile_key,
         "score_down_avg_applied_penalty_pct": _mean(applied_penalty_pcts),
         "score_down_min_applied_penalty_pct": min(applied_penalty_pcts) if applied_penalty_pcts else None,
         "score_down_max_applied_penalty_pct": max(applied_penalty_pcts) if applied_penalty_pcts else None,
@@ -1705,6 +1979,35 @@ def _run_one_mode(
             symbol_rank_penalty_pct_by_date=symbol_penalties,
             severity_profile_key=profile.profile_key,
         )
+    if simulator_mode == SCORE_DOWN_CONTEXT_BASE_MODE:
+        if candidate_scores is None or price_returns is None:
+            raise ValueError("score_down_context mode requires candidate_scores and price_returns")
+        if simulator_scenario.context_profile is None or simulator_scenario.top_k is None:
+            raise ValueError("score_down_context scenario missing context_profile/top_k")
+        profile = CONTEXT_SCORE_DOWN_PROFILES[simulator_scenario.context_profile]
+        trading_days = sorted({_date_key(value) for value in report.index})
+        symbol_penalties = build_context_score_down_penalty_by_date(
+            overlay_for_validator,
+            candidate_scores=candidate_scores,
+            trading_days=trading_days,
+            profile=profile,
+            top_k=simulator_scenario.top_k,
+            ranking_date_mode=simulator_scenario.ranking_date_mode or DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
+        )
+        return run_score_down_rerank_counterfactual(
+            positions=positions,
+            report=report,
+            overlay=overlay_for_validator,
+            candidate_scores=candidate_scores,
+            price_returns=price_returns,
+            date_from=date_from,
+            date_to=date_to,
+            rank_penalty_pct=profile.base_pct,
+            top_k=simulator_scenario.top_k,
+            ranking_date_mode=simulator_scenario.ranking_date_mode or DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
+            symbol_rank_penalty_pct_by_date=symbol_penalties,
+            context_profile_key=profile.profile_key,
+        )
     raise ValueError(f"unsupported simulator mode: {simulator_mode}")
 
 
@@ -1720,6 +2023,7 @@ def run_financial_distress_qe_overlay_research(
     simulator_modes: Sequence[str] = DEFAULT_SIMULATOR_MODES,
     score_down_rank_penalty_pcts: Sequence[float] = DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS,
     score_down_severity_profiles: Sequence[str] = DEFAULT_SCORE_DOWN_SEVERITY_PROFILES,
+    score_down_context_profiles: Sequence[str] = DEFAULT_SCORE_DOWN_CONTEXT_PROFILES,
     score_down_top_k: int = DEFAULT_SCORE_DOWN_TOP_K,
     score_down_ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
     price_return_csv: Optional[Path] = None,
@@ -1748,6 +2052,7 @@ def run_financial_distress_qe_overlay_research(
         simulator_modes=simulator_modes,
         score_down_rank_penalty_pcts=score_down_rank_penalty_pcts,
         score_down_severity_profiles=score_down_severity_profiles,
+        score_down_context_profiles=score_down_context_profiles,
         score_down_top_k=score_down_top_k,
         score_down_ranking_date_mode=score_down_ranking_date_mode,
     )
@@ -1863,7 +2168,9 @@ def run_financial_distress_qe_overlay_research(
             "expanded_simulator_modes": [scenario.mode_key for scenario in simulator_scenarios],
             "score_down_rank_penalty_pcts": [scenario.rank_penalty_pct for scenario in simulator_scenarios if scenario.base_mode == SCORE_DOWN_BASE_MODE],
             "score_down_severity_profiles": [scenario.severity_profile for scenario in simulator_scenarios if scenario.base_mode == SCORE_DOWN_SEVERITY_BASE_MODE],
+            "score_down_context_profiles": [scenario.context_profile for scenario in simulator_scenarios if scenario.base_mode == SCORE_DOWN_CONTEXT_BASE_MODE],
             "severity_profiles": {key: asdict(SEVERITY_PROFILES[key]) for key in SEVERITY_PROFILES},
+            "context_score_down_profiles": {key: asdict(CONTEXT_SCORE_DOWN_PROFILES[key]) for key in CONTEXT_SCORE_DOWN_PROFILES},
             "score_down_top_k": score_down_top_k,
             "score_down_ranking_date_mode": score_down_ranking_date_mode,
             "financial_rows_loaded": len(financial_rows),
@@ -2234,6 +2541,7 @@ def run_multiloop_financial_distress_qe_overlay_research(
     simulator_modes: Sequence[str] = DEFAULT_SIMULATOR_MODES,
     score_down_rank_penalty_pcts: Sequence[float] = DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS,
     score_down_severity_profiles: Sequence[str] = DEFAULT_SCORE_DOWN_SEVERITY_PROFILES,
+    score_down_context_profiles: Sequence[str] = DEFAULT_SCORE_DOWN_CONTEXT_PROFILES,
     score_down_top_k: int = DEFAULT_SCORE_DOWN_TOP_K,
     score_down_ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
     price_return_csv: Optional[Path] = None,
@@ -2260,6 +2568,7 @@ def run_multiloop_financial_distress_qe_overlay_research(
         simulator_modes=simulator_modes,
         score_down_rank_penalty_pcts=score_down_rank_penalty_pcts,
         score_down_severity_profiles=score_down_severity_profiles,
+        score_down_context_profiles=score_down_context_profiles,
         score_down_top_k=score_down_top_k,
         score_down_ranking_date_mode=score_down_ranking_date_mode,
     )
@@ -2285,6 +2594,7 @@ def run_multiloop_financial_distress_qe_overlay_research(
             simulator_modes=simulator_modes,
             score_down_rank_penalty_pcts=score_down_rank_penalty_pcts,
             score_down_severity_profiles=score_down_severity_profiles,
+            score_down_context_profiles=score_down_context_profiles,
             score_down_top_k=score_down_top_k,
             score_down_ranking_date_mode=score_down_ranking_date_mode,
             price_return_csv=price_return_csv,
@@ -2327,7 +2637,9 @@ def run_multiloop_financial_distress_qe_overlay_research(
             "expanded_simulator_modes": [scenario.mode_key for scenario in simulator_scenarios],
             "score_down_rank_penalty_pcts": [scenario.rank_penalty_pct for scenario in simulator_scenarios if scenario.base_mode == SCORE_DOWN_BASE_MODE],
             "score_down_severity_profiles": [scenario.severity_profile for scenario in simulator_scenarios if scenario.base_mode == SCORE_DOWN_SEVERITY_BASE_MODE],
+            "score_down_context_profiles": [scenario.context_profile for scenario in simulator_scenarios if scenario.base_mode == SCORE_DOWN_CONTEXT_BASE_MODE],
             "severity_profiles": {key: asdict(SEVERITY_PROFILES[key]) for key in SEVERITY_PROFILES},
+            "context_score_down_profiles": {key: asdict(CONTEXT_SCORE_DOWN_PROFILES[key]) for key in CONTEXT_SCORE_DOWN_PROFILES},
             "score_down_top_k": score_down_top_k,
             "score_down_ranking_date_mode": score_down_ranking_date_mode,
             "financial_rows_loaded": len(financial_rows),
@@ -2671,7 +2983,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--simulator-mode",
         action="append",
-        choices=["cash", "next_candidate", SCORE_DOWN_BASE_MODE, SCORE_DOWN_SEVERITY_BASE_MODE],
+        choices=["cash", "next_candidate", SCORE_DOWN_BASE_MODE, SCORE_DOWN_SEVERITY_BASE_MODE, SCORE_DOWN_CONTEXT_BASE_MODE],
         default=None,
     )
     parser.add_argument(
@@ -2688,6 +3000,13 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         choices=sorted(SEVERITY_PROFILES),
         default=None,
         help="Severity profile for score_down_severity mode. Can be repeated.",
+    )
+    parser.add_argument(
+        "--score-down-context-profile",
+        action="append",
+        choices=sorted(CONTEXT_SCORE_DOWN_PROFILES),
+        default=None,
+        help="Context profile for score_down_context mode. Can be repeated.",
     )
     parser.add_argument(
         "--score-down-ranking-date-mode",
@@ -2741,6 +3060,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             simulator_modes=tuple(args.simulator_mode or DEFAULT_SIMULATOR_MODES),
             score_down_rank_penalty_pcts=tuple(args.score_down_rank_penalty_pct or DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS),
             score_down_severity_profiles=tuple(args.score_down_severity_profile or DEFAULT_SCORE_DOWN_SEVERITY_PROFILES),
+            score_down_context_profiles=tuple(args.score_down_context_profile or DEFAULT_SCORE_DOWN_CONTEXT_PROFILES),
             score_down_top_k=args.score_down_top_k,
             score_down_ranking_date_mode=args.score_down_ranking_date_mode,
             price_return_csv=Path(args.price_return_csv) if args.price_return_csv else None,
@@ -2765,6 +3085,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         simulator_modes=tuple(args.simulator_mode or DEFAULT_SIMULATOR_MODES),
         score_down_rank_penalty_pcts=tuple(args.score_down_rank_penalty_pct or DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS),
         score_down_severity_profiles=tuple(args.score_down_severity_profile or DEFAULT_SCORE_DOWN_SEVERITY_PROFILES),
+        score_down_context_profiles=tuple(args.score_down_context_profile or DEFAULT_SCORE_DOWN_CONTEXT_PROFILES),
         score_down_top_k=args.score_down_top_k,
         score_down_ranking_date_mode=args.score_down_ranking_date_mode,
         price_return_csv=Path(args.price_return_csv) if args.price_return_csv else None,

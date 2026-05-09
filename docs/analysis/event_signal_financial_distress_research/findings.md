@@ -15,6 +15,8 @@
 | F007 | Every rule now has market-cap bucket coverage | Use bucket rows to prevent small-cap-only overgeneralization. |
 | F008 | Direct event returns are not pure downside events | Do not convert financial distress rules to hard bans without context. |
 | F009 | Medium-cap indicator decline is context-sensitive | Keep as QE rank/severity score-down candidate, not standalone risk filter. |
+| F010 | Context overlay improves policy shape more than raw return | Prefer it for runtime-shaped design, not because it beats every benchmark. |
+| F011 | Sector relief is not yet a decision driver | Keep compatibility for plate rotation, but do not select rules by sector relief. |
 +------+----------------------------------------------+--------------------------------------------------------------+
 ```
 
@@ -147,4 +149,18 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | indicator_decline_30_100bn | abnormal medians negative from T+5 onward but QE overlay weak                                | watchlist-only research feature                                        |
 | structured_risk_10_30bn    | positive abnormal mean but negative abnormal median                                          | coverage benchmark, not standalone runtime signal                      |
 +----------------------------+----------------------------------------------------------------------------------------------+------------------------------------------------------------------------+
+```
+
+
+## Phase 12 Context Overlay Finding
+
+```text
++-----------------------------------------------------------------------------------------+----------------------------------------------+
+| finding                                                                                 | implication                                  |
++-----------------------------------------------------------------------------------------+----------------------------------------------+
+| balanced context profile is best runtime-shaped candidate for 10-30bn indicator decline | use score-down only, 20-60td, no hard ban    |
+| old aggressive rank20 can have higher average but worse tail                            | do not promote aggressive profile first      |
+| smallcap loss/mv benchmark remains useful                                               | continue comparing every new rule against it |
+| sector relief had little measurable effect in this run                                  | keep as configurable future hook only        |
++-----------------------------------------------------------------------------------------+----------------------------------------------+
 ```
