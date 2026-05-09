@@ -243,3 +243,56 @@ Phase 16 selected result:
 | ctx_balanced60 | 14/22     | 0.1134%   | 0.0000%   | -0.3206%  | 0.0294%   |
 +----------------+-----------+-----------+-----------+-----------+-----------+
 ```
+
+
+## 2026-05-09 Phase 17 Completion
+
+```text
++----------------------+---------------------------------------+-------------------------------------------------+
+| time                 | action                                | result                                          |
++----------------------+---------------------------------------+-------------------------------------------------+
+| 2026-05-09 evening   | inspected QE pred-backtest path       | qrun_limit_minute.py can rerun external pred.pkl|
+| 2026-05-09 evening   | added pred materializer prototype     | research-only adjusted pred.pkl + trace writer  |
+| 2026-05-09 evening   | validated previous-date mapping       | T signal rewrites T-1 prediction rows           |
+| 2026-05-09 evening   | documented true-rerun harness design  | next phase is copied-loop one-loop smoke        |
++----------------------+---------------------------------------+-------------------------------------------------+
+```
+
+Latest curated report: `docs/analysis/event_signal_financial_distress_true_qe_rerun_design_20260509.md`.
+Latest validation record: `tests/aistock_validation/history/local_data_management/20260509_l2_financial-distress-true-qe-rerun-design-validation.md`.
+
+Phase 17 validation:
+
+```powershell
+python -m py_compile backend/services/event_signal/financial_distress_pred_materializer.py backend/tests/event_signal/test_financial_distress_pred_materializer.py
+python -m pytest backend/tests/event_signal/test_financial_distress_pred_materializer.py -q
+python -m pytest backend/tests/event_signal/test_financial_distress_qe_overlay_research.py backend/tests/event_signal/test_financial_distress_pred_materializer.py -q
+python -m pytest backend/tests/test_unified_event_signal_schema.py backend/tests/event_signal -q
+rg -n "financial_distress_pred_materializer|true_qe_rerun|rank_decay_balanced|indicator_large_decline_mv_10_30bn" backend/services/selection_center backend/services/paper_trading_v2 backend/services/quantevolver backend/infra/qmt_client.py backend/routers/qmt.py -S
+git diff --check
+```
+
+```text
++--------------------------------------+-----------------------------+
+| check                                | result                      |
++--------------------------------------+-----------------------------+
+| py_compile                           | pass                        |
+| targeted materializer pytest         | 4 passed                    |
+| focused financial distress pytest    | 35 passed                   |
+| event_signal pytest suite            | 170 passed                  |
+| runtime isolation scan               | no runtime references added |
+| git diff --check                     | pass, LF/CRLF warnings only |
+| runtime code changes                 | none outside event_signal   |
+| production backend 8001              | not touched                 |
++--------------------------------------+-----------------------------+
+```
+
+Phase 17 errors and resolutions:
+
+```text
++------------------------------------------+----------------------------------------------+----------------------------------------------+
+| error                                    | cause                                        | resolution                                   |
++------------------------------------------+----------------------------------------------+----------------------------------------------+
+| PowerShell rejected python heredoc syntax| bash-style python - <<'PY' is unsupported    | used PowerShell here-string piped to python  |
++------------------------------------------+----------------------------------------------+----------------------------------------------+
+```

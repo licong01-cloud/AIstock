@@ -21,6 +21,7 @@
 | F013 | Additional loops weaken 20td default and favor more research | Keep 60td as primary test; run parameter sweep before runtime promotion. |
 | F014 | 22-loop parameter sweep favors 60td context-balanced score-down | Use as primary research candidate; keep fixed 10% only as baseline. |
 | F015 | Robustness gate rejects runtime and DB promotion for now | Median is zero and effect is replacement-sparse; design true QE rerun next. |
+| F016 | qrun --pred-backtest enables copied-loop true rerun | Use materialized pred.pkl for research-only PortAnaRecord validation. |
 +------+----------------------------------------------+--------------------------------------------------------------+
 ```
 
@@ -223,4 +224,18 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | outlier dependence remains             | require broader experiment support before promotion            |
 | traceable rerun is justified           | next phase should design rerun trace and hook points           |
 +----------------------------------------+---------------------------------------------------------------+
+```
+
+
+## Phase 17 True QE Rerun Design Finding
+
+```text
++---------------------------------------------+---------------------------------------------------------------+
+| finding                                     | implication                                                   |
++---------------------------------------------+---------------------------------------------------------------+
+| --pred-backtest can rerun real PortAnaRecord| copied-loop true QE validation is feasible without runtime edit |
+| prediction date must be shifted             | trade-date risk for T should rewrite T-1 pred rows by default  |
+| materializer creates pkl/csv/json/md trace  | next empirical phase can compare baseline vs adjusted rerun     |
+| score-weighted sizing remains approximate   | require copied-loop baseline parity before interpreting alpha   |
++---------------------------------------------+---------------------------------------------------------------+
 ```

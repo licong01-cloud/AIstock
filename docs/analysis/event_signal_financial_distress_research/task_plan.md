@@ -63,8 +63,9 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 14    | additional QE experiment validation             | complete   | 12 extra loops tested; 60td weakly better than 20td          |
 | 15    | non-hard parameter sweep across loop sets       | complete   | 22-loop sweep shows 60td context-balanced as best shape      |
 | 16    | robustness gate / persistence decision          | complete   | keep research-only; reject runtime and DB promotion for now  |
-| 17    | true QE rerun design / dry-run harness          | pending    | define traceable rerun path without production QE coupling   |
-| 18    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
+| 17    | true QE rerun design / dry-run harness          | complete   | pred-backtest materializer path designed and unit-tested      |
+| 18    | copied-loop true QE smoke rerun                 | pending    | rerun one loop baseline/adjusted pred in copied workspace     |
+| 19    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -170,5 +171,19 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | runtime integration                    | REJECT_NOW                 | benefit is modest and partly driven by a few replacement events         |
 | DB policy draft persistence            | DEFER                      | wait for true QE rerun or stronger breadth before writing policy rows   |
 | true QE rerun                          | DESIGN_NEXT                | next phase should define a traceable, research-only rerun path          |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+```
+
+
+## Phase 17 True QE Rerun Design Finding
+
+```text
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| candidate                              | decision                   | evidence                                                               |
++----------------------------------------+----------------------------+------------------------------------------------------------------------+
+| pred-backtest rerun path               | IMPLEMENT_RESEARCH_HARNESS | qrun_limit_minute.py supports external pred.pkl + PortAnaRecord rerun  |
+| prediction-date mapping                | REQUIRED                   | Qlib trades date T from prediction date T-1 in current generated config |
+| runtime integration                    | STILL_REJECT               | harness is for copied-loop research only; no production QE code change  |
+| next empirical step                    | RUN_ONE_LOOP_SMOKE         | compare baseline rerun vs adjusted-pred rerun before 22-loop batch      |
 +----------------------------------------+----------------------------+------------------------------------------------------------------------+
 ```
