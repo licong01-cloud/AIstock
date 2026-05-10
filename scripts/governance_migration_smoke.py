@@ -827,6 +827,7 @@ def run_db_execution(*, target: DbTarget, apply: bool = False) -> SmokeReport:
     apply_order = _specs_in_apply_order()
     applied_files: list[str] = []
     try:
+        conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute("SELECT to_regclass('strategy_pkg.package'), to_regclass('public.aistock_model_catalog')")
             package_regclass, catalog_regclass = cur.fetchone()
@@ -834,9 +835,9 @@ def run_db_execution(*, target: DbTarget, apply: bool = False) -> SmokeReport:
             raise GovernanceMigrationSmokeError("strategy_pkg.package is required before governance stack smoke")
         if catalog_regclass is None:
             raise GovernanceMigrationSmokeError("public.aistock_model_catalog is required by model registry bridge")
+        conn.autocommit = False
 
         if not apply:
-            conn.autocommit = False
             try:
                 with conn.cursor() as cur:
                     cur.execute("SET LOCAL lock_timeout = '3s'")
@@ -850,7 +851,6 @@ def run_db_execution(*, target: DbTarget, apply: bool = False) -> SmokeReport:
                 raise
         else:
             for spec in apply_order:
-                conn.autocommit = False
                 try:
                     with conn.cursor() as cur:
                         cur.execute("SET LOCAL lock_timeout = '3s'")
@@ -864,6 +864,7 @@ def run_db_execution(*, target: DbTarget, apply: bool = False) -> SmokeReport:
 
             with conn.cursor() as cur:
                 _verify_catalog_after_apply(cur, apply_order)
+            conn.rollback()
     finally:
         conn.close()
 

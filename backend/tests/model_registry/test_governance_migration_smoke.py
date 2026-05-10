@@ -603,7 +603,7 @@ def test_apply_commits_per_file_in_phase1a_order(monkeypatch: pytest.MonkeyPatch
     assert report.checks["db_execution"]["applied_files"] == list(smoke.PHASE1A_APPLY_ORDER)
     assert executed_files == list(smoke.PHASE1A_APPLY_ORDER)
     assert fake_conn.commit_count == len(smoke.PHASE1A_APPLY_ORDER)
-    assert fake_conn.rollback_count == 0
+    assert fake_conn.rollback_count == 1
     assert fake_conn.close_count == 1
 
 
