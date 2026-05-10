@@ -131,3 +131,6 @@ report/
 .env
 .claude/
 aistock_models/aistock_models.egg-info/
+
+# Dev DB schema snapshots (T17, 2026-05-10) — large, regenerable from prod
+backend/db/dev/
