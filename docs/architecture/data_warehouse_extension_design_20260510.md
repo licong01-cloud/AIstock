@@ -142,12 +142,61 @@ ETL scope 全 21 张：
 | 20 | config_change_audit | paper_v2_config_change_audit | append | config.changed |
 | 21 | reset_audit | paper_v2_reset_audit | append | run.completed |
 
-**主表（1 张）**：paper_v2_run（D1=a 新增独立主表）
-**SCD2 维度（3 张）**：portfolio / runtime_profile / runtime_profile_version
-**事实表（13 张）**：session / session_day / order_execution / order / fill / position_snapshot / daily_snapshot / intraday_snapshot / cash_ledger / error / runtime_config_activation / execution_policy_activation / reset_audit
-**事件表 append-only（5 张）**：session_event / run_event / order_event / config_change_audit / broker_error（如有）
+### §3.2.1 表数对账（T11 修正，per Codex D5 Q1.a caveat drawer 9cd6d6bb）
 
-合计 paper_v2_* 表：**1 + 3 + 13 + 5 = 22**（其中 broker_error 视 schema 实际情况，可能合并到 paper_v2_error，故文档其他章节按 18 张计算 = 1 主表 + 17 子表）。
+**Codex 发现 D5 文中存在 3 个表数描述不一致**："21 runtime tables in scope" / "18 + 1" / 列举 1+3+13+5=22。本节统一 **18 + 1** 为权威数。
+
+| 类别 | 数量 | 表 |
+|---|---|---|
+| 主表 | 1 | paper_v2_run |
+| SCD2 维度 | 3 | dim_paper_v2_portfolio / dim_paper_v2_runtime_profile / dim_paper_v2_runtime_profile_version |
+| 事实表 | 9 | paper_v2_session / paper_v2_session_day / paper_v2_order / paper_v2_order_execution_state / paper_v2_fill / paper_v2_position_snapshot / paper_v2_daily_snapshot / paper_v2_intraday_snapshot / paper_v2_cash_ledger |
+| 配置/审计事实表 | 3 | paper_v2_runtime_config_activation / paper_v2_execution_policy_activation / paper_v2_reset_audit |
+| 事件表（append-only）| 4 | paper_v2_session_event / paper_v2_run_event / paper_v2_order_event / paper_v2_config_change_audit |
+| **paper_v2_* 总计** | **20** | |
+| factor_value | 1 | factor_value（单独，按月分区）|
+| **qe_archive 新增总计** | **21** | |
+
+注：之前 v1/v2 文中"18+1"是漏算的旧表，"22"重复计入了 broker_error。本节为权威。
+
+### §3.2.2 paper_v2_error 与 broker_error 合并政策（T11 决定）
+
+paper_v2 source schema 中 `errors` 表（21 张运行时表之一）已涵盖 broker 异常（含 BrokerBackendError 子类）。**不**单独建 paper_v2_broker_error，统一进 **paper_v2_error**：
+
+```sql
+-- paper_v2_error 表已含 error_class 字段，区分 broker 异常 vs 一般异常
+error_class TEXT  -- 'BrokerBackendError' 子类 / 'StrategyPackageError' / 'GenericError' / ...
+```
+
+应用层查询 broker 异常：`WHERE error_class LIKE 'BrokerBackend%'`。
+
+### §3.2.3 source-to-archive 表映射（per Codex D5 Q1.a 要求）
+
+| paper_v2 source 表 | qe_archive 目标 | grain | ETL 触发 | 备注 |
+|---|---|---|---|---|
+| portfolio | dim_paper_v2_portfolio (SCD2) | portfolio_id × manifest_sha256 × broker_backend | config.changed + portfolio.run.completed | 维度，broker 切换 → 新版本 |
+| run | **paper_v2_run（独立主表）** | portfolio_id × trade_date | portfolio.run.completed | D1=a 不共享 qe_archive.run |
+| trade_session | paper_v2_session | trade_session_id | portfolio.run.completed | |
+| session_day | paper_v2_session_day | trade_session_id × trade_date | portfolio.run.completed | |
+| session_events | paper_v2_session_event | event_id append | portfolio.run.completed | |
+| run_events | paper_v2_run_event | event_id append | portfolio.run.completed | |
+| order_execution_state | paper_v2_order_execution_state | order_id 终态 | portfolio.run.completed | |
+| orders | paper_v2_order | order_id | portfolio.run.completed | |
+| order_events | paper_v2_order_event | event_id append | portfolio.run.completed | |
+| fills | paper_v2_fill | fill_id | portfolio.run.completed | T6.1 真实 market_context schema (§5.7) |
+| positions | paper_v2_position_snapshot | trade_date × portfolio_id × symbol | daily_snapshot.captured | |
+| daily_snapshots | paper_v2_daily_snapshot | trade_date × portfolio_id | daily_snapshot.captured | join market.regime_label |
+| intraday_snapshots | paper_v2_intraday_snapshot | snapshot_id | portfolio.run.completed | |
+| cash_ledger | paper_v2_cash_ledger | ledger_entry_id append | portfolio.run.completed | |
+| **errors** | **paper_v2_error**（含 broker 异常）| error_id append | portfolio.run.completed | broker_error 不单独建表 |
+| runtime_profile | dim_paper_v2_runtime_profile (SCD2) | profile_id × version | profile.changed | |
+| runtime_profile_version | dim_paper_v2_runtime_profile_version | version_id | profile.changed | |
+| runtime_config_activation | paper_v2_runtime_config_activation | activation_id | config.changed | |
+| execution_policy_activation | paper_v2_execution_policy_activation | activation_id | config.changed | |
+| config_change_audit | paper_v2_config_change_audit | audit_id append | config.changed | |
+| reset_audit | paper_v2_reset_audit | audit_id append | run.completed | |
+
+**总计**：21 source tables → **20 paper_v2_* archive tables**（errors 合并到 paper_v2_error，dim_paper_v2_portfolio SCD2 一对多）+ **1 factor_value**（来源 single/parquet）= **21 archive tables 新增**。
 
 ### §3.3 增量去重策略
 
