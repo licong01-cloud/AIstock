@@ -240,8 +240,11 @@ SELECT
     CASE WHEN lower(COALESCE(mc.raw_payload ->> 'training_failed', 'false')) IN ('true', '1', 'yes') THEN FALSE ELSE TRUE END AS qe_selectable,
     FALSE::BOOLEAN AS paper_selectable,
     'legacy aistock_model_catalog compatibility bridge; Paper selects StrategyPackage, not this model row'::TEXT AS qe_selectability_reason,
-    mc.created_at,
-    mc.updated_at
+    -- public.aistock_model_catalog has generated_at_utc text but no
+    -- created_at/updated_at columns. Keep nullable synthetic timestamps to
+    -- preserve the bridge contract without risking runtime text-cast failures.
+    NULL::TIMESTAMPTZ AS created_at,
+    NULL::TIMESTAMPTZ AS updated_at
 FROM public.aistock_model_catalog mc;
 
 COMMENT ON SCHEMA model_registry IS 'Authoritative model registry schema for QE model templates, specs, trials, artifacts, and lifecycle audit events.';

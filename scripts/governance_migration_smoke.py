@@ -232,6 +232,15 @@ STACK_SPECS: tuple[MigrationSpec, ...] = (
     ),
 )
 
+PHASE1A_APPLY_ORDER = (
+    "strategy_pkg_package_asset_20260509.sql",
+    "qe_phase4_master_seed_contract_20260509.sql",
+    "strategy_pkg_runtime_variant_20260509.sql",
+    "strategy_pkg_validation_run_20260509.sql",
+    "strategy_pkg_promotion_review_20260509.sql",
+    "model_registry_phase5_20260509.sql",
+)
+
 
 @dataclass(frozen=True)
 class DbTarget:
@@ -787,72 +796,88 @@ def _fetch_names(cur: Any, sql: str) -> set[str]:
     return {str(row[0]) for row in cur.fetchall()}
 
 
+def _specs_in_apply_order(specs: tuple[MigrationSpec, ...] = STACK_SPECS) -> tuple[MigrationSpec, ...]:
+    by_filename = {spec.filename: spec for spec in specs}
+    if set(by_filename) != set(PHASE1A_APPLY_ORDER):
+        raise GovernanceMigrationSmokeError("Unexpected Phase 1A apply spec set")
+    return tuple(by_filename[filename] for filename in PHASE1A_APPLY_ORDER)
+
+
+def _verify_catalog_after_apply(cur: Any, specs: tuple[MigrationSpec, ...]) -> None:
+    expected_columns_by_spec = {spec.filename: _expected_columns_for_spec(spec) for spec in specs}
+    missing: dict[str, dict[str, Any]] = {}
+    for spec in specs:
+        state = _catalog_state(cur, spec, expected_columns_by_spec[spec.filename])
+        if state["missing_object_count"]:
+            missing[spec.filename] = {
+                "missing_object_count": state["missing_object_count"],
+                "missing_tables": state["missing_tables"],
+                "missing_views": state["missing_views"],
+                "missing_indexes": state["missing_indexes"],
+                "missing_named_constraints": state["missing_named_constraints"],
+                "missing_columns": state["missing_columns"],
+            }
+    if missing:
+        raise GovernanceMigrationSmokeError(f"DB smoke missing objects after apply: {json.dumps(missing, ensure_ascii=False)}")
+
+
 def run_db_execution(*, target: DbTarget, apply: bool = False) -> SmokeReport:
     static_report = run_static_smoke()
     conn = _connect(target)
-    committed = False
-    transaction_finished = False
+    apply_order = _specs_in_apply_order()
+    applied_files: list[str] = []
     try:
-        conn.autocommit = False
         with conn.cursor() as cur:
-            cur.execute("SET LOCAL lock_timeout = '3s'")
-            cur.execute("SET LOCAL statement_timeout = '120s'")
             cur.execute("SELECT to_regclass('strategy_pkg.package'), to_regclass('public.aistock_model_catalog')")
             package_regclass, catalog_regclass = cur.fetchone()
-            if package_regclass is None:
-                raise GovernanceMigrationSmokeError("strategy_pkg.package is required before governance stack smoke")
-            if catalog_regclass is None:
-                raise GovernanceMigrationSmokeError("public.aistock_model_catalog is required by model registry bridge")
-            for spec in STACK_SPECS:
-                cur.execute(spec.path.read_text(encoding="utf-8"))
-            model_registry_tables = _fetch_names(
-                cur,
-                """
-                SELECT table_name FROM information_schema.tables
-                WHERE table_schema = 'model_registry' AND table_type = 'BASE TABLE'
-                """,
-            )
-            strategy_pkg_tables = _fetch_names(
-                cur,
-                """
-                SELECT table_name FROM information_schema.tables
-                WHERE table_schema = 'strategy_pkg' AND table_type = 'BASE TABLE'
-                """,
-            )
-            views = _fetch_names(
-                cur,
-                """
-                SELECT table_name FROM information_schema.views
-                WHERE table_schema = 'model_registry'
-                """,
-            )
-            missing_tables: list[str] = []
-            missing_views: list[str] = []
-            for spec in STACK_SPECS:
-                found = model_registry_tables if spec.schema == "model_registry" else strategy_pkg_tables
-                missing_tables.extend(f"{spec.schema}.{table}" for table in spec.tables if table not in found)
-                missing_views.extend(f"{spec.schema}.{view}" for view in spec.views if view not in views)
-            if missing_tables or missing_views:
-                raise GovernanceMigrationSmokeError(f"DB smoke missing tables={missing_tables} views={missing_views}")
-        if apply:
-            conn.commit()
-            committed = True
-            transaction_finished = True
+        if package_regclass is None:
+            raise GovernanceMigrationSmokeError("strategy_pkg.package is required before governance stack smoke")
+        if catalog_regclass is None:
+            raise GovernanceMigrationSmokeError("public.aistock_model_catalog is required by model registry bridge")
+
+        if not apply:
+            conn.autocommit = False
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SET LOCAL lock_timeout = '3s'")
+                    cur.execute("SET LOCAL statement_timeout = '120s'")
+                    for spec in apply_order:
+                        cur.execute(spec.path.read_text(encoding="utf-8"))
+                    _verify_catalog_after_apply(cur, apply_order)
+                conn.rollback()
+            except Exception:
+                conn.rollback()
+                raise
         else:
-            conn.rollback()
-            transaction_finished = True
+            for spec in apply_order:
+                conn.autocommit = False
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SET LOCAL lock_timeout = '3s'")
+                        cur.execute("SET LOCAL statement_timeout = '120s'")
+                        cur.execute(spec.path.read_text(encoding="utf-8"))
+                    conn.commit()
+                    applied_files.append(spec.filename)
+                except Exception:
+                    conn.rollback()
+                    raise
+
+            with conn.cursor() as cur:
+                _verify_catalog_after_apply(cur, apply_order)
     finally:
-        if not committed and not transaction_finished:
-            conn.rollback()
         conn.close()
 
     checks = dict(static_report.checks)
-    checks["db_execution"] = {"transaction": "committed" if apply else "rolled_back"}
+    checks["db_execution"] = {
+        "transaction": "committed_per_file" if apply else "rolled_back",
+        "apply_order": [spec.filename for spec in apply_order],
+        "applied_files": applied_files,
+    }
     return SmokeReport(
         status="passed",
         mode="apply" if apply else "db_transaction_check_rolled_back",
         files=static_report.files,
-        order=static_report.order,
+        order=[spec.filename for spec in apply_order],
         checks=checks,
         db_target=target.label,
     )

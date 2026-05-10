@@ -82,6 +82,12 @@ def test_phase5_migration_defines_qe_selector_and_legacy_bridge_views() -> None:
     assert "CREATE OR REPLACE VIEW model_registry.v_legacy_aistock_model_catalog_bridge" in sql
     assert "FROM public.aistock_model_catalog" in sql
     assert "THEN FALSE ELSE TRUE END AS qe_selectable" in sql
+    legacy_view = sql.split("CREATE OR REPLACE VIEW model_registry.v_legacy_aistock_model_catalog_bridge AS", 1)[1]
+    legacy_view = legacy_view.split("FROM public.aistock_model_catalog", 1)[0]
+    assert "NULL::TIMESTAMPTZ AS created_at" in legacy_view
+    assert "NULL::TIMESTAMPTZ AS updated_at" in legacy_view
+    assert "mc.created_at" not in legacy_view
+    assert "mc.updated_at" not in legacy_view
     for field in (
         "s.code_text",
         "s.code_sha256",

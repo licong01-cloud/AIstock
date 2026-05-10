@@ -147,6 +147,14 @@ def test_static_full_stack_smoke_passes_without_db_connection(monkeypatch: pytes
     assert set(report.checks) == {spec.filename for spec in smoke.STACK_SPECS}
 
 
+def test_phase1a_apply_order_keeps_model_registry_last() -> None:
+    ordered = smoke._specs_in_apply_order()
+
+    assert [spec.filename for spec in ordered] == list(smoke.PHASE1A_APPLY_ORDER)
+    assert ordered[0].filename == "strategy_pkg_package_asset_20260509.sql"
+    assert ordered[-1].filename == "model_registry_phase5_20260509.sql"
+
+
 def test_cli_default_json_is_static_and_lists_all_stack_files(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -425,6 +433,8 @@ def test_production_readonly_preflight_reports_missing_objects_and_base_dependen
 
 
 def test_db_transaction_check_rolls_back_and_never_commits(monkeypatch: pytest.MonkeyPatch) -> None:
+    executed_files: list[str] = []
+
     class FakeCursor:
         def __init__(self) -> None:
             self.last_sql = ""
@@ -437,13 +447,30 @@ def test_db_transaction_check_rolls_back_and_never_commits(monkeypatch: pytest.M
 
         def execute(self, sql: str) -> None:
             self.last_sql = sql
+            for spec in smoke.STACK_SPECS:
+                if spec.path.read_text(encoding="utf-8") == sql:
+                    executed_files.append(spec.filename)
 
         def fetchone(self) -> tuple[object, ...]:
             if "to_regclass('strategy_pkg.package')" in self.last_sql:
                 return ("strategy_pkg.package", "public.aistock_model_catalog")
+            if "FROM pg_class" in self.last_sql and "c.relkind" in self.last_sql:
+                if "v_" in self.last_sql:
+                    return ("v",)
+                return ("r",)
             raise AssertionError(f"unexpected fetchone SQL: {self.last_sql}")
 
         def fetchall(self) -> list[tuple[str]]:
+            if "information_schema.columns" in self.last_sql:
+                schema = _query_literal(self.last_sql, "table_schema")
+                table = _query_literal(self.last_sql, "table_name")
+                return [(column,) for column in _preflight_columns().get((schema, table), [])]
+            if "FROM pg_indexes" in self.last_sql:
+                schema = _query_literal(self.last_sql, "schemaname")
+                return sorted(_preflight_indexes().get(schema, set()))
+            if "FROM pg_constraint" in self.last_sql:
+                schema = _query_literal(self.last_sql, "n.nspname")
+                return sorted(_preflight_constraints().get(schema, set()))
             if "information_schema.tables" in self.last_sql and "model_registry" in self.last_sql:
                 names = []
                 for spec in smoke.STACK_SPECS:
@@ -491,8 +518,92 @@ def test_db_transaction_check_rolls_back_and_never_commits(monkeypatch: pytest.M
     )
 
     assert report.mode == "db_transaction_check_rolled_back"
+    assert report.order == list(smoke.PHASE1A_APPLY_ORDER)
+    assert executed_files == list(smoke.PHASE1A_APPLY_ORDER)
     assert fake_conn.commit_count == 0
     assert fake_conn.rollback_count == 1
+    assert fake_conn.close_count == 1
+
+
+def test_apply_commits_per_file_in_phase1a_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    executed_files: list[str] = []
+
+    class FakeCursor:
+        def __init__(self) -> None:
+            self.last_sql = ""
+
+        def __enter__(self) -> "FakeCursor":
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            return None
+
+        def execute(self, sql: str) -> None:
+            self.last_sql = sql
+            for spec in smoke.STACK_SPECS:
+                if spec.path.read_text(encoding="utf-8") == sql:
+                    executed_files.append(spec.filename)
+
+        def fetchone(self) -> tuple[object, ...]:
+            if "to_regclass('strategy_pkg.package')" in self.last_sql:
+                return ("strategy_pkg.package", "public.aistock_model_catalog")
+            raise AssertionError(f"unexpected fetchone SQL: {self.last_sql}")
+
+        def fetchall(self) -> list[tuple[str]]:
+            if "information_schema.columns" in self.last_sql:
+                schema = _query_literal(self.last_sql, "table_schema")
+                table = _query_literal(self.last_sql, "table_name")
+                return [(column,) for column in _preflight_columns().get((schema, table), [])]
+            if "FROM pg_class" in self.last_sql and "c.relkind" in self.last_sql:
+                raise AssertionError("relation kind checks should use fetchone")
+            if "FROM pg_indexes" in self.last_sql:
+                schema = _query_literal(self.last_sql, "schemaname")
+                return sorted(_preflight_indexes().get(schema, set()))
+            if "FROM pg_constraint" in self.last_sql:
+                schema = _query_literal(self.last_sql, "n.nspname")
+                return sorted(_preflight_constraints().get(schema, set()))
+            raise AssertionError(f"unexpected fetchall SQL: {self.last_sql}")
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.autocommit = True
+            self.commit_count = 0
+            self.rollback_count = 0
+            self.close_count = 0
+
+        def cursor(self) -> FakeCursor:
+            return FakeCursor()
+
+        def commit(self) -> None:
+            self.commit_count += 1
+
+        def rollback(self) -> None:
+            self.rollback_count += 1
+
+        def close(self) -> None:
+            self.close_count += 1
+
+    relations = _preflight_relations()
+
+    def relation_kind(cur: object, schema: str, relation_name: str) -> str | None:
+        return relations.get(f"{schema}.{relation_name}")
+
+    fake_conn = FakeConnection()
+    monkeypatch.setattr(smoke, "_connect", lambda _target: fake_conn)
+    monkeypatch.setattr(smoke, "_relation_kind", relation_kind)
+
+    report = smoke.run_db_execution(
+        target=smoke.DbTarget(host="localhost", port=5432, dbname="aistock_dev", user="postgres"),
+        apply=True,
+    )
+
+    assert report.mode == "apply"
+    assert report.order == list(smoke.PHASE1A_APPLY_ORDER)
+    assert report.checks["db_execution"]["transaction"] == "committed_per_file"
+    assert report.checks["db_execution"]["applied_files"] == list(smoke.PHASE1A_APPLY_ORDER)
+    assert executed_files == list(smoke.PHASE1A_APPLY_ORDER)
+    assert fake_conn.commit_count == len(smoke.PHASE1A_APPLY_ORDER)
+    assert fake_conn.rollback_count == 0
     assert fake_conn.close_count == 1
 
 
