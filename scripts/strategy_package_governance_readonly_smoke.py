@@ -319,11 +319,12 @@ def run_smoke(
         _check_list_endpoint(
             api_base,
             f"/strategy-packages/{encoded_package_id}/selection-artifacts?limit={limit}",
-            "selection_artifacts",
+            "artifacts",
             endpoints,
             failures,
             counts,
             timeout,
+            count_key="selection_artifacts",
         )
         _check_list_endpoint(
             api_base,
@@ -421,12 +422,14 @@ def _check_list_endpoint(
     failures: list[str],
     counts: dict[str, Any],
     timeout: float,
+    *,
+    count_key: str | None = None,
 ) -> list[Any]:
     payload = _extract_payload(_append_endpoint(endpoints, _call(api_base, path, timeout=timeout)), failures)
     if payload is None:
         return []
     items = _require_list(payload, path.split("?", 1)[0], key, failures)
-    counts[key] = len(items)
+    counts[count_key or key] = len(items)
     return items
 
 

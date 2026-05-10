@@ -41,7 +41,7 @@ def _route(path: str) -> tuple[int | None, dict | None, str | None]:
         "/strategy-packages/pkg_1/metrics-summary": _ok({"metrics_summary": {"annual_return": 0.1}}),
         "/strategy-packages/pkg_1/execution-policies": _ok({"execution_policies": [{"policy_id": "policy_1"}]}),
         "/strategy-packages/pkg_1/model-retrain/jobs": _ok({"jobs": []}),
-        "/strategy-packages/pkg_1/selection-artifacts": _ok({"selection_artifacts": []}),
+        "/strategy-packages/pkg_1/selection-artifacts": _ok({"artifacts": []}),
         "/strategy-packages/pkg_1/runtime-variants": _ok({"runtime_variants": [{"variant_id": "rtv_1"}]}),
         "/strategy-packages/pkg_1/validation-runs": _ok(
             {"validation_runs": [{"validation_run_id": "vr_1", "status": "PASSED"}]}

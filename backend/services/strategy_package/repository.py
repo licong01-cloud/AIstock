@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterator
 
 import psycopg2.extras
+from psycopg2 import errors as pg_errors
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.db.pg_pool import get_conn
@@ -222,34 +223,61 @@ class StrategyPackageRepository:
                 },
             )
         with self._conn_factory() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE strategy_pkg.package
-                    SET package_status = %s, updated_at = NOW()
-                    WHERE package_id = %s AND package_status = %s
-                    """,
-                    (to_status.value, package_id, record.package_status.value),
-                )
-                if cur.rowcount != 1:
-                    raise InvalidStateTransitionError(
-                        "strategy package status transition lost compare-and-set race",
-                        context={"package_id": package_id},
+            original_autocommit = getattr(conn, "autocommit", None)
+            try:
+                # Keep package status and its audit event atomic even though
+                # pooled AIstock connections default to autocommit=True.
+                if original_autocommit is not None:
+                    conn.autocommit = False
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE strategy_pkg.package
+                        SET package_status = %s, updated_at = NOW()
+                        WHERE package_id = %s AND package_status = %s
+                        """,
+                        (to_status.value, package_id, record.package_status.value),
                     )
-                cur.execute(
-                    """
-                    INSERT INTO strategy_pkg.package_status_event (
-                        package_id, from_status, to_status, reason, context
-                    ) VALUES (%s, %s, %s, %s, %s)
-                    """,
-                    (
-                        package_id,
-                        record.package_status.value,
-                        to_status.value,
-                        reason,
-                        psycopg2.extras.Json(context or {}),
-                    ),
-                )
+                    if cur.rowcount != 1:
+                        raise InvalidStateTransitionError(
+                            "strategy package status transition lost compare-and-set race",
+                            context={"package_id": package_id},
+                        )
+                    cur.execute(
+                        """
+                        INSERT INTO strategy_pkg.package_status_event (
+                            package_id, from_status, to_status, reason, context
+                        ) VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            package_id,
+                            record.package_status.value,
+                            to_status.value,
+                            reason,
+                            psycopg2.extras.Json(context or {}),
+                        ),
+                    )
+                if hasattr(conn, "commit"):
+                    conn.commit()
+            except pg_errors.UniqueViolation as exc:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise InvalidStateTransitionError(
+                    "strategy package status event sequence is behind existing rows",
+                    context={
+                        "package_id": package_id,
+                        "from_status": record.package_status.value,
+                        "to_status": to_status.value,
+                        "reason": reason,
+                    },
+                ) from exc
+            except Exception:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise
+            finally:
+                if original_autocommit is not None:
+                    conn.autocommit = original_autocommit
         return self.get(package_id)
 
     def mark_paper_portfolio_created(self, package_id: str, portfolio_id: str) -> StrategyPackageRecord:

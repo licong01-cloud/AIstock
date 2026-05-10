@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
+import psycopg2
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.model_state import ModelRetrainJobStatus, ModelStalenessStatus, StrategyPackageModelState
 from backend.services.strategy_package.models import PackageStatus
-from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
+from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository, StrategyPackageRepository
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.strategy_package.validation_run import (
     PackageValidationRetrainMode,
@@ -27,7 +28,14 @@ def _record_passed_original_retest(service: StrategyPackageService, package_id: 
         status=PackageValidationStatus.PASSED,
         metrics_json={"annual_return": 0.12, "max_drawdown": -0.08},
         artifact_manifest_json={"artifact_sha256": "sha256:unit-test-original-retest"},
-        evidence_json={"commands": ["pytest synthetic original retest"], "mode": "A"},
+        evidence_json={
+            "commands": ["pytest synthetic original retest"],
+            "mode": "A",
+            "regime_metrics": {
+                "bull": {"annual_return": 0.101},
+                "bear": {"annual_return": 0.102},
+            },
+        },
         completed_at=datetime.now(timezone.utc),
         created_by="unit_test",
     )
@@ -182,6 +190,141 @@ def test_enable_paper_finds_passed_original_retest_even_after_many_newer_runs() 
     assert report["original_fixed_weight_retest"]["matching_passed_run_id"] == passed.validation_run_id
     assert report["original_fixed_weight_retest"]["same_manifest_run_count"] == 101
     assert paper.package_status == PackageStatus.PAPER_ENABLED
+
+
+def test_postgres_repository_wraps_status_event_sequence_collision(monkeypatch) -> None:
+    repo = StrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    state = {
+        "autocommit": True,
+        "commits": 0,
+        "rollbacks": 0,
+    }
+
+    class Cursor:
+        rowcount = 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params=None):
+            if "INSERT INTO strategy_pkg.package_status_event" in sql:
+                raise psycopg2.errors.UniqueViolation("duplicate event_id")
+
+    class Conn:
+        @property
+        def autocommit(self):
+            return state["autocommit"]
+
+        @autocommit.setter
+        def autocommit(self, value):
+            state["autocommit"] = value
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def cursor(self, *args, **kwargs):
+            return Cursor()
+
+        def commit(self):
+            state["commits"] += 1
+
+        def rollback(self):
+            state["rollbacks"] += 1
+
+    monkeypatch.setattr(repo, "get", lambda package_id: manifest_to_record(manifest))
+    monkeypatch.setattr(repo, "_conn_factory", lambda: Conn())
+
+    with pytest.raises(InvalidStateTransitionError, match="status event sequence is behind"):
+        repo.transition_status(
+            package_id=manifest.package_id,
+            to_status=PackageStatus.PAPER_ENABLED,
+            allowed_from={PackageStatus.BACKTEST_APPROVED},
+            reason="enable_paper",
+        )
+    assert state == {
+        "autocommit": True,
+        "commits": 0,
+        "rollbacks": 1,
+    }
+
+
+def test_postgres_repository_commits_status_transition_atomically(monkeypatch) -> None:
+    repo = StrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    state = {
+        "autocommit": True,
+        "commits": 0,
+        "rollbacks": 0,
+        "sql": [],
+    }
+
+    class Cursor:
+        rowcount = 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params=None):
+            state["sql"].append(sql)
+
+    class Conn:
+        @property
+        def autocommit(self):
+            return state["autocommit"]
+
+        @autocommit.setter
+        def autocommit(self, value):
+            state["autocommit"] = value
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def cursor(self, *args, **kwargs):
+            return Cursor()
+
+        def commit(self):
+            state["commits"] += 1
+
+        def rollback(self):
+            state["rollbacks"] += 1
+
+    monkeypatch.setattr(repo, "get", lambda package_id: manifest_to_record(manifest))
+    monkeypatch.setattr(repo, "_conn_factory", lambda: Conn())
+
+    repo.transition_status(
+        package_id=manifest.package_id,
+        to_status=PackageStatus.PAPER_ENABLED,
+        allowed_from={PackageStatus.BACKTEST_APPROVED},
+        reason="enable_paper",
+    )
+
+    assert state["autocommit"] is True
+    assert state["commits"] == 1
+    assert state["rollbacks"] == 0
+    assert any("UPDATE strategy_pkg.package" in sql for sql in state["sql"])
+    assert any("INSERT INTO strategy_pkg.package_status_event" in sql for sql in state["sql"])
+
+
+def manifest_to_record(manifest):
+    saved = InMemoryStrategyPackageRepository().save_manifest(manifest)
+    return saved
 
 
 def test_strategy_package_repository_rejects_silent_manifest_replacement() -> None:
