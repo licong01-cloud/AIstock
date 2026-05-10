@@ -65,6 +65,10 @@ nul
 !package.json
 !package-lock.json
 !tsconfig.json
+!tests/aistock_validation/bugs/*.json
+!tests/aistock_validation/catalog/**/*.json
+!tests/aistock_validation/runs/**/*.json
+!tests/aistock_validation/templates/**/*.json
 
 # Backup and temp directories
 git_ignore_folder/

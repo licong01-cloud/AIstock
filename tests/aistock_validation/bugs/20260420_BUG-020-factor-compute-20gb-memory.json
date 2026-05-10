@@ -1,0 +1,54 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-020",
+  "title": "个别因子计算消耗 20GB+ 内存 — exec 沙箱模式下不应发生",
+  "description": "在 exec 沙箱模式下，个别因子（2 个因子并发即触发）计算时占用 20GB+ 内存，远超预期。exec 沙箱的设计目标是低内存增量（每因子 < 2GB），20GB+ 表明：(a) 因子代码携带全量历史数据 in-memory 而非分块；(b) 因子表达式中的 join 操作产生笛卡尔展开；(c) 沙箱未释放上一因子的内存。需 profile 定位具体因子 + 内存峰值来源。从 MEMORY pending_fixes.md 提取。",
+  "module": "aistock_backend",
+  "severity": "P1",
+  "risk_area": "performance",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "exec_sandbox_2_factors_in_parallel",
+    "memory_observed_gb": 20
+  },
+  "reproduce_command": "python scripts/run_factor_pipeline_v2.py --factor-ids <high_memory_factor_id> --parallel 2",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "memory:pending_fixes.md",
+    "memory:factor_pipeline_v2_architecture.md"
+  ],
+  "fingerprint": "aistock::factor_pipeline_v2::exec_sandbox_high_memory",
+  "assigned_agent": null,
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-04-20T00:00:00Z",
+  "first_seen_at": "2026-04-20T00:00:00Z",
+  "last_seen_at": "2026-04-20T00:00:00Z",
+  "fixed_at": null,
+  "submitted_at": null,
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/factor_pipeline_v2/exec_sandbox.py",
+    "backend/services/factor_pipeline_v2/factor_runner.py"
+  ],
+  "suspected_modules": [
+    "backend/services/factor_pipeline_v2/"
+  ],
+  "required_verification": [
+    "memory_profiler trace identifying peak source",
+    "Per-factor memory < 5GB after fix"
+  ],
+  "closure_requirements": [
+    "Profile report committed",
+    "Memory regression test (assert < threshold) added"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-04-20T00:00:00Z",
+      "actor": "claude_code",
+      "action": "discovered",
+      "note": "Observed during factor library v2 cleanup batch runs"
+    }
+  ]
+}

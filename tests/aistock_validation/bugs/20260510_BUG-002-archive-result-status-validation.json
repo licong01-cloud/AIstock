@@ -1,0 +1,62 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-002",
+  "title": "ArchiveResult status validation broken for string statuses",
+  "description": "ArchiveResult(status='failed') is accepted without error_message, while ArchiveResult(status='failed', error_message='x') is rejected because checks compare with HandlerStatus by identity. Impact: fail-fast/error reporting contract can silently accept invalid failed results and reject valid failed results when implementers pass strings (which Python dataclasses allow). Fix: __post_init__ coerces str → HandlerStatus via the enum constructor using object.__setattr__ on the frozen dataclass, then enforces invariants by == comparison. Both string and enum status paths produce identical validation. P1.2 of Codex T12+T14a review.",
+  "module": "qe_archive",
+  "severity": "P1",
+  "risk_area": "data_correctness",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "ArchiveResult_status_passes_as_string",
+    "value_examples": ["'failed'", "'success'"]
+  },
+  "reproduce_command": "pytest backend/tests/qe_archive/test_handler_contract.py -k status -q",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/T12+T14a-review-2026-05-10",
+    "branch:origin/claude/dw-foundation-20260510",
+    "commit:db6241f",
+    "file:backend/services/qe_archive/handlers/contract.py:78,84-90"
+  ],
+  "fingerprint": "qe_archive::contract.py::ArchiveResult::status_str_identity",
+  "assigned_agent": "claude_code",
+  "fix_branch": "claude/dw-foundation-20260510",
+  "fix_commit": "db6241f",
+  "verification_run_id": null,
+  "created_at": "2026-05-10T00:00:00Z",
+  "first_seen_at": "2026-05-10T00:00:00Z",
+  "last_seen_at": "2026-05-10T00:00:00Z",
+  "fixed_at": "2026-05-10T00:00:00Z",
+  "submitted_at": "2026-05-10T00:00:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qe_archive/handlers/contract.py",
+    "backend/tests/qe_archive/test_handler_contract.py"
+  ],
+  "suspected_modules": [
+    "backend/services/qe_archive/handlers/contract.py"
+  ],
+  "required_verification": [
+    "pytest backend/tests/qe_archive/test_handler_contract.py -q",
+    "Codex independent re-review of round-2 fix"
+  ],
+  "closure_requirements": [
+    "Codex review pass on round-2 fix",
+    "9 status-related regression tests added by round-2"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-10T00:00:00Z",
+      "actor": "codex_app",
+      "action": "discovered",
+      "note": "T12+T14a review - manual status smoke confirmed string-status validation bug"
+    },
+    {
+      "timestamp": "2026-05-10T00:00:00Z",
+      "actor": "claude_code",
+      "action": "fixed",
+      "note": "round-2 commit db6241f - object.__setattr__ + HandlerStatus(str) coercion + 9 tests"
+    }
+  ]
+}

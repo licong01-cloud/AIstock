@@ -1,0 +1,56 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-010",
+  "title": "paper_v2 config_change_audit.change_type semantics — action vs subject split follow-up",
+  "description": "Round-2 fix renamed CHECK constraint ck_paper_v2_config_change_audit_type → ck_..._action and changed enum from subject-type (runtime_profile/execution_policy/.../other) to action-type (CREATE/ACTIVATE/DEACTIVATE/MODIFY) to match live source. Source column is misleadingly named change_type but actually carries action info. Subject info lives in old_value_json/new_value_json payload. Follow-up question: should archive split into action_type + subject_type two columns for queryability (avoid JSON path queries for subject)? Deferred design decision. Source actual values: CREATE 96, ACTIVATE 136 (only 2 seen so far).",
+  "module": "qe_archive",
+  "severity": "P3",
+  "risk_area": "data_correctness",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "future_query_pattern_subject_type_filter",
+    "current_workaround": "JSON_VALUE(old_value_json, '$.subject_type')"
+  },
+  "reproduce_command": "psql -h 127.0.0.1 -p 5433 -d aistock -c \"SELECT change_type, count(*) FROM paper_v2.config_change_audit GROUP BY 1\"",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/dw-foundation-fix-round-2",
+    "branch:origin/claude/dw-foundation-20260510",
+    "commit:9079ee5"
+  ],
+  "fingerprint": "qe_archive::config_change_audit::action_vs_subject_split",
+  "assigned_agent": "claude_code",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-10T00:00:00Z",
+  "first_seen_at": "2026-05-10T00:00:00Z",
+  "last_seen_at": "2026-05-10T00:00:00Z",
+  "fixed_at": null,
+  "submitted_at": null,
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/db/init_qe_archive_paper_v2_extension_20260510.sql",
+    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py",
+    "docs/architecture/data_warehouse_extension_design_20260510.md"
+  ],
+  "suspected_modules": [
+    "backend/services/qe_archive/handlers/",
+    "backend/db/init_qe_archive_paper_v2_extension_20260510.sql"
+  ],
+  "required_verification": [
+    "Future query pattern review with stakeholders",
+    "If split decided: migration adds subject_type column + handler populates from JSON"
+  ],
+  "closure_requirements": [
+    "Decision recorded: keep single action column vs split action+subject"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-10T00:00:00Z",
+      "actor": "claude_code",
+      "action": "discovered",
+      "note": "Round-2 P1.4 audit fixed semantic but flagged split as deferred design pass"
+    }
+  ]
+}

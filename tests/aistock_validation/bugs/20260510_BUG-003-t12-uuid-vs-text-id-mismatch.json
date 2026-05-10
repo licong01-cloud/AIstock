@@ -1,0 +1,62 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-003",
+  "title": "T12 paper_v2 archive ID columns declared UUID but source IDs are prefixed TEXT",
+  "description": "T12 DDL declares several archive columns as UUID, but the live paper_v2 source uses prefixed TEXT IDs such as paper_<hex>, prun_<hex>, ord_<hex>, evt_<hex>, fill_<hex>, rprof_<hex>, rcact_<hex>, epact_<hex>, pkg_<hex>, session_<hex>. Mirroring real paper_v2 rows would fail with 'invalid input syntax for type uuid'. Round-2 audit revealed 16 UUID columns total (Codex brief named only 5). All converted to TEXT to accept prefixed source IDs - archive directly mirrors source per dw-foundation policy decision (no transform layer). P1.3 of Codex T12+T14a review.",
+  "module": "qe_archive",
+  "severity": "P1",
+  "risk_area": "data_correctness",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "T12_DDL_apply_then_archive_real_paper_v2_row",
+    "blocked_by_uuid_cast": true
+  },
+  "reproduce_command": "psql -h 127.0.0.1 -p 5433 -d aistock_dev -f backend/db/init_qe_archive_paper_v2_extension_20260510.sql && python -c \"# attempt insert with paper_<hex> id\"",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/T12+T14a-review-2026-05-10",
+    "branch:origin/claude/dw-foundation-20260510",
+    "commit:9079ee5",
+    "file:backend/db/init_qe_archive_paper_v2_extension_20260510.sql",
+    "file:backend/services/paper_trading_v2/models.py:32,132,146,170,271"
+  ],
+  "fingerprint": "qe_archive::T12::uuid_vs_prefixed_text_ids",
+  "assigned_agent": "claude_code",
+  "fix_branch": "claude/dw-foundation-20260510",
+  "fix_commit": "9079ee5",
+  "verification_run_id": null,
+  "created_at": "2026-05-10T00:00:00Z",
+  "first_seen_at": "2026-05-10T00:00:00Z",
+  "last_seen_at": "2026-05-10T00:00:00Z",
+  "fixed_at": "2026-05-10T00:00:00Z",
+  "submitted_at": "2026-05-10T00:00:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/db/init_qe_archive_paper_v2_extension_20260510.sql"
+  ],
+  "suspected_modules": [
+    "backend/db/init_qe_archive_paper_v2_extension_20260510.sql"
+  ],
+  "required_verification": [
+    "Codex independent re-review of round-2 fix",
+    "post-apply smoke: insert real paper_<hex> row succeeds on dev DB qe_archive"
+  ],
+  "closure_requirements": [
+    "Codex round-2 review pass",
+    "T12 successfully applied to dev DB (5433) without UUID cast failures"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-10T00:00:00Z",
+      "actor": "codex_app",
+      "action": "discovered",
+      "note": "T12+T14a review - 5 UUID/TEXT mismatches flagged in DDL vs source"
+    },
+    {
+      "timestamp": "2026-05-10T00:00:00Z",
+      "actor": "claude_code",
+      "action": "fixed",
+      "note": "round-2 commit 9079ee5 - audit revealed 16 UUID cols total, all → TEXT"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-008",
+  "title": "paper_v2 session_day archive vs source schema divergence — handler must derive data_quality + actual_bar_count",
+  "description": "Archive paper_v2_session_day has trade_session_id, actual_bar_count, data_quality that source lacks. Live source schema: session_id, status, phase, data_source, last_processed_bar_time. Round-2 fix kept data_quality 4-val CHECK as archive-derived field. T14b handler must compute data_quality from (expected_bar_count vs actual_bar_count comparison) and actual_bar_count from minute-bar count between session phase boundaries. trade_session_id is renamed source.session_id — pure mapping. Deferred from round-2.",
+  "module": "qe_archive",
+  "severity": "P2",
+  "risk_area": "data_correctness",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "T14b_PaperV2ArchiveHandler_implementation",
+    "blocked_until": "design_pass_for_handler_derived_fields"
+  },
+  "reproduce_command": "python -c \"from backend.services.paper_trading_v2.repository import probe_session_day_schema; print(probe_session_day_schema())\"",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/dw-foundation-fix-round-2",
+    "branch:origin/claude/dw-foundation-20260510",
+    "commit:9079ee5"
+  ],
+  "fingerprint": "qe_archive::session_day::archive_vs_source_schema_divergence",
+  "assigned_agent": "claude_code",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-10T00:00:00Z",
+  "first_seen_at": "2026-05-10T00:00:00Z",
+  "last_seen_at": "2026-05-10T00:00:00Z",
+  "fixed_at": null,
+  "submitted_at": null,
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py",
+    "backend/db/init_qe_archive_paper_v2_extension_20260510.sql",
+    "docs/architecture/data_warehouse_extension_design_20260510.md"
+  ],
+  "suspected_modules": [
+    "backend/services/qe_archive/handlers/",
+    "backend/services/paper_trading_v2/repository.py"
+  ],
+  "required_verification": [
+    "design pass for data_quality categorization thresholds (see BUG-011)",
+    "T14b unit tests for actual_bar_count counting + data_quality mapping"
+  ],
+  "closure_requirements": [
+    "data_quality 4-val (excellent/good/degraded/incomplete) mapping rules documented",
+    "actual_bar_count derivation source (minute_bar table query) confirmed"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-10T00:00:00Z",
+      "actor": "claude_code",
+      "action": "discovered",
+      "note": "Round-2 P1.4 audit kept data_quality CHECK as archive-derived; flagged as deferred design pass"
+    }
+  ]
+}
