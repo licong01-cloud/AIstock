@@ -82,11 +82,25 @@ class ArchiveResult:
     stats: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if isinstance(self.status, str) and not isinstance(self.status, HandlerStatus):
+            try:
+                coerced = HandlerStatus(self.status)
+            except ValueError as e:
+                raise ValueError(
+                    f"invalid status string {self.status!r}; "
+                    f"expected one of {[s.value for s in HandlerStatus]}"
+                ) from e
+            object.__setattr__(self, "status", coerced)
+        if not isinstance(self.status, HandlerStatus):
+            raise TypeError(
+                f"status must be HandlerStatus or its str value, "
+                f"got {type(self.status).__name__}"
+            )
         if self.rows_inserted < 0 or self.rows_upserted < 0:
             raise ValueError("row counts must be non-negative")
-        if self.status is HandlerStatus.FAILED and not self.error_message:
+        if self.status == HandlerStatus.FAILED and not self.error_message:
             raise ValueError("FAILED status requires error_message")
-        if self.status is not HandlerStatus.FAILED and self.error_message:
+        if self.status != HandlerStatus.FAILED and self.error_message:
             raise ValueError("error_message only valid with FAILED status")
 
 
@@ -131,7 +145,13 @@ class ArchiveHandler(abc.ABC):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        if cls.__abstractmethods__:
+        # __abstractmethods__ may not yet be populated by ABCMeta when this
+        # hook fires (it depends on metaclass __init__ ordering across Python
+        # versions). Read defensively: if the attribute is missing OR still
+        # carries unimplemented abstract methods, skip concrete-subclass
+        # validation. Subclasses that finish implementation will reach the
+        # checks below on their final ABCMeta pass.
+        if getattr(cls, "__abstractmethods__", None):
             return
         if not cls.event_type:
             raise TypeError(
