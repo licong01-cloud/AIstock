@@ -53,11 +53,11 @@ CREATE SCHEMA IF NOT EXISTS qe_archive;
 
 CREATE TABLE IF NOT EXISTS qe_archive.dim_paper_v2_portfolio (
     portfolio_version_id BIGSERIAL PRIMARY KEY,
-    portfolio_id         UUID         NOT NULL,
+    portfolio_id         TEXT         NOT NULL,
     manifest_sha256      TEXT         NOT NULL,
     broker_backend       TEXT         NOT NULL,
     data_source          TEXT         NOT NULL,
-    package_id           UUID,
+    package_id           TEXT,
     initial_cash         NUMERIC(18,4),
     fee_policy_json      JSONB        NOT NULL DEFAULT '{}'::jsonb,
     risk_policy_json     JSONB        NOT NULL DEFAULT '{}'::jsonb,
@@ -117,7 +117,10 @@ CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_run (
     captured_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_paper_v2_run_natural UNIQUE (portfolio_id, trade_date),
     CONSTRAINT ck_paper_v2_run_status CHECK (
-        status IN ('pending','running','completed','failed','interrupted')
+        -- Source paper_v2.run.status uses uppercase enum (probed values: SUCCEEDED, FAILED).
+        -- Forward-compat list per Codex review fix round 2: keep PENDING + RUNNING for in-flight rows,
+        -- INTERRUPTED for daemon-killed runs that may surface in future emit pipelines.
+        status IN ('PENDING','RUNNING','SUCCEEDED','FAILED','INTERRUPTED')
     ),
     CONSTRAINT ck_paper_v2_run_origin CHECK (
         model_params_origin IN ('node','cache','unavailable')
@@ -167,7 +170,7 @@ CREATE INDEX IF NOT EXISTS ix_paper_v2_run_node
 
 CREATE TABLE IF NOT EXISTS qe_archive.dim_paper_v2_runtime_profile (
     profile_version_id BIGSERIAL PRIMARY KEY,
-    profile_id         UUID         NOT NULL,
+    profile_id         TEXT         NOT NULL,
     profile_name       TEXT,
     profile_json       JSONB        NOT NULL DEFAULT '{}'::jsonb,
     valid_from         TIMESTAMPTZ  NOT NULL,
@@ -201,8 +204,8 @@ CREATE INDEX IF NOT EXISTS ix_dim_paper_v2_runtime_profile_valid
 
 CREATE TABLE IF NOT EXISTS qe_archive.dim_paper_v2_runtime_profile_version (
     version_pk        BIGSERIAL PRIMARY KEY,
-    version_id        UUID         NOT NULL UNIQUE,
-    profile_id        UUID         NOT NULL,
+    version_id        TEXT         NOT NULL UNIQUE,
+    profile_id        TEXT         NOT NULL,
     version_number    INTEGER      NOT NULL,
     config_diff_json  JSONB        NOT NULL DEFAULT '{}'::jsonb,
     created_by        TEXT,
@@ -234,7 +237,7 @@ CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_session (
     session_pk           BIGSERIAL PRIMARY KEY,
     run_id               TEXT         NOT NULL REFERENCES qe_archive.paper_v2_run(run_id) ON DELETE CASCADE,
     portfolio_version_id BIGINT       REFERENCES qe_archive.dim_paper_v2_portfolio(portfolio_version_id),
-    trade_session_id     UUID         NOT NULL UNIQUE,
+    trade_session_id     TEXT         NOT NULL UNIQUE,
     trade_date           DATE         NOT NULL,
     mode                 TEXT,
     validated_execution_policy_json JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -268,7 +271,7 @@ CREATE INDEX IF NOT EXISTS ix_paper_v2_session_date
 CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_session_day (
     session_day_pk            BIGSERIAL PRIMARY KEY,
     run_id                    TEXT         NOT NULL REFERENCES qe_archive.paper_v2_run(run_id) ON DELETE CASCADE,
-    trade_session_id          UUID         NOT NULL,
+    trade_session_id          TEXT         NOT NULL,
     trade_date                DATE         NOT NULL,
     expected_bar_count        INTEGER,
     actual_bar_count          INTEGER,
@@ -305,7 +308,7 @@ CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_order (
     run_id               TEXT         NOT NULL REFERENCES qe_archive.paper_v2_run(run_id) ON DELETE CASCADE,
     portfolio_version_id BIGINT       REFERENCES qe_archive.dim_paper_v2_portfolio(portfolio_version_id),
     order_id             TEXT         NOT NULL UNIQUE,
-    trade_session_id     UUID,
+    trade_session_id     TEXT,
     trade_date           DATE         NOT NULL,
     symbol               TEXT         NOT NULL,
     side                 TEXT         NOT NULL,
@@ -318,6 +321,11 @@ CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_order (
     CONSTRAINT ck_paper_v2_order_side CHECK (side IN ('BUY','SELL')),
     CONSTRAINT ck_paper_v2_order_type CHECK (
         order_type IN ('LIMIT','MARKET','STOP','STOP_LIMIT')
+    ),
+    -- NEW per Codex review fix round 2: ADD CHECK on order.status using source enum
+    -- (probed values: FILLED, PARTIALLY_FILLED, SUBMITTED) plus forward-compat tail.
+    CONSTRAINT ck_paper_v2_order_status CHECK (
+        status IN ('SUBMITTED','PARTIALLY_FILLED','FILLED','CANCELLED','REJECTED','EXPIRED')
     )
 );
 
@@ -354,8 +362,11 @@ CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_order_event (
     occurred_at   TIMESTAMPTZ  NOT NULL,
     captured_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     CONSTRAINT ck_paper_v2_order_event_type CHECK (
+        -- Source paper_v2.order_events.event_type uses uppercase enum (probed values:
+        -- NO_FILL, PARTIALLY_FILLED, FILLED). Keep SUBMITTED/CANCELLED/REJECTED for
+        -- forward-compat with order lifecycle events that have not surfaced yet on prod.
         event_type IN (
-            'placed','partial_fill','fill','cancelled','rejected','expired','modified'
+            'SUBMITTED','PARTIALLY_FILLED','FILLED','NO_FILL','CANCELLED','REJECTED'
         )
     )
 );
@@ -413,7 +424,7 @@ CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_fill (
     portfolio_version_id BIGINT,
     order_id             TEXT         NOT NULL,
     trade_date           DATE         NOT NULL,
-    trade_session_id     UUID,
+    trade_session_id     TEXT,
     symbol               TEXT         NOT NULL,
     side                 TEXT,
     filled_quantity      BIGINT,
@@ -459,6 +470,14 @@ COMMENT ON COLUMN qe_archive.paper_v2_fill.broker_backend IS
 CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_fill_y2026m05
     PARTITION OF qe_archive.paper_v2_fill
     FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
+
+-- DEFAULT 兜底分区 per Codex review fix round 2 (P1.5):
+--   Batch A imported 8243 fills spanning multiple months; without a DEFAULT partition
+--   any INSERT outside 2026-05-01..2026-06-01 fails with 'no partition for row'.
+--   Production rollout will replace this with pg_partman-managed monthly partitions
+--   covering the full historical range; until then DEFAULT prevents apply / smoke failures.
+CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_fill_default
+    PARTITION OF qe_archive.paper_v2_fill DEFAULT;
 
 CREATE INDEX IF NOT EXISTS ix_paper_v2_fill_run_date
     ON qe_archive.paper_v2_fill (run_id, trade_date);
@@ -584,10 +603,13 @@ CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_cash_ledger (
     balance_after        NUMERIC(18,4),
     related_order_id     TEXT,
     occurred_at          TIMESTAMPTZ  NOT NULL,
-    captured_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    CONSTRAINT ck_paper_v2_cash_ledger_entry_type CHECK (
-        entry_type IN ('deposit','withdraw','fee','fill_credit','fill_debit','dividend','adjustment')
-    )
+    captured_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    -- entry_type CHECK REMOVED in Codex review fix round 2: source paper_v2.cash_ledger
+    -- has no entry_type column (probed source schema: cash_id, run_id, portfolio_id, fill_id,
+    -- trade_date, symbol, side, notional, fee, cash_delta, cash_after, created_at).
+    -- Handler derives entry_type at archive time from (side, notional, fee, cash_delta).
+    -- Downstream invariant enforced at handler, not at SQL CHECK, until source introduces
+    -- a stable enum field. The entry_type column itself remains declared above as plain TEXT NOT NULL.
 );
 
 COMMENT ON TABLE qe_archive.paper_v2_cash_ledger IS
@@ -612,7 +634,7 @@ CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_error (
     error_id         TEXT         NOT NULL UNIQUE,
     run_id           TEXT         REFERENCES qe_archive.paper_v2_run(run_id) ON DELETE CASCADE,
     trade_date       DATE,
-    trade_session_id UUID,
+    trade_session_id TEXT,
     error_class      TEXT         NOT NULL,
     error_code       TEXT,
     error_message    TEXT,
@@ -650,7 +672,7 @@ CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_session_event (
     event_pk         BIGSERIAL PRIMARY KEY,
     event_id         TEXT         NOT NULL UNIQUE,
     run_id           TEXT         NOT NULL REFERENCES qe_archive.paper_v2_run(run_id) ON DELETE CASCADE,
-    trade_session_id UUID,
+    trade_session_id TEXT,
     trade_date       DATE,
     event_type       TEXT         NOT NULL,
     event_payload    JSONB        NOT NULL DEFAULT '{}'::jsonb,
@@ -701,8 +723,8 @@ CREATE INDEX IF NOT EXISTS ix_paper_v2_run_event_type
 CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_runtime_config_activation (
     activation_pk      BIGSERIAL PRIMARY KEY,
     activation_id      TEXT         NOT NULL UNIQUE,
-    portfolio_id       UUID         NOT NULL,
-    profile_version_id UUID,
+    portfolio_id       TEXT         NOT NULL,
+    profile_version_id TEXT,
     activated_at       TIMESTAMPTZ  NOT NULL,
     activated_by       TEXT,
     captured_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW()
@@ -724,7 +746,7 @@ CREATE INDEX IF NOT EXISTS ix_paper_v2_runtime_config_activation_portfolio
 CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_execution_policy_activation (
     activation_pk BIGSERIAL PRIMARY KEY,
     activation_id TEXT         NOT NULL UNIQUE,
-    portfolio_id  UUID         NOT NULL,
+    portfolio_id  TEXT         NOT NULL,
     policy_sha256 TEXT,
     policy_json   JSONB        NOT NULL DEFAULT '{}'::jsonb,
     activated_at  TIMESTAMPTZ  NOT NULL,
@@ -748,18 +770,22 @@ CREATE INDEX IF NOT EXISTS ix_paper_v2_execution_policy_activation_sha
 CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_config_change_audit (
     audit_pk       BIGSERIAL PRIMARY KEY,
     audit_id       TEXT         NOT NULL UNIQUE,
-    portfolio_id   UUID,
+    portfolio_id   TEXT,
     change_type    TEXT         NOT NULL,
     old_value_json JSONB,
     new_value_json JSONB,
     changed_by     TEXT,
     changed_at     TIMESTAMPTZ  NOT NULL,
     captured_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    CONSTRAINT ck_paper_v2_config_change_audit_type CHECK (
-        change_type IN (
-            'runtime_profile','execution_policy','fee_policy','risk_policy',
-            'broker_backend','data_source','manifest','other'
-        )
+    -- change_type CHECK rewritten per Codex review fix round 2: source
+    -- paper_v2.config_change_audit.change_type uses ACTION enum (probed: CREATE, ACTIVATE),
+    -- NOT subject-type as the column name suggests. Per brief decision (archive directly
+    -- mirrors source, no transform layer), CHECK enforces the actual source enum.
+    -- Forward-compat: DEACTIVATE, MODIFY for future paper_v2 source extensions.
+    -- Downstream queries that need subject-type must inspect old_value_json/new_value_json
+    -- payload (which carries the affected config subject).
+    CONSTRAINT ck_paper_v2_config_change_audit_action CHECK (
+        change_type IN ('CREATE','ACTIVATE','DEACTIVATE','MODIFY')
     )
 );
 
@@ -781,15 +807,19 @@ CREATE INDEX IF NOT EXISTS ix_paper_v2_config_change_audit_type
 CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_reset_audit (
     audit_pk             BIGSERIAL PRIMARY KEY,
     audit_id             TEXT         NOT NULL UNIQUE,
-    portfolio_id         UUID,
+    portfolio_id         TEXT,
     reset_type           TEXT         NOT NULL,
     reset_reason         TEXT,
     snapshot_before_json JSONB,
     reset_at             TIMESTAMPTZ  NOT NULL,
-    captured_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    CONSTRAINT ck_paper_v2_reset_audit_type CHECK (
-        reset_type IN ('full_reset','partial_reset','position_only','cash_only','config_only')
-    )
+    captured_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    -- reset_type CHECK REMOVED in Codex review fix round 2: source paper_v2.reset_audit
+    -- has no reset_type column at all (probed source schema: audit_id, portfolio_id, rerun_policy,
+    -- start_date, end_date, confirm_text, deleted_counts, status, context, created_at).
+    -- The archive models reset_type / reset_reason / snapshot_before_json as ETL-derived fields;
+    -- broader source-vs-archive reconciliation deferred to a separate design pass. Until then,
+    -- reset_type stays as the plain TEXT NOT NULL column declared above, populated by the handler
+    -- from a deterministic function of (rerun_policy, deleted_counts).
 );
 
 COMMENT ON TABLE qe_archive.paper_v2_reset_audit IS
@@ -843,6 +873,13 @@ COMMENT ON COLUMN qe_archive.factor_value.snapshot_date IS
 CREATE TABLE IF NOT EXISTS qe_archive.factor_value_y2026m05
     PARTITION OF qe_archive.factor_value
     FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
+
+-- DEFAULT 兜底分区 per Codex review fix round 2 (P1.5):
+--   factor_value source data spans 2018+ (per design §7.4 ~50B rows over 8 years);
+--   without a DEFAULT partition, any INSERT outside the example month fails.
+--   Production rollout will use pg_partman-managed monthly partitions over the full range.
+CREATE TABLE IF NOT EXISTS qe_archive.factor_value_default
+    PARTITION OF qe_archive.factor_value DEFAULT;
 
 CREATE INDEX IF NOT EXISTS ix_factor_value_factor_date
     ON qe_archive.factor_value (factor_name, trade_date);
