@@ -101,6 +101,41 @@ def get_packages(cur) -> list[dict]:
     return cur.fetchall()
 
 
+# P1.3 (Codex REV-6) — pre-flight schema dependency check.
+# Batch C writes to columns that exist only after the T5 (paper_v2 fills capture)
+# and T1 (paper_v2.run.model_params_origin) migrations. Without an explicit
+# pre-check the script would either ROLLBACK midway with a vague column error
+# or, worse, silently no-op some fixture functions. Fail-fast here with a clear
+# remediation message.
+REQUIRED_COLUMNS = (
+    # (schema, table, column, source_migration_label)
+    ("paper_v2", "fills", "intended_price",       "T5 paper_v2 capture columns"),
+    ("paper_v2", "fills", "fill_market_context",  "T5 paper_v2 capture columns"),
+    ("paper_v2", "fills", "created_at",           "T5 paper_v2 capture columns"),
+    ("paper_v2", "fills", "updated_at",           "T5 paper_v2 capture columns"),
+    ("paper_v2", "run",   "model_params_origin",  "T1 paper_v2.run model_params_origin"),
+)
+
+
+def assert_required_columns(cur) -> None:
+    """Raise SystemExit if any required column is absent from dev DB."""
+    missing: list[str] = []
+    for schema, table, column, label in REQUIRED_COLUMNS:
+        cur.execute(
+            """SELECT 1 FROM information_schema.columns
+               WHERE table_schema=%s AND table_name=%s AND column_name=%s""",
+            (schema, table, column),
+        )
+        if cur.fetchone() is None:
+            missing.append(f"  {schema}.{table}.{column}  (from {label})")
+    if missing:
+        sys.exit(
+            "FATAL: Batch C requires migrations not yet applied to dev DB.\n"
+            "Missing columns:\n" + "\n".join(missing) + "\n"
+            "Apply T5 + T1 migrations to dev DB before running Batch C."
+        )
+
+
 # ---------- 1. package_validation_run (12 rows) ----------
 
 def fixture_package_validation_run(cur, packages: list[dict]) -> FixtureResult:
@@ -344,6 +379,11 @@ def fixture_outbox_event(cur) -> FixtureResult:
             sub_id = f"dev_seed_sub_{i:02d}" if "portfolio_run" in et else None
             payload = {
                 "schema_version": 1,
+                # P1.4 (Codex REV-6): payload-side routing_class so handler
+                # can_handle() filters by payload, not by event_type alone. All
+                # 4 synthetic event types are archive-class; if a future batch
+                # adds paper.daemon.* it must mark routing_class='telemetry'.
+                "routing_class": "archive",
                 "occurred_at": "2026-05-10T12:00:00Z",
                 "synthetic": True,
             }
@@ -492,6 +532,10 @@ def main():
     t0 = time.time()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur_dict:
+            # P1.3 (Codex REV-6) — schema dependency pre-flight
+            assert_required_columns(cur_dict)
+            print("[pre-flight] required T1 + T5 migration columns present.\n")
+
             packages = get_packages(cur_dict)
             print(f"Found {len(packages)} packages in dev DB:")
             for p in packages:

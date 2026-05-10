@@ -363,6 +363,48 @@ def main():
     prod_conn.rollback()  # explicitly close prod txn (was read-only anyway)
     print("\nCOMMIT done on dev. Prod connection was read-only throughout.")
 
+    # ---- P1.1 (Codex REV-6): reset BIGSERIAL/SERIAL sequences post-COPY ----
+    # COPY ... FROM STDIN does not advance OWNED sequences. Without this,
+    # subsequent INSERT relying on DEFAULT nextval() will collide with
+    # imported rows. Issue setval(seq, GREATEST(MAX(col), 1)) for every owned
+    # sequence under paper_v2 / strategy_pkg / market.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from _seq_reset_helpers import (  # type: ignore[import-not-found]
+        reset_owned_sequences, validate_foreign_keys,
+    )
+    print("\n=== P1.1: BIGSERIAL/SERIAL sequence reset (post-COPY) ===")
+    # Switch back to default trigger role so VALIDATE CONSTRAINT can fire
+    # parent-side checks naturally below.
+    with dev_conn.cursor() as dc:
+        dc.execute("SET session_replication_role = 'origin'")
+    seq_report = reset_owned_sequences(dev_conn)
+    dev_conn.commit()
+    seq_skipped_failures = [
+        r for r in seq_report.results
+        if r.note and not r.note.startswith("pg_get_serial_sequence returned NULL")
+    ]
+    if seq_skipped_failures:
+        print("WARNING: some sequences could NOT be reset:")
+        for r in seq_skipped_failures:
+            print(f"  {r.schema}.{r.table}.{r.column}: {r.note}")
+    print(seq_report.render())
+
+    # ---- P1.2 (Codex REV-6): FK integrity sweep ----
+    # session_replication_role='replica' bypassed FK trigger checks during
+    # COPY. Verify integrity now via:
+    #   (a) ALTER TABLE ... VALIDATE CONSTRAINT for any NOT VALID FK
+    #   (b) explicit referential check (orphan-row count) per FK
+    print("\n=== P1.2: FK integrity sweep (post-import) ===")
+    fk_report = validate_foreign_keys(dev_conn)
+    dev_conn.commit()
+    print(fk_report.render())
+    fk_failures = [r for r in fk_report.results if r.status in ("failed", "orphan_rows")]
+    if fk_failures:
+        print("\n!!! FK INTEGRITY FAILURES — listing all:")
+        for r in fk_failures:
+            print(f"  {r.schema}.{r.table}.{r.constraint}: status={r.status} "
+                  f"orphan_count={r.orphan_count} note={r.note}")
+
     # ---- final validation queries ----
     print("\n=== Post-import validation (per design §5) ===")
     with dev_conn.cursor() as dc:
@@ -388,7 +430,7 @@ def main():
     prod_conn.close()
     dev_conn.close()
 
-    if failed:
+    if failed or fk_failures:
         sys.exit(2)
 
 
