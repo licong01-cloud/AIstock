@@ -173,7 +173,7 @@ T7 的 §1+§2 合计：
 | B. `validation_status != VALIDATION_PASSED` | 应 raise | **不检查**`validation_status`（manifest 中也没有此字段被消费）→ 200 | **不兼容（gap）** |
 | C. `paper_candidate=false` | 应 raise | **不检查**`paper_candidate`（schema 内无此列）→ 200 | **不兼容（gap）** |
 | D. `frozen_manifest_sha256` 不匹配 | 应 raise | **检查**！`validators.py:32-42` 重算 `compute_manifest_sha256(manifest)` 并与 `manifest.manifest_sha256` 比对，不匹配 → `StrategyPackageValidationError` → HTTP 400 | **兼容** |
-| E. 状态机非法迁移（如从 DRAFT 直接 PAPER_ENABLED） | 应 raise | **检查**！`STATUS_TRANSITIONS[PAPER_ENABLED]={BACKTEST_APPROVED,SELECTION_ENABLED}` + repository 层 SQL compare-and-set → `InvalidStateTransitionError` → HTTP 400 | **兼容** |
+| E. 状态机非法迁移（PAPER_ENABLED 再入：已是 PAPER_ENABLED 又调用 enable_paper） | 应 raise | **检查**！`STATUS_TRANSITIONS[PAPER_ENABLED]={BACKTEST_APPROVED,SELECTION_ENABLED}` + repository 层 SQL compare-and-set → `InvalidStateTransitionError` → HTTP 400。**注**：触发 `InvalidStateTransitionError` 要求持久化的 `package_status` 同时满足：(a) ∈ `{BACKTEST_APPROVED, SELECTION_ENABLED, PAPER_ENABLED}`（validator 允许）；(b) ∉ `{BACKTEST_APPROVED, SELECTION_ENABLED}`（状态机不允许）。**唯一解是 `PAPER_ENABLED`（再入尝试）**。`DRAFT` / `ARCHIVED` 等会先在 `validate_manifest_identity_for_paper_trading` (`validators.py:62-73`) 被拦截，raise `StrategyPackageValidationError`，根本不会到状态机这一步。 | **兼容** |
 | F. compare-and-set 竞态 | 应 raise | `repository.py:218` `cur.rowcount != 1` → `InvalidStateTransitionError` → HTTP 400 | **兼容** |
 | G. manifest `asset_checks` 任一项 failed | 应 raise | `validators.py:25-31` raise → 400 | **兼容** |
 
@@ -216,9 +216,9 @@ T7 的 §1+§2 合计：
 
 无需等 Codex schema，可立刻在本 worktree 加：
 
-- 测试 1：`test_enable_paper_rejects_manifest_sha_mismatch` — 显式构造 sha256 错配的 manifest，确认 raise `StrategyPackageValidationError`（锁住 §4.3 D 当前行为）。
-- 测试 2：`test_enable_paper_rejects_invalid_status_transition` — 从 DRAFT 直接调 enable_paper，确认 raise `InvalidStateTransitionError`（锁住 §4.3 E 当前行为）。
-- 文件：`backend/tests/strategy_package/test_repository_service.py`（已存在 happy-path，缺这两条 fail-fast 反向测试）
+- 测试 1：`test_enable_paper_raises_on_manifest_sha256_mismatch` — 注意：`enable_paper(self, package_id: str)` 不接受 sha 参数，sha 由 `record.current_manifest()` 隐式从 `StrategyPackageRecord.frozen_manifest_json` 读取。要触发 sha 错配，测试必须**直接将篡改后的 `StrategyPackageRecord` 注入 `repo.records`**，绕过 `save_manifest`（`save_manifest` 会自动重新冻结 sha，无法触发不一致）。确认 raise `StrategyPackageValidationError`（锁住 §4.3 D 当前行为）。
+- 测试 2：`test_enable_paper_raises_on_invalid_status_transition` — **不能用 DRAFT**（DRAFT 会先被 `validate_manifest_identity_for_paper_trading` (`validators.py:62-73`) 拦截，raise `StrategyPackageValidationError`，永远到不了状态机）。**唯一可触发 `InvalidStateTransitionError` 的路径是 `PAPER_ENABLED` 再入**（即 package 已是 PAPER_ENABLED 时再次调用 enable_paper：通过 validator 但被状态机 `STATUS_TRANSITIONS[PAPER_ENABLED]={BACKTEST_APPROVED,SELECTION_ENABLED}` 拒绝）。锁住 §4.3 E 当前行为。
+- 文件：`backend/tests/strategy_package/test_enable_paper_invariants.py`（T8-B 实际落点 commit `9cd4c9b`；原计划 `test_repository_service.py`，已分文件）
 - 估时：~1 小时
 - Workspace 归属：D1（test-only）
 
@@ -229,3 +229,16 @@ T7 的 §1+§2 合计：
 ---
 
 **闭环**：T7 排除了 `enable_paper` 存在 81b1370 风格 silent-swallow 的疑虑（无 BLOCKING 风险）。但发现了与 Codex 严格化 retest gate 的**接线缺口**（§4.3 A/B/C 三 scenario 全部 gap）；这是 "未实现"，不是 "实现错"，需要在 Codex Phase 3 schema 落主线后用 T8-A 补齐。建议立即实施 T8-B（不变量测试），锁住当前 fail-fast 行为不被未来重构破坏。
+
+---
+
+## §6 Drift correction (2026-05-10, T9, post T8-B verification)
+
+T8-B (commit 9cd4c9b) verified the test paths and surfaced two drifts in this audit:
+
+1. **`enable_paper` signature**: actual signature is `enable_paper(self, package_id: str)`, not a sha-accepting kwarg. sha is read implicitly from `StrategyPackageRecord.frozen_manifest_json` via `record.current_manifest()`. To trigger a sha mismatch in tests, the test must inject a tampered `StrategyPackageRecord` directly into `repo.records`, bypassing `save_manifest` (which auto-refreezes the sha). T8-B Test 1 (`test_enable_paper_raises_on_manifest_sha256_mismatch` in `backend/tests/strategy_package/test_enable_paper_invariants.py` at commit `9cd4c9b`) demonstrates this path. §5 T8-B Test 1 entry has been corrected inline.
+2. **`DRAFT → InvalidStateTransitionError` example**: incorrect. DRAFT manifest fails `validate_manifest_identity_for_paper_trading` (`validators.py:62-73`) FIRST → `StrategyPackageValidationError`. Triggering `InvalidStateTransitionError` requires the persisted `package_status` to satisfy BOTH (a) ∈ `{BACKTEST_APPROVED, SELECTION_ENABLED, PAPER_ENABLED}` (validator-allowed) and (b) ∉ `{BACKTEST_APPROVED, SELECTION_ENABLED}` (transition-allowed). The unique solution is `PAPER_ENABLED` (already-enabled re-entry attempt). §4.3 E and §5 T8-B Test 2 have been corrected inline. T8-B Test 2 (`test_enable_paper_raises_on_invalid_status_transition` in `backend/tests/strategy_package/test_enable_paper_invariants.py` at commit `9cd4c9b`) uses the `PAPER_ENABLED` re-entry path.
+
+§5 T8-A pseudocode unchanged: it references `governance.assess_paper_eligibility(package_id)` which is a future Codex Phase 3 interface, not an `enable_paper` signature claim.
+
+Cross-tool ref: drawer `0ec9d0898cac6c0361a5b96e` (strategy session notification to Codex).
