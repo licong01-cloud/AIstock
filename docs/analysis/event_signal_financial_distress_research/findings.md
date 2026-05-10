@@ -307,3 +307,17 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | next research should pivot                  | benchmark smoke or cleaner signal families before LLM/PDF     |
 +---------------------------------------------+---------------------------------------------------------------+
 ```
+
+
+## Phase 23 Benchmark True QE Smoke Finding
+
+```text
++---------------------------------------------+---------------------------------------------------------------+
+| finding                                     | implication                                                   |
++---------------------------------------------+---------------------------------------------------------------+
+| clean benchmark true smoke is non-negative  | keep as calibration benchmark, not a risk policy              |
+| true QE impact is far smaller than cheap row| cheap overlay is only a shortlist screen                      |
+| drawdown relief is effectively zero         | do not classify as risk-control proof                         |
+| next phase needs stronger signal family     | search beyond this small-cap loss/mv fixed_20 profile         |
++---------------------------------------------+---------------------------------------------------------------+
+```

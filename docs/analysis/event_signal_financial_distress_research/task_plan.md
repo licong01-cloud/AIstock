@@ -268,3 +268,17 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | next empirical step                          | BENCHMARK_OR_NEW_FAMILY    | either true-rerun clean benchmark smoke or screen cleaner signal family |
 +---------------------------------------------+----------------------------+------------------------------------------------------------------------+
 ```
+
+
+## Phase 23 Benchmark True QE Smoke Finding
+
+```text
++---------------------------------------------+----------------------------+------------------------------------------------------------------------+
+| candidate                                   | decision                   | evidence                                                               |
++---------------------------------------------+----------------------------+------------------------------------------------------------------------+
+| loss_to_market_cap_ge_50pct_mv_lt_10bn       | BENCHMARK_ONLY             | WSL true ann excess +0.036pp, IR +0.00175, MDD relief near zero        |
+| cheap overlay as final evidence              | REJECT_AS_FINAL_GATE       | one-loop cheap +0.80% final delta did not translate materially         |
+| immediate runtime promotion                  | REJECT                     | true effect too small and sparse for policy/runtime integration        |
+| next empirical step                          | NEW_SIGNAL_FAMILY_SCREEN   | find stronger direct-event or broader financial-risk candidates        |
++---------------------------------------------+----------------------------+------------------------------------------------------------------------+
+```
