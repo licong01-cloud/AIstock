@@ -104,10 +104,13 @@ Validation Center backend 已暴露：
 
 ```
 GET  /api/v1/validation/bugs                              # 列表 (severity/status/module/agent filter)
-GET  /api/v1/validation/bugs/{bug_id}                     # 详情 + agent_context
-GET  /api/v1/validation/bugs/{bug_id}/agent_context       # 修复任务上下文
+GET  /api/v1/validation/bugs/{bug_id}                     # 详情 + agent_context (字段)
+GET  /api/v1/validation/bugs/{bug_id}/agent-context       # 修复任务上下文 (kebab-case path)
 GET  /api/v1/validation/bugs/summary                      # 严重度/状态/模块分布
 ```
+
+注意：FastAPI 路由用 kebab-case `agent-context`，但响应 JSON 字段 / Python
+函数名仍是 snake_case `agent_context` / `get_bug_agent_context`。
 
 `bug_agent_context` 返回 ：
 - `problem_statement`

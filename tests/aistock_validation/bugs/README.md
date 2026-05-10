@@ -19,7 +19,10 @@
 
 ## Schema (aistock_validation_bug_v1)
 
-参考 `backend/services/validation/finding_store.py::_normalize_bug` 实际读取字段：
+参考 `backend/services/validation/finding_store.py::_normalize_bug` 实际读取字段。
+注意 API 路径用 kebab-case `agent-context`（FastAPI router 在 `backend/routers/validation.py`
+注册的 path 是 `/bugs/{bug_id}/agent-context`），但 Python 函数名仍是 snake_case
+`get_bug_agent_context`：
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -84,12 +87,12 @@ Validation Center backend 已暴露：
 
 ```
 GET  /api/v1/validation/bugs                    # 列表 (filter by severity/status/module/agent)
-GET  /api/v1/validation/bugs/{bug_id}           # 详情 + agent_context
-GET  /api/v1/validation/bugs/{bug_id}/agent_context  # 喂给 Claude/Codex 的上下文 (reproduce + write scope + verification)
+GET  /api/v1/validation/bugs/{bug_id}           # 详情 + agent_context (字段)
+GET  /api/v1/validation/bugs/{bug_id}/agent-context  # 修复任务上下文 (kebab-case path)
 GET  /api/v1/validation/bugs/summary            # 严重度/状态/模块分布
 ```
 
-`agent_context` 包含 reproduce_command / allowed_write_scope / required_verification /
+`agent_context` 字段（Python 字典 key 用下划线）包含 reproduce_command / allowed_write_scope / required_verification /
 closure_requirements，可直接喂给 Claude Code 或 Codex App 作为修复任务的输入。
 
 ## Cross-Tool Review 入库流程

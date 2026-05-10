@@ -20,7 +20,7 @@ without copy-pasting curl output.
   ```
   `report_bug` works without the backend; the other 12 tools need it.
 
-## 2. Configure `.mcp.json` and opt-in via `settings.local.json`
+## 2. Configure `.mcp.json` (in git) + opt-in via `settings.local.json`
 
 Claude Code reads MCP server definitions from a project-scoped `.mcp.json`
 at the repo root, then requires explicit opt-in via the
@@ -28,24 +28,43 @@ at the repo root, then requires explicit opt-in via the
 `settings.local.json` schema does **not** accept `mcpServers` directly —
 that key is rejected with a schema validation error.)
 
-### 2.1 Create `F:/Dev/AIstock/.mcp.json`
+### 2.1 `.mcp.json` is committed (since 2026-05-11)
+
+Per the user decision recorded in cross-tool drawer 2026-05-11, the
+project-level `.mcp.json` lives in git so all developers + worktrees share
+the same canonical server definition. The committed file uses **repo-relative
+paths and the bare `python` command** so it works on every developer's
+machine regardless of conda env location:
 
 ```json
 {
   "mcpServers": {
     "aistock-validation": {
-      "command": "C:/Users/lc999/miniconda3/envs/AIstock/python.exe",
-      "args": ["F:/Dev/AIstock/scripts/aistock_mcp_server.py"],
+      "command": "python",
+      "args": ["scripts/aistock_mcp_server.py"],
       "env": {
-        "AISTOCK_VALIDATION_BASE_URL": "http://127.0.0.1:8011/api/v1/validation",
-        "AISTOCK_REPO_ROOT": "F:/Dev/AIstock"
+        "AISTOCK_VALIDATION_BASE_URL": "http://127.0.0.1:8011/api/v1/validation"
       }
     }
   }
 }
 ```
 
-### 2.2 Opt in via `F:/Dev/AIstock/.claude/settings.local.json`
+Each developer is responsible for activating an environment (conda AIstock
+or any venv) where `python` resolves to an interpreter with `mcp` + `httpx`
+installed:
+
+```bash
+conda activate AIstock
+# OR: source .venv/bin/activate / Scripts\activate
+python -c "import mcp, httpx; print('ok')"
+```
+
+If your `python` does not have `mcp` installed, override the command in
+your *local* `.claude/settings.local.json` (see §2.3) — do not edit the
+committed `.mcp.json`.
+
+### 2.2 Opt in via `.claude/settings.local.json` (host-local, NOT committed)
 
 Append (or merge) `enabledMcpjsonServers`:
 
@@ -56,17 +75,42 @@ Append (or merge) `enabledMcpjsonServers`:
 }
 ```
 
-Notes:
+This per-developer file remains gitignored. Claude Code will refuse to load
+the MCP server until this opt-in is present.
 
-- Use the **absolute path to the conda env's python.exe** so Claude Code
-  doesn't pick up the system Python that lacks the `mcp` package.
-- `AISTOCK_REPO_ROOT` is required when launching from a different cwd —
-  otherwise the server resolves it from the script location.
-- For dev-port 8011 setups this points away from production 8001; adjust if
-  your single-port setup runs on 8001.
-- `.mcp.json` is project-scoped. Either commit it to the repo (with
-  host-specific paths replaced by env vars at runtime) or add it to
-  `.gitignore` if the absolute paths are personal.
+### 2.3 Override the python command for your machine (optional)
+
+If you need a specific interpreter (e.g. an absolute path because no
+suitable `python` is on `PATH` when Claude Code launches):
+
+The override has to live in a per-developer file. Recommended pattern:
+
+1. Keep `.mcp.json` (committed) as-is with `command: "python"`.
+2. In `~/.claude/settings.json` (your **user**-level settings, also not in
+   the project repo), declare a custom MCP server with a different name
+   that shadows the project entry:
+
+   ```json
+   {
+     "mcpServers": {
+       "aistock-validation-local": {
+         "command": "C:/Users/lc999/miniconda3/envs/AIstock/python.exe",
+         "args": ["F:/Dev/AIstock/scripts/aistock_mcp_server.py"],
+         "env": {
+           "AISTOCK_VALIDATION_BASE_URL": "http://127.0.0.1:8011/api/v1/validation",
+           "AISTOCK_REPO_ROOT": "F:/Dev/AIstock"
+         }
+       }
+     }
+   }
+   ```
+
+   Then `enabledMcpjsonServers: ["aistock-validation-local"]` in the
+   project settings.local.json instead.
+
+For most developers the bare `python` command in `.mcp.json` is enough —
+just activate the AIstock conda env in the terminal that launches Claude
+Code.
 
 ## 3. Reload Claude Code
 

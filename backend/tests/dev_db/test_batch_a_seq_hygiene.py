@@ -62,9 +62,14 @@ def test_parse_env_reads_key_value_lines(seq_reset_module, tmp_path):
     assert cfg["TDX_DB_PASSWORD"] == "hunter2"
 
 
-def test_assert_dev_target_accepts_loopback_dev(seq_reset_module):
+def test_assert_dev_target_accepts_literal_loopback(seq_reset_module):
     seq_reset_module.assert_dev_target("127.0.0.1", 5433, "aistock_dev")
-    seq_reset_module.assert_dev_target("localhost", 5433, "AIstock_dev_smoke")
+    seq_reset_module.assert_dev_target("::1", 5433, "AIstock_dev_smoke")
+
+
+def test_assert_dev_target_rejects_localhost_alias(seq_reset_module):
+    with pytest.raises(SystemExit, match="only literal loopback"):
+        seq_reset_module.assert_dev_target("localhost", 5433, "aistock_dev")
 
 
 def test_assert_dev_target_rejects_production_port(seq_reset_module):

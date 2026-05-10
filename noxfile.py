@@ -50,17 +50,27 @@ def _codex_quick_validate_script() -> Path:
 
 
 def _guardrail_baseline_json(session: nox.Session) -> str:
-    baseline_json = os.environ.get(
-        "AISTOCK_GUARDRAIL_BASELINE_JSON",
+    """Locate the guardrail baseline JSON.
+
+    Default points at the in-tree baseline under tests/aistock_validation/.
+    Falls back to the legacy ``tmp/validation/guardrails/baseline_20260504.json``
+    location for compatibility with older worktrees that haven't migrated yet.
+    """
+    candidates = [
+        os.environ.get("AISTOCK_GUARDRAIL_BASELINE_JSON"),
+        "tests/aistock_validation/guardrails_baseline_20260511.json",
+        "tests/aistock_validation/guardrails_baseline_20260504.json",
         "tmp/validation/guardrails/baseline_20260504.json",
+    ]
+    for candidate in candidates:
+        if candidate and (ROOT / candidate).exists():
+            return candidate
+    session.error(
+        "Missing guardrail baseline JSON. Run "
+        "`python scripts/aistock_guardrail_scan.py --baseline "
+        "--output-json tests/aistock_validation/guardrails_baseline_<YYYYMMDD>.json` "
+        "first, or set AISTOCK_GUARDRAIL_BASELINE_JSON to an existing file."
     )
-    if not (ROOT / baseline_json).exists():
-        session.error(
-            "Missing guardrail baseline JSON. Run "
-            "`python scripts/aistock_guardrail_scan.py --baseline "
-            "--output-json tmp/validation/guardrails/baseline_20260504.json` first."
-        )
-    return baseline_json
 
 
 @nox.session(venv_backend="none")
@@ -688,6 +698,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/routers/validation.py",
         "backend/services/validation",
         "scripts/aistock_validate.py",
+        "scripts/aistock_mcp_server.py",
         "scripts/validation_center_readonly_smoke.py",
         "scripts/validation_center_runner_smoke.py",
         external=True,
@@ -706,8 +717,10 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/tests/test_validation_ui_target_catalog.py",
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
+        "backend/tests/test_aistock_mcp_server.py",
         "--cov=backend.services.validation",
         "--cov=backend.routers.validation",
+        "--cov=scripts.aistock_mcp_server",
         "--cov=scripts.validation_center_readonly_smoke",
         "--cov=scripts.validation_center_runner_smoke",
         "--cov-branch",

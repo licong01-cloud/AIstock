@@ -69,6 +69,8 @@ nul
 !tests/aistock_validation/catalog/**/*.json
 !tests/aistock_validation/runs/**/*.json
 !tests/aistock_validation/templates/**/*.json
+!tests/aistock_validation/guardrails_baseline_*.json
+!.mcp.json
 
 # Backup and temp directories
 git_ignore_folder/

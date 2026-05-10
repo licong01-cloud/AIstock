@@ -90,9 +90,22 @@ def parse_env(env_file: Path = ENV_FILE) -> dict[str, str]:
     return cfg
 
 
+_LOOPBACK_LITERAL = {"127.0.0.1", "::1"}
+
+
 def assert_dev_target(host: str, port: int, dbname: str) -> None:
-    if host not in {"127.0.0.1", "localhost"}:
-        raise SystemExit(f"FATAL: refusing to run against host {host!r}; expected loopback.")
+    """Refuse to run unless the target is a literal loopback dev DB.
+
+    'localhost' was previously accepted but is now rejected to defend against
+    /etc/hosts overrides that could silently redirect to a non-loopback IP
+    (Stage 4 P2.2 follow-up). Callers must pass the literal IP.
+    """
+    if host not in _LOOPBACK_LITERAL:
+        raise SystemExit(
+            f"FATAL: refusing to run against host {host!r}; "
+            f"only literal loopback addresses {sorted(_LOOPBACK_LITERAL)} are accepted "
+            f"(use 127.0.0.1 instead of 'localhost' to defend against /etc/hosts overrides)."
+        )
     if int(port) != 5433:
         raise SystemExit(f"FATAL: refusing to run against port {port}; expected dev DB on 5433.")
     if "dev" not in dbname.lower():

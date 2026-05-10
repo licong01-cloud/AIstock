@@ -32,6 +32,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -49,6 +50,38 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8001/api/v1/validation"
 DEFAULT_TIMEOUT = 30.0
 SEVERITY_VALUES = {"P0", "P1", "P2", "P3"}
 STATUS_VALUES = {"open", "in_progress", "fixed", "verified", "wontfix"}
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _sanitize_identifier(value: Any, name: str) -> str:
+    """Reject anything that could change the URL path semantics.
+
+    Forbids ``/`` (path traversal / extra segments), ``%`` (encoded slash),
+    ``?`` / ``#`` (query / fragment), whitespace, and any other punctuation.
+    Allows the small alphabet used by canonical AIstock identifiers
+    (BUG-NNN, paper_v2_backend, qe_20260415_173338_d1c5, exec-1, etc).
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a non-empty string; got {value!r}")
+    if not IDENTIFIER_PATTERN.match(value):
+        raise ValueError(
+            f"{name} contains illegal characters: {value!r}; "
+            f"only [A-Za-z0-9_.-] allowed"
+        )
+    return value
+
+
+def _assert_loopback_url(url: str) -> str:
+    """Refuse to issue HTTP against any host outside the loopback set."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host not in LOOPBACK_HOSTS:
+        raise ValueError(
+            f"AISTOCK_VALIDATION_BASE_URL must be loopback "
+            f"({sorted(LOOPBACK_HOSTS)}); got host={host!r} url={url!r}"
+        )
+    return url
 
 
 def _resolve_repo_root() -> Path:
@@ -85,7 +118,9 @@ class ValidationCenterClient:
         timeout: float | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        self.base_url = (base_url or os.environ.get("AISTOCK_VALIDATION_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
+        candidate = (base_url or os.environ.get("AISTOCK_VALIDATION_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
+        _assert_loopback_url(candidate)
+        self.base_url = candidate
         self.timeout = float(timeout if timeout is not None else os.environ.get("AISTOCK_HTTP_TIMEOUT", DEFAULT_TIMEOUT))
         self._transport = transport
 
@@ -307,7 +342,8 @@ def list_plans() -> dict[str, Any]:
 @mcp.tool()
 def get_plan(plan_key: str) -> dict[str, Any]:
     """Get a single validation plan by ``plan_key``."""
-    return _client().get(f"/plans/{plan_key}")
+    safe = _sanitize_identifier(plan_key, "plan_key")
+    return _client().get(f"/plans/{safe}")
 
 
 @mcp.tool()
@@ -328,7 +364,8 @@ def list_validation_runs(
 @mcp.tool()
 def get_validation_run(run_id: str) -> dict[str, Any]:
     """Get a single validation run record by ``run_id``."""
-    return _client().get(f"/runs/{run_id}")
+    safe = _sanitize_identifier(run_id, "run_id")
+    return _client().get(f"/runs/{safe}")
 
 
 @mcp.tool()
@@ -386,7 +423,8 @@ def get_bug_agent_context(bug_id: str) -> dict[str, Any]:
     and ``closure_requirements`` - everything an AI agent needs to start a
     bounded fix attempt without reading the raw JSON file.
     """
-    return _client().get(f"/bugs/{bug_id}/agent-context")
+    safe = _sanitize_identifier(bug_id, "bug_id")
+    return _client().get(f"/bugs/{safe}/agent-context")
 
 
 @mcp.tool()
@@ -443,7 +481,8 @@ def start_validation_execution(
 @mcp.tool()
 def get_validation_execution_status(execution_id: str) -> dict[str, Any]:
     """Get the status / exit code / artifacts of a controlled validation execution."""
-    return _client().get(f"/executions/{execution_id}")
+    safe = _sanitize_identifier(execution_id, "execution_id")
+    return _client().get(f"/executions/{safe}")
 
 
 @mcp.tool()
@@ -451,7 +490,8 @@ def get_validation_execution_log(execution_id: str, tail: int = 100) -> dict[str
     """Get the tail of a controlled validation execution log."""
     if tail < 1 or tail > 2000:
         raise ValueError("tail must be between 1 and 2000")
-    return _client().get(f"/executions/{execution_id}/log", params={"tail_lines": tail})
+    safe = _sanitize_identifier(execution_id, "execution_id")
+    return _client().get(f"/executions/{safe}/log", params={"tail_lines": tail})
 
 
 @mcp.tool()

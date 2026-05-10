@@ -30,7 +30,7 @@ def mcp_module(tmp_path, monkeypatch):
     on demand by report_bug, so we just point AISTOCK_REPO_ROOT at tmp_path.
     """
     monkeypatch.setenv("AISTOCK_REPO_ROOT", str(tmp_path))
-    monkeypatch.setenv("AISTOCK_VALIDATION_BASE_URL", "http://test-host/api/v1/validation")
+    monkeypatch.setenv("AISTOCK_VALIDATION_BASE_URL", "http://127.0.0.1/api/v1/validation")
     import importlib
     import sys
     sys.modules.pop("scripts.aistock_mcp_server", None)
@@ -77,7 +77,7 @@ def test_client_unwraps_data_envelope(mcp_module):
 
     transport = _mock_transport(handler)
     client = mcp_module.ValidationCenterClient(
-        base_url="http://test-host/api/v1/validation",
+        base_url="http://127.0.0.1/api/v1/validation",
         transport=transport,
     )
     payload = client.get("/health")
@@ -88,7 +88,7 @@ def test_client_unwraps_data_envelope(mcp_module):
 def test_client_raises_on_http_error(mcp_module):
     transport = _mock_transport(lambda req: (500, {"detail": "boom"}))
     client = mcp_module.ValidationCenterClient(
-        base_url="http://test-host/api/v1/validation", transport=transport
+        base_url="http://127.0.0.1/api/v1/validation", transport=transport
     )
     with pytest.raises(RuntimeError, match="HTTP 500"):
         client.get("/health")
@@ -97,7 +97,7 @@ def test_client_raises_on_http_error(mcp_module):
 def test_client_raises_on_missing_envelope(mcp_module):
     transport = _mock_transport(lambda req: httpx.Response(200, json={"unexpected": True}))
     client = mcp_module.ValidationCenterClient(
-        base_url="http://test-host/api/v1/validation", transport=transport
+        base_url="http://127.0.0.1/api/v1/validation", transport=transport
     )
     with pytest.raises(RuntimeError, match="unexpected envelope"):
         client.get("/health")
@@ -114,7 +114,7 @@ def test_health_tool_calls_health_endpoint(mcp_module):
     _swap_client(
         mcp_module,
         mcp_module.ValidationCenterClient(
-            base_url="http://test-host/api/v1/validation", transport=transport
+            base_url="http://127.0.0.1/api/v1/validation", transport=transport
         ),
     )
     result = mcp_module.health()
@@ -128,7 +128,7 @@ def test_list_plans_returns_data(mcp_module):
     _swap_client(
         mcp_module,
         mcp_module.ValidationCenterClient(
-            base_url="http://test-host/api/v1/validation", transport=transport
+            base_url="http://127.0.0.1/api/v1/validation", transport=transport
         ),
     )
     result = mcp_module.list_plans()
@@ -145,7 +145,7 @@ def test_get_plan_includes_plan_key_in_path(mcp_module):
     _swap_client(
         mcp_module,
         mcp_module.ValidationCenterClient(
-            base_url="http://test-host/api/v1/validation",
+            base_url="http://127.0.0.1/api/v1/validation",
             transport=_mock_transport(handler),
         ),
     )
@@ -164,7 +164,7 @@ def test_list_validation_runs_passes_filters(mcp_module):
     _swap_client(
         mcp_module,
         mcp_module.ValidationCenterClient(
-            base_url="http://test-host/api/v1/validation",
+            base_url="http://127.0.0.1/api/v1/validation",
             transport=_mock_transport(handler),
         ),
     )
@@ -185,7 +185,7 @@ def test_list_findings_maps_source_to_source_type(mcp_module):
     _swap_client(
         mcp_module,
         mcp_module.ValidationCenterClient(
-            base_url="http://test-host/api/v1/validation",
+            base_url="http://127.0.0.1/api/v1/validation",
             transport=_mock_transport(handler),
         ),
     )
@@ -203,7 +203,7 @@ def test_list_bugs_returns_envelope_inner(mcp_module):
     _swap_client(
         mcp_module,
         mcp_module.ValidationCenterClient(
-            base_url="http://test-host/api/v1/validation", transport=transport
+            base_url="http://127.0.0.1/api/v1/validation", transport=transport
         ),
     )
     result = mcp_module.list_bugs(status="open", severity="P1")
@@ -229,7 +229,7 @@ def test_get_bug_agent_context_endpoint_path(mcp_module):
     _swap_client(
         mcp_module,
         mcp_module.ValidationCenterClient(
-            base_url="http://test-host/api/v1/validation",
+            base_url="http://127.0.0.1/api/v1/validation",
             transport=_mock_transport(handler),
         ),
     )
@@ -250,7 +250,7 @@ def test_module_quality_summary_filters_modules(mcp_module):
     _swap_client(
         mcp_module,
         mcp_module.ValidationCenterClient(
-            base_url="http://test-host/api/v1/validation", transport=transport
+            base_url="http://127.0.0.1/api/v1/validation", transport=transport
         ),
     )
     filtered = mcp_module.get_module_quality_summary(module="paper_v2")
@@ -277,7 +277,7 @@ def test_start_validation_execution_posts_minimal_body(mcp_module):
     _swap_client(
         mcp_module,
         mcp_module.ValidationCenterClient(
-            base_url="http://test-host/api/v1/validation",
+            base_url="http://127.0.0.1/api/v1/validation",
             transport=_mock_transport(handler),
         ),
     )
@@ -299,7 +299,7 @@ def test_get_validation_execution_log_passes_tail(mcp_module):
     _swap_client(
         mcp_module,
         mcp_module.ValidationCenterClient(
-            base_url="http://test-host/api/v1/validation",
+            base_url="http://127.0.0.1/api/v1/validation",
             transport=_mock_transport(handler),
         ),
     )
@@ -397,6 +397,84 @@ def test_report_bug_rejects_invalid_severity(mcp_module):
             expected="e",
             actual="a",
         )
+
+
+# --- Security: path traversal + loopback enforcement -------------------
+
+
+@pytest.mark.parametrize(
+    "tool_name, kwargs",
+    [
+        ("get_plan", {"plan_key": "../../health"}),
+        ("get_plan", {"plan_key": "qe_archive/../../health"}),
+        ("get_validation_run", {"run_id": "a/b"}),
+        ("get_validation_run", {"run_id": "id?force=1"}),
+        ("get_bug_agent_context", {"bug_id": "BUG-001/../../bugs/summary"}),
+        ("get_bug_agent_context", {"bug_id": "BUG 001"}),  # whitespace
+        ("get_validation_execution_status", {"execution_id": "exec/../runs/x"}),
+        ("get_validation_execution_log", {"execution_id": "x%2Fy", "tail": 10}),
+    ],
+)
+def test_path_interpolating_tools_reject_dangerous_identifiers(mcp_module, tool_name, kwargs):
+    # Even with a working client, the sanitize check must fire BEFORE the HTTP request.
+    transport = _mock_transport(lambda req: {"unreachable": True})
+    _swap_client(
+        mcp_module,
+        mcp_module.ValidationCenterClient(
+            base_url="http://127.0.0.1/api/v1/validation", transport=transport,
+        ),
+    )
+    tool = getattr(mcp_module, tool_name)
+    with pytest.raises(ValueError, match="contains illegal characters|must be a non-empty string"):
+        tool(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "tool_name, kwargs",
+    [
+        ("get_plan", {"plan_key": "qe_archive_backend"}),
+        ("get_validation_run", {"run_id": "qe_20260415_173338_d1c5"}),
+        ("get_bug_agent_context", {"bug_id": "BUG-023"}),
+        ("get_validation_execution_status", {"execution_id": "exec-1"}),
+    ],
+)
+def test_path_interpolating_tools_accept_canonical_ids(mcp_module, tool_name, kwargs):
+    captured = []
+
+    def handler(req):
+        captured.append(req.url.path)
+        return httpx.Response(200, json=_envelope({"ok": True}))
+
+    _swap_client(
+        mcp_module,
+        mcp_module.ValidationCenterClient(
+            base_url="http://127.0.0.1/api/v1/validation",
+            transport=_mock_transport(handler),
+        ),
+    )
+    tool = getattr(mcp_module, tool_name)
+    result = tool(**kwargs)
+    assert result == {"ok": True}
+    # The identifier must appear verbatim (no encoding distortion) in the path
+    primary = next(iter(kwargs.values()))
+    assert primary in captured[-1]
+
+
+def test_client_construction_rejects_non_loopback_url(mcp_module):
+    with pytest.raises(ValueError, match="must be loopback"):
+        mcp_module.ValidationCenterClient(
+            base_url="https://example.com/api/v1/validation",
+        )
+
+
+def test_client_construction_accepts_loopback_variants(mcp_module):
+    for url in [
+        "http://127.0.0.1:8011/api/v1/validation",
+        "http://localhost:8011/api/v1/validation",
+        "http://[::1]:8011/api/v1/validation",
+    ]:
+        client = mcp_module.ValidationCenterClient(base_url=url)
+        assert client.base_url.startswith(("http://127.0.0.1", "http://localhost", "http://[::1]"))
 
 
 def test_report_bug_normalizes_drawer_evidence(mcp_module):
