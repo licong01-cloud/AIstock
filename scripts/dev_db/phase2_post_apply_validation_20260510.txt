@@ -1,0 +1,32 @@
+qe_archive POST-APPLY validation 2026-05-10
+pre_table_count=27
+post_table_count=53
+delta=+26
+indexes(paper_v2_*+factor_value)=98
+new tables (26):
+  dim_paper_v2_portfolio
+  dim_paper_v2_runtime_profile
+  dim_paper_v2_runtime_profile_version
+  factor_value
+  factor_value_default
+  factor_value_y2026m05
+  paper_v2_cash_ledger
+  paper_v2_config_change_audit
+  paper_v2_daily_snapshot
+  paper_v2_error
+  paper_v2_execution_policy_activation
+  paper_v2_fill
+  paper_v2_fill_default
+  paper_v2_fill_y2026m05
+  paper_v2_intraday_snapshot
+  paper_v2_order
+  paper_v2_order_event
+  paper_v2_order_execution_state
+  paper_v2_position_snapshot
+  paper_v2_reset_audit
+  paper_v2_run
+  paper_v2_run_event
+  paper_v2_runtime_config_activation
+  paper_v2_session
+  paper_v2_session_day
+  paper_v2_session_event
