@@ -433,6 +433,8 @@ CREATE TABLE qe_archive.paper_v2_fill (
     slippage_bps         NUMERIC(10,2),         -- 计算字段，可空
     broker_backend       TEXT,                  -- 冗余便于查询
     algo_code            TEXT,
+    intended_price       NUMERIC(18,4),         -- 见下方说明：当前生产几乎全 NULL（MARKET-only），未来加 LIMIT 后启用
+    fill_market_context  JSONB,                 -- 见下方说明：T6.1 修正后的真实 key 集
     filled_at            TIMESTAMPTZ NOT NULL,
     captured_at          TIMESTAMPTZ DEFAULT NOW()
 ) PARTITION BY RANGE (trade_date);
@@ -445,6 +447,40 @@ CREATE TABLE qe_archive.paper_v2_fill_y2026m05
 CREATE INDEX ix_paper_v2_fill_run ON qe_archive.paper_v2_fill (run_id, trade_date);
 CREATE INDEX ix_paper_v2_fill_symbol ON qe_archive.paper_v2_fill (symbol, trade_date);
 ```
+
+**T6.1 修正（2026-05-10）**：
+
+#### intended_price 结构性 NULL 约定
+
+`strategy_package/runtime.py:716` 当前**只发 MARKET 订单**，所以 `intended_price` 在生产中**结构性 NULL**——这是正确状态，不是数据缺失。
+- DW ETL 模型设计应把 NULL 视为 **first-class signal**（"该 fill 来自 MARKET 订单"），不要当 missing data 处理
+- 未来 paper_v2 加 LIMIT 订单后，intended_price 才有值
+- slippage_bps 计算逻辑：仅当 `intended_price IS NOT NULL` 时计算 `(fill_price - intended_price) / intended_price * 10000`，否则 NULL（MARKET 无 reference 价）
+
+#### fill_market_context 真实 key 集（T6.1 揭露）
+
+之前 v1 文档误写为 `bid/ask/best_volume/spread`，**实际不正确**。T6.1 查 `backend/services/paper_trading_v2/market_data.py:692` 确认 `_build_market_context` 实际产出 key 集：
+
+```json
+{
+  "stock_id": "000001.SZ",
+  "trade_date": "2026-05-10",
+  "data_source": "TDX_REALTIME",
+  "prev_close": 12.34,
+  "limit_up": 13.57,
+  "limit_down": 11.11,
+  "suspend_status": "TRADING",
+  "full_day_open": 12.40,
+  "full_day_close": 12.50,
+  "full_day_volume": 1234567,
+  "full_day_high": 12.60,
+  "full_day_low": 12.30,
+  "generated_at": "2026-05-10T15:30:00",
+  "day_features_*": "..."  // 仅 V25 时存在
+}
+```
+
+DW ETL 设计基于此 key 集修正字段映射；T6.1 测试已断言真实 key 集（避免后续再错位）。
 
 ### §5.8 paper_v2_position_snapshot
 
