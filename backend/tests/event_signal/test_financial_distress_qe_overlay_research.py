@@ -10,6 +10,7 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
     FIRST_BATCH_RULES,
     LOSS_HISTORY_RULES,
     MID_LARGE_EVENT_RULES,
+    PHASE24_RESEARCH_RULES,
     REFINEMENT_RULES,
     SIZE_BUCKET_RULES,
     CandidateScore,
@@ -38,7 +39,14 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
 def _rule(key: str):
     return next(
         rule
-        for rule in (*FIRST_BATCH_RULES, *SIZE_BUCKET_RULES, *LOSS_HISTORY_RULES, *MID_LARGE_EVENT_RULES, *REFINEMENT_RULES)
+        for rule in (
+            *FIRST_BATCH_RULES,
+            *SIZE_BUCKET_RULES,
+            *LOSS_HISTORY_RULES,
+            *MID_LARGE_EVENT_RULES,
+            *REFINEMENT_RULES,
+            *PHASE24_RESEARCH_RULES,
+        )
         if rule.rule_key == key
     )
 
@@ -111,6 +119,12 @@ def test_select_research_rules_can_run_refinement_only():
     rules = select_research_rules(refinement_only=True)
 
     assert [rule.rule_key for rule in rules] == [rule.rule_key for rule in REFINEMENT_RULES]
+
+
+def test_select_research_rules_can_run_phase24_only():
+    rules = select_research_rules(phase24_only=True)
+
+    assert [rule.rule_key for rule in rules] == [rule.rule_key for rule in PHASE24_RESEARCH_RULES]
 
 
 def test_select_research_rules_can_include_loss_history_with_first_batch():
@@ -287,6 +301,30 @@ def test_expectation_miss_metric_bucket_exposes_gap_for_overlay_rules():
     assert detail["miss_gap_bucket"] == "miss_gap_50pct_to_100pct"
 
 
+def test_indicator_large_decline_metric_bucket_exposes_phase24_quality_fields():
+    metric_bucket, detail = classify_metric_bucket(
+        "financial_indicator_large_decline",
+        {
+            "metrics": {"actual_yoy": "-95.5"},
+            "raw_payload": {
+                "or_yoy": "12.3",
+                "ocf_yoy": "-65.0",
+                "debt_to_assets": "76.5",
+                "current_ratio": "0.92",
+                "netprofit_margin": "-4.2",
+            },
+        },
+    )
+
+    assert metric_bucket == "financial_indicator_large_decline:default"
+    assert detail["actual_yoy"] == -95.5
+    assert detail["or_yoy"] == 12.3
+    assert detail["ocf_yoy"] == -65.0
+    assert detail["debt_to_assets"] == 76.5
+    assert detail["current_ratio"] == 0.92
+    assert detail["netprofit_margin"] == -4.2
+
+
 def test_prior_loss_history_is_available_for_non_loss_events():
     rows = [
         {
@@ -338,6 +376,59 @@ def test_refinement_rules_split_size_and_prior_loss_history():
     assert _rule_applies(
         {"event_type": "financial_express_loss", "market_cap_bucket": "mv_10bn_to_30bn_yuan"},
         _rule("structured_financial_risk_mv_10_30bn"),
+    )
+
+
+def test_phase24_expectation_miss_rules_match_gap_source_and_size():
+    row = {
+        "event_type": "financial_positive_but_miss_expectation",
+        "market_cap_bucket": "mv_10bn_to_30bn_yuan",
+        "metric_detail": {"miss_gap": 120.0, "actual_source_type": "tushare_fina_indicator"},
+    }
+
+    assert _rule_applies(row, _rule("expectation_miss_gap_ge_100_mv_ge_10bn"))
+    assert _rule_applies(row, _rule("expectation_miss_gap_ge_100_mv_10_30bn"))
+    assert _rule_applies(row, _rule("expectation_miss_gap_ge_50_actual_indicator_mv_ge_10bn"))
+    assert not _rule_applies(
+        {**row, "metric_detail": {"miss_gap": 80.0, "actual_source_type": "tushare_express"}},
+        _rule("expectation_miss_gap_ge_100_mv_ge_10bn"),
+    )
+    assert not _rule_applies(
+        {**row, "market_cap_bucket": "mv_5bn_to_10bn_yuan"},
+        _rule("expectation_miss_gap_ge_100_mv_ge_10bn"),
+    )
+
+
+def test_phase24_indicator_rules_match_deterioration_quality_fields():
+    base = {
+        "event_type": "financial_indicator_large_decline",
+        "market_cap_bucket": "mv_10bn_to_30bn_yuan",
+        "metric_detail": {
+            "actual_yoy": -120.0,
+            "or_yoy": 10.0,
+            "ocf_yoy": -55.0,
+            "q_ocf_to_sales": -3.0,
+            "debt_to_assets": 75.0,
+            "current_ratio": 0.8,
+            "netprofit_margin": -2.0,
+        },
+    }
+
+    assert _rule_applies(base, _rule("indicator_decline_actual_yoy_le_minus100_mv_10_30bn"))
+    assert _rule_applies(base, _rule("indicator_decline_actual_yoy_le_minus80_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_profit_revenue_diverge_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_negative_margin_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_ocf_yoy_le_minus50_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_debt_assets_ge_70_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_current_ratio_lt_1_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_ocf_negative_or_leverage_mv_ge_10bn"))
+    assert _rule_applies(
+        {**base, "metric_detail": {**base["metric_detail"], "or_yoy": -25.0}},
+        _rule("indicator_decline_profit_revenue_both_down_mv_ge_10bn"),
+    )
+    assert not _rule_applies(
+        {**base, "market_cap_bucket": "mv_5bn_to_10bn_yuan"},
+        _rule("indicator_decline_actual_yoy_le_minus80_mv_ge_10bn"),
     )
 
 

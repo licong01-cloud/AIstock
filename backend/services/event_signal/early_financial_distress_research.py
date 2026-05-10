@@ -254,10 +254,40 @@ def classify_metric_bucket(event_type: str, evidence: Optional[Mapping[str, Any]
         np_max = _safe_float(raw.get("net_profit_max"))
         candidates = [value for value in (np_min, np_max) if value is not None]
         worst_loss_wan = min(candidates) if candidates else None
+        p_change_min = _safe_float(raw.get("p_change_min"))
+        p_change_max = _safe_float(raw.get("p_change_max"))
+        p_change_mid = _safe_float(metrics.get("forecast_mid"))
+        if p_change_mid is None:
+            pct_candidates = [value for value in (p_change_min, p_change_max) if value is not None]
+            p_change_mid = _mean(pct_candidates)
         bucket = _loss_abs_bucket(worst_loss_wan, unit="wan")
         return (
             f"forecast_loss:type={forecast_type}|{bucket}",
-            {"forecast_type": forecast_type, "worst_loss_wan": worst_loss_wan},
+            {
+                "forecast_type": forecast_type,
+                "worst_loss_wan": worst_loss_wan,
+                "p_change_min": p_change_min,
+                "p_change_max": p_change_max,
+                "p_change_mid": p_change_mid,
+            },
+        )
+    if event_type == "financial_forecast_large_decline":
+        p_change_min = _safe_float(raw.get("p_change_min"))
+        p_change_max = _safe_float(raw.get("p_change_max"))
+        p_change_mid = _safe_float(metrics.get("forecast_mid"))
+        if p_change_mid is None:
+            pct_candidates = [value for value in (p_change_min, p_change_max) if value is not None]
+            p_change_mid = _mean(pct_candidates)
+        return (
+            f"{event_type}:default",
+            {
+                "forecast_type": str(raw.get("type") or "unknown"),
+                "p_change_min": p_change_min,
+                "p_change_max": p_change_max,
+                "p_change_mid": p_change_mid,
+                "net_profit_min_wan": _safe_float(raw.get("net_profit_min")),
+                "net_profit_max_wan": _safe_float(raw.get("net_profit_max")),
+            },
         )
     if event_type == "financial_express_loss":
         net_profit = _safe_float(raw.get("n_income"))
@@ -268,7 +298,59 @@ def classify_metric_bucket(event_type: str, evidence: Optional[Mapping[str, Any]
         bucket = _loss_abs_bucket(net_profit, unit="yuan")
         return (
             f"express_loss:{bucket}|{equity_bucket}",
-            {"net_profit_yuan": net_profit, "equity_yuan": equity, "equity_bucket": equity_bucket},
+            {
+                "net_profit_yuan": net_profit,
+                "equity_yuan": equity,
+                "equity_bucket": equity_bucket,
+                "actual_yoy": _safe_float(metrics.get("actual_yoy")),
+                "revenue_yuan": _safe_float(raw.get("revenue")),
+                "operate_profit_yuan": _safe_float(raw.get("operate_profit")),
+                "total_profit_yuan": _safe_float(raw.get("total_profit")),
+            },
+        )
+    if event_type == "financial_express_large_decline":
+        return (
+            f"{event_type}:default",
+            {
+                "actual_yoy": _safe_float(metrics.get("actual_yoy")),
+                "net_profit_yuan": _safe_float(raw.get("n_income")),
+                "revenue_yuan": _safe_float(raw.get("revenue")),
+                "operate_profit_yuan": _safe_float(raw.get("operate_profit")),
+                "total_profit_yuan": _safe_float(raw.get("total_profit")),
+                "equity_yuan": _safe_float(raw.get("total_hldr_eqy_exc_min_int")),
+                "diluted_roe": _safe_float(raw.get("diluted_roe")),
+            },
+        )
+    if event_type == "financial_indicator_large_decline":
+        actual_yoy = _safe_float(metrics.get("actual_yoy"))
+        return (
+            f"{event_type}:default",
+            {
+                "actual_yoy": actual_yoy,
+                "netprofit_yoy": _safe_float(raw.get("netprofit_yoy")),
+                "q_netprofit_yoy": _safe_float(raw.get("q_netprofit_yoy")),
+                "dt_netprofit_yoy": _safe_float(raw.get("dt_netprofit_yoy")),
+                "q_profit_yoy": _safe_float(raw.get("q_profit_yoy")),
+                "op_yoy": _safe_float(raw.get("op_yoy")),
+                "q_op_yoy": _safe_float(raw.get("q_op_yoy")),
+                "or_yoy": _safe_float(raw.get("or_yoy")),
+                "tr_yoy": _safe_float(raw.get("tr_yoy")),
+                "q_sales_yoy": _safe_float(raw.get("q_sales_yoy")),
+                "ocf_yoy": _safe_float(raw.get("ocf_yoy")),
+                "q_ocf_to_sales": _safe_float(raw.get("q_ocf_to_sales")),
+                "roe": _safe_float(raw.get("roe")),
+                "roe_waa": _safe_float(raw.get("roe_waa")),
+                "roe_dt": _safe_float(raw.get("roe_dt")),
+                "roa": _safe_float(raw.get("roa")),
+                "debt_to_assets": _safe_float(raw.get("debt_to_assets")),
+                "current_ratio": _safe_float(raw.get("current_ratio")),
+                "quick_ratio": _safe_float(raw.get("quick_ratio")),
+                "grossprofit_margin": _safe_float(raw.get("grossprofit_margin")),
+                "netprofit_margin": _safe_float(raw.get("netprofit_margin")),
+                "profit_to_gr": _safe_float(raw.get("profit_to_gr")),
+                "eps": _safe_float(raw.get("eps")),
+                "dt_eps": _safe_float(raw.get("dt_eps")),
+            },
         )
     if event_type == "financial_positive_but_miss_expectation":
         miss_gap = _safe_float(metrics.get("miss_gap"))

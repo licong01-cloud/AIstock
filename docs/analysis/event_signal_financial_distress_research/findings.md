@@ -321,3 +321,17 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | next phase needs stronger signal family     | search beyond this small-cap loss/mv fixed_20 profile         |
 +---------------------------------------------+---------------------------------------------------------------+
 ```
+
+## Phase 24 Structured Signal Family Finding
+
+```text
++-------------------------------------------------------+----------------------------+------------------------------------------------------------------------+
+| candidate                                             | decision                   | evidence                                                               |
++-------------------------------------------------------+----------------------------+------------------------------------------------------------------------+
+| indicator_decline_ocf_negative_or_leverage_mv_ge_10bn | WATCHLIST_PRIMARY          | 22-loop cheap avg +0.131%, ex-best +0.047%, worst -0.183%, direct down |
+| expectation_miss_gap_ge_50/100                         | DIRECT_DOWNSIDE_ONLY       | T+20 abnormal median strongly negative, but QE top50 interaction weak  |
+| current_ratio_lt_1 / debt_assets_ge_70                 | WATCHLIST_FEATURE          | direct downside exists, overlay average positive but sparse            |
+| immediate WSL true rerun                               | REJECT_NOW                 | no rule passed strict cheap gate; best score 55.6 below 60             |
+| next empirical step                                    | REFINE_OR_TRUE_QE_SMOKE    | either refine top rule thresholds or run one-loop WSL smoke if desired |
++-------------------------------------------------------+----------------------------+------------------------------------------------------------------------+
+```

@@ -77,6 +77,10 @@ STRUCTURED_FINANCIAL_RISK_EVENT_TYPES = {
     *STRUCTURED_LARGE_DECLINE_EVENT_TYPES,
     EXPECTATION_MISS_EVENT_TYPE,
 }
+PHASE24_EXPECTATION_MISS_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
+PHASE24_INDICATOR_DETERIORATION_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
+PHASE24_CASHFLOW_LEVERAGE_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
+PHASE24_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
 MARKET_CAP_BUCKET_ORDER = (
     "mv_lt_5bn_yuan",
     "mv_5bn_to_10bn_yuan",
@@ -429,6 +433,105 @@ REFINEMENT_RULES: tuple[FinancialDistressRule, ...] = (
     ),
 )
 
+PHASE24_EXPECTATION_MISS_RESEARCH_RULES: tuple[FinancialDistressRule, ...] = (
+    FinancialDistressRule(
+        rule_key="expectation_miss_gap_ge_100_mv_ge_10bn",
+        title="expectation miss gap >= 100ppt and market cap >= 10bn CNY",
+        description="Actual financial result misses a high-growth forecast by at least 100 percentage points in mid/large caps.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=510,
+    ),
+    FinancialDistressRule(
+        rule_key="expectation_miss_gap_ge_100_mv_10_30bn",
+        title="expectation miss gap >= 100ppt and market cap 10-30bn CNY",
+        description="Medium-cap expectation miss with at least 100 percentage points forecast-to-actual gap.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=520,
+    ),
+    FinancialDistressRule(
+        rule_key="expectation_miss_gap_ge_50_actual_indicator_mv_ge_10bn",
+        title="expectation miss gap >= 50ppt from fina_indicator and market cap >= 10bn CNY",
+        description="Expectation miss where actual data comes from fina_indicator and PIT market cap is at least 10bn CNY.",
+        policy_risk_level="MEDIUM",
+        priority=530,
+    ),
+)
+
+PHASE24_INDICATOR_DETERIORATION_RESEARCH_RULES: tuple[FinancialDistressRule, ...] = (
+    FinancialDistressRule(
+        rule_key="indicator_decline_actual_yoy_le_minus100_mv_10_30bn",
+        title="financial indicator actual yoy <= -100% and market cap 10-30bn CNY",
+        description="Medium-cap financial-indicator large decline where parsed actual yoy is at most -100%.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=610,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_actual_yoy_le_minus80_mv_ge_10bn",
+        title="financial indicator actual yoy <= -80% and market cap >=10bn CNY",
+        description="Mid/large-cap financial-indicator large decline with a sharper actual-yoy deterioration than the v0 -50% rule.",
+        policy_risk_level="MEDIUM",
+        priority=620,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_profit_revenue_diverge_mv_ge_10bn",
+        title="financial indicator profit decline with non-negative revenue growth and market cap >=10bn CNY",
+        description="Profit collapse despite non-negative revenue growth, capturing margin or non-operating deterioration.",
+        policy_risk_level="MEDIUM",
+        priority=630,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_profit_revenue_both_down_mv_ge_10bn",
+        title="financial indicator profit and revenue both down, market cap >=10bn CNY",
+        description="Mid/large-cap financial-indicator decline where both profit and revenue indicators deteriorate.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=640,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_negative_margin_mv_ge_10bn",
+        title="financial indicator decline with negative net margin and market cap >=10bn CNY",
+        description="Mid/large-cap financial-indicator decline with negative net-profit margin.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=650,
+    ),
+)
+
+PHASE24_CASHFLOW_LEVERAGE_RESEARCH_RULES: tuple[FinancialDistressRule, ...] = (
+    FinancialDistressRule(
+        rule_key="indicator_decline_ocf_yoy_le_minus50_mv_ge_10bn",
+        title="financial indicator OCF yoy <= -50% and market cap >=10bn CNY",
+        description="Mid/large-cap financial-indicator decline with materially worsening operating cash flow.",
+        policy_risk_level="MEDIUM",
+        priority=710,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_debt_assets_ge_70_mv_ge_10bn",
+        title="financial indicator debt/assets >=70% and market cap >=10bn CNY",
+        description="Mid/large-cap financial-indicator decline with elevated leverage.",
+        policy_risk_level="MEDIUM",
+        priority=720,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_current_ratio_lt_1_mv_ge_10bn",
+        title="financial indicator current ratio <1 and market cap >=10bn CNY",
+        description="Mid/large-cap financial-indicator decline with short-term liquidity pressure.",
+        policy_risk_level="MEDIUM",
+        priority=730,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_ocf_negative_or_leverage_mv_ge_10bn",
+        title="financial indicator decline with cash-flow or leverage pressure and market cap >=10bn CNY",
+        description="Broad financial quality deterioration rule combining cash-flow weakness, high leverage, or current ratio below one.",
+        policy_risk_level="MEDIUM",
+        priority=740,
+    ),
+)
+
+PHASE24_RESEARCH_RULES: tuple[FinancialDistressRule, ...] = (
+    *PHASE24_EXPECTATION_MISS_RESEARCH_RULES,
+    *PHASE24_INDICATOR_DETERIORATION_RESEARCH_RULES,
+    *PHASE24_CASHFLOW_LEVERAGE_RESEARCH_RULES,
+)
+
 SEVERITY_PROFILES: dict[str, SeverityProfile] = {
     "balanced": SeverityProfile(
         profile_key="balanced",
@@ -739,13 +842,19 @@ def select_research_rules(
     include_loss_history_rules: bool = False,
     include_mid_large_event_rules: bool = False,
     include_refinement_rules: bool = False,
+    include_phase24_rules: bool = False,
     size_bucket_only: bool = False,
     loss_history_only: bool = False,
     mid_large_only: bool = False,
     refinement_only: bool = False,
+    phase24_only: bool = False,
 ) -> tuple[FinancialDistressRule, ...]:
     rules: list[FinancialDistressRule] = []
-    enabled_only_flags = sum(1 for flag in (size_bucket_only, loss_history_only, mid_large_only, refinement_only) if flag)
+    enabled_only_flags = sum(
+        1
+        for flag in (size_bucket_only, loss_history_only, mid_large_only, refinement_only, phase24_only)
+        if flag
+    )
     if enabled_only_flags > 1:
         raise ValueError("only one *_only rule-set flag can be enabled")
     if size_bucket_only:
@@ -756,6 +865,8 @@ def select_research_rules(
         rules.extend(MID_LARGE_EVENT_RULES)
     elif refinement_only:
         rules.extend(REFINEMENT_RULES)
+    elif phase24_only:
+        rules.extend(PHASE24_RESEARCH_RULES)
     else:
         if include_first_batch_rules:
             rules.extend(FIRST_BATCH_RULES)
@@ -767,6 +878,8 @@ def select_research_rules(
             rules.extend(MID_LARGE_EVENT_RULES)
         if include_refinement_rules:
             rules.extend(REFINEMENT_RULES)
+        if include_phase24_rules:
+            rules.extend(PHASE24_RESEARCH_RULES)
     if not rules:
         raise ValueError("at least one research rule set must be enabled")
     return tuple(sorted(rules, key=lambda item: item.priority))
@@ -838,6 +951,14 @@ def _metric_detail_float(row: Mapping[str, Any], key: str) -> Optional[float]:
     return number
 
 
+def _metric_detail_any_float(row: Mapping[str, Any], *keys: str) -> Optional[float]:
+    for key in keys:
+        value = _metric_detail_float(row, key)
+        if value is not None:
+            return value
+    return None
+
+
 def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
     event_type = str(row.get("event_type") or "")
     loss_bucket = str(row.get("loss_to_market_cap_bucket") or "")
@@ -851,6 +972,16 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
     is_ge_100bn_cap = market_cap_bucket == "mv_ge_100bn_yuan"
     is_indicator_large_decline = event_type == "financial_indicator_large_decline"
     miss_gap = _metric_detail_float(row, "miss_gap")
+    actual_yoy = _metric_detail_any_float(row, "actual_yoy", "netprofit_yoy", "q_netprofit_yoy", "dt_netprofit_yoy")
+    revenue_yoy = _metric_detail_any_float(row, "or_yoy", "tr_yoy", "q_sales_yoy")
+    ocf_yoy = _metric_detail_float(row, "ocf_yoy")
+    q_ocf_to_sales = _metric_detail_float(row, "q_ocf_to_sales")
+    debt_to_assets = _metric_detail_float(row, "debt_to_assets")
+    current_ratio = _metric_detail_float(row, "current_ratio")
+    netprofit_margin = _metric_detail_any_float(row, "netprofit_margin", "profit_to_gr")
+    actual_source_type = str(
+        (row.get("metric_detail") if isinstance(row.get("metric_detail"), Mapping) else {}).get("actual_source_type") or ""
+    )
     if rule.rule_key == "loss_to_market_cap_ge_50pct":
         return loss_bucket in GE50_LOSS_BUCKETS
     if rule.rule_key == "forecast_loss_to_market_cap_ge_50pct":
@@ -915,6 +1046,59 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
         return event_type in STRUCTURED_FINANCIAL_RISK_EVENT_TYPES and is_large_cap
     if rule.rule_key == "structured_financial_risk_mv_ge_10bn_prior_loss_ge_2":
         return event_type in STRUCTURED_FINANCIAL_RISK_EVENT_TYPES and is_mid_large_cap and prior_loss_count_bucket in PRIOR_LOSS_GE2_BUCKETS
+    if rule.rule_key == "expectation_miss_gap_ge_100_mv_ge_10bn":
+        return event_type == EXPECTATION_MISS_EVENT_TYPE and is_mid_large_cap and miss_gap is not None and miss_gap >= 100.0
+    if rule.rule_key == "expectation_miss_gap_ge_100_mv_10_30bn":
+        return event_type == EXPECTATION_MISS_EVENT_TYPE and is_10_30bn_cap and miss_gap is not None and miss_gap >= 100.0
+    if rule.rule_key == "expectation_miss_gap_ge_50_actual_indicator_mv_ge_10bn":
+        return (
+            event_type == EXPECTATION_MISS_EVENT_TYPE
+            and is_mid_large_cap
+            and miss_gap is not None
+            and miss_gap >= 50.0
+            and actual_source_type == "tushare_fina_indicator"
+        )
+    if rule.rule_key == "indicator_decline_actual_yoy_le_minus100_mv_10_30bn":
+        return is_indicator_large_decline and is_10_30bn_cap and actual_yoy is not None and actual_yoy <= -100.0
+    if rule.rule_key == "indicator_decline_actual_yoy_le_minus80_mv_ge_10bn":
+        return is_indicator_large_decline and is_mid_large_cap and actual_yoy is not None and actual_yoy <= -80.0
+    if rule.rule_key == "indicator_decline_profit_revenue_diverge_mv_ge_10bn":
+        return (
+            is_indicator_large_decline
+            and is_mid_large_cap
+            and actual_yoy is not None
+            and actual_yoy <= -50.0
+            and revenue_yoy is not None
+            and revenue_yoy >= 0.0
+        )
+    if rule.rule_key == "indicator_decline_profit_revenue_both_down_mv_ge_10bn":
+        return (
+            is_indicator_large_decline
+            and is_mid_large_cap
+            and actual_yoy is not None
+            and actual_yoy <= -50.0
+            and revenue_yoy is not None
+            and revenue_yoy <= -20.0
+        )
+    if rule.rule_key == "indicator_decline_negative_margin_mv_ge_10bn":
+        return is_indicator_large_decline and is_mid_large_cap and netprofit_margin is not None and netprofit_margin < 0.0
+    if rule.rule_key == "indicator_decline_ocf_yoy_le_minus50_mv_ge_10bn":
+        return is_indicator_large_decline and is_mid_large_cap and ocf_yoy is not None and ocf_yoy <= -50.0
+    if rule.rule_key == "indicator_decline_debt_assets_ge_70_mv_ge_10bn":
+        return is_indicator_large_decline and is_mid_large_cap and debt_to_assets is not None and debt_to_assets >= 70.0
+    if rule.rule_key == "indicator_decline_current_ratio_lt_1_mv_ge_10bn":
+        return is_indicator_large_decline and is_mid_large_cap and current_ratio is not None and current_ratio < 1.0
+    if rule.rule_key == "indicator_decline_ocf_negative_or_leverage_mv_ge_10bn":
+        return (
+            is_indicator_large_decline
+            and is_mid_large_cap
+            and (
+                (ocf_yoy is not None and ocf_yoy <= -50.0)
+                or (q_ocf_to_sales is not None and q_ocf_to_sales < 0.0)
+                or (debt_to_assets is not None and debt_to_assets >= 70.0)
+                or (current_ratio is not None and current_ratio < 1.0)
+            )
+        )
     raise ValueError(f"unsupported financial distress rule: {rule.rule_key}")
 
 
@@ -3028,6 +3212,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--mid-large-only", action="store_true")
     parser.add_argument("--include-refinement-rules", action="store_true")
     parser.add_argument("--refinement-only", action="store_true")
+    parser.add_argument("--include-phase24-rules", action="store_true")
+    parser.add_argument("--phase24-only", action="store_true")
     parser.add_argument("--rule-key", action="append", default=None, help="Limit research to one or more rule_key values.")
     return parser.parse_args(argv)
 
@@ -3041,10 +3227,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         include_loss_history_rules=args.include_loss_history_rules,
         include_mid_large_event_rules=args.include_mid_large_rules,
         include_refinement_rules=args.include_refinement_rules,
+        include_phase24_rules=args.include_phase24_rules,
         size_bucket_only=args.size_bucket_only,
         loss_history_only=args.loss_history_only,
         mid_large_only=args.mid_large_only,
         refinement_only=args.refinement_only,
+        phase24_only=args.phase24_only,
     )
     research_rules = filter_research_rules_by_key(research_rules, args.rule_key)
     if args.loop_spec or args.loop_spec_json:

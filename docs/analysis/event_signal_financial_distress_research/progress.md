@@ -501,3 +501,37 @@ Phase 23 evidence:
 | production backend 8001              | not touched                                                  |
 +--------------------------------------+--------------------------------------------------------------+
 ```
+
+## 2026-05-11 Phase 24 Completion
+
+```text
++----------------------+---------------------------------------+-------------------------------------------------+
+| time                 | action                                | result                                          |
++----------------------+---------------------------------------+-------------------------------------------------+
+| 2026-05-10 night     | added phase-24 structured rules       | expectation miss, deterioration, cashflow/leverage |
+| 2026-05-11 early     | ran direct event return screen        | 12 rules / 36 rule-window rows                  |
+| 2026-05-11 early     | ran 22-loop cheap overlay screen      | 1584 validations / 72 stability rows            |
+| 2026-05-11 early     | documented phase-24 conclusion        | no TRUE_QE candidate; best row is watchlist      |
++----------------------+---------------------------------------+-------------------------------------------------+
+```
+
+Latest curated report: `docs/analysis/event_signal_financial_distress_phase24_signal_family_screen_result_20260510.md`.
+Latest validation record: `tests/aistock_validation/history/local_data_management/20260511_l2_financial-distress-phase24-signal-family-screen-validation.md`.
+
+Phase 24 evidence:
+
+```text
++--------------------------------------+--------------------------------------------------------------+
+| check                                | result                                                       |
++--------------------------------------+--------------------------------------------------------------+
+| phase24 screen command                | pass                                                         |
+| direct event report                   | 12 rules, 36 rule/window rows                                |
+| 22-loop cheap overlay                 | 1584 validations, 72 stability rows                          |
+| best cheap row                        | indicator_decline_ocf_negative_or_leverage_mv_ge_10bn        |
+| best cheap row metrics                | 60td fixed_10, avg +0.131%, ex-best +0.047%, worst -0.183%   |
+| true-QE promotion                     | rejected; no TRUE_QE_CANDIDATE                               |
+| event_signal pytest suite             | 168 passed                                                   |
+| runtime isolation                     | no Selection/Paper/QE/QMT references added                   |
+| production backend 8001               | not touched                                                  |
++--------------------------------------+--------------------------------------------------------------+
+```

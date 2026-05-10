@@ -38,6 +38,8 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 20    | selective true QE rerun shortlist        | complete | selective_true_qe_shortlist_20260510                        |
 | 21    | shortlist cheap 22-loop overlay expansion| complete | phase21_22_loop_overlay_result_20260510                     |
 | 22    | loss-history tail-control sweep          | complete | phase22_tail_control_result_20260510                        |
+| 23    | benchmark true QE smoke                  | complete | benchmark_true_qe_smoke_result_20260510                     |
+| 24    | structured signal-family screen          | complete | phase24_signal_family_screen_result_20260510                |
 +-------+------------------------------------------+----------+-------------------------------------------------------------+
 ```
 
@@ -74,8 +76,10 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 20    | selective true QE rerun shortlist               | complete   | no direct true-rerun candidate; cheap expansion first         |
 | 21    | shortlist cheap 22-loop overlay expansion       | complete   | loss-history improved but tail too large; no runtime promote |
 | 22    | loss-history tail-control parameter sweep       | complete   | tail improved but still not enough for WSL true-rerun        |
-| 23    | benchmark true-rerun smoke or new family screen | pending    | compare clean-tail benchmark vs alternative signal families  |
-| 24    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
+| 23    | benchmark true-rerun smoke                      | complete   | clean small-cap benchmark true-QE effect is too weak         |
+| 24    | structured signal-family screen                 | complete   | best new family is watchlist, not true-QE candidate          |
+| 25    | top-family threshold refinement or WSL smoke     | pending    | refine OCF/leverage rule or run one-loop WSL true-QE smoke   |
+| 26    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals stop improving           |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -281,4 +285,17 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | immediate runtime promotion                  | REJECT                     | true effect too small and sparse for policy/runtime integration        |
 | next empirical step                          | NEW_SIGNAL_FAMILY_SCREEN   | find stronger direct-event or broader financial-risk candidates        |
 +---------------------------------------------+----------------------------+------------------------------------------------------------------------+
+```
+
+## Phase 24 Structured Signal Family Finding
+
+```text
++-------------------------------------------------------+----------------------------+------------------------------------------------------------------------+
+| candidate                                             | decision                   | evidence                                                               |
++-------------------------------------------------------+----------------------------+------------------------------------------------------------------------+
+| indicator_decline_ocf_negative_or_leverage_mv_ge_10bn | WATCHLIST_PRIMARY          | best 22-loop cheap row, but does not pass TRUE_QE gate                  |
+| expectation miss gap rules                             | DIRECT_DOWNSIDE_ONLY       | strong direct downside; weak top50 overlay interaction                  |
+| runtime integration                                    | REJECT                     | financial signals remain non-hard research-only                         |
+| next phase                                             | pending                    | refine thresholds or run one-loop WSL smoke for watchlist candidate     |
++-------------------------------------------------------+----------------------------+------------------------------------------------------------------------+
 ```

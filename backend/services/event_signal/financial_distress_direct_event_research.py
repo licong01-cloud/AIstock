@@ -31,6 +31,7 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
     FIRST_BATCH_RULES,
     LOSS_HISTORY_RULES,
     MID_LARGE_EVENT_RULES,
+    PHASE24_RESEARCH_RULES,
     REFINEMENT_RULES,
     SIZE_BUCKET_RULES,
     FinancialDistressRule,
@@ -47,7 +48,14 @@ ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RULE_KEYS = ("indicator_large_decline_mv_10_30bn",)
 DEFAULT_RETURN_WINDOWS_PHASE11 = (0, 1, 5, 10, 20, 60)
 REPORT_VERSION = "financial_distress_direct_event_research_v1_20260509"
-ALL_DIRECT_EVENT_RULES = FIRST_BATCH_RULES + SIZE_BUCKET_RULES + LOSS_HISTORY_RULES + MID_LARGE_EVENT_RULES + REFINEMENT_RULES
+ALL_DIRECT_EVENT_RULES = (
+    FIRST_BATCH_RULES
+    + SIZE_BUCKET_RULES
+    + LOSS_HISTORY_RULES
+    + MID_LARGE_EVENT_RULES
+    + REFINEMENT_RULES
+    + PHASE24_RESEARCH_RULES
+)
 
 
 @dataclass(frozen=True)
