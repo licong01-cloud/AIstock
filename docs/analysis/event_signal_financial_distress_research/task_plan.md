@@ -37,6 +37,7 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 19    | WSL full-universe true QE parity rerun   | complete | true_qe_wsl_full_universe_result_20260510                   |
 | 20    | selective true QE rerun shortlist        | complete | selective_true_qe_shortlist_20260510                        |
 | 21    | shortlist cheap 22-loop overlay expansion| complete | phase21_22_loop_overlay_result_20260510                     |
+| 22    | loss-history tail-control sweep          | complete | phase22_tail_control_result_20260510                        |
 +-------+------------------------------------------+----------+-------------------------------------------------------------+
 ```
 
@@ -72,8 +73,9 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 19    | memory-safe true QE rerun feasibility           | complete   | WSL full-universe baseline/adjusted parity rerun completed   |
 | 20    | selective true QE rerun shortlist               | complete   | no direct true-rerun candidate; cheap expansion first         |
 | 21    | shortlist cheap 22-loop overlay expansion       | complete   | loss-history improved but tail too large; no runtime promote |
-| 22    | loss-history tail-control parameter sweep       | pending    | reduce worst-loop loss before any WSL true-rerun decision    |
-| 23    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
+| 22    | loss-history tail-control parameter sweep       | complete   | tail improved but still not enough for WSL true-rerun        |
+| 23    | benchmark true-rerun smoke or new family screen | pending    | compare clean-tail benchmark vs alternative signal families  |
+| 24    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -250,5 +252,19 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | loss_to_market_cap_ge_50pct                  | BENCHMARK_ALPHA_WATCH      | clean tail, avg +0.122%, but sparse drops and not a risk proof         |
 | immediate runtime promotion                  | REJECT                     | no candidate is both strong and tail-safe enough                       |
 | next empirical step                          | TAIL_CONTROL_SWEEP         | test softer/rank-aware loss-history profiles before WSL true rerun     |
++---------------------------------------------+----------------------------+------------------------------------------------------------------------+
+```
+
+## Phase 22 Loss-History Tail-Control Finding
+
+```text
++---------------------------------------------+----------------------------+------------------------------------------------------------------------+
+| candidate                                   | decision                   | evidence                                                               |
++---------------------------------------------+----------------------------+------------------------------------------------------------------------+
+| loss-history severity_balanced               | REJECT_TRUE_RERUN_NOW      | avg +0.178%, but worst loop -1.966%                                    |
+| loss-history fixed_5 / ctx_light             | WATCHLIST_ONLY             | worst improved to -0.935%, but still not tail-safe                     |
+| loss_to_market_cap_ge_50pct_mv_lt_10bn       | CLEAN_BENCHMARK            | avg +0.122%, ex-best +0.065%, worst -0.174%                            |
+| immediate WSL true rerun                     | REJECT_NOW                 | no loss-history row combines high average with acceptable tail         |
+| next empirical step                          | BENCHMARK_OR_NEW_FAMILY    | either true-rerun clean benchmark smoke or screen cleaner signal family |
 +---------------------------------------------+----------------------------+------------------------------------------------------------------------+
 ```

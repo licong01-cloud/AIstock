@@ -293,3 +293,17 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | next phase is tail control                  | test softer/rank-aware loss-history variants before WSL       |
 +---------------------------------------------+---------------------------------------------------------------+
 ```
+
+## Phase 22 Loss-History Tail-Control Finding
+
+```text
++---------------------------------------------+---------------------------------------------------------------+
+| finding                                     | implication                                                   |
++---------------------------------------------+---------------------------------------------------------------+
+| softer loss-history modes reduce tail       | worst improves from -1.966% to -0.935%                        |
+| reduced tail sacrifices average             | fixed_5 avg falls to +0.120%; ctx_light avg +0.111%           |
+| clean benchmark remains better tail shape   | loss/mv<10bn fixed_20 worst -0.174%, avg +0.122%              |
+| no loss-history row passes WSL gate          | do not true-rerun or integrate loss-history yet               |
+| next research should pivot                  | benchmark smoke or cleaner signal families before LLM/PDF     |
++---------------------------------------------+---------------------------------------------------------------+
+```

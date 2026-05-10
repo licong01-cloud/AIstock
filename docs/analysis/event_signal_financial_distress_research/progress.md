@@ -438,3 +438,36 @@ Phase 21 evidence:
 | production backend 8001              | not touched                                                  |
 +--------------------------------------+--------------------------------------------------------------+
 ```
+
+## 2026-05-10 Phase 22 Completion
+
+```text
++----------------------+---------------------------------------+-------------------------------------------------+
+| time                 | action                                | result                                          |
++----------------------+---------------------------------------+-------------------------------------------------+
+| 2026-05-10 midday    | ran focused tail-control sweep        | 704 validations / 32 stability rows             |
+| 2026-05-10 midday    | compared fixed_5 and ctx_light modes  | worst improved to -0.935% but still not safe    |
+| 2026-05-10 midday    | rechecked clean benchmark             | loss/mv<10bn fixed_20 remains cleanest tail     |
+| 2026-05-10 midday    | documented pivot direction            | benchmark smoke or cleaner signal-family screen |
++----------------------+---------------------------------------+-------------------------------------------------+
+```
+
+Latest curated report: `docs/analysis/event_signal_financial_distress_phase22_tail_control_result_20260510.md`.
+Latest validation record: `tests/aistock_validation/history/local_data_management/20260510_l2_financial-distress-phase22-tail-control-validation.md`.
+
+Phase 22 evidence:
+
+```text
++--------------------------------------+--------------------------------------------------------------+
+| check                                | result                                                       |
++--------------------------------------+--------------------------------------------------------------+
+| tail-control overlay command          | completed                                                    |
+| validations                           | 704                                                          |
+| severity_balanced loss-history row     | avg +0.178%, worst -1.966%                                   |
+| fixed_5 loss-history row               | avg +0.120%, worst -0.935%                                   |
+| ctx_light loss-history row             | avg +0.111%, 17/22 positive, worst -0.935%                   |
+| clean benchmark row                    | loss/mv<10bn fixed_20 avg +0.122%, worst -0.174%             |
+| runtime promotion                      | rejected; research-only                                      |
+| production backend 8001               | not touched                                                  |
++--------------------------------------+--------------------------------------------------------------+
+```
