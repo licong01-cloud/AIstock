@@ -279,3 +279,17 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | next phase is cheap expansion               | test top shortlist rules before spending WSL true-rerun time  |
 +---------------------------------------------+---------------------------------------------------------------+
 ```
+
+## Phase 21 Cheap 22-Loop Overlay Expansion Finding
+
+```text
++---------------------------------------------+---------------------------------------------------------------+
+| finding                                     | implication                                                   |
++---------------------------------------------+---------------------------------------------------------------+
+| loss-history small-cap row has best average | promising but tail loss is too large for risk-first use       |
+| structured ge10 did not scale               | 10-loop signal strength was not stable enough                 |
+| clean-tail benchmark is sparse              | useful comparison, not a risk-policy candidate                |
+| no immediate WSL rerun candidate             | true-rerun budget should wait for tail-controlled profile     |
+| next phase is tail control                  | test softer/rank-aware loss-history variants before WSL       |
++---------------------------------------------+---------------------------------------------------------------+
+```

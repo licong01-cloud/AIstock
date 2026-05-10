@@ -406,3 +406,35 @@ Phase 20 evidence:
 | production backend 8001               | not touched                                                  |
 +--------------------------------------+--------------------------------------------------------------+
 ```
+
+## 2026-05-10 Phase 21 Completion
+
+```text
++----------------------+---------------------------------------+-------------------------------------------------+
+| time                 | action                                | result                                          |
++----------------------+---------------------------------------+-------------------------------------------------+
+| 2026-05-10 morning   | expanded Phase 20 shortlist           | 22-loop cheap overlay set completed             |
+| 2026-05-10 morning   | ran 10 shortlisted rule families      | 1320 validations / 60 stability rows            |
+| 2026-05-10 morning   | reviewed tail and market-cap exposure | no candidate passed risk-first true-rerun gate  |
+| 2026-05-10 morning   | documented next empirical step        | tail-control sweep before WSL true rerun        |
++----------------------+---------------------------------------+-------------------------------------------------+
+```
+
+Latest curated report: `docs/analysis/event_signal_financial_distress_phase21_22_loop_overlay_result_20260510.md`.
+Latest validation record: `tests/aistock_validation/history/local_data_management/20260510_l2_financial-distress-phase21-22-loop-overlay-validation.md`.
+
+Phase 21 evidence:
+
+```text
++--------------------------------------+--------------------------------------------------------------+
+| check                                | result                                                       |
++--------------------------------------+--------------------------------------------------------------+
+| 22-loop overlay command               | completed                                                    |
+| validations                           | 1320                                                         |
+| best avg row                          | loss_reports_ge_4_mv_lt_10bn_ex_ge50_loss, +0.178%          |
+| best avg row worst loop               | -1.966%, too large for risk-first signal                     |
+| structured ge10 row                   | +0.110% avg, worst -0.879%, no true-rerun promotion          |
+| runtime promotion                     | rejected; research-only                                      |
+| production backend 8001              | not touched                                                  |
++--------------------------------------+--------------------------------------------------------------+
+```

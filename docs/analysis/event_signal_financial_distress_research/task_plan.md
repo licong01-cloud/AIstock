@@ -36,6 +36,7 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 18    | copied-loop true QE smoke rerun          | complete | true_qe_rerun_smoke_result_20260509                         |
 | 19    | WSL full-universe true QE parity rerun   | complete | true_qe_wsl_full_universe_result_20260510                   |
 | 20    | selective true QE rerun shortlist        | complete | selective_true_qe_shortlist_20260510                        |
+| 21    | shortlist cheap 22-loop overlay expansion| complete | phase21_22_loop_overlay_result_20260510                     |
 +-------+------------------------------------------+----------+-------------------------------------------------------------+
 ```
 
@@ -70,8 +71,9 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 18    | copied-loop true QE smoke rerun                 | complete   | technical path passes; full-universe PnL blocked by memory   |
 | 19    | memory-safe true QE rerun feasibility           | complete   | WSL full-universe baseline/adjusted parity rerun completed   |
 | 20    | selective true QE rerun shortlist               | complete   | no direct true-rerun candidate; cheap expansion first         |
-| 21    | shortlist cheap 22-loop overlay expansion       | pending    | expand top 10-loop candidates before WSL true-rerun budget   |
-| 22    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
+| 21    | shortlist cheap 22-loop overlay expansion       | complete   | loss-history improved but tail too large; no runtime promote |
+| 22    | loss-history tail-control parameter sweep       | pending    | reduce worst-loop loss before any WSL true-rerun decision    |
+| 23    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals show value               |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -235,4 +237,18 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | loss_to_market_cap_ge_50pct_mv_lt_10bn  | BENCHMARK_ONLY             | direct event T+5/T+20 medians positive; not a hard-risk proof          |
 | next empirical step                     | CHEAP_OVERLAY_EXPANSION    | run 22-loop overlay expansion for top 10-loop candidates               |
 +----------------------------------------+----------------------------+------------------------------------------------------------------------+
+```
+
+## Phase 21 Cheap 22-Loop Overlay Expansion Finding
+
+```text
++---------------------------------------------+----------------------------+------------------------------------------------------------------------+
+| candidate                                   | decision                   | evidence                                                               |
++---------------------------------------------+----------------------------+------------------------------------------------------------------------+
+| loss_reports_ge_4_mv_lt_10bn_ex_ge50_loss   | TAIL_CONTROL_NEXT          | avg +0.178%, median +0.021%, but worst loop -1.966%                    |
+| structured_financial_risk_mv_ge_10bn         | REJECT_TRUE_RERUN_NOW      | 22-loop avg fell to +0.110% and worst loop reached -0.879%             |
+| loss_to_market_cap_ge_50pct                  | BENCHMARK_ALPHA_WATCH      | clean tail, avg +0.122%, but sparse drops and not a risk proof         |
+| immediate runtime promotion                  | REJECT                     | no candidate is both strong and tail-safe enough                       |
+| next empirical step                          | TAIL_CONTROL_SWEEP         | test softer/rank-aware loss-history profiles before WSL true rerun     |
++---------------------------------------------+----------------------------+------------------------------------------------------------------------+
 ```
