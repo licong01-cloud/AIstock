@@ -1,0 +1,416 @@
+"""Unit tests for scripts/aistock_mcp_server.py.
+
+Coverage:
+- HTTP client envelope unwrap + error propagation (3 tests)
+- Each MCP tool happy path via mocked transport (8 tests)
+- ``report_bug`` write path including next-id allocation, slug, dedup (4 tests)
+- ``health`` smoke (1 test)
+- start_validation_execution body assembly + posargs (1 test)
+- module-quality client filter (1 test)
+
+Tests do NOT spawn the MCP stdio server. They exercise the decorated tool
+functions and the underlying ``ValidationCenterClient`` directly.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pytest
+
+
+@pytest.fixture
+def mcp_module(tmp_path, monkeypatch):
+    """Import the MCP server with REPO_ROOT redirected to a temp dir.
+
+    BUG_ROOT computes as REPO_ROOT/tests/aistock_validation/bugs and is created
+    on demand by report_bug, so we just point AISTOCK_REPO_ROOT at tmp_path.
+    """
+    monkeypatch.setenv("AISTOCK_REPO_ROOT", str(tmp_path))
+    monkeypatch.setenv("AISTOCK_VALIDATION_BASE_URL", "http://test-host/api/v1/validation")
+    import importlib
+    import sys
+    sys.modules.pop("scripts.aistock_mcp_server", None)
+    module = importlib.import_module("scripts.aistock_mcp_server")
+    expected_bug_root = (tmp_path / "tests" / "aistock_validation" / "bugs").resolve()
+    assert Path(module.BUG_ROOT).resolve() == expected_bug_root, (
+        f"BUG_ROOT did not redirect: {module.BUG_ROOT} vs {expected_bug_root}"
+    )
+    yield module
+    sys.modules.pop("scripts.aistock_mcp_server", None)
+
+
+def _envelope(data: Any) -> dict[str, Any]:
+    return {"data": data}
+
+
+def _mock_transport(handler):
+    """Wrap a callable into an httpx MockTransport returning JSON envelopes."""
+    def adapter(request: httpx.Request) -> httpx.Response:
+        result = handler(request)
+        if isinstance(result, httpx.Response):
+            return result
+        if isinstance(result, tuple):
+            status, payload = result
+            return httpx.Response(status, json=payload)
+        return httpx.Response(200, json=_envelope(result))
+    return httpx.MockTransport(adapter)
+
+
+def _swap_client(mcp_module, client) -> None:
+    """Replace the module-level _default_client so tools see the mock."""
+    mcp_module._default_client = client  # type: ignore[attr-defined]
+
+
+# --- HTTP client behavior ------------------------------------------------
+
+
+def test_client_unwraps_data_envelope(mcp_module):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json=_envelope({"ok": True}))
+
+    transport = _mock_transport(handler)
+    client = mcp_module.ValidationCenterClient(
+        base_url="http://test-host/api/v1/validation",
+        transport=transport,
+    )
+    payload = client.get("/health")
+    assert payload == {"ok": True}
+    assert captured["url"].endswith("/api/v1/validation/health")
+
+
+def test_client_raises_on_http_error(mcp_module):
+    transport = _mock_transport(lambda req: (500, {"detail": "boom"}))
+    client = mcp_module.ValidationCenterClient(
+        base_url="http://test-host/api/v1/validation", transport=transport
+    )
+    with pytest.raises(RuntimeError, match="HTTP 500"):
+        client.get("/health")
+
+
+def test_client_raises_on_missing_envelope(mcp_module):
+    transport = _mock_transport(lambda req: httpx.Response(200, json={"unexpected": True}))
+    client = mcp_module.ValidationCenterClient(
+        base_url="http://test-host/api/v1/validation", transport=transport
+    )
+    with pytest.raises(RuntimeError, match="unexpected envelope"):
+        client.get("/health")
+
+
+# --- Read tools ---------------------------------------------------------
+
+
+def test_health_tool_calls_health_endpoint(mcp_module):
+    captured = []
+    transport = _mock_transport(
+        lambda req: (captured.append(req.url.path), {"status": "ok"})[1]
+    )
+    _swap_client(
+        mcp_module,
+        mcp_module.ValidationCenterClient(
+            base_url="http://test-host/api/v1/validation", transport=transport
+        ),
+    )
+    result = mcp_module.health()
+    assert result == {"status": "ok"}
+    assert captured[-1].endswith("/health")
+
+
+def test_list_plans_returns_data(mcp_module):
+    plans_payload = {"plans": [{"plan_key": "l0"}, {"plan_key": "qe_archive_backend"}]}
+    transport = _mock_transport(lambda req: plans_payload)
+    _swap_client(
+        mcp_module,
+        mcp_module.ValidationCenterClient(
+            base_url="http://test-host/api/v1/validation", transport=transport
+        ),
+    )
+    result = mcp_module.list_plans()
+    assert result == plans_payload
+
+
+def test_get_plan_includes_plan_key_in_path(mcp_module):
+    captured = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.append(req.url.path)
+        return httpx.Response(200, json=_envelope({"plan_key": "qe_archive_backend"}))
+
+    _swap_client(
+        mcp_module,
+        mcp_module.ValidationCenterClient(
+            base_url="http://test-host/api/v1/validation",
+            transport=_mock_transport(handler),
+        ),
+    )
+    result = mcp_module.get_plan("qe_archive_backend")
+    assert result["plan_key"] == "qe_archive_backend"
+    assert captured[-1].endswith("/plans/qe_archive_backend")
+
+
+def test_list_validation_runs_passes_filters(mcp_module):
+    captured = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["query"] = dict(req.url.params)
+        return httpx.Response(200, json=_envelope({"items": []}))
+
+    _swap_client(
+        mcp_module,
+        mcp_module.ValidationCenterClient(
+            base_url="http://test-host/api/v1/validation",
+            transport=_mock_transport(handler),
+        ),
+    )
+    mcp_module.list_validation_runs(module="qe", level="L2")
+    assert captured["query"]["module"] == "qe"
+    assert captured["query"]["level"] == "L2"
+    # None values must not be sent on the wire.
+    assert "status" not in captured["query"]
+
+
+def test_list_findings_maps_source_to_source_type(mcp_module):
+    captured = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["query"] = dict(req.url.params)
+        return httpx.Response(200, json=_envelope({"items": []}))
+
+    _swap_client(
+        mcp_module,
+        mcp_module.ValidationCenterClient(
+            base_url="http://test-host/api/v1/validation",
+            transport=_mock_transport(handler),
+        ),
+    )
+    mcp_module.list_findings(severity="P1", source="guardrail")
+    assert captured["query"]["severity"] == "P1"
+    assert captured["query"]["source_type"] == "guardrail"
+
+
+def test_list_bugs_returns_envelope_inner(mcp_module):
+    bugs_payload = {
+        "items": [{"bug_id": "BUG-001"}, {"bug_id": "BUG-002"}],
+        "total": 2,
+    }
+    transport = _mock_transport(lambda req: bugs_payload)
+    _swap_client(
+        mcp_module,
+        mcp_module.ValidationCenterClient(
+            base_url="http://test-host/api/v1/validation", transport=transport
+        ),
+    )
+    result = mcp_module.list_bugs(status="open", severity="P1")
+    assert result == bugs_payload
+
+
+def test_get_bug_agent_context_endpoint_path(mcp_module):
+    captured = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.append(req.url.path)
+        return httpx.Response(
+            200,
+            json=_envelope(
+                {
+                    "schema_version": "aistock_validation_agent_context_v1",
+                    "bug_id": "BUG-023",
+                    "reproduce_command": "pytest …",
+                }
+            ),
+        )
+
+    _swap_client(
+        mcp_module,
+        mcp_module.ValidationCenterClient(
+            base_url="http://test-host/api/v1/validation",
+            transport=_mock_transport(handler),
+        ),
+    )
+    result = mcp_module.get_bug_agent_context("BUG-023")
+    assert result["bug_id"] == "BUG-023"
+    assert captured[-1].endswith("/bugs/BUG-023/agent-context")
+
+
+def test_module_quality_summary_filters_modules(mcp_module):
+    full_summary = {
+        "modules": [
+            {"module_id": "qe.archive", "score": 0.9},
+            {"module_id": "paper_v2", "score": 0.7},
+        ],
+        "generated_at": "2026-05-10T20:30:00Z",
+    }
+    transport = _mock_transport(lambda req: full_summary)
+    _swap_client(
+        mcp_module,
+        mcp_module.ValidationCenterClient(
+            base_url="http://test-host/api/v1/validation", transport=transport
+        ),
+    )
+    filtered = mcp_module.get_module_quality_summary(module="paper_v2")
+    assert len(filtered["modules"]) == 1
+    assert filtered["modules"][0]["module_id"] == "paper_v2"
+    assert filtered["filter"] == {"module": "paper_v2"}
+    # No filter returns the original
+    full = mcp_module.get_module_quality_summary()
+    assert len(full["modules"]) == 2
+
+
+# --- Action tools -------------------------------------------------------
+
+
+def test_start_validation_execution_posts_minimal_body(mcp_module):
+    captured = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["method"] = req.method
+        captured["path"] = req.url.path
+        captured["body"] = json.loads(req.content.decode("utf-8"))
+        return httpx.Response(200, json=_envelope({"job_id": "exec-1"}))
+
+    _swap_client(
+        mcp_module,
+        mcp_module.ValidationCenterClient(
+            base_url="http://test-host/api/v1/validation",
+            transport=_mock_transport(handler),
+        ),
+    )
+    result = mcp_module.start_validation_execution(plan_key="l0")
+    assert result == {"job_id": "exec-1"}
+    assert captured["method"] == "POST"
+    assert captured["path"].endswith("/executions")
+    assert captured["body"] == {"plan_key": "l0", "requested_by": "mcp_agent"}
+
+
+def test_get_validation_execution_log_passes_tail(mcp_module):
+    captured = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["query"] = dict(req.url.params)
+        captured["path"] = req.url.path
+        return httpx.Response(200, json=_envelope({"tail": "log line"}))
+
+    _swap_client(
+        mcp_module,
+        mcp_module.ValidationCenterClient(
+            base_url="http://test-host/api/v1/validation",
+            transport=_mock_transport(handler),
+        ),
+    )
+    mcp_module.get_validation_execution_log("exec-1", tail=42)
+    assert captured["query"]["tail_lines"] == "42"
+    assert captured["path"].endswith("/executions/exec-1/log")
+
+
+def test_get_validation_execution_log_rejects_out_of_range(mcp_module):
+    with pytest.raises(ValueError, match="tail must be between"):
+        mcp_module.get_validation_execution_log("exec-1", tail=0)
+
+
+# --- report_bug write path ----------------------------------------------
+
+
+def test_report_bug_creates_file(mcp_module):
+    result = mcp_module.report_bug(
+        title="MCP smoke bug",
+        severity="P2",
+        module="rl_execution",
+        files=["backend/services/rl_execution/__init__.py"],
+        reproduce_command="python -c 'import backend.services.rl_execution'",
+        expected="import succeeds",
+        actual="ModuleNotFoundError",
+        fix_owner="claude_code",
+    )
+    assert result["deduplicated"] is False
+    assert result["bug_id"] == "BUG-001"
+    written = Path(mcp_module.REPO_ROOT) / result["path"]
+    assert written.exists()
+    payload = json.loads(written.read_text(encoding="utf-8"))
+    assert payload["bug_id"] == "BUG-001"
+    assert payload["module"] == "rl_execution"
+    assert payload["severity"] == "P2"
+    assert payload["status"] == "open"
+    assert payload["fingerprint"] == result["fingerprint"]
+
+
+def test_report_bug_dedupes_on_fingerprint(mcp_module):
+    first = mcp_module.report_bug(
+        title="Same exact issue",
+        severity="P1",
+        module="qe_archive",
+        files=["backend/services/qe_archive/foo.py"],
+        reproduce_command="pytest backend/tests/qe_archive/test_foo.py",
+        expected="pass",
+        actual="fail",
+    )
+    assert first["deduplicated"] is False
+    second = mcp_module.report_bug(
+        title="Same exact issue",
+        severity="P1",
+        module="qe_archive",
+        files=["backend/services/qe_archive/foo.py"],
+        reproduce_command="pytest backend/tests/qe_archive/test_foo.py",
+        expected="pass",
+        actual="fail",
+    )
+    assert second["deduplicated"] is True
+    assert second["existing"]["bug_id"] == first["bug_id"]
+
+
+def test_report_bug_increments_id(mcp_module):
+    a = mcp_module.report_bug(
+        title="alpha",
+        severity="P3",
+        module="alpha_mod",
+        files=["foo.py"],
+        reproduce_command="cmd alpha",
+        expected="x",
+        actual="y",
+    )
+    b = mcp_module.report_bug(
+        title="beta",
+        severity="P3",
+        module="beta_mod",
+        files=["bar.py"],
+        reproduce_command="cmd beta",
+        expected="x",
+        actual="y",
+    )
+    assert a["bug_id"] == "BUG-001"
+    assert b["bug_id"] == "BUG-002"
+
+
+def test_report_bug_rejects_invalid_severity(mcp_module):
+    with pytest.raises(ValueError, match="severity must be one of"):
+        mcp_module.report_bug(
+            title="x",
+            severity="HIGH",
+            module="m",
+            files=["f.py"],
+            reproduce_command="cmd",
+            expected="e",
+            actual="a",
+        )
+
+
+def test_report_bug_normalizes_drawer_evidence(mcp_module):
+    result = mcp_module.report_bug(
+        title="drawer normalization",
+        severity="P3",
+        module="cross_tool",
+        files=[],
+        reproduce_command="cmd",
+        expected="e",
+        actual="a",
+        related_drawer="abc1234567",
+    )
+    written = Path(mcp_module.REPO_ROOT) / result["path"]
+    payload = json.loads(written.read_text(encoding="utf-8"))
+    drawer_uri = next((u for u in payload["evidence_uris"] if u.startswith("drawer:")), None)
+    assert drawer_uri == "drawer:cross-tool/codex-claude-coord/abc1234567"
