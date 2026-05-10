@@ -26,6 +26,7 @@ from backend.services.strategy_package.validation_run import (
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import (
     DataUnavailableError,
+    InvalidStateTransitionError,
     StrategyPackageValidationError,
     TradingCoreError,
     UnsupportedFeatureError,
@@ -142,6 +143,8 @@ def _raise_http(exc: TradingCoreError) -> None:
         status_code = 404
     elif isinstance(exc, UnsupportedFeatureError):
         status_code = 422
+    elif isinstance(exc, InvalidStateTransitionError):
+        status_code = 409
     raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
 
 

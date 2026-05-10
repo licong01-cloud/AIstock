@@ -339,8 +339,7 @@ class StrategyPackageService:
             # policies are selected later from backtest-validated policy rows,
             # so enabling the package for Paper v2 must not validate an obsolete
             # manifest-embedded V24/V25 runtime asset path.
-            self.validator.validate_manifest_identity_for_paper_trading(record.current_manifest())
-            self._require_original_fixed_weight_retest_passed(record)
+            self._require_governance_paper_ready(record)
         return self.repository.transition_status(
             package_id=package_id,
             to_status=to_status,
@@ -771,6 +770,15 @@ class StrategyPackageService:
         raise StrategyPackageValidationError(
             "original fixed-weight validation must pass before enabling Paper",
             context=report,
+        )
+
+    def _require_governance_paper_ready(self, record: StrategyPackageRecord) -> None:
+        eligibility = self.governance_eligibility(record.package_id)
+        if eligibility["paper_ready"]:
+            return
+        raise StrategyPackageValidationError(
+            "governance eligibility must be paper_ready before enabling Paper",
+            context=eligibility,
         )
 
     def _manifest_identity_gate(self, record: StrategyPackageRecord, manifest: StrategyPackageManifest) -> dict[str, Any]:

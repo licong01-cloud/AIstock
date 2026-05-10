@@ -7,7 +7,9 @@ from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.model_state import ModelRetrainJobStatus, ModelStalenessStatus, StrategyPackageModelState
 from backend.services.strategy_package.models import PackageStatus
+from backend.services.strategy_package.package_asset import StrategyPackageAssetType
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository, StrategyPackageRepository
+from backend.services.strategy_package.runtime_variant import RuntimeVariantKind, RuntimeVariantValidationStatus
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.strategy_package.validation_run import (
     PackageValidationRetrainMode,
@@ -20,7 +22,12 @@ from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 import pytest
 
 
-def _record_passed_original_retest(service: StrategyPackageService, package_id: str) -> None:
+def _record_passed_original_retest(
+    service: StrategyPackageService,
+    package_id: str,
+    *,
+    completed_at: datetime | None = None,
+) -> None:
     service.create_validation_run(
         package_id,
         validation_type=PackageValidationType.ORIGINAL_FIXED_WEIGHT,
@@ -36,9 +43,65 @@ def _record_passed_original_retest(service: StrategyPackageService, package_id: 
                 "bear": {"annual_return": 0.102},
             },
         },
-        completed_at=datetime.now(timezone.utc),
+        completed_at=completed_at or datetime.now(timezone.utc),
         created_by="unit_test",
     )
+
+
+def _record_stable_seed_runs(
+    service: StrategyPackageService,
+    package_id: str,
+    *,
+    completed_at: datetime,
+) -> None:
+    for seed, annual_return in ((101, 0.101), (202, 0.102)):
+        service.create_validation_run(
+            package_id,
+            validation_type=PackageValidationType.ORIGINAL_RETRAIN,
+            retrain_mode=PackageValidationRetrainMode.FIXED_SEED_RETRAIN,
+            seed_policy="fixed",
+            random_seed=seed,
+            metrics_json={"annual_return": annual_return},
+            artifact_manifest_json={"artifact_sha256": f"sha256:seed-{seed}"},
+            evidence_json={
+                "regime_metrics": {
+                    "bull": {"annual_return": annual_return},
+                    "bear": {"annual_return": annual_return + 0.0001},
+                }
+            },
+            completed_at=completed_at,
+            created_by="unit_test",
+        )
+
+
+def _record_runtime_candidate(service: StrategyPackageService, package_id: str) -> None:
+    variant = service.create_runtime_variant(
+        package_id,
+        variant_name="risk cap",
+        variant_kind=RuntimeVariantKind.RISK_POLICY,
+        variant_config={"risk_policy": {"max_position_weight": 0.04}},
+        created_by="unit_test",
+    )
+    service.mark_runtime_variant_validation(
+        package_id,
+        variant.variant_id,
+        validation_status=RuntimeVariantValidationStatus.VALIDATION_PASSED,
+        paper_candidate=True,
+        validation_evidence={"validation_run_id": "vr_candidate", "status": "passed"},
+    )
+
+
+def _seed_paper_ready_package(service: StrategyPackageService, package_id: str) -> None:
+    completed_at = datetime.now(timezone.utc)
+    service.record_package_asset(
+        package_id,
+        asset_type=StrategyPackageAssetType.MODEL_WEIGHT,
+        asset_ref="weights/frozen.pkl",
+        asset_sha256="sha256:weights",
+    )
+    _record_runtime_candidate(service, package_id)
+    _record_passed_original_retest(service, package_id, completed_at=completed_at)
+    _record_stable_seed_runs(service, package_id, completed_at=completed_at)
 
 
 def test_strategy_package_repository_persists_frozen_manifest_and_status_flow() -> None:
@@ -48,7 +111,7 @@ def test_strategy_package_repository_persists_frozen_manifest_and_status_flow() 
 
     service = StrategyPackageService(repository=repo)
     selected = service.enable_selection(saved.package_id)
-    _record_passed_original_retest(service, saved.package_id)
+    _seed_paper_ready_package(service, saved.package_id)
     paper = service.enable_paper(saved.package_id)
     repo.mark_paper_portfolio_created(saved.package_id, "paper_1")
 
@@ -71,11 +134,32 @@ def test_enable_paper_does_not_validate_manifest_minute_runtime_asset() -> None:
     )
     repo.save_manifest(manifest)
     service = StrategyPackageService(repository=repo)
-    _record_passed_original_retest(service, manifest.package_id)
+    _seed_paper_ready_package(service, manifest.package_id)
 
     paper = service.enable_paper(manifest.package_id)
 
     assert paper.package_status == PackageStatus.PAPER_ENABLED
+
+
+def test_enable_paper_requires_governance_eligibility_ready() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+    _record_passed_original_retest(service, manifest.package_id)
+    before_reasons = [event.reason for event in repo.list_status_events(manifest.package_id)]
+
+    with pytest.raises(StrategyPackageValidationError, match="governance eligibility") as exc_info:
+        service.enable_paper(manifest.package_id)
+
+    context = exc_info.value.context
+    assert context["paper_ready"] is False
+    assert "protected_asset_ledger_missing" in context["blockers"]
+    assert "runtime_variant_paper_candidate_missing" in context["blockers"]
+    assert repo.get(manifest.package_id).package_status == PackageStatus.BACKTEST_APPROVED
+    assert [event.reason for event in repo.list_status_events(manifest.package_id)] == before_reasons
 
 
 def test_enable_paper_requires_passed_original_fixed_weight_retest() -> None:
@@ -85,8 +169,9 @@ def test_enable_paper_requires_passed_original_fixed_weight_retest() -> None:
     )
     repo.save_manifest(manifest)
 
-    with pytest.raises(StrategyPackageValidationError, match="original fixed-weight validation"):
+    with pytest.raises(StrategyPackageValidationError, match="governance eligibility") as exc_info:
         StrategyPackageService(repository=repo).enable_paper(manifest.package_id)
+    assert "original_fixed_weight_retest_missing_passed_run_for_current_manifest" in exc_info.value.context["blockers"]
 
 
 def test_enable_paper_reports_failed_original_retest_without_status_mutation() -> None:
@@ -107,14 +192,17 @@ def test_enable_paper_reports_failed_original_retest_without_status_mutation() -
     )
     before_reasons = [event.reason for event in repo.list_status_events(manifest.package_id)]
 
-    with pytest.raises(StrategyPackageValidationError, match="original fixed-weight validation") as exc_info:
+    with pytest.raises(StrategyPackageValidationError, match="governance eligibility") as exc_info:
         service.enable_paper(manifest.package_id)
 
     context = exc_info.value.context
-    assert context["required_validation_type"] == PackageValidationType.ORIGINAL_FIXED_WEIGHT.value
-    assert context["required_status"] == PackageValidationStatus.PASSED.value
-    assert context["same_manifest_run_count"] == 1
-    assert context["observed_original_fixed_weight_runs"] == [
+    original_retest = context["original_fixed_weight_retest"]
+    assert context["paper_ready"] is False
+    assert "original_fixed_weight_retest_missing_passed_run_for_current_manifest" in context["blockers"]
+    assert original_retest["required_validation_type"] == PackageValidationType.ORIGINAL_FIXED_WEIGHT.value
+    assert original_retest["required_status"] == PackageValidationStatus.PASSED.value
+    assert original_retest["same_manifest_run_count"] == 1
+    assert original_retest["observed_original_fixed_weight_runs"] == [
         {
             "validation_run_id": failed.validation_run_id,
             "status": PackageValidationStatus.FAILED.value,
@@ -151,9 +239,10 @@ def test_enable_paper_does_not_fall_back_to_latest_fixed_weight_validation() -> 
     with pytest.raises(StrategyPackageValidationError) as exc_info:
         service.enable_paper(manifest.package_id)
 
-    assert exc_info.value.context["required_validation_type"] == PackageValidationType.ORIGINAL_FIXED_WEIGHT.value
-    assert exc_info.value.context["same_manifest_run_count"] == 0
-    assert exc_info.value.context["observed_original_fixed_weight_runs"] == []
+    original_retest = exc_info.value.context["original_fixed_weight_retest"]
+    assert original_retest["required_validation_type"] == PackageValidationType.ORIGINAL_FIXED_WEIGHT.value
+    assert original_retest["same_manifest_run_count"] == 0
+    assert original_retest["observed_original_fixed_weight_runs"] == []
     assert repo.get(manifest.package_id).package_status == PackageStatus.BACKTEST_APPROVED
 
 
@@ -164,6 +253,13 @@ def test_enable_paper_finds_passed_original_retest_even_after_many_newer_runs() 
     )
     repo.save_manifest(manifest)
     service = StrategyPackageService(repository=repo)
+    service.record_package_asset(
+        manifest.package_id,
+        asset_type=StrategyPackageAssetType.MODEL_WEIGHT,
+        asset_ref="weights/frozen.pkl",
+        asset_sha256="sha256:weights",
+    )
+    _record_runtime_candidate(service, manifest.package_id)
     passed = service.create_validation_run(
         manifest.package_id,
         validation_type=PackageValidationType.ORIGINAL_FIXED_WEIGHT,
@@ -183,6 +279,7 @@ def test_enable_paper_finds_passed_original_retest_even_after_many_newer_runs() 
             status=PackageValidationStatus.REQUESTED,
             created_by=f"noise_{index}",
         )
+    _record_stable_seed_runs(service, manifest.package_id, completed_at=datetime.now(timezone.utc))
 
     report = service.governance_eligibility(manifest.package_id)
     paper = service.enable_paper(manifest.package_id)
