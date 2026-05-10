@@ -238,3 +238,71 @@ plans:
     writes_business_state: false
     max_duration_seconds: 1200
     evidence_kinds: [pytest, db_smoke, playwright]
+  - plan_key: model_registry_backend
+    title: Model Registry backend tests
+    module: model_registry
+    level: L2
+    command_key: nox_model_registry_backend
+    nox_session: model_registry_backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 300
+    evidence_kinds: [pytest]
+  - plan_key: market_regime_label
+    title: Market regime label data-pipeline tests
+    module: market.regime_label
+    level: L2
+    command_key: nox_market_regime_label
+    nox_session: market_regime_label
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 180
+    evidence_kinds: [pytest]
+  - plan_key: rl_execution_smoke
+    title: RL Execution module visibility smoke
+    module: rl_execution
+    level: L0
+    command_key: nox_rl_execution_smoke
+    nox_session: rl_execution_smoke
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 120
+    evidence_kinds: [pytest]
+  - plan_key: qe_archive_backend
+    title: QE archive backend regression (handler contract + schema/repository)
+    module: qe.archive
+    level: L2
+    command_key: nox_qe_archive_backend
+    nox_session: qe_archive_backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 300
+    evidence_kinds: [pytest]

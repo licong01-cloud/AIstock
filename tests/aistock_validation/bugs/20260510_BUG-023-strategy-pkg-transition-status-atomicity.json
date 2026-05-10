@@ -1,0 +1,66 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-023",
+  "title": "StrategyPackageRepository.transition_status not atomic — partial mutation on event-insert failure",
+  "description": "AIstock pg_pool connections default to autocommit=True. StrategyPackageRepository.transition_status() updated package_status before inserting package_status_event. If the event insert failed (e.g. UniqueViolation from sequence collision per BUG-022), package_status was already mutated and not rolled back, leaving the repository in an inconsistent state where the package shows the new status without the corresponding audit event row. Codex Phase 3 live smoke discovered this by triggering UniqueViolation on package_status_event during enable_paper, observing package_status persisted but no event recorded. Codex local fix on origin/codex/qe-governance-integration-20260509: disable autocommit around update + event insert, commit on success, rollback on failure, restore original autocommit, wrap UniqueViolation as InvalidStateTransitionError. 32 regression tests added/passed locally but commit not yet pushed. Cross-tool drawer dd17c102a3a16e087d453364 captures the diagnostic + Codex's planned fix.",
+  "module": "strategy_package",
+  "severity": "P0",
+  "risk_area": "data_correctness",
+  "status": "in_progress",
+  "trigger_condition": {
+    "scenario": "transition_status_call_with_event_insert_collision",
+    "default_autocommit_pool": true
+  },
+  "reproduce_command": "pytest backend/tests/strategy_package/test_repository_service.py -k 'sequence_collision or atomic' -q",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/dd17c102a3a16e087d453364",
+    "branch:origin/codex/qe-governance-integration-20260509",
+    "file:backend/services/strategy_package/repository.py",
+    "file:backend/tests/strategy_package/test_repository_service.py"
+  ],
+  "fingerprint": "strategy_package::repository::transition_status_partial_mutation",
+  "assigned_agent": "codex_app",
+  "fix_branch": "codex/qe-governance-integration-20260509",
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-10T20:16:45Z",
+  "first_seen_at": "2026-05-10T20:16:45Z",
+  "last_seen_at": "2026-05-10T20:16:45Z",
+  "fixed_at": null,
+  "submitted_at": null,
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/strategy_package/repository.py",
+    "backend/tests/strategy_package/test_repository_service.py"
+  ],
+  "suspected_modules": [
+    "backend/services/strategy_package/",
+    "backend/db/pg_pool.py"
+  ],
+  "required_verification": [
+    "Codex pushes fix commit to origin/codex/qe-governance-integration-20260509",
+    "Claude Code or independent reviewer runs pytest backend/tests/strategy_package/test_repository_service.py -q",
+    "Atomic invariant: failed event insert leaves package_status unchanged",
+    "InvalidStateTransitionError → HTTP 409 mapping (currently 400 on integration branch; 4528a32 on paper branch maps to 409 — needs port to integration branch)"
+  ],
+  "closure_requirements": [
+    "Atomic transaction confirmed via regression tests",
+    "InvalidStateTransitionError HTTP mapping unified to 409 across branches",
+    "Decision recorded for governance_eligibility paper_ready vs enable_paper retest gate semantics (separate, may file new bug)"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-10T20:16:45Z",
+      "actor": "codex_app",
+      "action": "discovered",
+      "note": "Phase 3 governance live smoke - UniqueViolation on event insert revealed partial mutation"
+    },
+    {
+      "timestamp": "2026-05-10T20:16:45Z",
+      "actor": "codex_app",
+      "action": "in_progress",
+      "note": "Local atomic patch + 32 regression tests passing; awaiting push to origin/codex/qe-governance-integration-20260509"
+    }
+  ]
+}

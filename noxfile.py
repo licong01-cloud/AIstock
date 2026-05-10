@@ -402,11 +402,14 @@ def qe_read_l3(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def qe_archive_backend(session: nox.Session) -> None:
-    """Run QE archive backend/schema regression tests without starting services."""
-    session.run(
-        "python",
-        "-m",
-        "compileall",
+    """Run QE archive backend/schema regression tests without starting services.
+
+    Includes the QE archive handler contract module (T14a) and its regression
+    tests when those paths are present on the active branch. The handler module
+    + tests live on origin/claude/dw-foundation-20260510 and are pulled into
+    main via merge; this session is forward-compatible with both states.
+    """
+    compileall_targets = [
         "backend/db/init_qe_archive_schema.py",
         "backend/routers/qe_archive.py",
         "backend/routers/quantevolver.py",
@@ -415,17 +418,160 @@ def qe_archive_backend(session: nox.Session) -> None:
         "backend/services/quantevolver/qe_evolution_service.py",
         "scripts/qe_archive_backfill.py",
         "scripts/qe_archive_data_quality_smoke.py",
+    ]
+    handlers_dir = ROOT / "backend" / "services" / "qe_archive" / "handlers"
+    if handlers_dir.exists():
+        compileall_targets.append("backend/services/qe_archive/handlers")
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        *compileall_targets,
         external=True,
     )
-    _run_pytest(
-        session,
+    pytest_targets = [
         "backend/tests/test_qe_archive_schema.py",
         "backend/tests/test_qe_archive_repository_static.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
+    ]
+    handler_contract_test = ROOT / "backend" / "tests" / "qe_archive" / "test_handler_contract.py"
+    if handler_contract_test.exists():
+        pytest_targets.append("backend/tests/qe_archive/test_handler_contract.py")
+    _run_pytest(
+        session,
+        *pytest_targets,
         "-q",
         "-p",
         "no:cacheprovider",
     )
+
+
+@nox.session(venv_backend="none")
+def model_registry_backend(session: nox.Session) -> None:
+    """Run Model Registry backend regression tests without starting services.
+
+    The model_registry module + tests live on origin/codex/qe-governance-integration-20260509
+    until that branch merges to main. Session skips gracefully when sources are
+    not yet merged.
+    """
+    services_dir = ROOT / "backend" / "services" / "model_registry"
+    tests_dir = ROOT / "backend" / "tests" / "model_registry"
+    if not services_dir.exists() and not tests_dir.exists():
+        session.skip(
+            "Model Registry module not yet merged to main. Skipped pending "
+            "origin/codex/qe-governance-integration-20260509 merge."
+        )
+    compileall_targets: list[str] = []
+    if services_dir.exists():
+        compileall_targets.append("backend/services/model_registry")
+    for router in (ROOT / "backend" / "routers").glob("model_registry*.py"):
+        compileall_targets.append(f"backend/routers/{router.name}")
+    if compileall_targets:
+        session.run(
+            "python",
+            "-m",
+            "compileall",
+            *compileall_targets,
+            external=True,
+        )
+    pytest_targets: list[str] = []
+    for candidate in (
+        "test_governance_migration_smoke.py",
+        "test_model_registry_phase5.py",
+    ):
+        path = tests_dir / candidate
+        if path.exists():
+            pytest_targets.append(f"backend/tests/model_registry/{candidate}")
+    if not pytest_targets:
+        session.skip("Model Registry tests not yet present.")
+    _run_pytest(
+        session,
+        *pytest_targets,
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def market_regime_label(session: nox.Session) -> None:
+    """Run market.regime_label data-pipeline tests without starting services.
+
+    DDL + cron script live on origin/claude/dw-foundation-20260510. Test
+    `backend/tests/market/test_regime_label.py` (relocated from
+    scripts/test_regime_label.py) lands here once the dw-foundation merge
+    completes. Session skips when sources are not yet present.
+    """
+    test_path = ROOT / "backend" / "tests" / "market" / "test_regime_label.py"
+    cron_script = ROOT / "scripts" / "regime_label_daily.py"
+    sql_init = ROOT / "backend" / "db" / "init_market_regime_label_20260510.sql"
+    if not test_path.exists() and not cron_script.exists():
+        session.skip(
+            "market.regime_label sources not yet merged to main. Skipped pending "
+            "origin/claude/dw-foundation-20260510 merge."
+        )
+    compileall_targets: list[str] = []
+    if cron_script.exists():
+        compileall_targets.append("scripts/regime_label_daily.py")
+    fetch_script = ROOT / "scripts" / "regime_label_fetch_percentile.py"
+    if fetch_script.exists():
+        compileall_targets.append("scripts/regime_label_fetch_percentile.py")
+    if compileall_targets:
+        session.run(
+            "python",
+            "-m",
+            "compileall",
+            *compileall_targets,
+            external=True,
+        )
+    if not test_path.exists():
+        session.skip("backend/tests/market/test_regime_label.py not yet present.")
+    _run_pytest(
+        session,
+        "backend/tests/market/test_regime_label.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    # Note: SQL DDL init_market_regime_label_20260510.sql is text-only and not
+    # exercised here; its application is owned by dw-foundation per
+    # cross-tool drawer eb441503881c1c0f680ca7ac.
+    _ = sql_init  # documented dependency
+
+
+@nox.session(venv_backend="none")
+def rl_execution_smoke(session: nox.Session) -> None:
+    """Module-visibility smoke for backend.services.rl_execution.
+
+    The rl_execution module + visibility regression test live on
+    origin/fix/rl_execution_module_visibility-20260510 (and via direct
+    contributions when that branch merges to main). The .gitignore-mask
+    regression test runs unconditionally because the .gitignore is on every
+    branch; the import-path tests skip when the module is not yet merged.
+    """
+    services_dir = ROOT / "backend" / "services" / "rl_execution"
+    test_path = ROOT / "backend" / "tests" / "test_rl_execution_module_visibility.py"
+    if test_path.exists():
+        if services_dir.exists():
+            session.run(
+                "python",
+                "-m",
+                "compileall",
+                "backend/services/rl_execution",
+                external=True,
+            )
+        _run_pytest(
+            session,
+            "backend/tests/test_rl_execution_module_visibility.py",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        )
+    else:
+        session.skip(
+            "backend/tests/test_rl_execution_module_visibility.py not yet present "
+            "on this branch."
+        )
 
 
 @nox.session(venv_backend="none")

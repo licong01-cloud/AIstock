@@ -6,7 +6,7 @@
   "module": "qe_archive",
   "severity": "P1",
   "risk_area": "data_correctness",
-  "status": "fixed",
+  "status": "verified",
   "trigger_condition": {
     "scenario": "ArchiveResult_status_passes_as_string",
     "value_examples": ["'failed'", "'success'"]
@@ -23,7 +23,7 @@
   "assigned_agent": "claude_code",
   "fix_branch": "claude/dw-foundation-20260510",
   "fix_commit": "db6241f",
-  "verification_run_id": null,
+  "verification_run_id": "drawer_cross-tool_codex-claude-coord_5bd5430016acfaafd182577a",
   "created_at": "2026-05-10T00:00:00Z",
   "first_seen_at": "2026-05-10T00:00:00Z",
   "last_seen_at": "2026-05-10T00:00:00Z",
@@ -57,6 +57,12 @@
       "actor": "claude_code",
       "action": "fixed",
       "note": "round-2 commit db6241f - object.__setattr__ + HandlerStatus(str) coercion + 9 tests"
+    },
+    {
+      "timestamp": "2026-05-10T20:16:15Z",
+      "actor": "codex_app",
+      "action": "verified",
+      "note": "Codex round-2 review PASS - manual smoke confirms ArchiveResult(status='failed', error_message='boom') normalizes; ArchiveResult(status='failed') rejected; ArchiveResult(status='bad') rejected. drawer 5bd5430016acfaafd182577a"
     }
   ]
 }

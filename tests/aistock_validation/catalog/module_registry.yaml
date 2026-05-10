@@ -413,3 +413,39 @@ modules:
     risk_level: medium
     description: Reusable operational, diagnostic, validation, and data scripts.
     description_zh: 覆盖可复用运维脚本、诊断脚本、验证脚本、数据脚本和命令行入口。
+  - module_id: model_registry
+    display_name: Model Registry
+    module_type: infrastructure
+    risk_level: high
+    description: Cross-team model registry, governance migration phase 5 schema, and registry router.
+    description_zh: 覆盖模型注册中心、治理迁移 Phase 5 schema、注册路由和模型资产桥接。
+    api_routes: [/api/v1/model-registry/*]
+    test_plans:
+      required_on_change: [l0, model_registry_backend]
+  - module_id: market.regime_label
+    display_name: Market Regime Label
+    parent_module: platform
+    module_type: data_pipeline
+    risk_level: medium
+    description: Market regime label DDL, daily compute pipeline, and 5y percentile fetch helpers.
+    description_zh: 覆盖 market.regime_label DDL、每日 regime 计算 cron、5 年百分位查询和多方法共存。
+    test_plans:
+      required_on_change: [l0, market_regime_label]
+  - module_id: rl_execution
+    display_name: RL Execution Module
+    module_type: infrastructure
+    risk_level: medium
+    description: backend.services.rl_execution module visibility, router registration, and gitignore guard.
+    description_zh: 覆盖 backend.services.rl_execution 模块可见性、路由注册和 .gitignore 反向遮蔽防护。
+    api_routes: [/api/v1/rl-execution/*]
+    test_plans:
+      required_on_change: [l0, rl_execution_smoke]
+  - module_id: qe.archive_handlers
+    display_name: QE Archive Event Handlers
+    parent_module: qe.archive
+    module_type: infrastructure
+    risk_level: high
+    description: QE archive event handler interface contract and per-event-type handlers (paper_v2 / factor_value).
+    description_zh: 覆盖 QE 归档 handler 接口契约、各事件类型 handler 实现和归档协调子系统。
+    test_plans:
+      required_on_change: [l0, qe_archive_backend]

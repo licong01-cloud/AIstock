@@ -6,7 +6,7 @@
   "module": "qe_archive",
   "severity": "P1",
   "risk_area": "data_correctness",
-  "status": "fixed",
+  "status": "verified",
   "trigger_condition": {
     "scenario": "T12_DDL_apply_then_archive_real_paper_v2_row",
     "blocked_by_uuid_cast": true
@@ -24,7 +24,7 @@
   "assigned_agent": "claude_code",
   "fix_branch": "claude/dw-foundation-20260510",
   "fix_commit": "9079ee5",
-  "verification_run_id": null,
+  "verification_run_id": "drawer_cross-tool_codex-claude-coord_5bd5430016acfaafd182577a",
   "created_at": "2026-05-10T00:00:00Z",
   "first_seen_at": "2026-05-10T00:00:00Z",
   "last_seen_at": "2026-05-10T00:00:00Z",
@@ -57,6 +57,12 @@
       "actor": "claude_code",
       "action": "fixed",
       "note": "round-2 commit 9079ee5 - audit revealed 16 UUID cols total, all → TEXT"
+    },
+    {
+      "timestamp": "2026-05-10T20:16:15Z",
+      "actor": "codex_app",
+      "action": "verified",
+      "note": "Codex round-2 review PASS - confirmed no UUID column declarations remain for paper_v2 source IDs; transactional syntax smoke executed against dev DB and rolled back without leaving T12 applied. drawer 5bd5430016acfaafd182577a"
     }
   ]
 }
