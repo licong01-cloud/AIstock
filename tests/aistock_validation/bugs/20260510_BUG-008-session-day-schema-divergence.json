@@ -20,8 +20,8 @@
   ],
   "fingerprint": "qe_archive::session_day::archive_vs_source_schema_divergence",
   "assigned_agent": "claude_code",
-  "fix_branch": null,
-  "fix_commit": null,
+  "fix_branch": "claude/dw-foundation-20260510",
+  "fix_commit": "bd098f8",
   "verification_run_id": null,
   "created_at": "2026-05-10T00:00:00Z",
   "first_seen_at": "2026-05-10T00:00:00Z",
@@ -52,6 +52,12 @@
       "actor": "claude_code",
       "action": "discovered",
       "note": "Round-2 P1.4 audit kept data_quality CHECK as archive-derived; flagged as deferred design pass"
+    },
+    {
+      "timestamp": "2026-05-10T22:40:47Z",
+      "actor": "claude_code",
+      "action": "partial_fix",
+      "note": "T14b PaperV2ArchiveHandler synthesize_data_quality implemented + unit tested. Mapping: actual=NULL -> 'missing'; actual >= expected -> 'ok'; actual >= expected*0.5 -> 'partial'; otherwise -> 'low_coverage'. Caveat (per dw-foundation drawer e943f994b1225e6016f9ed8a): the 'derived actual' is computed via COUNT(*) on intraday_snapshots, which under-reports on sparse-capture days and overestimates data_quality categories. KEEPING STATUS=OPEN until source schema gains a proper actual_bar_count column or the derivation is tightened with a tick-level data feed. dw-foundation commit bd098f8"
     }
   ]
 }

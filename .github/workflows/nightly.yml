@@ -1,0 +1,167 @@
+name: AIstock Nightly L3 + DR
+
+on:
+  schedule:
+    # 19:07 UTC = 03:07 China Standard Time (UTC+8) -- after market close + log rotation
+    - cron: '7 19 * * *'
+  workflow_dispatch: {}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHONIOENCODING: utf-8
+  PYTHONDONTWRITEBYTECODE: '1'
+  AISTOCK_GUARDRAIL_BASELINE_JSON: tmp/validation/guardrails/baseline_20260504.json
+
+permissions:
+  contents: read
+
+jobs:
+  dr-snapshot:
+    name: DR snapshot prod DB (Stage 5 placeholder)
+    # self-hosted is mandatory because the DR job needs to read the local
+    # production DB at 127.0.0.1:5432; GitHub-hosted runners cannot reach it.
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: TODO Stage 5 - run scripts/dr_snapshot_prod_db.py
+        run: |
+          echo "Stage 5 will add scripts/dr_snapshot_prod_db.py for nightly pg_dump"
+          echo "Target: 'E:/DEV backup/aistock_pg_$(date +%Y%m%d).dump'"
+          echo "Retention policy: 30 days rolling + 1st-of-month permanent"
+          echo "::notice::DR snapshot is a placeholder until Stage 5 lands."
+
+      - name: Upload DR evidence (placeholder)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dr-evidence-${{ github.run_id }}
+          path: tmp/dr/
+          if-no-files-found: ignore
+
+  nightly-l3:
+    name: Nightly L3 (paper_v2 + qe_archive + qe_read)
+    needs: dr-snapshot
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # Activates the local AIstock conda env. The runner must have conda on PATH
+      # and the AIstock env pre-built (see docs/process/mcp_server_setup_claude_code_20260510.md
+      # for env setup pointers). GitHub-hosted Linux runners can't do this.
+      - name: Sanity - conda AIstock env present
+        run: |
+          if ! command -v conda >/dev/null 2>&1; then
+            echo "::error::conda not on PATH on this self-hosted runner"
+            exit 1
+          fi
+          conda env list | grep -E "^AIstock\s" || (echo "::error::conda env AIstock missing"; exit 1)
+
+      - name: nox -s paper_v2_l3
+        run: |
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          python -m nox -s paper_v2_l3
+        env:
+          PAPER_V2_SKIP_REALTIME: '1'
+
+      - name: nox -s qe_archive_l3
+        run: |
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          python -m nox -s qe_archive_l3
+        env:
+          QE_ARCHIVE_L3_SKIP_UI: '1'
+
+      - name: nox -s qe_read_l3
+        run: |
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          python -m nox -s qe_read_l3
+        env:
+          QE_READ_L3_SKIP_UI: '1'
+
+      - name: Upload validation history
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-l3-history-${{ github.run_id }}
+          path: tests/aistock_validation/history/
+          if-no-files-found: ignore
+
+  paper-v2-live:
+    name: Paper v2 live catch-up (skip realtime by default)
+    needs: nightly-l3
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 60
+    env:
+      PAPER_V2_SKIP_REALTIME: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: nox -s paper_v2_live
+        run: |
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          python -m nox -s paper_v2_live
+
+      - name: Upload paper-v2 live evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-v2-live-${{ github.run_id }}
+          path: tmp/paper_v2/
+          if-no-files-found: ignore
+
+  full-summary:
+    name: Nightly summary + auto-bug on failure
+    needs: [dr-snapshot, nightly-l3, paper-v2-live]
+    if: always()
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compose nightly summary
+        env:
+          DR_RESULT: ${{ needs.dr-snapshot.result }}
+          L3_RESULT: ${{ needs.nightly-l3.result }}
+          LIVE_RESULT: ${{ needs.paper-v2-live.result }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          DATE=$(date +%Y%m%d)
+          SUMMARY_DIR="tests/aistock_validation/history/${DATE}"
+          mkdir -p "${SUMMARY_DIR}"
+          cat <<EOF > "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+          # Nightly run ${RUN_ID} ${DATE}
+
+          - dr-snapshot: ${DR_RESULT}
+          - nightly-l3: ${L3_RESULT}
+          - paper-v2-live: ${LIVE_RESULT}
+
+          Run: ${RUN_URL}
+          EOF
+          cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+
+      - name: TODO Stage 5 - auto-register failure as BUG
+        if: failure() || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure'
+        run: |
+          echo "::notice::A nightly job failed. Stage 5 will add scripts/ci_register_failure_as_bug.py to file an automatic bug."
+          echo "Until then, treat the failure as the canonical signal and file a bug manually via MCP report_bug."
+
+      - name: Upload summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-summary-${{ github.run_id }}
+          path: tests/aistock_validation/history/
+          if-no-files-found: ignore

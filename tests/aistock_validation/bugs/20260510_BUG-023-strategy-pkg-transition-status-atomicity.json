@@ -6,7 +6,7 @@
   "module": "strategy_package",
   "severity": "P0",
   "risk_area": "data_correctness",
-  "status": "in_progress",
+  "status": "verified",
   "trigger_condition": {
     "scenario": "transition_status_call_with_event_insert_collision",
     "default_autocommit_pool": true
@@ -22,12 +22,12 @@
   "fingerprint": "strategy_package::repository::transition_status_partial_mutation",
   "assigned_agent": "codex_app",
   "fix_branch": "codex/qe-governance-integration-20260509",
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_commit": "5bce68c",
+  "verification_run_id": "drawer_cross-tool_codex-claude-coord_72c82167df76a2e0a646d8a8",
   "created_at": "2026-05-10T20:16:45Z",
   "first_seen_at": "2026-05-10T20:16:45Z",
   "last_seen_at": "2026-05-10T20:16:45Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-10T20:27:05Z",
   "submitted_at": null,
   "closed_at": null,
   "allowed_write_scope": [
@@ -61,6 +61,18 @@
       "actor": "codex_app",
       "action": "in_progress",
       "note": "Local atomic patch + 32 regression tests passing; awaiting push to origin/codex/qe-governance-integration-20260509"
+    },
+    {
+      "timestamp": "2026-05-10T20:27:05Z",
+      "actor": "codex_app",
+      "action": "fixed",
+      "note": "Codex pushed commit 5bce68c on origin/codex/qe-governance-integration-20260509. transition_status now disables autocommit around update + event insert, rolls back on failure, restores original autocommit, wraps UniqueViolation as InvalidStateTransitionError. 32 regression tests passing. drawer 72c82167df76a2e0a646d8a8."
+    },
+    {
+      "timestamp": "2026-05-10T23:30:00Z",
+      "actor": "claude_code",
+      "action": "verified",
+      "note": "Claude Code strategy session reviewed Codex commit 5bce68c diff + drawer 72c82167df76a2e0a646d8a8 evidence. Atomic transaction invariant + UniqueViolation -> InvalidStateTransitionError mapping confirmed against test_repository_service.py regression suite (32 passed). Production untouched per Codex boundary confirmation. Open follow-up question for Codex (out-of-scope for this verify): InvalidStateTransitionError -> HTTP 409 mapping is on the paper-v2 branch (commit 4528a32) but not in origin/codex/qe-governance-integration-20260509; surface as a separate BUG if it becomes blocking."
     }
   ]
 }

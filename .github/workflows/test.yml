@@ -1,0 +1,176 @@
+name: AIstock CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# AIstock is a Windows-first project; runners must be Windows.
+# CI uses a venv installed from requirements.txt (no conda) so the workflow
+# stays portable to GitHub-hosted Windows runners. Local dev still uses the
+# AIstock conda env per docs/process/.
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHONIOENCODING: utf-8
+  PYTHONDONTWRITEBYTECODE: '1'
+  AISTOCK_GUARDRAIL_BASELINE_JSON: tmp/validation/guardrails/baseline_20260504.json
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  static-gate:
+    name: Static gate (l0 + module registry)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install nox + light deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install nox httpx pyyaml
+
+      - name: nox -s l0
+        run: python -m nox -s l0
+
+      - name: nox -s validation_module_registry_l0
+        run: python -m nox -s validation_module_registry_l0
+
+      - name: Upload guardrail evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guardrail-evidence
+          path: tmp/validation/guardrails/
+          if-no-files-found: ignore
+
+  backend-tests:
+    name: Backend tests (${{ matrix.session }})
+    needs: static-gate
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        session:
+          - paper_v2_backend
+          - qe_archive_backend
+          - model_registry_backend
+          - market_regime_label
+          - rl_execution_smoke
+          - validation_center_backend
+          - qe_data_contract_backend
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg14
+        ports: ['5433:5432']
+        env:
+          POSTGRES_USER: aistock
+          POSTGRES_PASSWORD: ${{ secrets.TDX_DB_DEV_PASSWORD }}
+          POSTGRES_DB: aistock_dev
+        # GitHub-hosted Windows runners do not run service containers natively;
+        # this block is a no-op when the matrix runs on windows-latest. It is
+        # honored on linux-latest if the matrix is later expanded. Sessions
+        # marked write_database=false in test_plans.yaml run without DB.
+        options: >-
+          --health-cmd "pg_isready -U aistock"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install backend deps (best-effort)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install nox httpx pyyaml psycopg2-binary pytest pytest-cov mcp
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt || echo "requirements.txt install failed; some tests may skip"
+          fi
+
+      - name: nox -s ${{ matrix.session }}
+        env:
+          TDX_DB_HOST: 127.0.0.1
+          TDX_DB_PORT: 5433
+          TDX_DB_NAME: aistock_dev
+          TDX_DB_USER: aistock
+          TDX_DB_PASSWORD: ${{ secrets.TDX_DB_DEV_PASSWORD }}
+        run: python -m nox -s ${{ matrix.session }}
+
+      - name: Upload validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-${{ matrix.session }}
+          path: |
+            tmp/validation/
+            tmp/coverage/
+          if-no-files-found: ignore
+
+  failure-bug-register:
+    name: Auto-register CI failures as BUGs
+    needs: backend-tests
+    if: failure() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Note pending bug-register tooling
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          echo "::notice::Backend tests failed on PR ${PR_NUMBER}. Run: ${RUN_URL}"
+          echo "Stage 5 will add scripts/ci_register_failure_as_bug.py to convert this notice into a tests/aistock_validation/bugs/ JSON automatically."
+          echo "Until then, treat the failure as the canonical signal and decide whether to file a BUG manually via MCP report_bug or via the bug_report issue template."
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              '### CI failure detected',
+              '',
+              `Backend tests failed on this PR. Failed run: [${context.runId}](${runUrl})`,
+              '',
+              'Auto bug registration is scheduled for Stage 5. For now, please:',
+              '',
+              '1. Review the failed matrix job(s) and decide if this is a real regression.',
+              '2. If yes, file a bug via `aistock-validation/report_bug` MCP tool, or use',
+              '   `.github/ISSUE_TEMPLATE/bug_report.md` and mirror it into',
+              '   `tests/aistock_validation/bugs/` per the bug registry workflow doc.',
+              '3. Link the new BUG-NNN here so reviewers can route the fix.',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });

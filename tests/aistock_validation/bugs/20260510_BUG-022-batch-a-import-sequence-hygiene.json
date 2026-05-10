@@ -6,7 +6,7 @@
   "module": "dev_db_pipeline",
   "severity": "P2",
   "risk_area": "data_correctness",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "dev_db_re_import_real_data_then_governance_smoke",
     "missed_setval_sequences": [
@@ -22,18 +22,19 @@
   ],
   "fingerprint": "dev_db::batch_a::missing_setval_after_copy",
   "assigned_agent": "claude_code",
-  "fix_branch": null,
+  "fix_branch": "claude/pipeline-foundation-20260510",
   "fix_commit": null,
   "verification_run_id": null,
   "created_at": "2026-05-10T20:16:45Z",
   "first_seen_at": "2026-05-10T20:16:45Z",
   "last_seen_at": "2026-05-10T20:16:45Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-10T23:30:00Z",
   "submitted_at": null,
   "closed_at": null,
   "allowed_write_scope": [
     "scripts/dev_db/batch_a_import_real_data.py",
-    "backend/tests/dev_db/test_batch_a_import.py"
+    "scripts/dev_db/batch_a_seq_reset.py",
+    "backend/tests/dev_db/test_batch_a_seq_hygiene.py"
   ],
   "suspected_modules": [
     "scripts/dev_db/",
@@ -54,6 +55,12 @@
       "actor": "codex_app",
       "action": "discovered",
       "note": "Phase 3 governance live smoke - first enable_paper probe hit HTTP 500 due to seq behind max(event_id). Manually fixed via SELECT setval() to unblock smoke."
+    },
+    {
+      "timestamp": "2026-05-10T23:30:00Z",
+      "actor": "claude_code",
+      "action": "fixed",
+      "note": "Stage 4 T-PIPE-4.5: scripts/dev_db/batch_a_seq_reset.py introduced as the canonical idempotent sequence-reset helper covering 17 strategy_pkg + paper_v2 + qe_archive tables. backend/tests/dev_db/test_batch_a_seq_hygiene.py adds 11 regression tests (parse_env, dev-target safety, setval emission, error propagation, RESET_TARGETS coverage, render). dw-foundation team should call this helper at the end of batch_a_import_real_data.py main() before the post-import validation block. fix_commit will be set after the Stage 4 commit lands."
     }
   ]
 }
