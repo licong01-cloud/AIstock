@@ -129,38 +129,32 @@ class PaperV2ArchiveHandler(ArchiveHandler):
     def handle(
         self,
         event: ClaimedOutboxEvent,
-        archive_job: ArchiveJobRecord,
+        archive_job: ArchiveJobRecord | None = None,
     ) -> ArchiveResult:
+        """P1.2 (Codex round 2): exceptions PROPAGATE to caller; no silent
+        FAILED conversion. The worker's archive_handler_adapter (worker.py)
+        catches and converts to ArchiveWorkerEventResult(success=False).
+        Inner try/except remains for transactional ROLLBACK before re-raise.
+        """
         self.validate_payload(event.payload or {})
         et = event.event_type
 
-        try:
-            with self._connection_provider() as conn:
-                conn.autocommit = False
-                try:
-                    if et == "paper.portfolio_run.completed":
-                        result = self._handle_run_completed(conn, event)
-                    elif et == "paper.daily_snapshot.captured":
-                        result = self._handle_daily_snapshot(conn, event)
-                    elif et == "paper.config.changed":
-                        result = self._handle_config_changed(conn, event)
-                    else:
-                        # can_handle should have rejected; defensive
-                        raise PayloadValidationError(
-                            f"unsupported event_type {et!r}"
-                        )
-                    conn.commit()
-                    return result
-                except Exception:
-                    conn.rollback()
-                    raise
-        except PayloadValidationError:
-            raise
-        except Exception as e:
-            return ArchiveResult(
-                status=HandlerStatus.FAILED,
-                error_message=f"{type(e).__name__}: {str(e)[:500]}",
-            )
+        with self._connection_provider() as conn:
+            conn.autocommit = False
+            try:
+                if et == "paper.portfolio_run.completed":
+                    result = self._handle_run_completed(conn, event)
+                elif et == "paper.daily_snapshot.captured":
+                    result = self._handle_daily_snapshot(conn, event)
+                elif et == "paper.config.changed":
+                    result = self._handle_config_changed(conn, event)
+                else:
+                    raise PayloadValidationError(f"unsupported event_type {et!r}")
+                conn.commit()
+                return result
+            except Exception:
+                conn.rollback()
+                raise
 
     # ==================================================================
     # Event 1: paper.portfolio_run.completed
@@ -175,10 +169,25 @@ class PaperV2ArchiveHandler(ArchiveHandler):
         inserted = 0
         upserted = 0
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # 1) fetch source run row (NOOP if it disappeared from source)
+            # P1.5 (Codex round 2) — replay short-circuit: if paper_v2_run already
+            # exists for this run_id, treat as a replay and SUCCESS-NOOP. This
+            # prevents SCD2 dim_paper_v2_portfolio from version-bumping on replay
+            # when source portfolio attributes have drifted since the run completed.
+            # The run captures a point-in-time portfolio state; later portfolio
+            # changes must NOT be retroactively attributed to it.
             cur.execute(
-                "SELECT * FROM paper_v2.run WHERE run_id = %s", (run_id,),
+                "SELECT 1 FROM qe_archive.paper_v2_run WHERE run_id = %s", (run_id,),
             )
+            if cur.fetchone():
+                return ArchiveResult(
+                    status=HandlerStatus.SUCCESS,
+                    rows_inserted=0,
+                    rows_upserted=0,
+                    stats={"run_id": run_id, "replay_skipped": True},
+                )
+
+            # 1) fetch source run row (NOOP if it disappeared from source)
+            cur.execute("SELECT * FROM paper_v2.run WHERE run_id = %s", (run_id,))
             run_row = cur.fetchone()
             if not run_row:
                 return ArchiveResult(
@@ -193,8 +202,7 @@ class PaperV2ArchiveHandler(ArchiveHandler):
             inserted += scd_inserted
 
             # 3) INSERT paper_v2_run (idempotent)
-            run_inserted = self._insert_paper_v2_run(cur, run_row, portfolio_version_id)
-            inserted += run_inserted
+            inserted += self._insert_paper_v2_run(cur, run_row, portfolio_version_id)
 
             # 4) trade_session + session_day + session_events for this run
             inserted += self._mirror_sessions_for_run(cur, run_id, portfolio_version_id)
@@ -202,10 +210,10 @@ class PaperV2ArchiveHandler(ArchiveHandler):
             # 5) run_events
             inserted += self._mirror_run_events(cur, run_id)
 
-            # 6) orders + order_events + order_execution_state
+            # 6) orders + order_events + order_execution_state (P1.3: enum drift raises)
             inserted += self._mirror_orders_for_run(cur, run_id, portfolio_version_id)
 
-            # 7) fills (partition table — idempotent on (fill_id, trade_date))
+            # 7) fills (partition table)
             inserted += self._mirror_fills_for_run(cur, run_id, portfolio_version_id)
 
             # 8) positions -> paper_v2_position_snapshot
@@ -222,6 +230,22 @@ class PaperV2ArchiveHandler(ArchiveHandler):
 
             # 12) errors -> paper_v2_error
             inserted += self._mirror_errors_for_run(cur, run_id)
+
+            # P1.4 (Codex round 2) — 5 previously-unfilled archive tables:
+            # 13) dim_paper_v2_runtime_profile (SCD2) for this portfolio
+            inserted += self._upsert_runtime_profile_dim(cur, run_row["portfolio_id"])
+
+            # 14) dim_paper_v2_runtime_profile_version (immutable version log)
+            inserted += self._mirror_runtime_profile_versions(cur, run_row["portfolio_id"])
+
+            # 15) paper_v2_runtime_config_activation
+            inserted += self._mirror_runtime_config_activation(cur, run_row["portfolio_id"], run_row["trade_date"])
+
+            # 16) paper_v2_execution_policy_activation
+            inserted += self._mirror_execution_policy_activation(cur, run_row["portfolio_id"], run_row["trade_date"])
+
+            # 17) paper_v2_reset_audit (synthesize reset_type per BUG-007)
+            inserted += self._mirror_reset_audit(cur, run_row["portfolio_id"])
 
         return ArchiveResult(
             status=HandlerStatus.SUCCESS,
@@ -520,8 +544,14 @@ class PaperV2ArchiveHandler(ArchiveHandler):
             if order_type not in ("LIMIT", "MARKET", "STOP", "STOP_LIMIT"):
                 order_type = "MARKET"
             side = o.get("side")
+            # P1.3 (Codex round 2): no silent skip on enum drift. Raise so the
+            # whole event transaction rolls back; operator must fix source data
+            # or extend allowed enum before re-archiving.
             if side not in ("BUY", "SELL"):
-                continue  # source CHECK upstream should prevent this; defensive skip
+                raise ValueError(
+                    f"unknown order side {side!r} for run_id={run_id} "
+                    f"order_id={o.get('order_id')}; expected one of {('BUY','SELL')}"
+                )
             cur.execute(
                 """
                 INSERT INTO qe_archive.paper_v2_order (
@@ -554,9 +584,13 @@ class PaperV2ArchiveHandler(ArchiveHandler):
             )
             for ev in cur.fetchall():
                 event_type = ev.get("event_type")
+                # P1.3 (Codex round 2): no silent skip; raise on enum drift.
                 if event_type and event_type not in ORDER_EVENT_TYPE_ALLOWED:
-                    # Source enum drift: skip with note rather than crashing whole event
-                    continue
+                    raise ValueError(
+                        f"unknown order_event event_type {event_type!r} for "
+                        f"order_id={ev.get('order_id')} event_id={ev.get('event_id')}; "
+                        f"expected one of {ORDER_EVENT_TYPE_ALLOWED}"
+                    )
                 cur.execute(
                     """
                     INSERT INTO qe_archive.paper_v2_order_event (
@@ -802,17 +836,28 @@ class PaperV2ArchiveHandler(ArchiveHandler):
                 "paper.daily_snapshot.captured needs run_id + trade_date"
             )
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT * FROM paper_v2.run WHERE run_id = %s", (run_id,))
-            run_row = cur.fetchone()
-            if not run_row:
-                return ArchiveResult(status=HandlerStatus.NOOP,
-                                     stats={"reason": "source run missing"})
-            pvid, _ = self._upsert_portfolio_dim(cur, run_row["portfolio_id"])
-
-            # daily_snapshot.captured can fire BEFORE portfolio_run.completed in
-            # the natural event order. Ensure parent paper_v2_run exists (idempotent
-            # ON CONFLICT DO NOTHING) so the FK from paper_v2_daily_snapshot resolves.
-            self._insert_paper_v2_run(cur, run_row, pvid)
+            # P1.5 (Codex round 2) policy interaction: daily_snapshot.captured
+            # MUST NOT pre-create paper_v2_run, otherwise the subsequent
+            # paper.portfolio_run.completed event would short-circuit and skip
+            # the full mirror. If paper_v2_run is not yet archived, return NOOP
+            # — the run.completed handler will pull all daily snapshots when it
+            # eventually fires (via _mirror_daily_snapshots_for_run).
+            cur.execute(
+                "SELECT portfolio_version_id FROM qe_archive.paper_v2_run WHERE run_id = %s",
+                (run_id,),
+            )
+            pvid_row = cur.fetchone()
+            if not pvid_row:
+                return ArchiveResult(
+                    status=HandlerStatus.NOOP,
+                    stats={
+                        "reason": "paper_v2_run not yet archived; "
+                                  "deferred to portfolio_run.completed",
+                        "run_id": run_id,
+                        "trade_date": str(trade_date),
+                    },
+                )
+            pvid = pvid_row["portfolio_version_id"]
 
             # narrow: write only this trade_date's daily + position snapshots
             cur.execute(
@@ -975,3 +1020,196 @@ class PaperV2ArchiveHandler(ArchiveHandler):
             return float(market_value) - float(qty) * float(avg_cost)
         except (TypeError, ValueError):
             return None
+
+    # ==================================================================
+    # P1.4 (Codex round 2): 5 previously-unfilled archive table mirrors
+    # ==================================================================
+
+    def _upsert_runtime_profile_dim(self, cur: Any, portfolio_id: str) -> int:
+        """SCD2 mirror of paper_v2.runtime_profile -> dim_paper_v2_runtime_profile.
+
+        Natural key: (profile_id, valid_from). valid_from = source created_at so
+        replays are idempotent on ON CONFLICT (profile_id, valid_from) DO NOTHING.
+        """
+        cur.execute(
+            """SELECT profile_id, profile_name, status, current_version_id,
+                      package_id, created_by, created_at
+               FROM paper_v2.runtime_profile WHERE portfolio_id = %s""",
+            (portfolio_id,),
+        )
+        n = 0
+        for p in cur.fetchall():
+            profile_json = {
+                "profile_name": p.get("profile_name"),
+                "status": p.get("status"),
+                "current_version_id": p.get("current_version_id"),
+                "package_id": p.get("package_id"),
+                "created_by": p.get("created_by"),
+            }
+            cur.execute(
+                """
+                INSERT INTO qe_archive.dim_paper_v2_runtime_profile (
+                    profile_id, profile_name, profile_json,
+                    valid_from, valid_to, is_current, captured_at
+                ) VALUES (
+                    %s, %s, %s::jsonb,
+                    %s, NULL, TRUE, NOW()
+                )
+                ON CONFLICT (profile_id, valid_from) DO NOTHING
+                """,
+                (
+                    p["profile_id"], p.get("profile_name"),
+                    json.dumps(profile_json, default=str),
+                    p.get("created_at"),
+                ),
+            )
+            n += cur.rowcount
+        return n
+
+    def _mirror_runtime_profile_versions(self, cur: Any, portfolio_id: str) -> int:
+        """Append-only mirror of paper_v2.runtime_profile_version. Idempotent
+        on (version_id) UNIQUE."""
+        cur.execute(
+            """SELECT v.profile_version_id, v.profile_id, v.version_no,
+                      v.config_json, v.config_sha256, v.created_by, v.created_at,
+                      v.supersedes_version_id, v.reason
+               FROM paper_v2.runtime_profile_version v
+               JOIN paper_v2.runtime_profile p ON p.profile_id = v.profile_id
+               WHERE p.portfolio_id = %s""",
+            (portfolio_id,),
+        )
+        n = 0
+        for v in cur.fetchall():
+            # config_diff_json: when supersedes_version_id is set we'd compute a
+            # delta vs that version; for now we record the full new config_json
+            # plus a marker pointing at the predecessor.
+            diff = {
+                "supersedes_version_id": v.get("supersedes_version_id"),
+                "config_sha256": v.get("config_sha256"),
+                "reason": v.get("reason"),
+                "full_config": v.get("config_json"),
+            }
+            cur.execute(
+                """
+                INSERT INTO qe_archive.dim_paper_v2_runtime_profile_version (
+                    version_id, profile_id, version_number,
+                    config_diff_json, created_by, created_at, captured_at
+                ) VALUES (
+                    %s, %s, %s,
+                    %s::jsonb, %s, %s, NOW()
+                )
+                ON CONFLICT (version_id) DO NOTHING
+                """,
+                (
+                    v["profile_version_id"], v["profile_id"], v.get("version_no"),
+                    json.dumps(diff, default=str),
+                    v.get("created_by"), v.get("created_at"),
+                ),
+            )
+            n += cur.rowcount
+        return n
+
+    def _mirror_runtime_config_activation(
+        self, cur: Any, portfolio_id: str, trade_date: Any,
+    ) -> int:
+        """Mirror paper_v2.runtime_config_activation rows. Source has trade_date
+        column so we restrict by (portfolio_id, trade_date) to avoid pulling
+        unrelated history every replay."""
+        cur.execute(
+            """SELECT activation_id, portfolio_id, trade_date, profile_version_id,
+                      status, activated_at, activated_by
+               FROM paper_v2.runtime_config_activation
+               WHERE portfolio_id = %s AND trade_date = %s""",
+            (portfolio_id, trade_date),
+        )
+        n = 0
+        for a in cur.fetchall():
+            cur.execute(
+                """
+                INSERT INTO qe_archive.paper_v2_runtime_config_activation (
+                    activation_id, portfolio_id, profile_version_id,
+                    activated_at, activated_by, captured_at
+                ) VALUES (%s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (activation_id) DO NOTHING
+                """,
+                (
+                    a["activation_id"], a["portfolio_id"],
+                    a.get("profile_version_id"),
+                    a.get("activated_at"), a.get("activated_by"),
+                ),
+            )
+            n += cur.rowcount
+        return n
+
+    def _mirror_execution_policy_activation(
+        self, cur: Any, portfolio_id: str, trade_date: Any,
+    ) -> int:
+        cur.execute(
+            """SELECT activation_id, portfolio_id, trade_date, policy_id,
+                      policy_sha256, policy_name, policy_json, status,
+                      activated_at, activated_by
+               FROM paper_v2.execution_policy_activation
+               WHERE portfolio_id = %s AND trade_date = %s""",
+            (portfolio_id, trade_date),
+        )
+        n = 0
+        for a in cur.fetchall():
+            cur.execute(
+                """
+                INSERT INTO qe_archive.paper_v2_execution_policy_activation (
+                    activation_id, portfolio_id, policy_sha256, policy_json,
+                    activated_at, captured_at
+                ) VALUES (%s, %s, %s, %s::jsonb, %s, NOW())
+                ON CONFLICT (activation_id) DO NOTHING
+                """,
+                (
+                    a["activation_id"], a["portfolio_id"],
+                    a.get("policy_sha256"),
+                    json.dumps(a.get("policy_json") or {}, default=str),
+                    a.get("activated_at"),
+                ),
+            )
+            n += cur.rowcount
+        return n
+
+    def _mirror_reset_audit(self, cur: Any, portfolio_id: str) -> int:
+        """Mirror paper_v2.reset_audit. Source lacks reset_type / reset_reason /
+        snapshot_before_json — synthesize from (rerun_policy, deleted_counts)
+        per BUG-007. Source audit_id is bigint, cast to TEXT.
+        """
+        cur.execute(
+            """SELECT audit_id, portfolio_id, rerun_policy, start_date, end_date,
+                      confirm_text, deleted_counts, status, context, created_at
+               FROM paper_v2.reset_audit WHERE portfolio_id = %s""",
+            (portfolio_id,),
+        )
+        n = 0
+        for r in cur.fetchall():
+            reset_type = synth.synthesize_reset_audit_reset_type(
+                r.get("rerun_policy"), r.get("deleted_counts"),
+            )
+            reset_reason = r.get("rerun_policy") or "synthesized_from_source"
+            snapshot_before = {
+                "rerun_policy": r.get("rerun_policy"),
+                "start_date": str(r.get("start_date")) if r.get("start_date") else None,
+                "end_date": str(r.get("end_date")) if r.get("end_date") else None,
+                "deleted_counts": r.get("deleted_counts"),
+                "context": r.get("context"),
+                "status": r.get("status"),
+            }
+            cur.execute(
+                """
+                INSERT INTO qe_archive.paper_v2_reset_audit (
+                    audit_id, portfolio_id, reset_type, reset_reason,
+                    snapshot_before_json, reset_at, captured_at
+                ) VALUES (%s, %s, %s, %s, %s::jsonb, %s, NOW())
+                ON CONFLICT (audit_id) DO NOTHING
+                """,
+                (
+                    str(r["audit_id"]), r["portfolio_id"], reset_type, reset_reason,
+                    json.dumps(snapshot_before, default=str),
+                    r.get("created_at"),
+                ),
+            )
+            n += cur.rowcount
+        return n

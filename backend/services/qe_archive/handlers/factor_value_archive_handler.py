@@ -116,32 +116,28 @@ class FactorValueArchiveHandler(ArchiveHandler):
                 },
             )
 
-        try:
-            with self._connection_provider() as conn:
-                conn.autocommit = False
-                try:
-                    inserted, upserted = self._bulk_upsert(conn, payload, rows)
-                    conn.commit()
-                    return ArchiveResult(
-                        status=HandlerStatus.SUCCESS,
-                        rows_inserted=inserted,
-                        rows_upserted=upserted,
-                        stats={
-                            "factor_name": payload.get("factor_name"),
-                            "code_text_hash": payload.get("code_text_hash"),
-                            "row_count": len(rows),
-                        },
-                    )
-                except Exception:
-                    conn.rollback()
-                    raise
-        except PayloadValidationError:
-            raise
-        except Exception as e:
-            return ArchiveResult(
-                status=HandlerStatus.FAILED,
-                error_message=f"{type(e).__name__}: {str(e)[:500]}",
-            )
+        # P1.2 (Codex round 2): exceptions PROPAGATE; no silent FAILED
+        # conversion. Worker adapter (worker.py) catches and converts to
+        # ArchiveWorkerEventResult(success=False). Inner try/except retains
+        # transactional ROLLBACK before re-raise.
+        with self._connection_provider() as conn:
+            conn.autocommit = False
+            try:
+                inserted, upserted = self._bulk_upsert(conn, payload, rows)
+                conn.commit()
+                return ArchiveResult(
+                    status=HandlerStatus.SUCCESS,
+                    rows_inserted=inserted,
+                    rows_upserted=upserted,
+                    stats={
+                        "factor_name": payload.get("factor_name"),
+                        "code_text_hash": payload.get("code_text_hash"),
+                        "row_count": len(rows),
+                    },
+                )
+            except Exception:
+                conn.rollback()
+                raise
 
     # ------------------------------------------------------------------
     def _bulk_upsert(
@@ -166,10 +162,22 @@ class FactorValueArchiveHandler(ArchiveHandler):
             )
             pre_count = cur.fetchone()[0]
 
+            # P2.a (Codex round 2): no silent skip on missing required keys.
+            # Raise so the source loader contract violation surfaces immediately
+            # rather than producing a SUCCESS with rows_inserted=0 that masks
+            # data loss.
             params = []
-            for r in rows:
-                if "trade_date" not in r or "code" not in r:
-                    continue
+            for idx, r in enumerate(rows):
+                if "trade_date" not in r:
+                    raise ValueError(
+                        f"factor_value source row {idx} for factor_name={factor_name!r} "
+                        f"missing required 'trade_date' key; refusing to silently skip"
+                    )
+                if "code" not in r:
+                    raise ValueError(
+                        f"factor_value source row {idx} for factor_name={factor_name!r} "
+                        f"missing required 'code' key; refusing to silently skip"
+                    )
                 params.append((
                     factor_name, code_text_hash, r["trade_date"], r["code"],
                     r.get("value"), snapshot_date,

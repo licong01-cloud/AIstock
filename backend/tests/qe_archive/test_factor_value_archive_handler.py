@@ -189,3 +189,76 @@ class TestFactorValueHandler:
         assert result.status is HandlerStatus.SUCCESS, \
             f"DEFAULT partition should accept any trade_date; got: {result.error_message}"
         assert result.rows_inserted == 2
+
+    def test_partition_routing_tableoid_assertion(self, dev_conn_provider):
+        """P1.6 (Codex round 2): assert via tableoid that dates land in the
+        DEFAULT partition (not the y2026m05 example one) for old/future dates."""
+        rows = [
+            {"trade_date": date(2018, 1, 15), "code": "000900.SZ", "value": 0.5},
+            {"trade_date": date(2099, 12, 31), "code": "000900.SZ", "value": 0.7},
+        ]
+        handler = FactorValueArchiveHandler(
+            connection_provider=dev_conn_provider,
+            source_loader=lambda p: rows,
+        )
+        evt = _make_event("test_factor_tableoid", "sha256:tableoid")
+        job = ArchiveJobRecord(event_id=evt.event_id, job_type="factor_value_capture")
+        handler.handle(evt, job)
+
+        with dev_conn_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT tableoid::regclass::text FROM qe_archive.factor_value
+                       WHERE factor_name = %s AND code_text_hash = %s
+                         AND trade_date IN ('2018-01-15','2099-12-31')""",
+                    ("test_factor_tableoid", "sha256:tableoid"),
+                )
+                partitions = {r[0] for r in cur.fetchall()}
+        # Both rows MUST land in DEFAULT partition since y2026m05 is the only
+        # other configured partition.
+        assert partitions == {"qe_archive.factor_value_default"}, \
+            f"expected DEFAULT partition, got {partitions}"
+
+
+# ---------------------------------------------------------------------------
+# P2.a (Codex round 2): missing required keys raise (no silent skip)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.usefixtures("cleanup_qe_archive")
+class TestP2aMissingKeysRaise:
+    def test_missing_trade_date_raises(self, dev_conn_provider):
+        bad_rows = [
+            {"trade_date": date(2026, 5, 5), "code": "000001.SZ", "value": 0.1},
+            {"code": "000002.SZ", "value": 0.2},  # missing trade_date
+        ]
+        handler = FactorValueArchiveHandler(
+            connection_provider=dev_conn_provider,
+            source_loader=lambda p: bad_rows,
+        )
+        evt = _make_event("test_factor_missing_td", "sha256:missing_td")
+        job = ArchiveJobRecord(event_id=evt.event_id, job_type="factor_value_capture")
+        with pytest.raises(ValueError, match="missing required 'trade_date'"):
+            handler.handle(evt, job)
+
+        # Verify FULL rollback: no rows landed even for the valid first row
+        with dev_conn_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT COUNT(*) FROM qe_archive.factor_value
+                       WHERE factor_name = %s""",
+                    ("test_factor_missing_td",),
+                )
+                assert cur.fetchone()[0] == 0
+
+    def test_missing_code_raises(self, dev_conn_provider):
+        bad_rows = [
+            {"trade_date": date(2026, 5, 5), "value": 0.1},  # missing code
+        ]
+        handler = FactorValueArchiveHandler(
+            connection_provider=dev_conn_provider,
+            source_loader=lambda p: bad_rows,
+        )
+        evt = _make_event("test_factor_missing_code", "sha256:missing_code")
+        job = ArchiveJobRecord(event_id=evt.event_id, job_type="factor_value_capture")
+        with pytest.raises(ValueError, match="missing required 'code'"):
+            handler.handle(evt, job)

@@ -163,6 +163,94 @@ def sample_run_id(dev_conn_provider) -> str:
 
 
 @pytest.fixture
+def run_id_with_runtime_profile(dev_conn_provider) -> str:
+    """Pick a run whose portfolio has at least 1 runtime_profile row (T21 P1.4
+    test coverage). Different tests need different source coverage; this fixture
+    picks the most recent run that satisfies the constraint."""
+    with dev_conn_provider() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT r.run_id FROM paper_v2.run r
+                   WHERE EXISTS (SELECT 1 FROM paper_v2.runtime_profile
+                                 WHERE portfolio_id = r.portfolio_id)
+                   ORDER BY r.trade_date DESC LIMIT 1"""
+            )
+            row = cur.fetchone()
+    if not row:
+        pytest.skip("no runs with runtime_profile data")
+    return row[0]
+
+
+@pytest.fixture
+def run_id_with_runtime_profile_version(dev_conn_provider) -> str:
+    with dev_conn_provider() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT r.run_id FROM paper_v2.run r
+                   WHERE EXISTS (
+                       SELECT 1 FROM paper_v2.runtime_profile_version v
+                       JOIN paper_v2.runtime_profile p ON p.profile_id = v.profile_id
+                       WHERE p.portfolio_id = r.portfolio_id
+                   )
+                   ORDER BY r.trade_date DESC LIMIT 1"""
+            )
+            row = cur.fetchone()
+    if not row:
+        pytest.skip("no runs with runtime_profile_version data")
+    return row[0]
+
+
+@pytest.fixture
+def run_id_with_runtime_config_activation(dev_conn_provider) -> str:
+    with dev_conn_provider() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT r.run_id FROM paper_v2.run r
+                   WHERE EXISTS (
+                       SELECT 1 FROM paper_v2.runtime_config_activation
+                       WHERE portfolio_id = r.portfolio_id AND trade_date = r.trade_date
+                   ) ORDER BY r.trade_date DESC LIMIT 1"""
+            )
+            row = cur.fetchone()
+    if not row:
+        pytest.skip("no runs with runtime_config_activation matching trade_date")
+    return row[0]
+
+
+@pytest.fixture
+def run_id_with_execution_policy_activation(dev_conn_provider) -> str:
+    with dev_conn_provider() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT r.run_id FROM paper_v2.run r
+                   WHERE EXISTS (
+                       SELECT 1 FROM paper_v2.execution_policy_activation
+                       WHERE portfolio_id = r.portfolio_id AND trade_date = r.trade_date
+                   ) ORDER BY r.trade_date DESC LIMIT 1"""
+            )
+            row = cur.fetchone()
+    if not row:
+        pytest.skip("no runs with execution_policy_activation matching trade_date")
+    return row[0]
+
+
+@pytest.fixture
+def run_id_with_reset_audit(dev_conn_provider) -> str:
+    with dev_conn_provider() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT r.run_id FROM paper_v2.run r
+                   WHERE EXISTS (SELECT 1 FROM paper_v2.reset_audit
+                                 WHERE portfolio_id = r.portfolio_id)
+                   ORDER BY r.trade_date DESC LIMIT 1"""
+            )
+            row = cur.fetchone()
+    if not row:
+        pytest.skip("no runs with reset_audit data")
+    return row[0]
+
+
+@pytest.fixture
 def archive_event_payload():
     """Helper to build a well-formed archive event payload."""
     def _build(
